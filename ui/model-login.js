@@ -11,8 +11,7 @@
    every computer first asks "this computer only" or "all of them", listing them (`scopeHTML`, `chosenScope`).
    On a hosted Tico (config `hosted`, TICO_HOSTED) the person has no terminal on the computer, so the sign-in shows only
    the provider's link and code (never what else the CLI printed; a failure gives its message), never points to a
-   terminal, and
-   closes by itself once it has signed in or is cancelled. */
+   terminal, and closes by itself once it has signed in or its cancel is confirmed. */
 'use strict';
 (function () {
   const RUNTIME_NAMES = {codex: 'Codex (ChatGPT)', claude: 'Claude Code'};
@@ -69,7 +68,8 @@
     document.body.appendChild(dialog);
     const body = dialog.querySelector('[data-body]'), status = dialog.querySelector('[data-status]'),
           actions = dialog.querySelector('[data-actions]');
-    let login = null, timer = null, closed = false, sending = false;
+    // `note`: why a cancel did not go through, kept on screen while the sign-in it left running goes on.
+    let login = null, timer = null, closed = false, sending = false, note = '';
 
     const stop = () => { closed = true; clearTimeout(timer); };
     const close = async () => {
@@ -126,7 +126,7 @@
       body.innerHTML = head + lines;
       const field = body.querySelector('[name=code]');
       if (field && typed) field.value = typed;
-      status.textContent = label;
+      status.textContent = note && active(state) ? `${label} ${note}` : label;
       status.dataset.state = state;
       actions.innerHTML = state === 'finishing' ? ''
         : active(state) ? '<button class="ghost" type="button" data-cancel>Cancel sign-in</button>'
@@ -151,11 +151,15 @@
       finally { sending = false; }
     });
     actions.addEventListener('click', async event => {
-      if (event.target.closest('[data-cancel]') && hosted()) {
-        void close();   // cancels it, then closes
-      } else if (event.target.closest('[data-cancel]')) {
-        try { login = await post(`${base}/${encodeURIComponent(login.id)}/cancel`, {}); draw(); }
-        catch (error) { status.textContent = error.message; }
+      if (event.target.closest('[data-cancel]')) {
+        // On a hosted Tico the pane closes once the computer's sign-in is cancelled. A refused cancel (a switch
+        // already putting the new account in place) or a failed one leaves it open, saying why and following it on.
+        try {
+          login = await post(`${base}/${encodeURIComponent(login.id)}/cancel`, {});
+          note = '';
+          draw();
+          if (hosted() && login.state === 'cancelled') { toast(status.textContent); stop(); if (dialog.open) dialog.close(); }
+        } catch (error) { note = error.message; status.textContent = error.message; }
       } else if (event.target.closest('[data-retry]')) {
         void begin();
       }
@@ -178,6 +182,7 @@
     const begin = async () => {
       clearTimeout(timer);
       closed = false;
+      note = '';
       status.textContent = 'Starting…';
       try { login = await post(base, {runtime, ...(profile ? {profile} : {}), ...(switchAccount ? {switch: true} : {})}); }
       catch (error) { status.textContent = error.message; actions.innerHTML = '<button class="ghost" type="button" data-close>Close</button>'; return; }

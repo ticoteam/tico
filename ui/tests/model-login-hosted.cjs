@@ -24,7 +24,7 @@ const {unrouted} = require('./support/routes.cjs');
         readiness: {runtimes: {codex: {installed: true, authenticated: 'missing'}, claude: {installed: true, authenticated: 'missing'}},
           harnesses: {codex: chip('Codex', 'codex'), claude: chip('Claude Code', 'claude')}}};
       const writes = [], rows = {};
-      let seq = 0;
+      let seq = 0, refusal = null;
       const page = await browser.newPage({viewport: {width: 1440, height: 900}, serviceWorkers: 'block'});
       const errors = [];
       page.on('pageerror', e => errors.push(e.message));
@@ -57,7 +57,19 @@ const {unrouted} = require('./support/routes.cjs');
           return json(rows[id]);
         }
         const one = p.match(/^\/api\/v2\/computers\/box\/logins\/(\w+)(\/cancel|\/code)?$/);
-        if (one && one[2] === '/cancel') { writes.push({p}); rows[one[1]].state = 'cancelled'; return json(rows[one[1]]); }
+        if (one && one[2] === '/cancel') {
+          writes.push({p});
+          // `refuse`: the next `times` cancels fail with this status and message, moving the row to `state` first if
+          // given (a switch the computer is already putting in place answers 409 and goes on).
+          if (refusal) {
+            const {status, detail, state} = refusal;
+            if (!--refusal.times) refusal = null;
+            if (state) rows[one[1]].state = state;
+            return json({error: {detail}}, status);
+          }
+          rows[one[1]].state = 'cancelled';
+          return json(rows[one[1]]);
+        }
         if (one && one[2] === '/code') { writes.push({p}); rows[one[1]].code_sent = true; return json(rows[one[1]]); }
         if (one) return json(rows[one[1]]);
         if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
@@ -68,7 +80,7 @@ const {unrouted} = require('./support/routes.cjs');
       const table = page.locator('#set-machines [role=table][aria-label="AI tools on Server"]');
       await table.waitFor();
       const row = name => table.locator(`[data-machine-tool="${name}"]:not([data-machine-profile])`);
-      return {page, box, writes, errors, rows, row, last: () => rows[`in${seq}`]};
+      return {page, box, writes, errors, rows, row, last: () => rows[`in${seq}`], refuse: r => { refusal = {times: 1, ...r}; }};
     }
     const login = page => page.locator('dialog.model-login:not(.model-logout)');
 
@@ -106,9 +118,9 @@ const {unrouted} = require('./support/routes.cjs');
       await page.close();
     }
 
-    // ---- Hosted: Codex. Link and one-time code; Cancel sign-in cancels it on the computer and closes.
+    // ---- Hosted: Codex. Link and one-time code; Cancel sign-in closes only once the computer's sign-in is cancelled.
     {
-      const {page, writes, errors, row, last} = await open('invited');
+      const {page, writes, errors, row, last, refuse} = await open('invited');
       await row('codex').getByRole('button', {name: 'Sign in'}).click();
       const dialog = login(page);
       await dialog.locator('[data-status]', {hasText: 'Starting the sign-in'}).waitFor();
@@ -116,9 +128,34 @@ const {unrouted} = require('./support/routes.cjs');
       await dialog.locator('code[data-code]', {hasText: 'ABCD-12345'}).waitFor();
       assert.equal(await dialog.locator('[data-link]').getAttribute('href'), 'https://auth.openai.com/codex/device');
       assert.equal(await dialog.locator('[data-lines]').count(), 0);
+      // A cancel the server never confirms (busy on every try) leaves the sign-in running: the pane stays, says so
+      // across the next looks, and still offers Cancel sign-in.
+      const unconfirmed = 'Could not confirm whether this saved.';
+      refuse({status: 503, detail: 'The server is busy', times: 3});
+      await dialog.getByRole('button', {name: 'Cancel sign-in'}).click();
+      await dialog.locator('[data-status]', {hasText: unconfirmed}).waitFor();
+      await page.waitForTimeout(2500);   // one look (POLL_MS) redraws it
+      assert.match(await dialog.locator('[data-status]').innerText(), new RegExp(`^Waiting for you to finish signing in… ${unconfirmed}`));
+      assert.equal(await dialog.locator('code[data-code]').innerText(), 'ABCD-12345');
+      // Confirmed, it closes and says so.
       await dialog.getByRole('button', {name: 'Cancel sign-in'}).click();
       await dialog.waitFor({state: 'detached'});
       assert.deepEqual(writes.at(-1), {p: `/api/v2/computers/box/logins/${last().id}/cancel`});
+      await page.locator('.toast', {hasText: 'The sign-in was cancelled.'}).waitFor();
+      // Refused because the computer is already putting the account in place (409): the pane stays, follows it to
+      // signed in, and closes then.
+      await row('codex').getByRole('button', {name: 'Sign in'}).click();
+      await dialog.locator('[data-status]', {hasText: 'Starting the sign-in'}).waitFor();
+      Object.assign(last(), {state: 'waiting', url: 'https://auth.openai.com/codex/device', code: 'WXYZ-67890'});
+      await dialog.locator('code[data-code]', {hasText: 'WXYZ-67890'}).waitFor();
+      const late = "The new account is already being put in place, so it can't be cancelled now";
+      refuse({status: 409, detail: late, state: 'finishing'});
+      await dialog.getByRole('button', {name: 'Cancel sign-in'}).click();
+      await dialog.locator('[data-status][data-state=finishing]', {hasText: late}).waitFor();
+      assert.equal(await dialog.locator('[data-actions] button').count(), 0, 'nothing to cancel once it is finishing');
+      Object.assign(last(), {state: 'signed_in', updated: new Date().toISOString()});
+      await dialog.waitFor({state: 'detached'});
+      await page.locator('.toast', {hasText: 'Signed in. Codex (ChatGPT) is ready on Server.'}).waitFor();
       // A failure gives its message, still without the computer's lines.
       await row('codex').getByRole('button', {name: 'Sign in'}).click();
       await dialog.locator('[data-status]', {hasText: 'Starting the sign-in'}).waitFor();
