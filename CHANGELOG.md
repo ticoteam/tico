@@ -8,6 +8,12 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- Every bot run records what woke it (a person's message, a comment, a status or relation change, pull request checks,
+  a stall check, a schedule, or other), its input tokens with the cached part split out, its output tokens, and an
+  outcome worked out in code from what the run wrote: `acted`, `no_change` (its task is still open) or `nothing_to_do`,
+  plus an exact `did_nothing` flag. `hub sql` gains `run_weekly`, one row per week, bot and trigger with runs, tokens
+  and the count and share of each outcome. Runs from before this read `unknown` and are still counted
+  ([What woke each run](docs/hub-sql.md#what-woke-each-run-and-what-it-did)).
 - **Add key**, **Replace key** and **Clear key** for a computer's model API key (Codex, Claude Code, Cursor Agent,
   Muse Code), from Settings > Computers, with no terminal. The row shows whose key it is by its preview only. A new key
   goes to the credential vault for that computer alone and is checked on the computer before the old one is deleted;
@@ -67,12 +73,6 @@ All notable changes to Tico are recorded here. The format follows
 
 ### Added
 
-- Every bot run records what woke it (a person's message, a comment, a status or relation change, pull request checks,
-  a stall check, a schedule, or other), its input tokens with the cached part split out, its output tokens, and an
-  outcome worked out in code from what the run wrote: `acted`, `no_change` (its task is still open) or `nothing_to_do`,
-  plus an exact `did_nothing` flag. `hub sql` gains `run_weekly`, one row per week, bot and trigger with runs, tokens
-  and the count and share of each outcome. Runs from before this read `unknown` and are still counted
-  ([What woke each run](docs/hub-sql.md#what-woke-each-run-and-what-it-did)).
 - The Overview shows **Bot hours vs human hours**: bot hours per human hour over the last 7 days, and a weekly line for
   up to 12 weeks (Monday to Sunday, Pacific time) with a dashed Parity line at 1× and the current week dotted as "so far".
   Hover or tap a week for its numbers; click the card for the table by week. Bot hours are the time bot runs spent
