@@ -10,7 +10,9 @@
 //! computer, `safe_upstream`) is reached directly, never through a proxy.
 //!
 //! Under isolation (crate::isolation) the turn runs as another user and cannot read this process at all. Without it,
-//! the turn's user can read the runner's registration anyway, so this boundary is only as strong as isolation.
+//! the turn's user could read this process and the runner's registration, so a runner without isolation hands a turn
+//! no relay: a turn on a Tico model is refused there, and a Tico fallback is left out. The relay passes on one call
+//! only, a model call (`POST /chat/completions`): the key opens nothing else at the Gateway for a turn.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -25,8 +27,13 @@ use crate::util::text_of;
 
 pub use crate::hosts::pi::{GATEWAY_KEY_ENV as KEY_ENV, GATEWAY_URL_ENV as URL_ENV};
 
-/// The relay's path; what follows it goes after the Gateway's base URL (`/chat/completions`).
+/// The relay's path; what follows it goes after the Gateway's base URL.
 const PREFIX: &str = "/gateway";
+/// The one Gateway route a turn may reach: an OpenAI-chat model call.
+const MODEL_CALL: &str = "/chat/completions";
+/// Why a turn on a Tico model is refused on a runner that does not run bot code as another user.
+pub const NOT_ISOLATED: &str = "Tico models run only on a computer that runs bots as their own user (Tico's Docker \
+runner); this computer runs them as itself, where a bot's commands could read the Gateway's key";
 const MAX_HEAD: usize = 64 * 1024;
 const MAX_BODY: usize = 32 * 1024 * 1024;
 /// Request headers never passed on: the turn's token, and what belongs to this connection only.
@@ -99,12 +106,27 @@ pub fn wanted(attempt: &Value) -> bool {
 
 /// Give a turn on a Tico model its relay: the relay's URL and the turn's own token in `env`, in place of anything else
 /// by those names; the key itself only in `vault` (to scrub from what the turn says, and to stop the relay with it).
-pub async fn hand_to_turn(client: &Client, attempt: &Value, env: &mut Env, vault: &mut Vault) -> Result<(), String> {
+/// `isolated` is whether bot code runs as another user here (crate::isolation::enabled): without it there is no relay,
+/// so a turn whose own model is a Tico model is refused, and one with only a Tico fallback runs without it.
+pub async fn hand_to_turn(
+    client: &Client,
+    attempt: &Value,
+    env: &mut Env,
+    vault: &mut Vault,
+    isolated: bool,
+) -> Result<(), String> {
     if !wanted(attempt) {
         return Ok(());
     }
     env.remove(KEY_ENV);
     env.remove(URL_ENV);
+    if !isolated {
+        if crate::hosts::pi::is_gateway(attempt["config"]["model"].as_str()) {
+            return Err(NOT_ISOLATED.into());
+        }
+        crate::util::log(&format!("{}: no Tico fallback here: {NOT_ISOLATED}", text_of(&attempt["id"])));
+        return Ok(());
+    }
     if let Some((key, url)) = credentials(client, &text_of(&attempt["id"])).await? {
         vault.values.push(key.clone());
         let relay = start(&url, key).await?;
@@ -196,18 +218,12 @@ async fn serve(mut socket: TcpStream, s: &Shared) -> std::io::Result<()> {
     if !same(given, &s.token) {
         return answer(&mut socket, 401, "This relay serves its own turn only").await;
     }
-    let plain = |r: &&str| {
-        let lower = r.to_ascii_lowercase();
-        r.starts_with('/') && !lower.contains("..") && !lower.contains("%2e") && !r.contains(['#', '\\'])
-    };
-    let Some(rest) = target.strip_prefix(PREFIX).filter(plain) else {
-        return answer(&mut socket, 404, "Not a Gateway path").await;
-    };
-    let method = match method.as_str() {
-        "GET" => reqwest::Method::GET,
-        "POST" => reqwest::Method::POST,
-        _ => return answer(&mut socket, 405, "Only GET and POST").await,
-    };
+    if target.strip_prefix(PREFIX) != Some(MODEL_CALL) {
+        return answer(&mut socket, 404, "This relay passes on model calls only").await;
+    }
+    if method != "POST" {
+        return answer(&mut socket, 405, "Model calls are POST").await;
+    }
     if header("transfer-encoding").is_some() {
         return answer(&mut socket, 411, "Send the body with a Content-Length").await;
     }
@@ -226,7 +242,7 @@ async fn serve(mut socket: TcpStream, s: &Shared) -> std::io::Result<()> {
         body.extend_from_slice(&chunk[..n]);
     }
     body.truncate(length);
-    let mut request = s.client.request(method, format!("{}{rest}", s.base)).bearer_auth(&s.key).body(body);
+    let mut request = s.client.post(format!("{}{MODEL_CALL}", s.base)).bearer_auth(&s.key).body(body);
     for (k, v) in &headers {
         if !DROP_REQUEST.contains(&k.as_str()) {
             request = request.header(k.as_str(), v.as_str());
@@ -295,9 +311,13 @@ mod tests {
     }
 
     async fn call(relay: &Relay, token: &str, path: &str, body: &str) -> String {
+        send(relay, "POST", token, path, body).await
+    }
+
+    async fn send(relay: &Relay, method: &str, token: &str, path: &str, body: &str) -> String {
         let mut socket = TcpStream::connect(relay.url.trim_start_matches("http://").split('/').next().unwrap()).await.unwrap();
         let request = format!(
-            "POST {path} HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nX-Kept: yes\r\nContent-Length: {}\r\n\r\n{body}",
+            "{method} {path} HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nX-Kept: yes\r\nContent-Length: {}\r\n\r\n{body}",
             body.len()
         );
         socket.write_all(request.as_bytes()).await.unwrap();
@@ -338,11 +358,17 @@ mod tests {
             (relay.token.as_str(), "/gateway/../key", "404"),
             (relay.token.as_str(), "/gateway/%2E%2e/key", "404"),
             (relay.token.as_str(), "/gatewayx/chat/completions", "404"),
+            (relay.token.as_str(), "/gateway/decisions", "404"),           // the Gateway's other routes
+            (relay.token.as_str(), "/gateway/key", "404"),
+            (relay.token.as_str(), "/gateway/chat/completions/../../decisions", "404"),
+            (relay.token.as_str(), "/gateway/chat/completions?x=1", "404"),
         ] {
             let out = call(&relay, token, path, "{}").await;
             assert!(out.starts_with(&format!("HTTP/1.1 {status}")), "{token} {path}: {out}");
             assert!(!out.contains(KEY));
         }
+        let out = send(&relay, "GET", &relay.token, "/gateway/chat/completions", "").await;
+        assert!(out.starts_with("HTTP/1.1 405"), "{out}");
         assert!(seen.lock().unwrap().is_empty());
     }
 
@@ -380,9 +406,9 @@ mod tests {
         let (mut env, mut vault) = (Env::new(), Vault::default());
         env.insert(KEY_ENV.into(), KEY.into());                    // from anywhere else: never kept
         env.insert("PATH".into(), "/usr/bin".into());
-        hand_to_turn(&client, &serde_json::json!({"id": "att-1", "gateway": false}), &mut env, &mut vault).await.unwrap();
+        hand_to_turn(&client, &serde_json::json!({"id": "att-1", "gateway": false}), &mut env, &mut vault, true).await.unwrap();
         assert!(asked.lock().unwrap().is_empty() && vault.relay.is_none());
-        hand_to_turn(&client, &serde_json::json!({"id": "att-1", "gateway": true}), &mut env, &mut vault).await.unwrap();
+        hand_to_turn(&client, &serde_json::json!({"id": "att-1", "gateway": true}), &mut env, &mut vault, true).await.unwrap();
         let request = asked.lock().unwrap()[0].clone();
         assert!(request.starts_with("GET /api/v2/runner-gateway-credentials?attempt=att-1 "), "{request}");
         assert!(request.contains("Bearer runner-token"));
@@ -392,6 +418,26 @@ mod tests {
         assert_eq!(vault.values, vec![KEY.to_string()]);
         let out = call(relay, &env[KEY_ENV], "/gateway/chat/completions", "{}").await;
         assert!(out.starts_with("HTTP/1.1 200") && seen.lock().unwrap().len() == 1, "{out}");
+    }
+
+    #[tokio::test]
+    async fn a_runner_without_isolation_hands_a_turn_no_relay() {
+        let (hub, asked) = upstream(b"HTTP/1.1 500 X\r\nContent-Length: 0\r\n\r\n".to_vec()).await;
+        let client = Client::new(hub.trim_end_matches("/v1/gateway"), "runner-token", 5, 0).unwrap();
+        for (config, refused) in [(serde_json::json!({"model": "tico-mid-1.0"}), true),
+                                  (serde_json::json!({"model": "opus-5-5", "fallback": {"model": "tico-mid-1.0"}}), false)] {
+            let (mut env, mut vault) = (Env::new(), Vault::default());
+            env.insert(KEY_ENV.into(), KEY.into());
+            env.insert(URL_ENV.into(), "https://gw.example/v1/gateway".into());
+            let attempt = serde_json::json!({"id": "att-1", "gateway": true, "config": config});
+            let got = hand_to_turn(&client, &attempt, &mut env, &mut vault, false).await;
+            assert_eq!(got.is_err(), refused, "{config}");
+            if refused {
+                assert_eq!(got.unwrap_err(), NOT_ISOLATED);
+            }
+            assert!(!env.contains_key(KEY_ENV) && !env.contains_key(URL_ENV) && vault.relay.is_none() && vault.values.is_empty());
+        }
+        assert!(asked.lock().unwrap().is_empty());                // the key is never even fetched
     }
 
     #[test]

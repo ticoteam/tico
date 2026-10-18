@@ -62,8 +62,8 @@ pub fn is_gateway(model: Option<&str>) -> bool {
 }
 
 /// pi's `models.json` for the Gateway: its OpenAI-chat endpoint at `url` (the runner's relay, gateway_relay.rs), the
-/// token read from GATEWAY_KEY_ENV when pi makes a request. It holds no secret. The models take text and tools only (the Gateway refuses images). They reason,
-/// so pi sends the bot's effort as `reasoning_effort`; pi drops it for a model not marked `reasoning`. The Gateway
+/// token read from GATEWAY_KEY_ENV when pi makes a request. It holds no secret. The models take text and tools only
+/// (the Gateway refuses images). They reason, so pi sends the bot's effort as `reasoning_effort`; pi drops it for a model not marked `reasoning`. The Gateway
 /// takes none, minimal, low, medium, high and xhigh, so pi's `max` (`effort_for`) goes as `xhigh`.
 pub fn gateway_models_json(url: &str) -> Value {
     let url = url.trim().trim_end_matches('/');

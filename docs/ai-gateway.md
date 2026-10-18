@@ -42,8 +42,13 @@ People other than the owner see only whether the Gateway is connected.
 
 While the Gateway is connected, pick **Tico Cheap 1.0**, **Tico Mid 1.0** or **Tico Power 1.0** in **Settings → Bots**
 like any other model ([Harness, model, effort and fallback](creating-bots.md#7-harness-model-effort-and-fallback)). The
-model list says what runs underneath, for example "Tico Mid 1.0 (Claude Sonnet 5.5 underneath)". Only bots on a Tico
-model, or with a Tico model as their own fallback, get the gateway key.
+model list says what runs underneath, for example "Tico Mid 1.0 (Claude Sonnet 5.5 underneath)".
+
+No bot ever holds the gateway key. For a bot on a Tico model, or with a Tico model as its own fallback, the computer
+running it fetches the key and passes the bot's model calls on to the Gateway. The bot gets a pass that works only for
+that run and only for model calls. That is why Tico models run only on a computer that runs bots as their own user:
+Tico's Docker runner does. On a computer that runs bots as itself (a Mac), a bot on a Tico model stops with "Tico models
+run only on a computer that runs bots as their own user", and a Tico fallback is left out.
 
 ## What the card says
 

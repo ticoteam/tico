@@ -779,7 +779,8 @@ impl Runner {
                 }
             }
             // The Gateway's key stays with this runner: the turn gets a relay and a token good for this turn only.
-            crate::gateway_relay::hand_to_turn(&self.client, &attempt, &mut env, &mut vault).await.map_err(Fail::runtime)?;
+            let isolated = crate::isolation::enabled();
+            crate::gateway_relay::hand_to_turn(&self.client, &attempt, &mut env, &mut vault, isolated).await.map_err(Fail::runtime)?;
             base_env = Some(env.clone());
             let pairs: Vec<(String, String)> = env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
             redactor = redact::for_turn(&pairs, &vault.values);
