@@ -649,7 +649,7 @@ def test_a_routing_retry_is_one_short_http_attempt_and_one_audited_call(hub, mon
         attempts.append(timeout)
         raise TimeoutError()
 
-    monkeypatch.setattr("urllib.request.urlopen", opener)
+    monkeypatch.setattr("clients.judge.urlopen", opener)
     hub.settings.typesafe_api_key = "synthetic"
     gw = G.Gateway(hub, FakeSlack(), clock=Clock())
     gw.verify_app()

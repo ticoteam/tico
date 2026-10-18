@@ -4,7 +4,12 @@ every step. All against a fake Gateway, a fake TypeSafe and a fake Anthropic: no
 
 import io
 import json
+import socketserver
+import ssl
+import threading
+import time
 import urllib.error
+import urllib.request
 from pathlib import Path
 
 import pytest
@@ -117,7 +122,7 @@ class Trickle(io.BytesIO):
 @pytest.fixture
 def net(monkeypatch):
     internet = Internet()
-    monkeypatch.setattr("urllib.request.urlopen", internet)
+    monkeypatch.setattr("clients.judge.urlopen", internet)       # what every decision transport opens with
     return internet
 
 
@@ -460,6 +465,87 @@ def test_an_answer_that_trickles_in_is_cut_off_at_its_deadline_and_the_next_prov
     with pytest.raises(J.JudgeError) as caught:
         engine({"team": "Acme"}, QUESTIONS)
     assert caught.value.code == "unavailable" and clock.now - start <= J.GATEWAY_TIMEOUT + 2
+
+
+def self_signed(tmp_path):
+    """A certificate for 127.0.0.1 that only this test trusts (SSL_CERT_FILE), and its key."""
+    import datetime
+    import ipaddress
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.x509.oid import NameOID
+    key = ec.generate_private_key(ec.SECP256R1())
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "127.0.0.1")])
+    now = datetime.datetime.now(datetime.timezone.utc)
+    cert = (x509.CertificateBuilder().subject_name(name).issuer_name(name).public_key(key.public_key())
+            .serial_number(1).not_valid_before(now - datetime.timedelta(days=1))
+            .not_valid_after(now + datetime.timedelta(days=1))
+            .add_extension(x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]), False)
+            .add_extension(x509.BasicConstraints(ca=True, path_length=None), True)
+            .add_extension(x509.KeyUsage(True, False, False, False, False, True, False, False, False), True)
+            .add_extension(x509.SubjectKeyIdentifier.from_public_key(key.public_key()), False)
+            .add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(key.public_key()), False)
+            .sign(key, hashes.SHA256()))
+    (tmp_path / "cert.pem").write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+    (tmp_path / "key.pem").write_bytes(key.private_bytes(serialization.Encoding.PEM,
+                                                         serialization.PrivateFormat.PKCS8,
+                                                         serialization.NoEncryption()))
+    return tmp_path / "cert.pem", tmp_path / "key.pem"
+
+
+class Dribble(socketserver.BaseRequestHandler):
+    """A peer that never finishes its headers: a status line, then a header byte every 0.1 s, over TLS when the
+    server has a `tls` context. Each wait is far under any socket timeout."""
+
+    def handle(self):
+        conn = self.request
+        try:
+            if self.server.tls:
+                conn = self.server.tls.wrap_socket(conn, server_side=True)
+            conn.settimeout(0.5)
+            conn.recv(65536)
+            conn.sendall(b"HTTP/1.1 200 OK\r\nX-Slow: ")
+            for _ in range(100):
+                time.sleep(0.1)
+                conn.sendall(b"a")
+        except (OSError, ssl.SSLError):
+            pass                                    # the client shut the connection: what the test wants
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("scheme", ["http", "https"])
+def test_a_peer_that_dribbles_its_headers_is_cut_at_the_deadline_and_the_next_provider_answers(monkeypatch, tmp_path,
+                                                                                               scheme):
+    server = socketserver.ThreadingTCPServer(("127.0.0.1", 0), Dribble)
+    server.daemon_threads, server.tls = True, None
+    if scheme == "https":
+        cert, key = self_signed(tmp_path)
+        server.tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        server.tls.load_cert_chain(cert, key)
+        monkeypatch.setenv("SSL_CERT_FILE", str(cert))
+        # The opener's TLS context reads the trusted certificates when it is built.
+        monkeypatch.setattr(J, "_OPENER", urllib.request.build_opener(J._HTTPHandler, J._HTTPSHandler))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    url = f"{scheme}://127.0.0.1:{server.server_address[1]}/v1/decisions"
+
+    def answers(state, questions, label=None):
+        return {"answers": answer_all(questions), "model": "next-provider"}
+    try:
+        monkeypatch.setattr(B, "CHAIN_SECONDS", 2.5)
+        start = time.monotonic()
+        result = B.ordered([J.gateway("gw-synthetic", url, timeout=1.2), answers])({"team": "Acme"}, QUESTIONS)
+        assert result["model"] == "next-provider" and result["fallback"] == "unavailable"
+        assert time.monotonic() - start < 1.2 + 1, "the attempt is cut at its own deadline"
+        # Every provider dribbling: the whole chain still ends by its deadline.
+        start = time.monotonic()
+        with pytest.raises(J.JudgeError) as caught:
+            B.ordered([J.gateway("gw-synthetic", url, timeout=1.2), J.gateway("gw-synthetic", url)])(
+                {"team": "Acme"}, QUESTIONS)
+        assert caught.value.code == "unavailable" and time.monotonic() - start < B.CHAIN_SECONDS + 1
+    finally:
+        server.shutdown()
+        server.server_close()
 
 
 def test_every_client_that_asks_for_a_decision_waits_longer_than_the_chain_takes(monkeypatch):

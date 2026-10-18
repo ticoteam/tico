@@ -140,7 +140,7 @@ class Captured:
 
 def test_the_openrouter_fallback_sends_the_openrouter_model_id_and_skips_providers_without_a_key(monkeypatch, caplog):
     opener = Captured()
-    monkeypatch.setattr("urllib.request.urlopen", opener)
+    monkeypatch.setattr("clients.judge.urlopen", opener)
     pi = {"runtime": "pi", "model": "deepseek-v4.1-flash", "enabled": ["openrouter"]}
     engine = B.fallback_engine(pi, env={"OPENROUTER_API_KEY": "synthetic"})
     engine({"team": "Acme"}, QUESTIONS)
