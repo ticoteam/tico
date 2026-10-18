@@ -413,8 +413,8 @@ def direct(api_key, model=MODEL, timeout=TIMEOUT, opener=None, sleep=time.sleep,
                     detail = json.load(exc)
                 except ValueError:
                     detail = {}
-                if status == 401:
-                    raise JudgeError("auth", "TypeSafe refused the key", 401)
+                if status in (401, 403):
+                    raise JudgeError("auth", f"TypeSafe refused the key ({status})", status)
                 if status == 422:
                     raise JudgeError("invalid", str(detail.get("detail") or detail or "TypeSafe refused the request"), 422)
                 if status in (429, 529) or status >= 500:
