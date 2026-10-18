@@ -6,6 +6,7 @@ views and an authorizer; these tests hold the two to the same answers.
 
 import json
 import re
+from types import SimpleNamespace
 
 import pytest
 
@@ -55,7 +56,7 @@ def world(api):
             "private": private, "coo_task": coo_task, "finance_task": finance_task}
 
 
-def test_only_one_read_statement_is_accepted(api):
+def test_only_one_read_statement_is_accepted(api, monkeypatch):
     for sql in REJECTED:
         detail = error(api, sql)
         assert "statement" in detail, (sql, detail)
@@ -63,8 +64,15 @@ def test_only_one_read_statement_is_accepted(api):
     assert query(api, "select 1 as one")["columns"] == ["one"]
     assert query(api, "EXPLAIN QUERY PLAN SELECT * FROM tasks")["columns"] == ["id", "parent", "notused", "detail"]
     assert "no such table: nope" in error(api, "SELECT * FROM nope")
-    assert query(api, "SELECT x'0102' AS b") == {"columns": ["b"], "rows": [["AQI="]], "row_count": 1,
-                                                 "truncated": False, "ms": 0, "note": "BLOB values are base64"}
+    blob = query(api, "SELECT x'0102' AS b")
+    # `ms` is measured: a loaded computer takes a millisecond or two.
+    assert isinstance(blob.pop("ms"), int)
+    assert blob == {"columns": ["b"], "rows": [["AQI="]], "row_count": 1, "truncated": False,
+                    "note": "BLOB values are base64"}
+    # A query that takes 5 ms reports it.
+    clock = iter(range(1000))
+    monkeypatch.setattr("backend.sql.time", SimpleNamespace(monotonic=lambda: next(clock) * 0.005))
+    assert query(api, "SELECT 1 AS one")["ms"] == 5
 
 
 def test_secret_tables_and_columns_are_denied_for_everyone(api, world):
