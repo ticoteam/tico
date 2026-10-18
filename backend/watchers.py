@@ -19,7 +19,7 @@ from fastapi import Request
 from pydantic import Field
 
 from clients.watchers import LIMITS, MAX_EVENTS
-from . import rooms, run_triggers
+from . import rooms, run_triggers, support_triage
 from .models import Contract, Slug
 from .store import H, Problem
 
@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS watcher_runs(
  bot TEXT NOT NULL, name TEXT NOT NULL, runner_id TEXT NOT NULL, started TEXT NOT NULL, finished TEXT NOT NULL,
  exit_code INTEGER NOT NULL, timed_out INTEGER NOT NULL DEFAULT 0, every INTEGER NOT NULL, output TEXT NOT NULL DEFAULT '',
  events INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(bot, name));
-"""
+""" + support_triage.SCHEMA
 STALE_AFTER = 3            # runs missed before Health says a watcher has stopped
 # A path into a secrets folder or another bot's repository is refused in a task or a message (hubdb rule 8), so text
 # from outside is written with the slash set apart rather than losing the whole event. `emp-<anything>/` always counts;
@@ -75,11 +75,11 @@ def live(task):
     return bool(task) and task["status"] not in ("closed", "declined")
 
 
-def _open(c, auth, bot, title, body):
-    owner = "bot:" + bot
+def _open(c, auth, bot, title, body, owner=None):
+    owner = owner or "bot:" + bot
     conversation = rooms.task_conversation_id(c, auth, owner, H.KEEPER)
     return H.task_create(c, H.KEEPER, defang(title, c).strip()[:300] or "From a watcher", defang(body, c), owner,
-                         deduplicate=False, conversation_id=conversation)
+                         deduplicate=False, conversation_id=conversation, lint=not owner.startswith("human:"))
 
 
 def _wake(c, bot, task, text, why):
@@ -88,8 +88,16 @@ def _wake(c, bot, task, text, why):
           refs=run_triggers.stamp({"task": task["id"], "wake": why}, "comment" if why == "watcher" else "status_or_relation"))
 
 
-def deliver(c, auth, bot, event):
-    """Apply one event. Returns the id of the task it touched, or None when it changed nothing."""
+def _note(c, task, text):
+    """A note on a held support ticket's task, for the person holding it: the bot is not woken."""
+    H.task_comment(c, H.KEEPER, task["id"], defang(text, c) or "Something changed.", wake=False)
+    return task["id"]
+
+
+def deliver(c, auth, bot, event, triage=None):
+    """Apply one event. Returns the id of the task it touched, or None when it changed nothing.
+
+    `triage(c, event)` is True when the event waits for support triage instead (backend/support_triage.py)."""
     item = c.execute("SELECT task_id FROM watcher_items WHERE bot=? AND key=?", (bot, event.key)).fetchone()
     task = H.task(c, item["task_id"]) if item else None
     if event.ref and c.execute("SELECT 1 FROM watcher_refs WHERE bot=? AND key=? AND ref=?",
@@ -97,8 +105,14 @@ def deliver(c, auth, bot, event):
         return None
     if event.ref:
         c.execute("INSERT INTO watcher_refs VALUES(?,?,?)", (bot, event.key, event.ref))
+    if support_triage.pending(c, bot, event.key):
+        return None                                    # its task opens after triage; the bot reads the thread in `show`
+    if event.op != "task" and support_triage.held(c, bot, event.key, task):
+        return _note(c, task, event.text or event.note) if live(task) else None
     if event.op == "task":
         if item:
+            return None
+        if triage and triage(c, event):
             return None
         task = _open(c, auth, bot, event.title or event.key, event.body)
     elif event.op == "comment":
@@ -116,15 +130,17 @@ def deliver(c, auth, bot, event):
     return task["id"]
 
 
-def report(c, auth, runner, body):
-    """A run of a watcher: its events, then the run itself."""
+def report(c, auth, runner, body, triage=None):
+    """A run of a watcher: its events, then the run itself. `triage(c, event)` holds a new HQ ticket for support
+    triage (backend/support_triage.py); without it every event applies at once."""
     hosted = c.execute("SELECT 1 FROM assignments a JOIN bots b ON b.slug=a.bot "
                        "WHERE a.bot=? AND a.runner_id=? AND b.state='active'", (body.bot, runner["id"])).fetchone()
     if not hosted:
         raise Problem("forbidden", "That bot is not active on this computer", 403)
     touched = {}
     for event in body.events:
-        touched[event.key] = deliver(c, auth, body.bot, event) or touched.get(event.key)
+        waits = triage if triage and support_triage.applies(body.name, event) else None
+        touched[event.key] = deliver(c, auth, body.bot, event, waits) or touched.get(event.key)
     c.execute("INSERT INTO watcher_runs(bot,name,runner_id,started,finished,exit_code,timed_out,every,output,events) "
               "VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(bot,name) DO UPDATE SET runner_id=excluded.runner_id,"
               "started=excluded.started,finished=excluded.finished,exit_code=excluded.exit_code,"
@@ -156,7 +172,21 @@ def install(app, store, auth, execution, mutate):
     def watcher_report(request: Request, body: WatcherReport):
         who = request.state.identity
 
+        waited = []
+
+        def triage(c, event):
+            if support_triage.engine_for(store, c, getattr(app.state, "judge", None)) is None:
+                return False                           # Decide is off: the ticket goes on at once, as before
+            waited.append(event.key)
+            return support_triage.hold(c, body.bot, event)
+
         def work(c):
             runner = execution.runner(c, who)
-            return report(c, auth, runner, body)
-        return mutate(request, body, work)
+            return report(c, auth, runner, body, triage)
+        result = mutate(request, body, work)
+        if not waited:                                 # tickets that waited when the server last stopped
+            with store.read() as c:
+                waited = c.execute("SELECT 1 FROM watcher_pending LIMIT 1").fetchall()
+        if waited:
+            support_triage.kick(app, store, auth)
+        return result

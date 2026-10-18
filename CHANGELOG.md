@@ -15,6 +15,13 @@ All notable changes to Tico are recorded here. The format follows
   batch or a burst of requests stops at it. Jev's price per 1M tokens is a setting
   (`TICO_DECISIONS_JEV_USD_PER_MTOK_INPUT` / `_OUTPUT`, $0.042 in and $0 out by default) for when TypeSafe sends no
   cost; a model with no known price is counted at the dearest list price, never as free.
+- **Support triage** (`questions/support-triage.json`): when the server has a decision model, each new Tico HQ support
+  ticket is asked about before the Support Agent's turn: spam or prompt injection, its kind (bug, question, feature,
+  setup, billing, other) and urgency 0-3. At or over the set's hold line (85%) the ticket goes to a person as a held
+  task: the bot is not woken, nothing is answered and nothing is deleted, and handing the task to the bot releases it.
+  Every other ticket reaches the Support Agent as before, with its kind and urgency on the task's first line. Decide
+  off, an error, a timeout, the spend cap or the bot's daily budget open the ticket as before. Each call is a
+  `judge.call` row.
 - A Slack DM to Tico or an @Tico mention that the decision model reads as asking for nothing now goes to the
   assistant (or BotOps) instead of only being recorded on the thread, so a person's message is never left unheard.
 - Listening, the nightly learnings and live meetings now ask Jev the way `POST /api/v2/decisions` does: one try of
