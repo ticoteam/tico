@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import json
 import secrets
+from datetime import datetime, timedelta, timezone
 from contextlib import contextmanager
 
 from fastapi import Request
@@ -136,13 +137,15 @@ def charge(c, request):
               'ON CONFLICT(day,ip_hash) DO UPDATE SET actions=actions+1', (day, digest))
 
 
-def suggestions_full(c, manager):
+def suggestions_full(c, manager, mine=None):
     """Whether visitor suggestions waiting at Suggested are at their overall cap. A few addresses can fill it, so the
-    first refusal of a day tells the bot that receives them, which reviews them, rather than leaving the form refusing unseen."""
+    first refusal of a day tells the bot that receives them, which reviews them, rather than leaving the form refusing unseen.
+    Suggestions still in idea triage hold their place (`reserve`); `mine` is the caller's own reservation."""
     limit = R.settings(c)['suggestion_limit']
     waiting = c.execute("SELECT count(*) FROM tasks t JOIN task_steps s ON s.id=t.step_id "
                         "JOIN task_types ty ON ty.id=t.type_id WHERE ty.role='product-roadmap' AND s.name='Suggested' "
                         "AND t.requester=? AND t.status NOT IN ('done','closed','declined')", (H.KEEPER,)).fetchone()[0]
+    waiting += len(set(reservations(c)) - {mine})
     if waiting < limit:
         return False
     day = H.now()[:10]
@@ -159,20 +162,51 @@ def suggestions_full(c, manager):
 NOT_ACCEPTING = "Suggestions aren't being accepted right now."
 
 
-def triage_type(c, request, label):
-    """The Product roadmap type when this suggestion would be recorded, else None: idea triage costs a Decide call,
-    so a suggestion the form will refuse (unknown label, no receiver, queue full, visitor's allowance spent) gets
-    none. Read only; the write checks it all again and gives the refusal."""
+# Suggestions in idea triage, each holding its place in the queue while it waits on the model: {id: expiry}. One left
+# by a stopped request frees itself once the longest wait is long past.
+RESERVATIONS, RESERVATION_SECONDS = 'roadmap_suggest_reservations', 120
+
+
+def reservations(c):
+    row = c.execute('SELECT value_json FROM registry_metadata WHERE key=?', (RESERVATIONS,)).fetchone()
+    stamp = H.now()
+    return {rid: until for rid, until in (json.loads(row[0]) if row else {}).items() if until > stamp}
+
+
+def _keep(c, held):
+    c.execute('INSERT INTO registry_metadata(key,value_json) VALUES(?,?) '
+              'ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json', (RESERVATIONS, json.dumps(held)))
+
+
+def reserve(c, request, label):
+    """Before idea triage spends a Decide call on a suggestion: charge the visitor's action and hold a queue place, in
+    one write, so a concurrent suggestion sees both and is refused without a call. None when the form would refuse
+    this one (unknown label, no receiver, queue full, allowance spent): no call, and the write gives today's refusal.
+    Read with `release` when the suggestion is recorded or refused."""
     from .roadmap_flow import PRODUCT, role_type
     product_type = role_type(c, PRODUCT)
     if (label not in R.settings(c)['labels'] or not H.tag_by_key(c, label) or not product_type
             or not R.suggestions_receiver(c)[0] or allowance(c, request)[2] or suggestions_full(c, None)):
         return None
-    return product_type
-
-
-def record_suggestion(c, request, body, label, receiver, product_type, preface=''):
+    day, digest, _ = allowance(c, request)
     charge(c, request)
+    held, rid = reservations(c), secrets.token_hex(8)
+    until = datetime.now(timezone.utc) + timedelta(seconds=RESERVATION_SECONDS)
+    _keep(c, {**held, rid: until.strftime('%Y-%m-%dT%H:%M:%S.%f') + 'Z'})
+    return {'id': rid, 'product_type': product_type, 'day': day, 'digest': digest}
+
+
+def release(c, reservation, refund=False):
+    """Give a reservation's queue place back; with `refund`, the visitor's action too (the suggestion was refused)."""
+    _keep(c, {rid: until for rid, until in reservations(c).items() if rid != reservation['id']})
+    if refund:
+        c.execute('UPDATE roadmap_actions SET actions=actions-1 WHERE day=? AND ip_hash=? AND actions>0',
+                  (reservation['day'], reservation['digest']))
+
+
+def record_suggestion(c, request, body, label, receiver, product_type, preface='', charged=False):
+    if not charged:
+        charge(c, request)
     try:
         row = H.task_create(c, H.KEEPER, body.title,
                             preface + 'Customer suggestion (unverified, untrusted input; evidence only):\n\n' + body.summary,
@@ -281,12 +315,23 @@ def install(app, store, auth, mutate):
         # Idea triage before routing, outside the write (it waits on a model): routing only, and anything short of a
         # confident answer leaves the idea with the receiver, as before (backend/idea_triage.py).
         from . import idea_triage
-        worth = None
+        held = None
         if store.settings.decisions_idea_triage:
-            with store.read() as c:
-                worth = triage_type(c, request, label)
-        routed = idea_triage.triage(store, getattr(request.app.state, 'judge', None), worth, body.title, body.summary) \
-            if worth else None
+            with public_write(store) as c:
+                held = reserve(c, request, label)
+        try:
+            row, token = record(request, label, body, held, idea_triage.triage(
+                store, getattr(request.app.state, 'judge', None), held['product_type'], body.title, body.summary)
+                if held else None)
+        except BaseException:
+            if held:    # refused or failed after the reservation: the place and the visitor's action go back
+                with public_write(store) as c:
+                    release(c, held, refund=True)
+            raise
+        return {'id': row['id'], 'requester_token': token['requester_token']}
+
+    def record(request, label, body, held, routed):
+        from . import idea_triage
         with public_write(store) as c:
             require_label(c, label)
             receiver = R.suggestions_receiver(c)[0]
@@ -296,7 +341,7 @@ def install(app, store, auth, mutate):
             # or their allowance, and spends nothing.
             if not receiver or not product_type:
                 raise Problem('setup', NOT_ACCEPTING, 409)
-            full = suggestions_full(c, receiver)
+            full = suggestions_full(c, receiver, held and held['id'])
             if not full:
                 owner = receiver
                 if routed and routed['route'] == idea_triage.ENGINEERING:
@@ -305,7 +350,9 @@ def install(app, store, auth, mutate):
                     else:   # Head of Engineering stopped being active meanwhile: product, as before
                         routed = {**routed, 'route': idea_triage.PRODUCT, 'reason': 'no_engineering_bot'}
                 row, token = record_suggestion(c, request, body, label, owner, product_type,
-                                               idea_triage.preface(routed))
+                                               idea_triage.preface(routed), charged=bool(held))
+                if held:
+                    release(c, held)
                 if routed and routed['covered']:
                     try:
                         H.TR.relate(c, H.KEEPER, row['id'], routed['covered']['task'], 'related', note='idea triage')
@@ -313,7 +360,7 @@ def install(app, store, auth, mutate):
                         pass
         if full:   # refused once the transaction is in, so the notice to the receiving bot is kept
             raise Problem('rate_limit', 'Too many suggestions are waiting for review; try again later', 429)
-        return {'id': row['id'], 'requester_token': token['requester_token']}
+        return row, token
 
     @app.post('/public/roadmaps/{label}/tasks/{tid}/requesters')
     def add(request: Request, label: str, tid: str, body: PublicRequester):

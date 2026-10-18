@@ -19,10 +19,12 @@ class FakeModel:
 
     def __init__(self, kind="product", confidence=0.9, match=None, covered=0.85):
         self.kind, self.confidence, self.match, self.covered = kind, confidence, match, covered
-        self.calls, self.fail, self.hold = [], None, None
+        self.calls, self.fail, self.hold, self.extra = [], None, None, {}
+        self.entered = threading.Event()
 
     def __call__(self, state, questions, label=None):
         self.calls.append({"state": state, "questions": questions, "label": label})
+        self.entered.set()
         if self.hold:
             self.hold.wait(5)
         if self.fail:
@@ -32,7 +34,8 @@ class FakeModel:
             options = questions["covered"]["criteria"]
             hit = next((name for name, text in options.items() if self.match and self.match in str(text)), "new")
             answers["covered"] = {"type": "choice", "choice": hit, "confidence": self.covered if hit != "new" else 0.9}
-        return {"model": "jev-1.14", "usage": {"input_tokens": 400, "output_tokens": 0}, "ms": 120, "answers": answers}
+        return {"model": "jev-1.14", "usage": {"input_tokens": 400, "output_tokens": 0}, "ms": 120,
+                "answers": {**answers, **self.extra}}
 
 
 @pytest.fixture
@@ -98,7 +101,7 @@ def test_a_bug_goes_to_head_of_engineering(roadmap):
 
 
 @pytest.mark.parametrize("case", ["off", "error", "timeout", "below_threshold", "no_engineering_bot", "spend_cap",
-                                  "shape", "unconfigured"])
+                                  "shape", "unconfigured", "budget", "bad_confidence"])
 def test_anything_short_of_a_confident_answer_goes_to_product_as_today(roadmap, monkeypatch, case):
     api, _, model = roadmap
     model.kind, model.confidence = "engineering", 0.95
@@ -121,6 +124,10 @@ def test_anything_short_of_a_confident_answer_goes_to_product_as_today(roadmap, 
             H.event(c, "bot:ops", "judge.spend", "mail-triage@1", {"cost_usd": settings.decisions_monthly_usd})
     elif case == "shape":
         model.kind = "neither"
+    elif case == "bad_confidence":
+        model.confidence = "high"
+    elif case == "budget":
+        settings.decisions_daily_calls_bot = 0
     elif case == "unconfigured":
         api.app.state.judge = None
         monkeypatch.setattr("backend.judge.fallback_engine", lambda *args, **kwargs: None)
@@ -129,14 +136,14 @@ def test_anything_short_of_a_confident_answer_goes_to_product_as_today(roadmap, 
         model.hold.set()
     assert task["owner"] == "bot:cpo"
     calls = audits(api)
-    if case in ("off", "spend_cap", "unconfigured"):
+    if case in ("off", "spend_cap", "unconfigured", "budget"):
         assert not calls and not model.calls, "no call is made, so nothing is audited"
         assert task["body"].startswith("Customer suggestion (unverified"), "exactly as before"
         return
     (_, _, detail), = calls
     assert detail["route"] == "product"
-    if case in ("error", "timeout", "shape"):
-        assert detail["reason"] == {"error": "unavailable"}.get(case, case)
+    if case in ("error", "timeout", "shape", "bad_confidence"):
+        assert detail["reason"] == {"error": "unavailable", "bad_confidence": "shape"}.get(case, case)
         assert task["body"].startswith("Customer suggestion (unverified")
         assert not task["relations"].get("related")
     else:
@@ -156,3 +163,61 @@ def test_no_call_for_a_suggestion_the_form_refuses_and_none_without_open_items(r
         c.execute("UPDATE tasks SET status='done' WHERE type_id=(SELECT id FROM task_types WHERE role='product-roadmap')")
     suggest(api, "Third idea")
     assert set(model.calls[-1]["questions"]) == {"kind"}
+
+
+def test_a_covered_match_under_its_threshold_is_neither_named_nor_linked(roadmap):
+    api, _, model = roadmap
+    model.match, model.covered = "Internal title", 0.6
+    task = suggest(api, "Let me export reports")["task"]
+    assert task["owner"] == "bot:cpo" and "Probably covered" not in task["body"]
+    assert not task["relations"].get("related")
+    assert audits(api)[-1][2]["covered"] is None
+
+
+def test_a_malformed_extra_answer_neither_breaks_the_suggestion_nor_enters_the_audit(roadmap):
+    api, _, model = roadmap
+    model.extra = {"extra": {"noul": "invalid"}}
+    task = suggest(api, "Let me export reports")["task"]
+    assert task["owner"] == "bot:cpo"
+    (_, _, detail), = audits(api)
+    assert set(detail["answers"]) == {"kind", "covered"}
+
+
+@pytest.mark.parametrize("last", ["allowance", "queue"])
+def test_a_suggestion_refused_while_another_waits_on_triage_costs_no_call(roadmap, last):
+    """Two suggestions racing for the visitor's last action or the queue's last place: the one in triage holds it,
+    so the other is refused without a Decide call, and a refused one gives its place and action back."""
+    api, _, model = roadmap
+    post(api, "roadmaps/settings", {"action_limit": 1} if last == "allowance" else {"suggestion_limit": 1})
+    model.hold = threading.Event()
+    first = {}
+    worker = threading.Thread(target=lambda: first.update(response=api.post(
+        "/public/roadmaps/roadmap/suggest", json={"title": "First idea"}, headers=ORIGIN)))
+    worker.start()
+    assert model.entered.wait(5)
+    second = api.post("/public/roadmaps/roadmap/suggest", json={"title": "Second idea"}, headers=ORIGIN)
+    assert second.status_code == 429 and len(model.calls) == 1
+    model.hold.set()
+    worker.join(10)
+    assert first["response"].status_code == 200, first["response"].text
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT value_json FROM registry_metadata WHERE key='roadmap_suggest_reservations'"
+                         ).fetchone()[0] == "{}", "the recorded suggestion's place is released"
+
+
+
+def test_a_suggestion_refused_after_triage_gives_back_the_visitors_action_and_its_place(roadmap):
+    api, _, model = roadmap
+    post(api, "roadmaps/settings", {"action_limit": 1})
+
+    def receiver_leaves(state, questions, label=None):
+        with api.app.state.store.transaction() as c:
+            c.execute("UPDATE bots SET state='archived' WHERE slug IN ('cpo','cmo')")
+        return FakeModel()(state, questions, label)
+    api.app.state.judge = receiver_leaves
+    refused = api.post("/public/roadmaps/roadmap/suggest", json={"title": "First idea"}, headers=ORIGIN)
+    assert refused.status_code == 409
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT coalesce(sum(actions),0) FROM roadmap_actions").fetchone()[0] == 0
+        assert c.execute("SELECT value_json FROM registry_metadata WHERE key='roadmap_suggest_reservations'"
+                         ).fetchone()[0] == "{}"

@@ -70,6 +70,15 @@ def _ask(engine, state, questions, label):
     return box.get("result"), box.get("error")
 
 
+def _summary(answers, questions):
+    """The audit's answers: only the questions asked, and nothing when they are malformed, so writing the row never
+    stops the idea from reaching product."""
+    try:
+        return J.summary({qid: answers[qid] for qid in questions if qid in answers})
+    except (AttributeError, KeyError, TypeError, ValueError):
+        return {}
+
+
 def triage(store, primary, product_type, title, summary):
     """Where a new idea goes: {"route": "engineering" | "product", "reason", "covered": None | {"task", "title",
     "confidence"}, "engineering_bot" (with route engineering), "kind": (choice, confidence)}. Never raises; anything
@@ -96,6 +105,8 @@ def triage(store, primary, product_type, title, summary):
                                               {name: title for name, (_, title) in items.items()})
     state = {"idea": {"title": title, "summary": summary}}
     result, error = _ask(engine, state, questions, qset["label"])
+    if result is not None and not isinstance(result, dict):
+        result, error = None, "shape"
     out = _product(error) if error else None
     if result is not None:
         try:
@@ -119,7 +130,7 @@ def triage(store, primary, product_type, title, summary):
               "options": len(items), "route": out["route"], "reason": out["reason"],
               "covered": (out["covered"] or {}).get("task")}
     if result is not None:
-        detail.update(audit_detail(result), answers=J.summary(result.get("answers") or {}))
+        detail.update(audit_detail(result), answers=_summary(result.get("answers"), questions))
     if error:
         detail["error"] = error
     with store.transaction() as c:
