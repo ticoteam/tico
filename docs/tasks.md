@@ -156,7 +156,28 @@ going, and no question already waiting on someone) gets one **Still wanted?** qu
 person owns it; a task only bots are on is left alone. It shows in that person's Needs you and
 Decide. **Keep** restarts the clock; **Close** closes the task as theirs with a note. Nothing
 closes without the answer, and the task is asked again only after new activity and another idle
-week (`stale_asked_at`).
+week (`stale_asked_at`). While the team has **Stale ticket review** on, these questions stop: its
+suggestions cover the quiet week.
+
+### Stale ticket review
+
+With **Stale ticket review** on (Settings > Team, an owner or an admin turns it; off by default,
+`TICO_STALE_REVIEW=1` on a server turns the default on), Tico looks once an hour for open, doing,
+waiting and review tasks that seem finished or forgotten: every linked PR merged, closed or shipped;
+the parent done or closed; everything it is blocked by done; a snooze that ended over a day ago with
+nothing since; the same title as an older open task of the same owner; or 7 quiet days (3 for doing).
+A private task is never looked at, so none of its words go to Decide.
+Only a task that is new to the list, or changed since it was last looked at, is judged by Tico Decide
+(`questions/stale-review.json`), at most 30 an hour within the server's daily Decide allowance, and one suggestion a
+task a week; what is left waits for the next hour. A task that changes or starts being worked while Decide is asked,
+or a switch turned off meanwhile, gets nothing. When nothing is new the hour passes with no Decide call and nothing
+written. A suggestion is never an action:
+
+- a bot that owns the task gets one comment, "Stale check: PR #12 merged Oct 16. Suggest: mark done.";
+- a person who owns it gets a row on their one **Stale tickets: N suggestions** card in Needs you, with
+  **Accept** and **Skip**, and **Accept all**. Accept is their own change, with the same checks as by
+  hand: the owner marks done, the requester or a person closes, and anything else is refused. It applies only
+  what the card showed: a task changed since is refused on its own, and a row that arrived since stays.
 
 ### When nobody answers a bot's ask
 
