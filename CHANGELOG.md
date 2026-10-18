@@ -11,10 +11,22 @@ All notable changes to Tico are recorded here. The format follows
 - A bot's turn finishes when a comment it had taken in was deleted while it ran. Finishing such a turn failed with a
   server error on every retry; now the turn and its reply are recorded as usual, and the deleted comment is never held
   for review or run again.
+- A queued job whose message its bot can no longer read (a private task or conversation it was taken off) no longer
+  sits queued for ever. No claim ever takes it, so it aged Health's "queued since" warning. The scheduler now cancels
+  it within a minute and records why (a `job.suppress` event, reason `unreadable`); the message itself stays.
 - A bot no longer gets a second turn on a task while its first is still running there when the task was moved under
   another of its tasks mid-turn. A wake about a task the bot is working on goes into that turn, or waits for the next
   turn on the task; it never starts one beside it. Another bot's turn on the same task (the requester woken by the
   owner's comment) and the bot's other tasks still run side by side.
+- **Clear** on a bot's chat now really starts the bot over. Before, it only trimmed the history Tico sends, and on
+  the computer Claude Code, Codex and the other harnesses kept resuming the old provider thread, so the bot still
+  remembered the cleared chat and every turn still paid for it. Each turn now carries its conversation's session
+  epoch (`session_epoch`) and its bot's (`bot_session_epoch`), moved by Clear and by the session resets after a
+  model, placement or thread-mode change; when the one for its thread moves, the runner starts a new provider thread
+  from Tico's history. The thread a bot's direct chats share starts over on the next turn of any of them, while each
+  other chat keeps its own history. Without a clear the bot resumes its thread as before. After the upgrade, a thread
+  that may have been cleared or reset before its first turn on the new runner starts over once. A runner or Hub from
+  before this keeps today's behaviour ([sessions](docs/sessions.md)).
 
 ### Changed
 - **Decide asks the Tico AI Gateway first**, as Tico Decide 1.0 (`tico-decide-1.0`), with a gateway key

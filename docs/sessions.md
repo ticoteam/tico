@@ -41,6 +41,11 @@ Set `subtask_session: own` to give every subtask its own session instead.
 Each turn on a task leaves a **checkpoint**: the turn's final reply, kept on the task. If a task's session can't be
 resumed (a new computer, a cleared thread), the next turn starts a fresh session from that checkpoint.
 
+**Clear** on a bot's chat starts that chat over: the next turn opens a new provider thread and reads only what was
+said after the clear. The main chat is one thread shared by the bot's chats, so a clear in one person's chat starts
+that shared thread over too; others' chats then continue from their own history in Tico. A bot's computer must run
+a runner from this release or later; an older runner keeps resuming the old thread.
+
 Nothing closes on its own. A task with no activity for 7 days gets one **Still wanted?** question, with **Keep** and
 **Close**, to the person who asked for it (or the person who owns it). See [Picking work back up](tasks.md#picking-work-back-up).
 
