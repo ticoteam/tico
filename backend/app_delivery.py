@@ -11,12 +11,20 @@ that computer is registered:
 - the computer reports what the app's conversation shows (`POST /api/v2/runners/me/app-delivery/{slug}`): the
   bot's new words become its messages here, what the person typed in the app itself is copied in as theirs and
   read, and a question the bot needs its person for is an ask in their Needs you;
-- what goes wrong with the app is a Health finding on that computer (`health_problems`).
+- what goes wrong with the app is a Health finding on that computer (`health_problems`), until a clean read clears
+  it (the listing says which bots' apps have one, so the computer posts an empty clean report for them).
+
+A message is matched to one Tico already holds by sender, words and the time it was said (the app's own `at`, kept as
+`refs.app.at`, or when Tico wrote it), within ECHO_HOURS either way: so the daily sync and the app's history meet in the
+middle in either order. The 4.2 read contract has no needs-a-person marker on a message, so the watch reports the
+bot's words as ordinary messages; a question the app needs its person for reaches Needs you through a send's
+`needs_human` error, which becomes one ask whichever of the turn's reply and the error report arrives first.
 
 Unset, cleared, or with the computer revoked, the bot is sync-only exactly as before.
 """
 
 import json
+from datetime import timezone
 
 from fastapi import Request
 
@@ -168,13 +176,31 @@ def _norm(text):
     return " ".join(str(text or "").split())
 
 
+def said_at(value, fallback):
+    """The app's `at` for a message in Tico's own timestamp format (UTC), or `fallback` when it has none or it can't
+    be read."""
+    at = H.parse_ts(value) if value else None
+    if at is None:
+        return fallback
+    at = at.astimezone(timezone.utc) if at.tzinfo else at.replace(tzinfo=timezone.utc)
+    return at.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+
+
+# When a message was said: the app's own time for one the app reported, else when Tico wrote it.
+SAID_SQL = "COALESCE(json_extract(refs_json,'$.app.at'),created)"
+
+
 def echoes(c, room_id, sender, text, any_source=True, at=None):
-    """True when the room already holds `text` from `sender` within ECHO_HOURS of `at`: the reply a runner turn posted,
-    or the person's message Tico delivered. A message the app itself reported counts only with `any_source` false,
-    so the app saying the same words twice is two messages."""
+    """True when the room already holds `text` from `sender` said within ECHO_HOURS of `at`: the reply a runner turn
+    posted, or the person's message Tico delivered. A message the app itself reported counts only with `any_source`
+    false (and by the app's own time for it), so the app saying the same words twice is two messages."""
     at = at or H.now()
-    sql = ("SELECT body FROM messages WHERE conversation_id=? AND from_actor=? AND created BETWEEN ? AND ? "
-           "AND deleted_at IS NULL AND json_extract(refs_json,'$.app') IS " + ("NULL" if any_source else "NOT NULL"))
+    # A message the app reported has its key; a `needs_human` question has `app` without one, so it is both what Tico
+    # holds (the watch reading the same words doesn't post them again) and what the app brought (the turn's reply
+    # and the sync don't either).
+    which = "json_extract(refs_json,'$.app.key') IS NULL" if any_source else "json_extract(refs_json,'$.app') IS NOT NULL"
+    sql = (f"SELECT body FROM messages WHERE conversation_id=? AND from_actor=? AND {SAID_SQL} BETWEEN ? AND ? "
+           f"AND deleted_at IS NULL AND {which}")
     wanted = _norm(text)
     return any(_norm(row[0]) == wanted for row in c.execute(
         sql, (room_id, sender, H.shift(at, hours=-ECHO_HOURS), H.shift(at, hours=ECHO_HOURS))))
@@ -200,25 +226,38 @@ def _errors(c, runner_id):
 
 def _ask(c, actor, person, room, text, refs):
     """The bot's question to its person: an ask in its chat, which their Needs you lists (H.loose_asks_to). The same
-    open question is not asked twice."""
+    open question is not asked twice, and the same words the turn already posted as its reply (a send's `needs_human`
+    completes the turn with them) become that question rather than a second message."""
     for row in c.execute(f"SELECT m.body FROM messages m WHERE m.conversation_id=? AND m.from_actor=? AND m.to_actor=? "
                          f"AND m.kind='ask' AND m.deleted_at IS NULL AND {H.OPEN_ASK_SQL}", (room["id"], actor, person)):
         if _norm(row[0]) == _norm(text):
             return False
+    reply = next((row for row in c.execute(
+        "SELECT id,body,refs_json FROM messages WHERE conversation_id=? AND from_actor=? AND to_actor=? AND kind='say' "
+        "AND deleted_at IS NULL AND json_extract(refs_json,'$.app') IS NULL AND created>=? ORDER BY created DESC",
+        (room["id"], actor, person, H.shift(H.now(), hours=-ECHO_HOURS))) if _norm(row["body"]) == _norm(text)), None)
+    if reply:
+        c.execute("UPDATE messages SET kind='ask',refs_json=? WHERE id=?",
+                  (encode({**(H._json(reply["refs_json"], {}) or {}), **refs, "depth": 1}), reply["id"]))
+        H.event(c, actor, "app_delivery.asked", reply["id"], {"to": person, "conversation": room["id"]})
+        return False
     H._write_message(c, actor, person, text, room, "ask", {**refs, "depth": 1}, None, None)
     return True
 
 
 def delivered(c, runner_id):
-    """The bots delivered through an app on this computer, for GET /api/v2/runners/me/app-delivery."""
-    out = []
+    """The bots delivered through an app on this computer, for GET /api/v2/runners/me/app-delivery. `error`: this
+    computer's Health holds an error for the bot's app, which the next clean read clears."""
+    out, errors = [], _errors(c, runner_id)
     for row in c.execute("SELECT bc.bot,bc.config_json FROM bot_config bc JOIN bots b ON b.slug=bc.bot "
                          "WHERE b.state<>'archived' AND json_extract(bc.config_json,'$.app_delivery.computer')=? "
                          "ORDER BY bc.bot", (runner_id,)):
         config = H._json(row["config_json"], {}) or {}
         bot = app_bot(config)
         if bot:
-            out.append({"slug": row["bot"], "app": setting(config)["app"], "bot": bot, "after": _seen(c, row["bot"])["after"]})
+            app = setting(config)["app"]
+            out.append({"slug": row["bot"], "app": app, "bot": bot, "after": _seen(c, row["bot"])["after"],
+                        "error": app in errors})
     return out
 
 
@@ -237,19 +276,23 @@ def report(c, runner_id, slug, body):
     known, keys, after, posted, now = set(seen["keys"]), list(seen["keys"]), seen["after"], 0, H.now()
     for msg in body.messages:
         after = msg.key
-        if msg.key in known:
+        # The newest SEEN_KEYS keys answer most reports; an older key the computer sends again (a lost cursor) is
+        # found on the message it made.
+        if msg.key in known or c.execute("SELECT 1 FROM messages WHERE conversation_id=? AND "
+                                         "json_extract(refs_json,'$.app.key')=?", (room["id"], msg.key)).fetchone():
             continue
         known.add(msg.key)
         keys.append(msg.key)
-        refs = {"app": {"app": found["app"], "key": msg.key, "at": msg.at}}
+        at = said_at(msg.at, now)
+        refs = {"app": {"app": found["app"], "key": msg.key, "at": at}}
         if msg.role == "bot":
             if msg.needs_human:
                 posted += _ask(c, actor, person, room, msg.text, refs)
-            elif not echoes(c, room["id"], actor, msg.text):
+            elif not echoes(c, room["id"], actor, msg.text, at=at):
                 # The bot's own words, unread for its person like any bot's reply.
                 H._write_message(c, actor, person, msg.text, room, "say", refs, None, None)
                 posted += 1
-        elif not echoes(c, room["id"], person, msg.text):
+        elif not echoes(c, room["id"], person, msg.text, at=at):
             # Typed in the app itself: the person's own words, already read, and no job (`quiet`).
             H._write_message(c, person, actor, msg.text, room, "say", {**refs, "quiet": True}, None, None,
                              delivered_at=now, read_at=now)

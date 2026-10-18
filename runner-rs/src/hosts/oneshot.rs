@@ -284,6 +284,7 @@ impl<W: Wire> OneShot<W> {
         }
         let mut state = self.turn_state();
         let deadline = W::deadline(&self.0.cmd).map(|d| tokio::time::Instant::now() + d);
+        let mut late = false;
         if let Some(stdout) = stdout {
             let mut lines = BufReader::new(stdout).lines();
             loop {
@@ -293,6 +294,7 @@ impl<W: Wire> OneShot<W> {
                         Err(_) => {
                             W::timed_out(&mut state);
                             stopper.terminate(Duration::from_secs(2));
+                            late = true;
                             break;
                         }
                     },
@@ -311,7 +313,24 @@ impl<W: Wire> OneShot<W> {
                 }
             }
         }
-        let rc = match exited.await {
+        // The deadline holds until the program exits too: one that closes stdout and hangs is stopped and reaped,
+        // so it never keeps its gate past the deadline.
+        let mut exited = exited;
+        let waited = match deadline.filter(|_| !late) {
+            Some(at) => match tokio::time::timeout_at(at, &mut exited).await {
+                Ok(waited) => waited,
+                Err(_) => {
+                    // A turn that already gave its whole answer keeps it.
+                    if !(state.ended && state.error.is_empty()) {
+                        W::timed_out(&mut state);
+                    }
+                    stopper.terminate(Duration::from_secs(2));
+                    exited.await
+                }
+            },
+            None => exited.await,
+        };
+        let rc = match waited {
             Ok(status) => super::return_code(&status),
             Err(_) => -1,
         };

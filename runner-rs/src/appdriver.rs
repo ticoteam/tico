@@ -160,6 +160,17 @@ pub fn error_of(line: &Value) -> Value {
 
 // ------------------------------------------------------------------------------------------ what the server hears
 
+/// One waiting report: the bot, its idempotency key and body.
+#[derive(Clone, Debug)]
+pub struct Report {
+    pub slug: String,
+    pub key: String,
+    pub body: Value,
+}
+
+/// Reports kept while the server can't be reached; past this the oldest go first.
+const REPORTS_KEPT: usize = 200;
+
 #[derive(Default)]
 struct Shared {
     /// The last probe: its lines, or why it failed.
@@ -168,8 +179,9 @@ struct Shared {
     sticky: HashMap<String, String>,
     /// The last turn's end, or read that found the bot saying something new.
     activity: Option<Instant>,
-    /// POSTs to `runners/me/app-delivery/{slug}` the watch loop sends next.
-    reports: Vec<(String, Value)>,
+    /// POSTs to `runners/me/app-delivery/{slug}` the watch loop sends next, each with the idempotency key it keeps
+    /// on every try, until the server takes it.
+    reports: Vec<Report>,
 }
 
 fn shared() -> std::sync::MutexGuard<'static, Shared> {
@@ -208,22 +220,40 @@ pub fn report(slug: &str, app: &str, error: Value) {
     if !CODES.contains(&error["code"].as_str().unwrap_or_default()) {
         return;
     }
-    shared().reports.push((slug.to_string(), json!({"app": app, "messages": [], "error": error})));
+    let report = Report { slug: slug.to_string(), key: format!("appdriver-report-{}", uuid::Uuid::new_v4().simple()), body: json!({"app": app, "messages": [], "error": error}) };
+    let mut s = shared();
+    s.reports.push(report);
+    let over = s.reports.len().saturating_sub(REPORTS_KEPT);
+    s.reports.drain(..over);
+    drop(s);
     wake().notify_one();
 }
 
+/// Put reports that could not go back in line, ahead of any made since; past REPORTS_KEPT the oldest are dropped.
+fn keep(mut reports: Vec<Report>) {
+    let mut s = shared();
+    reports.append(&mut s.reports);
+    let over = reports.len().saturating_sub(REPORTS_KEPT);
+    s.reports = reports.split_off(over);
+}
+
 /// The reports waiting to go.
-pub fn take_reports() -> Vec<(String, Value)> {
+pub fn take_reports() -> Vec<Report> {
     std::mem::take(&mut shared().reports)
 }
 
 /// One bot's waiting reports, leaving the others' (tests run side by side).
 #[cfg(test)]
 pub fn take_reports_for(slug: &str) -> Vec<Value> {
+    take_report_entries_for(slug).into_iter().map(|r| r.body).collect()
+}
+
+#[cfg(test)]
+fn take_report_entries_for(slug: &str) -> Vec<Report> {
     let mut s = shared();
-    let (mine, rest) = std::mem::take(&mut s.reports).into_iter().partition(|(b, _)| b == slug);
+    let (mine, rest) = std::mem::take(&mut s.reports).into_iter().partition(|r| r.slug == slug);
     s.reports = rest;
-    mine.into_iter().map(|(_, body)| body).collect()
+    mine
 }
 
 /// The bot configs assigned here that deliver through an app.
@@ -231,16 +261,27 @@ fn deliveries(assignments: &[Value]) -> Vec<Delivery> {
     assignments.iter().filter(|e| e["state"] != "archived").filter_map(|e| delivery(&e["config"])).collect()
 }
 
-/// This heartbeat's readiness `appdriver` field: only on a Mac where it matters (TICO_APPDRIVER is set or a bot
-/// here delivers through an app).
+/// Whether this Mac reports and probes its desktop apps: a bot here delivers through one, TICO_APPDRIVER is set,
+/// or the driver is installed (beside the runner or on PATH). The last is how a fresh Mac with no delivery yet
+/// shows Ready, which the server needs before its person can choose it.
+pub fn wanted(delivering: bool, overridden: bool, driver_found: bool) -> bool {
+    delivering || overridden || driver_found
+}
+
+fn overridden() -> bool {
+    std::env::var_os(OVERRIDE_ENV).is_some_and(|v| !v.is_empty())
+}
+
+/// This heartbeat's readiness `appdriver` field, on a Mac where it matters (`wanted`).
 pub fn readiness(assignments: &[Value]) -> Option<Value> {
     if !cfg!(target_os = "macos") {
         return None;
     }
-    let wanted = deliveries(assignments);
-    if wanted.is_empty() && std::env::var_os(OVERRIDE_ENV).is_none_or(|v| v.is_empty()) {
+    let wanted_apps = deliveries(assignments);
+    if !wanted(!wanted_apps.is_empty(), overridden(), driver().is_some()) {
         return None;
     }
+    let wanted = wanted_apps;
     let exe = std::env::current_exe().map(|p| p.display().to_string()).unwrap_or_else(|_| "tico-runner".into());
     let s = shared();
     let probe = if driver().is_some() { s.probe.as_ref() } else { None };
@@ -360,7 +401,9 @@ pub async fn watch_pass(client: &Client, driver: &Path) -> Pass {
         };
         let (messages, error) = read_result(read);
         note_call(&app, error.as_ref().map(|e| e["code"].as_str().unwrap_or_default()));
-        if messages.is_empty() && error.is_none() {
+        // Nothing new and nothing wrong: posted only when the server still holds an error for this app, so a clean
+        // read clears it from Health.
+        if messages.is_empty() && error.is_none() && !row["error"].as_bool().unwrap_or(false) {
             continue;
         }
         let bot_spoke = messages.iter().any(|m| m["role"] == "bot");
@@ -410,15 +453,37 @@ async fn probe(driver: &Path) {
     s.probe = Some(result);
 }
 
+/// Send the waiting reports. One whose failure the client calls retryable (no answer, a server error) stays in
+/// line with its key for the next pass, so a `needs_human` question arrives once the server is back, and only once; one it
+/// refused (a bot no longer delivered here) is dropped.
 async fn send_reports(client: &Client) {
-    for (slug, body) in take_reports() {
-        if let Err(e) = client.post(&format!("runners/me/app-delivery/{slug}"), &body, None).await {
-            if e.status != 404 {
-                crate::util::diagnostic(&format!("Tico runner: {slug}: app delivery report failed ({})", crate::runner::describe(&e)));
+    send_these(client, take_reports()).await;
+}
+
+async fn send_these(client: &Client, reports: Vec<Report>) {
+    let mut again = vec![];
+    let mut down = false;
+    for report in reports {
+        if down {
+            again.push(report);
+            continue;
+        }
+        match client.post(&format!("runners/me/app-delivery/{}", report.slug), &report.body, Some(&report.key)).await {
+            Ok(_) => {}
+            Err(e) if e.retryable => {
+                crate::util::diagnostic(&format!("Tico runner: {}: app delivery report failed, kept for the next try ({})", report.slug, crate::runner::describe(&e)));
+                down = true;
+                again.push(report);
             }
+            Err(e) if e.status == 404 => {}
+            Err(e) => crate::util::diagnostic(&format!("Tico runner: {}: app delivery report refused ({})", report.slug, crate::runner::describe(&e))),
         }
     }
+    if !again.is_empty() {
+        keep(again);
+    }
 }
+
 
 /// The watch and the probe, for as long as the runner runs. Nothing at all on a computer without the driver.
 pub async fn run_loop(runner: Arc<crate::runner::Runner>) {
@@ -430,8 +495,9 @@ pub async fn run_loop(runner: Arc<crate::runner::Runner>) {
     while !runner.stopping() {
         send_reports(&runner.client).await;
         let assignments = runner.assignments_seen();
-        let wanted = !deliveries(&assignments).is_empty() || std::env::var_os(OVERRIDE_ENV).is_some_and(|v| !v.is_empty());
-        if let Some(driver) = driver().filter(|_| wanted) {
+        let found = driver();
+        let wanted = wanted(!deliveries(&assignments).is_empty(), overridden(), found.is_some());
+        if let Some(driver) = found.filter(|_| wanted) {
             if Instant::now() >= next_probe {
                 probe(&driver).await;
                 next_probe = Instant::now() + PROBE_EVERY;
@@ -508,6 +574,11 @@ mod tests {
 
     /// A hub answering the list, then taking one post, recording both requests.
     async fn hub(list: Value) -> (String, Arc<Mutex<Vec<String>>>) {
+        hub_failing(list, 0).await
+    }
+
+    /// The same, answering its first `fail` posts 503.
+    async fn hub_failing(list: Value, fail: usize) -> (String, Arc<Mutex<Vec<String>>>) {
         use tokio::io::AsyncReadExt;
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
@@ -532,9 +603,16 @@ mod tests {
                     }
                 }
                 let text = String::from_utf8_lossy(&got).to_string();
-                let body = if text.starts_with("GET ") { list.to_string() } else { json!({"after": "k2", "posted": 2}).to_string() };
+                let posts = log_.lock().unwrap().iter().filter(|t: &&String| t.starts_with("POST ")).count();
+                let (status, body) = if text.starts_with("GET ") {
+                    ("200 OK", list.to_string())
+                } else if posts < fail {
+                    ("503 Service Unavailable", json!({"error": {"code": "unavailable", "detail": "down"}}).to_string())
+                } else {
+                    ("200 OK", json!({"after": "k2", "posted": 2}).to_string())
+                };
                 log_.lock().unwrap().push(text);
-                let reply = format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+                let reply = format!("HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
                 let _ = sock.write_all(reply.as_bytes()).await;
                 let _ = sock.shutdown().await;
             }
@@ -566,6 +644,70 @@ mod tests {
         let posted: Value = serde_json::from_str(&seen[1][seen[1].find("\r\n\r\n").unwrap() + 4..]).unwrap();
         assert_eq!(posted["error"], Value::Null);
         assert_eq!(posted["messages"][1], json!({"key": "k2", "role": "bot", "text": "Thursday.", "at": "2026-10-01T10:00:05Z", "needs_human": false}));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn a_mac_with_the_driver_installed_reports_its_apps_before_any_bot_is_delivered_there() {
+        // A fresh runner: no assignment, no TICO_APPDRIVER, the driver beside it or on PATH.
+        assert!(wanted(false, false, true));
+        assert!(wanted(true, false, false), "a delivered bot with no driver hears that it's missing");
+        assert!(wanted(false, true, false));
+        assert!(!wanted(false, false, false), "a Mac without the driver says nothing about apps");
+    }
+
+    fn header(request: &str, name: &str) -> String {
+        request.lines().find_map(|l| l.split_once(':').filter(|(k, _)| k.eq_ignore_ascii_case(name)).map(|(_, v)| v.trim().to_string())).unwrap_or_default()
+    }
+
+    #[tokio::test]
+    async fn a_report_the_server_could_not_take_waits_with_its_key_and_goes_once_it_is_back() {
+        let (url, seen) = hub_failing(json!({"bots": []}), 1).await;
+        let client = Client::new(&url, "runner-token", 5, 0).unwrap();
+        let ask = json!({"code": "needs_human", "detail": "", "text": "Which account?"});
+        let report = Report { slug: "keeper-test".into(), key: "appdriver-report-k1".into(), body: json!({"app": "grok", "messages": [], "error": ask}) };
+        send_these(&client, vec![report]).await;
+        let kept = take_report_entries_for("keeper-test");
+        assert_eq!(kept.len(), 1, "kept after the client gave up");
+        assert_eq!(kept[0].key, "appdriver-report-k1");
+        send_these(&client, kept).await;
+        assert!(take_report_entries_for("keeper-test").is_empty(), "taken once the server answers");
+        let seen = seen.lock().unwrap();
+        let posts: Vec<&String> = seen.iter().filter(|t| t.starts_with("POST /api/v2/runners/me/app-delivery/keeper-test ")).collect();
+        assert_eq!(posts.len(), 2);
+        assert!(posts.iter().all(|p| header(p, "Idempotency-Key") == "appdriver-report-k1"), "the same key on every try");
+    }
+
+    #[test]
+    fn reports_that_could_not_go_stay_ahead_of_newer_ones() {
+        let error = json!({"code": "busy", "detail": "", "text": ""});
+        report("order-test", "grok", error.clone());
+        keep(vec![Report { slug: "order-test".into(), key: "older".into(), body: Value::Null }]);
+        let kept = take_report_entries_for("order-test");
+        assert_eq!(kept.len(), 2);
+        assert_eq!(kept[0].key, "older");
+        assert_eq!(kept[1].body["error"], error);
+        assert_ne!(kept[1].key, "", "every report has its own key from the start");
+    }
+
+    #[tokio::test]
+    async fn a_clean_empty_read_is_posted_only_while_the_server_holds_an_error_for_it() {
+        let dir = std::env::temp_dir().join(format!("fake-appdriver-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let driver = dir.join("tico-appdriver");
+        crate::util::write_script(&driver, "#!/bin/sh\ncat > /dev/null\nexit 0\n");
+        let bot = json!({"id": "b-1", "name": "Acme Helper"});
+        for (error, posted) in [(json!(true), true), (Value::Null, false)] {
+            let (url, seen) = hub(json!({"bots": [{"slug": "healed", "app": "heal-chat", "bot": bot, "after": "k9", "error": error}]})).await;
+            let client = Client::new(&url, "runner-token", 5, 0).unwrap();
+            assert_eq!(watch_pass(&client, &driver).await, Pass::Done(false));
+            let seen = seen.lock().unwrap();
+            let post = seen.iter().find(|t| t.starts_with("POST /api/v2/runners/me/app-delivery/healed "));
+            assert_eq!(post.is_some(), posted, "error {error}");
+            if let Some(post) = post {
+                let body: Value = serde_json::from_str(&post[post.find("\r\n\r\n").unwrap() + 4..]).unwrap();
+                assert_eq!(body, json!({"app": "heal-chat", "messages": [], "error": null}));
+            }
+        }
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

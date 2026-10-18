@@ -93,7 +93,7 @@ the reply. It never moves the pointer, types through the keyboard or brings Grok
 the Mac. It presses nothing but the bot's row, the message box and Send. When a reply asks for something only you can
 do in Grok (an approval, a sign-in, a payment), Tico asks you instead. When Grok is signed out, missing its
 permission, or changed its layout, Health names the problem for that Mac and the bot's chat says why the message
-didn't go.
+didn't go; the Health line goes once the runner next reads the conversation without a problem.
 
 The routine keeps working and stays optional; with app delivery on it is only needed to copy the bot's instructions
 and section. A message delivered through the app is not handed to the routine again, and the routine does not copy

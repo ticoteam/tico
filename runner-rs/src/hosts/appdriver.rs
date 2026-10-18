@@ -57,6 +57,10 @@ impl Wire for AppDriver {
     }
 
     fn deadline(_cmd: &[String]) -> Option<Duration> {
+        #[cfg(test)]
+        if let Some(short) = tests::DEADLINE.with(|d| d.get()) {
+            return Some(short);
+        }
         Some(Duration::from_secs(appdriver::SEND_TIMEOUT_S + 60))
     }
 
@@ -137,6 +141,11 @@ mod tests {
     use super::super::oneshot::testing::turn_events;
     use super::*;
     use tokio::sync::mpsc;
+
+    thread_local! {
+        /// A shorter send deadline for this test's thread (its current-thread runtime runs the host's reader).
+        pub static DEADLINE: std::cell::Cell<Option<Duration>> = const { std::cell::Cell::new(None) };
+    }
 
     /// A driver that saves its request, prints `lines` and exits `rc` (or, with `hang`, waits to be killed).
     fn driver(dir: &std::path::Path, name: &str, lines: &[Value], rc: i32, hang: bool) -> std::path::PathBuf {
@@ -253,6 +262,35 @@ mod tests {
         h.interrupt(&turn);
         assert_eq!(strip(turn_events(&mut rx).await), [json!({"kind": "turn_completed", "status": "interrupted"})]);
         assert_ne!(unsafe { libc::kill(pid, 0) }, 0, "the driver is gone");
+        h.stop().await;
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+    #[tokio::test]
+    async fn a_driver_that_closes_stdout_and_hangs_is_stopped_at_the_deadline_and_frees_the_app() {
+        let dir = std::env::temp_dir().join(format!("fake-appdriver-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("mute");
+        let pid_file = dir.join("mute.pid");
+        crate::util::write_script(&path, &format!("#!/bin/sh\ncat > /dev/null\nexec 1>&-\necho $$ > '{}'\nexec sleep 30\n", pid_file.display()));
+        DEADLINE.with(|d| d.set(Some(Duration::from_secs(2))));
+        // An app of its own, so the other tests here don't share its gate.
+        let delivery = Delivery { app: "mute-chat".into(), bot: json!({"id": "b-9", "name": "Quiet"}) };
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let h = AppDriverHost::new("mute", command(&path, &delivery), tx);
+        h.start();
+        let thread = h.start_thread(&settings(&dir));
+        let started = std::time::Instant::now();
+        h.start_turn(&thread, "hi", None).unwrap();
+        assert_eq!(
+            strip(turn_events(&mut rx).await),
+            [json!({"kind": "turn_failed", "error": "Mute-chat on this Mac didn't finish its reply in time", "limit": false})]
+        );
+        assert!(started.elapsed() < Duration::from_secs(8), "stopped at the deadline, not the driver's 30 s");
+        let pid: i32 = std::fs::read_to_string(&pid_file).unwrap().trim().parse().unwrap();
+        assert_ne!(unsafe { libc::kill(pid, 0) }, 0, "the driver is reaped");
+        assert!(appdriver::gate("mute-chat").try_lock_owned().is_ok(), "the app's gate is free again");
+        assert_eq!(appdriver::take_reports_for("mute").len(), 1, "the timeout is reported");
+        DEADLINE.with(|d| d.set(None));
         h.stop().await;
         std::fs::remove_dir_all(dir).unwrap();
     }
