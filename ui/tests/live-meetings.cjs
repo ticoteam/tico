@@ -31,6 +31,10 @@ async function main() {
       });
       await page.locator('#live-chat-form button[type="submit"]').click();
     };
+    // A send is over once its follow-up refresh has landed: until then Send stays disabled, and a detail read held now
+    // would be that refresh's (a later read of the same path shares the request), not the next one's.
+    const chatSettled = () => page.waitForFunction(() => !LIVE_MEETINGS.chatSending.size
+      && document.querySelector('#live-chat-form button[type="submit"]')?.disabled === false);
     // A detail read later than `count` is painted: livePaintDetail runs in the same turn state.detail is set.
     const detailPaintedAfter = count => page.waitForFunction(n => LIVE_MEETINGS?.detail?.fixture_read > n, count, {timeout: t(10000)});
     // The chat box as it is on the page now, read in one step (a locator could hold the input a repaint just replaced).
@@ -145,6 +149,7 @@ async function main() {
     assert.deepEqual(await page.locator('#live-bot-picker select').evaluate(select =>
       [...select.selectedOptions].map(option => option.value)), ['finance']);
     await sendChat();
+    await page.locator('.live-status').getByText('Message sent.').waitFor();
     const chatCalls = calls.filter(([op]) => op === 'chat');
     assert.equal(chatCalls.length, 1);
     assert.equal(chatCalls[0][1].text, draft);
@@ -160,6 +165,7 @@ async function main() {
       'the submitted message is trimmed for the API');
     assert.equal(await page.evaluate(() => LIVE_MEETINGS.drafts['live-1']?.chatText), '',
       'successful whitespace-padded send clears its saved draft');
+    await chatSettled();
 
     // A detail response already in flight must not replace a draft while chat is submitted.
     world.detailHoldCount = 1;
@@ -203,15 +209,20 @@ async function main() {
     assert.equal(await chatInput.inputValue(), 'Retain this rejected message', 'failed send keeps the draft');
 
     await page.locator('#live-bot-picker button').click();
+    await page.locator('[data-live-bot-remove="finance"]').waitFor();
     assert(calls.some(([op, body]) => op === 'bots' && body.bots.includes('finance')));
     await page.locator('[data-live-bot-remove="finance"]').click();
     await page.locator('[data-live-bot-remove="finance"]').waitFor({state: 'detached'});
     assert(calls.some(([op]) => op === 'finance'), 'a joined person can revoke meeting-only bot access');
     await page.locator('[data-live-control=pause]').click();
+    await page.locator('[data-live-control=resume]').waitFor();
     assert(calls.some(([op, body]) => op === 'control' && body.action === 'pause'));
     await page.locator('[data-live-control=resume]').click();
+    // End shows while paused too: click it once the resumed meeting is painted, or the resume still in flight drops it.
+    await page.locator('[data-live-control=pause]').waitFor();
     await page.locator('[data-live-control=end]').click();
     await page.locator('[data-live-finalize]').click();
+    await page.locator('.live-finalized').waitFor();
     assert(calls.some(([op]) => op === 'finalize'));
     assert.deepEqual(errors, []);
     await context.close();
