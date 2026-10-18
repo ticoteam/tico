@@ -578,17 +578,25 @@ def test_wake_once_needs_the_app_and_waits_only_on_a_pr_github_reports(api):
 
 
 class FakeHistory:
-    """A small repository GitHub answers for: each commit is its parents and its whole tree."""
+    """A small repository GitHub answers for: each commit is its parents, its whole tree and the renames it made."""
 
     def __init__(self):
         self.commits, self.blobs, self.calls = {}, {}, []
 
-    def commit(self, name, parents, tree):
+    def commit(self, name, parents, tree, renames=None):
         sha = hashlib.sha1(name.encode()).hexdigest()
         for text in tree.values():
             self.blobs[hashlib.sha1(text.encode()).hexdigest()] = text
-        self.commits[sha] = (list(parents), dict(tree))
+        self.commits[sha] = (list(parents), dict(tree), dict(renames or {}))
         return sha
+
+    def tree(self, sha, **changes):
+        """A commit's tree with paths changed (a value) or deleted (None); `__` in a name stands for `/`."""
+        tree = dict(self.commits[sha][1])
+        for path, text in changes.items():
+            path = path.replace("__", "/").replace("_dot_", ".")
+            tree.pop(path) if text is None else tree.__setitem__(path, text)
+        return tree
 
     def ancestors(self, sha):
         seen, todo = set(), [sha]
@@ -598,17 +606,20 @@ class FakeHistory:
                 todo += self.commits[one][0]
         return seen
 
-    def files(self, old, new):
+    def files(self, old, new, renames=()):
         import difflib
-        out = []
+        def entry(before, after, path, **extra):
+            patch = "\n".join(list(difflib.unified_diff((before or "").splitlines(), (after or "").splitlines(),
+                                                         lineterm=""))[2:])
+            return {"filename": path, "patch": patch, **extra,
+                    "sha": hashlib.sha1((after if after is not None else before).encode()).hexdigest()}
+        out = [entry(old[was], new[path], path, status="renamed", previous_filename=was)
+               for path, was in dict(renames).items()]
         for path in sorted(set(old) | set(new)):
-            if old.get(path) == new.get(path):
+            if old.get(path) == new.get(path) or path in dict(renames) or path in dict(renames).values():
                 continue
-            patch = "\n".join(list(difflib.unified_diff((old.get(path) or "").splitlines(),
-                                                         (new.get(path) or "").splitlines(), lineterm=""))[2:])
             status = "added" if path not in old else "removed" if path not in new else "modified"
-            out.append({"filename": path, "status": status, "patch": patch,
-                        "sha": hashlib.sha1((new.get(path) or old[path]).encode()).hexdigest()})
+            out.append(entry(old.get(path), new.get(path), path, status=status))
         return out
 
     def call(self, method, path, params=None, headers=None):
@@ -626,9 +637,9 @@ class FakeHistory:
                           "base_commit": {"sha": base}, "merge_base_commit": {"sha": base if ahead else None},
                           "files": self.files(self.commits[base][1], self.commits[head][1])})
         if kind == "commits":
-            parents, tree = self.commits[arg]
+            parents, tree, renames = self.commits[arg]
             return reply({"parents": [{"sha": p} for p in parents],
-                          "files": self.files(self.commits[parents[0]][1] if parents else {}, tree)})
+                          "files": self.files(self.commits[parents[0]][1] if parents else {}, tree, renames)})
         if kind == "contents":
             text = self.commits[params["ref"]][1].get(unquote(arg))
             return reply({"sha": hashlib.sha1(text.encode()).hexdigest()} if text is not None else {},
@@ -655,62 +666,83 @@ def _refresh_release(api, monkeypatch, history, release):
 
 def test_a_release_that_reverts_a_merged_pr_does_not_ship_it(api, monkeypatch):
     """Dev 127: #818 merged, the release branch reverted it after QA failed, and the release was tagged on that revert.
-    Ancestry says the merge is in the release; its lines are not, so no Shipped notice and the ticket stays put."""
+    Ancestry says the merge is in the release; its change is not, so no Shipped notice and the ticket stays put."""
     _app(api)
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO repositories(full_name,reachable,enabled,added_by,updated) VALUES(?,1,1,?,?)",
                   ('ticoteam/tico', 'human:ana', H.now()))
-    kept_pr = PR.replace('/412', '/413')
     typ = post(api, 'task-types', {'name': 'Dev', 'steps': [
         {'name': 'Pending Release', 'status': 'review'}, {'name': 'Post Release QA', 'status': 'review'}]})['type']
-    reverted = post(api, 'tasks', {'owner': 'cpo', 'title': 'Live desks', 'body': 'x', 'links': [PR],
-                                   'type': typ['id'], 'step': 'Pending Release'})
-    kept = post(api, 'tasks', {'owner': 'cpo', 'title': 'Pricing copy', 'body': 'x', 'links': [kept_pr],
-                               'type': typ['id'], 'step': 'Pending Release'})
-    _arm(api, reverted['id']), _arm(api, kept['id'], url=kept_pr)
+    tasks = {}
+    for n in range(412, 418):
+        url = PR.replace('/412', f'/{n}')
+        tasks[n] = post(api, 'tasks', {'owner': 'cpo', 'title': f'Change {n}', 'body': 'x', 'links': [url],
+                                       'type': typ['id'], 'step': 'Pending Release'})
+        _arm(api, tasks[n]['id'], url=url)
 
     code = "export function refresh() {\n  poll(120000);\n}\n"
     live = "export function refresh() {\n  poll(120000);\n  onStatusEvent(event => moveDesk(event.bot));\n}\n"
-    notes = "## [Unreleased]\n"
+    audit = "def a():\n    audit_event()\n    return 1\n\n\ndef b():\n    return 2\n"
     h = FakeHistory()
-    base = h.commit('base', [], {'ui/app/refresh.js': code, 'CHANGELOG.md': notes, 'ui/app/pricing.js': 'price = 10\n'})
-    merge = h.commit('#412', [base], {'ui/app/refresh.js': live, 'CHANGELOG.md': notes + '- Desks move live\n',
-                                      'ui/tests/overview-live.cjs': 'assert desk moved at once\n',
-                                      'ui/app/pricing.js': 'price = 10\n'})
-    other = h.commit('#413', [merge], {**h.commits[merge][1], 'ui/app/pricing.js': 'price = 12 per seat\n'})
-    cut = h.commit('cut', [other], {**h.commits[other][1], 'CHANGELOG.md': '## [0.3.55]\n- Desks move live\n'})
-    revert = h.commit('revert #412', [cut], {**h.commits[cut][1], 'ui/app/refresh.js': code,
-                                             'CHANGELOG.md': '## [0.3.55]\n'})
-    del h.commits[revert][1]['ui/tests/overview-live.cjs']
-    hook(api, 'pull_request', pr_event('closed', merged=True, merge_commit_sha=merge))
-    hook(api, 'pull_request', pr_event('closed', html_url=kept_pr, merged=True, merge_commit_sha=other))
-    # main's push records put both merges before the release: push order alone would ship both
+    base = h.commit('base', [], {'ui/app/refresh.js': code, 'CHANGELOG.md': '## [Unreleased]\n',
+                                 'ui/app/pricing.js': 'price = 10\n', 'app/flag.py': 'x=1\n',
+                                 'app/loop.py': 'for item in items:\n    work(item)\ndone()\n',
+                                 'app/audit.py': audit, 'app/old.py': 'def price():\n    return 10\n'})
+    merges = {}
+    def merge(n, parent, **changes):
+        merges[n] = h.commit(f'#{n}', [parent], h.tree(parent, **changes), changes.pop('renames', None))
+        hook(api, 'pull_request', pr_event('closed', html_url=PR.replace('/412', f'/{n}'), merged=True,
+                                           merge_commit_sha=merges[n]))
+        return merges[n]
+    # 412 the live desks (product, test, notes); 413 kept; 414 a two-character edit; 415 indentation only;
+    # 416 adds a line that already exists elsewhere in the file; 417 renames a file and edits it.
+    last = merge(412, base, ui__app__refresh_dot_js=live, CHANGELOG_dot_md='## [Unreleased]\n- Desks move live\n',
+                 ui__tests__overview_live_dot_cjs='assert desk moved at once\n')
+    last = merge(413, last, ui__app__pricing_dot_js='price = 12 per seat\n')
+    last = merge(414, last, app__flag_dot_py='x=2\n')
+    last = merge(415, last, app__loop_dot_py='for item in items:\n    work(item)\n    done()\n')
+    last = merge(416, last, app__audit_dot_py=audit.replace('    return 2', '    audit_event()\n    return 2'))
+    merges[417] = last = h.commit('#417', [last], h.tree(last, app__old_dot_py=None,
+                                  app__new_dot_py='def price():\n    return 20\n'), {'app/new.py': 'app/old.py'})
+    hook(api, 'pull_request', pr_event('closed', html_url=PR.replace('/412', '/417'), merged=True, merge_commit_sha=last))
+    # The cut moves the notes and drops 416's pre-existing call, keeping the one 416 added.
+    cut = h.commit('cut', [last], h.tree(last, CHANGELOG_dot_md='## [0.3.55]\n- Desks move live\n',
+                                         app__audit_dot_py=audit.replace('    audit_event()\n    return 1', '    return 1')
+                                         .replace('    return 2', '    audit_event()\n    return 2')))
+    revert = h.commit('revert', [cut], h.tree(cut, ui__app__refresh_dot_js=code, CHANGELOG_dot_md='## [0.3.55]\n',
+                                              ui__tests__overview_live_dot_cjs=None, app__flag_dot_py='x=1\n',
+                                              app__loop_dot_py='for item in items:\n    work(item)\ndone()\n',
+                                              app__new_dot_py=None, app__old_dot_py='def price():\n    return 10\n'))
+    # main's push records put every merge before the release: push order alone would ship them all
     hook(api, 'push', {'ref': 'refs/heads/main', 'repository': {'full_name': 'ticoteam/tico', 'default_branch': 'main'},
-                       'commits': [{'id': merge}, {'id': other}, {'id': cut}, {'id': revert}]})
+                       'commits': [{'id': sha} for sha in [*merges.values(), cut, revert]]})
     api.app.state.store.settings.release_commit = revert
     with api.app.state.store.transaction() as c:
         assert G.ship_deployed(c, api.app.state.store.settings) == []
 
     _refresh_release(api, monkeypatch, h, revert)
+    shipped = {413, 416}
     with api.app.state.store.read() as c:
-        assert [l['state'] for l in H.task_links(c, reverted['id'])] == ['merged']
-        assert [l['state'] for l in H.task_links(c, kept['id'])] == ['shipped']
-        assert [r['target'] for r in c.execute("SELECT target FROM events WHERE action='github.shipped'")] == [kept['id']]
-    assert _burst(api, reverted['id']) == []
-    assert _burst(api, kept['id']) == [f"Shipped: tico#413 is in the running release {revert[:12]} {kept_pr}"]
-    for task in (reverted, kept):
+        for n, task in tasks.items():
+            assert [l['state'] for l in H.task_links(c, task['id'])] == ['shipped' if n in shipped else 'merged'], n
+        assert sorted(r['target'] for r in c.execute("SELECT target FROM events WHERE action='github.shipped'")) == \
+            sorted(tasks[n]['id'] for n in shipped)
+    for n, task in tasks.items():
+        url = PR.replace('/412', f'/{n}')
+        assert _burst(api, task['id']) == ([f"Shipped: tico#{n} is in the running release {revert[:12]} {url}"]
+                                           if n in shipped else []), n
         assert get(api, 'tasks/' + task['id'])['task']['step_id'] == task['step_id']
     # A revert is fixed history: the next pass asks GitHub nothing more about it.
     _refresh_release(api, monkeypatch, h, revert)
     assert h.calls == []
 
     # Re-applied in a later release, the same pull request ships then.
-    again = h.commit('reapply #412', [revert], {**h.commits[revert][1], 'ui/app/refresh.js': live})
+    again = h.commit('reapply #412', [revert], h.tree(revert, ui__app__refresh_dot_js=live))
     _refresh_release(api, monkeypatch, h, again)
-    assert _burst(api, reverted['id']) == [f"Shipped: tico#412 is in the running release {again[:12]} {PR}"]
+    assert _burst(api, tasks[412]['id']) == [f"Shipped: tico#412 is in the running release {again[:12]} {PR}"]
 
 
-def test_change_kept_counts_product_lines_and_reads_a_merge_commit_against_main():
+def test_change_kept_reads_a_merge_commit_against_main_and_ignores_cut_tests():
     h = FakeHistory()
     get = lambda path, **params: G._read(SimpleNamespace(_call=h.call), 'test-token', path, params)
     code = "def price():\n    return 10\n"
@@ -725,6 +757,3 @@ def test_change_kept_counts_product_lines_and_reads_a_merge_commit_against_main(
     # Reverting the merge commit (against main, its first parent) undoes it; the other side's change stays.
     revert = h.commit('revert', [cut], {**h.commits[cut][1], 'app/price.py': code})
     assert G.change_kept(get, 'ticoteam/tico', merge, revert) is False
-    # Nothing to measure (a one-word change): ancestry decides, as before.
-    tiny = h.commit('tiny', [revert], {**h.commits[revert][1], 'docs/a.md': 'Other words entirely\nok\n'})
-    assert G.change_kept(get, 'ticoteam/tico', tiny, tiny) is None

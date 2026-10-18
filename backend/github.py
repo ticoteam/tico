@@ -28,7 +28,6 @@ import logging
 import re
 import threading
 import time
-from collections import Counter
 from urllib.parse import quote
 
 from fastapi import Request, Response
@@ -535,23 +534,38 @@ def refresh_deployed_tasks(service):
     threading.Thread(target=refresh, name="tico-deploy-refresh", daemon=True).start()
 
 
-# How much of a pull request is still in a release, measured as scripts/freeze_guard.py measures a net revert: release
-# notes move between sections at every cut and tests are cut routinely, so only product lines count when it has any.
+# What a release kept of a pull request is read hunk by hunk: release notes move between sections at every cut and
+# tests are cut routinely, so the product files decide when the pull request has any.
 NOTES_FILES = {"CHANGELOG.md"}
 TEST_PATH = re.compile(r"(^|/)(tests?|testdata|fixtures)/|(^|/)test_[^/]*$|_test\.[a-z]+$|\.test\.[a-z]+$")
 
 
-def _meaningful(text):
-    """Blank lines, lone brackets and one-word lines appear everywhere; they are no evidence either way."""
-    return sum(ch.isalnum() for ch in text) >= 3
+def _hunks(patch):
+    """Each hunk of a unified diff as (lines before, lines after), context included and whitespace kept exactly."""
+    hunks, before, after = [], None, None
+    for line in (patch or "").removesuffix("\n").split("\n"):
+        if line.startswith("@@"):
+            if before is not None:
+                hunks.append((before, after))
+            before, after = [], []
+        elif before is None or line.startswith("\\"):
+            continue
+        elif line[:1] == "+":
+            after.append(line[1:])
+        elif line[:1] == "-":
+            before.append(line[1:])
+        else:
+            before.append(line[1:])
+            after.append(line[1:])
+    if before is not None:
+        hunks.append((before, after))
+    return [(b, a) for b, a in hunks if b != a]
 
 
-def _patch_lines(patch):
-    added, removed = Counter(), Counter()
-    for line in (patch or "").splitlines():
-        if line[:1] in "+-" and _meaningful(line[1:].strip()):
-            (added if line[0] == "+" else removed)[line[1:].strip()] += 1
-    return added, removed
+def _contains(lines, block):
+    """`block` appears in `lines` as a run of consecutive lines."""
+    n = len(block)
+    return any(lines[i:i + n] == block for i in range(len(lines) - n + 1) if lines[i] == block[0])
 
 
 def _read(service, token, path, params):
@@ -567,9 +581,10 @@ def _read(service, token, path, params):
 def change_kept(get, repo, merge, release):
     """Whether `release`, which contains `merge`, still has what that merge changed.
 
-    False only when every meaningful line the pull request added is gone again and every one it deleted is back, in
-    each file it changed: a revert. True as soon as one file keeps its change; None when the change has no lines to
-    measure (a rename, a binary file), which leaves ancestry to decide as before."""
+    False only for a revert: in every hunk of every file it measures, the text after the change (with its context)
+    is gone from the release and the text before it is back where it was, under the old name of a renamed file. True
+    as soon as one hunk is still there, or is neither (changed again since); None when a file has no diff to read
+    (binary, too large), which leaves ancestry to decide as before."""
     base = f"/repos/{quote(repo, safe='/')}"
     commit = get(f"{base}/commits/{merge}")
     if not commit:
@@ -578,29 +593,40 @@ def change_kept(get, repo, merge, release):
     files = commit.get("files") or []
     if len(parents) > 1:   # a merge commit: the pull request is what it changed on top of main
         files = (get(f"{base}/compare/{parents[0]['sha']}...{merge}") or {}).get("files") or []
-    measured = [(f, *_patch_lines(f.get("patch"))) for f in files if f.get("filename") not in NOTES_FILES]
-    measured = [m for m in measured if m[1] or m[2]]
-    product = [m for m in measured if not TEST_PATH.search(m[0]["filename"])]
-    if not (product or measured):
+    files = [f for f in files if f.get("filename") not in NOTES_FILES]
+    product = [f for f in files if not TEST_PATH.search(f["filename"])]
+    if not (product or files):
         return None
+    cache = {}
 
-    def lines(sha):
-        blob = get(f"{base}/git/blobs/{sha}") or {}
-        text = base64.b64decode(blob.get("content") or "").decode("utf-8", "replace")
-        return Counter(line.strip() for line in text.splitlines() if line.strip())
+    def at_release(path):
+        """The file's lines in the release ([] when it isn't there) and its blob sha."""
+        if path not in cache:
+            there = get(f"{base}/contents/{quote(path)}", ref=release)
+            sha = there.get("sha") if isinstance(there, dict) else None
+            text = ""
+            if sha:
+                blob = get(f"{base}/git/blobs/{sha}") or {}
+                text = base64.b64decode(blob.get("content") or "").decode("utf-8", "replace")
+            cache[path] = (text.removesuffix("\n").split("\n") if text else [], sha)
+        return cache[path]
 
-    for f, added, removed in product or measured:
-        there = get(f"{base}/contents/{quote(f['filename'])}", ref=release)
-        now_sha = there.get("sha") if isinstance(there, dict) else None
-        merged_sha = None if f.get("status") == "removed" else f.get("sha")
-        if now_sha and now_sha == merged_sha:
+    unknown = False
+    for f in product or files:
+        hunks = _hunks(f.get("patch"))
+        if not hunks:
+            unknown = True
+            continue
+        new, sha = at_release(f["filename"])
+        if sha and f.get("status") != "removed" and sha == f.get("sha"):
             return True    # the file is as the merge left it
-        now = lines(now_sha) if now_sha else Counter()
-        then = lines(merged_sha) if merged_sha else Counter()
-        gone, back = then - now, now - then
-        if any(gone[text] < n for text, n in added.items()) or any(back[text] < n for text, n in removed.items()):
-            return True
-    return False
+        old = at_release(f.get("previous_filename") or f["filename"])[0]
+        for before, after in hunks:
+            if after and _contains(new, after):
+                return True    # this part of the change is still there
+            if before and not _contains(old, before):
+                return True    # changed again since: not a revert
+    return None if unknown else False
 
 
 def checked_on_github(c, settings, repo):
