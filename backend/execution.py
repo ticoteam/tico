@@ -1816,7 +1816,11 @@ class Execution:
         # against the attempt when it is not. Refusing it was how a run that opened three pull
         # requests came back as a phantom interruption.
         late = row["state"] == "expired"
-        if not late and row["state"] != "running":
+        # The one turn that ends before it starts: a Tico model on a runner that can't run one (clients/gateway.py
+        # NOT_ISOLATED). Settled now, so the bot says why once rather than its lease lapsing into a retry.
+        unstarted = (row["state"] == "leased" and body.outcome == "failed"
+                     and any(gateway.run_code(error) == gateway.NOT_ISOLATED for error in limit_errors(c, aid)))
+        if not late and row["state"] != "running" and not unstarted:
             raise Problem("not_started", "Acknowledge start before completing work", 409)
         if row["last_seq"] != body.last_seq:
             raise Problem("event_gap", "Upload all events before completing the attempt", 409)

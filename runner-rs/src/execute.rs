@@ -781,8 +781,11 @@ impl Runner {
             // The Gateway's key stays with this runner: the turn gets a relay and a token good for this turn only.
             let isolated = crate::isolation::enabled();
             if let Err(why) = crate::gateway_relay::hand_to_turn(&self.client, &attempt, &mut env, &mut vault, isolated).await {
-                // The turn's error, so the server reads its code (`not_isolated`: said once, not retried).
+                // A failed turn whose error carries its code: the server settles it unstarted (`not_isolated`), so it
+                // is said once and not retried.
                 let _ = self.state.append(&aid, "error", &json!({"error": why}));
+                drove.outcome = "failed".into();
+                drove.reply = why.clone();
                 return Err(Fail::runtime(why));
             }
             base_env = Some(env.clone());
