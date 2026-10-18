@@ -8,6 +8,10 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- PRIVACY.md has a section for **Ask Tico**, the chat on tico.team: what goes to Tico HQ and to OpenRouter (with
+  fixed filters: no data collection, zero data retention, DeepSeek's own service excluded), that chats are kept with no
+  automatic deletion and deleted on request by chat or email, that notes stay with the Tico team's customer record,
+  and the limits and $20 daily cap. ([Privacy](PRIVACY.md#ask-tico-the-chat-on-ticoteam))
 - **Stale ticket review** (Settings > Team; off by default, an owner or an admin turns it on): once an hour Tico
   looks for open tasks that seem finished or forgotten, such as a merged pull request, a done parent or a quiet week,
   and suggests what to do. Private tasks are never looked at. A bot gets one "Stale check" comment; a person gets one
