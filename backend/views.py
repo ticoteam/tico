@@ -16,7 +16,7 @@ from . import bot_access as A
 from . import models as M
 from . import changelog as CL
 from . import providers, runner_versions
-from . import personal_tokens, rooms, team_rules, turns
+from . import personal_tokens, rooms, team_rules, turns, wake_presets
 from .execution import AWAKE_GAP, AWAKE_SETTLE, Execution, turn_limit, turn_share, turns_here
 from pathlib import Path
 
@@ -1411,6 +1411,8 @@ def install_views(app, store, auth, mutate, task_view):
                          **location,
                          "users": [P.brief(p) for p in P.primary_users(slug, people, configs)],
                          "icon": icon_of(config), "helper": helper(config),
+                         # What Settings and the branch editor show and pick from (backend/wake_presets.py).
+                         "wake": wake_presets.effective(config),
                          "my_access": level, **policy,
                          "can_chat": level["write"] and slug != auth.settings.assistant_bot})
         return rows

@@ -68,8 +68,19 @@ def queue_wake(c, task, item, batch=None):
     if item not in items:
         items = (items + [item[:1000]])[-50:]
     kind = batch if not burst or burst.get("batch") == batch else None
-    save_metadata(c, key, {"due": burst.get("due") or H.shift(H.now(), seconds=170), "items": items,
-                           **({"batch": kind} if kind else {})})
+    # Under a wake preset the preset is the one timer: the burst goes out on the next flush, and the hold coalesces it
+    # from then (backend/wake_presets.py). Current behaviour keeps the three-minute burst.
+    due = H.now() if _preset_owner(c, task) else burst.get("due") or H.shift(H.now(), seconds=170)
+    save_metadata(c, key, {"due": due, "items": items, **({"batch": kind} if kind else {})})
+
+
+def _preset_owner(c, task):
+    from . import wake_presets
+    owner = str(task.get("owner") or "")
+    if not owner.startswith("bot:"):
+        return False
+    row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (owner[4:],)).fetchone()
+    return wake_presets.preset_of(H._json(row[0], {}) if row else {}) != wake_presets.CURRENT
 
 
 def fire_once(detail, item):

@@ -12,9 +12,11 @@ an immediate wake wait by sending text that looks like one. Everything else — 
 assignment, a question, an awaited dependency resolving, a blocker, a review or QA request — is never held.
 The scheduler plans each held job's release (`tick`) and lets it go when it is due.
 
-Under a preset a queued job that repeats one still queued in the same conversation (same sender, kind and
-text) is dropped as a duplicate, so a duplicated event wakes the bot once. A preset grants nothing: it is one
-key in the bot's configuration and the hold reads nothing else.
+Under a preset a job whose message repeats another of the bot's in the same conversation (same sender, kind, text,
+refs and reply) is dropped as a duplicate, so a duplicated event wakes the bot once: while the first is queued or
+being worked, and for DUPLICATE_SECONDS after its turn ended. A message from a person or a bot repeats only when
+nothing else was said in between, so the same words sent again after an answer are a new request. A preset grants
+nothing: it is one key in the bot's configuration and the hold reads nothing else.
 
 The values below are starting points to evaluate, not measured optima. TICO_WAKE_PRESETS overrides them
 per install without a code change, e.g. `{"token_saver": {"batch_seconds": 900}}`.
@@ -43,6 +45,8 @@ CHOICES = (CURRENT, TOKEN_SAVER, PERFORMANCE)
 LABELS = {CURRENT: "Current behaviour", TOKEN_SAVER: "Token saver", PERFORMANCE: "Performance"}
 # An immediate wake not picked up within this long counts as a missed action in `measures`.
 MISSED_AFTER_SECONDS = 5 * 60
+# How long after a turn ends an identical event still counts as the same one (a retried webhook, a double send).
+DUPLICATE_SECONDS = 2 * 60
 # Nonblocking notices the keeper marks with refs.wake_batch.
 BATCH_KINDS = ("completion", "review", "ci")
 # Sweeps: refs.wake on a keeper notice, or refs.sweep (a routine's scheduled run, by schedule id).
@@ -54,6 +58,12 @@ _BATCH_SQL = ("json_extract(m.refs_json,'$.wake_batch') IN (" + ",".join(f"'{k}'
 _SWEEP_SQL = ("(json_extract(m.refs_json,'$.wake') IN (" + ",".join(f"'{k}'" for k in SWEEP_WAKES) + ") "
               "OR json_extract(m.refs_json,'$.sweep') IS NOT NULL)")
 _PRESET_SQL = "(SELECT wake_preset FROM jobs WHERE id=NEW.id) IN ('" + TOKEN_SAVER + "','" + PERFORMANCE + "')"
+# The same event as an earlier job's message: same room, sender, kind, text, refs and reply, the same hold, and for a
+# person or a bot nothing said in between.
+_SAME_EVENT = (f"om.rowid<m.rowid AND om.from_actor IS m.from_actor AND om.kind IS m.kind AND om.body=m.body "
+               f"AND om.refs_json IS m.refs_json AND om.in_reply_to IS m.in_reply_to AND om.conversation_id=m.conversation_id "
+               f"AND o.held=(SELECT held FROM jobs WHERE id=NEW.id) AND (m.from_actor='{H.KEEPER}' OR NOT EXISTS("
+               f"SELECT 1 FROM messages x WHERE x.conversation_id=m.conversation_id AND x.rowid>om.rowid AND x.rowid<m.rowid))")
 HOLD_TRIGGER = f"""CREATE TRIGGER wake_preset_hold AFTER INSERT ON jobs WHEN NEW.state='queued' BEGIN
  UPDATE jobs SET wake_preset=coalesce((SELECT json_extract(config_json,'$.wake_preset') FROM bot_config
    WHERE bot=NEW.bot),'{CURRENT}') WHERE id=NEW.id;
@@ -62,10 +72,12 @@ HOLD_TRIGGER = f"""CREATE TRIGGER wake_preset_hold AFTER INSERT ON jobs WHEN NEW
    WHERE id=NEW.id AND {_PRESET_SQL} AND EXISTS(SELECT 1 FROM messages m WHERE m.id=NEW.message_id
    AND m.from_actor='{H.KEEPER}' AND ({_BATCH_SQL} OR {_SWEEP_SQL}));
  UPDATE jobs SET state='cancelled',held=0,wake_class='duplicate' WHERE id=NEW.id AND {_PRESET_SQL}
-   AND EXISTS(SELECT 1 FROM messages m JOIN jobs o ON o.bot=NEW.bot AND o.state='queued' AND o.id<>NEW.id
-   JOIN messages om ON om.id=o.message_id WHERE m.id=NEW.message_id AND om.conversation_id=m.conversation_id
-   AND om.from_actor IS m.from_actor AND om.kind IS m.kind AND om.body=m.body
-   AND o.held=(SELECT held FROM jobs WHERE id=NEW.id));
+   AND EXISTS(SELECT 1 FROM messages m JOIN jobs o ON o.bot=NEW.bot AND o.state IN ('queued','leased','running','input')
+   AND o.id<>NEW.id JOIN messages om ON om.id=o.message_id WHERE m.id=NEW.message_id AND {_SAME_EVENT})
+   OR id=NEW.id AND {_PRESET_SQL} AND EXISTS(SELECT 1 FROM messages m JOIN messages om
+   ON om.conversation_id=m.conversation_id AND om.created>=strftime('%Y-%m-%dT%H:%M:%fZ',m.created,'-{DUPLICATE_SECONDS} seconds')
+   JOIN jobs o ON o.message_id=om.id AND o.bot=NEW.bot AND o.state<>'cancelled' AND o.id<>NEW.id
+   WHERE m.id=NEW.message_id AND {_SAME_EVENT});
 END"""
 
 
@@ -76,6 +88,8 @@ def ensure(c):
     H.add_column(c, "jobs", "wake_class", "TEXT")
     H.add_column(c, "jobs", "held", "INTEGER NOT NULL DEFAULT 0")
     H.add_column(c, "jobs", "hold_until", "TEXT")
+    # The job whose turn carried this one's notice (a batch's newest, or its digest), for `measures`.
+    H.add_column(c, "jobs", "wake_carrier", "TEXT")
     H.add_column(c, "attempts", "wake_json", "TEXT")
     c.execute("CREATE INDEX IF NOT EXISTS jobs_held ON jobs(bot,hold_until) WHERE held=1")
     stored = c.execute("SELECT sql FROM sqlite_master WHERE type='trigger' AND name='wake_preset_hold'").fetchone()
@@ -173,18 +187,23 @@ def tick(c, at=None):
 
 
 def _sweep_slot(c, job, gap):
-    """When this run of a sweep may start: now, or `gap` after the same sweep's last run. None when the same sweep
-    already waits, since this run adds nothing that one will not do."""
-    key = sweep_key(H._json(job["refs_json"], {}) or {})
+    """When this run of a sweep may start: now, or `gap` after the same sweep's last run started (its first claim,
+    which a busy computer can put well after its planned release). None when the same sweep is still queued, held or
+    let go, since this run adds nothing that one will not do."""
+    key, since = sweep_key(H._json(job["refs_json"], {}) or {}), H.shift(job["created"], seconds=-gap)
     last = None
-    for row in c.execute("SELECT j.state,j.held,j.hold_until,m.refs_json FROM jobs j JOIN messages m ON m.id=j.message_id "
-                         "WHERE j.bot=? AND j.wake_class='sweep' AND j.id<>? AND j.hold_until>?",
-                         (job["bot"], job["id"], H.shift(job["created"], seconds=-gap))):
+    for row in c.execute("SELECT j.state,j.hold_until,m.refs_json,"
+                         "(SELECT min(a.created) FROM attempts a WHERE a.job_id=j.id) AS started "
+                         "FROM jobs j JOIN messages m ON m.id=j.message_id "
+                         "WHERE j.bot=? AND j.wake_class='sweep' AND j.id<>? AND j.state<>'cancelled' "
+                         "AND (j.state IN ('queued','leased','running','input') OR j.hold_until>? "
+                         "OR EXISTS(SELECT 1 FROM attempts a WHERE a.job_id=j.id AND a.created>?))",
+                         (job["bot"], job["id"], since, since)):
         if sweep_key(H._json(row["refs_json"], {}) or {}) != key:
             continue
-        if row["state"] == "queued" and row["held"]:
+        if row["state"] == "queued":
             return None
-        last = max(last or "", row["hold_until"])
+        last = max(last or "", row["started"] or row["hold_until"])
     return max(job["created"], H.shift(last, seconds=gap)) if last else job["created"]
 
 
@@ -209,25 +228,32 @@ def _batch_slot(c, job, values_of):
 
 
 def _release(c, bot, jobs):
-    """Let a due batch go as one wake. Notices about one task in one room: the newest starts the turn, and the room
-    page it is given carries the others, so they are read with it. Notices across tasks: one digest in the bot's
-    notice room names each, and the turn opens whichever it needs; their own messages stay unread where they are."""
+    """Let a due batch go as one wake. Notices about one task in one room that all fit in the room page the turn is
+    given (execution.HISTORY_PAGE, with room to spare for what arrives before the claim): the newest starts the turn
+    and the page carries the others. Otherwise one digest in the bot's notice room names each room, how many notices
+    wait there and how to read them; their own messages stay unread where they are."""
     rooms = {(j["conversation_id"], (H._json(j["refs_json"], {}) or {}).get("task")) for j in jobs}
-    if len(rooms) == 1:
+    if len(rooms) == 1 and _on_one_page(c, jobs):
         *earlier, last = jobs
         c.execute("UPDATE jobs SET held=0 WHERE id=?", (last["id"],))
         for job in earlier:
-            c.execute("UPDATE jobs SET state='completed',held=0 WHERE id=?", (job["id"],))
+            c.execute("UPDATE jobs SET state='completed',held=0,wake_carrier=? WHERE id=?", (last["id"], job["id"]))
             H.mark_delivered(c, H.KEEPER, job["message_id"])
         return
-    lines = []
+    groups = {}
     for job in jobs:
-        message = H.message(c, job["message_id"]) or {}
-        task = H.task(c, (H._json(job["refs_json"], {}) or {}).get("task") or "")
-        what = classify(message)[1]
-        lines.append(f"- {what}: " + (f"a private task ({task['id']})" if task and H.task_private(c, task)
-                                      else f"{task['title']} ({task['id']})" if task
-                                      else str(message.get("body") or "").splitlines()[0][:200]))
+        groups.setdefault(job["conversation_id"], []).append(job)
+    lines = []
+    for conversation, held in groups.items():
+        first, newest = H.message(c, held[0]["message_id"]) or {}, H.message(c, held[-1]["message_id"]) or {}
+        task = H.task(c, (H._json(held[-1]["refs_json"], {}) or {}).get("task") or "")
+        what = classify(newest)[1] + (f" and {len(held) - 1} more" if len(held) > 1 else "")
+        where = (f"a private task ({task['id']})" if task and H.task_private(c, task)
+                 else f"{task['title']} ({task['id']})" if task
+                 else str(newest.get("body") or "").splitlines()[0][:200] if newest.get("body") else "a notice")
+        lines.append(f"- {what}: {where}; read them with `hub conversation show {conversation}`"
+                     + (f" (the oldest is from {first.get('created')}: page back with --before to reach it)"
+                        if len(held) > 1 else ""))
     label = LABELS.get(jobs[0]["wake_preset"], "")
     sent = H.say(c, H.KEEPER, "bot:" + bot, f"{len(jobs)} updates held by your {label} wake preset:\n"
                  + "\n".join(lines) + "\nOpen each task that needs you; the rest is news.", kind="notice",
@@ -235,9 +261,24 @@ def _release(c, bot, jobs):
     held_until = max(c.execute("SELECT hold_until FROM jobs WHERE id=?", (j["id"],)).fetchone()[0] for j in jobs)
     c.execute("UPDATE jobs SET wake_class='digest',wake_preset=?,hold_until=? WHERE message_id=?",
               (jobs[0]["wake_preset"], held_until, (sent or {}).get("id")))
+    digest = c.execute("SELECT id FROM jobs WHERE message_id=?", ((sent or {}).get("id"),)).fetchone()
     for job in jobs:
-        c.execute("UPDATE jobs SET state='cancelled',held=0 WHERE id=?", (job["id"],))
+        c.execute("UPDATE jobs SET state='cancelled',held=0,wake_carrier=? WHERE id=?",
+                  (digest[0] if digest else None, job["id"]))
     H.event(c, H.KEEPER, "job.wake_digest", bot, {"jobs": [j["id"] for j in jobs]})
+
+
+def _on_one_page(c, jobs):
+    """Whether the room page of the batch's newest turn still shows its oldest notice: at most half a page of
+    messages from it on, and none of it before the room's session epoch (which the page starts from)."""
+    from .execution import HISTORY_PAGE
+    oldest = c.execute("SELECT rowid,conversation_id,created FROM messages WHERE id=?", (jobs[0]["message_id"],)).fetchone()
+    epoch = c.execute("SELECT updated FROM session_epochs WHERE conversation_id=?", (oldest["conversation_id"],)).fetchone()
+    if epoch and epoch["updated"] and oldest["created"] < epoch["updated"]:
+        return False
+    after = c.execute("SELECT count(*) FROM messages WHERE conversation_id=? AND rowid>=?",
+                      (oldest["conversation_id"], oldest["rowid"])).fetchone()[0]
+    return after <= HISTORY_PAGE // 2
 
 
 def replan(c, bot):
@@ -314,14 +355,23 @@ def _pct(values_, q):
 def measures(c, since, until=None, limit=20000):
     """Per preset, over jobs queued in [since, until): turns and tokens per accepted ticket (a task that ended done),
     pickup latency from the event to the turn that acts on it, the time those tickets spent blocked or waiting, and
-    missed actions (an immediate wake not picked up within MISSED_AFTER_SECONDS). Bounded by `limit` jobs."""
+    missed actions (an immediate wake not picked up within MISSED_AFTER_SECONDS). Bounded by `limit` jobs.
+
+    A notice a batch carried (`wake_carrier`: the batch's newest, or its digest) is picked up when its carrier is, so
+    its wait runs from its own event; the carrier's own message is not an event and adds no wait. A carrier's turns
+    and tokens are split evenly over the tickets it carried, so each is counted once."""
     until = until or H.now()
     rows = c.execute(
-        "SELECT j.id,j.state,j.wake_preset,j.wake_class,j.created,m.created AS event_at,a.created AS claimed,"
-        "t.task_id,t.tokens_in,t.tokens_out FROM jobs j "
-        "JOIN messages m ON m.id=j.message_id LEFT JOIN attempts a ON a.job_id=j.id LEFT JOIN turns t ON t.id=a.id "
+        "SELECT j.id,j.state,j.wake_preset,j.wake_class,j.wake_carrier,m.created AS event_at,m.refs_json FROM jobs j "
+        "JOIN messages m ON m.id=j.message_id "
         "WHERE j.created>=? AND j.created<? AND j.wake_preset IS NOT NULL ORDER BY j.created LIMIT ?",
         (since, until, limit)).fetchall()
+    runs = _runs(c, {r["id"] for r in rows} | {r["wake_carrier"] for r in rows if r["wake_carrier"]})
+    carried = {}
+    for row in rows:
+        if row["wake_carrier"]:
+            task = (H._json(row["refs_json"], {}) or {}).get("task")
+            carried.setdefault(row["wake_carrier"], set()).update([task] if task else [])
     out = {}
     for name in CHOICES:
         out[name] = {"preset": name, "label": LABELS[name], "jobs": 0, "turns": 0, "tokens": 0,
@@ -339,15 +389,21 @@ def measures(c, since, until=None, limit=20000):
         if row["wake_class"] == "duplicate":
             bucket["duplicates"] += 1
             continue
-        wait = _seconds(row["event_at"], row["claimed"] or (until if row["state"] == "queued" else None))
-        if row["claimed"]:
-            bucket["turns"] += 1
-            tokens = (row["tokens_in"] or 0) + (row["tokens_out"] or 0)
-            bucket["tokens"] += tokens
-            if row["task_id"]:
-                seen = tickets[name].setdefault(row["task_id"], [0, 0])
-                seen[0], seen[1] = seen[0] + 1, seen[1] + tokens
-            if wait is not None:
+        if row["wake_carrier"]:
+            claimed = (runs.get(row["wake_carrier"]) or {}).get("claimed")
+            if claimed and _seconds(row["event_at"], claimed) is not None:
+                pickups[name]["held"].append(_seconds(row["event_at"], claimed))
+            continue
+        run = runs.get(row["id"]) or {}
+        wait = _seconds(row["event_at"], run.get("claimed") or (until if row["state"] == "queued" else None))
+        if run.get("claimed"):
+            bucket["turns"] += run["turns"]
+            bucket["tokens"] += run["tokens"]
+            shared = sorted((carried.get(row["id"]) or set()) | ({run["task"]} if run["task"] else set()))
+            for task in shared:
+                seen = tickets[name].setdefault(task, [0, 0])
+                seen[0], seen[1] = seen[0] + run["turns"] / len(shared), seen[1] + run["tokens"] / len(shared)
+            if wait is not None and row["wake_class"] != "digest":
                 pickups[name]["held" if held else "immediate"].append(wait)
         if not held and wait is not None and wait > MISSED_AFTER_SECONDS and row["state"] != "cancelled":
             bucket["missed_actions"] += 1
@@ -364,6 +420,19 @@ def measures(c, since, until=None, limit=20000):
             bucket["pickup_seconds"][kind + "_p90"] = _pct(pickups[name][kind], 0.9)
     return {"since": since, "until": until, "missed_after_seconds": MISSED_AFTER_SECONDS,
             "presets": [out[name] for name in CHOICES]}
+
+
+def _runs(c, job_ids):
+    """Each job's first claim, and its turns' count, tokens and task."""
+    out, ids = {}, sorted(i for i in job_ids if i)
+    for n in range(0, len(ids), 500):
+        part = ids[n:n + 500]
+        for row in c.execute("SELECT a.job_id,min(a.created) AS claimed,count(t.id) AS turns,"
+                             "coalesce(sum(coalesce(t.tokens_in,0)+coalesce(t.tokens_out,0)),0) AS tokens,"
+                             "max(t.task_id) AS task FROM attempts a LEFT JOIN turns t ON t.id=a.id "
+                             f"WHERE a.job_id IN ({','.join('?' * len(part))}) GROUP BY a.job_id", part):
+            out[row["job_id"]] = dict(row)
+    return out
 
 
 def _blocked(c, task_id):

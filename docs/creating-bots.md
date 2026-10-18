@@ -601,7 +601,7 @@ Levers set in **Settings → Bots**, not in the repository:
   at most every 2 hours. **Performance** coalesces the same news for 1 minute and runs those sweeps at most
   every 15 minutes. **Current behaviour**, which every bot made before presets keeps until someone picks
   one, wakes on each piece of news as it arrives. In every preset, these wake the bot at once, and only once
-  however often the event repeats: a person's message, an assignment, a question, something it waits on
+  when the same event repeats before its run is over: a person's message, an assignment, a question, something it waits on
   resolving, a blocker, and a review or QA request. A preset turns on no routine, hook, subscription or
   permission, and leaves Compact at alone. The line under the picker shows what the bot runs on. Each run
   in a task's **Runs** says what woke it. A branch picks its own.
