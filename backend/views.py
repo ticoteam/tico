@@ -15,7 +15,8 @@ from . import access as Access
 from . import bot_access as A
 from . import models as M
 from . import changelog as CL
-from . import providers, runner_versions
+from . import app_delivery, providers, runner_versions
+from .harnesses import resolve_harness
 from . import personal_tokens, rooms, team_rules, turns
 from .execution import AWAKE_GAP, AWAKE_SETTLE, Execution, turn_limit, turn_share, turns_here
 from pathlib import Path
@@ -1412,7 +1413,10 @@ def install_views(app, store, auth, mutate, task_view):
                          "users": [P.brief(p) for p in P.primary_users(slug, people, configs)],
                          "icon": icon_of(config), "helper": helper(config),
                          "my_access": level, **policy,
-                         "can_chat": level["write"] and slug != auth.settings.assistant_bot})
+                         "can_chat": level["write"] and slug != auth.settings.assistant_bot,
+                         # Labelled as on the bot list, so its computer is named to one who cannot see it.
+                         "app_delivery": app_delivery.view(c, config),
+                         "app_delivery_app": app_delivery.HARNESS_APP.get(resolve_harness(config, config.get("runtime")))})
         return rows
 
     @app.get("/api/me")

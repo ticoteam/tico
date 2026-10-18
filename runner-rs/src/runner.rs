@@ -292,8 +292,10 @@ impl Runner {
         let assignments = self.assignments.lock().unwrap().clone();
         let candidates = readiness_candidates(&assignments);
         // A built-in bot is set up from the catalog first; any other (or one whose history is on GitHub) is fetched.
-        crate::product_files::bootstrap_missing(&self.config, &candidates).await;
-        self.fetch_missing(&candidates).await;
+        // A bot delivered through an app has no repository to fetch.
+        let with_repositories: Vec<Value> = candidates.iter().filter(|e| crate::appdriver::delivery(&e["config"]).is_none()).cloned().collect();
+        crate::product_files::bootstrap_missing(&self.config, &with_repositories).await;
+        self.fetch_missing(&with_repositories).await;
         // Profiles as runner.json has them now, so a sign-in made since start is reported and checked.
         let config = self.config_now();
         let runtimes = readiness::runtime_report(&config, &self.sign_in, &self.client, &candidates).await;
@@ -311,6 +313,9 @@ impl Runner {
         }
         if let Some(screen) = crate::screen::readiness() {
             readiness_doc["screen"] = screen; // only while turned on here (crate::screen)
+        }
+        if let Some(apps) = crate::appdriver::readiness(&candidates) {
+            readiness_doc["appdriver"] = apps; // only on a Mac with app delivery (crate::appdriver)
         }
         let mut body = json!({
             "version": RUNNER_VERSION,
@@ -619,6 +624,7 @@ impl Runner {
         tokio::spawn(self.clone().push_backlog());
         tokio::spawn(self.events.clone().run(self.client.clone()));
         tokio::spawn(crate::perf::run_loop(self.clone()));
+        tokio::spawn(crate::appdriver::run_loop(self.clone()));
         let mut clock = Clock {
             polled: HashMap::new(),
             next_claim: None,

@@ -7,6 +7,15 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+- A synced Grok Bot can be delivered through the Grok Mac app: set **Deliver through the app on** in its settings
+  to one of your own Macs where Grok is ready, and a message to it reaches it within a minute, it shows as working,
+  its reply streams in, and what it says on its own in Grok reaches its Tico chat within minutes. The Mac's native
+  runner works only through Accessibility (`tico-appdriver`, shipped separately): it never moves the pointer, types
+  or brings Grok forward. **Settings → Computers** shows a **Desktop apps** row per app, Health names a signed-out
+  app, missing permission or changed layout, and a reply that needs you in Grok becomes a question in your Needs
+  you. Off by default; with it off nothing changes, and no message is handed to the daily sync twice.
+
 ### Changed
 - Screen: the first time a new computer offers its screen, its **Screen** setting in Settings > Computers starts at
   **Control** instead of **View**, so its operator or an admin can drive it at once. Who may open a screen is
@@ -22,16 +31,25 @@ All notable changes to Tico are recorded here. The format follows
 - **Save bot** in the bot editor no longer drops a Model or Fallback you picked but didn't Apply. A picked Fallback is
   saved with the bot; a picked Model opens its change dialog first, and if you cancel it the editor stays open and
   says the model change wasn't applied. If the fallback can't be saved, the editor stays open with the reason.
+- Automatic fallback no longer sends a bot to a login that is out of quota. When a login on a computer fails a turn
+  on its usage limit, the runner skips it for fallback until the provider's reset time, or for 30 minutes when the
+  provider gives none, and takes the next of the company's providers instead. A fallback that hits its own limit
+  mid-turn moves the turn on to the next provider rather than ending it.
 - A person's new Slack thread to a bot that is paused or quarantined is kept and runs when the bot is back, as a reply
   in an existing thread already was, instead of being dropped. The person is told in the thread that the bot is held
   and when it is back, with no need to resend.
 - The Overview campus moves a bot's desk as soon as its status changes, while live updates are connected, instead of at
   the next refresh (up to two minutes).
+- An Overview replay that plays to its end goes back to the live desks, as Back to live does, instead of staying on
+  the day's last states while the bots have moved on.
 - Health no longer says a bot that ran out of quota has no fallback when the company fallback (*Fall back when a plan
   runs out*, **Settings > AI providers**) covers it. And Health now says when a computer's default login for an AI tool
   (the one bots without a subscription use) is out of quota, e.g. "Team box's default Codex login is out of quota":
   turns there keep stopping on a usage limit with no reset time, so bots that fall back to it fail. It clears once a
   turn on that login completes or the reset time passes.
+- A check or review subtask whose model's default login on its computer is out of quota (the Health finding above) now
+  moves to the next check model at once, instead of retrying that login every 30 minutes. It goes back to the model
+  it asked for once that login works again or its reset time passes; with no other check model, it waits as before.
 - On a phone, the Support pop-up fits the space above the keyboard while you type: the box, Send and the newest
   reply stay on screen, and the page behind no longer shows below it or scrolls under it. With the keyboard down it is
   the usual bottom sheet again.

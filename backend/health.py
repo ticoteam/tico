@@ -1293,6 +1293,9 @@ def view(c, who, settings, auth, github, config):
     if subscription_problems:
         checks.append(_check("subscriptions", "Subscriptions", "warn", "; ".join(subscription_problems[:5]),
                              [_fix("Open Computers", "#/settings", "devices")]))
+    from .app_delivery import health_problems
+    for key, summary in health_problems(c, who, auth, online_ids):
+        checks.append(_check(key, "Desktop apps", "warn", summary, [_fix("Open Computers", "#/settings", "devices")]))
     fixes = [_fix("Add a computer", "#/settings", "devices")] if full else []
     if not computers:
         checks.append(_check("computers", "Computers", "bad", "No computer is set up. Bots need one to run.", fixes))
