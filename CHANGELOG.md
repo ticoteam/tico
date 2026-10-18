@@ -13,6 +13,15 @@ All notable changes to Tico are recorded here. The format follows
   HQ keeps none of the call's text (only the key's label and per-call counts), that zero retention is enforced only when
   a call asks for it (OpenRouter's policy still allows in-memory prompt caching), and that the region is not confirmed.
 
+### Fixed
+- **Clear** on a bot's chat now really starts the bot over. Before, it only trimmed the history Tico sends, and on
+  the computer Claude Code, Codex and the other harnesses kept resuming the old provider thread, so the bot still
+  remembered the cleared chat and every turn still paid for it. Each turn now carries its conversation's session
+  epoch (`session_epoch`, moved by Clear and by the session resets after a model, placement or thread-mode change);
+  when it moves, the runner starts a new provider thread from Tico's history after the clear. Without a clear the bot
+  resumes its thread as before. After the upgrade, each chat that was ever cleared or reset starts one new thread
+  once. A runner or Hub from before this keeps today's behaviour ([sessions](docs/sessions.md)).
+
 ## [0.3.58] - 2026-10-18
 
 ### Added
@@ -67,12 +76,6 @@ All notable changes to Tico are recorded here. The format follows
   at once instead of tapping Control first, with **View** one tap away; a computer set to View opens view only.
 
 ### Fixed
-- **Clear** on a bot's chat now really starts the bot over. Before, it only trimmed the history Tico sends, and on
-  the computer Claude Code, Codex and the other harnesses kept resuming the old provider thread, so the bot still
-  remembered the cleared chat and every turn still paid for it. Each turn now carries its conversation's session
-  epoch (`session_epoch`, moved by Clear and by the session resets after a model, placement or thread-mode change);
-  when it moves, the runner starts a new provider thread from Tico's history after the clear. Without a clear the bot
-  resumes its thread as before. A runner or Hub from before this keeps today's behaviour ([sessions](docs/sessions.md)).
 - A failed Decide call now keeps only its error code (`auth`, `http`, `invalid`, `not_found`, `shape`, `spend_cap`,
   `unavailable`, `unconfigured`, else `unreadable`) in the `judge.call` audit of `POST /api/v2/decisions` and the Slack
   gateway, in the Slack event's reason and log line, and in the listening API's per-post `errors`, never the provider's

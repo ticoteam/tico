@@ -316,6 +316,37 @@ def test_a_person_clearing_the_chat_starts_a_new_provider_thread_and_without_one
         assert calls[-1]["pid"] != calls[0]["pid"] == calls[1]["pid"]
 
 
+@pytest.mark.parametrize("harness", ["claude", "codex"])
+def test_a_clear_made_after_an_upgrade_before_the_chats_next_turn_still_starts_a_new_thread(api, computer, monkeypatch):
+    from backend.execution import Execution
+    claim = Execution.claim
+
+    def without_epoch(self, *args, **kwargs):
+        out = claim(self, *args, **kwargs)
+        if isinstance(out, dict) and isinstance(out.get("attempt"), dict):
+            out["attempt"].pop("session_epoch", None)
+        return out
+    # Before the upgrade: a thread saved with no epoch recorded beside it.
+    monkeypatch.setattr(Execution, "claim", without_epoch)
+    computer.start()
+    post(api, "chat/ops", {"text": "Remember the Acme code word"})
+    until(lambda: len([a for a in computer.attempts() if a["result"]]) == 1, "the first reply")
+    assert computer.api.post("/api/employees/ops/session/clear", json={}, headers=headers()).status_code == 200
+    # Upgraded: the next turn carries the moved epoch, seen here for the first time.
+    monkeypatch.setattr(Execution, "claim", claim)
+    post(api, "chat/ops", {"text": "Start over: a new question"})
+    until(lambda: len([a for a in computer.attempts() if a["result"]]) == 2, "the reply after the clear")
+    assert [a["result"]["outcome"] for a in computer.attempts()] == ["completed"] * 2
+    first, second = started_threads(api, computer)
+    assert first and second and second != first, (first, second)
+    assert "Remember the Acme code word" not in computer.prompts()[-1]["prompt"]
+    if computer.harness == "claude":
+        assert "--resume" not in computer.prompts()[-1]["argv"]
+    else:
+        starts = [c for c in computer.calls() if c.get("harness") == "codex" and c.get("method") in ("thread/start", "thread/resume")]
+        assert [c["method"] for c in starts] == ["thread/start", "thread/start"]
+
+
 @pytest.mark.parametrize("harness", ["gemini", "antigravity"])
 def test_a_second_message_reuses_the_warm_process_or_resumes_the_session(api, computer):
     computer.start()
