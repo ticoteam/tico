@@ -1731,16 +1731,21 @@ class AuthRejected(Contract):
 
 
 RequestTokens = Annotated[int, Field(ge=0, le=10**9)]
+# A request's three counts, and from a runner that can tell, whether it was the bot's own request (1) or a subagent's (0).
+RequestUsage = tuple[RequestTokens, RequestTokens, RequestTokens] | tuple[RequestTokens, RequestTokens, RequestTokens,
+                                                                          Literal[0, 1]]
 
 
 class RunUsagePart(Contract):
     """What a run spent, as its runner counted it: uncached input, cached input and output tokens.
     `requests` is the same three per model request, sent when the runner saw every request, so a model whose
-    long prompts cost more (providers.LONG_PROMPT) is priced request by request."""
+    long prompts cost more (providers.LONG_PROMPT) is priced request by request. A fourth count, when the runner
+    sends one, marks the bot's own requests (1) from its subagents' (0): the newest of its own is the session's
+    context size (`turns.prompt_tokens`)."""
     input_tokens: int = Field(default=0, ge=0, le=10**12)
     cached_tokens: int = Field(default=0, ge=0, le=10**12)
     output_tokens: int = Field(default=0, ge=0, le=10**12)
-    requests: list[tuple[RequestTokens, RequestTokens, RequestTokens]] | None = Field(default=None, max_length=2000)
+    requests: list[RequestUsage] | None = Field(default=None, max_length=2000)
     model: str = Field(default="", max_length=120)
     runtime: str = Field(default="", max_length=60)
     profile_used: str | None = Field(default=None, max_length=80)

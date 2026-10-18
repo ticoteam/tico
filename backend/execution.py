@@ -1548,8 +1548,10 @@ class Execution:
             if len({p[key] for p in segments}) > 1:
                 result[key] = None
         result["segments"] = segments
-        # The newest request's prompt, the session's context size, when the last portion sent each request's tokens.
-        result["prompt_tokens"] = sum(items[-1].requests[-1][:2]) if items[-1].requests else None
+        # The session's context size: the newest of the bot's own requests' prompt, when the last portion's runner
+        # marked them (a subagent's request is not the session's). Unknown otherwise.
+        own = [r for r in items[-1].requests or () if len(r) > 3 and r[3] == 1]
+        result["prompt_tokens"] = own[-1][0] + own[-1][1] if own else None
         return result
 
     def file_result(self, c, row, body):

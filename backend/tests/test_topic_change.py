@@ -138,20 +138,56 @@ def test_the_size_is_the_newest_prompt_never_the_turns_summed_usage(chat, contex
         assert checks(api)[0]["context_tokens"] is None and checks(api)[0]["gate"] == "cold"
 
 
-def test_a_turn_keeps_its_newest_requests_prompt_as_the_context_size(chat):
-    api, machine, _, _, _ = chat
+def run_with(api, machine, requests):
+    """A turn whose runner reports these per-request counts; its stored (input, cached, prompt) tokens."""
     with api.app.state.store.transaction() as c:
         team_rules.save(c, "human:ana", {"topic_fresh": False})
     post(api, "chat/ops", {"text": "Next one"})
     turn = claim(api, machine)
     post(api, f"attempts/{turn['id']}/started", {"thread_id": "t-" + turn["id"][:8]}, machine["token"])
-    part = {"model": "claude-haiku-5-5", "runtime": "claude", "billing": "api", "input_tokens": 1_500,
-            "cached_tokens": 104_000, "output_tokens": 300, "requests": [[500, 50_000, 100], [1_000, 54_000, 200]]}
-    post(api, f"attempts/{turn['id']}/complete", {"outcome": "completed", "last_seq": 0, "text": "Done.",
-                                                  "usage": {**part, "segments": [part]}}, machine["token"])
+    totals = [sum(r[i] for r in requests) for i in range(3)]
+    part = {"model": "claude-haiku-5-5", "runtime": "claude", "billing": "api", "input_tokens": totals[0],
+            "cached_tokens": totals[1], "output_tokens": totals[2], "requests": requests}
+    r = api.post(f"/api/v2/attempts/{turn['id']}/complete", headers=headers(machine["token"]),
+                 json={"outcome": "completed", "last_seq": 0, "text": "Done.", "usage": {**part, "segments": [part]}})
+    assert r.status_code == 200, r.text
     with api.app.state.store.read() as c:
-        row = c.execute("SELECT input_tokens,cached_tokens,prompt_tokens FROM turns WHERE id=?", (turn["id"],)).fetchone()
-    assert tuple(row) == (1_500, 104_000, 55_000), "the summed totals stay; the context is the last request's prompt"
+        return tuple(c.execute("SELECT input_tokens,cached_tokens,prompt_tokens FROM turns WHERE id=?",
+                               (turn["id"],)).fetchone())
+
+
+@pytest.mark.parametrize("requests,prompt", [
+    # The runner's own fixture (runner-rs claude.rs): a 123,002-token prompt of the bot's, then a subagent's 900.
+    ([[3002, 120000, 78, 1], [900, 0, 5, 0]], 123_002),
+    # A small prompt of the bot's, then a large subagent's: the session is still small.
+    ([[500, 15000, 100, 1], [2000, 118000, 50, 0]], 15_500),
+    ([[500, 50000, 100, 1], [1000, 54000, 200, 1], [300, 0, 9, 0]], 55_000),   # the newest of the bot's own
+    ([[500, 50000, 100], [1000, 54000, 200]], None),     # an older runner: no marks, size unknown
+    ([[900, 0, 5, 0]], None),                            # only a subagent's: unknown
+])
+def test_a_turn_keeps_the_newest_of_the_bots_own_prompts_as_the_context_size(chat, requests, prompt):
+    api, machine, _, _, _ = chat
+    stored = run_with(api, machine, requests)
+    assert stored == (sum(r[0] for r in requests), sum(r[1] for r in requests), prompt), \
+        "the summed totals stay; the context is the bot's own newest prompt"
+
+
+@pytest.mark.parametrize("requests,checked", [
+    ([[3002, 120000, 78, 1], [900, 0, 5, 0]], True),     # a warm session over 100k: checked, whatever the subagent
+    ([[500, 15000, 100, 1], [2000, 118000, 50, 0]], False),   # a warm small session: a large subagent never checks it
+    ([[3002, 120000, 78]], False),                       # an older runner, warm: size unknown, no check
+])
+def test_only_the_bots_own_prompt_size_triggers_a_check(chat, requests, checked):
+    api, machine, _, model, _ = chat
+    run_with(api, machine, requests)
+    with api.app.state.store.transaction() as c:
+        team_rules.save(c, "human:ana", {"topic_fresh": True})
+    model.choice = "same_topic"
+    post(api, "chat/ops", {"text": "And another"})
+    assert bool(model.calls) is checked and len(checks(api)) == int(checked)
+    if checked:
+        assert checks(api)[0]["gate"] == "big"
+
 
 # -------------------------------------------------------------------------------- a new topic clears like Clear
 
@@ -341,6 +377,49 @@ def test_overlapping_new_topic_sends_clear_once_and_keep_the_first_message(chat)
     turn = claim(api, machine)
     assert sorted(m["body"] for m in turn["history"]) == sorted(m["body"] for m in sent), \
         "both new messages are after the clear"
+
+
+def test_a_clear_between_admission_and_history_is_not_cleared_again(chat, monkeypatch):
+    """A Clear that commits after the gate admitted the old three-turn session but before history and the marker are
+    read: the check reads the chat as admitted, so its decision no longer matches and nothing is cleared twice."""
+    api, machine, conversation, _, _ = chat
+    store = api.app.state.store
+    real = T.gate
+
+    def gate_then_clear(*args, **kwargs):
+        verdict = real(*args, **kwargs)
+        assert verdict[0], "the old session was admitted"
+        with store.transaction() as c:          # another tab's Clear commits now
+            views.clear_chat_session(c, store.settings, "human:ana", "ops", conversation)
+        return verdict
+    monkeypatch.setattr(T, "gate", gate_then_clear)
+    message = post(api, "chat/ops", {"text": UNRELATED})
+    assert "topic_changed" not in (message.get("refs") or {}), "no divider"
+    assert session_state(api, conversation) == {"epoch": 1, "bot_epoch": 1, "thread": False}, "cleared once"
+    with store.read() as c:
+        kept = [json.loads(r[0]) for r in c.execute("SELECT detail_json FROM events WHERE action='chat.topic_kept'")]
+    assert kept == [{"why": "changed"}]
+    turn = claim(api, machine)
+    assert [m["body"] for m in turn["history"]] == [UNRELATED], "the message is after the first clear"
+
+
+def test_an_answer_after_the_deadline_is_dropped_even_when_the_worker_runs_first(chat, monkeypatch):
+    """The answer is ready only after the deadline, and the worker hands it over before the waiting send wakes."""
+    api, _, conversation, _, _ = chat
+    skew = [0.0]
+    monkeypatch.setattr(T, "_clock", lambda: time.monotonic() + skew[0])
+
+    class Late(FakeDecide):
+        def __call__(self, *args, **kwargs):
+            answer = super().__call__(*args, **kwargs)
+            skew[0] = T.BUDGET + 0.1             # the answer arrives past the deadline; the send has not woken yet
+            return answer
+    api.app.state.judge = Late()
+    message = post(api, "chat/ops", {"text": UNRELATED})
+    assert "topic_changed" not in (message.get("refs") or {}), "a late new topic is never applied"
+    assert session_state(api, conversation)["epoch"] == 0
+    row = checks(api)[0]
+    assert row["error"] == "timeout" and row["clear"] is False and row["answers"]["topic"]["choice"] == "new_topic"
 
 
 # -------------------------------------------------------------------------------- never checked

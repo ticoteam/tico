@@ -7,15 +7,16 @@ The gate is plain code, read from what runners already report. The session is th
 would continue (its `bot_sessions` row); its last turn is the newest finished turn on that thread.
 - Warm: that turn finished under WARM_SECONDS ago and reported `cached_tokens` > 0. Anything else is cold: no turn, an
   older one, or a harness that reports no cache use (Grok, today).
-- Context size: that turn's newest model request's whole prompt (`turns.prompt_tokens`, uncached + cached), when its
-  runner sent each request's tokens. The turn's summed `input_tokens + cached_tokens` count every request of the turn
-  again and are not a context size; without `prompt_tokens` the size is unknown and never triggers a check.
+- Context size: that turn's newest request of the bot's own (not a subagent's) whole prompt (`turns.prompt_tokens`,
+  uncached + cached), when its runner marked its requests. The turn's summed `input_tokens + cached_tokens` count every
+  request of the turn again and are not a context size; without `prompt_tokens` (an older runner, a harness that does
+  not mark them) the size is unknown and never triggers a check.
 - Check at BIG_CONTEXT tokens or more, or when the cache is cold; not under BIG_CONTEXT with a warm cache.
 - Never when the team's `topic_fresh` rule is off, the chat is a shared bot's room (even one with a single person), the
   chat has an active goal, a turn is running, or the chat has fewer than MIN_TURNS turns since its last clear.
 
 The whole check, its reads, the call and the answer, runs on a worker the send waits for at most BUDGET seconds; an
-answer later than that is dropped. A decision holds only for the chat as it was read: `apply` re-reads it in the send's
+answer later than that is dropped, whichever thread runs first. Its reads are one snapshot, admission to history. A decision holds only for the chat as it was read: `apply` re-reads it in the send's
 own transaction and clears nothing when the rule, a goal, a running turn, the session's epoch or the chat's newest
 message changed meanwhile.
 
@@ -37,6 +38,7 @@ from .judge import audit_detail, daily_cap, over_spend_cap, server_engine, used_
 from .store import H, encode
 
 LOG = logging.getLogger("tico.topic_change")
+_clock = time.monotonic
 QUESTION_SET = "topic-change"
 RULE = "topic_fresh"
 # The most a send waits for the check, all of it: the read, the call and the answer.
@@ -181,14 +183,14 @@ def check(store, primary, who, bot, text, admit=None):
     "conversation_id", "context_tokens", "snapshot", "delay_ms", ...}, or None when no check ran or it did not finish
     in time. `admit(c)`, when given, is the caller's own condition read with the gate. Never raises and never waits
     more than BUDGET seconds; anything short of a confident new topic is no clear."""
-    started = time.monotonic()
+    started = _clock()
     deadline = started + BUDGET
     box, lock, ready = {}, threading.Lock(), threading.Event()
 
     def hand_over(out):
-        """Give the send its outcome unless it has stopped waiting; True when it took it."""
+        """Give the send its outcome unless it has stopped waiting or the deadline has passed; True when it took it."""
         with lock:
-            if box.get("late"):
+            if box.get("late") or _clock() >= deadline:
                 return False
             box["out"] = out
         ready.set()
@@ -201,11 +203,11 @@ def check(store, primary, who, bot, text, admit=None):
                 ready.set()
                 return
             out, detail = decided
-            out["delay_ms"] = int((time.monotonic() - started) * 1000)
+            out["delay_ms"] = int((_clock() - started) * 1000)
             if hand_over(out):
                 detail["delay_ms"] = out["delay_ms"]
             else:                             # the send went on without it: its delay was the whole wait
-                detail.update(clear=False, error="timeout", delay_ms=box["waited_ms"])
+                detail.update(clear=False, error="timeout", delay_ms=box.get("waited_ms") or int(BUDGET * 1000))
             _audit(store, who, detail)
         except Exception as exc:              # a send never breaks on the check
             LOG.warning("Topic check failed: %s", type(exc).__name__)
@@ -216,12 +218,12 @@ def check(store, primary, who, bot, text, admit=None):
     worker = threading.Thread(target=work, name="topic-change", daemon=True)
     _WORKERS.add(worker)
     worker.start()
-    ready.wait(max(0.0, deadline - time.monotonic()))
+    ready.wait(max(0.0, deadline - _clock()))
     with lock:
-        box["late"], box["waited_ms"] = True, int((time.monotonic() - started) * 1000)
-        out = box.get("out")
+        box["late"], box["waited_ms"] = True, int((_clock() - started) * 1000)
+        out = box.get("out")                  # handed over before the deadline, or not at all
     if out:
-        out["delay_ms"] = int((time.monotonic() - started) * 1000)
+        out["delay_ms"] = int((_clock() - started) * 1000)
     return out
 
 
@@ -229,7 +231,7 @@ def _decide(store, primary, who, bot, text, admit, deadline, box):
     """The check itself, on the worker: (outcome, audit detail), or None when the gate said no or the send stopped
     waiting before a call was made."""
     settings = store.settings
-    with store.read() as c:
+    with store.read_transaction() as c:      # one snapshot: what the gate admitted is what history and the marker read
         if admit and not admit(c):
             return None
         from .views import direct_chat
@@ -249,7 +251,7 @@ def _decide(store, primary, who, bot, text, admit, deadline, box):
            "gate": reason, "snapshot": held}
     questions = {"topic": qset["questions"]["topic"]}
     result = error = None
-    left = deadline - time.monotonic()
+    left = deadline - _clock()
     if box.get("late") or left <= 0:
         return None                           # nothing asked: no call to pay for or count
     if engine is None:

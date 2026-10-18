@@ -68,7 +68,8 @@ impl From<String> for Fail {
 
 /// What a turn spent (runner/usage.py Meter): the sum of each `tokens` event's `usage` increment. A host that learns
 /// the model from its harness (Muse Code) puts it on the event; it names the run's model when the config does not.
-/// A host that sees each model request (Claude) lists them as `requests`, so the server can price each on its own.
+/// A host that sees each model request (Claude) lists them as `requests`, so the server can price each on its own; a
+/// fourth count, when the host sends one, is 1 for the bot's own request and 0 for a subagent's.
 #[derive(Default)]
 pub(crate) struct Meter {
     input: i64,
@@ -99,7 +100,11 @@ impl Meter {
             if let Some(more) = u["requests"].as_array() {
                 let requests = self.requests.get_or_insert_with(Vec::new);
                 for r in more.iter().take(MAX_REQUESTS.saturating_sub(requests.len())) {
-                    requests.push(json!([count(&r[0]), count(&r[1]), count(&r[2])]));
+                    let mut entry = vec![json!(count(&r[0])), json!(count(&r[1])), json!(count(&r[2]))];
+                    if let Some(main) = r.get(3) {
+                        entry.push(json!(count(main).min(1)));
+                    }
+                    requests.push(Value::Array(entry));
                 }
             }
         }
@@ -127,6 +132,17 @@ impl Meter {
             m.insert("requests".into(), json!(requests));
         }
         Some(m)
+    }
+}
+
+/// Drop each request's fourth count (whether it was the bot's own), for a server that takes only three.
+fn main_marks_off(part: &mut Map<String, Value>) {
+    if let Some(Value::Array(requests)) = part.get_mut("requests") {
+        for r in requests.iter_mut() {
+            if let Value::Array(counts) = r {
+                counts.truncate(3);
+            }
+        }
     }
 }
 
@@ -1133,6 +1149,8 @@ impl Runner {
             if let Some(mut part) = s.meter.report(&text_of(&ran["model"]), &rt, s.billing) {
                 if !crate::follow::feature("usage_requests") {
                     part.remove("requests"); // an older server refuses the field
+                } else if !crate::follow::feature("usage_request_main") {
+                    main_marks_off(&mut part); // ... or a request's fourth count
                 }
                 let harness = Some(text_of(&ran["harness"])).filter(|h| !h.is_empty()).unwrap_or(rt);
                 part.insert("harness".into(), json!(harness));
@@ -1424,5 +1442,15 @@ mod tests {
         assert_eq!(m.report("m", "claude", "api").unwrap()["requests"], json!([[10, 20, 3], [20, 100, 4]]));
         m.add(&json!({"usage": {"input": 1, "requests": vec![json!([1, 0, 0]); MAX_REQUESTS]}}));
         assert_eq!(m.report("m", "claude", "api").unwrap()["requests"].as_array().unwrap().len(), MAX_REQUESTS);
+    }
+
+    #[test]
+    fn a_requests_main_mark_is_kept_and_dropped_for_a_server_that_takes_three() {
+        let mut m = Meter::default();
+        m.add(&json!({"usage": {"input": 150, "cached": 120, "output": 7, "requests": [[10, 20, 3, 1], [20, 100, 4, 0], [5, 0, 1]]}}));
+        let mut part = m.report("m", "claude", "api").unwrap();
+        assert_eq!(part["requests"], json!([[10, 20, 3, 1], [20, 100, 4, 0], [5, 0, 1]]));
+        main_marks_off(&mut part);
+        assert_eq!(part["requests"], json!([[10, 20, 3], [20, 100, 4], [5, 0, 1]]));
     }
 }
