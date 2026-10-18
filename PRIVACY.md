@@ -237,20 +237,23 @@ limit, stop words, reasoning effort and answer format. That is all. Not your gat
 and not a caller's own id or metadata (`user`, `metadata` and fields like them are dropped at HQ). Images, audio and
 files are refused before anything is sent.
 
-**What HQ keeps:** no text. No message, tool, answer or label is stored or logged, and an error from OpenRouter is
-answered with a fixed code, never its words. Per call, HQ writes the Tico model, its token counts, cost and price (added
-up per key and month, kept 13 months, for the monthly cap) and one route-log row: the time, the route, the outcome code
-and how long it took (kept 13 weeks). Your address is used in memory only, as a salted hash, to slow down an address that keeps
+**What HQ keeps:** none of the call's content. No message, tool or answer is stored or logged, and an error from
+OpenRouter is answered with a fixed code, never its words. Separately, HQ keeps your gateway key's record: a hash of the
+key and the label the Tico team gave it, which the team sees in its key list and usage reports. Per call, HQ writes
+the Tico model, its token counts, cost and price (added up per key and month, kept 13 months, for the monthly cap) and
+one route-log row: the time, the route, the outcome code and how long it took (kept 13 weeks). Your address is used in memory only, as a salted hash, to slow down an address that keeps
 sending unknown keys; it is never stored or logged.
 
 **What OpenRouter and the provider keep** is under their own terms. Zero retention is enforced only when a call asks
 for it (`"filters": {"zero_retention": true}` in the request): then HQ sends OpenRouter's zero-retention preference, so
-only a provider endpoint that keeps nothing may serve the call and none may collect it for training; if none can, the
-call fails rather than going to one that keeps data. A call that does not ask gets OpenRouter's and the provider's
-normal retention, and Tico's bots do not ask for it today.
+only an endpoint OpenRouter classes as zero data retention may serve the call, with data collection denied; if none can,
+the call fails rather than going to one that keeps data. OpenRouter's policy does not count a provider's in-memory
+prompt caching as retention, so such an endpoint may still cache the prompt in memory
+([OpenRouter: zero data retention](https://openrouter.ai/docs/guides/features/zdr#caching)). A call that does not ask
+gets OpenRouter's and the provider's normal retention, and Tico's bots do not ask for it today.
 
-**Where it runs:** OpenRouter does not confirm the region a call is served in, so these calls may be handled outside
-the US. A call that asks for the US (`"filters": {"region": "us"}`) is refused with `no_route` and sent nowhere, until
+**Where it runs:** HQ's route through OpenRouter has no confirmed region, so these calls may be handled outside the
+US. A call that asks for the US (`"filters": {"region": "us"}`) is refused with `no_route` and sent nowhere, until
 a route confirmed to stay in the US exists.
 
 ## The AI accounts your computers are signed in to
