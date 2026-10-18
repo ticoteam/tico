@@ -144,7 +144,12 @@ def test_at_most_one_suggestion_a_week_even_when_the_task_changed(stale):
 def test_three_stale_tasks_of_a_person_are_one_card_and_accept_marks_only_that_one_done(stale):
     api, store, task = stale
     ids = [task(f"Old chore {n}", owner="human:ana", requester="bot:ops", status="open", days_ago=9) for n in range(3)]
+    with store.read() as c:
+        before = c.execute("SELECT coalesce(max(seq),0) FROM changes").fetchone()[0]
     SR.run_pass(store, engine=FakeDecide("update"))
+    with store.read() as c:
+        assert c.execute("SELECT count(*) FROM changes WHERE topic='needs' AND kind='stale' AND subject_id='human:ana' "
+                         "AND seq>?", (before,)).fetchone()[0] == 3, "an open Needs you page hears of the card"
     items = get(api, "needs-you")["items"]
     cards = [i for i in items if i["kind"] == "stale"]
     assert len(cards) == 1
@@ -160,8 +165,12 @@ def test_three_stale_tasks_of_a_person_are_one_card_and_accept_marks_only_that_o
             == "accepted"
     card = next(i for i in get(api, "needs-you")["items"] if i["kind"] == "stale")
     assert card["title"] == "Stale tickets: 2 suggestions"
+    with store.read() as c:
+        before = c.execute("SELECT max(seq) FROM changes").fetchone()[0]
     post(api, "stale-review/" + card["rows"][0]["id"], {"decision": "skip"})
     with store.read() as c:
+        assert c.execute("SELECT count(*) FROM changes WHERE topic='needs' AND kind='stale' AND seq>?",
+                         (before,)).fetchone()[0] == 1
         assert H.task(c, ids[1])["status"] == "open"
         assert c.execute("SELECT outcome FROM stale_suggestions WHERE task_id=?", (ids[1],)).fetchone()[0] == "skipped"
     # The suggestion is someone else's to answer only if it was made to them.

@@ -218,6 +218,10 @@ TRIGGERS = [
      _needs("approval", "(SELECT to_actor FROM messages WHERE id=NEW.message_id)")),
     ("changes_approvals_update", "UPDATE", "approvals", _changed("decision", "consumed_at"),
      _needs("approval", "(SELECT to_actor FROM messages WHERE id=NEW.message_id)")),
+    # A stale ticket suggestion is on its owner's card until they accept or skip it (backend/stale_review.py).
+    ("changes_stale_suggestions_insert", "INSERT", "stale_suggestions", None, _needs("stale", "NEW.owner")),
+    ("changes_stale_suggestions_update", "UPDATE", "stale_suggestions", _changed("outcome"),
+     _needs("stale", "NEW.owner")),
 ]
 
 # ---------------------------------------------------------------- what a computer is told
