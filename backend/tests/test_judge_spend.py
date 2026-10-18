@@ -19,9 +19,9 @@ DOWN = J.JudgeError("unavailable", "TypeSafe did not answer: TimeoutError", retr
 def spend(api, usd, ts=None, actor="bot:ops"):
     """A past decision call that cost `usd`, this month unless `ts` says otherwise."""
     with api.app.state.store.transaction() as c:
-        H.event(c, actor, "judge.call", "mail-triage@1", {"cost_usd": usd})
+        H.event(c, actor, "judge.spend", "mail-triage@1", {"cost_usd": usd})
         if ts:
-            c.execute("UPDATE events SET ts=? WHERE id=(SELECT id FROM events WHERE action='judge.call' "
+            c.execute("UPDATE events SET ts=? WHERE id=(SELECT id FROM events WHERE action='judge.spend' "
                       "ORDER BY rowid DESC LIMIT 1)", (ts,))
 
 
@@ -37,15 +37,16 @@ def test_a_calls_cost_is_the_providers_own_figure_else_its_tokens_at_list_price(
     assert B.cost_usd(settings, "jev-1.14", {"input_tokens": 9_000_000, "cost": 0.0123}) == 0.0123
     # Jev at TypeSafe's published price: input $0.042 per 1M tokens, output free.
     assert B.cost_usd(settings, "jev-1.14", {"input_tokens": 1_000_000, "output_tokens": 50_000}) == 0.042
-    # Jev without a price is unknown: tokens kept, nothing counted.
-    assert B.cost_usd(priced(settings, 0, 0), "jev-1.14", {"input_tokens": 1000, "output_tokens": 10}) is None
+    # A model with no known price never counts $0: its tokens are counted at the dearest list price.
+    assert B.CEILING == (10.0, 50.0)
+    assert B.cost_usd(priced(settings, 0, 0), "jev-1.14", {"input_tokens": 1_000_000, "output_tokens": 0}) == 10.0
     priced(settings)
     assert B.cost_usd(settings, "jev-1.14", {"input_tokens": 2_000_000, "output_tokens": 500_000}) == 2.0
     # The company's model at providers.PRICES; OpenAI-style counts include the cached tokens.
     assert B.cost_usd(settings, "claude-sonnet-5-5", {"input_tokens": 1_000_000, "output_tokens": 100_000}) == 3.0
     assert B.tokens({"prompt_tokens": 1000, "completion_tokens": 7,
                      "prompt_tokens_details": {"cached_tokens": 400}}) == (600, 400, 7)
-    assert B.cost_usd(settings, "a-model-with-no-price", {"input_tokens": 10}) is None
+    assert B.cost_usd(settings, "a-model-with-no-price", {"output_tokens": 1_000_000}) == 50.0
 
 
 def test_the_audit_keeps_model_tokens_latency_and_cost_and_says_when_the_fallback_answered(api, monkeypatch):
@@ -85,7 +86,7 @@ def test_at_the_monthly_cap_a_call_is_refused_before_any_model_is_asked(api, mon
     post(api, "decisions", {"state": {"team": "Acme"}, "questions": QUESTIONS})
     assert len(engine.calls) == 1
     shown = get(api, "judge")
-    assert shown["monthly_usd"] == 50.0 and shown["spent_this_month_usd"] == pytest.approx(49.99)
+    assert shown["monthly_usd"] == 50.0 and shown["spent_this_month_usd"] == pytest.approx(49.99, abs=0.001)
 
     spend(api, 0.01)
     result = api.post("/api/v2/decisions", json={"state": {"team": "Acme"}, "questions": QUESTIONS}, headers=headers())
@@ -149,7 +150,7 @@ def test_a_batch_stops_calling_once_its_own_answers_reach_the_cap(api, monkeypat
     jev = Paid(0.6)                                    # the first answer takes the month past $1
     monkeypatch.setattr(B, "fallback_engine", lambda *args, **kwargs: None)
     with store.read() as c:
-        engine = B.server_engine(c, store.settings, jev)
+        engine = B.server_engine(store, c, jev)
     engine({"team": "Acme"}, QUESTIONS)
     with pytest.raises(J.JudgeError) as refused:
         engine({"team": "Acme"}, QUESTIONS)
@@ -160,7 +161,8 @@ def test_a_batch_stops_calling_once_its_own_answers_reach_the_cap(api, monkeypat
     listening = _token(api, "listening")
     post(api, "listening/runs", {"source": "x", "query": "q", "status": "ok", "items": [
         _post(str(n), f"Creator post {n} [creator]") for n in range(3)]}, token=listening)
-    api.app.state.judge = jev = Paid(0.6, Listener())   # the engine above audits nothing: $0.50 spent
+    api.app.state.judge = jev = Paid(0.6, Listener())
+    spend(api, -0.6)                                   # back to $0.50, so the batch starts
     out = post(api, "listening/judge", {}, token=listening)
     assert out["judged"] == 1 and [e["error"] for e in out["errors"]] == ["spend_cap"] and len(jev.calls) == 1
     with store.read() as c:
@@ -194,13 +196,52 @@ def test_a_batch_stops_calling_once_its_own_answers_reach_the_cap(api, monkeypat
     assert api.post("/api/v2/learnings/run", json={}, headers=headers()).status_code == 200
 
 
+def test_a_call_in_flight_holds_its_most_against_the_cap_for_every_other_request(api, monkeypatch):
+    """Two requests at once: the second sees what the first may cost while it is still out, not only what is written."""
+    import threading
+    store = api.app.state.store
+    store.settings.decisions_monthly_usd = 1.0
+    priced(store.settings, 0, 0)                       # Jev unpriced, so a call in flight holds a lot
+    spend(api, 0.8)
+    entered, release = threading.Event(), threading.Event()
+
+    class Slow(Paid):
+        def __call__(self, state, questions, label=None):
+            entered.set()
+            release.wait(5)
+            return super().__call__(state, questions, label)
+    slow = Slow(0.05)
+    monkeypatch.setattr(B, "fallback_engine", lambda *args, **kwargs: None)
+    with store.read() as c:
+        first, second = B.server_engine(store, c, slow), B.server_engine(store, c, Paid(0.05))
+    assert B.reservation(store.settings, [J.MODEL], {"team": "Acme"}, QUESTIONS) > 0.2, "unpriced: held high"
+    out = {}
+    thread = threading.Thread(target=lambda: out.update(first({"team": "Acme"}, QUESTIONS, "unpriced")))
+    thread.start()
+    assert entered.wait(5)
+    slow.inner = lambda state, questions, label=None: {"model": "an-unpriced-model", "ms": 1, "answers": {}}
+    with pytest.raises(J.JudgeError) as refused:       # $0.80 written + the first call's most in flight
+        second({"team": "Acme"}, QUESTIONS)
+    assert refused.value.code == "spend_cap"
+    release.set()
+    thread.join(5)
+    assert out["cost_usd"] == 0.05 and B._RESERVED[0] == 0
+    second({"team": "Acme"}, QUESTIONS)                # $0.85 written, nothing in flight: allowed
+    with store.read() as c:
+        assert B.spent_this_month(c) == pytest.approx(0.9)
+        rows = [json.loads(r[0]) for r in c.execute("SELECT detail_json FROM events WHERE action='judge.spend' "
+                                                    "AND target='unpriced'")]
+    assert rows == [{"label": "unpriced", "model": "an-unpriced-model", "cost_usd": 0.05}], \
+        "the provider's own cost wins; an unpriced model without one is counted at the ceiling"
+
+
 # ----------------------------------------------------------------------------- one engine for every caller
 def test_the_server_engine_falls_back_when_jev_is_down_and_is_off_at_the_cap(api, monkeypatch):
     store = api.app.state.store
     jev, backup = FakeJudge(), FakeJudge()
     monkeypatch.setattr(B, "fallback_engine", lambda *args, **kwargs: backup)
     with store.read() as c:
-        engine = B.server_engine(c, store.settings, jev)
+        engine = B.server_engine(store, c, jev)
     assert engine.model == J.MODEL
     assert "cost_usd" in engine({"team": "Acme"}, QUESTIONS) and len(jev.calls) == 1 and backup.calls == []
     jev.fail = DOWN
@@ -211,15 +252,15 @@ def test_the_server_engine_falls_back_when_jev_is_down_and_is_off_at_the_cap(api
     assert len(backup.calls) == 1
     # No key: the company's model alone. Neither: off.
     with store.read() as c:
-        assert B.server_engine(c, store.settings, None)({"team": "Acme"}, QUESTIONS)["model"] == "judge-1.13.0"
+        assert B.server_engine(store, c, None)({"team": "Acme"}, QUESTIONS)["model"] == "judge-1.13.0"
     monkeypatch.setattr(B, "fallback_engine", lambda *args, **kwargs: None)
     with store.read() as c:
-        assert B.server_engine(c, store.settings, None) is None
+        assert B.server_engine(store, c, None) is None
     monkeypatch.setattr(B, "fallback_engine", lambda *args, **kwargs: backup)
     store.settings.decisions_monthly_usd = 1.0
     spend(api, 1.0)
     with store.read() as c:
-        assert B.server_engine(c, store.settings, jev) is None
+        assert B.server_engine(store, c, jev) is None
 
 
 def test_the_nightly_learnings_ask_jev_once_and_briefly_with_the_fallback_behind_and_tally_the_cost(api, monkeypatch):
@@ -233,17 +274,19 @@ def test_the_nightly_learnings_ask_jev_once_and_briefly_with_the_fallback_behind
     monkeypatch.setattr(B.J, "direct", direct)
     store.settings.typesafe_api_key = "synthetic"
     with store.read() as c:
-        engine = L.engine_for(c, store.settings)
+        engine = L.engine_for(store, c)
     assert seen == [("synthetic", B.JEV_TIMEOUT, 0)], "not the direct client's 20 s and two retries"
     tally = L.Tally(engine)
     tally({"team": "Acme"}, QUESTIONS)
     tally({"team": "Acme"}, QUESTIONS)
-    assert tally.detail() == {"calls": 2, "fallbacks": 0, "models": {"judge-1.13.0": 2}, "model": "judge-1.13.0",
-                              "usage": {"input_tokens": 180, "output_tokens": 0}, "cost_usd": 0.0}
+    detail = tally.detail()
+    assert detail.pop("cost_usd") == pytest.approx(2 * B.cost_usd(store.settings, "judge-1.13.0", {"input_tokens": 90}))
+    assert detail == {"calls": 2, "fallbacks": 0, "models": {"judge-1.13.0": 2}, "model": "judge-1.13.0",
+                      "usage": {"input_tokens": 180, "output_tokens": 0}}
     store.settings.decisions_monthly_usd = 1.0
     spend(api, 1.0)
     with store.read() as c:
-        assert L.engine_for(c, store.settings) is None
+        assert L.engine_for(store, c) is None
 
 
 def test_the_listening_judge_gets_the_fallback_when_jev_is_down_and_waits_at_the_cap(api, monkeypatch):
@@ -275,10 +318,10 @@ def test_the_slack_gateway_routes_to_the_assistant_at_the_cap_and_audits_the_cos
                    kind="message", user="U2")
     assert first["state"] == "routed"
     audit = S.rows(hub, "SELECT detail_json FROM events WHERE action='judge.call'")
-    assert json.loads(audit[-1]["detail_json"])["cost_usd"] == 0.0     # the fake model has no list price
+    assert json.loads(audit[-1]["detail_json"])["cost_usd"] == 0.005   # no list price: 500 tokens at the ceiling
     hub.settings.decisions_monthly_usd = 1.0
     with hub.transaction() as c:
-        H.event(c, "bot:ops", "judge.call", "mail-triage@1", {"cost_usd": 1.0})
+        H.event(c, "bot:ops", "judge.spend", "mail-triage@1", {"cost_usd": 1.0})
     calls = len(gateway.engine.calls)
     second = S.send(gateway, "and the NDA too", channel=S.DM, kind="message", user="U2")
     assert len(gateway.engine.calls) == calls, "at the cap the decision model is not asked"
@@ -287,8 +330,8 @@ def test_the_slack_gateway_routes_to_the_assistant_at_the_cap_and_audits_the_cos
 
 
 def test_slack_keeps_the_cost_of_answered_batches_when_a_later_batch_fails(gateway, hub):
-    """A big fleet is asked in several calls. When one fails after another answered, the paid answer is counted once:
-    on a retry as a `judge.spend` row (not against the sender's daily calls), on the final failure in its audit."""
+    """A big fleet is asked in several calls. Each answered call is counted as it returns (a `judge.spend` row, not
+    one of the sender's daily calls), so a later failure, its retries and the final failure lose none and add none."""
     from backend.tests import test_slack_gateway as S
     S.add_bots(hub, 50)                                # 56 bots: two calls a message
     down = J.JudgeError("unavailable", "the decision model answered 503", 503, retryable=True)
@@ -310,7 +353,8 @@ def test_slack_keeps_the_cost_of_answered_batches_when_a_later_batch_fails(gatew
     with hub.read() as c:
         rows = [(r["action"], json.loads(r["detail_json"])) for r in
                 c.execute("SELECT action,detail_json FROM events WHERE action IN ('judge.call','judge.spend') ORDER BY rowid")]
-        assert [(a, d["cost_usd"]) for a, d in rows] == [("judge.spend", 0.25), ("judge.call", 0.5)]
+        # Each answered call is written down as it returns: the first try's one, then the retry's two.
+        assert [(a, d["cost_usd"]) for a, d in rows] == [("judge.spend", 0.25)] * 3 + [("judge.call", 0.5)]
         assert B.spent_this_month(c) == 0.75
         actor = rows[1][1] and c.execute("SELECT actor FROM events WHERE action='judge.call'").fetchone()[0]
         assert B.used_today(c, actor) == 1, "the retried try is not one of the sender's calls"
@@ -323,6 +367,27 @@ def test_slack_keeps_the_cost_of_answered_batches_when_a_later_batch_fails(gatew
         last = json.loads(c.execute("SELECT detail_json FROM events WHERE action='judge.call' ORDER BY rowid DESC").fetchone()[0])
         assert last["error"] == "unavailable" and last["cost_usd"] == 0.25
         assert B.spent_this_month(c) == 1.25
+
+
+def test_slack_stops_a_big_fleet_at_the_cap_partway_and_routes_to_the_assistant(gateway, hub):
+    from backend.tests import test_slack_gateway as S
+    S.add_bots(hub, 50)                                # 56 bots: two calls a message
+    hub.settings.decisions_monthly_usd = 1.0
+    with hub.transaction() as c:
+        H.event(c, "bot:ops", "judge.spend", "mail-triage@1", {"cost_usd": 0.9})
+
+    class Paying(S.CappedJudge):
+        def __call__(self, state, questions, label=None):
+            return {**super().__call__(state, questions, label), "usage": {"cost": 0.25}}
+    gateway._judge = engine = Paying({"asks": 0.9, "bot:legal": 0.9})
+    result = S.send(gateway, "please review the vendor terms", channel=S.DM, kind="message")
+    assert len(engine.calls) == 1, "the second call would start over the cap"
+    assert result["state"] == "routed" and result["decision"]["routed_by"] == "spend_cap"
+    assert [r["bot"] for r in result["decision"]["recipients"]] == ["coo"]
+    with hub.read() as c:
+        audit = json.loads(c.execute("SELECT detail_json FROM events WHERE action='judge.call'").fetchone()[0])
+        assert audit["error"] == "spend_cap" and audit["cost_usd"] == 0.25
+        assert B.spent_this_month(c) == pytest.approx(1.15)
 
 
 def test_a_live_meeting_passes_at_the_cap_and_its_audit_keeps_the_tokens_and_cost(api, monkeypatch):

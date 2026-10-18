@@ -529,7 +529,7 @@ def _decision(app, decision_input, bots, threshold, owner_actor, *, label="live-
                         "trace": {"reason": "monthly_decision_spend_cap", "answers": {},
                                   "threshold": threshold, "decision_input": state}}
             engine = (getattr(app.state, "live_meeting_decider", None)
-                      or server_engine(c, app.state.store.settings, getattr(app.state, "judge", None)))
+                      or server_engine(app.state.store, c, getattr(app.state, "judge", None)))
         if engine is None:
             return {"outcome": "pass", "targets": [],
                     "trace": {"reason": "decisions service unconfigured", "answers": {},

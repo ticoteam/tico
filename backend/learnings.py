@@ -265,10 +265,10 @@ def collect(c, settings, now, team):
 
 
 # ----------------------------------------------------------------------------- route
-def engine_for(c, settings):
+def engine_for(store, c):
     """The server's decision model (backend/judge.py `server_engine`): Jev in one short try with the company's
     own provider behind it; None when there is neither, or the month's decision spend is at its cap."""
-    return server_engine(c, settings, jev(settings))
+    return server_engine(store, c, jev(store.settings))
 
 
 class Tally:
@@ -458,7 +458,7 @@ def run(store, run_id):
             if not row or row["status"] != "running":
                 return
             night, now = row["night"], H.now()
-            engine = engine_for(c, settings)
+            engine = engine_for(store, c)
             capped = engine is None and over_spend_cap(c, settings) is not None
             team = roster(c, settings, now)
             if engine is not None:

@@ -598,7 +598,7 @@ def install(app, store, auth, mutate):
         from .judge import over_spend_cap, server_engine
         with store.read() as c:
             capped = over_spend_cap(c, store.settings)
-            engine = None if capped else server_engine(c, store.settings, getattr(app.state, "judge", None))
+            engine = None if capped else server_engine(store, c, getattr(app.state, "judge", None))
         if capped:
             raise Problem("spend_cap", "Decide has reached the team's monthly spend cap; posts stay unjudged "
                           "until the 1st (UTC)", 429)

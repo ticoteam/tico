@@ -55,7 +55,7 @@ The decision model reading the previous routing and the open ask in its state, n
 
 | the decision model says | The gateway does |
 |---|---|
-| asks-for-anything below `TICO_SLACK_ASK_THRESHOLD` (0.5) | records the message on the thread's conversations, wakes nobody |
+| asks-for-anything below `TICO_SLACK_ASK_THRESHOLD` (0.5) | routes to the assistant (or BotOps): the decision model picks who gets a person's message, never whether anyone does. With neither active, the message is recorded on the thread's conversations and nobody is woken |
 | one or more bots at or above `TICO_SLACK_ROUTE_THRESHOLD` (0.6) | routes to each, best `TICO_SLACK_MAX_RECIPIENTS` (3) by confidence, ties by slug |
 | no bot at threshold | routes to the assistant (`TICO_ASSISTANT_BOT`) with the top three candidates on the message, so it can ask the one clarifying question the write layer allows. A team that chose no assistant (it is optional) gets BotOps instead; with neither active, the message is recorded and nobody is woken |
 | a chosen bot paused or quarantined since the roster was read | keeps the message for it (it runs when the bot is back) and tells the person in the thread that it waits |
@@ -77,10 +77,11 @@ neither is running it is recorded and Tico tells the human in the thread.
 
 When the team's decision spend for the month has reached its cap (`TICO_DECISIONS_MONTHLY_USD`, backend/judge.py), the
 decision model is not asked either: the message goes to the assistant (or BotOps) with `routed_by: spend_cap`, as it would
-with no decisions key. Each `judge.call` the gateway audits also keeps the message's `cost_usd`. A big fleet is asked
-in several calls; when one fails after another answered, the answered calls' cost is still kept, once: on a try that
-will be retried as a `judge.spend` event (counted by the monthly cap, not the sender's daily calls), on the final
-failure in its `judge.call`.
+with no decisions key. A big fleet is asked in several calls, and the cap is checked before each: one that would start at
+the cap stops the message there and it goes to the assistant the same way. Each call's cost is written down as it returns
+(a `judge.spend` event, which the monthly cap sums and the sender's daily calls do not count), so a later call failing,
+its retries and the final failure lose none and add none; each `judge.call` the gateway audits repeats the message's
+`cost_usd` for reading.
 
 Every score and answer is stored: on the event (`slack_events.routing_json`) and on the message
 (`refs.routing`), where the conversation view shows it as a chip (`routed by decisions to Legal 92%`).

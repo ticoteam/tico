@@ -523,6 +523,13 @@ def test_a_shared_dm_with_56_active_bots_is_asked_in_calls_within_the_cap_and_ro
     assert events(hub)[0]["state"] == "routed"
 
 
+def test_a_persons_message_the_model_reads_as_asking_for_nothing_still_reaches_the_assistant(gateway, hub):
+    """Decide picks who gets a person's message, never whether anyone does (the Decide on Jev spec)."""
+    result = send(gateway, "thanks, that's all", judge_answer=answers(asks=0.1, legal=0.9), channel=DM, kind="message")
+    assert result["state"] == "routed" and [r["bot"] for r in result["decision"]["recipients"]] == ["coo"]
+    assert "asks for nothing" in result["decision"]["reason"] and [j["bot"] for j in jobs(hub)] == ["coo"]
+
+
 def test_a_decision_outage_retries_for_ten_minutes_and_then_fails_instead_of_looping(gateway, hub):
     gateway._judge = CappedJudge({}, fail=J.JudgeError("unavailable", "the decision model answered 503", 503, retryable=True))
     assert send(gateway, "hello there", channel=DM, kind="message")["state"] == "received"

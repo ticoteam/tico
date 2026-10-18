@@ -25,6 +25,7 @@ off. Each of them gets its model from `server_engine`, so Jev's one short try an
 sender's, and the market ask (`market.ask` events) has its own count under the same caps.
 """
 
+import json
 import logging
 import os
 import threading
@@ -122,32 +123,45 @@ def tokens(usage):
             first("output_tokens", "completion_tokens", "candidatesTokenCount"))
 
 
+# The dearest list price in `providers.PRICES` (USD per 1M input, output tokens): what a call to a model with no known
+# price is counted at, so no paid call counts $0 toward the cap.
+CEILING = (max(p[0] for p in providers.PRICES.values()), max(p[2] for p in providers.PRICES.values()))
+# A call's output is at most the transports' max_tokens; the reservation for a call in flight assumes all of it.
+MAX_OUTPUT_TOKENS = 4096
+
+
+def priced(settings, model):
+    """Whether `model` has a known price: Jev at the settings' rates, any other at `providers.PRICES`."""
+    if str(model or "").lower().startswith("jev"):
+        return bool(settings.decisions_jev_usd_per_mtok_input or settings.decisions_jev_usd_per_mtok_output)
+    return providers.estimate_cost(model, 1, 0, 1) is not None
+
+
 def cost_usd(settings, model, usage):
     """What one call cost in USD: the provider's own figure when it sends one (OpenRouter's `usage.cost`), else its
-    tokens at list price (Jev at the settings' rates, the company's models at `providers.PRICES`). None when the price
-    is unknown; such a call keeps its tokens in the audit and counts nothing toward the monthly cap."""
+    tokens at list price (Jev at the settings' rates, the company's models at `providers.PRICES`), else, for a model
+    with no known price, its tokens at `CEILING`. Never None: an unknown price is counted high, not as nothing."""
     usage = usage if isinstance(usage, dict) else {}
     for key in ("cost_usd", "cost"):
         value = usage.get(key)
         if isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0:
             return round(float(value), 6)
     fresh, cached, out = tokens(usage)
-    if str(model or "").lower().startswith("jev"):
-        rate_in = settings.decisions_jev_usd_per_mtok_input
-        rate_out = settings.decisions_jev_usd_per_mtok_output
-        if not (rate_in or rate_out):
-            return None
-        return round(((fresh + cached) * rate_in + out * rate_out) / 1_000_000, 6)
-    found = providers.estimate_cost(model, fresh, cached, out)
-    return None if found is None else round(found, 6)
+    if priced(settings, model) and str(model or "").lower().startswith("jev"):
+        rate_in, rate_out = settings.decisions_jev_usd_per_mtok_input, settings.decisions_jev_usd_per_mtok_output
+    elif priced(settings, model):
+        return round(providers.estimate_cost(model, fresh, cached, out), 6)
+    else:
+        rate_in, rate_out = CEILING
+    return round(((fresh + cached) * rate_in + out * rate_out) / 1_000_000, 6)
 
 
 def spent_this_month(c, at=None):
-    """USD the team's decision calls have cost since the 1st of this UTC month, from the audit: every `judge.call`,
-    plus `judge.spend`, the paid part of a try that failed later and will be retried (the Slack gateway)."""
+    """USD the team's decision calls have cost since the 1st of this UTC month: the sum of the `judge.spend` rows
+    `metered` writes after every paid call, whoever made it. (`judge.call` rows repeat the cost for reading.)"""
     month = (at or H.now())[:7]
     total = c.execute("SELECT coalesce(sum(json_extract(detail_json,'$.cost_usd')),0) FROM events "
-                      "WHERE ts>=? AND action IN ('judge.call','judge.spend')", (month + "-01T00:00:00",)).fetchone()[0]
+                      "WHERE ts>=? AND action='judge.spend'", (month + "-01T00:00:00",)).fetchone()[0]
     return round(float(total or 0), 6)              # a float sum of cents can land a hair under the cap
 
 
@@ -163,6 +177,56 @@ def over_spend_cap(c, settings, at=None):
     return spent, cap
 
 
+# Calls in flight in this process, as USD reserved for them: a request or batch thread that checks the cap counts
+# what the others have started and not yet written down.
+_METER, _RESERVED = threading.Lock(), [0.0]
+
+
+def reservation(settings, models, state, questions):
+    """The most one call can cost: all of its input and MAX_OUTPUT_TOKENS of output, at the dearest of `models`."""
+    size = len(json.dumps(state, default=str)) + len(json.dumps(questions, default=str))
+    usage = {"input_tokens": size // 3 + 1000, "output_tokens": MAX_OUTPUT_TOKENS}
+    return max(cost_usd(settings, model, usage) for model in models or [""])
+
+
+def metered(store, models, state, questions, label, call):
+    """One paid decision call under the team's monthly cap, for every caller (server and Slack gateway alike).
+
+    Under one lock per process: read the month's spend from the audit, add the reservations of calls in flight here,
+    refuse `spend_cap` at or over the cap, else reserve this call's most. After the call its real cost is written as a
+    `judge.spend` row before the reservation is released, so the next check sees one or the other. Another process
+    (the Slack gateway's container) sees this one's calls once they are written; that is the most the cap can be
+    passed by: the other process's calls in flight, each at most its reservation."""
+    settings = store.settings
+    cap = float(settings.decisions_monthly_usd or 0)
+    reserved = reservation(settings, models, state, questions) if cap > 0 else 0.0
+    with _METER:
+        if cap > 0:
+            with store.read() as c:
+                spent = spent_this_month(c)
+            if spent + _RESERVED[0] >= cap:
+                _skip("every caller", f"the month's decision spend ${spent:.2f} has reached the ${cap:.2f} cap")
+                raise J.JudgeError("spend_cap", f"Decide has cost ${spent:.2f} this month; the team's cap is "
+                                   f"${cap:.2f} until the 1st (UTC)", 429)
+        _RESERVED[0] += reserved
+    try:
+        result = call()
+        cost = cost_usd(settings, result.get("model"), result.get("usage"))
+        with store.transaction() as c:
+            H.event(c, H.KEEPER, "judge.spend", label or "", {
+                "label": label, "model": result.get("model"), "cost_usd": cost,
+                **({} if priced(settings, result.get("model")) or _own_cost(result) else {"price": "ceiling"})})
+        return {**result, "cost_usd": cost}
+    finally:
+        with _METER:
+            _RESERVED[0] = max(0.0, _RESERVED[0] - reserved)
+
+
+def _own_cost(result):
+    usage = result.get("usage") if isinstance(result.get("usage"), dict) else {}
+    return any(isinstance(usage.get(k), (int, float)) and not isinstance(usage.get(k), bool) for k in ("cost_usd", "cost"))
+
+
 def jev(settings):
     """TypeSafe as the server asks it: one try of at most JEV_TIMEOUT seconds. None without a key."""
     if not settings.typesafe_api_key or settings.rehearsal:
@@ -170,40 +234,34 @@ def jev(settings):
     return J.direct(settings.typesafe_api_key, timeout=JEV_TIMEOUT, retries=0)
 
 
-def server_engine(c, settings, primary=None):
+def server_engine(store, c, primary=None):
     """The decision model every server-side caller uses, or None for "carry on as if Decide were off": rehearsal, no
     model at all, or the month's spend at the cap. `primary` is Jev (`jev(settings)`, or the test's fake); when Jev
-    is slow or down the company's own model answers and the result says `fallback`. Each result carries `cost_usd`.
-
-    A batch (listening, learnings) reuses one engine for many calls, and its rows reach the audit late or only at the
-    end, so the engine adds its own calls' cost to the month's spend it read here and refuses `spend_cap` before any
-    call that would start at or over the cap. Calls already in flight on other threads still finish."""
+    is slow or down the company's own model answers and the result says `fallback`. Each call goes through `metered`,
+    so a batch that reuses one engine (listening, learnings) stops at the cap call by call; each result carries
+    `cost_usd`."""
+    settings = store.settings
     if settings.rehearsal or over_spend_cap(c, settings):
         return None
     backup = fallback_engine(providers.load(c, settings))
     first = primary or backup
     if first is None:
         return None
-    cap = float(settings.decisions_monthly_usd or 0)
-    spent, lock = [spent_this_month(c) if cap > 0 else 0.0], threading.Lock()
+    models = [J.MODEL if first is primary else getattr(backup, "model", "")]
+    if first is primary and backup is not None:
+        models.append(getattr(backup, "model", ""))
 
-    def engine(state, questions, label=None):
-        with lock:
-            if cap > 0 and spent[0] >= cap:
-                _skip("every caller", f"the month's decision spend ${spent[0]:.2f} has reached the ${cap:.2f} cap")
-                raise J.JudgeError("spend_cap", f"Decide has cost ${spent[0]:.2f} this month; the team's cap is "
-                                   f"${cap:.2f} until the 1st (UTC)", 429)
+    def answer(state, questions, label):
         try:
-            result = first(state, questions, label)
+            return first(state, questions, label)
         except J.JudgeError as exc:
             if first is not primary or backup is None or not exc.retryable:
                 raise
-            result = {**backup(state, questions, label), "fallback": exc.code}
-        cost = cost_usd(settings, result.get("model"), result.get("usage"))
-        with lock:
-            spent[0] += cost or 0.0
-        return {**result, "cost_usd": cost}
-    engine.model = J.MODEL if first is primary else getattr(backup, "model", "")
+            return {**backup(state, questions, label), "fallback": exc.code}
+
+    def engine(state, questions, label=None):
+        return metered(store, models, state, questions, label, lambda: answer(state, questions, label))
+    engine.model = models[0]
     return engine
 
 
@@ -253,7 +311,7 @@ def install_judge(app, store, auth):
             raise Problem("rehearsal", "Decisions are off in rehearsal mode; nothing is sent to a provider", 503)
         with store.read() as c:
             capped = over_spend_cap(c, settings)
-            engine = None if capped else server_engine(c, settings, app.state.judge)
+            engine = None if capped else server_engine(store, c, app.state.judge)
         if capped:
             raise Problem("spend_cap", f"Decide has cost ${capped[0]:.2f} this month; the team's cap is "
                           f"${capped[1]:.2f} until the 1st (UTC). Carry on without it.", 429)

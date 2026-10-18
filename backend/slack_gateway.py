@@ -731,22 +731,26 @@ class Gateway:
         """The decision model's answers to every question, in calls of at most `J.MAX_QUESTIONS`.
 
         The questions are independent and their ids unique, so the calls' answers merge into one
-        map. A call that fails fails the whole ask; nothing is routed from half the answers."""
+        map. A call that fails fails the whole ask; nothing is routed from half the answers. Each call goes through
+        the team's monthly spend cap (backend/judge.py `metered`), which writes down its cost as it returns and
+        refuses `spend_cap` before a call at the cap, so a big fleet stops there too."""
         questions = self.questions(fleet)
         ids = list(questions)
-        from .judge import cost_usd
+        from .judge import metered
         answers, self.last_model, self.last_usage, self.last_cost = {}, "", [], 0.0
         for start in range(0, len(ids), J.MAX_QUESTIONS):
             batch = {qid: questions[qid] for qid in ids[start:start + J.MAX_QUESTIONS]}
-            result = self.judge(state, batch, JUDGE_LABEL)
+            result = metered(self.store, [J.MODEL], state, batch, JUDGE_LABEL,
+                             lambda batch=batch: self.judge(state, batch, JUDGE_LABEL))
             answers.update(result["answers"])
             self.last_model = str(result.get("model") or "")
             self.last_usage.append(result.get("usage") or {})
-            self.last_cost += cost_usd(self.settings, self.last_model, result.get("usage")) or 0.0
+            self.last_cost += result["cost_usd"]
         return answers
 
     def paid(self):
-        """What the last `ask`'s answered batches cost before one failed, or None when none answered."""
+        """What the last `ask`'s answered batches cost before one failed, or None when none answered. For reading:
+        the cap already counted each batch as it returned."""
         if not self.last_usage:
             return None
         return {"model": self.last_model, "usage": self.last_usage, "cost_usd": round(self.last_cost, 6)}
@@ -800,7 +804,16 @@ class Gateway:
         ranked = sorted(scores.items(), key=lambda kv: (-kv[1], kv[0]))
         decision["candidates"] = [{"bot": slug, "confidence": p} for slug, p in ranked[:3]]
         if decision["asks"] < self.settings.slack_ask_threshold:
-            decision["reason"] = "asks for nothing; recorded, nobody woken"
+            # Decide picks who gets a person's message, never whether anyone does: one it reads as asking for
+            # nothing goes to the assistant (or BotOps), and is only recorded when neither is running.
+            asker = self.fallback_bot([bot["slug"] for bot in fleet])
+            decision["fallback"] = bool(asker)
+            if asker:
+                decision["reason"] = "asks for nothing by the decision model's reading; " + (
+                    "the assistant" if asker == self.settings.assistant_bot else asker) + " gets it so it is not unheard"
+                decision["recipients"] = [{"bot": asker, "confidence": scores.get(asker, 0.0)}]
+            else:
+                decision["reason"] = "asks for nothing, and no assistant or BotOps to hand it to; recorded, nobody woken"
             return decision
         chosen = [(slug, p) for slug, p in ranked if p >= self.settings.slack_route_threshold]
         if len(chosen) > self.settings.slack_max_recipients:
@@ -919,7 +932,8 @@ class Gateway:
         return decision
 
     def record_only(self, c, event, person, decision):
-        """A message that asks for nothing: kept on the thread's conversations, no job queued."""
+        """A message nobody can be woken for (no bot chosen, no assistant or BotOps running): kept on the thread's
+        conversations, no job queued."""
         actor = "human:" + person["id"]
         kept = []
         for row in c.execute("SELECT bot,conversation_id FROM slack_threads WHERE channel=? AND thread_ts=? "
@@ -946,15 +960,12 @@ class Gateway:
         """The decision model could not answer. A refusal, or an outage that outlasted
         `ROUTE_GIVE_UP_SECONDS`, ends the message as `failed` and tells the human; a short outage
         leaves it `received` for the next try. Never an endless loop. `paid` is what the batches that did
-        answer cost: a try to be retried keeps it as a `judge.spend` row, which the monthly cap counts and the
-        sender's daily call budget does not; a final failure keeps it on its `judge.call`."""
+        answer cost; the monthly cap counted each as it returned (`judge.spend`), and a final failure repeats it
+        on its `judge.call` for reading."""
         actor = "human:" + person["id"]
         expired = H.shift(event["received"], seconds=ROUTE_GIVE_UP_SECONDS) <= self.clock()
         if exc.retryable and not expired:
             with self.store.transaction() as c:
-                if paid:
-                    H.event(c, actor, "judge.spend", JUDGE_LABEL, {"via": "slack", "event_id": event["event_id"],
-                                                                  "retry": True, "error": exc.code, **paid})
                 self.finish(c, event, "received", actor=actor, reason=f"decisions: {exc}")
             LOG.error("Event %s waits: %s", event["event_id"], exc)
             return {"event_id": event["event_id"], "state": "received", "reason": str(exc)}
@@ -998,10 +1009,17 @@ class Gateway:
             try:
                 answers = self.ask(state, fleet)
             except J.JudgeError as exc:
-                return self.routing_error(event, person, exc, fleet, paid=self.paid())
-            decision = self.decide(answers, fleet)
-            called = {"model": self.last_model, "usage": self.last_usage, "cost_usd": round(self.last_cost, 6),
-                      "ms": round((time.monotonic() - started) * 1000)}
+                if exc.code != "spend_cap":
+                    return self.routing_error(event, person, exc, fleet, paid=self.paid())
+                # The cap was reached partway through: route as if Decide were off, and audit what was paid.
+                answers = None
+                called = {**(self.paid() or {"model": None, "usage": [], "cost_usd": 0.0}), "error": "spend_cap",
+                          "ms": round((time.monotonic() - started) * 1000)}
+                decision = self.default_decision(fleet, spend=True)
+            if answers is not None:
+                decision = self.decide(answers, fleet)
+                called = {"model": self.last_model, "usage": self.last_usage, "cost_usd": round(self.last_cost, 6),
+                          "ms": round((time.monotonic() - started) * 1000)}
         with self.store.transaction() as c:
             if called:
                 self.audit(c, actor, event, fleet, called)
