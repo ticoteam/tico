@@ -10,6 +10,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const {html, uiFile} = require('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs');
 const {t} = require('./support/load.cjs');
 const shots = process.env.TICO_SCREENSHOT_DIR;
 const now = Date.now(), iso = ms => new Date(now + ms).toISOString(), hour = 3600e3;
@@ -122,7 +123,7 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
         const u = updates.find(x => x.id === one[1]) || older[one[1]];
         return u ? json({update: u, thread: threads[one[1]] || []}) : json({error: {code: 'not_found', detail: 'Update not found'}}, 404);
       }
-      return json({});
+      return json(unrouted(p));
     });
     return {page, errors};
   };

@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const {html, uiFile} = require('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs');
 const evidence = process.env.TICO_REVIEW_EVIDENCE;
 const row = (id, title, owner, review_state, privateMeeting = false) => ({id, title, owner, review_state, private: privateMeeting,
   kind: 'meeting', status: 'done', source: privateMeeting ? 'granola' : 'zoom', can_edit: true, started: '2026-10-01T14:00:00Z',
@@ -64,7 +65,7 @@ async function open(browser, viewport, scheme, role = 'owner') {
     }
     if (/^\/api\/meetings\/[^/]+$/.test(p)) return json(rows.find(r => r.id === p.split('/').pop()));
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
-    return json({});
+    return json(unrouted(p));
   });
   await page.goto('https://tico-ui.test/#/meetings');
   // New imports are the first thing a person sees: the page opens on Pending while it has any.

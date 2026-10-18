@@ -7,6 +7,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const {html, uiFile} = require('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs');
 
 const now = new Date().toISOString();
 const msg = (id, from, body, refs = {}) => ({id, from_actor: from, body, refs, created: now, kind: 'say'});
@@ -50,7 +51,7 @@ async function open(browser, viewport, state) {
       return json({action: card});
     }
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
-    return json({});
+    return json(unrouted(p));
   });
   return {page, errors};
 }

@@ -46,12 +46,21 @@ All notable changes to Tico are recorded here. The format follows
   says so and links the app's permissions page, where the Owner turns it on once. Connecting and disconnecting GitHub
   stay the Owner's ([Permissions](docs/permissions.md#bots-that-create-repositories),
   [GitHub App](docs/github-app.md#bots-that-create-product-repositories)).
+- Screen: the first time a new computer offers its screen, its **Screen** setting in Settings > Computers starts at
+  **Control** instead of **View**, so its operator or an admin can drive it at once. Who may open a screen is
+  unchanged (the computer's operator and admins), a Screen setting someone already chose stays (View and Off
+  included), and a computer that already offered its screen keeps its setting.
 
 ### Fixed
 
 - On a phone, the Support pop-up fits the space above the keyboard while you type: the box, Send and the newest
   reply stay on screen, and the page behind no longer shows below it or scrolls under it. With the keyboard down it is
   the usual bottom sheet again.
+- Health no longer says a bot that ran out of quota has no fallback when the company fallback (*Fall back when a plan
+  runs out*, **Settings > AI providers**) covers it. And Health now says when a computer's default login for an AI tool
+  (the one bots without a subscription use) is out of quota, e.g. "Team box's default Codex login is out of quota":
+  turns there keep stopping on a usage limit with no reset time, so bots that fall back to it fail. It clears once a
+  turn on that login completes or the reset time passes.
 - `hub computer performance` and the `hub_computer_performance` tool work again: they read the computers reply as a list,
   so every call failed before it reached the computer's CPU, memory and disk history.
 - The Overview campus opened before the bots' status arrived now shows each desk's state as soon as it does, instead
@@ -64,6 +73,9 @@ All notable changes to Tico are recorded here. The format follows
   quarantined bot is kept and runs when it is back, and the sender is told when that is. A new task or hand-off to
   one is refused as `target_inactive`, saying when the bot is back. That refusal opens no review of the sender and
   never counts as a repeat toward its quarantine; it counts only toward the 30 refusals a day that stop a loop.
+- A person's new Slack thread to a bot that is paused or quarantined is kept and runs when the bot is back, as a reply
+  in an existing thread already was, instead of being dropped. The person is told in the thread that the bot is held
+  and when it is back, with no need to resend.
 
 ## [0.3.54] - 2026-10-17
 

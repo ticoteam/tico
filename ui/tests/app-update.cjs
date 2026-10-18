@@ -4,6 +4,7 @@ const {webkit} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs');
 
 (async () => {
   const browser = await webkit.launch({headless:true});
@@ -31,7 +32,7 @@ const {html, uiFile} = require('./support/page.cjs');
     if (p === '/api/status') return json({cloud:true,keeper_alive:true,health_issues:[]});
     if (p === '/api/download/mac') return json({available:true,version:'0.3.46',url:'https://github.com/ticoteam/tico/releases/download/v0.3.46/Tico.dmg'});
     if (p === '/api/employees' || p === '/api/issues') return json([]);
-    return json({});
+    return json(unrouted(p));
   });
   await page.goto('https://tico-ui.test/#/settings', {waitUntil:'domcontentloaded'});
   const bar = page.locator('#app-update');

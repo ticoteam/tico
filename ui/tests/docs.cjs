@@ -9,6 +9,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const ui = path.join(__dirname, '..');
 const {html, uiFile} = require('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs');
 const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();   // load.cjs arrives with #254
 const shots = process.env.TICO_SCREENSHOT_DIR;
 const shot = async (page, name) => {
@@ -218,7 +219,7 @@ const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
         if (body.archived) linked.splice(linked.indexOf(link), 1); else Object.assign(link, {title: body.title ?? link.title, description: body.description ?? link.description, url: body.url ?? link.url});
         return json({linked: linkView(link || {})});
       }
-      return json({});
+      return json(unrouted(p));
     });
 
     const errors = [];

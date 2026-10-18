@@ -12,6 +12,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const zlib = require('node:zlib');
 const {html, uiFile} = require('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs');
 const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();   // load.cjs arrives with #254
 const shots = process.env.TICO_SHOTS || '';
 
@@ -190,7 +191,7 @@ const AMBER = png(160, 90, (x, y) => [220, 110 + (y >> 1), 40 + (x >> 2)]);
         return json({task: t, comments: t === task ? comments : plainComments, events: [], children: [], parent: null, mover: true, messages: [], can_comment: t === task});
       }
       if (p === '/api/v2/conversations') return json({conversations: []});
-      return json({});
+      return json(unrouted(p));
     });
     const theme = async mode => page.evaluate(m => document.documentElement.setAttribute('data-theme', m), mode);
     const shot = async name => { if (shots) await page.screenshot({path: path.join(shots, name + '.png')}); };
