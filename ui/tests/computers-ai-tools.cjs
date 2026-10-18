@@ -77,8 +77,9 @@ const {html, uiFile} = require('./support/page.cjs');
       if (p === '/api/v2/models') return json({models: [], harnesses: [
         {id: 'claude', runtime: 'claude', name: 'Claude Code', capabilities: {account: 'status-json', weekly_usage: 'turns', browser_sign_in: true, subscription_profiles: true}},
         {id: 'codex', runtime: 'codex', name: 'Codex', capabilities: {account: 'app-server', weekly_usage: 'refresh', browser_sign_in: true, subscription_profiles: true}},
-        {id: 'grok', runtime: 'grok', name: 'Grok Build', capabilities: {account: '', weekly_usage: 'manual', terminal_login: ['login']}},
-        {id: 'cursor', runtime: 'cursor', name: 'Cursor Agent', capabilities: {account: '', weekly_usage: ''}},
+        // terminal_login as the server sends it: the executable and its arguments (clients/harness_manifests.py).
+        {id: 'grok', runtime: 'grok', name: 'Grok Build', capabilities: {account: '', weekly_usage: 'manual', terminal_login: 'grok login'}},
+        {id: 'cursor', runtime: 'cursor', name: 'Cursor Agent', capabilities: {account: '', weekly_usage: '', terminal_login: 'cursor-agent login', api_keys: 'computer'}},
         {id: 'musecode', runtime: 'musecode', name: 'Muse Code', capabilities: {account: '', weekly_usage: ''}}]});
       if (p === '/api/v2/subscriptions') return json({profiles_by_computer: [], assignments: []});
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
@@ -137,6 +138,13 @@ const {html, uiFile} = require('./support/page.cjs');
     assert.equal(await beta.locator('[data-model-login][data-profile=beta]').isEnabled(), true);
     assert.match(await dialog.locator('[data-connection="own:musecode"]').innerText(), /Login expired or rejected[\s\S]*The provider refused the login/);
     assert.equal(await dialog.locator('[data-add-connection] [data-subs-add]').count(), 1, 'Add a named subscription at the end');
+    // Installed tools no bot uses, signed in only from a terminal: their command is under Add connection, with no chip.
+    assert.deepEqual(await dialog.locator('[data-add-connection] [data-add-terminal]').evaluateAll(list => list.map(t => [t.dataset.addTerminal,
+      t.querySelector('code').textContent, t.querySelector('[data-machine-copy-login]').dataset.machineCopyLogin])),
+      [['cursor', 'cursor-agent login', 'cursor-agent login'], ['grok', 'grok login', 'grok login']]);
+    assert.match(await dialog.locator('[data-add-terminal=grok]').innerText(), /^Grok Build:\s*grok login\s*Copy$/);
+    assert.equal(await dialog.locator('[data-connection][data-machine-tool=grok], [data-connection][data-machine-tool=cursor]').count(), 0);
+    assert.doesNotMatch(await row('box').locator('.machine-chips').innerText(), /Grok|Cursor/);
     // Usage reads as what is left, everywhere in the pop-up and the list.
     assert.doesNotMatch(await page.locator('#set-machines').innerText(), /% used/);
 
@@ -202,7 +210,7 @@ const {html, uiFile} = require('./support/page.cjs');
       ['own:claude', 'profile:acme:codex', 'profile:beta:codex', 'own:musecode']);
     assert.match(await dialog.locator('[data-connection="profile:acme:codex"]').innerText(), /Subscription · Acme Pro\s+Computer's login/);
     assert.doesNotMatch(await dialog.innerText(), /@/, 'no account emails');
-    assert.equal(await dialog.locator('[data-model-login], [data-subs-add], [data-subs-rename], [data-subs-weekly], [data-subs-refresh], [data-computer-remove], [data-inbox-only], [data-member-bots], [data-computer-screen], [data-harness-choice], [data-performance-mode]').count(), 0);
+    assert.equal(await dialog.locator('[data-model-login], [data-add-connection], [data-machine-copy-login], [data-subs-add], [data-subs-rename], [data-subs-weekly], [data-subs-refresh], [data-computer-remove], [data-inbox-only], [data-member-bots], [data-computer-screen], [data-harness-choice], [data-performance-mode]').count(), 0);
     await page.keyboard.press('Escape');
 
     assert.deepEqual(errors, []);

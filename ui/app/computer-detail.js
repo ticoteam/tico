@@ -113,10 +113,8 @@ function machineConnectionHTML(machine, conn, online, manage) {
   const offline = online ? '' : ' disabled title="Computer is offline"';
   let action = '';
   if (manage && conn.state.signed_in !== true && !conn.missing) {
-    const caps = harnessCaps(conn.runtime), command = !conn.profile && machineLoginCommand(machine, conn.runtime);
-    if (caps.browser_sign_in) action = ` <button class="ghost machine-signin" type="button" data-model-login data-runner="${esc(machine.id)}" data-runtime="${esc(conn.runtime)}" data-machine="${esc(machine.label)}"${conn.profile ? ` data-profile="${esc(conn.profile.name)}"` : ''}${offline}>Sign in</button>`;
-    else if (command) action = ` <span class="machine-login-command" title="Run on the computer${command.includes('<container>') ? '; docker ps shows the container name' : ''}"><code>${esc(command)}</code><button class="ghost machine-signin" type="button" data-machine-copy-login="${esc(command)}">Copy</button></span>`;
-    else if (caps.api_keys === 'bot') action = ' <a class="machine-signin-link" href="#/credentials">Add key</a>';
+    if (harnessCaps(conn.runtime).browser_sign_in) action = ` <button class="ghost machine-signin" type="button" data-model-login data-runner="${esc(machine.id)}" data-runtime="${esc(conn.runtime)}" data-machine="${esc(machine.label)}"${conn.profile ? ` data-profile="${esc(conn.profile.name)}"` : ''}${offline}>Sign in</button>`;
+    else if (!conn.profile) action = machineTerminalSignInHTML(machine, conn.runtime);
   }
   // Switch account / Sign out (or Use the shared key) per login, from ui/model-login.js; only while online. A line
   // that is both the computer's login and a subscription names which login each pair acts on.
@@ -142,7 +140,15 @@ function machineConnectionHTML(machine, conn, online, manage) {
     ${tools || note ? `<div class="computer-conn-tools">${tools}${note ? `<span class="muted" role="status">${esc(note)}</span>` : ''}</div>` : ''}
   </div>`;
 }
-// Add a connection: the computer's own login for an installed tool it is not signed in to, or a named subscription.
+// A tool with no sign-in in the browser: the command to run in a terminal on the computer (Tico need not reach it), or
+// where its keys go.
+function machineTerminalSignInHTML(machine, runtime) {
+  const command = machineLoginCommand(machine, runtime);
+  if (command) return ` <span class="machine-login-command" title="Run on the computer${command.includes('<container>') ? '; docker ps shows the container name' : ''}"><code>${esc(command)}</code><button class="ghost machine-signin" type="button" data-machine-copy-login="${esc(command)}">Copy</button></span>`;
+  return harnessCaps(runtime).api_keys === 'bot' ? ' <a class="machine-signin-link" href="#/credentials">Add key</a>' : '';
+}
+// Add a connection: the computer's own login for an installed tool it is not signed in to (in the browser, or by a
+// command in a terminal), or a named subscription.
 function machineAddHTML(machine, conns, online, manage) {
   if (!manage || machine.revoked_at) return '';
   const offline = online ? '' : ' disabled title="Computer is offline"';
@@ -150,10 +156,15 @@ function machineAddHTML(machine, conns, online, manage) {
   const own = Object.entries(runtimes).filter(([runtime, value]) => value?.installed && harnessCaps(runtime).browser_sign_in
     && !conns.some(conn => conn.runtime === runtime && conn.own && conn.state.signed_in === true))
     .map(([runtime]) => `<button class="ghost machine-signin" type="button" data-model-login data-runner="${esc(machine.id)}" data-runtime="${esc(runtime)}" data-machine="${esc(machine.label)}"${offline}>Sign in to ${esc(machineToolName(machine, runtime))}</button>`).join('');
+  // A tool already on a line of its own login carries its command there.
+  const terminal = Object.entries(runtimes).filter(([runtime, value]) => value?.installed && !harnessCaps(runtime).browser_sign_in
+    && !conns.some(conn => conn.runtime === runtime && conn.own))
+    .map(([runtime]) => [runtime, machineTerminalSignInHTML(machine, runtime)]).filter(([, html]) => html)
+    .map(([runtime, html]) => `<span class="computer-add-terminal" data-add-terminal="${esc(runtime)}">${esc(machineToolName(machine, runtime))}:${html}</span>`).join('');
   const add = subsAddHTML(machine, online);
-  if (!own && !add) return '';
+  if (!own && !terminal && !add) return '';
   return `<div class="computer-add" data-add-connection><strong>Add connection</strong>
-    ${own ? `<div class="computer-add-own"><span class="muted">The computer's login:</span>${own}</div>` : ''}
+    ${own || terminal ? `<div class="computer-add-own"><span class="muted">The computer's login:</span>${own}${terminal}</div>` : ''}
     ${add ? `<div class="computer-add-sub"><span class="muted">A named subscription:</span>${add}</div>` : ''}</div>`;
 }
 function machineBotsHTML(machine) {
@@ -276,16 +287,33 @@ function computerDetailOpen(id) {
   computerDetailPaint(true);
   if (!dialog.open) dialog.showModal();
 }
-// Redraw the open pop-up after Settings loads again; a form being typed in is left alone.
+// Redraw the open pop-up after Settings loads again. A connection, or Add connection, that someone is typing in is
+// carried over as it is (draft, focus and caret), and everything around it is redrawn; a save settles its own form
+// first (subsSettle), so its connection is redrawn too.
+const COMPUTER_DETAIL_KEPT = '[data-connection], [data-add-connection]';
+const computerDetailKey = node => node.matches('[data-add-connection]') ? '[data-add-connection]'
+  : `[data-connection="${CSS.escape(node.dataset.connection)}"]`;
 function computerDetailPaint(force = false) {
   const dialog = $('#set-machines dialog.computer-detail');
   if (!dialog?.dataset.computer) return;
   const machine = (SETTINGS_DATA?.machines || []).find(m => m.id === dialog.dataset.computer);
   if (!machine) { dialog.close(); return; }
-  if (!force && formBusy(dialog)) return;
+  const kept = force ? [] : [...dialog.querySelectorAll(COMPUTER_DETAIL_KEPT)].filter(formBusy);
+  // A draft anywhere else (none today) holds the whole pop-up back, as before.
+  if (!force && [...dialog.querySelectorAll('textarea, input')].some(field => !field.closest(COMPUTER_DETAIL_KEPT)
+    && formBusy({querySelectorAll: selector => [field].filter(f => f.matches(selector))}))) return;
   const body = dialog.querySelector('.computer-detail-body'), scroll = body?.scrollTop || 0;
   const open = new Set([...dialog.querySelectorAll('details[open]')].map(node => node.dataset.machineDetails || node.dataset.profile || ''));
-  dialog.innerHTML = computerDetailHTML(machine);
-  dialog.querySelectorAll('details').forEach(node => { node.open = open.has(node.dataset.machineDetails || node.dataset.profile || ''); });
+  const active = document.activeElement, caret = [active?.selectionStart, active?.selectionEnd];
+  const next = document.createElement('div');
+  next.innerHTML = computerDetailHTML(machine);
+  next.querySelectorAll('details').forEach(node => { node.open = open.has(node.dataset.machineDetails || node.dataset.profile || ''); });
+  // A connection that is gone keeps no draft.
+  for (const node of kept) next.querySelector(computerDetailKey(node))?.replaceWith(node);
+  dialog.replaceChildren(...next.childNodes);
+  if (active && kept.some(node => node.contains(active))) {
+    active.focus({preventScroll: true});
+    if (typeof caret[0] === 'number') try { active.setSelectionRange(caret[0], caret[1]); } catch { /* not a text field */ }
+  }
   if (!force) dialog.querySelector('.computer-detail-body').scrollTop = scroll;
 }

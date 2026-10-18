@@ -3,7 +3,8 @@ never anything token-like, and readable only by an administrator or the computer
 import json
 from datetime import datetime, timedelta, timezone
 
-from backend.tests.test_api import api, assign, claim, get, post, ready, runner  # noqa: F401
+from backend.tests.test_api import api, assign, claim, get, post, ready, restrict, runner  # noqa: F401
+from backend.tests.test_bot_access import world  # noqa: F401  (a Legal bot and who may see it)
 
 NOW = datetime.now(timezone.utc)
 ACCOUNT = {'email': 'ops@acme.example', 'plan': 'max', 'org': 'Acme Ltd'}
@@ -191,3 +192,26 @@ def test_an_own_window_that_fails_its_checks_reads_unknown_and_the_heartbeat_sti
     assert claude['five_hour']['used_percent'] is None and claude['weekly']['used_percent'] == 17
     with api.app.state.store.read() as c:
         assert 'sk-ant-oat01' not in json.dumps([list(row) for row in c.execute('SELECT readiness_json FROM runners')])
+
+
+def test_a_bot_a_member_may_not_see_is_left_off_another_persons_computer(world):
+    # Ops is seen by everyone; Finance, once placed, only by Ben. The computer then goes to Cara, who runs it; Dee is
+    # a member with no say on it.
+    api, tokens, _ = world
+    r = runner(api)
+    for slug in ('finance', 'ops'):
+        assign(api, r, slug)
+    with api.app.state.store.transaction() as c:
+        restrict(c, 'finance', people=['ben'])
+        c.execute("UPDATE runners SET operator='cara' WHERE id=?", (r['runner_id'],))
+    post(api, 'runners/heartbeat', {'version': 'test', 'platform': 'test', 'readiness': {'schema_version': 1, 'runtimes': {},
+         'bots': {slug: {'ready': True, 'runtime': 'fake'} for slug in ('finance', 'ops')}}}, token=r['token'])
+
+    def bots(token):
+        m = machine(api, r, token)
+        return m['bots'], sorted(m['readiness']['bots']), sorted(line['bot'] for line in m['bot_connections'])
+    assert bots(tokens['dee']) == (['ops'], ['ops'], ['ops'])
+    assert 'finance' not in json.dumps(machine(api, r, tokens['dee']))
+    both = (['finance', 'ops'], ['finance', 'ops'], ['finance', 'ops'])
+    assert bots(tokens['ana']) == both, 'an administrator'
+    assert bots(tokens['cara']) == both, "the computer's operator"

@@ -29,7 +29,7 @@ function fixtures() {
       profiles_by_computer: [
         {runner_id: 'r1', label: 'Acme box', profiles: [
           {name: 'acme-eng', runtimes: {codex: {signed_in: true}, claude: {signed_in: false}}},
-          {name: 'acme-ops', runtimes: {claude: {signed_in: true}, codex: {signed_in: null}}},
+          {id: 'p-ops', name: 'acme-ops', runtimes: {claude: {signed_in: true}, codex: {signed_in: null}}},
           {name: 'acme-new', runtimes: {codex: {signed_in: null}, claude: {signed_in: null}}}]},     // reported, state unknown
         {runner_id: 'r2', label: "Sam's Mac", profiles: [
           {name: 'acme-eng', runtimes: {claude: {signed_in: false}}},
@@ -112,6 +112,19 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
       return json(body);                                           // backend: body.model_dump()
     }
     if (p === '/api/v2/bots/builder/subscription') return json(lineFor(data));
+    // A saved name, and a manual weekly reading (backend/subscriptions.py rename, save_weekly), in the next report.
+    const saved = body => data.subs.profiles_by_computer.find(c => c.runner_id === body.runner_id).profiles.find(x => x.name === body.profile);
+    if (p === '/api/v2/subscriptions/name' && method === 'PUT') {
+      const body = req.postDataJSON(); writes.push({p, body});
+      saved(body).display_name = body.display_name;
+      return json({ok: true});
+    }
+    if (p === '/api/v2/subscriptions/weekly' && method === 'PUT') {
+      const body = req.postDataJSON(); writes.push({p, body});
+      saved(body).runtimes[body.runtime].weekly = body.used_percent === null ? undefined
+        : {used_percent: body.used_percent, resets_at: body.resets_at, reported_at: new Date().toISOString(), source: 'manual'};
+      return json({ok: true});
+    }
     const login = p.match(/^\/api\/v2\/computers\/([^/]+)\/logins$/);
     if (login && method === 'POST') {
       const body = req.postDataJSON(); writes.push({p, body});
@@ -267,6 +280,38 @@ async function signInRefresh(browser) {
   await page.close();
 }
 
+// A saved name or reading is no draft: the open pop-up shows it at once and takes later reports, while a name still
+// being typed in Add connection stays as it is.
+async function savedForms(browser) {
+  const {page, errors, writes, data} = await open(browser);
+  await page.evaluate(() => settingsShow('devices'));
+  await page.locator('#set-machines .machine-name[data-computer-open=r1]').click();
+  const detail = page.locator('#set-machines dialog.computer-detail[open]');
+  const ops = detail.locator('[data-connection="profile:acme-ops:claude"]');
+  await detail.locator('[data-subs-add] input[name=profile]').fill('Acme Draft');
+  await ops.locator('details.subs-controls summary').click();
+  await ops.locator('[data-subs-rename] input[name=display_name]').fill('Acme Operations');
+  await ops.locator('[data-subs-rename] button[type=submit]').click();
+  await ops.locator('.computer-conn-head', {hasText: 'Subscription · Acme Operations'}).waitFor();
+  assert.deepEqual(last(writes, '/api/v2/subscriptions/name'), {runner_id: 'r1', profile: 'acme-ops', display_name: 'Acme Operations'});
+  assert.equal(await ops.locator('details.subs-controls').evaluate(d => d.open), true, 'Manage stays open');
+  await ops.locator('[data-subs-weekly] input[name=percent]').fill('40');
+  await ops.locator('[data-subs-weekly] button[type=submit]').click();
+  await ops.locator('.computer-conn-usage', {hasText: 'Weekly 40% left'}).waitFor();
+  assert.equal(last(writes, '/api/v2/subscriptions/weekly').used_percent, 60);
+  assert.equal(await ops.locator('[data-subs-weekly] input[name=percent]').inputValue(), '40');
+  // The computer's next report reaches the same pop-up, still open.
+  data.subs.profiles_by_computer[0].profiles[1].runtimes.claude.weekly.used_percent = 90;
+  await page.evaluate(() => loadSettings());
+  await ops.locator('.computer-conn-usage', {hasText: 'Weekly 10% left'}).waitFor();
+  assert.equal(await ops.locator('[data-subs-weekly] input[name=percent]').inputValue(), '10');
+  assert.equal(await ops.locator('button:disabled').count(), 0, 'no button left waiting');
+  assert.equal(await detail.locator('[data-subs-add] input[name=profile]').inputValue(), 'Acme Draft', 'the other draft is kept');
+  assert.deepEqual(errors, []);
+  console.log('saved forms refresh: ok');
+  await page.close();
+}
+
 async function who(browser) {
   // A co-owner of the bot sees its connection but may not change it; the person whose computer it runs on may.
   for (const [as, enabled] of [['coowner', false], ['operator', true]]) {
@@ -326,6 +371,6 @@ async function phone(browser) {
 
 (async () => {
   const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
-  try { await navigation(browser); await computers(browser); await botEditor(browser); await signInRefresh(browser); await who(browser); await oldServer(browser); await phone(browser); }
+  try { await navigation(browser); await computers(browser); await botEditor(browser); await signInRefresh(browser); await savedForms(browser); await who(browser); await oldServer(browser); await phone(browser); }
   finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });
