@@ -190,6 +190,8 @@ class Scheduler:
             flight.sweep(self.store, at.timestamp())       # the flight recorder's minutes become hours
             from . import performance
             performance.sweep(self.store, at.timestamp())  # computers' minutes become ten-minute points
+            from . import support_triage
+            support_triage.sweep(self.store, stamp(at))    # a support ticket waits here at most an hour
         if self.goals_checked is None or at - self.goals_checked >= timedelta(hours=1):
             # Data goes stale as time passes, so every goal's automatic colour is worked out again once an
             # hour, whether or not a reading arrived (a person's colour is only ever suggested over).

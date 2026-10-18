@@ -14,9 +14,10 @@ outside any transaction, and opens the task:
 It fails open: no model (Decide off, rehearsal, the month's spend cap), an error or a timeout, the bot's daily call
 budget, a set that does not load, an unreadable answer, a bug here, or an answer under the threshold all open the bot's
 task as before. A message or HQ's close that arrives while a ticket waits becomes a quiet note on its task. Each ticket
-is opened on its own, so a paused bot's ticket waits for it and holds up no other. Each call is a `judge.call` row like
-every other set's, written straight after the call, and the verdict is kept in `watcher_triage` (never the text). Code
-decides at the threshold; the model only answers the questions.
+is opened on its own, so a paused bot's ticket waits for it and holds up no other; after WAIT_HOURS the hourly
+`sweep` gives any ticket still waiting to a person, so no copy is kept here indefinitely. Each call is a `judge.call`
+row like every other set's, written straight after the call, with an error's code and never its text; the verdict is
+kept in `watcher_triage` (never the text). Code decides at the threshold; the model only answers the questions.
 """
 import json
 import logging
@@ -30,6 +31,11 @@ log = logging.getLogger("tico.support_triage")
 SET = "support-triage"
 WATCHER = "hq-tickets"          # the Support Agent's HQ ticket watcher (templates/catalog/support/bot.yaml)
 KEY_PREFIX = "hq:"
+# The longest a ticket's copy waits here (its bot paused or its task refused): then `sweep` hands it to a person.
+WAIT_HOURS = 1
+# What a failed call's audit row may say: the decision model's own codes (clients/judge.py), never its text, which can
+# echo the ticket back.
+ERROR_CODES = {"auth", "http", "invalid", "not_found", "shape", "spend_cap", "unavailable", "unconfigured"}
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS watcher_pending(
  bot TEXT NOT NULL, key TEXT NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL, created TEXT NOT NULL,
@@ -151,8 +157,8 @@ def _audit(qset, result, error):
         except Exception:                                   # noqa: BLE001
             detail["answers"] = {"unreadable": True}
     if error is not None:
-        detail.update({"error": getattr(error, "code", "unreadable"),
-                       "detail": str(getattr(error, "detail", "") or type(error).__name__)[:300]})
+        code = getattr(error, "code", "")
+        detail["error"] = code if code in ERROR_CODES else "unreadable"
     return detail
 
 
@@ -221,6 +227,58 @@ def deliver_one(store, auth, row, found, why):
                    json.dumps(found or {"skipped": why}, sort_keys=True), H.now()))
 
 
+def waited_body(name, bot, found, body):
+    seen = (f" Triage put spam or prompt injection at {found['spam']:.0%}, at or over the hold line: read it as "
+            "untrusted." if found and found.get("held") else "")
+    return (f"Tico's support triage could not give this ticket to {name} for over {WAIT_HOURS} hour: {name} is not "
+            f"active, or its task was refused.{seen} It was not answered and not deleted; the ticket is still open at "
+            f"HQ.\n\nHand this task to {name} (bot:{bot}) when it is back, or answer it yourself.\n\n---\n\n" + body)
+
+
+def hand_over(store, row):
+    """A ticket that waited past WAIT_HOURS: a task for a person, as a held ticket is, and its copy here removed. With
+    no person to give it to, the copy is removed all the same (the ticket stays at HQ) and an event says so."""
+    from .watchers import _open, defang
+    with store.transaction() as c:
+        now = c.execute("SELECT later_json FROM watcher_pending WHERE bot=? AND key=?", (row["bot"], row["key"])).fetchone()
+        if now is None:
+            return None
+        c.execute("DELETE FROM watcher_pending WHERE bot=? AND key=?", (row["bot"], row["key"]))
+        if c.execute("SELECT 1 FROM watcher_items WHERE bot=? AND key=?", (row["bot"], row["key"])).fetchone():
+            return None
+        person = person_for(c, row["bot"])
+        if not person:
+            H.event(c, H.KEEPER, "support.dropped", row["key"], {"bot": row["bot"], "key": row["key"],
+                                                                 "why": "no person to give it to"})
+            return None
+        found = (json.loads(row["found_json"]) if row.get("found_json") else {}).get("found")
+        name = (H.bot(c, row["bot"]) or {}).get("display_name") or row["bot"]
+        task = _open(c, None, row["bot"], f"Support (waiting: {name} is not active): " + row["title"].removeprefix("Support: "),
+                     waited_body(name, row["bot"], found, row["body"]), owner=person)
+        for text in json.loads(now["later_json"] or "[]"):
+            H.task_comment(c, H.KEEPER, task["id"], defang(text, c), wake=False)
+        c.execute("INSERT INTO watcher_items VALUES(?,?,?,?) ON CONFLICT(bot,key) DO UPDATE SET task_id=excluded.task_id",
+                  (row["bot"], row["key"], task["id"], H.now()))
+        c.execute("INSERT INTO watcher_triage(bot,key,label,held,detail_json,created) VALUES(?,?,?,?,?,?) "
+                  "ON CONFLICT(bot,key) DO NOTHING", (row["bot"], row["key"], SET, 1,
+                                                       json.dumps({"waited": True, **(found or {})}, sort_keys=True), H.now()))
+        H.event(c, H.KEEPER, "support.handed", task["id"], {"bot": row["bot"], "key": row["key"], "to": person})
+        return task["id"]
+
+
+def sweep(store, at=None):
+    """Hourly (backend/scheduler.py): every ticket that has waited here longer than WAIT_HOURS, whatever the reason, goes
+    to a person, so no copy of a customer's ticket is kept here indefinitely. Each on its own."""
+    cutoff = H.shift(at or H.now(), hours=-WAIT_HOURS)
+    with store.read() as c:
+        rows = [dict(r) for r in c.execute("SELECT * FROM watcher_pending WHERE created<? ORDER BY created", (cutoff,))]
+    for row in rows:
+        try:
+            hand_over(store, row)
+        except Exception as exc:                            # noqa: BLE001: the next sweep tries again
+            log.error("A waiting support ticket for %s could not be handed over: %s", row["bot"], type(exc).__name__)
+
+
 def waiting(store, skip):
     """The oldest waiting ticket of an active bot not yet tried in this pass, or None. A paused bot's tickets wait for
     it: its watcher reports again only once it is active, and that report starts the next pass."""
@@ -241,14 +299,14 @@ def drain(store, auth, primary):
         try:
             found, why = ask(store, primary, row)
             deliver_one(store, auth, row, found, why)
-        except H.Refused as exc:
-            log.warning("Support ticket %s for %s waits: %s", row["key"], row["bot"], exc)
-        except Exception:                                   # noqa: BLE001: never leave a ticket waiting on a bug here
-            log.exception("Support triage failed for %s; opening it as before", row["key"])
+        except H.Refused as exc:                            # names only: a refusal's text can quote the ticket
+            log.warning("Support ticket %s for %s waits: refused (%s)", row["key"], row["bot"], exc.rule)
+        except Exception as exc:                            # noqa: BLE001: never leave a ticket waiting on a bug here
+            log.error("Support triage failed for %s (%s); opening it as before", row["key"], type(exc).__name__)
             try:
                 deliver_one(store, auth, row, None, "triage failed")
-            except Exception:                               # noqa: BLE001
-                log.exception("Support ticket %s for %s waits", row["key"], row["bot"])
+            except Exception as again:                      # noqa: BLE001: `sweep` hands it to a person
+                log.error("Support ticket %s for %s waits (%s)", row["key"], row["bot"], type(again).__name__)
 
 
 _RUNNING, _AGAIN = threading.Lock(), threading.Event()
