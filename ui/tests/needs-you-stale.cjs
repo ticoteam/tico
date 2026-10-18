@@ -27,9 +27,10 @@ async function answered(browser, viewport) {
     sent.push([id, body]);
     if (id !== 'accept-all') { take(id); return route.fulfill({contentType: 'application/json', body: JSON.stringify({id, outcome: body.decision === 'skip' ? 'skipped' : 'accepted'})}); }
     const accepted = [], refused = [];
+    // refuseAll: every row refused and nothing changes (not yours to change), so the card's list comes back the same.
     for (const {id: rid, version} of body.rows) {
       const r = server.rows.find(x => x.id === rid);
-      if (r && r.version === version) { accepted.push({id: rid, task: r.task, did: r.action}); take(rid); }
+      if (r && r.version === version && !server.refuseAll) { accepted.push({id: rid, task: r.task, did: r.action}); take(rid); }
       else refused.push({id: rid, reason: 'The task changed since'});
     }
     return route.fulfill({contentType: 'application/json', body: JSON.stringify({accepted, refused})});
@@ -93,6 +94,18 @@ async function answered(browser, viewport) {
   assert.deepEqual([now.same, now.title, now.count, now.rows, now.busy, now.all],
     [true, 'Tico: Stale tickets: 3 suggestions', '3', ['s-4@2', 's-5@3', 's-6@1'], 0, 1],
     'refused row at its new version, the late row drawn, Accept all ready again');
+
+  // Accept all refused for every row: the list comes back the same, so the card is not redrawn, and Accept all is
+  // ready again as itself, not left busy.
+  server.refuseAll = true;
+  await shown.locator('[data-stale-all]').click();
+  for (let i = 0; i < 250 && !sent.length; i++) await page.waitForTimeout(20);
+  assert.deepEqual(sent.shift(), ['accept-all', {rows: [{id: 's-4', version: 2}, {id: 's-6', version: 1}]}]);
+  now = await settle(v => v.busy === 0, 'Accept all refused for every row is ready again');
+  assert.deepEqual([now.same, now.title, now.rows, now.all], [true, 'Tico: Stale tickets: 3 suggestions', ['s-4@2', 's-5@3', 's-6@1'], 1]);
+  assert.equal((await shown.locator('[data-stale-all]').textContent()).trim(), 'Accept all');
+  assert.equal(await shown.locator('[data-stale-all]').isEnabled(), true);
+  server.refuseAll = false;
 
   for (const id of ['s-4', 's-5', 's-6']) {
     await button(id, 'skip').click();
