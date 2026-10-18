@@ -140,6 +140,9 @@ function settingsWireChoiceFields(fields, onChange = () => {}) {
   };
   const value = () => picked.model ? settingsChoiceValue(picked.harness, picked.model, picked.effort) : '';
   const valid = () => (choices.some(row => row.value === value()) && !block(picked.harness)) || (!picked.harness && fields.hasAttribute('data-allow-none'));
+  // Whether the three fields show something other than what the bot has, finished or not.
+  const changed = () => { const was = settingsChoiceFromValue(fields.dataset.current);
+    return picked.harness !== was.harness || picked.model !== was.model || picked.effort !== was.effort; };
   harness.onchange = () => {
     picked = {harness: harness.value, model: '', effort: ''};
     paint(); onChange(value(), valid());
@@ -153,7 +156,7 @@ function settingsWireChoiceFields(fields, onChange = () => {}) {
   };
   effort.onchange = () => { picked.effort = effort.value; onChange(value(), valid()); };
   paint();
-  return {value, valid};
+  return {value, valid, changed};
 }
 function settingsChoiceCombo(e, kind) {
   const fallback = kind === 'fallback', selected = fallback ? e.fallback : e;
@@ -216,6 +219,7 @@ function settingsWireCombos(root, onPick = settingsPickChoice) {
       const picker = settingsWireChoiceFields(fields, (value, valid) => {
         if (button) button.disabled = !valid || value === (box.dataset.current || '');
       });
+      box.picker = picker;   // the bot editor's Save reads a pick that was never Applied
       if (!button) return;
       button.disabled = true;
       button.onclick = async () => {
@@ -229,6 +233,11 @@ function settingsWireCombos(root, onPick = settingsPickChoice) {
     mount();
   });
 }
+// The /fallback body for a picker value ('' is None); Apply and the bot editor's Save send the same.
+function settingsFallbackBody(value) {
+  const choice = value ? settingsChoiceFromValue(value) : null;
+  return choice ? {harness: choice.harness, model: choice.model, effort: choice.effort} : null;
+}
 async function settingsPickChoice(box, value) {
   const slug = box.dataset.botChoice, e = S.emps.find(row => row.name === slug);
   const current = box.dataset.current || '';
@@ -237,9 +246,7 @@ async function settingsPickChoice(box, value) {
   if (box.dataset.kind === 'fallback') {
     try {
       const choice = value ? settingsChoiceFromValue(value) : null;
-      await post(`/v2/bots/${encodeURIComponent(slug)}/fallback`, {
-        fallback: choice ? {harness: choice.harness, model: choice.model, effort: choice.effort} : null,
-        expected_revision: e.revision});
+      await post(`/v2/bots/${encodeURIComponent(slug)}/fallback`, {fallback: settingsFallbackBody(value), expected_revision: e.revision});
       await loadSettings();
       toast(choice ? `${e.display_name} fallback is ${settingsChoiceLabel(choice.harness, choice.model, choice.effort)}`
         : `${e.display_name} fallback is none`);

@@ -60,7 +60,9 @@ Slack or mail for this itself.
   never the transcript.
 
 **Routing.** The decision model (TypeSafe when the server has its key, else the team's own AI
-provider; with neither the night shows "needs a decision model") answers, per item, whether it is
+provider; with neither the night shows "needs a decision model"; when the team's monthly decision spend cap is
+reached, even partway through, the night sends nothing, shows "Skipped", and the same activity is read again on a later
+night) answers, per item, whether it is
 learnable and, per recipient, whether it is relevant (`questions/learnings-route.json`). An item goes
 to every recipient scoring 0.6 or more, unless its learnable score is under 0.2; at most 40 items each,
 highest first. Recipients are the active bots other than BotOps, the Assistant and the Goal Manager,

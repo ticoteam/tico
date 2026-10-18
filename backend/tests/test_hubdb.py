@@ -791,8 +791,16 @@ class WaitingWithDependency(HubCase):
         self.assertEqual(needs(), 1)
         H.answer(self.conn, ANA, question['id'], 'Friday')
         self.assertEqual(needs(), 0)
+        # A bot's private task to itself reaches the one person it asks, its guest (Dev 172), and no second one.
         secret = H.task_create(self.conn, CMO, 'Review the payroll export', '', CMO, private=True)
-        self.refused('private', H.task_update, self.conn, CMO, secret['id'], status='waiting', waiting_on='ben',
+        H.task_update(self.conn, CMO, secret['id'], status='waiting', waiting_on='ben',
+                      note='Approve the payroll export? If yes, I will send it.')
+        self.assertEqual(H.task(self.conn, secret['id'])['guest'], H.human_actor('ben'))
+        self.refused('private', H.task_update, self.conn, CMO, secret['id'], status='waiting', waiting_on='ana',
+                     note='Approve the payroll export? If yes, I will send it.')
+        # A person's private task still stays with its two parties.
+        theirs = H.task_create(self.conn, ANA, 'Review my payroll export', '', CMO, private=True)
+        self.refused('private', H.task_update, self.conn, CMO, theirs['id'], status='waiting', waiting_on='ben',
                      note='Approve the payroll export? If yes, I will send it.')
 
     def test_one_question_one_card_when_bots_chain_on_the_same_person(self):

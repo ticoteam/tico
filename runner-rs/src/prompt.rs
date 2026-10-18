@@ -57,6 +57,10 @@ pub fn replayed(attempt: &Value, names: &Names, after: Option<&str>, resumed: bo
     if crate::util::truthy(message["refs"].get("command")) {
         return s(&message["body"]);
     }
+    if crate::appdriver::delivery(&attempt["config"]).is_some() {
+        // The bot in the app has its own instructions: it gets exactly what the person wrote.
+        return s(&message["body"]);
+    }
     let conversation = &attempt["conversation"];
     let app = &names.app;
     let bot = s(&attempt["bot"]);

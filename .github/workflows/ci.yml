@@ -6,8 +6,9 @@ run-name: ${{ github.event_name == 'schedule' && 'Nightly gate on main' || forma
 
 on:
   schedule:
-    - cron: '0 3 * * *'    # 03:00 Pacific all year (GitHub schedules in this time zone), before the working day
-      timezone: America/Los_Angeles
+    # UTC (no timezone: key): with one, neither scheduled workflow fired on Oct 18. 10:17 UTC = 03:17 PDT / 02:17 PST,
+    # off the top of the hour, when GitHub drops scheduled runs under load.
+    - cron: '17 10 * * *'
   workflow_dispatch:
     inputs:
       candidate_sha:

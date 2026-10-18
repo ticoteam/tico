@@ -105,9 +105,14 @@ impl Meter {
         }
     }
 
+    /// Whether the segment used any tokens: one that used none is left out of the completion's usage.
+    pub(crate) fn used(&self) -> bool {
+        self.input != 0 || self.output != 0
+    }
+
     pub(crate) fn report(&self, model: &str, runtime: &str, billing: &str) -> Option<Map<String, Value>> {
         let cached = self.cached.min(self.input);
-        if self.input == 0 && self.output == 0 {
+        if !self.used() {
             return None;
         }
         let model = if (model.trim().is_empty() || model.trim() == "default") && !self.model.is_empty() { &self.model } else { model };
@@ -591,8 +596,18 @@ impl Runner {
     }
 
     /// The host for `runtime` on this turn: Claude Code runs the installed (or tools-dir) `claude`, Codex its app
-    /// server on the profile's CODEX_HOME.
-    fn make_host(&self, bot: &str, runtime: &str, env: &Env, profile: Option<&Profile>, tx: hosts::Events) -> Result<Host, Fail> {
+    /// server on the profile's CODEX_HOME, a bot delivered through a Mac app the app driver (`config`).
+    fn make_host(&self, bot: &str, runtime: &str, config: &Value, env: &Env, profile: Option<&Profile>, tx: hosts::Events) -> Result<Host, Fail> {
+        if let Some(delivery) = crate::appdriver::delivery(config) {
+            let app = crate::appdriver::label(&delivery.app);
+            if !cfg!(target_os = "macos") {
+                return Err(Fail::runtime(format!("{app} app delivery runs only on a Mac, and this computer is not one")));
+            }
+            let driver = crate::appdriver::driver().ok_or_else(|| {
+                Fail::runtime(format!("{app} can't be reached on this Mac: {} is not installed beside tico-runner", crate::appdriver::EXECUTABLE))
+            })?;
+            return Ok(Host::AppDriver(crate::hosts::appdriver::AppDriverHost::new(bot, crate::hosts::appdriver::command(&driver, &delivery), tx)));
+        }
         Ok(match runtime {
             "claude" => Host::Claude(ClaudeHost::new(bot, vec![crate::harness_tools::executable_for("claude")], tx)),
             "codex" => Host::Codex(CodexHost::on_home(env.clone(), tx, profile.and_then(|p| p.home("codex")).map(|h| h.display().to_string()).as_deref())),
@@ -623,6 +638,22 @@ impl Runner {
             }
         }
         billing_for(runtime, &text_of(&row["detail"]))
+    }
+
+    /// The key on this computer a turn of `runtime` signs in with, set unless a grant set one: always for a CLI that
+    /// reads its key from the turn's environment only (`api_key_in_turn`), and for one that reads it there or from a
+    /// login of its own (Claude Code) when the key is this computer's own from the app (a person added it in place of
+    /// any login) or readiness found no login and reported the key. Never for a subscription with its own home.
+    fn turn_key(&self, runtime: &str, profile: Option<&Profile>) -> Option<(String, String)> {
+        let caps = crate::harness_tools::caps(runtime, "");
+        if profile.is_some_and(|p| !p.share_operator) {
+            return None;
+        }
+        let (name, key) = self.sign_in.headless_secret(runtime)?;
+        let own = self.sign_in.key_source(runtime).is_some_and(|(_, source)| source == "computer");
+        let reported = || text_of(&self.runtime_rows.lock().unwrap().get(runtime).cloned().unwrap_or_default()["detail"]) == format!("Signed in with {name}");
+        let by_key = caps.api_key_in_turn || caps.api_keys == "computer" && caps.api_key_login.is_empty() && (own || reported());
+        by_key.then_some((name, key))
     }
 
     fn turn_profile(&self, attempt: &Value) -> Result<Option<Profile>, Fail> {
@@ -727,14 +758,9 @@ impl Runner {
             crate::gitcred::apply(&mut env, &self.client, &self.tokens, &bot, socket_path.as_deref(), &self.state.directory).await;
             let hop_runtime = crate::fallback::configured(&config).map(|h| h.runtime);
             for keyed in std::iter::once(runtime.as_str()).chain(hop_runtime.as_deref()) {
-                // A CLI that reads its key from the turn's environment only (`api_key_in_turn`): a key on this
-                // computer (the runner's environment, `_shared.env` or the company's) reports it ready, so it
-                // reaches the turn unless a grant set one.
-                if crate::harness_tools::caps(keyed, "").api_key_in_turn && selected.as_ref().is_none_or(|p| p.share_operator) {
-                    if let Some((name, key)) = self.sign_in.headless_secret(keyed) {
-                        if env.get(&name).is_none_or(|v| v.is_empty()) {
-                            env.insert(name, key);
-                        }
+                if let Some((name, key)) = self.turn_key(keyed, selected.as_ref()) {
+                    if env.get(&name).is_none_or(|v| v.is_empty()) {
+                        env.insert(name, key);
                     }
                 }
             }
@@ -789,7 +815,7 @@ impl Runner {
                 env = turn_env;
                 Host::Antigravity(warm)
             } else {
-                self.make_host(&bot, &runtime, &env, selected.as_ref(), tx)?
+                self.make_host(&bot, &runtime, &config, &env, selected.as_ref(), tx)?
             };
             let h = host.insert(made);
             if let Some(c) = &capture {
@@ -876,18 +902,24 @@ impl Runner {
             }
         }
         let native_control = truthy(refs.get("command")) || goal.chat_goal.as_ref().is_some_and(|g| g["status"] == "active");
-        let mut hop = if unavailable && !native_control { crate::fallback::configured(&config) } else { None };
+        let mut pending = if unavailable && !native_control { crate::fallback::configured(&config) } else { None };
         let hit_limit = drove.limited;
-        if hop.is_none() && hit_limit && !native_control && prepared {
+        // Out of quota here until its reset (or for a while): no other bot's fallback picks this login meanwhile.
+        crate::fallback::settle_limit(&runtime, &text_of(&config["harness"]), selected.as_ref(), hit_limit, drove.outcome == "completed");
+        let turn_env = base_env.clone().unwrap_or_default();
+        if pending.is_none() && hit_limit && !native_control && prepared {
             // Out of quota with no fallback of its own: another provider signed in on this computer runs the turn
             // once (Settings > AI providers can turn this off for the company).
             let choices = self.default_fallbacks().await;
-            let turn_env = base_env.clone().unwrap_or_default();
-            hop = crate::fallback::default_choice(&config, &choices, &turn_env, |rt| self.fallback_ready(rt, selected.as_ref()));
+            pending = crate::fallback::default_choice(&config, &choices, &turn_env, |rt| self.fallback_ready(rt, selected.as_ref()));
         }
         // Only a server that sent `fallback_models` knows the field (an older one refuses unknown fields).
-        let primary_limited = hop.as_ref().is_some_and(|h| h.default && hit_limit);
-        if let (Some(hop), true, Some(base)) = (hop, prepared, base_env.clone()) {
+        let primary_limited = pending.as_ref().is_some_and(|h| h.default && hit_limit);
+        let mut tried: Vec<String> = vec![runtime.clone()];
+        // Why the turn left the harness before the hop, for its diagnostic: the primary, then each spent hop.
+        let mut left = None;
+        while let (Some(hop), true, Some(base)) = (pending.take(), prepared, base_env.clone()) {
+            tried.push(hop.runtime.clone());
             uses.push(hop.runtime.clone());
             crate::harness_tools::turn_runtimes(&aid, &uses);
             if let Some(th) = &thread {
@@ -913,11 +945,12 @@ impl Runner {
                 });
                 let hop_env = selected.as_ref().map_or_else(|| base.clone(), |p| p.environment(&hop.runtime, &base));
                 env = hop_env.clone();
-                self.diagnose(&aid, &crate::fallback::diagnostic(&primary, &hop, hit_limit));
+                let (from, limited) = left.clone().unwrap_or_else(|| (primary.clone(), hit_limit));
+                self.diagnose(&aid, &crate::fallback::diagnostic(&from, &hop, limited));
                 // The primary's promise to report every tool call ends here; the fallback host makes its own.
                 let _ = self.state.append(&aid, "status", &json!({"tool_events": false}));
                 let (tx, mut rx) = unbounded_channel();
-                let h = host.insert(self.make_host(&bot, &hop.runtime, &hop_env, selected.as_ref(), tx)?);
+                let h = host.insert(self.make_host(&bot, &hop.runtime, &hop_config, &hop_env, selected.as_ref(), tx)?);
                 if let Some(c) = &capture {
                     h.set_capture(c);
                 }
@@ -967,6 +1000,15 @@ impl Runner {
                 } else {
                     self.diagnose(&aid, &format!("{}: fallback harness interrupted; inspect local runner", e.kind));
                 }
+            }
+            crate::fallback::settle_limit(&hop.runtime, &hop.harness, selected.as_ref(), drove.limited, drove.outcome == "completed");
+            // That login is out of quota too: the next of the company's providers takes the turn. Only while at most
+            // one segment has used tokens, since a completion reports two at most (backend/models.py RunUsage).
+            let spent = segments.iter().filter(|s| s.meter.used()).count();
+            if drove.limited && hop.default && !native_control && spent < 2 {
+                left = Some((hop.harness.clone(), true));
+                let choices = self.default_fallbacks().await;
+                pending = crate::fallback::next_choice(&config, &choices, &turn_env, &tried, |rt| self.fallback_ready(rt, selected.as_ref()));
             }
         }
         let ran_on = fallback.clone().unwrap_or_else(|| runtime.clone());
@@ -1136,7 +1178,9 @@ impl Runner {
                         }
                     }
                     self.state.phase(&aid, "synced")?;
-                    if let Some(p) = place.as_ref().filter(|_| drove.outcome == "completed" && host.is_some()) {
+                    // A bot delivered through an app has no repository here: its work lives in the app.
+                    let repository = crate::appdriver::delivery(&config).is_none();
+                    if let Some(p) = place.as_ref().filter(|_| drove.outcome == "completed" && host.is_some() && repository) {
                         if !committed_secret && p.session_path.is_none() {
                             self.publish(&bot, &execution_path, &env).await;
                         }
@@ -1286,6 +1330,47 @@ mod tests {
         assert_eq!(billing_for("codex", "Signed in with an API key"), "api");
         assert_eq!(billing_for("musecode", "Signed in with a Meta account"), "subscription");
         assert_eq!(billing_for("musecode", "Signed in with META_API_KEY"), "api");
+    }
+
+    #[test]
+    fn a_claude_turn_signs_in_with_the_key_added_for_this_computer() {
+        if ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"].iter().any(|k| std::env::var_os(k).is_some()) {
+            return; // a key in this process's environment is the terminal's and comes first
+        }
+        let dir = std::env::temp_dir().join(format!("tico-turn-key-{}", uuid::Uuid::new_v4().simple()));
+        let secrets = dir.join("projects/secrets");
+        std::fs::create_dir_all(&secrets).unwrap();
+        let path = dir.join("runner.json");
+        std::fs::write(&path, json!({"url": "http://127.0.0.1:9", "token": "t", "runner_id": "r1", "projects_dir": dir.join("projects")}).to_string()).unwrap();
+        let config = crate::config::Config::load(&path).unwrap();
+        let client = crate::client::Client::new(&config.url(), &config.token(), 1, 0).unwrap();
+        let runner = Runner::new(config, client, crate::state::State::open(&dir.join("state")).unwrap());
+        let (computer, team) = (secrets.join(crate::signin::COMPUTER_KEYS_FILE), secrets.join(crate::signin::TEAM_KEYS_FILE));
+        let signed_in = |detail: &str| {
+            *runner.runtime_rows.lock().unwrap() = [("claude".to_string(), json!({"status": "ready", "detail": detail}))].into_iter().collect();
+        };
+        // Claude Code has a browser login and the company's key: the login signs it in, as readiness reported.
+        std::fs::write(&team, "ANTHROPIC_API_KEY=sk-ant-team-0123\n").unwrap();
+        signed_in("Signed in with claude.ai");
+        assert_eq!(runner.turn_key("claude", None), None);
+        // No login, so readiness reported the key: the turn carries it.
+        signed_in("Signed in with ANTHROPIC_API_KEY");
+        assert_eq!(runner.turn_key("claude", None), Some(("ANTHROPIC_API_KEY".into(), "sk-ant-team-0123".into())));
+        // A key added for this computer replaces the old one and any login.
+        std::fs::write(&computer, "ANTHROPIC_API_KEY=sk-ant-mine-0123\n").unwrap();
+        signed_in("Signed in with claude.ai");
+        assert_eq!(runner.turn_key("claude", None), Some(("ANTHROPIC_API_KEY".into(), "sk-ant-mine-0123".into())));
+        std::fs::write(&computer, "ANTHROPIC_API_KEY=sk-ant-next-0123\n").unwrap();
+        assert_eq!(runner.turn_key("claude", None).unwrap().1, "sk-ant-next-0123");
+        // A named subscription keeps its own login; a cleared key reaches no turn.
+        let own_home = crate::profiles::Profile { name: "lab".into(), directory: dir.join("lab"), share_operator: false };
+        assert_eq!(runner.turn_key("claude", Some(&own_home)), None);
+        runner.sign_in.forget_keys("claude").unwrap();
+        assert_eq!(runner.turn_key("claude", None), None);
+        // Codex turns its key into a login of its own: the turn never carries it.
+        std::fs::write(&computer, "OPENAI_API_KEY=sk-mine-0123\n").unwrap();
+        assert_eq!(runner.turn_key("codex", None), None);
+        std::fs::remove_dir_all(dir).ok();
     }
 
     #[test]

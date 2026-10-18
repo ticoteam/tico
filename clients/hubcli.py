@@ -231,6 +231,8 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub decision ask --set <name> --state-file s.json [--option covered=opts.json] [--label L]
                                            ask the decision model typed questions about a state (questions/README.md);
                                            --questions-file q.json instead of --set; --list shows the sets
+    hub decision readout [--days 7]        per question set: calls, cost, Jev or fallback, answer spread; and the
+                                           month's spend against the cap (`text` is the readout in plain words)
     hub template list                      the bot templates this company can pick from
     hub bot create --template T [--name "Display"] [<slug>]
                                            set a chosen bot up in the workspace (BotOps only); the slug is picked
@@ -282,7 +284,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub api GET|POST|PUT|PATCH|DELETE <path> ['{json}']
                                            BotOps: any v2 route, as the person who asked; a Confirm card for what
                                            always needs their click. Never a secret in the body
-    hub computer list                      the computers a bot may go on, and what runs on each
+    hub computer list [--computer C]       the computers a bot may go on, one short row each; one in full
     hub computer performance <label|id> [--hours 24]
                                            its CPU, memory and disk over time, overloads and what ran then
     hub credential request <ENV> [--for-bot B] [--label "your Jira login"] [--format "you@x.com:API token"]
@@ -1563,6 +1565,10 @@ def parser():
     s.add_argument("--label", help="how the call is grouped in the audit; the set's id@version by default")
     s.add_argument("--list", action="store_true", help="print the question sets this checkout has")
     s.set_defaults(fn="decision ask")
+    s = decision.add_parser("readout", help="per question set: the last days' calls, cost, Jev or fallback and answer "
+                                            "spread, and the month's spend against the cap")
+    s.add_argument("--days", type=int, help="how many days back from now (1-31, 7 by default)")
+    s.set_defaults(fn="decision readout")
 
     # A new bot: BotOps builds the chosen template in the workspace (`hub bot create`) or only registers it (--record-only).
     # The Librarian (docs/librarian.md): ask a question, and read a linked doc on this computer.
@@ -1777,7 +1783,12 @@ def parser():
     s.add_argument("--on-behalf-of", help="the open task a person asked you for, when something else started this run")
     s.set_defaults(fn="api")
     comp = sub.add_parser("computer", help="the computers a bot may go on").add_subparsers(dest="sub")
-    comp.add_parser("list", help="the computers a bot may go on, and what runs on each").set_defaults(fn="computer list")
+    s = comp.add_parser("list", help="the computers a bot may go on, one short row each; --computer for one in full")
+    s.add_argument("--computer", help="one computer's label or id: its full detail, large sections capped")
+    s.add_argument("--section", choices=["assigned", "repositories", "bots", "runtimes", "harnesses", "recent_errors"],
+                   help="with --computer: one page of this section only")
+    s.add_argument("--offset", type=int, help="with --section: the first item to return")
+    s.set_defaults(fn="computer list")
     s = comp.add_parser("performance", help="a computer's CPU, memory and disk over time, overloads and what ran then")
     s.add_argument("computer", help="the computer's label or id")
     s.add_argument("--hours", type=int, default=24)

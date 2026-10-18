@@ -12,11 +12,17 @@ function settingsAgentCell(e) {
   const a = e.agent, name = agentKind(a);
   const manage = settingsCanManageBot(e);
   if (a.synced) return `<div class="settings-agent-cell"><strong>${esc(name)}</strong>${a.profile ? ` · <span class="muted">${esc(a.profile)}</span>` : ''}
-    <span class="settings-cell-note">${esc(a.last_seen ? `synced ${ago(a.last_seen)}${a.detail ? ` by ${a.detail}` : ''}` : 'not synced yet')}</span></div>`;
+    <span class="settings-cell-note">${esc(a.last_seen ? `synced ${ago(a.last_seen)}${a.detail ? ` by ${a.detail}` : ''}` : 'not synced yet')}</span>${settingsAppDeliveryNote(e)}</div>`;
   const seen = a.last_seen ? `last seen ${ago(a.last_seen)}` : a.credential ? 'credential issued · no heartbeat yet' : 'no credential yet';
   return `<div class="settings-agent-cell"><strong>${esc(name)}</strong>${a.profile ? ` · <span class="muted">${esc(a.profile)}</span>` : ''}
     <span class="settings-cell-note">${esc(seen)}</span>
     ${manage ? `<span class="settings-agent-actions">${agentPairButton(e)}<button class="ghost" type="button" data-agent-credential="${esc(e.name)}">${a.credential ? 'Rotate credential' : 'Create credential'}</button>${a.credential ? `<button class="ghost" type="button" data-agent-revoke="${esc(e.name)}">Revoke</button>` : ''}</span>` : ''}</div>`;
+}
+// Where a synced bot's messages go when it is delivered through its desktop app (settings-bot-editor.js).
+function settingsAppDeliveryNote(e) {
+  const d = e.app_delivery; if (!d?.computer) return '';
+  const where = SETTINGS_DATA.machines.find(machine => machine.id === d.computer)?.label || d.computer_label || 'a computer';
+  return `<span class="settings-cell-note" data-app-delivery-note>through the ${esc(d.app_label || machineAppName(d.app))} app on ${esc(where)}</span>`;
 }
 // Pair: the code a Hermes profile printed, typed here; approving hands the profile its credential (backend/agents.py).
 const agentPairButton = e => ['hermes', 'openclaw'].includes(e.agent?.harness) ? `<button class="ghost" type="button" data-agent-pair="${esc(e.name)}">Pair</button>` : '';
@@ -291,6 +297,17 @@ const machineSignedOut = (machine, runtime, profile = '') => (machine.signed_out
 const machineLoginActions = (machine, online, runtime, profile, signedIn) => window.TicoModelLogin?.actionsHTML({
   runnerId: machine.id, runtime, machine: machine.label, profile, signedIn, signedOut: machineSignedOut(machine, runtime, profile), online,
   platform: machine.platform || ''}) || '';
+// The key a login runs on (its readiness `key`: {name, source}), by its stored preview only: this computer's own key or
+// the company's shared one (backend/computer_keys.py), or one set on the computer itself.
+function machineKeyHTML(machine, runtime, key) {
+  if (!key) return '';
+  const stored = key.source === 'computer' ? machine.keys?.[runtime] : key.source === 'shared' ? machine.shared_keys?.[runtime] : null;
+  const whose = {computer: 'this computer\'s key', shared: 'the company\'s shared key', terminal: 'a key set on the computer'}[key.source] || 'a key';
+  return ` <span class="muted machine-key" data-machine-key="${esc(key.source)}">· ${esc(whose)}${stored?.preview ? ` <code>${esc(stored.preview)}</code>` : ''}</span>`;
+}
+// Replace key / Clear key, or Add key, from the shared sign-in module (ui/model-login.js).
+const machineKeyActions = (machine, online, runtime, key, signedIn) => window.TicoModelLogin?.keyActionsHTML({
+  runnerId: machine.id, runtime, machine: machine.label, key, signedIn, online}) || '';
 function machineProfileSignIn(state, runtime) {
   if (state?.signed_in === true) return machineAccountHTML(state.account, runtime);
   if (state?.signed_in === false) return '<span class="pill fail">Signed out</span>';
@@ -325,10 +342,14 @@ function machineToolsHtml(machine, online) {
       else if (command) action = ` <span class="machine-login-command" title="Run on the computer${command.includes('<container>') ? '; docker ps shows the container name' : ''}"><code>${esc(command)}</code><button class="ghost machine-signin" type="button" data-machine-copy-login="${esc(command)}">Copy</button></span>`;
       else if (caps.api_keys === 'bot') action = ' <a class="machine-signin-link" href="#/credentials">Add key</a>';
       if (caps.browser_sign_in) action += machineLoginActions(machine, online, name, '', false);
-    } else if (manage && installed) action = machineLoginActions(machine, online, name, '', true);
+      if (caps.api_keys === 'computer') action += machineKeyActions(machine, online, name, null, false);
+    // A login a key signs in: Clear key stands in for Sign out.
+    } else if (manage && installed) action = value.key && harnessCaps(name).api_keys === 'computer'
+      ? machineKeyActions(machine, online, name, value.key, true) : machineLoginActions(machine, online, name, '', true);
     const rejected = auth === 'rejected'
       ? `<span class="err machine-rejected" data-rejected="${esc(name)}">${value.rejected_at ? esc(ago(value.rejected_at)) + '. ' : ''}${value.rejected_reason ? esc(value.rejected_reason) + '. ' : ''}${hlCredentialFix(value.credential_source)}. It takes no work that needs ${esc(name)} until then.</span>` : '';
-    const signIn = installed ? machineSignInHTML(machine, online, name, auth, value) : '<span class="muted">—</span>';
+    const signIn = !installed ? '<span class="muted">—</span>'
+      : machineSignInHTML(machine, online, name, auth, value) + (auth === 'ready' ? machineKeyHTML(machine, name, value.key) : '');
     // The computer's own login's usage windows (only to whoever may see its account); each named subscription below
     // carries its own.
     const own = installed ? machineUsageHTML(name, {account: value.account, weekly: value.weekly, five_hour: value.five_hour}, label) : '<span class="muted">—</span>';
@@ -354,6 +375,27 @@ function machineToolsHtml(machine, online) {
   if (!rows) return '';
   return `<div class="machine-tools" role="table" aria-label="AI tools on ${esc(machine.label)}"><div class="machine-tool machine-tool-head" role="row">
     <span role="columnheader">Tool</span><span role="columnheader">Installed</span><span role="columnheader">Enabled</span><span role="columnheader">Sign-in</span><span role="columnheader">Usage</span></div>${rows}</div>`;
+}
+// Desktop apps the computer's app driver operates for synced bots (readiness `appdriver`, a Mac's native runner):
+// one row per app with its state and the driver's own detail, such as which System Settings entry to turn on. A
+// computer without a driver reports no `appdriver`, so it shows nothing here.
+const MACHINE_APP_STATES = {no_permission: 'Needs Accessibility permission', not_signed_in: 'Not signed in',
+  not_installed: 'Not installed', needs_foreground: 'Can\'t work in the background', ui_changed: 'Layout changed',
+  no_driver: 'Driver not installed', error: 'Problem'};
+const machineAppName = id => String(id).replace(/^./, c => c.toUpperCase());
+// `ready` is what the server checks before it delivers through the app; a state it does not know reads Problem.
+const machineAppState = app => app?.ready === true ? 'Ready' : MACHINE_APP_STATES[app?.state] || 'Problem';
+function machineAppsHtml(machine) {
+  const driver = machine.readiness?.appdriver;
+  if (!driver || typeof driver !== 'object') return '';
+  const apps = Object.entries(driver.apps || {});
+  const rows = apps.map(([id, app]) => `<div class="machine-tool" role="row" data-machine-app="${esc(id)}">
+      <span role="cell" class="machine-tool-name">${esc(machineAppName(id))}</span>
+      <span role="cell" class="machine-tool-version"${app.version ? ` title="${esc(app.version)}"` : ''}>${app.installed ? esc(app.version || 'Installed') : '<span class="muted">Not installed</span>'}</span>
+      <span role="cell" class="machine-tool-signin"><span class="pill ${app.ready === true ? 'ok' : 'fail'}" data-app-state="${esc(app.ready === true ? 'ready' : app.state || 'error')}">${esc(machineAppState(app))}</span>${app.detail ? `<span class="muted machine-app-detail">${esc(app.detail)}</span>` : ''}</span></div>`).join('');
+  if (!rows) return '';
+  return `<div class="machine-tools machine-apps" role="table" aria-label="Desktop apps on ${esc(machine.label)}"><div class="machine-tool machine-tool-head" role="row">
+    <span role="columnheader">Desktop apps</span><span role="columnheader">Installed</span><span role="columnheader">State</span></div>${rows}</div>`;
 }
 // The row's sign that the screen is on: a link to it for whoever may open it.
 function machineScreenHTML(machine) {
@@ -425,7 +467,7 @@ function renderSettingsMachines() {
     return `<tr class="machine-card"><td><strong>${esc(machine.label)}</strong><span class="settings-cell-note">${esc(machine.version || 'version not reported')}${machine.platform ? ` · ${esc(machine.platform)}` : ''}${engineLabel}</span>${window.runnerUpdateHtml?.(machine.update, machine.version) || ''}</td>
       <td data-label="Operator">${esc(settingsPersonName(machine.operator))}${!machine.revoked_at && machine.accepts_member_bots ? '<span class="settings-cell-note">Accepts members\' bots</span>' : ''}</td>
       <td data-label="Bots">${bots.length ? `<a href="#/settings" class="machine-bots" data-computer-bots="${esc(machine.id)}" title="${esc(botNames.join(', '))}"><strong>${bots.length} bot${bots.length === 1 ? '' : 's'}</strong><span class="settings-cell-note">${esc(botNames.join(', '))}</span></a>` : '<span class="muted">No bots</span>'}${failures ? `<span class="settings-cell-note err">${failures} not ready</span>` : ''}</td>
-      <td data-label="AI tools"><div class="machine-runtime">${tools || '<span class="muted">No AI tools reported</span>'}</div>${harnesses ? `<details data-machine-details="${esc(machine.id)}:tools"><summary>Installation and updates</summary><p class="settings-cell-note">Enabled tools stay installed. Sign-in status is shown above.</p><div class="machine-harnesses">${harnesses}</div></details>` : ''}</td>
+      <td data-label="AI tools"><div class="machine-runtime">${tools || '<span class="muted">No AI tools reported</span>'}</div>${machineAppsHtml(machine)}${harnesses ? `<details data-machine-details="${esc(machine.id)}:tools"><summary>Installation and updates</summary><p class="settings-cell-note">Enabled tools stay installed. Sign-in status is shown above.</p><div class="machine-harnesses">${harnesses}</div></details>` : ''}</td>
       <td data-label="Status"><span class="machine-status"><span class="dot ${status[0]}" aria-hidden="true"></span>${status[1]}${machine.last_seen ? `<span class="muted"> · ${esc(ago(machine.last_seen))}</span>` : ''}</span>${online && machine.restarting ? `<span class="settings-cell-note" data-machine-restarting title="${esc(`Since ${machine.restarting.slice(0, 16).replace('T', ' ')} UTC`)}">Restarting: it starts new work once its running turns end</span>` : ''}${machineScreenHTML(machine)}</td>
       <td class="settings-row-actions"><div class="people-cell-more">${menu ? `<button class="people-more" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="More for ${esc(machine.label)}"><span class="nav-icon" aria-hidden="true">more_horiz</span></button><div class="people-menu" role="menu" hidden>${menu}</div>` : ''}</div></td></tr>`;
   }).join('');

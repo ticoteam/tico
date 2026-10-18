@@ -107,7 +107,7 @@ def _fan(kind, ids):
 
 # Who could read a task before this write: its parties and privacy, kept on the row when they
 # change (and on a delete), so a delta read says `gone` only to someone who could have seen it.
-_WAS = "json_array(OLD.owner,OLD.requester,OLD.private)"
+_WAS = "json_array(OLD.owner,OLD.requester,OLD.private,OLD.guest)"   # task_reads._could_read
 _MEDIA = ("width", "height", "thumb_blob_id", "poster_blob_id")
 _MEDIA_TASKS = ("SELECT task_id AS id FROM task_assets WHERE blob_id=NEW.blob_id UNION SELECT f.task_id "
                 "FROM bot_file_versions v JOIN bot_files f ON f.id=v.file_id WHERE v.blob_id=NEW.blob_id")
@@ -117,7 +117,7 @@ _ASK_TASK = ("(SELECT " + H.MESSAGE_TASK_SQL + " FROM messages m LEFT JOIN conve
 
 _RUN_CONVERSATION = ("(SELECT m.conversation_id FROM attempts a JOIN jobs j ON j.id=a.job_id "
                      "JOIN messages m ON m.id=j.message_id WHERE a.id={aid})")
-_PARTIES = ("owner", "requester", "waiting_on")
+_PARTIES = ("owner", "requester", "waiting_on", "guest")
 
 # (trigger name, event, table, WHEN or None, body). One list, so a new source is one more line. A table that does not exist is
 # skipped, and a trigger whose definition changed is replaced at the next start.
@@ -126,7 +126,7 @@ TRIGGERS = [
      _row("tasks", "insert", "NEW.id") + _needs("task", *("NEW." + p for p in _PARTIES))),
     ("changes_tasks_update", "UPDATE", "tasks", None,
      _row("tasks", "update", "NEW.id",
-          ref=f"CASE WHEN {_changed('owner', 'requester', 'private')} THEN {_WAS} END")
+          ref=f"CASE WHEN {_changed('owner', 'requester', 'private', 'guest')} THEN {_WAS} END")
      + _needs("task", *("OLD." + p for p in _PARTIES), *("NEW." + p for p in _PARTIES))),
     ("changes_tasks_delete", "DELETE", "tasks", None,
      _row("tasks", "delete", "OLD.id", ref=_WAS) + _needs("task", *("OLD." + p for p in _PARTIES))),
@@ -254,6 +254,9 @@ RUNNER_TRIGGERS = [
     ("changes_runner_jobs_insert", "INSERT", "jobs", "NEW.state='queued'", _bot_runner("work", "NEW.bot")),
     ("changes_runner_jobs_update", "UPDATE", "jobs", "NEW.state='queued' AND OLD.state IS NOT 'queued'",
      _bot_runner("work", "NEW.bot")),
+    # A wake preset's held job let go (backend/wake_presets.py tick).
+    ("changes_runner_jobs_released", "UPDATE", "jobs", "NEW.state='queued' AND OLD.held=1 AND NEW.held=0",
+     _bot_runner("work", "NEW.bot")),
     ("changes_runner_bots_update", "UPDATE", "bots", _changed("state"),
      _bot_runner("work", "NEW.slug") + _bot_runner("assignments", "NEW.slug")),
     ("changes_runner_bot_control_update", "UPDATE", "bot_control", None, _bot_runner("work", "NEW.bot")),
@@ -278,7 +281,8 @@ RUNNER_TRIGGERS = [
     ("changes_runner_credential_grants_delete", "DELETE", "credential_grants", None, _tell("credentials", _ALL_RUNNERS)),
     ("changes_runner_credentials_insert", "INSERT", "credentials", None, _tell("credentials", _ALL_RUNNERS)),
     ("changes_runner_credentials_update", "UPDATE", "credentials",
-     f"{_changed('env')} OR (OLD.ciphertext IS NULL) IS NOT (NEW.ciphertext IS NULL)", _tell("credentials", _ALL_RUNNERS)),
+     # A new value too: a model key replaced for every computer is fetched again at once (runner-rs/src/signin.rs).
+     f"{_changed('env')} OR OLD.ciphertext IS NOT NEW.ciphertext", _tell("credentials", _ALL_RUNNERS)),
     ("changes_runner_credentials_delete", "DELETE", "credentials", None, _tell("credentials", _ALL_RUNNERS)),
     # The company's AI providers (backend/providers.py): a computer installs what is enabled.
     ("changes_runner_providers_insert", "INSERT", "registry_metadata", "NEW.key='providers'", _tell("config", _ALL_RUNNERS)),
@@ -606,13 +610,13 @@ def status_line(c, who, slug, default=None, inputs=None, auth=None):
 def _trashed_visible(c, who, task_id):
     """A deleted task is reported gone only to someone who could have seen it."""
     try:
-        row = c.execute("SELECT owner, requester, private FROM task_trash WHERE task_id=? AND purged_at IS NULL",
+        row = c.execute("SELECT owner, requester, private, guest FROM task_trash WHERE task_id=? AND purged_at IS NULL",
                         (task_id,)).fetchone()
     except sqlite3.OperationalError:
         return False
     if not row:
         return False
-    return who.actor in (row["owner"], row["requester"]) or not row["private"]
+    return who.actor in (row["owner"], row["requester"], row["guest"]) or not row["private"]
 
 
 class _Viewer:

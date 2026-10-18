@@ -185,6 +185,8 @@ def run(args, who=None):
         from clients import hubtools
         text = Path(args.file).read_text(errors="replace") if args.file else sys.stdin.read()
         return hubtools.BY_NAME["hub_classify"]["fn"](client, {"text": text})
+    if fn == "decision readout":
+        return via_tool(client, args)
     if args.cmd == "decision":
         return judge(client, args)
     if args.cmd == "meeting":
@@ -660,7 +662,7 @@ def bots(client, args):
         from clients import hubtools
         fields = {"bot": args.bot}
         if args.computer:
-            listing = hubtools.computers(client, {})
+            listing = hubtools._as_person(client).get("computers")
             rows = listing.get("computers", []) if isinstance(listing, dict) else listing
             me = hubtools._as_person(client).get("me")
             person = str(me.get("actor") or me.get("id") or "").removeprefix("human:")

@@ -367,7 +367,7 @@ def silent_computers(c, minutes=SILENT_MINUTES):
     rows = c.execute(
         "SELECT r.id, r.label, r.operator, r.last_seen, count(j.id) queued, group_concat(DISTINCT a.bot) bots "
         "FROM runners r JOIN assignments a ON a.runner_id=r.id JOIN bots b ON b.slug=a.bot AND b.state='active' "
-        "JOIN jobs j ON j.bot=a.bot AND j.state='queued' "
+        "JOIN jobs j ON j.bot=a.bot AND j.state='queued' AND j.held=0 "
         "WHERE r.revoked_at IS NULL AND r.last_seen < ? GROUP BY r.id ORDER BY r.last_seen",
         (H.shift(H.now(), minutes=-minutes),)).fetchall()
     return [{"id": r["id"], "label": r["label"], "operator": r["operator"], "last_seen": r["last_seen"],
@@ -391,8 +391,9 @@ def _waiting(c, online_ids, settings=None):
     from .execution import bot_claimable
     cutoff = H.shift(H.now(), minutes=-QUEUE_MINUTES)
     person_cutoff = H.shift(H.now(), minutes=-PERSON_QUEUE_MINUTES)
+    # A job its wake preset holds is waiting on purpose (backend/wake_presets.py), not stuck.
     queued = {r["bot"]: (r["n"], r["oldest"]) for r in c.execute(
-        "SELECT bot, count(*) n, min(created) oldest FROM jobs WHERE state='queued' GROUP BY bot")}
+        "SELECT bot, count(*) n, min(created) oldest FROM jobs WHERE state='queued' AND held=0 GROUP BY bot")}
     asked = {r["bot"]: r["oldest"] for r in c.execute(
         "SELECT j.bot, min(j.created) oldest FROM jobs j JOIN messages m ON m.id=j.message_id "
         "WHERE j.state='queued' AND m.from_actor LIKE 'human:%' GROUP BY j.bot")}
@@ -1306,6 +1307,9 @@ def view(c, who, settings, auth, github, config):
     if subscription_problems:
         checks.append(_check("subscriptions", "Subscriptions", "warn", "; ".join(subscription_problems[:5]),
                              [_fix("Open Computers", "#/settings", "devices")]))
+    from .app_delivery import health_problems
+    for key, summary in health_problems(c, who, auth, online_ids):
+        checks.append(_check(key, "Desktop apps", "warn", summary, [_fix("Open Computers", "#/settings", "devices")]))
     fixes = [_fix("Add a computer", "#/settings", "devices")] if full else []
     if not computers:
         checks.append(_check("computers", "Computers", "bad", "No computer is set up. Bots need one to run.", fixes))

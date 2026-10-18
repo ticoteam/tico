@@ -4,7 +4,7 @@ as reading them one bot at a time, and about the same number of statements for 7
 import collections
 import json
 
-from backend import agents, rooms, update_feeds, views
+from backend import agents, rooms, update_feeds, views, wake_presets
 from backend import task_privacy as privacy
 from backend.chat_goals import readable_active
 from backend.harnesses import resolve_harness
@@ -53,6 +53,7 @@ def per_bot_view(c, settings, auth, bot, level, access, registry_roster, registr
                     "shared_from": str(declared.get("shared_from") or ""),
                     "temp": bool(declared.get("temp")),
                     "compact_at": compact_at_of(declared),
+                    "wake": wake_presets.effective(declared),
                     "thread_mode": config["thread_mode"] or rooms.thread_mode(c, bot["slug"])})
     configured = json.loads(config["owner_ids_json"]) if config and config["owner_ids_json"] else None
     owner_rows = ([H.human(c, owner) for owner in configured] if configured is not None
@@ -74,7 +75,10 @@ def per_bot_view(c, settings, auth, bot, level, access, registry_roster, registr
     row["notes"] = len(H.notes_waiting(c, bot["slug"], limit=500))
     external = agents.presence(c, bot["slug"])
     row["agent"] = external["agent"] if external else None
-    if external:
+    from backend import app_delivery
+    row["app_delivery"] = app_delivery.view(c, declared) if config and external else None
+    row["app_delivery_app"] = app_delivery.HARNESS_APP.get(row.get("harness"))
+    if external and not (row["app_delivery"] or {}).get("active"):
         row["online"] = external["online"]
     return row
 

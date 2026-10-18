@@ -4,8 +4,7 @@
 name: Granola live check
 on:
   schedule:
-    - cron: '30 3 * * *'    # 03:30 Pacific, after the 03:00 nightly gate in ci.yml
-      timezone: America/Los_Angeles
+    - cron: '47 10 * * *'    # 10:47 UTC (03:47 PDT / 02:47 PST), after the nightly gate in ci.yml; UTC like ci.yml
   workflow_dispatch:
 permissions:
   contents: read

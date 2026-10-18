@@ -1,6 +1,8 @@
 """The flight recorder (backend/flight.py): what it aggregates is right, only owners and admins read it, it forgets on
-schedule, it catches a stalled event loop in the act, and the start record holds no secret."""
+schedule, it catches a stalled event loop in the act, the start record holds no secret, and a caller that hangs up is no
+server error."""
 import json
+import logging
 import sqlite3
 import threading
 import time
@@ -9,9 +11,10 @@ from contextlib import contextmanager
 import httpx
 import pytest
 import yaml
+from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
-from backend import code_hash, flight, flight_file, releases
+from backend import code_hash, diagnostics, flight, flight_file, releases
 from backend.app import create_app
 from backend.auth import Identity
 from backend.config import Settings
@@ -207,6 +210,72 @@ def test_owners_admins_and_bots_read_the_metrics(tmp_path):
         assert body["sql"]["queries"] and body["events"]["start"]["version"]
         assert set(get("ana-test", "/api/v2/system/metrics?section=slow").json()) == {"since", "now", "minutes", "slow"}
 
+
+def test_a_client_that_hangs_up_during_the_body_read_is_a_499_not_a_5xx(tmp_path, caplog):
+    """A caller that disconnects while request_guard reads its body (v0.3.55's seven "5xx", Dev 170) ends as 499 with no
+    traceback, and the 5xx count stays 0; a normal request is still a 200 and a handler that raises still a 500."""
+    registry = tmp_path / "registry"
+    registry.mkdir()
+    (registry / "hub-access.yaml").write_text(yaml.safe_dump({"owner": "ana@acme.example"}))
+    app = create_app(Settings(db_path=tmp_path / "hub.db", registry_dir=registry, flight_recorder=True, test_identities={
+        "ana-test": Identity("human:ana", "owner", "ana@acme.example")}))
+
+    def boom():
+        raise RuntimeError("a real handler failure")
+    app.router.routes.insert(0, APIRoute("/api/v2/test-boom", boom, methods=["GET"]))
+    statuses = []
+    end = app.state.timing.end
+
+    def recorded(route, auth_ms, total_ms, caller="anonymous", status=200, *rest):
+        statuses.append((route, status))
+        return end(route, auth_ms, total_ms, caller, status, *rest)
+    app.state.timing.end = recorded
+
+    async def hang_up():
+        scope = {"type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1", "method": "POST", "scheme": "http",
+                 "path": "/api/v2/tasks", "raw_path": b"/api/v2/tasks", "root_path": "", "query_string": b"",
+                 "headers": [(b"host", b"testserver"), (b"authorization", b"Bearer ana-test"),
+                             (b"content-type", b"application/json"), (b"content-length", b"100")],
+                 "client": ("testclient", 50000), "server": ("testserver", 80), "state": {}, "extensions": {}}
+        parts = iter([{"type": "http.request", "body": b'{"title": "half', "more_body": True}])
+        sent = []
+
+        async def receive():
+            return next(parts, {"type": "http.disconnect"})
+
+        async def send(message):
+            sent.append(message)
+        await app(scope, receive, send)
+        return sent
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        with app.state.store.transaction() as c:
+            H.sync_registry(c, {}, {"people": [{"id": "ana", "email": "ana@acme.example"}]})
+        caplog.set_level(logging.DEBUG)
+        rec = app.state.flight
+        rec.drain()
+        rec.take(0)
+        failures = diagnostics.RING.total
+        caplog.clear()
+        sent = client.portal.call(hang_up)
+        assert statuses == [("POST unmatched", 499)]
+        assert [m["status"] for m in sent if m["type"] == "http.response.start"] == [499]
+        assert diagnostics.RING.total == failures
+        assert not [r for r in caplog.records if r.exc_info]
+        assert [(r.levelno, r.getMessage()) for r in caplog.records if r.name == "tico.request"] == [
+            (logging.INFO, "POST request: the client disconnected before its body was read")]
+        rec.drain()
+        routes = {r["route"]: r for r in rec.take(0)["file"][1]["routes"]}
+        assert routes["POST unmatched"]["n"] == 1 and routes["POST unmatched"]["errors"] == 0
+
+        # Unchanged: a normal request is a 200 and a handler that raises is a 500, counted as a server error.
+        statuses.clear()
+        assert client.get("/api/v2/health", headers={"Authorization": "Bearer ana-test"}).status_code == 200
+        assert client.get("/api/v2/test-boom", headers={"Authorization": "Bearer ana-test"}).status_code == 500
+        assert statuses == [("GET /api/v2/health", 200), ("GET /api/v2/test-boom", 500)]
+        rec.drain()
+        routes = {r["route"]: r for r in rec.take(0)["file"][1]["routes"]}
+        assert routes["GET /api/v2/health"]["errors"] == 0 and routes["GET /api/v2/test-boom"]["errors"] == 1
 
 def test_minutes_become_hours_and_old_rows_go(store):
     now = 1_800_000_000

@@ -17,14 +17,15 @@ from fastapi.datastructures import DefaultPlaceholder
 from fastapi.routing import APIRoute
 from fastapi.staticfiles import StaticFiles
 from fastapi.exceptions import RequestValidationError
+from starlette.requests import ClientDisconnect
 
 from clients.agent_skill import WHO_NEEDS_ME
 
 from . import go_live as pending_go_lives
 from . import repo_waits
 from . import built_on
-from . import agents, batch, external_sync, inbox_isolation, mcp_oauth, harness_actions, model_login, oidc, personal_tokens, views
-from . import check_models, team_rules, update_feeds, usage_limits
+from . import agents, app_delivery, batch, external_sync, inbox_isolation, mcp_oauth, harness_actions, model_login, oidc, personal_tokens, views
+from . import check_models, run_triggers, team_rules, update_feeds, usage_limits, wake_presets
 from . import task_privacy as privacy
 from . import task_relations as TR
 from . import task_roles as TRo
@@ -385,7 +386,7 @@ def create_app(settings=None):
 
     @app.middleware("http")
     async def request_guard(request, call_next):
-        via_reset = delegation_reset = None
+        via_reset = delegation_reset = run_reset = None
         try:
             # The sign-in exemptions below match on prefixes; a dot segment would carry one of
             # them onto the static files ("/download/../index.html").
@@ -462,6 +463,9 @@ def create_app(settings=None):
                     # recorded via assistant, and unless the person just confirmed a proposal it may
                     # write only what is low-risk.
                     via_reset = H.VIA.set(who.via)
+                if who.attempt_id and who.role != "runner" and not request.url.path.startswith(run_triggers.RUNNER_PATHS):
+                    # A run's own tool call: what it writes counts toward whether the run acted.
+                    run_reset = H.RUN.set(who.attempt_id)
             if request.method not in ("GET", "HEAD", "OPTIONS"):
                 origin = request.headers.get("origin")
                 if origin and not settings.allows_origin(origin):
@@ -638,6 +642,13 @@ def create_app(settings=None):
                 # Where an agent with no token can sign in (backend/mcp_oauth.py, RFC 9728).
                 response.headers["WWW-Authenticate"] = mcp_oauth.challenge_header(settings)
             return response
+        except ClientDisconnect:
+            # The caller hung up while its request body was read (a closed tab, a cancelled call): nothing failed here.
+            # It ends as 499, client closed request, which the flight recorder and Sentry don't count as a server error.
+            # The method only: some addresses carry their own secret (a webhook trigger's).
+            logging.getLogger("tico.request").info("%s request: the client disconnected before its body was read",
+                                                   request.method)
+            return Response(status_code=499)
         except Exception as exc:
             from .diagnostics import request_failure
             request_failure(request, 500, exc)
@@ -648,6 +659,8 @@ def create_app(settings=None):
                 H.VIA.reset(via_reset)
             if delegation_reset is not None:
                 H.DELEGATION.reset(delegation_reset)
+            if run_reset is not None:
+                H.RUN.reset(run_reset)
 
     from . import routines
 
@@ -824,7 +837,8 @@ def create_app(settings=None):
             current = routines.latest_task(c, schedule_id)
             if current and current["status"] in ("open", "doing", "waiting", "review", "ready"):
                 raise Problem("routine", "This routine already has unfinished work", 409)
-            task = routines.open_task(c, auth, schedule, schedule["title"], schedule["playbook"], H.now())
+            task = routines.open_task(c, auth, schedule, schedule["title"], schedule["playbook"], H.now(),
+                                      trigger="person_message" if H.is_human(who.actor) else "other")
             occurrence = "manual:" + H.new_id()
             c.execute("INSERT INTO schedule_occurrences VALUES(?,?,?,?)",
                       (schedule_id, occurrence, task["id"], "created"))
@@ -1647,6 +1661,7 @@ def create_app(settings=None):
                         "shared_from": str(declared.get("shared_from") or ""),
                         "temp": bool(declared.get("temp")),
                         "compact_at": compact_at_of(declared),
+                        "wake": wake_presets.effective(declared),
                         "thread_mode": config["thread_mode"] or rooms.thread_mode(c, bot["slug"], config)})
         configured = json.loads(config["owner_ids_json"]) if config and config["owner_ids_json"] else None
         owner_rows = ([rows.human(owner) for owner in configured] if configured is not None
@@ -1671,7 +1686,11 @@ def create_app(settings=None):
         harness = rows.external_harness(slug)
         external = agents.presence(c, slug, harness) if harness else None
         row["agent"] = external["agent"] if external else None
-        if external:
+        # Delivered through a desktop app (backend/app_delivery.py): where, and online is that computer's.
+        # `app_delivery_app`: the desktop app the bot could be delivered through, for its settings.
+        row["app_delivery"] = app_delivery.view(c, declared) if config and harness else None
+        row["app_delivery_app"] = app_delivery.HARNESS_APP.get(row.get("harness"))
+        if external and not (row["app_delivery"] or {}).get("active"):
             row["online"] = external["online"]
         return row
 
@@ -2745,9 +2764,10 @@ def create_app(settings=None):
         from .shared_bots import route
         original = auth.target(c, who, body.owner, need="write")
         owner = auth.target(c, who, route(c, who.actor, original), need="write")
-        if privacy.private_execution(c, source):
-            privacy.require_destination(c, source, owner, None, {})
-            privacy.require_destination(c, source, who.actor, None, {})
+        # The same checks the dry-run makes (task_privacy.require_create); a subtask for a person under a private
+        # task with no person on it, filed by the bot that owns it, makes them its one guest.
+        guest = privacy.require_create(c, source, body.private, owner, H.task(c, parent_id) if parent_id else None,
+                                       actor=who.actor)
         auth.require_bot_contact(c, who, owner, task_id=parent_id, kind="task")
         # A subtask is the shape that parks the filer as `waiting` and makes it care when the
         # other one finishes. A bot set to `tasks` has opted out of that on both sides: it does
@@ -2807,6 +2827,8 @@ def create_app(settings=None):
                 raise Problem("privacy", "The verified requester cannot receive this private execution's other context", 403)
         if private and actual_bot and actual_bot not in (requester_actor or who.actor, owner):
             raise Problem("privacy", "The acting bot must be a current participant of the private task", 403)
+        if guest:
+            H.task_reach(c, who.actor, parent, owner)
         row = H.task_create(c, who.actor, body.title, body.body, owner, body.due, parent_id,
                             requester_actor=requester_actor, visibility=body.visibility,
                             public_title=body.public_title, public_summary=body.public_summary,
@@ -2908,6 +2930,7 @@ def create_app(settings=None):
                 warnings = None
             else:
                 fields = body.model_dump(exclude={"version", "close", "on_behalf_of"})
+                privacy.require_wait(c, caller, row, body.waiting_on)
                 if "size" in body.model_fields_set and body.size is None:
                     fields["clear_size"] = True
                 warnings = H.task_update(c, who.actor, task_id, **fields, mover=mover(c, who) or None).get("warnings")
@@ -4130,6 +4153,29 @@ def create_app(settings=None):
         return mutate(request, body, lambda c: model_login.use_shared_key(
             c, request.state.identity, rid, body.runtime, auth=auth))
 
+    # Clear key / Replace key (backend/computer_keys.py). What signs it in, and for the company's shared key every
+    # computer it serves: the "this computer only / all of them" ask. Previews only.
+    @app.get("/api/v2/runners/{rid}/keys")
+    def computer_key_info(request: Request, rid: str, runtime: str):
+        with store.read() as c:
+            return model_login.key_info(c, request.state.identity, rid, runtime, auth=auth, vault=app.state.vault)
+
+    @app.post("/api/v2/runners/{rid}/keys/clear")
+    def clear_computer_key(request: Request, rid: str, body: M.KeyClear):
+        return mutate(request, body, lambda c: model_login.clear_key(
+            c, request.state.identity, rid, body.runtime, body.scope, auth=auth))
+
+    # The key goes to the vault, never into the login relay; the vault's own write path keeps it out of the request
+    # receipt (a keyed fingerprint, as for Credentials).
+    @app.post("/api/v2/runners/{rid}/keys")
+    def replace_computer_key(request: Request, rid: str, body: M.KeyReplace):
+        who = request.state.identity
+        vault = app.state.vault
+        return vault.change(who, request.url.path, request.headers.get("idempotency-key"), body,
+                            lambda c, w: None,
+                            lambda c: model_login.replace_key(c, who, rid, body.runtime, body.secret.get_secret_value(),
+                                                              body.env, body.scope, auth=auth, vault=vault))
+
     @app.get("/api/v2/runners/{rid}/logins/{lid}")
     def read_login(request: Request, rid: str, lid: str):
         # A read that also expires: a sign-in nobody finished does not stay open.
@@ -4192,6 +4238,7 @@ def create_app(settings=None):
                 raise Problem("forbidden", "You cannot revoke this runner", 403)
             c.execute("UPDATE runners SET revoked_at=? WHERE id=?", (H.now(), rid))
             c.execute('DELETE FROM registry_metadata WHERE key=?', ('computer-repositories:' + rid,))
+            app_delivery.runner_revoked(c, who.actor, rid)
             H.event(c, who.actor, "runner.revoked", rid)
             return {"revoked": True}
         result = mutate(request, body, work)
@@ -4869,6 +4916,20 @@ def create_app(settings=None):
         return mutate(request, body, lambda c: settings_admin.set_compact_at(
             c, request.state.identity, bot, body))
 
+    @app.post("/api/v2/bots/{bot}/wake-preset")
+    def bot_wake_preset(request: Request, bot: str, body: M.BotWakePreset):
+        """How soon the bot's nonblocking notices and enabled sweeps start a turn (backend/wake_presets.py)."""
+        return mutate(request, body, lambda c: settings_admin.set_wake_preset(
+            c, request.state.identity, bot, body))
+
+    @app.get("/api/v2/wake-presets/measures")
+    def wake_preset_measures(request: Request, since: str | None = None, until: str | None = None):
+        """Per wake preset, over jobs queued in [since, until) (the last 7 days by default): turns and tokens per accepted
+        ticket, pickup latency, blocked time and missed actions. Owners and admins."""
+        admin_only(request.state.identity, "sees wake preset measures")
+        with store.read() as c:
+            return wake_presets.measures(c, since or H.shift(H.now(), days=-7), until)
+
     @app.post("/api/v2/bots/{bot}/transitions")
     def begin_transition(request: Request, bot: str, body: M.BotTransitionCreate):
         def work(c):
@@ -5027,6 +5088,7 @@ def create_app(settings=None):
     app.state.task_view = task_view         # for the events' read in tests (backend/tests/test_payload_budgets.py)
     # And one for each computer, in place of its polls (runner-rs/src/events.rs).
     install_runner_events(app, store, execution)
+    app_delivery.install(app, store, execution, mutate)
 
     from .views import install_views
     from .task_types import install_task_types

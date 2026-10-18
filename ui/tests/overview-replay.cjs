@@ -87,8 +87,17 @@ const SCENE = `export function createBuilding(data) {
     await frame.locator('#replay-captions li', {hasText: 'WRITER → EDITOR: Can you review the launch post?'}).waitFor();
     await scene.waitForFunction(() => window.__scene.links.some(([, , k]) => k === 'handoff'), null, {polling: 100});
 
-    // At the end, desks show the replayed states: the editor needs a person, the restricted bot stays restricted.
-    await frame.locator('#replay-play[aria-label="Play"]').waitFor();
+    // Played to its end, the replay goes back to live.
+    await frame.locator('#replay').waitFor({state: 'hidden'});
+    assert.equal(deskOf((await rec()).data, 'bot:editor').state, 'running', 'the live status again');
+    assert.equal(await frame.locator('#replay-toggle').getAttribute('aria-pressed'), 'false');
+
+    // Scrubbed to the end, desks show the replayed states: the editor needs a person, the restricted bot stays restricted.
+    // From here playback is held (no animation frames), so a replay can't play out and close before it is scrubbed.
+    await scene.evaluate(() => { window.requestAnimationFrame = () => 0; });
+    await frame.locator('#replay-toggle').click();
+    await frame.locator('#replay-bar').waitFor();
+    await frame.locator('#replay-range').evaluate(el => { el.value = '1000'; el.dispatchEvent(new Event('input')); });
     const ended = (await rec()).data;
     assert.equal(deskOf(ended, 'bot:editor').state, 'needs');
     assert.equal(deskOf(ended, 'bot:writer').state, 'idle');

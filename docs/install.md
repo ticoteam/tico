@@ -438,6 +438,12 @@ signed in on the side, and the old one keeps working until that finishes (or if 
 that stop first; they wait until someone signs in again. A computer you signed out is not signed back in by the model key
 given to every computer until you sign in or choose **Use the shared key**. See [subscriptions](subscriptions.md#signing-out-and-switching-accounts).
 
+A computer can also run on a model API key of its own, with no terminal: **Add key** (or **Replace key**) next to it in
+Settings > Computers keeps the key in Tico's credential vault for that computer alone, and the computer checks it before
+the old one goes. **Clear key** names the bots that stop, then takes the key off the computer. For the key given to every
+computer, both ask whether to change **this computer only** or **all of them**; an offline computer clears its copy when
+it is next online. See [subscriptions](subscriptions.md#api-keys-on-a-computer).
+
 ### Linux or cloud server (Docker)
 
 On any Linux computer, run the line the app shows. It downloads the installer of the release your server runs, so the
@@ -627,7 +633,8 @@ allowed, take control. The computer itself decides whether it offers one:
   (`screen off` and `screen status` too; a running runner follows within seconds).
 
 The first time a new computer offers its screen, its **Screen** setting in **Settings > Computers** starts at
-**Control**, so its operator and admins can watch it and drive it; choose **View** there to watch only, or **Off**. No one
+**Control**, so its operator and admins can watch it and drive it: the screen opens in Control, with **View** one tap
+away; choose **View** there to watch only, or **Off**. No one
 else can open it. A setting someone already chose stays, including View and Off, and a computer added before this
 default keeps its setting. The runner runs a virtual
 display (1440x900) on the first free display from `:99` to `:120` and gives bots that `DISPLAY` (set

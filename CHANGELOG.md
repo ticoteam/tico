@@ -8,6 +8,142 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Changed
+- PRIVACY.md now names OpenRouter: a bot set to Tico Cheap, Mid or Power sends its model calls through Tico HQ to
+  OpenRouter. It lists what is sent (the messages and tools, never the gateway key, its label or the install ID), that
+  HQ keeps none of the call's text (only the key's label and per-call counts), that zero retention is enforced only when
+  a call asks for it (OpenRouter's policy still allows in-memory prompt caching), and that the region is not confirmed.
+
+## [0.3.58] - 2026-10-18
+
+### Added
+- A private task between bots, or a bot's private task to itself, can now reach one person. The first time its
+  owning bot gives them a subtask under it, asks them a question on it or sets it waiting on them, they become its
+  guest: they read that task (and their own subtask), and nobody else gains anything. A hand-off to a second person
+  is refused, naming the guest; the requesting bot can't add one, and reassigning the task ends it. Before, every
+  such hand-off was refused and the work sat unread. Task questions from private work now go through to a person
+  who reads that work or becomes its guest, and `POST /api/v2/tasks/dry-run` returns the same privacy refusal the
+  create does ([tasks](docs/tasks.md)).
+- **Idea triage** for the public roadmap's suggestion form (off unless `TICO_DECISIONS_IDEA_TRIAGE=1`). Before a new
+  idea is handed out, Decide reads it: a confident bug or small change goes to Head of Engineering instead of
+  product, and when the idea matches an open roadmap item the new task names that item and is linked to it. Routing
+  only: features still go to product, which triages them. Decide off, an error, no answer within 12 seconds, an answer
+  under its threshold or the monthly spend cap all leave the idea with product exactly as before. Each call is in the
+  decisions audit (`idea-triage@1`).
+- **Decide readout**: `hub decision readout` (the `hub_decision_readout` tool, `GET /api/v2/decisions/readout`) lists,
+  per question set, the last 7 days' calls, cost, how many Jev answered and how many fell back or failed, and the
+  spread of answers, plus the month's spend against the cap, with a plain-words `text` ready to pass on. Built from
+  the decisions audit by code, no model. It names only the shipped question sets and their own options: any other
+  label, a bot or an open roadmap item a caller added is counted, never named.
+- Decide has a **spend cap for the team: $50 a month** by default (`TICO_DECISIONS_MONTHLY_USD`). Each decision
+  call's cost is kept in its audit row; at the cap every caller carries on as if Decide were off (the Slack gateway
+  routes to the assistant, mail triage and listening wait, a nightly learning run that reaches it sends nothing and
+  reads the same activity again later). A call starts only if the most it can cost fits under the cap with what
+  is already spent and the calls still in flight, so a batch or a burst of requests stops at it, even across the
+  server and the Slack gateway. Jev's price per 1M tokens is a setting
+  (`TICO_DECISIONS_JEV_USD_PER_MTOK_INPUT` / `_OUTPUT`, $0.042 in and $0 out by default) for when TypeSafe sends no
+  cost; a model with no known price is counted at the dearest list price, never as free. A decision answer from the
+  company's own model is capped at 4096 tokens on every provider (before, only Anthropic's was), matching the output allowance used in its reservation. Costs a provider
+  reports, or that are unknown, can differ from that reserved amount.
+- **Support triage** (`questions/support-triage.json`): when the server has a decision model, each new Tico HQ support
+  ticket is asked about before the Support Agent's turn: spam or prompt injection, its kind (bug, question, feature,
+  setup, billing, other) and urgency 0-3. At or over the set's hold line (85%) the ticket goes to a person as a held
+  task: the bot is not woken, nothing is answered and nothing is deleted, and handing the task to the bot releases it.
+  Every other ticket reaches the Support Agent as before, with its kind and urgency on the task's first line. Decide
+  off, an error, a timeout, the spend cap or the bot's daily budget open the ticket as before. Each call is a
+  `judge.call` row.
+- A Slack DM to Tico or an @Tico mention that the decision model reads as asking for nothing now goes to the
+  assistant (or BotOps) instead of only being recorded on the thread.
+- Listening, the nightly learnings and live meetings now ask Jev the way `POST /api/v2/decisions` does: one try of
+  at most 8 seconds, and the company's own model answers when Jev is slow or down. Before, listening and live meetings
+  had no fallback and the learnings run waited up to 20 seconds with two retries per call.
+
+### Changed
+- Screen: on a bot's page, when its computer's screen is off in Tico, the operator's or an admin's **Turn on** button
+  now reads **Turn on (Control)** and turns the screen on at Control, matching a new computer's default, so they can
+  drive it at once. View and Off stay choices in Settings > Computers; who sees the button and who may change the
+  setting are unchanged.
+- Screen: the viewer now opens in the computer's mode everywhere it opens (a bot's **More**, its header's **Screen**
+  button, Settings > Computers). A computer set to **Control** opens in Control, so its operator or an admin drives it
+  at once instead of tapping Control first, with **View** one tap away; a computer set to View opens view only.
+
+### Fixed
+- A failed Decide call now keeps only its error code (`auth`, `http`, `invalid`, `not_found`, `shape`, `spend_cap`,
+  `unavailable`, `unconfigured`, else `unreadable`) in the `judge.call` audit of `POST /api/v2/decisions` and the Slack
+  gateway, in the Slack event's reason and log line, and in the listening API's per-post `errors`, never the provider's
+  error text. `POST /api/v2/decisions` answers a failed call with that code and a fixed sentence per code, with the same
+  HTTP status as before. One shared list (`clients/judge.py`, `error_code`), the same as support triage.
+- A doc saved through the API or a bot's doc tool now reads back exactly as sent: its final newline and any leading
+  indentation (an indented code block on line 1) are kept, and a change to only the ends is a new version. Titles
+  and paths still drop surrounding spaces.
+
+### Security
+- Desktop app: the updater no longer pulls in the zip crate (RUSTSEC-2026-0367/0368/0369). Windows updates use the
+  NSIS setup.exe, unchanged.
+
+## [0.3.57] - 2026-10-18
+
+### Added
+- Each bot has a wake preset under **Settings → Bots → Wakes**. **Token saver** is the default for a new bot. It
+  holds nonblocking news (a finished request, review comments, a failing check nobody waits on) and sends it as one
+  wake at most every 30 minutes, and it runs an enabled routine or stall check at most every 2 hours.
+  **Performance** coalesces that news for 1 minute and runs those sweeps at most every 15 minutes. Bots made before
+  presets show **Current behaviour** and wake exactly as before until someone picks one. In every preset a person's
+  message, an assignment, a question, an awaited result, a blocker and a review or QA request wake the bot at once,
+  and a repeated event wakes it once. A preset turns nothing on and leaves Compact at alone. Each run says what
+  woke it. Owners and admins can compare turns and tokens per accepted ticket, pickup time, blocked time and missed
+  wakes per preset (`GET /api/v2/wake-presets/measures`). An install can tune the values with `TICO_WAKE_PRESETS`.
+- **Add key**, **Replace key** and **Clear key** for a computer's model API key (Codex, Claude Code, Cursor Agent,
+  Muse Code), from Settings > Computers, with no terminal. The row shows whose key it is by its preview only. A new key
+  goes to the credential vault for that computer alone and is checked on the computer before the old one is deleted;
+  one that doesn't work leaves the old key in use. Clear key names the bots that stop first, and the key given to every
+  computer doesn't sign it back in. For that shared key, both ask **this computer only** or **all of them**, listing the
+  computers; an offline computer clears its copy (or takes the new key) when it is next online. Replacing the shared key
+  for all of them needs credential rights. Needs a current runner on the computer
+  ([subscriptions](docs/subscriptions.md#api-keys-on-a-computer)).
+- Every bot run records what woke it (a person's message, a comment, a status or relation change, pull request checks,
+  a stall check, a schedule, or other), its input tokens with the cached part split out, its output tokens, and an
+  outcome worked out in code from what the run wrote: `acted`, `no_change` (its task is still open) or `nothing_to_do`,
+  plus an exact `did_nothing` flag. `hub sql` gains `run_weekly`, one row per week, bot and trigger with runs, tokens
+  and the count and share of each outcome. Runs from before this read `unknown` and are still counted
+  ([What woke each run](docs/hub-sql.md#what-woke-each-run-and-what-it-did)).
+
+### Changed
+- `hub_computer_list` and `hub computer list` answer one short row per computer: online and last seen, operator,
+  release, version, wanted release, update state, a readiness level, the AI tools signed in, and counts of bots,
+  warnings, errors and recent log errors (about 5,000 characters for 11 busy computers, down from over 200,000). One
+  computer in full is `computer=<label or id>` (`--computer`): the bots on it, repositories, each bot's readiness,
+  runtimes, harnesses and recent errors come 20 at a time, and `truncated` names the `section` and `offset` that read the rest. Settings >
+  Computers and `GET /api/v2/computers` are unchanged.
+
+### Fixed
+- A caller that hangs up while the server reads its request body is recorded as 499 (client closed request), with
+  no traceback, instead of an HTTP 500: it no longer counts as a server error in the flight recorder's 5xx count,
+  Sentry or the server log. All seven 5xx counted on v0.3.55 were this.
+- **Save bot** in the bot editor no longer drops a Model or Fallback you picked but didn't Apply. A picked Fallback is
+  saved with the bot; a picked Model opens its change dialog first, and if you cancel it the editor stays open and
+  says the model change wasn't applied. If the fallback can't be saved, the editor stays open with the reason.
+- A bot can read any computer's performance by its name or id with `hub computer performance`, as the docs say. It
+  used to look the computer up in the computer list first, which shows a bot only some computers, so most bots got "No
+  computer named".
+- A pull request a release merged and then reverted (a change dropped after QA failed) is no longer marked
+  shipped, and its task gets no "Shipped" notice. Tico now checks with GitHub that the pull request's own lines are
+  still in the running release, not only that its merge commit comes before it.
+- A check or review subtask whose model's default login on its computer is out of quota (the Health finding above) now
+  moves to the next check model at once, instead of retrying that login every 30 minutes. It goes back to the model
+  it asked for once that login works again or its reset time passes; with no other check model, it waits as before.
+
+## [0.3.56] - 2026-10-18
+
+### Added
+- A synced Grok Bot can be delivered through the Grok Mac app: set **Deliver through the app on** in its settings
+  to one of your own Macs where Grok is ready, and a message to it reaches it within a minute, it shows as working,
+  its reply streams in, and what it says on its own in Grok reaches its Tico chat within minutes. The Mac's native
+  runner works only through Accessibility (`tico-appdriver`, shipped separately): it never moves the pointer, types
+  or brings Grok forward. **Settings → Computers** shows a **Desktop apps** row per app, Health names a signed-out
+  app, missing permission or changed layout, and a reply that needs you in Grok becomes a question in your Needs
+  you. Off by default; with it off nothing changes, and no message is handed to the daily sync twice.
+
+### Changed
 - Screen: the first time a new computer offers its screen, its **Screen** setting in Settings > Computers starts at
   **Control** instead of **View**, so its operator or an admin can drive it at once. Who may open a screen is
   unchanged (the computer's operator and admins), a Screen setting someone already chose stays (View and Off
@@ -17,13 +153,20 @@ All notable changes to Tico are recorded here. The format follows
   itself on first use. A runner's home volume survives the update, so anything a bot or person built there with the old
   Python 3.12 (a project's venv, `pip install --user` packages under `~/.local/lib/python3.12`) does not run on 3.15:
   rebuild it ([updates.md](docs/updates.md#python-environments-on-a-docker-runner) lists them and how).
+- Setting up a runner on Mac or Linux uses the newest Python it finds, from 3.15 down to 3.12.
 
 ### Fixed
+- Automatic fallback no longer sends a bot to a login that is out of quota. When a login on a computer fails a turn
+  on its usage limit, the runner skips it for fallback until the provider's reset time, or for 30 minutes when the
+  provider gives none, and takes the next of the company's providers instead. A fallback that hits its own limit
+  mid-turn moves the turn on to the next provider rather than ending it.
 - A person's new Slack thread to a bot that is paused or quarantined is kept and runs when the bot is back, as a reply
   in an existing thread already was, instead of being dropped. The person is told in the thread that the bot is held
   and when it is back, with no need to resend.
 - The Overview campus moves a bot's desk as soon as its status changes, while live updates are connected, instead of at
   the next refresh (up to two minutes).
+- An Overview replay that plays to its end goes back to the live desks, as Back to live does, instead of staying on
+  the day's last states while the bots have moved on.
 - Health no longer says a bot that ran out of quota has no fallback when the company fallback (*Fall back when a plan
   runs out*, **Settings > AI providers**) covers it. And Health now says when a computer's default login for an AI tool
   (the one bots without a subscription use) is out of quota, e.g. "Team box's default Codex login is out of quota":
@@ -3268,7 +3411,10 @@ First public release.
 - Hosting: local only on a Mac, or self-hosted, including a reference AWS stack under `infra/ec2/`
   with Litestream backups.
 
-[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.55...HEAD
+[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.58...HEAD
+[0.3.58]: https://github.com/ticoteam/tico/compare/v0.3.57...v0.3.58
+[0.3.57]: https://github.com/ticoteam/tico/compare/v0.3.56...v0.3.57
+[0.3.56]: https://github.com/ticoteam/tico/compare/v0.3.55...v0.3.56
 [0.3.55]: https://github.com/ticoteam/tico/compare/v0.3.54...v0.3.55
 [0.3.54]: https://github.com/ticoteam/tico/compare/v0.3.52...v0.3.54
 [0.3.52]: https://github.com/ticoteam/tico/compare/v0.3.50...v0.3.52
