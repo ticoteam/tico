@@ -167,13 +167,16 @@ waiting and review tasks that seem finished or forgotten: every linked PR merged
 the parent done or closed; everything it is blocked by done; a snooze that ended over a day ago with
 nothing since; the same title as an older open task of the same owner; or 7 quiet days (3 for doing).
 Only a task that is new to the list, or changed since it was last looked at, is judged by Tico Decide
-(`questions/stale-review.json`), at most 30 an hour and one suggestion a task a week. When nothing is
-new the hour passes with no Decide call and nothing written. A suggestion is never an action:
+(`questions/stale-review.json`), at most 30 an hour within the server's daily Decide allowance, and one suggestion a
+task a week; what is left waits for the next hour. A task that changes or starts being worked while Decide is asked,
+or a switch turned off meanwhile, gets nothing. When nothing is new the hour passes with no Decide call and nothing
+written. A suggestion is never an action:
 
 - a bot that owns the task gets one comment, "Stale check: PR #12 merged Oct 16. Suggest: mark done.";
 - a person who owns it gets a row on their one **Stale tickets: N suggestions** card in Needs you, with
   **Accept** and **Skip**, and **Accept all**. Accept is their own change, with the same checks as by
-  hand: the owner marks done, the requester or a person closes, and anything else is refused.
+  hand: the owner marks done, the requester or a person closes, and anything else is refused. It applies only
+  what the card showed: a task changed since is refused on its own, and a row that arrived since stays.
 
 ### When nobody answers a bot's ask
 
