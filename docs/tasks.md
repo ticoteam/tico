@@ -735,8 +735,11 @@ who it reached, and its Private row names them.
 - A run that also carries private work the person cannot read reaches nobody: the subtask, the question and the
   wait are all refused.
 - There is one guest. A hand-off to a different person is refused, naming the guest; hand the work to them instead.
-- Only the bot that owns the task brings a guest in; the requesting bot cannot. Reassigning the task ends the guest.
-- A task under a private task that has a person on it cannot reach someone that person's task does not have.
+- Only the bot that owns the task brings a guest in; the requesting bot cannot. Reassigning the task ends the
+  guest's access; a new bot owner may then bring in one person of its own.
+- When a private task above it has a person on it, only someone who reads that task above can become the guest. From
+  the task's own private work the hand-off is refused; otherwise the person gets their subtask alone, as before, and
+  does not become the guest.
 - The guest's answer on their subtask or question comes back to the task, and wakes its owner, as on any task.
 - Approvals stay refused from private work (they go to the default approver): ask the person with a subtask or
   `hub task question`.
