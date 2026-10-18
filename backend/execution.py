@@ -1639,7 +1639,10 @@ class Execution:
         attempt = self.attempt(c, who, aid)
         if attempt["state"] != "running":
             return {"messages": []}
-        origin = H.message(c, c.execute("SELECT message_id FROM jobs WHERE id=?", (attempt["job_id"],)).fetchone()[0])
+        # A comment its author took back mid-turn (H.task_comment_delete) still started the turn: read its row,
+        # whose words are already gone, so the turn keeps polling. Its follow-ups are read the normal way below.
+        origin = H.message(c, c.execute("SELECT message_id FROM jobs WHERE id=?", (attempt["job_id"],)).fetchone()[0],
+                           include_deleted=True)
         origin_task = H.message_task_id(origin, H.conversation(c, origin["conversation_id"]))
         capabilities = c.execute("SELECT capabilities_json FROM runners WHERE id=?", (attempt["runner_id"],)).fetchone()
         lanes, roots = lanes_on(capabilities), roots_on(capabilities)
@@ -1684,7 +1687,7 @@ class Execution:
                 refs = json.loads(row["refs_json"] or "{}")
                 origin = c.execute("SELECT j.message_id,m.from_actor FROM jobs j JOIN messages m ON m.id=j.message_id "
                                    "WHERE j.id=?", (attempt["job_id"],)).fetchone()
-                origin_message = H.message(c, origin["message_id"])
+                origin_message = H.message(c, origin["message_id"], include_deleted=True)
                 task_id = H.message_task_id(origin_message)
                 task = H.task(c, task_id) if task_id else None
                 requester = task["requester"] if task else origin["from_actor"]
@@ -1800,7 +1803,9 @@ class Execution:
         conv = H.conversation(c, msg["conversation_id"])
         actor = "bot:" + row["bot"]
         reply = None
-        if body.text and body.outcome == "completed":
+        # Nothing is posted under a comment taken back mid-turn: the reply would stand where it was and could
+        # restate it. The turn's own result is still recorded below.
+        if body.text and body.outcome == "completed" and msg["deleted_at"] is None:
             text, notices = split_runner_notices(body.text)
             already = c.execute("SELECT id FROM messages WHERE from_actor=? AND in_reply_to=?",
                                 (actor, msg["id"])).fetchone()
@@ -1857,7 +1862,8 @@ class Execution:
             # what was folded into it), kept in the reply's refs for the frontends to show.
             handled = [msg["id"]] + [r[0] for r in c.execute(
                 "SELECT i.message_id FROM attempt_inputs i JOIN messages m ON m.id=i.message_id "
-                "WHERE i.attempt_id=? AND m.conversation_id=? ORDER BY m.rowid", (aid, msg["conversation_id"]))]
+                "WHERE i.attempt_id=? AND m.conversation_id=? AND m.deleted_at IS NULL ORDER BY m.rowid",
+                (aid, msg["conversation_id"]))]
             refs = {**(H.message(c, reply["id"]).get("refs") or {}),
                     "run": {"job_id": row["job_id"], "attempt_id": aid}, "answers": handled}
             c.execute("UPDATE messages SET refs_json=? WHERE id=?", (encode(refs), reply["id"]))

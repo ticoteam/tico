@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from backend.tests.test_api import api, assign, claim, get, post, ready, runner, setup_attempt, expire
@@ -372,3 +374,64 @@ def test_a_comment_taken_back_before_the_runtime_got_it_is_cancelled_not_requeue
             ("queued", None)
         assert c.execute("SELECT state FROM jobs WHERE message_id=?", (gone["id"],)).fetchone()[0] == "cancelled"
         assert not c.execute("SELECT 1 FROM attempt_inputs WHERE message_id IN (?,?)", (kept["id"], gone["id"])).fetchone()
+
+
+def _a_turn_started_by_a_comment(api, bot="ops", r=None):
+    if r is None:
+        r = runner(api)
+        assign(api, r, bot)
+        ready(api, r, [bot])
+    task = post(api, "tasks", {"owner": bot, "title": "Review the report", "body": "Please review."})
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE jobs SET state='cancelled' WHERE state='queued'")
+    path = f"tasks/{task['id']}/comments"
+    said = post(api, path, {"text": "Please look at the totals"})["comment"]
+    attempt = claim(api, r, bot)
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT message_id FROM jobs WHERE id=?", (attempt["job_id"],)).fetchone()[0] == said["id"]
+    post(api, f"attempts/{attempt['id']}/started", {"thread_id": "thread"}, r["token"])
+    return r, path, said, attempt
+
+
+@pytest.mark.parametrize("bot", ["ops", "botops"])
+def test_a_turn_whose_own_comment_was_taken_back_keeps_polling_and_posts_no_reply_under_it(api, request, bot):
+    # #879/#880: the steering poll read the turn's own comment the way a room does, which leaves a deleted one
+    # out, so every poll after the author took it back raised a TypeError (a 500) until the turn ended.
+    # BotOps reads it a second time for each follow-up it weighs.
+    machine = request.getfixturevalue("botops") if bot == "botops" else None
+    r, path, said, attempt = _a_turn_started_by_a_comment(api, bot, machine)
+    post(api, f"{path}/{said['id']}/delete", {})
+    later = post(api, path, {"text": "Also the appendix"})["comment"]
+    polled = post(api, f"attempts/{attempt['id']}/inputs", {}, r["token"])["messages"]
+    assert said["id"] not in [m["id"] for m in polled]
+    for m in polled:
+        post(api, f"attempts/{attempt['id']}/inputs/{m['id']}/ack", {}, r["token"])
+    post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "text": "Totals checked.", "last_seq": 0},
+         r["token"])
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT state FROM attempts WHERE id=?", (attempt["id"],)).fetchone()[0] == "completed"
+        # #885's shipped settlement for the turn's own job stays as it is.
+        assert c.execute("SELECT state FROM jobs WHERE id=?", (attempt["job_id"],)).fetchone()[0] == "completed"
+        # Nothing stands under the comment that was taken back, and its words are not kept on it.
+        assert not c.execute("SELECT 1 FROM messages WHERE in_reply_to=?", (said["id"],)).fetchone()
+        assert c.execute("SELECT body FROM messages WHERE id=?", (said["id"],)).fetchone()[0] == ""
+        if bot == "ops":
+            assert [m["id"] for m in polled] == [later["id"]]
+
+
+def test_a_reply_does_not_list_a_comment_taken_back_mid_turn_among_those_it_answered(api):
+    r, path, said, attempt = _a_turn_started_by_a_comment(api)
+    kept = post(api, path, {"text": "Also check the totals"})["comment"]
+    gone = post(api, path, {"text": "And the appendix"})["comment"]
+    assert {m["id"] for m in post(api, f"attempts/{attempt['id']}/inputs", {}, r["token"])["messages"]} == \
+        {kept["id"], gone["id"]}
+    for m in (kept, gone):
+        post(api, f"attempts/{attempt['id']}/inputs/{m['id']}/ack", {}, r["token"])
+    post(api, f"{path}/{gone['id']}/delete", {})
+    done = post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "text": "Reviewed.", "last_seq": 0},
+                r["token"])
+    with api.app.state.store.read() as c:
+        reply = c.execute("SELECT refs_json FROM messages WHERE in_reply_to=? AND from_actor='bot:ops'",
+                          (said["id"],)).fetchone()
+        assert reply, done
+        assert json.loads(reply[0])["answers"] == [said["id"], kept["id"]]

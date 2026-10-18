@@ -16,6 +16,10 @@ All notable changes to Tico are recorded here. The format follows
 - A bot's turn finishes when a comment it had taken in was deleted while it ran. Finishing such a turn failed with a
   server error on every retry; now the turn and its reply are recorded as usual, and the deleted comment is never held
   for review or run again.
+- A comment taken back while a bot was working on it no longer breaks or shows through that turn. A bot checking for
+  new comments got a server error each time once the comment that started its turn was deleted; now it carries on.
+  Its reply is no longer posted under the deleted comment, and a reply no longer lists a deleted comment among those
+  it answered.
 - A queued job whose message its bot can no longer read (a private task or conversation it was taken off) no longer
   sits queued for ever. No claim ever takes it, so it aged Health's "queued since" warning. The scheduler now cancels
   it within a minute and records why (a `job.suppress` event, reason `unreadable`); the message itself stays.
