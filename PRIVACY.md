@@ -171,6 +171,9 @@ from or goes to a Tico server you run.
 
 - `GET /v1/onboarding/health`: whether Tico's assistant can answer. Nothing is sent with it. Until the assistant
   launches it answers `{"ok": false}`, and the page plans in your browser.
+- `POST /v1/onboarding/turn`, only while Tico's assistant is on: your message, the tab you are on and your plan, with the
+  chat's last 8 turns, which HQ sends to Anthropic (Claude Haiku 5.5) for the answer; key-shaped text is removed first,
+  and HQ keeps none of it and logs no text.
 - `POST /v1/onboarding/event`, when you send a message or download your company file, and nothing else:
 
 ```
