@@ -36,7 +36,7 @@ EMPTY = (
     # routines and watchers
     "schedules", "schedule_config", "schedule_occurrences", "triggers", "trigger_deliveries", "watcher_runs", "watcher_items", "watcher_refs",
     # runner and bot sessions
-    "enrollments", "assignments", "agent_pairings", "bot_sessions", "session_epochs", "model_logins", "model_login_cleared",
+    "enrollments", "assignments", "agent_pairings", "bot_sessions", "session_epochs", "model_logins", "model_login_cleared", "computer_keys",
     "computer_profiles", "subscription_assignments", "runner_harness_actions", "runner_harness_choices",
     "runner_versions",
     # human sign-in and service keys

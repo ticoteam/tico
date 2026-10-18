@@ -640,6 +640,22 @@ impl Runner {
         billing_for(runtime, &text_of(&row["detail"]))
     }
 
+    /// The key on this computer a turn of `runtime` signs in with, set unless a grant set one: always for a CLI that
+    /// reads its key from the turn's environment only (`api_key_in_turn`), and for one that reads it there or from a
+    /// login of its own (Claude Code) when the key is this computer's own from the app (a person added it in place of
+    /// any login) or readiness found no login and reported the key. Never for a subscription with its own home.
+    fn turn_key(&self, runtime: &str, profile: Option<&Profile>) -> Option<(String, String)> {
+        let caps = crate::harness_tools::caps(runtime, "");
+        if profile.is_some_and(|p| !p.share_operator) {
+            return None;
+        }
+        let (name, key) = self.sign_in.headless_secret(runtime)?;
+        let own = self.sign_in.key_source(runtime).is_some_and(|(_, source)| source == "computer");
+        let reported = || text_of(&self.runtime_rows.lock().unwrap().get(runtime).cloned().unwrap_or_default()["detail"]) == format!("Signed in with {name}");
+        let by_key = caps.api_key_in_turn || caps.api_keys == "computer" && caps.api_key_login.is_empty() && (own || reported());
+        by_key.then_some((name, key))
+    }
+
     fn turn_profile(&self, attempt: &Value) -> Result<Option<Profile>, Fail> {
         let rows = self.runtime_rows.lock().unwrap().clone();
         let assignments = self.assignments_seen();
@@ -742,14 +758,9 @@ impl Runner {
             crate::gitcred::apply(&mut env, &self.client, &self.tokens, &bot, socket_path.as_deref(), &self.state.directory).await;
             let hop_runtime = crate::fallback::configured(&config).map(|h| h.runtime);
             for keyed in std::iter::once(runtime.as_str()).chain(hop_runtime.as_deref()) {
-                // A CLI that reads its key from the turn's environment only (`api_key_in_turn`): a key on this
-                // computer (the runner's environment, `_shared.env` or the company's) reports it ready, so it
-                // reaches the turn unless a grant set one.
-                if crate::harness_tools::caps(keyed, "").api_key_in_turn && selected.as_ref().is_none_or(|p| p.share_operator) {
-                    if let Some((name, key)) = self.sign_in.headless_secret(keyed) {
-                        if env.get(&name).is_none_or(|v| v.is_empty()) {
-                            env.insert(name, key);
-                        }
+                if let Some((name, key)) = self.turn_key(keyed, selected.as_ref()) {
+                    if env.get(&name).is_none_or(|v| v.is_empty()) {
+                        env.insert(name, key);
                     }
                 }
             }
@@ -1319,6 +1330,47 @@ mod tests {
         assert_eq!(billing_for("codex", "Signed in with an API key"), "api");
         assert_eq!(billing_for("musecode", "Signed in with a Meta account"), "subscription");
         assert_eq!(billing_for("musecode", "Signed in with META_API_KEY"), "api");
+    }
+
+    #[test]
+    fn a_claude_turn_signs_in_with_the_key_added_for_this_computer() {
+        if ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"].iter().any(|k| std::env::var_os(k).is_some()) {
+            return; // a key in this process's environment is the terminal's and comes first
+        }
+        let dir = std::env::temp_dir().join(format!("tico-turn-key-{}", uuid::Uuid::new_v4().simple()));
+        let secrets = dir.join("projects/secrets");
+        std::fs::create_dir_all(&secrets).unwrap();
+        let path = dir.join("runner.json");
+        std::fs::write(&path, json!({"url": "http://127.0.0.1:9", "token": "t", "runner_id": "r1", "projects_dir": dir.join("projects")}).to_string()).unwrap();
+        let config = crate::config::Config::load(&path).unwrap();
+        let client = crate::client::Client::new(&config.url(), &config.token(), 1, 0).unwrap();
+        let runner = Runner::new(config, client, crate::state::State::open(&dir.join("state")).unwrap());
+        let (computer, team) = (secrets.join(crate::signin::COMPUTER_KEYS_FILE), secrets.join(crate::signin::TEAM_KEYS_FILE));
+        let signed_in = |detail: &str| {
+            *runner.runtime_rows.lock().unwrap() = [("claude".to_string(), json!({"status": "ready", "detail": detail}))].into_iter().collect();
+        };
+        // Claude Code has a browser login and the company's key: the login signs it in, as readiness reported.
+        std::fs::write(&team, "ANTHROPIC_API_KEY=sk-ant-team-0123\n").unwrap();
+        signed_in("Signed in with claude.ai");
+        assert_eq!(runner.turn_key("claude", None), None);
+        // No login, so readiness reported the key: the turn carries it.
+        signed_in("Signed in with ANTHROPIC_API_KEY");
+        assert_eq!(runner.turn_key("claude", None), Some(("ANTHROPIC_API_KEY".into(), "sk-ant-team-0123".into())));
+        // A key added for this computer replaces the old one and any login.
+        std::fs::write(&computer, "ANTHROPIC_API_KEY=sk-ant-mine-0123\n").unwrap();
+        signed_in("Signed in with claude.ai");
+        assert_eq!(runner.turn_key("claude", None), Some(("ANTHROPIC_API_KEY".into(), "sk-ant-mine-0123".into())));
+        std::fs::write(&computer, "ANTHROPIC_API_KEY=sk-ant-next-0123\n").unwrap();
+        assert_eq!(runner.turn_key("claude", None).unwrap().1, "sk-ant-next-0123");
+        // A named subscription keeps its own login; a cleared key reaches no turn.
+        let own_home = crate::profiles::Profile { name: "lab".into(), directory: dir.join("lab"), share_operator: false };
+        assert_eq!(runner.turn_key("claude", Some(&own_home)), None);
+        runner.sign_in.forget_keys("claude").unwrap();
+        assert_eq!(runner.turn_key("claude", None), None);
+        // Codex turns its key into a login of its own: the turn never carries it.
+        std::fs::write(&computer, "OPENAI_API_KEY=sk-mine-0123\n").unwrap();
+        assert_eq!(runner.turn_key("codex", None), None);
+        std::fs::remove_dir_all(dir).ok();
     }
 
     #[test]

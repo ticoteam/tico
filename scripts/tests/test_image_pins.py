@@ -35,6 +35,10 @@ BUILT_IN_THE_VENV_STAGE = {'pyyaml': 'libyaml-dev'}
 DIGEST = re.compile(r'@sha256:[0-9a-f]{64}$')
 # The images ship for both (.github/workflows/docker.yml); a pin needs a wheel for each.
 ARCHES = ('x86_64', 'aarch64')
+# glibc in each Debian release (packages.debian.org/<release>/libc6); a manylinux wheel needing newer won't install.
+DEBIAN_GLIBC = {'bookworm': (2, 36), 'trixie': (2, 41)}
+# The legacy manylinux names and the glibc each one means (PEP 600).
+LEGACY_MANYLINUX = {'1': (2, 5), '2010': (2, 12), '2014': (2, 17)}
 
 
 def python_image():
@@ -108,16 +112,38 @@ def test_packages_built_in_the_venv_stage_get_their_headers_and_runtime_library(
     assert 'yaml.CSafeLoader' in stage('source'), 'the build must fail if PyYAML lost its C loader'
 
 
-def installs_on_the_image(tags, minor, arch):
-    """Whether pip in the image (CPython 3.<minor>, glibc Debian, <arch>) can install a wheel with these tags."""
+def debian_release():
+    return python_image().split('@')[0].rsplit('-', 1)[1]
+
+
+def image_glibc():
+    return DEBIAN_GLIBC[debian_release()]
+
+
+def manylinux(platform):
+    """(glibc, arch) a manylinux platform tag needs, or None for any other platform."""
+    if match := re.fullmatch(r'manylinux_(\d+)_(\d+)_(\w+)', platform):
+        return (int(match[1]), int(match[2])), match[3]
+    if match := re.fullmatch(r'manylinux(1|2010|2014)_(\w+)', platform):
+        return LEGACY_MANYLINUX[match[1]], match[2]
+    return None
+
+
+def installs_on_the_image(tags, minor, arch, glibc):
+    """Whether pip in the image (CPython 3.<minor>, Debian with this glibc, <arch>) can install these wheel tags."""
     python, abi, platform = tags
     pythons, platforms = python.split('.'), platform.split('.')
     cp = f'cp3{minor}'
     abi3 = abi == 'abi3' and any(p.startswith('cp3') and p[3:].isdigit() and int(p[3:]) <= minor for p in pythons)
     pure = abi == 'none' and any(p in ('py3', f'py3{minor}', cp) for p in pythons)
     native = abi == cp and cp in pythons
+    linux = [m for m in map(manylinux, platforms) if m]
     return ((pure or abi3 or native)
-            and ('any' in platforms or any(p.startswith('manylinux') and p.endswith(f'_{arch}') for p in platforms)))
+            and ('any' in platforms or any(needs <= glibc and on == arch for needs, on in linux)))
+
+
+def test_the_images_debian_release_has_a_known_glibc():
+    assert debian_release() in DEBIAN_GLIBC, f'{debian_release()}: add its glibc to DEBIAN_GLIBC'
 
 
 @pytest.mark.parametrize('wheel, x86_64, aarch64', [
@@ -133,10 +159,20 @@ def installs_on_the_image(tags, minor, arch):
     ('cp315-cp315t-manylinux_2_17_x86_64', False, False),
     ('cp39-abi3-manylinux_2_28_x86_64', True, False),
     ('cp316-abi3-manylinux_2_28_x86_64', False, False),
+    ('cp315-cp315-manylinux1_x86_64', True, False),
+    ('cp315-cp315-manylinux2010_x86_64', True, False),
+    ('cp315-cp315-manylinux2014_aarch64', False, True),
+    ('cp315-cp315-manylinux_2_41_x86_64', True, False),
+    ('cp315-cp315-manylinux_2_42_x86_64', False, False),
+    ('cp315-cp315-manylinux_2_99_x86_64', False, False),
+    ('cp315-cp315-manylinux_3_0_aarch64', False, False),
+    ('cp315-cp315-manylinux_2_99_x86_64.manylinux_2_17_x86_64', True, False),
+    ('cp315-cp315-manylinux_2_17_x86_64.manylinux_2_99_aarch64', True, False),
 ])
 def test_wheel_tags_match_only_the_images_python_and_platforms(wheel, x86_64, aarch64):
-    tags = tuple(wheel.split('-'))
-    assert (installs_on_the_image(tags, 15, 'x86_64'), installs_on_the_image(tags, 15, 'aarch64')) == (x86_64, aarch64)
+    tags, trixie = tuple(wheel.split('-')), DEBIAN_GLIBC['trixie']
+    assert (installs_on_the_image(tags, 15, 'x86_64', trixie),
+            installs_on_the_image(tags, 15, 'aarch64', trixie)) == (x86_64, aarch64)
 
 
 @pytest.mark.slow
@@ -161,7 +197,7 @@ def test_the_pinned_sqlite_builds_with_every_option_python_sees(tmp_path):
 
 @pytest.mark.slow
 def test_every_apt_package_exists_in_the_images_debian_release():
-    release = python_image().split('@')[0].rsplit('-', 1)[1]
+    release = debian_release()
     index = f'https://deb.debian.org/debian/dists/{release}/main/binary-amd64/Packages.xz'
     with urllib.request.urlopen(index, timeout=120) as response:
         names = set(re.findall(r'^Package: (\S+)$', lzma.decompress(response.read()).decode(), re.M))
@@ -185,9 +221,10 @@ def test_every_pin_has_a_wheel_for_the_images_python(requirements):
 
     with ThreadPoolExecutor(16) as pool:
         missing = sorted(f'{name} ({arch})' for name, wheels in pool.map(wheel_tags, pins) for arch in ARCHES
-                         if not any(installs_on_the_image(w, int(minor), arch) for w in wheels)
+                         if not any(installs_on_the_image(w, int(minor), arch, image_glibc()) for w in wheels)
                          and name.lower() not in BUILT_IN_THE_VENV_STAGE)
-    assert not missing, f'no {tag} Linux wheel: {missing}; add it to BUILT_IN_THE_VENV_STAGE with its headers'
+    assert not missing, (f'no {tag} Linux wheel for glibc {image_glibc()}: {missing}; '
+                         'add it to BUILT_IN_THE_VENV_STAGE with its headers')
 
 
 @pytest.mark.slow

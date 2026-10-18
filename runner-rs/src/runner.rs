@@ -728,6 +728,14 @@ impl Runner {
             if changed {
                 crate::relays::config_changed();
             }
+            // A credential changed in the app: its model keys are fetched again by this pass, not after KEY_REFRESH.
+            if clock.wants(&self.events, "keys", None) {
+                for runtime in crate::harness_tools::runtimes() {
+                    if !crate::signin::headless_names(&runtime).is_empty() {
+                        self.sign_in.refresh_now(&runtime);
+                    }
+                }
+            }
             let full = clock.wants(&self.events, "sync", Some(15.0)) || changed;
             let forced = clock.wants(&self.events, "heartbeat", None) | self.sign_in.take_dirty();
             if full || forced || clock.last_heartbeat.is_none_or(|t| t.elapsed().as_secs_f64() >= 15.0) {

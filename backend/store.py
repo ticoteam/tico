@@ -118,7 +118,13 @@ CREATE TABLE IF NOT EXISTS model_logins(
 CREATE INDEX IF NOT EXISTS model_logins_by_runner ON model_logins(runner_id,state);
 CREATE TABLE IF NOT EXISTS model_login_cleared(
  runner_id TEXT NOT NULL REFERENCES runners(id), runtime TEXT NOT NULL, profile TEXT NOT NULL DEFAULT '',
- cleared_at TEXT NOT NULL, cleared_by TEXT NOT NULL, PRIMARY KEY(runner_id,runtime,profile));
+ cleared_at TEXT NOT NULL, cleared_by TEXT NOT NULL, clear_key INTEGER NOT NULL DEFAULT 0,
+ PRIMARY KEY(runner_id,runtime,profile));
+-- A model key stored in the vault for one computer (backend/computer_keys.py): staged until the computer checks it.
+CREATE TABLE IF NOT EXISTS computer_keys(
+ credential_id TEXT PRIMARY KEY REFERENCES credentials(id), runner_id TEXT NOT NULL REFERENCES runners(id),
+ runtime TEXT NOT NULL, state TEXT NOT NULL, login_id TEXT, created TEXT NOT NULL, created_by TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS computer_keys_by_runner ON computer_keys(runner_id,runtime,state);
 CREATE TABLE IF NOT EXISTS runner_harness_actions(
  id TEXT PRIMARY KEY, runner_id TEXT NOT NULL REFERENCES runners(id), harness TEXT NOT NULL,
  action TEXT NOT NULL, state TEXT NOT NULL, message TEXT NOT NULL DEFAULT '',
@@ -1130,6 +1136,8 @@ class Store:
                 # When readiness was last reported (last_seen is any contact): the app waits for a report newer than a
                 # sign-out or switch before it stops looking.
                 H.add_column(c, "runners", "readiness_at", "TEXT")
+                # Clear key: a computer that missed its job (offline) clears its key copy at its next key fetch.
+                H.add_column(c, "model_login_cleared", "clear_key", "INTEGER NOT NULL DEFAULT 0")
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=55").fetchone():
                     H._apply(c, H.MEETING_REVIEW_SCHEMA)
                     c.execute("INSERT INTO cloud_migrations VALUES(55,?)", (H.now(),))
@@ -1186,6 +1194,10 @@ class Store:
                 c.execute("DROP INDEX IF EXISTS one_active_attempt_per_bot")
                 c.execute("CREATE UNIQUE INDEX IF NOT EXISTS one_active_attempt_per_lane ON attempts(bot,lane) "
                           "WHERE state IN ('leased','running')")
+                # A bot's wake preset holds its nonblocking notices and sweeps at enqueue time (backend/wake_presets.py).
+                # Unversioned like redirect: an older release never reads the columns and claims every queued job.
+                from .wake_presets import ensure as ensure_wake_presets
+                ensure_wake_presets(c)
                 # The change log live events are read from (backend/events.py); idempotent.
                 from .events import ensure as ensure_changes
                 ensure_changes(c)

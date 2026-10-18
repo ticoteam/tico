@@ -297,6 +297,17 @@ const machineSignedOut = (machine, runtime, profile = '') => (machine.signed_out
 const machineLoginActions = (machine, online, runtime, profile, signedIn) => window.TicoModelLogin?.actionsHTML({
   runnerId: machine.id, runtime, machine: machine.label, profile, signedIn, signedOut: machineSignedOut(machine, runtime, profile), online,
   platform: machine.platform || ''}) || '';
+// The key a login runs on (its readiness `key`: {name, source}), by its stored preview only: this computer's own key or
+// the company's shared one (backend/computer_keys.py), or one set on the computer itself.
+function machineKeyHTML(machine, runtime, key) {
+  if (!key) return '';
+  const stored = key.source === 'computer' ? machine.keys?.[runtime] : key.source === 'shared' ? machine.shared_keys?.[runtime] : null;
+  const whose = {computer: 'this computer\'s key', shared: 'the company\'s shared key', terminal: 'a key set on the computer'}[key.source] || 'a key';
+  return ` <span class="muted machine-key" data-machine-key="${esc(key.source)}">· ${esc(whose)}${stored?.preview ? ` <code>${esc(stored.preview)}</code>` : ''}</span>`;
+}
+// Replace key / Clear key, or Add key, from the shared sign-in module (ui/model-login.js).
+const machineKeyActions = (machine, online, runtime, key, signedIn) => window.TicoModelLogin?.keyActionsHTML({
+  runnerId: machine.id, runtime, machine: machine.label, key, signedIn, online}) || '';
 function machineProfileSignIn(state, runtime) {
   if (state?.signed_in === true) return machineAccountHTML(state.account, runtime);
   if (state?.signed_in === false) return '<span class="pill fail">Signed out</span>';
@@ -331,10 +342,14 @@ function machineToolsHtml(machine, online) {
       else if (command) action = ` <span class="machine-login-command" title="Run on the computer${command.includes('<container>') ? '; docker ps shows the container name' : ''}"><code>${esc(command)}</code><button class="ghost machine-signin" type="button" data-machine-copy-login="${esc(command)}">Copy</button></span>`;
       else if (caps.api_keys === 'bot') action = ' <a class="machine-signin-link" href="#/credentials">Add key</a>';
       if (caps.browser_sign_in) action += machineLoginActions(machine, online, name, '', false);
-    } else if (manage && installed) action = machineLoginActions(machine, online, name, '', true);
+      if (caps.api_keys === 'computer') action += machineKeyActions(machine, online, name, null, false);
+    // A login a key signs in: Clear key stands in for Sign out.
+    } else if (manage && installed) action = value.key && harnessCaps(name).api_keys === 'computer'
+      ? machineKeyActions(machine, online, name, value.key, true) : machineLoginActions(machine, online, name, '', true);
     const rejected = auth === 'rejected'
       ? `<span class="err machine-rejected" data-rejected="${esc(name)}">${value.rejected_at ? esc(ago(value.rejected_at)) + '. ' : ''}${value.rejected_reason ? esc(value.rejected_reason) + '. ' : ''}${hlCredentialFix(value.credential_source)}. It takes no work that needs ${esc(name)} until then.</span>` : '';
-    const signIn = installed ? machineSignInHTML(machine, online, name, auth, value) : '<span class="muted">—</span>';
+    const signIn = !installed ? '<span class="muted">—</span>'
+      : machineSignInHTML(machine, online, name, auth, value) + (auth === 'ready' ? machineKeyHTML(machine, name, value.key) : '');
     // The computer's own login's usage windows (only to whoever may see its account); each named subscription below
     // carries its own.
     const own = installed ? machineUsageHTML(name, {account: value.account, weekly: value.weekly, five_hour: value.five_hour}, label) : '<span class="muted">—</span>';

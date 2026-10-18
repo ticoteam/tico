@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 from croniter import croniter
 
 from . import goals as G
-from . import placement
+from . import placement, run_triggers
 from .batch_work import isolated
 from .harnesses import SYNCED_SQL
 from .statuses import PARKED_SQL
@@ -47,6 +47,8 @@ class Scheduler:
             self.execution.auto_reconcile(c)
             self.execution.release_deploy_drains(c)
             self.execution.release_limits(c)           # a usage limit lifts at its reset, not at the next claim
+            from . import wake_presets
+            wake_presets.tick(c, H.now())                 # wake presets let go of the notices and sweeps now due
             self.execution.hold_unrunnable(c)
             placement.sweep(c, self.execution)            # an active bot with no computer gets one when one can take it
             H.lift_cooled_quarantines(c)
@@ -99,12 +101,14 @@ class Scheduler:
                                           f"Scheduled occurrence {when[:16].replace('T', ' ')}Z of {row['title']} "
                                           "absorbed into this open task; continue it or mark it done.",
                                           kind="notice", conversation_id=H.task(c, tid)["conversation_id"],
-                                          refs={"task": tid, "wake": "occurrence"})
+                                          refs=run_triggers.stamp({"task": tid, "wake": "occurrence", "sweep": row["id"]},
+                                                                  "schedule", row["id"]))
                             elif skip := routines.no_input(c, self.store.settings, row, occurrence):
                                 tid, outcome = None, "skipped"
                             else:
                                 task = routines.open_task(c, self.execution.auth, row, row["title"],
-                                                          row["playbook"] or routines.DEFAULT_TEXT, stamp(at))
+                                                          row["playbook"] or routines.DEFAULT_TEXT, stamp(at),
+                                                          sweep=True)
                                 tid, outcome = task["id"], "created"
                                 created = tid
                             c.execute("INSERT INTO schedule_occurrences VALUES(?,?,?,?)", (row["id"], when, tid, outcome))
@@ -138,7 +142,8 @@ class Scheduler:
                         continue
                     try:
                         H.say(c, H.KEEPER, row["owner"], "Due: " + row["title"], kind="notice",
-                              conversation_id=row["conversation_id"], refs={"task": row["id"], "wake": "due"})
+                              conversation_id=row["conversation_id"],
+                              refs=run_triggers.stamp({"task": row["id"], "wake": "due"}, "schedule"))
                     except H.Refused as exc:
                         H.event(c, H.KEEPER, "task.reminder-refused", row["id"], {"reason": str(exc)[:300]})
                     c.execute("INSERT INTO task_reminders VALUES(?,?,?)", (row["id"], row["due"], stamp(at)))

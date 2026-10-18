@@ -4,7 +4,7 @@ from typing import Annotated, Any, Literal
 
 import re
 
-from pydantic import AfterValidator, BeforeValidator, BaseModel, ConfigDict, Field, StrictBool, StrictStr, ValidationError, WrapValidator, model_serializer, model_validator
+from pydantic import AfterValidator, BeforeValidator, BaseModel, ConfigDict, Field, SecretStr, StrictBool, StrictStr, ValidationError, WrapValidator, model_serializer, model_validator
 
 Text = Annotated[str, Field(min_length=1, max_length=200_000)]
 ID = Annotated[str, Field(min_length=1, max_length=200)]
@@ -780,6 +780,11 @@ class HarnessReadiness(GoalReadiness):
     detail: str = Field(default="", max_length=500)
 
 
+class RuntimeKey(Contract):
+    name: str = Field(max_length=100, pattern=r"^[A-Z_][A-Z0-9_]*$")
+    source: Literal["computer", "terminal", "shared"]
+
+
 class RuntimeReadiness(GoalReadiness):
     installed: bool
     # "rejected": the provider refused the key or sign-in on a real turn (rejected_at, rejected_reason).
@@ -787,6 +792,9 @@ class RuntimeReadiness(GoalReadiness):
     rejected_at: str = Field(default="", max_length=40)
     rejected_reason: str = Field(default="", max_length=300)
     credential_source: Literal["", "credentials", "computer"] = ""
+    # Which key signs it in, when one does: the computer's own from the app ("computer"), one set on the computer
+    # ("terminal"), or the company's shared key ("shared"). A name, never a value (runner-rs/src/signin.rs key_source).
+    key: RuntimeKey | None = None
     version: str = Field(default="", max_length=100)
     models: list[ID] = Field(default_factory=list, max_length=50)
     controls: list[Literal["interrupt", "new-session"]] = Field(default_factory=list)
@@ -1069,7 +1077,7 @@ class Heartbeat(Contract):
     platform: str = Field(max_length=100)
     capacity: int = Field(default=4, ge=1, le=256)
     # The assignment_* values name the retired temporary assignments (#420); an older runner still sends them.
-    capabilities: list[Literal["assignment_instances_v1", "assignment_cleanup_v1", "task_lanes_v1", "task_lanes_v2", "session_roots_v1", "task_goals_v1", "screen_v1", "model_sign_out_v1"]] = Field(default_factory=list, max_length=20)
+    capabilities: list[Literal["assignment_instances_v1", "assignment_cleanup_v1", "task_lanes_v1", "task_lanes_v2", "session_roots_v1", "task_goals_v1", "screen_v1", "model_sign_out_v1", "model_keys_v1"]] = Field(default_factory=list, max_length=20)
     # The bool map remains accepted during runner rollout. The server normalizes both
     # shapes before storing them, so every read path sees one structured document.
     readiness: StructuredReadiness | dict[str, bool] = Field(default_factory=dict)
@@ -1459,6 +1467,11 @@ class BotFallback(Contract):
 
 class BotCompactAt(Contract):
     compact_at: Literal[150_000, 250_000, 400_000, 600_000, 1_000_000]
+    expected_revision: int = Field(ge=1)
+
+
+class BotWakePreset(Contract):
+    wake_preset: Literal["current", "token_saver", "performance"]
     expected_revision: int = Field(ge=1)
 
 
@@ -1919,6 +1932,21 @@ class LogoutStart(Contract):
 
 class SharedKeyUse(Contract):
     runtime: Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]*$", max_length=40)]
+
+
+class KeyClear(Contract):
+    """Clear key on a computer; "all" clears the company's shared key on every computer it serves."""
+    runtime: Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]*$", max_length=40)]
+    scope: Literal["this", "all"] = "this"
+
+
+class KeyReplace(Contract):
+    """Replace key (or Add key) on a computer. The key is sealed in the vault; nothing sends it back (backend/computer_keys.py)."""
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=False)
+    runtime: Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]*$", max_length=40)]
+    secret: SecretStr = Field(max_length=4000)
+    env: str = Field(default="", max_length=100, pattern=r"^$|^[A-Z_][A-Z0-9_]*$")
+    scope: Literal["this", "all"] = "this"
 
 
 class LoginCode(Contract):

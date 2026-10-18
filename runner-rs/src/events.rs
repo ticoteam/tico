@@ -30,7 +30,9 @@ pub const ALL: &[&str] = &["claim", "sync", "config", "heartbeat", "logins", "ha
 pub fn channels(kind: &str) -> &'static [&'static str] {
     match kind {
         "work" => &["claim"],
-        "assignments" | "credentials" | "repositories" => &["sync"],
+        "assignments" | "repositories" => &["sync"],
+        // A credential's value changed: the model keys from the app are asked for again at once (signin.rs).
+        "credentials" => &["sync", "keys"],
         "config" => &["sync", "config"],
         "worktrees" | "restart" | "performance" => &["heartbeat"],
         "logins" => &["logins"],
@@ -288,6 +290,7 @@ mod tests {
     fn kinds_map_to_the_python_channels() {
         assert_eq!(channels("work"), &["claim"]);
         assert_eq!(channels("config"), &["sync", "config"]);
+        assert_eq!(channels("credentials"), &["sync", "keys"]);
         assert_eq!(channels("something new"), ALL);
         let e = Events::new();
         e.dispatch("ready", Some("7".into()), &serde_json::json!({"seq": 7, "release": "v1"}), true);

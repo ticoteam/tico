@@ -75,6 +75,12 @@ pub async fn runtime_readiness(runtime: &str, sign: &SignIn, client: &Client, as
     };
     let models: Vec<String> = if caps.model_list == "host" { crate::hosts::models(runtime, profile) } else { vec![] };
     let mut row = Map::new();
+    // Which key signs the computer's own login in, by name and where it is kept; never its value.
+    if let Some((name, source)) = sign.key_source(runtime).filter(|_| profile.is_none() && authenticated == "ready") {
+        if detail == format!("Signed in with {name}") || detail.contains("API key") {
+            row.insert("key".into(), json!({"name": name, "source": source}));
+        }
+    }
     // The account only beside a sign-in the check just confirmed; a signed-out login forgets it.
     let account_key = profile.map(|p| p.name.clone()).unwrap_or_default();
     if authenticated == "ready" && !caps.account.is_empty() {
@@ -118,10 +124,16 @@ async fn sign_in_state(
     let timed_out = if profile.is_some() { "unknown" } else { "failed" };
     let account_key = profile.map(|p| p.name.clone()).unwrap_or_default();
     let computer_key = caps.api_keys == "computer";
-    if computer_key && profile.is_none() && status.check != "command" && status.check != "json" {
-        sign.team_model_keys(client, runtime).await;
+    // A key from the app is asked for again while it signs the runtime in, so one replaced or cleared there arrives.
+    let from_app = |sign: &SignIn| sign.key_source(runtime).is_some_and(|(_, source)| source != "terminal");
+    let mut changed = false;
+    if computer_key && profile.is_none() && (from_app(sign) || (status.check != "command" && status.check != "json")) {
+        changed = sign.team_model_keys(client, runtime).await;
     }
-    if caps.api_key_in_turn && profile.is_none_or(|p| p.share_operator) {
+    // A key added for this computer in the app signs in a CLI that reads it on each turn (execute.rs turn_key), in
+    // place of any login of its own.
+    let own_key = computer_key && caps.api_key_login.is_empty() && sign.key_source(runtime).is_some_and(|(_, source)| source == "computer");
+    if (caps.api_key_in_turn || own_key) && profile.is_none_or(|p| p.share_operator) {
         if profile.is_some() {
             sign.team_model_keys(client, runtime).await;
         }
@@ -186,17 +198,27 @@ async fn sign_in_state(
         _ => {}
     }
     let mut result = probe().await;
-    if !matches!(result, Ok(Some(_))) && profile.is_none() && computer_key {
-        sign.team_model_keys(client, runtime).await;
+    if profile.is_none() && computer_key {
+        let signed = matches!(result, Ok(Some(_)));
+        if !signed {
+            changed |= sign.team_model_keys(client, runtime).await;
+        }
         // A box with an API key and no browser: sign in once, for the bots that use this runtime, or with the key the
-        // company gave every computer. Never into a profile's own home.
+        // app gave this computer or every computer. A key that changed in the app replaces the login an older key
+        // made, never a browser or subscription login. Never into a profile's own home.
+        let by_key = matches!(&result, Ok(Some(detail)) if detail.to_lowercase().contains("api key"));
         if result.is_ok()
+            && (!signed || (changed && by_key))
             && !caps.api_key_login.is_empty()
             && sign.headless_secret(runtime).is_some()
-            && (sign.team_key_only(runtime) || signin::assigned(assignments, runtime))
-            && sign.key_login(runtime, path).await
+            && (from_app(sign) || signin::assigned(assignments, runtime))
         {
-            result = probe().await;
+            if changed {
+                sign.retry_key_login(runtime);
+            }
+            if sign.key_login(runtime, path).await {
+                result = probe().await;
+            }
         }
     }
     if let Ok(Some(detail)) = result {
@@ -279,6 +301,7 @@ pub async fn runtime_report(config: &Config, sign: &SignIn, client: &Client, ass
 /// row is shown; a named profile's are in the profiles report instead.
 fn combined(mut targets: Map<String, Value>, own: Map<String, Value>) -> Value {
     let own_ready = targets.get("").is_some_and(|r| r["authenticated"] == "ready");
+    let own_key = targets.get("").and_then(|r| r.get("key")).cloned();
     let mut row = if targets.len() == 1 && targets.contains_key("") {
         targets.remove("").and_then(|r| r.as_object().cloned()).unwrap_or_default()
     } else {
@@ -293,6 +316,10 @@ fn combined(mut targets: Map<String, Value>, own: Map<String, Value>) -> Value {
         row
     };
     if own_ready {
+        // The own login's key is shown whichever row is: it is the computer's, not a profile's.
+        if let Some(key) = own_key {
+            row.insert("key".into(), key);
+        }
         row.extend(own);
     }
     Value::Object(row)
@@ -641,5 +668,16 @@ mod tests {
         let row = combined(rows("missing", "ready"), own.clone());
         assert!(row.get("weekly").is_none() && row.get("five_hour").is_none());
         assert!(combined(map(json!({"lab": {"installed": true, "authenticated": "ready"}})), own).get("weekly").is_none());
+    }
+
+    #[test]
+    fn the_own_logins_key_source_stays_whichever_row_is_shown() {
+        let key = json!({"name": "OPENAI_API_KEY", "source": "computer"});
+        let rows = map(json!({"": {"installed": true, "authenticated": "ready", "detail": "Signed in with an API key", "key": key},
+                              "lab": {"installed": true, "authenticated": "missing", "detail": "Not signed in"}}));
+        let row = combined(rows, Map::new());
+        assert_eq!((row["authenticated"].clone(), row["key"].clone()), (json!("missing"), key.clone()));
+        let alone = combined(map(json!({"": {"installed": true, "authenticated": "ready", "key": key}})), Map::new());
+        assert_eq!(alone["key"], key);
     }
 }

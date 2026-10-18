@@ -8,6 +8,23 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- Each bot has a wake preset under **Settings → Bots → Wakes**. **Token saver** is the default for a new bot. It
+  holds nonblocking news (a finished request, review comments, a failing check nobody waits on) and sends it as one
+  wake at most every 30 minutes, and it runs an enabled routine or stall check at most every 2 hours.
+  **Performance** coalesces that news for 1 minute and runs those sweeps at most every 15 minutes. Bots made before
+  presets show **Current behaviour** and wake exactly as before until someone picks one. In every preset a person's
+  message, an assignment, a question, an awaited result, a blocker and a review or QA request wake the bot at once,
+  and a repeated event wakes it once. A preset turns nothing on and leaves Compact at alone. Each run says what
+  woke it. Owners and admins can compare turns and tokens per accepted ticket, pickup time, blocked time and missed
+  wakes per preset (`GET /api/v2/wake-presets/measures`). An install can tune the values with `TICO_WAKE_PRESETS`.
+- **Add key**, **Replace key** and **Clear key** for a computer's model API key (Codex, Claude Code, Cursor Agent,
+  Muse Code), from Settings > Computers, with no terminal. The row shows whose key it is by its preview only. A new key
+  goes to the credential vault for that computer alone and is checked on the computer before the old one is deleted;
+  one that doesn't work leaves the old key in use. Clear key names the bots that stop first, and the key given to every
+  computer doesn't sign it back in. For that shared key, both ask **this computer only** or **all of them**, listing the
+  computers; an offline computer clears its copy (or takes the new key) when it is next online. Replacing the shared key
+  for all of them needs credential rights. Needs a current runner on the computer
+  ([subscriptions](docs/subscriptions.md#api-keys-on-a-computer)).
 - A synced Grok Bot can be delivered through the Grok Mac app: set **Deliver through the app on** in its settings
   to one of your own Macs where Grok is ready, and a message to it reaches it within a minute, it shows as working,
   its reply streams in, and what it says on its own in Grok reaches its Tico chat within minutes. The Mac's native
@@ -15,12 +32,22 @@ All notable changes to Tico are recorded here. The format follows
   or brings Grok forward. **Settings → Computers** shows a **Desktop apps** row per app, Health names a signed-out
   app, missing permission or changed layout, and a reply that needs you in Grok becomes a question in your Needs
   you. Off by default; with it off nothing changes, and no message is handed to the daily sync twice.
+- Every bot run records what woke it (a person's message, a comment, a status or relation change, pull request checks,
+  a stall check, a schedule, or other), its input tokens with the cached part split out, its output tokens, and an
+  outcome worked out in code from what the run wrote: `acted`, `no_change` (its task is still open) or `nothing_to_do`,
+  plus an exact `did_nothing` flag. `hub sql` gains `run_weekly`, one row per week, bot and trigger with runs, tokens
+  and the count and share of each outcome. Runs from before this read `unknown` and are still counted
+  ([What woke each run](docs/hub-sql.md#what-woke-each-run-and-what-it-did)).
 
 ### Changed
 - Screen: the first time a new computer offers its screen, its **Screen** setting in Settings > Computers starts at
   **Control** instead of **View**, so its operator or an admin can drive it at once. Who may open a screen is
   unchanged (the computer's operator and admins), a Screen setting someone already chose stays (View and Off
   included), and a computer that already offered its screen keeps its setting.
+- Screen: on a bot's page, when its computer's screen is off in Tico, the operator's or an admin's **Turn on** button
+  now reads **Turn on (Control)** and turns the screen on at Control, matching a new computer's default, so they can
+  drive it at once. View and Off stay choices in Settings > Computers; who sees the button and who may change the
+  setting are unchanged.
 - The server, runner and updater images run Python 3.15 on Debian trixie with SQLite 3.54.1, built in and checked
   when the image is built (Debian's own copy is 3.46.1). The update pulls the images, and Tico's own mail venv rebuilds
   itself on first use. A runner's home volume survives the update, so anything a bot or person built there with the old
@@ -31,6 +58,9 @@ All notable changes to Tico are recorded here. The format follows
 - **Save bot** in the bot editor no longer drops a Model or Fallback you picked but didn't Apply. A picked Fallback is
   saved with the bot; a picked Model opens its change dialog first, and if you cancel it the editor stays open and
   says the model change wasn't applied. If the fallback can't be saved, the editor stays open with the reason.
+- A pull request a release merged and then reverted (a change dropped after QA failed) is no longer marked
+  shipped, and its task gets no "Shipped" notice. Tico now checks with GitHub that the pull request's own lines are
+  still in the running release, not only that its merge commit comes before it.
 - Automatic fallback no longer sends a bot to a login that is out of quota. When a login on a computer fails a turn
   on its usage limit, the runner skips it for fallback until the provider's reset time, or for 30 minutes when the
   provider gives none, and takes the next of the company's providers instead. A fallback that hits its own limit
