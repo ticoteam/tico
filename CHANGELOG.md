@@ -7,6 +7,8 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.3.56] - 2026-10-18
+
 ### Added
 - A synced Grok Bot can be delivered through the Grok Mac app: set **Deliver through the app on** in its settings
   to one of your own Macs where Grok is ready, and a message to it reaches it within a minute, it shows as working,
@@ -26,6 +28,7 @@ All notable changes to Tico are recorded here. The format follows
   itself on first use. A runner's home volume survives the update, so anything a bot or person built there with the old
   Python 3.12 (a project's venv, `pip install --user` packages under `~/.local/lib/python3.12`) does not run on 3.15:
   rebuild it ([updates.md](docs/updates.md#python-environments-on-a-docker-runner) lists them and how).
+- Setting up a runner on Mac or Linux uses the newest Python it finds, from 3.15 down to 3.12.
 
 ### Fixed
 - Automatic fallback no longer sends a bot to a login that is out of quota. When a login on a computer fails a turn
@@ -3276,7 +3279,8 @@ First public release.
 - Hosting: local only on a Mac, or self-hosted, including a reference AWS stack under `infra/ec2/`
   with Litestream backups.
 
-[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.55...HEAD
+[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.56...HEAD
+[0.3.56]: https://github.com/ticoteam/tico/compare/v0.3.55...v0.3.56
 [0.3.55]: https://github.com/ticoteam/tico/compare/v0.3.54...v0.3.55
 [0.3.54]: https://github.com/ticoteam/tico/compare/v0.3.52...v0.3.54
 [0.3.52]: https://github.com/ticoteam/tico/compare/v0.3.50...v0.3.52
