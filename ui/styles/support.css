@@ -73,11 +73,11 @@
 .support-modal p{margin:0;font-size:var(--t-base)}.support-json{width:100%;min-height:280px;box-sizing:border-box;font:var(--t-sm)/1.5 var(--mono);white-space:pre;resize:vertical}
 .support-sections{display:flex;gap:8px 16px;flex-wrap:wrap}.support-sections label{display:flex;align-items:center;gap:5px;font-size:var(--t-sm)}
 /* A phone: a bottom sheet that fills most of the screen, swiped down (from its top) to close. Its bottom sits on the
-   bottom of what is visible (ui/app/viewport.js keeps the visual viewport in --chat-viewport-*), so with the keyboard up
-   it shrinks to the space above the keyboard instead of running under it, and the safe-area gap goes with the home bar. */
+   bottom of what is visible (support.js fit() sets --support-visible and --support-bottom), so with the keyboard up it
+   shrinks to the space above the keyboard instead of running under it, and the safe-area gap goes with the home bar. */
 @media(max-width:760px){
-  .support-pop{--sheet-h:min(92dvh,var(--chat-viewport-height,100dvh));inset:auto 0;top:calc(var(--chat-viewport-top,0px) + var(--chat-viewport-height,100dvh) - var(--sheet-h));width:100%;height:var(--sheet-h);border-radius:16px 16px 0 0;border-bottom:0;
-    padding-bottom:clamp(0px,calc(env(safe-area-inset-bottom) - (100dvh - var(--chat-viewport-height,100dvh))),env(safe-area-inset-bottom))}
+  .support-pop{--sheet-h:min(92dvh,var(--support-visible,100dvh));inset:auto 0;top:calc(var(--support-bottom,100dvh) - var(--sheet-h));width:100%;height:var(--sheet-h);border-radius:16px 16px 0 0;border-bottom:0;
+    padding-bottom:clamp(0px,calc(env(safe-area-inset-bottom) - (100dvh - var(--support-visible,100dvh))),env(safe-area-inset-bottom))}
   /* The page behind stays put while the sheet is open. */
   body:has(> .support-pop[open]){overflow:hidden}
   .support-pop::backdrop{background:rgba(0,0,0,.38)}
