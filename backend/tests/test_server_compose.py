@@ -91,3 +91,13 @@ def test_front_doors_have_fixed_edge_addresses_the_server_trusts_and_nothing_wid
     trusted = services["server"]["environment"]["TICO_TRUSTED_PROXIES"]
     resolved = re.sub(r"\$\{\w+:-([^}$]*)\}", r"\1", trusted[len("${TICO_TRUSTED_PROXIES:-"):-1])
     assert resolved.split(",") == ["127.0.0.1/32", "::1/128", f"{doors['caddy']}/32", f"{doors['cloudflared']}/32"]
+
+
+def test_the_server_gets_every_setting_that_turns_a_team_rule_default_on():
+    # A rule's env default (team_rules.ENV_DEFAULTS) only works if compose forwards it: the server sees just the
+    # keys listed under its environment, and an update replaces compose.yaml but never .env.
+    import yaml
+    from backend import team_rules
+    environment = yaml.safe_load((ROOT / "compose.yaml").read_text())["services"]["server"]["environment"]
+    assert set(team_rules.ENV_DEFAULTS.values()) <= set(environment)
+    assert all(environment[key] is None for key in team_rules.ENV_DEFAULTS.values())
