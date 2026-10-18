@@ -168,10 +168,13 @@ class BotSetup:
         try:
             record = self.onboarding()
             chosen = (record.get("selected") or {}).get(bot) or {}
+            # A sample company bot is made already set up: its state.md says so, or it would ask the setup questions.
+            setup = ((record.get("sample") or {}).get("setup") or {}).get(bot) or None
             catalog.materialize(template, bot, Path(self.config["projects_dir"]), self.names(),
                                 record.get("answers") or {},
                                 display_name=(config or {}).get("display_name") or chosen.get("display_name"),
-                                instructions=(config or {}).get("instructions") or chosen.get("instructions"))
+                                instructions=(config or {}).get("instructions") or chosen.get("instructions"),
+                                state=setup if isinstance(setup, dict) else None)
         except Exception as exc:
             return "", (f"Setting {bot} up from the {template} catalog template failed: "
                         f"{type(exc).__name__}: {exc}")[:500]

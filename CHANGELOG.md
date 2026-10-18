@@ -12,16 +12,16 @@ All notable changes to Tico are recorded here. The format follows
   `TICO_GATEWAY_KEY` sets it, and wins), Decide asks the Gateway with that same key, and bots can then pick **Tico Cheap, Mid and Power 1.0** (Claude Haiku, Sonnet and Opus
   5.5 underneath) like any other model, streamed through the Gateway on pi. The key is sealed and never shown after
   save. No bot holds it: the computer running a bot on a Tico model passes its model calls on with the key, so Tico
-  models run only on a computer that runs bots as their own user (Tico's Docker runner). The owner sees the 80% monthly cap warning and a key the Gateway doesn't
+  models run only on a computer that runs bots as their own user (Tico's Docker runner); elsewhere a bot on one says
+  so once. The owner sees the 80% monthly cap warning and a key the Gateway doesn't
   recognise. A bot stopped by the cap says "Gateway cap reached" and waits for next month; every other Gateway
   refusal reads plainly and is retried only when retrying can help, and a reply cut off mid-stream is posted with a
   note ([Tico AI Gateway](docs/ai-gateway.md)).
-- **Stale ticket review** (Settings > Team; off by default, an owner or an admin turns it on): once an hour Tico
-  looks for open tasks that seem finished or forgotten, such as a merged pull request, a done parent or a quiet week,
-  and suggests what to do. Private tasks are never looked at. A bot gets one "Stale check" comment; a person gets one
-  **Stale tickets** card in Needs you with **Accept**, **Skip** and **Accept all**. Nothing changes unless the owner
-  accepts. While it is on, **Still wanted?** questions stop.
-  ([Tasks](docs/tasks.md#stale-ticket-review))
+- **Sample company**: a new Tico can start as Sample Co, a made-up team of five bots (Assistant, Head of Product,
+  Builder, Support Agent and Content Marketer) spread over the Claude and ChatGPT subscriptions. Each has a goal and a
+  first task that takes minutes and ends by asking the owner a Yes/No approval in Needs you; nothing is sent outside
+  the company. Start it from the first-run welcome's **Start with a sample company**, or at install with
+  `TICO_SAMPLE_COMPANY=on`. ([The sample company](docs/sample-company.md))
 
 ### Fixed
 - **Clear** on a bot's chat now really starts the bot over. Before, it only trimmed the history Tico sends, and on
@@ -33,6 +33,16 @@ All notable changes to Tico are recorded here. The format follows
   other chat keeps its own history. Without a clear the bot resumes its thread as before. After the upgrade, a thread
   that may have been cleared or reset before its first turn on the new runner starts over once. A runner or Hub from
   before this keeps today's behaviour ([sessions](docs/sessions.md)).
+
+## [0.3.61] - 2026-10-18
+
+### Added
+- **Stale ticket review** (Settings > Team; off by default, an owner or an admin turns it on): once an hour Tico
+  looks for open tasks that seem finished or forgotten, such as a merged pull request, a done parent or a quiet week,
+  and suggests what to do. Private tasks are never looked at. A bot gets one "Stale check" comment; a person gets one
+  **Stale tickets** card in Needs you with **Accept**, **Skip** and **Accept all**. Nothing changes unless the owner
+  accepts. While it is on, **Still wanted?** questions stop.
+  ([Tasks](docs/tasks.md#stale-ticket-review))
 
 ### Changed
 - Market is no longer marked Beta: its sidebar item, page title and pages carry no **Beta** pill, and Help no longer
@@ -3491,7 +3501,8 @@ First public release.
 - Hosting: local only on a Mac, or self-hosted, including a reference AWS stack under `infra/ec2/`
   with Litestream backups.
 
-[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.60...HEAD
+[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.61...HEAD
+[0.3.61]: https://github.com/ticoteam/tico/compare/v0.3.60...v0.3.61
 [0.3.60]: https://github.com/ticoteam/tico/compare/v0.3.59...v0.3.60
 [0.3.59]: https://github.com/ticoteam/tico/compare/v0.3.58...v0.3.59
 [0.3.58]: https://github.com/ticoteam/tico/compare/v0.3.57...v0.3.58
