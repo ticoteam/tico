@@ -5,6 +5,8 @@
 //    change saves the definition, then starts the model transition from the new revision;
 //  - a refused /fallback keeps the editor open with the error and saves nothing else;
 //  - when the definition is refused after the fallback saved, Save again sends only the definition;
+//  - Model and Fallback both pending: Fallback, definition, then the transition; a refused transition keeps the editor
+//    open with the pick, and Save again sends the definition and the transition, not the Fallback;
 //  - a half-made pick (harness, no model) keeps the editor open and says so;
 //  - with nothing pending, Save posts the definition only, as before.
 const {chromium} = require('playwright');
@@ -29,7 +31,7 @@ const {unrouted} = require('./support/routes.cjs');
       can_manage: true, users: [], bot_owners: [], revision: 4, model: 'opus-5-5', harness: 'claude', reasoning_effort: 'high',
       thread_mode: 'personal', bot_contact: 'open', machine: {runner_id: 'r1', label: 'Box', operator: 'ana', generation: 7}};
     const bots = [helper];
-    let calls = [], refuseFallback = false, refuseDefinition = false;
+    let calls = [], refuseFallback = false, refuseDefinition = false, refuseTransition = false;
     await page.route('**/*', route => {
       const req = route.request(), p = new URL(req.url()).pathname;
       const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
@@ -53,6 +55,7 @@ const {unrouted} = require('./support/routes.cjs');
           Object.assign(helper, {display_name: body.display_name, description: body.description});
           return json({name: 'helper', display_name: helper.display_name, revision: ++helper.revision});
         }
+        if (what === 'transitions' && refuseTransition) return json({error: {detail: 'Bot configuration changed; refresh before saving'}}, 409);
         if (what === 'transitions') return json({id: 'tr-1', bot: 'helper', kind: 'model', state: 'preparing'});
       }
       if (p === '/api/v2/settings/transitions/tr-1') return json({id: 'tr-1', bot: 'helper', kind: 'model', state: 'preparing',
@@ -173,18 +176,39 @@ const {unrouted} = require('./support/routes.cjs');
     await page.waitForFunction(() => /Checkpointing 0 of 1/.test(document.querySelector('#transition-dialog')?.innerText || ''));
     await page.evaluate(() => { clearInterval(SETTINGS_TRANSITION_TIMER); document.querySelector('#transition-dialog').close(); });
 
-    // Apply itself is unchanged: it sends the same /fallback body and leaves the editor open.
+    // Model and Fallback both pending, and the transition is refused after the Fallback and the definition saved.
     await open();
     await pick('fallback', 'codex', 'gpt-6-1-sol');
+    await pick('model', 'codex', 'gpt-6-1-sol');
+    refuseTransition = true;
+    await save();
+    await transition.locator('[data-confirm-prepare]').click();
+    await editor.locator('[data-bot-status] .err').waitFor();
+    assert.match(await statusText(), /Bot configuration changed/, 'the refused transition is shown in the editor');
+    assert.deepEqual(calls.map(c => [c.what, c.body.expected_revision]), [['fallback', 10], ['definition', 11], ['transitions', 12]],
+      'Fallback, then the definition, then the transition, each at the revision the write before it made');
+    assert.equal(await row('model').locator('[data-choice-model]').inputValue(), 'gpt-6-1-sol', 'the Model pick is kept');
+    refuseTransition = false; calls = [];
+    await save();
+    await transition.locator('[data-confirm-prepare]').click();
+    await closed();
+    assert.deepEqual(calls.map(c => [c.what, c.body.expected_revision]), [['definition', 12], ['transitions', 13]],
+      'Save again does not resend the saved Fallback');
+    await page.waitForFunction(() => /Checkpointing 0 of 1/.test(document.querySelector('#transition-dialog')?.innerText || ''));
+    await page.evaluate(() => { clearInterval(SETTINGS_TRANSITION_TIMER); document.querySelector('#transition-dialog').close(); });
+
+    // Apply itself is unchanged: it sends the same /fallback body and leaves the editor open.
+    await open();
+    await pick('fallback', 'codex', 'gpt-6-luna');
     await row('fallback').locator('[data-choice-apply]').click();
-    await page.waitForFunction(() => S.emps.find(e => e.name === 'helper')?.fallback?.model === 'gpt-6-1-sol');
-    assert.deepEqual(calls, [{what: 'fallback', body: {fallback: {harness: 'codex', model: 'gpt-6-1-sol', effort: 'high'}, expected_revision: 10}}]);
+    await page.waitForFunction(() => S.emps.find(e => e.name === 'helper')?.fallback?.model === 'gpt-6-luna');
+    assert.deepEqual(calls, [{what: 'fallback', body: {fallback: {harness: 'codex', model: 'gpt-6-luna', effort: 'high'}, expected_revision: 13}}]);
     assert.equal(await editor.evaluate(d => d.open), true);
     calls = [];
     await save();
     await closed();
     assert.deepEqual(calls.map(c => c.what), ['definition'], 'an Applied fallback is not sent again by Save');
-    assert.equal(calls[0].body.expected_revision, 11, 'Save uses the revision Apply made');
+    assert.equal(calls[0].body.expected_revision, 14, 'Save uses the revision Apply made');
 
     assert.deepEqual(errors, []);
     console.log('ok');
