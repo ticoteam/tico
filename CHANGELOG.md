@@ -15,6 +15,13 @@ All notable changes to Tico are recorded here. The format follows
   accepts. While it is on, **Still wanted?** questions stop.
   ([Tasks](docs/tasks.md#stale-ticket-review))
 
+### Changed
+- **Tico-hosted servers keep no Claude sign-in token** (Anthropic's terms). On a server Tico runs for you, adding a
+  Claude OAuth token as a Computer key or a Credential is refused with the reason and the two ways that work: **Sign
+  in** on the computer (Settings > Computers) or an Anthropic API key. Tokens stored before the update are deleted
+  and no longer reach computers or bots. Servers you run yourself are unchanged, and API keys work as before.
+  ([Install](docs/install.md#add-computers-to-run-your-bots))
+
 ### Fixed
 - **Clear** on a bot's chat now really starts the bot over. Before, it only trimmed the history Tico sends, and on
   the computer Claude Code, Codex and the other harnesses kept resuming the old provider thread, so the bot still

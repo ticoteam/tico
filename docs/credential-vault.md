@@ -33,6 +33,9 @@ Model credentials named `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUT
 that variable when the optional variable field is blank. An explicit variable always wins. For a stored API key or token,
 **Manage access > Every computer** lets computers sign their models in. It gives no bot access: grant a bot separately.
 Older name-only model credentials also offer this choice; granting them fills the missing variable without changing the secret.
+On a Tico-hosted server (`TICO_HOSTED=own` or `invited`) a Claude sign-in token is never stored: a `CLAUDE_CODE_OAUTH_TOKEN`
+credential, or any value starting `sk-ant-oat`, is refused, and one stored before is deleted at the next start
+([install](install.md#add-computers-to-run-your-bots)). Anthropic API keys are unaffected.
 
 ## The key: nothing to set up
 

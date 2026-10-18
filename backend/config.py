@@ -262,8 +262,15 @@ class Settings:
     # leaves the server: no scheduler, directory sync, backups, release check, usage count, support or HQ calls,
     # GitHub or Slack, telemetry or updater (docs/install.md, "Rehearse a migration"). Migrations run as usual.
     rehearsal: bool = False
+    # TICO_HOSTED: "own" or "invited" on a server Tico runs (for its own team, or for an invited company), written only
+    # by the hosting preset; unset or empty is a server its company runs itself. Hosted, it keeps no Claude sign-in
+    # token (backend/hosting.py).
+    hosted: str = ""
 
     def __post_init__(self):
+        self.hosted = self.hosted.strip().lower()
+        if self.hosted not in ("", "own", "invited"):
+            raise ValueError("TICO_HOSTED is own or invited on a server Tico runs, or unset on one you run yourself")
         if self.screen_relay_url:
             relay = urlparse(self.screen_relay_url)
             if (len(self.screen_relay_key) < 32 or relay.scheme != "http" or not relay.hostname
@@ -416,6 +423,7 @@ class Settings:
             scheduler_enabled=not rehearsal and os.environ.get("TICO_SCHEDULER", "1") == "1",
             flight_recorder=os.environ.get("TICO_FLIGHT_RECORDER", "1") != "0",
             rehearsal=rehearsal,
+            hosted=os.environ.get("TICO_HOSTED", ""),
             blob_dir=Path(os.environ["TICO_BLOB_DIR"]) if os.environ.get("TICO_BLOB_DIR") else None,
             blob_bucket=os.environ.get("TICO_BLOB_BUCKET", ""),
             blob_region=os.environ.get("TICO_BLOB_REGION", ""),

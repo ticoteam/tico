@@ -11,7 +11,7 @@ with that job's id, checks it, and reports. `confirm` then puts it in use and de
 "Every computer" key, else none; and none while a person cleared its key or signed it out (`model_login_cleared`).
 """
 
-from . import providers
+from . import hosting, providers
 from .credentials import COMPUTERS, granted
 from .store import H, Problem
 
@@ -37,10 +37,12 @@ def store(c, vault, who, runner, runtime, value, login_id, env=""):
     """Seal `value` in the vault as a key staged for this computer's `runtime`; it is used once `confirm` says the
     computer checked it. Returns the stored key's metadata, never its value."""
     allowed = names(runtime)
-    env = env or allowed[0]
+    value = str(value or "").strip()
+    # A Claude sign-in token never reaches the vault on a server Tico hosts (backend/hosting.py).
+    hosting.refuse(vault.store.settings, env, value)
+    env = env or (hosting.key_names(vault.store.settings, allowed) or allowed)[0]
     if env not in allowed:
         raise Problem("env", f"A {runtime} key is stored as " + " or ".join(allowed), 422)
-    value = str(value or "").strip()
     if not value or len(value) > 4000 or any(ch in value for ch in "\r\n\0"):
         raise Problem("credential", "Paste the key as one line", 422)
     if not vault.configured:
@@ -147,24 +149,31 @@ def keys_for(c, vault, runner_id, runtime, login_id=""):
     or its login signed out. `clear_key` tells a computer that missed its Clear key job (it was offline) to clear
     its copy now. Returns (reply, credential ids sent)."""
     from .model_login import ACTIVE_SQL
+    settings = vault.store.settings
     if login_id:
         row = c.execute("SELECT cr.* FROM computer_keys k JOIN credentials cr ON cr.id=k.credential_id "
                         "JOIN model_logins l ON l.id=k.login_id WHERE k.login_id=? AND k.runner_id=? AND k.runtime=? "
                         f"AND k.state=? AND l.kind='use_key' AND l.{ACTIVE_SQL}",
                         (login_id, runner_id, runtime, STAGED)).fetchone()
-        if not row:
+        value = vault.cipher.decrypt(c, row) if row else ""
+        if not row or hosting.withheld(settings, row["env"], value):
             return {"credentials": []}, []
-        return {"credentials": [{"env": row["env"], "value": vault.cipher.decrypt(c, row), "source": "computer"}]}, [row["id"]]
+        return {"credentials": [{"env": row["env"], "value": value, "source": "computer"}]}, [row["id"]]
     mark = c.execute("SELECT clear_key FROM model_login_cleared WHERE runner_id=? AND runtime=? AND profile=''",
                      (runner_id, runtime)).fetchone()
     if mark:
         return {"credentials": [], "signed_out": True, **({"clear_key": True} if mark["clear_key"] else {})}, []
+    # On a server Tico hosts, a Claude sign-in token stored before it refused them is never handed out (backend/hosting.py):
+    # the computer is given none, so it takes its copy out, as for a key no longer given.
     own = active(c, runner_id, runtime)
     if own:
-        return {"credentials": [{"env": own["env"], "value": vault.cipher.decrypt(c, own), "source": "computer"}]}, [own["id"]]
-    found = shared(c, runtime)
-    return ({"credentials": [{"env": env, "value": vault.cipher.decrypt(c, row), "source": "shared"}
-                             for env, row in found.items()]}, [row["id"] for row in found.values()])
+        value = vault.cipher.decrypt(c, own)
+        if not hosting.withheld(settings, own["env"], value):
+            return {"credentials": [{"env": own["env"], "value": value, "source": "computer"}]}, [own["id"]]
+    found = {env: (row, vault.cipher.decrypt(c, row)) for env, row in shared(c, runtime).items()}
+    found = {env: pair for env, pair in found.items() if not hosting.withheld(settings, env, pair[1])}
+    return ({"credentials": [{"env": env, "value": value, "source": "shared"} for env, (row, value) in found.items()]},
+            [row["id"] for row, _ in found.values()])
 
 
 def listing(c, runner_id):

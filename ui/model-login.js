@@ -418,6 +418,7 @@
       ${adding ? '' : scopeHTML(info, 'replace', where)}
       <label>New key <input name="secret" type="password" autocomplete="off" spellcheck="false" required maxlength="4000" aria-label="New ${text(name)} key"></label>
       ${names.length > 1 ? `<label>Kind <select name="env">${names.map(n => `<option value="${text(n)}"${n === info.name ? ' selected' : ''}>${text(n)}</option>`).join('')}</select></label>` : ''}
+      ${info.refused ? `<p class="muted" data-key-refused>${text(info.refused)}</p>` : ''}
       <p class="muted">It is kept in Tico's credential vault and never shown again in full. The next turn uses it once the computer has checked it; the old key is then deleted.</p>`;
     const field = form.querySelector('[name=secret]');
     field.addEventListener('input', () => { go.disabled = !field.value.trim(); });

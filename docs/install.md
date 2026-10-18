@@ -550,6 +550,12 @@ docker exec -it -u bot '<container-name>' claude auth login              # Claud
 `claude setup-token` is not a sign-in: it prints a long-lived token and leaves Claude Code signed out. To use such a
 token, store it as a `CLAUDE_CODE_OAUTH_TOKEN` Credential for every computer instead (above).
 
+On a server Tico runs for you (Tico-hosted, `TICO_HOSTED=own` or `invited`, set by the hosting setup), Tico keeps no
+Claude sign-in token, as Anthropic's terms require: a `CLAUDE_CODE_OAUTH_TOKEN` key or Credential, or any value starting
+`sk-ant-oat`, is refused with the reason, and one stored before the update is deleted when the server starts and no
+longer given to computers or bots. Sign Claude in on the computer itself (**Settings > Computers > Sign in**), or use an
+`ANTHROPIC_API_KEY`. A server you run yourself (`TICO_HOSTED` unset) keeps OAuth-token keys as before.
+
 Store API keys and other Credentials in **Tools > Credentials**, set their environment-variable name,
 and grant them to each bot that needs them. A bot run receives only its grants; it does not inherit
 `_shared.env` or the runner's process credentials. On upgrade, each existing bot is granted its own keys and every

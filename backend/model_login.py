@@ -425,9 +425,14 @@ def key_info(c, who, rid, runtime, auth=None, vault=None):
     reported = _key_source(runner, runtime)
     shared = computer_keys.shared_for(c, runtime, reported.get("name"))
     source = "computer" if own else reported.get("source") or ""
+    from . import hosting
+    every, settings = computer_keys.names(runtime), vault.store.settings if vault else None
     out = {"runtime": runtime, "source": source, "name": own["env"] if own else reported.get("name", ""),
            "preview": own["preview"] if own else shared["preview"] if shared and source == "shared" else "",
-           "cleared": cleared(c, rid, runtime), "names": list(computer_keys.names(runtime)), "computers": []}
+           "cleared": cleared(c, rid, runtime), "names": list(hosting.key_names(settings, every)), "computers": []}
+    # On a server Tico hosts, Add key and Replace key offer no Claude sign-in token, and say why (backend/hosting.py).
+    if len(hosting.key_names(settings, every)) < len(every):
+        out["refused"] = hosting.REFUSED
     if source == "shared":
         out["computers"] = [{"id": row["id"], "label": row["label"], "online": _online(row),
                              "updated": _handles_keys(row), "may": _may(c, who, row, auth)}
@@ -500,11 +505,13 @@ def replace_key(c, who, rid, runtime, key, env="", scope="this", auth=None, vaul
     runner is told to fetch it, check it and use it; only then is the old one deleted. A failed check leaves the old
     key working. `scope` "all", for the company's shared key: its value is replaced for every computer it serves, which
     is a credential administrator's change as in Credentials; each fetches it at once, or when next online."""
-    from . import computer_keys
+    from . import computer_keys, hosting
     from .credentials import require_admin
     _person_only(who, "change a key")
     _operator(c, who, rid, auth)
     _key_runtime(runtime)
+    # Before anything is queued or stored: a server Tico hosts keeps no Claude sign-in token (backend/hosting.py).
+    hosting.refuse(vault.store.settings, env, key)
     runner = _runner(c, rid)
     if scope == "all":
         require_admin(c, who, vault.admins)
@@ -520,6 +527,7 @@ def replace_key(c, who, rid, runtime, key, env="", scope="this", auth=None, vaul
         if env not in shared:
             raise Problem("env", "The shared key is " + " and ".join(shared) + ", not " + env + "; replace it as that "
                           "kind, or add a " + env + " in Credentials", 409)
+        hosting.refuse(vault.store.settings, env, key)
         row = shared[env]
         value = str(key or "").strip()
         if not value or len(value) > 4000 or any(ch in value for ch in "\r\n\0"):

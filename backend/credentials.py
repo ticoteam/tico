@@ -12,7 +12,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from fastapi import Request
 from pydantic import ConfigDict, Field, SecretStr
 
-from . import providers
+from . import hosting, providers
 from .auth import validate_identity
 from .models import Contract, ID
 from .bot_access import owner_ids
@@ -394,6 +394,8 @@ class Vault:
         if not name:
             raise Problem('credential', 'Enter a credential name', 422)
         refuse_reserved(model_env(name, body.kind, body.env), old['env'] if old else '')
+        # A server Tico hosts keeps no Claude sign-in token, under its own variable or another (backend/hosting.py).
+        hosting.refuse(self.store.settings, model_env(name, body.kind, body.env), secret or '')
         # `member_stored` is set once, on insert: only a credential a member stored for their bot is ever theirs (`owned`).
         c.execute('INSERT INTO credentials(id,name,username,kind,env,preview,ciphertext,nonce,source,created,updated,updated_by,'
                   'created_by,member_stored) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,username=excluded.username,'
@@ -560,6 +562,9 @@ def install_credentials(app,store,delegate=None,propose=None):
                     continue                # the bot migrated before: only the HUB_ keys 0.2.30 could not take
                 if item.env in RESERVED_ENV or item.env.startswith(RESERVED_PREFIXES):
                     raise Problem('env','A Computer setting cannot be granted as a Credential',422)
+                # On a server Tico hosts a Claude sign-in token is left behind, not stored (backend/hosting.py).
+                if hosting.withheld(store.settings,item.env,item.value.get_secret_value()):
+                    continue
                 # Even a revoked grant wins over an old file: migration never resurrects access.
                 if c.execute('SELECT 1 FROM credentials v JOIN credential_grants g ON g.credential_id=v.id '
                              'WHERE v.env=? AND g.subject=?',(item.env,subject)).fetchone():
@@ -701,6 +706,9 @@ def install_credentials(app,store,delegate=None,propose=None):
             held=granted(c,who.actor)
             for row in c.execute('SELECT * FROM credentials ORDER BY id'):
                 if row['ciphertext'] is not None and row['id'] in held:
+                    # Never a Claude sign-in token into a bot's turn on a server Tico hosts (backend/hosting.py).
+                    if hosting.withheld(store.settings,row['env'],vault.cipher.decrypt(c,row)):
+                        continue
                     values.append({'id':row['id'],'name':row['name'],'env':row['env'],'kind':row['kind'],**vault.reveal(c,who,row['id'])})
             return {'credentials':values}
 
@@ -716,7 +724,10 @@ def install_credentials(app,store,delegate=None,propose=None):
             held=granted(c,'bot:'+bot)
             for row in c.execute('SELECT * FROM credentials ORDER BY id'):
                 if row['ciphertext'] is not None and row['env'] and row['id'] in held:
-                    values.append({'id':row['id'],'env':row['env'],'kind':row['kind'],'value':vault.cipher.decrypt(c,row)})
+                    value=vault.cipher.decrypt(c,row)
+                    if hosting.withheld(store.settings,row['env'],value):
+                        continue
+                    values.append({'id':row['id'],'env':row['env'],'kind':row['kind'],'value':value})
                     H.event(c,who.actor,'credential.sent_to_computer',row['id'],{'bot':bot,'runner':who.runner_id,'use':'watcher'})
             return {'credentials':values}
 
