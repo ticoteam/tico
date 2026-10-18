@@ -95,6 +95,7 @@ def view(c, settings=None, *, manage=False):
     state = fresh.get("state") or ("unchecked" if where else "none")
     return {**out, "preview": record.get("preview", "") if where == "settings" else "",
             "env": ENV_KEY if where == "environment" else "",
+            "revision": int(record.get("revision") or 0),
             "updated": record.get("updated", ""), "updated_by": record.get("updated_by", ""),
             "state": state, "working": state not in ("revoked", "invalid"),
             "message": fresh.get("message") or ("Not checked yet." if where else "No gateway key saved."),

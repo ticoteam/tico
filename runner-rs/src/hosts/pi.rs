@@ -6,6 +6,11 @@
 //!
 //! Pi has no MCP and no permission prompts (the bot uses the hub CLI over bash); `steer` is refused.
 //! OPENROUTER_API_KEY reaches the process from the bot's granted credential.
+//!
+//! The Tico AI Gateway's models (`tico-cheap-1.0`, `tico-mid-1.0`, `tico-power-1.0`) run on pi too, as pi's custom
+//! provider `tico` over the Gateway's OpenAI-chat endpoint: the server hands a run on one the gateway key and URL
+//! (TICOAI_GATEWAY_KEY / TICOAI_GATEWAY_URL, backend/gateway_connection.py), and the turn's pi reads a `models.json`
+//! naming that URL and the key's variable, never the key itself.
 
 use std::path::PathBuf;
 
@@ -28,11 +33,18 @@ pub const MODELS: &[(&str, &str)] = &[
     ("devstral-2512", "mistralai/devstral-2512"),
 ];
 const DEFAULT_MODEL: &str = "deepseek-v4.1-flash";
+/// The Tico AI Gateway's chat models: pi's custom provider `tico` (`gateway_models_json`).
+pub const GATEWAY_PROVIDER: &str = "tico";
+pub const GATEWAY_MODELS: &[(&str, &str)] =
+    &[("tico-cheap-1.0", "Tico Cheap 1.0"), ("tico-mid-1.0", "Tico Mid 1.0"), ("tico-power-1.0", "Tico Power 1.0")];
+pub const GATEWAY_KEY_ENV: &str = "TICOAI_GATEWAY_KEY";
+pub const GATEWAY_URL_ENV: &str = "TICOAI_GATEWAY_URL";
+const GATEWAY_DEFAULT_URL: &str = "https://updates.tico.team/v1/gateway";
 const TOOLS: &str = "read,bash,edit,write,grep,find,ls";
 
 /// The catalog ids, sorted (readiness `models`).
 pub fn model_names() -> Vec<String> {
-    let mut names: Vec<String> = MODELS.iter().map(|(k, _)| k.to_string()).collect();
+    let mut names: Vec<String> = MODELS.iter().chain(GATEWAY_MODELS).map(|(k, _)| k.to_string()).collect();
     names.sort();
     names
 }
@@ -42,6 +54,54 @@ pub fn model_for(model: Option<&str>) -> String {
     let m = model.unwrap_or_default().trim();
     let m = if m.is_empty() || m == "default" { DEFAULT_MODEL } else { m };
     MODELS.iter().find(|(k, _)| *k == m).map_or(m, |(_, v)| v).to_string()
+}
+
+/// Whether `model` is one of the Tico AI Gateway's, run as pi's `tico` provider.
+pub fn is_gateway(model: Option<&str>) -> bool {
+    model.is_some_and(|m| m.trim().starts_with("tico-"))
+}
+
+/// pi's `models.json` for the Gateway: its OpenAI-chat endpoint at `url`, the key read from GATEWAY_KEY_ENV when pi
+/// makes a request. It holds no secret.
+pub fn gateway_models_json(url: &str) -> Value {
+    let url = url.trim().trim_end_matches('/');
+    let models: Vec<Value> = GATEWAY_MODELS
+        .iter()
+        .map(|(id, name)| json!({"id": id, "name": name, "input": ["text", "image"], "contextWindow": 200000, "maxTokens": 32000}))
+        .collect();
+    json!({"providers": {GATEWAY_PROVIDER: {
+        "baseUrl": if url.is_empty() { GATEWAY_DEFAULT_URL } else { url },
+        "api": "openai-completions",
+        "apiKey": format!("${GATEWAY_KEY_ENV}"),
+        "models": models,
+    }}})
+}
+
+/// The agent directory a Gateway turn's pi reads its `models.json` from: `<workspace>/runtime/pi-gateway`.
+fn gateway_agent_dir(settings: &Settings, env: &Env) -> Option<PathBuf> {
+    let root = env.get("HUB_WORKSPACE").filter(|w| !w.is_empty()).cloned().unwrap_or_else(|| if settings.cwd.is_empty() { ".".into() } else { settings.cwd.clone() });
+    let dir = PathBuf::from(root).join("runtime").join("pi-gateway");
+    crate::isolation::mkdir(&dir, 0o755).ok()?;
+    let body = serde_json::to_vec_pretty(&gateway_models_json(env.get(GATEWAY_URL_ENV).map(String::as_str).unwrap_or_default())).ok()?;
+    std::fs::write(dir.join("models.json"), body).ok()?;
+    crate::isolation::chown(&dir.join("models.json"));
+    Some(dir)
+}
+
+/// A model error in words a person reads, for the Tico AI Gateway's refusals (its codes, or its messages as pi prints
+/// them); anything else as it came. The cap still reads as a spend limit and a refused key as a revoked API key, so the
+/// runner's limit and sign-in rules (hosts/mod.rs) classify them as before.
+pub fn plain_error(text: &str) -> String {
+    let lower = text.to_lowercase();
+    if lower.contains("cap_reached") || lower.contains("gateway cap reached") {
+        "Gateway cap reached: this gateway key has used its monthly spend limit (cap_reached)".into()
+    } else if lower.contains("key_revoked") {
+        "Tico AI Gateway: api key revoked (key_revoked)".into()
+    } else if lower.contains("invalid_key") {
+        "Tico AI Gateway: invalid api key (invalid_key)".into()
+    } else {
+        text.to_string()
+    }
 }
 
 pub fn effort_for(effort: Option<&str>) -> &'static str {
@@ -95,6 +155,8 @@ pub fn sign_in(assignments: &[Value]) -> (&'static str, String) {
     let mut missing: Vec<String> = assignments
         .iter()
         .filter(|r| r["config"]["runtime"] == "pi")
+        // A Tico model signs in with the company's gateway key, which the server hands its run.
+        .filter(|r| !is_gateway(r["config"]["model"].as_str()))
         .map(|r| text_of(&r["bot"]))
         .filter(|bot| !crate::hosts::gemini::has_grant(bot, "OPENROUTER_API_KEY"))
         .collect();
@@ -148,9 +210,11 @@ impl Wire for Pi {
     fn argv(cmd: &[String], thread_id: &str, t: &Thread, effort: Option<&str>) -> Vec<String> {
         let s = &t.settings;
         let mut argv = cmd.to_vec();
+        let gateway = is_gateway(s.model.as_deref());
+        let model = if gateway { s.model.clone().unwrap_or_default().trim().to_string() } else { model_for(s.model.as_deref()) };
         argv.extend(
             [
-                "--mode", "json", "-p", "--provider", PROVIDER, "--model", &model_for(s.model.as_deref()),
+                "--mode", "json", "-p", "--provider", if gateway { GATEWAY_PROVIDER } else { PROVIDER }, "--model", &model,
                 "--thinking", effort_for(effort.or(s.effort.as_deref())), "--tools", TOOLS, "--session-id", thread_id,
                 "--session-dir", &session_dir(&t.bot, s).display().to_string(), "--approve",
             ]
@@ -161,6 +225,12 @@ impl Wire for Pi {
 
     fn env(settings: &Settings) -> Env {
         let mut env = base_env(settings);
+        if is_gateway(settings.model.as_deref()) {
+            if let Some(dir) = gateway_agent_dir(settings, &env) {
+                env.insert("PI_CODING_AGENT_DIR".into(), dir.display().to_string());
+            }
+            return env;
+        }
         let key = openrouter_key(&env, settings.env.is_empty());
         if !key.is_empty() {
             env.insert("OPENROUTER_API_KEY".into(), key);
@@ -186,6 +256,11 @@ impl Wire for Pi {
             }
             "message_end" => {
                 let done = &msg["message"];
+                if done["role"] == "assistant" && done["stopReason"] == "error" && truthy(done.get("errorMessage")) {
+                    // A model call that failed (the Gateway's cap, a refused key): pi ends the message with its error.
+                    turn.error = plain_error(&text_of(&done["errorMessage"]));
+                    turn.extra["model_error"] = json!(true);
+                }
                 if done["role"] == "assistant" && done["usage"].is_object() {
                     // One assistant message ends once, so this is where its tokens are counted.
                     let (inp, out, total) = usage_tokens(&done["usage"]);
@@ -205,10 +280,10 @@ impl Wire for Pi {
             }
             "error" => {
                 let err = [m.get("error"), m.get("message")].into_iter().flatten().find(|v| truthy(Some(v))).cloned().unwrap_or(json!("pi error"));
-                turn.error = match &err {
+                turn.error = plain_error(&match &err {
                     Value::Object(e) => e.get("message").filter(|v| truthy(Some(v))).map(text_of).unwrap_or_else(|| err.to_string()),
                     other => text_of(other),
-                };
+                });
             }
             "agent_end" => turn.ended = true,
             kind @ ("tool_execution_start" | "tool_execution_end") => {
@@ -220,7 +295,8 @@ impl Wire for Pi {
     }
 
     fn succeeded(rc: i32, turn: &Turn) -> bool {
-        rc == 0 || (turn.ended && turn.error.is_empty())
+        // A model call that failed fails the turn even when pi exits 0, so a cap or a refused key is never a quiet "done".
+        !truthy(turn.extra.get("model_error")) && (rc == 0 || (turn.ended && turn.error.is_empty()))
     }
 }
 
@@ -271,6 +347,64 @@ mod tests {
         }
         assert_eq!(std::fs::read_to_string(dir.join("args.log.prompt")).unwrap(), "hello");
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_tico_model_runs_on_the_gateway_and_its_cap_reads_as_gateway_cap_reached() {
+        let dir = std::env::temp_dir().join(format!("fake-pi-gw-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cmd = fake(&dir, "pi");
+        // pi ends a failed model call with the error on the assistant message, then exits 0.
+        let fixture = dir.join("cap.jsonl");
+        std::fs::write(&fixture, [
+            r#"{"type":"session","version":3,"id":"0b5c2f1e-3a4d-4e6f-8a9b-0c1d2e3f4a5b"}"#,
+            r#"{"type":"agent_start"}"#,
+            r#"{"type":"message_end","message":{"role":"assistant","content":[],"stopReason":"error","errorMessage":"429 Gateway cap reached for this key this month"}}"#,
+            r#"{"type":"turn_end","message":{"role":"assistant","content":[]}}"#,
+            r#"{"type":"agent_end"}"#,
+        ].join("\n")).unwrap();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let host = PiHost::new("acme", vec![cmd.clone()], tx);
+        host.start();
+        let mut s = Settings { cwd: dir.display().to_string(), model: Some("tico-mid-1.0".into()), slug: "acme".into(), ..Default::default() };
+        for (k, v) in [("PATH", "/usr/bin:/bin".to_string()), ("HUB_WORKSPACE", dir.display().to_string()), (GATEWAY_KEY_ENV, "tgw-synthetic-fixture".into()), (GATEWAY_URL_ENV, "https://gw.example/v1/gateway/".into()), ("ARGS_LOG", dir.join("args.log").display().to_string()), ("FIXTURE", fixture.display().to_string()), ("RC", "0".into())] {
+            s.env.insert(k.into(), v);
+        }
+        let thread = host.start_thread(&s);
+        host.start_turn(&thread, "hello", Some("high")).unwrap();
+        assert_eq!(turn_events(&mut rx).await, vec![
+            json!({"kind": "status", "state": "active"}),
+            json!({"kind": "turn_failed", "error": "Gateway cap reached: this gateway key has used its monthly spend limit (cap_reached)", "limit": true}),
+            json!({"kind": "status", "state": "idle"}),
+        ]);
+        host.stop().await;
+        let args = std::fs::read_to_string(dir.join("args.log")).unwrap();
+        assert!(args.lines().last().unwrap().starts_with("--mode json -p --provider tico --model tico-mid-1.0 --thinking high"), "{args}");
+        // pi's models.json names the Gateway and the key's variable, never the key.
+        let written = std::fs::read_to_string(dir.join("runtime/pi-gateway/models.json")).unwrap();
+        assert!(!written.contains("tgw-synthetic-fixture"));
+        let models: Value = serde_json::from_str(&written).unwrap();
+        assert_eq!(models["providers"]["tico"]["baseUrl"], "https://gw.example/v1/gateway");
+        assert_eq!(models["providers"]["tico"]["apiKey"], "$TICOAI_GATEWAY_KEY");
+        assert_eq!(models["providers"]["tico"]["api"], "openai-completions");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn the_gateways_refusals_read_plainly_and_keep_their_classification() {
+        let cap = plain_error("429 {\"error\":{\"code\":\"cap_reached\"}}");
+        assert!(cap.starts_with("Gateway cap reached") && crate::hosts::limit_re().is_match(&cap));
+        let revoked = plain_error("401 key_revoked");
+        assert!(crate::hosts::is_auth_rejected(&revoked), "{revoked}");
+        assert!(crate::hosts::is_auth_rejected(&plain_error("401 invalid_key")));
+        let rate = plain_error("429 rate_limited: slow down");
+        assert_eq!(rate, "429 rate_limited: slow down");
+        assert!(!rate.contains("Gateway cap"));
+        assert_eq!(gateway_models_json("")["providers"]["tico"]["baseUrl"], GATEWAY_DEFAULT_URL);
+        // A Tico-model bot needs no OpenRouter grant on its computer.
+        let (state, _) = sign_in(&[json!({"bot": "gw-only-bot", "config": {"runtime": "pi", "model": "tico-mid-1.0"}})]);
+        assert_eq!(state, "ready");
+        assert!(model_names().contains(&"tico-power-1.0".to_string()));
     }
 
     #[test]

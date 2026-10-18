@@ -82,6 +82,21 @@ A model with no CLI of its own has a row in `MODEL_CATALOG` with `runtime: "pi"`
 `runner-rs/src/hosts/pi.rs` `MODELS` that gives its OpenRouter id (for example `kimi-k3` is `moonshotai/kimi-k3`). Enabling
 the `openrouter` provider offers every such model; enabling one vendor offers that vendor's models only.
 
+### The Tico AI Gateway
+
+Tico Cheap, Mid and Power 1.0 (`tico-cheap-1.0`, `tico-mid-1.0`, `tico-power-1.0`; Claude Haiku, Sonnet and Opus 5.5
+underneath) run on pi through Tico's own Gateway, not OpenRouter. Their provider, `tico`, is never ticked: it is on
+exactly while the **Tico AI Gateway** connection in Settings > AI providers has a key (`backend/gateway_connection.py`),
+and OpenRouter's catch-all does not offer them. The key is the one Decide uses; the server's `TICO_GATEWAY_KEY` and
+`TICO_GATEWAY_URL` win over a saved one and show as connected. A saved key is sealed and never read back, only a
+preview of its first and last three characters.
+
+A bot on a Tico model, or whose own fallback is one, gets the key and the Gateway's URL as `TICOAI_GATEWAY_KEY` and
+`TICOAI_GATEWAY_URL` from `GET /api/v2/credential-runtime`; no other bot does. pi reads them through a `tico` provider
+in its `models.json` (OpenAI chat completions, streamed). The server reads the Gateway's word on the key
+(`<gateway>/key`) on save, on **Check now** and hourly: the owner sees the 80% warning, **Gateway cap reached** and a
+revoked key in Settings and Health, and a bot stopped by the cap says "Gateway cap reached" in its status.
+
 ## Choosing a harness, model and effort
 
 Bot settings, new bots, fallbacks and bulk model changes use three separate fields:

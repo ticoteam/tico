@@ -8,6 +8,11 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Tico AI Gateway** in Settings > AI providers: the owner saves the gateway key Tico gives them (or the server's
+  `TICO_GATEWAY_KEY` sets it), and bots can then pick **Tico Cheap, Mid and Power 1.0** (Claude Haiku, Sonnet and Opus
+  5.5 underneath) like any other model, streamed through the Gateway on pi. The key is sealed, never shown after save
+  and only sent to runs on a Tico model. The owner sees the 80% monthly cap warning and a revoked key, and a bot
+  stopped by the cap says "Gateway cap reached" ([harnesses](docs/harnesses.md#the-tico-ai-gateway)).
 - A private task between bots, or a bot's private task to itself, can now reach one person. The first time its
   owning bot gives them a subtask under it, asks them a question on it or sets it waiting on them, they become its
   guest: they read that task (and their own subtask), and nobody else gains anything. A hand-off to a second person
