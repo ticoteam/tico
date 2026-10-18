@@ -123,6 +123,7 @@ class Trickle(io.BytesIO):
 def net(monkeypatch):
     internet = Internet()
     monkeypatch.setattr("clients.judge.urlopen", internet)       # what every decision transport opens with
+    monkeypatch.setattr("clients.judge.gateway_open", internet)  # the Gateway's own (no redirect, no loopback proxy)
     return internet
 
 
@@ -642,3 +643,97 @@ def test_slack_routing_asks_the_gateway_first_and_audits_it(hub, monkeypatch, ne
     gw.tick()
     detail = json.loads(rows(hub, "SELECT detail_json FROM events WHERE action='judge.call'")[-1]["detail_json"])
     assert detail["provider"] == "TypeSafe" and len(net.calls(J.URL)) >= 1
+
+
+class _Recorder:
+    """A loopback HTTP server that keeps each request's (path, Authorization) and answers with `reply(handler)`."""
+
+    def __init__(self, reply):
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        calls = self.calls = []
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+
+            def _any(self):
+                self.rfile.read(int(self.headers.get("Content-Length") or 0))
+                calls.append((self.path, self.headers.get("Authorization", "")))
+                reply(self)
+            do_GET = do_POST = do_CONNECT = _any
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.url = f"http://127.0.0.1:{self.server.server_address[1]}"
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def close(self):
+        self.server.shutdown()
+        self.server.server_close()
+
+
+def _json(handler, status, payload):
+    body = json.dumps(payload).encode()
+    handler.send_response(status)
+    handler.send_header("Content-Type", "application/json")
+    handler.send_header("Content-Length", str(len(body)))
+    handler.end_headers()
+    handler.wfile.write(body)
+
+
+def _answers(handler):
+    _json(handler, 200, {"answers": answer_all(QUESTIONS), "model": "tico-decide-1.0"})
+
+
+def test_decide_sends_the_gateway_key_only_where_it_is_set_never_through_a_redirect_or_a_loopback_proxy(monkeypatch):
+    """Decide's Gateway transport holds the same line as the key check (clients/gateway.py): the key never follows a
+    redirect, a plain-http loopback Gateway is reached without the environment's proxy, and a URL that is neither
+    https nor this computer gets nothing (the next provider answers)."""
+    other = _Recorder(_answers)
+    moved = _Recorder(lambda h: (h.send_response(302), h.send_header("Location", other.url + "/v1/decisions"),
+                                 h.send_header("Content-Length", "0"), h.end_headers()))
+    gateway = _Recorder(_answers)
+    proxy = _Recorder(lambda h: _json(h, 502, {}))
+    try:
+        request = lambda url: urllib.request.Request(url, data=b"{}", method="POST",
+                                                     headers={"Authorization": "Bearer gw-synthetic"})
+        # Control: urllib's default opener follows the redirect and hands the key to the other server.
+        with J.urlopen(request(moved.url + "/v1/decisions"), timeout=5) as response:
+            response.read()
+        assert other.calls == [("/v1/decisions", "Bearer gw-synthetic")]
+        other.calls.clear()
+        moved.calls.clear()
+        with pytest.raises(J.JudgeError) as caught:
+            J.gateway("gw-synthetic", moved.url + "/v1/decisions")({"team": "Acme"}, QUESTIONS)
+        assert (caught.value.code, caught.value.status) == ("http", 302)
+        assert len(moved.calls) == 1 and other.calls == []
+
+        for name in ("no_proxy", "NO_PROXY"):
+            monkeypatch.delenv(name, raising=False)
+        for name in ("http_proxy", "HTTP_PROXY"):
+            monkeypatch.setenv(name, proxy.url)
+        # Control: with a proxy set and no loopback bypass, urllib sends a loopback request, key and all, to the proxy.
+        with pytest.raises(urllib.error.HTTPError):
+            urllib.request.build_opener().open(request(gateway.url + "/v1/decisions"), timeout=5)
+        assert proxy.calls and gateway.calls == []
+        proxy.calls.clear()
+        result = J.gateway("gw-synthetic", gateway.url + "/v1/decisions")({"team": "Acme"}, QUESTIONS)
+        assert result["provider"] == J.GATEWAY_PROVIDER
+        assert gateway.calls == [("/v1/decisions", "Bearer gw-synthetic")] and proxy.calls == []
+
+        seen = []
+
+        def spy(request, timeout=None):
+            seen.append(request.full_url)
+            raise AssertionError("nothing may be sent")
+
+        def answers(state, questions, label=None):
+            return {"answers": answer_all(questions), "model": "next-provider"}
+        for url in ("http://localhost.acme.example/v1/decisions", "http://127.0.0.1.acme.example/v1/decisions",
+                    "http://hq.example/v1/decisions", "https://user@hq.example/v1/decisions",
+                    "https://hq.example/v1/decisions?x=1"):
+            result = B.ordered([J.gateway("gw-synthetic", url, opener=spy), answers])({"team": "Acme"}, QUESTIONS)
+            assert result["model"] == "next-provider" and result["fallback"] == "unconfigured", url
+        assert seen == []
+    finally:
+        for server in (other, moved, gateway, proxy):
+            server.close()
