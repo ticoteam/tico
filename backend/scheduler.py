@@ -35,6 +35,7 @@ class Scheduler:
         self.goals_checked = None
         self.go_lives_checked = None
         self.health_scanned = None
+        self.stale_checked = None
 
     def tick(self, at=None):
         at = at or datetime.now(timezone.utc)
@@ -219,6 +220,15 @@ class Scheduler:
                     health_monitor.scan(c, self.execution.auth, self.store.settings)
             except Exception as exc:
                 failures.append({"health_monitor": type(exc).__name__})
+        if self.stale_checked is None or at - self.stale_checked >= timedelta(minutes=5):
+            # Stale ticket review (backend/stale_review.py), while the team has it on: the watermark makes it hourly;
+            # the Decide calls run on the pass's own thread, never under this lock.
+            self.stale_checked = at
+            try:
+                from . import stale_review
+                stale_review.tick(self.store, stamp(at))
+            except Exception as exc:
+                failures.append({"stale_review": type(exc).__name__})
         if self.go_lives_checked is None or at - self.go_lives_checked >= timedelta(minutes=10):
             # A go-live waiting for a computer that never reports still ends, with its notice (backend/go_live.py).
             self.go_lives_checked = at

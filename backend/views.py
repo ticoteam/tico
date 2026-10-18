@@ -668,7 +668,7 @@ def conversation_execution(c, cid, who=None, settings=None, bot=None):
 PRESSING_DAYS = 3
 DECISIVE_DAYS = 1
 # A bot's task set waiting on the person blocks that bot just as its question does.
-KIND_RANK = {"approval": 0, "question": 1, "ask": 1, "waiting": 1, "declined": 2, "task": 3, "report": 4}
+KIND_RANK = {"approval": 0, "question": 1, "ask": 1, "waiting": 1, "declined": 2, "stale": 3, "task": 3, "report": 4}
 # A card whose bot has not yet said plainly what it needs (`ask_missing`) waits at the very bottom: there is nothing
 # for the person to do on it until the bot restates it (backend/restate_asks.py asks it to).
 
@@ -809,6 +809,8 @@ def yes_no_ask(text):
 def need_of(item):
     """The group a Needs you card goes in (NEED_GROUPS)."""
     kind = item.get("kind")
+    if kind == "stale":
+        return "decide"         # Accept or Skip, row by row
     if kind == "approval":
         return {"spend": "pay", "send": "review", "publish": "review", "support": "review", "merge": "review"}.get(
             item.get("what"), "decide")
@@ -1181,12 +1183,27 @@ def needs_items(c, auth, who, task_view, older=None):
                 item["title"] = "Send this to Tico support?"
                 item["support"] = {"to": hq_url().split("://", 1)[-1].split("/", 1)[0]}
             items.append(item)
+    from . import stale_review
+    stale = stale_review.card(c, who.actor) if H.is_human(who.actor) else None
+    if stale:
+        # The one card for the person's stale ticket suggestions (backend/stale_review.py): a row per task they may read.
+        stale["rows"] = [r for r in stale["rows"] if _readable(auth, c, who, r["task"])]
+        if stale["rows"]:
+            items.append(stale_review.retitle(stale))
     items = fold_related(items, c, who.actor)
     at = H.now()
     for item in items:
         item["pressing"] = pressing(item, at)
         item["need"] = need_of(item)
     return sorted(items, key=needs_key)
+
+
+def _readable(auth, c, who, task_id):
+    try:
+        auth.task(c, who, task_id)
+    except Problem:
+        return False
+    return True
 
 
 def needs_key(x):

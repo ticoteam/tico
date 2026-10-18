@@ -112,6 +112,11 @@ class TakeRecommendation(Contract):
     version: Annotated[int, Field(strict=True, ge=1)] | None = None     # the card's task version: a changed task is refused
 
 
+class StaleDecision(Contract):
+    """A person's answer to one row of their Stale tickets card (backend/stale_review.py): accept or skip."""
+    decision: Literal["accept", "skip"] = "accept"
+
+
 class ClarifyAsk(Contract):
     ask: Annotated[StrictStr, Field(min_length=1, max_length=100)]     # the stale bot ask to send the clarify prompt to
 
@@ -1586,6 +1591,7 @@ class AccessRules(Contract):
     health_monitor_reports: bool | None = None
     bots_go_ahead: bool | None = None
     support_access: bool | None = None
+    stale_review: bool | None = None
     go_ahead_days: Annotated[int, Field(strict=True, ge=1, le=14)] | None = None
 
 
