@@ -216,6 +216,9 @@ def test_answers_written_before_the_index_are_found_after_the_backfill(api):
         assert {r[0] for r in IM.quoting(c, said["id"])} == quoted
         assert all(json.loads(r[1]).get("comments") == [] for r in IM.quoting(c, said["id"])
                    if "comments" in json.loads(r[1]))
+        some = sorted(quoted)[0]
+        c.execute("UPDATE idempotency SET response_json='{}' WHERE rowid=?", (some,))   # a rewrite that drops the quote
+        assert {r[0] for r in IM.quoting(c, said["id"])} == quoted - {some}
         c.execute("DELETE FROM idempotency")                    # the retention sweep
         assert c.execute("SELECT count(*) FROM idempotency_messages").fetchone()[0] == 0
 
