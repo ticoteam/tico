@@ -8,6 +8,11 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Fixed
+- A check or review subtask held by its model's usage limit no longer waits unseen. After 12 hours with every turn on
+  it stopped on the limit, the Health Monitor files one setup finding naming the bot, the model, since when and the
+  task, with the fix: wait for the reset, file the check again on another model, or drop it. And a held check whose
+  task is done, closed or declined has its queued turn let go, instead of retrying after every reset and running once
+  on a finished task; checks already in that state are let go on the first scheduler tick after the update.
 - A bot no longer gets a second turn on a task while its first is still running there when the task was moved under
   another of its tasks mid-turn. A wake about a task the bot is working on goes into that turn, or waits for the next
   turn on the task; it never starts one beside it. Another bot's turn on the same task (the requester woken by the

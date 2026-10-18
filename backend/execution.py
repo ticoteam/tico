@@ -578,6 +578,8 @@ def job_refusal(c, job, followed, ready, busy, lanes, roots, live=frozenset()):
     wanted = check_models.of(c, task_id, job["bot"])
     if not check_models.runs_here(ready, wanted) or (wanted and check_models.held(c, task_id)):
         return "check_model"
+    if wanted and not message["from_actor"].startswith("human:") and check_models.dropped(c, task_id):
+        return "check_model"                # hold_unrunnable cancels it on the scheduler's next tick
     config = check_models.apply(followed, wanted)
     if ((job["bot"], job_lane(c, job["bot"], config, message, conversation, lanes, roots)) in busy
             or (job["bot"], task_id) in live):
@@ -2195,6 +2197,23 @@ class Execution:
             with isolated(c, "hold_unrunnable", row["id"]):
                 c.execute("UPDATE jobs SET state='cancelled' WHERE id=?", (row["id"],))
                 H.event(c, H.KEEPER, "job.suppress", row["id"], {"reason": "Bot is archived"})
+                held.append(row["id"])
+        # A check its model's usage limit held, whose task is done, closed or declined, would go on retrying after
+        # every reset and run once on a finished task: its owner's queued turns on it are let go. A person's message
+        # stays queued. From the held checks (check_models.hold) to their owner's queue (jobs_queue).
+        for row in c.execute("SELECT j.id,t.id AS task_id,t.status FROM registry_metadata r "
+                             "JOIN tasks t ON t.id=substr(r.key,15) CROSS JOIN jobs j CROSS JOIN messages m "
+                             "JOIN conversations cv ON cv.id=m.conversation_id "
+                             "WHERE r.key>='check-limited:' AND r.key<'check-limited;' "
+                             f"AND t.status NOT IN ({','.join('?' * len(H.ACTIVE_STATUSES))}) "
+                             "AND t.owner LIKE 'bot:%' AND j.bot=substr(t.owner,5) AND j.state='queued' "
+                             "AND m.id=j.message_id AND m.from_actor NOT LIKE 'human:%' "
+                             f"AND {H.MESSAGE_TASK_SQL}=t.id", H.ACTIVE_STATUSES).fetchall():
+            with isolated(c, "hold_unrunnable", row["id"]):
+                c.execute("UPDATE jobs SET state='cancelled' WHERE id=?", (row["id"],))
+                H.event(c, H.KEEPER, "job.suppress", row["id"],
+                        {"reason": f"Check task is {row['status']}: its turn held by a usage limit is let go",
+                         "task_id": row["task_id"]})
                 held.append(row["id"])
         return held
 
