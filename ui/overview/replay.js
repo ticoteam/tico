@@ -64,8 +64,8 @@ export function replayTimeline(data, names = {}) {
 }
 
 // The controls and clock. `scene()` is the current renderer (it is rebuilt when the team changes shape),
-// and `onState()` is called when any desk changes.
-export function createReplay(root, data, {names = {}, words = {}, scene, onState, reduced}) {
+// `onState()` is called when any desk changes, and `onEnd()` when playback reaches the end on its own.
+export function createReplay(root, data, {names = {}, words = {}, scene, onState, onEnd, reduced}) {
   const line = replayTimeline(data, names);
   const {from, to, items} = line;
   const st = {playing: false, speed: 600, raf: 0, last: 0, captions: []};
@@ -121,7 +121,7 @@ export function createReplay(root, data, {names = {}, words = {}, scene, onState
     const gap = Math.max(0, coming - Math.max(prev, from));
     const rate = gap / st.speed > QUIET_MS ? gap / QUIET_MS : st.speed;
     step(Math.min(to, line.t + dt * rate), true);
-    if (line.t >= to) { st.playing = false; bar(); return; }
+    if (line.t >= to) { st.playing = false; bar(); onEnd?.(); return; }
     bar(); st.raf = requestAnimationFrame(frame);
   }
   function play() { if (st.playing) return; if (line.t >= to) seek(from); st.playing = true; st.last = 0; st.raf = requestAnimationFrame(frame); bar(); }

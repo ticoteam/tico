@@ -93,7 +93,7 @@ async function showReplay(message) {
   replay?.destroy();
   $('#replay-bar').hidden = false;
   replay = createReplay($('#replay'), message.data, {names: message.names || {}, words: message.words || {}, reduced: reducedMotion,
-    scene: () => scene, onState: () => scene?.update(currentData())});
+    scene: () => scene, onState: () => scene?.update(currentData()), onEnd: stopReplay});
   scene?.update(currentData());
   replay.play();
 }
@@ -103,7 +103,8 @@ function stopReplay() {
   if (model) { controls(); scene?.update(currentData()); }
 }
 $('#replay-toggle').onclick = () => replaying ? stopReplay() : startReplay();
-// Back to live works while loading and after an error too, before any replay exists.
+// Back to live works while loading and after an error too, before any replay exists. A replay that plays to its
+// end goes back to live the same way; one scrubbed to the end stays open for scrubbing back.
 $('#replay-live').onclick = stopReplay;
 function dispose() { disposed = true; revision++; replay?.destroy(); replay = null; scene?.dispose(); scene = null; }
 window.addEventListener('message', event => {
