@@ -218,11 +218,15 @@ for you or reach a Tico server you run. Only `https://tico.team` may call these 
 ### What is sent, and to whom
 
 - **To Tico HQ:** each message you type (up to 2,000 characters) with a random ID the panel makes for this chat
-  (`crypto.randomUUID()`), and nothing else: no name, email address, page history or cookie. The panel also tells HQ
-  when the chat opens and when you click a card's link (the card and the link's title, never text).
+  (`crypto.randomUUID()`), and nothing else: the panel adds no name, email address, page history or cookie. Anything
+  you type yourself, a name or an email address included, is part of the message and is kept like the rest of the
+  chat. The panel also tells HQ when the chat opens and when you click a card's link (the card and the link's title,
+  never text).
 - **To OpenRouter** (openrouter.ai), which passes it to a provider that serves the model (DeepSeek V4.1 Flash today;
   the Tico team can change it): a fixed instruction, Tico's sales brief, up to four excerpts of Tico's public manual
-  that match your message, and this chat's last 20 messages. Not the chat ID, your address or anything about you. HQ
+  that match your message, your current message and up to 20 previous messages from this chat, as you wrote them.
+  HQ adds nothing about you (not the chat ID, your IP address or any other detail): anything personal in the call is
+  what you typed. HQ
   calls OpenRouter with its own key and the same three filters on every call, which are not a setting: no provider
   that may keep or train on data (`data_collection: deny`), only endpoints OpenRouter classes as zero data retention
   (`zdr: true`), and never DeepSeek's own service (`ignore: ["deepseek"]`). If no provider meets them, the call is
