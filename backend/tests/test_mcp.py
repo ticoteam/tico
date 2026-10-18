@@ -271,3 +271,111 @@ def test_a_question_asked_from_a_run_on_the_bots_own_task_is_filed_under_it(api)
         assert H.task(c, work["id"])["owner"] == "bot:ops"
     cards = [i["id"] for i in get(api, "needs-you")["items"]]
     assert made["id"] in cards and work["id"] not in cards
+
+
+# ------------------------------------------------------------------ the computer list
+SUMMARY_FIELDS = {"id", "label", "online", "last_seen", "operator", "release", "version", "wanted_release", "update",
+                  "readiness", "warnings", "errors"}
+
+
+def heavy_heartbeat(api, r, bots, n, release="0.3.56", update=None):
+    """What a busy computer reports: runtime catalogs, every bot's readiness with instruction warnings, a long error
+    history and its repositories (synthetic, at the sizes the models allow)."""
+    models = ["model-" + str(m) for m in range(30)]
+    runtime = lambda name: {"installed": True, "authenticated": "ready" if name != "gemini" else "missing",   # noqa: E731
+                            "version": "2.1." + str(n), "models": models, "detail": "signed in " * 20,
+                            "profiles": {p: {"runtime": name, "installed": True, "authenticated": "ready",
+                                             "version": "2.1", "models": models} for p in ("work", "personal")}}
+    report = {"schema_version": 1, "disk": {"total_bytes": 10**12, "free_bytes": 10**11},
+              "engine": {"name": "rust", "build": "abc123"},
+              "runtimes": {name: runtime(name) for name in ("claude", "codex", "gemini")},
+              "harnesses": {h: {"name": h, "runtime": h, "installed": True, "version": "1.0", "detail": "ok " * 50}
+                            for h in ("claude", "codex", "gemini", "grok")},
+              "bots": {bot: {"ready": bool(i or n % 3), "runtime": "claude", "model": "model-1",
+                             "repository": f"/Users/acme/tico/{bot}", "repository_present": True,
+                             "repository_revision": "f" * 40, "configuration_valid": True,
+                             "problems": [] if i or n % 3 else ["The repository is not on this computer yet"],
+                             "warnings": ["AGENT.md is 41,000 characters; a run reads it every turn " + "x" * 150] * 3}
+                       for i, bot in enumerate(bots)},
+              "recent_errors": [f"2026-10-18T07:{m:02d}:00Z ERROR runner: turn {m} failed " + "y" * 230 for m in range(50)]}
+    repositories = [{"full_name": f"acme/repo-{k}", "state": "cloned", "last_fetch": "2026-10-18T07:00:00Z",
+                     "size_mb": 120.5, "error": None} for k in range(30)]
+    return post(api, "runners/heartbeat", {"version": "0.5.9", "platform": "darwin", "kind": "mac", "release": release,
+                                           "readiness": report, "repositories": repositories,
+                                           **({"update": update} if update else {})}, token=r["token"])
+
+
+def eleven_computers(api):
+    from backend import hubdb as H
+    from backend.store import encode
+    slugs = ["bot-" + str(k) for k in range(33)]
+    bots = {slug: {"name": slug, "runtime": "fake", "status": "active"} for slug in slugs}
+    with api.app.state.store.transaction() as c:
+        H.sync_registry(c, bots, [])
+        for slug, config in bots.items():
+            c.execute("INSERT INTO bot_config(bot,config_json,operator) VALUES(?,?,'ana')", (slug, encode(config)))
+    computers = []
+    for n in range(11):
+        r = runner(api, label=f"Mac {n:02d}")
+        mine = slugs[n * 3:n * 3 + 3]
+        for bot in mine:
+            assign(api, r, bot)
+        heavy_heartbeat(api, r, mine, n, release="0.3.50" if n == 1 else "0.3.56",
+                        update={"state": "failed", "error": "download refused"} if n == 2 else
+                        {"state": "updating", "target": "0.3.56"} if n == 3 else None)
+        computers.append(r)
+    return computers
+
+
+def test_the_computer_list_is_a_short_summary_and_one_computer_reads_in_capped_pages(api, monkeypatch):
+    monkeypatch.setenv("TICO_VERSION", "0.3.56")
+    eleven_computers(api)
+    assert len(json.dumps(get(api, "computers"))) > 200_000                 # the Computers page keeps everything
+    err, listing = call(api, "hub_computer_list")
+    assert not err and len(listing["computers"]) == 11
+    assert len(json.dumps(listing)) < 8_000                                  # the budget for 11 computers
+    rows = {row["label"]: row for row in listing["computers"]}
+    assert all(SUMMARY_FIELDS <= set(row) for row in rows.values())
+    assert [rows[f"Mac {n:02d}"]["update"] for n in range(4)] == ["current", "update_available", "failed", "updating"]
+    assert rows["Mac 00"]["readiness"] == "not_ready" and rows["Mac 00"]["errors"] == 1
+    assert rows["Mac 01"]["readiness"] == "warnings" and rows["Mac 01"]["warnings"] == 9
+    assert rows["Mac 01"]["signed_in"] == ["claude", "codex"] and rows["Mac 01"]["recent_errors"] == 50
+    assert "repositories" not in rows["Mac 01"] and "AGENT.md" not in json.dumps(listing)
+
+    err, detail = call(api, "hub_computer_list", {"computer": "mac 04"})
+    assert not err and detail["label"] == "Mac 04" and len(json.dumps(detail)) <= hubtools.COMPUTER_DETAIL_CHARS
+    assert len(detail["repositories"]) == hubtools.COMPUTER_PAGE and len(detail["readiness"]["bots"]) == 3
+    assert detail["readiness"]["recent_errors"][0].startswith("2026-10-18T07:49")          # newest first
+    assert detail["readiness"]["bots"]["bot-12"]["warnings"][0].startswith("AGENT.md is 41,000")
+    cut = detail["truncated"]
+    assert set(cut) == {"repositories", "recent_errors"} and cut["repositories"]["total"] == 30
+    err, rest = call(api, "hub_computer_list", {"computer": detail["id"], "section": "repositories", "offset": 20})
+    assert not err and [r["full_name"] for r in rest["items"]] == [f"acme/repo-{k}" for k in range(20, 30)]
+    assert "more" not in rest and rest["total"] == 30
+    assert "hub_computer_list" in cut["recent_errors"]["more"]
+
+
+def test_a_member_reads_neither_a_computer_nor_a_bot_they_cannot_see_in_the_summary_or_the_detail(api):
+    from backend.tests.test_api import as_member
+    as_member(api, "ben@acme.example")
+    anas = runner(api, label="Ana Mac")                                      # Ana's own, closed to members' bots
+    shared = runner(api, label="Shared Mac")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runners SET accepts_member_bots=0 WHERE id=?", (anas["runner_id"],))
+        c.execute("UPDATE runners SET accepts_member_bots=1 WHERE id=?", (shared["runner_id"],))
+        restrict(c, "finance", people=["ana"])
+    assign(api, anas, "coo")
+    for bot in ("ops", "finance"):
+        assign(api, shared, bot)
+    heavy_heartbeat(api, anas, ["coo"], 1)
+    heavy_heartbeat(api, shared, ["ops", "finance"], 1)
+    raw = get(api, "computers", "ben-test")
+    err, listing = call(api, "hub_computer_list", token="ben-test")
+    assert not err and [row["label"] for row in listing["computers"]] == [row["label"] for row in raw["computers"]]
+    assert [row["label"] for row in listing["computers"]] == ["Shared Mac"]
+    assert listing["computers"][0]["bots"] == ["ops"] and listing["computers"][0]["warnings"] == 3
+    err, detail = call(api, "hub_computer_list", {"computer": "Shared Mac"}, token="ben-test")
+    assert not err and list(detail["readiness"]["bots"]) == ["ops"] and "finance" not in json.dumps(detail)
+    assert call(api, "hub_computer_list", {"computer": "Ana Mac"}, token="ben-test")[0]
+    err, everything = call(api, "hub_computer_list", {"computer": "Shared Mac"})
+    assert not err and set(everything["readiness"]["bots"]) == {"ops", "finance"}         # the owner still reads it

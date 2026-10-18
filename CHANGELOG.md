@@ -26,6 +26,12 @@ All notable changes to Tico are recorded here. The format follows
   itself on first use. A runner's home volume survives the update, so anything a bot or person built there with the old
   Python 3.12 (a project's venv, `pip install --user` packages under `~/.local/lib/python3.12`) does not run on 3.15:
   rebuild it ([updates.md](docs/updates.md#python-environments-on-a-docker-runner) lists them and how).
+- `hub_computer_list` and `hub computer list` answer one short row per computer: online and last seen, operator,
+  release, version, wanted release, update state, a readiness level, its bots, the AI tools signed in, and counts of
+  warnings, errors and recent log errors (about 5,000 characters for 11 busy computers, down from over 200,000). One
+  computer in full is `computer=<label or id>` (`--computer`): repositories, each bot's readiness, runtimes, harnesses
+  and recent errors come 20 at a time, and `truncated` names the `section` and `offset` that read the rest. Settings >
+  Computers and `GET /api/v2/computers` are unchanged.
 
 ### Fixed
 - Automatic fallback no longer sends a bot to a login that is out of quota. When a login on a computer fails a turn

@@ -2326,10 +2326,135 @@ tool("hub_bot_resume", "Resume a paused bot, as the person who asked you; one wi
      {"bot": _s("The bot's slug")}, required=("bot",), writes=True)(_control("resume"))
 
 
-@tool("hub_computer_list", "The computers a bot may go on, as the person who asked you: label, whether it is online, whether it "
-      "takes members' bots, which bots run there, release (Tico), version (runner software), wanted release, update state, last error and service readiness.", {})
+# A computer's full row runs to tens of thousands of characters (every repository, each bot's readiness, runtime
+# catalogs, recent log errors), so the list is one short row each and the detail is paged section by section.
+COMPUTER_SECTIONS = ("repositories", "bots", "runtimes", "harnesses", "recent_errors")
+COMPUTER_PAGE = 20
+COMPUTER_TEXT = 300
+COMPUTER_DETAIL_CHARS = 40_000
+
+
+def _computer_counts(row):
+    """Warnings and errors as numbers: each bot's warnings and problems (a bot not ready that names none counts one),
+    and a failed update."""
+    readiness = row.get("readiness") if isinstance(row.get("readiness"), dict) else {}
+    reports = [r for r in (readiness.get("bots") or {}).values() if isinstance(r, dict)]
+    warnings = sum(len(r.get("warnings") or []) for r in reports)
+    errors = sum(len(r.get("problems") or []) or (0 if r.get("ready") else 1) for r in reports)
+    return warnings, errors + bool((row.get("update") or {}).get("error")), readiness
+
+
+def computer_summary(row):
+    """One computer in a few hundred characters: who runs it, whether it is up, its release and update, and how
+    ready it is, with counts in place of the text."""
+    update = row.get("update") or {}
+    warnings, errors, readiness = _computer_counts(row)
+    state = "failed" if update.get("error") else {"needs_update": "update_available"}.get(
+        update.get("state"), update.get("state") or "unknown")
+    level = ("offline" if not row.get("online") else "not_ready" if errors else "warnings" if warnings else "ready")
+    return {"id": row.get("id"), "label": row.get("label"), "online": bool(row.get("online")),
+            "last_seen": row.get("last_seen"), "operator": row.get("operator"), "platform": row.get("platform") or "",
+            "accepts_member_bots": bool(row.get("accepts_member_bots")), "release": row.get("release") or "",
+            "version": row.get("version") or "", "wanted_release": update.get("wanted_release") or "",
+            "update": state, "readiness": level, "bots": list(row.get("bots") or []),
+            "signed_in": sorted(name for name, r in (readiness.get("runtimes") or {}).items()
+                                if isinstance(r, dict) and r.get("authenticated") == "ready"),
+            "warnings": warnings, "errors": errors, "recent_errors": len(readiness.get("recent_errors") or [])}
+
+
+def _bounded(value, cap):
+    """Cut long text, long lists and long maps of records inside one section item, and say how much was cut."""
+    if isinstance(value, str):
+        return value if len(value) <= COMPUTER_TEXT else value[:COMPUTER_TEXT] + "… (cut)"
+    if isinstance(value, list):
+        return [_bounded(v, cap) for v in value[:cap]] + ([f"… {len(value) - cap} more"] if len(value) > cap else [])
+    if isinstance(value, dict):
+        keys = list(value)
+        many = len(keys) > cap and all(isinstance(v, dict) for v in value.values())
+        out = {k: _bounded(value[k], cap) for k in (keys[:cap] if many else keys)}
+        return {**out, "…": f"{len(keys) - cap} more"} if many else out
+    return value
+
+
+def _computer_section(row, name):
+    """A section's items in a stable order, or None when the computer has none: maps by name, recent errors
+    newest first."""
+    readiness = row.get("readiness") if isinstance(row.get("readiness"), dict) else {}
+    found = row.get(name) if name == "repositories" else readiness.get(name)
+    if isinstance(found, dict):
+        return sorted(found.items())
+    if isinstance(found, list):
+        return list(reversed(found)) if name == "recent_errors" else found
+    return None
+
+
+def _page(items, name, offset, cap):
+    """One page of a section's items, and where the next one starts (None on the last page)."""
+    page = [_bounded(v, cap) for v in items[offset:offset + cap]]
+    return (page if name in ("repositories", "recent_errors") else dict(page),
+            offset + cap if offset + cap < len(items) else None)
+
+
+def computer_detail(row, section=None, offset=0):
+    """One computer in full, every large section capped at COMPUTER_PAGE items and long text cut, with a note on each
+    cut saying how to read the rest; with `section`, one page of that section from `offset`. A row still over
+    COMPUTER_DETAIL_CHARS is paged smaller."""
+    more = lambda name, at: f"hub_computer_list computer={row.get('id')} section={name} offset={at}"  # noqa: E731
+    offset = max(0, int(offset or 0))
+    for cap in (COMPUTER_PAGE, 10, 5, 2, 1):
+        if section:
+            items = _computer_section(row, section) or []
+            page, after = _page(items, section, offset, cap)
+            result = {"id": row.get("id"), "label": row.get("label"), "section": section, "offset": offset,
+                      "total": len(items), "items": page, **({"more": more(section, after)} if after else {})}
+        else:
+            readiness = row.get("readiness") if isinstance(row.get("readiness"), dict) else {}
+            result = {k: v if k == "bots" else _bounded(v, cap) for k, v in row.items() if k != "readiness"}
+            result["readiness"] = {k: _bounded(v, cap) for k, v in readiness.items() if k not in COMPUTER_SECTIONS}
+            result["truncated"] = {}
+            for name in COMPUTER_SECTIONS:
+                items = _computer_section(row, name)
+                if items is None:
+                    continue
+                page, after = _page(items, name, 0, cap)
+                (result if name == "repositories" else result["readiness"])[name] = page
+                if after:
+                    result["truncated"][name] = {"shown": len(page), "total": len(items), "more": more(name, after)}
+        if len(json.dumps(result, default=str)) <= COMPUTER_DETAIL_CHARS:
+            break
+    return result
+
+
+@tool("hub_computer_list", "The computers a bot may go on, as the person who asked you, one short row each: id, label, "
+      "online and last seen, operator, release (Tico), version (runner software), wanted release, update (current, "
+      "update_available, updating, failed, incompatible or unknown), readiness (ready, warnings, not_ready or offline), "
+      "the bots that run there, the AI tools signed in, and counts of warnings, errors and recent log errors; and "
+      "whether each team service is ok. "
+      "For one computer in full (repositories, each bot's readiness, runtimes, update error, recent errors) pass "
+      "`computer`: large sections come capped, and `truncated` says how to read the rest with `section` and `offset`.",
+      {"computer": _s("One computer's label or id: its full detail instead of the list"),
+       "section": {"type": "string", "enum": list(COMPUTER_SECTIONS),
+                   "description": "With `computer`: one page of this section only"},
+       "offset": {"type": "integer", "minimum": 0, "description": "With `section`: the first item to return (default 0)"}})
 def computers(api, args):
-    return _as_person(api).get("computers")
+    listing = _as_person(api).get("computers") or {}
+    rows = listing.get("computers") or []
+    wanted = str(args.get("computer") or "").strip()
+    if not wanted:
+        if args.get("section"):
+            raise ValueError("Name the computer whose section you want: `computer`")
+        return {"computers": [computer_summary(r) for r in rows],
+                "services": [{"name": s.get("name"), "ok": not s.get("last_error"), "last_success": s.get("last_success")}
+                             for s in listing.get("services") or []],
+                "detail": "One computer in full: hub_computer_list computer=<label or id>"}
+    match = [r for r in rows if wanted == r.get("id")] or [
+        r for r in rows if wanted.lower() == str(r.get("label") or "").strip().lower()]
+    if len(match) != 1:
+        raise ValueError(f"No computer named {wanted!r}; hub computer list names them" if not match else
+                         f"More than one computer is called {wanted!r}; use its id")
+    if args.get("section") and args["section"] not in COMPUTER_SECTIONS:
+        raise ValueError("section is one of " + ", ".join(COMPUTER_SECTIONS))
+    return computer_detail(match[0], args.get("section"), args.get("offset") or 0)
 
 
 @tool("hub_computer_performance", "A computer's CPU, memory, load, swap and free disk over the last hours (up to 336): "

@@ -375,5 +375,7 @@ Bump `MIN_RUNNER_RELEASE` in the release that changes the runner/server contract
 Ship the server and runner image for that release together, and expect computers to move within a few minutes of
 the server's restart.
 
-Computers and `hub_computer_list` show installed and wanted releases, update state and last error.
+Computers shows installed and wanted releases, update state and last error. `hub_computer_list` gives each computer's
+releases and update state (`current`, `update_available`, `updating`, `failed`, `incompatible` or `unknown`) in one
+short row; `hub_computer_list computer=<label or id>` adds the last error.
 `hub_health_check` includes that Computer detail and service errors with the next step.

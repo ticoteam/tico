@@ -282,7 +282,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub api GET|POST|PUT|PATCH|DELETE <path> ['{json}']
                                            BotOps: any v2 route, as the person who asked; a Confirm card for what
                                            always needs their click. Never a secret in the body
-    hub computer list                      the computers a bot may go on, and what runs on each
+    hub computer list [--computer C]       the computers a bot may go on, one short row each; one in full
     hub computer performance <label|id> [--hours 24]
                                            its CPU, memory and disk over time, overloads and what ran then
     hub credential request <ENV> [--for-bot B] [--label "your Jira login"] [--format "you@x.com:API token"]
@@ -1777,7 +1777,12 @@ def parser():
     s.add_argument("--on-behalf-of", help="the open task a person asked you for, when something else started this run")
     s.set_defaults(fn="api")
     comp = sub.add_parser("computer", help="the computers a bot may go on").add_subparsers(dest="sub")
-    comp.add_parser("list", help="the computers a bot may go on, and what runs on each").set_defaults(fn="computer list")
+    s = comp.add_parser("list", help="the computers a bot may go on, one short row each; --computer for one in full")
+    s.add_argument("--computer", help="one computer's label or id: its full detail, large sections capped")
+    s.add_argument("--section", choices=["repositories", "bots", "runtimes", "harnesses", "recent_errors"],
+                   help="with --computer: one page of this section only")
+    s.add_argument("--offset", type=int, help="with --section: the first item to return")
+    s.set_defaults(fn="computer list")
     s = comp.add_parser("performance", help="a computer's CPU, memory and disk over time, overloads and what ran then")
     s.add_argument("computer", help="the computer's label or id")
     s.add_argument("--hours", type=int, default=24)
