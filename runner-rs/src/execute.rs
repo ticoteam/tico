@@ -105,9 +105,14 @@ impl Meter {
         }
     }
 
+    /// Whether the segment used any tokens: one that used none is left out of the completion's usage.
+    pub(crate) fn used(&self) -> bool {
+        self.input != 0 || self.output != 0
+    }
+
     pub(crate) fn report(&self, model: &str, runtime: &str, billing: &str) -> Option<Map<String, Value>> {
         let cached = self.cached.min(self.input);
-        if self.input == 0 && self.output == 0 {
+        if !self.used() {
             return None;
         }
         let model = if (model.trim().is_empty() || model.trim() == "default") && !self.model.is_empty() { &self.model } else { model };
@@ -876,18 +881,29 @@ impl Runner {
             }
         }
         let native_control = truthy(refs.get("command")) || goal.chat_goal.as_ref().is_some_and(|g| g["status"] == "active");
-        let mut hop = if unavailable && !native_control { crate::fallback::configured(&config) } else { None };
+        let mut pending = if unavailable && !native_control { crate::fallback::configured(&config) } else { None };
         let hit_limit = drove.limited;
-        if hop.is_none() && hit_limit && !native_control && prepared {
+        let login = |p: &Option<Profile>| p.as_ref().map(|p| p.name.clone()).unwrap_or_default();
+        if hit_limit {
+            // Out of quota here until its reset (or for a while): no other bot's fallback picks this login meanwhile.
+            crate::fallback::remember_limit(&login(&selected), &runtime, crate::util::epoch_s());
+        } else if drove.outcome == "completed" {
+            crate::fallback::forget_limit(&login(&selected), &runtime);
+        }
+        let turn_env = base_env.clone().unwrap_or_default();
+        if pending.is_none() && hit_limit && !native_control && prepared {
             // Out of quota with no fallback of its own: another provider signed in on this computer runs the turn
             // once (Settings > AI providers can turn this off for the company).
             let choices = self.default_fallbacks().await;
-            let turn_env = base_env.clone().unwrap_or_default();
-            hop = crate::fallback::default_choice(&config, &choices, &turn_env, |rt| self.fallback_ready(rt, selected.as_ref()));
+            pending = crate::fallback::default_choice(&config, &choices, &turn_env, |rt| self.fallback_ready(rt, selected.as_ref()));
         }
         // Only a server that sent `fallback_models` knows the field (an older one refuses unknown fields).
-        let primary_limited = hop.as_ref().is_some_and(|h| h.default && hit_limit);
-        if let (Some(hop), true, Some(base)) = (hop, prepared, base_env.clone()) {
+        let primary_limited = pending.as_ref().is_some_and(|h| h.default && hit_limit);
+        let mut tried: Vec<String> = vec![runtime.clone()];
+        // Why the turn left the harness before the hop, for its diagnostic: the primary, then each spent hop.
+        let mut left = None;
+        while let (Some(hop), true, Some(base)) = (pending.take(), prepared, base_env.clone()) {
+            tried.push(hop.runtime.clone());
             uses.push(hop.runtime.clone());
             crate::harness_tools::turn_runtimes(&aid, &uses);
             if let Some(th) = &thread {
@@ -913,7 +929,8 @@ impl Runner {
                 });
                 let hop_env = selected.as_ref().map_or_else(|| base.clone(), |p| p.environment(&hop.runtime, &base));
                 env = hop_env.clone();
-                self.diagnose(&aid, &crate::fallback::diagnostic(&primary, &hop, hit_limit));
+                let (from, limited) = left.clone().unwrap_or_else(|| (primary.clone(), hit_limit));
+                self.diagnose(&aid, &crate::fallback::diagnostic(&from, &hop, limited));
                 // The primary's promise to report every tool call ends here; the fallback host makes its own.
                 let _ = self.state.append(&aid, "status", &json!({"tool_events": false}));
                 let (tx, mut rx) = unbounded_channel();
@@ -967,6 +984,19 @@ impl Runner {
                 } else {
                     self.diagnose(&aid, &format!("{}: fallback harness interrupted; inspect local runner", e.kind));
                 }
+            }
+            if drove.limited {
+                crate::fallback::remember_limit(&login(&selected), &hop.runtime, crate::util::epoch_s());
+            } else if drove.outcome == "completed" {
+                crate::fallback::forget_limit(&login(&selected), &hop.runtime);
+            }
+            // That login is out of quota too: the next of the company's providers takes the turn. Only while at most
+            // one segment has used tokens, since a completion reports two at most (backend/models.py RunUsage).
+            let spent = segments.iter().filter(|s| s.meter.used()).count();
+            if drove.limited && hop.default && !native_control && spent < 2 {
+                left = Some((hop.harness.clone(), true));
+                let choices = self.default_fallbacks().await;
+                pending = crate::fallback::next_choice(&config, &choices, &turn_env, &tried, |rt| self.fallback_ready(rt, selected.as_ref()));
             }
         }
         let ran_on = fallback.clone().unwrap_or_else(|| runtime.clone());

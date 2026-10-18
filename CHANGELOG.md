@@ -49,6 +49,10 @@ All notable changes to Tico are recorded here. The format follows
 
 ### Fixed
 
+- Automatic fallback no longer sends a bot to a login that is out of quota. When a login on a computer fails a turn
+  on its usage limit, the runner skips it for fallback until the provider's reset time, or for 30 minutes when the
+  provider gives none, and takes the next of the company's providers instead. A fallback that hits its own limit
+  mid-turn moves the turn on to the next provider rather than ending it.
 - `hub computer performance` and the `hub_computer_performance` tool work again: they read the computers reply as a list,
   so every call failed before it reached the computer's CPU, memory and disk history.
 - The Overview campus opened before the bots' status arrived now shows each desk's state as soon as it does, instead

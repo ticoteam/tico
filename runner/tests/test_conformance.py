@@ -414,6 +414,35 @@ def test_a_usage_limit_with_no_fallback_set_runs_on_another_signed_in_provider(a
                for d in diagnostics), diagnostics
 
 
+# TK-EKWAFWPD: the first of the company's providers is out of quota on this computer too. The hop that hits its limit
+# moves the turn on to the next provider in the same turn, and the next turn skips that login altogether.
+@pytest.mark.parametrize("harness", ["claude"])
+@pytest.mark.parametrize("setup", [{"env": {"FAKE_CLAUDE_LIMIT": "1"}}])
+def test_a_fallback_out_of_quota_too_moves_the_turn_on_and_is_skipped_next_time(api, computer):
+    from backend.store import H
+    view = get(api, "providers")
+    saved = api.put("/api/v2/providers", json={"enabled": ["anthropic", "openai", "meta"], "model": view["default"]["model"] or "",
+                                                "expected_revision": view["revision"], "auto_fallback": True},
+                    headers={"Authorization": "Bearer ana-test", "Idempotency-Key": H.new_id()})
+    assert saved.status_code == 200, saved.text
+    computer.start()
+    msg = post(api, "chat/ops", {"text": "Please LIMIT yourself"})       # Codex fails this on its usage limit
+    assert until(lambda: reply_to(api, msg["conversation_id"]), "the second fallback's reply")["body"] == "Acme reply."
+    first = until(lambda: (computer.attempts() or [{}])[-1].get("result"), "the completion")
+    assert first["outcome"] == "completed" and first["fallback"] == "musecode" and first["primary_limited"] is True
+    assert not first.get("limited")
+    assert [p["harness"] for p in computer.prompts()] == ["claude", "codex", "musecode"]
+    diagnostics = [e["payload"].get("text", "") for e in computer.events(computer.attempts()[-1]["id"]) if e["kind"] == "diagnostic"]
+    assert any(d.startswith("claude hit its usage limit; running this turn on codex") for d in diagnostics), diagnostics
+    assert any(d.startswith("codex hit its usage limit; running this turn on musecode") for d in diagnostics), diagnostics
+    # The next turn: Claude is still out of quota, and so is this computer's Codex login, so Muse Code takes it at once.
+    post(api, "chat/ops", {"text": "Please LIMIT yourself again"})
+    second = until(lambda: (lambda rows: rows[-1]["result"] if len(rows) == 2 and rows[-1]["result"] else None)(computer.attempts()),
+                   "the second completion")
+    assert second["outcome"] == "completed" and second["fallback"] == "musecode"
+    assert [p["harness"] for p in computer.prompts()] == ["claude", "codex", "musecode", "claude", "musecode"]
+
+
 # Steering and subscription profiles are Claude Code and Codex features (runner-rs/src/profiles.rs, steer in drive).
 @pytest.mark.parametrize("harness", ["claude", "codex"])
 @pytest.mark.parametrize("setup", [{"env": {"FAKE_SLOW": "8"}}])

@@ -290,7 +290,10 @@ limit" counts): the runner runs that turn once on the first of the company's oth
 signed in on the same computer, with that provider's default model (`fallback_models` in
 `GET /api/v2/config`), and reports `fallback` with `primary_limited`. A provider signed in only by a key in
 the environment is skipped (a turn carries only its own runtime's keys; Codex turns its key into a login).
-With no ready provider the run is limited as above. Every turn tries the bot's own provider first, so the
+A login on that computer that failed a turn on its usage limit is skipped until the provider's reset time, or for
+30 minutes when the provider gives none, and the next provider in the list takes the turn. When the fallback itself
+hits its limit, the same turn moves on to the next signed-in provider instead of ending. With no ready provider
+the run is limited as above. Every turn tries the bot's own provider first, so the
 bot moves back on its own once the limit resets. The owner turns this off in **Settings → AI providers**
 (*Fall back when a plan runs out*, `auto_fallback`). Overview lists how many bots are on a fallback and
 since when, and how many are limited.
