@@ -9,7 +9,7 @@ an API key, whose plan usage the server refuses to read. FAKE_CODEX_LOGIN=file m
 the test to put `approve` (writes auth.json) or `deny` (fails) in $CODEX_HOME.
 
 Scripted prompts: HANG streams one delta and then waits, once per $FAKE_LOG, until its parent goes away; LIMIT
-fails the turn with a usage limit; SLOW streams one delta and answers after $FAKE_SLOW seconds (2), or at once
+fails the turn with a usage limit (after some token usage when $FAKE_LIMIT_SPENDS names codex); SLOW streams one delta and answers after $FAKE_SLOW seconds (2), or at once
 after a steer, whose text the answer then carries."""
 import json
 import os
@@ -178,6 +178,10 @@ def main():
                     time.sleep(0.1)
                 return
             if "LIMIT" in text:
+                if "codex" in os.environ.get("FAKE_LIMIT_SPENDS", ""):
+                    send({"method": "thread/tokenUsage/updated", "params": {"threadId": thread, "turnId": turn, "tokenUsage": {
+                        "total": {"inputTokens": 5, "cachedInputTokens": 0, "outputTokens": 1, "totalTokens": 6},
+                        "last": {"inputTokens": 5, "cachedInputTokens": 0, "outputTokens": 1, "totalTokens": 6}}}})
                 send({"method": "turn/completed", "params": {"threadId": thread, "turn": {
                     "id": turn, "status": "failed", "error": {"message": "You've hit your usage limit. Try again later."}}}})
                 continue

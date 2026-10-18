@@ -332,6 +332,11 @@ p:empty{display:none}
 .machine-usage-line .muted{flex-basis:100%;font-size:var(--t-xs)}
 .machine-usage-bar{width:64px;height:8px;flex-shrink:0}
 @media (max-width:900px){.machine-tools{grid-template-columns:1fr 1fr}.machine-tool-head{display:none}.machine-tool>[role=cell]{border-top:0}.machine-tool-name{grid-column:1/-1;border-top:1px solid var(--line)!important}}
+/* Desktop apps: the same rows as AI tools (app | installed version | state and its detail). On a phone the head row
+   keeps only its title, so the rows still say they are desktop apps. */
+.machine-apps{grid-template-columns:minmax(90px,max-content) minmax(0,110px) minmax(160px,1fr);margin-top:6px}
+.machine-app-detail{flex-basis:100%;font-size:var(--t-xs);overflow-wrap:anywhere}
+@media (max-width:900px){.machine-apps .machine-tool-head{display:contents}.machine-apps .machine-tool-head>[role=columnheader]{display:none}.machine-apps .machine-tool-head>:first-child{display:flex;grid-column:1/-1}}
 .settings-services summary{cursor:pointer;font-weight:600}
 .settings-services-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:6px 14px;margin-top:12px;font-size:var(--t-sm)}
 .settings-team-icon{display:flex;align-items:center;gap:20px;padding:16px 0}

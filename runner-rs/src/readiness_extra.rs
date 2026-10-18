@@ -18,7 +18,7 @@ pub const PUBLISH_WARNING: &str = "GitHub history not published: ";
 const DENIED_WARNING: &str = "Claude Code denies what AGENT.md asks for: ";
 const DENIES_WARNING: &str = "Claude Code settings deny: ";
 /// Readiness fields an older server may refuse; each is left out for ten minutes after a refusal.
-pub const OPTIONAL: &[&str] = &["engine", "worktree_waits", "worktrees", "harnesses", "mail_key", "shared_env", "recent_errors", "container_exec", "github_auth", "browser_launch", "disk", "screen"];
+pub const OPTIONAL: &[&str] = &["engine", "worktree_waits", "worktrees", "harnesses", "mail_key", "shared_env", "recent_errors", "container_exec", "github_auth", "browser_launch", "disk", "screen", "appdriver"];
 
 // ------------------------------------------------------------------------------------- credential grants
 
