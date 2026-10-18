@@ -44,8 +44,6 @@ New bots start with their own repository unless the team selected all ticked rep
 
 ## Subscribe to updates
 
-> **Unreleased**: this setting is on `main` and not in a published release yet.
-
 A bot can hear about changes that may matter to it, as information only. In the bot editor (**Settings → Bots →
 Edit**, or **Bot settings** on the bot's Setup card), under **Subscribe to updates**, people who manage the bot tick
 either, both or neither:
@@ -596,7 +594,7 @@ Levers set in **Settings → Bots**, not in the repository:
   the bot's computer unless the owner turned that off in **Settings → AI providers** (docs/how-it-works.md).
 - **Compact at**: how full the bot's conversation gets before it is compacted: 150k, 250k tokens (the default),
   400k, 600k or 1M. Claude Code and Codex only. Changing it keeps the session.
-- **Wakes** (Coming soon): how soon news starts a run. **Token saver**, the default for a new bot, holds
+- **Wakes**: how soon news starts a run. **Token saver**, the default for a new bot, holds
   nonblocking news (a request it asked for finished, review comments, a failing check nobody waits on) and
   sends it as one wake at most every 30 minutes. It also runs an enabled routine, or a stall check on a task,
   at most every 2 hours. **Performance** coalesces the same news for 1 minute and runs those sweeps at most

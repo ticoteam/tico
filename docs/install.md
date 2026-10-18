@@ -245,7 +245,7 @@ Then it shows the plan and asks "Go ahead?". `--dry-run` prints the plan and cha
 
 ```
 $ python3 -m setup --dry-run --non-interactive --target local --front-door caddy --domain tico.example.com \
-    --server-ip 203.0.113.7 --auth google --client-id 1234-abc.apps.googleusercontent.com --team-name Acme --owner-email you@example.com
+    --server-ip 203.0.113.7 --auth google --client-id 1234-abc.apps.googleusercontent.com --company Acme --owner-email you@example.com
 tico setup (dry run: nothing will be created or changed)
 Sign-in: create a Google OAuth client at https://console.cloud.google.com/auth/clients/create
   with redirect URI exactly https://tico.example.com/auth/callback
@@ -300,12 +300,12 @@ they never appear in a process list:
 
 ```
 TICO_OIDC_CLIENT_SECRET=... sh install.sh --yes --version vX.Y.Z -- --domain tico.example.com --front-door caddy \
-  --server-ip 203.0.113.7 --auth google --client-id 1234-abc.apps.googleusercontent.com --team-name Acme \
+  --server-ip 203.0.113.7 --auth google --client-id 1234-abc.apps.googleusercontent.com --company Acme \
   --owner-email you@example.com --backup local
 ```
 
 Flags: `--domain`, `--front-door caddy|cloudflared`, `--server-ip`, `--tico-version`, `--auth google|microsoft|cloudflare`,
-`--tenant`, `--client-id`, `--allowed-domain`, `--team-name` (`--company` remains an alias), `--owner-email`, `--decisions-provider` (the old `--judge-provider` still works), `--backup`,
+`--tenant`, `--client-id`, `--allowed-domain`, `--company` (the team name), `--owner-email`, `--decisions-provider` (the old `--judge-provider` still works), `--backup`,
 `--backup-url`, `--backup-endpoint`, `--backup-region`, `--no-updater`, `--dns-timeout MINUTES`, `--skip-dns-wait`.
 Credentials: `TICO_OIDC_CLIENT_SECRET`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_TUNNEL_TOKEN`, `OPENAI_API_KEY` (or
 `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`). `python3 -m setup --help` lists all of them.
