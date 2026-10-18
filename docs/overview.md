@@ -12,6 +12,30 @@ Hidden people, invisible or retired bots and other people's personal branches ar
 
 The renderer uses native ES modules and locally vendored Three.js; it needs no build step or external CDN. Geometry and materials are shared and static scenery is batched. Device pixel ratio is capped, invisible documents stop rendering and reduced-motion preferences pause decorative motion, including preference changes while the scene is open. If WebGL is unavailable, the same authorized roster remains accessible as a list grouped by computer and pavilion.
 
+## Bot hours vs human hours
+
+The **Bot hours vs human hours** card sits at the top of the Overview, above the campus. It compares how much time your bots spent working with the hours your people work, as an estimate.
+
+- **Headline:** bot hours per human hour over the last 7 days, for example **6×**. Below 10 it shows one decimal (0.4×, 2.5×); from 10 up, a whole number.
+- **Chart:** one point a week for up to the last 12 weeks, with a dashed **Parity 1×** line where bots and people work the same hours. The current week is dotted and hollow: it is the week "so far", not a finished week. Hover a point, or tap it on a phone, to see that week's numbers, for example "Week of Oct 12: 243 bot hours · 40 human hours · 6.1×".
+- **Table:** click the card to open the numbers by week: week, bot hours, people, human hours and ratio, newest first.
+
+How the two numbers are counted:
+
+- **Bot hours** are the time bot runs spent working. Each run counts from its start to its finish (to now while it is still going). A silence of more than 30 minutes inside a run, with no activity from the bot, is left out. Every bot counts, BotOps and the Assistant included, and a run that failed counts for the time it ran.
+- **Human hours** are the people on the org chart × 40 hours a week. Hidden people and bots don't count. The org chart keeps no history, so every week uses today's count of people.
+- **Weeks** run Monday to Sunday in the company's time zone (Pacific time).
+
+It is an estimate: nobody's actual working time is tracked, and every person counts as 40 hours. The card shows totals only, never a bot's or a person's own hours. Everyone who can open the Overview sees it; bots can't read it.
+
+What you see before there is enough data:
+
+- **No bot runs yet:** "No bot work yet", with a link to Bots in Settings.
+- **No people on the org chart:** bot hours for the last 7 days with no ratio, and "Add people to the org chart to compare".
+- **Less than 7 days of runs:** the headline for the days so far and "Chart fills in as weeks pass".
+
+The numbers come from `GET /api/v2/overview/bot-hours` (`backend/bot_hours.py`), which reads the runs Tico already records; nothing new is stored. The answer is kept for a minute, and the card asks again at most every 5 minutes while the Overview is open. `backend/tests/test_bot_hours.py` checks the counting with sample runs, and the browser test `ui/tests/overview-hours.cjs` checks the card, the hover, the table and a phone-sized screen.
+
 ## Replay the last 24 hours
 
 **Replay last 24h** (under the layout switch) turns the campus into a recap of the day. The page reads `GET /api/v2/replay` for the last 24 hours with the viewer's own rights, the same history and visibility rules as the Replay page, and hands the campus only what it shows: who, to whom, task titles, bot states and the first line of each message. Bot focus text and run summaries are not passed in, as for the live campus.
