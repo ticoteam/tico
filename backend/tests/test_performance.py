@@ -175,3 +175,18 @@ def test_turning_it_off_ends_an_open_overload(api):
     post(api, f"computers/{rid}/performance", {"mode": "off"})
     assert get(api, f"computers/{rid}/performance?hours=1")["overloads"][0]["ended"] == start + 600
     assert not any(x["id"] == "performance:" + rid and "overloaded now" in x["summary"] for x in get(api, "health")["checks"])
+
+
+def test_the_performance_tool_finds_the_computer_by_label_or_id_in_the_computers_reply(api):
+    """Task 122: the tool walked the computers reply as a list, so every call failed on its keys."""
+    from backend.tests.test_mcp import call
+    r, _, attempt = setup_attempt(api)
+    rid = r["runner_id"]
+    assert set(get(api, "computers")) >= {"computers", "services"}     # the reply is a dict, not a list
+    post(api, "runners/performance", {"samples": [sample(time.time() - 30)]}, token=r["token"])
+    for wanted in ("Test Mac", rid):
+        failed, seen = call(api, "hub_computer_performance", {"computer": wanted, "hours": 1}, token=attempt["token"])
+        assert not failed, seen
+        assert seen["computer"] == {"id": rid, "label": "Test Mac"} and seen["performance"] == "on" and seen["points"][0][1] == 20.0
+    failed, seen = call(api, "hub_computer_performance", {"computer": "No such box"}, token=attempt["token"])
+    assert failed and "No computer named 'No such box'" in str(seen)

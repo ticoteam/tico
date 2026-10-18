@@ -76,6 +76,7 @@ function pageOverview() {
   main.innerHTML = `<section class="overview-page" aria-label="Company overview">
     <a class="overview-needs" id="overview-needs" href="#/tasks" hidden></a>
     <div class="overview-stuck" id="overview-stuck" role="status" hidden></div>
+    <div class="overview-hours" id="overview-hours" role="button" tabindex="0" aria-haspopup="dialog" hidden></div>
     <iframe id="overview-frame" class="overview-frame" title="Interactive campus of your computers, bots and human teammates" src="/tico/ui/overview/index.html" allow="fullscreen"></iframe>
   </section>`;
   const frame = $('#overview-frame');
@@ -89,8 +90,14 @@ function pageOverview() {
     }
     if (ev.data?.type === 'tico-overview-replay-load') void overviewReplayLoad(state);
   }, {signal: state.abort.signal});
+  const hours = $('#overview-hours');
+  hours.addEventListener('click', ev => { if (!ev.target.closest('a')) overviewHoursOpen(); }, {signal: state.abort.signal});
+  hours.addEventListener('keydown', ev => {
+    if ((ev.key === 'Enter' || ev.key === ' ') && ev.target === hours) { ev.preventDefault(); overviewHoursOpen(); }
+  }, {signal: state.abort.signal});
   overviewStuckDraw();
   overviewNeedsDraw();
+  void overviewHoursLoad();
   void overviewLoadComputers().then(() => { if (OVERVIEW_PAGE === state) overviewRefresh(); });
 }
 // The campus replay reads the same history as the Replay page (GET /api/v2/replay), with the viewer's own rights,
@@ -116,6 +123,7 @@ async function overviewReplayLoad(state) {
 function overviewRefresh() {
   const state = OVERVIEW_PAGE; if (!state) return;
   state.model = overviewModel();
+  overviewHoursMaybe();
   if (state.ready) state.frame.contentWindow?.postMessage({type: 'tico-overview-data', model: state.model}, location.origin);
 }
 function overviewStop() {

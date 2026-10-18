@@ -30,7 +30,7 @@ from .redaction import (ACTOR, AUTHORITY, CONTROL, EMAIL, HOST, IPV4, IPV6, KNOW
 from .store import H
 
 FORMAT = 1
-MAX_BYTES = 256 * 1024            # HQ refuses more (hq/support.py)
+MAX_BYTES = 256 * 1024            # HQ refuses more (docs/telemetry.md, Support tickets)
 LOG_LINES = 200                   # server WARN and ERROR lines
 RUNNER_LINES = 50
 APP_LINES = 200                   # the end of the desktop app's log, when the page runs in the app

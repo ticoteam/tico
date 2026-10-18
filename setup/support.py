@@ -27,7 +27,7 @@ from .ui import IO
 DEFAULT_HQ = "https://updates.tico.team"
 QUESTION = "Send this to Tico support?"
 OFF = ("off", "0", "false", "no", "disabled")
-VERSION = re.compile(r"[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}(?:-[0-9A-Za-z][0-9A-Za-z.-]{0,31})?")    # hq/support.py VERSION
+VERSION = re.compile(r"[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}(?:-[0-9A-Za-z][0-9A-Za-z.-]{0,31})?")    # the version HQ accepts
 EMAIL = re.compile(r"[^@\s<>\",;()\[\]\\]{1,64}@[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?\.[A-Za-z]{2,24}")
 TICKET = re.compile(r"TK-[A-Z2-7]{8}")
 SECRET = re.compile(r"[A-Za-z0-9_-]{20,64}")

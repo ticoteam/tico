@@ -166,7 +166,7 @@ const {html, uiFile, harnesses} = require('./support/page.cjs');
     assert.equal(await confirm.locator('[data-bots]').innerText(), 'Writer and Scout will stop running until this is signed in again.');
     assert.match(await confirm.innerText(), /shared key won't sign it back in by itself/);
     await confirm.getByRole('button', {name: 'Cancel'}).click();
-    await page.locator('dialog.model-logout').waitFor({state: 'detached'});
+    await page.locator('dialog.model-logout').waitFor({state: 'detached'});   // removed on the dialog's close event, a task after the click
     assert.deepEqual(writes, []);
     // Four bots: the first two by name and how many more, every name on hover.
     await own('claude').getByRole('button', {name: 'Sign out'}).click();
@@ -174,6 +174,7 @@ const {html, uiFile, harnesses} = require('./support/page.cjs');
     assert.equal(await confirm.locator('[data-bots]').innerText(), 'Reviewer 1, QA and 2 more will stop running until this is signed in again.');
     assert.equal(await confirm.locator('[data-bots]').getAttribute('title'), 'Reviewer 1, QA, Scout, Writer');
     await confirm.getByRole('button', {name: 'Cancel'}).click();
+    await page.locator('dialog.model-logout').waitFor({state: 'detached'});
     assert.deepEqual(writes, []);
 
     // Confirmed: it asks the computer and follows it to Signed out; the row then reads Signed out, with Sign in and

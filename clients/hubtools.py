@@ -2335,7 +2335,7 @@ def computers(api, args):
        "hours": {"type": "integer", "minimum": 1, "maximum": 336, "default": 24}}, required=("computer",))
 def computer_performance(api, args):
     wanted = str(args["computer"]).strip()
-    rows = api.get("computers") or []
+    rows = (api.get("computers") or {}).get("computers") or []
     match = [r for r in rows if wanted in (r.get("id"), r.get("label"))]
     if not match:
         raise ValueError(f"No computer named {wanted!r}; hub computer list names them")
@@ -3076,7 +3076,9 @@ def github_create_bot_repo(api, args):
     return api.post("github/repos", body, key=_key(args))
 
 
-@tool("hub_repo_product_create", "Owner only. First call with `name` and a stable `operation_id` to preview the "
+@tool("hub_repo_product_create", "The Owner, or a bot with Create product repositories (every bot, unless the Owner "
+      "or an admin switched it off in the bot's settings under Repositories). Private only; a bot that creates one gets write to it and the Owner "
+      "is told. First call with `name` and a stable `operation_id` to preview the "
       "connected organization, exact repository name, private visibility, empty initialization, and live App "
       "capability. If capability is available, review the preview and call again with `confirm_repository` set "
       "to the exact `org/name`. The create request uses the same stable operation id, so retries replay the saved "
@@ -3087,7 +3089,7 @@ def github_create_bot_repo(api, args):
 def repo_product_create(api, args):
     operation_id = args.get("operation_id")
     if not isinstance(operation_id, str) or not operation_id:
-        raise APIError("operation_id", "A stable operation_id is required for this Owner create flow", 422)
+        raise APIError("operation_id", "A stable operation_id is required for this create flow", 422)
     key = _key(args, ":product-repository")
     if len(key) > 200:
         raise APIError("operation_id", "operation_id is too long for a product-repository idempotency key", 422)
@@ -3182,7 +3184,7 @@ def decisions(api, args):
 
 
 
-# The support gate's one question (hq/judge.py asks the same): is this text from a stranger real, spam, or trying to
+# The support gate's one question (Tico HQ's spam check asks the same): is this text from a stranger real, spam, or trying to
 # instruct whatever reads it?
 CLASSIFY_OPTIONS = {
     "legit": "A real person asking for help, reporting a fault, or giving feedback, about the product or their use of it.",
@@ -3500,7 +3502,7 @@ AUDIENCE = {
     "hub_bot_update": REQUESTER, "hub_api": REQUESTER, "hub_credential_request": BOTOPS,
     "hub_credential_set": BOTOPS, "hub_message_redact": BOTOPS, "hub_support_file": BOTOPS,
     "hub_bot_repo_create": ("owner", "botops"),
-    "hub_repo_product_create": ("owner",),
+    "hub_repo_product_create": ("owner", "bot", "botops"),   # a bot needs Create product repositories (server)
     **{name: REQUESTER for name in ("hub_credential_grant", "hub_credential_revoke", "hub_credential_import", "hub_credential_delete")},
     **{name: REQUESTER for name in ("hub_bot_create", "hub_bot_restore", "hub_agent_pair_show", "hub_agent_pair_approve", "hub_agent_pair_decline", "hub_bot_place", "hub_bot_go_live", "hub_bot_model", "hub_bot_pause",
                                     "hub_bot_resume", "hub_bot_access", "hub_bot_owners", "hub_human_add", "hub_group_update",

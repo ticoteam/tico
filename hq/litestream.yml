@@ -1,7 +1,0 @@
-# Continuous copy of HQ's database (compose profile "backup"). Restore into an empty volume with:
-#   docker compose -f hq/compose.yaml run --rm --no-deps --entrypoint litestream backup restore -o /data/hq.db -config /etc/litestream.yml /data/hq.db
-dbs:
-  - path: /data/hq.db
-    replica:
-      url: ${HQ_BACKUP_URL}
-      endpoint: ${HQ_BACKUP_ENDPOINT}

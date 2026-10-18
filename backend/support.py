@@ -1,6 +1,6 @@
 """Contact support: a person writes to the Tico team from the app, and the replies come back to it.
 
-A request goes to Tico HQ (`POST <TICO_HQ_URL>/v1/support`, hq/support.py) only when a person submits the form. Nothing here
+A request goes to Tico HQ (`POST <TICO_HQ_URL>/v1/support`, docs/telemetry.md) only when a person submits the form. Nothing here
 is automatic and nothing is sent in demo mode. The counting choice (PRIVACY.md) does not block it: this is a message the
 person chose to send, and what goes with it is shown on the form and switchable there.
 
