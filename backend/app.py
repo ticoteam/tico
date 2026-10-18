@@ -2080,16 +2080,18 @@ def create_app(settings=None):
         (its first try already decided), or a bot whose chat is another's (a shared or the Assistant's)."""
         if who.role not in ("owner", "human") or who.via or body.command or (body.refs or {}).get("task"):
             return None
-        key = request.headers.get("idempotency-key")
-        with store.read() as c:
+        key, path = request.headers.get("idempotency-key"), request.url.path
+        if not key:
+            return None
+
+        def admit(c):                         # read with the gate, inside the check's time budget
             from .shared_bots import route
-            if not key or c.execute("SELECT 1 FROM idempotency WHERE actor=? AND operation=? AND key=?",
-                                    (who.actor, request.url.path, key)).fetchone():
-                return None
+            if c.execute("SELECT 1 FROM idempotency WHERE actor=? AND operation=? AND key=?",
+                         (who.actor, path, key)).fetchone():
+                return False
             target = H.actor_id(route(c, who.actor, "bot:" + bot))
-            if target != bot or bot == settings.assistant_bot or not views.may_chat(c, auth, who, bot):
-                return None
-        return topic_change.check(store, app.state.judge, who, bot, body.text)
+            return target == bot and bot != settings.assistant_bot and views.may_chat(c, auth, who, bot)
+        return topic_change.check(store, app.state.judge, who, bot, body.text, admit)
 
     # ------------------------------------------------------------------ updates (backend/updates.py)
     def update_visible(c, who, mine=False, scope=None):

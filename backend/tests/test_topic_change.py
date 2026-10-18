@@ -1,8 +1,9 @@
 """Topic changed (backend/topic_change.py): before a person's message in their direct chat goes to the bot, a plain-code
-gate decides whether a Decide check runs (100k tokens or more, or a cold cache; never with the switch off, an active
-goal, a running turn or under 3 turns), a faked Decide answers, and only a confident new topic clears the session exactly
-as the person's own Clear does, marking the message for the chat's quiet "Topic changed" line. A timeout, an error,
-the cap or `not_sure` sends the message in the same session with no line. Every check is a `judge.call` row."""
+gate decides whether a Decide check runs (a latest prompt of 100k tokens or more, or a cold cache; never with the switch
+off, in a shared bot's room, with an active goal, a running turn or under 3 turns), a faked Decide answers, and only a
+confident new topic clears the session exactly as the person's own Clear does, marking the message for the chat's quiet
+"Topic changed" line. A timeout, an error, the cap or `not_sure` sends the message in the same session with no line, as
+does a decision about a chat that changed while Decide was asked. Every check is a `judge.call` row."""
 
 import json
 import threading
@@ -10,7 +11,7 @@ import time
 
 import pytest
 
-from backend import team_rules
+from backend import team_rules, views
 from backend import topic_change as T
 from backend.store import H
 from backend.tests.test_api import api, assign, claim, headers, post, ready, runner  # noqa: F401  (api is a fixture)
@@ -40,7 +41,8 @@ class FakeDecide:
 @pytest.fixture
 def chat(api):
     """Ana's direct chat with ops: three finished turns, the switch on, a fake Decide. `usage(context, cached, age)`
-    sets what the last turn reported and how long ago it finished."""
+    sets what the last turn reported and how long ago it finished: `context` is its newest request's prompt
+    (`prompt_tokens`, None for a runner that sent no request counts), `summed` its totals over every request."""
     machine = runner(api)
     assign(api, machine, "ops")
     ready(api, machine, ["ops"])
@@ -54,17 +56,19 @@ def chat(api):
     model = FakeDecide()
     api.app.state.judge = model
 
-    def usage(context=150_000, cached=40_000, age=30):
+    def usage(context=150_000, cached=40_000, age=30, summed=None):
+        summed = summed or context or 0
         with store.transaction() as c:
             last = c.execute("SELECT t.id FROM turns t JOIN bot_sessions s ON s.bot=t.bot AND s.thread_id=t.thread_id "
                              "WHERE t.bot='ops'").fetchone()[0]
-            c.execute("UPDATE turns SET input_tokens=?,cached_tokens=?,finished=? WHERE id=?",
-                      (context - cached, cached, H.shift(H.now(), seconds=-age), last))
+            c.execute("UPDATE turns SET input_tokens=?,cached_tokens=?,prompt_tokens=?,finished=? WHERE id=?",
+                      (summed - cached, cached, context, H.shift(H.now(), seconds=-age), last))
     usage()
     return api, machine, conversation, model, usage
 
 
 def checks(api):
+    T.settle()                                # each row is written once the send has its answer
     with api.app.state.store.read() as c:
         rows = c.execute("SELECT actor,detail_json FROM events WHERE action='judge.call' AND target='topic-change@1' "
                          "ORDER BY rowid").fetchall()
@@ -90,14 +94,15 @@ def session_state(api, conversation):
 
 def test_warm_needs_a_turn_under_five_minutes_old_that_read_the_cache():
     now = H.now()
-    recent = {"finished": H.shift(now, seconds=-60), "input_tokens": 5_000, "cached_tokens": 12_000}
-    assert T.warmth(recent, now) == (True, 17_000), "a recent turn with cached tokens: warm; context is input + cached"
+    recent = {"finished": H.shift(now, seconds=-60), "cached_tokens": 12_000, "prompt_tokens": 17_000}
+    assert T.warmth(recent, now) == (True, 17_000), "a recent turn with cached tokens: warm; context is its last prompt"
     stale = {**recent, "finished": H.shift(now, seconds=-301)}
     assert T.warmth(stale, now) == (False, 17_000), "older than the 5-minute cache lifetime: cold"
-    no_usage = {"finished": H.shift(now, seconds=-10), "input_tokens": 5_000, "cached_tokens": None}
+    no_usage = {"finished": H.shift(now, seconds=-10), "cached_tokens": None, "prompt_tokens": 5_000}
     assert T.warmth(no_usage, now) == (False, 5_000), "a harness that reports no cache use (Grok) is always cold"
     assert T.warmth({**no_usage, "cached_tokens": 0}, now)[0] is False
-    assert T.warmth(None, now) == (False, 0), "no turn on the session yet: cold"
+    assert T.warmth({**recent, "prompt_tokens": None}, now) == (True, None), "no request counts: size unknown"
+    assert T.warmth(None, now) == (False, None), "no turn on the session yet: cold"
 
 
 @pytest.mark.parametrize("context,cached,age,checked", [
@@ -117,6 +122,36 @@ def test_the_size_bands_and_warmth_decide_whether_decide_is_asked(chat, context,
         row = checks(api)[0]
         assert row["context_tokens"] == context and row["gate"] == ("big" if context >= 100_000 else "cold")
 
+
+@pytest.mark.parametrize("context,age,checked", [
+    (15_000, 30, False),               # six warm requests of about 18k: summed over 100k, the last prompt under 20k
+    (None, 30, False),                 # a runner that sent no request counts: the size never triggers a check
+    (None, 600, True),                 # ... a cold cache still does
+])
+def test_the_size_is_the_newest_prompt_never_the_turns_summed_usage(chat, context, age, checked):
+    api, _, _, model, usage = chat
+    model.choice = "same_topic"
+    usage(context, 15_000, age, summed=6 * 18_000)
+    post(api, "chat/ops", {"text": "Next one"})
+    assert bool(model.calls) is checked and len(checks(api)) == int(checked)
+    if checked:
+        assert checks(api)[0]["context_tokens"] is None and checks(api)[0]["gate"] == "cold"
+
+
+def test_a_turn_keeps_its_newest_requests_prompt_as_the_context_size(chat):
+    api, machine, _, _, _ = chat
+    with api.app.state.store.transaction() as c:
+        team_rules.save(c, "human:ana", {"topic_fresh": False})
+    post(api, "chat/ops", {"text": "Next one"})
+    turn = claim(api, machine)
+    post(api, f"attempts/{turn['id']}/started", {"thread_id": "t-" + turn["id"][:8]}, machine["token"])
+    part = {"model": "claude-haiku-5-5", "runtime": "claude", "billing": "api", "input_tokens": 1_500,
+            "cached_tokens": 104_000, "output_tokens": 300, "requests": [[500, 50_000, 100], [1_000, 54_000, 200]]}
+    post(api, f"attempts/{turn['id']}/complete", {"outcome": "completed", "last_seq": 0, "text": "Done.",
+                                                  "usage": {**part, "segments": [part]}}, machine["token"])
+    with api.app.state.store.read() as c:
+        row = c.execute("SELECT input_tokens,cached_tokens,prompt_tokens FROM turns WHERE id=?", (turn["id"],)).fetchone()
+    assert tuple(row) == (1_500, 104_000, 55_000), "the summed totals stay; the context is the last request's prompt"
 
 # -------------------------------------------------------------------------------- a new topic clears like Clear
 
@@ -191,7 +226,8 @@ def test_a_slow_decide_does_not_hold_the_send_past_the_budget(chat):
     assert took < T.BUDGET + 0.5, f"the send waited {took:.2f}s"
     assert "topic_changed" not in (message.get("refs") or {})
     assert session_state(api, conversation)["epoch"] == 0
-    assert checks(api)[0]["error"] == "timeout" and checks(api)[0]["delay_ms"] <= 1500 + 100
+    assert checks(api)[0]["error"] == "timeout" and checks(api)[0]["clear"] is False, "a late new topic is dropped"
+    assert 1400 <= checks(api)[0]["delay_ms"] <= 1500 + 100, "the delay is what the send waited"
     turn = claim(api, machine)
     assert turn["session_epoch"] == 0 and UNRELATED in [m["body"] for m in turn["history"]]
 
@@ -215,7 +251,107 @@ def test_the_daily_budget_reached_asks_nothing_and_sends_in_the_same_session(cha
     assert session_state(api, conversation)["epoch"] == 0
 
 
+@pytest.mark.parametrize("slow", ["gate", "audit"])
+def test_slow_reads_or_a_slow_audit_write_do_not_hold_the_send_past_the_budget(chat, monkeypatch, slow):
+    api, _, conversation, model, _ = chat
+    release = threading.Event()
+    real = getattr(T, "_" + slow if slow == "audit" else slow)
+
+    def held(*args, **kwargs):
+        release.wait(5)
+        return real(*args, **kwargs)
+    monkeypatch.setattr(T, "_audit" if slow == "audit" else "gate", held)
+    try:
+        started = time.monotonic()
+        message = post(api, "chat/ops", {"text": UNRELATED})
+        took = time.monotonic() - started
+    finally:
+        release.set()
+    assert took < T.BUDGET + 0.5, f"the send waited {took:.2f}s"
+    if slow == "gate":                        # the reads ran past the budget: no call is made or applied
+        assert model.calls == [] and checks(api) == []
+        assert "topic_changed" not in (message.get("refs") or {}) and session_state(api, conversation)["epoch"] == 0
+    else:                                     # the answer came in time; its audit row follows on its own
+        assert message["refs"].get("topic_changed") is True and session_state(api, conversation)["epoch"] == 1
+        assert [r["clear"] for r in checks(api)] == [True], "one audit row, still counted against the day's calls"
+
+
+# -------------------------------------------------------------------------------- the chat changed meanwhile
+
+def bot_says(c, conversation, text):
+    """A bot message lands in the chat (a queued reply, another tab's send) while Decide is asked."""
+    c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,created) "
+              "VALUES(?,?,'bot:ops','human:ana','say',?,?)", ("late-" + text[:4], conversation, text, H.now()))
+
+
+CHANGES = {
+    "cleared": lambda api, c, conv: views.clear_chat_session(c, api.app.state.store.settings, "human:ana", "ops", conv),
+    "message": lambda api, c, conv: bot_says(c, conv, "One more thing"),
+    "goal": lambda api, c, conv: c.execute(
+        "INSERT INTO chat_goals(id,conversation_id,bot,objective,status,set_by,set_at,updated_at) "
+        "VALUES('g1',?,'ops','Ship the fix','active','human:ana',?,?)", (conv, H.now(), H.now())),
+    "off": lambda api, c, conv: team_rules.save(c, "human:ana", {"topic_fresh": False}),
+}
+
+
+@pytest.mark.parametrize("change", sorted(CHANGES))
+def test_a_decision_about_a_chat_that_changed_meanwhile_clears_nothing(chat, change):
+    api, _, conversation, model, _ = chat
+    before = session_state(api, conversation)
+    model.hold = threading.Event()
+    sent = {}
+    sender = threading.Thread(target=lambda: sent.update(post(api, "chat/ops", {"text": UNRELATED})))
+    sender.start()
+    deadline = time.monotonic() + 1.0
+    while not model.calls and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert model.calls, "the check is asking Decide"
+    with api.app.state.store.transaction() as c:
+        CHANGES[change](api, c, conversation)
+    model.hold.set()                          # a confident new topic, about the chat as it was
+    sender.join(5)
+    assert "topic_changed" not in (sent.get("refs") or {}), "no divider"
+    expected = {**before, "epoch": 1, "bot_epoch": 1, "thread": False} if change == "cleared" else before
+    assert session_state(api, conversation) == expected, "no clear beyond what happened meanwhile"
+    with api.app.state.store.read() as c:
+        kept = [json.loads(r[0]) for r in c.execute("SELECT detail_json FROM events WHERE action='chat.topic_kept'")]
+        changed = c.execute("SELECT count(*) FROM events WHERE action='chat.topic_changed'").fetchone()[0]
+    assert kept == [{"why": {"cleared": "changed", "message": "changed"}.get(change, change)}] and changed == 0
+    assert [r["clear"] for r in checks(api)] == [True], "the audit keeps the decision; topic_kept says it was refused"
+
+
+def test_overlapping_new_topic_sends_clear_once_and_keep_the_first_message(chat):
+    api, machine, conversation, model, _ = chat
+    model.hold = threading.Event()
+    sent = []
+    senders = [threading.Thread(target=lambda t=t: sent.append(post(api, "chat/ops", {"text": t})))
+               for t in (UNRELATED, "Plan the offsite agenda")]
+    for sender in senders:
+        sender.start()
+        deadline = time.monotonic() + 1.0
+        while len(model.calls) < senders.index(sender) + 1 and time.monotonic() < deadline:
+            time.sleep(0.01)
+    assert len(model.calls) == 2, "both sends are asking Decide about the same chat"
+    model.hold.set()
+    for sender in senders:
+        sender.join(5)
+    assert len(sent) == 2
+    assert sum(bool((m.get("refs") or {}).get("topic_changed")) for m in sent) == 1, "one divider"
+    assert session_state(api, conversation)["epoch"] == 1, "cleared once"
+    turn = claim(api, machine)
+    assert sorted(m["body"] for m in turn["history"]) == sorted(m["body"] for m in sent), \
+        "both new messages are after the clear"
+
+
 # -------------------------------------------------------------------------------- never checked
+
+def test_never_checked_in_a_shared_bots_room_even_with_one_person(chat):
+    api, _, conversation, model, _ = chat
+    with api.app.state.store.transaction() as c:   # what rooms.sync_shared_room makes when its owner is its only member
+        c.execute("UPDATE conversations SET scope='shared' WHERE id=?", (conversation,))
+    before = session_state(api, conversation)
+    post(api, "chat/ops", {"text": UNRELATED})
+    assert model.calls == [] and checks(api) == [] and session_state(api, conversation) == before
 
 def test_never_checked_with_the_switch_off(chat):
     api, _, _, model, _ = chat

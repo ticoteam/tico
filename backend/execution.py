@@ -1530,8 +1530,9 @@ class Execution:
                     "est_cost_usd": cost, "est_cost_low": int(low),
                     "billing": item.billing, "runtime": runtime or None, "harness": item.harness or None,
                     "effort": item.effort or None, "profile": item.profile_used or None}
-        segments = [part(item) for item in (used.segments or [used])
-                    if item.input_tokens or item.cached_tokens or item.output_tokens]
+        items = [item for item in (used.segments or [used])
+                 if item.input_tokens or item.cached_tokens or item.output_tokens]
+        segments = [part(item) for item in items]
         if not segments:
             return None
         result = dict(segments[-1])
@@ -1547,6 +1548,8 @@ class Execution:
             if len({p[key] for p in segments}) > 1:
                 result[key] = None
         result["segments"] = segments
+        # The newest request's prompt, the session's context size, when the last portion sent each request's tokens.
+        result["prompt_tokens"] = sum(items[-1].requests[-1][:2]) if items[-1].requests else None
         return result
 
     def file_result(self, c, row, body):

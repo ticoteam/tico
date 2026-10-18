@@ -7,23 +7,32 @@ The gate is plain code, read from what runners already report. The session is th
 would continue (its `bot_sessions` row); its last turn is the newest finished turn on that thread.
 - Warm: that turn finished under WARM_SECONDS ago and reported `cached_tokens` > 0. Anything else is cold: no turn, an
   older one, or a harness that reports no cache use (Grok, today).
-- Context size: that turn's `input_tokens + cached_tokens`, the last prompt.
+- Context size: that turn's newest model request's whole prompt (`turns.prompt_tokens`, uncached + cached), when its
+  runner sent each request's tokens. The turn's summed `input_tokens + cached_tokens` count every request of the turn
+  again and are not a context size; without `prompt_tokens` the size is unknown and never triggers a check.
 - Check at BIG_CONTEXT tokens or more, or when the cache is cold; not under BIG_CONTEXT with a warm cache.
-- Never when the team's `topic_fresh` rule is off, the chat has an active goal, a turn is running, or the chat has fewer
-  than MIN_TURNS turns since its last clear.
+- Never when the team's `topic_fresh` rule is off, the chat is a shared bot's room (even one with a single person), the
+  chat has an active goal, a turn is running, or the chat has fewer than MIN_TURNS turns since its last clear.
+
+The whole check, its reads, the call and the answer, runs on a worker the send waits for at most BUDGET seconds; an
+answer later than that is dropped. A decision holds only for the chat as it was read: `apply` re-reads it in the send's
+own transaction and clears nothing when the rule, a goal, a running turn, the session's epoch or the chat's newest
+message changed meanwhile.
 
 Fail open: no decision model, rehearsal, the spend cap, the daily call budget, an error, no answer within BUDGET seconds,
 `not_sure`, `same_topic` or a `new_topic` under the set's threshold all send the message in the same session with no
 line. Each check is one `judge.call` row in the person's name, counted against their daily Decide calls as the Slack
-gateway's routing is (label, model, tokens, latency, cost, the answer, the outcome, the delay); never the chat's text. Each clear is one `chat.topic_changed` event: the tokens before the clear and the delay added
-before the send."""
+gateway's routing is (label, model, tokens, latency, cost, the answer, the decision, the delay); never the chat's text.
+It is written after the send stops waiting, so it never adds to the delay. Each clear is one `chat.topic_changed`
+event: the tokens before the clear and the delay added before the send; a decision `apply` refused is one
+`chat.topic_kept` event saying why."""
 
 import logging
 import threading
 import time
 
 from clients import judge as J
-from . import team_rules
+from . import rooms, team_rules
 from .judge import audit_detail, daily_cap, over_spend_cap, server_engine, used_today
 from .store import H, encode
 
@@ -58,17 +67,18 @@ def last_turn(c, settings, bot):
                         (bot, runtime, model)).fetchone()
     if not session or not session[0]:
         return None
-    row = c.execute("SELECT finished,input_tokens,cached_tokens FROM turns WHERE bot=? AND thread_id=? "
+    row = c.execute("SELECT finished,cached_tokens,prompt_tokens FROM turns WHERE bot=? AND thread_id=? "
                     "AND finished IS NOT NULL ORDER BY finished DESC LIMIT 1", (bot, session[0])).fetchone()
     return dict(row) if row else None
 
 
 def warmth(turn, now=None):
-    """(warm, context tokens) of a session from its last turn (`last_turn`)."""
+    """(warm, context tokens) of a session from its last turn (`last_turn`). The context is None when unknown."""
     if not turn:
-        return False, 0
+        return False, None
     cached = int(turn.get("cached_tokens") or 0)
-    context = int(turn.get("input_tokens") or 0) + cached
+    context = turn.get("prompt_tokens")
+    context = int(context) if context is not None else None
     finished, at = H.parse_ts(turn.get("finished")), H.parse_ts(now or H.now())
     age = (at - finished).total_seconds() if finished and at else None
     return cached > 0 and age is not None and 0 <= age < WARM_SECONDS, context
@@ -87,23 +97,43 @@ def turns_since(c, bot, conversation_id, since):
                      (bot, conversation_id, since or "")).fetchone()[0]
 
 
-def gate(c, settings, bot, conversation_id):
-    """(check, reason, facts) for a message about to go into this direct chat. `reason` says why it is or is not
-    checked; `facts` are the tokens and warmth the measures read."""
+def _held(c, conv):
+    """Why a decision may not touch this chat now, or None: the rule is off, it is a shared bot's room, it has an
+    active goal or a turn is running."""
     from .chat_goals import current
     from .views import chat_running
     if not team_rules.load(c)[RULE]:
-        return False, "off", {}
-    goal = current(c, conversation_id)
+        return "off"
+    if conv.get("scope") == rooms.SHARED:
+        return "shared"
+    goal = current(c, conv["id"])
     if goal and goal.get("status") == "active":
-        return False, "goal", {}
-    if chat_running(c, conversation_id):
-        return False, "running", {}
+        return "goal"
+    if chat_running(c, conv["id"]):
+        return "running"
+    return None
+
+
+def snapshot(c, conversation_id):
+    """What a decision was made on: the session's epoch and the chat's newest message."""
+    epoch = c.execute("SELECT epoch FROM session_epochs WHERE conversation_id=?", (conversation_id,)).fetchone()
+    newest = c.execute("SELECT id FROM messages WHERE conversation_id=? ORDER BY created DESC, id DESC LIMIT 1",
+                       (conversation_id,)).fetchone()
+    return {"epoch": epoch[0] if epoch else 0, "newest": newest[0] if newest else None}
+
+
+def gate(c, settings, bot, conv):
+    """(check, reason, facts) for a message about to go into this direct chat. `reason` says why it is or is not
+    checked; `facts` are the tokens and warmth the measures read."""
+    conversation_id = conv["id"]
+    held = _held(c, conv)
+    if held:
+        return False, held, {}
     if turns_since(c, bot, conversation_id, epoch_since(c, conversation_id)) < MIN_TURNS:
         return False, "few_turns", {}
     warm, context = warmth(last_turn(c, settings, bot))
     facts = {"warm": warm, "context_tokens": context}
-    if context >= BIG_CONTEXT:
+    if context is not None and context >= BIG_CONTEXT:
         return True, "big", facts
     if not warm:
         return True, "cold", facts
@@ -137,62 +167,104 @@ def recent(c, who, bot, conversation_id):
     return turns[-RECENT_TURNS:]
 
 
-def _ask(engine, state, questions, label, budget):
-    """The engine's answer within `budget` seconds: (result, None), (None, error code) or (None, 'timeout'). A call
-    still running at the deadline finishes on its own thread; its cost is metered all the same."""
-    box = {}
+_WORKERS = set()
+
+
+def settle(timeout=5.0):
+    """Wait for checks still finishing on their own threads (their late answer, their audit row). For tests."""
+    for worker in list(_WORKERS):
+        worker.join(timeout)
+
+
+def check(store, primary, who, bot, text, admit=None):
+    """Whether to clear this person's direct chat with `bot` before `text` is sent: {"clear", "reason",
+    "conversation_id", "context_tokens", "snapshot", "delay_ms", ...}, or None when no check ran or it did not finish
+    in time. `admit(c)`, when given, is the caller's own condition read with the gate. Never raises and never waits
+    more than BUDGET seconds; anything short of a confident new topic is no clear."""
+    started = time.monotonic()
+    deadline = started + BUDGET
+    box, lock, ready = {}, threading.Lock(), threading.Event()
+
+    def hand_over(out):
+        """Give the send its outcome unless it has stopped waiting; True when it took it."""
+        with lock:
+            if box.get("late"):
+                return False
+            box["out"] = out
+        ready.set()
+        return True
 
     def work():
         try:
-            with J.within(budget):
-                box["result"] = engine(state, questions, label)
-        except J.JudgeError as exc:
-            box["error"] = J.error_code(exc)
-        except Exception as exc:    # a fake, a provider bug: a send never breaks on it
+            decided = _decide(store, primary, who, bot, text, admit, deadline, box)
+            if decided is None:
+                ready.set()
+                return
+            out, detail = decided
+            out["delay_ms"] = int((time.monotonic() - started) * 1000)
+            if hand_over(out):
+                detail["delay_ms"] = out["delay_ms"]
+            else:                             # the send went on without it: its delay was the whole wait
+                detail.update(clear=False, error="timeout", delay_ms=box["waited_ms"])
+            _audit(store, who, detail)
+        except Exception as exc:              # a send never breaks on the check
             LOG.warning("Topic check failed: %s", type(exc).__name__)
-            box["error"] = "error"
+            ready.set()
+        finally:
+            _WORKERS.discard(threading.current_thread())
+
     worker = threading.Thread(target=work, name="topic-change", daemon=True)
+    _WORKERS.add(worker)
     worker.start()
-    worker.join(max(0.0, budget))
-    if worker.is_alive():
-        return None, "timeout"
-    return box.get("result"), box.get("error")
+    ready.wait(max(0.0, deadline - time.monotonic()))
+    with lock:
+        box["late"], box["waited_ms"] = True, int((time.monotonic() - started) * 1000)
+        out = box.get("out")
+    if out:
+        out["delay_ms"] = int((time.monotonic() - started) * 1000)
+    return out
 
 
-def check(store, primary, who, bot, text):
-    """Whether to clear this person's direct chat with `bot` before `text` is sent: {"clear": bool, "reason",
-    "conversation_id", "context_tokens", "delay_ms"}, or None when no check ran (not a direct chat, the gate said no).
-    Never raises and never takes more than BUDGET seconds; anything short of a confident new topic is no clear."""
-    started = time.monotonic()
+def _decide(store, primary, who, bot, text, admit, deadline, box):
+    """The check itself, on the worker: (outcome, audit detail), or None when the gate said no or the send stopped
+    waiting before a call was made."""
     settings = store.settings
-    try:
-        with store.read() as c:
-            from .views import direct_chat
-            conv = direct_chat(c, who.actor, bot)
-            if not conv:
-                return None
-            wanted, reason, facts = gate(c, settings, bot, conv["id"])
-            if not wanted:
-                return None
-            qset = J.load_set(QUESTION_SET)
-            engine = server_engine(store, c, primary)
-            capped = engine is None and over_spend_cap(c, settings)
-            budget_used = engine is not None and used_today(c, who.actor) >= daily_cap(settings, who.role)
-            turns = recent(c, who, bot, conv["id"])
-    except Exception as exc:                  # the gate's own reads: the message goes as before
-        LOG.warning("Topic check skipped: %s", type(exc).__name__)
-        return None
-    out = {"clear": False, "conversation_id": conv["id"], "context_tokens": facts.get("context_tokens", 0),
-           "gate": reason}
+    with store.read() as c:
+        if admit and not admit(c):
+            return None
+        from .views import direct_chat
+        conv = direct_chat(c, who.actor, bot)
+        if not conv:
+            return None
+        wanted, reason, facts = gate(c, settings, bot, conv)
+        if not wanted:
+            return None
+        qset = J.load_set(QUESTION_SET)
+        engine = server_engine(store, c, primary)
+        capped = engine is None and over_spend_cap(c, settings)
+        budget_used = engine is not None and used_today(c, who.actor) >= daily_cap(settings, who.role)
+        turns = recent(c, who, bot, conv["id"])
+        held = snapshot(c, conv["id"])
+    out = {"clear": False, "conversation_id": conv["id"], "context_tokens": facts.get("context_tokens"),
+           "gate": reason, "snapshot": held}
     questions = {"topic": qset["questions"]["topic"]}
     result = error = None
+    left = deadline - time.monotonic()
+    if box.get("late") or left <= 0:
+        return None                           # nothing asked: no call to pay for or count
     if engine is None:
         error = "spend_cap" if capped else "unconfigured"
     elif budget_used:
         error = "budget"
     else:
-        state = {"recent": turns, "message": _trim(text)}
-        result, error = _ask(engine, state, questions, qset["label"], BUDGET - (time.monotonic() - started))
+        try:
+            with J.within(left):
+                result = engine({"recent": turns, "message": _trim(text)}, questions, qset["label"])
+        except J.JudgeError as exc:
+            error = J.error_code(exc)
+        except Exception as exc:              # a fake, a provider bug
+            LOG.warning("Topic check failed: %s", type(exc).__name__)
+            error = "error"
         if result is not None and not isinstance(result, dict):
             result, error = None, "shape"
     answer = None
@@ -205,32 +277,40 @@ def check(store, primary, who, bot, text):
         out["answer"] = answer[0]
         out["clear"] = answer[0] == "new_topic" and answer[1] >= qset["thresholds"].get("new_topic", 1.01)
     out["reason"] = error or ("new_topic" if out["clear"] else (answer or ("none",))[0])
-    out["delay_ms"] = int((time.monotonic() - started) * 1000)
     detail = {"label": qset["label"], "questions": 1, "types": ["choice"], "gate": reason,
-              "context_tokens": out["context_tokens"], "warm": facts.get("warm", False),
-              "clear": out["clear"], "delay_ms": out["delay_ms"]}
+              "context_tokens": out["context_tokens"], "warm": facts.get("warm", False), "clear": out["clear"]}
     if result is not None:
         detail.update(audit_detail(result))
         if answer:
             detail["answers"] = {"topic": {"choice": answer[0], "confidence": round(answer[1], 3)}}
     if error:
         detail["error"] = error
+    return out, detail
+
+
+def _audit(store, who, detail):
+    """The check's `judge.call` row, written by the worker once the send has its answer."""
     try:
         with store.transaction() as c:
-            H.event(c, who.actor, "judge.call", qset["label"], detail)
+            H.event(c, who.actor, "judge.call", detail["label"], detail)
     except Exception as exc:
         LOG.warning("Topic check audit failed: %s", type(exc).__name__)
-    return out
 
 
 def apply(c, settings, who, bot, outcome):
     """In the send's own transaction, before the message is saved: clear the chat's session when the check said so
-    and nothing has changed since (no turn started, still the same chat). True when it cleared."""
-    from .views import chat_running, clear_chat_session, direct_chat
+    and the chat is still as it was read (`_held`, `snapshot`). True when it cleared; a refused decision is one
+    `chat.topic_kept` event."""
+    from .views import clear_chat_session, direct_chat
     if not outcome or not outcome.get("clear"):
         return False
     conv = direct_chat(c, who.actor, bot)
-    if not conv or conv["id"] != outcome["conversation_id"] or chat_running(c, conv["id"]):
+    if not conv or conv["id"] != outcome["conversation_id"]:
+        why = "chat"
+    else:
+        why = _held(c, conv) or (None if snapshot(c, conv["id"]) == outcome.get("snapshot") else "changed")
+    if why:
+        H.event(c, who.actor, "chat.topic_kept", outcome["conversation_id"], {"why": why})
         return False
     clear_chat_session(c, settings, who.actor, bot, conv["id"], {"reason": "topic_change"})
     return True
@@ -241,6 +321,6 @@ def record(c, who, message, outcome):
     refs = {**_refs(message), "topic_changed": True}
     c.execute("UPDATE messages SET refs_json=? WHERE id=?", (encode(refs), message["id"]))
     H.event(c, who.actor, "chat.topic_changed", message["conversation_id"],
-            {"message_id": message["id"], "tokens_before": outcome.get("context_tokens", 0),
+            {"message_id": message["id"], "tokens_before": outcome.get("context_tokens"),
              "delay_ms": outcome.get("delay_ms", 0)})
     return H.message(c, message["id"])
