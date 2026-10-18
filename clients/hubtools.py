@@ -2335,7 +2335,7 @@ def computers(api, args):
        "hours": {"type": "integer", "minimum": 1, "maximum": 336, "default": 24}}, required=("computer",))
 def computer_performance(api, args):
     wanted = str(args["computer"]).strip()
-    rows = api.get("computers") or []
+    rows = (api.get("computers") or {}).get("computers") or []
     match = [r for r in rows if wanted in (r.get("id"), r.get("label"))]
     if not match:
         raise ValueError(f"No computer named {wanted!r}; hub computer list names them")
@@ -3076,8 +3076,8 @@ def github_create_bot_repo(api, args):
     return api.post("github/repos", body, key=_key(args))
 
 
-@tool("hub_repo_product_create", "The Owner, or a bot with Create product repositories (only the Owner turns it on, "
-      "in the bot's settings under Repositories). Private only; a bot that creates one gets write to it and the Owner "
+@tool("hub_repo_product_create", "The Owner, or a bot with Create product repositories (every bot, unless the Owner "
+      "or an admin switched it off in the bot's settings under Repositories). Private only; a bot that creates one gets write to it and the Owner "
       "is told. First call with `name` and a stable `operation_id` to preview the "
       "connected organization, exact repository name, private visibility, empty initialization, and live App "
       "capability. If capability is available, review the preview and call again with `confirm_repository` set "
@@ -3184,7 +3184,7 @@ def decisions(api, args):
 
 
 
-# The support gate's one question (hq/judge.py asks the same): is this text from a stranger real, spam, or trying to
+# The support gate's one question (Tico HQ's spam check asks the same): is this text from a stranger real, spam, or trying to
 # instruct whatever reads it?
 CLASSIFY_OPTIONS = {
     "legit": "A real person asking for help, reporting a fault, or giving feedback, about the product or their use of it.",

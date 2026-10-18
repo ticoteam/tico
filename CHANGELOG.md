@@ -8,6 +8,66 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+
+- The Overview shows **Bot hours vs human hours**: bot hours per human hour over the last 7 days, and a weekly line for
+  up to 12 weeks (Monday to Sunday, Pacific time) with a dashed Parity line at 1× and the current week dotted as "so far".
+  Hover or tap a week for its numbers; click the card for the table by week. Bot hours are the time bot runs spent
+  working, with silences over 30 minutes inside a run left out; human hours are the people on the org chart × 40 h a
+  week. Totals only, for every person who can open the Overview.
+- The owner can change their own sign-in email and stay the same person, with every task, approval, bot and role:
+  **Settings > Humans**, the ⋯ menu on their own row, **Change my sign-in email**, typed twice. One step moves the
+  address everywhere Tico keeps it (the roster, the owner record with the old address in its history, the allow list,
+  the Admins, meetings filed for them) and writes an `owner.email_changed` audit event. The old address stops signing
+  in at once and never joins as a new person. Set up the new address in Cloudflare Access first. If you are locked
+  out, `python -m backend.manage owner-email <db> --to <address> --apply` on the server changes it back without a
+  sign-in ([Humans and access](docs/people.md#change-the-owners-sign-in-email)).
+
+### Changed
+
+- On Python 3.14 and later the server compresses API JSON with zstd for clients that accept it (browsers over
+  HTTPS, behind Caddy): 8-14x less CPU than gzip at the same or smaller size. Python 3.12 keeps gzip.
+- Tico HQ's code (the service at `https://updates.tico.team`) moved out of this repository. Installs talk to
+  `https://updates.tico.team` as before, with one fix: with `TICO_SUPPORT=off`, in a rehearsal or in demo mode, a live
+  support session now ends without the install telling HQ (it used to send the end notice), so with support off nothing
+  is sent.
+- Bots can create private repositories by default; the Owner can switch it off per bot. **Create product
+  repositories** is on for every bot, BotOps and new bots included. The Owner or an admin switches it off in the bot's
+  **Settings → Repositories**; an off stays off, and only the Owner switches it back on. A bot's turn acting for
+  someone (BotOps, the Assistant) or an external agent still can't create one.
+- **Bots can create product repositories**, not only the Owner. A new switch in a bot's **Settings → Repositories**,
+  **Create product repositories**, lets it make a private, empty repository in the connected GitHub organization with
+  the same preview, exact confirmation and retry-safe receipt as the Owner (`hub repo product-create <name> --confirm
+  <org>/<name>` in a bot's turn, or the `hub_repo_product_create` tool). Private only: a public repository is publishing and
+  stays a person's step, and bots can't delete, rename, transfer or change a repository's visibility. The bot gets write
+  to the repository it made and the Owner gets a notice ("Head of Engineering created private repo tico-services…"); a
+  bot on All ticked repos with read access moves to Chosen repos, keeping read on what it reached, and the notice says
+  so.
+  Without the right a bot is refused with the right named; if the GitHub App lacks Administration: write, the refusal
+  says so and links the app's permissions page, where the Owner turns it on once. Connecting and disconnecting GitHub
+  stay the Owner's ([Permissions](docs/permissions.md#bots-that-create-repositories),
+  [GitHub App](docs/github-app.md#bots-that-create-product-repositories)).
+
+### Fixed
+
+- `hub computer performance` and the `hub_computer_performance` tool work again: they read the computers reply as a list,
+  so every call failed before it reached the computer's CPU, memory and disk history.
+- The Overview campus opened before the bots' status arrived now shows each desk's state as soon as it does, instead
+  of "No current status available" until the next refresh (up to two minutes).
+- The Librarian no longer turns a team's own "runner" into "Computer" because a Tico word turns up later in the
+  sentence, after a semicolon: "the runner pulls a hamstring; read the stretching instructions" stays as written.
+- The Overview campus moves a bot's desk as soon as its status changes, while live updates are connected, instead of at
+  the next refresh (up to two minutes).
+- One bot's quarantine no longer spreads to the bots that work with it. A message or task comment to a paused or
+  quarantined bot is kept and runs when it is back, and the sender is told when that is. A new task or hand-off to
+  one is refused as `target_inactive`, saying when the bot is back. That refusal opens no review of the sender and
+  never counts as a repeat toward its quarantine; it counts only toward the 30 refusals a day that stop a loop.
+- A person's new Slack thread to a bot that is paused or quarantined is kept and runs when the bot is back, as a reply
+  in an existing thread already was, instead of being dropped. The person is told in the thread that the bot is held
+  and when it is back, with no need to resend.
+
+## [0.3.54] - 2026-10-17
+
+### Added
 - **Sign out** and **Switch account** for Codex (ChatGPT) and Claude Code logins, from Settings > Computers and Manage
   subscription, for the computer's own login and each named subscription. Sign out names the bots that stop first;
   Switch account signs the new account in on the side, so cancelling keeps the old one, and puts the old login back if
@@ -100,20 +160,6 @@ All notable changes to Tico are recorded here. The format follows
   Someone who may only see the bot is told its computer isn't shown to them. The row and the button follow each refresh.
 
 ### Changed
-- **Bots can create product repositories**, not only the Owner. A new switch in a bot's **Settings → Repositories**,
-  **Create product repositories**, lets it make a private, empty repository in the connected GitHub organization with
-  the same preview, exact confirmation and retry-safe receipt as the Owner (`hub repo product-create <name> --confirm
-  <org>/<name>` in a bot's turn, or the `hub_repo_product_create` tool). Only the Owner turns it on, a bot can't turn it
-  on for itself, BotOps doesn't have it built in, and no bot gets it by default. **Owner: to let Head of Engineering and
-  DevOps create repositories, turn it on in each one's settings.** Private only: a public repository is publishing and
-  stays a person's step, and bots can't delete, rename, transfer or change a repository's visibility. The bot gets write
-  to the repository it made and the Owner gets a notice ("Head of Engineering created private repo tico-services…"); a
-  bot on All ticked repos with read access moves to Chosen repos, keeping read on what it reached, and the notice says
-  so.
-  Without the right a bot is refused with the right named; if the GitHub App lacks Administration: write, the refusal
-  says so and links the app's permissions page, where the Owner turns it on once. Connecting and disconnecting GitHub
-  stay the Owner's ([Permissions](docs/permissions.md#bots-that-create-repositories),
-  [GitHub App](docs/github-app.md#bots-that-create-product-repositories)).
 - **What's new** clears on its own: opening the changelog marks the product updates it shows as read, older ones
   too as you load them, and they stay listed as **New** until you leave. The **Mark shown as read** button is gone.
 - Bots: hovering the small harness mark beside a bot's name reads harness, model and effort, such as
@@ -152,13 +198,6 @@ All notable changes to Tico are recorded here. The format follows
   `docker compose down`, run `docker compose up -d` first).
 
 ### Fixed
-- One bot's quarantine no longer spreads to the bots that work with it. A message or task comment to a paused or
-  quarantined bot is kept and runs when it is back, and the sender is told when that is. A new task or hand-off to
-  one is refused as `target_inactive`, saying when the bot is back. That refusal opens no review of the sender and
-  never counts as a repeat toward its quarantine; it counts only toward the 30 refusals a day that stop a loop.
-- A person's new Slack thread to a bot that is paused or quarantined is kept and runs when the bot is back, as a reply
-  in an existing thread already was, instead of being dropped. The person is told in the thread that the bot is held
-  and when it is back, with no need to resend.
 - Tico HQ answers a support ticket or follow-up whose message, email or diagnostics hold an unpaired surrogate (JSON
   `"\ud800"`) with the usual 422 naming the field, instead of a server error. Nothing is stored or judged.
 - Settings > Health's **Sign-in settings** fix (no identity proxy) opened Settings on Computers, a tab that has nothing
@@ -3199,7 +3238,8 @@ First public release.
 - Hosting: local only on a Mac, or self-hosted, including a reference AWS stack under `infra/ec2/`
   with Litestream backups.
 
-[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.52...HEAD
+[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.54...HEAD
+[0.3.54]: https://github.com/ticoteam/tico/compare/v0.3.52...v0.3.54
 [0.3.52]: https://github.com/ticoteam/tico/compare/v0.3.50...v0.3.52
 [0.3.50]: https://github.com/ticoteam/tico/compare/v0.3.49...v0.3.50
 [0.3.49]: https://github.com/ticoteam/tico/compare/v0.3.48...v0.3.49

@@ -32,6 +32,7 @@ function peopleMenu(p) {
   if (p.role === 'member') items.push(check('create_bots', 'Can add bots', !!p.create_bots), check('add_people', 'Can add humans', !!p.add_people));
   if (owner && !p.owner && p.email && p.can_sign_in) items.push('<button type="button" role="menuitem" data-person-act="owner">Make owner</button>');
   if (owner && !p.owner && p.id !== S.me?.id) items.push('<button type="button" role="menuitem" class="danger-text" data-person-act="left">Mark as left</button>');
+  if (owner && p.owner && p.id === S.me?.id) items.push('<button type="button" role="menuitem" data-person-act="email">Change my sign-in email</button>');
   return items.join('');
 }
 function peopleRow(p) {
@@ -189,9 +190,42 @@ async function renderSettingsPeople() {
         else if (act === 'left') confirmDialog(`Mark ${p.name} as left?`, 'Ends their sign-in and API tokens. Their history stays.', 'Mark as left',
           async () => { await post(`/v2/humans/${encodeURIComponent(p.id)}`, {left: true}); await again(`${p.name} marked as left`); });
         else if (act === 'owner') peopleOwnerDialog(p, view);
+        else if (act === 'email') peopleOwnerEmailDialog(p, view);
       });
     });
   } catch (error) { el.innerHTML = `<div class="err">${esc(error.message)}</div>`; }
+}
+// The owner's own sign-in address, changed in place (backend/access.py change_owner_email): typed twice, and the
+// old address stops signing in at once, so the page sends a proxy session to sign in again.
+function peopleOwnerEmailDialog(p, view) {
+  const d = peopleDialog('Change your sign-in email?', `<form>
+    <p>You stay the same person: your tasks, approvals, bots and history stay yours. Once you change it you sign in as the new address, and ${esc(p.email)} stops working here.</p>
+    <p>Set up the new address in your sign-in provider (Cloudflare Access) first, or you can't get back in. <a href="${GH}/blob/main/docs/people.md#change-the-owners-sign-in-email" target="_blank" rel="noopener noreferrer">How to</a></p>
+    <label class="onb-field"><span class="k">New sign-in email</span><input name="email" type="email" autocomplete="off" spellcheck="false"></label>
+    <label class="onb-field"><span class="k">Type it again</span><input name="again" type="email" autocomplete="off" spellcheck="false"></label>
+    <div class="onb-actions"><button class="ghost" type="button" data-people-cancel>Cancel</button><span class="spacer"></span><span class="people-status muted"></span><button class="primary people-danger" type="submit">Change sign-in email</button></div></form>`);
+  const form = d.querySelector('form'), go = form.querySelector('[type=submit]');
+  const typed = () => form.email.value.trim().toLowerCase();
+  const ready = () => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(typed()) && typed() === form.again.value.trim().toLowerCase() && typed() !== p.email.toLowerCase();
+  go.disabled = true;
+  d.querySelector('[data-people-cancel]').onclick = () => d.close();
+  form.email.oninput = form.again.oninput = () => { go.disabled = !ready(); };
+  form.onsubmit = async event => {
+    event.preventDefault();
+    if (!ready()) return;
+    form.querySelectorAll('button,input').forEach(b => b.disabled = true);
+    try {
+      await post('/v2/access/owner/email', {email: typed(), confirm_email: form.again.value.trim().toLowerCase(),
+        expected_revision: view.owner.revision, confirm: true});
+      // The address this browser signed in with no longer signs in: sign in again as the new one.
+      if (S.me?.proxy_session) location.href = '/api/v2/logout';
+      else { location.hash = '#/'; location.reload(); }
+    } catch (error) {
+      form.querySelector('.people-status').innerHTML = `<span class="err">${esc(error.message)}</span>`;
+      form.querySelectorAll('button,input').forEach(b => b.disabled = false);
+      go.disabled = !ready();
+    }
+  };
 }
 function peopleOwnerDialog(p, view) {
   const old = view.people.find(q => q.owner);

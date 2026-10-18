@@ -16,7 +16,7 @@
     },
     {
       "name": "Repositories",
-      "description": "Team repositories, Owner product-repository creation, and bot repository access."
+      "description": "Team repositories, product-repository creation (the Owner, or a bot with Create product repositories), and bot repository access."
     },
     {
       "name": "Subscriptions",

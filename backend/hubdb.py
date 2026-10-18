@@ -1036,6 +1036,9 @@ def migrate(conn, adopt_legacy=False):
                  "kind TEXT NOT NULL, url TEXT NOT NULL, title TEXT, state TEXT, added_by TEXT, created TEXT NOT NULL, "
                  "pr_sha TEXT, pr_merged_at TEXT)")
     conn.execute("CREATE INDEX IF NOT EXISTS task_links_task ON task_links(task_id)")
+    # The Overview's bot hours (backend/bot_hours.py) read the runs still going or finished inside its weeks,
+    # however long ago they started.
+    conn.execute("CREATE INDEX IF NOT EXISTS turns_finished ON turns(finished)")
     conn.execute("CREATE TABLE IF NOT EXISTS preferences(actor TEXT NOT NULL, key TEXT NOT NULL, "
                  "value_json TEXT NOT NULL, updated TEXT NOT NULL, PRIMARY KEY(actor, key))")
     # Which messages could be about a task, so a task's page does not read its whole room (backend/message_links.py).
@@ -2280,9 +2283,10 @@ LIBRARIAN_LITERAL = re.compile(
     r"|^[ \t]*>[^\n]*", re.M)                                   # blockquotes
 JARGON = ((r"\bthrough the runner\b", "through Tico"), (r"\bstanding instructions\b", "Instructions"),
           (r"\bHub docs\b", "Tico docs"))
-# "the runner pulls/syncs" is the Computer only when Tico context follows in the same sentence, even inside code
-# or a link ("syncs `AGENT.md`"); an athlete who pulls a hamstring stays one.
-RUNNER = re.compile(r"\bthe runner(?=\s+(?:pulls?|syncs?)\b[^.!?\n]*?(?:\b(?:updates?|releases?|changes|instructions|"
+# "the runner pulls/syncs" is the Computer only when Tico context follows before the next semicolon or sentence
+# end, even inside code or a link ("syncs `AGENT.md`"); an athlete who pulls a hamstring stays one when the Tico
+# word comes after a semicolon. Colons and dashes do not stop it: they can introduce what is synced.
+RUNNER = re.compile(r"\bthe runner(?=\s+(?:pulls?|syncs?)\b[^.!?;\n]*?(?:\b(?:updates?|releases?|changes|instructions|"
                     r"repository|repo|next run|Tico)\b|AGENT\.md))", re.I)
 
 
