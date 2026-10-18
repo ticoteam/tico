@@ -7,6 +7,12 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- A bot no longer gets a second turn on a task while its first is still running there when the task was moved under
+  another of its tasks mid-turn. A wake about a task the bot is working on goes into that turn, or waits for the next
+  turn on the task; it never starts one beside it. Another bot's turn on the same task (the requester woken by the
+  owner's comment) and the bot's other tasks still run side by side.
+
 ### Changed
 - PRIVACY.md now names OpenRouter: a bot set to Tico Cheap, Mid or Power sends its model calls through Tico HQ to
   OpenRouter. It lists what is sent (the messages and tools, never the gateway key, its label or the install ID), that
