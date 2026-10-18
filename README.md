@@ -9,7 +9,7 @@ A small pilot is what has been measured ([sizing](docs/sizing.md)).
 - **A small server holds the team.** One Docker install (the server, HTTPS through Caddy or a
   Cloudflare Tunnel, Litestream backups, an optional updater) keeps tasks, chats, approvals,
   routines, files and humans in SQLite. The server never runs a bot or a model CLI; when decisions (or Slack routing) are on, it sends the text of each
-  question to the decision provider you configured (TypeSafe, or OpenAI, Anthropic, Gemini, xAI or OpenRouter with a key stored on the server).
+  question to the decision model: the Tico AI Gateway on Tico HQ with a gateway key, then your own TypeSafe key if you set one, then OpenAI, Anthropic, Gemini, xAI or OpenRouter with a key stored on the server.
 - **Computers run the bots.** A Mac (the native runner) or any Linux or cloud computer (the
   `tico-runner` image) joins with a one-time code, claims work over HTTPS, and runs each bot's run
   in that bot's own git repository. Model sign-ins stay on the computer; granted bot credentials can also come from Tico's encrypted vault.
