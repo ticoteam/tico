@@ -270,7 +270,7 @@ watcher's report is answered at once; the ticket's task opens a few seconds late
 | Anything under the line | The Support Agent's task as before, with one line on top: `Triage (support-triage@1, ...): kind question (90%), urgency 1 of 3 ...`. |
 | Decide off, an error or timeout, the month's spend cap, the bot's daily decision budget | Fails open: the task opens as before (with a line saying triage did not run, when it was tried). |
 
-Only the first report of a ticket is triaged. Each call is a `judge.call` row labelled `support-triage@1`, with the
+Only the first report of a ticket is triaged; a message or HQ's close that arrives while it waits becomes a note on its task. A ticket for a paused bot waits until the bot is active again and holds up no other. Each call is a `judge.call` row labelled `support-triage@1`, with the
 answers and never the text; the verdict is kept with the ticket's watcher row. This runs alongside HQ's own spam and
 injection check above, which holds spam at HQ before the watcher sees it.
 

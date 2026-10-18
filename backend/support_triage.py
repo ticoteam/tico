@@ -12,9 +12,11 @@ outside any transaction, and opens the task:
   - anything else: the bot's task as before, with the kind and urgency on its first line.
 
 It fails open: no model (Decide off, rehearsal, the month's spend cap), an error or a timeout, the bot's daily call
-budget, a set that does not load, or an answer under the threshold all open the bot's task as before. Each call is a
-`judge.call` row like every other set's, and the verdict is kept in `watcher_triage` (never the text). Code decides at
-the threshold; the model only answers the questions.
+budget, a set that does not load, an unreadable answer, a bug here, or an answer under the threshold all open the bot's
+task as before. A message or HQ's close that arrives while a ticket waits becomes a quiet note on its task. Each ticket
+is opened on its own, so a paused bot's ticket waits for it and holds up no other. Each call is a `judge.call` row like
+every other set's, written straight after the call, and the verdict is kept in `watcher_triage` (never the text). Code
+decides at the threshold; the model only answers the questions.
 """
 import json
 import logging
@@ -31,7 +33,7 @@ KEY_PREFIX = "hq:"
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS watcher_pending(
  bot TEXT NOT NULL, key TEXT NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL, created TEXT NOT NULL,
- PRIMARY KEY(bot, key));
+ later_json TEXT NOT NULL DEFAULT '[]', found_json TEXT, PRIMARY KEY(bot, key));
 CREATE TABLE IF NOT EXISTS watcher_triage(
  bot TEXT NOT NULL, key TEXT NOT NULL, label TEXT NOT NULL, held INTEGER NOT NULL, detail_json TEXT NOT NULL,
  created TEXT NOT NULL, PRIMARY KEY(bot, key));
@@ -66,6 +68,16 @@ def hold(c, bot, event):
 
 def pending(c, bot, key):
     return c.execute("SELECT 1 FROM watcher_pending WHERE bot=? AND key=?", (bot, key)).fetchone() is not None
+
+
+def later(c, bot, event):
+    """Keep a message or HQ's close that arrives while the ticket waits; it is a note on the task once it opens."""
+    text = event.text or event.note or ""
+    if not text:
+        return
+    row = c.execute("SELECT later_json FROM watcher_pending WHERE bot=? AND key=?", (bot, event.key)).fetchone()
+    kept = json.loads(row["later_json"] or "[]") + [text]
+    c.execute("UPDATE watcher_pending SET later_json=? WHERE bot=? AND key=?", (json.dumps(kept), bot, event.key))
 
 
 def held(c, bot, key, task):
@@ -122,89 +134,121 @@ def held_body(qset, found, bot, name, body):
 
 
 # ----------------------------------------------------------------------------- the work
-def triage_one(store, auth, primary):
-    """Triage the oldest waiting ticket and open its task. False when nothing waits."""
-    from .judge import audit_detail, daily_cap, used_today
-    with store.read() as c:
-        row = c.execute("SELECT * FROM watcher_pending ORDER BY created, key LIMIT 1").fetchone()
-        if not row:
-            return False
-        row = dict(row)
-        engine = engine_for(store, c, primary)
-        actor = "bot:" + row["bot"]
-        over = engine is not None and used_today(c, actor) >= daily_cap(store.settings, "bot")
-    qset = question_set() if engine is not None else None
-    found, why, result, error = None, "", None, None
-    if engine is None:
-        why = "Decide is off or at its monthly cap"
-    elif over:
-        why = "the bot's daily decision budget is used"
-    else:
+def _audit(qset, result, error):
+    """The `judge.call` row of one attempted call: the requested answers' values only, never the state. Total: an
+    answer that cannot be summarised is marked, not raised."""
+    from .judge import audit_detail
+    detail = {"label": qset["label"], "questions": len(qset["questions"]), "caller": "support-triage",
+              "types": sorted({q["type"] for q in qset["questions"].values()})}
+    if result is not None:
         try:
-            result = engine({"title": row["title"], "body": row["body"]}, qset["questions"], qset["label"])
-            found = verdict(qset, result["answers"])
-        except J.JudgeError as exc:
-            error, why = exc, ("the month's spend cap" if exc.code == "spend_cap" else f"the decision model: {exc.code}")
-        except (KeyError, TypeError, ValueError) as exc:
-            error, why = exc, "the answer could not be read"
-            log.warning("Support triage answer could not be read: %s", type(exc).__name__)
+            detail.update(audit_detail(result))
+        except Exception:                                   # noqa: BLE001: the audit row is kept whatever came back
+            detail["usage"] = {}
+        answers = result.get("answers") if isinstance(result.get("answers"), dict) else {}
+        try:
+            detail["answers"] = J.summary({q: a for q, a in answers.items() if q in qset["questions"]})
+        except Exception:                                   # noqa: BLE001
+            detail["answers"] = {"unreadable": True}
+    if error is not None:
+        detail.update({"error": getattr(error, "code", "unreadable"),
+                       "detail": str(getattr(error, "detail", "") or type(error).__name__)[:300]})
+    return detail
+
+
+def ask(store, primary, row):
+    """Ask the set about one waiting ticket, once: (found, why). The `judge.call` row and the answer are written in
+    their own transaction straight after the call, so a later failure to open the task keeps both, and a ticket
+    retried (its bot paused meanwhile) is not asked again."""
+    from .judge import daily_cap, used_today
+    if row.get("found_json"):
+        kept = json.loads(row["found_json"])
+        return kept.get("found"), kept.get("why", "")
+    with store.read() as c:
+        engine = engine_for(store, c, primary)
+        over = engine is not None and used_today(c, "bot:" + row["bot"]) >= daily_cap(store.settings, "bot")
+    if engine is None:
+        return None, "Decide is off or at its monthly cap"
+    if over:
+        return None, "the bot's daily decision budget is used"
+    qset = question_set()
+    found, why, result, error = None, "", None, None
+    try:
+        result = engine({"title": row["title"], "body": row["body"]}, qset["questions"], qset["label"])
+        found = verdict(qset, result["answers"])
+    except J.JudgeError as exc:
+        error, why = exc, ("the month's spend cap" if exc.code == "spend_cap" else f"the decision model: {exc.code}")
+    except Exception as exc:                                # noqa: BLE001: an answer that cannot be read fails open
+        error, why = exc, "the answer could not be read"
+        log.warning("Support triage answer could not be read: %s", type(exc).__name__)
     with store.transaction() as c:
-        if not c.execute("DELETE FROM watcher_pending WHERE bot=? AND key=?", (row["bot"], row["key"])).rowcount:
-            return True                                    # another worker took it
+        H.event(c, "bot:" + row["bot"], "judge.call", qset["label"], _audit(qset, result, error))
+        c.execute("UPDATE watcher_pending SET found_json=? WHERE bot=? AND key=?",
+                  (json.dumps({"found": found, "why": why}), row["bot"], row["key"]))
+    return found, why
+
+
+def deliver_one(store, auth, row, found, why):
+    """Open one waited ticket's task, held or not, and replay what arrived meanwhile as quiet notes. One transaction
+    per ticket: a refusal (its bot paused) leaves this ticket waiting and no other."""
+    from .watchers import _open, defang
+    label = question_set()["label"] if found else SET
+    with store.transaction() as c:
+        now = c.execute("SELECT later_json FROM watcher_pending WHERE bot=? AND key=?", (row["bot"], row["key"])).fetchone()
+        if now is None:
+            return                                         # another worker took it
+        c.execute("DELETE FROM watcher_pending WHERE bot=? AND key=?", (row["bot"], row["key"]))
         if c.execute("SELECT 1 FROM watcher_items WHERE bot=? AND key=?", (row["bot"], row["key"])).fetchone():
-            return True
-        if qset and not over and engine is not None:
-            detail = {"label": qset["label"], "questions": len(qset["questions"]), "caller": "support-triage",
-                      "types": sorted({q["type"] for q in qset["questions"].values()})}
-            if result is not None:
-                detail.update({**audit_detail(result), "answers": J.summary(result.get("answers"))})
-            if error is not None:
-                detail.update({"error": getattr(error, "code", "unreadable"),
-                               "detail": str(getattr(error, "detail", "") or type(error).__name__)[:300]})
-            H.event(c, actor, "judge.call", qset["label"], detail)
-        from .watchers import _open
+            return
         name = (H.bot(c, row["bot"]) or {}).get("display_name") or row["bot"]
         person = person_for(c, row["bot"]) if found and found["held"] else None
         if person:
             task = _open(c, auth, row["bot"], "Support (held: spam or injection): " + row["title"].removeprefix("Support: "),
-                         held_body(qset, found, row["bot"], name, row["body"]), owner=person)
-            H.event(c, H.KEEPER, "support.held", task["id"], {"bot": row["bot"], "key": row["key"], "label": qset["label"],
+                         held_body(question_set(), found, row["bot"], name, row["body"]), owner=person)
+            H.event(c, H.KEEPER, "support.held", task["id"], {"bot": row["bot"], "key": row["key"], "label": label,
                                                               "spam": found["spam"], "to": person})
         else:
-            first = (untriaged_line(why) if not found else triaged_line(qset, found) if not found["held"]
+            first = (untriaged_line(why) if not found else triaged_line(question_set(), found) if not found["held"]
                      else untriaged_line(f"spam or injection {found['spam']:.0%}, but no person to hold it for"))
             task = _open(c, auth, row["bot"], row["title"], first + "\n\n" + row["body"])
+        for text in json.loads(now["later_json"] or "[]"):
+            H.task_comment(c, H.KEEPER, task["id"], defang(text, c), wake=False)
         c.execute("INSERT INTO watcher_items VALUES(?,?,?,?) ON CONFLICT(bot,key) DO UPDATE SET task_id=excluded.task_id",
                   (row["bot"], row["key"], task["id"], H.now()))
         c.execute("INSERT INTO watcher_triage(bot,key,label,held,detail_json,created) VALUES(?,?,?,?,?,?) "
                   "ON CONFLICT(bot,key) DO NOTHING",
-                  (row["bot"], row["key"], qset["label"] if qset else SET, int(bool(person)),
+                  (row["bot"], row["key"], label, int(bool(person)),
                    json.dumps(found or {"skipped": why}, sort_keys=True), H.now()))
-    return True
+
+
+def waiting(store, skip):
+    """The oldest waiting ticket of an active bot not yet tried in this pass, or None. A paused bot's tickets wait for
+    it: its watcher reports again only once it is active, and that report starts the next pass."""
+    with store.read() as c:
+        for row in c.execute("SELECT p.* FROM watcher_pending p JOIN bots b ON b.slug=p.bot AND b.state='active' "
+                             "ORDER BY p.created, p.bot, p.key"):
+            if (row["bot"], row["key"]) not in skip:
+                return dict(row)
+    return None
 
 
 def drain(store, auth, primary):
-    """Triage every waiting ticket, oldest first. A failure opens that ticket's task untriaged rather than losing it."""
-    while True:
+    """Triage every waiting ticket, oldest first, each on its own: one that cannot be opened is left waiting, one that
+    trips a bug here is opened untriaged, and neither stops the rest."""
+    skip = set()
+    while (row := waiting(store, skip)) is not None:
+        skip.add((row["bot"], row["key"]))
         try:
-            if not triage_one(store, auth, primary):
-                return
+            found, why = ask(store, primary, row)
+            deliver_one(store, auth, row, found, why)
+        except H.Refused as exc:
+            log.warning("Support ticket %s for %s waits: %s", row["key"], row["bot"], exc)
         except Exception:                                   # noqa: BLE001: never leave a ticket waiting on a bug here
-            log.exception("Support triage failed; opening the waiting tickets as before")
-            release_all(store, auth, "triage failed")
-            return
-
-
-def release_all(store, auth, why):
-    """Open every waiting ticket's task for its bot, untriaged."""
-    from .watchers import _open
-    with store.transaction() as c:
-        for row in c.execute("SELECT * FROM watcher_pending ORDER BY created, key").fetchall():
-            c.execute("DELETE FROM watcher_pending WHERE bot=? AND key=?", (row["bot"], row["key"]))
-            if c.execute("SELECT 1 FROM watcher_items WHERE bot=? AND key=?", (row["bot"], row["key"])).fetchone():
-                continue
-            task = _open(c, auth, row["bot"], row["title"], untriaged_line(why) + "\n\n" + row["body"])
-            c.execute("INSERT INTO watcher_items VALUES(?,?,?,?)", (row["bot"], row["key"], task["id"], H.now()))
+            log.exception("Support triage failed for %s; opening it as before", row["key"])
+            try:
+                deliver_one(store, auth, row, None, "triage failed")
+            except Exception:                               # noqa: BLE001
+                log.exception("Support ticket %s for %s waits", row["key"], row["bot"])
 
 
 _RUNNING, _AGAIN = threading.Lock(), threading.Event()

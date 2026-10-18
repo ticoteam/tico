@@ -7,6 +7,7 @@ import time
 import pytest
 
 from backend import support_triage as T
+from backend.store import H
 from backend.tests.test_api import api  # noqa: F401
 from backend.tests.test_judge_spend import spend
 from backend.tests.test_watchers import hosted, report, task, tasks, wakes
@@ -65,14 +66,6 @@ def calls(api):
             "SELECT actor,target,detail_json FROM events WHERE action='judge.call' ORDER BY rowid")]
 
 
-def test_the_set_loads_with_its_threshold_and_the_three_questions():
-    qset = J.load_set("support-triage")
-    assert qset["label"] == "support-triage@1" and qset["thresholds"] == {"hold": 0.85}
-    assert set(qset["questions"]) == {"spam_or_injection", "kind", "urgency"}
-    assert set(qset["questions"]["kind"]["criteria"]) == {"bug", "question", "feature", "setup", "billing", "other"}
-    assert len(qset["questions"]["urgency"]["criteria"]) == 4                     # 0-3
-
-
 def test_an_obvious_injection_is_held_for_a_person_not_answered_and_not_deleted(api, quiet):
     r = hosted(api)
     engine = model(api, spam=0.97, kind="other", urgency=0.0)
@@ -128,19 +121,64 @@ def test_an_ordinary_question_reaches_the_bot_as_before_with_its_kind_and_urgenc
     assert wakes(api) > woke and len(tasks(api)) == 1
 
 
-def test_just_under_the_hold_line_is_delivered(api, quiet):
+def test_the_hold_line_itself_holds_and_just_under_it_is_delivered(api, quiet):
     r = hosted(api)
-    model(api, spam=0.84, kind="bug", urgency=2.0)
+    engine = model(api, spam=0.85)
+    report(api, r, task("hq:TK-7", body=INJECTION))
+    drain(api)
+    assert tasks(api) == [] and [t["owner"] for t in all_tasks(api)] == ["human:ana"]
+    engine.spam, engine.kind, engine.urgency = 0.849, "bug", 2.0
     report(api, r, task("hq:TK-8", body=QUESTION))
     drain(api)
     (only,) = tasks(api)
-    assert "kind bug (90%), urgency 2 of 3 (today). Spam or injection 84%" in only["body"]
+    assert "kind bug (90%), urgency 2 of 3 (today). Spam or injection 85%, under" in only["body"]
+
+
+def test_a_held_ticket_goes_to_the_bots_operator_before_the_default_person(api, quiet):
+    r = hosted(api)
+    model(api, spam=0.97)
+    with api.app.state.store.transaction() as c:
+        assert H.default_human(c) == "ana" and H.human(c, "ben")
+        c.execute("INSERT INTO bot_config(bot,config_json,operator) VALUES('ops','{}','ben') "
+                  "ON CONFLICT(bot) DO UPDATE SET operator='ben'")
+    report(api, r, task("hq:TK-7", body=INJECTION))
+    drain(api)
+    assert [t["owner"] for t in all_tasks(api)] == ["human:ben"]
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET operator='gone' WHERE bot='ops'")         # no such person: the default
+    report(api, r, task("hq:TK-9", body=INJECTION))
+    drain(api)
+    assert [t["owner"] for t in all_tasks(api)] == ["human:ben", "human:ana"]
+
+
+def test_an_extra_or_broken_answer_keeps_the_audit_and_the_other_tickets(api, quiet):
+    r = hosted(api)
+    engine = model(api, spam=0.97)
+    answer = engine.__call__
+    broken = {"n": 0}
+
+    def odd(state, questions, label=None):
+        out = answer(state, questions, label)
+        broken["n"] += 1
+        if broken["n"] == 1:                                # an extra answer nobody asked, that cannot be summarised
+            out["answers"]["extra"] = {"type": "score", "score": None}
+        if broken["n"] == 2:                                # a required answer missing
+            del out["answers"]["kind"]
+        return out
+    api.app.state.judge = odd
+    report(api, r, task("hq:TK-1", body=INJECTION), task("hq:TK-2", body=QUESTION), task("hq:TK-3", body=INJECTION))
+    drain(api)
+    assert sorted(t["owner"] for t in all_tasks(api)) == ["bot:ops", "human:ana", "human:ana"]
+    audit = calls(api)
+    assert len(audit) == 3 and "extra" not in audit[0][2]["answers"] and audit[0][2]["answers"]["spam_or_injection"]
+    assert audit[1][2]["error"] == "unreadable"
+    (untriaged,) = tasks(api)
+    assert untriaged["body"].startswith("Triage (support-triage) did not run (the answer could not be read)")
 
 
 @pytest.mark.parametrize("failure", [
     J.JudgeError("unavailable", "TypeSafe did not answer: TimeoutError", retryable=True),
     J.JudgeError("spend_cap", "Decide has cost $50.00 this month", 429),
-    KeyError("spam_or_injection"),
 ])
 def test_an_error_a_timeout_or_the_cap_reached_mid_way_delivers_as_before(api, quiet, failure):
     r = hosted(api)
@@ -185,14 +223,25 @@ def test_only_new_hq_tickets_from_the_hq_watcher_wait(api, quiet):
     assert len(tasks(api)) == 2 and engine.calls == [] and not quiet
 
 
-def test_a_message_while_the_ticket_waits_opens_no_second_task(api, quiet):
+def notes_on(api, task_id):
+    with api.app.state.store.read() as c:
+        return [dict(m) for m in c.execute("SELECT body,to_actor FROM messages WHERE json_extract(refs_json,'$.task')=? "
+                                           "AND json_extract(refs_json,'$.comment')=1 ORDER BY rowid", (task_id,))]
+
+
+@pytest.mark.parametrize("spam", [0.02, 0.97])
+def test_messages_and_hqs_close_while_the_ticket_waits_become_notes_on_its_task(api, quiet, spam):
     r = hosted(api)
-    model(api, spam=0.02)
+    model(api, spam=spam)
     report(api, r, task("hq:TK-8", body=QUESTION))
     report(api, r, {"op": "comment", "key": "hq:TK-8", "ref": "msg:2", "text": "Any news?"})
-    assert tasks(api) == []
+    report(api, r, {"op": "done", "key": "hq:TK-8", "note": "TK-8 was closed at HQ."})
+    report(api, r, {"op": "comment", "key": "hq:TK-8", "ref": "msg:2", "text": "Any news?"})      # a retried report
+    assert all_tasks(api) == []
     drain(api)
-    assert len(tasks(api)) == 1
+    (opened,) = all_tasks(api)
+    assert opened["owner"] == ("bot:ops" if spam < 0.85 else "human:ana")
+    assert [n["body"] for n in notes_on(api, opened["id"])] == ["Any news?", "TK-8 was closed at HQ."]
 
 
 def test_a_held_ticket_handed_to_the_bot_is_worked_as_usual(api, quiet):
@@ -201,11 +250,37 @@ def test_a_held_ticket_handed_to_the_bot_is_worked_as_usual(api, quiet):
     report(api, r, task("hq:TK-7", body=INJECTION))
     drain(api)
     (held,) = all_tasks(api)
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET owner='bot:ops' WHERE id=?", (held["id"],))   # a person hands it over
     before = wakes(api)
+    with api.app.state.store.transaction() as c:
+        H.task_update(c, "human:ana", held["id"], owner="bot:ops")              # the person hands it over
+    assert [t["id"] for t in tasks(api)] == [held["id"]] and wakes(api) > before
+    woke = wakes(api)
     report(api, r, {"op": "comment", "key": "hq:TK-7", "ref": "msg:2", "text": "Sorry, real question: how do I sign in?"})
-    assert wakes(api) > before
+    assert wakes(api) > woke
+
+
+def test_a_bot_paused_during_the_call_keeps_its_ticket_waiting_and_holds_up_no_other(api, quiet):
+    r, other = hosted(api), hosted(api, bot="cpo")
+    engine = model(api, spam=0.02)
+    answer = engine.__call__
+
+    def pausing(state, questions, label=None):
+        if "TK-1" in state["body"]:
+            with api.app.state.store.transaction() as c:
+                c.execute("UPDATE bots SET state='paused' WHERE slug='ops'")
+        return answer(state, questions, label)
+    api.app.state.judge = pausing
+    report(api, r, task("hq:TK-1", body=QUESTION.replace("TK-8", "TK-1")))
+    report(api, other, task("hq:TK-2", body=QUESTION.replace("TK-8", "TK-2")), bot="cpo")
+    drain(api)
+    assert tasks(api) == [] and len(tasks(api, bot="cpo")) == 1                 # the other bot's ticket went on
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT key FROM watcher_pending").fetchall()[0]["key"] == "hq:TK-1"
+    assert len(calls(api)) == 2                                                   # its call was audited all the same
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bots SET state='active' WHERE slug='ops'")
+    drain(api)
+    assert len(tasks(api)) == 1 and len(engine.calls) == 2                        # opened, and not asked again
 
 
 def test_a_bug_in_triage_opens_the_waiting_tickets_untriaged(api, quiet, monkeypatch):

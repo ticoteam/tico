@@ -106,7 +106,8 @@ def deliver(c, auth, bot, event, triage=None):
     if event.ref:
         c.execute("INSERT INTO watcher_refs VALUES(?,?,?)", (bot, event.key, event.ref))
     if support_triage.pending(c, bot, event.key):
-        return None                                    # its task opens after triage; the bot reads the thread in `show`
+        support_triage.later(c, bot, event)            # a note on its task once triage opens it
+        return None
     if event.op != "task" and support_triage.held(c, bot, event.key, task):
         return _note(c, task, event.text or event.note) if live(task) else None
     if event.op == "task":
