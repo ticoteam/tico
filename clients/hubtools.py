@@ -2328,7 +2328,7 @@ tool("hub_bot_resume", "Resume a paused bot, as the person who asked you; one wi
 
 # A computer's full row runs to tens of thousands of characters (every repository, each bot's readiness, runtime
 # catalogs, recent log errors), so the list is one short row each and the detail is paged section by section.
-COMPUTER_SECTIONS = ("repositories", "bots", "runtimes", "harnesses", "recent_errors")
+COMPUTER_SECTIONS = ("assigned", "repositories", "bots", "runtimes", "harnesses", "recent_errors")
 COMPUTER_PAGE = 20
 COMPUTER_TEXT = 300
 COMPUTER_DETAIL_CHARS = 40_000
@@ -2356,7 +2356,7 @@ def computer_summary(row):
             "last_seen": row.get("last_seen"), "operator": row.get("operator"), "platform": row.get("platform") or "",
             "accepts_member_bots": bool(row.get("accepts_member_bots")), "release": row.get("release") or "",
             "version": row.get("version") or "", "wanted_release": update.get("wanted_release") or "",
-            "update": state, "readiness": level, "bots": list(row.get("bots") or []),
+            "update": state, "readiness": level, "bots": len(row.get("bots") or []),
             "signed_in": sorted(name for name, r in (readiness.get("runtimes") or {}).items()
                                 if isinstance(r, dict) and r.get("authenticated") == "ready"),
             "warnings": warnings, "errors": errors, "recent_errors": len(readiness.get("recent_errors") or [])}
@@ -2381,7 +2381,7 @@ def _computer_section(row, name):
     """A section's items in a stable order, or None when the computer has none: maps by name, recent errors
     newest first."""
     readiness = row.get("readiness") if isinstance(row.get("readiness"), dict) else {}
-    found = row.get(name) if name == "repositories" else readiness.get(name)
+    found = {"assigned": row.get("bots"), "repositories": row.get("repositories")}.get(name, readiness.get(name))
     if isinstance(found, dict):
         return sorted(found.items())
     if isinstance(found, list):
@@ -2393,7 +2393,7 @@ def _page(items, name, offset, cap, text):
     """One page of a section's items, each cut to size (a map's records by name), and where the next page starts
     (None on the last page)."""
     chosen = items[offset:offset + cap]
-    page = ([_bounded(v, cap, text) for v in chosen] if name in ("repositories", "recent_errors")
+    page = ([_bounded(v, cap, text) for v in chosen] if name in ("assigned", "repositories", "recent_errors")
             else {k: _bounded(v, cap, text) for k, v in chosen})
     return page, offset + cap if offset + cap < len(items) else None
 
@@ -2414,7 +2414,7 @@ def computer_detail(row, section=None, offset=0):
                       "total": len(items), "items": page, **({"more": more(section, after)} if after else {})}
         else:
             readiness = row.get("readiness") if isinstance(row.get("readiness"), dict) else {}
-            result = {k: _bounded(v, 1000 if k == "bots" else cap, text) for k, v in row.items() if k != "readiness"}
+            result = {k: _bounded(v, cap, text) for k, v in row.items() if k not in ("readiness", "bots")}
             result["readiness"] = {k: _bounded(v, cap, text) for k, v in readiness.items() if k not in COMPUTER_SECTIONS}
             result["truncated"] = {}
             for name in COMPUTER_SECTIONS:
@@ -2422,7 +2422,10 @@ def computer_detail(row, section=None, offset=0):
                 if items is None:
                     continue
                 page, after = _page(items, name, 0, cap, text)
-                (result if name == "repositories" else result["readiness"])[name] = page
+                if name in ("assigned", "repositories"):
+                    result["bots" if name == "assigned" else name] = page
+                else:
+                    result["readiness"][name] = page
                 if after:
                     result["truncated"][name] = {"shown": len(page), "total": len(items), "more": more(name, after)}
         if fits(result):
@@ -2442,9 +2445,10 @@ def computer_detail(row, section=None, offset=0):
 @tool("hub_computer_list", "The computers a bot may go on, as the person who asked you, one short row each: id, label, "
       "online and last seen, operator, release (Tico), version (runner software), wanted release, update (current, "
       "update_available, updating, failed, incompatible or unknown), readiness (ready, warnings, not_ready or offline), "
-      "the bots that run there, the AI tools signed in, and counts of warnings, errors and recent log errors; and "
+      "how many bots run there, the AI tools signed in, and counts of warnings, errors and recent log errors; and "
       "whether each team service is ok. "
-      "For one computer in full (repositories, each bot's readiness, runtimes, update error, recent errors) pass "
+      "For one computer in full (the bots on it, repositories, each bot's readiness, runtimes, update error, recent "
+      "errors) pass "
       "`computer`: large sections come capped, and `truncated` says how to read the rest with `section` and `offset`.",
       {"computer": _s("One computer's label or id: its full detail instead of the list"),
        "section": {"type": "string", "enum": list(COMPUTER_SECTIONS),

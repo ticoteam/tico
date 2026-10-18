@@ -1779,7 +1779,7 @@ def parser():
     comp = sub.add_parser("computer", help="the computers a bot may go on").add_subparsers(dest="sub")
     s = comp.add_parser("list", help="the computers a bot may go on, one short row each; --computer for one in full")
     s.add_argument("--computer", help="one computer's label or id: its full detail, large sections capped")
-    s.add_argument("--section", choices=["repositories", "bots", "runtimes", "harnesses", "recent_errors"],
+    s.add_argument("--section", choices=["assigned", "repositories", "bots", "runtimes", "harnesses", "recent_errors"],
                    help="with --computer: one page of this section only")
     s.add_argument("--offset", type=int, help="with --section: the first item to return")
     s.set_defaults(fn="computer list")

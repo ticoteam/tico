@@ -306,15 +306,22 @@ def heavy_heartbeat(api, r, bots, n, release="0.3.56", update=None, huge=""):
                                            **({"update": update} if update else {})}, token=r["token"])
 
 
-def eleven_computers(api):
+def add_bots(api, slugs, runner_id=None):
+    """Bots in the registry, and with `runner_id` already on that computer (as many as a big company puts there)."""
     from backend import hubdb as H
     from backend.store import encode
-    slugs = ["bot-" + str(k) for k in range(33)]
     bots = {slug: {"name": slug, "runtime": "fake", "status": "active"} for slug in slugs}
     with api.app.state.store.transaction() as c:
         H.sync_registry(c, bots, [])
         for slug, config in bots.items():
             c.execute("INSERT INTO bot_config(bot,config_json,operator) VALUES(?,?,'ana')", (slug, encode(config)))
+            if runner_id:
+                c.execute("INSERT INTO assignments VALUES(?,?,1,?,'human:ana')", (slug, runner_id, H.now()))
+
+
+def eleven_computers(api):
+    slugs = ["bot-" + str(k) for k in range(33)]
+    add_bots(api, slugs)
     computers = []
     for n in range(11):
         r = runner(api, label=f"Mac {n:02d}")
@@ -330,7 +337,8 @@ def eleven_computers(api):
 
 def test_the_computer_list_is_a_short_summary_and_one_computer_reads_in_capped_pages(api, monkeypatch):
     monkeypatch.setenv("TICO_VERSION", "0.3.56")
-    eleven_computers(api)
+    computers = eleven_computers(api)
+    add_bots(api, [f"helper-with-a-long-name-{k:03d}" for k in range(300)], computers[5]["runner_id"])
     assert len(json.dumps(get(api, "computers"))) > 200_000                 # the Computers page keeps everything
     err, listing = call(api, "hub_computer_list")
     assert not err and len(listing["computers"]) == 11
@@ -341,6 +349,7 @@ def test_the_computer_list_is_a_short_summary_and_one_computer_reads_in_capped_p
     assert rows["Mac 00"]["readiness"] == "not_ready" and rows["Mac 00"]["errors"] == 1
     assert rows["Mac 01"]["readiness"] == "warnings" and rows["Mac 01"]["warnings"] == 9 and rows["Mac 04"]["warnings"] == 7
     assert rows["Mac 01"]["signed_in"] == ["claude", "codex"] and rows["Mac 01"]["recent_errors"] == 50
+    assert rows["Mac 05"]["bots"] == 303 and rows["Mac 01"]["bots"] == 3                    # a count, not the names
     assert "repositories" not in rows["Mac 01"] and "AGENT.md" not in json.dumps(listing)
 
     err, detail = call(api, "hub_computer_list", {"computer": "mac 04"})
@@ -359,6 +368,10 @@ def test_the_computer_list_is_a_short_summary_and_one_computer_reads_in_capped_p
     assert not err and [r["full_name"] for r in rest["items"]] == [f"acme/repo-{k}" for k in range(20, 30)]
     assert "more" not in rest and rest["total"] == 30
     assert "hub_computer_list" in cut["recent_errors"]["more"]
+    err, busy = call(api, "hub_computer_list", {"computer": "Mac 05"})
+    assert not err and len(busy["bots"]) == 20 and busy["truncated"]["assigned"]["total"] == 303
+    err, rest = call(api, "hub_computer_list", {"computer": "Mac 05", "section": "assigned", "offset": 300})
+    assert not err and len(rest["items"]) == 3 and "more" not in rest
     # A record no page size or cut can fit names how to read it instead of going over the ceiling.
     row = {"id": "c1", "label": "Odd", "readiness": {"bots": {"odd": {f"k{k}": k for k in range(20_000)}}}}
     for read in (hubtools.computer_detail(row), hubtools.computer_detail(row, "bots")):
@@ -384,9 +397,9 @@ def test_a_member_reads_neither_a_computer_nor_a_bot_they_cannot_see_in_the_summ
     err, listing = call(api, "hub_computer_list", token="ben-test")
     assert not err and [row["label"] for row in listing["computers"]] == [row["label"] for row in raw["computers"]]
     assert [row["label"] for row in listing["computers"]] == ["Shared Mac"]
-    assert listing["computers"][0]["bots"] == ["ops"] and listing["computers"][0]["warnings"] == 3
+    assert listing["computers"][0]["bots"] == 1 and listing["computers"][0]["warnings"] == 3
     err, detail = call(api, "hub_computer_list", {"computer": "Shared Mac"}, token="ben-test")
-    assert not err and list(detail["readiness"]["bots"]) == ["ops"] and "finance" not in json.dumps(detail)
+    assert not err and detail["bots"] == list(detail["readiness"]["bots"]) == ["ops"] and "finance" not in json.dumps(detail)
     assert call(api, "hub_computer_list", {"computer": "Ana Mac"}, token="ben-test")[0]
     err, everything = call(api, "hub_computer_list", {"computer": "Shared Mac"})
     assert not err and set(everything["readiness"]["bots"]) == {"ops", "finance"}         # the owner still reads it
