@@ -312,3 +312,39 @@ def test_the_weekly_table_adds_up_only_runs_the_reader_may_read(api):
         c.execute("UPDATE tasks SET private=1 WHERE id=?", (shared["id"],))
     assert runs("ben-test") == {} and readable("ben-test", "turns") == 0
     assert sum(runs("ana-test").values()) == 5
+
+
+def test_a_run_whose_inputs_came_from_a_private_task_leaves_the_weekly_table(api):
+    """A run on a task Ben may read, turn or turnless, that read a message of Ana's private task among its inputs."""
+    as_member(api, "ben@acme.example")
+    r = machine(api)
+    store = api.app.state.store
+    private = post(api, "tasks", {"owner": "ops", "title": "Plan the reorg", "body": "Ana only.", "private": True})
+    secret = claim(api, r)
+    start(api, r, secret)
+    finish(api, r, secret)
+    post(api, "tasks", {"owner": "ops", "title": "Check the bank feed", "body": "Daily."})
+    tainted = claim(api, r)
+    start(api, r, tainted)
+    finish(api, r, tainted)
+    post(api, "tasks", {"owner": "ops", "title": "Check the card feed", "body": "Daily."})
+    lost = claim(api, r)
+    with store.transaction() as c:
+        c.execute("DELETE FROM turns WHERE id=?", (lost["id"],))
+        c.execute("UPDATE attempts SET state='failed' WHERE id=?", (lost["id"],))
+
+    def runs(token):
+        return {row["trigger"]: row["runs"] for row in weekly(api, token)}
+
+    assert runs("ben-test") == {"status_or_relation": 1, "unknown": 1}
+    with store.transaction() as c:
+        # Each run read a different message of the private task (a message is one run's input).
+        H.task_comment(c, "human:ana", private["id"], "And the second draft.")
+        later = c.execute("SELECT id FROM messages WHERE conversation_id=? ORDER BY rowid DESC LIMIT 1",
+                          (private["conversation_id"],)).fetchone()[0]
+        quiet(c)
+        first = c.execute("SELECT message_id FROM jobs WHERE id=?", (secret["job_id"],)).fetchone()[0]
+        for attempt, message in ((tainted, first), (lost, later)):
+            c.execute("INSERT INTO attempt_inputs(attempt_id,message_id) VALUES(?,?)", (attempt["id"], message))
+    assert runs("ben-test") == {}
+    assert runs("ana-test") == {"status_or_relation": 2, "unknown": 1}
