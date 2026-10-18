@@ -61,6 +61,9 @@ All notable changes to Tico are recorded here. The format follows
   Computers and `GET /api/v2/computers` are unchanged.
 
 ### Fixed
+- A doc saved through the API or a bot's doc tool now reads back exactly as sent: its final newline and any leading
+  indentation (an indented code block on line 1) are kept, and a change to only the ends is a new version. Titles
+  and paths still drop surrounding spaces.
 - A caller that hangs up while the server reads its request body is recorded as 499 (client closed request), with
   no traceback, instead of an HTTP 500: it no longer counts as a server error in the flight recorder's 5xx count,
   Sentry or the server log. All seven 5xx counted on v0.3.55 were this.

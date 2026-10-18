@@ -116,7 +116,7 @@ All of it is in the stable v2 contract ([openapi/v2.json](openapi/v2.json), tag 
 | | |
 |---|---|
 | `GET /api/v2/docs?path_prefix=&limit=&cursor=` | `{"docs": [{"id", "path", "title", "updated", "updated_by", "updated_by_name", "locked", "version"}], "next_cursor"}` |
-| `POST /api/v2/docs` `{"path"?, "title", "body", "note"?}` | `{"doc"}`; `409 path_taken` for a path in use |
+| `POST /api/v2/docs` `{"path"?, "title", "body", "note"?}` | `{"doc"}`; `409 path_taken` for a path in use. `body` is stored exactly as sent, leading and trailing whitespace included (here and on `PATCH`); the other fields trim |
 | `GET /api/v2/docs/{id}` | `{"doc": {..., "body", "created_by", "created_by_name", "archived"}}` |
 | `PATCH /api/v2/docs/{id}` `{"version", "title"?, "body"?, "path"?, "locked"?, "archived"?, "note"?}` | `{"doc"}`; `409 version_conflict` (with the current `version`, `updated_by_name`), `403 locked`, `403 forbidden` for `locked` by anyone but an owner or bot administrator |
 | `GET /api/v2/docs/{id}/versions` | `{"versions": [{"version", "current", "title", "path", "actor", "actor_name", "created", "note", "size"}]}` |
