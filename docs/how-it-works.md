@@ -294,6 +294,10 @@ With no ready provider the run is limited as above. Every turn tries the bot's o
 bot moves back on its own once the limit resets. The owner turns this off in **Settings → AI providers**
 (*Fall back when a plan runs out*, `auto_fallback`). Overview lists how many bots are on a fallback and
 since when, and how many are limited.
+**Settings → Health** counts this company fallback: a limited bot covered by it gets no "has no fallback
+model" finding. When a computer's default login (no subscription) keeps stopping on a usage limit, Health
+says so once per computer and tool, e.g. "Team box's default Codex login is out of quota", until a turn on
+it completes or the reset time passes ([Health Monitor](health-monitor.md), `default_login_limited`).
 
 The company's **check model** (*Check model* in **Settings → AI providers**, `check_models` on
 `/api/v2/providers`) is what review and check subtasks run on when they name no model: an ordered list such as
