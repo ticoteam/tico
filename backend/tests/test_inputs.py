@@ -295,3 +295,80 @@ def test_a_requester_bot_steers_its_delegated_tasks_running_turn(api):
         other = H.task_create(c, "human:ana", "Pay the rent", "April.", "bot:ops", private=False, lint=False)
     post(api, "messages", {"to": "ops", "kind": "steer", "text": "Skip it", "refs": {"task": other["id"]}},
          finance["token"], expected=422)
+
+
+@pytest.mark.parametrize("outcome", ["completed", "failed"])
+def test_a_comment_taken_back_while_the_turn_read_it_does_not_break_the_turns_finish(api, outcome):
+    # Dev 194: a comment the run had taken in was deleted before it finished. The input loop read it through
+    # H.message, which leaves deleted rows out, so every retry of the finish raised a TypeError (a 500 each).
+    r = runner(api)
+    assign(api, r, "ops")
+    ready(api, r, ["ops"])
+    task = post(api, "tasks", {"owner": "ops", "title": "Review the report", "body": "Please review."})
+    first = claim(api, r, "ops")
+    post(api, f"attempts/{first['id']}/started", {"thread_id": "thread"}, r["token"])
+    path = f"tasks/{task['id']}/comments"
+    kept = post(api, path, {"text": "Also check the totals"})["comment"]
+    gone = post(api, path, {"text": "And the appendix"})["comment"]
+    assert {m["id"] for m in post(api, f"attempts/{first['id']}/inputs", {}, r["token"])["messages"]} == \
+        {kept["id"], gone["id"]}
+    for m in (kept, gone):
+        post(api, f"attempts/{first['id']}/inputs/{m['id']}/ack", {}, r["token"])
+    post(api, f"attempts/{first['id']}/events", {"events": [{"seq": 1, "kind": "message",
+                                                              "payload": {"text": "Working on it"}}]}, r["token"])
+    post(api, f"{path}/{gone['id']}/delete", {})
+    finished = post(api, f"attempts/{first['id']}/complete", {"outcome": outcome, "text": "Reviewed.", "last_seq": 1},
+                    r["token"])
+    assert finished["outcome"] == outcome
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT state FROM attempts WHERE id=?", (first["id"],)).fetchone()[0] == outcome
+        assert c.execute("SELECT exit FROM turns WHERE id=?", (first["id"],)).fetchone()[0] == outcome
+        # The comment still there settles with the run as before; the one taken back is never held or retried.
+        assert c.execute("SELECT state FROM jobs WHERE message_id=?", (kept["id"],)).fetchone()[0] == \
+            ("completed" if outcome == "completed" else "uncertain")
+        assert c.execute("SELECT state FROM jobs WHERE message_id=?", (gone["id"],)).fetchone()[0] == \
+            ("completed" if outcome == "completed" else "cancelled")
+
+
+def test_a_turn_whose_own_comment_was_taken_back_still_finishes(api):
+    r = runner(api)
+    assign(api, r, "ops")
+    ready(api, r, ["ops"])
+    task = post(api, "tasks", {"owner": "ops", "title": "Review the report", "body": "Please review."})
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE jobs SET state='cancelled' WHERE state='queued'")
+    path = f"tasks/{task['id']}/comments"
+    said = post(api, path, {"text": "Please look at the totals"})["comment"]
+    first = claim(api, r, "ops")
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT message_id FROM jobs WHERE id=?", (first["job_id"],)).fetchone()[0] == said["id"]
+    post(api, f"attempts/{first['id']}/started", {"thread_id": "thread"}, r["token"])
+    post(api, f"{path}/{said['id']}/delete", {})
+    post(api, f"attempts/{first['id']}/complete", {"outcome": "completed", "text": "Totals checked.", "last_seq": 0},
+         r["token"])
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT state FROM attempts WHERE id=?", (first["id"],)).fetchone()[0] == "completed"
+        assert c.execute("SELECT state FROM jobs WHERE id=?", (first["job_id"],)).fetchone()[0] == "completed"
+
+
+@pytest.mark.parametrize("outcome", ["completed", "failed"])
+def test_a_comment_taken_back_before_the_runtime_got_it_is_cancelled_not_requeued(api, outcome):
+    r = runner(api)
+    assign(api, r, "ops")
+    ready(api, r, ["ops"])
+    task = post(api, "tasks", {"owner": "ops", "title": "Review the report", "body": "Please review."})
+    first = claim(api, r, "ops")
+    post(api, f"attempts/{first['id']}/started", {"thread_id": "thread"}, r["token"])
+    path = f"tasks/{task['id']}/comments"
+    kept = post(api, path, {"text": "Also check the totals"})["comment"]
+    gone = post(api, path, {"text": "And the appendix"})["comment"]
+    assert {m["id"] for m in post(api, f"attempts/{first['id']}/inputs", {}, r["token"])["messages"]} == \
+        {kept["id"], gone["id"]}
+    post(api, f"{path}/{gone['id']}/delete", {})
+    post(api, f"attempts/{first['id']}/complete", {"outcome": outcome, "text": "Reviewed.", "last_seq": 0,
+         "undelivered": [kept["id"], gone["id"]]}, r["token"])
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT state,attempt_id FROM jobs WHERE message_id=?", (kept["id"],)).fetchone()[:] == \
+            ("queued", None)
+        assert c.execute("SELECT state FROM jobs WHERE message_id=?", (gone["id"],)).fetchone()[0] == "cancelled"
+        assert not c.execute("SELECT 1 FROM attempt_inputs WHERE message_id IN (?,?)", (kept["id"], gone["id"])).fetchone()

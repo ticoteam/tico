@@ -11,6 +11,8 @@ import yaml
 from fastapi import Query, Request
 from fastapi.responses import PlainTextResponse, RedirectResponse, Response
 
+from clients import sessions
+
 from . import access as Access
 from . import bot_access as A
 from . import models as M
@@ -18,7 +20,7 @@ from . import changelog as CL
 from . import app_delivery, providers, runner_versions
 from .harnesses import resolve_harness
 from . import personal_tokens, rooms, team_rules, turns, wake_presets
-from .execution import AWAKE_GAP, AWAKE_SETTLE, Execution, turn_limit, turn_share, turns_here
+from .execution import AWAKE_GAP, AWAKE_SETTLE, Execution, bump_bot_session_epoch, turn_limit, turn_share, turns_here
 from pathlib import Path
 
 from . import read_cache
@@ -1533,13 +1535,16 @@ def install_views(app, store, auth, mutate, task_view):
             from .computer_keys import shared_all, shared_listing
             shared_keys = shared_all(c)
             for row in c.execute("SELECT id,label,operator,last_seen,revoked_at,platform,version,capacity,readiness_json,"
-                                 "accepts_member_bots,screen,performance,capabilities_json,readiness_at FROM runners ORDER BY created"):
+                                 "accepts_member_bots,screen,performance,capabilities_json,restart_since,readiness_at "
+                                 "FROM runners ORDER BY created"):
                 if not auth.bot_admin(who) and who.actor != "human:" + row["operator"]:
                     continue
                 bots = [a[0] for a in c.execute("SELECT bot FROM assignments WHERE runner_id=? ORDER BY bot", (row["id"],))]
                 value = dict(row)
                 value["release"] = runner_versions.view(fleet.get(row["id"])).get("release") or ""
                 value["accepts_member_bots"] = bool(row["accepts_member_bots"])
+                # Since when it says it is restarting after a person pressed Restart; null when it is not.
+                value["restarting"] = value.pop("restart_since")
                 from .screen import listing as screen_listing
                 from .performance import listing as performance_listing
                 value.update(screen_listing(value))
@@ -1919,10 +1924,15 @@ def install_views(app, store, auth, mutate, task_view):
             # Drop the provider pointer so the next turn tries a fresh thread and loads the
             # recovery pack from Hub history instead of resuming the cleared session.
             config = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
+            cfg = json.loads(config[0] or "{}") if config else {}
             if config:
-                cfg = json.loads(config[0] or "{}")
                 c.execute("DELETE FROM bot_sessions WHERE bot=? AND runtime=? AND model=?",
                           (bot, *providers.bot_choice(c, auth.settings, cfg)))
+            # This chat's turns continue the bot's thread every direct chat shares: the next turn of any of them
+            # starts a new one, while each other chat keeps its own history.
+            from .shared_bots import follow
+            if sessions.session_key(follow(c, bot, cfg), bot, None, conv["id"]) == sessions.BOT_THREAD:
+                bump_bot_session_epoch(c, bot)
             H.event(c, who.actor, "session.clear", conv["id"])
             return {"cleared": True, "conversation_id": conv["id"]}
         return mutate(request, body, work)

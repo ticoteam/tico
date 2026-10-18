@@ -71,7 +71,7 @@ pub fn capabilities() -> Vec<&'static str> {
 }
 
 /// Root-level heartbeat fields an older server may refuse; each is left out for ten minutes after a refusal.
-const ROOT_FIELDS: &[&str] = &["worktrees", "profiles", "repositories"];
+const ROOT_FIELDS: &[&str] = &["worktrees", "profiles", "repositories", "restart"];
 
 fn rows<'a>(body: &'a Value, key: &str) -> impl Iterator<Item = &'a Value> {
     body[key].as_array().into_iter().flatten()

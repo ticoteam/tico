@@ -11,6 +11,7 @@ import yaml
 
 from . import goals as G
 from . import hubdb as H
+from . import idempotency_messages
 from . import message_links
 from . import people as P
 from .harnesses import EXTERNAL_HARNESSES
@@ -76,6 +77,10 @@ CREATE TABLE IF NOT EXISTS settings_changes(
 CREATE INDEX IF NOT EXISTS settings_changes_created ON settings_changes(created);
 CREATE TABLE IF NOT EXISTS session_epochs(
  conversation_id TEXT PRIMARY KEY REFERENCES conversations(id), epoch INTEGER NOT NULL DEFAULT 0, updated TEXT NOT NULL);
+-- Moved by every clear or reset of one bot: a bot's direct chats share its one `bot` thread
+-- (clients/sessions.py), so one chat's Clear must reach the next turn of any of them.
+CREATE TABLE IF NOT EXISTS bot_session_epochs(
+ bot TEXT PRIMARY KEY REFERENCES bots(slug), epoch INTEGER NOT NULL DEFAULT 0, updated TEXT NOT NULL);
 -- Current provider thread for one bot+runtime+model. Local files hold the real
 -- context; this pointer lets a runner try resume, then fall back to a Hub pack.
 CREATE TABLE IF NOT EXISTS bot_sessions(
@@ -684,6 +689,8 @@ class Store:
             from . import performance as _performance
             c.executescript(_performance.SCHEMA)
             _updates.purge_rejected(c)
+            # Which stored retry answers quote which message (backend/idempotency_messages.py).
+            idempotency_messages.ensure(c)
             c.execute("BEGIN IMMEDIATE")
             try:
                 # Who may see, read and write to each bot (backend/bot_access.py); NULL is Open.
@@ -702,6 +709,9 @@ class Store:
                 H.add_column(c, "runners", "screen_default_pending", "INTEGER NOT NULL DEFAULT 0")
                 # Performance diagnostics: on unless a person turns them off (backend/performance.py).
                 H.add_column(c, "runners", "performance", "TEXT NOT NULL DEFAULT 'on'")
+                # When a computer said it is restarting after a person pressed Restart, from its heartbeat; NULL once
+                # a heartbeat no longer says so (backend/health.py `restarting`).
+                H.add_column(c, "runners", "restart_since", "TEXT")
                 # A starter bot is `needs_onboarding` until it says its setup is done, then
                 # `onboarded`; NULL for every other bot (backend/onboarding.py).
                 H.add_column(c, "bot_config", "onboarding_state", "TEXT")

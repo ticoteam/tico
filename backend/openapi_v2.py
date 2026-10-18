@@ -777,7 +777,7 @@ SCHEMAS = {
                   stuck={"type": "array", "items": {"type": "object"}, "description":
                          "Bots with queued work that is not starting, or left in setup for over a day (the caller may "
                          "read them): bot, name, queued, oldest, computer, reason (not_ready, computer_offline, no_computer, "
-                         "slow, limit, updating, setup, or a reason the claim holds the work: draining, maintaining, "
+                         "slow, limit, updating, restarting, setup, or a reason the claim holds the work: draining, maintaining, "
                          "lane_held, uncertain, cooling_off, readiness_unknown, sign_in_rejected, profile, config, "
                          "check_model, unreadable), why, since (setup only: when the bot was added), and fix (label plus "
                          "href/tab, login, move or finish; null unless the caller administers bots, or for setup may "

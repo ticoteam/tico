@@ -233,6 +233,12 @@ class Scheduler:
             self.stall_checked = at
             with self.store.transaction() as c:
                 H.wake_stalled(c, stamp(at))
+            # ...and queued jobs whose message their bot may no longer read, which no claim would ever take.
+            try:
+                with self.store.transaction() as c:
+                    self.execution.drop_unreadable(c)
+            except Exception as exc:
+                failures.append({"drop_unreadable": type(exc).__name__})
         if self.stranded is None or at - self.stranded >= timedelta(hours=1):
             # Every hour: bot tasks parked as waiting with nothing left to wait on.
             self.stranded = at

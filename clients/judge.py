@@ -1,4 +1,5 @@
-"""Decisions (TypeSafe's Jev is the optional provider; the question format matches OpenRouter's Decisions API),
+"""Decisions (the Tico AI Gateway's Tico Decide 1.0 is the default provider, TypeSafe's Jev an optional own key; the
+question format matches OpenRouter's Decisions API),
 the one decision primitive the hub and every bot share. The module keeps its old name, `judge`.
 
 One call takes a JSON `state` and a map of typed questions and returns a calibrated answer per
@@ -9,10 +10,12 @@ the whole contract, and it never changes:
     score    place the state on ordered levels -> {"score": float, "confidence": 0-1, "probabilities": {...}}
     noul     is this statement true          -> {"noul": probability that the answer is yes}
 
-Three ways to reach it, one signature (`engine(state, questions, label=None) -> result`):
+Four ways to reach it, one signature (`engine(state, questions, label=None) -> result`):
 
-    direct(api_key)        POST https://api.typesafe.ai/v1/systemone with the key; the hub server
-                           and the Slack gateway use this.
+    gateway(key, url)      POST the Tico AI Gateway's decisions endpoint with a gateway key, as
+                           `tico-decide-1.0`; the hub server and the Slack gateway ask it first.
+    direct(api_key)        POST https://api.typesafe.ai/v1/systemone with a customer's own TypeSafe
+                           key; the server's second choice, never set by default.
     through_hub(client)    POST /api/v2/decisions on the hub with the turn's own credential; the
                            `hub decision ask` command, the `hub_decision_ask` MCP tool and the mail CLI use
                            this, so no bot ever holds the key and every call is audited.
@@ -27,11 +30,16 @@ read back per question set.
 Pure stdlib on purpose: the runner venv, the mail venv, the cloud venv and the `hub` CLI all
 import it.
 """
+import contextlib
+import contextvars
 import hashlib
+import http.client
 import json
 import math
 import os
+import socket
 import stat
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -40,6 +48,16 @@ from pathlib import Path
 URL = "https://api.typesafe.ai/v1/systemone"
 MODEL = "jev-latest"
 KEY_ENV = "TYPESAFE_API_KEY"
+# The Tico AI Gateway (Tico HQ): the same contract, answered as a Tico model. `tico-classify-1.0` is the Gateway's name
+# for a choice-mode classify; the app asks as `tico-decide-1.0` and keeps whichever of the two the Gateway answers as.
+GATEWAY_PROVIDER = "Tico AI Gateway"
+GATEWAY_MODEL = "tico-decide-1.0"
+GATEWAY_MODELS = ("tico-decide-1.0", "tico-classify-1.0")
+GATEWAY_PATH = "/v1/gateway/decisions"
+GATEWAY_TIMEOUT = 8
+TYPESAFE_PROVIDER = "TypeSafe"
+LLM_PROVIDERS = {"anthropic": "Anthropic", "openai": "OpenAI", "google": "Google", "xai": "xAI",
+                 "openrouter": "OpenRouter"}
 TYPES = ("choice", "score", "noul")
 QUESTIONS_DIR = Path(__file__).resolve().parents[1] / "questions"
 _REGISTRY_DIR_FD = os.open in os.supports_dir_fd and os.stat in os.supports_dir_fd
@@ -82,6 +100,178 @@ def error_code(exc):
     """`exc`'s code when it is one of `ERROR_CODES`, else `unreadable`: the one part of a failed call that may be kept."""
     code = getattr(exc, "code", "")
     return code if isinstance(code, str) and code in ERROR_CODES else "unreadable"
+
+
+def clean_usage(usage):
+    """A provider's usage as kept and counted: a map, with any number that is not finite and non-negative dropped."""
+    if not isinstance(usage, dict):
+        return {}
+    out = {}
+    for key, value in usage.items():
+        if isinstance(value, dict):
+            out[key] = clean_usage(value)
+        elif isinstance(value, bool) or not isinstance(value, (int, float)) or (math.isfinite(value) and value >= 0):
+            out[key] = value
+    return out
+
+
+def _paid(exc, model, usage):
+    """`exc` for an answer that came back and could not be used: it was still paid for, so it carries `paid`, the
+    model and usage that the server's monthly cap counts (backend/judge.py `metered`)."""
+    exc.paid = [{"model": model, "usage": clean_usage(usage)}]
+    return exc
+
+
+# A chain of providers (backend/judge.py `ordered`) asks each under one deadline, so a slow one leaves the next only
+# what is left, and the whole chain answers before its callers stop waiting. `clock` is the seam the tests use.
+clock = time.monotonic
+_DEADLINE = contextvars.ContextVar("tico_judge_deadline", default=None)
+MIN_ATTEMPT = 1.0                           # seconds: with less left, a provider is not asked at all
+
+
+@contextlib.contextmanager
+def within(seconds):
+    """Every provider asked in this block answers within `seconds` of its start, or within an outer block's end."""
+    outer = _DEADLINE.get()
+    token = _DEADLINE.set(min(clock() + seconds, outer) if outer is not None else clock() + seconds)
+    try:
+        yield
+    finally:
+        _DEADLINE.reset(token)
+
+
+MAX_ANSWER_BYTES = 4_000_000               # a decision answer is a few KB; more than this is not one
+
+
+def read_json(response):
+    """A provider's JSON answer, read piece by piece under the deadline (`within`): a peer that sends a byte now and
+    then is cut off when the deadline passes (`unavailable`), not let run another socket timeout after each byte."""
+    read = getattr(response, "read1", None) or response.read
+    chunks, size = [], 0
+    while True:
+        deadline = _DEADLINE.get()
+        if deadline is not None:
+            left = deadline - clock()
+            if left <= 0:
+                raise JudgeError("unavailable", "the answer did not finish arriving in time", retryable=True)
+            sock = getattr(getattr(getattr(response, "fp", None), "raw", None), "_sock", None)
+            if hasattr(sock, "settimeout"):
+                sock.settimeout(left)       # no single wait for bytes outlasts the deadline either
+        chunk = read(65536)
+        if not chunk:
+            break
+        size += len(chunk)
+        if size > MAX_ANSWER_BYTES:
+            raise JudgeError("unavailable", "the answer was too large to be a decision", retryable=True)
+        chunks.append(chunk)
+    return json.loads(b"".join(chunks))
+
+
+@contextlib.contextmanager
+def one_try(timeout):
+    """One HTTP attempt: at most `timeout` seconds from its start to the last byte of its answer, and never past the
+    chain's deadline. Yields the socket timeout to open it with. A connection `urlopen` makes inside it is shut at the
+    deadline whatever it is doing (connecting, TLS, headers, the answer), and its watch ends with the attempt."""
+    seconds = time_left(timeout)
+    watches = []
+    token = _WATCHES.set(watches)
+    try:
+        with within(seconds):
+            yield seconds
+    finally:
+        _WATCHES.reset(token)
+        for watch in watches:
+            watch.cancel()
+
+
+# Each decision connection is shut when its attempt's deadline passes: urllib's timeout is per wait, so without this a
+# peer sending a byte now and then (in its TLS handshake or its headers, before any answer is read) could hold it open.
+_WATCHES = contextvars.ContextVar("tico_judge_watches", default=None)
+
+
+class _Watch:
+    """Shuts one connection at its deadline. It holds its own descriptor of the socket (`dup`): TLS wraps the plain
+    socket by detaching it, and a socket shut down through any of its descriptors is shut for all of them, so the
+    handshake, the headers and the answer are all cut. Its own descriptor also means it can never shut a later socket
+    that reused the number."""
+
+    def __init__(self, sock, seconds):
+        self._sock = sock.dup()
+        self._timer = threading.Timer(seconds, self._shut)
+        self._timer.daemon = True
+        self._timer.start()
+
+    def _shut(self):
+        try:
+            self._sock.shutdown(socket.SHUT_RDWR)   # a blocked read returns at once; the attempt fails `unavailable`
+        except OSError:
+            pass
+        self._sock.close()
+
+    def cancel(self):
+        self._timer.cancel()
+        self._timer.join()
+        self._sock.close()
+
+
+class _ByDeadline:
+    """An HTTP(S) connection whose socket is shut at the deadline in force when it connects (`within`)."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._create_connection = self._connect
+
+    def _connect(self, address, timeout=socket._GLOBAL_DEFAULT_TIMEOUT, source_address=None):
+        deadline = _DEADLINE.get()
+        if deadline is None:
+            return socket.create_connection(address, timeout, source_address)
+        left = deadline - clock()
+        if left <= 0:
+            raise TimeoutError("no time left to connect")
+        wait = min(timeout, left) if isinstance(timeout, (int, float)) else left
+        sock = socket.create_connection(address, wait, source_address)
+        watch = _Watch(sock, deadline - clock())
+        watches = _WATCHES.get()
+        if watches is not None:
+            watches.append(watch)
+        return sock
+
+
+class _HTTPByDeadline(_ByDeadline, http.client.HTTPConnection):
+    pass
+
+
+class _HTTPSByDeadline(_ByDeadline, http.client.HTTPSConnection):
+    pass
+
+
+class _HTTPHandler(urllib.request.HTTPHandler):
+    def http_open(self, req):
+        return self.do_open(_HTTPByDeadline, req)
+
+
+class _HTTPSHandler(urllib.request.HTTPSHandler):
+    def https_open(self, req):
+        return self.do_open(_HTTPSByDeadline, req, context=self._context)
+
+
+_OPENER = urllib.request.build_opener(_HTTPHandler, _HTTPSHandler)
+
+
+def urlopen(request, timeout):
+    """`urllib.request.urlopen` for the decision transports, with each connection held to its attempt's deadline."""
+    return _OPENER.open(request, timeout=timeout)
+
+
+def time_left(timeout):
+    """`timeout`, cut to what is left of the deadline; `unavailable`, asking nothing, when less than MIN_ATTEMPT is."""
+    deadline = _DEADLINE.get()
+    if deadline is None:
+        return timeout
+    left = deadline - clock()
+    if left < MIN_ATTEMPT:
+        raise JudgeError("unavailable", "no time was left to ask this provider", retryable=True)
+    return min(timeout, left)
 
 
 # ----------------------------------------------------------------------------- the contract
@@ -143,7 +333,9 @@ def clean(questions):
 
 
 def check_answers(answers, questions):
-    """Every question answered, in its type's shape; anything else is `JudgeError("shape")`."""
+    """Every question answered, in its type's shape; anything else is `JudgeError("shape")`. Returns the answers rebuilt
+    from what each type answers (`_project`): only the questions asked, only their fields, so nothing else a provider
+    sent (an extra answer, an extra field, text) reaches the caller."""
     if not isinstance(answers, dict):
         raise JudgeError("shape", "answers is not a map")
     for qid, q in questions.items():
@@ -152,7 +344,7 @@ def check_answers(answers, questions):
             raise JudgeError("shape", f"{qid}: no answer")
         kind = q["type"]
         if kind == "choice":
-            if a.get("choice") not in q["criteria"]:
+            if not isinstance(a.get("choice"), str) or a["choice"] not in q["criteria"]:
                 raise JudgeError("shape", f"{qid}: choice is not one of the options")
             if not _bounded(a.get("confidence"), 0, 1):
                 raise JudgeError("shape", f"{qid}: confidence is not in [0,1]")
@@ -163,7 +355,30 @@ def check_answers(answers, questions):
                 raise JudgeError("shape", f"{qid}: confidence is not in [0,1]")
         if kind == "noul" and not _bounded(a.get("noul"), 0, 1):
             raise JudgeError("shape", f"{qid}: noul is not in [0,1]")
-    return answers
+    return {qid: _project(answers[qid], q) for qid, q in questions.items()}
+
+
+def _project(answer, question):
+    """One checked answer, as the contract has it: a choice's `choice`, `confidence` and `probabilities` per option;
+    a score's `score`, `confidence`, `probabilities` per level and `legend` (the question's own levels); a noul's
+    `noul`. A probability that is not a number in [0,1] for one of the question's own options or levels is dropped."""
+    kind, criteria = question["type"], question.get("criteria")
+    if kind == "noul":
+        return {"noul": float(answer["noul"])}
+    out = {kind: answer[kind] if kind == "choice" else float(answer[kind]), "confidence": float(answer["confidence"])}
+    given = answer.get("probabilities")
+    if kind == "choice" and isinstance(given, dict):
+        out["probabilities"] = {name: float(given[name]) for name in criteria
+                                if name in given and _bounded(given[name], 0, 1)}
+    if kind == "score":
+        levels = range(len(criteria))
+        if isinstance(given, list) and len(given) == len(criteria):
+            given = dict(enumerate(given))
+        if isinstance(given, dict):
+            out["probabilities"] = {i: float(given.get(i, given.get(str(i)))) for i in levels
+                                    if _bounded(given.get(i, given.get(str(i))), 0, 1)}
+        out["legend"] = list(criteria)
+    return out
 
 
 def _bounded(value, low, high):
@@ -177,7 +392,7 @@ def direct(api_key, model=MODEL, timeout=TIMEOUT, opener=None, sleep=time.sleep,
     briefly, and falls back to the company's own model (backend/judge.py); a direct caller keeps the retries."""
     if not api_key:
         raise JudgeError("unconfigured", "no TypeSafe key")
-    opener = opener or urllib.request.urlopen
+    opener = opener or urlopen
 
     def engine(state, questions, label=None):
         validate(state, questions, label)
@@ -189,8 +404,8 @@ def direct(api_key, model=MODEL, timeout=TIMEOUT, opener=None, sleep=time.sleep,
                 "Authorization": "Bearer " + api_key, "Content-Type": "application/json",
                 "Accept": "application/json"})
             try:
-                with opener(request, timeout=timeout) as response:
-                    payload = json.load(response)
+                with one_try(timeout) as seconds, opener(request, timeout=seconds) as response:
+                    payload = read_json(response)
                 break
             except urllib.error.HTTPError as exc:
                 status = exc.code
@@ -198,8 +413,8 @@ def direct(api_key, model=MODEL, timeout=TIMEOUT, opener=None, sleep=time.sleep,
                     detail = json.load(exc)
                 except ValueError:
                     detail = {}
-                if status == 401:
-                    raise JudgeError("auth", "TypeSafe refused the key", 401)
+                if status in (401, 403):
+                    raise JudgeError("auth", f"TypeSafe refused the key ({status})", status)
                 if status == 422:
                     raise JudgeError("invalid", str(detail.get("detail") or detail or "TypeSafe refused the request"), 422)
                 if status in (429, 529) or status >= 500:
@@ -208,7 +423,7 @@ def direct(api_key, model=MODEL, timeout=TIMEOUT, opener=None, sleep=time.sleep,
                         continue
                     raise JudgeError("unavailable", f"TypeSafe answered {status}", status, retryable=True)
                 raise JudgeError("http", f"TypeSafe answered {status}", status)
-            except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
+            except (urllib.error.URLError, http.client.HTTPException, TimeoutError, OSError, ValueError) as exc:
                 if attempt < retries:
                     sleep(BACKOFF[min(attempt, len(BACKOFF) - 1)])
                     continue
@@ -216,9 +431,58 @@ def direct(api_key, model=MODEL, timeout=TIMEOUT, opener=None, sleep=time.sleep,
         ms = round((time.monotonic() - started) * 1000)
         if not isinstance(payload, dict):
             raise JudgeError("shape", "TypeSafe answered with something other than an object")
-        answers = check_answers(payload.get("answers"), questions)
+        try:
+            answers = check_answers(payload.get("answers"), questions)
+        except JudgeError as exc:
+            raise _paid(exc, str(payload.get("model") or model), payload.get("usage"))
         return {"model": str(payload.get("model") or model), "answers": answers,
-                "usage": payload.get("usage") or {}, "ms": ms}
+                "usage": clean_usage(payload.get("usage")), "ms": ms, "provider": TYPESAFE_PROVIDER}
+    engine.model, engine.provider = model, TYPESAFE_PROVIDER
+    return engine
+
+
+def gateway(api_key, url, model=GATEWAY_MODEL, timeout=GATEWAY_TIMEOUT, opener=None):
+    """The Tico AI Gateway with a gateway key: one try of at most `timeout` seconds, no retry (the Gateway makes none
+    either; the server falls back instead). A refusal keeps the HTTP status and a code, never the Gateway's text.
+    `opener(request, timeout)` is the seam the tests use."""
+    if not api_key or not url:
+        raise JudgeError("unconfigured", "no Tico AI Gateway key or URL")
+    opener = opener or urlopen
+
+    def engine(state, questions, label=None):
+        validate(state, questions, label)
+        body = {"state": state, "model": model, "questions": clean(questions)}
+        if label:
+            body["label"] = label
+        request = urllib.request.Request(url, data=json.dumps(body, default=str).encode(), method="POST", headers={
+            "Authorization": "Bearer " + api_key, "Content-Type": "application/json", "Accept": "application/json"})
+        started = time.monotonic()
+        try:
+            with one_try(timeout) as seconds, opener(request, timeout=seconds) as response:
+                payload = read_json(response)
+        except urllib.error.HTTPError as exc:
+            status = exc.code
+            if status in (401, 403):                    # unknown or revoked key
+                raise JudgeError("auth", f"the Tico AI Gateway refused the key ({status})", status)
+            if status in (402, 429, 529) or status >= 500:  # the Gateway's cap, a rate limit, or down
+                raise JudgeError("unavailable", f"the Tico AI Gateway answered {status}", status, retryable=True)
+            # A 422 too: the request passed `validate` here, so the Gateway disagreeing is its problem, not the
+            # caller's, and the next provider is asked.
+            raise JudgeError("http", f"the Tico AI Gateway answered {status}", status)
+        except (urllib.error.URLError, http.client.HTTPException, TimeoutError, OSError, ValueError) as exc:
+            raise JudgeError("unavailable", f"the Tico AI Gateway did not answer: {type(exc).__name__}",
+                             retryable=True)
+        ms = round((time.monotonic() - started) * 1000)
+        if not isinstance(payload, dict):
+            raise JudgeError("shape", "the Tico AI Gateway answered with something other than an object")
+        answered = payload.get("model") if payload.get("model") in GATEWAY_MODELS else model
+        usage = clean_usage(payload.get("usage"))
+        try:
+            answers = check_answers(payload.get("answers"), questions)
+        except JudgeError as exc:
+            raise _paid(exc, answered, usage)
+        return {"model": answered, "answers": answers, "usage": usage, "ms": ms, "provider": GATEWAY_PROVIDER}
+    engine.model, engine.provider = model, GATEWAY_PROVIDER
     return engine
 
 
@@ -278,6 +542,8 @@ def llm_text(provider, payload):
 
 def llm_answers(raw, questions):
     """Turn the model's probabilities into the decisions contract's answers."""
+    if not isinstance(raw, str):
+        raise JudgeError("shape", "the model did not answer with text")
     text = raw.strip()
     if text.startswith("```"):
         text = text.strip("`").removeprefix("json").strip()
@@ -291,7 +557,10 @@ def llm_answers(raw, questions):
         if not isinstance(got, dict):
             raise JudgeError("shape", f"{qid}: no answer")
         if q["type"] == "noul":
-            answers[qid] = {"noul": min(1.0, max(0.0, float(got.get("noul", 0.5))))}
+            try:
+                answers[qid] = {"noul": min(1.0, max(0.0, float(got.get("noul", 0.5))))}
+            except (TypeError, ValueError):
+                raise JudgeError("shape", f"{qid}: noul is not a number")
             continue
         raw_p = got.get("probabilities")
         names = list(q["criteria"]) if q["type"] == "choice" else list(range(len(q["criteria"])))
@@ -320,27 +589,37 @@ def llm(provider, api_key, model, timeout=TIMEOUT, opener=None):
     classifier: the probabilities are the model's stated ones. `opener` is the test seam."""
     if provider not in LLM_URLS or not api_key or not model:
         raise JudgeError("unconfigured", "no provider key or model for the decision model")
-    opener = opener or urllib.request.urlopen
+    opener = opener or urlopen
 
     def engine(state, questions, label=None):
         validate(state, questions, label)
         user = json.dumps({"state": state, "questions": clean(questions)}, default=str)
         started = time.monotonic()
         try:
-            with opener(llm_request(provider, api_key, model, LLM_INSTRUCTIONS, user, MAX_OUTPUT_TOKENS),
-                        timeout=timeout) as response:
-                payload = json.load(response)
-            text = llm_text(provider, payload)
+            with one_try(timeout) as seconds, opener(
+                    llm_request(provider, api_key, model, LLM_INSTRUCTIONS, user, MAX_OUTPUT_TOKENS),
+                    timeout=seconds) as response:
+                payload = read_json(response)
         except urllib.error.HTTPError as exc:
             raise JudgeError("unavailable" if exc.code in (429, 529) or exc.code >= 500 else "http",
                              f"{provider} answered {exc.code}", exc.code,
                              retryable=exc.code in (429, 529) or exc.code >= 500)
-        except (urllib.error.URLError, TimeoutError, OSError, ValueError, KeyError, IndexError, TypeError) as exc:
+        except (urllib.error.URLError, http.client.HTTPException, TimeoutError, OSError, ValueError) as exc:
             raise JudgeError("unavailable", f"{provider} did not answer: {type(exc).__name__}", retryable=True)
-        return {"model": model, "answers": llm_answers(text, questions),
-                "usage": payload.get("usage") or payload.get("usageMetadata") or {},
-                "ms": round((time.monotonic() - started) * 1000)}
-    engine.model = model
+        # An answer came back, so it was paid for, even when it cannot be used.
+        usage = clean_usage((payload.get("usage") or payload.get("usageMetadata")) if isinstance(payload, dict) else None)
+        try:
+            text = llm_text(provider, payload)
+        except (ValueError, KeyError, IndexError, TypeError, AttributeError) as exc:
+            raise _paid(JudgeError("unavailable", f"{provider} did not answer: {type(exc).__name__}", retryable=True),
+                        model, usage)
+        try:
+            answers = llm_answers(text, questions)
+        except JudgeError as exc:
+            raise _paid(exc, model, usage)
+        return {"model": model, "answers": answers, "usage": usage,
+                "ms": round((time.monotonic() - started) * 1000), "provider": LLM_PROVIDERS[provider]}
+    engine.model, engine.provider = model, LLM_PROVIDERS[provider]
     return engine
 
 
