@@ -42,6 +42,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
+from . import run_triggers
 from .store import H, Problem
 
 ZONE = ZoneInfo("America/Los_Angeles")
@@ -627,7 +628,8 @@ def send_request(c, row, assistant=None):
         c.execute("UPDATE update_queue SET state='sent', message_id=NULL, sent_at=? WHERE id=?", (H.now(), row["id"]))
         return None
     message = H.say(c, H.KEEPER, H.bot_actor(row["bot"]), request_text(c, row["bot"], row["kind"], row["day"], redo),
-                    kind="notice", refs={"update_request": row["id"], "wake": "update"})
+                    kind="notice", refs=run_triggers.stamp({"update_request": row["id"], "wake": "update"}, "schedule",
+                                                           row["id"]))
     c.execute("UPDATE update_queue SET state='sent', message_id=?, sent_at=? WHERE id=?",
               (message["id"], H.now(), row["id"]))
     return message

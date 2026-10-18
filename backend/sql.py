@@ -45,6 +45,30 @@ SAFE_COLUMNS = {"slack_posts": {"message_id", "bot", "state", "attempts", "next_
 HIDDEN = {"task_requesters": {"token_hash"}, "bots": {"token_hash", "cwd", "thread_id"}, "attempts": {"token_hash"},
           "service_jobs": {"token_hash"}}
 DENIED_FUNCTIONS = {"load_extension"}
+# Read-only views built over the caller's connection: name -> (base tables it reads, SELECT over `{table}` names,
+# each the unfiltered inner view, and `{bots}`, the caller's readable-bots predicate on a `bot` column). They show
+# totals only, never a row's text or ids, so they count every run of a bot the caller may read.
+DERIVED = {
+    # Runs per week (Monday, UTC), bot and what woke them, with their tokens and outcome (backend/run_triggers.py).
+    # A run from before triggers were recorded reads `unknown`, and is counted, never dropped.
+    "run_weekly": (("turns",), """
+        SELECT date(started, '-6 days', 'weekday 1') AS week, bot, coalesce(trigger_kind, 'unknown') AS trigger,
+               count(*) AS runs,
+               sum(coalesce(tokens_in, coalesce(input_tokens, 0) + coalesce(cached_tokens, 0))) AS input_tokens,
+               sum(coalesce(cached_tokens, 0)) AS cached_input_tokens,
+               sum(coalesce(output_tokens, tokens_out, 0)) AS output_tokens,
+               sum(coalesce(outcome, '') = 'acted') AS acted,
+               sum(coalesce(outcome, '') = 'no_change') AS no_change,
+               sum(coalesce(outcome, '') = 'nothing_to_do') AS nothing_to_do,
+               sum(outcome IS NULL) AS unknown,
+               sum(coalesce(did_nothing, 0) = 1) AS did_nothing,
+               round(100.0 * sum(coalesce(outcome, '') = 'acted') / count(*), 1) AS acted_pct,
+               round(100.0 * sum(coalesce(outcome, '') = 'no_change') / count(*), 1) AS no_change_pct,
+               round(100.0 * sum(coalesce(outcome, '') = 'nothing_to_do') / count(*), 1) AS nothing_to_do_pct,
+               round(100.0 * sum(outcome IS NULL) / count(*), 1) AS unknown_pct
+        FROM {turns} WHERE started IS NOT NULL AND {bots}
+        GROUP BY 1, 2, 3"""),
+}
 # FTS5 reads these as main.<virtual>_* with no view context; they are not a public API.
 FTS_SHADOWS = ("_data", "_idx", "_content", "_docsize", "_config")
 STATEMENT = re.compile(r"^\s*(?:(?:--[^\n]*\n?|/\*.*?\*/)\s*)*(select|with|explain\s+query\s+plan)\b", re.I | re.S)
@@ -364,6 +388,10 @@ def connect(path, c, auth, who, trace=None):
         for table, (predicate, _) in tables.items():
             projection = "*"
             conn.execute(f'CREATE TEMP VIEW "{table}" AS SELECT {projection} FROM {inner(table)} WHERE {predicate}')
+        # `bot_config` is filtered by exactly the readable-bots rule (guarded: bots_visible("bot")).
+        for name, (bases, select) in DERIVED.items():
+            conn.execute(f'CREATE TEMP VIEW "{name}" AS ' + select.format(
+                bots=tables["bot_config"][0], **{base: inner(base) for base in bases}))
         # Older SQLite versions initialize JSON virtual tables with schema authorization calls.
         # Initialize only these built-ins before installing the read-only authorizer.
         for function in sorted(TABLE_FUNCTIONS):
@@ -423,8 +451,10 @@ def connect(path, c, auth, who, trace=None):
         if schema == "temp":
             if table == visible:
                 return sqlite3.SQLITE_OK if context == "tasks" else sqlite3.SQLITE_DENY
-            if table in tables:
+            if table in tables or table in DERIVED:
                 return sqlite3.SQLITE_OK
+            if table in inner_names and context in DERIVED:
+                return sqlite3.SQLITE_OK if table[len(prefix):] in DERIVED[context][0] else sqlite3.SQLITE_DENY
             return sqlite3.SQLITE_OK if table in inner_names and context in tables else sqlite3.SQLITE_DENY
         return sqlite3.SQLITE_DENY
 

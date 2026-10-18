@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 from croniter import croniter
 
 from . import goals as G
-from . import placement
+from . import placement, run_triggers
 from .batch_work import isolated
 from .harnesses import SYNCED_SQL
 from .statuses import PARKED_SQL
@@ -99,7 +99,8 @@ class Scheduler:
                                           f"Scheduled occurrence {when[:16].replace('T', ' ')}Z of {row['title']} "
                                           "absorbed into this open task; continue it or mark it done.",
                                           kind="notice", conversation_id=H.task(c, tid)["conversation_id"],
-                                          refs={"task": tid, "wake": "occurrence"})
+                                          refs=run_triggers.stamp({"task": tid, "wake": "occurrence"}, "schedule",
+                                                                  row["id"]))
                             elif skip := routines.no_input(c, self.store.settings, row, occurrence):
                                 tid, outcome = None, "skipped"
                             else:
@@ -138,7 +139,8 @@ class Scheduler:
                         continue
                     try:
                         H.say(c, H.KEEPER, row["owner"], "Due: " + row["title"], kind="notice",
-                              conversation_id=row["conversation_id"], refs={"task": row["id"], "wake": "due"})
+                              conversation_id=row["conversation_id"],
+                              refs=run_triggers.stamp({"task": row["id"], "wake": "due"}, "schedule"))
                     except H.Refused as exc:
                         H.event(c, H.KEEPER, "task.reminder-refused", row["id"], {"reason": str(exc)[:300]})
                     c.execute("INSERT INTO task_reminders VALUES(?,?,?)", (row["id"], row["due"], stamp(at)))
