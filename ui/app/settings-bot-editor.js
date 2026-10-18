@@ -3,10 +3,10 @@
 'use strict';
 
 // What the bot editor shows for an existing bot beyond its definition: who may use it, who it works for and who
-// owns it (each opens its own dialog); its computer, where it compacts and, for a synced bot, the app it is delivered
-// through (each applies as soon as it is picked); and its model and fallback, whose pickers hold a pick until Apply
-// next to them, or until Save bot applies it (settingsEditorPendingChoice). A model change, either way, goes through
-// its transition dialog.
+// owns it (each opens its own dialog); its computer, where it compacts, how soon it wakes and, for a synced bot, the
+// app it is delivered through (each applies as soon as it is picked); and its model and fallback, whose pickers hold
+// a pick until Apply next to them, or until Save bot applies it (settingsEditorPendingChoice). A model change, either
+// way, goes through its transition dialog.
 function settingsBotEditorRows(e) {
   const chips = list => (list || []).map(o => `<span class="pchip">${personCircle(o.name || o.id, 16)}<span>${esc(firstName(o.name) || o.id)}</span></span>`).join('');
   const manage = settingsCanManageBot(e);
