@@ -700,7 +700,7 @@ class Auth:
         return False
 
     def task_sql(self, c, who, delegations="task_delegations", unreadable=None):
-        """Company tasks are readable subject to bot activity controls; private tasks have two parties.
+        """Company tasks are readable subject to bot activity controls; private tasks have two parties, and a guest.
 
         Ownership, type-wide work, ancestry and delegation never widen private visibility.
         `delegations` stays accepted for compatibility with the guarded SQL caller.
@@ -711,9 +711,11 @@ class Auth:
         hidden = ["bot:" + slug for slug in sorted(self.unreadable_bots(c, who) if unreadable is None else unreadable)]
         clear = ("NOT (owner IN %s OR requester IN %s)" % ((A.qlist(hidden),) * 2)) if hidden else "1"
         me = A.q(who.actor)
-        audience = f"({me} IN (owner,requester) OR (coalesce(private,1)=0 AND ({clear})))"
+        # A private task's guest (hubdb.task_reach) reads it as its two parties do.
+        audience = f"({me} IN (owner,requester) OR guest={me} OR (coalesce(private,1)=0 AND ({clear})))"
         if who.task_actor:
-            audience += f" AND (coalesce(private,1)=0 OR {A.q(who.task_actor)} IN (owner,requester))"
+            actor = A.q(who.task_actor)
+            audience += f" AND (coalesce(private,1)=0 OR {actor} IN (owner,requester) OR guest={actor})"
         return audience
 
     def operator(self, c, who, bot):

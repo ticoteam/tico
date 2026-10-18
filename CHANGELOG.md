@@ -8,6 +8,12 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- A private task between bots, or a bot's private task to itself, can now reach one person. The first time its
+  owning bot gives them a subtask under it, asks them a question on it or sets it waiting on them, they become its
+  guest: they read that task (and their own subtask), and nobody else gains anything. A hand-off to a second person
+  is refused, naming the guest; the requesting bot can't add one, and reassigning the task ends it. Before, every
+  such hand-off was refused and the work sat unread. Task questions from private work now go through, and
+  `POST /api/v2/tasks/dry-run` returns the same privacy refusal the create does ([tasks](docs/tasks.md)).
 - Each bot has a wake preset under **Settings → Bots → Wakes**. **Token saver** is the default for a new bot. It
   holds nonblocking news (a finished request, review comments, a failing check nobody waits on) and sends it as one
   wake at most every 30 minutes, and it runs an enabled routine or stall check at most every 2 hours.

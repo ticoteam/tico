@@ -2764,9 +2764,10 @@ def create_app(settings=None):
         from .shared_bots import route
         original = auth.target(c, who, body.owner, need="write")
         owner = auth.target(c, who, route(c, who.actor, original), need="write")
-        if privacy.private_execution(c, source):
-            privacy.require_destination(c, source, owner, None, {})
-            privacy.require_destination(c, source, who.actor, None, {})
+        # The same checks the dry-run makes (task_privacy.require_create); a subtask for a person under a private
+        # task with no person on it, filed by the bot that owns it, makes them its one guest.
+        guest = privacy.require_create(c, source, body.private, owner, H.task(c, parent_id) if parent_id else None,
+                                       actor=who.actor)
         auth.require_bot_contact(c, who, owner, task_id=parent_id, kind="task")
         # A subtask is the shape that parks the filer as `waiting` and makes it care when the
         # other one finishes. A bot set to `tasks` has opted out of that on both sides: it does
@@ -2826,6 +2827,8 @@ def create_app(settings=None):
                 raise Problem("privacy", "The verified requester cannot receive this private execution's other context", 403)
         if private and actual_bot and actual_bot not in (requester_actor or who.actor, owner):
             raise Problem("privacy", "The acting bot must be a current participant of the private task", 403)
+        if guest:
+            H.task_reach(c, who.actor, parent, owner)
         row = H.task_create(c, who.actor, body.title, body.body, owner, body.due, parent_id,
                             requester_actor=requester_actor, visibility=body.visibility,
                             public_title=body.public_title, public_summary=body.public_summary,
