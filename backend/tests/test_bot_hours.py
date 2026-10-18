@@ -1,0 +1,111 @@
+"""Bot hours against human hours on the Overview (backend/bot_hours.py): runs count start to finish with silences over
+30 minutes left out, people on the org chart count 40 hours a week, weeks are Monday to Sunday in the company's time
+zone, and only people may read the totals. Synthetic runs only."""
+
+from datetime import datetime, timedelta
+
+from backend import bot_hours as B
+from backend.store import encode
+from backend.tests.test_api import api, get, headers, setup_attempt  # noqa: F401
+
+ZONE = B.ZONE
+MONDAY = datetime(2026, 10, 5, 0, 0, tzinfo=ZONE)       # a past week, Monday 00:00 Pacific
+NOW = datetime(2026, 10, 14, 12, 0, tzinfo=ZONE)        # the Wednesday of the week after
+
+
+def runs(api):
+    """The fixture's one real run, finished at once, and a function adding finished runs beside it."""
+    _, _, attempt = setup_attempt(api)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE turns SET finished=started WHERE id=?", (attempt["id"],))
+        base = dict(c.execute("SELECT * FROM attempts WHERE id=?", (attempt["id"],)).fetchone())
+
+    def add(c, rid, start, end, events=()):
+        row = {**base, "id": rid, "token_hash": rid, "state": "completed"}
+        c.execute(f"INSERT INTO attempts({','.join(row)}) VALUES({','.join('?' * len(row))})", list(row.values()))
+        run(c, rid, start, end, events)
+    add.bot_token = attempt["token"]
+    return add
+
+
+def run(c, rid, start, end, events=()):
+    c.execute("INSERT INTO turns(id,bot,started,finished,trigger,exit) VALUES(?,?,?,?,?,?)",
+              (rid, "ops", B.stamp(start), B.stamp(end) if end else None, "task", "completed"))
+    for seq, (at, kind) in enumerate(events, 1):
+        c.execute("INSERT INTO attempt_events(attempt_id,seq,kind,payload_json,created) VALUES(?,?,?,?,?)",
+                  (rid, seq, kind, "{}", B.stamp(at)))
+
+
+def people(c, ids):
+    c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'",
+              (encode({"people": [{"id": p, "email": p + "@acme.example"} for p in ids]}),))
+
+
+def week(answer, monday):
+    return next(w for w in answer["weeks"] if w["week"] == monday.date().isoformat())
+
+
+def test_eighty_bot_hours_and_one_person_read_two_to_one(api):
+    store, run = api.app.state.store, runs(api)
+    with store.transaction() as c:
+        people(c, ["ana"])
+        # Ten runs that never fall silent (an event every 10 minutes), Monday to Friday, two a day: 79 hours.
+        for day in range(5):
+            for lane in range(2):
+                start, hours = MONDAY + timedelta(days=day, hours=8 + lane), 7 if (day, lane) == (0, 0) else 8
+                run(c, f"r{day}{lane}", start, start + timedelta(hours=hours),
+                    [(start + timedelta(minutes=m), "tool") for m in range(10, hours * 60, 10)])
+        # A run across Sunday midnight counts on both sides of it: its second hour makes 80.
+        late = MONDAY - timedelta(hours=1)
+        run(c, "across", late, late + timedelta(hours=2))
+    with store.read_transaction() as c:
+        answer = B.Counter().count(c, now=NOW)
+    first = week(answer, MONDAY)
+    assert (first["bot_hours"], first["people"], first["human_hours"], first["ratio"]) == (80.0, 1, 40, 2.0)
+    assert first["so_far"] is False
+    assert week(answer, MONDAY - timedelta(days=7))["bot_hours"] == 1.0
+    assert week(answer, MONDAY + timedelta(days=7))["so_far"] is True
+    assert [w["week"] for w in answer["weeks"]] == ["2026-09-28", "2026-10-05", "2026-10-12"], "none before the first run"
+    assert answer["last_7_days"]["full"] is True
+
+    # Three people: 120 human hours a week. Nobody on the chart: hours with no ratio.
+    with store.transaction() as c:
+        people(c, ["ana", "ben", "cara"])
+    with store.read_transaction() as c:
+        assert week(B.Counter().count(c, now=NOW), MONDAY)["human_hours"] == 120
+    with store.transaction() as c:
+        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'",
+                  (encode({"people": [{"id": "ana", "email": "ana@acme.example", "hidden": True}],
+                           "default_user": "ana"}),))
+    with store.read_transaction() as c:
+        empty = week(B.Counter().count(c, now=NOW), MONDAY)
+    assert (empty["people"], empty["human_hours"], empty["ratio"], empty["bot_hours"]) == (0, 0, None, 80.0)
+
+
+def test_a_silence_over_thirty_minutes_is_left_out():
+    start = MONDAY + timedelta(hours=9)
+    m = lambda n: start + timedelta(minutes=n)  # noqa: E731
+    # Work 9:00-10:00 (an event every 10 minutes), two silent hours, then work 12:00-12:30 and finish.
+    activity = [m(n) for n in range(10, 61, 10)] + [m(n) for n in range(180, 211, 10)]
+    spans = B.worked(start, m(210), activity)
+    assert spans == [(start, m(60)), (m(180), m(210))]
+    assert B.overlap(spans, start, m(210)) == 90 * 60
+    # Nothing recorded inside a finished run: start to finish. A run still going stops at its last activity.
+    assert B.worked(start, m(240)) == [(start, m(240))]
+    assert B.worked(start, m(240), [m(20)], finished=False) == [(start, m(20))]
+
+
+def test_runner_notes_dont_break_a_silence_and_only_people_read_it(api):
+    store, run = api.app.state.store, runs(api)
+    start = datetime.now(ZONE) - timedelta(hours=4)
+    with store.transaction() as c:
+        # Ten minutes of work, then three hours of only status notes before the finish: ten minutes count.
+        run(c, "quiet", start, start + timedelta(hours=3, minutes=10),
+            [(start + timedelta(minutes=10), "tool")]
+            + [(start + timedelta(minutes=m), "status") for m in range(20, 190, 10)])
+    answer = get(api, "overview/bot-hours")
+    assert answer["last_7_days"]["bot_hours"] == round(10 / 60, 2)
+    assert answer["people"] == 3 and answer["last_7_days"]["human_hours"] == 120
+    assert set(answer) == {"zone", "now", "first_run", "people", "hours_per_person", "gap_minutes", "last_7_days", "weeks"}
+    assert all(set(w) == {"week", "bot_hours", "people", "human_hours", "ratio", "so_far"} for w in answer["weeks"])
+    assert api.get("/api/v2/overview/bot-hours", headers=headers(run.bot_token)).status_code == 403

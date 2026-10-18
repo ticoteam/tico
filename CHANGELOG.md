@@ -8,6 +8,11 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- The Overview shows **Bot hours vs human hours**: bot hours per human hour over the last 7 days, and a weekly line for
+  up to 12 weeks (Monday to Sunday, Pacific time) with a dashed Parity line at 1× and the current week dotted as "so far".
+  Hover or tap a week for its numbers; click the card for the table by week. Bot hours are the time bot runs spent
+  working, with silences over 30 minutes inside a run left out; human hours are the people on the org chart × 40 h a
+  week. Totals only, for every person who can open the Overview.
 - **Sign out** and **Switch account** for Codex (ChatGPT) and Claude Code logins, from Settings > Computers and Manage
   subscription, for the computer's own login and each named subscription. Sign out names the bots that stop first;
   Switch account signs the new account in on the side, so cancelling keeps the old one, and puts the old login back if
