@@ -1409,14 +1409,9 @@ def create_app(settings=None):
 
     @app.put("/api/v2/access/rules")
     def access_rules(request: Request, body: M.AccessRules):
-        """Turn the team's fast defaults off, or back on (backend/team_rules.py). The owner; an admin may change only
-        the rules in `team_rules.ADMIN_RULES` (Stale ticket review)."""
+        """Turn the team's fast defaults off, or back on (backend/team_rules.py). The owner."""
         who = request.state.identity
-        sent = {name for name, value in body.model_dump().items() if value is not None}
-        if sent and sent <= set(team_rules.ADMIN_RULES):
-            admin_only(who, "changes " + ", ".join(sorted(sent)))
-        else:
-            owner_only(who, "changes the team's rules")
+        owner_only(who, "changes the team's rules")
         result = mutate(request, body, lambda c: team_rules.save(c, who.actor, body.model_dump()))
         with store.read() as c:
             auth.sync_access(c)          # who is a credential administrator follows the rule
@@ -5161,8 +5156,6 @@ def create_app(settings=None):
     install_sql(app, store, auth)
     from .judge import install_judge
     install_judge(app, store, auth)
-    from . import stale_review
-    stale_review.install(app, store, auth, mutate)
     from .live_meetings import install_live_meetings
     install_live_meetings(app, store, auth, mutate)
     from .mail import install_mail

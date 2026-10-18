@@ -191,7 +191,7 @@ function taskItems(state, view = state.view) {
 function tasksCounts(state) {
   if (state.loading) return {};
   const active = taskItems(state, 'list');
-  return {foryou: active.filter(it => taskNeedsViewer(it.task) && !needsFolded(it.id)).length + looseAsks().length + pendingApprovals().length + staleCards().length, list: active.length,
+  return {foryou: active.filter(it => taskNeedsViewer(it.task) && !needsFolded(it.id)).length + looseAsks().length + pendingApprovals().length, list: active.length,
     snoozed: taskItems(state, 'snoozed').length, recurring: typeof routineItems === 'function' ? routineItems(state).length : 0};
 }
 
@@ -368,9 +368,9 @@ function tasksListHTML(items, state) {
   const cards = state.view === 'foryou' && !state.q && !tasksActiveFilterCount(state);
   // Grouped by what it takes, approvals and questions go in their groups instead of leading the list.
   const byNeed = by === 'need' && state.view === 'foryou';
-  const asks = cards && !byNeed ? approvalsHTML() + staleCardsHTML() + looseAsksHTML() : '';
+  const asks = cards && !byNeed ? approvalsHTML() + looseAsksHTML() : '';
   const extra = new Map();
-  if (cards && byNeed) for (const it of [...pendingApprovals(), ...staleCards(), ...looseAsks()]) {
+  if (cards && byNeed) for (const it of [...pendingApprovals(), ...looseAsks()]) {
     const k = 'need:' + (it.need || 'do');
     extra.set(k, [...(extra.get(k) || []), it]);
   }
@@ -408,7 +408,7 @@ function tasksListHTML(items, state) {
         ${g.create ? `<button type="button" class="tl-gact" data-group-add="${esc(g.key)}" aria-label="New task in ${esc(g.label)}" title="New task">${TL_ICON.plus}</button>` : ''}
       </header>` : '';
     return `<section class="tl-group${collapsed ? ' collapsed' : ''}" data-group="${esc(g.key)}">${head}
-      <div class="tl-rows" id="${id}" role="list"${g.label ? ` aria-label="${esc(g.label)}"` : ' aria-label="Tasks"'}${collapsed ? ' hidden' : ''}>${more.map(it => it.kind === 'ask' ? looseAskRow(it) : it.kind === 'stale' ? staleCardHTML(it) : needsV2Item(it, false)).join('')}${tops.map(it => taskListRowHTML(it, ctx)).join('')}</div></section>`;
+      <div class="tl-rows" id="${id}" role="list"${g.label ? ` aria-label="${esc(g.label)}"` : ' aria-label="Tasks"'}${collapsed ? ' hidden' : ''}>${more.map(it => it.kind === 'ask' ? looseAskRow(it) : needsV2Item(it, false)).join('')}${tops.map(it => taskListRowHTML(it, ctx)).join('')}</div></section>`;
   }).join('')}${done && state.doneNext != null ? '<button class="ghost tl-more" type="button" id="board-more">Show more</button>' : ''}</div>`;
 }
 // Done: everything finished, newest first, a page at a time (routine runs live under Recurring).

@@ -5,13 +5,10 @@ back the click or the limit the product had before. They are read wherever the d
 direct writes (backend/assistant.py), what BotOps does without a card (backend/botops_act.py), the bots BotOps
 manages in its own runs and who is a credential administrator (backend/auth.py), who stores a credential for their
 own bot (backend/credentials.py), the SQL page and personal tokens, whether a bot goes ahead on its own default when
-a person leaves its ask unanswered (backend/ask_deadlines.py), whether Tico support may be let in
-(backend/support_access.py), and whether the hourly stale ticket review runs (backend/stale_review.py). That last one is
-off by default, an admin may turn it too (ADMIN_RULES), and the server's environment may set its default
-(ENV_DEFAULTS).
+a person leaves its ask unanswered (backend/ask_deadlines.py), and whether Tico support may be let in
+(backend/support_access.py).
 """
 import json
-import os
 
 from .store import H
 
@@ -28,38 +25,22 @@ DEFAULTS = {
     "bots_go_ahead": True,          # an ask with a reversible, internal default goes ahead after `go_ahead_days`
     "health_monitor_reports": True,  # the Health Monitor, once turned on, files Tico bug reports without a card
     "support_access": True,         # an owner or admin may let Tico support in from a ticket (backend/support_access.py)
-    "stale_review": False,          # the hourly stale ticket review suggests updates to owners (backend/stale_review.py)
 }
-# Rules an admin may change too, not only the owner (Settings > Team).
-ADMIN_RULES = ("stale_review",)
-# A rule whose default the server's environment sets (`TICO_STALE_REVIEW=1` on Tico Team's own server). A saved choice
-# wins; until someone sets the rule it is not stored, so it keeps following the environment.
-ENV_DEFAULTS = {"stale_review": "TICO_STALE_REVIEW"}
 # Numbers the owner sets, with their default and bounds.
 NUMBERS = {
     "go_ahead_days": (3, 1, 14),    # days an ask with a default waits for a person before the bot goes ahead
 }
 
 
-def default_of(name):
-    """A rule's default: DEFAULTS, or the server's environment for a rule in ENV_DEFAULTS that sets it."""
-    value = os.environ.get(ENV_DEFAULTS.get(name, ""), "").strip()
-    return value == "1" if value in ("0", "1") else DEFAULTS[name]
-
-
-def _stored(c):
+def load(c):
+    """Every rule with its value: the stored choice, else its default."""
     row = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (KEY,)).fetchone()
     try:
         stored = json.loads(row[0]) if row else {}
     except ValueError:
         stored = {}
-    return stored if isinstance(stored, dict) else {}
-
-
-def load(c):
-    """Every rule with its value: the stored choice, else its default."""
-    stored = _stored(c)
-    rules = {name: bool(stored[name]) if name in stored else default_of(name) for name in DEFAULTS}
+    stored = stored if isinstance(stored, dict) else {}
+    rules = {name: bool(stored[name]) if name in stored else default for name, default in DEFAULTS.items()}
     for name, (default, low, high) in NUMBERS.items():
         value = stored.get(name)
         rules[name] = value if isinstance(value, int) and not isinstance(value, bool) and low <= value <= high else default
@@ -74,11 +55,8 @@ def save(c, actor, changes):
         value = changes.get(name)
         if value is not None:
             after[name] = min(high, max(low, int(value)))
-    stored = _stored(c)
-    kept = {name: value for name, value in after.items()
-            if name not in ENV_DEFAULTS or name in stored or changes.get(name) is not None}
     c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
-              (KEY, json.dumps(kept, sort_keys=True)))
+              (KEY, json.dumps(after, sort_keys=True)))
     if after != before:
         H.event(c, actor, "access.rules_updated", "", {"before": before, "after": after})
     if before["support_access"] and not after["support_access"]:

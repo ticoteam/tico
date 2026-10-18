@@ -58,9 +58,3 @@ button.ghost.danger,.linkish.danger{color:var(--fail)}
 .approval-facts dd.approval-text{white-space:pre-wrap}
 @media (max-width:640px){.req-next.approval-payload{grid-template-columns:minmax(0,1fr);gap:6px}}   /* the label above, the payload full width */
 .approval-file-icon{flex:none;color:var(--muted);align-self:center}
-/* The Stale tickets card (ui/app/needs-you.js staleCardHTML): one row per task, its reason and suggestion, Accept / Skip. */
-.stale-rows{list-style:none;margin:8px 0 0;padding:0}
-.stale-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 0;border-top:1px solid var(--line)}
-.stale-row:first-child{border-top:0}
-.stale-what{min-width:0}
-.stale-row .row{display:flex;gap:6px;flex-shrink:0}
