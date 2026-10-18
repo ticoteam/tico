@@ -205,6 +205,10 @@ def test_answers_written_before_the_index_are_found_after_the_backfill(api):
     with api.app.state.store.read() as c:
         IM.ensure(c)
         assert IM.quoting(c, said["id"]) is None                 # not ready: an edit reads every answer
+        stopped = threading.Event()
+        stopped.set()
+        assert IM.backfill(c, span=400, stop=stopped) == 0       # the server stopping: the next start goes again
+        assert IM.quoting(c, said["id"]) is None
         assert IM.backfill(c, batch=50, span=400) == 601         # the answers that may quote a message
         assert {r[0] for r in IM.quoting(c, said["id"])} == quoted
         assert IM.backfill(c) == 0                               # once
@@ -221,6 +225,29 @@ def test_answers_written_before_the_index_are_found_after_the_backfill(api):
         assert {r[0] for r in IM.quoting(c, said["id"])} == quoted - {some}
         c.execute("DELETE FROM idempotency")                    # the retention sweep
         assert c.execute("SELECT count(*) FROM idempotency_messages").fetchone()[0] == 0
+
+
+def test_the_server_indexes_an_older_servers_answers_after_it_starts(tmp_path):
+    from fastapi.testclient import TestClient
+    from backend.app import create_app
+    from backend.config import Settings
+    from backend.store import Store
+    settings = Settings(db_path=tmp_path / "hub.db")
+    store = Store(settings)
+    store.initialize(seed_market=False)
+    message = {"id": "m-older", "from_actor": "bot:ops", "body": "old words"}
+    with store.transaction() as c:
+        for statement in ("DROP TRIGGER idempotency_messages_insert", "DROP TRIGGER idempotency_messages_update",
+                          "DROP TRIGGER idempotency_messages_delete", "DROP TABLE idempotency_messages"):
+            c.execute(statement)
+        c.execute("DELETE FROM registry_metadata WHERE key=?", (IM.READY,))
+        _answers(c, 1000, quoting=message)
+    with TestClient(create_app(settings)) as client:
+        deadline = time.monotonic() + 30
+        with client.app.state.store.read() as c:
+            while IM.quoting(c, "m-older") is None and time.monotonic() < deadline:
+                time.sleep(0.05)
+            assert len(IM.quoting(c, "m-older")) == 2
 
 
 def test_a_new_file_is_ready_without_a_backfill(tmp_path):

@@ -221,6 +221,10 @@ def create_app(settings=None):
         import threading
         copy_stop = threading.Event()
         copy_task = asyncio.create_task(asyncio.to_thread(app.state.blobs.storage_loop, store, copy_stop))
+        # Answers an older server stored get their quoted-message index, beside the server (backend/idempotency_messages.py).
+        from . import idempotency_messages
+        index_stop = threading.Event()
+        index_task = asyncio.create_task(asyncio.to_thread(idempotency_messages.backfill_store, store, index_stop))
         media_task = asyncio.create_task(asyncio.to_thread(app.state.file_metadata.loop))
         demo_task = None
         if settings.demo:
@@ -236,10 +240,12 @@ def create_app(settings=None):
                 screen_sessions.http.close()
             app.state.doc_sources.stop.set()
             copy_stop.set()
+            index_stop.set()
             app.state.file_metadata.stop.set()
             app.state.file_metadata.wake.set()
             # The storage probe observes copy_stop even while its bounded SDK call is in flight.
             await copy_task
+            await index_task
             await media_task
             app.state.github_app.repository_stop.set()
             if demo_task:

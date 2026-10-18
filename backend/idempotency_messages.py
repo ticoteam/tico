@@ -9,14 +9,15 @@ waited behind it. So each answer's quoted message ids are kept here:
 
 - triggers keep `idempotency_messages` in step with every insert, update and delete on `idempotency`, whoever writes
   it (`Store.mutate`, credentials, the GitHub app, the retention sweep);
-- rows an older server wrote are filled in at start (`backfill`), in short batches, reading outside the write lock;
-  until that first pass has finished (`READY`), an edit reads the answers the old way.
+- rows an older server wrote are filled in beside the running server (`backfill_store`, started with it), in short
+  batches, reading outside the write lock; until that first pass has finished (`READY`), an edit reads the answers the
+  old way. On 665k synthetic answers it took about 26 s; the server does not wait for it to start.
 """
 import json
 import sqlite3
 
 READY = "idempotency_messages.ready"
-BATCH = 2000
+BATCH = 500     # answers indexed per write transaction: about 0.15 s of lock on 665k synthetic answers
 SPAN = 20000    # rowids the backfill reads per look, outside the write lock
 
 # The ids of the objects with both an `id` (a string) and a `from_actor` key in one answer, in one pass over its JSON.
@@ -76,16 +77,28 @@ def quoting(conn, message_id):
                         (message_id, UNREAD, message_id)).fetchall()
 
 
-def backfill(conn, batch=BATCH, span=SPAN):
+def backfill_store(store, stop):
+    """`backfill` on its own connection, beside the server, until it finishes once or the server stops."""
+    try:
+        with store.read() as conn:
+            backfill(conn, stop=stop)
+    except Exception as exc:                # the next start tries again; edits read every answer meanwhile
+        import logging
+        logging.getLogger("tico.idempotency").error("Indexing stored answers failed: %s", type(exc).__name__)
+
+
+def backfill(conn, batch=BATCH, span=SPAN, stop=None):
     """The quoted ids of every answer written before the triggers existed. Runs at every start until it has finished
     once; the search reads `span` rowids at a time outside the write lock, and each `batch` of answers that may quote
     a message is indexed in its own short write transaction. Answers written meanwhile are indexed by the triggers.
-    Idempotent. Returns how many answers it read."""
+    Idempotent; a pass that is stopped starts again at the next start. Returns how many answers it read."""
     if _get(conn, READY):
         return 0
     done, after = 0, 0
     top = conn.execute("SELECT coalesce(max(rowid), 0) FROM idempotency").fetchone()[0]
     while after < top:
+        if stop is not None and stop.is_set():
+            return done
         rowids = [r[0] for r in conn.execute(
             f"SELECT rowid FROM idempotency WHERE rowid>? AND rowid<=? AND {_MAY_QUOTE.format(src='response_json')}",
             (after, after + span))]

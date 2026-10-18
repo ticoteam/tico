@@ -1053,10 +1053,6 @@ def migrate(conn, adopt_legacy=False):
     if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='schedule_occurrences'").fetchone():
         conn.execute("CREATE INDEX IF NOT EXISTS schedule_occurrences_task ON schedule_occurrences(task_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS events_task_origin ON events(actor,action,target,ts DESC)")
-    # A comment's edit and delete history, rewritten on each edit or delete (`_refresh_comment_replies`) inside the
-    # write transaction: without it that update read every event.
-    conn.execute("CREATE INDEX IF NOT EXISTS events_message_change ON events(target) "
-                 "WHERE action IN ('message.edited','message.deleted')")
     conn.execute("CREATE TABLE IF NOT EXISTS task_links(id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id), "
                  "kind TEXT NOT NULL, url TEXT NOT NULL, title TEXT, state TEXT, added_by TEXT, created TEXT NOT NULL, "
                  "pr_sha TEXT, pr_merged_at TEXT)")

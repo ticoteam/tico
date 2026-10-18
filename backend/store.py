@@ -1307,8 +1307,6 @@ class Store:
             # Every start, in short batches of their own: rows written since the last pass, including any an
             # older server wrote after a rollback, get their task links (backend/message_links.py).
             message_links.backfill(c)
-            # Until it has finished once: the quoted messages of answers written before the triggers existed.
-            idempotency_messages.backfill(c)
         c.close()
 
     @contextmanager
