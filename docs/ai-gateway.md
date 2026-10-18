@@ -61,7 +61,7 @@ same warnings to the owner, with **Open AI providers**.
 
 ## When the Gateway refuses a bot's run
 
-The bot's status says why, in plain words, and the run waits or is saved for later:
+The bot's status says why, in plain words, and the run waits or is saved for later. The same holds when a Tico model ran as the bot's own fallback:
 
 | The bot's status says | What happens to the run |
 |---|---|
@@ -72,7 +72,7 @@ The bot's status says why, in plain words, and the run waits or is saved for lat
 | The Tico AI Gateway refused the request as sent, with the Gateway's reason | Saved for later, not retried. |
 | No Tico route for this request | Saved for later, not retried. |
 | The Tico AI Gateway doesn't serve Tico models at its URL yet | Saved for later, not retried. Check the **Gateway URL**. |
-| Tico AI Gateway is unavailable, try again | Back in the queue if nothing ran yet, otherwise saved for later. |
+| Tico AI Gateway is unavailable, try again | Back in the queue if nothing ran yet: tried up to three times, waiting a minute, then two. After the third try, or if the run had already acted, saved for later. |
 
 If the Gateway cuts a reply off after the bot started answering, the bot posts what it had written, with a note
 saying the Tico AI Gateway cut the reply off.

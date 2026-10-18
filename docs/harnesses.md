@@ -100,7 +100,7 @@ key the Gateway doesn't recognise (revoked or unknown, one plain message) in Set
 answers 404 (no chat endpoint yet, or a wrong URL) shows as **Not ready**.
 
 The Gateway names every refusal with a code, the same on every endpoint (`error.code`, or a flat `error` from
-decisions). pi's own retry is off for Tico models, so the server decides what happens next from the code:
+decisions). pi's own retry is off for Tico models, so the server decides what happens next from the code, for a Tico model the bot runs on or names as its own fallback (an automatic fallback is never a Tico model). pi sends the bot's effort as `reasoning_effort`, its `max` as the Gateway's `xhigh`:
 
 | Code | What the bot says | The run |
 |---|---|---|
@@ -111,7 +111,7 @@ decisions). pi's own retry is off for Tico models, so the server decides what ha
 | `unsupported_field`, `bad_request`, `upstream_refused` | Refused as sent, with the Gateway's message | Saved for later, not retried |
 | `no_route` | No Tico route for this request | Saved for later, not retried |
 | 404 | The Gateway doesn't serve Tico models at its URL yet | Saved for later, not retried |
-| `upstream_unavailable` | Tico AI Gateway is unavailable, try again | Back in the queue if nothing ran |
+| `upstream_unavailable` | Tico AI Gateway is unavailable, try again | Back in the queue if nothing ran, at most twice, the bot waiting 1 then 2 minutes first; then saved for later |
 
 A reply the Gateway cuts off after it began streaming is posted as far as it got, with a note saying the Gateway cut
 it off. Only codes are logged, never the key.
