@@ -13,7 +13,7 @@ Human hours are the people on the org chart (`people.visible_people`) times HOUR
 no history, so every week uses today's count.
 
 Weeks run Monday to Sunday where the company keeps its calendar (`updates.ZONE`), for up to WEEKS weeks, starting no
-earlier than the week of the first run. Only totals leave this module: never a bot's or a person's own hours.
+earlier than the week of the first run. Every run that worked inside them counts, however long ago it started. Only totals leave this module: never a bot's or a person's own hours.
 """
 
 import threading
@@ -29,7 +29,6 @@ from .updates import ZONE
 GAP = timedelta(minutes=30)
 WEEKS = 12
 HOURS_PER_PERSON = 40
-LONGEST_RUN = timedelta(days=2)     # a run that started earlier than this before the window is not looked for
 CACHE_S = 60                        # the Overview may open often; the answer is an estimate and keeps a minute
 
 
@@ -68,8 +67,10 @@ def next_week(start):
 
 
 def overlap(spans, lo, hi):
-    """Seconds of `spans` inside lo..hi."""
-    return sum(max(0.0, (min(b, hi) - max(a, lo)).total_seconds()) for a, b in spans)
+    """Seconds of `spans` inside lo..hi. Elapsed time is taken in UTC: two times in the company's zone subtract as wall
+    clock, which a week with a clock change makes an hour long or short."""
+    utc = timezone.utc
+    return sum(max(0.0, (min(b, hi).astimezone(utc) - max(a, lo).astimezone(utc)).total_seconds()) for a, b in spans)
 
 
 def ratio(bot_hours, human_hours):
@@ -105,11 +106,14 @@ def sampled(c, rid):
 
 
 class Counter:
-    """Each finished run's working stretches are kept once read: a finished run doesn't change."""
+    """Each finished run's working stretches are kept once read, with the start and finish they were read for. A
+    finish can change: a run stopped when its lease ran out is restored and finishes again, or files its result late,
+    and then it is read again. Its events need no such check: the server stamps each event as it arrives, so one that
+    comes after a finish lies past it, outside the stretch that finish closes."""
 
     def __init__(self):
         self.lock = threading.Lock()
-        self.done = {}              # run id -> its stretches, for finished runs inside the window
+        self.done = {}              # run id -> ((started, finished), its stretches), for finished runs in the window
         self.answer = None          # (monotonic time, answer)
 
     def spans(self, c, rows, now):
@@ -121,21 +125,23 @@ class Counter:
             start, end = H.parse_ts(row["started"]), H.parse_ts(row["finished"]) if row["finished"] else None
             if start is None:
                 continue
-            if row["id"] in known and end is not None:
-                out[row["id"]] = keep[row["id"]] = known[row["id"]]
+            key = (row["started"], row["finished"])
+            held = known.get(row["id"])
+            if end is not None and held and held[0] == key:
+                out[row["id"]], keep[row["id"]] = held[1], held
                 continue
             stop = end or now
             if stop - start <= GAP:
                 out[row["id"]] = worked(start, stop)
                 if end is not None:
-                    keep[row["id"]] = out[row["id"]]
+                    keep[row["id"]] = (key, out[row["id"]])
             else:
-                wanted[row["id"]] = (start, stop, end is not None)
+                wanted[row["id"]] = (start, stop, key, end is not None)
         activity = {rid: sampled(c, rid) for rid in wanted}
-        for rid, (start, stop, finished) in wanted.items():
+        for rid, (start, stop, key, finished) in wanted.items():
             out[rid] = worked(start, stop, activity[rid], finished)
             if finished:
-                keep[rid] = out[rid]
+                keep[rid] = (key, out[rid])
         with self.lock:
             self.done = keep        # runs that left the window drop out here
         return out
@@ -150,9 +156,11 @@ class Counter:
         first = c.execute("SELECT MIN(started) FROM turns WHERE started IS NOT NULL").fetchone()[0]
         people = len(P.visible_people(views.roster(c)))
         human = people * HOURS_PER_PERSON
-        rows = c.execute("SELECT id, started, finished FROM turns WHERE started >= ? AND started < ? "
-                         "AND (finished IS NULL OR finished > ?)",
-                         (stamp(lo - LONGEST_RUN), stamp(now), stamp(lo))).fetchall()
+        # Runs finished inside the window or still going, by the `turns_finished` index: a run that started weeks
+        # before the window still counts for the time it worked inside it.
+        rows = c.execute("SELECT id, started, finished FROM turns WHERE finished > ? AND started < ? "
+                         "UNION ALL SELECT id, started, finished FROM turns WHERE finished IS NULL AND started < ?",
+                         (stamp(lo), stamp(now), stamp(now))).fetchall()
         spans = [s for run in self.spans(c, rows, now).values() for s in run]
         week_from = max(earliest, week_start(H.parse_ts(first))) if first else None
         weeks, at = [], week_from

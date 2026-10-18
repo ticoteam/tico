@@ -115,3 +115,38 @@ def test_a_long_runs_few_reads_find_every_silence_and_only_people_read_it(api):
     assert set(answer) == {"zone", "now", "first_run", "people", "hours_per_person", "gap_minutes", "last_7_days", "weeks"}
     assert all(set(w) == {"week", "bot_hours", "people", "human_hours", "ratio", "so_far"} for w in answer["weeks"])
     assert api.get("/api/v2/overview/bot-hours", headers=headers(run.bot_token)).status_code == 403
+
+
+def test_a_finish_that_changes_and_a_run_older_than_the_weeks_both_count(api, monkeypatch):
+    store, run, counter = api.app.state.store, runs(api), B.Counter()
+    reads = []
+    real = B.sampled
+    monkeypatch.setattr(B, "sampled", lambda c, rid: reads.append(rid) or real(c, rid))
+    oldest = datetime(2026, 7, 27, 0, 0, tzinfo=ZONE)   # NOW's twelfth week back
+    stopped = MONDAY + timedelta(hours=9)
+    with store.transaction() as c:
+        people(c, ["ana"])
+        # Started three days before the oldest week, finished a day into it, nothing recorded inside: 24 h there.
+        run(c, "old", oldest - timedelta(days=3), oldest + timedelta(days=1))
+        # Finished before the oldest week: nothing.
+        run(c, "older", oldest - timedelta(days=7), oldest - timedelta(days=1))
+        # Stopped 40 minutes in when its lease ran out.
+        run(c, "late", stopped, stopped + timedelta(minutes=40))
+    with store.read_transaction() as c:
+        answer = counter.count(c, now=NOW)
+    assert answer["weeks"][0]["week"] == "2026-07-27" and answer["weeks"][0]["bot_hours"] == 24.0
+    assert week(answer, MONDAY)["bot_hours"] == round(40 / 60, 2)
+    with store.read_transaction() as c:
+        reads.clear()
+        counter.count(c, now=NOW)
+    assert reads == [], "a finished run that hasn't changed is not read again"
+    # Its result arrives late, three hours in: the same counter counts the new finish.
+    with store.transaction() as c:
+        c.execute("UPDATE turns SET finished=? WHERE id='late'", (B.stamp(stopped + timedelta(hours=3)),))
+    with store.read_transaction() as c:
+        assert week(counter.count(c, now=NOW), MONDAY)["bot_hours"] == 3.0
+    assert reads == ["late"]
+    # A week with a clock change is as long as it really is: 169 h when the clocks go back, 167 when they go forward.
+    for day, hours in ((datetime(2026, 11, 1, 12, tzinfo=ZONE), 169), (datetime(2026, 3, 8, 12, tzinfo=ZONE), 167)):
+        lo = B.week_start(day)
+        assert B.overlap([(lo - timedelta(days=1), lo + timedelta(days=9))], lo, B.next_week(lo)) == hours * 3600

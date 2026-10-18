@@ -104,6 +104,7 @@ const answer = (over = {}) => ({zone: 'America/Los_Angeles', now: '2026-10-14T19
     const phone = await plot.boundingBox();
     await plot.tap({position: {x: phone.width - 2, y: phone.height / 2}}).catch(() => plot.click({position: {x: phone.width - 2, y: phone.height / 2}}));
     assert.match(await card.locator('.ovh-tip').innerText(), /^Week of Oct 12 \(so far\): 100 bot hours · 120 human hours · 0\.8×$/);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'the shown week fits too');
     await page.setViewportSize({width: 1280, height: 860});
 
     // No people on the org chart: bot hours only.
