@@ -16,8 +16,11 @@ step. A person moves the task. The repository's webhook posts here signed with
 The last hop is a fact of the deploy, not of GitHub: the release manifest names the commit the
 running code was built from (`release.py` writes it from CI), and `ship_deployed` marks a merged
 link `shipped` once its merge commit is at or before that commit on main. Only the repository this
-release came from ships that way; a merged link in another repository stays `merged`.
+release came from ships that way; a merged link in another repository stays `merged`. A release that
+contains the merge and then its revert (a change dropped after QA failed) does not ship it: GitHub is
+asked whether the pull request's own lines are still there at the release commit (`change_kept`).
 """
+import base64
 import hashlib
 import hmac
 import json
@@ -25,6 +28,7 @@ import logging
 import re
 import threading
 import time
+from collections import Counter
 from urllib.parse import quote
 
 from fastapi import Request, Response
@@ -491,7 +495,7 @@ def refresh_deployed_tasks(service):
             for key in due:
                 if service.repository_stop.is_set():
                     return
-                verified = False
+                verified = reverted = False
                 try:
                     if token is None:
                         token, _ = service.mint([repo], {"contents": "read"}, diagnose=False)
@@ -502,12 +506,19 @@ def refresh_deployed_tasks(service):
                         verified = (data.get("status") in ("ahead", "identical")
                                     and (data.get("base_commit") or {}).get("sha") == key[1]
                                     and (data.get("merge_base_commit") or {}).get("sha") == key[1])
+                    if verified and change_kept(lambda path, **params: _read(service, token, path, params),
+                                                repo, key[1], commit) is False:
+                        # Both commits are fixed, so the answer is too: never asked again for this release.
+                        verified, reverted = False, True
+                        logging.getLogger("tico.github").info("Release %s reverts %s in %s: not shipped",
+                                                              commit[:12], key[1][:12], repo)
                 except Exception:
+                    verified = False
                     logging.getLogger("tico.github").warning("Release ancestry unavailable for %s at %s", repo, key[1])
                 with service.lock:
                     if key not in cache and len(cache) >= 512:
                         cache.pop(next(iter(cache)))
-                    cache[key] = {"verified": verified, "next": time.monotonic() + 300}
+                    cache[key] = {"verified": verified, "next": float("inf") if reverted else time.monotonic() + 300}
             if service.repository_stop.is_set():
                 return
             with service.lock:
@@ -524,12 +535,90 @@ def refresh_deployed_tasks(service):
     threading.Thread(target=refresh, name="tico-deploy-refresh", daemon=True).start()
 
 
+# How much of a pull request is still in a release, measured as scripts/freeze_guard.py measures a net revert: release
+# notes move between sections at every cut and tests are cut routinely, so only product lines count when it has any.
+NOTES_FILES = {"CHANGELOG.md"}
+TEST_PATH = re.compile(r"(^|/)(tests?|testdata|fixtures)/|(^|/)test_[^/]*$|_test\.[a-z]+$|\.test\.[a-z]+$")
+
+
+def _meaningful(text):
+    """Blank lines, lone brackets and one-word lines appear everywhere; they are no evidence either way."""
+    return sum(ch.isalnum() for ch in text) >= 3
+
+
+def _patch_lines(patch):
+    added, removed = Counter(), Counter()
+    for line in (patch or "").splitlines():
+        if line[:1] in "+-" and _meaningful(line[1:].strip()):
+            (added if line[0] == "+" else removed)[line[1:].strip()] += 1
+    return added, removed
+
+
+def _read(service, token, path, params):
+    """One GitHub read for `change_kept`: the JSON, None when it is not there, an exception otherwise."""
+    response = service._call("GET", path, params=params or None, headers={"Authorization": "Bearer " + token})
+    if response.status_code == 404:
+        return None
+    if response.status_code != 200:
+        raise RuntimeError(f"GitHub answered {response.status_code} for {path}")
+    return response.json()
+
+
+def change_kept(get, repo, merge, release):
+    """Whether `release`, which contains `merge`, still has what that merge changed.
+
+    False only when every meaningful line the pull request added is gone again and every one it deleted is back, in
+    each file it changed: a revert. True as soon as one file keeps its change; None when the change has no lines to
+    measure (a rename, a binary file), which leaves ancestry to decide as before."""
+    base = f"/repos/{quote(repo, safe='/')}"
+    commit = get(f"{base}/commits/{merge}")
+    if not commit:
+        return None
+    parents = commit.get("parents") or []
+    files = commit.get("files") or []
+    if len(parents) > 1:   # a merge commit: the pull request is what it changed on top of main
+        files = (get(f"{base}/compare/{parents[0]['sha']}...{merge}") or {}).get("files") or []
+    measured = [(f, *_patch_lines(f.get("patch"))) for f in files if f.get("filename") not in NOTES_FILES]
+    measured = [m for m in measured if m[1] or m[2]]
+    product = [m for m in measured if not TEST_PATH.search(m[0]["filename"])]
+    if not (product or measured):
+        return None
+
+    def lines(sha):
+        blob = get(f"{base}/git/blobs/{sha}") or {}
+        text = base64.b64decode(blob.get("content") or "").decode("utf-8", "replace")
+        return Counter(line.strip() for line in text.splitlines() if line.strip())
+
+    for f, added, removed in product or measured:
+        there = get(f"{base}/contents/{quote(f['filename'])}", ref=release)
+        now_sha = there.get("sha") if isinstance(there, dict) else None
+        merged_sha = None if f.get("status") == "removed" else f.get("sha")
+        if now_sha and now_sha == merged_sha:
+            return True    # the file is as the merge left it
+        now = lines(now_sha) if now_sha else Counter()
+        then = lines(merged_sha) if merged_sha else Counter()
+        gone, back = then - now, now - then
+        if any(gone[text] < n for text, n in added.items()) or any(back[text] < n for text, n in removed.items()):
+            return True
+    return False
+
+
+def checked_on_github(c, settings, repo):
+    """`refresh_deployed_tasks` can ask GitHub about this release, so it decides what ships, reverts included."""
+    app = c.execute("SELECT org FROM github_app WHERE id='app'").fetchone()
+    return bool(not settings.rehearsal and app and repo.split("/")[0].lower() == str(app["org"]).lower()
+                and c.execute("SELECT 1 FROM repositories WHERE lower(full_name)=? AND reachable=1",
+                              (repo.lower(),)).fetchone())
+
+
 def ship_deployed(c, settings, *, ancestry=None):
     """Every merged pull request link in the running release is `shipped`; the task itself does not move."""
     commit, repo = settings.release_commit, settings.release_repo
     if not commit or not repo:
         return []
-    here = c.execute("SELECT seq FROM main_pushes WHERE sha=?", (commit,)).fetchone()
+    # Push order alone can't see a revert; it ships only where GitHub can't be asked.
+    here = (ancestry is None and not checked_on_github(c, settings, repo)
+            and c.execute("SELECT seq FROM main_pushes WHERE sha=?", (commit,)).fetchone())
     shipped = []
     candidates = H._rows(c.execute(DEPLOY_QUERY,
         ("https://github.com/" + repo.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "/pull/%",)))

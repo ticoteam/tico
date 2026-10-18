@@ -19,6 +19,9 @@ All notable changes to Tico are recorded here. The format follows
   rebuild it ([updates.md](docs/updates.md#python-environments-on-a-docker-runner) lists them and how).
 
 ### Fixed
+- A pull request a release merged and then reverted (a change dropped after QA failed) is no longer marked
+  shipped, and its task gets no "Shipped" notice. Tico now checks with GitHub that the pull request's own lines are
+  still in the running release, not only that its merge commit comes before it.
 - A person's new Slack thread to a bot that is paused or quarantined is kept and runs when the bot is back, as a reply
   in an existing thread already was, instead of being dropped. The person is told in the thread that the bot is held
   and when it is back, with no need to resend.
