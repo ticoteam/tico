@@ -224,6 +224,13 @@ def test_answers_written_before_the_index_are_found_after_the_backfill(api):
         finally:
             IM._write = real_write
         assert writes == [1] and IM.quoting(c, said["id"]) is None   # one write, not ready
+        writes.clear()
+        IM._write = counted
+        try:
+            assert IM.backfill(c, batch=1000, span=10**6, stop=StopAfterFirstWrite()) == 601   # every batch, then stop
+        finally:
+            IM._write = real_write
+        assert writes == [1] and IM.quoting(c, said["id"]) is None   # the ready mark is not written either
         assert IM.backfill(c, batch=50, span=400) == 601         # the answers that may quote a message
         assert {r[0] for r in IM.quoting(c, said["id"])} == quoted
         assert IM.backfill(c) == 0                               # once

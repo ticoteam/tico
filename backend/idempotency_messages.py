@@ -91,7 +91,7 @@ def backfill(conn, batch=BATCH, span=SPAN, stop=None):
     """The quoted ids of every answer written before the triggers existed. Runs at every start until it has finished
     once; the search reads `span` rowids at a time outside the write lock, and each `batch` of answers that may quote
     a message is indexed in its own short write transaction. Answers written meanwhile are indexed by the triggers.
-    Idempotent; a pass that is stopped (checked before each write) starts again at the next start. Returns how many
+    Idempotent; a pass that is stopped (checked before each write, the ready mark included) starts again at the next start. Returns how many
     answers it read."""
     if _get(conn, READY):
         return 0
@@ -114,6 +114,8 @@ def backfill(conn, batch=BATCH, span=SPAN, stop=None):
             _write(conn, lambda: conn.execute(f"INSERT OR IGNORE INTO idempotency_messages {_quoted('i', chosen)}",
                                               chunk * 2))
         done += len(rowids)
+    if stopped():                           # every batch written, but ready is left to a pass that ends unstopped
+        return done
     _write(conn, lambda: _set(conn, READY, True))
     return done
 
