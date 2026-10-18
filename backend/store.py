@@ -76,10 +76,6 @@ CREATE TABLE IF NOT EXISTS settings_changes(
 CREATE INDEX IF NOT EXISTS settings_changes_created ON settings_changes(created);
 CREATE TABLE IF NOT EXISTS session_epochs(
  conversation_id TEXT PRIMARY KEY REFERENCES conversations(id), epoch INTEGER NOT NULL DEFAULT 0, updated TEXT NOT NULL);
--- Moved by every clear or reset of one bot: a bot's direct chats share its one `bot` thread
--- (clients/sessions.py), so one chat's Clear must reach the next turn of any of them.
-CREATE TABLE IF NOT EXISTS bot_session_epochs(
- bot TEXT PRIMARY KEY REFERENCES bots(slug), epoch INTEGER NOT NULL DEFAULT 0, updated TEXT NOT NULL);
 -- Current provider thread for one bot+runtime+model. Local files hold the real
 -- context; this pointer lets a runner try resume, then fall back to a Hub pack.
 CREATE TABLE IF NOT EXISTS bot_sessions(

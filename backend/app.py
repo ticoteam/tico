@@ -37,7 +37,7 @@ from . import models as M
 from .auth import LOCAL_COOKIE, LOCAL_COOKIE_DAYS, LOCAL_SIGNIN_PATH, LOGOUT_PATH, Auth, Identity
 from .config import Settings
 from .observability import Observability, browser_config, staff_display_name
-from .execution import Execution, bot_repository, bump_bot_session_epoch, clear_limits
+from .execution import Execution, bot_repository, clear_limits
 from .onboarding import BOTOPS, Onboarding
 from .recruit import Recruiter
 from . import rooms
@@ -75,7 +75,6 @@ STABLE_PATH = re.compile("|".join(re.sub(r"\\\{[^}]+\\\}", "[^/]+", re.escape(sp
 
 def reset_bot_sessions(c, bot):
     """Keep durable history while fencing local provider sessions for one bot."""
-    bump_bot_session_epoch(c, bot)
     reset = 0
     for conversation in c.execute("SELECT id,participants_json FROM conversations").fetchall():
         if "bot:" + bot not in json.loads(conversation["participants_json"]):
