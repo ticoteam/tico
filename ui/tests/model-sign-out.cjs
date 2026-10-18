@@ -162,7 +162,7 @@ const {unrouted} = require('./support/routes.cjs');
     assert.equal(await confirm.locator('[data-bots]').innerText(), 'These 2 bots stop until someone signs in again: Writer, Scout.');
     assert.match(await confirm.innerText(), /shared key won't sign it back in by itself/);
     await confirm.getByRole('button', {name: 'Cancel'}).click();
-    assert.equal(await page.locator('dialog.model-logout').count(), 0);
+    await page.locator('dialog.model-logout').waitFor({state: 'detached'});   // removed on the dialog's close event, a task after the click
     assert.deepEqual(writes, []);
 
     // Confirmed: it asks the computer and follows it to Signed out; the row then reads Signed out, with Sign in and

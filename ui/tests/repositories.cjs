@@ -235,14 +235,16 @@ async function owner(browser) {
   await box.locator('input[type=radio][value=own]').focus();
   await page.keyboard.press('ArrowRight');
   await page.waitForFunction(() => document.querySelector('#bot-editor input[type=radio][value=all]')?.checked);
-  assert.equal(lastWrite(writes, '/api/v2/bots/release-captain/repositories').mode, 'all');
+  // The radio moves at once; its save reaches the mock a moment later, so wait for the save itself.
+  await until(() => lastWrite(writes, '/api/v2/bots/release-captain/repositories').mode === 'all', 'the All ticked repos save');
   // Creation is a separate explicit grant; keyboard changes save and preserve focus.
   const creation = box.locator('[data-brepo-create]');
   assert.equal(await creation.isChecked(), false);
   await creation.focus();
   await page.keyboard.press('Space');
   await page.waitForFunction(() => document.querySelector('#bot-editor [data-brepo-status]')?.textContent === 'Saved');
-  assert.equal(lastWrite(writes, '/api/v2/bots/release-captain/repositories').create_repositories, true);
+  // 'Saved' may still be the mode save's; the creation save is the one to wait for.
+  await until(() => lastWrite(writes, '/api/v2/bots/release-captain/repositories').create_repositories === true, 'the Create bot repositories save');
   assert.equal(await creation.isChecked(), true);
   assert.equal(await creation.evaluate(el => el === document.activeElement), true);
   // Create product repositories: its own grant, on by default; the Owner switches it off and back on.
@@ -309,6 +311,8 @@ async function saves(browser) {
   await page.waitForFunction(() => document.querySelector('#bot-editor [data-brepo-status]')?.textContent === 'Saved');
   await box.locator('[data-brepo="acme/web"] [data-brepo-pick]').click();
   await page.waitForFunction(() => document.querySelector('#bot-editor [data-brepo-status]')?.textContent === 'Saved');
+  // 'Saved' may still be the Chosen repos save's; acme/web's save must land before saves are refused.
+  await until(() => lastWrite(writes, '/api/v2/bots/release-captain/repositories').chosen.some(c => c.full_name === 'acme/web'), 'the acme/web save');
   data.refuse = 'Repository access is locked';
   await box.locator('[data-brepo="acme/mobile"] [data-brepo-pick]').click();
   await page.waitForFunction(() => /locked/.test(document.querySelector('#bot-editor [data-brepo-status]')?.textContent || ''));

@@ -261,6 +261,8 @@ const railOrder = page => page.evaluate(() => [...document.querySelectorAll('#pa
       const banner = page.locator('#conv-paused:not([hidden])');
       await banner.waitFor();
       assert.match(await banner.innerText(), /usage limit; your messages will run when it's back\s*Try now$/);
+      // The header warning is drawn at the end of the refresh, after the issues list, so it can follow the chat banner.
+      await page.locator('#bot-alert', {hasText: /Try now/}).waitFor();
       assert.match(await page.locator('#bot-alert').innerText(), /Try now/);
       if (shots) await page.screenshot({path: path.join(shots, `bot-limit-try-now-${scheme}.png`)});
       await banner.locator('[data-limit-retry]').click();
@@ -285,6 +287,7 @@ const railOrder = page => page.evaluate(() => [...document.querySelectorAll('#pa
       assert.equal(await card.locator('a[href="#/task/t9"]').innerText(), 'Set up the tool');
       assert.doesNotMatch(await page.locator('#main').innerText(), /outside the hub|escape:/);
       if (shots) await page.screenshot({path: path.join(shots, 'bot-quarantine-review.png'), fullPage: true});
+      await page.locator('#bot-alert', {hasText: /Paused for review\s*Resume bot/}).waitFor();
       assert.match(await page.locator('#bot-alert').innerText(), /Paused for review\s*Resume bot/);
       await page.locator('#bot-alert [data-quarantine-resume]').click();
       await page.locator('#bot-alert [data-quarantine-resume]').waitFor({state: 'detached'});

@@ -500,11 +500,16 @@ const AMBER = png(160, 90, (x, y) => [220, 110 + (y >> 1), 40 + (x >> 2)]);
     await page.locator('#task-create-form [name=title]').fill('Brief');
     await page.locator('#task-create-form [name=body]').fill('See the brief.');
     const sentBefore = await page.evaluate(() => window.sentFiles.length);
+    // The page counts a file when it is added to the form, before the request reaches the server: read the new task's
+    // own upload, not whichever upload the server saw last.
+    const created = page.waitForRequest(r => new URL(r.url()).pathname === '/api/v2/uploads/tasks' && r.method() === 'POST');
     await page.locator('#task-create-form [type=submit]').click();
     await page.waitForFunction(n => window.sentFiles.length >= n + 2, sentBefore);
     assert.deepEqual(await page.evaluate(n => window.sentFiles.slice(n).map(f => [f.name.replace(/\d/g, ''), f.size, f.copied]), sentBefore),
       [['brief.pdf', 3, true], ['screenshot--.png', 4, true]]);
-    assert.match(uploadBodies.at(-1).toString('latin1'), /filename="brief\.pdf"\r\nContent-Type: application\/pdf\r\n\r\npdf\r\n/);
+    const createdBody = ((await created).postDataBuffer() || Buffer.alloc(0)).toString('latin1');
+    assert.match(createdBody, /filename="brief\.pdf"\r\nContent-Type: application\/pdf\r\n\r\npdf\r\n/);
+    assert.match(createdBody, /filename="screenshot-\d{8}-\d{6}\.png"\r\nContent-Type: image\/png\r\n\r\nshot\r\n/);
     await page.locator('#task-create').waitFor({state: 'hidden'});
     assert.deepEqual(errors, []);
     console.log(`PASS: files strip, viewer, versions, compare, asks, comment files, linked images, covers, pins, phone (${((Date.now() - t0) / 1000).toFixed(1)}s)`);

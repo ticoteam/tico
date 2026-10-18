@@ -220,7 +220,7 @@ def install_scim(app, settings, store):
         with store.transaction() as c:
             live = roster_of(c)
             owner = Access.load_owner(c, settings)["email"]
-            found = D.plan(live, [record], "scim", owner, False)
+            found = D.plan(live, [record], "scim", owner, False, Access.retired_emails(c))
             blocked = bool(found["leaves"]) and _recent_leaves(c) + len(found["leaves"]) > D.load(c)["mass_leave_limit"]
             if not blocked:
                 for key in ("protected", "skipped"):
