@@ -453,10 +453,9 @@ class Auth:
                 row = c.execute("SELECT id FROM humans WHERE lower(email)=?", (email,)).fetchone()
                 # The owner's old address after an email change joins no one: it would be a second owner-to-be.
                 if not row and email in self.retired_emails:
-                    raise Problem("identity", "This address no longer signs in to " + self.settings.app_name
-                                  + ". Sign in with your new address, or ask the owner to add this one", 403)
+                    raise self.retired()
                 if not row and self.admits(email):
-                    row = {"id": self.join(email)}
+                    row = self.join(email)
                 # The people roster is the approved internal-user list; the allow list adds to it.
                 if not row:
                     raise Problem("identity", "This account is not on the " + self.settings.app_name
@@ -488,11 +487,23 @@ class Auth:
             return who
 
     def join(self, email):
-        """The allow list admitted this verified address: add them to the roster as a person."""
+        """The allow list admitted this verified address: add them to the roster as a person. Decided again from the
+        stored lists under the write lock, since an owner email change that committed after this request read them
+        retires the old address and takes it off the lists. Returns the row, or None when no longer admitted."""
         from . import access
         with self.store.transaction() as c:
             row = c.execute("SELECT id FROM humans WHERE lower(email)=?", (email,)).fetchone()
-            return row["id"] if row else access.join_on_sign_in(c, email)
+            if row:
+                return {"id": row["id"]}
+            if email in access.retired_emails(c):
+                raise self.retired()
+            if not access.admitted(access.load_access(c, self.settings), email):
+                return None
+            return {"id": access.join_on_sign_in(c, email)}
+
+    def retired(self):
+        return Problem("identity", "This address no longer signs in to " + self.settings.app_name
+                       + ". Sign in with your new address, or ask the owner to add this one", 403)
 
     # ------------------------------------------------------------------ per-bot access
     # See, Read and Write are decided here and nowhere else (backend/bot_access.py has the stored

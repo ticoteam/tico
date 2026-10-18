@@ -571,6 +571,11 @@ def change_owner_email(c, actor, roster, owner, new_email, *, expected_revision,
     person = P.person_by_email(old, roster) if old else None
     if not person:
         raise Problem("not_found", "The owner (" + (old or "unset") + ") is not on the roster", 404)
+    # Checked again here, under the write lock: the caller's owner role was read when it signed in, and a transfer that
+    # committed since would otherwise let it change the new owner's address. The host command has the host's word.
+    if via != "host" and actor != "human:" + person["id"]:
+        raise Problem("forbidden", "Only the owner changes their own sign-in email, and you are no longer the owner; "
+                      "nothing was changed", 403)
     other = P.person_by_email(new, roster)
     if (other and other["id"] != person["id"]) or _email_taken(c, new, person["id"]):
         raise Problem("conflict", new + " already belongs to someone else on the roster. Change or remove their "

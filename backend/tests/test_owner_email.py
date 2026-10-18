@@ -1,12 +1,14 @@
 """The owner changes their own sign-in email in place: the same person, every copy at once, audited."""
 
 import json
+import threading
 
 import pytest
 
 from backend import access as Access
 from backend import manage
 from backend import routines
+from backend import views
 from backend.auth import Identity
 from backend.store import H
 from backend.tests.test_onboarding import OWNER_EMAIL, environment, signed_in  # noqa: F401
@@ -136,6 +138,99 @@ def test_botops_and_the_assistant_acting_as_the_owner_are_refused_even_after_a_c
         # Unconfirmed BotOps is stopped before the route; a confirmed click reaches it and is refused there.
         assert confirmed is False or "signed-in browser" in refused["error"]["detail"], (token, refused)
     assert state(api) == before
+
+
+def test_an_owner_role_read_before_a_transfer_cannot_change_the_new_owner_s_email(environment):
+    api = environment()
+    store = api.app.state.store
+    held, go, answer = threading.Event(), threading.Event(), {}
+    mutate = store.mutate
+
+    def paused(identity, operation, *args, **kwargs):
+        # Signed in as the owner and past the route's checks, but not yet holding the write lock.
+        if operation == "/api/v2/access/owner/email" and not held.is_set():
+            held.set()
+            assert go.wait(10)
+        return mutate(identity, operation, *args, **kwargs)
+    store.mutate = paused
+    revision = view(api)["owner"]["revision"]
+    # The held request names the revision the transfer will make, so the revision check alone cannot stop it.
+    request = threading.Thread(target=lambda: answer.update(r=api.post(
+        "/api/v2/access/owner/email", headers=signed_in(),
+        json={"email": NEW, "confirm_email": NEW, "confirm": True, "expected_revision": revision + 1})))
+    request.start()
+    assert held.wait(10)
+    call(api, "POST", "/owner", {"person": "riley", "confirm": True, "expected_revision": revision})
+    transferred = state(api)
+    go.set()
+    request.join(10)
+    store.mutate = mutate
+    refused = answer["r"]
+    assert refused.status_code == 403 and "no longer the owner" in refused.text, refused.text
+    assert state(api) == transferred and transferred["owner"]["email"] == "riley@acme.example"
+    assert transferred["humans"]["riley"] == "riley@acme.example" and transferred["events"] == []
+
+
+def sign_in_while(api, email, commit):
+    """Sign in as `email` through the proxy, with `commit` (fn(c)) committed by another request while this sign-in
+    sits between reading the lists and joining."""
+    store, auth = api.app.state.store, api.app.state.auth
+    sync, armed = auth.sync_access, threading.Event()
+
+    def other():
+        with store.transaction() as c:
+            commit(c)
+
+    def paused(c):
+        sync(c)
+        if armed.is_set():
+            armed.clear()
+            thread = threading.Thread(target=other)
+            thread.start()
+            thread.join(10)
+    auth.sync_access = paused
+    armed.set()
+    try:
+        return api.get("/api/v2/me", headers={"x-test-email": email})
+    finally:
+        auth.sync_access = sync
+        assert not armed.is_set()
+
+
+@pytest.mark.parametrize("allowed, domains", [([OWNER_EMAIL], []), ([], ["acme.example"])])
+def test_a_sign_in_that_read_the_lists_before_the_change_does_not_join_the_old_address(environment, allowed, domains):
+    api = environment()
+    store = api.app.state.store
+    with store.transaction() as c:
+        Access._store(c, Access.ACCESS, {**Access._load_json(c, Access.ACCESS), "allowed": allowed,
+                                         "allowed_domains": domains})
+    api.app.state.auth.proxy = HeaderProxy()
+    assert api.get("/api/v2/me", headers={"x-test-email": OWNER_EMAIL}).json()["actor"] == "human:morgan"
+    before = state(api)
+    refused = sign_in_while(api, OWNER_EMAIL, lambda c: Access.change_owner_email(
+        c, "human:morgan", views.roster(c), Access.load_owner(c, store.settings), NEW,
+        expected_revision=before["owner"]["revision"], now=H.now(), settings=store.settings))
+    assert refused.status_code == 403 and "no longer signs in" in refused.text, refused.text
+    after = state(api)
+    assert set(after["humans"]) == set(before["humans"]) and after["joined"] == 0
+    assert after["humans"]["morgan"] == NEW and len(after["events"]) == 1
+    me = api.get("/api/v2/me", headers={"x-test-email": NEW}).json()
+    assert me["actor"] == "human:morgan" and me["role"] == "owner"
+
+
+def test_a_sign_in_that_read_the_lists_before_its_address_left_them_joins_no_one(environment):
+    api = environment()
+    owner_on_the_lists(api)                                    # sam@partner.example is on the allow list
+    api.app.state.auth.proxy = HeaderProxy()
+    api.get("/api/v2/me", headers={"x-test-email": OWNER_EMAIL})
+    before = state(api)
+
+    def take_sam_off(c):
+        Access._store(c, Access.ACCESS, {**Access._load_json(c, Access.ACCESS), "allowed": [OWNER_EMAIL]})
+    refused = sign_in_while(api, "sam@partner.example", take_sam_off)
+    assert refused.status_code == 403 and "not on the" in refused.text, refused.text
+    after = state(api)
+    assert after["humans"] == before["humans"] and after["joined"] == 0
 
 
 def test_a_message_bot_keeps_reading_the_old_mailbox_both_ways(environment):
