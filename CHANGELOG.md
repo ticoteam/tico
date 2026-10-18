@@ -26,6 +26,11 @@ All notable changes to Tico are recorded here. The format follows
 
 - On Python 3.14 and later the server compresses API JSON with zstd for clients that accept it (browsers over
   HTTPS, behind Caddy): 8-14x less CPU than gzip at the same or smaller size. Python 3.12 keeps gzip.
+- The server, runner and updater images run Python 3.15 on Debian trixie with SQLite 3.54.1, built in and checked
+  when the image is built (Debian's own copy is 3.46.1). The update pulls the images, and Tico's own mail venv rebuilds
+  itself on first use. A runner's home volume survives the update, so anything a bot or person built there with the old
+  Python 3.12 (a project's venv, `pip install --user` packages under `~/.local/lib/python3.12`) does not run on 3.15:
+  rebuild it ([updates.md](docs/updates.md#python-environments-on-a-docker-runner) lists them and how).
 - Tico HQ's code (the service at `https://updates.tico.team`) moved out of this repository. Installs talk to
   `https://updates.tico.team` as before, with one fix: with `TICO_SUPPORT=off`, in a rehearsal or in demo mode, a live
   support session now ends without the install telling HQ (it used to send the end notice), so with support off nothing
@@ -46,12 +51,24 @@ All notable changes to Tico are recorded here. The format follows
   says so and links the app's permissions page, where the Owner turns it on once. Connecting and disconnecting GitHub
   stay the Owner's ([Permissions](docs/permissions.md#bots-that-create-repositories),
   [GitHub App](docs/github-app.md#bots-that-create-product-repositories)).
+- Screen: the first time a new computer offers its screen, its **Screen** setting in Settings > Computers starts at
+  **Control** instead of **View**, so its operator or an admin can drive it at once. Who may open a screen is
+  unchanged (the computer's operator and admins), a Screen setting someone already chose stays (View and Off
+  included), and a computer that already offered its screen keeps its setting.
 
 ### Fixed
 
 - **Save bot** in the bot editor no longer drops a Model or Fallback you picked but didn't Apply. A picked Fallback is
   saved with the bot; a picked Model opens its change dialog first, and if you cancel it the editor stays open and
   says the model change wasn't applied. If the fallback can't be saved, the editor stays open with the reason.
+- On a phone, the Support pop-up fits the space above the keyboard while you type: the box, Send and the newest
+  reply stay on screen, and the page behind no longer shows below it or scrolls under it. With the keyboard down it is
+  the usual bottom sheet again.
+- Health no longer says a bot that ran out of quota has no fallback when the company fallback (*Fall back when a plan
+  runs out*, **Settings > AI providers**) covers it. And Health now says when a computer's default login for an AI tool
+  (the one bots without a subscription use) is out of quota, e.g. "Team box's default Codex login is out of quota":
+  turns there keep stopping on a usage limit with no reset time, so bots that fall back to it fail. It clears once a
+  turn on that login completes or the reset time passes.
 - `hub computer performance` and the `hub_computer_performance` tool work again: they read the computers reply as a list,
   so every call failed before it reached the computer's CPU, memory and disk history.
 - The Overview campus opened before the bots' status arrived now shows each desk's state as soon as it does, instead
