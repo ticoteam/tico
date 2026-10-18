@@ -753,4 +753,4 @@ See [Tags and release checklists](using-tico.md#tags-and-release-checklists).
 A bot can keep using task statuses with any task type. Tico maps each status change to the type's
 matching step, or shows the plain status when no step matches. `hub task types` lists definitions;
 `hub task update <id> --step "Legal review"` chooses a named step explicitly. Types are optional,
-managed by movers in Settings → Types. See [Task types and steps](tasks.md).
+managed by movers in Settings → Tasks. See [Task types and steps](tasks.md).
