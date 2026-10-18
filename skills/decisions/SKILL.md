@@ -180,7 +180,7 @@ version for a bot:
 - There is a budget per actor per day (`GET /api/v2/decisions` reports it; the server sets it with
   `TICO_DECISIONS_DAILY_CALLS_OWNER`, `_HUMAN` and `_BOT`). A loop that spends it is a bug; stop and say so.
 - There is also a spend cap for the whole team per UTC month (`TICO_DECISIONS_MONTHLY_USD`, $50 by default;
-  `GET /api/v2/decisions` shows `spent_this_month_usd`). At the cap a call is a 429 `spend_cap`: carry on as you
+  `GET /api/v2/decisions` shows `spent_this_month_usd`). At the cap, or when a call's most would not fit under it, the call is a 429 `spend_cap`: carry on as you
   would without Decide (your own judgment, or a person), and do not retry before the 1st.
 - Test before you trust. Run a new question over ten rows you already know the answer to and
   read the misses: missing evidence in the state, a literal reading of your words, a model

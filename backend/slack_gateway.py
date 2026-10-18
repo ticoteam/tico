@@ -733,7 +733,7 @@ class Gateway:
         The questions are independent and their ids unique, so the calls' answers merge into one
         map. A call that fails fails the whole ask; nothing is routed from half the answers. Each call goes through
         the team's monthly spend cap (backend/judge.py `metered`), which writes down its cost as it returns and
-        refuses `spend_cap` before a call at the cap, so a big fleet stops there too."""
+        refuses `spend_cap` before a call that would not fit under the cap, so a big fleet stops there too."""
         questions = self.questions(fleet)
         ids = list(questions)
         from .judge import metered, step_models

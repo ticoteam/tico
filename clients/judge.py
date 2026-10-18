@@ -295,22 +295,32 @@ LLM_INSTRUCTIONS = (
     "statement is true}. Probabilities are numbers in [0,1] that sum to 1 within a question.")
 
 
-def llm_request(provider, api_key, model, system, user):
-    """(request) for one provider's chat API; each takes a system prompt and one user turn."""
+# The longest answer a decision call may give, on every transport. The server's spend cap reserves a call's most with
+# it (backend/judge.py `reservation`), so a call can never be billed more output than was held for it.
+MAX_OUTPUT_TOKENS = 4096
+# Each OpenAI-style API's name for that limit: OpenAI's own reasoning models refuse `max_tokens`.
+LLM_OUTPUT_LIMIT = {"openai": "max_completion_tokens", "xai": "max_tokens", "openrouter": "max_tokens"}
+
+
+def llm_request(provider, api_key, model, system, user, max_output=None):
+    """(request) for one provider's chat API; each takes a system prompt and one user turn. `max_output` caps the
+    answer's tokens on every transport (Anthropic always needs one, so it gets 4096 when none is given)."""
     headers = {"Content-Type": "application/json"}
     if provider == "anthropic":
         headers.update({"x-api-key": api_key, "anthropic-version": "2023-06-01"})
-        body = {"model": model, "max_tokens": 4096, "system": system,
+        body = {"model": model, "max_tokens": max_output or MAX_OUTPUT_TOKENS, "system": system,
                 "messages": [{"role": "user", "content": user}]}
     elif provider == "google":
         headers["x-goog-api-key"] = api_key
         body = {"systemInstruction": {"parts": [{"text": system}]},
                 "contents": [{"role": "user", "parts": [{"text": user}]}],
-                "generationConfig": {"responseMimeType": "application/json"}}
+                "generationConfig": {"responseMimeType": "application/json",
+                                     **({"maxOutputTokens": max_output} if max_output else {})}}
     else:
         headers["Authorization"] = "Bearer " + api_key
         body = {"model": model, "response_format": {"type": "json_object"},
-                "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]}
+                "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+                **({LLM_OUTPUT_LIMIT[provider]: max_output} if max_output else {})}
     return urllib.request.Request(LLM_URLS[provider].format(model=model), data=json.dumps(body).encode(),
                                   method="POST", headers=headers)
 
@@ -374,7 +384,8 @@ def llm(provider, api_key, model, timeout=TIMEOUT, opener=None):
         user = json.dumps({"state": state, "questions": clean(questions)}, default=str)
         started = time.monotonic()
         try:
-            with opener(llm_request(provider, api_key, model, LLM_INSTRUCTIONS, user), timeout=timeout) as response:
+            with opener(llm_request(provider, api_key, model, LLM_INSTRUCTIONS, user, MAX_OUTPUT_TOKENS),
+                        timeout=timeout) as response:
                 payload = json.load(response)
             text = llm_text(provider, payload)
         except urllib.error.HTTPError as exc:

@@ -82,13 +82,13 @@ def test_at_the_monthly_cap_a_call_is_refused_before_any_model_is_asked(api, mon
     api.app.state.store.settings.decisions_monthly_usd = 50.0
     spend(api, 60.0, ts="2000-01-15T00:00:00Z")            # an older month never counts
     spend(api, 30.0)
-    spend(api, 19.99, actor="human:ben")                     # every actor's calls count: the cap is the team's
-    post(api, "decisions", {"state": {"team": "Acme"}, "questions": QUESTIONS})
+    spend(api, 19.7, actor="human:ben")                      # every actor's calls count: the cap is the team's
+    post(api, "decisions", {"state": {"team": "Acme"}, "questions": QUESTIONS})   # its most (~$0.21) fits
     assert len(engine.calls) == 1
     shown = get(api, "judge")
-    assert shown["monthly_usd"] == 50.0 and shown["spent_this_month_usd"] == pytest.approx(49.99, abs=0.001)
+    assert shown["monthly_usd"] == 50.0 and shown["spent_this_month_usd"] == pytest.approx(49.7, abs=0.001)
 
-    spend(api, 0.01)
+    spend(api, 0.2)                                          # under the cap, but a call's most no longer fits
     result = api.post("/api/v2/decisions", json={"state": {"team": "Acme"}, "questions": QUESTIONS}, headers=headers())
     assert result.status_code == 429 and result.json()["error"]["code"] == "spend_cap"
     assert len(engine.calls) == 1 and backup.calls == [], "neither Jev nor the fallback is asked at the cap"
@@ -202,7 +202,7 @@ def test_a_call_in_flight_holds_its_most_against_the_cap_for_every_other_request
     store = api.app.state.store
     store.settings.decisions_monthly_usd = 1.0
     priced(store.settings, 0, 0)                       # Jev unpriced, so a call in flight holds a lot
-    spend(api, 0.8)
+    spend(api, 0.6)
     entered, release = threading.Event(), threading.Event()
 
     class Slow(Paid):
@@ -214,25 +214,176 @@ def test_a_call_in_flight_holds_its_most_against_the_cap_for_every_other_request
     monkeypatch.setattr(B, "fallback_engine", lambda *args, **kwargs: None)
     with store.read() as c:
         first, second = B.server_engine(store, c, slow), B.server_engine(store, c, Paid(0.05))
-    assert B.reservation(store.settings, [J.MODEL], {"team": "Acme"}, QUESTIONS) > 0.2, "unpriced: held high"
+    held = B.reservation(store.settings, [J.MODEL], {"team": "Acme"}, QUESTIONS)
+    assert 0.2 < held < 0.4, "unpriced: held high, but one call still fits under the cap"
     out = {}
     thread = threading.Thread(target=lambda: out.update(first({"team": "Acme"}, QUESTIONS, "unpriced")))
     thread.start()
     assert entered.wait(5)
     slow.inner = lambda state, questions, label=None: {"model": "an-unpriced-model", "ms": 1, "answers": {}}
-    with pytest.raises(J.JudgeError) as refused:       # $0.80 written + the first call's most in flight
+    with pytest.raises(J.JudgeError) as refused:       # $0.60 written + the first call's most in flight + its own
         second({"team": "Acme"}, QUESTIONS)
     assert refused.value.code == "spend_cap"
     release.set()
     thread.join(5)
     assert out["cost_usd"] == 0.05 and B._RESERVED[0] == 0
-    second({"team": "Acme"}, QUESTIONS)                # $0.85 written, nothing in flight: allowed
+    second({"team": "Acme"}, QUESTIONS)                # $0.65 written, nothing in flight: it fits
     with store.read() as c:
-        assert B.spent_this_month(c) == pytest.approx(0.9)
+        assert B.spent_this_month(c) == pytest.approx(0.7)
         rows = [json.loads(r[0]) for r in c.execute("SELECT detail_json FROM events WHERE action='judge.spend' "
                                                     "AND target='unpriced'")]
     assert rows == [{"label": "unpriced", "model": "an-unpriced-model", "cost_usd": 0.05}], \
         "the provider's own cost wins; an unpriced model without one is counted at the ceiling"
+
+
+@pytest.mark.parametrize("written", [0.009999, 0.0099])
+def test_two_processes_admitted_at_once_pass_the_cap_by_at_most_the_larger_reservation(gateway, hub, monkeypatch,
+                                                                                       written):
+    """QA's repro on the v0.3.58 candidate: cap $0.01 and $0.009999 written; a server_engine call and a Slack
+    Gateway.ask in the gateway's own process (its own meter) both checked before either answer is written; each
+    answers 1000 tokens in, 0 out, on Jev. Each admits a call only if it fits with its own most, so the month ends
+    at most the larger reservation over the cap. Before the fix both were let in at $0.009999: $0.010083 written."""
+    from backend.tests import test_slack_gateway as S
+    hub.settings.decisions_monthly_usd = 0.01
+    with hub.transaction() as c:
+        H.event(c, "bot:ops", "judge.spend", "mail-triage@1", {"cost_usd": written})
+    monkeypatch.setattr(B, "fallback_engine", lambda *args, **kwargs: None)
+    jev_usage = {"input_tokens": 1000, "output_tokens": 0}
+    state, held, slack_answered = {"team": "Acme"}, [], []
+    reserve = B.reservation
+    monkeypatch.setattr(B, "reservation", lambda *args: held.append(reserve(*args)) or held[-1])
+
+    class SlackJev(S.CappedJudge):
+        def __call__(self, state, questions, label=None):
+            slack_answered.append(questions)
+            return {**super().__call__(state, questions, label), "model": J.MODEL, "usage": jev_usage}
+    gateway._judge = SlackJev({"asks": 0.9, "bot:legal": 0.9})
+
+    def slack_process():
+        """The gateway's container: the same audit, its own in-flight reservations."""
+        real = B._RESERVED
+        monkeypatch.setattr(B, "_RESERVED", [0.0])
+        try:
+            return S.send(gateway, "please review the vendor terms", channel=S.DM, kind="message", user="U2")
+        finally:
+            monkeypatch.setattr(B, "_RESERVED", real)
+
+    def server_jev(state, questions, label=None):
+        out["slack"] = slack_process()                 # the Slack call is checked while this one is out
+        return {"model": J.MODEL, "answers": FakeJudge()(state, questions, label)["answers"], "usage": jev_usage, "ms": 1}
+    out = {}
+    with hub.read() as c:
+        engine = B.server_engine(hub, c, server_jev)
+    try:
+        engine(state, QUESTIONS, "server")
+    except J.JudgeError as exc:
+        assert exc.code == "spend_cap"
+        out["slack"] = slack_process()                 # the server call never went out; Slack is checked alone
+    with hub.read() as c:
+        spent = B.spent_this_month(c)
+    assert len(held) == 2 and max(held) < 0.0001       # Jev at $0.042 per 1M in: a few hundredths of a cent each
+    assert spent <= 0.01 + max(held), f"${spent} written against a $0.01 cap"
+    if written == 0.009999:                            # neither fits with its own most: nothing more is spent
+        assert spent == pytest.approx(written) and slack_answered == []
+        assert out["slack"]["decision"]["routed_by"] == "spend_cap"
+    else:                                              # both fit: both answer, and the month stays under the cap
+        assert len(slack_answered) == 1 and spent == pytest.approx(written + 2 * 0.000042) and spent <= 0.01
+    assert B._RESERVED[0] == 0
+
+
+def test_slack_without_a_jev_key_holds_each_call_at_the_company_models_price(gateway, hub, monkeypatch):
+    """No TypeSafe key: the company's own model answers Slack, so a call is held at its price, not Jev's."""
+    from backend.tests import test_slack_gateway as S
+
+    class Company(S.CappedJudge):
+        model = "a-model-with-no-list-price"           # held at the ceiling, about $0.21 a call
+    company = Company({"asks": 0.9, "bot:legal": 0.9})
+    gateway._judge = None
+    monkeypatch.setattr(B, "fallback_engine", lambda *args, **kwargs: company)
+    hub.settings.decisions_monthly_usd = 1.0
+    with hub.transaction() as c:
+        H.event(c, "bot:ops", "judge.spend", "mail-triage@1", {"cost_usd": 0.9})
+    result = S.send(gateway, "please review the vendor terms", channel=S.DM, kind="message")
+    assert company.calls == [], "at Jev's price the call would have fit; at the company model's it does not"
+    assert result["decision"]["routed_by"] == "spend_cap"
+    with hub.transaction() as c:
+        c.execute("DELETE FROM events WHERE action='judge.spend'")
+    assert S.send(gateway, "and the NDA", channel=S.DM, kind="message")["state"] == "routed"
+    assert len(company.calls) == 1
+
+
+# The company's own model on each transport: (transport, a model with a list price), as the fallback asks it.
+COMPANY_MODELS = [("anthropic", "claude-opus-5-5"), ("openai", "gpt-6-sol"), ("google", "gemini-3.8-flash"),
+                  ("xai", "grok-4.6"), ("openrouter", "moonshotai/kimi-k3")]
+
+
+class WholeAllowance:
+    """A provider that answers with the longest answer the request allows, and bills all of it."""
+
+    def __init__(self, provider):
+        self.provider, self.limits = provider, []
+
+    def __call__(self, request, timeout=None):
+        import io
+        body = json.loads(request.data)
+        limit = (body.get("generationConfig") or {}).get("maxOutputTokens") or body.get("max_tokens") \
+            or body.get("max_completion_tokens")
+        self.limits.append(limit)
+        billed_in, billed_out = len(request.data) // 3, limit or 64_000   # no limit: a long reasoning answer
+        text = json.dumps({"bucket": {"probabilities": {"archive": 0.2, "reply": 0.8}}, "is_ask": {"noul": 0.9}})
+        if self.provider == "anthropic":
+            payload = {"content": [{"type": "text", "text": text}],
+                       "usage": {"input_tokens": billed_in, "output_tokens": billed_out}}
+        elif self.provider == "google":
+            payload = {"candidates": [{"content": {"parts": [{"text": text}]}}],
+                       "usageMetadata": {"promptTokenCount": billed_in, "candidatesTokenCount": billed_out}}
+        else:
+            payload = {"choices": [{"message": {"content": text}}],
+                       "usage": {"prompt_tokens": billed_in, "completion_tokens": billed_out}}
+        return io.BytesIO(json.dumps(payload).encode())
+
+
+@pytest.mark.parametrize("provider,model", COMPANY_MODELS)
+def test_every_transport_caps_a_decisions_answer_at_what_the_cap_reserves(provider, model):
+    """Review 1 on #864: only Anthropic carried an output limit, so a Google or OpenAI-style answer could be billed
+    far past the call's reservation. Each now asks for at most MAX_OUTPUT_TOKENS, in that API's own field."""
+    seen = []
+    J.llm(provider, "synthetic", model, opener=lambda request, timeout=None: seen.append(json.loads(request.data))
+          or WholeAllowance(provider)(request))({"team": "Acme"}, QUESTIONS)
+    body = seen[-1]
+    field = {"anthropic": body.get("max_tokens"), "google": (body.get("generationConfig") or {}).get("maxOutputTokens"),
+             "openai": body.get("max_completion_tokens"), "xai": body.get("max_tokens"),
+             "openrouter": body.get("max_tokens")}[provider]
+    assert field == J.MAX_OUTPUT_TOKENS == B.MAX_OUTPUT_TOKENS
+    if provider == "openai":
+        assert "max_tokens" not in body, "OpenAI's reasoning models refuse max_tokens"
+    # The draft writer is not a decision call and keeps its own length: only Anthropic, which requires one, is capped.
+    J.llm_writer(provider, "synthetic", model, opener=lambda request, timeout=None: seen.append(
+        json.loads(request.data)) or WholeAllowance(provider)(request))("Draft it.", "Ana's facts")
+    assert provider == "anthropic" or not ({"max_tokens", "max_completion_tokens"} & set(seen[-1])
+                                           or "maxOutputTokens" in (seen[-1].get("generationConfig") or {}))
+
+
+@pytest.mark.parametrize("provider,model", COMPANY_MODELS)
+def test_a_company_model_call_billed_its_whole_allowance_stays_within_its_reservation(api, monkeypatch, provider,
+                                                                                      model):
+    """The bound holds only if no call costs more than was held for it. Through the meter, on the company's model,
+    with the provider billing the longest answer the request allows: the recorded cost is at most the reservation."""
+    store = api.app.state.store
+    store.settings.decisions_monthly_usd = 50.0
+    provider_api = WholeAllowance(provider)
+    monkeypatch.setattr(B, "fallback_engine", lambda *args, **kwargs: J.llm(provider, "synthetic", model,
+                                                                             opener=provider_api))
+    held, reserve = [], B.reservation
+    monkeypatch.setattr(B, "reservation", lambda *args: held.append(reserve(*args)) or held[-1])
+    with store.read() as c:
+        engine = B.server_engine(store, c, None)
+    result = engine({"team": "Acme"}, QUESTIONS, "company")
+    assert provider_api.limits == [J.MAX_OUTPUT_TOKENS]
+    with store.read() as c:
+        recorded = json.loads(c.execute("SELECT detail_json FROM events WHERE action='judge.spend'").fetchone()[0])
+    assert recorded["model"] == model and recorded["cost_usd"] == result["cost_usd"] > 0
+    assert recorded["cost_usd"] <= held[0], f"{provider}: billed ${recorded['cost_usd']}, held ${held[0]}"
 
 
 # ----------------------------------------------------------------------------- one engine for every caller

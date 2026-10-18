@@ -56,7 +56,7 @@ class Internet:
         how = self.fail.get(url)
         if isinstance(how, int):
             raise urllib.error.HTTPError(url, how, "no", {}, io.BytesIO(json.dumps(
-                {"error": "revoked_key", "detail": "echo: " + SECRET}).encode()))
+                {"error": "cap_reached" if how == 429 else "revoked_key", "detail": "echo: " + SECRET}).encode()))
         if isinstance(how, BaseException):
             raise how
         if how == "garbled":
@@ -181,6 +181,69 @@ def test_without_an_own_key_a_failed_gateway_goes_straight_to_the_team_llm(api, 
     assert r.status_code == 200 and r.json()["model"] == "claude-sonnet-5-5"
     assert not net.calls(J.URL), "no TypeSafe call without a TypeSafe key"
     assert audits(api)[-1]["provider"] == "Anthropic" and audits(api)[-1]["fallback"] == "auth"
+
+
+def no_own_key_settings(monkeypatch, tmp_path):
+    """The server's settings with a gateway key and none of the three TypeSafe sources: no `TYPESAFE_API_KEY`, no
+    `TICO_TYPESAFE_SECRET_ARN`, no /etc/tico/typesafe-api-key."""
+    for name in ("TYPESAFE_API_KEY", "TICO_TYPESAFE_SECRET_ARN", "TICO_REHEARSAL", *J.LLM_KEYS.values()):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("TICO_DB", str(tmp_path / "env.db"))
+    monkeypatch.setenv("TICO_GATEWAY_KEY", "gw-synthetic")
+    monkeypatch.setenv("TICO_GATEWAY_URL", GATEWAY_URL)
+    real = Path.read_text
+
+    def read_text(self, *args, **kwargs):
+        if str(self) == "/etc/tico/typesafe-api-key":
+            raise FileNotFoundError(str(self))
+        return real(self, *args, **kwargs)
+    monkeypatch.setattr(Path, "read_text", read_text)
+    settings = Settings.from_env()
+    assert settings.gateway_key == "gw-synthetic" and settings.typesafe_api_key == ""
+    return settings
+
+
+@pytest.mark.parametrize("team_llm", [True, False])
+def test_a_gateway_at_its_cap_with_no_own_key_never_reaches_typesafe_directly(api, monkeypatch, net, tmp_path,
+                                                                                team_llm):
+    """The Gateway's cap is the team's one Jev budget: at 429 cap_reached the team's LLM answers or Decide is off,
+    and no call goes to TypeSafe on another key, on the decisions route or on Slack routing."""
+    env = no_own_key_settings(monkeypatch, tmp_path)
+    settings = api.app.state.store.settings
+    settings.gateway_key, settings.gateway_url, settings.typesafe_api_key = \
+        env.gateway_key, env.gateway_url, env.typesafe_api_key
+    api.app.state.judge = B.primary_engine(settings)
+    backup = J.llm("anthropic", "an-synthetic", "claude-sonnet-5-5") if team_llm else None
+    monkeypatch.setattr(B, "fallback_engine", lambda *args, **kwargs: backup)
+    net.fail[GATEWAY_URL] = 429
+
+    r = ask(api)
+    if team_llm:
+        assert r.status_code == 200 and r.json()["model"] == "claude-sonnet-5-5"
+        assert audits(api)[-1]["provider"] == "Anthropic" and audits(api)[-1]["fallback"] == "unavailable"
+    else:
+        assert r.status_code == 503 and r.json()["error"]["code"] == "judge_unavailable"
+    assert len(net.calls(GATEWAY_URL)) == 1
+    assert net.calls(J.URL) == [], "a capped Gateway never falls through to TypeSafe"
+
+
+@pytest.mark.parametrize("team_llm", [True, False])
+def test_slack_routing_with_a_capped_gateway_and_no_own_key_never_reaches_typesafe_directly(hub, monkeypatch, net,
+                                                                                            tmp_path, team_llm):
+    env = no_own_key_settings(monkeypatch, tmp_path)
+    hub.settings.gateway_key, hub.settings.gateway_url, hub.settings.typesafe_api_key = \
+        env.gateway_key, env.gateway_url, env.typesafe_api_key
+    backup = J.llm("anthropic", "an-synthetic", "claude-sonnet-5-5") if team_llm else None
+    monkeypatch.setattr(B, "fallback_engine", lambda *args, **kwargs: backup)
+    net.fail[GATEWAY_URL] = 429
+    gw = G.Gateway(hub, FakeSlack(), clock=Clock())
+    gw.verify_app()
+    assert gw.receive(envelope("hello there", channel=DM, kind="message")) == "queued"
+    gw.tick()
+    assert len(net.calls(GATEWAY_URL)) == 1 and net.calls(J.URL) == [], "a capped Gateway never falls through to TypeSafe"
+    if team_llm:
+        detail = json.loads(rows(hub, "SELECT detail_json FROM events WHERE action='judge.call'")[-1]["detail_json"])
+        assert detail["provider"] == "Anthropic" and len(net.calls(ANTHROPIC)) == 1
 
 
 def test_a_request_the_contract_refuses_is_refused_before_any_provider_is_asked(api, monkeypatch, net):
