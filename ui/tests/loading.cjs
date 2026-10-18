@@ -3,6 +3,7 @@ const {chromium, webkit} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs');
 
 async function check(engine, native) {
   const browser = await engine.launch({headless:true});
@@ -33,7 +34,7 @@ async function check(engine, native) {
     if (p === '/api/v2/status') return json({bots:[{bot:'ops',state:'idle',open_tasks:0}]});
     if (p === '/api/v2/needs-you') return json({items:[]});
     if (p === '/api/v2/task-types') return json({types:[]});
-    return json({});
+    return json(unrouted(p));
   });
   const started = Date.now();
   await page.goto('https://tico-ui.test/#/tasks', {waitUntil:'domcontentloaded'});

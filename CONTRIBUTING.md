@@ -58,8 +58,8 @@ Resolve runtime packages first, then development packages against those pins. Th
 same shared dependencies as installations. Use the supported Python version for both commands:
 
 ```bash
-uv pip compile backend/requirements.in --python-version 3.12 -o backend/requirements.txt
-uv pip compile backend/requirements-dev.in --python-version 3.12 -o backend/requirements-dev.txt
+uv pip compile backend/requirements.in --python-version 3.15 -o backend/requirements.txt
+uv pip compile backend/requirements-dev.in --python-version 3.15 -o backend/requirements-dev.txt
 ```
 
 Upgrade a small compatible group with `--upgrade-package NAME` on the first command, then regenerate

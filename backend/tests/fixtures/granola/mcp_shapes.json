@@ -1,0 +1,104 @@
+{
+  "about": [
+    "Granola's answers as they reach Tico, scrubbed: every person, company, title, id, note and token is a placeholder.",
+    "Bodies are stored decoded so they can be read; an exchange with a Content-Encoding header is served compressed.",
+    "Sources: the v0.3.4 fix (Granola gzips every answer, OAuth included), the v0.3.7 fix (notes and transcripts can",
+    "start with provider text before the XML-like body; get_meetings takes at most 10 ids; throttling arrives as HTTP",
+    "429, as a JSON-RPC error and as an isError tool result, each saying 'Rate limit exceeded. Please slow down",
+    "requests.'), Granola's MCP docs, and the 'redirect_uris must be an array' registration check seen live.",
+    "Refresh from a real account with: python scripts/granola_live_check.py --record <dir>, then read the scrub."
+  ],
+  "exchanges": {
+    "register": {
+      "status": 201,
+      "headers": {"Content-Type": "application/json", "Content-Encoding": "gzip"},
+      "json": {"client_id": "client-placeholder", "client_name": "Tico", "token_endpoint_auth_method": "none",
+               "grant_types": ["urn:ietf:params:oauth:grant-type:device_code", "refresh_token"],
+               "redirect_uris": ["http://127.0.0.1/callback"]}
+    },
+    "device_authorization": {
+      "status": 200,
+      "headers": {"Content-Type": "application/json", "Content-Encoding": "gzip"},
+      "json": {"device_code": "device-placeholder", "user_code": "WXYZ-1234", "verification_uri": "https://granola.ai/device",
+               "verification_uri_complete": "https://granola.ai/device?user_code=WXYZ-1234", "expires_in": 600, "interval": 5}
+    },
+    "token": {
+      "status": 200,
+      "headers": {"Content-Type": "application/json", "Content-Encoding": "gzip", "Cache-Control": "no-store"},
+      "json": {"access_token": "access-placeholder", "token_type": "Bearer", "expires_in": 3600,
+               "refresh_token": "refresh-placeholder", "scope": "openid profile email offline_access mcp"}
+    },
+    "authorization_server": {
+      "status": 200,
+      "headers": {"Content-Type": "application/json", "Content-Encoding": "gzip"},
+      "json": {"issuer": "https://mcp-auth.granola.ai", "token_endpoint": "https://mcp-auth.granola.ai/oauth2/token",
+               "revocation_endpoint": "https://mcp-auth.granola.ai/oauth2/revoke"}
+    },
+    "initialize": {
+      "status": 200,
+      "headers": {"Content-Type": "application/json", "Content-Encoding": "gzip", "Mcp-Session-Id": "session-placeholder"},
+      "json": {"jsonrpc": "2.0", "id": "<request id>", "result": {"protocolVersion": "2025-03-26",
+               "capabilities": {"tools": {"listChanged": false}}, "serverInfo": {"name": "granola", "version": "1.0.0"}}}
+    },
+    "initialized": {
+      "status": 202,
+      "headers": {}
+    },
+    "tools_list": {
+      "status": 200,
+      "headers": {"Content-Type": "application/json", "Content-Encoding": "gzip"},
+      "json": {"jsonrpc": "2.0", "id": "<request id>", "result": {"tools": [
+        {"name": "list_meetings", "description": "List meetings in a time range.", "inputSchema": {"type": "object",
+         "properties": {"time_range": {"type": "string", "enum": ["this_week", "last_week", "last_30_days", "custom"]},
+                        "custom_start": {"type": "string"}, "custom_end": {"type": "string"}},
+         "required": ["time_range"], "additionalProperties": false}},
+        {"name": "get_meetings", "description": "Get notes for up to 10 meetings.", "inputSchema": {"type": "object",
+         "properties": {"meeting_ids": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 10}},
+         "required": ["meeting_ids"], "additionalProperties": false}},
+        {"name": "get_meeting_transcript", "description": "Transcript of one meeting (paid plans).", "inputSchema": {
+         "type": "object", "properties": {"meeting_id": {"type": "string"}}, "required": ["meeting_id"],
+         "additionalProperties": false}}
+      ]}}
+    },
+    "list_meetings": {
+      "status": 200,
+      "headers": {"Content-Type": "application/json", "Content-Encoding": "gzip"},
+      "json": {"jsonrpc": "2.0", "id": "<request id>", "result": {"content": [{"type": "text", "text": "Here are your meetings from the last 30 days:\n<meetings_data from=\"Sep 18, 2026\" to=\"Oct 2, 2026\" count=\"2\">\n<meeting id=\"00000000-0000-4000-8000-000000000001\" title=\"Meeting one\" date=\"Oct 1, 2026 4:00 PM\">\n  <known_participants>\n  Person One (note creator) from Company <person1@example.com>\n  Person Two from Company <person2@example.com>\n  </known_participants>\n</meeting>\n<meeting id=\"00000000-0000-4000-8000-000000000002\" title=\"Meeting two\" date=\"Oct 2, 2026\">\n  <known_participants>\n  Person One (note creator) from Company <person1@example.com>\n  </known_participants>\n</meeting>\n</meetings_data>"}]}}
+    },
+    "get_meetings": {
+      "status": 200,
+      "headers": {"Content-Type": "application/json", "Content-Encoding": "gzip"},
+      "json": {"jsonrpc": "2.0", "id": "<request id>", "result": {"content": [{"type": "text", "text": "Here are the shared notes for these meetings:\n<meetings_data count=\"2\">\n<meeting id=\"00000000-0000-4000-8000-000000000001\" title=\"Meeting one\" date=\"Oct 1, 2026 4:00 PM\">\n  <known_participants>\n  Person One (note creator) from Company <person1@example.com>\n  Person Two from Company <person2@example.com>\n  </known_participants>\n  <summary>\n## Decisions\n- Budget < 15% & plan approved\n</summary>\n  <private_notes><summary>Private placeholder</summary></private_notes>\n</meeting>\n<meeting id=\"00000000-0000-4000-8000-000000000002\" title=\"Meeting two\" date=\"Oct 2, 2026\">\n  <summary>\n## Notes\n- Shared placeholder\n</summary>\n</meeting>\n</meetings_data>"}]}}
+    },
+    "get_meetings_event_stream": {
+      "status": 200,
+      "headers": {"Content-Type": "text/event-stream", "Content-Encoding": "gzip"},
+      "events": [{"jsonrpc": "2.0", "id": "<request id>", "result": {"content": [{"type": "text", "text": "Here are the shared notes for these meetings:\n<meetings_data count=\"2\">\n<meeting id=\"00000000-0000-4000-8000-000000000001\" title=\"Meeting one\" date=\"Oct 1, 2026 4:00 PM\">\n  <summary>\n## Decisions\n- Budget < 15% & plan approved\n</summary>\n</meeting>\n<meeting id=\"00000000-0000-4000-8000-000000000002\" title=\"Meeting two\" date=\"Oct 2, 2026\">\n  <summary>\n## Notes\n- Shared placeholder\n</summary>\n</meeting>\n</meetings_data>"}]}}]
+    },
+    "transcript": {
+      "status": 200,
+      "headers": {"Content-Type": "application/json", "Content-Encoding": "gzip"},
+      "json": {"jsonrpc": "2.0", "id": "<request id>", "result": {"content": [{"type": "text", "text": "Here is the transcript:\n<transcript meeting_id=\"00000000-0000-4000-8000-000000000001\">[00:00:15] Person One: Placeholder line</transcript>"}]}}
+    },
+    "transcript_free_plan": {
+      "status": 200,
+      "headers": {"Content-Type": "application/json", "Content-Encoding": "gzip"},
+      "json": {"jsonrpc": "2.0", "id": "<request id>", "result": {"isError": true, "content": [{"type": "text", "text": "Transcripts are only available to paid Granola tiers"}]}}
+    },
+    "rate_limit_http_429": {
+      "status": 429,
+      "headers": {"Content-Type": "application/json", "Content-Encoding": "gzip", "Retry-After": "5"},
+      "json": {"error": "Rate limit exceeded. Please slow down requests."}
+    },
+    "rate_limit_rpc_error": {
+      "status": 200,
+      "headers": {"Content-Type": "application/json", "Content-Encoding": "gzip"},
+      "json": {"jsonrpc": "2.0", "id": "<request id>", "error": {"code": -32000, "message": "Rate limit exceeded. Please slow down requests."}}
+    },
+    "rate_limit_tool_error": {
+      "status": 200,
+      "headers": {"Content-Type": "application/json", "Content-Encoding": "gzip"},
+      "json": {"jsonrpc": "2.0", "id": "<request id>", "result": {"isError": true, "content": [{"type": "text", "text": "Rate limit exceeded. Please slow down requests."}]}}
+    }
+  }
+}

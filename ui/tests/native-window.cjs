@@ -4,6 +4,7 @@ const {webkit} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs');
 
 (async () => {
   const browser = await webkit.launch({headless:true});
@@ -34,7 +35,7 @@ const {html, uiFile} = require('./support/page.cjs');
     if (p === '/api/v2/status') return json({bots:[{bot:'ops',state:'idle',open_tasks:0}]});
     if (p === '/api/v2/needs-you') return json({items:[]});
     if (p === '/api/v2/task-types') return json({types:[]});
-    return json({});
+    return json(unrouted(p));
   });
   await page.goto('https://tico-ui.test/#/tasks', {waitUntil:'domcontentloaded'});
   await page.getByRole('heading',{name:'Tasks',exact:true}).waitFor();
