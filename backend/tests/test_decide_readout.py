@@ -186,3 +186,29 @@ def test_a_bot_reads_it_through_the_tool(api):
     r, msg, attempt = setup_attempt(api)
     err, out = call(api, "hub_decision_readout", {"days": 7}, token=attempt["token"])
     assert not err and out["total"]["calls"] == 21 and out["text"].startswith("Decide readout, ")
+
+
+def test_a_named_sets_label_shows_only_a_version_the_set_defines(api):
+    """The text after a shipped set's `@` is free text: a route call under a made-up suffix is counted under the set
+    and never named; the set's own version and the nightly learnings run's marker still read back."""
+    jev = fake(api)
+    first = jev.__call__
+    api.app.state.judge = lambda s, q, label=None: {**first(s, q, label), "model": "jev-1.14"}
+    for label in ("support-triage@1", "support-triage@PRIVATE_SENTINEL Dana's divorce", "support-triage@01",
+                  "support-triage@4155550142"):
+        post(api, "decisions", {"state": {"subject": "Invoice"}, "questions": QUESTIONS, "label": label})
+    audit(api, "judge.call", "learnings-route@run", {"label": "learnings-route@run", "items": 2, "calls": 2,
+                                                     "models": {"jev-1.14": 2}, "cost_usd": 0.01})
+    out = get(api, "decisions/readout")
+    for private in ("PRIVATE_SENTINEL", "Dana", "divorce", "4155550142"):
+        assert private not in json.dumps(out), private
+        assert private not in out["text"], private
+    sets = {row["set"]: row for row in out["sets"]}
+    support = sets["support-triage"]
+    assert (support["calls"], support["jev"], support["versions"]) == (4, 4, ["1"]), "a number the set never had is text"
+    with api.app.state.store.read() as c:
+        spent = c.execute("SELECT COUNT(*), SUM(json_extract(detail_json, '$.cost_usd')) FROM events "
+                          "WHERE action='judge.spend' AND target LIKE 'support-triage@%'").fetchone()
+    assert spent[0] == 4 and support["cost_usd"] == round(spent[1], 6) > 0, "every call's spend counts under the set"
+    assert sets["learnings-route"]["versions"] == ["run"] and sets["learnings-route"]["calls"] == 2
+    assert "support-triage v1: 4 calls" in out["text"] and "learnings-route vrun: 2 calls" in out["text"]

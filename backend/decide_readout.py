@@ -7,7 +7,9 @@ for). Rows are grouped by question set, the id before the `@` of their label, so
 
 It names nothing a caller wrote. A label is free text, so only the shipped question sets (`questions/*.json`, the
 company's registry copy, and the few sets the code asks inline) are named; every other label is one "(other labels)"
-row with counts and cost. An answer is a band or an option of the set's own questions: a yes/no as under 0.3, 0.3
+row with counts and cost. The text after a named set's `@` is free text too: a version is shown only when the set
+defines it (1 to the set's version, or the nightly learnings run's own marker), and any other suffix is counted under
+the set and never shown. An answer is a band or an option of the set's own questions: a yes/no as under 0.3, 0.3
 to 0.7 or 0.7 and over; a score as its level; a choice as the set's fixed option, and "(an open item)" for an option
 the caller added (a roadmap item, a bot). A question the set does not define (one per bot, as Slack routing and live
 meetings ask) is counted under "(other questions)".
@@ -25,6 +27,7 @@ OTHER_QUESTIONS = "(other questions)"
 OPEN_ITEM = "(an open item)"
 BANDS = ("under 0.3", "0.3 to 0.7", "0.7 and over")
 MAX_DAYS = 31
+RUN = {"learnings-route": "run"}     # backend/learnings.py audits a night's run as one `learnings-route@run` row
 
 
 def _inline_sets():
@@ -36,10 +39,12 @@ def _inline_sets():
 
 
 def known_sets(registry_dir=None):
-    """{set id: {question id: (type, fixed options or None)}} for every set the readout may name."""
-    out = {}
+    """({set id: {question id: (type, fixed options or None)}}, {set id: the versions it may show}) for every set the
+    readout may name. A set's versions come from the set itself, never from a label."""
+    out, versions = {}, {}
     for name, questions in _inline_sets().items():
         out[name] = {qid: ("choice", options) for qid, options in questions.items()}
+        versions[name] = {"1"}
     for entry in J.list_sets():
         if entry.get("error"):
             continue
@@ -50,12 +55,21 @@ def known_sets(registry_dir=None):
         out[data["id"]] = {qid: (q.get("type"), tuple(q["criteria"]) if q.get("type") == "choice"
                                  and isinstance(q.get("criteria"), dict) else None)
                            for qid, q in data["questions"].items() if isinstance(q, dict)}
-    return out
+        versions[data["id"]] = {str(n) for n in range(1, data["version"] + 1)}
+    for name, marker in RUN.items():
+        versions.setdefault(name, set()).add(marker)
+    return out, versions
 
 
 def set_of(label, sets):
     name = str(label or "").split("@", 1)[0]
     return name if name in sets else OTHER_LABELS
+
+
+def version_of(label, name, versions):
+    """The version after the `@` of a named set's label when the set defines it, else None (never the label's text)."""
+    suffix = str(label).split("@", 1)[1] if "@" in str(label) else None
+    return suffix if suffix in versions.get(name, ()) else None
 
 
 def band(p):
@@ -110,7 +124,7 @@ def readout(c, settings, days=7, at=None):
     end = at or datetime.now(timezone.utc)
     start = end - timedelta(days=days)
     stamp = lambda t: t.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"     # noqa: E731: hubdb.now()'s format
-    sets = known_sets(getattr(settings, "registry_dir", None))
+    sets, versions = known_sets(getattr(settings, "registry_dir", None))
     by = {}
     rows = c.execute("SELECT action, target, detail_json FROM events WHERE ts>=? AND ts<? "
                      "AND action IN ('judge.call','judge.spend')", (stamp(start), stamp(end))).fetchall()
@@ -129,8 +143,8 @@ def readout(c, settings, days=7, at=None):
                 row["cost_usd"] += float(cost)
             row["ceiling_priced"] += detail.get("price") == "ceiling"
             continue
-        version = str(label).split("@", 1)[1] if "@" in str(label) else ""
-        if name != OTHER_LABELS and version.isdigit():       # a set's version is a number; anything else is free text
+        version = version_of(label, name, versions)
+        if version:
             row["versions"].add(version)
         jev, other, failed = _calls(detail)
         row["jev"] += jev
