@@ -27,7 +27,8 @@ npx playwright install chromium
 npm run test:ui                                # the core browser scripts (CORE in scripts/ui-tests.cjs)
 ```
 
-Run both locally before you open a pull request: GitHub Actions does not run tests. The default run leaves out
+Run both locally before you open a pull request. GitHub Actions runs them again on the pull request (the PR checks
+workflow), so a failure shows there too. The default run leaves out
 tests marked `@pytest.mark.slow` (real git, Docker, servers, long timers) and the browser scripts outside the core
 list; `python -m pytest -q -m slow` and `node scripts/ui-tests.cjs --all` run them, and the release check does. Run
 them too when you change what they cover. To run less while you work: `python -m pytest -q backend/tests/test_x.py`
