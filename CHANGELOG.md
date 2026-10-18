@@ -8,6 +8,15 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- Each bot has a wake preset under **Settings → Bots → Wakes**. **Token saver** is the default for a new bot. It
+  holds nonblocking news (a finished request, review comments, a failing check nobody waits on) and sends it as one
+  wake at most every 30 minutes, and it runs an enabled routine or stall check at most every 2 hours.
+  **Performance** coalesces that news for 1 minute and runs those sweeps at most every 15 minutes. Bots made before
+  presets show **Current behaviour** and wake exactly as before until someone picks one. In every preset a person's
+  message, an assignment, a question, an awaited result, a blocker and a review or QA request wake the bot at once,
+  and a repeated event wakes it once. A preset turns nothing on and leaves Compact at alone. Each run says what
+  woke it. Owners and admins can compare turns and tokens per accepted ticket, pickup time, blocked time and missed
+  wakes per preset (`GET /api/v2/wake-presets/measures`). An install can tune the values with `TICO_WAKE_PRESETS`.
 - **Add key**, **Replace key** and **Clear key** for a computer's model API key (Codex, Claude Code, Cursor Agent,
   Muse Code), from Settings > Computers, with no terminal. The row shows whose key it is by its preview only. A new key
   goes to the credential vault for that computer alone and is checked on the computer before the old one is deleted;
@@ -23,6 +32,12 @@ All notable changes to Tico are recorded here. The format follows
   or brings Grok forward. **Settings → Computers** shows a **Desktop apps** row per app, Health names a signed-out
   app, missing permission or changed layout, and a reply that needs you in Grok becomes a question in your Needs
   you. Off by default; with it off nothing changes, and no message is handed to the daily sync twice.
+- Every bot run records what woke it (a person's message, a comment, a status or relation change, pull request checks,
+  a stall check, a schedule, or other), its input tokens with the cached part split out, its output tokens, and an
+  outcome worked out in code from what the run wrote: `acted`, `no_change` (its task is still open) or `nothing_to_do`,
+  plus an exact `did_nothing` flag. `hub sql` gains `run_weekly`, one row per week, bot and trigger with runs, tokens
+  and the count and share of each outcome. Runs from before this read `unknown` and are still counted
+  ([What woke each run](docs/hub-sql.md#what-woke-each-run-and-what-it-did)).
 
 ### Changed
 - Screen: the first time a new computer offers its screen, its **Screen** setting in Settings > Computers starts at
@@ -43,6 +58,9 @@ All notable changes to Tico are recorded here. The format follows
 - A bot can read any computer's performance by its name or id with `hub computer performance`, as the docs say. It
   used to look the computer up in the computer list first, which shows a bot only some computers, so most bots got "No
   computer named".
+- A pull request a release merged and then reverted (a change dropped after QA failed) is no longer marked
+  shipped, and its task gets no "Shipped" notice. Tico now checks with GitHub that the pull request's own lines are
+  still in the running release, not only that its merge commit comes before it.
 - Automatic fallback no longer sends a bot to a login that is out of quota. When a login on a computer fails a turn
   on its usage limit, the runner skips it for fallback until the provider's reset time, or for 30 minutes when the
   provider gives none, and takes the next of the company's providers instead. A fallback that hits its own limit
@@ -70,12 +88,6 @@ All notable changes to Tico are recorded here. The format follows
 
 ### Added
 
-- Every bot run records what woke it (a person's message, a comment, a status or relation change, pull request checks,
-  a stall check, a schedule, or other), its input tokens with the cached part split out, its output tokens, and an
-  outcome worked out in code from what the run wrote: `acted`, `no_change` (its task is still open) or `nothing_to_do`,
-  plus an exact `did_nothing` flag. `hub sql` gains `run_weekly`, one row per week, bot and trigger with runs, tokens
-  and the count and share of each outcome. Runs from before this read `unknown` and are still counted
-  ([What woke each run](docs/hub-sql.md#what-woke-each-run-and-what-it-did)).
 - The Overview shows **Bot hours vs human hours**: bot hours per human hour over the last 7 days, and a weekly line for
   up to 12 weeks (Monday to Sunday, Pacific time) with a dashed Parity line at 1× and the current week dotted as "so far".
   Hover or tap a week for its numbers; click the card for the table by week. Bot hours are the time bot runs spent

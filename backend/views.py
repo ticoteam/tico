@@ -17,7 +17,7 @@ from . import models as M
 from . import changelog as CL
 from . import app_delivery, providers, runner_versions
 from .harnesses import resolve_harness
-from . import personal_tokens, rooms, team_rules, turns
+from . import personal_tokens, rooms, team_rules, turns, wake_presets
 from .execution import AWAKE_GAP, AWAKE_SETTLE, Execution, turn_limit, turn_share, turns_here
 from pathlib import Path
 
@@ -1412,6 +1412,8 @@ def install_views(app, store, auth, mutate, task_view):
                          **location,
                          "users": [P.brief(p) for p in P.primary_users(slug, people, configs)],
                          "icon": icon_of(config), "helper": helper(config),
+                         # What Settings and the branch editor show and pick from (backend/wake_presets.py).
+                         "wake": wake_presets.effective(config),
                          "my_access": level, **policy,
                          "can_chat": level["write"] and slug != auth.settings.assistant_bot,
                          # Labelled as on the bot list, so its computer is named to one who cannot see it.

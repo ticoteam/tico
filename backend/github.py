@@ -16,8 +16,11 @@ step. A person moves the task. The repository's webhook posts here signed with
 The last hop is a fact of the deploy, not of GitHub: the release manifest names the commit the
 running code was built from (`release.py` writes it from CI), and `ship_deployed` marks a merged
 link `shipped` once its merge commit is at or before that commit on main. Only the repository this
-release came from ships that way; a merged link in another repository stays `merged`.
+release came from ships that way; a merged link in another repository stays `merged`. A release that
+contains the merge and then its revert (a change dropped after QA failed) does not ship it: GitHub is
+asked whether the pull request's own lines are still there at the release commit (`change_kept`).
 """
+import base64
 import hashlib
 import hmac
 import json
@@ -55,15 +58,32 @@ def _links_for(c, url):
                             ((match.group(1) + "/" + match.group(2)).lower(), int(match.group(3)))))
 
 
-def queue_wake(c, task, item):
-    """Keep one bounded, durable burst per task; the scheduler sends it within three minutes."""
+def queue_wake(c, task, item, batch=None):
+    """Keep one bounded, durable burst per task; the scheduler sends it within three minutes.
+
+    `batch` is the kind of nonblocking notice the item is (wake_presets.BATCH_KINDS: review comments, a failing check
+    nobody waits on), which the owner's wake preset may hold. A burst stays batchable only while every item in it is;
+    one item that is not (a conflict, a result an armed link waits on) makes the whole burst wake at once."""
     from .repositories import metadata, save_metadata
     key = "github-task-wake:" + task["id"]
     burst = metadata(c, key)
     items = burst.get("items", [])
     if item not in items:
         items = (items + [item[:1000]])[-50:]
-    save_metadata(c, key, {"due": burst.get("due") or H.shift(H.now(), seconds=170), "items": items})
+    kind = batch if not burst or burst.get("batch") == batch else None
+    # Under a wake preset the preset is the one timer: the burst goes out on the next flush, and the hold coalesces it
+    # from then (backend/wake_presets.py). Current behaviour keeps the three-minute burst.
+    due = H.now() if _preset_owner(c, task) else burst.get("due") or H.shift(H.now(), seconds=170)
+    save_metadata(c, key, {"due": due, "items": items, **({"batch": kind} if kind else {})})
+
+
+def _preset_owner(c, task):
+    from . import wake_presets
+    owner = str(task.get("owner") or "")
+    if not owner.startswith("bot:"):
+        return False
+    row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (owner[4:],)).fetchone()
+    return wake_presets.preset_of(H._json(row[0], {}) if row else {}) != wake_presets.CURRENT
 
 
 def fire_once(detail, item):
@@ -86,7 +106,8 @@ def flush_wakes(c):
                 continue
             task = H.task(c, row["key"].split(":", 1)[1])
             if task and task["status"] in (*H.ACTIVE_STATUSES, "blocked"):
-                H._wake(c, task, task["owner"], "\n".join(burst.get("items", [])), trigger="pr_checks")
+                H._wake(c, task, task["owner"], "\n".join(burst.get("items", [])),
+                        {"wake_batch": burst["batch"]} if burst.get("batch") else None, trigger="pr_checks")
             c.execute("DELETE FROM registry_metadata WHERE key=?", (row["key"],))
             if task and task["status"] in (*H.ACTIVE_STATUSES, "blocked"):
                 sent.append(task["id"])
@@ -200,7 +221,8 @@ def pull_request(c, payload, review_role="", release_repo=""):
             queue_wake(c, task, detail["wake_once_fired"]["item"])
         if (state == "closed" and link["state"] != state
                 or conflict_wake):
-            queue_wake(c, task, item)
+            # Closed without merging is news; a conflict is a blocker on the bot's own work.
+            queue_wake(c, task, item, "completion" if not conflict_wake and not wake_once else None)
         _review_role(c, task, payload, review_role)
         H.event(c, H.KEEPER, "github.pull_request", task["id"], {"action": action, "url": url})
     return {"pr": url, "action": action, "tasks": len(links)}
@@ -254,7 +276,7 @@ def pr_signal(c, event, payload):
         detail = H._json(link.get("detail_json"), {}) or {}
         fields = {}
         label = link["title"]
-        wake = False
+        wake, batch = False, None
         if event in ("check_run", "check_suite", "status"):
             if signal.get("head_sha") and detail.get("head_sha") and signal["head_sha"] != detail["head_sha"]:
                 continue
@@ -265,6 +287,7 @@ def pr_signal(c, event, payload):
             name = (_suite_key(signal, signal) if event == "check_suite"
                     else str(signal.get("name") or signal.get("context") or "Checks")[:200])
             wake = state == "failing" and checks.get(name) != "failing"
+            batch = "ci"
             left_pending = checks.get(name) == "pending" and state != "pending"
             checks[name] = state
             own = (signal.get("check_suite") or {}) if event == "check_run" else {}
@@ -291,7 +314,7 @@ def pr_signal(c, event, payload):
                 done = (f"Checks finished on {label}: {'failed (' + ', '.join(failed) + ')' if failed else 'passed'} "
                         f"{link['url']}/checks" + (f" at {sha}" if sha else ""))
                 if fire_once(detail, done):
-                    wake, item = True, done
+                    wake, item, batch = True, done, None
         elif event == "pull_request_review":
             state = str((payload.get("review") or {}).get("state") or "").lower()
             if payload.get("action") == "dismissed":
@@ -310,11 +333,12 @@ def pr_signal(c, event, payload):
             wake = fresh and payload.get("action") != "dismissed" and (
                 state == "changes_requested" or state == "commented" and not _own_comment(c, task, payload, "review", detail))
             item = f"Review {state.replace('_', ' ')} on {label}"
+            batch = "review"
             if fresh and payload.get("action") == "submitted" and state in ("approved", "changes_requested"):
                 who = str((review.get("user") or {}).get("login") or "")
                 done = item + (f" by {who}" if who else "") + " " + str(review.get("html_url") or link["url"])
                 if fire_once(detail, done):
-                    wake, item = True, done
+                    wake, item, batch = True, done, None
         else:
             action = payload.get("action")
             if action not in ("created", "deleted"):
@@ -331,6 +355,7 @@ def pr_signal(c, event, payload):
             fields["pending_comments"] = max(0, (link.get("pending_comments") or 0) + (1 if action == "created" else -1))
             wake = action == "created" and not _own_comment(c, task, payload, "comment", detail)
             item = f"{fields['pending_comments']} review comments on {label}"
+            batch = "review"
         changed = any(value != link.get(field) for field, value in fields.items())
         fields.update(detail_json=json.dumps(detail), updated=H.now())
         if changed:
@@ -338,7 +363,7 @@ def pr_signal(c, event, payload):
         c.execute("UPDATE task_links SET " + ",".join(k + "=?" for k in fields) + " WHERE id=?",
                   (*fields.values(), link["id"]))
         if wake:
-            queue_wake(c, task, item)
+            queue_wake(c, task, item, batch)
     return {"tasks": len({l["task_id"] for l in links})}
 
 
@@ -491,7 +516,7 @@ def refresh_deployed_tasks(service):
             for key in due:
                 if service.repository_stop.is_set():
                     return
-                verified = False
+                verified = reverted = False
                 try:
                     if token is None:
                         token, _ = service.mint([repo], {"contents": "read"}, diagnose=False)
@@ -502,12 +527,19 @@ def refresh_deployed_tasks(service):
                         verified = (data.get("status") in ("ahead", "identical")
                                     and (data.get("base_commit") or {}).get("sha") == key[1]
                                     and (data.get("merge_base_commit") or {}).get("sha") == key[1])
+                    if verified and change_kept(lambda path, **params: _read(service, token, path, params),
+                                                repo, key[1], commit) is False:
+                        # Both commits are fixed, so the answer is too: never asked again for this release.
+                        verified, reverted = False, True
+                        logging.getLogger("tico.github").info("Release %s reverts %s in %s: not shipped",
+                                                              commit[:12], key[1][:12], repo)
                 except Exception:
+                    verified = False
                     logging.getLogger("tico.github").warning("Release ancestry unavailable for %s at %s", repo, key[1])
                 with service.lock:
                     if key not in cache and len(cache) >= 512:
                         cache.pop(next(iter(cache)))
-                    cache[key] = {"verified": verified, "next": time.monotonic() + 300}
+                    cache[key] = {"verified": verified, "next": float("inf") if reverted else time.monotonic() + 300}
             if service.repository_stop.is_set():
                 return
             with service.lock:
@@ -524,12 +556,117 @@ def refresh_deployed_tasks(service):
     threading.Thread(target=refresh, name="tico-deploy-refresh", daemon=True).start()
 
 
+# What a release kept of a pull request is read hunk by hunk: release notes move between sections at every cut and
+# tests are cut routinely, so the product files decide when the pull request has any.
+NOTES_FILES = {"CHANGELOG.md"}
+TEST_PATH = re.compile(r"(^|/)(tests?|testdata|fixtures)/|(^|/)test_[^/]*$|_test\.[a-z]+$|\.test\.[a-z]+$")
+
+
+def _hunks(patch):
+    """Each hunk of a unified diff as (lines before, lines after), context included and whitespace kept exactly."""
+    hunks, before, after = [], None, None
+    for line in (patch or "").removesuffix("\n").split("\n"):
+        if line.startswith("@@"):
+            if before is not None:
+                hunks.append((before, after))
+            before, after = [], []
+        elif before is None or line.startswith("\\"):
+            continue
+        elif line[:1] == "+":
+            after.append(line[1:])
+        elif line[:1] == "-":
+            before.append(line[1:])
+        else:
+            before.append(line[1:])
+            after.append(line[1:])
+    if before is not None:
+        hunks.append((before, after))
+    return [(b, a) for b, a in hunks if b != a]
+
+
+def _contains(lines, block):
+    """`block` appears in `lines` as a run of consecutive lines."""
+    n = len(block)
+    return any(lines[i:i + n] == block for i in range(len(lines) - n + 1) if lines[i] == block[0])
+
+
+def _read(service, token, path, params):
+    """One GitHub read for `change_kept`: the JSON, None when it is not there, an exception otherwise."""
+    response = service._call("GET", path, params=params or None, headers={"Authorization": "Bearer " + token})
+    if response.status_code == 404:
+        return None
+    if response.status_code != 200:
+        raise RuntimeError(f"GitHub answered {response.status_code} for {path}")
+    return response.json()
+
+
+def change_kept(get, repo, merge, release):
+    """Whether `release`, which contains `merge`, still has what that merge changed.
+
+    False only for a revert: in every hunk of every file it measures, the text after the change (with its context)
+    is gone from the release and the text before it is back where it was, under the old name of a renamed file. True
+    as soon as one hunk is still there, or is neither (changed again since); None when a file has no diff to read
+    (binary, too large), which leaves ancestry to decide as before."""
+    base = f"/repos/{quote(repo, safe='/')}"
+    commit = get(f"{base}/commits/{merge}")
+    if not commit:
+        return None
+    parents = commit.get("parents") or []
+    files = commit.get("files") or []
+    if len(parents) > 1:   # a merge commit: the pull request is what it changed on top of main
+        files = (get(f"{base}/compare/{parents[0]['sha']}...{merge}") or {}).get("files") or []
+    files = [f for f in files if f.get("filename") not in NOTES_FILES]
+    product = [f for f in files if not TEST_PATH.search(f["filename"])]
+    if not (product or files):
+        return None
+    cache = {}
+
+    def at_release(path):
+        """The file's lines in the release ([] when it isn't there) and its blob sha."""
+        if path not in cache:
+            there = get(f"{base}/contents/{quote(path)}", ref=release)
+            sha = there.get("sha") if isinstance(there, dict) else None
+            text = ""
+            if sha:
+                blob = get(f"{base}/git/blobs/{sha}") or {}
+                text = base64.b64decode(blob.get("content") or "").decode("utf-8", "replace")
+            cache[path] = (text.removesuffix("\n").split("\n") if text else [], sha)
+        return cache[path]
+
+    unknown = False
+    for f in product or files:
+        hunks = _hunks(f.get("patch"))
+        if not hunks:
+            unknown = True
+            continue
+        new, sha = at_release(f["filename"])
+        if sha and f.get("status") != "removed" and sha == f.get("sha"):
+            return True    # the file is as the merge left it
+        old = at_release(f.get("previous_filename") or f["filename"])[0]
+        for before, after in hunks:
+            if after and _contains(new, after):
+                return True    # this part of the change is still there
+            if before and not _contains(old, before):
+                return True    # changed again since: not a revert
+    return None if unknown else False
+
+
+def checked_on_github(c, settings, repo):
+    """`refresh_deployed_tasks` can ask GitHub about this release, so it decides what ships, reverts included."""
+    app = c.execute("SELECT org FROM github_app WHERE id='app'").fetchone()
+    return bool(not settings.rehearsal and app and repo.split("/")[0].lower() == str(app["org"]).lower()
+                and c.execute("SELECT 1 FROM repositories WHERE lower(full_name)=? AND reachable=1",
+                              (repo.lower(),)).fetchone())
+
+
 def ship_deployed(c, settings, *, ancestry=None):
     """Every merged pull request link in the running release is `shipped`; the task itself does not move."""
     commit, repo = settings.release_commit, settings.release_repo
     if not commit or not repo:
         return []
-    here = c.execute("SELECT seq FROM main_pushes WHERE sha=?", (commit,)).fetchone()
+    # Push order alone can't see a revert; it ships only where GitHub can't be asked.
+    here = (ancestry is None and not checked_on_github(c, settings, repo)
+            and c.execute("SELECT seq FROM main_pushes WHERE sha=?", (commit,)).fetchone())
     shipped = []
     candidates = H._rows(c.execute(DEPLOY_QUERY,
         ("https://github.com/" + repo.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "/pull/%",)))

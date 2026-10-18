@@ -1194,6 +1194,10 @@ class Store:
                 c.execute("DROP INDEX IF EXISTS one_active_attempt_per_bot")
                 c.execute("CREATE UNIQUE INDEX IF NOT EXISTS one_active_attempt_per_lane ON attempts(bot,lane) "
                           "WHERE state IN ('leased','running')")
+                # A bot's wake preset holds its nonblocking notices and sweeps at enqueue time (backend/wake_presets.py).
+                # Unversioned like redirect: an older release never reads the columns and claims every queued job.
+                from .wake_presets import ensure as ensure_wake_presets
+                ensure_wake_presets(c)
                 # The change log live events are read from (backend/events.py); idempotent.
                 from .events import ensure as ensure_changes
                 ensure_changes(c)

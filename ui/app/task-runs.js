@@ -50,10 +50,13 @@ function runAttemptHTML(a, open) {
     a.next.at ? ago(a.next.at) : ''].filter(Boolean).join(', '))}${a.next.note ? `<span class="truns-note">${esc(a.next.note)}</span>` : ''}</p>` : '';
   const lease = (a.lease || []).map(l => `<li class="muted">${esc(l.kind === 'grace' ? 'Lease lapsed; the runner was given time to report back'
     : 'Lease restored by the runner')} · ${esc(ago(l.at))}</li>`).join('');
+  // What woke the turn, under which wake preset, and until when a preset held it (backend/wake_presets.py record).
+  const woke = a.wake ? `<p class="muted truns-wake">Woke for: ${esc(a.wake.reason)} · ${esc(a.wake.preset_label)}${a.wake.held_until
+    ? ` · held until ${esc(fmt(a.wake.held_until))}` : ''}</p>` : '';
   const shells = (a.background || []).length ? `<div class="truns-sub"><div class="lbl">Background</div><ul class="truns-list">${a.background.map(runShellHTML).join('')}</ul></div>` : '';
   return `<details class="truns-try${a.state === 'running' || a.state === 'leased' ? ' live' : ''}"${open ? ' open' : ''} data-run="${esc(a.run)}">
     <summary><span>${esc(head)}</span><span class="muted tnum" title="${esc(fmt(a.started || a.created))}">${esc(ago(a.started || a.created))}</span></summary>
-    ${a.reason ? `<p class="truns-reason">${esc(a.reason)}</p>` : ''}${runReportHTML(a)}${lease ? `<ul class="truns-list truns-lease">${lease}</ul>` : ''}${nxt}
+    ${woke}${a.reason ? `<p class="truns-reason">${esc(a.reason)}</p>` : ''}${runReportHTML(a)}${lease ? `<ul class="truns-list truns-lease">${lease}</ul>` : ''}${nxt}
     ${runAgentsHTML(a.subagents || [], model)}${shells}
     ${(a.subagents || []).length || shells || nxt || a.reason ? '' : '<p class="muted truns-empty">No subagents or background work.</p>'}</details>`;
 }

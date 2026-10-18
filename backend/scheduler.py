@@ -47,6 +47,8 @@ class Scheduler:
             self.execution.auto_reconcile(c)
             self.execution.release_deploy_drains(c)
             self.execution.release_limits(c)           # a usage limit lifts at its reset, not at the next claim
+            from . import wake_presets
+            wake_presets.tick(c, H.now())                 # wake presets let go of the notices and sweeps now due
             self.execution.hold_unrunnable(c)
             placement.sweep(c, self.execution)            # an active bot with no computer gets one when one can take it
             H.lift_cooled_quarantines(c)
@@ -99,13 +101,14 @@ class Scheduler:
                                           f"Scheduled occurrence {when[:16].replace('T', ' ')}Z of {row['title']} "
                                           "absorbed into this open task; continue it or mark it done.",
                                           kind="notice", conversation_id=H.task(c, tid)["conversation_id"],
-                                          refs=run_triggers.stamp({"task": tid, "wake": "occurrence"}, "schedule",
-                                                                  row["id"]))
+                                          refs=run_triggers.stamp({"task": tid, "wake": "occurrence", "sweep": row["id"]},
+                                                                  "schedule", row["id"]))
                             elif skip := routines.no_input(c, self.store.settings, row, occurrence):
                                 tid, outcome = None, "skipped"
                             else:
                                 task = routines.open_task(c, self.execution.auth, row, row["title"],
-                                                          row["playbook"] or routines.DEFAULT_TEXT, stamp(at))
+                                                          row["playbook"] or routines.DEFAULT_TEXT, stamp(at),
+                                                          sweep=True)
                                 tid, outcome = task["id"], "created"
                                 created = tid
                             c.execute("INSERT INTO schedule_occurrences VALUES(?,?,?,?)", (row["id"], when, tid, outcome))
