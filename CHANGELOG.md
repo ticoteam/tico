@@ -49,6 +49,11 @@ All notable changes to Tico are recorded here. The format follows
 
 ### Fixed
 
+- Health no longer says a bot that ran out of quota has no fallback when the company fallback (*Fall back when a plan
+  runs out*, **Settings > AI providers**) covers it. And Health now says when a computer's default login for an AI tool
+  (the one bots without a subscription use) is out of quota, e.g. "Team box's default Codex login is out of quota":
+  turns there keep stopping on a usage limit with no reset time, so bots that fall back to it fail. It clears once a
+  turn on that login completes or the reset time passes.
 - `hub computer performance` and the `hub_computer_performance` tool work again: they read the computers reply as a list,
   so every call failed before it reached the computer's CPU, memory and disk history.
 - The Overview campus opened before the bots' status arrived now shows each desk's state as soon as it does, instead

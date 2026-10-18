@@ -15,7 +15,8 @@ Once an hour, while it is on, the server checks the install in plain code (`back
 |---|---|---|
 | `runner_outdated` | setup | An online computer is on an older release, cannot work with this one, or failed to update; or it holds queued work until its running turns finish so it can update (the finding names that work) |
 | `computer_silent` | setup | A computer has not checked in for 10 minutes or more while work is queued for its bots |
-| `limited_no_fallback` | setup | A bot's turns stopped on a subscription or spend limit in the last day and it has no fallback model |
+| `limited_no_fallback` | setup | A bot's turns stopped on a subscription or spend limit in the last day and it has no fallback model: none of its own, and not the company's either (*Fall back when a plan runs out* is off in **Settings > AI providers**, no company provider is on another runtime than the bot's, or the bot turned fallback off) |
+| `default_login_limited` | setup | A computer's default login for an AI tool (the one a turn uses with no subscription) is out of quota: in the last day at least two turns on it stopped on a usage limit and none has completed since, and the provider gave no reset time or one still ahead. One finding per computer and tool; it goes away once a turn on that login completes or the reset time passes. Fallback hops and check-model turns count; a turn on a subscription does not |
 | `stuck_setup` | setup | A bot has been in setup over an hour while work waits for it |
 | `worktree_error` | setup | A task worktree failed on its computer |
 | `push_stuck` | setup | A runner reports a checkout with commits it cannot push (diverged) |
