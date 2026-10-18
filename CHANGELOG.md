@@ -55,6 +55,10 @@ All notable changes to Tico are recorded here. The format follows
   **Control** instead of **View**, so its operator or an admin can drive it at once. Who may open a screen is
   unchanged (the computer's operator and admins), a Screen setting someone already chose stays (View and Off
   included), and a computer that already offered its screen keeps its setting.
+- Screen: on a bot's page, when its computer's screen is off in Tico, the operator's or an admin's **Turn on** button
+  now reads **Turn on (Control)** and turns the screen on at Control, matching a new computer's default, so they can
+  drive it at once. View and Off stay choices in Settings > Computers; who sees the button and who may change the
+  setting are unchanged.
 
 ### Fixed
 

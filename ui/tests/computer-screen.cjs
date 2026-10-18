@@ -61,6 +61,8 @@ const {fakeVnc, exposeRoutedSockets} = require('./support/fake-vnc.cjs');
     const more = label => page.locator(`#set-machines [aria-label="More for ${label}"]`);
     assert.equal(await page.locator('[data-computer-screen=c2]').count(), 0);
     await more('Build server').click();
+    // All three stay choices here; the bot page's Turn on picks Control only.
+    assert.deepEqual(await page.locator('[data-computer-screen=c1] input').evaluateAll(els => els.map(el => el.value)), ['off', 'view', 'control']);
     await page.locator('[data-computer-screen=c1] label:has(input[value=control])').click();
     await page.waitForFunction(() => SETTINGS_DATA.machines[0].screen === 'control');
     assert.deepEqual(writes, [{mode: 'control'}]);
