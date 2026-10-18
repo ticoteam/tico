@@ -8,6 +8,11 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Start fresh when the topic changes** (Settings > Team; off by default, an owner or an admin turns it on): in a
+  long or idle direct chat with a bot, Tico asks Decide whether your new message starts a new topic before it is sent.
+  If it does, the bot's session is cleared the same way Clear does, and the chat shows a quiet **Topic changed** line
+  above your message. A chat with an active goal, a running turn or fewer than 3 turns is never checked, and a slow or
+  failed check (over 1.5 s) sends the message in the same session with no line.
 - **Stale ticket review** (Settings > Team; off by default, an owner or an admin turns it on): once an hour Tico
   looks for open tasks that seem finished or forgotten, such as a merged pull request, a done parent or a quiet week,
   and suggests what to do. Private tasks are never looked at. A bot gets one "Stale check" comment; a person gets one

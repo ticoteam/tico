@@ -25,7 +25,7 @@ from . import go_live as pending_go_lives
 from . import repo_waits
 from . import built_on
 from . import agents, app_delivery, batch, external_sync, inbox_isolation, mcp_oauth, harness_actions, model_login, oidc, personal_tokens, views
-from . import check_models, run_triggers, team_rules, update_feeds, usage_limits, wake_presets
+from . import check_models, run_triggers, team_rules, update_feeds, topic_change, usage_limits, wake_presets
 from . import task_privacy as privacy
 from . import task_relations as TR
 from . import task_roles as TRo
@@ -1411,7 +1411,7 @@ def create_app(settings=None):
     @app.put("/api/v2/access/rules")
     def access_rules(request: Request, body: M.AccessRules):
         """Turn the team's fast defaults off, or back on (backend/team_rules.py). The owner; an admin may change only
-        the rules in `team_rules.ADMIN_RULES` (Stale ticket review)."""
+        the rules in `team_rules.ADMIN_RULES` (Stale ticket review, Start fresh when the topic changes)."""
         who = request.state.identity
         sent = {name for name, value in body.model_dump().items() if value is not None}
         if sent and sent <= set(team_rules.ADMIN_RULES):
@@ -2062,12 +2062,34 @@ def create_app(settings=None):
 
     @app.post("/api/v2/chat/{bot}")
     def chat(request: Request, bot: str, body: M.ChatCreate):
+        who = request.state.identity
+        # A person's message in their direct chat: a new topic clears the session first (backend/topic_change.py).
+        topic = topic_check(request, who, bot, body)
+
         def work(c):
-            who = request.state.identity
+            cleared = topic_change.apply(c, settings, who, bot, topic)
             message = send(c, who, M.MessageCreate(to="bot:" + bot, text=body.text, refs=body.refs, command=body.command))
+            if cleared:
+                message = topic_change.record(c, who, message, topic)
             onboarding.start_setup(c, who, bot)
             return {"conversation": H.conversation(c, message["conversation_id"]), "message": message}
         return mutate(request, body, work)
+
+    def topic_check(request, who, bot, body):
+        """The topic check's outcome for a person's chat message, or None: not a person, a command, a retried request
+        (its first try already decided), or a bot whose chat is another's (a shared or the Assistant's)."""
+        if who.role not in ("owner", "human") or who.via or body.command or (body.refs or {}).get("task"):
+            return None
+        key = request.headers.get("idempotency-key")
+        with store.read() as c:
+            from .shared_bots import route
+            if not key or c.execute("SELECT 1 FROM idempotency WHERE actor=? AND operation=? AND key=?",
+                                    (who.actor, request.url.path, key)).fetchone():
+                return None
+            target = H.actor_id(route(c, who.actor, "bot:" + bot))
+            if target != bot or bot == settings.assistant_bot or not views.may_chat(c, auth, who, bot):
+                return None
+        return topic_change.check(store, app.state.judge, who, bot, body.text)
 
     # ------------------------------------------------------------------ updates (backend/updates.py)
     def update_visible(c, who, mine=False, scope=None):
