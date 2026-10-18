@@ -250,9 +250,11 @@ STABLE = [
     ("/api/v2/needs-you/clarify", "post", "Needs you", "clarifyAsk",
      "Ask the bot behind a stale question whether it still matters, in clearer words", None),
     ("/api/v2/stale-review/accept-all", "post", "Needs you", "acceptAllStaleSuggestions",
-     "Accept every suggestion on your Stale tickets card that has an action, each as your own change", None),
+     "Accept the suggestions your Stale tickets card showed (their ids and task versions), each as your own change; "
+     "a row whose task changed since is refused on its own and a row added since is left", None),
     ("/api/v2/stale-review/{suggestion_id}", "post", "Needs you", "decideStaleSuggestion",
-     "Accept or skip one suggestion on your Stale tickets card", None),
+     "Accept or skip one suggestion on your Stale tickets card; accept sends the task version it showed "
+     "(409 version_conflict otherwise)", None),
     ("/api/v2/approvals/{aid}", "get", "Needs you", "getApproval", "One approval request", None),
     ("/api/v2/approvals/{aid}", "post", "Needs you", "decideApproval", "Approve or reject", None),
     ("/api/v2/approvals/{aid}/undo", "post", "Needs you", "undoApproval",

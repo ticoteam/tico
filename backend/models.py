@@ -113,8 +113,21 @@ class TakeRecommendation(Contract):
 
 
 class StaleDecision(Contract):
-    """A person's answer to one row of their Stale tickets card (backend/stale_review.py): accept or skip."""
+    """A person's answer to one row of their Stale tickets card (backend/stale_review.py): accept or skip. Accept names
+    the task version the row showed (409 version_conflict once the task changed), as a change by hand does."""
     decision: Literal["accept", "skip"] = "accept"
+    version: int | None = None
+
+
+class StaleShown(Contract):
+    id: ID
+    version: int
+
+
+class StaleAcceptAll(Contract):
+    """Accept all on a Stale tickets card: the rows the card showed, each with its task's version then. A row added
+    since is not in the list and stays; a row whose task changed is refused on its own."""
+    rows: list[StaleShown] = Field(min_length=1, max_length=500)
 
 
 class ClarifyAsk(Contract):

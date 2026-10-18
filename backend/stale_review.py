@@ -283,6 +283,28 @@ def _apply(c, row, why, verdict, confidence, at):
 
 
 # ----------------------------------------------------------------------------- the pass
+def eligible(c, row, at):
+    """The task as it is now if it is still the candidate the pass found: unchanged since, open, not snoozed, nobody
+    working it, and an owner who can hear a suggestion. Starting a turn does not change the task's mark, so a call
+    in flight is checked again before its answer is used."""
+    now = H.task(c, row["id"])
+    if (not now or mark(now) != mark(row) or now["status"] not in STATUSES or H.TS.snoozed(now, at)
+            or _live(c, now["id"]) or not _owner_reachable(c, now["owner"])):
+        return None
+    return now
+
+
+def _stop(c, settings, at, label):
+    """Why the pass makes no more calls now, or None: the switch went off, or this hour's or today's calls are used."""
+    if not enabled(c):
+        return "switched_off"
+    if calls_this_hour(c, at, label) >= CALLS_PER_HOUR:
+        return "hourly_cap"
+    if used_today(c, H.KEEPER, at) >= daily_cap(settings, "bot"):
+        return "daily_cap"
+    return None
+
+
 def _claim(store, at):
     """In one transaction: the switch, the hour and the watermark. The new candidates, or None when no pass is due."""
     with store.transaction() as c:
@@ -308,12 +330,9 @@ def run_pass(store, at=None, engine=None, clock=time.monotonic):
         LOG.warning("Stale ticket review has no question set: %s", exc.detail)
         qset = None
     label = qset["label"] if qset else QUESTION_SET
-    with store.read() as c:
-        budget = max(0, CALLS_PER_HOUR - calls_this_hour(c, at, label))
-        if engine is None and qset:
+    if engine is None and qset:
+        with store.read() as c:
             engine = server_engine(store, c, primary_engine(settings))
-        if used_today(c, H.KEEPER) >= daily_cap(settings, "bot"):
-            engine = None
     summary = {"candidates": len(found), "new": len(found), "calls": 0, "suggested": 0, "left": 0,
                "deferred": 0, "errors": 0, "changed": 0, "routes": {}, "cost_usd": 0.0}
     if engine is None or qset is None:
@@ -322,12 +341,20 @@ def run_pass(store, at=None, engine=None, clock=time.monotonic):
         questions = {"verdict": qset["questions"]["verdict"]}
         threshold = qset["thresholds"].get("suggest", 1.01)
         for n, (row, why) in enumerate(found):
-            if n >= budget or clock() - started > PASS_SECONDS - CHAIN_SECONDS:
-                summary["deferred"] += len(found) - n
-                summary.setdefault("why", "hourly_cap" if n >= budget else "time")
-                break
+            # Each call is admitted on its own: the switch, this hour's and today's allowance read from the audit log
+            # as they are now, and the task still the candidate that was found.
             with store.read() as c:
-                state = state_of(c, row, why)
+                stop = _stop(c, settings, at, label) or (
+                    "time" if clock() - started > PASS_SECONDS - CHAIN_SECONDS else None)
+                now = None if stop else eligible(c, row, at)
+                state = state_of(c, now, why) if now else None
+            if stop:
+                summary["deferred"] += len(found) - n
+                summary["why"] = stop
+                break
+            if now is None:
+                summary["changed"] += 1         # it moved or is being worked: the next pass sees it fresh
+                continue
             summary["calls"] += 1
             result, error = None, None
             try:
@@ -353,18 +380,24 @@ def run_pass(store, at=None, engine=None, clock=time.monotonic):
                 if verdict not in SUGGEST or confidence < threshold:
                     verdict = LEAVE
                 detail["verdict"] = {"value": verdict, "confidence": round(confidence, 3)}
+            off = False
             with store.transaction() as c:
-                H.event(c, H.KEEPER, "judge.call", label, detail)
+                H.event(c, H.KEEPER, "judge.call", label, detail)     # the call happened, whatever comes of it
                 if error:
                     continue
-                now = H.task(c, row["id"])
-                if not now or mark(now) != mark(row) or now["status"] not in STATUSES:
-                    summary["changed"] += 1     # it moved while Decide was asked: the next pass sees it fresh
-                    continue
-                if _apply(c, now, why, verdict, confidence, at):
-                    summary["suggested"] += 1
-                else:
-                    summary["left"] += 1
+                off = not enabled(c)
+                now = None if off else eligible(c, row, at)
+                if now is not None:
+                    if _apply(c, now, why, verdict, confidence, at):
+                        summary["suggested"] += 1
+                    else:
+                        summary["left"] += 1
+            if off:                             # turned off while Decide was asked: nothing more is said or asked
+                summary["deferred"] += len(found) - n
+                summary["why"] = "switched_off"
+                break
+            if now is None:
+                summary["changed"] += 1
     with store.transaction() as c:
         H.event(c, H.KEEPER, "stale_review.pass", label, summary)
     return summary
@@ -436,13 +469,16 @@ def _outcome(c, sid, outcome, actor):
               (outcome, H.now(), actor, sid))
 
 
-def _accept_one(c, auth, who, row):
-    """The person's own change for one row, with the checks a change by hand has: the owner marks done, the requester
-    or an authorized person closes; anything else is refused as it is today."""
+def _accept_one(c, auth, who, row, version):
+    """The person's own change for one row, with the checks a change by hand has: the task is still at the version the
+    row showed, the owner marks done, the requester or an authorized person closes; anything else is refused as it is
+    today."""
     task = auth.task(c, who, row["task_id"])
     if task["status"] not in STATUSES:
         _outcome(c, row["id"], "changed:" + task["status"], who.actor)
         return "already " + task["status"]
+    if task["version"] != version:
+        raise Problem("version_conflict", "Task changed since the card showed it; open it to see what changed", 409)
     note = f"Stale check: {row['reason']}."
     if row["action"] == "done":
         H.task_update(c, who.actor, row["task_id"], status="done", note=note)
@@ -463,25 +499,33 @@ def _mine(c, who, sid):
     return dict(row)
 
 
-def decide(c, auth, who, sid, decision):
-    """Accept or skip one row of the person's card."""
+def decide(c, auth, who, sid, decision, version=None):
+    """Accept or skip one row of the person's card. Accept needs the task version the row showed."""
     row = _mine(c, who, sid)
     if decision == "skip":
         _outcome(c, sid, "skipped", who.actor)
         return {"id": sid, "outcome": "skipped"}
-    return {"id": sid, "outcome": "accepted", "did": _accept_one(c, auth, who, row)}
+    if version is None:
+        raise Problem("invalid", "Accept needs the task version the card showed", 422)
+    return {"id": sid, "outcome": "accepted", "did": _accept_one(c, auth, who, row, version)}
 
 
-def accept_all(c, auth, who):
-    """Every row with something to accept, in one go, each with its own checks: a row the person may not change by
-    hand is refused and stays on the card, and the others still go through."""
+def accept_all(c, auth, who, shown):
+    """The rows the card showed (`shown`: {suggestion id: task version then}) that have something to accept, in one
+    go, each with its own checks: a row whose task changed since, or that the person may not change by hand, is
+    refused and stays on the card, and the others still go through. A row added since the card was drawn is left."""
     done, refused = [], []
-    for row, _ in pending(c, who.actor):
+    waiting = {row["id"]: row for row, _ in pending(c, who.actor)}
+    for sid, version in shown.items():
+        row = waiting.get(sid)
+        if row is None:
+            refused.append({"id": sid, "task": None, "reason": "No longer waiting for you"})
+            continue
         if not row["action"]:
             continue
         c.execute("SAVEPOINT stale_accept")
         try:
-            did = _accept_one(c, auth, who, row)
+            did = _accept_one(c, auth, who, row, version)
         except (H.Refused, Problem) as exc:
             c.execute("ROLLBACK TO stale_accept")
             refused.append({"id": row["id"], "task": row["task_id"],
@@ -493,14 +537,16 @@ def accept_all(c, auth, who):
 
 
 def install(app, store, auth, mutate):
-    from .models import StaleDecision
+    from .models import StaleAcceptAll, StaleDecision
 
     @app.post("/api/v2/stale-review/accept-all")
-    def stale_accept_all(request: Request, body: StaleDecision):
-        """Accept every suggestion on the caller's Stale tickets card that has an action, each as their own change."""
+    def stale_accept_all(request: Request, body: StaleAcceptAll):
+        """Accept the suggestions the caller's Stale tickets card showed that have an action, each as their own change
+        and at the task version the card showed."""
         who = request.state.identity
         auth.domain(who)
-        return mutate(request, body, lambda c: accept_all(c, auth, who))
+        shown = {r.id: r.version for r in body.rows}
+        return mutate(request, body, lambda c: accept_all(c, auth, who, shown))
 
     @app.post("/api/v2/stale-review/{suggestion_id}")
     def stale_decide(request: Request, suggestion_id: str, body: StaleDecision):
@@ -509,5 +555,5 @@ def install(app, store, auth, mutate):
         auth.domain(who)
         if body.decision not in ("accept", "skip"):
             raise Problem("invalid", "decision is accept or skip", 422)
-        return mutate(request, body, lambda c: decide(c, auth, who, suggestion_id, body.decision))
+        return mutate(request, body, lambda c: decide(c, auth, who, suggestion_id, body.decision, body.version))
 

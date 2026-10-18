@@ -220,11 +220,12 @@ function approvalsHTML() {
     <div class="tl-rows" role="list" aria-label="Approvals">${items.map(it => needsV2Item(it, false)).join('')}</div></section>`;
 }
 // The person's one Stale tickets card (backend/stale_review.py): a row per task the hourly check found stale, each with
-// its reason and suggestion, Accept or Skip, and Accept all. Accept is the person's own change, refused as by hand.
+// its reason and suggestion, Accept or Skip, and Accept all. Accept is the person's own change, refused as by hand,
+// and names the task version the row showed; Accept all names the rows on screen, so a row added since is not applied.
 const staleCards = () => (S.v2?.needs || []).filter(it => it.kind === 'stale');
 function staleCardRow(r) {
   const accept = r.action ? `<button type="button" class="ghost" data-stale="${esc(r.id)}" data-stale-decision="accept">Accept</button>` : '';
-  return `<li class="stale-row" data-stale-row="${esc(r.id)}">
+  return `<li class="stale-row" data-stale-row="${esc(r.id)}" data-stale-version="${esc(String(r.version ?? ''))}"${r.action ? ' data-stale-action' : ''}>
     <div class="stale-what"><a href="#/task/${encodeURIComponent(r.task)}">${esc(plainActors(r.title || ''))}</a>
       <div class="muted">${esc(r.reason)}. Suggest: ${esc(r.suggest)}.</div></div>
     <div class="row">${accept}<button type="button" class="ghost" data-stale="${esc(r.id)}" data-stale-decision="skip">Skip</button></div>
@@ -409,9 +410,20 @@ document.addEventListener('click', ev => {
 }, true);
 document.addEventListener('click', ev => {
   const st = ev.target.closest('[data-stale]');
-  if (st) { ev.preventDefault(); void staleDecide(st, `/v2/stale-review/${encodeURIComponent(st.dataset.stale)}`, {decision: st.dataset.staleDecision}); return; }
+  if (st) {
+    ev.preventDefault();
+    const decision = st.dataset.staleDecision, version = Number(st.closest('[data-stale-row]')?.dataset.staleVersion);
+    void staleDecide(st, `/v2/stale-review/${encodeURIComponent(st.dataset.stale)}`, decision === 'accept' ? {decision, version} : {decision});
+    return;
+  }
   const sa = ev.target.closest('[data-stale-all]');
-  if (sa) { ev.preventDefault(); void staleDecide(sa, '/v2/stale-review/accept-all', {}); return; }
+  if (sa) {
+    ev.preventDefault();
+    const rows = [...(sa.closest('[data-stale-card]')?.querySelectorAll('[data-stale-row][data-stale-action]') || [])]
+      .map(li => ({id: li.dataset.staleRow, version: Number(li.dataset.staleVersion)}));
+    void staleDecide(sa, '/v2/stale-review/accept-all', {rows});
+    return;
+  }
   const ap = ev.target.closest('[data-v2-approval]');
   if (ap) { ev.preventDefault(); void v2Decide(ap, ap.dataset.v2Approval, ap.dataset.v2Decision); return; }
   const tk = ev.target.closest('[data-v2-task]');

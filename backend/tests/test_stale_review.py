@@ -72,6 +72,41 @@ def hours(n):
     return H.shift(H.now(), hours=n)
 
 
+def stale_card(api, token="ana-test"):
+    return next(i for i in get(api, "needs-you", token=token)["items"] if i["kind"] == "stale")
+
+
+def shown(card):
+    """What the card's Accept all sends: the rows it showed with an action, and their task versions then."""
+    return {"rows": [{"id": r["id"], "version": r["version"]} for r in card["rows"] if r["action"]]}
+
+
+def start_turn(c, task_id):
+    """A bot's turn on the task begins, as a runner's claim writes it: a running attempt and its turn, while the task
+    row itself stays as it was."""
+    other = H.task_create(c, "human:ana", "Elsewhere " + H.new_id(), "x", "bot:ops")
+    H.task_comment(c, "human:ana", other["id"], "Please look at this")
+    job = c.execute("SELECT id FROM jobs WHERE bot='ops' ORDER BY created DESC LIMIT 1").fetchone()[0]
+    c.execute("INSERT OR IGNORE INTO runners(id,label,operator,token_hash,created) VALUES('r1','r','ana','h','t')")
+    aid = H.new_id()
+    c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created) "
+              "VALUES(?,?,'ops','r1',1,?,'running',?,?)", (aid, job, aid, H.shift(H.now(), seconds=600), H.now()))
+    c.execute("INSERT INTO turns(id,bot,started,task_id) VALUES(?,'ops',?,?)", (aid, H.now(), task_id))
+
+
+def an_hour_on(store):
+    """The next hour, as the pass sees it: the last pass and this hour's calls are an hour old."""
+    with store.transaction() as c:
+        c.execute("UPDATE events SET ts=? WHERE action='judge.call'", (hours(-1.01),))
+        SR._set_watermark(c, hours(-1.01))
+
+
+def seed_calls(store, n, label="stale-review@1"):
+    with store.transaction() as c:
+        for _ in range(n):
+            H.event(c, H.KEEPER, "judge.call", label, {"label": label, "verdict": {"value": "leave"}})
+
+
 def test_a_review_task_with_a_merged_pr_gets_one_stale_check_comment_to_its_bot(stale):
     api, store, task = stale
     tid = task("Ship the export button", pr="merged")
@@ -158,7 +193,7 @@ def test_three_stale_tasks_of_a_person_are_one_card_and_accept_marks_only_that_o
     assert [r["task"] for r in card["rows"]] == ids
     assert card["rows"][0]["reason"] == "Nothing happened on it for 9 days" and card["rows"][0]["suggest"] == "Mark done"
     assert not any(comments(store, t) for t in ids), "a person gets the card, not comments"
-    post(api, "stale-review/" + card["rows"][0]["id"], {"decision": "accept"})
+    post(api, "stale-review/" + card["rows"][0]["id"], {"decision": "accept", "version": card["rows"][0]["version"]})
     with store.read() as c:
         assert [H.task(c, t)["status"] for t in ids] == ["done", "open", "open"]
         assert c.execute("SELECT outcome FROM stale_suggestions WHERE id=?", (card["rows"][0]["id"],)).fetchone()[0] \
@@ -174,7 +209,8 @@ def test_three_stale_tasks_of_a_person_are_one_card_and_accept_marks_only_that_o
         assert H.task(c, ids[1])["status"] == "open"
         assert c.execute("SELECT outcome FROM stale_suggestions WHERE task_id=?", (ids[1],)).fetchone()[0] == "skipped"
     # The suggestion is someone else's to answer only if it was made to them.
-    post(api, "stale-review/" + card["rows"][1]["id"], {"decision": "accept"}, token="ben-test", expected=404)
+    post(api, "stale-review/" + card["rows"][1]["id"], {"decision": "accept", "version": card["rows"][1]["version"]},
+         token="ben-test", expected=404)
 
 
 def test_accept_all_cannot_change_a_task_the_person_could_not_change_by_hand(stale):
@@ -186,19 +222,43 @@ def test_accept_all_cannot_change_a_task_the_person_could_not_change_by_hand(sta
     with store.transaction() as c:
         c.execute("UPDATE tasks SET owner='human:ben' WHERE id=?", (moved,))
         version = H.task(c, moved)["version"]
+    card = stale_card(api, "priya-test")
     by_hand = api.post(f"/api/v2/tasks/{moved}", json={"status": "done", "version": version},
                        headers=headers("priya-test"))
     assert by_hand.status_code == 403 and "not yours to change" in by_hand.text, by_hand.text
-    out = post(api, "stale-review/accept-all", {}, token="priya-test")
+    out = post(api, "stale-review/accept-all", shown(card), token="priya-test")
     assert [r["task"] for r in out["accepted"]] == [mine]
     assert [r["task"] for r in out["refused"]] == [moved] and "not yours to change" in out["refused"][0]["reason"]
     with store.read() as c:
         assert H.task(c, mine)["status"] == "done" and H.task(c, moved)["status"] == "open"
         assert c.execute("SELECT outcome FROM stale_suggestions WHERE task_id=?", (moved,)).fetchone()[0] is None
     # One row on its own is refused the same way.
-    sid = next(r["id"] for r in next(i for i in get(api, "needs-you", token="priya-test")["items"]
-                                     if i["kind"] == "stale")["rows"])
-    post(api, "stale-review/" + sid, {"decision": "accept"}, token="priya-test", expected=403)
+    row = stale_card(api, "priya-test")["rows"][0]
+    post(api, "stale-review/" + row["id"], {"decision": "accept", "version": row["version"]}, token="priya-test",
+         expected=403)
+
+
+def test_accept_applies_only_the_rows_and_task_versions_the_card_showed(stale):
+    api, store, task = stale
+    edited = task("Old chore one", owner="human:ana", requester="bot:ops", status="open", days_ago=9)
+    kept = task("Old chore two", owner="human:ana", requester="bot:ops", status="open", days_ago=9)
+    SR.run_pass(store, engine=FakeDecide("update"))
+    card = stale_card(api)
+    # After the card was drawn: the next pass adds a row the person never saw, and someone gives one task fresh work.
+    late = task("Old chore three", owner="human:ana", requester="bot:ops", status="open", days_ago=9)
+    SR.run_pass(store, at=hours(1.01), engine=FakeDecide("update"))
+    assert len(stale_card(api)["rows"]) == 3
+    with store.transaction() as c:
+        c.execute("UPDATE tasks SET version=version+1 WHERE id=?", (edited,))
+    row = next(r for r in card["rows"] if r["task"] == edited)
+    post(api, "stale-review/" + row["id"], {"decision": "accept"}, expected=422)
+    post(api, "stale-review/" + row["id"], {"decision": "accept", "version": row["version"]}, expected=409)
+    out = post(api, "stale-review/accept-all", shown(card))
+    assert [r["task"] for r in out["accepted"]] == [kept]
+    assert [r["task"] for r in out["refused"]] == [edited] and "changed since" in out["refused"][0]["reason"]
+    with store.read() as c:
+        assert [H.task(c, t)["status"] for t in (edited, kept, late)] == ["open", "done", "open"]
+    assert sorted(r["task"] for r in stale_card(api)["rows"]) == sorted([edited, late]), "both stay to be answered"
 
 
 def test_a_close_suggestion_is_closed_by_the_person_as_by_hand(stale):
@@ -207,7 +267,8 @@ def test_a_close_suggestion_is_closed_by_the_person_as_by_hand(stale):
     SR.run_pass(store, engine=FakeDecide("close"))
     card = next(i for i in get(api, "needs-you", token="ben-test")["items"] if i["kind"] == "stale")
     assert card["rows"][0]["suggest"] == "Close it" and card["rows"][0]["action"] == "close"
-    post(api, "stale-review/" + card["rows"][0]["id"], {"decision": "accept"}, token="ben-test")
+    post(api, "stale-review/" + card["rows"][0]["id"], {"decision": "accept", "version": card["rows"][0]["version"]},
+         token="ben-test")
     with store.read() as c:
         row = H.task(c, tid)
     assert row["status"] == "closed" and row["closed_by"] == "human:ben"
@@ -272,12 +333,79 @@ def test_forty_new_candidates_make_at_most_thirty_calls_that_hour(stale):
     api, store, task = stale
     for n in range(40):
         task(f"Shipped thing {n}", pr="shipped")
+    seed_calls(store, 25)                   # this hour's calls so far count against it
     model = FakeDecide("leave")
     done = SR.run_pass(store, at=H.now(), engine=model)
-    assert len(model.calls) == 30 and done["deferred"] == 10 and done["why"] == "hourly_cap"
-    # The rest are judged the next hour, and the ones left are not asked again.
-    SR.run_pass(store, at=hours(1.01), engine=model)
+    assert len(model.calls) == 5 and done["deferred"] == 35 and done["why"] == "hourly_cap"
+    # The rest are judged the next hours, 30 an hour, and the ones left are not asked again.
+    an_hour_on(store)
+    SR.run_pass(store, engine=model)
+    assert len(model.calls) == 35
+    an_hour_on(store)
+    SR.run_pass(store, engine=model)
     assert len(model.calls) == 40
+
+
+def test_the_daily_allowance_is_checked_before_every_call(stale, monkeypatch):
+    api, store, task = stale
+    ids = [task(f"Shipped thing {n}", pr="shipped") for n in range(4)]
+    seed_calls(store, 2)
+    with store.read() as c:
+        used = SR.used_today(c, H.KEEPER)
+    monkeypatch.setattr(store.settings, "decisions_daily_calls_bot", used + 1)
+    model = FakeDecide("update")
+    done = SR.run_pass(store, engine=model)
+    assert len(model.calls) == 1 and done["deferred"] == 3 and done["why"] == "daily_cap"
+    assert sum(bool(comments(store, t)) for t in ids) == 1
+    # Spent for the day: the next pass asks nothing, and the tasks wait unjudged for tomorrow.
+    with store.transaction() as c:
+        SR._set_watermark(c, hours(-2))
+    done = SR.run_pass(store, engine=model)
+    assert len(model.calls) == 1 and done["calls"] == 0 and done["deferred"] == 3 and done["why"] == "daily_cap"
+    with store.read() as c:
+        assert c.execute("SELECT count(*) FROM stale_judged").fetchone()[0] == 1
+
+
+def test_a_turn_that_starts_while_decide_is_asked_gets_no_stale_comment(stale):
+    api, store, task = stale
+    worked = task("Ship the export button", pr="merged")
+    moved = task("Ship the import button", pr="merged")
+    other = task("Ship the print button", pr="merged")
+    model = FakeDecide("update")
+    asked = model.__call__
+
+    def busy(state, questions, label=None):
+        out = asked(state, questions, label)
+        title = state["task"]["title"]
+        with store.transaction() as c:
+            if title == "Ship the export button":
+                start_turn(c, worked)       # the owner bot picks it up: the task row does not change
+            elif title == "Ship the import button":
+                c.execute("UPDATE tasks SET version=version+1 WHERE id=?", (moved,))
+        return out
+    done = SR.run_pass(store, engine=busy)
+    assert len(model.calls) == 3 and done["changed"] == 2 and done["suggested"] == 1
+    assert not comments(store, worked) and not comments(store, moved) and len(comments(store, other)) == 1
+    assert len(calls(store)) == 3, "every call made stays in the audit log"
+    with store.read() as c:
+        judged = {r[0] for r in c.execute("SELECT task_id FROM stale_judged")}
+    assert judged == {other}, "the ones it could not use wait for a pass that sees them fresh"
+
+
+def test_turning_the_switch_off_during_a_pass_stops_its_calls_and_output(stale):
+    api, store, task = stale
+    ids = [task(f"Shipped thing {n}", pr="shipped") for n in range(3)]
+    model = FakeDecide("update")
+    asked = model.__call__
+
+    def then_off(state, questions, label=None):
+        out = asked(state, questions, label)
+        with store.transaction() as c:
+            team_rules.save(c, "human:ana", {"stale_review": False})
+        return out
+    done = SR.run_pass(store, engine=then_off)
+    assert len(model.calls) == 1 and done["why"] == "switched_off" and done["deferred"] == 3
+    assert not any(comments(store, t) for t in ids) and len(calls(store)) == 1
 
 
 def test_the_pass_stops_before_the_hour_is_over(stale):
@@ -327,6 +455,14 @@ def test_admins_turn_the_switch_members_cannot_and_the_environment_sets_only_the
     r = api.put("/api/v2/access/rules", json={"stale_review": True, "admin_sql": False},
                 headers={"Authorization": "Bearer ben-test"})
     assert r.status_code == 403 and "Only the owner" in r.text, "with any other rule it stays the owner's"
+    monkeypatch.setattr(api.app.state.auth, "bot_admins", {"ben@acme.example"})
+    r = api.put("/api/v2/access/rules", json={"stale_review": True}, headers=headers("ben-test"))
+    assert r.status_code == 200 and r.json()["stale_review"] is True, r.text
+    with store.read() as c:
+        assert team_rules.load(c)["stale_review"] is True, "an admin who is not the owner turns it"
+    r = api.put("/api/v2/access/rules", json={"stale_review": False, "admin_sql": False}, headers=headers("ben-test"))
+    assert r.status_code == 403 and "Only the owner" in r.text, "an admin still may not turn the owner's rules"
+    monkeypatch.setattr(api.app.state.auth, "bot_admins", set())
     with store.transaction() as c:
         team_rules.save(c, "human:ana", {"admin_sql": False})
         assert team_rules.load(c)["stale_review"] is True, "saving another rule does not freeze this one"
