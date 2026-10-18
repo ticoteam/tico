@@ -17,6 +17,7 @@ from fastapi.datastructures import DefaultPlaceholder
 from fastapi.routing import APIRoute
 from fastapi.staticfiles import StaticFiles
 from fastapi.exceptions import RequestValidationError
+from starlette.requests import ClientDisconnect
 
 from clients.agent_skill import WHO_NEEDS_ME
 
@@ -641,6 +642,13 @@ def create_app(settings=None):
                 # Where an agent with no token can sign in (backend/mcp_oauth.py, RFC 9728).
                 response.headers["WWW-Authenticate"] = mcp_oauth.challenge_header(settings)
             return response
+        except ClientDisconnect:
+            # The caller hung up while its request body was read (a closed tab, a cancelled call): nothing failed here.
+            # It ends as 499, client closed request, which the flight recorder and Sentry don't count as a server error.
+            # The method only: some addresses carry their own secret (a webhook trigger's).
+            logging.getLogger("tico.request").info("%s request: the client disconnected before its body was read",
+                                                   request.method)
+            return Response(status_code=499)
         except Exception as exc:
             from .diagnostics import request_failure
             request_failure(request, 500, exc)
