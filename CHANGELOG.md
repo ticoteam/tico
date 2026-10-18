@@ -11,8 +11,19 @@ All notable changes to Tico are recorded here. The format follows
 - A queued job whose message its bot can no longer read (a private task or conversation it was taken off) no longer
   sits queued for ever. No claim ever takes it, so it aged Health's "queued since" warning. The scheduler now cancels
   it within a minute and records why (a `job.suppress` event, reason `unreadable`); the message itself stays.
+- A bot no longer gets a second turn on a task while its first is still running there when the task was moved under
+  another of its tasks mid-turn. A wake about a task the bot is working on goes into that turn, or waits for the next
+  turn on the task; it never starts one beside it. Another bot's turn on the same task (the requester woken by the
+  owner's comment) and the bot's other tasks still run side by side.
 
 ### Changed
+- **Decide asks the Tico AI Gateway first**, as Tico Decide 1.0 (`tico-decide-1.0`), with a gateway key
+  (`TICO_GATEWAY_KEY` or `TICO_GATEWAY_SECRET_ARN`; `TICO_GATEWAY_URL`, Tico HQ's by default), instead of calling
+  TypeSafe. The order is the Gateway, then your own TypeSafe key if you set one (no longer in any default setup), then
+  the team's own AI provider, then off; any failure (down, slow, a refused key, the Gateway's cap) moves on to the
+  next, so no caller waits on a broken provider. Each decision's audit row names the provider that answered (`Tico AI
+  Gateway`, `TypeSafe`, or the team's provider) and its model, and the Slack gateway routes the same way. A Tico Decide
+  call counts toward the monthly spend cap at the Gateway's price ($0.06 per 1M input tokens, output free).
 - PRIVACY.md now names OpenRouter: a bot set to Tico Cheap, Mid or Power sends its model calls through Tico HQ to
   OpenRouter. It lists what is sent (the messages and tools, never the gateway key, its label or the install ID), that
   HQ keeps none of the call's text (only the key's label and per-call counts), that zero retention is enforced only when
