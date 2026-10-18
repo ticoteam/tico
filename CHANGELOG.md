@@ -35,10 +35,6 @@ All notable changes to Tico are recorded here. The format follows
   ([What woke each run](docs/hub-sql.md#what-woke-each-run-and-what-it-did)).
 
 ### Changed
-- Screen: on a bot's page, when its computer's screen is off in Tico, the operator's or an admin's **Turn on** button
-  now reads **Turn on (Control)** and turns the screen on at Control, matching a new computer's default, so they can
-  drive it at once. View and Off stay choices in Settings > Computers; who sees the button and who may change the
-  setting are unchanged.
 - `hub_computer_list` and `hub computer list` answer one short row per computer: online and last seen, operator,
   release, version, wanted release, update state, a readiness level, the AI tools signed in, and counts of bots,
   warnings, errors and recent log errors (about 5,000 characters for 11 busy computers, down from over 200,000). One
