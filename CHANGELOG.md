@@ -8,6 +8,9 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Fixed
+- A bot's turn finishes when a comment it had taken in was deleted while it ran. Finishing such a turn failed with a
+  server error on every retry; now the turn and its reply are recorded as usual, and the deleted comment is never held
+  for review or run again.
 - A bot no longer gets a second turn on a task while its first is still running there when the task was moved under
   another of its tasks mid-turn. A wake about a task the bot is working on goes into that turn, or waits for the next
   turn on the task; it never starts one beside it. Another bot's turn on the same task (the requester woken by the
