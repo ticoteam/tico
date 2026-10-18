@@ -196,6 +196,13 @@ class Settings:
     decisions_daily_calls_owner: int = 20_000
     decisions_daily_calls_human: int = 5_000
     decisions_daily_calls_bot: int = 5_000
+    # What the team's decision calls may cost in a UTC month, in USD, counted from the audit's `cost_usd`; 0 is no
+    # cap. At the cap every server-side caller carries on as if Decide were off. backend/judge.py.
+    decisions_monthly_usd: float = 50.0
+    # Jev's price in USD per 1M input and output tokens, for the audit's cost when TypeSafe's answer carries none:
+    # TypeSafe's published price, output free. Both 0 is unknown: the call's tokens are kept, its cost not counted.
+    decisions_jev_usd_per_mtok_input: float = 0.042
+    decisions_jev_usd_per_mtok_output: float = 0.0
     # First-boot seed for the owner's AI provider choice (backend/providers.py). Once the
     # database holds a choice, these are never read again.
     enabled_providers: tuple[str, ...] = ()
@@ -405,6 +412,9 @@ class Settings:
             decisions_daily_calls_owner=max(0, int(os.environ.get("TICO_DECISIONS_DAILY_CALLS_OWNER", "") or 20_000)),
             decisions_daily_calls_human=max(0, int(os.environ.get("TICO_DECISIONS_DAILY_CALLS_HUMAN", "") or 5_000)),
             decisions_daily_calls_bot=max(0, int(os.environ.get("TICO_DECISIONS_DAILY_CALLS_BOT", "") or 5_000)),
+            decisions_monthly_usd=max(0.0, float(os.environ.get("TICO_DECISIONS_MONTHLY_USD", "") or 50.0)),
+            decisions_jev_usd_per_mtok_input=max(0.0, float(os.environ.get("TICO_DECISIONS_JEV_USD_PER_MTOK_INPUT", "") or 0.042)),
+            decisions_jev_usd_per_mtok_output=max(0.0, float(os.environ.get("TICO_DECISIONS_JEV_USD_PER_MTOK_OUTPUT", "") or 0)),
             enabled_providers=tuple(part.strip().lower() for part in
                                     os.environ.get("TICO_ENABLED_PROVIDERS", "").split(",") if part.strip()),
             default_runtime=os.environ.get("TICO_DEFAULT_RUNTIME", "").strip().lower(),

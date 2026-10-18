@@ -14,6 +14,18 @@ All notable changes to Tico are recorded here. The format follows
   is refused, naming the guest; the requesting bot can't add one, and reassigning the task ends it. Before, every
   such hand-off was refused and the work sat unread. Task questions from private work now go through, and
   `POST /api/v2/tasks/dry-run` returns the same privacy refusal the create does ([tasks](docs/tasks.md)).
+- Decide has a **spend cap for the team: $50 a month** by default (`TICO_DECISIONS_MONTHLY_USD`). Each decision
+  call's cost is kept in its audit row; at the cap every caller carries on as if Decide were off (the Slack gateway
+  routes to the assistant, mail triage and listening wait, a nightly learning run that reaches it sends nothing and
+  reads the same activity again later). The cap is checked before every call, counting calls still in flight, so a
+  batch or a burst of requests stops at it. Jev's price per 1M tokens is a setting
+  (`TICO_DECISIONS_JEV_USD_PER_MTOK_INPUT` / `_OUTPUT`, $0.042 in and $0 out by default) for when TypeSafe sends no
+  cost; a model with no known price is counted at the dearest list price, never as free.
+- A Slack DM to Tico or an @Tico mention that the decision model reads as asking for nothing now goes to the
+  assistant (or BotOps) instead of only being recorded on the thread, so a person's message is never left unheard.
+- Listening, the nightly learnings and live meetings now ask Jev the way `POST /api/v2/decisions` does: one try of
+  at most 8 seconds, and the company's own model answers when Jev is slow or down. Before, listening and live meetings
+  had no fallback and the learnings run waited up to 20 seconds with two retries per call.
 - Each bot has a wake preset under **Settings → Bots → Wakes**. **Token saver** is the default for a new bot. It
   holds nonblocking news (a finished request, review comments, a failing check nobody waits on) and sends it as one
   wake at most every 30 minutes, and it runs an enabled routine or stall check at most every 2 hours.
@@ -31,13 +43,6 @@ All notable changes to Tico are recorded here. The format follows
   computers; an offline computer clears its copy (or takes the new key) when it is next online. Replacing the shared key
   for all of them needs credential rights. Needs a current runner on the computer
   ([subscriptions](docs/subscriptions.md#api-keys-on-a-computer)).
-- A synced Grok Bot can be delivered through the Grok Mac app: set **Deliver through the app on** in its settings
-  to one of your own Macs where Grok is ready, and a message to it reaches it within a minute, it shows as working,
-  its reply streams in, and what it says on its own in Grok reaches its Tico chat within minutes. The Mac's native
-  runner works only through Accessibility (`tico-appdriver`, shipped separately): it never moves the pointer, types
-  or brings Grok forward. **Settings → Computers** shows a **Desktop apps** row per app, Health names a signed-out
-  app, missing permission or changed layout, and a reply that needs you in Grok becomes a question in your Needs
-  you. Off by default; with it off nothing changes, and no message is handed to the daily sync twice.
 - Every bot run records what woke it (a person's message, a comment, a status or relation change, pull request checks,
   a stall check, a schedule, or other), its input tokens with the cached part split out, its output tokens, and an
   outcome worked out in code from what the run wrote: `acted`, `no_change` (its task is still open) or `nothing_to_do`,
@@ -46,19 +51,10 @@ All notable changes to Tico are recorded here. The format follows
   ([What woke each run](docs/hub-sql.md#what-woke-each-run-and-what-it-did)).
 
 ### Changed
-- Screen: the first time a new computer offers its screen, its **Screen** setting in Settings > Computers starts at
-  **Control** instead of **View**, so its operator or an admin can drive it at once. Who may open a screen is
-  unchanged (the computer's operator and admins), a Screen setting someone already chose stays (View and Off
-  included), and a computer that already offered its screen keeps its setting.
 - Screen: on a bot's page, when its computer's screen is off in Tico, the operator's or an admin's **Turn on** button
   now reads **Turn on (Control)** and turns the screen on at Control, matching a new computer's default, so they can
   drive it at once. View and Off stay choices in Settings > Computers; who sees the button and who may change the
   setting are unchanged.
-- The server, runner and updater images run Python 3.15 on Debian trixie with SQLite 3.54.1, built in and checked
-  when the image is built (Debian's own copy is 3.46.1). The update pulls the images, and Tico's own mail venv rebuilds
-  itself on first use. A runner's home volume survives the update, so anything a bot or person built there with the old
-  Python 3.12 (a project's venv, `pip install --user` packages under `~/.local/lib/python3.12`) does not run on 3.15:
-  rebuild it ([updates.md](docs/updates.md#python-environments-on-a-docker-runner) lists them and how).
 - `hub_computer_list` and `hub computer list` answer one short row per computer: online and last seen, operator,
   release, version, wanted release, update state, a readiness level, the AI tools signed in, and counts of bots,
   warnings, errors and recent log errors (about 5,000 characters for 11 busy computers, down from over 200,000). One
@@ -67,6 +63,9 @@ All notable changes to Tico are recorded here. The format follows
   Computers and `GET /api/v2/computers` are unchanged.
 
 ### Fixed
+- A doc saved through the API or a bot's doc tool now reads back exactly as sent: its final newline and any leading
+  indentation (an indented code block on line 1) are kept, and a change to only the ends is a new version. Titles
+  and paths still drop surrounding spaces.
 - A caller that hangs up while the server reads its request body is recorded as 499 (client closed request), with
   no traceback, instead of an HTTP 500: it no longer counts as a server error in the flight recorder's 5xx count,
   Sentry or the server log. All seven 5xx counted on v0.3.55 were this.
@@ -79,6 +78,34 @@ All notable changes to Tico are recorded here. The format follows
 - A pull request a release merged and then reverted (a change dropped after QA failed) is no longer marked
   shipped, and its task gets no "Shipped" notice. Tico now checks with GitHub that the pull request's own lines are
   still in the running release, not only that its merge commit comes before it.
+- A check or review subtask whose model's default login on its computer is out of quota (the Health finding above) now
+  moves to the next check model at once, instead of retrying that login every 30 minutes. It goes back to the model
+  it asked for once that login works again or its reset time passes; with no other check model, it waits as before.
+
+## [0.3.56] - 2026-10-18
+
+### Added
+- A synced Grok Bot can be delivered through the Grok Mac app: set **Deliver through the app on** in its settings
+  to one of your own Macs where Grok is ready, and a message to it reaches it within a minute, it shows as working,
+  its reply streams in, and what it says on its own in Grok reaches its Tico chat within minutes. The Mac's native
+  runner works only through Accessibility (`tico-appdriver`, shipped separately): it never moves the pointer, types
+  or brings Grok forward. **Settings → Computers** shows a **Desktop apps** row per app, Health names a signed-out
+  app, missing permission or changed layout, and a reply that needs you in Grok becomes a question in your Needs
+  you. Off by default; with it off nothing changes, and no message is handed to the daily sync twice.
+
+### Changed
+- Screen: the first time a new computer offers its screen, its **Screen** setting in Settings > Computers starts at
+  **Control** instead of **View**, so its operator or an admin can drive it at once. Who may open a screen is
+  unchanged (the computer's operator and admins), a Screen setting someone already chose stays (View and Off
+  included), and a computer that already offered its screen keeps its setting.
+- The server, runner and updater images run Python 3.15 on Debian trixie with SQLite 3.54.1, built in and checked
+  when the image is built (Debian's own copy is 3.46.1). The update pulls the images, and Tico's own mail venv rebuilds
+  itself on first use. A runner's home volume survives the update, so anything a bot or person built there with the old
+  Python 3.12 (a project's venv, `pip install --user` packages under `~/.local/lib/python3.12`) does not run on 3.15:
+  rebuild it ([updates.md](docs/updates.md#python-environments-on-a-docker-runner) lists them and how).
+- Setting up a runner on Mac or Linux uses the newest Python it finds, from 3.15 down to 3.12.
+
+### Fixed
 - Automatic fallback no longer sends a bot to a login that is out of quota. When a login on a computer fails a turn
   on its usage limit, the runner skips it for fallback until the provider's reset time, or for 30 minutes when the
   provider gives none, and takes the next of the company's providers instead. A fallback that hits its own limit
@@ -95,9 +122,6 @@ All notable changes to Tico are recorded here. The format follows
   (the one bots without a subscription use) is out of quota, e.g. "Team box's default Codex login is out of quota":
   turns there keep stopping on a usage limit with no reset time, so bots that fall back to it fail. It clears once a
   turn on that login completes or the reset time passes.
-- A check or review subtask whose model's default login on its computer is out of quota (the Health finding above) now
-  moves to the next check model at once, instead of retrying that login every 30 minutes. It goes back to the model
-  it asked for once that login works again or its reset time passes; with no other check model, it waits as before.
 - On a phone, the Support pop-up fits the space above the keyboard while you type: the box, Send and the newest
   reply stay on screen, and the page behind no longer shows below it or scrolls under it. With the keyboard down it is
   the usual bottom sheet again.
@@ -3330,7 +3354,8 @@ First public release.
 - Hosting: local only on a Mac, or self-hosted, including a reference AWS stack under `infra/ec2/`
   with Litestream backups.
 
-[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.55...HEAD
+[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.56...HEAD
+[0.3.56]: https://github.com/ticoteam/tico/compare/v0.3.55...v0.3.56
 [0.3.55]: https://github.com/ticoteam/tico/compare/v0.3.54...v0.3.55
 [0.3.54]: https://github.com/ticoteam/tico/compare/v0.3.52...v0.3.54
 [0.3.52]: https://github.com/ticoteam/tico/compare/v0.3.50...v0.3.52
