@@ -22,8 +22,8 @@ Only the owner can do this.
 4. Press **Connect**.
 
 The card shows **Connected**, and Tico Cheap, Mid and Power 1.0 appear in the bot model list. The key field empties as
-soon as you press **Connect**, and the key is never shown again: the field shows only its first and last three
-characters. If the card says **Not working** or **Not ready**, see [What the card says](#what-the-card-says).
+soon as you press **Connect**, and the key is never shown again: the field shows only a short preview, its first and
+last three characters. If the card says **Not working** or **Not ready**, see [What the card says](#what-the-card-says).
 
 Once connected, the card has three buttons:
 
