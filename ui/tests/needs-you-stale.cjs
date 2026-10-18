@@ -79,9 +79,23 @@ async function answered(browser, viewport) {
   now = await look();
   assert.deepEqual([now.rows, now.focus], [['s-1@4', 's-3@9', 's-4@1', 's-5@3'], 's-3'], 'focus stays on the row it was on');
 
-  await button('s-1', 'accept').click();
-  now = await settle(v => !v.rows.includes('s-1@4'), 'Accept takes only its own row out');
-  assert.deepEqual(sent.shift(), ['s-1', {decision: 'accept', version: 4}]);
+  // One row goes and another comes in the same redraw, so the count stays: the row with the focus is the same
+  // element, and the same button still has the focus.
+  await button('s-3', 'accept').focus();
+  await shown.evaluate(el => { const li = el.querySelector('[data-stale-row="s-3"]'); li.__kept = true; li.querySelector('[data-stale-decision="accept"]').__kept = true; });
+  take('s-1');
+  server.rows.push(row('s-7', 't-7', 'Old chore seven', 'done', 1));
+  await poll();
+  now = await look();
+  assert.deepEqual([now.same, now.title, now.count, now.rows], [true, 'Tico: Stale tickets: 4 suggestions', '4', ['s-3@9', 's-4@1', 's-5@3', 's-7@1']]);
+  assert.deepEqual(await page.evaluate(() => {
+    const li = document.querySelector('[data-stale-card] [data-stale-row="s-3"]'), f = document.activeElement;
+    return {row: !!li.__kept, button: !!f.__kept, focused: [f.closest('[data-stale-row]')?.dataset.staleRow, f.dataset.staleDecision]};
+  }), {row: true, button: true, focused: ['s-3', 'accept']}, 'an equal-count update keeps the focused row and button');
+
+  await button('s-7', 'accept').click();
+  now = await settle(v => !v.rows.includes('s-7@1'), 'Accept takes only its own row out');
+  assert.deepEqual(sent.shift(), ['s-7', {decision: 'accept', version: 1}]);
   assert.deepEqual([now.same, now.title, now.count, now.rows, now.busy], [true, 'Tico: Stale tickets: 3 suggestions', '3', ['s-3@9', 's-4@1', 's-5@3'], 0]);
 
   // Accept all: s-4's task moved on before the click (refused, the row stays at its new version), and s-6 arrived

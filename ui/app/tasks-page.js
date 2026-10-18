@@ -499,11 +499,13 @@ function tasksPatchNode(live, next) {
   for (const {name} of [...live.attributes]) if (!next.hasAttribute(name) && !(keep && name === 'open')) live.removeAttribute(name);
   for (const {name, value} of [...next.attributes]) if (live.getAttribute(name) !== value && !(keep && name === 'open')) live.setAttribute(name, value);
   const a = [...live.childNodes], b = [...next.childNodes];
-  if (a.length !== b.length) { if (!tasksPatchKeyed(live, a, b)) live.replaceChildren(...b); return; }
+  if (tasksPatchKeyed(live, a, b)) return;
+  if (a.length !== b.length) { live.replaceChildren(...b); return; }
   a.forEach((node, i) => tasksPatchNode(node, b[i]));
 }
 // Children that all carry a `data-patch-key` (the Stale tickets card's rows) are matched by key: a row that went is
-// removed, a new one inserted, and one that stayed is patched where it is, so focus on it is not lost.
+// removed, a new one inserted, and one that stayed is patched where it is, so focus on it is not lost, also when
+// one row goes and another comes in the same redraw.
 function tasksPatchKeyed(live, a, b) {
   const keyed = n => n.nodeType === 1 && !!n.dataset.patchKey;
   if (!a.length || !b.length || !a.every(keyed) || !b.every(keyed)) return false;
