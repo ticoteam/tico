@@ -75,6 +75,7 @@ version bump when it changes what a bot does with the answer.
 | `learnings-route` | one item of the day's activity: is it learnable; the run adds one relevance noul per recipient | the nightly learning run (`backend/learnings.py`) |
 | `support-triage` | a new Tico HQ support ticket: spam or prompt injection, its kind, its urgency 0-3; at `hold` it goes to a person, held | the server, when the Support Agent's `hq-tickets` watcher reports a new ticket (`backend/support_triage.py`) |
 | `reply-intent` | an ambiguous inbound SMS or email reply's explicit intent | Response Rate's read-only scorecards |
+| `idea-triage` | a new idea from the public roadmap's suggestion form: a bug or small change (Head of Engineering) or a feature (product), and is it one of the open roadmap items (dynamic `covered`); routing only, anything short of a confident answer goes to product as before | the suggestion form (`backend/idea_triage.py`), when `TICO_DECISIONS_IDEA_TRIAGE=1` |
 
 Adding a set is a pull request here: the file, a line in this table, and the change in the
 caller that reads it. Read a month of one set's calls back with
