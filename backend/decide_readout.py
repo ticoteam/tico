@@ -129,8 +129,9 @@ def readout(c, settings, days=7, at=None):
                 row["cost_usd"] += float(cost)
             row["ceiling_priced"] += detail.get("price") == "ceiling"
             continue
-        if name != OTHER_LABELS and "@" in str(label):
-            row["versions"].add(str(label).split("@", 1)[1])
+        version = str(label).split("@", 1)[1] if "@" in str(label) else ""
+        if name != OTHER_LABELS and version.isdigit():       # a set's version is a number; anything else is free text
+            row["versions"].add(version)
         jev, other, failed = _calls(detail)
         row["jev"] += jev
         row["fallback"] += other

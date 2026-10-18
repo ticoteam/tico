@@ -126,9 +126,28 @@ def test_given_a_week_of_use_the_readout_lists_calls_cost_and_answer_spread_per_
 
 def test_the_readout_names_no_free_text_label_no_bot_and_no_open_item(api):
     a_week_of_use(api)
+    # A shipped set's id with free text after the `@`: counted under the set, the text never shown as a version.
+    audit(api, "judge.call", "support-triage@Dana's divorce", answered("support-triage@Dana's divorce", "jev-1.14", 0.001, {}))
     out = json.dumps(get(api, "decisions/readout"))
     for private in ("Dana", "divorce", "private_question", "secret-legal-bot", "finance", "8a75c5fd"):
         assert private not in out, private
+
+
+def test_slack_messages_count_each_batch_and_a_failed_message_fails_every_batch_once(api):
+    """Slack routing asks a big fleet in batches: one audit row per message with `calls` batches, and one spend row
+    per paid batch. A message that failed partway keeps the paid batches' model and cost on its row."""
+    def message(detail, spends):
+        audit(api, "judge.call", "slack-route@1", {"via": "slack", "event_id": "Ev", "questions": 90, **detail})
+        for cost in spends:
+            audit(api, "judge.spend", "slack-route@1", {"label": "slack-route@1", "model": "jev-1.14", "cost_usd": cost})
+    message({"calls": 3, "model": "jev-1.14", "usage": [{}, {}, {}], "cost_usd": 0.003}, [0.001, 0.001, 0.001])
+    message({"calls": 2, "model": "claude-haiku-5-5", "usage": [{}, {}], "cost_usd": 0.04}, [0.02, 0.02])
+    message({"calls": 3, "model": "jev-1.14", "usage": [{}, {}], "cost_usd": 0.002, "error": "unavailable"},
+            [0.001, 0.001])
+    slack, = get(api, "decisions/readout")["sets"]
+    assert (slack["calls"], slack["jev"], slack["fallback"], slack["failed"]) == (8, 3, 2, {"unavailable": 3})
+    assert slack["jev_share"] == 0.375
+    assert slack["cost_usd"] == 0.045, "each paid batch once, from its spend row; the audit rows' cost is not added"
 
 
 def test_the_window_is_the_days_asked_and_a_route_call_reads_back(api, monkeypatch):
