@@ -7,6 +7,8 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.3.55] - 2026-10-18
+
 ### Added
 
 - The Overview shows **Bot hours vs human hours**: bot hours per human hour over the last 7 days, and a weekly line for
@@ -3235,7 +3237,8 @@ First public release.
 - Hosting: local only on a Mac, or self-hosted, including a reference AWS stack under `infra/ec2/`
   with Litestream backups.
 
-[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.54...HEAD
+[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.55...HEAD
+[0.3.55]: https://github.com/ticoteam/tico/compare/v0.3.54...v0.3.55
 [0.3.54]: https://github.com/ticoteam/tico/compare/v0.3.52...v0.3.54
 [0.3.52]: https://github.com/ticoteam/tico/compare/v0.3.50...v0.3.52
 [0.3.50]: https://github.com/ticoteam/tico/compare/v0.3.49...v0.3.50
