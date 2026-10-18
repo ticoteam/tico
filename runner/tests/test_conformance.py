@@ -443,6 +443,34 @@ def test_a_fallback_out_of_quota_too_moves_the_turn_on_and_is_skipped_next_time(
     assert [p["harness"] for p in computer.prompts()] == ["claude", "codex", "musecode", "claude", "musecode"]
 
 
+# A completion reports at most two usage segments (backend/models.py RunUsage): once the primary and one fallback have
+# both spent tokens, a further hop would make a third, so the turn ends limited there. Spent-nothing hops do not count.
+@pytest.mark.parametrize("harness", ["claude"])
+@pytest.mark.parametrize("setup", [{"env": {"FAKE_CLAUDE_LIMIT": "1", "FAKE_LIMIT_SPENDS": spends}} for spends in ("claude", "claude,codex")])
+def test_a_fallback_chain_stops_before_a_third_usage_segment(api, computer):
+    from backend.store import H
+    spends = computer.env["FAKE_LIMIT_SPENDS"]
+    view = get(api, "providers")
+    saved = api.put("/api/v2/providers", json={"enabled": ["anthropic", "openai", "meta"], "model": view["default"]["model"] or "",
+                                                "expected_revision": view["revision"], "auto_fallback": True},
+                    headers={"Authorization": "Bearer ana-test", "Idempotency-Key": H.new_id()})
+    assert saved.status_code == 200, saved.text
+    computer.start()
+    post(api, "chat/ops", {"text": "Please LIMIT yourself"})
+    result = until(lambda: (computer.attempts() or [{}])[-1].get("result"), "the completion")
+    segments = [s["runtime"] for s in result["usage"]["segments"]]
+    if spends == "claude":      # Codex refused with nothing spent: Muse Code still takes the turn
+        assert result["outcome"] == "completed" and result["fallback"] == "musecode" and not result.get("limited")
+        assert [p["harness"] for p in computer.prompts()] == ["claude", "codex", "musecode"]
+        assert segments == ["claude", "musecode"]
+    else:                       # both spent tokens: Muse Code never starts, and the server takes the two segments
+        assert result.get("limited") and result["fallback"] == "codex"
+        assert [p["harness"] for p in computer.prompts()] == ["claude", "codex"]
+        assert segments == ["claude", "codex"]
+    made = next(r["ran_on"] for r in get(api, "bots/ops/turns") if r["id"] == computer.attempts()[-1]["id"])
+    assert [s["runtime"] for s in made["segments"]] == segments
+
+
 # Steering and subscription profiles are Claude Code and Codex features (runner-rs/src/profiles.rs, steer in drive).
 @pytest.mark.parametrize("harness", ["claude", "codex"])
 @pytest.mark.parametrize("setup", [{"env": {"FAKE_SLOW": "8"}}])

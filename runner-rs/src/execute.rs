@@ -883,13 +883,8 @@ impl Runner {
         let native_control = truthy(refs.get("command")) || goal.chat_goal.as_ref().is_some_and(|g| g["status"] == "active");
         let mut pending = if unavailable && !native_control { crate::fallback::configured(&config) } else { None };
         let hit_limit = drove.limited;
-        let login = |p: &Option<Profile>| p.as_ref().map(|p| p.name.clone()).unwrap_or_default();
-        if hit_limit {
-            // Out of quota here until its reset (or for a while): no other bot's fallback picks this login meanwhile.
-            crate::fallback::remember_limit(&login(&selected), &runtime, crate::util::epoch_s());
-        } else if drove.outcome == "completed" {
-            crate::fallback::forget_limit(&login(&selected), &runtime);
-        }
+        // Out of quota here until its reset (or for a while): no other bot's fallback picks this login meanwhile.
+        crate::fallback::settle_limit(&runtime, &text_of(&config["harness"]), selected.as_ref(), hit_limit, drove.outcome == "completed");
         let turn_env = base_env.clone().unwrap_or_default();
         if pending.is_none() && hit_limit && !native_control && prepared {
             // Out of quota with no fallback of its own: another provider signed in on this computer runs the turn
@@ -985,11 +980,7 @@ impl Runner {
                     self.diagnose(&aid, &format!("{}: fallback harness interrupted; inspect local runner", e.kind));
                 }
             }
-            if drove.limited {
-                crate::fallback::remember_limit(&login(&selected), &hop.runtime, crate::util::epoch_s());
-            } else if drove.outcome == "completed" {
-                crate::fallback::forget_limit(&login(&selected), &hop.runtime);
-            }
+            crate::fallback::settle_limit(&hop.runtime, &hop.harness, selected.as_ref(), drove.limited, drove.outcome == "completed");
             // That login is out of quota too: the next of the company's providers takes the turn. Only while at most
             // one segment has used tokens, since a completion reports two at most (backend/models.py RunUsage).
             let spent = segments.iter().filter(|s| s.meter.used()).count();

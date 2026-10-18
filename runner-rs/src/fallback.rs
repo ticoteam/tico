@@ -119,6 +119,28 @@ pub fn out_of_quota(profile: &str, runtime: &str, now: f64) -> bool {
     limits().lock().unwrap().out_of_quota(profile, runtime, now)
 }
 
+/// The login a turn on `runtime` (`harness`) with `profile` signs in with, as `limits` keeps it: the profile's own
+/// login, or "" for the computer's own (no profile, or one that shares the operator's logins or has no home of its
+/// own for that runtime). None for a harness that signs in with each bot's own key (`api_keys = "bot"`): that quota
+/// is one bot's, so it is never kept for another bot's turn.
+pub fn login(runtime: &str, harness: &str, profile: Option<&crate::profiles::Profile>) -> Option<String> {
+    if crate::harness_tools::caps(runtime, harness).api_keys == "bot" {
+        return None;
+    }
+    let own = profile.filter(|p| p.home(runtime).is_some() && crate::profiles::home_var(runtime).is_some());
+    Some(own.map_or_else(String::new, |p| p.name.clone()))
+}
+
+/// What a turn says about its login's quota: a usage limit is kept, a completed turn ends one.
+pub fn settle_limit(runtime: &str, harness: &str, profile: Option<&crate::profiles::Profile>, limited: bool, completed: bool) {
+    let Some(login) = login(runtime, harness, profile) else { return };
+    if limited {
+        remember_limit(&login, runtime, crate::util::epoch_s());
+    } else if completed {
+        forget_limit(&login, runtime);
+    }
+}
+
 /// The key a harness signs in with from the bot's own grant (`api_keys = "bot"`, its preferred `api_key_env`), not a
 /// login on the computer.
 fn bot_key(harness: &str) -> Vec<String> {
@@ -247,7 +269,7 @@ impl Runner {
         crate::util::truthy(row.get("installed"))
             && row["authenticated"] == "ready"
             && self.sign_in.rejection(runtime, profile).is_none()
-            && !out_of_quota(profile.map_or("", |p| p.name.as_str()), runtime, crate::util::epoch_s())
+            && login(runtime, "", profile).is_none_or(|l| !out_of_quota(&l, runtime, crate::util::epoch_s()))
             && (!crate::harness_tools::caps(runtime, "").api_key_login.is_empty() || self.sign_in.headless_secret(runtime).is_none())
     }
 }
@@ -328,6 +350,45 @@ mod tests {
         // The window passed: the login is tried again.
         assert!(limits.out_of_quota("", "codex", now + LIMIT_WINDOW_S - 1.0));
         assert_eq!(default_choice(&config, &choices, &none, |rt| !limits.out_of_quota("", rt, now + LIMIT_WINDOW_S)).unwrap().runtime, "codex");
+    }
+
+    #[test]
+    fn a_profile_on_the_operators_logins_shares_its_quota_and_an_isolated_profile_keeps_its_own() {
+        use crate::profiles::Profile;
+        let shared = Profile::new("shared", "/tmp/acme-profiles/shared", true);
+        let work = Profile::new("work", "/tmp/acme-profiles/work", false);
+        let key = |p: Option<&Profile>| login("codex", "codex", p).unwrap();
+        assert_eq!((key(None), key(Some(&shared)), key(Some(&work))), (String::new(), String::new(), "work".to_string()));
+        let now = 1_792_000_000.0;
+        // The computer's own login out of quota: a turn on the sharing profile is on that same login.
+        let mut limits = Limits::default();
+        limits.remember(&key(None), "codex", now, None);
+        assert!(limits.out_of_quota(&key(Some(&shared)), "codex", now + 1.0));
+        assert!(!limits.out_of_quota(&key(Some(&work)), "codex", now + 1.0));
+        // And the other way: a limit hit on the sharing profile holds for no-profile turns, and its success clears it.
+        let mut limits = Limits::default();
+        limits.remember(&key(Some(&shared)), "codex", now, None);
+        assert!(limits.out_of_quota(&key(None), "codex", now + 1.0));
+        limits.forget(&key(Some(&shared)), "codex");
+        assert!(!limits.out_of_quota(&key(None), "codex", now + 1.0));
+        // An isolated profile's limit is its own.
+        limits.remember(&key(Some(&work)), "codex", now, None);
+        assert!(!limits.out_of_quota(&key(None), "codex", now + 1.0) && !limits.out_of_quota(&key(Some(&shared)), "codex", now + 1.0));
+    }
+
+    #[test]
+    fn a_bots_own_key_is_never_kept_as_a_login_another_bot_shares() {
+        // Gemini CLI and pi sign in with each bot's own key: one bot's spent key says nothing about another's.
+        assert_eq!((login("pi", "pi", None), login("gemini", "gemini", None)), (None, None));
+        let now = crate::util::epoch_s();
+        let profile = crate::profiles::Profile::new("limit-test-key", "/tmp/acme-profiles/key", false);
+        settle_limit("pi", "pi", Some(&profile), true, false);
+        assert!(!out_of_quota("limit-test-key", "pi", now + 1.0) && !out_of_quota("", "pi", now + 1.0));
+        // A computer login on the same profile is kept, and a completed turn there clears it.
+        settle_limit("codex", "codex", Some(&profile), true, false);
+        assert!(out_of_quota("limit-test-key", "codex", now + 1.0));
+        settle_limit("codex", "codex", Some(&profile), false, true);
+        assert!(!out_of_quota("limit-test-key", "codex", now + 1.0));
     }
 
     #[test]
