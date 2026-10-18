@@ -5,6 +5,7 @@
 //! status {state}, tokens {input, output, total, usage{input, cached, output}}, rate_limits, error, diagnostic.
 
 pub mod antigravity;
+pub mod appdriver;
 pub mod claude;
 pub mod codex;
 pub mod cursor;
@@ -333,6 +334,8 @@ pub enum Host {
     Pi(pi::PiHost),
     Cursor(cursor::CursorHost),
     Grok(grok::GrokHost),
+    /// A bot in another platform's app on this Mac, through tico-appdriver (crate::appdriver).
+    AppDriver(appdriver::AppDriverHost),
 }
 
 impl Host {
@@ -371,6 +374,10 @@ impl Host {
                 h.start();
                 Ok(())
             }
+            Host::AppDriver(h) => {
+                h.start();
+                Ok(())
+            }
         }
     }
 
@@ -384,6 +391,7 @@ impl Host {
             Host::Pi(h) => h.stop().await,
             Host::Cursor(h) => h.stop().await,
             Host::Grok(h) => h.stop().await,
+            Host::AppDriver(h) => h.stop().await,
         }
     }
 
@@ -397,6 +405,7 @@ impl Host {
             Host::Pi(h) => h.alive(),
             Host::Cursor(h) => h.alive(),
             Host::Grok(h) => h.alive(),
+            Host::AppDriver(h) => h.alive(),
         }
     }
 
@@ -411,6 +420,7 @@ impl Host {
             Host::Pi(_) => ("pi", ""),
             Host::Cursor(_) => ("cursor", ""),
             Host::Grok(_) => ("grok", ""),
+            Host::AppDriver(_) => ("grokbot", ""),
         }
     }
 
@@ -435,6 +445,7 @@ impl Host {
             Host::Pi(h) => Ok(h.start_thread(settings)),
             Host::Cursor(h) => h.start_thread(settings).await,
             Host::Grok(h) => h.start_thread(bot, settings).await,
+            Host::AppDriver(h) => Ok(h.start_thread(settings)),
         }
     }
 
@@ -448,6 +459,7 @@ impl Host {
             Host::Pi(h) => Ok(h.resume_thread(thread_id, settings)),
             Host::Cursor(h) => Ok(h.resume_thread(thread_id, settings)),
             Host::Grok(h) => h.resume_thread(thread_id, settings).await,
+            Host::AppDriver(h) => Ok(h.resume_thread(thread_id, settings)),
         }
     }
 
@@ -461,6 +473,7 @@ impl Host {
             Host::Pi(h) => h.start_turn(thread_id, text, effort),
             Host::Cursor(h) => h.start_turn(thread_id, text, effort),
             Host::Grok(h) => h.start_turn(thread_id, text).await,
+            Host::AppDriver(h) => h.start_turn(thread_id, text, effort),
         }
     }
 
@@ -474,6 +487,7 @@ impl Host {
             Host::Pi(_) => Err(failed("Pi runtime cannot steer a running turn")),
             Host::Cursor(_) => Err(failed("Cursor runtime cannot steer a running turn")),
             Host::Grok(_) => Err(failed("grok agent cannot steer a running turn")),
+            Host::AppDriver(_) => Err(failed("a turn in a Mac app cannot be steered")),
         }
     }
 
@@ -505,6 +519,10 @@ impl Host {
                 Ok(())
             }
             Host::Grok(h) => h.interrupt(thread_id).await,
+            Host::AppDriver(h) => {
+                h.interrupt(turn_id);
+                Ok(())
+            }
         }
     }
 
