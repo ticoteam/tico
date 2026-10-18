@@ -91,9 +91,30 @@ fn gateway_agent_dir(settings: &Settings, env: &Env) -> Option<PathBuf> {
     // pi retries any 429 or 5xx within seconds, and never waits for Retry-After. The Gateway's `rate_limited` asks for
     // an hour (more refused keys from this address extend it), so a Gateway turn does not retry in pi: the server
     // retries by the Gateway's code instead (backend/execution.py).
-    std::fs::write(dir.join("settings.json"), br#"{"retry": {"enabled": false}}"#).ok()?;
+    // pi's bash tool hands its commands pi's whole environment, the gateway key included: each command starts by
+    // unsetting it. (A command can still read pi's own /proc environ; this keeps the key out of ordinary tool output.)
+    let settings_json = json!({"retry": {"enabled": false}, "shellCommandPrefix": format!("unset {GATEWAY_KEY_ENV}")});
+    std::fs::write(dir.join("settings.json"), serde_json::to_vec_pretty(&settings_json).ok()?).ok()?;
     crate::isolation::chown(&dir.join("settings.json"));
     Some(dir)
+}
+
+/// Loopback hosts, added to NO_PROXY for a Gateway turn. pi sends every request through the environment's proxy
+/// (a CONNECT tunnel, even for plain http), so a proxy without a loopback bypass would carry a plain-http local
+/// Gateway's request, key and all, and reach its own loopback, not this computer's.
+const LOOPBACK: &[&str] = &["localhost", "127.0.0.1", "::1"];
+
+fn bypass_proxy_for_loopback(env: &mut Env) {
+    for name in ["NO_PROXY", "no_proxy"] {
+        let mut hosts: Vec<String> =
+            env.get(name).map(|v| v.split(',').map(|h| h.trim().to_string()).filter(|h| !h.is_empty()).collect()).unwrap_or_default();
+        for host in LOOPBACK {
+            if !hosts.iter().any(|h| h.eq_ignore_ascii_case(host)) {
+                hosts.push(host.to_string());
+            }
+        }
+        env.insert(name.into(), hosts.join(","));
+    }
 }
 
 /// The Tico AI Gateway's error codes (the same on every endpoint), each with the fixed message it is sent with. pi
@@ -279,6 +300,7 @@ impl Wire for Pi {
             if let Some(dir) = gateway_agent_dir(settings, &env) {
                 env.insert("PI_CODING_AGENT_DIR".into(), dir.display().to_string());
             }
+            bypass_proxy_for_loopback(&mut env);
             return env;
         }
         let key = openrouter_key(&env, settings.env.is_empty());
@@ -467,6 +489,32 @@ mod tests {
         assert_eq!(models["providers"]["tico"]["api"], "openai-completions");
         let settings: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("runtime/pi-gateway/settings.json")).unwrap()).unwrap();
         assert_eq!(settings["retry"]["enabled"], false);
+        // Every bash command pi runs starts without the key in its environment.
+        assert_eq!(settings["shellCommandPrefix"], "unset TICOAI_GATEWAY_KEY");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_gateway_turn_never_sends_a_loopback_request_through_a_proxy() {
+        let dir = std::env::temp_dir().join(format!("pi-proxy-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let ws = dir.display().to_string();
+        let mut s = Settings { cwd: ws.clone(), model: Some("tico-mid-1.0".into()), ..Default::default() };
+        for (k, v) in [("PATH", "/usr/bin:/bin"), ("HUB_WORKSPACE", ws.as_str()), (GATEWAY_KEY_ENV, "tgw-synthetic-fixture"),
+                       (GATEWAY_URL_ENV, "http://127.0.0.1:8080/v1/gateway"), ("HTTP_PROXY", "http://proxy.example:3128"),
+                       ("NO_PROXY", "corp.example, LOCALHOST")] {
+            s.env.insert(k.into(), v.to_string());
+        }
+        let env = Pi::env(&s);
+        // The proxy stays for everything else; loopback is added once to both spellings, beside what was there.
+        assert_eq!(env["HTTP_PROXY"], "http://proxy.example:3128");
+        assert_eq!(env["NO_PROXY"], "corp.example,LOCALHOST,127.0.0.1,::1");
+        assert_eq!(env["no_proxy"], "localhost,127.0.0.1,::1");
+        // A turn on another provider's model is left as it was.
+        s.model = Some("kimi-k3".into());
+        let other = Pi::env(&s);
+        assert_eq!(other["NO_PROXY"], "corp.example, LOCALHOST");
+        assert!(!other.contains_key("no_proxy"));
         std::fs::remove_dir_all(dir).unwrap();
     }
 
