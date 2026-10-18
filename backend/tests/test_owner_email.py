@@ -6,6 +6,8 @@ import pytest
 
 from backend import access as Access
 from backend import manage
+from backend import routines
+from backend.auth import Identity
 from backend.store import H
 from backend.tests.test_onboarding import OWNER_EMAIL, environment, signed_in  # noqa: F401
 from backend.tests.test_people_access import HeaderProxy, call, person_headers, view
@@ -120,6 +122,39 @@ def test_only_the_signed_in_owner_changes_it_and_only_typed_twice(environment):
     change(api, OWNER_EMAIL, expected=409)                                 # already the owner's
     change(api, NEW, revision=revision + 5, expected=409)                  # stale page
     assert state(api) == before
+
+
+def test_botops_and_the_assistant_acting_as_the_owner_are_refused_even_after_a_click(environment):
+    api = environment()
+    before = state(api)
+    revision = view(api)["owner"]["revision"]
+    for token, via, confirmed in (("as-botops", "botops", False), ("as-assistant", "assistant", False),
+                                  ("as-click", "assistant", True), ("as-botops-click", "botops", True)):
+        api.app.state.store.settings.test_identities[token] = Identity(
+            "human:morgan", "owner", email=OWNER_EMAIL, via=via, confirmed=confirmed)
+        refused = change(api, NEW, signed_in(token), expected=403, revision=revision)
+        # Unconfirmed BotOps is stopped before the route; a confirmed click reaches it and is refused there.
+        assert confirmed is False or "signed-in browser" in refused["error"]["detail"], (token, refused)
+    assert state(api) == before
+
+
+def test_a_message_bot_keeps_reading_the_old_mailbox_both_ways(environment):
+    api = environment()
+    with api.app.state.store.transaction() as c:
+        roster = Access._load_json(c, "people")
+        roster["people"] = [{**p, "inbox_bot": "coo"} if p["id"] == "morgan" else p for p in roster["people"]]
+        Access._save_roster(c, roster)
+        assert routines.token_mailboxes(c, "coo") == [OWNER_EMAIL]               # no mailbox declared: the sign-in
+    api.app.state.auth.proxy = HeaderProxy()
+    for email in (NEW, OWNER_EMAIL, NEW):
+        change(api, email)
+        assert api.get("/api/v2/me", headers={"x-test-email": email}).json()["actor"] == "human:morgan"
+        with api.app.state.store.read() as c:
+            assert routines.token_mailboxes(c, "coo") == [OWNER_EMAIL]
+            [box] = routines.message_bot_mailboxes(c)
+            assert box["address"] == OWNER_EMAIL and box["person_id"] == "morgan"
+            config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='coo'").fetchone()[0])
+            assert routines.inbox_of("coo", config, routines._roster(c))["mailboxes"] == [OWNER_EMAIL]
 
 
 def test_changing_it_back_lets_the_old_address_in_again_as_the_same_person(environment):

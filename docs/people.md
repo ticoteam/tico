@@ -52,10 +52,19 @@ comment, approval, conversation, bot and role stays theirs. It is not a transfer
 
 **First, set up the new address in Cloudflare Access.** Tico doesn't sign anyone in itself: Cloudflare Access (or
 Cognito, or your OIDC provider) checks who you are, then tells Tico your address. Add the new address, or its Google
-login method, to the Access application's policy. Then check it: in a private window, sign in to Tico with the new
-address. Tico's "not on the roster" page means Cloudflare let the address through; that is what you want for now.
-Don't add the new address on this page or to the allow list first: it would join as a second person, and Tico then
-refuses the change because the address belongs to someone else.
+login method, to the Access application's policy. Then check it, one of two ways:
+
+- **Tico would not let the new address in on its own** (it is not under **Also allowed**, and its domain is not one
+  that **Anyone at <domain> can sign in** covers): in a private window, sign in to Tico with the new address. Tico's
+  "not on the roster" page means Cloudflare let the address through; that is what you want for now.
+- **Tico would let it in** (a new address at your own company's domain, usually): don't sign in to Tico with it yet.
+  That sign-in would join the address as a second person, and Tico then refuses the change because the address
+  belongs to someone else. Check it at Cloudflare instead, with the Access application's policy tester for the new
+  address.
+
+For the same reason, don't add the new address on this page or to the allow list first. If a second person did join
+with the new address, first give that person another email nobody uses: ask BotOps (you confirm its card), or call
+`POST /api/v2/access/humans/<their id>` with `{"email": ...}`. Then mark them as left and make the change below.
 
 **Then change it.** Signed in with your current address, open **Settings > Humans**, open the ⋯ menu on your own row
 and pick **Change my sign-in email**. Type the new address twice and confirm. Only the owner sees this, signed in as
@@ -81,8 +90,9 @@ someone else, add it on this page.
 Things Tico doesn't change:
 
 - **Mail.** A mailbox is a mail account, not a sign-in. Your archived mail stays under the old mailbox; the owner still
-  sees every mailbox. If your mail also moved, reconnect Google mail. A message bot that reads the old mailbox keeps
-  reading it until you change its mailbox.
+  sees every mailbox. If your mail also moved, reconnect Google mail. A message bot that reads your mail keeps reading the
+  old mailbox: when it read it by your sign-in address, the change writes that mailbox into the bot's settings. Change
+  its mailbox when your mail moves too.
 - **Slack.** The Slack gateway matches the email on your Slack profile. Change it there to the new address too, or
   your Slack messages to bots are refused.
 - **Server settings.** If `api.env` sets `TICO_CREDENTIAL_ADMINS` or `TICO_LOCAL_OWNER_EMAIL` to the old address,

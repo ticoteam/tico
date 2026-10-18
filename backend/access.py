@@ -548,6 +548,16 @@ def retired_emails(c):
     return emails((_load_json(c, OWNER) or {}).get("retired"))
 
 
+def _keep_mailbox(c, person, address):
+    """A message bot that declares no mailbox reads its person's email (backend/routines.py message_bot_mailboxes). A
+    sign-in change is not a mail change, so the address it reads now is written down before the email moves."""
+    from . import routines
+    bot = person.get("inbox_bot")
+    found = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone() if bot else None
+    if found and not routines.declared_mailbox(json.loads(found["config_json"] or "{}")):
+        routines.set_declared_mailbox(c, bot, address)
+
+
 def change_owner_email(c, actor, roster, owner, new_email, *, expected_revision, now, settings, via="app"):
     """The owner's own sign-in address, changed in place in the caller's transaction: the same person keeps every task,
     approval, grant and conversation, and every copy of the address moves at once (the roster, `humans`, the owner
@@ -565,6 +575,7 @@ def change_owner_email(c, actor, roster, owner, new_email, *, expected_revision,
     if (other and other["id"] != person["id"]) or _email_taken(c, new, person["id"]):
         raise Problem("conflict", new + " already belongs to someone else on the roster. Change or remove their "
                       "email first; nothing was changed", 409)
+    _keep_mailbox(c, person, old)
     row = P._person({**person, "email": new})
     _save_roster(c, {**roster, "people": [row if p["id"] == person["id"] else p for p in roster["people"]]})
     _sync_human(c, row)
