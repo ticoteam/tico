@@ -49,6 +49,9 @@ All notable changes to Tico are recorded here. The format follows
 
 ### Fixed
 
+- **Save bot** in the bot editor no longer drops a Model or Fallback you picked but didn't Apply. A picked Fallback is
+  saved with the bot; a picked Model opens its change dialog first, and if you cancel it the editor stays open and
+  says the model change wasn't applied. If the fallback can't be saved, the editor stays open with the reason.
 - `hub computer performance` and the `hub_computer_performance` tool work again: they read the computers reply as a list,
   so every call failed before it reached the computer's CPU, memory and disk history.
 - The Overview campus opened before the bots' status arrived now shows each desk's state as soon as it does, instead
