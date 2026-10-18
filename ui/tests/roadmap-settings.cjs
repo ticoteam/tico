@@ -6,6 +6,7 @@ const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs');
 // /employees leaves archived bots out, as the server does; the archived bot's name comes from GET /v2/bots/{slug}.
 const bots = [
   {name: 'product-lead', display_name: 'Head of Product', status: 'active', users: [], bot_owners: []},
@@ -56,7 +57,7 @@ const types = Array.from({length: 12}, (_, i) => ({id: 'type-' + i, name: 'Type 
         return json(settings);
       }
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
-      return json({});
+      return json(unrouted(p));
     });
     // Health's fix link: it lands on Settings > Tasks with the Public roadmap card in view.
     await page.goto('https://tico-ui.test/#/settings/roadmap');

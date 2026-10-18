@@ -56,3 +56,17 @@ def test_only_the_operator_or_an_admin_sets_or_opens_a_screen_and_only_once_the_
     post(api, f"computers/{rid}/screen", {"mode": "off"})
     assert get(api, "runners/me/screen/sessions", token=r["token"]) == {"sessions": []}     # off closes it
     post(api, f"computers/{rid}/screen/sessions", {"control": False}, expected=403)
+
+
+def test_a_new_computer_starts_at_control_for_its_operator_and_admins_and_no_one_else(api):
+    caras, anas = runner(api, operator="cara"), runner(api, operator="ana", label="Ana's Mac")
+    for r in (caras, anas):
+        offer(api, r)
+    computers = {m["id"]: m["screen"] for m in get(api, "operations")["computers"]}
+    assert computers[caras["runner_id"]] == computers[anas["runner_id"]] == "control"
+    for token in ("cara-test", "ben-test"):              # its operator (a member), then an admin, drive it at once
+        assert post(api, f"computers/{caras['runner_id']}/screen/sessions", {"control": True}, token=token)["control"]
+    for control in (True, False):                        # a member opens no one else's computer
+        post(api, f"computers/{anas['runner_id']}/screen/sessions", {"control": control}, token="cara-test",
+             expected=403)
+    post(api, f"computers/{anas['runner_id']}/screen", {"mode": "view"}, token="cara-test", expected=403)

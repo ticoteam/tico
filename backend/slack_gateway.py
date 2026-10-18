@@ -20,8 +20,9 @@ so there is no public receiver and no signing secret. What it does, in order, fo
    reply to the bot that last asked here?", "does it ask for anything?" and "does it name a
    bot?". The rules (`docs/slack-gateway.md`): asks below `slack_ask_threshold` wakes nobody;
    every bot at or above `slack_route_threshold` is a recipient, best `slack_max_recipients` by
-   confidence; none means the assistant (`coo`) with the candidates named; a recipient the write
-   layer refuses (paused, quarantined) is dropped with the reason, and the assistant again if
+   confidence; none means the assistant (`coo`) with the candidates named; a recipient paused or
+   quarantined since the roster was read keeps the message for when it is back, and the person is told; one the
+   write layer refuses (archived, planned) is dropped with the reason, and the assistant again if
    that empties the set. Every score and answer is stored on the event and on the message. A call
    that cannot be answered is retried for `ROUTE_GIVE_UP_SECONDS`; one that is refused, or still
    failing after that, ends the message as `failed` with the reason, and the human is told in the thread.
@@ -825,8 +826,11 @@ class Gateway:
                         (event["channel"], event["thread_ts"], bot)).fetchone()
         if row and H.conversation(c, row["conversation_id"]) and not H.conversation(c, row["conversation_id"])["closed_at"]:
             return row["conversation_id"], False
+        # A person's message to a paused or quarantined bot is kept and runs when the bot is back, a new thread as
+        # much as a reply in one (hubdb.say); planned, archived and unknown bots are still refused.
         conv = H.open_conversation(c, actor, [actor, "bot:" + bot], kind="chat",
-                                   subject=f"Slack {event['channel']} {event['thread_ts']}", scope="direct")
+                                   subject=f"Slack {event['channel']} {event['thread_ts']}", scope="direct",
+                                   allow_held=H.is_human(actor))
         c.execute("INSERT OR REPLACE INTO slack_threads(channel,thread_ts,bot,conversation_id,created,last_routed) "
                   "VALUES(?,?,?,?,?,NULL)", (event["channel"], event["thread_ts"], bot, conv["id"], self.clock()))
         return conv["id"], True
@@ -881,7 +885,8 @@ class Gateway:
                 continue
             c.execute("UPDATE slack_threads SET last_routed=? WHERE channel=? AND thread_ts=? AND bot=?",
                       (self.clock(), event["channel"], event["thread_ts"], bot))
-            delivered.append({"bot": bot, "conversation_id": cid, "message_id": message["id"], "opened": opened})
+            delivered.append({"bot": bot, "conversation_id": cid, "message_id": message["id"], "opened": opened,
+                              **({"held": held} if (held := H.held_note(c, "bot:" + bot)) else {})})
         if not delivered and not decision["fallback"] and decision["dropped"]:
             # Everyone the decision model chose is unreachable: the assistant gets it, with the reasons on it.
             asker = self.fallback_bot([r["slug"] for r in c.execute("SELECT slug FROM bots WHERE state='active'")
@@ -986,6 +991,14 @@ class Gateway:
                             decision=decision)
         LOG.info("Event %s %s -> %s", event["event_id"], state_out,
                  ",".join(r["bot"] for r in decision["recipients"]) or "nobody")
+        held = [one["held"] for one in decision.get("delivered") or [] if one.get("held")]
+        if held:
+            # Kept for a paused or quarantined bot: the person hears it waits, rather than nothing until it is back.
+            try:
+                self.slack.post_message(event["channel"], event["reply_ts"] or None, " ".join(held))
+            except Exception as post_exc:
+                LOG.warning("Could not tell the human in %s that the bot is held: %s", event["channel"],
+                            type(post_exc).__name__)
         if decision["routed_by"] == "budget" and state_out != "routed":
             # Over the cap with no assistant or BotOps to take it: the message is kept, and the human is told.
             try:

@@ -3,6 +3,7 @@ const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs');
 const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();   // load.cjs arrives with #254
 
 (async () => {
@@ -63,7 +64,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
       }
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       if (p.endsWith('/files')) return json({files: []});
-      return json({});
+      return json(unrouted(p));
     });
     // On a phone the top line is only the bot and its tabs; branches wait at the top of More.
     await page.goto('https://tico-ui.test/#/bot/architect/more');

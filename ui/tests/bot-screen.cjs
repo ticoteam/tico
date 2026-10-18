@@ -7,6 +7,7 @@ const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs');
 const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();
 
 (async () => {
@@ -61,7 +62,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
         }
         if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
         if (p.endsWith('/files')) return json({files: []});
-        return json({});
+        return json(unrouted(p));
       });
       // The row's words, without the icon's ligature name.
       const rowText = () => page.locator('#bot-screen-row').evaluate(el => {

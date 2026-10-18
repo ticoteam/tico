@@ -11,6 +11,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const {html, uiFile} = require('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs');
 const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();   // load.cjs arrives with #254
 
 async function access(browser) {
@@ -70,7 +71,7 @@ async function access(browser) {
     if (p === '/api/v2/tasks') return json({tasks: []});
     if (p === '/api/v2/conversations') return json({conversations: []});
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
-    return json({});
+    return json(unrouted(p));
   });
   page.on('pageerror', e => errors.push(e.message));
   page.on('console', m => { if (process.env.DEBUG_UI) console.log('console:', m.text()); });
@@ -265,7 +266,7 @@ async function roles(browser) {
       {id: 'm2', conversation_id: conv.id, from_actor: 'bot:botops', to_actor: 'human:ana', kind: 'say', body: 'Needs your OK: Add Sean (sean@example.test) to the roster',
        created: new Date().toISOString(), refs: {assistant: true, action: 'act1'}}], execution: null, has_more: false, next_before: null});
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
-    return json({});
+    return json(unrouted(p));
   });
   page.on('pageerror', e => errors.push(e.message));
 
