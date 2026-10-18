@@ -12,7 +12,8 @@ import os
 import shlex
 from datetime import datetime, timezone
 
-from . import access, blob_s3, inbox_isolation, model_login, providers, releases, runner_versions, setup_stuck, watchers
+from . import (access, blob_s3, inbox_isolation, model_login, providers, releases, roadmaps, runner_versions,
+               setup_stuck, watchers)
 from .getting_started import _online_runners, _signed_in_runtime, _wanted_runtimes, _person
 
 
@@ -962,6 +963,25 @@ def _sealed_secrets(c, settings, github):
 KEY_LOST = " The credential key, which opens every saved credential, is on this server's disk only."
 
 
+def _roadmap_suggestions(c):
+    """A public roadmap whose suggestions reach no bot, or not the bot the owner chose. It reads the one rule that
+    routes suggestions (roadmaps.suggestions_receiver), so this line and the visitor's refusal never disagree, and
+    it clears by itself once a bot is receiving them again. Without an enabled label nobody can suggest anything."""
+    if not roadmaps.settings(c)['labels']:
+        return None
+    receiver = roadmaps.settings_view(c)['suggestions_receiver']
+    fix = [_fix("Open Public roadmap", "#/settings/roadmap")]
+    if not receiver['bot']:
+        return _check("roadmap_suggestions", "No bot receives roadmap suggestions", "warn",
+                      "Visitors who suggest a feature on your public roadmap are being turned away.", fix)
+    why = {'chosen_archived': "is archived", 'chosen_inactive': "isn't active"}.get(receiver['source'])
+    if why:
+        return _check("roadmap_suggestions",
+                      f"The bot chosen for roadmap suggestions {why}; suggestions now go to {receiver['name']}", "warn",
+                      "To clear this, make the chosen bot active again, or choose another bot or Automatic.", fix)
+    return None
+
+
 def _signin(settings):
     kind = settings.proxy_kind
     if kind:
@@ -970,7 +990,7 @@ def _signin(settings):
         return _check("signin", "Sign-in", "ok", "Local sign-in on this computer.")
     return _check("signin", "Sign-in", "warn",
                   "No identity proxy is configured for this address, so people cannot sign in safely.",
-                  [_fix("Sign-in settings", "#/settings", "access")])
+                  [_fix("Sign-in settings", "https://github.com/ticoteam/tico/blob/main/docs/install.md#sign-in")])
 
 
 def _server_settings(c, settings):
@@ -1453,6 +1473,8 @@ def view(c, who, settings, auth, github, config):
                              + ". A bot talked into it could read every mailbox. Use a Linux Docker runner with the "
                              "current runner.compose.yaml, where the runner keeps the key to itself (docs/mail.md).",
                              [_fix("Open Computers", "#/settings", "devices")]))
+    if full and (suggestions := _roadmap_suggestions(c)):
+        checks.append(suggestions)
     if full:
         checks.append(_github(c, github))
         if repo_create := _github_repo_create(c, github):

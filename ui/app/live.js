@@ -9,7 +9,7 @@
 // (liveFallback); everywhere else nothing polls for what this stream carries.
 const LIVE_TOPICS = ['tasks', 'messages', 'runs', 'bots', 'needs'];
 const LIVE = {es: null, after: null, started: false, connected: false, opened: 0, tries: 0, timer: 0, restart: 0,
-              handlers: new Map(), conversations: new Map(), expiredToast: false};
+              handlers: new Map(), conversations: new Map()};
 const liveAvailable = () => typeof EventSource !== 'undefined';
 const liveConnected = () => LIVE.connected;
 // `fn(data)` for each event of `topic` (one of LIVE_TOPICS, or `reset`, `status` and `needs-list`); returns the unsubscribe.
@@ -93,6 +93,7 @@ function liveAdvance(seq) {
 }
 function liveEventsConnect() {
   clearTimeout(LIVE.timer); clearTimeout(LIVE.restart);
+  if (SESSION.out) return;                                // signed out: nothing reconnects until the person signs in
   try { LIVE.es?.close(); } catch {}
   const es = LIVE.es = new EventSource(liveUrl());
   LIVE.opened = Date.now();
@@ -104,7 +105,7 @@ function liveEventsConnect() {
     // The list as this stream counts from: a held copy of another version (missed while away) is read again.
     if (d.needs_version) liveEmit('needs', {version: d.needs_version});
     const was = LIVE.connected;
-    LIVE.connected = true; LIVE.expiredToast = false;
+    LIVE.connected = true;
     if (!was) liveEmit('status', {connected: true});
   });
   for (const topic of LIVE_TOPICS) es.addEventListener(topic, ev => {
@@ -120,24 +121,38 @@ function liveEventsConnect() {
     LIVE.after = Number(liveData(ev)?.seq) || 0;
     liveEmit('reset', {});
   });
-  // Signed out (or the session lapsed): say so once, and look again in a while; another tab may sign in.
+  // The server says the sign-in lapsed: GET /v2/me confirms it and shows the signed-out banner (session.js). If
+  // another tab signed in meanwhile, look again in a while.
   es.addEventListener('expired', () => {
     if (!current()) return;
     liveDown(es);
-    if (!LIVE.expiredToast) { LIVE.expiredToast = true; toast('Sign in again to continue receiving updates.', true); }
-    LIVE.timer = setTimeout(liveEventsConnect, 30000);
+    liveAfterProbe(30000);
   });
   // The server ends each stream after about five minutes; the browser would reconnect on its own, but with the
   // first URL's `after`. This reconnects with the newest one: at once after a full stream, backing off while
   // the connection keeps failing.
+  // A second failure in a row, while the browser says it is online, asks whether a proxy signed the person out: its
+  // login redirect fails the stream exactly as a dropped network does.
   es.onerror = () => {
     if (!current()) return;
     liveDown(es);
     if (Date.now() - LIVE.opened > 20000) LIVE.tries = 0;
     const wait = LIVE.tries ? Math.min(30000, 1000 * 2 ** (LIVE.tries - 1)) : 250;
-    LIVE.tries++;
-    LIVE.timer = setTimeout(liveEventsConnect, wait);
+    if (LIVE.tries++) liveAfterProbe(wait);
+    else LIVE.timer = setTimeout(liveEventsConnect, wait);
   };
+}
+// Reconnect after `wait` as usual, and meanwhile ask whether a proxy signed the person out: if it did, signedOut stops
+// the reconnect (liveSignedOut). The reconnect never waits on the answer, so a question that stalls cannot stop it.
+function liveAfterProbe(wait) {
+  clearTimeout(LIVE.timer);
+  LIVE.timer = setTimeout(liveEventsConnect, wait);
+  void sessionProbe();
+}
+// Signed out (session.js signedOut): stop, and say the stream is down.
+function liveSignedOut() {
+  clearTimeout(LIVE.timer); clearTimeout(LIVE.restart);
+  if (LIVE.es) liveDown(LIVE.es);
 }
 function liveDown(es) {
   try { es.close(); } catch {}
@@ -145,5 +160,5 @@ function liveDown(es) {
   if (LIVE.connected) { LIVE.connected = false; liveEmit('status', {connected: false}); }
 }
 // A tab coming back from sleep or a dropped network reconnects now rather than at the end of its backoff.
-window.addEventListener('online', () => { if (LIVE.started && !LIVE.connected) liveEventsConnect(); });
+window.addEventListener('online', () => { if (LIVE.started && !LIVE.connected && !SESSION.out) liveEventsConnect(); });
 window.liveEvents = {on: liveOn, follow: liveFollow, available: liveAvailable, connected: liveConnected};

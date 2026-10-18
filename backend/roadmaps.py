@@ -13,7 +13,7 @@ from .models import Contract
 from .store import Problem
 
 # Anonymous suggestions waiting at Suggested, across every visitor: the per-address limit alone lets many
-# addresses queue unbounded work for the Product Manager (the same overall cap as waiting pairings).
+# addresses queue unbounded work for the bot that receives them (the same overall cap as waiting pairings).
 SUGGESTIONS_WAITING_MAX = 20
 VISIBILITY = "TEXT NOT NULL DEFAULT 'private' CHECK(visibility IN ('public','private'))"
 
@@ -38,7 +38,7 @@ def migrate(c):
     # those copies go from tasks that are not public, so publishing one later needs public text written for it.
     c.execute('CREATE TABLE IF NOT EXISTS registry_metadata(key TEXT PRIMARY KEY, value_json TEXT NOT NULL)')
     if c.execute("INSERT OR IGNORE INTO registry_metadata(key,value_json) VALUES('roadmaps_explicit_public_text','true')").rowcount:
-        c.execute("UPDATE task_types SET default_visibility='private' WHERE manager='product-manager'")
+        c.execute("UPDATE task_types SET default_visibility='private' WHERE role='product-roadmap'")
         c.execute("UPDATE tasks SET public_title='',public_summary='' WHERE visibility='private' "
                   "AND public_title=substr(coalesce(title,''),1,300) AND public_summary=substr(coalesce(body,''),1,8000)")
     # Marked on every database, so a fresh one does not take its own second start for a first-version one. The marker
@@ -91,8 +91,37 @@ def clear_copies(c):
 def settings(c):
     row = c.execute("SELECT value_json FROM registry_metadata WHERE key='roadmaps'").fetchone() if H._has_table(c, 'registry_metadata') else None
     return {'labels': [], 'cors_origins': [], 'action_limit': 10, 'suggestion_limit': SUGGESTIONS_WAITING_MAX,
-            'bot_public_approval': True,
+            'bot_public_approval': True, 'suggestions_bot': None,
             **(json.loads(row[0]) if row else {})}
+
+
+def suggestions_receiver(c):
+    """The bot that gets visitor suggestions and the suggestions-full notice, and why: the bot chosen in settings
+    while it is active; otherwise Automatic, the first active or planned Product Manager, then an active Head of
+    Product. Returns (slug or None, 'chosen' | 'automatic' | 'chosen_archived' | 'chosen_inactive'), the last two
+    saying the chosen bot was passed over because it is archived (or gone), or paused, quarantined or planned."""
+    chosen = settings(c)['suggestions_bot']
+    source = 'automatic'
+    if chosen:
+        state = (H._one(c, 'SELECT state FROM bots WHERE slug=?', (chosen,)) or {'state': 'archived'})['state']
+        if state == 'active':
+            return chosen, 'chosen'
+        source = 'chosen_archived' if state == 'archived' else 'chosen_inactive'
+    for template, states in (('product-manager', ('active', 'planned')), ('product-lead', ('active',))):
+        row = c.execute("SELECT bc.bot FROM bot_config bc JOIN bots b ON b.slug=bc.bot "
+                        "WHERE json_extract(bc.config_json,'$.template')=? AND b.state IN (" + ','.join('?' * len(states)) + ") "
+                        "ORDER BY bc.bot LIMIT 1", (template, *states)).fetchone()
+        if row:
+            return row[0], source
+    return None, source
+
+
+def settings_view(c):
+    """The settings plus the bot suggestions go to right now, so a reader sees what Automatic means today."""
+    bot, source = suggestions_receiver(c)
+    name = H._one(c, 'SELECT display_name FROM bots WHERE slug=?', (bot,)) if bot else None
+    return {**settings(c), 'suggestions_receiver': {
+        'bot': bot, 'name': (name and name['display_name']) or bot, 'source': source}}
 
 
 def publication_payload(task_id, operation, values):
@@ -376,7 +405,7 @@ def install_internal(app, store, auth, mutate, mover):
                 '(SELECT task_id,count(*) requester_count,sum(actor IS NULL) external_requesters,'
                 'sum(actor IS NOT NULL) internal_requesters,sum(important) important_requesters,'
                 "min(nullif(organization,'')) organization FROM task_requesters GROUP BY task_id) r ON r.task_id=t.id "
-                "WHERE t.type_id IN (SELECT id FROM task_types WHERE manager='product-manager') AND EXISTS (SELECT 1 FROM tasks WHERE tasks.id=t.id AND (" + visible + ')) '
+                "WHERE t.type_id IN (SELECT id FROM task_types WHERE role='product-roadmap') AND EXISTS (SELECT 1 FROM tasks WHERE tasks.id=t.id AND (" + visible + ')) '
                 'ORDER BY ' + sorts[sort] + ' ' + direction + ',t.id LIMIT ? OFFSET ?', (limit + 1, offset))
             items, after = page((dict(r) for r in rows), limit, offset)
             return {'tasks': items, 'next_offset': after}

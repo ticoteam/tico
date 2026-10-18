@@ -49,7 +49,8 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub task comment-moderate <id> <comment-id> hide|show|delete   a public comment on a task you manage
     hub roadmap tasks [--sort requester_count|external_requesters|important|organization|size]   ranked roadmap
     hub roadmap settings [--label L] [--cors-origin O] [--action-limit N] [--suggestion-limit N]
-                         [--bot-public-approval|--no-bot-public-approval]   read, or change (owners and admins)
+                         [--bot-public-approval|--no-bot-public-approval] [--suggestions-bot SLUG|--automatic]
+                                                       read, or change (owners and admins)
     hub task deleted                                   deleted tasks you may restore
     hub task restore <id>                              put a deleted task back
     hub task update <id> --status doing|waiting|done|declined [--note "..."] [--goal ID|--goal ""]
@@ -191,6 +192,8 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub team show [--person ID] [--team NAME]
                                            humans and bots: who they are, Slack, what they own; each bot
                                            with its reports_to, group and template (the bots you may see)
+    hub org order <manager> [--set a,b,c]  a manager's direct reports in the chart's order; --set puts them in
+                                           that order (the ones left out keep their places)
     hub health check                       what is wrong with the bots, most urgent first, each with its fix
     hub health metrics [--minutes N]       the server's flight recorder (owners, admins and bots)
                                            (the Assistant gets the live snapshot)
@@ -952,6 +955,7 @@ def parser():
     s.add_argument("id")
     s.add_argument("--add", action="append")
     s.add_argument("--remove", action="append")
+    s.add_argument("--approval-id", dest="approval_id", help="an approved publish approval, for a public roadmap label")
     s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
     s.set_defaults(fn="task label")
     s = task.add_parser("close")
@@ -1429,6 +1433,12 @@ def parser():
     s.add_argument("--person", help="that human and everyone under them")
     s.add_argument("--team", help="a group id, like engineering or sales: that group and the groups in it")
     s.set_defaults(fn="team show")
+    org = sub.add_parser("org", help="the order of the team chart").add_subparsers(dest="sub")
+    s = org.add_parser("order", help="a manager's direct reports in the chart's order; --set puts them in an order")
+    s.add_argument("manager", help="a bot's slug or a human's id (human:<id> when one could be either)")
+    s.add_argument("--set", type=lambda text: [x.strip() for x in text.split(",") if x.strip()], metavar="A,B,C",
+                   help="its reports in the new order, comma-separated; the ones left out keep their places")
+    s.set_defaults(fn="org order")
     health = sub.add_parser("health", help="what is wrong, and where").add_subparsers(dest="sub")
     s = health.add_parser("check", help="what is wrong with the bots, most urgent first, each with its fix")
     s.set_defaults(fn="health check")
@@ -1600,6 +1610,9 @@ def parser():
                         "for a reviewer bot; own (default): its own model")
     s.add_argument("--capture-stream", choices=("on", "off"),
                    help="on (owner only): keep each run's raw provider stream a week for hub run export; off (default): not")
+    s.add_argument("--subscribe-updates", metavar="templates,tico|none",
+                   help="Subscribe to updates, as quiet notes for its next run: templates (its template's changes), "
+                        "tico (Tico releases), both, or none")
     s.add_argument("--shared", action=argparse.BooleanOptionalAction, default=None, help="allow branches")
     s.set_defaults(fn="bot update")
     s = bot.add_parser("check", help="what preflight would still refuse about that repository")
@@ -1690,8 +1703,10 @@ def parser():
         s = repos.add_parser(verb)
         s.add_argument("full_name")
         s.set_defaults(fn="repo " + verb)
-    s = repos.add_parser("product-create", help="preview, then confirm an exact private empty product repository (Owner only)")
+    s = repos.add_parser("product-create", help="preview, then confirm an exact private empty product repository "
+                         "(the Owner, or a bot with Create product repositories)")
     s.add_argument("name", help="exact GitHub repository name, without an organization")
+    s.add_argument("--confirm", metavar="ORG/NAME", help="the exact preview target, instead of typing it at a terminal")
     s.set_defaults(fn="repo product-create")
     s = bot.add_parser("repo-create", help="owner or BotOps: create <org>/bot-<slug> from a template, or empty")
     s.add_argument("slug")
@@ -1855,6 +1870,9 @@ def parser():
     s.add_argument("--suggestion-limit", dest="suggestion_limit", type=int, help="visitor suggestions waiting at once")
     s.add_argument("--bot-public-approval", dest="bot_public_approval", action=argparse.BooleanOptionalAction, default=None,
                    help="bots need an approval to publish")
+    who = s.add_mutually_exclusive_group()
+    who.add_argument("--suggestions-bot", dest="suggestions_bot", metavar="SLUG", help="the bot that receives visitor suggestions")
+    who.add_argument("--automatic", action="store_true", help="suggestions go to the Automatic bot (Product Manager, then Head of Product)")
     s.set_defaults(fn="roadmap settings")
     keys = sub.add_parser("service-key", help="keys another system uses to file tasks, or to update this install (owner and admins)").add_subparsers(dest="sub")
     s = keys.add_parser("create", help="make a key; it is shown this once")
@@ -1964,6 +1982,8 @@ def rename_argv(argv):
     argv = list(argv)
     if argv[:1] == ["note"] and len(argv) > 1 and argv[1] not in ("create", "list", "delete") and not argv[1].startswith("-"):
         return ["note", "create"] + argv[1:], '"hub note <bot> <text>" is now "hub note create <bot> <text>"'
+    if argv[:2] == ["org", "order"]:                   # `hub org` alone is the old `hub team show`; this one is new
+        return argv, None
     for old, new, tail, rewrite in RENAMED:
         if tuple(argv[:len(old)]) == old:
             rest = argv[len(old):]

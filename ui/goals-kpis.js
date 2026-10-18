@@ -440,17 +440,15 @@ function goalTreeShape() {
   }
   return {byParent, helpers};
 }
-// The org chart's order: a group's humans and bots first, then the groups in it; people before bots; a bot's
-// `order`, then names.
+// The org chart's order: a group's humans and bots first, then the groups in it; a manager's reports in the order
+// someone put them; then the chart's own order (chartFallback).
 function goalTreeOrder(parent) {
-  const nameOf = n => n.kind === 'person' ? (n.person.name || n.id) : n.kind === 'group' ? n.name : (n.display_name || n.name || '').replace(TEMP_RE, '');
+  const placed = byReportOrder(parent);
   return (a, b) => {
     if ((a.kind === 'group') !== (b.kind === 'group')) return a.kind === 'group' ? 1 : -1;
     if (a.kind === 'group') return (a.order || 0) - (b.order || 0);
-    if ((a.kind === 'person') !== (b.kind === 'person')) return a.kind === 'person' ? -1 : 1;
-    if (a.kind === 'bot' && isTempBot(a) !== isTempBot(b)) return isTempBot(a) - isTempBot(b);
-    if (a.kind === 'bot' && byBotOrder(a, b)) return byBotOrder(a, b);
-    return nameOf(a).localeCompare(nameOf(b));
+    if (placed(a, b)) return placed(a, b);
+    return chartFallback(a, b);
   };
 }
 const GOAL_WORST = ['red', 'yellow', 'green', 'gray', 'none'];

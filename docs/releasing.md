@@ -80,6 +80,23 @@ computer acceptance still need the corresponding Mac environment. The full Docke
 
 ## Before you tag
 
+At freeze, before asking for Release validation, check what the candidate carries since the previous tag:
+
+```
+python scripts/freeze_guard.py --head <candidate> --receipts receipts.json
+```
+
+It names every change that undoes a pull request an earlier release shipped (a stale tree committed over newer work,
+or a reverted fix put back): all of it, however small, or most of its meaningful product lines; tests and release notes
+don't count. It compares against all history unless `--releases N` limits it (about 15 seconds for a release of 60
+pull requests). It also names every merged pull request whose final head has no approving GitHub review or ticket
+review receipt at that commit (an approval of an earlier head counts only when the change is the same line for line),
+and every commit that landed without a pull request. With no `--previous`, it takes the newest release tag that doesn't
+already contain the candidate, and refuses to check an empty range. `receipts.json` lists the heads
+the tickets' reviewers approved (`[{"pr": 639, "head": "<sha>", "source": "<ticket>"}]`); the script's docstring has
+the format. It exits 1 with findings: settle each one (an intended revert, or a review of the final head) before the
+candidate goes on.
+
 ```
 python scripts/release_checks.py --release                     # this checkout is the candidate (v9.9.9)
 python scripts/release_checks.py --release --previous v0.3.21  # upgrade from a given release instead of the newest tag

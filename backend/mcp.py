@@ -200,7 +200,9 @@ def task_dry_run(c, auth, who, body):
     else:
         if H.is_bot(target):
             state = (H.bot(c, H.actor_id(target)) or {}).get("state")
-            if state != "active":
+            if state in H.INACTIVE_STATES:
+                problems.append(H.target_inactive(c, H.actor_id(target), state))
+            elif state != "active":
                 problems.append(f"{H.actor_id(target)} is {state}, not active")
             if not auth.bot_access(c, who, H.actor_id(target))["write"]:
                 problems.append(f"you can see {H.actor_id(target)} but may not give it work; "

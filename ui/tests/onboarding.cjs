@@ -885,10 +885,10 @@ function recruitFor({department, briefing, share}) {
     await waiting.reload();
     await waiting.locator('[data-onb-bot=coo]').waitFor();
     assert.match(await waiting.locator('[data-onb-bot=coo]').textContent(), /Add an AI provider\./);
-    assert.equal(await waiting.locator('[data-onb-bot=coo] a[data-fr-providers]').count(), 1);   // a link to Settings > AI providers
+    assert.equal(await waiting.locator('[data-onb-bot=coo] a[data-gs-tab=providers]').count(), 1);   // a link to Settings > AI providers
     assert.equal(await waiting.locator('#onb-after > section').first().getAttribute('id'), 'fr-providers');
-    await waiting.locator('#fr-providers [data-fr-providers]').click();
-    await waiting.waitForFunction(() => SETTINGS_TAB === 'providers');
+    await waiting.locator('#fr-providers [data-gs-tab=providers]').click();
+    await waiting.locator('#settings-tabs [data-settings-tab=providers][aria-selected=true]').waitFor();   // lands on that tab
     CONFIG.local = true;
     await waiting.reload();
     await waiting.goto('https://tico-ui.test/#/welcome');

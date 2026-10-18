@@ -37,6 +37,24 @@ def test_a_claimed_attempt_carries_the_company_default_for_a_bot_that_names_none
 
 
 
+def test_a_bot_set_to_haiku_5_5_at_xhigh_runs_that_model_at_that_effort(api):
+    """A Settings model change is what the runner's next claim carries: `--model` and `--effort` come from it."""
+    from backend.tests.test_api import claim, post, put, runner, assign, ready
+    put(api, "providers", {"enabled": ["anthropic"], "runtime": "claude", "model": "claude-opus-5-5",
+                           "expected_revision": 0})
+    r = runner(api)
+    assign(api, r, "ops")
+    ready(api, r, ["ops"])
+    with api.app.state.store.read() as c:
+        revision = c.execute("SELECT revision FROM bot_config WHERE bot='ops'").fetchone()[0]
+    post(api, "bots/ops/transitions", {"kind": "model", "model": "claude-haiku-5-5", "effort": "xhigh",
+                                       "expected_revision": revision})
+    post(api, "chat/ops", {"text": "Say hello."})
+    config = claim(api, r)["config"]
+    assert (config["runtime"], config["model"], config["reasoning_effort"]) == ("claude", "claude-haiku-5-5", "xhigh")
+    assert P.price_of("claude-haiku-5-5") == (0.10, 0.01, 0.50)
+
+
 @pytest.mark.parametrize("model,runtime", [("gpt-6-sol", "codex")])
 def test_retired_models_remain_readable_but_cannot_be_new_choices(model, runtime):
     company = P._record({"enabled": ["openai", "anthropic"], "runtime": runtime, "model": model})
@@ -45,3 +63,25 @@ def test_retired_models_remain_readable_but_cannot_be_new_choices(model, runtime
     with pytest.raises(P.ProviderError) as refused:
         P.complete_choice(company["enabled"], runtime, model)
     assert refused.value.status == 422 and "retired" in refused.value.detail
+
+
+def test_the_bot_list_says_the_effort_a_bot_runs_at_and_nothing_when_it_has_none(api):
+    """The runtime mark's hover reads harness, model and effort ("Codex GPT 6.1 Sol High"): the bot's
+    reasoning_effort, else an older config `effort`, else its stored row; none, or no runtime, sends none."""
+    from backend.store import encode
+    from backend.tests.test_api import put
+    put(api, "providers", {"enabled": ["openai", "anthropic"], "runtime": "claude", "model": "claude-opus-5-5", "expected_revision": 0})
+    configs = {"ops": ({"runtime": "codex", "model": "gpt-6.1-sol", "reasoning_effort": "high", "effort": "low"}, "max"),
+               "cpo": ({}, ""), "coo": ({"effort": "xhigh"}, "low"), "inbox": ({}, "medium")}
+    with api.app.state.store.transaction() as c:
+        for bot, (config, stored) in configs.items():
+            c.execute("UPDATE bot_config SET config_json=? WHERE bot=?", (encode({"name": bot, "status": "active", **config}), bot))
+            c.execute("UPDATE bots SET effort=? WHERE slug=?", (stored, bot))
+    rows = {row["name"]: row for row in api.get("/api/employees", headers={"Authorization": "Bearer ana-test"}).json()}
+    said = {bot: (rows[bot]["resolved_runtime"], rows[bot]["resolved_model"], rows[bot]["resolved_effort"]) for bot in configs}
+    assert said == {"ops": ("codex", "gpt-6.1-sol", "high"), "cpo": ("claude", "claude-opus-5-5", ""),
+                    "coo": ("claude", "claude-opus-5-5", "xhigh"), "inbox": ("claude", "claude-opus-5-5", "medium")}
+    # A team with no provider: nothing resolves, so no effort is said either.
+    put(api, "providers", {"enabled": [], "runtime": "", "model": "", "expected_revision": 1})
+    rows = {row["name"]: row for row in api.get("/api/employees", headers={"Authorization": "Bearer ana-test"}).json()}
+    assert (rows["cpo"]["resolved_runtime"], rows["cpo"]["resolved_effort"], rows["inbox"]["resolved_effort"]) == ("", "", "")

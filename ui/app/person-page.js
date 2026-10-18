@@ -47,7 +47,10 @@ function pagePerson(id, tab) {
   if (tab === 'assistant' && tabs.includes('assistant')) { location.replace(ASSISTANT); return; }
   orgHistoryVisit('p:' + p.id);
   tab = tabs.includes(tab) ? tab : 'profile';
-  const reports = (S.people || []).filter(row => row.reports_to === p.id && !row.hidden);
+  // In the chart's order: the ones someone placed first (byReportOrder), then the chart's own order (chartFallback).
+  const placed = byReportOrder('p:' + p.id), inOrder = (a, b) => placed(a, b) || chartFallback(a, b);
+  const reports = (S.people || []).filter(row => row.reports_to === p.id && !row.hidden)
+    .sort((a, b) => inOrder({kind: 'person', person: a}, {kind: 'person', person: b}));
   const bots = (p.bots || []).map(slug => S.emps.find(e => e.name === slug)).filter(e => e && !isHiddenBot(e.name));    // not the Assistant or the Librarian (ui/app/sidebar.js)
   const under = shownEmps().filter(e => e.org_parent === 'p:' + p.id);
   const boss = (S.people || []).find(row => row.id === p.reports_to);
@@ -84,7 +87,7 @@ function pagePerson(id, tab) {
     ${reports.length ? `<section class="card"><header><h2>Reports</h2></header>
       <div>${reports.map(row => `<a class="chip" href="#/person/${encodeURIComponent(row.id)}">${personAvatar(row, 20)}<span>${esc(firstName(row.name) || row.id)}</span></a>`).join('')}</div></section>` : ''}
     ${(bots.length || under.length) ? `<section class="card"><header><h2>Bots</h2></header>
-      <div>${[...new Map([...bots, ...under].map(e => [e.name, e])).values()].map(e => `<a class="chip" href="#/bot/${esc(e.name)}">${avatar(e.name, 20, stateOf(e.name))}<span>${shownName(e)}</span>${runtimeTag(e)}</a>`).join('')}</div></section>` : ''}
+      <div>${[...new Map([...bots, ...under].map(e => [e.name, e])).values()].sort((a, b) => inOrder({kind: 'bot', ...a}, {kind: 'bot', ...b})).map(e => `<a class="chip" href="#/bot/${esc(e.name)}">${avatar(e.name, 20, stateOf(e.name))}<span>${shownName(e)}</span>${runtimeTag(e)}</a>`).join('')}</div></section>` : ''}
     ${edit ? `<section class="card" id="person-notify"><header><h2>Notifications</h2></header>
       <label class="person-notify" title="A Slack DM when a task they asked for is finished or declined">
         <input type="checkbox" role="switch" class="people-switch" id="person-notify-slack" ${p.notify_slack_task_done !== false ? 'checked' : ''}>

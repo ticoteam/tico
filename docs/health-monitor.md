@@ -4,6 +4,9 @@ The Health Monitor is a built-in helper that keeps an install healthy without an
 default**. The owner turns it on or off with one switch in **Settings > Health** (`POST /api/v2/health-monitor/turn-on`,
 `/turn-off`). Turning it off pauses it; its history stays.
 
+Settings > Health also lists checks that belong to one feature, documented on that feature's page: public roadmap
+suggestions with no receiving bot are in [Public roadmaps](roadmaps.md).
+
 ## What it checks
 
 Once an hour, while it is on, the server checks the install in plain code (`backend/health_monitor.py`). No model runs:

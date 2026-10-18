@@ -465,7 +465,9 @@ def test_multipart_keeps_its_selected_identity_through_completion_or_abort(tmp_p
 @pytest.mark.parametrize('stage', ['create'])
 def test_probe_deadline_bounds_provider_and_s3_latency_without_reselecting_late(tmp_path, monkeypatch, credential_clients, stage):
     import threading
-    from backend import blob_s3
+    import time
+    from types import SimpleNamespace
+    from backend import blob_s3, blobs
     from backend.store import Problem
 
     clients, calls = credential_clients
@@ -477,9 +479,19 @@ def test_probe_deadline_bounds_provider_and_s3_latency_without_reselecting_late(
     original = getattr(target, name)
     def blocked(*args, **options):
         entered.set()
-        assert release.wait(2)
+        assert release.wait(10)
         return original(*args, **options)
     monkeypatch.setattr(target, name, blocked)
+    # The deadline runs on a clock that holds still until the probe is inside the blocked call, then
+    # jumps an hour, so a busy machine cannot spend the deadline before the probe gets there.
+    # A probe that never gets there still times out after 30 s, and fails the entered check.
+    start = time.monotonic()
+    def monotonic():
+        now = time.monotonic()
+        if entered.is_set():
+            return now + 3600
+        return start if now - start < 30 else now
+    monkeypatch.setattr(blobs, 'time', SimpleNamespace(monotonic=monotonic, sleep=time.sleep))
     try:
         assert storage.check_write(store, timeout=0.05) is False
         assert entered.is_set() and 'timed out' in write_health(store)['error']
@@ -491,7 +503,7 @@ def test_probe_deadline_bounds_provider_and_s3_latency_without_reselecting_late(
         assert len(calls) == (0 if stage == 'client' else 1)
     finally:
         release.set()
-        assert storage._probe_task[0].wait(1)
+        assert storage._probe_task[0].wait(10)
     assert storage._sources.selected is None
     assert 'timed out' in write_health(store)['error']
     assert storage.check_write(store) is True
