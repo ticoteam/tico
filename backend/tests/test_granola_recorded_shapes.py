@@ -343,6 +343,18 @@ def test_a_successful_recording_saves_the_rebuilt_form_and_nothing_granola_wrote
     assert out.strip().endswith("OK: Granola's answers match the fixtures' shapes")
 
 
+def test_a_meeting_list_the_rebuild_would_read_differently_is_refused(tmp_path, monkeypatch, capsys):
+    # Tico reads an attendee that is neither text nor an object (str(a)); the JSON rebuild drops it.
+    notes = {"meetings": [{"id": S % 1, "title": S % 2, "summary_text": S % 3, "attendees": [S % 4, 7]}]}
+    (tmp_path / "mcp_shapes.json").write_text("kept")
+    recording_run(monkeypatch, meetings_answer(json.dumps(notes)))
+    assert granola_live_check.main(["--record", str(tmp_path)]) == 2
+    out = capsys.readouterr().out
+    assert "CANNOT RECORD: meetings answer the rebuild would change; nothing was written" in out and "zq" not in out
+    assert [p.name for p in tmp_path.iterdir()] == ["mcp_shapes.json"]
+    assert (tmp_path / "mcp_shapes.json").read_text() == "kept"
+
+
 def fail_halfway(self, data, *args, **kwargs):
     with open(self, "w") as file:
         file.write(data[:len(data) // 2])

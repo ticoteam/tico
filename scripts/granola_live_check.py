@@ -654,8 +654,11 @@ def write_recording(directory, exchanges):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--record", metavar="DIR", help="write the scrubbed answers to DIR/mcp_shapes.json")
+    title, _usage, *details = __doc__.split("\n\n")
+    parser = argparse.ArgumentParser(description=title, epilog="\n\n".join(details),
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--record", metavar="DIR",
+                        help="write answers rebuilt from made-up values to DIR/mcp_shapes.json (what it keeps and drops: below)")
     args = parser.parse_args(argv)
     token, key = os.environ.get("GRANOLA_MCP_TOKEN", "").strip(), os.environ.get("GRANOLA_API_KEY", "").strip()
     if not token and not key:
