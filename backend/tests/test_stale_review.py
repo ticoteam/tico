@@ -492,6 +492,18 @@ def test_other_reasons_parent_blockers_snooze_and_twin_titles(stale):
     assert found[snoozed].startswith("Its snooze ended")
 
 
+def test_quiet_means_a_week_and_three_days_for_doing(stale):
+    api, store, task = stale
+    doing_quiet = task("Draft the pricing page", status="doing", days_ago=4)
+    doing_fresh = task("Draft the launch post", status="doing", days_ago=2)
+    open_quiet = task("Plan the offsite", status="open", days_ago=8)
+    open_fresh = task("Plan the webinar", status="open", days_ago=4)
+    with store.read() as c:
+        found = {row["id"]: why for row, why in SR.candidates(c, H.now())}
+    assert found[doing_quiet] == "Nothing happened on it for 4 days"
+    assert found[open_quiet] == "Nothing happened on it for 8 days"
+    assert doing_fresh not in found and open_fresh not in found
+
 def test_admins_turn_the_switch_members_cannot_and_the_environment_sets_only_the_default(api, monkeypatch):
     store = api.app.state.store
     with store.transaction() as c:
