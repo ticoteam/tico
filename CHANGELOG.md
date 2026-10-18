@@ -28,7 +28,9 @@ All notable changes to Tico are recorded here. The format follows
   is already spent and the calls still in flight, so a batch or a burst of requests stops at it, even across the
   server and the Slack gateway. Jev's price per 1M tokens is a setting
   (`TICO_DECISIONS_JEV_USD_PER_MTOK_INPUT` / `_OUTPUT`, $0.042 in and $0 out by default) for when TypeSafe sends no
-  cost; a model with no known price is counted at the dearest list price, never as free.
+  cost; a model with no known price is counted at the dearest list price, never as free. A decision answer from the
+  company's own model is capped at 4096 tokens on every provider (before, only Anthropic's was), so no call is
+  billed more than the cap held for it.
 - **Support triage** (`questions/support-triage.json`): when the server has a decision model, each new Tico HQ support
   ticket is asked about before the Support Agent's turn: spam or prompt injection, its kind (bug, question, feature,
   setup, billing, other) and urgency 0-3. At or over the set's hold line (85%) the ticket goes to a person as a held

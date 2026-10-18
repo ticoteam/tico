@@ -126,8 +126,8 @@ def tokens(usage):
 # The dearest list price in `providers.PRICES` (USD per 1M input, output tokens): what a call to a model with no known
 # price is counted at, so no paid call counts $0 toward the cap.
 CEILING = (max(p[0] for p in providers.PRICES.values()), max(p[2] for p in providers.PRICES.values()))
-# A call's output is at most the transports' max_tokens; the reservation for a call in flight assumes all of it.
-MAX_OUTPUT_TOKENS = 4096
+# A call's output is at most what every transport asks for (clients/judge.py); a call in flight is held at all of it.
+MAX_OUTPUT_TOKENS = J.MAX_OUTPUT_TOKENS
 
 
 def priced(settings, model):
@@ -197,7 +197,9 @@ def metered(store, models, state, questions, label, call):
     is written as a `judge.spend` row before the reservation is released, so the next check sees one or the other.
     Another process (the Slack gateway's container) sees this one's calls once they are written, and admits its own
     only if they fit too; so the cap can be passed by at most one process's calls in flight, each at most its
-    reservation."""
+    reservation. That bound is for the two processes that ask today, the server and the Slack gateway: each further
+    process with its own meter can add its own calls in flight on top. A call stays within its reservation because
+    every transport caps the answer at MAX_OUTPUT_TOKENS; a provider's own reported cost can still be higher."""
     settings = store.settings
     cap = float(settings.decisions_monthly_usd or 0)
     reserved = reservation(settings, models, state, questions) if cap > 0 else 0.0

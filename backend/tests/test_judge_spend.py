@@ -312,6 +312,80 @@ def test_slack_without_a_jev_key_holds_each_call_at_the_company_models_price(gat
     assert len(company.calls) == 1
 
 
+# The company's own model on each transport: (transport, a model with a list price), as the fallback asks it.
+COMPANY_MODELS = [("anthropic", "claude-opus-5-5"), ("openai", "gpt-6-sol"), ("google", "gemini-3.8-flash"),
+                  ("xai", "grok-4.6"), ("openrouter", "moonshotai/kimi-k3")]
+
+
+class WholeAllowance:
+    """A provider that answers with the longest answer the request allows, and bills all of it."""
+
+    def __init__(self, provider):
+        self.provider, self.limits = provider, []
+
+    def __call__(self, request, timeout=None):
+        import io
+        body = json.loads(request.data)
+        limit = (body.get("generationConfig") or {}).get("maxOutputTokens") or body.get("max_tokens") \
+            or body.get("max_completion_tokens")
+        self.limits.append(limit)
+        billed_in, billed_out = len(request.data) // 3, limit or 64_000   # no limit: a long reasoning answer
+        text = json.dumps({"bucket": {"probabilities": {"archive": 0.2, "reply": 0.8}}, "is_ask": {"noul": 0.9}})
+        if self.provider == "anthropic":
+            payload = {"content": [{"type": "text", "text": text}],
+                       "usage": {"input_tokens": billed_in, "output_tokens": billed_out}}
+        elif self.provider == "google":
+            payload = {"candidates": [{"content": {"parts": [{"text": text}]}}],
+                       "usageMetadata": {"promptTokenCount": billed_in, "candidatesTokenCount": billed_out}}
+        else:
+            payload = {"choices": [{"message": {"content": text}}],
+                       "usage": {"prompt_tokens": billed_in, "completion_tokens": billed_out}}
+        return io.BytesIO(json.dumps(payload).encode())
+
+
+@pytest.mark.parametrize("provider,model", COMPANY_MODELS)
+def test_every_transport_caps_a_decisions_answer_at_what_the_cap_reserves(provider, model):
+    """Review 1 on #864: only Anthropic carried an output limit, so a Google or OpenAI-style answer could be billed
+    far past the call's reservation. Each now asks for at most MAX_OUTPUT_TOKENS, in that API's own field."""
+    seen = []
+    J.llm(provider, "synthetic", model, opener=lambda request, timeout=None: seen.append(json.loads(request.data))
+          or WholeAllowance(provider)(request))({"team": "Acme"}, QUESTIONS)
+    body = seen[-1]
+    field = {"anthropic": body.get("max_tokens"), "google": (body.get("generationConfig") or {}).get("maxOutputTokens"),
+             "openai": body.get("max_completion_tokens"), "xai": body.get("max_tokens"),
+             "openrouter": body.get("max_tokens")}[provider]
+    assert field == J.MAX_OUTPUT_TOKENS == B.MAX_OUTPUT_TOKENS
+    if provider == "openai":
+        assert "max_tokens" not in body, "OpenAI's reasoning models refuse max_tokens"
+    # The draft writer is not a decision call and keeps its own length: only Anthropic, which requires one, is capped.
+    J.llm_writer(provider, "synthetic", model, opener=lambda request, timeout=None: seen.append(
+        json.loads(request.data)) or WholeAllowance(provider)(request))("Draft it.", "Ana's facts")
+    assert provider == "anthropic" or not ({"max_tokens", "max_completion_tokens"} & set(seen[-1])
+                                           or "maxOutputTokens" in (seen[-1].get("generationConfig") or {}))
+
+
+@pytest.mark.parametrize("provider,model", COMPANY_MODELS)
+def test_a_company_model_call_billed_its_whole_allowance_stays_within_its_reservation(api, monkeypatch, provider,
+                                                                                      model):
+    """The bound holds only if no call costs more than was held for it. Through the meter, on the company's model,
+    with the provider billing the longest answer the request allows: the recorded cost is at most the reservation."""
+    store = api.app.state.store
+    store.settings.decisions_monthly_usd = 50.0
+    provider_api = WholeAllowance(provider)
+    monkeypatch.setattr(B, "fallback_engine", lambda *args, **kwargs: J.llm(provider, "synthetic", model,
+                                                                             opener=provider_api))
+    held, reserve = [], B.reservation
+    monkeypatch.setattr(B, "reservation", lambda *args: held.append(reserve(*args)) or held[-1])
+    with store.read() as c:
+        engine = B.server_engine(store, c, None)
+    result = engine({"team": "Acme"}, QUESTIONS, "company")
+    assert provider_api.limits == [J.MAX_OUTPUT_TOKENS]
+    with store.read() as c:
+        recorded = json.loads(c.execute("SELECT detail_json FROM events WHERE action='judge.spend'").fetchone()[0])
+    assert recorded["model"] == model and recorded["cost_usd"] == result["cost_usd"] > 0
+    assert recorded["cost_usd"] <= held[0], f"{provider}: billed ${recorded['cost_usd']}, held ${held[0]}"
+
+
 # ----------------------------------------------------------------------------- one engine for every caller
 def test_the_server_engine_falls_back_when_jev_is_down_and_is_off_at_the_cap(api, monkeypatch):
     store = api.app.state.store
