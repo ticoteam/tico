@@ -3,7 +3,10 @@
 'use strict';
 
 // What the bot editor shows for an existing bot beyond its definition: who may use it, who it works for and who
-// owns it (each opens its own dialog), and its model, fallback and computer (each applies as soon as it is picked).
+// owns it (each opens its own dialog); its computer, where it compacts, how soon it wakes and, for a synced bot, the
+// app it is delivered through (each applies as soon as it is picked); and its model and fallback, whose pickers hold
+// a pick until Apply next to them, or until Save bot applies it (settingsEditorPendingChoice). A model change, either
+// way, goes through its transition dialog.
 function settingsBotEditorRows(e) {
   const chips = list => (list || []).map(o => `<span class="pchip">${personCircle(o.name || o.id, 16)}<span>${esc(firstName(o.name) || o.id)}</span></span>`).join('');
   const manage = settingsCanManageBot(e);
@@ -179,7 +182,7 @@ function settingsEditBot(slug = '') {
         <label class="bot-editor-check"><input type="checkbox" name="shared" ${e?.shared ? 'checked' : ''}><span>Allow branches<small>People can make their own branch of it, on their computer and subscription.</small></span></label>
         <label class="bot-editor-check"><input type="checkbox" name="temp" ${e?.temp ? 'checked' : ''}><span>Temp bot<small>For work expected to end.</small></span></label>
         ${editing ? settingsUpdateSubscriptions(e) : ''}
-        ${editing ? `<h3 class="bot-editor-sec bot-editor-wide">Access, model and computer</h3><p class="bot-editor-hint bot-editor-wide">Each of these saves as soon as you change it.</p><div class="bot-editor-wide sb-rows" data-bot-people></div>` : ''}
+        ${editing ? `<h3 class="bot-editor-sec bot-editor-wide">Access, model and computer</h3><p class="bot-editor-hint bot-editor-wide">Access, owners and computer save as soon as you change them. A model or fallback pick applies with Apply or Save bot.</p><div class="bot-editor-wide sb-rows" data-bot-people></div>` : ''}
         ${editing ? '' : `<h3 class="bot-editor-sec bot-editor-wide">Model and computer</h3><div class="bot-editor-wide" data-add-choice>
           ${settingsChoiceFields(currentModel)}
           <input type="hidden" name="model_effort" value="${esc(currentModel)}">
@@ -197,8 +200,8 @@ function settingsEditBot(slug = '') {
     <div class="bot-editor-foot"><button class="primary" type="submit">${editing ? 'Save bot' : 'Add bot'}</button><button class="ghost" type="button" data-bot-close>Cancel</button><span class="muted" data-bot-status></span>${editing && !isBuiltInBot(e.name) ? `<span class="spacer"></span><select name="successor" aria-label="Hand its work to"><option value="">Hand its work to ${esc(settingsPersonName(e.operator))}</option>${S.emps.filter(row => row.name !== slug).map(row => `<option value="${esc(row.name)}">Hand its work to ${esc(row.display_name || row.name)}</option>`).join('')}</select>${['hermes', 'openclaw'].includes(e.agent?.harness) ? `<label class="bot-editor-check" title="Its agent stops either way; revoking makes it stop reporting in"><input type="checkbox" name="revoke_agent" checked> Revoke its credential</label>` : ''}<button class="ghost danger" type="button" data-bot-remove>Remove bot</button>` : ''}</div></form>`;
   const form = dialog.querySelector('form'), status = dialog.querySelector('[data-bot-status]');
   dialog.querySelectorAll('[data-bot-close]').forEach(button => button.onclick = () => dialog.close());
-  // The rows for who owns it, its model and its computer: they save on their own, so keep them fresh, and
-  // once one has changed the bot use the newer revision for Save.
+  // The rows for who owns it, its model and its computer save on their own (on change, or Apply), so keep them
+  // fresh, and once one has changed the bot use the newer revision for Save.
   let rev = e?.revision, touched = false;
   const rows = dialog.querySelector('[data-bot-people]');
   if (rows) {
@@ -298,14 +301,30 @@ function settingsEditBot(slug = '') {
     let added = null;
     try {
       if (editing) {
-        await post(`/v2/bots/${encodeURIComponent(slug)}/definition`, {
+        const model = settingsEditorPendingChoice(rows, 'model'), fallback = settingsEditorPendingChoice(rows, 'fallback');
+        const unfinished = [model, fallback].find(pick => pick && !pick.ready);
+        if (unfinished) throw new Error(`${unfinished === model ? 'Model' : 'Fallback'} change not applied: finish choosing it, or reset it.`);
+        // A model change starts a fresh session, so Save asks first, as Apply does; saying no saves nothing.
+        const bot = S.emps.find(row => row.name === slug) || e, target = model && settingsChoiceFromValue(model.value);
+        if (model && !await settingsConfirmTransition(bot, 'model', settingsChoiceLabel(target.harness, target.model, target.effort)))
+          throw new Error('Model change not applied: press Apply next to Model, or reset it.');
+        if (fallback) {
+          rev = (await post(`/v2/bots/${encodeURIComponent(slug)}/fallback`, {fallback: settingsFallbackBody(fallback.value), expected_revision: rev})).revision;
+          // Saved now: if the definition fails below, pressing Save again does not send it twice.
+          fallback.box.dataset.current = fallback.box.querySelector('[data-choice-fields]').dataset.current = fallback.value;
+        }
+        rev = (await post(`/v2/bots/${encodeURIComponent(slug)}/definition`, {
           display_name: form.elements.display_name.value, description: form.elements.description.value,
           reports_to: form.elements.reports_to.value || null, status: form.elements.status.value,
           bot_contact: form.elements.bot_contact.value,
           private_tasks_default: form.elements.private_tasks_default.checked,
           repo: form.elements.repo.value, thread_mode: form.elements.thread_mode.value,
           temp: form.elements.temp.checked, shared: form.elements.shared.checked, expected_revision: rev,
-          ...settingsUpdateSubscriptionsChange(form, e)});
+          ...settingsUpdateSubscriptionsChange(form, e)}))?.revision ?? rev;
+        // Last, since the transition holds the revision it started from; its own dialog shows the progress.
+        if (model) settingsWatchTransition((await post(`/v2/bots/${encodeURIComponent(slug)}/transitions`, {kind: 'model',
+          model: target.model, effort: target.effort, harness: target.harness,
+          expected_generation: bot.machine?.generation || 0, expected_revision: rev})).id);
       } else {
         const choice = settingsChoiceFromValue(form.elements.model_effort.value);
         if (!choice.harness || !choice.model || !choice.effort) throw new Error('Choose a harness, model and effort.');
@@ -325,6 +344,14 @@ function settingsEditBot(slug = '') {
   };
   dialog.onclose = () => { if (!dialog.open) dialog.innerHTML = ''; };
   dialog.showModal();
+}
+// A Model or Fallback picked in the editor but not Applied (TK-BLOG3EDS): Save applies it, or says why it can't,
+// rather than closing over it. Null when the picker shows what the bot has; `ready` when Apply would take it.
+function settingsEditorPendingChoice(rows, kind) {
+  const box = rows?.querySelector(`[data-bot-choice][data-kind="${kind}"]`);
+  if (!box?.picker?.changed()) return null;
+  const value = box.picker.value();
+  return {box, value, ready: box.picker.valid() && value !== (box.dataset.current || '')};
 }
 function settingsEditOwners(slug) {
   const e = S.emps.find(row => row.name === slug), dialog = $('#owner-picker');

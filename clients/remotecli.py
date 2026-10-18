@@ -660,7 +660,7 @@ def bots(client, args):
         from clients import hubtools
         fields = {"bot": args.bot}
         if args.computer:
-            listing = hubtools.computers(client, {})
+            listing = hubtools._as_person(client).get("computers")
             rows = listing.get("computers", []) if isinstance(listing, dict) else listing
             me = hubtools._as_person(client).get("me")
             person = str(me.get("actor") or me.get("id") or "").removeprefix("human:")

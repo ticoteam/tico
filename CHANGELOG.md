@@ -53,11 +53,20 @@ All notable changes to Tico are recorded here. The format follows
   itself on first use. A runner's home volume survives the update, so anything a bot or person built there with the old
   Python 3.12 (a project's venv, `pip install --user` packages under `~/.local/lib/python3.12`) does not run on 3.15:
   rebuild it ([updates.md](docs/updates.md#python-environments-on-a-docker-runner) lists them and how).
+- `hub_computer_list` and `hub computer list` answer one short row per computer: online and last seen, operator,
+  release, version, wanted release, update state, a readiness level, the AI tools signed in, and counts of bots,
+  warnings, errors and recent log errors (about 5,000 characters for 11 busy computers, down from over 200,000). One
+  computer in full is `computer=<label or id>` (`--computer`): the bots on it, repositories, each bot's readiness,
+  runtimes, harnesses and recent errors come 20 at a time, and `truncated` names the `section` and `offset` that read the rest. Settings >
+  Computers and `GET /api/v2/computers` are unchanged.
 
 ### Fixed
 - A caller that hangs up while the server reads its request body is recorded as 499 (client closed request), with
   no traceback, instead of an HTTP 500: it no longer counts as a server error in the flight recorder's 5xx count,
   Sentry or the server log. All seven 5xx counted on v0.3.55 were this.
+- **Save bot** in the bot editor no longer drops a Model or Fallback you picked but didn't Apply. A picked Fallback is
+  saved with the bot; a picked Model opens its change dialog first, and if you cancel it the editor stays open and
+  says the model change wasn't applied. If the fallback can't be saved, the editor stays open with the reason.
 - A bot can read any computer's performance by its name or id with `hub computer performance`, as the docs say. It
   used to look the computer up in the computer list first, which shows a bot only some computers, so most bots got "No
   computer named".
