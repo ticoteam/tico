@@ -7,6 +7,14 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Stale ticket review (Settings > Team, owners and admins; off by default, `TICO_STALE_REVIEW=1` turns the default
+  on): once an hour plain code finds open tasks that look finished or forgotten (a PR merged or shipped, the parent
+  done, every blocker done, a long-over snooze, a twin title, a quiet week; never a private task), Tico Decide judges
+  only the new ones (at most 30 an hour), and owners get suggestions, never actions: a bot one "Stale check" comment, a person one Stale
+  tickets card in Needs you with Accept, Skip and Accept all, each Accept checked like a change by hand. An hour with
+  nothing new makes no Decide call and writes nothing. While it is on, "Still wanted?" questions stop.
+
 ### Fixed
 - A bot's usage-limit cooldown survives other task turns starting, restoring a lease or finishing. Queued work
   waits for recovery instead of repeatedly retrying an exhausted subscription.
@@ -18,13 +26,6 @@ All notable changes to Tico are recorded here. The format follows
 - A bot's turn finishes when a comment it had taken in was deleted while it ran. Finishing such a turn failed with a
   server error on every retry; now the turn and its reply are recorded as usual, and the deleted comment is never held
   for review or run again.
-- A queued job whose message its bot can no longer read (a private task or conversation it was taken off) no longer
-  sits queued for ever. No claim ever takes it, so it aged Health's "queued since" warning. The scheduler now cancels
-  it within a minute and records why (a `job.suppress` event, reason `unreadable`); the message itself stays.
-- A bot no longer gets a second turn on a task while its first is still running there when the task was moved under
-  another of its tasks mid-turn. A wake about a task the bot is working on goes into that turn, or waits for the next
-  turn on the task; it never starts one beside it. Another bot's turn on the same task (the requester woken by the
-  owner's comment) and the bot's other tasks still run side by side.
 - **Clear** on a bot's chat now really starts the bot over. Before, it only trimmed the history Tico sends, and on
   the computer Claude Code, Codex and the other harnesses kept resuming the old provider thread, so the bot still
   remembered the cleared chat and every turn still paid for it. Each turn now carries its conversation's session
@@ -45,16 +46,31 @@ All notable changes to Tico are recorded here. The format follows
   answered (`Tico AI Gateway`, `TypeSafe`, or the team's provider) and its model, and the Slack gateway routes the
   same way. A Tico Decide call counts toward the monthly spend cap at the Gateway's price ($0.06 per 1M input tokens,
   output free).
-- PRIVACY.md now names OpenRouter: a bot set to Tico Cheap, Mid or Power sends its model calls through Tico HQ to
-  OpenRouter. It lists what is sent (the messages and tools, never the gateway key, its label or the install ID), that
-  HQ keeps none of the call's text (only the key's label and per-call counts), that zero retention is enforced only when
-  a call asks for it (OpenRouter's policy still allows in-memory prompt caching), and that the region is not confirmed.
 
 ### Fixed
 - Editing or deleting a task comment no longer holds the database write lock while it reads every stored retry
   answer. On a large install that read took 35-37 s, and other writes timed out waiting for it. The answers that
   quote a comment are now found by index; the index is filled for existing answers at the first start, in short
   batches beside the running server. Deleting a comment also finds the questions it answered by index.
+
+## [0.3.59] - 2026-10-18
+
+### Fixed
+- A queued job whose message its bot can no longer read (a private task or conversation it was taken off) no longer
+  sits queued for ever. No claim ever takes it, so it aged Health's "queued since" warning. The scheduler now cancels
+  it within a minute and records why (a `job.suppress` event, reason `unreadable`); the message itself stays.
+- A bot no longer gets a second turn on a task while its first is still running there when the task was moved under
+  another of its tasks mid-turn. A wake about a task the bot is working on goes into that turn, or waits for the next
+  turn on the task; it never starts one beside it. Another bot's turn on the same task (the requester woken by the
+  owner's comment) and the bot's other tasks still run side by side.
+
+### Changed
+- PRIVACY.md now names OpenRouter: a bot set to Tico Cheap, Mid or Power sends its model calls through Tico HQ to
+  OpenRouter. It lists what is sent (the messages and tools, never the gateway key, its label or the install ID), that
+  HQ keeps none of the call's text (only the key's label and per-call counts), that zero retention is enforced only when
+  a call asks for it (OpenRouter's policy still allows in-memory prompt caching), and that the region is not confirmed.
+
+### Fixed
 - Health no longer reports a bot's queued work as a Tico bug (Health Monitor `queue_idle`) when an old job is held on
   purpose, or waits behind a person's message, and the job that would start next is still young. It judges a bot by
   that job, a person's message first: slow only once it has waited 15 minutes (a person's message: 2). When every job
@@ -3455,7 +3471,8 @@ First public release.
 - Hosting: local only on a Mac, or self-hosted, including a reference AWS stack under `infra/ec2/`
   with Litestream backups.
 
-[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.58...HEAD
+[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.59...HEAD
+[0.3.59]: https://github.com/ticoteam/tico/compare/v0.3.58...v0.3.59
 [0.3.58]: https://github.com/ticoteam/tico/compare/v0.3.57...v0.3.58
 [0.3.57]: https://github.com/ticoteam/tico/compare/v0.3.56...v0.3.57
 [0.3.56]: https://github.com/ticoteam/tico/compare/v0.3.55...v0.3.56
