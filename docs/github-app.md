@@ -174,11 +174,14 @@ Repositories**. Tico never changes the installation's repository selection or bo
 ### Bots that create product repositories
 
 A bot creates a product repository the same way, with the same preview, exact confirmation, request key and
-name rules, once the Owner turns on **Create product repositories** in that bot's **Settings → Repositories**
-(`PUT /api/v2/bots/<bot>/repositories {"create_product_repositories": true}`; only the Owner's own request may
-turn it on, an admin may turn it off). No bot has it by default, BotOps included. Without it the preview and the
-create answer `403` naming the right: *Creating a product repository needs the Owner, or a bot with the Create
-product repositories right.* A bot's turn acting for someone (BotOps' on-behalf-of, the Assistant) or an external
+name rules. Every bot has **Create product repositories** by default, BotOps and bots made later included. The
+Owner or an admin switches it off in that bot's **Settings → Repositories**
+(`PUT /api/v2/bots/<bot>/repositories {"create_product_repositories": false}`), and only the Owner's own request
+switches it back on (`true`). An off is kept as that bot's choice, so a later default, migration or template never
+turns it back on. A bot switched off is refused `403` on the preview and the create, naming the right: *Creating a
+product repository needs the Owner, or a bot with the Create product repositories right. Every bot has it unless
+the Owner or an admin switched it off; only the Owner switches it back on, in the bot's settings under
+Repositories.* A bot's turn acting for someone (BotOps' on-behalf-of, the Assistant) or an external
 agent gets `403` on both, even for the Owner. The rules are in [Permissions](permissions.md#bots-that-create-repositories).
 
 - **Private and empty only.** `visibility` must be `private`; a public repository is publishing and stays a

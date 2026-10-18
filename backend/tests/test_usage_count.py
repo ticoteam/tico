@@ -7,7 +7,7 @@ import httpx
 import pytest
 
 from backend import census, releases
-from backend.store import H
+from backend.store import H, Problem
 from backend.tests.test_onboarding import as_person, environment, signed_in  # noqa: F401
 
 RELEASE = {"tag_name": "v0.2.0", "html_url": "https://github.com/ticoteam/tico/releases/tag/v0.2.0",
@@ -82,7 +82,7 @@ def test_the_payload_is_exactly_the_allowed_fields(environment):
     assert not c.person_due(SimpleNamespace(role="human", via="", via_token=True))
 
 
-@pytest.mark.parametrize("how", ["TICO_TELEMETRY", "toggle"])
+@pytest.mark.parametrize("how", ["TICO_TELEMETRY", "toggle", "TICO_UPDATE_CHECK"])
 def test_when_off_the_check_goes_to_github_with_no_id(environment, monkeypatch, how):
     api = environment()
     counting(api)
@@ -91,6 +91,13 @@ def test_when_off_the_check_goes_to_github_with_no_id(environment, monkeypatch, 
     elif how == "toggle":
         assert api.put("/api/v2/system/usage-count", json={"enabled": False}, headers=signed_in()).status_code == 200
     checker, seen = wire(monkeypatch, api)
+    if how == "TICO_UPDATE_CHECK":                         # the check itself off: no request to anyone
+        monkeypatch.setenv("TICO_UPDATE_CHECK", "off")
+        assert checker.view("0.2.13")["latest"] == "" and not checker.running and seen == []    # no check started
+        with pytest.raises(Problem):
+            checker.check_now()
+        assert seen == []
+        return
     checker.refresh()
     assert [r.url.host for r in seen] == ["api.github.com"]
     assert not seen[0].url.query and "install" not in str(seen[0].headers)

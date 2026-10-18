@@ -58,14 +58,17 @@ const SCENE = `export function createBuilding(data) {
       }
       return json({});
     });
-    await page.goto('http://tico-ui.test/');
-    await page.waitForFunction(() => location.hash === '#/updates');
-    await page.evaluate(() => location.hash = '#/overview');
+    // Opened by its address, the campus is drawn once the team has loaded (switching the hash earlier would draw it
+    // before the roster arrives and draw it again after).
+    await page.goto('http://tico-ui.test/#/overview');
     const frame = page.frameLocator('#overview-frame');
     await frame.locator('body[data-scene-ready]').waitFor();
     const scene = page.frames().find(f => f.url().includes('/overview/index.html'));
     const rec = () => scene.evaluate(() => window.__scene);
     const deskOf = (data, id) => data.groups.flatMap(g => g.members).find(m => m.id === id);
+    // The first status answer may land after the campus opens; the desks follow it then, not at the next poll.
+    await scene.waitForFunction(() => window.__scene.data.groups.flatMap(g => g.members).find(m => m.id === 'bot:editor')?.state === 'running',
+      null, {polling: 100, timeout: 10000});
     assert.equal(deskOf((await rec()).data, 'bot:editor').state, 'running', 'live status before the replay');
 
     // The toggle asks for exactly the last 24 hours, ending now.
