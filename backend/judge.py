@@ -335,7 +335,7 @@ def install_judge(app, store, auth):
             result = engine(body.state, body.questions, body.label)
         except J.JudgeError as exc:
             with store.transaction() as c:
-                H.event(c, who.actor, "judge.call", label, {**detail, "error": exc.code, "detail": exc.detail[:300]})
+                H.event(c, who.actor, "judge.call", label, {**detail, "error": J.error_code(exc)})
             if exc.code == "spend_cap":
                 raise Problem("spend_cap", exc.detail + ". Carry on without it.", 429)
             status = 503 if exc.retryable else (422 if exc.code == "invalid" else 502)

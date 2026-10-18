@@ -33,9 +33,6 @@ WATCHER = "hq-tickets"          # the Support Agent's HQ ticket watcher (templat
 KEY_PREFIX = "hq:"
 # The longest a ticket's copy waits here (its bot paused or its task refused): then `sweep` hands it to a person.
 WAIT_HOURS = 1
-# What a failed call's audit row may say: the decision model's own codes (clients/judge.py), never its text, which can
-# echo the ticket back.
-ERROR_CODES = {"auth", "http", "invalid", "not_found", "shape", "spend_cap", "unavailable", "unconfigured"}
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS watcher_pending(
  bot TEXT NOT NULL, key TEXT NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL, created TEXT NOT NULL,
@@ -157,8 +154,7 @@ def _audit(qset, result, error):
         except Exception:                                   # noqa: BLE001
             detail["answers"] = {"unreadable": True}
     if error is not None:
-        code = getattr(error, "code", "")
-        detail["error"] = code if code in ERROR_CODES else "unreadable"
+        detail["error"] = J.error_code(error)
     return detail
 
 

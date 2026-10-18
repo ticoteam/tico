@@ -963,16 +963,17 @@ class Gateway:
         answer cost; the monthly cap counted each as it returned (`judge.spend`), and a final failure repeats it
         on its `judge.call` for reading."""
         actor = "human:" + person["id"]
+        code = J.error_code(exc)        # never the error's text: an upstream error can echo the message back
         expired = H.shift(event["received"], seconds=ROUTE_GIVE_UP_SECONDS) <= self.clock()
         if exc.retryable and not expired:
             with self.store.transaction() as c:
-                self.finish(c, event, "received", actor=actor, reason=f"decisions: {exc}")
-            LOG.error("Event %s waits: %s", event["event_id"], exc)
-            return {"event_id": event["event_id"], "state": "received", "reason": str(exc)}
-        reason = f"decisions: {exc}" + (f" (still failing after {ROUTE_GIVE_UP_SECONDS // 60} minutes)" if exc.retryable else "")
+                self.finish(c, event, "received", actor=actor, reason=f"decisions: {code}")
+            LOG.error("Event %s waits: decisions %s", event["event_id"], code)
+            return {"event_id": event["event_id"], "state": "received", "reason": f"decisions: {code}"}
+        reason = f"decisions: {code}" + (f" (still failing after {ROUTE_GIVE_UP_SECONDS // 60} minutes)" if exc.retryable else "")
         with self.store.transaction() as c:
             self.finish(c, event, "failed", actor=actor, reason=reason)
-            self.audit(c, actor, event, fleet, {**(paid or {}), "error": exc.code, "detail": str(exc.detail)[:300]})
+            self.audit(c, actor, event, fleet, {**(paid or {}), "error": code})
         LOG.error("Event %s failed: %s", event["event_id"], reason)
         try:
             self.slack.post_message(event["channel"], event["reply_ts"] or None,

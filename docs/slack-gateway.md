@@ -71,7 +71,7 @@ question batch for a message.
 Routing a message is a decision call on the server's key, so it counts against the sender's daily decision cap
 (`TICO_DECISIONS_DAILY_CALLS_OWNER` / `_HUMAN`, the same cap as `POST /api/v2/decisions`) and is audited as one
 `judge.call` event by the sender (`via: slack`, the label, the question count, the model, usage and latency; never the
-text). A message counts once, when it is routed or finally fails, however many tries it took. Over the cap the decision
+text, and a failed call keeps only its error code, never the provider's error text). A message counts once, when it is routed or finally fails, however many tries it took. Over the cap the decision
 model is not asked: the message goes to the assistant (or BotOps) with `routed_by: budget` and the reason on it, and when
 neither is running it is recorded and Tico tells the human in the thread.
 

@@ -73,6 +73,17 @@ class JudgeError(Exception):
         self.code, self.detail, self.status, self.retryable = code, detail, status, retryable
 
 
+# The codes a JudgeError carries. An audit row, a log line or an answer to anyone but the caller keeps only these,
+# never `detail`: an upstream error can echo the request (a ticket, a Slack message, a saved post) back.
+ERROR_CODES = frozenset({"auth", "http", "invalid", "not_found", "shape", "spend_cap", "unavailable", "unconfigured"})
+
+
+def error_code(exc):
+    """`exc`'s code when it is one of `ERROR_CODES`, else `unreadable`: the one part of a failed call that may be kept."""
+    code = getattr(exc, "code", "")
+    return code if isinstance(code, str) and code in ERROR_CODES else "unreadable"
+
+
 # ----------------------------------------------------------------------------- the contract
 def validate(state, questions, label=None):
     """Refuse before the network does: the shape every transport checks the same way."""
