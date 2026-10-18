@@ -135,15 +135,23 @@ impl Meter {
     }
 }
 
-/// Drop each request's fourth count (whether it was the bot's own), for a server that takes only three.
-fn main_marks_off(part: &mut Map<String, Value>) {
-    if let Some(Value::Array(requests)) = part.get_mut("requests") {
-        for r in requests.iter_mut() {
-            if let Value::Array(counts) = r {
-                counts.truncate(3);
+/// A segment's usage as this server takes it (`feature`: what the server said it takes, follow::feature): without
+/// `usage_requests` no per-request list, without `usage_request_main` no request's fourth count (an older server
+/// refuses either).
+fn served(meter: &Meter, model: &str, runtime: &str, billing: &str, feature: impl Fn(&str) -> bool) -> Option<Map<String, Value>> {
+    let mut part = meter.report(model, runtime, billing)?;
+    if !feature("usage_requests") {
+        part.remove("requests");
+    } else if !feature("usage_request_main") {
+        if let Some(Value::Array(requests)) = part.get_mut("requests") {
+            for r in requests.iter_mut() {
+                if let Value::Array(counts) = r {
+                    counts.truncate(3);
+                }
             }
         }
     }
+    Some(part)
 }
 
 /// `subscription` when the runtime is signed in with a plan (ChatGPT, Claude, Cursor, Meta), else `api` (usage.billing_for).
@@ -1146,12 +1154,7 @@ impl Runner {
         for s in &segments {
             let ran = &s.config;
             let rt = text_of(&ran["runtime"]);
-            if let Some(mut part) = s.meter.report(&text_of(&ran["model"]), &rt, s.billing) {
-                if !crate::follow::feature("usage_requests") {
-                    part.remove("requests"); // an older server refuses the field
-                } else if !crate::follow::feature("usage_request_main") {
-                    main_marks_off(&mut part); // ... or a request's fourth count
-                }
+            if let Some(mut part) = served(&s.meter, &text_of(&ran["model"]), &rt, s.billing, crate::follow::feature) {
                 let harness = Some(text_of(&ran["harness"])).filter(|h| !h.is_empty()).unwrap_or(rt);
                 part.insert("harness".into(), json!(harness));
                 part.insert("effort".into(), json!(text_of(&ran["reasoning_effort"])));
@@ -1445,12 +1448,18 @@ mod tests {
     }
 
     #[test]
-    fn a_requests_main_mark_is_kept_and_dropped_for_a_server_that_takes_three() {
+    fn a_segments_usage_carries_the_requests_and_marks_only_a_server_takes() {
         let mut m = Meter::default();
         m.add(&json!({"usage": {"input": 150, "cached": 120, "output": 7, "requests": [[10, 20, 3, 1], [20, 100, 4, 0], [5, 0, 1]]}}));
-        let mut part = m.report("m", "claude", "api").unwrap();
-        assert_eq!(part["requests"], json!([[10, 20, 3, 1], [20, 100, 4, 0], [5, 0, 1]]));
-        main_marks_off(&mut part);
-        assert_eq!(part["requests"], json!([[10, 20, 3], [20, 100, 4], [5, 0, 1]]));
+        let server = |takes: &'static [&'static str]| move |name: &str| takes.contains(&name);
+        let current = served(&m, "m", "claude", "api", server(&["usage_requests", "usage_request_main"])).unwrap();
+        assert_eq!(current["requests"], json!([[10, 20, 3, 1], [20, 100, 4, 0], [5, 0, 1]]), "marks kept");
+        let older = served(&m, "m", "claude", "api", server(&["usage_requests"])).unwrap();
+        assert_eq!(older["requests"], json!([[10, 20, 3], [20, 100, 4], [5, 0, 1]]), "three counts for a server without marks");
+        let oldest = served(&m, "m", "claude", "api", server(&[])).unwrap();
+        assert!(oldest.get("requests").is_none(), "no list for a server without per-request usage");
+        for part in [&current, &older, &oldest] {
+            assert_eq!((&part["input_tokens"], &part["cached_tokens"], &part["output_tokens"]), (&json!(30), &json!(120), &json!(7)));
+        }
     }
 }

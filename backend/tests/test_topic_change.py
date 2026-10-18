@@ -172,6 +172,14 @@ def test_a_turn_keeps_the_newest_of_the_bots_own_prompts_as_the_context_size(cha
         "the summed totals stay; the context is the bot's own newest prompt"
 
 
+def test_the_server_tells_runners_it_takes_the_marks(chat):
+    """The runner sends each request's fourth count only when the server names this feature (runner-rs execute.rs
+    `served`); an older server refuses it."""
+    api, machine, _, _, _ = chat
+    features = api.get("/api/v2/runners/desired", headers=headers(machine["token"])).json()["features"]
+    assert features["usage_requests"] is True and features["usage_request_main"] is True
+
+
 @pytest.mark.parametrize("requests,checked", [
     ([[3002, 120000, 78, 1], [900, 0, 5, 0]], True),     # a warm session over 100k: checked, whatever the subagent
     ([[500, 15000, 100, 1], [2000, 118000, 50, 0]], False),   # a warm small session: a large subagent never checks it
