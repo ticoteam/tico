@@ -107,13 +107,26 @@ def record(c, actor, task_id, check):
 
 def of(c, task_id, bot):
     """The check model `bot`'s turns on the task run on, or None: only the bot that filed the check, while it owns it.
-    While the computer login of its first model is out of quota (move_on), the next check model it moved to."""
+    While its first model would run on the default login that move_on found out of quota, and that login still is, the
+    next check model it moved to. A bot moved to another computer, or given a subscription for that tool, tries its
+    first model again."""
     first = H.check_model(c, task_id, bot)
     from .repositories import metadata
     moved = metadata(c, "check-moved:" + task_id) if first else None
-    if moved and _out_of_quota(c, moved["runner_id"], first["runtime"]):
+    if (moved and _default_login(c, bot, first, moved["runner_id"])
+            and _out_of_quota(c, moved["runner_id"], first["runtime"])):
         return {k: moved[k] for k in ("runtime", "model", "harness", "effort", "role")}
     return first
+
+
+def _default_login(c, bot, check, runner_id):
+    """Whether `bot`'s turns on `check` run on `runner_id`'s default login: the bot is assigned to that computer and no
+    subscription of its covers the check's harness."""
+    from .subscriptions import covers, effective
+    row = c.execute("SELECT runner_id FROM assignments WHERE bot=?", (bot,)).fetchone()
+    if not row or row[0] != runner_id:
+        return False
+    return not (effective(c, bot)[0] and covers({"runtime": check["runtime"], "harness": check["harness"]}))
 
 
 def _out_of_quota(c, runner_id, runtime, settings=None):
@@ -134,7 +147,7 @@ def move_on(c, settings, bot, task_id, check, runner_id):
     from .task_relations import parent_of
     first = H.check_model(c, task_id, bot)
     out = {x["runtime"] for x in out_of_quota_logins(c, settings) if x["runner_id"] == runner_id}
-    if not first or check["runtime"] not in out:
+    if not first or check["runtime"] not in out or not _default_login(c, bot, check, runner_id):
         return None
     authors = authors_of(c, settings, parent_of(c, task_id))
     for row in providers.check_order(providers.load(c, settings)):

@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+from backend import check_models
 from backend.store import H, encode
 from backend.tests.test_api import api, assign, claim, get, post, runner  # noqa: F401  (api is a fixture)
 
@@ -204,12 +205,13 @@ def test_a_check_handed_to_another_bot_mid_turn_still_completes_as_the_check(api
         assert not c.execute("SELECT 1 FROM registry_metadata WHERE key LIKE 'check-attempt:%'").fetchone()
 
 
-def all_ready(api, machine):
+def all_ready(api, machine, signed_out=(), extra=()):
     post(api, "runners/heartbeat", {
         "version": "test", "platform": "test", "capabilities": ["task_lanes_v2", "session_roots_v1"],
-        "readiness": {"schema_version": 1, "runtimes": {r: {"installed": True, "authenticated": "ready"}
-                                                         for r in ("claude", "codex", "grok")},
-                      "bots": {"ops": {"runtime": "claude", "ready": True}}}}, token=machine["token"])
+        "readiness": {"schema_version": 1, "runtimes": {
+            r: {"installed": True, "authenticated": "missing" if r in signed_out else "ready"}
+            for r in ("claude", "codex", "grok", *extra)},
+            "bots": {"ops": {"runtime": "claude", "ready": True}}}}, token=machine["token"])
 
 
 def codex_check(api):
@@ -320,3 +322,56 @@ def test_a_check_on_a_subscription_profile_does_not_move(api, monkeypatch):
     post(api, f"attempts/{check['id']}/complete", {"outcome": "failed", "last_seq": 0, "limited": True, "text": "",
                                                    "profile_used": "work"}, machine["token"])
     assert claim(api, machine) is None, "a profile's limit holds the check as before"
+
+
+def moved_to_grok(api):
+    """Two limits in a row on the computer's default Codex login: the check has moved to Grok."""
+    from backend.tests.test_health_monitor import turn as finished_turn
+    machine, sub, check = codex_check(api)
+    finished_turn(api, machine["runner_id"], {"outcome": "failed", "limited": True, "limit_resets_at": None,
+                                              "profile_used": None, "check": "codex"}, 5)
+    out_of_quota(api, machine, check)
+    with api.app.state.store.read() as c:
+        assert check_models.of(c, sub["id"], "ops")["runtime"] == "grok"
+    return machine, sub
+
+
+def test_a_moved_check_tries_its_first_model_again_on_another_computer(api):
+    from backend.health_monitor import out_of_quota_logins
+    machine, sub = moved_to_grok(api)
+    # The bot moves to a computer where Codex works and Grok is signed out; the first computer's login stays out.
+    other = runner(api, label="Other Mac")
+    with api.app.state.store.read() as c:
+        generation = c.execute("SELECT generation FROM assignments WHERE bot='ops'").fetchone()[0]
+    assign(api, other, "ops", generation=generation)
+    all_ready(api, other, signed_out=("grok",))
+    again = claim(api, other)
+    assert again["task"]["id"] == sub["id"]
+    assert (again["config"]["runtime"], again["config"]["model"]) == ("codex", "gpt-6-luna")
+    with api.app.state.store.read() as c:
+        assert [x["runner_id"] for x in out_of_quota_logins(c)] == [machine["runner_id"]]
+
+
+def test_a_subscription_for_the_checks_tool_ends_the_move(api):
+    machine, sub = moved_to_grok(api)
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO subscription_assignments(scope,target,profile) VALUES('bot','ops','team-plan')")
+    with api.app.state.store.read() as c:
+        assert check_models.of(c, sub["id"], "ops")["runtime"] == "codex", "its turns use the subscription's login"
+
+
+def test_a_check_skips_a_next_model_its_computer_cannot_run(api):
+    machine, parent, turn = parent_turn(api)
+    company(api, "anthropic", "openai", "xai", "cursor")
+    all_ready(api, machine, signed_out=("grok",), extra=("cursor",))
+    sub = post(api, "tasks", {"owner": "ops", "title": "Review PR 703 on Codex", "body": "Read it.",
+                              "check_model": "codex", "check_role": "review",
+                              "relations": [{"task": parent["id"], "kind": "parent"}]}, turn["token"])
+    finish(api, machine, turn)
+    from backend.tests.test_health_monitor import turn as finished_turn
+    finished_turn(api, machine["runner_id"], {"outcome": "failed", "limited": True, "limit_resets_at": None,
+                                              "profile_used": None, "check": "codex"}, 5)
+    check = claim(api, machine)
+    out_of_quota(api, machine, check)
+    moved = claim(api, machine)
+    assert moved["task"]["id"] == sub["id"] and moved["config"]["runtime"] == "cursor", "Grok is signed out here"

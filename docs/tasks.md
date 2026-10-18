@@ -472,7 +472,8 @@ is refused, never run on an author's own. `--role` is `review` or `check` (the d
   the next check model in the company's order (Settings > AI providers) that is not from a provider whose work it
   checks, not on another login out of quota there, and that the bot's computer can run. The task's history and the
   bot's status say where it moved. It goes back to the model it asked for once a turn on that login completes or
-  the provider's reset passes. With no next model, it keeps waiting as above.
+  the provider's reset passes, or once the bot moves to another computer or gets a subscription for that tool. With
+  no next model, it keeps waiting as above.
 - The check model belongs to the bot that filed it while it owns the subtask. Handed to another bot, the subtask
   is that bot's ordinary task, on its own model. Subtasks under a check continue the check's session, never the
   parent's.
