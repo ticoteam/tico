@@ -13,10 +13,22 @@ All notable changes to Tico are recorded here. The format follows
   task, with the fix: wait for the reset, file the check again on another model, or drop it. And a held check whose
   task is done, closed or declined has its queued turn let go, instead of retrying after every reset and running once
   on a finished task; checks already in that state are let go on the first scheduler tick after the update.
+- A queued job whose message its bot can no longer read (a private task or conversation it was taken off) no longer
+  sits queued for ever. No claim ever takes it, so it aged Health's "queued since" warning. The scheduler now cancels
+  it within a minute and records why (a `job.suppress` event, reason `unreadable`); the message itself stays.
 - A bot no longer gets a second turn on a task while its first is still running there when the task was moved under
   another of its tasks mid-turn. A wake about a task the bot is working on goes into that turn, or waits for the next
   turn on the task; it never starts one beside it. Another bot's turn on the same task (the requester woken by the
   owner's comment) and the bot's other tasks still run side by side.
+- **Clear** on a bot's chat now really starts the bot over. Before, it only trimmed the history Tico sends, and on
+  the computer Claude Code, Codex and the other harnesses kept resuming the old provider thread, so the bot still
+  remembered the cleared chat and every turn still paid for it. Each turn now carries its conversation's session
+  epoch (`session_epoch`) and its bot's (`bot_session_epoch`), moved by Clear and by the session resets after a
+  model, placement or thread-mode change; when the one for its thread moves, the runner starts a new provider thread
+  from Tico's history. The thread a bot's direct chats share starts over on the next turn of any of them, while each
+  other chat keeps its own history. Without a clear the bot resumes its thread as before. After the upgrade, a thread
+  that may have been cleared or reset before its first turn on the new runner starts over once. A runner or Hub from
+  before this keeps today's behaviour ([sessions](docs/sessions.md)).
 
 ### Changed
 - **Decide asks the Tico AI Gateway first**, as Tico Decide 1.0 (`tico-decide-1.0`), with a gateway key
@@ -32,6 +44,10 @@ All notable changes to Tico are recorded here. The format follows
   a call asks for it (OpenRouter's policy still allows in-memory prompt caching), and that the region is not confirmed.
 
 ### Fixed
+- Editing or deleting a task comment no longer holds the database write lock while it reads every stored retry
+  answer. On a large install that read took 35-37 s, and other writes timed out waiting for it. The answers that
+  quote a comment are now found by index; the index is filled for existing answers at the first start, in short
+  batches beside the running server. Deleting a comment also finds the questions it answered by index.
 - Health no longer reports a bot's queued work as a Tico bug (Health Monitor `queue_idle`) when an old job is held on
   purpose, or waits behind a person's message, and the job that would start next is still young. It judges a bot by
   that job, a person's message first: slow only once it has waited 15 minutes (a person's message: 2). When every job

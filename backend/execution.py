@@ -139,6 +139,12 @@ def job_lane(c, bot, config, message, conversation, lanes, roots=False):
                          conversation["id"] if conversation else None)
 
 
+def bump_bot_session_epoch(c, bot):
+    """Every turn of `bot` carries this as `bot_session_epoch`; a runner drops the bot's shared thread when it moves."""
+    c.execute("INSERT INTO bot_session_epochs VALUES(?,1,?) ON CONFLICT(bot) DO UPDATE SET "
+              "epoch=epoch+1,updated=excluded.updated", (bot, H.now()))
+
+
 # The room messages a claim hands its turn (the runner forwards only what arrived since the session last answered).
 HISTORY_PAGE = 50
 
@@ -1252,6 +1258,7 @@ class Execution:
         msg = H.message(c, row["message_id"])
         if not privacy.message_readable(c, "bot:" + row["bot"], msg):
             c.execute("UPDATE jobs SET state='cancelled' WHERE id=?", (row["id"],))
+            H.event(c, H.KEEPER, "job.suppress", row["id"], {"reason": "unreadable"})
             return {"attempt": None}
         live_ref = (msg.get("refs") or {}).get("live_meeting")
         if (isinstance(live_ref, dict) and msg.get("from_actor") == H.KEEPER
@@ -1300,7 +1307,8 @@ class Execution:
         # The room's recent page. The runner forwards only what arrived since the bot last
         # answered; the bot reads further back itself with `hub conversation show` when it wants to. The
         # hub keeps no pointer to the bot's session and rebuilds nothing on its behalf.
-        epoch = c.execute("SELECT updated FROM session_epochs WHERE conversation_id=?", (conv["id"],)).fetchone()
+        epoch = c.execute("SELECT epoch,updated FROM session_epochs WHERE conversation_id=?", (conv["id"],)).fetchone()
+        bot_epoch = c.execute("SELECT epoch FROM bot_session_epochs WHERE bot=?", (row["bot"],)).fetchone()
         bot_who = Identity("bot:" + row["bot"], "bot", attempt_id=aid)
         history = privacy.page(c, bot_who, conv["id"], limit=HISTORY_PAGE * (2 if lanes else 1),
                                since=epoch["updated"] if epoch else None)["messages"]
@@ -1423,7 +1431,12 @@ class Execution:
                             "message": msg, "conversation": conv, "task": task,
                             # The task's set-up worktrees on this computer, added to its session (runner-rs/src/sessions.rs).
                             "worktrees": worktrees.attached(c, task["id"], who.runner_id, row["bot"]) if task else [],
-                            "history": history, "config": config, "principal": principal}}
+                            "history": history, "config": config, "principal": principal,
+                            # Bumped by a session clear or reset (views.py clear_session, app.py reset_bot_sessions):
+                            # a runner that sees it change starts a fresh provider thread (runner-rs/src/execute.rs).
+                            "session_epoch": epoch["epoch"] if epoch else 0,
+                            # Moved by any clear or reset of this bot: the runner starts the bot's shared thread anew.
+                            "bot_session_epoch": bot_epoch[0] if bot_epoch else 0}}
 
     def attempt(self, c, who, aid, active=True, final=False):
         """`final` is a runner handing in the result of a turn it has finished. That result
@@ -2216,6 +2229,26 @@ class Execution:
                          "task_id": row["task_id"]})
                 held.append(row["id"])
         return held
+
+    def drop_unreadable(self, c):
+        """Cancel every queued job whose message its bot may no longer read: a private task it was taken off, say.
+
+        The claim passes over such a job for good (job_refusal's "unreadable"), so it would sit queued forever,
+        never claimed or expired, and age Health's queue_idle. The bot never read the message, so nothing it was
+        owed is lost; the message itself stays where it is. Held jobs too: a wake preset's release or a drain's end
+        would only hand the claim the same unreadable message. Runs from the scheduler, once a minute."""
+        dropped = []
+        # From the bots to their queued jobs (jobs_queue), not from every job ever run.
+        for row in c.execute("SELECT j.id,j.bot,j.message_id FROM bots b CROSS JOIN jobs j "
+                             "WHERE j.bot=b.slug AND j.state='queued' ORDER BY j.created,j.id").fetchall():
+            with isolated(c, "drop_unreadable", row["id"]):
+                # job_refusal's own check, with its arguments.
+                if privacy.message_readable(c, "bot:" + row["bot"], H.message(c, row["message_id"])):
+                    continue
+                c.execute("UPDATE jobs SET state='cancelled' WHERE id=? AND state='queued'", (row["id"],))
+                H.event(c, H.KEEPER, "job.suppress", row["id"], {"reason": "unreadable"})
+                dropped.append(row["id"])
+        return dropped
 
     def release_limits(self, c):
         """Runs from the scheduler's tick: lift each usage limit whose hold has passed."""

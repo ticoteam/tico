@@ -40,7 +40,7 @@ TABLE_FUNCTIONS = {"json_each", "json_tree"}
 SAFE_COLUMNS = {"slack_posts": {"message_id", "bot", "state", "attempts", "next_attempt",
                                 "slack_ts", "created", "updated"}}
 # Columns nobody reads through SQL. Tables not named in `guarded` (credentials, credential_keys,
-# credential_grants, idempotency, runners, enrollments, session_epochs, settings_changes,
+# credential_grants, idempotency, runners, enrollments, session_epochs, bot_session_epochs, settings_changes,
 # backup_verified_blobs, _litestream_*, sqlite_* except sqlite_master) are denied outright.
 HIDDEN = {"task_requesters": {"token_hash"}, "bots": {"token_hash", "cwd", "thread_id"}, "attempts": {"token_hash"},
           "service_jobs": {"token_hash"}}

@@ -67,7 +67,7 @@ multiple statements are refused; `EXPLAIN QUERY PLAN` is allowed.
 Reserved, never readable through SQL: `credentials`, `credential_keys`, `credential_grants`,
 `idempotency` (stored request and response bodies), `runners` (credential hashes),
 `human_tokens` (personal API token hashes), `service_keys` and `service_key_tasks` (service keys,
-[service-keys.md](service-keys.md)), `enrollments`, `session_epochs`, `settings_changes`, `backup_verified_blobs`, every
+[service-keys.md](service-keys.md)), `enrollments`, `session_epochs`, `bot_session_epochs`, `settings_changes`, `backup_verified_blobs`, every
 `_litestream_*` table and every `sqlite_*` internal other than `sqlite_master`.
 
 ## The useful tables
