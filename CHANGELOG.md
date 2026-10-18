@@ -7,6 +7,10 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- Withdrawing a comment during a bot turn no longer breaks completion or returns the withdrawn comment to
+  the queue. Already-executed work remains recorded, and other comments keep their normal handling.
+
 ### Changed
 - PRIVACY.md now names OpenRouter: a bot set to Tico Cheap, Mid or Power sends its model calls through Tico HQ to
   OpenRouter. It lists what is sent (the messages and tools, never the gateway key, its label or the install ID), that

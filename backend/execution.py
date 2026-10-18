@@ -1592,7 +1592,9 @@ class Execution:
         attempt = self.attempt(c, who, aid)
         if attempt["state"] != "running":
             return {"messages": []}
-        origin = H.message(c, c.execute("SELECT message_id FROM jobs WHERE id=?", (attempt["job_id"],)).fetchone()[0])
+        # A withdrawn origin retains routing metadata; its words stay absent from the room and inputs.
+        origin = H.message(c, c.execute("SELECT message_id FROM jobs WHERE id=?", (attempt["job_id"],)).fetchone()[0],
+                           include_deleted=True)
         origin_task = H.message_task_id(origin, H.conversation(c, origin["conversation_id"]))
         capabilities = c.execute("SELECT capabilities_json FROM runners WHERE id=?", (attempt["runner_id"],)).fetchone()
         lanes, roots = lanes_on(capabilities), roots_on(capabilities)
@@ -1690,7 +1692,9 @@ class Execution:
                              (aid, mid)).fetchone():
                 continue
             c.execute("DELETE FROM attempt_inputs WHERE attempt_id=? AND message_id=?", (aid, mid))
-            c.execute("UPDATE jobs SET state='queued',attempt_id=NULL WHERE message_id=? AND attempt_id=?", (mid, aid))
+            c.execute("UPDATE jobs SET state=CASE WHEN EXISTS(SELECT 1 FROM messages m "
+                      "WHERE m.id=jobs.message_id AND m.deleted_at IS NULL) THEN 'queued' ELSE 'cancelled' END, "
+                      "attempt_id=NULL WHERE message_id=? AND attempt_id=?", (mid, aid))
             H.event(c, H.KEEPER, "job.input_returned", aid, {"message_id": mid})
 
     def acknowledge_input(self, c, who, aid, mid):
@@ -1741,11 +1745,13 @@ class Execution:
         if late and not self.settleable(c, who, row):
             return self.file_result(c, row, body)
         self.release_undelivered(c, aid, body.undelivered)
-        msg = H.message(c, c.execute("SELECT message_id FROM jobs WHERE id=?", (row["job_id"],)).fetchone()[0])
+        # Completion still records already-executed work when its triggering comment was withdrawn.
+        msg = H.message(c, c.execute("SELECT message_id FROM jobs WHERE id=?", (row["job_id"],)).fetchone()[0],
+                        include_deleted=True)
         conv = H.conversation(c, msg["conversation_id"])
         actor = "bot:" + row["bot"]
         reply = None
-        if body.text and body.outcome == "completed":
+        if body.text and body.outcome == "completed" and msg.get("deleted_at") is None:
             text, notices = split_runner_notices(body.text)
             already = c.execute("SELECT id FROM messages WHERE from_actor=? AND in_reply_to=?",
                                 (actor, msg["id"])).fetchone()
@@ -1802,7 +1808,8 @@ class Execution:
             # what was folded into it), kept in the reply's refs for the frontends to show.
             handled = [msg["id"]] + [r[0] for r in c.execute(
                 "SELECT i.message_id FROM attempt_inputs i JOIN messages m ON m.id=i.message_id "
-                "WHERE i.attempt_id=? AND m.conversation_id=? ORDER BY m.rowid", (aid, msg["conversation_id"]))]
+                "WHERE i.attempt_id=? AND m.conversation_id=? AND m.deleted_at IS NULL ORDER BY m.rowid",
+                (aid, msg["conversation_id"]))]
             refs = {**(H.message(c, reply["id"]).get("refs") or {}),
                     "run": {"job_id": row["job_id"], "attempt_id": aid}, "answers": handled}
             c.execute("UPDATE messages SET refs_json=? WHERE id=?", (encode(refs), reply["id"]))
@@ -1858,7 +1865,7 @@ class Execution:
             silent = False
         requeue = not rejected_acted if rejected else limited or retryable or silent
         c.execute("UPDATE jobs SET state=? WHERE id=?",
-                  ("completed" if body.outcome == "completed" else "cancelled" if stopped
+                  ("cancelled" if msg.get("deleted_at") is not None else "completed" if body.outcome == "completed" else "cancelled" if stopped
                    else "queued" if requeue else "uncertain", row["job_id"]))
         live_ref = (msg.get("refs") or {}).get("live_meeting")
         if (isinstance(live_ref, dict) and msg.get("from_actor") == H.KEEPER
@@ -1868,8 +1875,11 @@ class Execution:
                                  body.text if body.outcome == "completed" else "", body.outcome,
                                  requeued=requeue)
         turn_task = H.message_task_id(msg, conv)
-        for incoming in c.execute("SELECT i.message_id,m.kind FROM attempt_inputs i "
+        for incoming in c.execute("SELECT i.message_id,m.kind,m.deleted_at FROM attempt_inputs i "
                                   "JOIN messages m ON m.id=i.message_id WHERE i.attempt_id=?", (aid,)).fetchall():
+            if incoming["deleted_at"] is not None:
+                c.execute("UPDATE jobs SET state='cancelled' WHERE message_id=?", (incoming["message_id"],))
+                continue
             answered = incoming["kind"] != "ask" or bool(H.answers_to(c, [incoming["message_id"]]))
             message = H.message(c, incoming["message_id"])
             task_id = H.message_task_id(message, H.conversation(c, message["conversation_id"]))

@@ -4,6 +4,52 @@ from backend.tests.test_api import api, assign, claim, get, post, ready, runner,
 from backend.tests.test_member_bots import botops, turn, finish
 
 
+@pytest.mark.parametrize("withdrawn", ["origin", "input", "undelivered"])
+def test_withdrawn_comments_do_not_break_turn_completion(api, withdrawn):
+    from backend.store import H
+    from backend.tests.test_task_lanes import task_bot, new_task
+
+    machine = task_bot(api, lanes=True)
+    task = new_task(api, "Review the report")
+    attempt = claim(api, machine)
+    post(api, f"attempts/{attempt['id']}/started", {"thread_id": "report"}, machine["token"])
+    comment = post(api, f"tasks/{task['id']}/comments", {"text": "Withdrawn request"})["comment"]
+    if withdrawn == "origin":
+        post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "last_seq": 0}, machine["token"])
+        attempt = claim(api, machine)
+        post(api, f"attempts/{attempt['id']}/started", {"thread_id": "comment"}, machine["token"])
+    else:
+        inputs = post(api, f"attempts/{attempt['id']}/inputs", {}, machine["token"])["messages"]
+        assert [m["id"] for m in inputs] == [comment["id"]]
+        if withdrawn == "input":
+            post(api, f"attempts/{attempt['id']}/inputs/{comment['id']}/ack", {}, machine["token"])
+            surviving = post(api, f"tasks/{task['id']}/comments", {"text": "Still wanted"})["comment"]
+            inputs = post(api, f"attempts/{attempt['id']}/inputs", {}, machine["token"])["messages"]
+            assert [m["id"] for m in inputs] == [surviving["id"]]
+            post(api, f"attempts/{attempt['id']}/inputs/{surviving['id']}/ack", {}, machine["token"])
+    post(api, f"tasks/{task['id']}/comments/{comment['id']}/delete", {})
+    assert post(api, f"attempts/{attempt['id']}/inputs", {}, machine["token"])["messages"] == []
+    current = get(api, "tasks/" + task["id"])["task"]
+    post(api, "tasks/" + task["id"], {"version": current["version"], "status": "done", "quiet": True}, attempt["token"])
+    body = {"outcome": "completed", "last_seq": 0, "text": "Recorded the work already done."}
+    if withdrawn == "undelivered":
+        body["undelivered"] = [comment["id"]]
+    path = f"attempts/{attempt['id']}/complete"
+    result = post(api, path, body, machine["token"], key="withdrawn-completion")
+    assert post(api, path, body, machine["token"], key="withdrawn-completion") == result
+    with api.app.state.store.read() as c:
+        assert H.message(c, comment["id"]) is None
+        assert c.execute("SELECT state FROM jobs WHERE message_id=?", (comment["id"],)).fetchone()[0] == "cancelled"
+        assert c.execute("SELECT state FROM attempts WHERE id=?", (attempt["id"],)).fetchone()[0] == "completed"
+        assert c.execute("SELECT final_text FROM attempts WHERE id=?", (attempt["id"],)).fetchone()[0] == body["text"]
+        assert not c.execute("SELECT 1 FROM messages WHERE in_reply_to=?", (comment["id"],)).fetchone()
+        if withdrawn == "input":
+            assert c.execute("SELECT state FROM jobs WHERE message_id=?", (surviving["id"],)).fetchone()[0] == "completed"
+            reply = H.message(c, result["message"]["id"])
+            assert surviving["id"] in reply["refs"]["answers"]
+            assert comment["id"] not in reply["refs"]["answers"]
+
+
 def test_interrupted_steered_question_is_not_silently_completed(api):
     r, _, a = setup_attempt(api)
     post(api, f"attempts/{a['id']}/started", {"thread_id": "thread"}, r["token"])
