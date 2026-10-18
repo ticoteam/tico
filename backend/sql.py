@@ -52,8 +52,9 @@ DERIVED = {
     # Runs per week (Monday, UTC), bot and what woke them, with their tokens and outcome (backend/run_triggers.py).
     # A run from before triggers were recorded reads `unknown`, and is counted, never dropped. Input is the run's
     # measured usage (every primary and fallback segment) first, and the runner's older one-number `tokens_in` only
-    # when there is none: a resumed thread may report its whole running total there.
-    "run_weekly": (("turns",), """
+    # when there is none: a resumed thread may report its whole running total there. An attempt that never got a
+    # turn row (one that failed or expired before it started) is counted too, as `unknown`, with no tokens or outcome.
+    "run_weekly": (("turns", "attempts"), """
         SELECT date(started, '-6 days', 'weekday 1') AS week, bot, coalesce(trigger_kind, 'unknown') AS trigger,
                count(*) AS runs,
                sum(CASE WHEN input_tokens IS NOT NULL OR cached_tokens IS NOT NULL
@@ -70,7 +71,13 @@ DERIVED = {
                round(100.0 * sum(coalesce(outcome, '') = 'no_change') / count(*), 1) AS no_change_pct,
                round(100.0 * sum(coalesce(outcome, '') = 'nothing_to_do') / count(*), 1) AS nothing_to_do_pct,
                round(100.0 * sum(outcome IS NULL) / count(*), 1) AS unknown_pct
-        FROM {turns} WHERE started IS NOT NULL AND {bots}
+        FROM (SELECT started, bot, trigger_kind, input_tokens, cached_tokens, tokens_in, output_tokens, tokens_out,
+                     outcome, did_nothing
+              FROM {turns} WHERE started IS NOT NULL
+              UNION ALL
+              SELECT coalesce(a.started, a.created), a.bot, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
+              FROM {attempts} a WHERE NOT EXISTS (SELECT 1 FROM {turns} t WHERE t.id = a.id))
+        WHERE {bots}
         GROUP BY 1, 2, 3"""),
 }
 # FTS5 reads these as main.<virtual>_* with no view context; they are not a public API.

@@ -223,6 +223,12 @@ def test_the_weekly_table_counts_every_run_and_old_ones_read_unknown(api):
                   "VALUES('old-run','ops',?,?,'task','completed',500,5)", (H.now(), H.now()))
         c.execute("INSERT INTO turns(id,bot,started,trigger,trigger_kind) VALUES('live-run','ops',?,'say','comment')",
                   (H.now(),))
+    # An attempt that failed with no turn row at all (as before turns were written at the claim).
+    post(api, "chat/ops", {"text": "And the bank feed?"})
+    lost = claim(api, r)
+    with api.app.state.store.transaction() as c:
+        c.execute("DELETE FROM turns WHERE id=?", (lost["id"],))
+        c.execute("UPDATE attempts SET state='failed' WHERE id=?", (lost["id"],))
     rows = {row["trigger"]: row for row in weekly(api, where="bot='ops'")}
     week = H.now()[:10]
     assert set(rows) == {"person_message", "unknown", "comment"}
@@ -230,10 +236,12 @@ def test_the_weekly_table_counts_every_run_and_old_ones_read_unknown(api):
     assert rows["person_message"] == {**rows["person_message"], "runs": 1, "input_tokens": 1200,
                                       "cached_input_tokens": 1000, "output_tokens": 30, "acted": 1, "no_change": 0,
                                       "nothing_to_do": 0, "unknown": 0, "acted_pct": 100.0}
-    assert rows["unknown"] == {**rows["unknown"], "runs": 1, "input_tokens": 500, "output_tokens": 5,
-                               "unknown": 1, "unknown_pct": 100.0, "acted": 0}
+    assert rows["unknown"] == {**rows["unknown"], "runs": 2, "input_tokens": 500, "output_tokens": 5,
+                               "unknown": 2, "unknown_pct": 100.0, "acted": 0, "did_nothing": 0}
     assert rows["comment"]["unknown"] == 1        # still running: no outcome yet, still counted
-    assert sum(row["runs"] for row in weekly(api)) == query(api, "SELECT count(*) FROM turns")["rows"][0][0]
+    every = query(api, "SELECT (SELECT count(*) FROM turns) + (SELECT count(*) FROM attempts a "
+                       "WHERE NOT EXISTS (SELECT 1 FROM turns t WHERE t.id = a.id))")["rows"][0][0]
+    assert sum(row["runs"] for row in weekly(api)) == every == 4
 
 
 def test_the_weekly_table_is_read_only_and_follows_who_may_read_the_bot(api):
