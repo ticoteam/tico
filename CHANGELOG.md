@@ -19,6 +19,9 @@ All notable changes to Tico are recorded here. The format follows
   rebuild it ([updates.md](docs/updates.md#python-environments-on-a-docker-runner) lists them and how).
 
 ### Fixed
+- A bot can read any computer's performance by its name or id with `hub computer performance`, as the docs say. It
+  used to look the computer up in the computer list first, which shows a bot only some computers, so most bots got "No
+  computer named".
 - A person's new Slack thread to a bot that is paused or quarantined is kept and runs when the bot is back, as a reply
   in an existing thread already was, instead of being dropped. The person is told in the thread that the bot is held
   and when it is back, with no need to resend.

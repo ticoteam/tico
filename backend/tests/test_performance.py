@@ -5,7 +5,8 @@ import time
 
 from backend import performance as P
 from backend.auth import Identity
-from backend.tests.test_api import api, get, headers, post, setup_attempt  # noqa: F401  (the api fixture)
+from backend.store import H
+from backend.tests.test_api import api, get, headers, post, runner, setup_attempt  # noqa: F401  (the api fixture)
 from backend.tests.test_bot_access import world  # noqa: F401  (a Legal bot and who may see it)
 
 
@@ -177,16 +178,25 @@ def test_turning_it_off_ends_an_open_overload(api):
     assert not any(x["id"] == "performance:" + rid and "overloaded now" in x["summary"] for x in get(api, "health")["checks"])
 
 
-def test_the_performance_tool_finds_the_computer_by_label_or_id_in_the_computers_reply(api):
-    """Task 122: the tool walked the computers reply as a list, so every call failed on its keys."""
+def test_a_bot_the_computer_list_does_not_show_reads_any_computer_by_label_or_id(api):
+    """The computer list shows a bot only some computers; performance is every bot's to read, by label or id. An unknown
+    name and a removed computer's get the same answer, and a caller who may not read it learns nothing either way."""
     from backend.tests.test_mcp import call
     r, _, attempt = setup_attempt(api)
     rid = r["runner_id"]
-    assert set(get(api, "computers")) >= {"computers", "services"}     # the reply is a dict, not a list
     post(api, "runners/performance", {"samples": [sample(time.time() - 30)]}, token=r["token"])
-    for wanted in ("Test Mac", rid):
-        failed, seen = call(api, "hub_computer_performance", {"computer": wanted, "hours": 1}, token=attempt["token"])
+    gone = runner(api, label="Old Mac")["runner_id"]
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runners SET revoked_at=? WHERE id=?", (H.now(), gone))
+        c.execute("UPDATE runners SET accepts_member_bots=0 WHERE id=?", (rid,))    # not opened to members' bots
+    bot = attempt["token"]
+    assert get(api, "computers", token=bot)["computers"] == []
+    for wanted in ("Test Mac", "test mac ", rid):
+        failed, seen = call(api, "hub_computer_performance", {"computer": wanted, "hours": 1}, token=bot)
         assert not failed, seen
-        assert seen["computer"] == {"id": rid, "label": "Test Mac"} and seen["performance"] == "on" and seen["points"][0][1] == 20.0
-    failed, seen = call(api, "hub_computer_performance", {"computer": "No such box"}, token=attempt["token"])
-    assert failed and "No computer named 'No such box'" in str(seen)
+        assert seen["computer"] == {"id": rid, "label": "Test Mac"} and seen["points"][0][1] == 20.0
+    for wanted in ("No such box", "Old Mac", gone):
+        failed, seen = call(api, "hub_computer_performance", {"computer": wanted}, token=bot)
+        assert failed and f"No computer named {wanted!r}; hub computer list names them" in str(seen), seen
+    for wanted in ("Test Mac", "No such box"):     # a runner credential is neither a person nor a bot
+        assert api.get(f"/api/v2/computers/{wanted}/performance", headers=headers(r["token"])).status_code == 403
