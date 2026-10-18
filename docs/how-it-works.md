@@ -319,7 +319,8 @@ AGENTS.md (else CLAUDE.md), labelled as rules for writing code there that never 
 a link out of the worktree is refused, the whole is capped at 16 KB, and a resumed thread gets
 them again only when they change. A bot's chat and its own thread use the local
 `bot-<slug>` checkout one turn at a time; with a session per task, each task's turns run in that
-task's own worktree (`sessions/bot-<slug>/<task>`), beside the bot's other tasks. Only that
+task's own worktree (`sessions/bot-<slug>/<task>`), beside the bot's other tasks. A bot never has two turns on
+one task at once: a wake about a task its turn is on goes into that turn, or waits for the next one there. Only that
 computer knows which thread
 it is. Tico never ends a thread, never asks the bot for a checkpoint before a model or computer
 change, and never rebuilds history into a prompt (a fresh session on a task starts from the task's last

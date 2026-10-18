@@ -7,7 +7,20 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- A bot no longer gets a second turn on a task while its first is still running there when the task was moved under
+  another of its tasks mid-turn. A wake about a task the bot is working on goes into that turn, or waits for the next
+  turn on the task; it never starts one beside it. Another bot's turn on the same task (the requester woken by the
+  owner's comment) and the bot's other tasks still run side by side.
+
 ### Changed
+- **Decide asks the Tico AI Gateway first**, as Tico Decide 1.0 (`tico-decide-1.0`), with a gateway key
+  (`TICO_GATEWAY_KEY` or `TICO_GATEWAY_SECRET_ARN`; `TICO_GATEWAY_URL`, Tico HQ's by default), instead of calling
+  TypeSafe. The order is the Gateway, then your own TypeSafe key if you set one (no longer in any default setup), then
+  the team's own AI provider, then off; any failure (down, slow, a refused key, the Gateway's cap) moves on to the
+  next, so no caller waits on a broken provider. Each decision's audit row names the provider that answered (`Tico AI
+  Gateway`, `TypeSafe`, or the team's provider) and its model, and the Slack gateway routes the same way. A Tico Decide
+  call counts toward the monthly spend cap at the Gateway's price ($0.06 per 1M input tokens, output free).
 - PRIVACY.md now names OpenRouter: a bot set to Tico Cheap, Mid or Power sends its model calls through Tico HQ to
   OpenRouter. It lists what is sent (the messages and tools, never the gateway key, its label or the install ID), that
   HQ keeps none of the call's text (only the key's label and per-call counts), that zero retention is enforced only when
@@ -18,6 +31,14 @@ All notable changes to Tico are recorded here. The format follows
   answer. On a large install that read took 35-37 s, and other writes timed out waiting for it. The answers that
   quote a comment are now found by index; the index is filled for existing answers at the first start, in short
   batches beside the running server. Deleting a comment also finds the questions it answered by index.
+- Health no longer reports a bot's queued work as a Tico bug (Health Monitor `queue_idle`) when an old job is held on
+  purpose, or waits behind a person's message, and the job that would start next is still young. It judges a bot by
+  that job, a person's message first: slow only once it has waited 15 minutes (a person's message: 2). When every job
+  is held, it names the reason.
+- A computer someone pressed Restart for now says so until it restarts. Its held work shows on Health as "{computer} is
+  restarting: it starts new work once its running turns end", and its row in Settings > Computers says it is
+  restarting. If the restart takes over 34 minutes, Health Monitor files a `runner_restarting` setup finding.
+  Before, that wait read as a Tico bug.
 
 ## [0.3.58] - 2026-10-18
 
