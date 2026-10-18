@@ -5,8 +5,10 @@ back the click or the limit the product had before. They are read wherever the d
 direct writes (backend/assistant.py), what BotOps does without a card (backend/botops_act.py), the bots BotOps
 manages in its own runs and who is a credential administrator (backend/auth.py), who stores a credential for their
 own bot (backend/credentials.py), the SQL page and personal tokens, whether a bot goes ahead on its own default when
-a person leaves its ask unanswered (backend/ask_deadlines.py), and whether Tico support may be let in
-(backend/support_access.py).
+a person leaves its ask unanswered (backend/ask_deadlines.py), whether Tico support may be let in
+(backend/support_access.py), and whether the hourly stale ticket review runs (backend/stale_review.py). That last one is
+off by default, an admin may turn it too (ADMIN_RULES), and the server's environment may set its default
+(ENV_DEFAULTS).
 """
 import json
 import os

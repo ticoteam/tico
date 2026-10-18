@@ -219,6 +219,51 @@ function approvalsHTML() {
   return `<section class="tl-group" data-group="approvals"><header class="tl-ghead"><span class="tl-gname">Approvals</span><span class="tl-gcount tnum">${items.length}</span></header>
     <div class="tl-rows" role="list" aria-label="Approvals">${items.map(it => needsV2Item(it, false)).join('')}</div></section>`;
 }
+// The person's one Stale tickets card (backend/stale_review.py): a row per task the hourly check found stale, each with
+// its reason and suggestion, Accept or Skip, and Accept all. Accept is the person's own change, refused as by hand.
+const staleCards = () => (S.v2?.needs || []).filter(it => it.kind === 'stale');
+function staleCardRow(r) {
+  const accept = r.action ? `<button type="button" class="ghost" data-stale="${esc(r.id)}" data-stale-decision="accept">Accept</button>` : '';
+  return `<li class="stale-row" data-stale-row="${esc(r.id)}">
+    <div class="stale-what"><a href="#/task/${encodeURIComponent(r.task)}">${esc(plainActors(r.title || ''))}</a>
+      <div class="muted">${esc(r.reason)}. Suggest: ${esc(r.suggest)}.</div></div>
+    <div class="row">${accept}<button type="button" class="ghost" data-stale="${esc(r.id)}" data-stale-decision="skip">Skip</button></div>
+  </li>`;
+}
+function staleCardHTML(it) {
+  const all = (it.rows || []).some(r => r.action);
+  return `<details class="req v2" data-patch-key="stale:${esc(it.id)}" data-stale-card open>
+    <summary>
+      ${personCircle('Tico', 24)}
+      <span class="req-text"><span class="req-from">Tico:</span> ${esc(it.title)}</span>
+      <span class="req-meta"><span class="pill needs">Stale check</span>${esc(ago(it.created))}</span>
+      <span class="req-arrow" aria-hidden="true">›</span>
+    </summary>
+    <div class="req-body">
+      <div class="req-context">The hourly stale check thinks these tasks may be finished or no longer needed. Nothing changes unless you accept.</div>
+      <ul class="stale-rows" aria-label="Stale ticket suggestions">${(it.rows || []).map(staleCardRow).join('')}</ul>
+      ${all ? '<div class="issue-actions"><button type="button" class="primary" data-stale-all>Accept all</button></div>' : ''}
+    </div>
+  </details>`;
+}
+function staleCardsHTML() {
+  const cards = staleCards();
+  if (!cards.length) return '';
+  return `<section class="tl-group" data-group="stale"><header class="tl-ghead"><span class="tl-gname">Stale tickets</span><span class="tl-gcount tnum">${cards.reduce((n, it) => n + (it.rows || []).length, 0)}</span></header>
+    <div class="tl-rows" role="list" aria-label="Stale tickets">${cards.map(staleCardHTML).join('')}</div></section>`;
+}
+async function staleDecide(button, path, body) {
+  const label = button.textContent;
+  button.disabled = true; button.textContent = '…';
+  try {
+    const out = await post(path, body);
+    const refused = out.refused || [];
+    if (refused.length) toast(`${refused.length} not changed: ${refused[0].reason}`, true);
+    else toast(out.accepted ? `Accepted ${out.accepted.length}` : out.outcome === 'skipped' ? 'Skipped' : 'Accepted');
+    await v2Refresh(); await refresh(true);
+    if (TASKS_ST && isTasksRoute(S.route)) tasksRender(TASKS_ST);
+  } catch (e) { toast(e.message, true); button.disabled = false; button.textContent = label; }
+}
 // A question a bot asked the person outside any task: no task row carries it, so Needs you lists it on its own,
 // answered in place. `data-patch-key` keeps an opened row (and a half-written answer) through the list's redraws.
 const looseAsks = () => (S.v2?.needs || []).filter(it => it.kind === 'ask');
@@ -363,6 +408,10 @@ document.addEventListener('click', ev => {
   void needsRecommend(rec, rec.dataset.recommend, Number(rec.dataset.version) || null);
 }, true);
 document.addEventListener('click', ev => {
+  const st = ev.target.closest('[data-stale]');
+  if (st) { ev.preventDefault(); void staleDecide(st, `/v2/stale-review/${encodeURIComponent(st.dataset.stale)}`, {decision: st.dataset.staleDecision}); return; }
+  const sa = ev.target.closest('[data-stale-all]');
+  if (sa) { ev.preventDefault(); void staleDecide(sa, '/v2/stale-review/accept-all', {}); return; }
   const ap = ev.target.closest('[data-v2-approval]');
   if (ap) { ev.preventDefault(); void v2Decide(ap, ap.dataset.v2Approval, ap.dataset.v2Decision); return; }
   const tk = ev.target.closest('[data-v2-task]');
