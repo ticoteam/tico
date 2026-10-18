@@ -19,7 +19,7 @@ from pathlib import Path
 import pytest
 
 from backend.store import encode
-from backend.tests.test_api import api, assign, get, post, put, runner, settled  # noqa: F401
+from backend.tests.test_api import api, assign, get, headers, post, put, runner, settled  # noqa: F401
 from backend.tests.live import live  # noqa: F401
 
 pytestmark = pytest.mark.slow
@@ -263,6 +263,57 @@ def test_a_chat_turn_streams_completes_and_resumes_the_bot_thread(api, computer)
         starts = [c for c in calls if c.get("method") in ("thread/start", "thread/resume")]
         assert starts[-1] == {"harness": "codex", "method": "thread/resume", "thread": starts[0]["thread"]}
     assert "Please answer locally" not in computer.prompts()[-1]["prompt"]
+
+
+def started_threads(api, computer):
+    """The provider thread each of this computer's turns reported when it started, oldest first."""
+    with api.app.state.store.read() as c:
+        return [r[0] for r in c.execute("SELECT thread_id FROM attempts WHERE runner_id=? ORDER BY created",
+                                        (computer.registration["runner_id"],))]
+
+
+@pytest.mark.parametrize("old_hub", [False, True])
+def test_a_person_clearing_the_chat_starts_a_new_provider_thread_and_without_one_it_resumes(api, computer, old_hub,
+                                                                                            monkeypatch):
+    if old_hub:
+        # A Hub from before `session_epoch`: the runner keeps resuming, as before, and nothing breaks.
+        from backend.execution import Execution
+        claim = Execution.claim
+
+        def without_epoch(self, *args, **kwargs):
+            out = claim(self, *args, **kwargs)
+            if isinstance(out, dict) and isinstance(out.get("attempt"), dict):
+                out["attempt"].pop("session_epoch", None)
+            return out
+        monkeypatch.setattr(Execution, "claim", without_epoch)
+    computer.start()
+    conversation = None
+    for n, text in enumerate(["Remember the Acme code word", "What was it?"], start=1):
+        conversation = post(api, "chat/ops", {"text": text})["conversation_id"]
+        until(lambda: len([a for a in computer.attempts() if a["result"]]) == n, f"reply {n}")
+    cleared = computer.api.post("/api/employees/ops/session/clear", json={}, headers=headers())
+    assert cleared.status_code == 200 and cleared.json()["conversation_id"] == conversation, cleared.text
+    post(api, "chat/ops", {"text": "Start over: a new question"})
+    until(lambda: len([a for a in computer.attempts() if a["result"]]) == 3, "the reply after the clear")
+    assert [a["result"]["outcome"] for a in computer.attempts()] == ["completed"] * 3
+    first, second, third = started_threads(api, computer)
+    # No clear: the same thread, warm. After the clear: a new one, not a resume of the old.
+    assert first and second == first, (first, second)
+    if old_hub:
+        assert third == first, "with no epoch from the Hub the runner resumes as it always did"
+        return
+    assert third and third != first, (first, third)
+    calls = computer.prompts()
+    assert "Remember the Acme code word" not in calls[-1]["prompt"], "the cleared history stays out of the new thread"
+    if computer.harness in ("claude", "gemini"):
+        argv = calls[-1]["argv"]
+        assert "--resume" not in argv and argv[argv.index("--session-id") + 1] == third
+    elif computer.harness == "codex":
+        starts = [c for c in computer.calls() if c.get("harness") == "codex" and c.get("method") in ("thread/start", "thread/resume")]
+        assert [c["method"] for c in starts] == ["thread/start", "thread/resume", "thread/start"]
+    elif computer.harness == "antigravity":
+        # A new epoch is a new warm scope: its own process, so a provider conversation of its own.
+        assert calls[-1]["pid"] != calls[0]["pid"] == calls[1]["pid"]
 
 
 @pytest.mark.parametrize("harness", ["gemini", "antigravity"])

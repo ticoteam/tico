@@ -802,6 +802,14 @@ impl Runner {
             if redactor.is_some() {
                 started_at = memory_before.clone();
             }
+            if let Some(epoch) = attempt.get("session_epoch").and_then(Value::as_i64) {
+                // A person cleared this chat (or a settings change reset the bot's sessions): a new provider thread,
+                // started from the Hub's recovery pack. A Hub that sends no epoch keeps today's resume.
+                let conversation_id = text_of(&attempt["conversation"]["id"]);
+                if !conversation_id.is_empty() && self.state.epoch_moved(&bot, &conversation_id, &conv, epoch)? {
+                    log(&format!("Tico runner: {bot}: session cleared in Tico; starting a new {session_runtime} thread"));
+                }
+            }
             let previous = self.state.session(&bot, &conv, &session_runtime)?;
             let minutes = config["max_run_minutes"].as_f64().or_else(|| text_of(&config["max_run_minutes"]).parse().ok()).unwrap_or(60.0);
             let limit = Instant::now() + Duration::from_secs_f64(60.0 * minutes);

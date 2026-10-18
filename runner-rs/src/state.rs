@@ -22,6 +22,9 @@ pub const SCHEMA: &str = "
     CREATE TABLE IF NOT EXISTS inputs(
       attempt_id TEXT NOT NULL, message_id TEXT NOT NULL, phase TEXT NOT NULL,
       PRIMARY KEY(attempt_id,message_id));
+    CREATE TABLE IF NOT EXISTS session_epochs(
+      bot TEXT NOT NULL, conversation_id TEXT NOT NULL, session TEXT NOT NULL,
+      epoch INTEGER NOT NULL, PRIMARY KEY(bot,conversation_id,session));
     CREATE TABLE IF NOT EXISTS session_cursors(
       thread TEXT PRIMARY KEY, message TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS session_repo_rules(
@@ -237,6 +240,32 @@ impl State {
         })
     }
 
+    /// Whether the Hub cleared this conversation's session since this session last ran for it: its epoch moved
+    /// (backend/execution.py `session_epoch`). Then the session's threads are dropped, in the same transaction that
+    /// records the new epoch, so a turn that dies before its new thread is saved still starts fresh on the retry. A
+    /// conversation seen for the first time is only recorded: there is nothing to compare, so it resumes as before.
+    pub fn epoch_moved(&self, bot: &str, conversation_id: &str, session: &str, epoch: i64) -> Result<bool, String> {
+        self.with(|c| {
+            let tx = c.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            let seen: Option<i64> = tx
+                .query_row(
+                    "SELECT epoch FROM session_epochs WHERE bot=? AND conversation_id=? AND session=?",
+                    params![bot, conversation_id, session],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            let moved = seen.is_some_and(|e| e != epoch);
+            if moved {
+                tx.execute("DELETE FROM sessions WHERE bot=? AND conversation=?", params![bot, session])?;
+            }
+            if seen != Some(epoch) {
+                tx.execute("INSERT OR REPLACE INTO session_epochs VALUES(?,?,?,?)", params![bot, conversation_id, session, epoch])?;
+            }
+            tx.commit()?;
+            Ok(moved)
+        })
+    }
+
     pub fn cursor(&self, thread: &str, message: Option<&str>) -> Result<Option<String>, String> {
         self.with(|c| {
             if let Some(m) = message {
@@ -264,6 +293,34 @@ mod tests {
 
     fn temp() -> PathBuf {
         std::env::temp_dir().join(format!("tico-state-{}", uuid::Uuid::new_v4()))
+    }
+
+    #[test]
+    fn a_cleared_conversation_drops_its_sessions_threads_and_an_unchanged_one_keeps_them() {
+        let state = State::open(&temp()).unwrap();
+        state.save_session("ops", "bot", "claude", "t-old").unwrap();
+        state.save_session("ops", "bot", "codex", "x-old").unwrap();
+        state.save_session("ops", "task:t1", "claude", "t-task").unwrap();
+        // First sight is only recorded; the same epoch again resumes.
+        assert!(!state.epoch_moved("ops", "c-ana", "bot", 2).unwrap());
+        assert!(!state.epoch_moved("ops", "c-ben", "bot", 0).unwrap());
+        assert!(!state.epoch_moved("ops", "c-ana", "bot", 2).unwrap());
+        assert_eq!(state.session("ops", "bot", "claude").unwrap().as_deref(), Some("t-old"));
+        // Ana clears her chat: the bot thread goes, for every runtime; the task's thread stays.
+        assert!(state.epoch_moved("ops", "c-ana", "bot", 3).unwrap());
+        assert_eq!(state.session("ops", "bot", "claude").unwrap(), None);
+        assert_eq!(state.session("ops", "bot", "codex").unwrap(), None);
+        assert_eq!(state.session("ops", "task:t1", "claude").unwrap().as_deref(), Some("t-task"));
+        // The new thread then resumes: for Ana at her new epoch and for Ben, whose epoch never moved.
+        state.save_session("ops", "bot", "claude", "t-new").unwrap();
+        assert!(!state.epoch_moved("ops", "c-ana", "bot", 3).unwrap());
+        assert!(!state.epoch_moved("ops", "c-ben", "bot", 0).unwrap());
+        assert_eq!(state.session("ops", "bot", "claude").unwrap().as_deref(), Some("t-new"));
+        // Another bot's sessions are its own.
+        state.save_session("cfo", "bot", "claude", "f-old").unwrap();
+        assert!(!state.epoch_moved("cfo", "c-ana", "bot", 0).unwrap());
+        assert!(state.epoch_moved("ops", "c-ana", "bot", 4).unwrap());
+        assert_eq!(state.session("cfo", "bot", "claude").unwrap().as_deref(), Some("f-old"));
     }
 
     #[test]
@@ -319,7 +376,7 @@ mod tests {
         drop(state);
         let script = "import sqlite3,sys,json\nc=sqlite3.connect(sys.argv[1])\nprint(c.execute('pragma journal_mode').fetchone()[0])\nprint(json.loads(c.execute('select completion from attempts').fetchone()[0])['outcome'])\nprint(c.execute('select thread from sessions').fetchone()[0])\nprint(len(c.execute(\"select name from sqlite_master where type='table'\").fetchall()))";
         let out = std::process::Command::new("python3").args(["-c", script]).arg(dir.join("runner.sqlite")).output().unwrap();
-        assert_eq!(String::from_utf8_lossy(&out.stdout).split_whitespace().collect::<Vec<_>>(), ["wal", "interrupted", "thread-1", "10"]);
+        assert_eq!(String::from_utf8_lossy(&out.stdout).split_whitespace().collect::<Vec<_>>(), ["wal", "interrupted", "thread-1", "11"]);
         std::fs::remove_dir_all(dir).ok();
     }
 }

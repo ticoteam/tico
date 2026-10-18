@@ -1266,7 +1266,7 @@ class Execution:
         # The room's recent page. The runner forwards only what arrived since the bot last
         # answered; the bot reads further back itself with `hub conversation show` when it wants to. The
         # hub keeps no pointer to the bot's session and rebuilds nothing on its behalf.
-        epoch = c.execute("SELECT updated FROM session_epochs WHERE conversation_id=?", (conv["id"],)).fetchone()
+        epoch = c.execute("SELECT epoch,updated FROM session_epochs WHERE conversation_id=?", (conv["id"],)).fetchone()
         bot_who = Identity("bot:" + row["bot"], "bot", attempt_id=aid)
         history = privacy.page(c, bot_who, conv["id"], limit=HISTORY_PAGE * (2 if lanes else 1),
                                since=epoch["updated"] if epoch else None)["messages"]
@@ -1389,7 +1389,10 @@ class Execution:
                             "message": msg, "conversation": conv, "task": task,
                             # The task's set-up worktrees on this computer, added to its session (runner-rs/src/sessions.rs).
                             "worktrees": worktrees.attached(c, task["id"], who.runner_id, row["bot"]) if task else [],
-                            "history": history, "config": config, "principal": principal}}
+                            "history": history, "config": config, "principal": principal,
+                            # Bumped by a session clear or reset (views.py clear_session, app.py reset_bot_sessions):
+                            # a runner that sees it change starts a fresh provider thread (runner-rs/src/execute.rs).
+                            "session_epoch": epoch["epoch"] if epoch else 0}}
 
     def attempt(self, c, who, aid, active=True, final=False):
         """`final` is a runner handing in the result of a turn it has finished. That result
