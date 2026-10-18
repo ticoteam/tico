@@ -7,6 +7,8 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.3.57] - 2026-10-18
+
 ### Added
 - Each bot has a wake preset under **Settings → Bots → Wakes**. **Token saver** is the default for a new bot. It
   holds nonblocking news (a finished request, review comments, a failing check nobody waits on) and sends it as one
@@ -3333,7 +3335,8 @@ First public release.
 - Hosting: local only on a Mac, or self-hosted, including a reference AWS stack under `infra/ec2/`
   with Litestream backups.
 
-[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.56...HEAD
+[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.57...HEAD
+[0.3.57]: https://github.com/ticoteam/tico/compare/v0.3.56...v0.3.57
 [0.3.56]: https://github.com/ticoteam/tico/compare/v0.3.55...v0.3.56
 [0.3.55]: https://github.com/ticoteam/tico/compare/v0.3.54...v0.3.55
 [0.3.54]: https://github.com/ticoteam/tico/compare/v0.3.52...v0.3.54
