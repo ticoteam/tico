@@ -6,6 +6,7 @@ const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs');
 
 const SCENE = `export function createBuilding() {
   document.body.dataset.sceneReady = 'true'; document.querySelector('#loading').hidden = true;
@@ -39,7 +40,7 @@ const answer = (over = {}) => ({zone: 'America/Los_Angeles', now: '2026-10-14T19
       if (p === '/api/employees') return json([]);
       if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}], org_groups: []});
       if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true, config: {company_name: 'Acme Studio'}});
-      return json({});
+      return json(unrouted(p));
     });
     await page.goto('http://tico-ui.test/');
     await page.waitForFunction(() => location.hash === '#/updates');

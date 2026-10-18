@@ -5,6 +5,7 @@ const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs');
 const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();
 
 const SCENE = `export function createBuilding(data) {
@@ -42,7 +43,7 @@ const block = (seq, event, data) => `id: ${seq}\nevent: ${event}\ndata: ${JSON.s
       if (p === '/api/v2/computers') return json({computers: [{id: 'alpha', label: 'Garden Mac'}]});
       if (p === '/api/v2/status') { reads.status++; return json({bots: bots.map(b => ({bot: b.name, state: 'running', focus: 'live work'}))}); }
       if (p === '/api/v2/events') { streams.push(route); return; }        // held open until the test sends
-      return json({});
+      return json(unrouted(p));
     });
     // The newest stream the page holds, answered with `blocks` (it then ends, and the page reconnects).
     const send = async (...blocks) => {
