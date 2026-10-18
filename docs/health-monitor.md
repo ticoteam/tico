@@ -5,7 +5,8 @@ default**. The owner turns it on or off with one switch in **Settings > Health**
 `/turn-off`). Turning it off pauses it; its history stays.
 
 Settings > Health also lists checks that belong to one feature, documented on that feature's page: public roadmap
-suggestions with no receiving bot are in [Public roadmaps](roadmaps.md).
+suggestions with no receiving bot are in [Public roadmaps](roadmaps.md), and the Tico AI Gateway key (near or at its
+monthly cap, not recognised, or not ready) is in [Tico AI Gateway](ai-gateway.md#what-the-card-says).
 
 ## What it checks
 

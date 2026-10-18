@@ -89,7 +89,7 @@ underneath) run on pi through Tico's own Gateway, not OpenRouter. Their provider
 exactly while the **Tico AI Gateway** connection in Settings > AI providers has a key (`backend/gateway_connection.py`),
 and OpenRouter's catch-all does not offer them. The key is the one Decide uses; the server's `TICO_GATEWAY_KEY` and
 `TICO_GATEWAY_URL` win over a saved one and show as connected. A saved key is sealed and never read back, only a
-preview of its first and last three characters.
+preview of its first and last three characters. What the owner sees and does is in [Tico AI Gateway](ai-gateway.md).
 
 A bot on a Tico model, or whose own fallback is one, gets the key and the Gateway's URL as `TICOAI_GATEWAY_KEY` and
 `TICOAI_GATEWAY_URL` from `GET /api/v2/credential-runtime`; no other bot does. pi reads them through a `tico` provider
