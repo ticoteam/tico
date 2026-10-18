@@ -23,6 +23,12 @@ All notable changes to Tico are recorded here. The format follows
   or brings Grok forward. **Settings → Computers** shows a **Desktop apps** row per app, Health names a signed-out
   app, missing permission or changed layout, and a reply that needs you in Grok becomes a question in your Needs
   you. Off by default; with it off nothing changes, and no message is handed to the daily sync twice.
+- Every bot run records what woke it (a person's message, a comment, a status or relation change, pull request checks,
+  a stall check, a schedule, or other), its input tokens with the cached part split out, its output tokens, and an
+  outcome worked out in code from what the run wrote: `acted`, `no_change` (its task is still open) or `nothing_to_do`,
+  plus an exact `did_nothing` flag. `hub sql` gains `run_weekly`, one row per week, bot and trigger with runs, tokens
+  and the count and share of each outcome. Runs from before this read `unknown` and are still counted
+  ([What woke each run](docs/hub-sql.md#what-woke-each-run-and-what-it-did)).
 
 ### Changed
 - Screen: the first time a new computer offers its screen, its **Screen** setting in Settings > Computers starts at
@@ -67,12 +73,6 @@ All notable changes to Tico are recorded here. The format follows
 
 ### Added
 
-- Every bot run records what woke it (a person's message, a comment, a status or relation change, pull request checks,
-  a stall check, a schedule, or other), its input tokens with the cached part split out, its output tokens, and an
-  outcome worked out in code from what the run wrote: `acted`, `no_change` (its task is still open) or `nothing_to_do`,
-  plus an exact `did_nothing` flag. `hub sql` gains `run_weekly`, one row per week, bot and trigger with runs, tokens
-  and the count and share of each outcome. Runs from before this read `unknown` and are still counted
-  ([What woke each run](docs/hub-sql.md#what-woke-each-run-and-what-it-did)).
 - The Overview shows **Bot hours vs human hours**: bot hours per human hour over the last 7 days, and a weekly line for
   up to 12 weeks (Monday to Sunday, Pacific time) with a dashed Parity line at 1× and the current week dotted as "so far".
   Hover or tap a week for its numbers; click the card for the table by week. Bot hours are the time bot runs spent
