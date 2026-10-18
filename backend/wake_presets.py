@@ -72,12 +72,11 @@ HOLD_TRIGGER = f"""CREATE TRIGGER wake_preset_hold AFTER INSERT ON jobs WHEN NEW
    WHERE id=NEW.id AND {_PRESET_SQL} AND EXISTS(SELECT 1 FROM messages m WHERE m.id=NEW.message_id
    AND m.from_actor='{H.KEEPER}' AND ({_BATCH_SQL} OR {_SWEEP_SQL}));
  UPDATE jobs SET state='cancelled',held=0,wake_class='duplicate' WHERE id=NEW.id AND {_PRESET_SQL}
-   AND EXISTS(SELECT 1 FROM messages m JOIN jobs o ON o.bot=NEW.bot AND o.state IN ('queued','leased','running','input')
-   AND o.id<>NEW.id JOIN messages om ON om.id=o.message_id WHERE m.id=NEW.message_id AND {_SAME_EVENT})
-   OR id=NEW.id AND {_PRESET_SQL} AND EXISTS(SELECT 1 FROM messages m JOIN messages om
-   ON om.conversation_id=m.conversation_id AND om.created>=strftime('%Y-%m-%dT%H:%M:%fZ',m.created,'-{DUPLICATE_SECONDS} seconds')
+   AND EXISTS(SELECT 1 FROM messages m JOIN messages om ON om.conversation_id=m.conversation_id
    JOIN jobs o ON o.message_id=om.id AND o.bot=NEW.bot AND o.state<>'cancelled' AND o.id<>NEW.id
-   WHERE m.id=NEW.message_id AND {_SAME_EVENT});
+   LEFT JOIN jobs cj ON cj.id=o.wake_carrier LEFT JOIN attempts a ON a.id=coalesce(o.attempt_id,cj.attempt_id)
+   WHERE m.id=NEW.message_id AND {_SAME_EVENT} AND (o.state IN ('queued','leased','running','input')
+   OR a.finished>=strftime('%Y-%m-%dT%H:%M:%fZ',m.created,'-{DUPLICATE_SECONDS} seconds')));
 END"""
 
 

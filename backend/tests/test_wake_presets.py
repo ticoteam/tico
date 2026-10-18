@@ -253,21 +253,23 @@ def test_a_duplicate_is_one_event_through_its_turn_and_a_new_event_is_not(api):
     preset(api, "ops", "token_saver")
     task = new_task(api, "awaited")
     settled(api)
-    since = H.now()
     body = "Unblocked: awaited\nThe migration is finished."
-    states = lambda: [(j["state"], j["wake_class"]) for j in jobs(api, since=since)]
+    states = lambda: [(j["state"], j["wake_class"]) for j in jobs(api) if j["body"] == body]
     notice(api, task, body, subtask="s1")
     notice(api, task, body, subtask="s1")                                # before the claim
     attempt = claim(api, machine)
     notice(api, task, body, subtask="s1")                                # while its turn runs
+    with api.app.state.store.transaction() as c:                         # its turn ran for ten minutes
+        c.execute("UPDATE messages SET created=? WHERE id=(SELECT message_id FROM jobs WHERE attempt_id=?)",
+                  (H.shift(H.now(), minutes=-10), attempt["id"]))
+        c.execute("UPDATE attempts SET created=? WHERE id=?", (H.shift(H.now(), minutes=-10), attempt["id"]))
     finish(api, machine, attempt)
     notice(api, task, body, subtask="s1")                                # just after it ended
     assert states() == [("completed", None)] + [("cancelled", "duplicate")] * 3
     notice(api, task, body, subtask="s2")                                # the same words, another dependency
-    with api.app.state.store.transaction() as c:                         # the same event, long after
-        first = jobs(api, since=since)[0]
-        c.execute("UPDATE messages SET created=? WHERE id=(SELECT message_id FROM jobs WHERE id=?)",
-                  (H.shift(H.now(), minutes=-W.DUPLICATE_SECONDS // 60 - 1), first["id"]))
+    with api.app.state.store.transaction() as c:                         # the same event, long after the turn ended
+        c.execute("UPDATE attempts SET finished=? WHERE id=?",
+                  (H.shift(H.now(), seconds=-W.DUPLICATE_SECONDS - 60), attempt["id"]))
     notice(api, task, body, subtask="s1")
     assert states()[-2:] == [("queued", None), ("queued", None)]
     # A person saying the same thing again after the bot answered is a new request.
@@ -275,7 +277,7 @@ def test_a_duplicate_is_one_event_through_its_turn_and_a_new_event_is_not(api):
     with api.app.state.store.transaction() as c:
         H.say(c, "bot:ops", "human:ana", "Ship the other one as well?", conversation_id=said["conversation_id"])
     post(api, "chat/ops", {"text": "Yes"})
-    assert [j["state"] for j in jobs(api, since=since) if j["body"] == "Yes"] == ["queued", "queued"]
+    assert [j["state"] for j in jobs(api) if j["body"] == "Yes"] == ["queued", "queued"]
 
 
 def test_a_batch_bigger_than_the_room_page_goes_out_as_a_digest_that_names_it(api):
