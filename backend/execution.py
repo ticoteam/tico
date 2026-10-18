@@ -1737,6 +1737,12 @@ class Execution:
                              (aid, mid)).fetchone():
                 continue
             c.execute("DELETE FROM attempt_inputs WHERE attempt_id=? AND message_id=?", (aid, mid))
+            if c.execute("SELECT 1 FROM messages WHERE id=? AND deleted_at IS NOT NULL", (mid,)).fetchone():
+                # Taken back before the runtime saw it: nothing is left to run, as H.task_comment_delete
+                # cancels a queued one.
+                c.execute("UPDATE jobs SET state='cancelled',attempt_id=NULL WHERE message_id=? AND attempt_id=?",
+                          (mid, aid))
+                continue
             c.execute("UPDATE jobs SET state='queued',attempt_id=NULL WHERE message_id=? AND attempt_id=?", (mid, aid))
             H.event(c, H.KEEPER, "job.input_returned", aid, {"message_id": mid})
 
@@ -1788,7 +1794,9 @@ class Execution:
         if late and not self.settleable(c, who, row):
             return self.file_result(c, row, body)
         self.release_undelivered(c, aid, body.undelivered)
-        msg = H.message(c, c.execute("SELECT message_id FROM jobs WHERE id=?", (row["job_id"],)).fetchone()[0])
+        # A message its author took back during the turn (H.task_comment_delete) still started it: read its row.
+        msg = H.message(c, c.execute("SELECT message_id FROM jobs WHERE id=?", (row["job_id"],)).fetchone()[0],
+                        include_deleted=True)
         conv = H.conversation(c, msg["conversation_id"])
         actor = "bot:" + row["bot"]
         reply = None
@@ -1917,8 +1925,14 @@ class Execution:
         turn_task = H.message_task_id(msg, conv)
         for incoming in c.execute("SELECT i.message_id,m.kind FROM attempt_inputs i "
                                   "JOIN messages m ON m.id=i.message_id WHERE i.attempt_id=?", (aid,)).fetchall():
+            message = H.message(c, incoming["message_id"], include_deleted=True)
+            if message["deleted_at"]:
+                # Taken back mid-turn: nothing is left to answer, defer or hold for review, so its job ends with
+                # the turn. A deleted comment's queued job is cancelled the same way (H.task_comment_delete).
+                c.execute("UPDATE jobs SET state=? WHERE message_id=?",
+                          ("completed" if body.outcome == "completed" else "cancelled", incoming["message_id"]))
+                continue
             answered = incoming["kind"] != "ask" or bool(H.answers_to(c, [incoming["message_id"]]))
-            message = H.message(c, incoming["message_id"])
             task_id = H.message_task_id(message, H.conversation(c, message["conversation_id"]))
             deferred = False
             if task_id and task_id != turn_task:

@@ -13,6 +13,9 @@ All notable changes to Tico are recorded here. The format follows
   task, with the fix: wait for the reset, file the check again on another model, or drop it. And a held check whose
   task is done, closed or declined has its queued turn let go, instead of retrying after every reset and running once
   on a finished task; checks already in that state are let go on the first scheduler tick after the update.
+- A bot's turn finishes when a comment it had taken in was deleted while it ran. Finishing such a turn failed with a
+  server error on every retry; now the turn and its reply are recorded as usual, and the deleted comment is never held
+  for review or run again.
 - A queued job whose message its bot can no longer read (a private task or conversation it was taken off) no longer
   sits queued for ever. No claim ever takes it, so it aged Health's "queued since" warning. The scheduler now cancels
   it within a minute and records why (a `job.suppress` event, reason `unreadable`); the message itself stays.
