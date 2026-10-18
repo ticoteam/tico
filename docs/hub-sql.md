@@ -101,7 +101,8 @@ Timestamps are ISO-8601 UTC text (`2026-09-15T21:40:12.931675Z`); compare them w
 | `approvals` | `id, kind, task_id, message_id, payload_json, requested_by, decided_by, decision, decided_at, consumed_at, created` | `kind`: send, spend, publish, merge |
 | `jobs` | `id, message_id, bot, state, created, attempt_id` | one per message a bot has to act on; `state`: queued, leased, running, input, completed, failed, uncertain, cancelled |
 | `attempts` | `id, job_id, bot, runner_id, state, lease_until, created, started, finished, result_json, final_text` | a run (`state`: leased, running, input, completed, failed, interrupted, expired); its streamed output is `attempt_events(attempt_id, seq, kind, payload_json, created)` |
-| `turns` | `id, bot, started, finished, trigger, message_id, task_id, exit, tokens_in, tokens_out, cost, summary, input_tokens, cached_tokens, output_tokens, model, provider, est_cost_usd, billing` | one per run (`id` = the run's attempt id); `exit` is null while running |
+| `turns` | `id, bot, started, finished, trigger, message_id, task_id, exit, tokens_in, tokens_out, cost, summary, input_tokens, cached_tokens, output_tokens, model, provider, est_cost_usd, billing, trigger_kind, trigger_source, writes, outcome, did_nothing` | one per run (`id` = the run's attempt id); `exit` is null while running. `tokens_in` is all input, `cached_tokens` the cached part of it and `input_tokens` the rest. `trigger_kind`, `writes` and `outcome` are explained under [What woke each run](#what-woke-each-run-and-what-it-did) |
+| `run_weekly` | `week, bot, trigger, runs, input_tokens, cached_input_tokens, output_tokens, acted, no_change, nothing_to_do, unknown, did_nothing, acted_pct, no_change_pct, nothing_to_do_pct, unknown_pct` | a read-only view: runs per week, bot and trigger, every attempt counted ([below](#what-woke-each-run-and-what-it-did)) |
 | `schedules` | `id, bot, routine_key, title, cron, event_name, playbook, timezone and enabled (schedule_config), last_fired, next_due, deleted_at` | routines (`docs/routines.md`); `schedule_occurrences(schedule_id, occurrence, task_id, outcome)` says what each firing did |
 | `events` | `ts, actor, action, target, detail_json` | the audit log; `action` such as `task.create`, `sql.query` |
 | `slack_posts` | `message_id, bot, state, attempts, next_attempt, slack_ts, created, updated` | Owner-only outbound queue status for messages the Owner may read; message text, destination and raw errors are hidden. Join `messages` and filter `json_extract(messages.refs_json, '$.task')` for one task. Other callers receive no rows. |
@@ -157,6 +158,50 @@ Successful runs finish with `completed`. `failed` and `expired` are terminal err
 a bot reporting blocked work can still complete its run successfully. Health counts failed and
 expired attempts in the last 24 hours. Runs includes those attempts even when no turn was recorded,
 with the attempt ID and reason. Query `attempts` when counting all execution attempts.
+
+### What woke each run, and what it did
+
+Every run records what woke it (`turns.trigger_kind`), its tokens, and whether it changed anything
+(`turns.outcome`). All three come from plain code, not from asking a model:
+
+- **`trigger_kind`**: `comment` (a bot wrote to it: a task comment or a message), `person_message` (a person
+  wrote to it, or pressed Run now), `status_or_relation` (a task of its moved: assigned, done, unblocked, a
+  subtask finished, reopened, snoozed by someone), `pr_checks` (its pull request's checks, review comments,
+  merge conflict, merge or release), `stall_check` (Tico's status check or stall wake on a quiet task, a task
+  not starting, a stale ask, a worktree left idle), `schedule` (a routine firing, a due date, a snooze ending,
+  a next-run task, an update request) or `other` (anything else: a Slack digest, a meeting turn, a worktree
+  becoming ready). `trigger_source` names the event behind it where there is one: the message itself for
+  `comment` and `person_message`, the subtask, the routine, the worktree.
+- **`writes`**: the hub writes the run made with its own run token (a task change, comment, link, message,
+  file, approval request), plus one for a reply Tico posted for it (to a person, or an answer to a bot's ask). Reads and bookkeeping are not
+  writes: `hub sql`, opening a conversation, marking messages read, its own status line, refusals and lint.
+  A commit or pull request counts once Tico hears of it (`hub task link`, a task note); a local commit
+  Tico never sees cannot be counted.
+- **`outcome`**: `acted` when `writes` is above zero; otherwise `no_change` when the run's task is still open
+  as it ends (it looked, and nothing had moved) and `nothing_to_do` when there was no open task to act on (no
+  task, or one already done, closed or declined).
+- **`did_nothing`**: 1 when `writes` is 0, else 0: the exact flag to measure against. It sees every write that
+  reaches Tico with the run's token; a git push the run never tells Tico about (no `hub task link`, no comment)
+  is not seen yet.
+
+A run from before this was recorded has none of these, and reads `unknown`; so does an attempt that never got
+a `turns` row (one that failed or expired before it started), counted with no tokens and no outcome. `run_weekly` adds them up per week
+(starting Monday, UTC), bot and trigger, over exactly the runs you may read in `turns` and `attempts`: a run on a
+private task, in someone else's room, or one you no longer have access to is left out of your totals. Its `input_tokens` is the run's measured usage (`input_tokens` + `cached_tokens`, every
+fallback segment included) and falls back to `tokens_in` only for a run with no usage recorded.
+Last week's numbers, biggest input first:
+
+```sql
+SELECT * FROM run_weekly WHERE week = date('now', '-13 days', 'weekday 1') ORDER BY input_tokens DESC
+```
+
+Per bot over about the last four weeks, with the share of runs that changed nothing:
+
+```sql
+SELECT bot, sum(runs) AS runs, sum(input_tokens) AS input_tokens,
+       round(100.0 * sum(no_change + nothing_to_do) / sum(runs), 1) AS idle_pct
+FROM run_weekly WHERE week >= date('now', '-27 days', 'weekday 1') GROUP BY bot ORDER BY input_tokens DESC
+```
 
 Who asked what today:
 

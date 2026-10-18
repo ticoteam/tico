@@ -8,7 +8,7 @@ import time
 
 from clients import sessions
 
-from . import app_delivery, check_models, inbox_isolation, providers, routines, runner_versions, screen, usage_limits, wake_presets
+from . import app_delivery, check_models, inbox_isolation, providers, routines, run_triggers, runner_versions, screen, usage_limits, wake_presets
 from . import task_privacy as privacy
 from .auth import Identity
 from .batch_work import isolated
@@ -1243,8 +1243,10 @@ class Execution:
         lane = job_lane(c, row["bot"], followed, msg, conv, lanes, roots)
         token = secrets.token_urlsafe(32)
         until = H.shift(H.now(), seconds=self.store.settings.lease_seconds)
+        woke, source = run_triggers.of_message(msg)
         turn = H.turn_start(c, H.KEEPER, row["bot"], trigger="task" if task else msg["kind"],
-                            message_id=msg["id"], task_id=task["id"] if task else None)
+                            message_id=msg["id"], task_id=task["id"] if task else None,
+                            trigger_kind=woke, trigger_source=source)
         aid = turn["id"]
         c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created,lane) "
                   "VALUES(?,?,?,?,?,?,'leased',?,?,?)",
@@ -1342,7 +1344,8 @@ class Execution:
                     # own instead, since a bot that only runs routines may never have another.
                     c.execute("UPDATE tasks SET next_run=0, updated=? WHERE id=?", (H.now(), item["id"]))
                     H._task_event(c, item["id"], H.KEEPER, "next_run", "1", "0", "a routine left it out: its own run")
-                    H._wake(c, item, item["owner"], f"Next-run task: {item['title']}", refs={"wake": "next-run"})
+                    H._wake(c, item, item["owner"], f"Next-run task: {item['title']}", refs={"wake": "next-run"},
+                            trigger="schedule")
                     continue
                 c.execute("UPDATE tasks SET carried_by=? WHERE id=?", (aid, item["id"]))
                 carried.append({k: item.get(k) for k in ("id", "title", "body", "requester", "created")})
@@ -1792,6 +1795,9 @@ class Execution:
                             c, actor, target, text, conversation_id=conv["id"],
                             in_reply_to=msg["id"], refs=refs)
         if reply:
+            # A reply (to a person, or an answer to a bot's ask) is the run acting, though Tico posts it for
+            # the run (backend/run_triggers.py). Only a newly written one: a reply already sent counts once.
+            c.execute("UPDATE turns SET writes=coalesce(writes,0)+1 WHERE id=?", (aid,))
             # Which run wrote this and which messages it took in (the one it was started for and
             # what was folded into it), kept in the reply's refs for the frontends to show.
             handled = [msg["id"]] + [r[0] for r in c.execute(

@@ -280,7 +280,7 @@ def heartbeat(c, who, reports, capable, default_org=""):
                 ('missing_woke', detail.get('missing_since'), 1, 'Worktree missing for a day'),
                 ('stalled_woke', detail.get('activity_at') if report.ahead else None, 3, 'Worktree has unpushed commits and no activity for three days')):
                 if since and not detail.get(key) and (datetime.now(timezone.utc) - datetime.fromisoformat(since.replace('Z', '+00:00'))).total_seconds() >= days * 86400:
-                    H._wake(c, task, task['owner'], message + ': ' + row['path'])
+                    H._wake(c, task, task['owner'], message + ': ' + row['path'], trigger='stall_check', source=row['id'])
                     detail[key] = True
         if report.state == 'removed' and detail.get('cleanup_requested'):
             detail['removed_by'] = 'cleanup'

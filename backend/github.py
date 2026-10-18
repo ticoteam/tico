@@ -104,7 +104,7 @@ def flush_wakes(c):
             task = H.task(c, row["key"].split(":", 1)[1])
             if task and task["status"] in (*H.ACTIVE_STATUSES, "blocked"):
                 H._wake(c, task, task["owner"], "\n".join(burst.get("items", [])),
-                        {"wake_batch": burst["batch"]} if burst.get("batch") else None)
+                        {"wake_batch": burst["batch"]} if burst.get("batch") else None, trigger="pr_checks")
             c.execute("DELETE FROM registry_metadata WHERE key=?", (row["key"],))
             if task and task["status"] in (*H.ACTIVE_STATUSES, "blocked"):
                 sent.append(task["id"])

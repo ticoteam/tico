@@ -57,6 +57,9 @@ For the usage count, one row per install ID, and nothing else:
 - **No IP addresses are stored or logged.** HQ uses the address in memory only, as a salted hash forgotten when the
   process restarts, to limit each address to 60 requests an hour. Its access log is switched off, so no address and no
   query string reaches a log. There is no ping history, user agent or other column.
+- **Request counts, in memory only.** HQ counts how many requests it answered per route group (support, support
+  access, recruit, everything else) and result class (2xx to 5xx): 16 numbers and nothing else, with no install ID,
+  address, path or time. They are never logged or written, and they are gone when HQ restarts.
 - Every field is checked strictly (a UUID, a version number, the words `true` or `false`); a request with anything
   else is refused and stores nothing. Extra fields are ignored and never stored.
 - **Retention:** an install row not heard from in 13 months is deleted, by a job that runs daily. This rule is for these rows only;

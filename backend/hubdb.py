@@ -78,6 +78,7 @@ from .batch_work import isolated
 from . import task_relations as TR
 from . import task_roles as TRo
 from . import task_snooze as TS
+from . import run_triggers as RT
 from clients.manifest import repo_dir
 from backend.chat_goals_schema import SCHEMA as CHAT_GOALS_SCHEMA
 from backend.repositories_schema import SCHEMA as REPOSITORIES_SCHEMA
@@ -671,6 +672,16 @@ CREATE TABLE IF NOT EXISTS goal_asks (
 CREATE INDEX IF NOT EXISTS goal_asks_task ON goal_asks(task_id);
 """
 
+# What woke a run and whether it changed anything (backend/run_triggers.py); append to preserve existing installations.
+# A run from before this has NULLs, which `run_weekly` in hub sql reads as `unknown`.
+RUN_TRIGGERS_SCHEMA = """
+ALTER TABLE turns ADD COLUMN trigger_kind TEXT;
+ALTER TABLE turns ADD COLUMN trigger_source TEXT;
+ALTER TABLE turns ADD COLUMN writes INTEGER;
+ALTER TABLE turns ADD COLUMN outcome TEXT;
+ALTER TABLE turns ADD COLUMN did_nothing INTEGER;
+"""
+
 MIGRATIONS = [SCHEMA, MEETING_SCHEMA, MEETING_ITEMS_SCHEMA,   # index i takes user_version from i
               MEETING_BRAIN_SCHEMA, MEETING_COMMENTS_SCHEMA,  # to i+1; append, never edit
               GOALS_SCHEMA, RECORDING_SOURCES_SCHEMA, MARKET_SCHEMA,
@@ -680,7 +691,7 @@ MIGRATIONS = [SCHEMA, MEETING_SCHEMA, MEETING_ITEMS_SCHEMA,   # index i takes us
               USAGE_SEGMENTS_SCHEMA, KPI_ARCHIVE_SCHEMA, WAITING_ON_SCHEMA,
               LIVE_MEETINGS_SCHEMA, LIVE_MEETINGS_ROUTING_LIMITS_SCHEMA,
               LIVE_MEETINGS_CHAT_ROUTING_SCHEMA, TASK_RELATIONS_SCHEMA, TRIGGERS_SCHEMA,
-              TRIGGER_SIGNING_SCHEMA, CHECK_MODELS_SCHEMA, GOAL_ASKS_SCHEMA]
+              TRIGGER_SIGNING_SCHEMA, CHECK_MODELS_SCHEMA, GOAL_ASKS_SCHEMA, RUN_TRIGGERS_SCHEMA]
 
 
 class Refused(Exception):
@@ -1070,6 +1081,9 @@ VIA = contextvars.ContextVar("hub_via", default="")
 DELEGATION = contextvars.ContextVar("hub_delegation", default=None)
 
 PRIVATE_WRITE = contextvars.ContextVar("hub_private_write", default=False)
+# The run (attempt id) whose token made this request (backend/app.py request_guard): each write it logs is counted on
+# that run's `turns.writes`, which says whether the run acted (backend/run_triggers.py).
+RUN = contextvars.ContextVar("hub_run", default="")
 
 
 def private_task_write(fn):
@@ -1112,6 +1126,8 @@ def event(conn, actor, action, target="", detail=None):
            "target": str(target or ""), "detail_json": _dump(detail)}
     conn.execute("INSERT INTO events (id, ts, actor, action, target, detail_json) "
                  "VALUES (:id, :ts, :actor, :action, :target, :detail_json)", row)
+    if RUN.get() and RT.counts(action):
+        conn.execute("UPDATE turns SET writes=coalesce(writes,0)+1 WHERE id=?", (RUN.get(),))
     return row
 
 
@@ -3129,7 +3145,8 @@ def _unblock(conn, done_task, told=()):
         TR.remove_blocker(conn, KEEPER, row["id"], done_task["id"], keeper_note=f"unblocked: {done_task['title']}")
         conn.execute("UPDATE tasks SET version=version+1 WHERE id=?", (row["id"],))
         if row["status"] in ACTIVE_STATUSES and not TR.blocker_ids(conn, row["id"]) and row["id"] not in told:
-            _wake(conn, row, row["owner"], f"Unblocked: {row['title']}\n{done_task['title']} is finished.")
+            _wake(conn, row, row["owner"], f"Unblocked: {row['title']}\n{done_task['title']} is finished.",
+                  source=done_task["id"])
 
 
 def _answered(conn, actor, task_id, card, told=None):
@@ -3159,7 +3176,8 @@ def _answered(conn, actor, task_id, card, told=None):
     conn.execute("UPDATE tasks SET note=?, version=version+1 WHERE id=?", (note, row["id"]))
     _task_event(conn, row["id"], KEEPER, "note", row.get("note"), note, "")
     if row["owner"] != told or TR.parent_of(conn, card["id"]) != row["id"]:
-        _wake(conn, row, row["owner"], f"{who}: {card['title']}" + (f"\n{said}" if said else ""), refs={"subtask": card["id"]})
+        _wake(conn, row, row["owner"], f"{who}: {card['title']}" + (f"\n{said}" if said else ""), refs={"subtask": card["id"]},
+              source=card["id"])
     return True
 
 
@@ -3560,7 +3578,7 @@ def _parent_finished(conn, row, previous, actor=None, parent=None, told=None):
             _session_lanes(conn, {**row, "owner": actor})[1] == _session_lanes(conn, parent)[1]
         if parent["status"] not in terminal and (parent["owner"] != actor or is_bot(actor) and not same_session) \
                 and not (parent_id == first and told and parent["owner"] == told):
-            _wake(conn, parent, parent["owner"], "All subtasks done")
+            _wake(conn, parent, parent["owner"], "All subtasks done", source=row["id"])
 
 
 def check_model(conn, task_id, bot=None):
@@ -3611,7 +3629,8 @@ def _subtask_wake(conn, actor, row, previous, note=None, quiet=False):
             or _marked_done(conn, actor, row["title"], "this subtask"))
     # The parent's "All subtasks done" (_parent_finished) rides on this one notice, not a second wake.
     last = "" if children_summary(conn, parent["id"])["open"] else "All subtasks done\n"
-    _wake(conn, parent, bot, f"{last}{said}" + (f": {row['title']}" if row["status"] != "done" else "") + (f"\n{note}" if note and not quiet else ""), refs={"subtask": row["id"]})
+    _wake(conn, parent, bot, f"{last}{said}" + (f": {row['title']}" if row["status"] != "done" else "") + (f"\n{note}" if note and not quiet else ""), refs={"subtask": row["id"]},
+                 source=row["id"])
     return bot
 
 
@@ -4043,7 +4062,7 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
                 allow_planned=False, conversation_id=None, lane=None, labels=None, top=False, lint=True,
                 goal_id=None, next_run=False, type=None, step=None, number=None, mover=None, private=None,
                 requester_actor=None, own_room=True, visibility=None, public_title=None, public_summary=None,
-                wake_refs=None):
+                wake_refs=None, trigger="status_or_relation", trigger_source=None):
     """Rule 5. Anyone may open a task for any active owner; a human owner's General task is
     linted (rule 7).
 
@@ -4221,7 +4240,7 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
         _task_started(conn, task(conn, row["id"]), started_in)
     _wake(conn, task(conn, row["id"]), target, f"New task from {actor}: {title}",
           {**({"reconcile": reconcile} if reconcile else {}), **(wake_refs or {})} or None,
-          quiet_bots=next_run, quiet=next_run)
+          quiet_bots=next_run, quiet=next_run, trigger=trigger, source=trigger_source)
     if parent and is_bot(parent["owner"]) and is_human(target):
         # A bot's task now waits on a person: one line in the bot's main chat.
         task_report(conn, task(conn, parent["id"]), "blocked", f"Waiting on {actor_id(target)}: {title}")
@@ -5424,7 +5443,7 @@ def _hold_for_setup(conn, row):
     asker = row["requester"]
     if is_bot(asker) and asker != row["owner"] and actor_id(asker) not in parked_bots(conn):
         _wake(conn, row, asker, f"Your task for {actor_id(row['owner'])} is not starting: {why} "
-                                "Move it to another bot if it can't wait.", {"setup_held": True})
+                                "Move it to another bot if it can't wait.", {"setup_held": True}, trigger="stall_check")
     event(conn, KEEPER, "task.setup_held", row["id"], {"bot": actor_id(row["owner"]), "reminder": reminder["id"]})
     return True
 
@@ -5459,7 +5478,7 @@ def _settle_undiagnosed(conn, row, cause):
         task_close(conn, KEEPER, row["id"], f"Closed by the stall check: {cause}.", quiet=True)
     elif _actor_exists(conn, row["requester"]):
         _wake(conn, row, row["requester"], f"Stuck: {row['title']}. {cause[0].upper()}{cause[1:]}. "
-              "Reassign it, run it, or close it.", {"wake": "stuck_cause"})
+              "Reassign it, run it, or close it.", {"wake": "stuck_cause"}, trigger="stall_check")
     event(conn, KEEPER, "task.stall_escalated", row["id"],
           {"bot": actor_id(row["owner"]), "recovery_task": None, "owner": None, "cause": cause})
 
@@ -5535,7 +5554,7 @@ def wake_stalled(conn, at=None):
                 # A spot check: one status check into the task's session per quiet stretch.
                 if nudged:
                     continue
-                _wake(conn, row, row["owner"], STATUS_CHECK, {"wake": "status_check"})
+                _wake(conn, row, row["owner"], STATUS_CHECK, {"wake": "status_check"}, trigger="stall_check")
                 event(conn, KEEPER, "task.stall_wake", row["id"],
                       {"bot": actor_id(row["owner"]), "quiet_minutes": row["quiet_minutes"], "wake": count + 1,
                        "kind": "status_check"})
@@ -5547,7 +5566,7 @@ def wake_stalled(conn, at=None):
                   f"Stalled {row['quiet_minutes']} min: {row['title']}. Nothing is set to move it. Carry it on now, "
                   f"or, when someone else must act, file a subtask for them (hub task create --parent {row['id']} "
                   "--owner <bot or person>) and set this waiting; finishing the subtask wakes it.",
-                  {"wake": "stalled"})
+                  {"wake": "stalled"}, trigger="stall_check")
             event(conn, KEEPER, "task.stall_wake", row["id"],
                   {"bot": actor_id(row["owner"]), "quiet_minutes": row["quiet_minutes"], "wake": count + 1})
             woke.append(row["id"])
@@ -5583,7 +5602,8 @@ def task_run_now(conn, actor, task_id):
         waiting = None
     after = task(conn, task_id)
     if not waiting:
-        _wake(conn, after, after["owner"], f"Run now: {after['title']}", {"run_now": True})
+        _wake(conn, after, after["owner"], f"Run now: {after['title']}", {"run_now": True},
+              trigger="person_message" if is_human(actor) else "other")
     event(conn, actor, "task.run-now", task_id, {"queued": not waiting})
     return after, not waiting
 
@@ -5674,8 +5694,12 @@ def notes_waiting_counts(conn, bots, limit=500):
     return out
 
 
-def _wake(conn, task_row, target, body, refs=None, quiet_bots=False, quiet=False):
+def _wake(conn, task_row, target, body, refs=None, quiet_bots=False, quiet=False, trigger="status_or_relation",
+          source=None):
     """Tell someone their task moved. Task traffic never counts against rule 4.
+
+    `trigger` is what this wake is, for the run it starts (backend/run_triggers.py): a task's status or
+    relation moved unless the caller says otherwise; `source` names the event behind it where there is one.
 
     `quiet_bots` is for news rather than work: a task finished, declined or closed. A person is
     always told properly, because a message to a person starts nothing. A bot that asked for
@@ -5698,7 +5722,7 @@ def _wake(conn, task_row, target, body, refs=None, quiet_bots=False, quiet=False
         refs = {**(refs or {}), "quiet": True}
     if not target or not _actor_exists(conn, target) or not task_private_readable(conn, target, task_row):
         return None
-    message_refs = {"task": task_row["id"], **(refs or {})}
+    message_refs = RT.stamp({"task": task_row["id"], **(refs or {})}, trigger, source)
     return _write_message(conn, KEEPER, target, body,
                           conversation(conn, task_row["conversation_id"]), "notice",
                           message_refs, None, None)
@@ -6056,20 +6080,22 @@ def rate_limits(conn):
 
 
 def turn_start(conn, actor, bot_slug, thread_id=None, trigger="message", message_id=None,
-               task_id=None):
-    """A turn on a bot's thread. Replaces the legacy dispatcher's `runs.jsonl` record."""
+               task_id=None, trigger_kind=None, trigger_source=None):
+    """A turn on a bot's thread. Replaces the legacy dispatcher's `runs.jsonl` record.
+    `trigger_kind` is what woke it (backend/run_triggers.py TRIGGERS) and `trigger_source` the event that did."""
     _writer(conn, actor)
     slug = actor_id(bot_slug) if actor_kind(bot_slug) else str(bot_slug).strip()
     if is_bot(actor) and actor_id(actor) != slug:
         refuse(conn, actor, "identity", f"{actor_id(actor)} may only record its own turns")
     row = {"id": new_id(), "bot": slug, "thread_id": thread_id, "started": now(),
            "finished": None, "trigger": trigger, "message_id": message_id, "task_id": task_id,
-           "exit": None, "tokens_in": None, "tokens_out": None, "cost": None, "summary": None}
+           "exit": None, "tokens_in": None, "tokens_out": None, "cost": None, "summary": None,
+           "trigger_kind": trigger_kind or "other", "trigger_source": trigger_source}
     conn.execute("INSERT INTO turns (id, bot, thread_id, started, finished, trigger, message_id, "
-                 "task_id, exit, tokens_in, tokens_out, cost, summary) VALUES (:id, :bot, "
-                 ":thread_id, :started, :finished, :trigger, :message_id, :task_id, :exit, "
-                 ":tokens_in, :tokens_out, :cost, :summary)", row)
-    event(conn, actor, "turn.start", row["id"], {"bot": slug, "trigger": trigger})
+                 "task_id, exit, tokens_in, tokens_out, cost, summary, trigger_kind, trigger_source, writes) "
+                 "VALUES (:id, :bot, :thread_id, :started, :finished, :trigger, :message_id, :task_id, :exit, "
+                 ":tokens_in, :tokens_out, :cost, :summary, :trigger_kind, :trigger_source, 0)", row)
+    event(conn, actor, "turn.start", row["id"], {"bot": slug, "trigger": trigger, "trigger_kind": row["trigger_kind"]})
     return _one(conn, "SELECT * FROM turns WHERE id=?", (row["id"],))
 
 
@@ -6082,6 +6108,8 @@ def turn_finish(conn, actor, turn_id, exit_code="ok", tokens_in=None, tokens_out
     ts = now()
     conn.execute("UPDATE turns SET finished=?, exit=?, tokens_in=?, tokens_out=?, cost=?, summary=? "
                  "WHERE id=?", (ts, exit_code, tokens_in, tokens_out, cost, summary, turn_id))
+    # Whether it acted, from what it wrote and its task's state as it ends (backend/run_triggers.py).
+    conn.execute(f"UPDATE turns SET {RT.SETTLE_SQL} WHERE id=?", (turn_id,))
     if usage:
         conn.execute("UPDATE turns SET input_tokens=:input_tokens, cached_tokens=:cached_tokens, "
                      "output_tokens=:output_tokens, model=:model, provider=:provider, est_cost_usd=:est_cost_usd, "

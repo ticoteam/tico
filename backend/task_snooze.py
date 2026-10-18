@@ -161,7 +161,7 @@ def wake_ended(conn, at, failures=None):
             if after.get("due") and H._has_table(conn, "task_reminders") and not H.not_yet_due(after, at):
                 # This notice is the due date's reminder too; the Due pass would only repeat it.
                 conn.execute("INSERT OR IGNORE INTO task_reminders VALUES(?,?,?)", (after["id"], after["due"], at))
-            H._wake(conn, after, after["owner"], f"Snooze over: {after['title']}", {"wake": "snooze"})
+            H._wake(conn, after, after["owner"], f"Snooze over: {after['title']}", {"wake": "snooze"}, trigger="schedule")
             woken.append(after["id"])
     return woken
 

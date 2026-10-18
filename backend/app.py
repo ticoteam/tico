@@ -24,7 +24,7 @@ from . import go_live as pending_go_lives
 from . import repo_waits
 from . import built_on
 from . import agents, app_delivery, batch, external_sync, inbox_isolation, mcp_oauth, harness_actions, model_login, oidc, personal_tokens, views
-from . import check_models, team_rules, update_feeds, usage_limits, wake_presets
+from . import check_models, run_triggers, team_rules, update_feeds, usage_limits, wake_presets
 from . import task_privacy as privacy
 from . import task_relations as TR
 from . import task_roles as TRo
@@ -385,7 +385,7 @@ def create_app(settings=None):
 
     @app.middleware("http")
     async def request_guard(request, call_next):
-        via_reset = delegation_reset = None
+        via_reset = delegation_reset = run_reset = None
         try:
             # The sign-in exemptions below match on prefixes; a dot segment would carry one of
             # them onto the static files ("/download/../index.html").
@@ -462,6 +462,9 @@ def create_app(settings=None):
                     # recorded via assistant, and unless the person just confirmed a proposal it may
                     # write only what is low-risk.
                     via_reset = H.VIA.set(who.via)
+                if who.attempt_id and who.role != "runner" and not request.url.path.startswith(run_triggers.RUNNER_PATHS):
+                    # A run's own tool call: what it writes counts toward whether the run acted.
+                    run_reset = H.RUN.set(who.attempt_id)
             if request.method not in ("GET", "HEAD", "OPTIONS"):
                 origin = request.headers.get("origin")
                 if origin and not settings.allows_origin(origin):
@@ -648,6 +651,8 @@ def create_app(settings=None):
                 H.VIA.reset(via_reset)
             if delegation_reset is not None:
                 H.DELEGATION.reset(delegation_reset)
+            if run_reset is not None:
+                H.RUN.reset(run_reset)
 
     from . import routines
 
@@ -824,7 +829,8 @@ def create_app(settings=None):
             current = routines.latest_task(c, schedule_id)
             if current and current["status"] in ("open", "doing", "waiting", "review", "ready"):
                 raise Problem("routine", "This routine already has unfinished work", 409)
-            task = routines.open_task(c, auth, schedule, schedule["title"], schedule["playbook"], H.now())
+            task = routines.open_task(c, auth, schedule, schedule["title"], schedule["playbook"], H.now(),
+                                      trigger="person_message" if H.is_human(who.actor) else "other")
             occurrence = "manual:" + H.new_id()
             c.execute("INSERT INTO schedule_occurrences VALUES(?,?,?,?)",
                       (schedule_id, occurrence, task["id"], "created"))

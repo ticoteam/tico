@@ -205,7 +205,7 @@ def no_input(c, settings, schedule, local):
     return None
 
 
-def open_task(c, auth, schedule, heading, body, now, sweep=False):
+def open_task(c, auth, schedule, heading, body, now, trigger="schedule", sweep=False):
     """`sweep` marks a timed run's wake, which the bot's wake preset may space out (backend/wake_presets.py);
     a run someone asked for, or one an event fired, wakes the bot at once."""
     owner = "bot:" + schedule["bot"]
@@ -213,8 +213,10 @@ def open_task(c, auth, schedule, heading, body, now, sweep=False):
     if auth is not None:
         from . import rooms
         conversation_id = rooms.task_conversation_id(c, auth, owner, H.KEEPER)
+    # Its wake is the routine's: a schedule, an event or Run now, never a status change.
     task = H.task_create(c, H.KEEPER, heading[:300], body, owner, deduplicate=False,
-                         conversation_id=conversation_id, wake_refs={"sweep": schedule["id"]} if sweep else None)
+                         conversation_id=conversation_id, wake_refs={"sweep": schedule["id"]} if sweep else None,
+                         trigger=trigger, trigger_source=schedule["id"])
     c.execute("UPDATE schedules SET last_fired=? WHERE id=?", (now, schedule["id"]))
     return task
 

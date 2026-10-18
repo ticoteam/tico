@@ -19,7 +19,7 @@ from fastapi import Request
 from pydantic import Field
 
 from clients.watchers import LIMITS, MAX_EVENTS
-from . import rooms
+from . import rooms, run_triggers
 from .models import Contract, Slug
 from .store import H, Problem
 
@@ -84,7 +84,8 @@ def _open(c, auth, bot, title, body):
 
 def _wake(c, bot, task, text, why):
     H.say(c, H.KEEPER, "bot:" + bot, defang(text, c) or "Something changed.", kind="notice",
-          conversation_id=task["conversation_id"], refs={"task": task["id"], "wake": why})
+          conversation_id=task["conversation_id"],
+          refs=run_triggers.stamp({"task": task["id"], "wake": why}, "comment" if why == "watcher" else "status_or_relation"))
 
 
 def deliver(c, auth, bot, event):
