@@ -4051,7 +4051,8 @@ def task_ask_resolve(conn, actor, task_id, message_id, quote=None):
 def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, deduplicate=True,
                 allow_planned=False, conversation_id=None, lane=None, labels=None, top=False, lint=True,
                 goal_id=None, next_run=False, type=None, step=None, number=None, mover=None, private=None,
-                requester_actor=None, own_room=True, visibility=None, public_title=None, public_summary=None):
+                requester_actor=None, own_room=True, visibility=None, public_title=None, public_summary=None,
+                trigger="status_or_relation", trigger_source=None):
     """Rule 5. Anyone may open a task for any active owner; a human owner's General task is
     linted (rule 7).
 
@@ -4228,7 +4229,8 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
     if started_in:
         _task_started(conn, task(conn, row["id"]), started_in)
     _wake(conn, task(conn, row["id"]), target, f"New task from {actor}: {title}",
-          {"reconcile": reconcile} if reconcile else None, quiet_bots=next_run, quiet=next_run)
+          {"reconcile": reconcile} if reconcile else None, quiet_bots=next_run, quiet=next_run,
+          trigger=trigger, source=trigger_source)
     if parent and is_bot(parent["owner"]) and is_human(target):
         # A bot's task now waits on a person: one line in the bot's main chat.
         task_report(conn, task(conn, parent["id"]), "blocked", f"Waiting on {actor_id(target)}: {title}")

@@ -173,21 +173,22 @@ Every run records what woke it (`turns.trigger_kind`), its tokens, and whether i
   becoming ready). `trigger_source` names the event behind it where there is one: the message itself for
   `comment` and `person_message`, the subtask, the routine, the worktree.
 - **`writes`**: the hub writes the run made with its own run token (a task change, comment, link, message,
-  file, approval request), plus one for a reply Tico posted for it to a person. Reads and bookkeeping are not
+  file, approval request), plus one for a reply Tico posted for it (to a person, or an answer to a bot's ask). Reads and bookkeeping are not
   writes: `hub sql`, opening a conversation, marking messages read, its own status line, refusals and lint.
   A commit or pull request counts once Tico hears of it (`hub task link`, a task note); a local commit
   Tico never sees cannot be counted.
 - **`outcome`**: `acted` when `writes` is above zero; otherwise `no_change` when the run's task is still open
   as it ends (it looked, and nothing had moved) and `nothing_to_do` when there was no open task to act on (no
   task, or one already done, closed or declined).
-
 - **`did_nothing`**: 1 when `writes` is 0, else 0: the exact flag to measure against. It sees every write that
   reaches Tico with the run's token; a git push the run never tells Tico about (no `hub task link`, no comment)
   is not seen yet.
 
 A run from before this was recorded has none of these, and reads `unknown`. `run_weekly` adds them up per week
 (starting Monday, UTC), bot and trigger, over every run of each bot you may read. It shows totals only, never
-a run's text or ids. Last week's numbers, biggest input first:
+a run's text or ids. Its `input_tokens` is the run's measured usage (`input_tokens` + `cached_tokens`, every
+fallback segment included) and falls back to `tokens_in` only for a run with no usage recorded.
+Last week's numbers, biggest input first:
 
 ```sql
 SELECT * FROM run_weekly WHERE week = date('now', '-13 days', 'weekday 1') ORDER BY input_tokens DESC

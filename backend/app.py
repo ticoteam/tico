@@ -829,7 +829,8 @@ def create_app(settings=None):
             current = routines.latest_task(c, schedule_id)
             if current and current["status"] in ("open", "doing", "waiting", "review", "ready"):
                 raise Problem("routine", "This routine already has unfinished work", 409)
-            task = routines.open_task(c, auth, schedule, schedule["title"], schedule["playbook"], H.now())
+            task = routines.open_task(c, auth, schedule, schedule["title"], schedule["playbook"], H.now(),
+                                      trigger="person_message" if H.is_human(who.actor) else "other")
             occurrence = "manual:" + H.new_id()
             c.execute("INSERT INTO schedule_occurrences VALUES(?,?,?,?)",
                       (schedule_id, occurrence, task["id"], "created"))

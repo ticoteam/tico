@@ -6,6 +6,7 @@ import pytest
 
 from backend import github as G
 from backend import repositories as R
+from backend import routines
 from backend import run_triggers as RT
 from backend.scheduler import Scheduler
 from backend.store import H
@@ -42,10 +43,13 @@ def start(api, r, attempt):
     post(api, f"attempts/{attempt['id']}/started", {"thread_id": "fixture-thread"}, r["token"])
 
 
-def finish(api, r, attempt, text=""):
+USAGE = {"input_tokens": 200, "cached_tokens": 1000, "output_tokens": 30, "model": "fake"}
+
+
+def finish(api, r, attempt, text="", tokens_in=1200, usage=USAGE):
     return post(api, f"attempts/{attempt['id']}/complete",
-                {"outcome": "completed", "last_seq": 0, "text": text, "tokens_in": 1200, "tokens_out": 30,
-                 "usage": {"input_tokens": 200, "cached_tokens": 1000, "output_tokens": 30, "model": "fake"}}, r["token"])
+                {"outcome": "completed", "last_seq": 0, "text": text, "tokens_in": tokens_in, "tokens_out": 30,
+                 "usage": usage}, r["token"])
 
 
 def test_each_trigger_kind_is_stamped_where_the_wake_is_made(api):
@@ -89,6 +93,24 @@ def test_each_trigger_kind_is_stamped_where_the_wake_is_made(api):
     said = post(api, "chat/ops", {"text": "How is the cash warning?"})
     with store.read() as c:
         assert RT.of_message(H.message(c, said["id"])) == ("person_message", said["id"])
+
+
+@pytest.mark.parametrize("fired_by", ["cron", "event"])
+def test_a_routines_new_task_is_woken_by_its_schedule(api, fired_by):
+    """A fresh occurrence opens a task; its wake is the routine, not the task handoff."""
+    store = api.app.state.store
+    with store.transaction() as c:
+        if fired_by == "cron":
+            c.execute("INSERT INTO schedules(id,bot,cron,title,playbook,last_fired,next_due) "
+                      "VALUES('morning','ops','0 9 * * *','Review the day','Review it',NULL,?)", (H.shift(H.now(), days=-2),))
+        else:
+            c.execute("INSERT INTO schedules(id,bot,event_name,title,playbook) "
+                      "VALUES('morning','ops','meeting.ready','Meeting notes','File them')")
+            assert len(routines.emit(c, "meeting.ready", "rec-1", title="Planning")) == 1
+    if fired_by == "cron":
+        assert Scheduler(store, api.app.state.execution).tick(H.parse_ts(H.now()))["fired"]
+    with store.read() as c:
+        assert RT.of_message(newest(c, "ops", "New task from")) == ("schedule", "morning")
 
 
 def test_the_claim_puts_the_wake_on_the_run(api):
@@ -152,6 +174,24 @@ def test_did_nothing_and_outcome_come_from_what_the_run_wrote(api, case):
     assert (row["tokens_in"], row["cached_tokens"], row["input_tokens"], row["output_tokens"]) == (1200, 1000, 200, 30)
 
 
+def test_an_answer_to_a_bots_ask_in_the_final_text_counts_once(api):
+    r = machine(api)
+    with api.app.state.store.transaction() as c:
+        H.say(c, "bot:finance", "bot:ops", "Is the bank feed in?", kind="ask")
+    attempt = claim(api, r)
+    start(api, r, attempt)
+    finish(api, r, attempt, "Yes, it came in at six.")
+    row = turn(api, attempt)
+    assert (row["writes"], row["outcome"], row["did_nothing"]) == (1, "acted", 0)
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM messages WHERE from_actor='bot:ops' AND to_actor='bot:finance'"
+                         ).fetchone()[0] == 1
+    # The runner sends its completion again: the answer is not written or counted twice.
+    api.post(f"/api/v2/attempts/{attempt['id']}/complete", headers=headers(r["token"]),
+             json={"outcome": "completed", "last_seq": 0, "text": "Yes, it came in at six.", "usage": USAGE})
+    assert turn(api, attempt)["writes"] == 1
+
+
 def test_a_restore_ends_open_runs_with_an_outcome(api):
     r = machine(api)
     post(api, "tasks", {"owner": "ops", "title": "Check the bank feed", "body": "Daily."})
@@ -172,7 +212,11 @@ def test_the_weekly_table_counts_every_run_and_old_ones_read_unknown(api):
     post(api, "chat/ops", {"text": "Anything new?"})
     attempt = claim(api, r)
     start(api, r, attempt)
-    finish(api, r, attempt, "Nothing new.")
+    # The runner's one-number counter says 9000 (a resumed thread's whole total); its measured usage, a primary
+    # and a fallback segment, says 1200. The table reads the measured usage.
+    finish(api, r, attempt, "Nothing new.", tokens_in=9000, usage={**USAGE, "segments": [
+        {"input_tokens": 50, "cached_tokens": 250, "output_tokens": 10, "model": "fake"},
+        {"input_tokens": 150, "cached_tokens": 750, "output_tokens": 20, "model": "fake-fallback"}]})
     with api.app.state.store.transaction() as c:
         # A run from before triggers were recorded, and one still going.
         c.execute("INSERT INTO turns(id,bot,started,finished,trigger,exit,tokens_in,tokens_out) "

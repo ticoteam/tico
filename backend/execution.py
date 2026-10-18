@@ -1785,10 +1785,10 @@ class Execution:
                         reply = H.answer(c, actor, msg["id"], body.text) if msg["kind"] == "ask" else H.say(
                             c, actor, target, text, conversation_id=conv["id"],
                             in_reply_to=msg["id"], refs=refs)
-        if reply and H.is_human(reply["to_actor"]):
-            # A reply to a person is the run acting, though Tico posts it for the run (backend/run_triggers.py).
-            c.execute("UPDATE turns SET writes=coalesce(writes,0)+1 WHERE id=?", (aid,))
         if reply:
+            # A reply (to a person, or an answer to a bot's ask) is the run acting, though Tico posts it for
+            # the run (backend/run_triggers.py). Only a newly written one: a reply already sent counts once.
+            c.execute("UPDATE turns SET writes=coalesce(writes,0)+1 WHERE id=?", (aid,))
             # Which run wrote this and which messages it took in (the one it was started for and
             # what was folded into it), kept in the reply's refs for the frontends to show.
             handled = [msg["id"]] + [r[0] for r in c.execute(

@@ -11,8 +11,8 @@ Every run (`turns`, same id as its attempt) records three things, all in plain c
 - `did_nothing`: 1 when the run made no write Tico counts (`writes` is 0), else 0. Exact for every write that
   reaches Tico with the run's token; a git push Tico is never told of is not seen (the runner does not report one).
 - `outcome`: `acted` when the run wrote something: a hub write made with its own run token (`writes`), or a
-  reply Tico posted for it to a person. A commit or pull request counts once Tico sees it (`hub task link`,
-  a task note); one that never reaches Tico cannot. Reads and bookkeeping (`BOOKKEEPING`) are not writes.
+  reply Tico posted for it (to a person, or an answer to a bot's ask). A commit or pull request counts once Tico
+  sees it (`hub task link`, a task note); one that never reaches Tico cannot. Reads and bookkeeping (`BOOKKEEPING`) are not writes.
   With no write it is `no_change` when its task is still open (it looked; nothing had moved) and
   `nothing_to_do` when there was no open task to act on (no task, or one already done, closed or declined).
 

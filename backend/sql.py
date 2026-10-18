@@ -50,11 +50,15 @@ DENIED_FUNCTIONS = {"load_extension"}
 # totals only, never a row's text or ids, so they count every run of a bot the caller may read.
 DERIVED = {
     # Runs per week (Monday, UTC), bot and what woke them, with their tokens and outcome (backend/run_triggers.py).
-    # A run from before triggers were recorded reads `unknown`, and is counted, never dropped.
+    # A run from before triggers were recorded reads `unknown`, and is counted, never dropped. Input is the run's
+    # measured usage (every primary and fallback segment) first, and the runner's older one-number `tokens_in` only
+    # when there is none: a resumed thread may report its whole running total there.
     "run_weekly": (("turns",), """
         SELECT date(started, '-6 days', 'weekday 1') AS week, bot, coalesce(trigger_kind, 'unknown') AS trigger,
                count(*) AS runs,
-               sum(coalesce(tokens_in, coalesce(input_tokens, 0) + coalesce(cached_tokens, 0))) AS input_tokens,
+               sum(CASE WHEN input_tokens IS NOT NULL OR cached_tokens IS NOT NULL
+                        THEN coalesce(input_tokens, 0) + coalesce(cached_tokens, 0)
+                        ELSE coalesce(tokens_in, 0) END) AS input_tokens,
                sum(coalesce(cached_tokens, 0)) AS cached_input_tokens,
                sum(coalesce(output_tokens, tokens_out, 0)) AS output_tokens,
                sum(coalesce(outcome, '') = 'acted') AS acted,
