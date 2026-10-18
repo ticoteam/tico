@@ -16,11 +16,11 @@ bot's own work is tasks, never issues.
 included, run `npm ci && npx playwright install chromium` and install `backend/requirements-dev.txt` in a venv
 first: runner images ship neither. Without Google Chrome, set `TICO_BROWSER_CHANNEL=` (empty) so the scripts use
 Playwright's Chromium. On a small computer (two CPUs, software WebGL) run the scripts you changed one at a time;
-the parallel suite is the release check's job on a full-size machine. PR tests run
-locally. The manually dispatched Release validation workflow runs the full release gate on an isolated
-GitHub-hosted Linux VM for an explicit immutable candidate SHA; no push or PR triggers run tests. The default Python suite stays under about 60 seconds and the whole
+the parallel suite is the release check's job on a full-size machine. The PR checks
+workflow runs the default Python suite and the core browser scripts on every pull request to main and every push to main. The manually dispatched Release validation workflow runs the full release gate across isolated
+GitHub-hosted Linux VMs for an explicit immutable candidate SHA. The same workflow is also scheduled nightly on main against the latest published release. The default Python suite stays under about 60 seconds and the whole
 default run (pytest plus core UI) under 2 minutes; `python scripts/release_checks.py` runs both and records time and
-load. A PR runs only the tests for what it changed; the full suite runs once, right before a release. `--release` runs every test (slow included, `ui-tests.cjs --all`) and the Docker
+load. Locally, a PR runs only the tests for what it changed; for each release, run the full suite once on its frozen candidate. The scheduled nightly gate runs separately. `--release` runs every test (slow included, `ui-tests.cjs --all`) and the Docker
 whole-product checks before a tag (docs/releasing.md). The suite is deliberately small: keep only tests that guard a
 privacy or permission boundary, migrations and data safety, or a core task/run flow, one or two per rule; no tests
 of wording or docs, no exhaustive parametrizations. Write tests freely while building, then keep only the highest-value ones. Real git, Docker, servers or long timers go behind
