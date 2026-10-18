@@ -32,13 +32,16 @@ const {unrouted} = require('./support/routes.cjs');
         harnesses: {codex: chip('Codex', 'codex'), claude: chip('Claude Code', 'claude'), 'cursor-agent': chip('Cursor Agent', 'cursor')}},
       profiles: []});
     // GET /v2/computers/{id}/keys (backend/model_login.py key_info)
-    let oldBox = false;
+    let oldBox = false, hosted = false;
+    // backend/hosting.py REFUSED: a server Tico hosts keeps no Claude sign-in token.
+    const REFUSED = "A server Tico hosts can't keep a Claude sign-in token (Anthropic's terms): sign in on the computer itself (Settings > Computers > Sign in), or use an Anthropic API key.";
     const info = runtime => runtime === 'codex'
       ? {runtime, source: 'shared', name: 'OPENAI_API_KEY', preview: 'sk-…xyz', cleared: false, names: ['OPENAI_API_KEY'], can_replace_all: false,
         computers: [{id: 'box', label: 'Team box', online: true, may: true, updated: true}, {id: 'far', label: 'Far box', online: false, may: true, updated: true},
           ...(oldBox ? [{id: 'old', label: 'Old box', online: false, may: true, updated: false}] : [])]}
       : runtime === 'claude'
-        ? {runtime, source: 'computer', name: 'ANTHROPIC_API_KEY', preview: 'sk-…abc', cleared: false, names: ['ANTHROPIC_API_KEY'], computers: [], can_replace_all: false}
+        ? hosted ? {runtime, source: 'computer', name: 'ANTHROPIC_API_KEY', preview: 'sk-…abc', cleared: false, names: ['ANTHROPIC_API_KEY'], computers: [], can_replace_all: false, refused: REFUSED}
+          : {runtime, source: 'computer', name: 'ANTHROPIC_API_KEY', preview: 'sk-…abc', cleared: false, names: ['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY'], computers: [], can_replace_all: false}
         : {runtime, source: null, name: '', preview: '', cleared: false, names: ['CURSOR_API_KEY'], computers: [], can_replace_all: false};
 
     async function open(as = 'sam') {
@@ -81,6 +84,7 @@ const {unrouted} = require('./support/routes.cjs');
         }
         if (p === '/api/v2/computers/box/keys' && method === 'POST') {
           const body = req.postDataJSON(); writes.push({p, body});
+          if (hosted && body.secret.startsWith('sk-ant-oat')) return json({error: {code: 'claude_token', detail: REFUSED, retryable: false}}, 422);
           rows.use1 = {id: 'use1', kind: 'use_key', runtime: body.runtime, state: 'requested', polls: 0, created: new Date().toISOString(), lines: []};
           return json({...rows.use1, key: {id: 'cred9', env: 'ANTHROPIC_API_KEY', preview: 'sk-…456'}});
         }
@@ -134,16 +138,34 @@ const {unrouted} = require('./support/routes.cjs');
     await own('claude').getByRole('button', {name: 'Replace key'}).click();
     await dialog.locator('input[name=secret]').waitFor();
     assert.equal(await dialog.locator('[data-key-scope]').count(), 0, 'its own key: nothing to ask');
+    assert.deepEqual(await dialog.locator('select[name=env] option').allInnerTexts(), ['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY'],
+      'a server its company runs offers both kinds');
+    assert.equal(await dialog.locator('[data-key-refused]').count(), 0);
     assert.equal(await dialog.locator('input[name=secret]').getAttribute('type'), 'password');
     assert.ok(await dialog.locator('[data-key-go]').isDisabled(), 'nothing to replace with yet');
     await dialog.locator('input[name=secret]').fill(SECRET);
     await dialog.locator('[data-key-go]').click();
     await dialog.locator('[data-status][data-state=done]').waitFor();
-    assert.deepEqual(writes.at(-1), {p: '/api/v2/computers/box/keys', body: {runtime: 'claude', secret: SECRET, scope: 'this'}});
+    assert.deepEqual(writes.at(-1), {p: '/api/v2/computers/box/keys', body: {runtime: 'claude', secret: SECRET, scope: 'this', env: 'ANTHROPIC_API_KEY'}});
     assert.equal(await dialog.locator('[data-status]').innerText(), 'Replaced. Claude Code on Team box now uses sk-…456.');
     assert.equal(await dialog.locator('input[name=secret]').inputValue(), '');
     assert.ok(!(await page.content()).includes(SECRET), 'the key is not kept in the page');
     await dialog.locator('[data-actions] [data-close]').click();
+
+    // On a server Tico hosts: no Claude sign-in token to choose, the reason and both ways that work said up front, and a
+    // token pasted anyway refused with that one line.
+    hosted = true;
+    await own('claude').getByRole('button', {name: 'Replace key'}).click();
+    await dialog.locator('input[name=secret]').waitFor();
+    assert.equal(await dialog.locator('select[name=env]').count(), 0, 'only the API key is offered');
+    assert.equal(await dialog.locator('[data-key-refused]').innerText(), REFUSED);
+    await dialog.locator('input[name=secret]').fill('sk-ant-oat01-not-a-real-token-123456');
+    await dialog.locator('[data-key-go]').click();
+    await dialog.locator('[data-status]', {hasText: 'Anthropic API key'}).waitFor();
+    assert.equal(await dialog.locator('[data-status]').innerText(), REFUSED);
+    assert.ok(!(await page.content()).includes('not-a-real-token'), 'the refused token is not kept in the page');
+    await dialog.locator('[data-actions] [data-close]').click();
+    hosted = false;
 
     // Replace key on the shared key: "All of them" is a credential administrator's alone.
     await own('codex').getByRole('button', {name: 'Replace key'}).click();
@@ -174,6 +196,6 @@ const {unrouted} = require('./support/routes.cjs');
     const other = await open('cara');
     assert.equal(await other.page.locator('#set-machines [data-model-key-replace], #set-machines [data-model-key-clear], #set-machines [data-model-key-add]').count(), 0);
     assert.deepEqual(other.errors, []);
-    console.log('PASS: key previews, clear with the bots named and the this/all ask (offline clears when next online, an older runner waits for its update), replace through a password field, admin-only replace-all, add key, rights');
+    console.log('PASS: key previews, clear with the bots named and the this/all ask (offline clears when next online, an older runner waits for its update), replace through a password field, admin-only replace-all, add key, a hosted server refusing a Claude sign-in token, rights');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exit(1); });
