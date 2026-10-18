@@ -357,13 +357,63 @@ def private_execution(c, who):
                                      for tid in attempt_tasks(c, who.attempt_id)))
 
 
-def question_party(c, who, person, parent=None):
+def question_party(c, who, person, parent=None, guest=None):
     """Whether `person` may be the other party of a private task a bot's run files to put a question to them
     (backend/media.py task_question): they must already read every private task the run carries, and the parent.
-    Being a party gives them nothing they could not read before."""
-    if parent and not H.task_private_readable(c, person, parent):
+    Being a party gives them nothing they could not read before, beyond the parent `guest` names (guest_for)."""
+    if parent and not _reads(c, person, parent, guest):
         return False
-    return not who.attempt_id or readable(c, person, attempt_tasks(c, who.attempt_id))
+    return not who.attempt_id or all(_reads(c, person, H._one(c, "SELECT * FROM tasks WHERE id=?", (tid,)), guest)
+                                     for tid in attempt_tasks(c, who.attempt_id))
+
+
+def _reads(c, actor, row, guest=None):
+    """`actor` reads `row`, counting the guest a write is about to bring in, (task id, person), as already there."""
+    return H.task_private_readable(c, actor, row) or bool(row and guest and guest == (row["id"], actor))
+
+
+def guest_for(c, who, person, parent):
+    """(parent id, person) when a bot's hand-off to `person` under `parent`, a private task with no person on it that
+    the bot owns, makes them its guest (hubdb.task_reach); None when it does not; Problem when it is refused.
+
+    The hand-offs are a subtask for them and a question to them (backend/media.py); waiting on them is hubdb's.
+    Outside private work a hand-off the guest rules refuse only for what is above the task goes on as before,
+    without a guest: the person gets the subtask alone. A second, different person is refused either way."""
+    if not (parent and who.role == "bot" and not who.via and who.actor == parent["owner"]
+            and H.is_bot(parent["requester"]) and H.is_human(person) and H.task_private(c, parent)
+            and not H.task_private_readable(c, person, parent)):
+        return None
+    refusal = H.task_reach_refusal(c, who.actor, parent, person)
+    if refusal is None:
+        return parent["id"], person
+    if parent.get("guest") or private_execution(c, who):
+        raise Problem("privacy", refusal, 403)
+    return None
+
+
+def require_create(c, who, private, owner, parent, actor=None):
+    """The privacy refusals of a task create (app.task_create), in one place so its dry-run gives the create's own
+    words. `who` is the caller as authenticated, `actor` the identity the task is filed as (a delegated person).
+    Returns guest_for's (parent id, person) for the create to make with hubdb.task_reach, or None."""
+    execution = private_execution(c, who)
+    if execution and private is False:
+        raise Problem("privacy", "Private task work cannot create company-visible tasks", 403)
+    guest = guest_for(c, who, owner, parent)
+    if execution:
+        require_destination(c, who, owner, None, {}, guest=guest)
+        require_destination(c, who, actor or who.actor, None, {}, guest=guest)
+    return guest
+
+
+def require_wait(c, who, row, waiting_on):
+    """A private run's `--status waiting --on <person>` puts its ask in front of that person (hubdb._ask_in_subtask) and,
+    on a private task with no person on it, makes them its guest: so they must read every private task the run carries,
+    as for a subtask or a question to them (require_create, question_party). Checked in the write's own transaction."""
+    person = H.resolve_actor(c, str(waiting_on or "").strip()) if waiting_on else None
+    if not person or not H.is_human(person) or not private_execution(c, who):
+        return
+    guest = None if H.task_private_readable(c, person, row) else (row["id"], person)
+    require_destination(c, who, person, None, {}, guest=guest)
 
 
 def public_message(c, message):
@@ -394,6 +444,8 @@ def guard_write(c, who, path, auth):
         return
     if path in ("/api/v2/sql", "/api/v2/mcp", "/api/v2/tasks/dry-run"):
         return
+    if path == "/api/v2/task-questions":
+        return              # a private task of its own, to a person question_party lets read the run's work (media.py)
     if path.startswith(("/api/v2/attempts/", "/api/v2/jobs/", "/api/v2/files/", "/api/v2/messages",
                         "/api/v2/conversations/", "/api/v2/chat/", "/api/v2/tasks")):
         task_path = re.fullmatch(r"/api/v2/tasks/([^/]+)(?:/.*)?", path)
@@ -418,7 +470,11 @@ def tag_readable(c, who, row):
             any(task_readable(c, who, H.task(c, tid)) for tid in linked)) and content_readable(c, actor(who), row)
 
 
-def require_destination(c, who, to, conversation_id, refs, reply=None):
+def require_destination(c, who, to, conversation_id, refs, reply=None, guest=None):
+    """Refuse a write whose audience cannot read every private task it carries. `guest` is the (task id, person) the
+    write itself makes a guest (guest_for), counted as already made so a dry-run refuses what the write would.
+    A private subtask's words may go to its parent's readers when every party of the subtask reads the parent
+    (hubdb.subtask_flows_up): a guest's answer comes back to the task it was asked for."""
     ids = references(c, refs)
     ids.update(message_tasks(c, reply) if reply else ())
     if who.attempt_id:
@@ -430,8 +486,12 @@ def require_destination(c, who, to, conversation_id, refs, reply=None):
     audience = set((conv or {}).get("participants") or []) | {who.actor, to}
     if getattr(who, "task_actor", ""):
         audience.add(who.task_actor)
+    target = (refs or {}).get("task") if isinstance(refs, dict) else None
+    target = H.task(c, target) if isinstance(target, str) else None
     for row in private:
-        if not all(H.task_private_readable(c, actor, row) for actor in audience):
+        if all(_reads(c, actor, row, guest) for actor in audience):
+            continue
+        if not (target and H.subtask_flows_up(c, row, target) and all(_reads(c, actor, target) for actor in audience)):
             raise Problem("privacy", "Private task content stays with its requester and current owner", 403)
     if (conv or {}).get("scope") == "shared":
         raise Problem("privacy", "Discuss private tasks in their task conversation", 403)

@@ -682,6 +682,11 @@ ALTER TABLE turns ADD COLUMN outcome TEXT;
 ALTER TABLE turns ADD COLUMN did_nothing INTEGER;
 """
 
+# The one person a private task with no person on it may reach (hubdb.task_reach): see "a private task's guest".
+TASK_GUEST_SCHEMA = """
+ALTER TABLE tasks ADD COLUMN guest TEXT;
+"""
+
 MIGRATIONS = [SCHEMA, MEETING_SCHEMA, MEETING_ITEMS_SCHEMA,   # index i takes user_version from i
               MEETING_BRAIN_SCHEMA, MEETING_COMMENTS_SCHEMA,  # to i+1; append, never edit
               GOALS_SCHEMA, RECORDING_SOURCES_SCHEMA, MARKET_SCHEMA,
@@ -691,7 +696,8 @@ MIGRATIONS = [SCHEMA, MEETING_SCHEMA, MEETING_ITEMS_SCHEMA,   # index i takes us
               USAGE_SEGMENTS_SCHEMA, KPI_ARCHIVE_SCHEMA, WAITING_ON_SCHEMA,
               LIVE_MEETINGS_SCHEMA, LIVE_MEETINGS_ROUTING_LIMITS_SCHEMA,
               LIVE_MEETINGS_CHAT_ROUTING_SCHEMA, TASK_RELATIONS_SCHEMA, TRIGGERS_SCHEMA,
-              TRIGGER_SIGNING_SCHEMA, CHECK_MODELS_SCHEMA, GOAL_ASKS_SCHEMA, RUN_TRIGGERS_SCHEMA]
+              TRIGGER_SIGNING_SCHEMA, CHECK_MODELS_SCHEMA, GOAL_ASKS_SCHEMA, RUN_TRIGGERS_SCHEMA,
+              TASK_GUEST_SCHEMA]
 
 
 class Refused(Exception):
@@ -2523,6 +2529,7 @@ def task_private(conn, row):
 
 
 def task_private_readable(conn, actor, row):
+    """A private task is read by its requester and owner, and by its guest when it has one (task_reach)."""
     if not row:
         return False
     row = dict(row)
@@ -2530,7 +2537,71 @@ def task_private_readable(conn, actor, row):
         return True
     if "owner" not in row or "requester" not in row:
         row = task(conn, row["id"])
-    return bool(row and actor in (row["owner"], row["requester"]))
+        if not row:
+            return False
+    if actor in (row["owner"], row["requester"]):
+        return True
+    if "guest" not in row:
+        row = _one(conn, "SELECT guest FROM tasks WHERE id=?", (row["id"],)) or {}
+    return bool(row.get("guest")) and actor == row["guest"]
+
+
+# ----------------------------------------------------------------------------- a private task's guest
+# A private task with no person on it (a bot's task for another bot, or for itself) would have no way to reach anyone:
+# every hand-off from its runs is refused because nobody it could go to reads it. Its owning bot may bring in ONE
+# person, its guest, by handing them work: a subtask under it, a question on it, or waiting on them. The guest reads
+# that task as its parties do and nothing else: not its parent, its other subtasks, or anything the run also carries.
+# The first person is kept; a hand-off to anyone else is refused. Changing the owner ends it.
+
+def bot_only(row):
+    """No person on this task: its requester and owner are both bots (the same bot for a bot's task to itself)."""
+    return is_bot(row.get("requester") or "") and is_bot(row.get("owner") or "") and not row.get("guest")
+
+
+def task_reach_refusal(conn, actor, row, person):
+    """Why `actor` may not make `person` the guest of private task `row`, or None when it may (or they already read
+    it). The words are the refusal a create, a question or a wait gives, and a dry-run gives the same."""
+    if not row or not task_private(conn, row) or task_private_readable(conn, person, row):
+        return None
+    row = task(conn, row["id"]) or row
+    who = actor_id(person)
+    if not is_human(person) or not human(conn, who):
+        return f"{person} is not a person on the team"
+    if row.get("guest"):
+        return (f"This private task already reached {actor_id(row['guest'])}, its one guest, and {who} cannot read it: "
+                f"hand this to {actor_id(row['guest'])}, or ask a person on the task to make it company-visible")
+    if not bot_only(row):
+        return "Private task content stays with its requester and current owner"
+    if actor != row["owner"]:
+        return "Only the bot that owns a private task brings a person into it"
+    for parent_id in TR.ancestors(conn, row["id"]):
+        parent = task(conn, parent_id)
+        if parent and task_private(conn, parent) and not bot_only(parent) and not task_private_readable(
+                conn, person, parent):
+            return (f"A private task above this one has a person on it whom {who} cannot read, so its work "
+                    f"cannot reach {who}")
+    return None
+
+
+def subtask_flows_up(conn, row, parent):
+    """Whether private subtask `row`'s words may reach readers of `parent`, its private parent, who cannot read the
+    subtask: every party of the subtask (requester, owner and guest) reads the parent. The person a bot handed a
+    subtask or a question under its task is that task's guest, so their answer comes back to the task it was asked
+    for, and to nobody that task does not already have."""
+    if not row or not parent or not task_private(conn, parent) or TR.parent_of(conn, row["id"]) != parent["id"]:
+        return False
+    row = task(conn, row["id"]) or {}
+    parties = [p for p in (row.get("requester"), row.get("owner"), row.get("guest")) if p]
+    return bool(parties) and all(task_private_readable(conn, p, parent) for p in parties)
+
+
+def task_reach(conn, actor, row, person):
+    """Make `person` the guest of private task `row` (task_reach_refusal said yes); a no-op when they already read it.
+    Recorded in the task's history, so its parties see who it reached."""
+    if task_private_readable(conn, person, row):
+        return
+    conn.execute("UPDATE tasks SET guest=? WHERE id=?", (person, row["id"]))
+    _task_event(conn, row["id"], actor, "guest", None, person, "")
 
 
 def _task_private_writer(conn, actor, row):
@@ -3139,8 +3210,9 @@ def _unblock(conn, done_task, told=()):
     blocks the task. `told` are the tasks already woken about it (_answered)."""
     for blocked_id in TR.blocked_ids(conn, done_task["id"]):
         row = task(conn, blocked_id)
-        if task_private(conn, done_task) and (not task_private(conn, row) or not all(
-                task_private_readable(conn, party, done_task) for party in (row['owner'], row['requester']))):
+        if task_private(conn, done_task) and not subtask_flows_up(conn, done_task, row) and (
+                not task_private(conn, row) or not all(
+                    task_private_readable(conn, party, done_task) for party in (row['owner'], row['requester']))):
             continue                  # do not copy private completion into a wider task
         TR.remove_blocker(conn, KEEPER, row["id"], done_task["id"], keeper_note=f"unblocked: {done_task['title']}")
         conn.execute("UPDATE tasks SET version=version+1 WHERE id=?", (row["id"],))
@@ -3613,7 +3685,8 @@ def _subtask_wake(conn, actor, row, previous, note=None, quiet=False):
     if not bot_reads_task(conn, bot, parent) or not task_private_readable(conn, bot, row):
         return None
     if task_private(conn, row) and (not task_private(conn, parent) or not all(
-            task_private_readable(conn, who, row) for who in (parent["owner"], parent["requester"]) if who)):
+            task_private_readable(conn, who, row) for who in (parent["owner"], parent["requester"]) if who)
+    ) and not subtask_flows_up(conn, row, parent):
         return None                         # a private subtask's words stay off a thread more people read
     if _has_table(conn, "jobs") and _one(
             conn, "SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot=? AND j.state='queued' "
@@ -4471,6 +4544,10 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
         sets.append("owner=:owner")
         args["owner"] = new_owner
         _task_event(conn, task_id, actor, "owner", row["owner"], new_owner, note or "")
+        if new_owner != row["owner"] and row.get("guest"):
+            # The guest was the old owner's to bring in; a new owner starts with the task's two parties.
+            sets.append("guest=NULL")
+            _task_event(conn, task_id, actor, "guest", row["guest"], None, "")
         if new_owner != row["owner"] and is_bot(row["owner"]) and row.get("conversation_id"):
             # The goal Tico set for the old owner ends with its ownership: only the owner's turns end a task goal,
             # and a person owner has none to end it. A new bot owner's first turn sets its own.
@@ -4723,7 +4800,8 @@ def _waiting_person(conn, actor, row, value, status, owner=None, private=None):
 
     It is what makes work that waits on a person show as needing that person: the task is in
     their Needs you and batch, and the bot counts toward `needs_human`. Only a person who can read
-    the task: a private task cannot be put in front of anyone outside its requester and owner."""
+    the task: a private task cannot be put in front of anyone outside its requester and owner, except the one
+    guest its owning bot brings into a private task with no person on it (task_reach)."""
     value = str(value or "").strip()
     if not value:
         return ""
@@ -4740,8 +4818,14 @@ def _waiting_person(conn, actor, row, value, status, owner=None, private=None):
                f"{value} is not a person on the team: a task waits on a person with --on, or on another "
                "task with hub task relate <task> <other> --kind blocked_by")
     if not task_private_readable(conn, person, row if private is None else {**row, "private": int(bool(private))}):
-        refuse(conn, actor, "private",
-               f"This task is private and {actor_id(person)} cannot read it: file a task for them instead")
+        # A private task with no person on it can take one, its guest, when its owning bot waits on them.
+        if private is not None or not bot_only(row) and not row.get("guest"):
+            refuse(conn, actor, "private",
+                   f"This task is private and {actor_id(person)} cannot read it: file a task for them instead")
+        refusal = task_reach_refusal(conn, actor, row, person)
+        if refusal:
+            refuse(conn, actor, "private", refusal)
+        task_reach(conn, actor, row, person)
     return person
 
 

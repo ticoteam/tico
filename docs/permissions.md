@@ -208,8 +208,9 @@ A Linux computer can show its screen in the app, so people watch its bots work o
   ones in control.
 
 Only the computer's operator and admins open the screen, in the app themselves: each opening is a one-minute, single-use
-ticket, at most three at once per computer, an hour at most each. Every opening and closing is in the audit log
-(`runner.screen_open`, `runner.screen_close` with who, view or control, and how long).
+ticket, at most three at once per computer, an hour at most each. The screen opens in the computer's mode, wherever it
+is opened from: at Control they drive it at once, with View one tap away; at View they watch only. Every opening and
+closing is in the audit log (`runner.screen_open`, `runner.screen_close` with who, view or control, and how long).
 
 Where the status shows: every bot's **More** has a **Screen** row, in Setup (or About). When the screen is ready it opens
 it and says View or Control, and the bot's header has a **Screen** button too. Otherwise the row says why and what to do:

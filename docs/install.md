@@ -633,7 +633,8 @@ allowed, take control. The computer itself decides whether it offers one:
   (`screen off` and `screen status` too; a running runner follows within seconds).
 
 The first time a new computer offers its screen, its **Screen** setting in **Settings > Computers** starts at
-**Control**, so its operator and admins can watch it and drive it; choose **View** there to watch only, or **Off**. No one
+**Control**, so its operator and admins can watch it and drive it: the screen opens in Control, with **View** one tap
+away; choose **View** there to watch only, or **Off**. No one
 else can open it. A setting someone already chose stays, including View and Off, and a computer added before this
 default keeps its setting. The runner runs a virtual
 display (1440x900) on the first free display from `:99` to `:120` and gives bots that `DISPLAY` (set

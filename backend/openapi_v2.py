@@ -557,6 +557,9 @@ SCHEMAS = {
                 step_rank={"type": ["number", "null"], "description": "Its place within its step, lower first"},
                 waiting_on={"type": ["string", "null"], "description": "The person a waiting task waits on; "
                             "the task is in their Needs you"},
+                guest={"type": ["string", "null"], "description": "The one person a private task with no person on "
+                       "it reached: its owning bot's first subtask, question or wait for them made them its guest. "
+                       "They read the task as its requester and owner do, and nothing else of its tree"},
                 snoozed_until={"type": ["string", "null"], "description": "Set aside until this moment (UTC): "
                                "off lists and Needs you, and quiet, until then"},
                 snoozed_by={"type": ["string", "null"], "description": "Who snoozed it"},

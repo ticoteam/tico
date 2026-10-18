@@ -8,6 +8,13 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- A private task between bots, or a bot's private task to itself, can now reach one person. The first time its
+  owning bot gives them a subtask under it, asks them a question on it or sets it waiting on them, they become its
+  guest: they read that task (and their own subtask), and nobody else gains anything. A hand-off to a second person
+  is refused, naming the guest; the requesting bot can't add one, and reassigning the task ends it. Before, every
+  such hand-off was refused and the work sat unread. Task questions from private work now go through to a person
+  who reads that work or becomes its guest, and `POST /api/v2/tasks/dry-run` returns the same privacy refusal the
+  create does ([tasks](docs/tasks.md)).
 - **Idea triage** for the public roadmap's suggestion form (off unless `TICO_DECISIONS_IDEA_TRIAGE=1`). Before a new
   idea is handed out, Decide reads it: a confident bug or small change goes to Head of Engineering instead of
   product, and when the idea matches an open roadmap item the new task names that item and is linked to it. Routing
@@ -33,6 +40,29 @@ All notable changes to Tico are recorded here. The format follows
 - Listening, the nightly learnings and live meetings now ask Jev the way `POST /api/v2/decisions` does: one try of
   at most 8 seconds, and the company's own model answers when Jev is slow or down. Before, listening and live meetings
   had no fallback and the learnings run waited up to 20 seconds with two retries per call.
+
+### Changed
+- Screen: on a bot's page, when its computer's screen is off in Tico, the operator's or an admin's **Turn on** button
+  now reads **Turn on (Control)** and turns the screen on at Control, matching a new computer's default, so they can
+  drive it at once. View and Off stay choices in Settings > Computers; who sees the button and who may change the
+  setting are unchanged.
+- Screen: the viewer now opens in the computer's mode everywhere it opens (a bot's **More**, its header's **Screen**
+  button, Settings > Computers). A computer set to **Control** opens in Control, so its operator or an admin drives it
+  at once instead of tapping Control first, with **View** one tap away; a computer set to View opens view only.
+
+### Fixed
+- A failed Decide call now keeps only its error code (`auth`, `http`, `invalid`, `not_found`, `shape`, `spend_cap`,
+  `unavailable`, `unconfigured`, else `unreadable`) in the `judge.call` audit of `POST /api/v2/decisions` and the Slack
+  gateway, in the Slack event's reason and log line, and in the listening API's per-post `errors`, never the provider's
+  error text. `POST /api/v2/decisions` answers a failed call with that code and a fixed sentence per code, with the same
+  HTTP status as before. One shared list (`clients/judge.py`, `error_code`), the same as support triage.
+- A doc saved through the API or a bot's doc tool now reads back exactly as sent: its final newline and any leading
+  indentation (an indented code block on line 1) are kept, and a change to only the ends is a new version. Titles
+  and paths still drop surrounding spaces.
+
+## [0.3.57] - 2026-10-18
+
+### Added
 - Each bot has a wake preset under **Settings → Bots → Wakes**. **Token saver** is the default for a new bot. It
   holds nonblocking news (a finished request, review comments, a failing check nobody waits on) and sends it as one
   wake at most every 30 minutes, and it runs an enabled routine or stall check at most every 2 hours.
@@ -58,10 +88,6 @@ All notable changes to Tico are recorded here. The format follows
   ([What woke each run](docs/hub-sql.md#what-woke-each-run-and-what-it-did)).
 
 ### Changed
-- Screen: on a bot's page, when its computer's screen is off in Tico, the operator's or an admin's **Turn on** button
-  now reads **Turn on (Control)** and turns the screen on at Control, matching a new computer's default, so they can
-  drive it at once. View and Off stay choices in Settings > Computers; who sees the button and who may change the
-  setting are unchanged.
 - `hub_computer_list` and `hub computer list` answer one short row per computer: online and last seen, operator,
   release, version, wanted release, update state, a readiness level, the AI tools signed in, and counts of bots,
   warnings, errors and recent log errors (about 5,000 characters for 11 busy computers, down from over 200,000). One
@@ -70,14 +96,6 @@ All notable changes to Tico are recorded here. The format follows
   Computers and `GET /api/v2/computers` are unchanged.
 
 ### Fixed
-- A failed Decide call now keeps only its error code (`auth`, `http`, `invalid`, `not_found`, `shape`, `spend_cap`,
-  `unavailable`, `unconfigured`, else `unreadable`) in the `judge.call` audit of `POST /api/v2/decisions` and the Slack
-  gateway, in the Slack event's reason and log line, and in the listening API's per-post `errors`, never the provider's
-  error text. `POST /api/v2/decisions` answers a failed call with that code and a fixed sentence per code, with the same
-  HTTP status as before. One shared list (`clients/judge.py`, `error_code`), the same as support triage.
-- A doc saved through the API or a bot's doc tool now reads back exactly as sent: its final newline and any leading
-  indentation (an indented code block on line 1) are kept, and a change to only the ends is a new version. Titles
-  and paths still drop surrounding spaces.
 - A caller that hangs up while the server reads its request body is recorded as 499 (client closed request), with
   no traceback, instead of an HTTP 500: it no longer counts as a server error in the flight recorder's 5xx count,
   Sentry or the server log. All seven 5xx counted on v0.3.55 were this.
@@ -3366,7 +3384,8 @@ First public release.
 - Hosting: local only on a Mac, or self-hosted, including a reference AWS stack under `infra/ec2/`
   with Litestream backups.
 
-[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.56...HEAD
+[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.57...HEAD
+[0.3.57]: https://github.com/ticoteam/tico/compare/v0.3.56...v0.3.57
 [0.3.56]: https://github.com/ticoteam/tico/compare/v0.3.55...v0.3.56
 [0.3.55]: https://github.com/ticoteam/tico/compare/v0.3.54...v0.3.55
 [0.3.54]: https://github.com/ticoteam/tico/compare/v0.3.52...v0.3.54
