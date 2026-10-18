@@ -22,11 +22,13 @@ function serverInit(name) {
   const format = Buffer.from([32, 24, 0, 1, 0, 255, 0, 255, 0, 255, 16, 8, 0, 0, 0, 0]);
   return Buffer.concat([u16(W), u16(H), format, u32(Buffer.byteLength(name)), Buffer.from(name)]);
 }
-// Serve one socket: `ws` is a Playwright WebSocketRoute.
-exports.fakeVnc = (ws, name = 'Build server') => {
+// Serve one socket: `ws` is a Playwright WebSocketRoute. `heard`, when given, gets the message type of each client
+// message after the handshake (noVNC flushes each input event on its own: 4 a key, 5 the pointer).
+exports.fakeVnc = (ws, name = 'Build server', heard = null) => {
   let buf = Buffer.alloc(0), phase = 0;
   const need = [12, 1, 1];          // client version, chosen security type, ClientInit
   ws.onMessage(message => {
+    if (phase === 4 && heard) heard.push((Buffer.isBuffer(message) ? message : Buffer.from(message))[0]);
     buf = Buffer.concat([buf, Buffer.isBuffer(message) ? message : Buffer.from(message)]);
     while (phase < 3 && buf.length >= need[phase]) {
       buf = buf.subarray(need[phase]);

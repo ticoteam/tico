@@ -49,6 +49,9 @@ All notable changes to Tico are recorded here. The format follows
   now reads **Turn on (Control)** and turns the screen on at Control, matching a new computer's default, so they can
   drive it at once. View and Off stay choices in Settings > Computers; who sees the button and who may change the
   setting are unchanged.
+- Screen: opening a computer's screen whose setting is **Control** now starts in Control, so its operator or an admin
+  drives it at once instead of tapping Control first; **View** is one tap away in the viewer. A computer set to View
+  still opens view only.
 - `hub_computer_list` and `hub computer list` answer one short row per computer: online and last seen, operator,
   release, version, wanted release, update state, a readiness level, the AI tools signed in, and counts of bots,
   warnings, errors and recent log errors (about 5,000 characters for 11 busy computers, down from over 200,000). One

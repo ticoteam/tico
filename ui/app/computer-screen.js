@@ -178,7 +178,8 @@ async function pageComputerScreen(id, from) {
   screenKeys(state);
   screenGestures(state);
   addEventListener('resize', state.onResize);
-  // The View | Control switch needs the computer's mode; Settings' listing has it, else one read of it.
+  // The first session and the View | Control switch follow the computer's mode; Settings' listing has it, else one
+  // read of it. At Control the person drives at once, and View stays one tap away.
   if (!screenMachine(id)?.screen && S.me?.cloud) {
     try { SETTINGS_DATA.machines = (await get('/v2/operations')).machines || SETTINGS_DATA.machines; } catch {}
     if (SCREEN !== state) return;
@@ -186,7 +187,7 @@ async function pageComputerScreen(id, from) {
   const machine = screenMachine(id);
   if (machine?.label) $('#scr-name').textContent = machine.label;
   state.mode = machine?.screen || '';
-  await screenConnect(state, false);
+  await screenConnect(state, state.mode === 'control');
 }
 function screenShow(state, text, retry) {
   if (SCREEN !== state) return;
