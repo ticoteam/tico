@@ -337,6 +337,19 @@ def test_a_revoked_key_says_the_connection_is_not_working(api, monkeypatch):
         assert H.status(c, "ops")["focus"].startswith("The Tico AI Gateway key is not working")
 
 
+def test_the_servers_default_gateway_url_does_not_hide_the_saved_one(api, monkeypatch):
+    """Dev 178's settings always carry a gateway URL, Tico HQ's decisions endpoint by default; only one the
+    environment chose wins over the URL saved here."""
+    setup(api, monkeypatch)
+    settings = api.app.state.store.settings
+    monkeypatch.setattr(settings, "gateway_url", G.decisions_url(), raising=False)
+    with fake_gateway() as fake:
+        fake.active(KEY, 0.1)
+        assert save(api, fake)["url"] == fake.url
+        monkeypatch.setattr(settings, "gateway_url", "https://gateway.example.test/v1/gateway/decisions", raising=False)
+        assert get(api, "providers/gateway")["url"] == "https://gateway.example.test/v1/gateway"
+
+
 def test_base_url_takes_one_setting_for_both_endpoints():
     assert G.base_url("") == G.DEFAULT_BASE
     assert G.base_url("https://gw.example/v1/gateway/decisions/") == "https://gw.example/v1/gateway"

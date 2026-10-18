@@ -42,7 +42,10 @@ def env_key(settings=None):
 
 
 def env_url(settings=None):
-    return str(getattr(settings, "gateway_url", "") or os.environ.get(ENV_URL, "")).strip()
+    """The Gateway URL the environment sets, or ''. Dev 178's `Settings.gateway_url` always has one, Tico HQ's by
+    default; that default is no choice, so it does not hide the URL saved in Settings."""
+    configured = str(os.environ.get(ENV_URL, "") or getattr(settings, "gateway_url", "") or "").strip()
+    return configured if configured and G.base_url(configured) != G.DEFAULT_BASE else ""
 
 
 def _row(c):
