@@ -16,8 +16,27 @@ All notable changes to Tico are recorded here. The format follows
   ([Tasks](docs/tasks.md#stale-ticket-review))
 
 ### Fixed
-- A bot's usage-limit cooldown survives other task turns starting, restoring a lease or finishing. Queued work
-  waits for recovery instead of repeatedly retrying an exhausted subscription.
+- **Clear** on a bot's chat now really starts the bot over. Before, it only trimmed the history Tico sends, and on
+  the computer Claude Code, Codex and the other harnesses kept resuming the old provider thread, so the bot still
+  remembered the cleared chat and every turn still paid for it. Each turn now carries its conversation's session
+  epoch (`session_epoch`) and its bot's (`bot_session_epoch`), moved by Clear and by the session resets after a
+  model, placement or thread-mode change; when the one for its thread moves, the runner starts a new provider thread
+  from Tico's history. The thread a bot's direct chats share starts over on the next turn of any of them, while each
+  other chat keeps its own history. Without a clear the bot resumes its thread as before. After the upgrade, a thread
+  that may have been cleared or reset before its first turn on the new runner starts over once. A runner or Hub from
+  before this keeps today's behaviour ([sessions](docs/sessions.md)).
+
+### Changed
+- Market is no longer marked Beta: its sidebar item, page title and pages carry no **Beta** pill, and Help no longer
+  lists it under **Beta features**.
+
+## [0.3.60] - 2026-10-18
+
+### Fixed
+- A bot that hits its usage limit now stays paused until the limit resets, even while its other task turns start,
+  restore a lease or finish. Before, a parallel turn cleared the pause, and queued work retried the exhausted
+  subscription every few seconds, thousands of failed attempts in one limit window; now it waits for the reset and
+  then runs normally.
 - A check or review subtask held by its model's usage limit no longer waits unseen. After 12 hours with every turn on
   it stopped on the limit, the Health Monitor files one setup finding naming the bot, the model, since when and the
   task, with the fix: wait for the reset, file the check again on another model, or drop it. And a held check whose
@@ -30,15 +49,10 @@ All notable changes to Tico are recorded here. The format follows
   new comments got a server error each time once the comment that started its turn was deleted; now it carries on.
   Its reply is no longer posted under the deleted comment, and a reply no longer lists a deleted comment among those
   it answered.
-- **Clear** on a bot's chat now really starts the bot over. Before, it only trimmed the history Tico sends, and on
-  the computer Claude Code, Codex and the other harnesses kept resuming the old provider thread, so the bot still
-  remembered the cleared chat and every turn still paid for it. Each turn now carries its conversation's session
-  epoch (`session_epoch`) and its bot's (`bot_session_epoch`), moved by Clear and by the session resets after a
-  model, placement or thread-mode change; when the one for its thread moves, the runner starts a new provider thread
-  from Tico's history. The thread a bot's direct chats share starts over on the next turn of any of them, while each
-  other chat keeps its own history. Without a clear the bot resumes its thread as before. After the upgrade, a thread
-  that may have been cleared or reset before its first turn on the new runner starts over once. A runner or Hub from
-  before this keeps today's behaviour ([sessions](docs/sessions.md)).
+- Editing or deleting a task comment no longer holds the database write lock while it reads every stored retry
+  answer. On a large install that read took 35-37 s, and other writes timed out waiting for it. The answers that
+  quote a comment are now found by index; the index is filled for existing answers at the first start, in short
+  batches beside the running server. Deleting a comment also finds the questions it answered by index.
 
 ### Changed
 - **Decide asks the Tico AI Gateway first**, as Tico Decide 1.0 (`tico-decide-1.0`), with a gateway key
@@ -50,14 +64,6 @@ All notable changes to Tico are recorded here. The format follows
   answered (`Tico AI Gateway`, `TypeSafe`, or the team's provider) and its model, and the Slack gateway routes the
   same way. A Tico Decide call counts toward the monthly spend cap at the Gateway's price ($0.06 per 1M input tokens,
   output free).
-- Market is no longer marked Beta: its sidebar item, page title and pages carry no **Beta** pill, and Help no longer
-  lists it under **Beta features**.
-
-### Fixed
-- Editing or deleting a task comment no longer holds the database write lock while it reads every stored retry
-  answer. On a large install that read took 35-37 s, and other writes timed out waiting for it. The answers that
-  quote a comment are now found by index; the index is filled for existing answers at the first start, in short
-  batches beside the running server. Deleting a comment also finds the questions it answered by index.
 
 ## [0.3.59] - 2026-10-18
 
@@ -3477,7 +3483,8 @@ First public release.
 - Hosting: local only on a Mac, or self-hosted, including a reference AWS stack under `infra/ec2/`
   with Litestream backups.
 
-[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.59...HEAD
+[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.60...HEAD
+[0.3.60]: https://github.com/ticoteam/tico/compare/v0.3.59...v0.3.60
 [0.3.59]: https://github.com/ticoteam/tico/compare/v0.3.58...v0.3.59
 [0.3.58]: https://github.com/ticoteam/tico/compare/v0.3.57...v0.3.58
 [0.3.57]: https://github.com/ticoteam/tico/compare/v0.3.56...v0.3.57
