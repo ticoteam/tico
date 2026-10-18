@@ -20,12 +20,31 @@ All notable changes to Tico are recorded here. The format follows
 - Listening, the nightly learnings and live meetings now ask Jev the way `POST /api/v2/decisions` does: one try of
   at most 8 seconds, and the company's own model answers when Jev is slow or down. Before, listening and live meetings
   had no fallback and the learnings run waited up to 20 seconds with two retries per call.
+- **Add key**, **Replace key** and **Clear key** for a computer's model API key (Codex, Claude Code, Cursor Agent,
+  Muse Code), from Settings > Computers, with no terminal. The row shows whose key it is by its preview only. A new key
+  goes to the credential vault for that computer alone and is checked on the computer before the old one is deleted;
+  one that doesn't work leaves the old key in use. Clear key names the bots that stop first, and the key given to every
+  computer doesn't sign it back in. For that shared key, both ask **this computer only** or **all of them**, listing the
+  computers; an offline computer clears its copy (or takes the new key) when it is next online. Replacing the shared key
+  for all of them needs credential rights. Needs a current runner on the computer
+  ([subscriptions](docs/subscriptions.md#api-keys-on-a-computer)).
+- A synced Grok Bot can be delivered through the Grok Mac app: set **Deliver through the app on** in its settings
+  to one of your own Macs where Grok is ready, and a message to it reaches it within a minute, it shows as working,
+  its reply streams in, and what it says on its own in Grok reaches its Tico chat within minutes. The Mac's native
+  runner works only through Accessibility (`tico-appdriver`, shipped separately): it never moves the pointer, types
+  or brings Grok forward. **Settings → Computers** shows a **Desktop apps** row per app, Health names a signed-out
+  app, missing permission or changed layout, and a reply that needs you in Grok becomes a question in your Needs
+  you. Off by default; with it off nothing changes, and no message is handed to the daily sync twice.
 
 ### Changed
 - Screen: the first time a new computer offers its screen, its **Screen** setting in Settings > Computers starts at
   **Control** instead of **View**, so its operator or an admin can drive it at once. Who may open a screen is
   unchanged (the computer's operator and admins), a Screen setting someone already chose stays (View and Off
   included), and a computer that already offered its screen keeps its setting.
+- Screen: on a bot's page, when its computer's screen is off in Tico, the operator's or an admin's **Turn on** button
+  now reads **Turn on (Control)** and turns the screen on at Control, matching a new computer's default, so they can
+  drive it at once. View and Off stay choices in Settings > Computers; who sees the button and who may change the
+  setting are unchanged.
 - The server, runner and updater images run Python 3.15 on Debian trixie with SQLite 3.54.1, built in and checked
   when the image is built (Debian's own copy is 3.46.1). The update pulls the images, and Tico's own mail venv rebuilds
   itself on first use. A runner's home volume survives the update, so anything a bot or person built there with the old
@@ -33,16 +52,25 @@ All notable changes to Tico are recorded here. The format follows
   rebuild it ([updates.md](docs/updates.md#python-environments-on-a-docker-runner) lists them and how).
 
 ### Fixed
+- Automatic fallback no longer sends a bot to a login that is out of quota. When a login on a computer fails a turn
+  on its usage limit, the runner skips it for fallback until the provider's reset time, or for 30 minutes when the
+  provider gives none, and takes the next of the company's providers instead. A fallback that hits its own limit
+  mid-turn moves the turn on to the next provider rather than ending it.
 - A person's new Slack thread to a bot that is paused or quarantined is kept and runs when the bot is back, as a reply
   in an existing thread already was, instead of being dropped. The person is told in the thread that the bot is held
   and when it is back, with no need to resend.
 - The Overview campus moves a bot's desk as soon as its status changes, while live updates are connected, instead of at
   the next refresh (up to two minutes).
+- An Overview replay that plays to its end goes back to the live desks, as Back to live does, instead of staying on
+  the day's last states while the bots have moved on.
 - Health no longer says a bot that ran out of quota has no fallback when the company fallback (*Fall back when a plan
   runs out*, **Settings > AI providers**) covers it. And Health now says when a computer's default login for an AI tool
   (the one bots without a subscription use) is out of quota, e.g. "Team box's default Codex login is out of quota":
   turns there keep stopping on a usage limit with no reset time, so bots that fall back to it fail. It clears once a
   turn on that login completes or the reset time passes.
+- A check or review subtask whose model's default login on its computer is out of quota (the Health finding above) now
+  moves to the next check model at once, instead of retrying that login every 30 minutes. It goes back to the model
+  it asked for once that login works again or its reset time passes; with no other check model, it waits as before.
 - On a phone, the Support pop-up fits the space above the keyboard while you type: the box, Send and the newest
   reply stay on screen, and the page behind no longer shows below it or scrolls under it. With the keyboard down it is
   the usual bottom sheet again.
@@ -51,6 +79,12 @@ All notable changes to Tico are recorded here. The format follows
 
 ### Added
 
+- Every bot run records what woke it (a person's message, a comment, a status or relation change, pull request checks,
+  a stall check, a schedule, or other), its input tokens with the cached part split out, its output tokens, and an
+  outcome worked out in code from what the run wrote: `acted`, `no_change` (its task is still open) or `nothing_to_do`,
+  plus an exact `did_nothing` flag. `hub sql` gains `run_weekly`, one row per week, bot and trigger with runs, tokens
+  and the count and share of each outcome. Runs from before this read `unknown` and are still counted
+  ([What woke each run](docs/hub-sql.md#what-woke-each-run-and-what-it-did)).
 - The Overview shows **Bot hours vs human hours**: bot hours per human hour over the last 7 days, and a weekly line for
   up to 12 weeks (Monday to Sunday, Pacific time) with a dashed Parity line at 1× and the current week dotted as "so far".
   Hover or tap a week for its numbers; click the card for the table by week. Bot hours are the time bot runs spent

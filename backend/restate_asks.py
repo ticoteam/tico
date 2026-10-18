@@ -42,7 +42,7 @@ def ask_restate(conn):
     asked = []
     for row in unexplained(conn):
         with isolated(conn, "restate_asks", row["id"]):
-            H._wake(conn, row, row["owner"], message(row), {"wake": "restate_ask"})
+            H._wake(conn, row, row["owner"], message(row), {"wake": "restate_ask"}, trigger="stall_check")
             H.event(conn, H.KEEPER, ACTION, row["id"], {"bot": H.actor_id(row["owner"]), "to": row["waiting_on"]})
             asked.append(row["id"])
     return asked

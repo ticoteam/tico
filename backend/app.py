@@ -23,8 +23,8 @@ from clients.agent_skill import WHO_NEEDS_ME
 from . import go_live as pending_go_lives
 from . import repo_waits
 from . import built_on
-from . import agents, batch, external_sync, inbox_isolation, mcp_oauth, harness_actions, model_login, oidc, personal_tokens, views
-from . import check_models, team_rules, update_feeds, usage_limits
+from . import agents, app_delivery, batch, external_sync, inbox_isolation, mcp_oauth, harness_actions, model_login, oidc, personal_tokens, views
+from . import check_models, run_triggers, team_rules, update_feeds, usage_limits
 from . import task_privacy as privacy
 from . import task_relations as TR
 from . import task_roles as TRo
@@ -385,7 +385,7 @@ def create_app(settings=None):
 
     @app.middleware("http")
     async def request_guard(request, call_next):
-        via_reset = delegation_reset = None
+        via_reset = delegation_reset = run_reset = None
         try:
             # The sign-in exemptions below match on prefixes; a dot segment would carry one of
             # them onto the static files ("/download/../index.html").
@@ -462,6 +462,9 @@ def create_app(settings=None):
                     # recorded via assistant, and unless the person just confirmed a proposal it may
                     # write only what is low-risk.
                     via_reset = H.VIA.set(who.via)
+                if who.attempt_id and who.role != "runner" and not request.url.path.startswith(run_triggers.RUNNER_PATHS):
+                    # A run's own tool call: what it writes counts toward whether the run acted.
+                    run_reset = H.RUN.set(who.attempt_id)
             if request.method not in ("GET", "HEAD", "OPTIONS"):
                 origin = request.headers.get("origin")
                 if origin and not settings.allows_origin(origin):
@@ -648,6 +651,8 @@ def create_app(settings=None):
                 H.VIA.reset(via_reset)
             if delegation_reset is not None:
                 H.DELEGATION.reset(delegation_reset)
+            if run_reset is not None:
+                H.RUN.reset(run_reset)
 
     from . import routines
 
@@ -824,7 +829,8 @@ def create_app(settings=None):
             current = routines.latest_task(c, schedule_id)
             if current and current["status"] in ("open", "doing", "waiting", "review", "ready"):
                 raise Problem("routine", "This routine already has unfinished work", 409)
-            task = routines.open_task(c, auth, schedule, schedule["title"], schedule["playbook"], H.now())
+            task = routines.open_task(c, auth, schedule, schedule["title"], schedule["playbook"], H.now(),
+                                      trigger="person_message" if H.is_human(who.actor) else "other")
             occurrence = "manual:" + H.new_id()
             c.execute("INSERT INTO schedule_occurrences VALUES(?,?,?,?)",
                       (schedule_id, occurrence, task["id"], "created"))
@@ -1671,7 +1677,11 @@ def create_app(settings=None):
         harness = rows.external_harness(slug)
         external = agents.presence(c, slug, harness) if harness else None
         row["agent"] = external["agent"] if external else None
-        if external:
+        # Delivered through a desktop app (backend/app_delivery.py): where, and online is that computer's.
+        # `app_delivery_app`: the desktop app the bot could be delivered through, for its settings.
+        row["app_delivery"] = app_delivery.view(c, declared) if config and harness else None
+        row["app_delivery_app"] = app_delivery.HARNESS_APP.get(row.get("harness"))
+        if external and not (row["app_delivery"] or {}).get("active"):
             row["online"] = external["online"]
         return row
 
@@ -4130,6 +4140,29 @@ def create_app(settings=None):
         return mutate(request, body, lambda c: model_login.use_shared_key(
             c, request.state.identity, rid, body.runtime, auth=auth))
 
+    # Clear key / Replace key (backend/computer_keys.py). What signs it in, and for the company's shared key every
+    # computer it serves: the "this computer only / all of them" ask. Previews only.
+    @app.get("/api/v2/runners/{rid}/keys")
+    def computer_key_info(request: Request, rid: str, runtime: str):
+        with store.read() as c:
+            return model_login.key_info(c, request.state.identity, rid, runtime, auth=auth, vault=app.state.vault)
+
+    @app.post("/api/v2/runners/{rid}/keys/clear")
+    def clear_computer_key(request: Request, rid: str, body: M.KeyClear):
+        return mutate(request, body, lambda c: model_login.clear_key(
+            c, request.state.identity, rid, body.runtime, body.scope, auth=auth))
+
+    # The key goes to the vault, never into the login relay; the vault's own write path keeps it out of the request
+    # receipt (a keyed fingerprint, as for Credentials).
+    @app.post("/api/v2/runners/{rid}/keys")
+    def replace_computer_key(request: Request, rid: str, body: M.KeyReplace):
+        who = request.state.identity
+        vault = app.state.vault
+        return vault.change(who, request.url.path, request.headers.get("idempotency-key"), body,
+                            lambda c, w: None,
+                            lambda c: model_login.replace_key(c, who, rid, body.runtime, body.secret.get_secret_value(),
+                                                              body.env, body.scope, auth=auth, vault=vault))
+
     @app.get("/api/v2/runners/{rid}/logins/{lid}")
     def read_login(request: Request, rid: str, lid: str):
         # A read that also expires: a sign-in nobody finished does not stay open.
@@ -4192,6 +4225,7 @@ def create_app(settings=None):
                 raise Problem("forbidden", "You cannot revoke this runner", 403)
             c.execute("UPDATE runners SET revoked_at=? WHERE id=?", (H.now(), rid))
             c.execute('DELETE FROM registry_metadata WHERE key=?', ('computer-repositories:' + rid,))
+            app_delivery.runner_revoked(c, who.actor, rid)
             H.event(c, who.actor, "runner.revoked", rid)
             return {"revoked": True}
         result = mutate(request, body, work)
@@ -5027,6 +5061,7 @@ def create_app(settings=None):
     app.state.task_view = task_view         # for the events' read in tests (backend/tests/test_payload_budgets.py)
     # And one for each computer, in place of its polls (runner-rs/src/events.rs).
     install_runner_events(app, store, execution)
+    app_delivery.install(app, store, execution, mutate)
 
     from .views import install_views
     from .task_types import install_task_types

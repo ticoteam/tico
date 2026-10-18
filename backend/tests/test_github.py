@@ -318,11 +318,11 @@ def test_grouped_wakes_retry_bad_rows_and_send_blocked_tasks(api, monkeypatch):
         c.execute("UPDATE tasks SET status='blocked' WHERE id=?", (tasks[1]["id"],))
         c.execute("UPDATE tasks SET status=? WHERE id=?", (finished_status, tasks[2]["id"]))
     wake = H._wake
-    def broken(c, task, *args):
+    def broken(c, task, *args, **kwargs):
         if task["id"] == tasks[0]["id"]:
             H.event(c, H.KEEPER, "wake.partial", task["id"])
             raise RuntimeError("bad conversation")
-        return wake(c, task, *args)
+        return wake(c, task, *args, **kwargs)
     monkeypatch.setattr(H, "_wake", broken)
     with store.transaction() as c:
         assert G.flush_wakes(c) == [tasks[1]["id"]]

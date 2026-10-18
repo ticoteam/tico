@@ -15,7 +15,8 @@ from . import access as Access
 from . import bot_access as A
 from . import models as M
 from . import changelog as CL
-from . import providers, runner_versions
+from . import app_delivery, providers, runner_versions
+from .harnesses import resolve_harness
 from . import personal_tokens, rooms, team_rules, turns
 from .execution import AWAKE_GAP, AWAKE_SETTLE, Execution, turn_limit, turn_share, turns_here
 from pathlib import Path
@@ -1412,7 +1413,10 @@ def install_views(app, store, auth, mutate, task_view):
                          "users": [P.brief(p) for p in P.primary_users(slug, people, configs)],
                          "icon": icon_of(config), "helper": helper(config),
                          "my_access": level, **policy,
-                         "can_chat": level["write"] and slug != auth.settings.assistant_bot})
+                         "can_chat": level["write"] and slug != auth.settings.assistant_bot,
+                         # Labelled as on the bot list, so its computer is named to one who cannot see it.
+                         "app_delivery": app_delivery.view(c, config),
+                         "app_delivery_app": app_delivery.HARNESS_APP.get(resolve_harness(config, config.get("runtime")))})
         return rows
 
     @app.get("/api/me")
@@ -1524,6 +1528,8 @@ def install_views(app, store, auth, mutate, task_view):
             _, assigned = providers.runtimes_needed(c, store.settings)
             default = {providers.default_runtime(providers.load(c, store.settings))} - {""}
             run_on = providers.runtimes_run_on(c, store.settings)
+            from .computer_keys import shared_all, shared_listing
+            shared_keys = shared_all(c)
             for row in c.execute("SELECT id,label,operator,last_seen,revoked_at,platform,version,capacity,readiness_json,"
                                  "accepts_member_bots,screen,performance,capabilities_json,readiness_at FROM runners ORDER BY created"):
                 if not auth.bot_admin(who) and who.actor != "human:" + row["operator"]:
@@ -1555,10 +1561,15 @@ def install_views(app, store, auth, mutate, task_view):
                 # Each named subscription on it, with its sign-in, account and usage windows: this list is already
                 # limited to an administrator or the computer's operator, who may read its accounts.
                 from .model_login import cleared_logins
+                from .computer_keys import listing as computer_key_listing
                 machines.append({**value, "bots": bots, "needed_runtimes": sorted(assigned.get(row["id"]) or default),
                                  "profiles": computer_profiles(c, row, True),
                                  # {runtime: [profile, ...]} a person signed out here; they stay signed out.
                                  "signed_out": cleared_logins(c, row["id"]),
+                                 # {runtime: {env, preview}}: its own keys stored from here, and the company's shared
+                                 # ones, for the rows a key signs in (backend/computer_keys.py). Never a value.
+                                 "keys": computer_key_listing(c, row["id"]),
+                                 "shared_keys": shared_listing(shared_keys, value["readiness"]),
                                  "bot_runtimes": sorted(run_on.get(row["id"], ())),
                                  "update": runner_versions.view(fleet.get(row["id"])),
                                  "harness_actions": recent(c, row["id"]) if who.role == "owner" else [],
