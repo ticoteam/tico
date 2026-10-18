@@ -102,7 +102,7 @@ function frBotRowHTML(state, bot, botOps) {
   const bootstrap = bot.slug === assistantBot() || !!card?.bootstrap;
   const ready = !!bot.repository_present, active = bot.status === 'active', parked = ['needs_setup', 'needs_onboarding'].includes(bot.onboarding_state);
   const waiting = frWaiting(state);
-  const where = waiting === 'Add an AI provider' ? '<a href="#/settings" data-fr-providers>Add an AI provider</a>.' : waiting ? waiting + '.' : bootstrap ? 'Set up automatically once a computer is online.'
+  const where = waiting === 'Add an AI provider' ? '<a href="#/settings" data-gs-tab="providers">Add an AI provider</a>.' : waiting ? waiting + '.' : bootstrap ? 'Set up automatically once a computer is online.'
     : parked ? (ready ? 'Repository ready.' : 'Setting up its repository…')
     : active ? 'Set up and running.'
     : `${esc(botOps)} is setting this up.`;
@@ -121,8 +121,8 @@ function frNextHTML(state) {
         `<option value="${esc(person.id)}">${esc(person.name || person.id)}${('human:' + person.id) === frOwner() ? ' (you)' : ''}</option>`).join('')}</select>
       <span class="muted" data-fr-owned="${esc(bot.slug)}">${esc(frPersonName(S.me?.id))} owns it</span></div>`).join('');
   return `<section class="card fr-card" id="fr-providers"><header><h2>AI providers</h2></header>
-      ${S.config?.providers_configured === false ? '<a href="#/settings" data-fr-providers>Add an AI provider</a>'
-        : '<p>Chosen. <a href="#/settings" data-fr-providers>Change them</a></p>'}</section>
+      ${S.config?.providers_configured === false ? '<a href="#/settings" data-gs-tab="providers">Add an AI provider</a>'
+        : '<p>Chosen. <a href="#/settings" data-gs-tab="providers">Change them</a></p>'}</section>
     <section class="card fr-card" id="fr-admin"><header><h2>Add an admin</h2></header>
       <form id="fr-admin-form" class="fr-form"><label class="onb-field"><span class="k">Name</span><input name="name" autocomplete="off" placeholder="Sam"></label>
         <label class="onb-field"><span class="k">Email</span><input name="email" type="email" autocomplete="off" required placeholder="sam@example.com"></label>
@@ -138,8 +138,6 @@ function frNextHTML(state) {
 }
 function frWireDone(state) {
   document.querySelectorAll('[data-fr-start]').forEach(button => button.onclick = () => void frStartSetup(button.dataset.frStart, button));
-  // The link lands on Settings > AI providers, not on whichever tab was open last.
-  document.querySelectorAll('[data-fr-providers]').forEach(link => link.onclick = () => { SETTINGS_TAB = 'providers'; });
 }
 async function frStartSetup(slug, button) {
   if (button) button.disabled = true;

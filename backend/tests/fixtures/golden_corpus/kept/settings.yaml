@@ -1,0 +1,9 @@
+# depot settings, kept by a coworker
+company: Brightwater Laundry Co.
+machines: [washer-1, dryer-2]   # two machines
+owner: "human:ana"
+runner:
+  name: Jo
+  notes: |
+    The runner syncs the tablet with the depot.
+    standing order: lock the van

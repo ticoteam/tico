@@ -420,6 +420,8 @@ pub fn forget_windows(profile: &str, runtime: &str) {
 
 struct Cached {
     at: Instant,
+    /// runner.json's `profiles` the rows were made from: a profile added or taken out since is not served stale.
+    profiles: Value,
     rows: Vec<Value>,
 }
 
@@ -428,8 +430,13 @@ fn report_cache() -> &'static Mutex<Option<Cached>> {
     C.get_or_init(Default::default)
 }
 
+/// Counts `forget_report` calls, so a report probed before one is not kept after it.
+static FORGOTTEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 pub fn forget_report() {
-    *report_cache().lock().unwrap() = None;
+    let mut cache = report_cache().lock().unwrap();
+    FORGOTTEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    *cache = None;
 }
 
 /// The cached login state of `profile` for `runtime` (`signed_in`), when the last report has it.
@@ -442,10 +449,12 @@ pub fn reported_sign_in(profile: &str, runtime: &str) -> Option<Value> {
 /// The heartbeat's `profiles` list (service.py profile_report): each profile's sign-in where its CLI can say, probed
 /// within ten seconds for the whole report and kept a minute, with the weekly allowance attached.
 pub async fn report(config: &Map<String, Value>, rejected: &(dyn Fn(&str, &str) -> bool + Sync)) -> Vec<Value> {
-    let fresh = report_cache().lock().unwrap().as_ref().filter(|c| c.at.elapsed() < Duration::from_secs(60)).map(|c| c.rows.clone());
+    let profiles = config.get("profiles").cloned().unwrap_or(Value::Null);
+    let fresh = report_cache().lock().unwrap().as_ref().filter(|c| c.at.elapsed() < Duration::from_secs(60) && c.profiles == profiles).map(|c| c.rows.clone());
     let rows = match fresh {
         Some(rows) => rows,
         None => {
+            let forgotten = FORGOTTEN.load(std::sync::atomic::Ordering::SeqCst);
             let deadline = Instant::now() + Duration::from_secs(10);
             let mut entries: Vec<(String, Value)> = config.get("profiles").and_then(|p| p.as_object()).map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect()).unwrap_or_default();
             entries.sort_by(|a, b| a.0.cmp(&b.0));
@@ -517,7 +526,12 @@ pub async fn report(config: &Map<String, Value>, rejected: &(dyn Fn(&str, &str) 
                     break;
                 }
             }
-            *report_cache().lock().unwrap() = Some(Cached { at: Instant::now(), rows: rows.clone() });
+            let mut cache = report_cache().lock().unwrap();
+            // A sign-in that finished while the CLIs were asked: these rows may predate it, so the next report asks again.
+            if FORGOTTEN.load(std::sync::atomic::Ordering::SeqCst) == forgotten {
+                *cache = Some(Cached { at: Instant::now(), profiles, rows: rows.clone() });
+            }
+            drop(cache);
             rows
         }
     };
@@ -654,6 +668,43 @@ mod tests {
         crate::accounts::forget("out-test", "claude");
         forget_report();
         std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn a_profile_added_or_taken_out_is_reported_at_once_not_from_the_minute_cache() {
+        let dir = std::env::temp_dir().join(format!("tico-report-set-{}", uuid::Uuid::new_v4().simple()));
+        let names = |rows: &[Value]| rows.iter().map(|r| text_of(&r["name"])).filter(|n| n.starts_with("set-")).collect::<Vec<_>>();
+        let one = json!({"profiles": {"set-one": {"dir": dir.join("one").to_string_lossy()}}});
+        let two = json!({"profiles": {"set-one": {"dir": dir.join("one").to_string_lossy()}, "set-two": {"dir": dir.join("two").to_string_lossy()}}});
+        assert_eq!(names(&report(one.as_object().unwrap(), &|_, _| false).await), ["set-one"]);
+        assert_eq!(names(&report(two.as_object().unwrap(), &|_, _| false).await), ["set-one", "set-two"], "added");
+        assert_eq!(names(&report(one.as_object().unwrap(), &|_, _| false).await), ["set-one"], "taken out");
+        forget_report();
+    }
+
+    #[tokio::test]
+    async fn rows_probed_while_a_sign_in_finished_are_not_kept() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let dir = std::env::temp_dir().join(format!("tico-report-race-{}", uuid::Uuid::new_v4().simple()));
+        let config = json!({"profiles": {"race-test": {"dir": dir.to_string_lossy()}}});
+        let config = config.as_object().unwrap();
+        // The sign-in's verdict lands (forget_report) while this report is still asking the CLIs.
+        report(config, &|runtime, _| {
+            if runtime == "codex" {
+                forget_report();
+            }
+            false
+        })
+        .await;
+        // So the next report asks again rather than serve those rows for a minute.
+        let asked = AtomicUsize::new(0);
+        report(config, &|_, _| {
+            asked.fetch_add(1, Ordering::SeqCst);
+            false
+        })
+        .await;
+        assert!(asked.load(Ordering::SeqCst) > 0, "served from the cache");
+        forget_report();
     }
 
     #[test]

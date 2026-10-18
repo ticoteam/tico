@@ -222,17 +222,51 @@ const RUNTIME_LABELS = {codex: 'Codex', claude: 'Claude Code', gemini: 'Gemini',
   cursor: 'Cursor', musecode: 'Muse Code', pi: 'OpenRouter', openrouter: 'OpenRouter', hermes: 'Hermes', openclaw: 'OpenClaw', grokbot: 'Grok Bot', 'grok-bot': 'Grok Bot', dots: 'Dots', muse: 'Muse'};
 const RUNTIME_MARKS = {codex: 'openai', claude: 'anthropic', gemini: 'google', antigravity: 'google', grok: 'xai',
   grokbot: 'xai', 'grok-bot': 'xai', cursor: 'cursor', pi: 'openrouter', openrouter: 'openrouter'};
+// Hover and screen readers say harness, model and effort in words: "Claude Code Opus 5.5 Med", "Codex GPT 6.1 Sol High".
+// The model is modelWords (ui/app/format.js) without a first word the harness already says; no effort, nothing after.
+const EFFORT_SHORT = {low: 'Low', medium: 'Med', high: 'High', xhigh: 'XHigh', max: 'Max', ultra: 'Ultra'};
 function runtimeTag(e) {
   const raw = String(e?.harness || e?.resolved_runtime || e?.runtime || '').trim().toLowerCase();
   if (!raw) return '';
   const label = RUNTIME_LABELS[raw] || raw.replace(/[-_]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-  const model = e.resolved_model || e.model || '';
-  const source = !model ? '' : e.model_source === 'company' ? ' (team default)' : e.model_source === 'bot' ? " (this bot's own choice)" : '';
+  const words = modelWords(e.resolved_model || e.model).split(' ').filter(Boolean);
+  const model = (words[0] === label.split(' ')[0] ? words.slice(1) : words).join(' ');
+  const effort = EFFORT_SHORT[String(e.resolved_effort || e.reasoning_effort || e.effort || '').toLowerCase()] || '';
+  const says = [label, model, effort].filter(Boolean).join(' ');
   const mark = window.toolIcons?.markup({logo_key: RUNTIME_MARKS[raw], name: label}) || '';
-  return `<span class="rt" role="img" aria-label="Runs on ${esc(label)}" title="${esc('Runs on ' + label + (model ? ' \u00b7 ' + model : '') + source)}">${mark}</span>`;
+  return `<span class="rt" role="img" aria-label="${esc(says)}" title="${esc(says)}">${mark}</span>`;
 }
 // A bot's `order` (its definition, Settings or registry) puts a pipeline in sequence without
 // numbering the names: siblings with an order come first, lowest first; the rest keep A-Z.
 // Renaming a bot never changes where it sits: the order field decides, the name does not.
 const botOrder = e => { const n = Number(e?.order); return e?.order == null || e.order === '' || !Number.isFinite(n) ? Infinity : n; };
 const byBotOrder = (a, b) => { const x = botOrder(a), y = botOrder(b); return x === y ? 0 : x < y ? -1 : 1; };
+// Whom a chart node reports to, as a tree key (`p:<id>` or `b:<slug>`); '' at the top.
+const orgReportsTo = n => {
+  const to = String((n.kind === 'person' ? n.person?.reports_to : n.reports_to) || '');
+  return !to ? '' : n.kind === 'person' ? 'p:' + to : to.startsWith('human:') ? 'p:' + to.slice(6) : 'b:' + to;
+};
+// A manager's reports in the order someone put them on the chart (backend/report_order.py): the placed ones first, by
+// place, before the chart's own order. Only a direct report of `parent` has a place there; in a group (`g:<id>`), each
+// member has its place among its own manager's reports.
+const reportPlace = (n, parent) => {
+  const at = n.kind === 'person' ? n.person?.report_position : n.report_position;
+  const manager = String(parent || '').startsWith('g:') ? orgReportsTo(n) : parent;
+  return at == null || !manager || orgReportsTo(n) !== manager ? Infinity : at;
+};
+const byReportOrder = parent => (a, b) => { const x = reportPlace(a, parent), y = reportPlace(b, parent); return x === y ? 0 : x < y ? -1 : 1; };
+// The chart's own order for reports with no place, the same everywhere they are listed and on the server
+// (backend/report_order.py fallback): humans first; then bots, temporary ones last and a bot's `order` lowest first;
+// then the name, accents and case aside; the id breaks a tie. Nodes are `{kind: 'person', person}` or bot rows.
+const chartNameKey = s => String(s || '').normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase();
+const chartFallback = (a, b) => {
+  const human = n => n.kind === 'person';
+  if (human(a) !== human(b)) return human(a) ? -1 : 1;
+  if (!human(a) && isTempBot(a) !== isTempBot(b)) return isTempBot(a) - isTempBot(b);
+  if (!human(a) && byBotOrder(a, b)) return byBotOrder(a, b);
+  const name = n => chartNameKey(human(n) ? n.person?.name || n.person?.id || n.id : String(n.display_name || n.name || '').replace(TEMP_RE, ''));
+  const id = n => String(human(n) ? n.person?.id || n.id : n.name || '');
+  const x = name(a), y = name(b);
+  if (x !== y) return x < y ? -1 : 1;
+  return id(a) < id(b) ? -1 : id(a) > id(b) ? 1 : 0;
+};

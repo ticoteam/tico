@@ -314,6 +314,8 @@ def config_view(c, settings, who=None):
     value["backup"] = replication.status()
     value["runner_compat"] = runner_versions.desired()
     value["beta"] = beta.listing()      # the Beta pill and Help's Beta list (ui/app/state.js betaPill)
+    from . import update_feeds
+    value["update_feeds"] = update_feeds.status()   # what Subscribe to updates can send (settings-bot-editor.js)
     return value
 
 

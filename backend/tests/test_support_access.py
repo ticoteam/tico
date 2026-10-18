@@ -4,6 +4,9 @@ runs what HQ carries as the session and logs it."""
 
 import base64
 import json
+import re
+import secrets
+from datetime import datetime, timedelta, timezone
 
 import httpx
 import pytest
@@ -12,7 +15,7 @@ from backend import support, support_access
 from backend.auth import Identity
 from backend.store import Problem
 from backend.tests.test_onboarding import as_person, environment, machine, signed_in  # noqa: F401
-from backend.tests.test_support import FakeHQ
+from backend.tests.test_support import TICKET_ID, ContractHQ, FakeHQ, documented
 
 
 class FakeAccessHQ(FakeHQ):
@@ -30,7 +33,7 @@ class FakeAccessHQ(FakeHQ):
             if not ticket or ticket["secret"] != request.headers.get("x-ticket-secret"):
                 return httpx.Response(404, json={"error": "not_found"})
             if len(parts) == 4:
-                return httpx.Response(201, json={"session": "sa_" + "0" * 23 + str(len(self.seen) % 10)})
+                return httpx.Response(201, json={"session": self.new_session_id()})
             if parts[5] == "pull":
                 taken, self.queued = self.queued, []
                 return httpx.Response(200, json={"ended": self.say_ended, "requests": taken})
@@ -41,6 +44,9 @@ class FakeAccessHQ(FakeHQ):
             self.ended.append(parts[4])
             return httpx.Response(200, json={"ended": True})
         return super().__call__(request)
+
+    def new_session_id(self):
+        return "sa_" + "0" * 23 + str(len(self.seen) % 10)
 
 
 @pytest.fixture(autouse=True)
@@ -125,7 +131,7 @@ def test_only_an_owner_or_admin_starts_one_and_full_access_is_the_owners(environ
     assert start(api, admin, tier="app").status_code == 200
 
 
-@pytest.mark.parametrize("switch", ["flag", "TICO_SUPPORT", "demo", "rule"])
+@pytest.mark.parametrize("switch", ["flag", "TICO_SUPPORT", "rehearsal", "demo", "rule"])
 def test_every_off_switch_refuses_and_ends_what_was_live(environment, hq, monkeypatch, switch):
     api = environment()
     session = start(api).json()
@@ -134,20 +140,27 @@ def test_every_off_switch_refuses_and_ends_what_was_live(environment, hq, monkey
         monkeypatch.delenv("TICO_SUPPORT_ACCESS")
     elif switch == "TICO_SUPPORT":
         monkeypatch.setenv("TICO_SUPPORT", "off")
+    elif switch == "rehearsal":
+        monkeypatch.setenv("TICO_REHEARSAL", "1")
     elif switch == "rule":
         assert api.put("/api/v2/access/rules", json={"support_access": False}, headers=signed_in()).status_code == 200
     else:
-        api = environment(demo=True)
+        # The same install, its live session and all, now in demo mode.
+        monkeypatch.setattr(api.app.state.store.settings, "demo", True)
         api.headers["Host"] = "localhost:8765"
     status = api.get("/api/v2/support/access", headers=signed_in()).json()
     assert status["available"] is False and status["active"] is None and status["off_reason"]
     r = api.post("/api/v2/support/access", json={"ticket_id": "sup_x"}, headers=signed_in())
     assert r.status_code == 409 and r.json()["error"]["code"] == "support_access_off"
-    if switch != "demo":
-        assert api.get("/api/v2/health", headers=token).status_code == 401
-        assert support_access.pull_once(api.app) is False
-        with api.app.state.store.read() as c:
-            assert c.execute("SELECT end_reason FROM support_access").fetchone()[0] == "turned_off"
+    assert api.get("/api/v2/health", headers=token).status_code == 401
+    sent = len(hq.seen)
+    assert support_access.pull_once(api.app) is False
+    # With support itself off nothing goes to HQ, not even the end notice. With only the flag off, HQ hears it ended;
+    # the team rule ended it when it was turned off, which tells HQ nothing.
+    ended = ["end"] if switch == "flag" else []
+    assert [r.url.path.rsplit("/", 1)[-1] for r in hq.seen[sent:]] == ended
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT end_reason FROM support_access").fetchone()[0] == "turned_off"
 
 
 def test_app_access_reads_and_changes_setup_and_nothing_else(environment, hq):
@@ -183,7 +196,8 @@ def test_full_access_is_the_owners_reach_but_not_the_session_or_tokens(environme
     token = bearer(start(api, tier="full").json())
     assert api.put("/api/v2/access/rules", json={"admin_sql": False}, headers=token).status_code == 200
     for method, path in (("GET", "/api/v2/support/access"), ("POST", "/api/v2/me/tokens"),
-                         ("POST", "/api/v2/service-keys"), ("POST", "/api/v2/access/owner")):
+                         ("POST", "/api/v2/service-keys"), ("POST", "/api/v2/access/owner"),
+                         ("POST", "/api/v2/access/owner/email")):
         assert api.request(method, path, json={}, headers=token).status_code == 403, path
 
 
@@ -270,45 +284,72 @@ def test_a_restart_mints_a_fresh_token_for_a_live_session(environment, hq):
     assert api.get("/api/v2/health", headers=bearer(session)).status_code == 200
 
 
-def test_a_staff_call_reaches_the_install_through_the_real_hq_and_comes_back(environment, monkeypatch, tmp_path):
-    """The whole loop against hq/support_access.py itself: the install opens the session, a staff call waits at HQ, the
-    install's pull takes it, runs it as the session and answers, and the staff call returns that answer."""
-    import threading
+class ContractAccessHQ(FakeAccessHQ):
+    """FakeAccessHQ with ticket ids, secrets and session ids made as HQ makes them (ContractHQ's)."""
 
-    from fastapi.testclient import TestClient
+    new_ticket_id, new_secret, calls = ContractHQ.new_ticket_id, ContractHQ.new_secret, ContractHQ.calls
 
-    from hq import support_access as hq_access
-    from hq.app import create_app
-    from hq.db import Database
-    from hq.releases import Latest
-    key = "k" * 32
-    monkeypatch.setattr(hq_access, "PULL_WAIT", 1)
-    latest = Latest(transport=httpx.MockTransport(lambda request: httpx.Response(200, json={"tag_name": "v0.2.17"})))
-    with TestClient(create_app(Database(tmp_path / "hq.db"), latest, staff_key=key), client=("203.0.113.9", 5000)) as hq_app:
-        def forward(request):
-            answer = hq_app.request(request.method, request.url.path, content=request.content,
-                                    headers={k: v for k, v in request.headers.items() if k in ("content-type", "x-ticket-secret")})
-            return httpx.Response(answer.status_code, content=answer.content, headers={"content-type": answer.headers["content-type"]})
-        monkeypatch.setattr(support, "TRANSPORT", httpx.MockTransport(forward))
-        api = environment()
-        session = start(api, tier="app").json()
-        (live,) = hq_app.get("/v1/staff/access", headers={"Authorization": "Bearer " + key}).json()["sessions"]
-        answers = []
-        caller = threading.Thread(target=lambda: answers.append(hq_app.get(
-            f"/v1/staff/access/{live['session']}/api/v2/health",
-            headers={"Authorization": "Bearer " + key, "X-Tico-Support-By": "support-agent"})))
-        caller.start()
-        for _ in range(10):
-            assert support_access.pull_once(api.app, wait=1) is True
-            caller.join(0.5)
-            if not caller.is_alive():
-                break
-        caller.join(10)
-        (answer,) = answers
-        assert answer.status_code == 200, answer.text
-        log = api.get(f"/api/v2/support/access/{session['id']}/log", headers=signed_in()).json()["log"]
-        assert [(x["by"], x["path"], x["status"]) for x in log] == [("support-agent", "/api/v2/health", 200)]
-        # Stop here ends it at HQ too.
-        api.post(f"/api/v2/support/access/{session['id']}/stop", headers=signed_in())
-        assert hq_app.get(f"/v1/staff/access/{live['session']}/api/v2/health",
-                          headers={"Authorization": "Bearer " + key}).status_code == 409
+    def new_session_id(self):
+        return "sa_" + secrets.token_hex(12)
+
+
+def test_a_support_session_keeps_to_hq_s_documented_access_contract(environment, monkeypatch):
+    """The install's side of a support session, with every request it makes held exactly to the access routes as
+    docs/tico-hq.md ("Support access") documents them: it opens the session with its tier and end time, pulls what a
+    staff call left at HQ, runs it as the session and replies with its status and body, keeps the log (by, path,
+    status), and on Stop ends it at HQ, each with the ticket's secret in `X-Ticket-Secret`. HQ's own side (the staff
+    routes, its in-memory queue, refusing a call once the session ended) is tested in ticoteam/tico-services."""
+    documented("tico-hq.md", "POST /v1/support/{ticket}/access", "POST /v1/support/{ticket}/access/{session}/pull",
+               "POST /v1/support/{ticket}/access/{session}/reply", "POST /v1/support/{ticket}/access/{session}/end")
+    hq = ContractAccessHQ()
+    monkeypatch.setattr(support, "TRANSPORT", httpx.MockTransport(hq))
+    api = environment()
+
+    # Opening, from a ticket just filed: `{tier, expires_at}` (to the second, UTC) answered `{session}`.
+    before = datetime.now(timezone.utc).replace(microsecond=0)
+    session = start(api, tier="app", hours=2).json()
+    (tid, held), = hq.tickets.items()
+    secret = held["secret"]
+    assert TICKET_ID.fullmatch(tid)
+    filed, (method, path, query, sent_secret, body) = hq.calls()
+    assert filed == ("POST", "/v1/support", "", None, {"message": "Bots stopped"})
+    assert (method, path, query, sent_secret) == ("POST", f"/v1/support/{tid}/access", "", secret)
+    assert set(body) == {"tier", "expires_at"} and body["tier"] == "app"
+    assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", body["expires_at"])
+    ends = datetime.strptime(body["expires_at"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    assert before + timedelta(hours=2) <= ends <= datetime.now(timezone.utc) + timedelta(hours=2)
+    with api.app.state.store.read() as c:
+        hq_session = c.execute("SELECT hq_session FROM support_access WHERE id=?", (session["id"],)).fetchone()[0]
+    assert re.fullmatch(r"sa_[0-9a-f]{24}", hq_session)
+    base = f"/v1/support/{tid}/access/{hq_session}"
+
+    # A staff call waits at HQ; the pull hands it over as documented, the install runs it and replies to it alone.
+    hq.queued = [{"rid": "r1", "by": "support-agent", "method": "GET", "path": "/api/v2/health", "query": "",
+                  "content_type": "", "body_b64": ""},
+                 {"rid": "r2", "by": "staff", "method": "GET", "path": "/api/v2/health", "query": "verbose=1",
+                  "content_type": "", "body_b64": ""}]
+    mark = len(hq.seen)
+    assert support_access.pull_once(api.app, wait=1) is True
+    calls = hq.calls(mark)
+    assert [(m, p, q, s) for m, p, q, s, _ in calls] == [("POST", base + "/pull", "", secret),
+                                                         ("POST", base + "/reply", "", secret),
+                                                         ("POST", base + "/reply", "", secret)]
+    assert calls[0][4] == {}
+    for (*_, sent), rid in zip(calls[1:], ("r1", "r2")):
+        (reply,) = sent["replies"]
+        assert set(reply) == {"rid", "status", "content_type", "body_b64"} and reply["rid"] == rid
+        assert reply["status"] == 200 and reply["content_type"].startswith("application/json")
+        assert json.loads(base64.b64decode(reply["body_b64"], validate=True))
+    log = api.get(f"/api/v2/support/access/{session['id']}/log", headers=signed_in()).json()["log"]
+    assert [(x["by"], x["method"], x["path"], x["status"]) for x in reversed(log)] == [
+        ("support-agent", "GET", "/api/v2/health", 200), ("staff", "GET", "/api/v2/health", 200)]
+
+    # Stop here ends it at HQ, and nothing more is pulled.
+    mark = len(hq.seen)
+    assert api.post(f"/api/v2/support/access/{session['id']}/stop", headers=signed_in()).json()["end_reason"] == "stopped"
+    assert hq.calls(mark) == [("POST", base + "/end", "", secret, {})] and hq.ended == [hq_session]
+    assert support_access.pull_once(api.app, wait=1) is False and len(hq.seen) == mark + 1
+
+    for request in hq.seen:
+        assert (request.url.scheme, request.url.host) == ("https", "updates.tico.team")
+        assert "authorization" not in request.headers and request.headers["content-type"] == "application/json"

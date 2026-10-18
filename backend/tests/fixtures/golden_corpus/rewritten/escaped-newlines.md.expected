@@ -1,0 +1,3 @@
+Escaped newlines a model wrote:
+first line
+second line, but `split on \n` stays code.

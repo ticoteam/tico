@@ -595,11 +595,8 @@ def status_line(c, who, slug, default=None, inputs=None, auth=None):
     row["bot_state"] = (H.bot(c, row["bot"]) or {}).get("state")
     if row["bot_state"] == "quarantined":
         # A refusal-count quarantine lifts itself after the cooldown; any other needs a person.
-        since = c.execute("SELECT max(ts) FROM events WHERE action='quarantine' AND target=?",
-                          (H.bot_actor(row["bot"]),)).fetchone()[0]
-        auto = not H.quarantine_is_escape(c, row["bot"])
-        row["quarantine"] = {"since": since, "auto": auto,
-                             "resumes_at": H.shift(since, seconds=H.QUARANTINE_COOLDOWN_S) if auto and since else None}
+        row["quarantine"] = H.quarantine_resumes(c, row["bot"])
+        auto = row["quarantine"]["auto"]
         if not auto and auth is not None and (auth.operator(c, who, row["bot"]) or auth.bot_manager(c, who, row["bot"])):
             review = dict(H.quarantine_review(c, row["bot"]) or {})
             task = H.task(c, review["task"]) if review.get("task") else None

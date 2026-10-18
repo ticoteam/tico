@@ -138,9 +138,11 @@ target
 task_alt
 text_fields
 today
+tour
 travel_explore
 troubleshoot
 verified_user
+view_agenda
 view_timeline
 warning
 waving_hand

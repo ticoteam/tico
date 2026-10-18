@@ -1,0 +1,179 @@
+"""tico.company.yaml, format 0.2: written from a draft as the setup page's `toYAML()` writes it, and read back.
+
+The file holds the plan only: never `undo`, `chat`, `removed` or `pending`, and never a credential. Format 0.2 differs
+from the page's 0.1 in its goals (a measure, unit, direction and numbers in place of free-text target and due date),
+a bot's `reports_to` set by the visitor or BotOps, the one `first_job`, and an existing agent's department and reason.
+"""
+import datetime as dt
+import json
+import re
+
+from . import draft as D
+from .keys import scrub_all
+
+FORMAT = "0.2"
+HEADER = ("# tico.company.yaml", "# Made with Tico setup at https://tico.team/setup",
+          "# Format 0.2. Importing this file into Tico is coming soon.",
+          "# No passwords, keys or credentials are stored here; tools are connected on your own install.")
+NOT_SET = "# not set yet: which number, and by when?"
+# YAML 1.1 reads these bare words as booleans or null, and a leading digit can read as a number or a date.
+PLAIN = re.compile(r"[a-z][a-z0-9_-]*")
+WORDS = {"y", "n", "yes", "no", "on", "off", "true", "false", "null"}
+# Characters a YAML reader refuses or reads as a line break, written as escapes.
+UNSAFE = re.compile("[\x7f-\x9f  ﻿￾￿]")
+
+
+def q(text):
+    """setup.js `q()`: a double-quoted string, "" when empty."""
+    return UNSAFE.sub(lambda m: "\\u%04x" % ord(m.group(0)), json.dumps(str(text or ""), ensure_ascii=False))
+
+
+def word(value):
+    """An id or a vocabulary word: bare when YAML reads it back as the same text."""
+    return value if PLAIN.fullmatch(value) and value not in WORDS else q(value)
+
+
+def num(value):
+    if value is None:
+        return "null"
+    text = repr(value)
+    # YAML 1.1 reads 1e-05 as text: its floats need a dot and a signed exponent.
+    mantissa, _, exponent = text.partition("e")
+    if exponent:
+        text = "%s%se%s%s" % (mantissa, "" if "." in mantissa else ".0", "" if exponent[0] in "+-" else "+", exponent)
+    return text
+
+
+def tool_list(draft):
+    """setup.js `toolList()`: the tools chosen, or by default every tool a bot on the chart uses."""
+    if draft["tools"]["mode"] == "custom":
+        return draft["tools"]["connect"]
+    return [t for t in D.TOOLS if any(t in b["tools"] for b in draft["bots"])]
+
+
+def to_yaml(draft, created=None):
+    """The company file for a draft, with key-shaped strings removed whatever path the draft took. `created` defaults
+    to now."""
+    draft = D.check(scrub_all(draft)[0])
+    created = created or dt.datetime.now(dt.timezone.utc)
+    head = D.owner(draft)
+    head_id = head["id"] if head else "you"
+    L = list(HEADER)
+    L += ["version: %s" % FORMAT, "created: %s" % created.astimezone(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.")
+          + "%03dZ" % (created.microsecond // 1000)]
+    company = draft["company"]
+    L += ["company:", "  name: %s" % q(company["name"]), "  about: %s" % q(company["about"]),
+          "  signals: [%s]" % ", ".join(company["signals"])]
+    L.append("people:")
+    if not draft["people"]:
+        L += ["  - id: you", '    name: "You"', '    role: "Owner"', "    owner: true"]
+    for p in draft["people"]:
+        L += ["  - id: %s" % word(p["id"]), "    name: %s" % q(p["name"]), "    role: %s" % q(p["role"]),
+              "    owner: true" if p["owner"] else "    reports_to: %s" % word(head_id)]
+    L.append("employees:" + ("" if any(not b["existing"] for b in draft["bots"]) else " []"))
+    for b in (b for b in draft["bots"] if not b["existing"]):
+        L += ["  - id: %s" % word(b["id"]), "    template: %s" % word(b["template"]), "    title: %s" % q(b["title"]),
+              "    department: %s" % b["dept"], "    reports_to: %s" % word(D.manager_of(draft, b)),
+              "    start: %s" % ("now" if b["start"] else "later"), "    reason: %s" % q(b["reason"])]
+        if b["routine"]:
+            L.append("    first_routine: %s" % q(b["routine"]))
+        if b["tools"]:
+            L.append("    tools: [%s]" % ", ".join(word(t) for t in b["tools"]))
+        if b.get("first_job"):
+            L.append("    first_job: %s" % q(b["first_job"]))
+    L.append("existing_agents:" + ("" if any(b["existing"] for b in draft["bots"]) else " []"))
+    for b in (b for b in draft["bots"] if b["existing"]):
+        L += ["  - id: %s" % word(b["id"]), "    runtime: %s" % b["runtime"], "    title: %s" % q(b["title"]),
+              "    job: %s" % q(b["about"]), "    department: %s" % b["dept"], "    reason: %s" % q(b["reason"]),
+              "    reports_to: %s" % word(D.manager_of(draft, b))]
+    L.append("goals:" + ("" if draft["goals"] else " []"))
+    for g in draft["goals"]:
+        L += ["  - id: %s" % word(g["id"]), "    title: %s" % q(g["title"]),
+              "    owner: %s" % word(head_id if g["owner"] == "you" else g["owner"]),
+              "    measure: %s" % (q(g["measure"]) if g["measure"] else "null  " + NOT_SET),
+              "    unit: %s" % q(g["unit"]), "    direction: %s" % g["direction"]]
+        for key in D.AIM[g["direction"]]:
+            L.append("    %s: %s" % (key, g[key] or "null" if key == "deadline" else num(g[key])))
+    L += ["rules:", "  mode: %s" % draft["rules"]["mode"], "  never_without_a_person:" + ("" if draft["rules"]["never"] else " []")]
+    L += ["    - %s  # %s" % (r, D.RULES[r]) for r in draft["rules"]["never"]]
+    L.append("  review: %s  # %s" % (draft["rules"]["review"], D.REVIEW[draft["rules"]["review"]]))
+    L += ["tools:", "  mode: %s" % draft["tools"]["mode"],
+          "  connect: [%s]  # connected after setup, never during it" % ", ".join(tool_list(draft))]
+    return "\n".join(L) + "\n"
+
+
+# ---------------------------------------------------------------------------------------------------- reading
+def _rows(doc, key):
+    rows = doc.get(key) or []
+    if not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows):
+        raise D.DraftError("%s must be a list of entries" % key)
+    return rows
+
+
+def _str(value):
+    return "" if value is None else value.isoformat() if isinstance(value, dt.date) else str(value) \
+        if isinstance(value, (int, float)) and not isinstance(value, bool) else value
+
+
+def from_yaml(text):
+    """The draft a company file holds (D.DraftError when it isn't a format 0.2 file Tico can read). Key-shaped strings
+    in it are removed. The draft starts on the chart tab with no undo, chat, removed or pending."""
+    import yaml  # PyYAML: only reading a file needs it.
+
+    if not isinstance(text, str) or len(text) > D.LIMITS["draft_bytes"]:
+        raise D.DraftError("the file is too large")
+    try:
+        doc = yaml.safe_load(text)
+    except yaml.YAMLError:
+        raise D.DraftError("the file isn't valid YAML") from None
+    if not isinstance(doc, dict) or str(doc.get("version")) != FORMAT:
+        raise D.DraftError("the file isn't a format %s company file" % FORMAT)
+    doc, _ = scrub_all(doc)
+    company = doc.get("company") if isinstance(doc.get("company"), dict) else {}
+    draft = D.blank()
+    draft["step"] = "chart"
+    draft["company"] = {"name": _str(company.get("name")), "about": _str(company.get("about")),
+                        "signals": company.get("signals") or []}
+    people = _rows(doc, "people")
+    if len(people) == 1 and people[0] == {"id": "you", "name": "You", "role": "Owner", "owner": True}:
+        people = []
+    draft["people"] = [{"id": _str(p.get("id")), "name": _str(p.get("name")), "role": _str(p.get("role")),
+                        "dept": D.dept_of(_str(p.get("role"))), "owner": p.get("owner") is True} for p in people]
+    chosen = {}
+    for b in _rows(doc, "employees"):
+        role = next((r for r in D.ROLES if r["slug"] == b.get("template")), None)
+        if not role:
+            raise D.DraftError("employees has a template Tico doesn't have: %s" % str(b.get("template"))[:40])
+        bot = {"id": _str(b.get("id")), "template": role["slug"], "title": _str(b.get("title")), "dept": b.get("department"),
+               "lead": role["lead"], "core": role["core"], "reason": _str(b.get("reason")),
+               "start": b.get("start") == "now" or b.get("start") is True, "routine": _str(b.get("first_routine")),
+               "tools": b.get("tools") or [], "about": role["summary"][:D.LIMITS["summary"]], "runtime": None,
+               "existing": False}
+        if b.get("first_job"):
+            bot["first_job"] = _str(b["first_job"])
+        chosen[bot["id"]] = _str(b.get("reports_to"))
+        draft["bots"].append(bot)
+    for b in _rows(doc, "existing_agents"):
+        bot = {"id": _str(b.get("id")), "template": None, "title": _str(b.get("title")), "dept": b.get("department"),
+               "lead": False, "core": False, "reason": _str(b.get("reason")), "start": True, "routine": "", "tools": [],
+               "about": _str(b.get("job")), "runtime": b.get("runtime"), "existing": True}
+        chosen[bot["id"]] = _str(b.get("reports_to"))
+        draft["bots"].append(bot)
+    for g in _rows(doc, "goals"):
+        goal = {"id": _str(g.get("id")), "title": _str(g.get("title")), "owner": _str(g.get("owner")),
+                "measure": _str(g.get("measure")), "unit": _str(g.get("unit")), "direction": g.get("direction") or "up"}
+        for key in D.AIM.get(goal["direction"], ()):
+            goal[key] = _str(g.get(key)) or None if key == "deadline" else g.get(key)
+        draft["goals"].append(goal)
+    rules = doc.get("rules") if isinstance(doc.get("rules"), dict) else {}
+    tools = doc.get("tools") if isinstance(doc.get("tools"), dict) else {}
+    draft["rules"] = {"mode": rules.get("mode"), "never": rules.get("never_without_a_person") or [],
+                      "review": rules.get("review")}
+    draft["tools"] = {"mode": tools.get("mode"), "connect": (tools.get("connect") or []) if tools.get("mode") == "custom" else []}
+    draft["seq"] = len(draft["people"]) + len(draft["bots"]) + len(draft["goals"]) + 1
+    draft = D.check(draft)
+    # A reports-to the file names is kept only where it differs from the line the chart draws anyway.
+    for bot in draft["bots"]:
+        if chosen.get(bot["id"]) and chosen[bot["id"]] != D.manager_of(draft, bot):
+            bot["reports_to"] = chosen[bot["id"]]
+    return D.check(draft)

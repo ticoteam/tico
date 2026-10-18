@@ -39,8 +39,9 @@ def test_each_caller_is_offered_only_the_tools_it_can_use(api, botops):
     for who in ("bot", "agent"):
         assert BOTS_ONLY <= lists[who] and not HUMANS_ONLY & lists[who] and not BOTOPS_ONLY & lists[who], who
     assert all("hub_external_sync" in lists[role] for role in ("owner", "admin", "member"))
-    assert "hub_repo_product_create" in lists["owner"]
-    assert all("hub_repo_product_create" not in lists[who] for who in ("admin", "member", "bot", "botops", "agent"))
+    # Bots are offered it; the server lets only one with Create product repositories use it (test_bot_product_repos).
+    assert all("hub_repo_product_create" in lists[who] for who in ("owner", "bot", "botops"))
+    assert all("hub_repo_product_create" not in lists[who] for who in ("admin", "member", "agent"))
     assert {"hub_api", "hub_bot_update"} <= lists["member"]
     assert BOTOPS_ONLY <= lists["botops"] and BOTS_ONLY <= lists["botops"] and not HUMANS_ONLY & lists["botops"]
     assert lists["bot"] < lists["owner"] | lists["bot"] and len(lists["bot"]) < len(lists["botops"])
