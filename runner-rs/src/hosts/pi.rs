@@ -61,8 +61,8 @@ pub fn is_gateway(model: Option<&str>) -> bool {
     model.is_some_and(|m| m.trim().starts_with("tico-"))
 }
 
-/// pi's `models.json` for the Gateway: its OpenAI-chat endpoint at `url`, the key read from GATEWAY_KEY_ENV when pi
-/// makes a request. It holds no secret. The models take text and tools only (the Gateway refuses images). They reason,
+/// pi's `models.json` for the Gateway: its OpenAI-chat endpoint at `url` (the runner's relay, gateway_relay.rs), the
+/// token read from GATEWAY_KEY_ENV when pi makes a request. It holds no secret. The models take text and tools only (the Gateway refuses images). They reason,
 /// so pi sends the bot's effort as `reasoning_effort`; pi drops it for a model not marked `reasoning`. The Gateway
 /// takes none, minimal, low, medium, high and xhigh, so pi's `max` (`effort_for`) goes as `xhigh`.
 pub fn gateway_models_json(url: &str) -> Value {
@@ -91,8 +91,9 @@ fn gateway_agent_dir(settings: &Settings, env: &Env) -> Option<PathBuf> {
     // pi retries any 429 or 5xx within seconds, and never waits for Retry-After. The Gateway's `rate_limited` asks for
     // an hour (more refused keys from this address extend it), so a Gateway turn does not retry in pi: the server
     // retries by the Gateway's code instead (backend/execution.py).
-    // pi's bash tool hands its commands pi's whole environment, the gateway key included: each command starts by
-    // unsetting it. (A command can still read pi's own /proc environ; this keeps the key out of ordinary tool output.)
+    // pi's bash tool hands its commands pi's whole environment: each command starts by unsetting GATEWAY_KEY_ENV. It
+    // holds only the turn's token for the runner's relay, never the Gateway's key (gateway_relay.rs); a command can
+    // still read pi's /proc environ, so this only keeps the token out of ordinary tool output.
     let settings_json = json!({"retry": {"enabled": false}, "shellCommandPrefix": format!("unset {GATEWAY_KEY_ENV}")});
     std::fs::write(dir.join("settings.json"), serde_json::to_vec_pretty(&settings_json).ok()?).ok()?;
     crate::isolation::chown(&dir.join("settings.json"));

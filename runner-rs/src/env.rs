@@ -110,6 +110,8 @@ pub struct Vault {
     pub values: Vec<String>,
     pub names: BTreeSet<String>,
     pub files: Vec<PathBuf>,
+    /// The turn's relay to the Tico AI Gateway (gateway_relay.rs), stopped with the vault.
+    pub relay: Option<crate::gateway_relay::Relay>,
 }
 
 impl Vault {

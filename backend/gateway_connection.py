@@ -292,17 +292,20 @@ def ran_tico(config, body):
     return is_tico(config.get("model"))
 
 
-def run_credentials_for(c, vault, settings, who):
-    """`run_credentials` for the bot run `who` (a bot identity with its attempt), by what its claim handed it out on."""
-    bot = H.actor_id(who.actor)
-    config = handed(c, who.attempt_id)
-    if not wanted(config):
+def run_credentials_for(c, vault, settings, who, attempt_id):
+    """`run_credentials` for attempt `attempt_id`, by what its claim handed it out on, to the runner `who` that holds it.
+    Only a runner is handed the key: its turn reaches the Gateway through the runner's relay with a token for that turn
+    alone (runner-rs/src/gateway_relay.rs), because the turn's own commands can read whatever the turn's processes hold."""
+    row = c.execute("SELECT bot FROM attempts WHERE id=?", (attempt_id,)).fetchone()
+    config = handed(c, attempt_id)
+    if not row or not wanted(config):
         return []
     fallback = config.get("fallback") if isinstance(config.get("fallback"), dict) else {}
     items = run_credentials(c, vault, settings, config.get("model") if is_tico(config.get("model"))
                             else fallback.get("model"))
     if items:
-        H.event(c, who.actor, "gateway.key_sent", PROVIDER, {"bot": bot, "attempt": who.attempt_id or None})
+        H.event(c, who.actor, "gateway.key_sent", PROVIDER,
+                {"bot": row["bot"], "attempt": attempt_id, "runner": who.runner_id})
     return items
 
 

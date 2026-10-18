@@ -395,6 +395,12 @@ def put_bot_on(api, bot, model):
                   (json.dumps({**config, "runtime": "pi", "harness": "pi", "model": model}), bot))
 
 
+def handed_to(api, machine, attempt, expected=200):
+    """What the computer running `attempt` is handed for the Gateway, by env name."""
+    got = get(api, f"runner-gateway-credentials?attempt={attempt['id']}", machine["token"], expected=expected)
+    return {r["env"]: r for r in got["credentials"]} if expected == 200 else got
+
+
 def test_only_a_run_on_a_tico_model_is_handed_the_key(api, monkeypatch):
     setup(api, monkeypatch)
     with fake_gateway() as fake:
@@ -408,17 +414,51 @@ def test_only_a_run_on_a_tico_model_is_handed_the_key(api, monkeypatch):
         ready(api, machine, ["ops", "finance"])
         post(api, "chat/ops", {"text": "Use only the synthetic fixture"})
         attempt = claim(api, machine, "ops")
-        assert attempt["credential_vault"] is True and attempt["config"]["model"] == "tico-mid-1.0"
-        handed = {r["env"]: r for r in get(api, "credential-runtime", attempt["token"])["credentials"]}
+        assert attempt["gateway"] is True and attempt["config"]["model"] == "tico-mid-1.0"
+        handed = handed_to(api, machine, attempt)
         assert handed["TICOAI_GATEWAY_KEY"]["value"] == KEY
         assert handed["TICOAI_GATEWAY_URL"]["value"] == fake.url
         post(api, "chat/finance", {"text": "Use only the synthetic fixture"})
         other = claim(api, machine, "finance")
-        assert other["credential_vault"] is False
-        assert get(api, "credential-runtime", other["token"])["credentials"] == []
+        assert other["gateway"] is False and other["credential_vault"] is False
+        assert handed_to(api, machine, other) == {}
         # Clearing the key takes it from the next fetch; nothing about it is in an event.
         delete(api, "providers/gateway")
+        assert handed_to(api, machine, attempt) == {}
+        assert KEY not in everything(api)
+
+
+@pytest.mark.parametrize("on", ["pi_on_tico", "claude_with_a_tico_fallback"])
+def test_the_key_goes_to_the_runner_alone_never_to_the_run(api, monkeypatch, on):
+    """The run's own token (HUB_TOKEN, readable by every command the run starts) never gets the Gateway's key, whether
+    its own model or only its fallback is a Tico model: only the computer running it does, while it runs, with the
+    computer's own token."""
+    setup(api, monkeypatch)
+    with fake_gateway() as fake:
+        fake.active(KEY, 0.1)
+        save(api, fake)
+        put_bot_on(api, "ops", "tico-mid-1.0")
+        if on == "claude_with_a_tico_fallback":
+            with api.app.state.store.transaction() as c:
+                config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='ops'").fetchone()[0])
+                c.execute("UPDATE bot_config SET config_json=? WHERE bot='ops'", (json.dumps({
+                    **config, "runtime": "claude", "harness": "claude", "model": "opus-5-5",
+                    "fallback": {"harness": "pi", "model": "tico-mid-1.0"}}),))
+        machine, stranger = runner(api), runner(api, label="Other Mac")
+        assign(api, machine, "ops")
+        ready(api, machine, ["ops"])
+        post(api, "chat/ops", {"text": "Use only the synthetic fixture"})
+        attempt = claim(api, machine, "ops")
+        assert attempt["gateway"] is True and attempt["config"]["harness"] == on.split("_")[0]
+        assert attempt["credential_vault"] is False                # nothing granted, so the run fetches nothing
         assert get(api, "credential-runtime", attempt["token"])["credentials"] == []
+        handed_to(api, stranger, attempt, expected=403)            # a computer not running it
+        handed_to(api, {"token": attempt["token"]}, attempt, expected=403)   # the run itself
+        handed_to(api, {"token": "ana-test"}, attempt, expected=403)         # a person
+        handed_to(api, machine, {"id": "no-such-attempt"}, expected=403)
+        assert handed_to(api, machine, attempt)["TICOAI_GATEWAY_KEY"]["value"] == KEY
+        finish(api, machine, attempt, "Tico AI Gateway: no Tico route for this request (no_route)")
+        handed_to(api, machine, attempt, expected=409)             # not once it has ended
         assert KEY not in everything(api)
 
 
@@ -463,7 +503,8 @@ def test_the_key_follows_what_the_run_was_handed_not_a_later_setting(api, monkey
     else:
         monkeypatch.setattr(check_models, "of", lambda c, task_id, bot: {
             "runtime": "pi", "model": "tico-mid-1.0", "harness": "pi"})
-    handed = {r["env"]: r for r in get(api, "credential-runtime", attempt["token"])["credentials"]}
+    assert attempt["gateway"] is started_on_tico
+    handed = handed_to(api, machine, attempt)
     assert ("TICOAI_GATEWAY_KEY" in handed) is started_on_tico, (change, list(handed))
     # Its outcome is read the same way: a refusal by code only for a run that was on a Tico model.
     finish(api, machine, attempt, "Tico AI Gateway: no Tico route for this request (no_route)")

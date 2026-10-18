@@ -1404,8 +1404,10 @@ class Execution:
                             # (its person's email when it declares none), then the people below them.
                             "mailboxes": routines.token_mailboxes(c, row["bot"], people) if inbox else [], "next_run": carried, "notes": notes, "job_id": row["id"], "bot": row["bot"], "lane": lane,
                             "credential_vault": c.execute("SELECT 1 FROM credential_grants WHERE subject=? AND revoked IS NULL LIMIT 1",
-                                                          ("bot:" + row["bot"],)).fetchone() is not None
-                                                or gateway_connection.wanted(config),
+                                                          ("bot:" + row["bot"],)).fetchone() is not None,
+                            # A run on a Tico model reaches the Gateway through its runner, which alone is handed the key
+                            # (runner-gateway-credentials; runner-rs/src/gateway_relay.rs).
+                            "gateway": gateway_connection.wanted(config),
                             "generation": row["generation"], "lease_until": until,
                             "lease_seconds": self.store.settings.lease_seconds, "token": token,
                             "message": msg, "conversation": conv, "task": task,

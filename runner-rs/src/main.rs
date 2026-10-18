@@ -23,6 +23,7 @@ mod fallback;
 mod flight;
 mod follow;
 mod fetchrepo;
+mod gateway_relay;
 mod gitrun;
 #[cfg(test)]
 mod gittests;

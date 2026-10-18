@@ -5,7 +5,7 @@ import pytest
 
 from backend.store import H
 from backend.tests.test_api import api, assign, claim, get, post, ready, runner  # noqa: F401
-from backend.tests.test_gateway_connection import KEY, fake_gateway, finish, put_bot_on, save, setup
+from backend.tests.test_gateway_connection import KEY, fake_gateway, finish, handed_to, put_bot_on, save, setup
 
 
 def set_fallback(api, bot, fallback):
@@ -51,10 +51,10 @@ def test_the_key_follows_the_claims_fallback_and_check(api, monkeypatch, change)
         with api.app.state.store.transaction() as c:                         # the check is handed to another bot
             c.execute("UPDATE tasks SET owner='bot:finance' WHERE id=?", (task_id,))
             assert check_models.of(c, task_id, "ops") is None
-    handed = {r["env"]: r for r in get(api, "credential-runtime", attempt["token"])["credentials"]}
+    handed = handed_to(api, machine, attempt)
     assert ("TICOAI_GATEWAY_KEY" in handed) is on_tico, (change, list(handed))
     finish(api, machine, attempt, "Tico AI Gateway: no Tico route for this request (no_route)")
-    # Ordinary identity validation still applies: a finished run's token gets nothing, and nothing is left behind.
-    get(api, "credential-runtime", attempt["token"], expected=409)
+    # A finished run's computer gets nothing, and nothing is left behind.
+    handed_to(api, machine, attempt, expected=409)
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM registry_metadata WHERE key LIKE 'gateway-attempt:%'").fetchone()[0] == 0
