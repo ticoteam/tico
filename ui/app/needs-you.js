@@ -223,9 +223,12 @@ function approvalsHTML() {
 // its reason and suggestion, Accept or Skip, and Accept all. Accept is the person's own change, refused as by hand,
 // and names the task version the row showed; Accept all names the rows on screen, so a row added since is not applied.
 const staleCards = () => (S.v2?.needs || []).filter(it => it.kind === 'stale');
+// The card keeps its key while its rows change: `data-patch-sig` says what it shows, so the Tasks page's redraw
+// (tasksPatchNode) takes an answered row out and a new one in, and leaves the card open or shut as the person left it.
+const staleSig = v => esc(JSON.stringify(v));
 function staleCardRow(r) {
   const accept = r.action ? `<button type="button" class="ghost" data-stale="${esc(r.id)}" data-stale-decision="accept">Accept</button>` : '';
-  return `<li class="stale-row" data-stale-row="${esc(r.id)}" data-stale-version="${esc(String(r.version ?? ''))}"${r.action ? ' data-stale-action' : ''}>
+  return `<li class="stale-row" data-patch-key="stale-row:${esc(r.id)}" data-patch-sig="${staleSig([r.task, r.title, r.reason, r.suggest, r.action, r.version])}" data-stale-row="${esc(r.id)}" data-stale-version="${esc(String(r.version ?? ''))}"${r.action ? ' data-stale-action' : ''}>
     <div class="stale-what"><a href="#/task/${encodeURIComponent(r.task)}">${esc(plainActors(r.title || ''))}</a>
       <div class="muted">${esc(r.reason)}. Suggest: ${esc(r.suggest)}.</div></div>
     <div class="row">${accept}<button type="button" class="ghost" data-stale="${esc(r.id)}" data-stale-decision="skip">Skip</button></div>
@@ -233,7 +236,8 @@ function staleCardRow(r) {
 }
 function staleCardHTML(it) {
   const all = (it.rows || []).some(r => r.action);
-  return `<details class="req v2" data-patch-key="stale:${esc(it.id)}" data-stale-card open>
+  const sig = [it.title, it.created, (it.rows || []).map(r => [r.id, r.task, r.title, r.reason, r.suggest, r.action, r.version])];
+  return `<details class="req v2" data-patch-key="stale:${esc(it.id)}" data-patch-sig="${staleSig(sig)}" data-stale-card open>
     <summary>
       ${personCircle('Tico', 24)}
       <span class="req-text"><span class="req-from">Tico:</span> ${esc(it.title)}</span>
@@ -253,8 +257,11 @@ function staleCardsHTML() {
   return `<section class="tl-group" data-group="stale"><header class="tl-ghead"><span class="tl-gname">Stale tickets</span><span class="tl-gcount tnum">${cards.reduce((n, it) => n + (it.rows || []).length, 0)}</span></header>
     <div class="tl-rows" role="list" aria-label="Stale tickets">${cards.map(staleCardHTML).join('')}</div></section>`;
 }
+// After the answer the card is drawn again from the new list. A button still on screen (a refused row, Accept all
+// with rows left) is ready again, and when the answered row took the focus with it, focus moves to the row now in its place.
 async function staleDecide(button, path, body) {
-  const label = button.textContent;
+  const label = button.textContent, card = button.closest('[data-stale-card]')?.dataset.patchKey || '';
+  const at = [...(button.closest('[data-stale-card]')?.querySelectorAll('[data-stale-row]') || [])].indexOf(button.closest('[data-stale-row]'));
   button.disabled = true; button.textContent = '…';
   try {
     const out = await post(path, body);
@@ -263,7 +270,15 @@ async function staleDecide(button, path, body) {
     else toast(out.accepted ? `Accepted ${out.accepted.length}` : out.outcome === 'skipped' ? 'Skipped' : 'Accepted');
     await v2Refresh(); await refresh(true);
     if (TASKS_ST && isTasksRoute(S.route)) tasksRender(TASKS_ST);
-  } catch (e) { toast(e.message, true); button.disabled = false; button.textContent = label; }
+  } catch (e) { toast(e.message, true); }
+  finally {
+    if (button.isConnected) { button.disabled = false; button.textContent = label; }
+    else if (card && (!document.activeElement || document.activeElement === document.body)) {
+      const host = document.querySelector(`[data-stale-card][data-patch-key="${CSS.escape(card)}"]`);
+      const rows = host?.open ? host.querySelectorAll('[data-stale-row]') : [];
+      (rows[Math.min(Math.max(at, 0), rows.length - 1)]?.querySelector('[data-stale]') || host?.querySelector('summary'))?.focus({preventScroll: true});
+    }
+  }
 }
 // A question a bot asked the person outside any task: no task row carries it, so Needs you lists it on its own,
 // answered in place. `data-patch-key` keeps an opened row (and a half-written answer) through the list's redraws.
