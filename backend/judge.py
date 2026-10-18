@@ -23,6 +23,9 @@ server-side caller (this route, listening, learnings, live meetings, the Slack g
 off. Each of them gets its model from `server_engine`, so Jev's one short try and the fallback are the same for all. The caps per role are settings
 (`TICO_DECISIONS_DAILY_CALLS_OWNER`, `_HUMAN`, `_BOT`); the Slack gateway's routing counts against the
 sender's, and the market ask (`market.ask` events) has its own count under the same caps.
+
+`GET /api/v2/decisions/readout` reads the audit back per question set: calls, cost, Jev or fallback, answer spread
+and the month's spend against the cap (backend/decide_readout.py).
 """
 
 import json
@@ -317,6 +320,18 @@ def install_judge(app, store, auth):
                 "daily_calls": daily_cap(settings, who.role), "used_today": used,
                 "monthly_usd": float(settings.decisions_monthly_usd or 0), "spent_this_month_usd": round(spent, 4),
                 "max_questions": J.MAX_QUESTIONS, "max_state_chars": J.MAX_STATE_CHARS}
+
+    @app.get("/api/v2/judge/readout")
+    def readout(request: Request, days: int = 7):
+        """The Decide readout over the last `days` (backend/decide_readout.py): the same readers as the config above,
+        since it names no caller, no state and no free-text label."""
+        from .decide_readout import MAX_DAYS, readout as build
+        who = request.state.identity
+        auth.domain(who)
+        if not 1 <= days <= MAX_DAYS:
+            raise Problem("invalid", f"days is 1 to {MAX_DAYS}", 422)
+        with store.read() as c:
+            return build(c, settings, days)
 
     @app.post("/api/v2/judge")
     def ask(request: Request, body: Ask):

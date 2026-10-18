@@ -21,6 +21,11 @@ All notable changes to Tico are recorded here. The format follows
   only: features still go to product, which triages them. Decide off, an error, no answer within 12 seconds, an answer
   under its threshold or the monthly spend cap all leave the idea with product exactly as before. Each call is in the
   decisions audit (`idea-triage@1`).
+- **Decide readout**: `hub decision readout` (the `hub_decision_readout` tool, `GET /api/v2/decisions/readout`) lists,
+  per question set, the last 7 days' calls, cost, how many Jev answered and how many fell back or failed, and the
+  spread of answers, plus the month's spend against the cap, with a plain-words `text` ready to pass on. Built from
+  the decisions audit by code, no model. It names only the shipped question sets and their own options: any other
+  label, a bot or an open roadmap item a caller added is counted, never named.
 - Decide has a **spend cap for the team: $50 a month** by default (`TICO_DECISIONS_MONTHLY_USD`). Each decision
   call's cost is kept in its audit row; at the cap every caller carries on as if Decide were off (the Slack gateway
   routes to the assistant, mail triage and listening wait, a nightly learning run that reaches it sends nothing and
