@@ -37,6 +37,8 @@ services:
       TICO_RUNNER_URL:
       TICO_COMPOSE_PROJECT: ${COMPOSE_PROJECT_NAME:-tico}
       TICO_SERVER_NETWORK: ${TICO_SERVER_NETWORK:-${COMPOSE_PROJECT_NAME:-tico}_default}
+      # A Tico our team runs for a company (own or invited); unset is self-hosted (backend/config.py).
+      TICO_HOSTED:
       TICO_ENVIRONMENT_ID:
       TICO_AUTH_PROXY:
       TICO_OIDC_ISSUER:
@@ -149,6 +151,8 @@ services:
       TICO_RUNNER_URL:
       TICO_COMPOSE_PROJECT: ${COMPOSE_PROJECT_NAME:-tico}
       TICO_SERVER_NETWORK: ${TICO_SERVER_NETWORK:-${COMPOSE_PROJECT_NAME:-tico}_default}
+      # A Tico our team runs for a company (own or invited); unset is self-hosted (backend/config.py).
+      TICO_HOSTED:
       # Sign-in settings: the gateway loads the same settings as the server and refuses to start when the
       # selected proxy (oidc, cloudflare) is missing its own.
       TICO_AUTH_PROXY:
