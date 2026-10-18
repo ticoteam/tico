@@ -50,6 +50,8 @@ All notable changes to Tico are recorded here. The format follows
   answered (`Tico AI Gateway`, `TypeSafe`, or the team's provider) and its model, and the Slack gateway routes the
   same way. A Tico Decide call counts toward the monthly spend cap at the Gateway's price ($0.06 per 1M input tokens,
   output free).
+- Market is no longer marked Beta: its sidebar item, page title and pages carry no **Beta** pill, and Help no longer
+  lists it under **Beta features**.
 
 ### Fixed
 - Editing or deleting a task comment no longer holds the database write lock while it reads every stored retry
