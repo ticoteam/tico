@@ -13,12 +13,6 @@ All notable changes to Tico are recorded here. The format follows
   If it does, the bot's session is cleared the same way Clear does, and the chat shows a quiet **Topic changed** line
   above your message. A chat with an active goal, a running turn or fewer than 3 turns is never checked, and a slow or
   failed check (over 1.5 s) sends the message in the same session with no line.
-- **Stale ticket review** (Settings > Team; off by default, an owner or an admin turns it on): once an hour Tico
-  looks for open tasks that seem finished or forgotten, such as a merged pull request, a done parent or a quiet week,
-  and suggests what to do. Private tasks are never looked at. A bot gets one "Stale check" comment; a person gets one
-  **Stale tickets** card in Needs you with **Accept**, **Skip** and **Accept all**. Nothing changes unless the owner
-  accepts. While it is on, **Still wanted?** questions stop.
-  ([Tasks](docs/tasks.md#stale-ticket-review))
 
 ### Fixed
 - **Clear** on a bot's chat now really starts the bot over. Before, it only trimmed the history Tico sends, and on
@@ -30,6 +24,16 @@ All notable changes to Tico are recorded here. The format follows
   other chat keeps its own history. Without a clear the bot resumes its thread as before. After the upgrade, a thread
   that may have been cleared or reset before its first turn on the new runner starts over once. A runner or Hub from
   before this keeps today's behaviour ([sessions](docs/sessions.md)).
+
+## [0.3.61] - 2026-10-18
+
+### Added
+- **Stale ticket review** (Settings > Team; off by default, an owner or an admin turns it on): once an hour Tico
+  looks for open tasks that seem finished or forgotten, such as a merged pull request, a done parent or a quiet week,
+  and suggests what to do. Private tasks are never looked at. A bot gets one "Stale check" comment; a person gets one
+  **Stale tickets** card in Needs you with **Accept**, **Skip** and **Accept all**. Nothing changes unless the owner
+  accepts. While it is on, **Still wanted?** questions stop.
+  ([Tasks](docs/tasks.md#stale-ticket-review))
 
 ### Changed
 - Market is no longer marked Beta: its sidebar item, page title and pages carry no **Beta** pill, and Help no longer
@@ -3488,7 +3492,8 @@ First public release.
 - Hosting: local only on a Mac, or self-hosted, including a reference AWS stack under `infra/ec2/`
   with Litestream backups.
 
-[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.60...HEAD
+[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.61...HEAD
+[0.3.61]: https://github.com/ticoteam/tico/compare/v0.3.60...v0.3.61
 [0.3.60]: https://github.com/ticoteam/tico/compare/v0.3.59...v0.3.60
 [0.3.59]: https://github.com/ticoteam/tico/compare/v0.3.58...v0.3.59
 [0.3.58]: https://github.com/ticoteam/tico/compare/v0.3.57...v0.3.58
