@@ -2362,16 +2362,17 @@ def computer_summary(row):
             "warnings": warnings, "errors": errors, "recent_errors": len(readiness.get("recent_errors") or [])}
 
 
-def _bounded(value, cap):
+def _bounded(value, cap, text=COMPUTER_TEXT):
     """Cut long text, long lists and long maps of records inside one section item, and say how much was cut."""
     if isinstance(value, str):
-        return value if len(value) <= COMPUTER_TEXT else value[:COMPUTER_TEXT] + "… (cut)"
+        return value if len(value) <= text else value[:text] + "… (cut)"
     if isinstance(value, list):
-        return [_bounded(v, cap) for v in value[:cap]] + ([f"… {len(value) - cap} more"] if len(value) > cap else [])
+        cut = [f"… {len(value) - cap} more"] if len(value) > cap else []
+        return [_bounded(v, cap, text) for v in value[:cap]] + cut
     if isinstance(value, dict):
         keys = list(value)
         many = len(keys) > cap and all(isinstance(v, dict) for v in value.values())
-        out = {k: _bounded(value[k], cap) for k in (keys[:cap] if many else keys)}
+        out = {k: _bounded(value[k], cap, text) for k in (keys[:cap] if many else keys)}
         return {**out, "…": f"{len(keys) - cap} more"} if many else out
     return value
 
@@ -2388,41 +2389,54 @@ def _computer_section(row, name):
     return None
 
 
-def _page(items, name, offset, cap):
-    """One page of a section's items, and where the next one starts (None on the last page)."""
-    page = [_bounded(v, cap) for v in items[offset:offset + cap]]
-    return (page if name in ("repositories", "recent_errors") else dict(page),
-            offset + cap if offset + cap < len(items) else None)
+def _page(items, name, offset, cap, text):
+    """One page of a section's items, each cut to size (a map's records by name), and where the next page starts
+    (None on the last page)."""
+    chosen = items[offset:offset + cap]
+    page = ([_bounded(v, cap, text) for v in chosen] if name in ("repositories", "recent_errors")
+            else {k: _bounded(v, cap, text) for k, v in chosen})
+    return page, offset + cap if offset + cap < len(items) else None
 
 
 def computer_detail(row, section=None, offset=0):
     """One computer in full, every large section capped at COMPUTER_PAGE items and long text cut, with a note on each
     cut saying how to read the rest; with `section`, one page of that section from `offset`. A row still over
-    COMPUTER_DETAIL_CHARS is paged smaller."""
+    COMPUTER_DETAIL_CHARS is paged smaller and cut shorter; one that cannot fit at all names the sections and how to
+    read them instead."""
     more = lambda name, at: f"hub_computer_list computer={row.get('id')} section={name} offset={at}"  # noqa: E731
+    fits = lambda result: len(json.dumps(result, default=str)) <= COMPUTER_DETAIL_CHARS  # noqa: E731
     offset = max(0, int(offset or 0))
-    for cap in (COMPUTER_PAGE, 10, 5, 2, 1):
+    for cap, text in ((COMPUTER_PAGE, COMPUTER_TEXT), (10, COMPUTER_TEXT), (5, 200), (2, 100), (1, 50)):
         if section:
             items = _computer_section(row, section) or []
-            page, after = _page(items, section, offset, cap)
+            page, after = _page(items, section, offset, cap, text)
             result = {"id": row.get("id"), "label": row.get("label"), "section": section, "offset": offset,
                       "total": len(items), "items": page, **({"more": more(section, after)} if after else {})}
         else:
             readiness = row.get("readiness") if isinstance(row.get("readiness"), dict) else {}
-            result = {k: v if k == "bots" else _bounded(v, cap) for k, v in row.items() if k != "readiness"}
-            result["readiness"] = {k: _bounded(v, cap) for k, v in readiness.items() if k not in COMPUTER_SECTIONS}
+            result = {k: _bounded(v, 1000 if k == "bots" else cap, text) for k, v in row.items() if k != "readiness"}
+            result["readiness"] = {k: _bounded(v, cap, text) for k, v in readiness.items() if k not in COMPUTER_SECTIONS}
             result["truncated"] = {}
             for name in COMPUTER_SECTIONS:
                 items = _computer_section(row, name)
                 if items is None:
                     continue
-                page, after = _page(items, name, 0, cap)
+                page, after = _page(items, name, 0, cap, text)
                 (result if name == "repositories" else result["readiness"])[name] = page
                 if after:
                     result["truncated"][name] = {"shown": len(page), "total": len(items), "more": more(name, after)}
-        if len(json.dumps(result, default=str)) <= COMPUTER_DETAIL_CHARS:
-            break
-    return result
+        if fits(result):
+            return result
+    keep = {k: _bounded(row.get(k), 1, 50) for k in ("id", "label", "online", "last_seen", "release", "version")}
+    if section:
+        items = _computer_section(row, section) or []
+        return {**keep, "section": section, "offset": offset, "total": len(items), "items": [],
+                "too_large": f"Item {offset + 1} is too large to show here; Settings > Computers shows it",
+                **({"more": more(section, offset + 1)} if offset + 1 < len(items) else {})}
+    sections = {name: _computer_section(row, name) for name in COMPUTER_SECTIONS}
+    return {**keep, "too_large": "This computer's detail is too large to show at once; read it a section at a time",
+            "truncated": {name: {"shown": 0, "total": len(items), "more": more(name, 0)}
+                          for name, items in sections.items() if items}}
 
 
 @tool("hub_computer_list", "The computers a bot may go on, as the person who asked you, one short row each: id, label, "

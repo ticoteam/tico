@@ -278,7 +278,7 @@ SUMMARY_FIELDS = {"id", "label", "online", "last_seen", "operator", "release", "
                   "readiness", "warnings", "errors"}
 
 
-def heavy_heartbeat(api, r, bots, n, release="0.3.56", update=None):
+def heavy_heartbeat(api, r, bots, n, release="0.3.56", update=None, huge=""):
     """What a busy computer reports: runtime catalogs, every bot's readiness with instruction warnings, a long error
     history and its repositories (synthetic, at the sizes the models allow)."""
     models = ["model-" + str(m) for m in range(30)]
@@ -295,7 +295,8 @@ def heavy_heartbeat(api, r, bots, n, release="0.3.56", update=None):
                              "repository": f"/Users/acme/tico/{bot}", "repository_present": True,
                              "repository_revision": "f" * 40, "configuration_valid": True,
                              "problems": [] if i or n % 3 else ["The repository is not on this computer yet"],
-                             "warnings": ["AGENT.md is 41,000 characters; a run reads it every turn " + "x" * 150] * 3}
+                             "warnings": ["AGENT.md is 41,000 characters; a run reads it every turn " + "x" * 150] * 3
+                             if bot != huge else ["z" * 50_000]}
                        for i, bot in enumerate(bots)},
               "recent_errors": [f"2026-10-18T07:{m:02d}:00Z ERROR runner: turn {m} failed " + "y" * 230 for m in range(50)]}
     repositories = [{"full_name": f"acme/repo-{k}", "state": "cloned", "last_fetch": "2026-10-18T07:00:00Z",
@@ -322,7 +323,7 @@ def eleven_computers(api):
             assign(api, r, bot)
         heavy_heartbeat(api, r, mine, n, release="0.3.50" if n == 1 else "0.3.56",
                         update={"state": "failed", "error": "download refused"} if n == 2 else
-                        {"state": "updating", "target": "0.3.56"} if n == 3 else None)
+                        {"state": "updating", "target": "0.3.56"} if n == 3 else None, huge="bot-13")
         computers.append(r)
     return computers
 
@@ -338,7 +339,7 @@ def test_the_computer_list_is_a_short_summary_and_one_computer_reads_in_capped_p
     assert all(SUMMARY_FIELDS <= set(row) for row in rows.values())
     assert [rows[f"Mac {n:02d}"]["update"] for n in range(4)] == ["current", "update_available", "failed", "updating"]
     assert rows["Mac 00"]["readiness"] == "not_ready" and rows["Mac 00"]["errors"] == 1
-    assert rows["Mac 01"]["readiness"] == "warnings" and rows["Mac 01"]["warnings"] == 9
+    assert rows["Mac 01"]["readiness"] == "warnings" and rows["Mac 01"]["warnings"] == 9 and rows["Mac 04"]["warnings"] == 7
     assert rows["Mac 01"]["signed_in"] == ["claude", "codex"] and rows["Mac 01"]["recent_errors"] == 50
     assert "repositories" not in rows["Mac 01"] and "AGENT.md" not in json.dumps(listing)
 
@@ -347,12 +348,22 @@ def test_the_computer_list_is_a_short_summary_and_one_computer_reads_in_capped_p
     assert len(detail["repositories"]) == hubtools.COMPUTER_PAGE and len(detail["readiness"]["bots"]) == 3
     assert detail["readiness"]["recent_errors"][0].startswith("2026-10-18T07:49")          # newest first
     assert detail["readiness"]["bots"]["bot-12"]["warnings"][0].startswith("AGENT.md is 41,000")
+    assert detail["readiness"]["bots"]["bot-13"]["warnings"][0].endswith("… (cut)")           # one 50,000-character warning
+    assert detail["readiness"]["runtimes"]["claude"]["models"][-1] == "… 10 more"               # catalogs inside a record
+    err, bots = call(api, "hub_computer_list", {"computer": detail["id"], "section": "bots"})
+    assert not err and len(json.dumps(bots)) <= hubtools.COMPUTER_DETAIL_CHARS and set(bots["items"]) == {
+        "bot-12", "bot-13", "bot-14"} and bots["items"]["bot-13"]["warnings"][0].endswith("… (cut)")
     cut = detail["truncated"]
     assert set(cut) == {"repositories", "recent_errors"} and cut["repositories"]["total"] == 30
     err, rest = call(api, "hub_computer_list", {"computer": detail["id"], "section": "repositories", "offset": 20})
     assert not err and [r["full_name"] for r in rest["items"]] == [f"acme/repo-{k}" for k in range(20, 30)]
     assert "more" not in rest and rest["total"] == 30
     assert "hub_computer_list" in cut["recent_errors"]["more"]
+    # A record no page size or cut can fit names how to read it instead of going over the ceiling.
+    row = {"id": "c1", "label": "Odd", "readiness": {"bots": {"odd": {f"k{k}": k for k in range(20_000)}}}}
+    for read in (hubtools.computer_detail(row), hubtools.computer_detail(row, "bots")):
+        assert read["too_large"] and len(json.dumps(read)) <= hubtools.COMPUTER_DETAIL_CHARS
+    assert hubtools.computer_detail(row)["truncated"]["bots"]["more"].endswith("section=bots offset=0")
 
 
 def test_a_member_reads_neither_a_computer_nor_a_bot_they_cannot_see_in_the_summary_or_the_detail(api):
