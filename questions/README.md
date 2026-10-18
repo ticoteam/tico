@@ -1,6 +1,6 @@
 # Decision questions
 
-One file per decision the company makes with the decision model (the Tico AI Gateway's Tico Decide 1.0 by default)
+One file per decision the company makes with the decision model (optionally TypeSafe's Jev, System One)
 (`skills/decisions/SKILL.md`). The decision model takes a JSON state and typed
 questions (`noul` for yes/no, `choice`, `score`, the same format as OpenRouter's Decisions API) and
 answers each with a calibrated probability; it writes no prose. The primitive is

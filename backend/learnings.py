@@ -28,7 +28,7 @@ from clients import judge as J
 from . import models as M
 from . import task_privacy as privacy
 from .harnesses import is_external
-from .judge import over_spend_cap, primary_engine, server_engine
+from .judge import jev, over_spend_cap, server_engine
 from .statuses import PARKED_SQL
 from .store import H, Problem
 from .updates import ZONE
@@ -266,10 +266,9 @@ def collect(c, settings, now, team):
 
 # ----------------------------------------------------------------------------- route
 def engine_for(store, c):
-    """The server's decision model (backend/judge.py `server_engine`): the Tico AI Gateway, then an own TypeSafe key,
-    each in one short try, with the company's own provider behind them; None when there is none, or the month's
-    decision spend is at its cap."""
-    return server_engine(store, c, primary_engine(store.settings))
+    """The server's decision model (backend/judge.py `server_engine`): Jev in one short try with the company's
+    own provider behind it; None when there is neither, or the month's decision spend is at its cap."""
+    return server_engine(store, c, jev(store.settings))
 
 
 class Tally:

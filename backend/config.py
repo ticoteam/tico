@@ -29,12 +29,12 @@ def _release_origin():
 LOOPBACK = ("127.0.0.1", "localhost", "::1")
 
 
-def _secret(env, arn_env, path):
-    """A key from `env`, else the AWS secret named in `arn_env`, else the file at `path`; "" when none holds one."""
-    value = os.environ.get(env, "").strip()
+def _typesafe_key():
+    """The optional TypeSafe (Jev) decisions key behind `POST /api/v2/decisions` and the Slack gateway."""
+    value = os.environ.get("TYPESAFE_API_KEY", "").strip()
     if value:
         return value
-    secret = os.environ.get(arn_env, "").strip()
+    secret = os.environ.get("TICO_TYPESAFE_SECRET_ARN", "").strip()
     if secret:
         try:
             import boto3
@@ -43,29 +43,9 @@ def _secret(env, arn_env, path):
         except Exception:
             return ""
     try:
-        return Path(path).read_text().strip()
+        return Path("/etc/tico/typesafe-api-key").read_text().strip()
     except OSError:
         return ""
-
-
-def _typesafe_key():
-    """A customer's own TypeSafe (Jev) decisions key: optional, never set by default, asked after the Tico AI Gateway."""
-    return _secret("TYPESAFE_API_KEY", "TICO_TYPESAFE_SECRET_ARN", "/etc/tico/typesafe-api-key")
-
-
-def _gateway_key():
-    """The Tico AI Gateway key behind `POST /api/v2/decisions` and the Slack gateway: the default decision provider."""
-    return _secret("TICO_GATEWAY_KEY", "TICO_GATEWAY_SECRET_ARN", "/etc/tico/gateway-key")
-
-
-def _gateway_url():
-    """Where the Gateway's decisions endpoint is: `TICO_GATEWAY_URL`, else Tico HQ's (`TICO_HQ_URL`)."""
-    url = os.environ.get("TICO_GATEWAY_URL", "").strip()
-    if url:
-        return url
-    from clients.judge import GATEWAY_PATH
-    hq = os.environ.get("TICO_HQ_URL", "").strip().rstrip("/") or "https://updates.tico.team"  # census.DEFAULT_HQ
-    return hq + GATEWAY_PATH
 
 
 def _emails(value):
@@ -73,7 +53,7 @@ def _emails(value):
 
 
 def slack_credentials(settings=None):
-    """The Slack gateway's tokens, read the way `_secret` reads the decisions keys and nowhere else.
+    """The Slack gateway's tokens, read the way `_typesafe_key` reads the decisions key and nowhere else.
 
     Only `python -m backend.slack_gateway` calls this: the API process never holds a Slack token.
     Precedence: `SLACK_BOT_TOKEN`/`SLACK_APP_TOKEN` in the environment, then the JSON secret at
@@ -210,10 +190,6 @@ class Settings:
     posthog_host: str = field(default="", repr=False)
     sentry_dsn: str = field(default="", repr=False)
     sentry_server_dsn: str = field(default="", repr=False)
-    # Decide's providers, in order (backend/judge.py): the Tico AI Gateway with its key, then a customer's own TypeSafe
-    # key (never set by default), then the team's own LLM; with none of them Decide is off.
-    gateway_key: str = field(default="", repr=False)
-    gateway_url: str = ""
     typesafe_api_key: str = field(default="", repr=False)
     # How many calls to the server's own models one actor may make in a UTC day, by role: decisions
     # (`judge.call`, Slack routing included) and, counted apart, market asks (`market.ask`). backend/judge.py.
@@ -435,8 +411,6 @@ class Settings:
             posthog_host=quiet(os.environ.get("TICO_POSTHOG_HOST", "")),
             sentry_dsn=quiet(os.environ.get("TICO_SENTRY_DSN", "")),
             sentry_server_dsn=quiet(os.environ.get("TICO_SENTRY_SERVER_DSN", "")),
-            gateway_key="" if rehearsal else _gateway_key(),
-            gateway_url=_gateway_url(),
             typesafe_api_key="" if rehearsal else _typesafe_key(),
             decisions_daily_calls_owner=max(0, int(os.environ.get("TICO_DECISIONS_DAILY_CALLS_OWNER", "") or 20_000)),
             decisions_daily_calls_human=max(0, int(os.environ.get("TICO_DECISIONS_DAILY_CALLS_HUMAN", "") or 5_000)),

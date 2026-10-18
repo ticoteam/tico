@@ -75,8 +75,8 @@ def chosen_grant(value):
 def run(args, who=None):
     if who:
         raise APIError("identity", "Remote identity comes from authentication; --human is unavailable")
-    # A query may run for 20 s on the server before it is stopped, a decision's providers 25 s; leave room for that.
-    client = Client(os.environ["HUB_API_URL"], os.environ.get("HUB_TOKEN", ""), timeout=30 if args.cmd in ("sql", "decision") else 120 if args.cmd == "listening" or args.fn == "market import" else 15)
+    # A query may run for 20 s on the server before it is stopped; leave room for that.
+    client = Client(os.environ["HUB_API_URL"], os.environ.get("HUB_TOKEN", ""), timeout=30 if args.cmd == "sql" else 120 if args.cmd == "listening" or args.fn == "market import" else 15)
     fn = args.fn
     if fn == "team icon":
         with Path(args.file).open("rb") as source:

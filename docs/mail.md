@@ -631,11 +631,9 @@ caps (20 sends a day, one outside recipient, no outside Cc, no attachments), no 
 `questions/mail-triage.json`, so the decision questions are in the bot's own repository wherever it runs.
 
 **The decision model.** `mail.sh inbox --decisions` and the spam and injection check (`hub classify`) ask the
-server's decision model. It asks the Tico AI Gateway first, with the gateway key in the server's `.env`
-(`TICO_GATEWAY_KEY`); then your own `TYPESAFE_API_KEY`, if you set one (it is optional); then one of the team's model keys
-(`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `XAI_API_KEY`, `OPENROUTER_API_KEY`). `compose.yaml` hands them
-to the server. A provider that fails hands the question to the next, and without any of them the check answers
-"unchecked" and the bot works the mail as it always did.
+server's decision model. Put `TYPESAFE_API_KEY` in the server's `.env`, or one of the team's model keys
+(`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `XAI_API_KEY`, `OPENROUTER_API_KEY`); `compose.yaml` hands them to
+the server, and without any of them the check answers "unchecked" and the bot works the mail as it always did.
 
 ## Unsubscribe before model triage
 
