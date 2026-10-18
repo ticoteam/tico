@@ -331,7 +331,8 @@ def limited(api, bot=SECRET_BOT, config=None):
     (False, ("anthropic", "openai"), None, True),                      # the owner turned automatic fallback off
     (True, ("anthropic",), None, True),                                # no row on another runtime
     (True, ("openai",), {"runtime": "codex"}, True),                   # the only row is the bot's own runtime...
-    (True, ("anthropic", "openai"), {"fallback": {"off": True}}, True),   # ...or the bot turned fallback off
+    (True, ("anthropic", "openai"), {"fallback": {"off": True}}, True),   # ...or the bot turned fallback off...
+    (True, ("anthropic", "openai"), {"fallback": {"harness": "codex"}}, True),   # ...or names one with no model
 ])
 def test_limited_no_fallback_counts_the_company_fallback(environment, auto, enabled, config, raised):
     api, _ = built(environment)
@@ -426,3 +427,36 @@ def test_a_default_login_limit_older_than_a_day_is_not_a_finding(environment):
     for ago in (25 * 60, 24 * 60 + 30):
         turn(api, runner["runner_id"], {**QUOTA, "check": "codex"}, ago)
     assert login_findings(api) == {}
+
+
+def test_turns_that_failed_without_a_limit_are_not_a_quota_finding(environment):
+    api, runner = built(environment)
+    for ago in (30, 20):
+        turn(api, runner["runner_id"], {"outcome": "failed", "check": "codex", "profile_used": None}, ago)
+    assert login_findings(api) == {}
+    turn(api, runner["runner_id"], {**QUOTA, "check": "codex"}, 10)       # one limit among them is still one
+    assert login_findings(api) == {}
+
+
+def test_a_bots_own_key_is_not_the_computers_login(environment):
+    api, runner = built(environment)
+    rid = runner["runner_id"]
+    company(api, ("google", "openrouter", "openai"))
+    with api.app.state.store.transaction() as c:
+        H.sync_registry(c, {b: {"name": b, "status": "active"} for b in ("gem-a", "gem-b", "pi-a")}, None)
+        for bot, harness in (("gem-a", "gemini-cli"), ("gem-b", "gemini-cli"), ("pi-a", "pi")):
+            c.execute("INSERT OR REPLACE INTO bot_config(bot,config_json,operator) VALUES(?,?,'ana')",
+                      (bot, json.dumps({"harness": harness})))
+    # The Gemini CLI and pi sign in with each bot's own key (`api_keys = "bot"`): gem-a out of quota on its key, as a
+    # turn of its own, a check and a fallback, says nothing about the computer, and gem-b working there clears nothing.
+    turn(api, rid, {**QUOTA}, 50, bot="gem-a")
+    turn(api, rid, {**QUOTA, "usage": {"runtime": "gemini", "harness": "gemini-cli"}}, 45, bot="gem-a")
+    turn(api, rid, {**QUOTA, "check": "gemini"}, 40, bot="gem-a")
+    turn(api, rid, {**QUOTA, "fallback": "pi"}, 35, bot="pi-a")
+    turn(api, rid, {**QUOTA, "fallback": "pi"}, 30, bot="pi-a")
+    assert login_findings(api) == {}
+    # Codex is signed in by the computer: two limits there are its finding, and gem-b's completed turn leaves it.
+    turn(api, rid, {**QUOTA, "check": "codex"}, 25, bot="gem-a")
+    turn(api, rid, {**QUOTA, "fallback": "codex"}, 20, bot="pi-a")
+    turn(api, rid, {"outcome": "completed", "profile_used": None}, 10, bot="gem-b")
+    assert list(login_findings(api)) == [f"default_login_limited:{rid}:codex"]

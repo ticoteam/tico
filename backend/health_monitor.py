@@ -215,39 +215,49 @@ def _runner_checks(c, settings):
     return out
 
 
-def _login_runtime(c, settings, bot, result, runtimes):
-    """The runtime whose login ended a finished turn: the fallback's when the turn hopped (its usage names only the
-    segments that spent tokens, so a hop refused at once is not in it), the check model's on a check, else the bot's."""
-    from .harnesses import runtime_of
+def _login(c, settings, bot, result, configs):
+    """(runtime, harness) of the login that ended a finished turn: the fallback's when the turn hopped (its usage names
+    only the segments that spent tokens, so a hop refused at once is not in it), the check model's on a check, else
+    what its usage or the bot's config names. An empty harness means the runtime's own CLI."""
+    from .harnesses import resolve_harness, runtime_of
     if result.get("fallback"):
-        return runtime_of(str(result["fallback"]))
+        return runtime_of(str(result["fallback"])), str(result["fallback"])
     if result.get("check"):
-        return str(result["check"])
+        return str(result["check"]), ""
     usage = result.get("usage") if isinstance(result.get("usage"), dict) else {}
     if usage.get("runtime"):
-        return str(usage["runtime"])
-    if bot not in runtimes:
+        return str(usage["runtime"]), str(usage.get("harness") or "")
+    if bot not in configs:
         row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
-        runtimes[bot] = providers.bot_choice(c, settings, json.loads(row[0] or "{}") if row else {})[0]
-    return runtimes[bot]
+        configs[bot] = json.loads(row[0] or "{}") if row else {}
+    return providers.bot_choice(c, settings, configs[bot])[0], resolve_harness(configs[bot])
+
+
+def _computer_login(runtime, harness):
+    """Whether a turn with no subscription profile ran on the computer's own sign-in. A harness whose key each bot
+    holds (`api_keys = "bot"`) signs in with the bot's own Credential instead: one bot's quota is not the computer's."""
+    from .harnesses import harness_caps
+    return bool(runtime) and harness_caps(harness, runtime).get("api_keys") != "bot"
 
 
 def out_of_quota_logins(c, settings=None):
-    """Each computer's default login (a turn with no subscription profile) whose latest turns in the last day, on one
-    runtime, stopped on a usage limit LOGIN_LIMITS times or more with no turn there completing since, and whose
-    provider gave no reset time or one still ahead. A turn that failed for another reason says nothing either way.
-    [{runner_id, runtime, limits, since, resets_at}]"""
+    """Each computer's default login (a turn with no subscription profile, on a harness the computer signs in rather
+    than each bot's own key) whose latest turns in the last day, on one runtime, stopped on a usage limit LOGIN_LIMITS
+    times or more with no turn there completing since, and whose provider gave no reset time or one still ahead. A turn
+    that failed for another reason says nothing either way. [{runner_id, runtime, limits, since, resets_at}]"""
     now = H.now()
-    seen, runtimes, out = {}, {}, []
+    seen, configs, out = {}, {}, []
     for r in c.execute("SELECT bot,runner_id,state,finished,result_json FROM attempts WHERE finished>? "
                        "AND state IN ('completed','failed','interrupted') AND result_json IS NOT NULL "
                        "AND json_extract(result_json,'$.profile_used') IS NULL ORDER BY finished DESC",
                        (H.shift(now, hours=-24),)):
         result = json.loads(r["result_json"])
-        key = (r["runner_id"], _login_runtime(c, settings, r["bot"], result, runtimes))
-        login = seen.setdefault(key, {"runner_id": key[0], "runtime": key[1], "limits": 0, "since": "",
-                                      "resets_at": None, "open": True})
-        if not login["open"] or not key[1]:
+        runtime, harness = _login(c, settings, r["bot"], result, configs)
+        if not _computer_login(runtime, harness):
+            continue
+        login = seen.setdefault((r["runner_id"], runtime), {"runner_id": r["runner_id"], "runtime": runtime,
+                                                            "limits": 0, "since": "", "resets_at": None, "open": True})
+        if not login["open"]:
             continue
         if result.get("limited") and r["state"] != "completed":
             if not login["limits"]:
