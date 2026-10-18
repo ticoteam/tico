@@ -202,3 +202,121 @@ def test_a_check_handed_to_another_bot_mid_turn_still_completes_as_the_check(api
         assert H.status(c, "ops")["state"] != "limited" and not cooling_off(c, "ops")
         assert "grok usage limit on a check" in H.status(c, "ops")["focus"]
         assert not c.execute("SELECT 1 FROM registry_metadata WHERE key LIKE 'check-attempt:%'").fetchone()
+
+
+def all_ready(api, machine):
+    post(api, "runners/heartbeat", {
+        "version": "test", "platform": "test", "capabilities": ["task_lanes_v2", "session_roots_v1"],
+        "readiness": {"schema_version": 1, "runtimes": {r: {"installed": True, "authenticated": "ready"}
+                                                         for r in ("claude", "codex", "grok")},
+                      "bots": {"ops": {"runtime": "claude", "ready": True}}}}, token=machine["token"])
+
+
+def codex_check(api):
+    """ops (Claude) with a review on Codex under its own task, the company also on Grok, the check claimed."""
+    machine, parent, turn = parent_turn(api)
+    company(api, "anthropic", "openai", "xai")
+    all_ready(api, machine)
+    sub = post(api, "tasks", {"owner": "ops", "title": "Review PR 702 on Codex", "body": "Read it.",
+                              "check_model": "codex", "check_role": "review",
+                              "relations": [{"task": parent["id"], "kind": "parent"}]}, turn["token"])
+    finish(api, machine, turn)
+    check = claim(api, machine)
+    assert check["task"]["id"] == sub["id"] and check["config"]["runtime"] == "codex"
+    return machine, sub, check
+
+
+def out_of_quota(api, machine, turn, resets_at=None):
+    """The Oct 17-18 case: the computer's default Codex login refuses the turn at once."""
+    post(api, f"attempts/{turn['id']}/started", {"thread_id": "codex-" + turn["id"][:8]}, machine["token"])
+    post(api, f"attempts/{turn['id']}/complete", {"outcome": "failed", "last_seq": 0, "limited": True, "text": "",
+                                                  "limit_resets_at": resets_at}, machine["token"])
+
+
+def later(api, monkeypatch, machine, at):
+    monkeypatch.setattr(H, "now", lambda: at)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runners SET last_seen=NULL,awake_since=NULL")   # the computer stayed in touch meanwhile
+    all_ready(api, machine)
+
+
+def test_a_check_moves_to_its_next_model_once_its_default_login_is_out_of_quota(api, monkeypatch):
+    machine, sub, check = codex_check(api)
+    start = H.now()
+    out_of_quota(api, machine, check)
+    assert claim(api, machine) is None, "one limit is not yet out of quota: the check waits as before"
+    later(api, monkeypatch, machine, H.shift(start, minutes=31))
+    again = claim(api, machine)
+    assert again["task"]["id"] == sub["id"] and again["config"]["runtime"] == "codex"
+    out_of_quota(api, machine, again)
+    # Two limits in a row with no reset time: Health marks the login out of quota, so the next turn runs on Grok
+    # at once instead of retrying Codex in half an hour.
+    moved = claim(api, machine)
+    assert moved["task"]["id"] == sub["id"]
+    assert (moved["config"]["runtime"], moved["config"]["model"]) == ("grok", "grok-4.6")
+    assert moved["task"]["check"] == {"runtime": "grok", "model": "grok-4.6", "role": "review"}
+    assert moved["config"]["fallback"] == {"off": True} and moved["config"]["subtask_session"] == "own"
+    with api.app.state.store.read() as c:
+        assert "the check moved to grok" in H.status(c, "ops")["focus"]
+        assert c.execute("SELECT count(*) FROM events WHERE action='attempt.check_moved'").fetchone()[0] == 1
+        event = c.execute("SELECT old,new,note FROM task_events WHERE task_id=? AND field='check_model' "
+                          "AND old IS NOT NULL", (sub["id"],)).fetchone()
+        assert (event["old"], event["new"]) == ("codex:gpt-6-luna", "grok:grok-4.6"), dict(event)
+    shown = get(api, "tasks/" + sub["id"])
+    assert shown["check_model"]["model"] == "gpt-6-luna", "the check asked for stays on record"
+
+
+def test_with_no_next_check_model_the_check_keeps_its_hold(api, monkeypatch):
+    machine, sub, check = codex_check(api)
+    company(api, "anthropic", "openai")                     # Claude wrote the work; Codex is the only other model
+    start = H.now()
+    out_of_quota(api, machine, check)
+    later(api, monkeypatch, machine, H.shift(start, minutes=31))
+    again = claim(api, machine)
+    out_of_quota(api, machine, again)
+    assert claim(api, machine) is None, "nowhere to move: the check waits on Codex as before"
+    with api.app.state.store.read() as c:
+        assert "codex usage limit on a check" in H.status(c, "ops")["focus"]
+    later(api, monkeypatch, machine, H.shift(start, minutes=63))
+    assert claim(api, machine)["config"]["runtime"] == "codex"
+
+
+@pytest.mark.parametrize("recovery", ["completed", "reset"])
+def test_a_moved_check_goes_back_to_its_first_model_once_that_login_works(api, monkeypatch, recovery):
+    from backend.tests.test_health_monitor import turn as finished_turn
+    machine, sub, check = codex_check(api)
+    start = H.now()
+    reset = H.shift(start, hours=3) if recovery == "reset" else None
+    # An earlier turn on that login already stopped on its limit (another bot's check, say).
+    finished_turn(api, machine["runner_id"], {"outcome": "failed", "limited": True, "limit_resets_at": reset,
+                                              "profile_used": None, "check": "codex"}, 5)
+    out_of_quota(api, machine, check, reset)
+    moved = claim(api, machine)
+    assert moved["config"]["runtime"] == "grok"
+    out_of_quota(api, machine, moved)                       # Grok is busy too: the check waits on Grok, not Codex
+    assert claim(api, machine) is None
+    if recovery == "completed":
+        # A turn on the computer's default Codex login completes: it works again.
+        finished_turn(api, machine["runner_id"], {"outcome": "completed", "profile_used": None,
+                                                  "usage": {"runtime": "codex"}}, -1, bot="coo")
+        later(api, monkeypatch, machine, H.shift(start, minutes=31))
+    else:
+        later(api, monkeypatch, machine, H.shift(reset, seconds=2))
+    back = claim(api, machine)
+    assert back["task"]["id"] == sub["id"]
+    assert (back["config"]["runtime"], back["config"]["model"]) == ("codex", "gpt-6-luna")
+    assert back["task"]["check"]["runtime"] == "codex"
+
+
+def test_a_check_on_a_subscription_profile_does_not_move(api, monkeypatch):
+    from backend.tests.test_health_monitor import turn as finished_turn
+    machine, sub, check = codex_check(api)
+    finished_turn(api, machine["runner_id"], {"outcome": "failed", "limited": True, "limit_resets_at": None,
+                                              "profile_used": None, "check": "codex"}, 10)
+    finished_turn(api, machine["runner_id"], {"outcome": "failed", "limited": True, "limit_resets_at": None,
+                                              "profile_used": None, "check": "codex"}, 5)
+    # The computer's default Codex login is out of quota, but this turn ran on a subscription profile's own login.
+    post(api, f"attempts/{check['id']}/started", {"thread_id": "codex-profile"}, machine["token"])
+    post(api, f"attempts/{check['id']}/complete", {"outcome": "failed", "last_seq": 0, "limited": True, "text": "",
+                                                   "profile_used": "work"}, machine["token"])
+    assert claim(api, machine) is None, "a profile's limit holds the check as before"

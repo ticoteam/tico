@@ -1951,6 +1951,18 @@ class Execution:
             # A worktree this turn was waiting for is not wanted any more (backend/worktree_waits.py).
             from .worktree_waits import cancel_for_attempt
             cancel_for_attempt(c, aid, f"Stopped by {name}")
+        elif limited and check and not body.profile_used and (moved := check_models.move_on(
+                c, self.store.settings, row["bot"], check_task, check, row["runner_id"])):
+            # The computer's default login for the check's model is already out of quota (Health's
+            # default_login_limited): retrying it every half hour only fails again, so the check's next turn runs
+            # on its next check model at once, and goes back to its first when that login works again.
+            hit = H.now()
+            settle_status(c, row["bot"], "idle", f"{runtime} is out of quota on this computer's default login; the "
+                          f"check moved to {moved['runtime']} ({moved['model']}) at {hit[11:16]}",
+                          began=row["started"] or row["created"])
+            H.event(c, H.KEEPER, "attempt.check_moved", aid,
+                    {"bot": row["bot"], "job_id": row["job_id"], "task_id": check_task, "runtime": runtime,
+                     "to_runtime": moved["runtime"], "to_model": moved["model"]})
         elif limited and check:
             # A check has no fallback, and its model's limit is not the bot's: hold the check alone, and leave
             # the bot's own work, its status and its Health finding to its own provider.

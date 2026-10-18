@@ -467,6 +467,12 @@ is refused, never run on an author's own. `--role` is `review` or `check` (the d
   session. Closing it is a cancellation and wakes nobody.
 - A usage limit on the check's model holds that subtask alone until the provider's reset: the bot's other work
   goes on, on its own model, and the bot is not marked limited.
+- When the limit is on the computer's default login (no subscription) and Health already marks that login out of
+  quota (`default_login_limited`, docs/health-monitor.md), the check does not wait: its next turn runs at once on
+  the next check model in the company's order (Settings > AI providers) that is not from a provider whose work it
+  checks, not on another login out of quota there, and that the bot's computer can run. The task's history and the
+  bot's status say where it moved. It goes back to the model it asked for once a turn on that login completes or
+  the provider's reset passes. With no next model, it keeps waiting as above.
 - The check model belongs to the bot that filed it while it owns the subtask. Handed to another bot, the subtask
   is that bot's ordinary task, on its own model. Subtasks under a check continue the check's session, never the
   parent's.
