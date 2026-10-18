@@ -240,10 +240,11 @@ impl State {
         })
     }
 
-    /// Whether the Hub cleared this conversation's session since this session last ran for it: its epoch moved
-    /// (backend/execution.py `session_epoch`). Then the session's threads are dropped, in the same transaction that
-    /// records the new epoch, so a turn that dies before its new thread is saved still starts fresh on the retry.
-    /// A conversation seen for the first time at epoch 0 was never cleared and resumes. Seen first at a later epoch,
+    /// Whether the Hub cleared this session since it last ran here: its epoch moved (backend/execution.py
+    /// `bot_session_epoch` for the bot's shared thread, recorded for conversation "", and `session_epoch` for any
+    /// other). Then the session's threads are dropped, in the same transaction that records the new epoch, so a turn
+    /// that dies before its new thread is saved still starts fresh on the retry.
+    /// A session seen for the first time at epoch 0 was never cleared and resumes. Seen first at a later epoch,
     /// a Clear may have come after its saved thread (one clicked after an upgrade, before the first turn on this
     /// runner): that thread is dropped once, a cold turn rather than a lost Clear.
     pub fn epoch_moved(&self, bot: &str, conversation_id: &str, session: &str, epoch: i64) -> Result<bool, String> {
@@ -298,30 +299,34 @@ mod tests {
     }
 
     #[test]
-    fn a_cleared_conversation_drops_its_sessions_threads_and_an_unchanged_one_keeps_them() {
+    fn a_moved_epoch_drops_its_sessions_threads_and_an_unchanged_one_keeps_them() {
         let state = State::open(&temp()).unwrap();
         state.save_session("ops", "bot", "claude", "t-old").unwrap();
         state.save_session("ops", "bot", "codex", "x-old").unwrap();
         state.save_session("ops", "task:t1", "claude", "t-task").unwrap();
         // First sight at epoch 0 (never cleared) is only recorded; the same epoch again resumes.
-        assert!(!state.epoch_moved("ops", "c-ben", "bot", 0).unwrap());
-        assert!(!state.epoch_moved("ops", "c-ben", "bot", 0).unwrap());
+        assert!(!state.epoch_moved("ops", "", "bot", 0).unwrap());
+        assert!(!state.epoch_moved("ops", "", "bot", 0).unwrap());
         assert_eq!(state.session("ops", "bot", "claude").unwrap().as_deref(), Some("t-old"));
-        // Ana clears her chat: the bot thread goes, for every runtime; the task's thread stays.
-        assert!(!state.epoch_moved("ops", "c-ana", "bot", 0).unwrap());
-        assert!(state.epoch_moved("ops", "c-ana", "bot", 1).unwrap());
+        // A Clear in any direct chat moves the bot's epoch: the shared thread goes, for every runtime; the task's stays.
+        assert!(state.epoch_moved("ops", "", "bot", 1).unwrap());
         assert_eq!(state.session("ops", "bot", "claude").unwrap(), None);
         assert_eq!(state.session("ops", "bot", "codex").unwrap(), None);
         assert_eq!(state.session("ops", "task:t1", "claude").unwrap().as_deref(), Some("t-task"));
-        // The new thread then resumes: for Ana at her new epoch and for Ben, whose epoch never moved.
+        // The new thread then resumes at that epoch.
         state.save_session("ops", "bot", "claude", "t-new").unwrap();
-        assert!(!state.epoch_moved("ops", "c-ana", "bot", 1).unwrap());
-        assert!(!state.epoch_moved("ops", "c-ben", "bot", 0).unwrap());
+        assert!(!state.epoch_moved("ops", "", "bot", 1).unwrap());
+        assert_eq!(state.session("ops", "bot", "claude").unwrap().as_deref(), Some("t-new"));
+        // A conversation's own thread moves with that conversation's epoch, apart from the bot's.
+        state.save_session("ops", "conversation:c-ana", "claude", "c-old").unwrap();
+        assert!(!state.epoch_moved("ops", "c-ana", "conversation:c-ana", 0).unwrap());
+        assert!(state.epoch_moved("ops", "c-ana", "conversation:c-ana", 1).unwrap());
+        assert_eq!(state.session("ops", "conversation:c-ana", "claude").unwrap(), None);
         assert_eq!(state.session("ops", "bot", "claude").unwrap().as_deref(), Some("t-new"));
         // Another bot's sessions are its own.
         state.save_session("cfo", "bot", "claude", "f-old").unwrap();
-        assert!(!state.epoch_moved("cfo", "c-ana", "bot", 0).unwrap());
-        assert!(state.epoch_moved("ops", "c-ana", "bot", 2).unwrap());
+        assert!(!state.epoch_moved("cfo", "", "bot", 0).unwrap());
+        assert!(state.epoch_moved("ops", "", "bot", 2).unwrap());
         assert_eq!(state.session("cfo", "bot", "claude").unwrap().as_deref(), Some("f-old"));
     }
 
@@ -330,11 +335,11 @@ mod tests {
         let state = State::open(&temp()).unwrap();
         // Upgraded: a thread saved by an older runner, no epoch row, and the chat cleared since (epoch 1).
         state.save_session("ops", "bot", "claude", "t-before-upgrade").unwrap();
-        assert!(state.epoch_moved("ops", "c-ana", "bot", 1).unwrap());
+        assert!(state.epoch_moved("ops", "", "bot", 1).unwrap());
         assert_eq!(state.session("ops", "bot", "claude").unwrap(), None);
         // Once: the new thread resumes at that epoch.
         state.save_session("ops", "bot", "claude", "t-new").unwrap();
-        assert!(!state.epoch_moved("ops", "c-ana", "bot", 1).unwrap());
+        assert!(!state.epoch_moved("ops", "", "bot", 1).unwrap());
         assert_eq!(state.session("ops", "bot", "claude").unwrap().as_deref(), Some("t-new"));
         // First sight at a later epoch with no saved thread has nothing to drop.
         assert!(!state.epoch_moved("ops", "c-cara", "task:t9", 3).unwrap());

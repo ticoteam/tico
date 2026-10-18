@@ -1,6 +1,7 @@
 """A person's Clear on a direct chat (POST /api/employees/{bot}/session/clear): the conversation's session epoch moves,
-every later turn carries it as `session_epoch` (the runner starts a new provider thread when it changes,
-runner-rs/src/execute.rs), and its history starts after the clear."""
+every later turn carries it as `session_epoch`, and its history starts after the clear. The bot's epoch moves too
+(`bot_session_epoch`): its direct chats share one provider thread, which the runner starts anew when it changes
+(runner-rs/src/execute.rs)."""
 from backend.tests.test_api import api, assign, claim, headers, post, ready, runner  # noqa: F401  (api is a fixture)
 
 
@@ -19,7 +20,7 @@ def test_a_clear_moves_the_epoch_every_later_turn_carries_and_starts_history_aft
     ready(api, machine, ["ops"])
     conversation = post(api, "chat/ops", {"text": "Remember the Acme code word"})["conversation_id"]
     first = claim(api, machine)
-    assert first["session_epoch"] == 0, "a conversation never cleared is at epoch 0"
+    assert first["session_epoch"] == first["bot_session_epoch"] == 0, "a conversation never cleared is at epoch 0"
     finish(api, machine, first)
     with api.app.state.store.read() as c:
         assert c.execute("SELECT 1 FROM bot_sessions WHERE bot='ops'").fetchone()
@@ -36,7 +37,7 @@ def test_a_clear_moves_the_epoch_every_later_turn_carries_and_starts_history_aft
         assert c.execute("SELECT epoch FROM session_epochs WHERE conversation_id=?", (conversation,)).fetchone()[0] == 1
     post(api, "chat/ops", {"text": "Start over: a new question"})
     third = claim(api, machine)
-    assert third["conversation"]["id"] == conversation and third["session_epoch"] == 1
+    assert third["conversation"]["id"] == conversation and third["session_epoch"] == third["bot_session_epoch"] == 1
     assert [m["body"] for m in third["history"]] == ["Start over: a new question"]
     finish(api, machine, third)
 
@@ -61,7 +62,10 @@ def test_a_clear_waits_for_the_running_turn_and_touches_only_the_persons_own_cha
     assert clear(api, token="ben-test").json()["conversation_id"] == ben
     post(api, "chat/ops", {"text": "Ana again"})
     again = claim(api, machine)
-    assert again["conversation"]["id"] == ana and again["session_epoch"] == 0, "Ben's clear leaves Ana's chat alone"
+    assert again["conversation"]["id"] == ana and again["session_epoch"] == 0, "Ben's clear leaves Ana's history alone"
+    assert "A long job" in [m["body"] for m in again["history"]]
+    # Ana's turns continue the bot thread Ben's chat shared, so they carry his clear: the runner starts it anew.
+    assert again["bot_session_epoch"] == 1
 
 
 def test_a_clear_with_no_chat_yet_is_a_no_op(api):

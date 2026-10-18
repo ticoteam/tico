@@ -272,20 +272,27 @@ def started_threads(api, computer):
                                         (computer.registration["runner_id"],))]
 
 
+def from_an_old_hub(monkeypatch):
+    """Claims as a Hub from before `session_epoch` and `bot_session_epoch` hands them out. Returns the real claim."""
+    from backend.execution import Execution
+    claim = Execution.claim
+
+    def without_epochs(self, *args, **kwargs):
+        out = claim(self, *args, **kwargs)
+        if isinstance(out, dict) and isinstance(out.get("attempt"), dict):
+            out["attempt"].pop("session_epoch", None)
+            out["attempt"].pop("bot_session_epoch", None)
+        return out
+    monkeypatch.setattr(Execution, "claim", without_epochs)
+    return claim
+
+
 @pytest.mark.parametrize("old_hub", [False, True])
 def test_a_person_clearing_the_chat_starts_a_new_provider_thread_and_without_one_it_resumes(api, computer, old_hub,
                                                                                             monkeypatch):
     if old_hub:
-        # A Hub from before `session_epoch`: the runner keeps resuming, as before, and nothing breaks.
-        from backend.execution import Execution
-        claim = Execution.claim
-
-        def without_epoch(self, *args, **kwargs):
-            out = claim(self, *args, **kwargs)
-            if isinstance(out, dict) and isinstance(out.get("attempt"), dict):
-                out["attempt"].pop("session_epoch", None)
-            return out
-        monkeypatch.setattr(Execution, "claim", without_epoch)
+        # A Hub from before the epochs: the runner keeps resuming, as before, and nothing breaks.
+        from_an_old_hub(monkeypatch)
     computer.start()
     conversation = None
     for n, text in enumerate(["Remember the Acme code word", "What was it?"], start=1):
@@ -319,15 +326,8 @@ def test_a_person_clearing_the_chat_starts_a_new_provider_thread_and_without_one
 @pytest.mark.parametrize("harness", ["claude", "codex"])
 def test_a_clear_made_after_an_upgrade_before_the_chats_next_turn_still_starts_a_new_thread(api, computer, monkeypatch):
     from backend.execution import Execution
-    claim = Execution.claim
-
-    def without_epoch(self, *args, **kwargs):
-        out = claim(self, *args, **kwargs)
-        if isinstance(out, dict) and isinstance(out.get("attempt"), dict):
-            out["attempt"].pop("session_epoch", None)
-        return out
     # Before the upgrade: a thread saved with no epoch recorded beside it.
-    monkeypatch.setattr(Execution, "claim", without_epoch)
+    claim = from_an_old_hub(monkeypatch)
     computer.start()
     post(api, "chat/ops", {"text": "Remember the Acme code word"})
     until(lambda: len([a for a in computer.attempts() if a["result"]]) == 1, "the first reply")
@@ -345,6 +345,30 @@ def test_a_clear_made_after_an_upgrade_before_the_chats_next_turn_still_starts_a
     else:
         starts = [c for c in computer.calls() if c.get("harness") == "codex" and c.get("method") in ("thread/start", "thread/resume")]
         assert [c["method"] for c in starts] == ["thread/start", "thread/start"]
+
+
+@pytest.mark.parametrize("harness", ["claude", "codex"])
+def test_after_one_persons_clear_another_persons_chat_on_the_shared_thread_starts_a_new_one_too(api, computer):
+    computer.start()
+    done = lambda n: len([a for a in computer.attempts() if a["result"]]) == n  # noqa: E731
+    ana = post(api, "chat/ops", {"text": "Remember the Acme code word"})["conversation_id"]
+    until(lambda: done(1), "Ana's reply")
+    ben = post(api, "chat/ops", {"text": "Ben's question"}, token="ben-test")["conversation_id"]
+    until(lambda: done(2), "Ben's reply")
+    assert computer.api.post("/api/employees/ops/session/clear", json={}, headers=headers()).status_code == 200
+    # Ben's chat runs first after Ana's Clear: the thread they shared is not resumed, and his own history stays.
+    post(api, "chat/ops", {"text": "Ben again"}, token="ben-test")
+    until(lambda: done(3), "Ben's reply after Ana's clear")
+    # Ana's next turn continues that new thread, not a third.
+    post(api, "chat/ops", {"text": "Ana starts over"})
+    until(lambda: done(4), "Ana's reply after her clear")
+    assert [a["result"]["outcome"] for a in computer.attempts()] == ["completed"] * 4
+    first, second, third, fourth = started_threads(api, computer)
+    assert second == first and third and third != first and fourth == third, (first, second, third, fourth)
+    assert ana != ben
+    if computer.harness == "codex":
+        starts = [c for c in computer.calls() if c.get("harness") == "codex" and c.get("method") in ("thread/start", "thread/resume")]
+        assert [c["method"] for c in starts] == ["thread/start", "thread/resume", "thread/start", "thread/resume"]
 
 
 @pytest.mark.parametrize("harness", ["gemini", "antigravity"])
