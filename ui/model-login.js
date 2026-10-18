@@ -5,7 +5,10 @@
    The same module signs a login out (after a confirmation naming the bots that stop), switches it to
    another account (a sign-in on the side: cancelling leaves the old account working), and lets the
    company's shared key sign a signed-out computer login in again. `actionsHTML` draws those buttons for
-   any page that lists a login: Settings > Computers and Manage subscription today. */
+   any page that lists a login: Settings > Computers and Manage subscription today.
+   Clear key / Replace key / Add key (backend/computer_keys.py) are here too, for a login a model key signs in: the key
+   is pasted once, stored in the vault for that computer and shown only by its preview. A key the company shares with
+   every computer first asks "this computer only" or "all of them", listing them (`scopeHTML`, `chosenScope`). */
 'use strict';
 (function () {
   const RUNTIME_NAMES = {codex: 'Codex (ChatGPT)', claude: 'Claude Code'};
@@ -279,13 +282,200 @@
     return signedOut && !profile ? ` <button class="ghost machine-signin" type="button" data-model-shared-key ${data}>Use the shared key</button>` : '';
   }
 
-  window.TicoModelLogin = {open, signOut, useSharedKey, actionsHTML};
+  const KEY_SOURCES = {computer: 'added from Tico', terminal: 'set on the computer', shared: 'the company\'s shared key'};
+  const keyName = runtime => RUNTIME_NAMES[runtime] || (typeof harnessRow === 'function' && harnessRow(runtime)?.name) || runtime;
+  const keyBase = runnerId => `/v2/computers/${encodeURIComponent(runnerId)}`;
+
+  // The "this computer only / all of them" ask for a key the company shares with every computer (`info` is
+  // GET /v2/computers/{id}/keys). `verb` is what happens to it ('clear', 'replace'). Reused by every page that changes
+  // a shared key; `chosenScope` reads the answer back.
+  function scopeHTML(info, verb, here) {
+    if (info.source !== 'shared') return '';
+    const later = verb === 'clear' ? 'clears its copy when it is next online' : 'gets the new key when it is next online';
+    // An older runner cannot clear its copy, online or not (`updated` false), so All of them waits for its update.
+    const stale = verb === 'clear' ? (info.computers || []).filter(c => c.updated === false) : [];
+    const rows = (info.computers || []).map(c => `<li data-scope-computer="${text(c.id)}">${text(c.label)}${stale.includes(c) ? ' <span class="muted">(needs a runner update to clear it from here)</span>' : c.online ? '' : ` <span class="muted">(offline: ${later})</span>`}${c.may ? '' : ' <span class="muted">(not yours to change)</span>'}</li>`).join('');
+    const all = verb === 'replace' && !info.can_replace_all ? ' disabled' : verb === 'clear' && ((info.computers || []).some(c => !c.may) || stale.length) ? ' disabled' : '';
+    const why = !all ? '' : verb === 'clear' && stale.length && !(info.computers || []).some(c => !c.may)
+      ? `<span class="muted"> Update ${text(stale.map(c => c.label).join(', '))} first, or delete the shared key in Credentials.</span>`
+      : `<span class="muted"> Only ${verb === 'replace' ? 'a credential administrator' : 'someone who may change every one of them'} can do this.</span>`;
+    return `<fieldset class="model-key-scope" data-key-scope><legend>This key is shared with ${(info.computers || []).length} computers:</legend>
+      <ul>${rows}</ul>
+      <label><input type="radio" name="key-scope" value="this" checked> This computer only${here ? ` (${text(here)})` : ''}: ${verb === 'clear' ? 'it stops using the shared key; the others keep it' : 'it gets its own key; the others keep the shared one'}</label>
+      <label><input type="radio" name="key-scope" value="all"${all}> All of them: ${verb === 'clear' ? 'every computer listed stops using it' : 'the shared key is replaced for every computer, in Credentials too'}${why}</label></fieldset>`;
+  }
+  const chosenScope = root => root.querySelector('[name=key-scope]:checked')?.value || 'this';
+
+  // A small dialog shell shared by Clear key and Replace key.
+  function keyDialog(title, inner, action, danger) {
+    const dialog = document.createElement('dialog');
+    dialog.className = 'tmodal model-login model-key';
+    dialog.setAttribute('aria-labelledby', 'model-key-title');
+    dialog.innerHTML = `<header><h2 id="model-key-title">${text(title)}</h2>
+        <button class="ghost tmodal-x" type="button" data-close aria-label="Close">✕</button></header>
+      <form class="model-login-body" data-key-form>${inner}</form>
+      <p class="model-login-status" role="status" aria-live="polite" data-status></p>
+      <div class="model-login-actions" data-actions><button class="ghost" type="button" data-close>Cancel</button>
+        <button class="primary${danger ? ' people-danger' : ''}" type="button" data-key-go disabled>${text(action)}</button></div>`;
+    document.body.appendChild(dialog);
+    dialog.addEventListener('close', () => { dialog.closed = true; clearTimeout(dialog.timer); dialog.remove(); });
+    dialog.addEventListener('click', event => {
+      if (event.target === dialog || event.target.closest('[data-close]')) dialog.close();
+    });
+    dialog.showModal();
+    return dialog;
+  }
+
+  // Follow a key job (`clear_key`, `use_key`) on one computer to its end, then redraw.
+  function followKeyJob(dialog, runnerId, runtime, row, done) {
+    const tick = async () => {
+      if (dialog.closed) return;
+      try {
+        row = await get(`${keyBase(runnerId)}/logins/${encodeURIComponent(row.id)}`);
+      } catch (error) { dialog.querySelector('[data-status]').textContent = error.message; }
+      if (active(row.state)) { dialog.timer = setTimeout(tick, POLL_MS); return; }
+      done(row);
+      refreshUntil(runnerId, runtime, '', row.state === 'signed_out' ? 'signed_out' : 'ready', row.updated);
+    };
+    if (active(row.state)) dialog.timer = setTimeout(tick, POLL_MS); else done(row);
+  }
+
+  // Clear key: confirm first, naming the bots that stop (on every computer, for "all of them"); bots and assignments
+  // stay, and the shared key does not sign it back in until someone adds a key or chooses the shared key.
+  async function clearKey({runnerId, runtime, machine}) {
+    const name = keyName(runtime), where = machine || 'the computer';
+    const dialog = keyDialog(`Clear the ${name} key on ${where}?`, '<p data-key-info>Checking which key it uses…</p>', 'Clear key', true);
+    const status = dialog.querySelector('[data-status]'), form = dialog.querySelector('[data-key-form]');
+    const go = dialog.querySelector('[data-key-go]');
+    let info;
+    try { info = await get(`${keyBase(runnerId)}/keys?runtime=${encodeURIComponent(runtime)}`); }
+    catch (error) { status.textContent = error.message; return dialog; }
+    const bots = async computers => {
+      const named = [];
+      for (const c of computers) {
+        const found = await get(`${keyBase(c.id)}/logouts/bots?runtime=${encodeURIComponent(runtime)}`);
+        named.push(...(found.bots || []).map(bot => (bot.name || bot.bot) + (computers.length > 1 ? ` (${c.label})` : '')));
+      }
+      return named;
+    };
+    const say = async () => {
+      go.disabled = true;
+      const scope = chosenScope(form);
+      const computers = scope === 'all' ? (info.computers || []).filter(c => c.may) : [{id: runnerId, label: where}];
+      const said = form.querySelector('[data-key-bots]');
+      said.textContent = 'Checking which bots use it…';
+      try {
+        const named = await bots(computers);
+        said.textContent = named.length
+          ? `${named.length === 1 ? 'This bot stops' : `These ${named.length} bots stop`} until a key is added again: ${named.join(', ')}.`
+          : 'No bot uses this key right now.';
+        go.disabled = false;
+      } catch (error) { said.textContent = `Couldn't check which bots use it (${error.message}), so it can't be cleared yet.`; }
+    };
+    form.innerHTML = `<p>${info.preview ? `Key <code>${text(info.preview)}</code>, ` : ''}${text(KEY_SOURCES[info.source] || 'a key')}.</p>
+      ${scopeHTML(info, 'clear', where)}
+      <p data-key-bots></p>
+      <p class="muted">The key is deleted from the computer. Bots keep this login, so nothing needs reassigning; the company's shared key won't sign it back in by itself. Add a key or choose Use the shared key to bring it back.</p>`;
+    form.addEventListener('change', () => void say());
+    void say();
+    go.addEventListener('click', async () => {
+      if (go.disabled) return;
+      dialog.querySelectorAll('[data-actions] button').forEach(button => { button.disabled = true; });
+      status.textContent = 'Clearing…';
+      try {
+        const out = await post(`${keyBase(runnerId)}/keys/clear`, {runtime, scope: chosenScope(form)});
+        const waiting = out.computers.filter(c => c.waiting).map(c => c.label);
+        const later = waiting.length ? ` ${waiting.join(', ')} ${waiting.length === 1 ? 'is' : 'are'} offline and clear${waiting.length === 1 ? 's its copy' : ' their copies'} when next online.` : '';
+        const here = out.computers.find(c => c.id === runnerId)?.login;
+        const end = row => {
+          status.dataset.state = row.state;
+          status.textContent = (row.state === 'signed_out' ? `Cleared. ${name} on ${where} has no key until one is added.`
+            : row.message || 'The key could not be cleared on the computer.') + later;
+          dialog.querySelector('[data-actions]').innerHTML = '<button class="ghost" type="button" data-close>Close</button>';
+        };
+        if (here) followKeyJob(dialog, runnerId, runtime, here, end); else end({state: 'signed_out'});
+        for (const c of out.computers) if (c.login && c.id !== runnerId) refreshUntil(c.id, runtime, '', 'signed_out', c.login.created);
+      } catch (error) {
+        status.textContent = error.message;
+        dialog.querySelector('[data-actions]').innerHTML = '<button class="ghost" type="button" data-close>Close</button>';
+      }
+    });
+    return dialog;
+  }
+
+  // Replace key, or Add key where none signs it in: the key is pasted once and goes to the vault; the computer checks
+  // it before the old one is deleted, so a key that doesn't work leaves the old one in use.
+  async function replaceKey({runnerId, runtime, machine, adding = false}) {
+    const name = keyName(runtime), where = machine || 'the computer';
+    const dialog = keyDialog(`${adding ? 'Add a' : 'Replace the'} ${name} key on ${where}`, '<p>Checking which key it uses…</p>', adding ? 'Add key' : 'Replace key');
+    const status = dialog.querySelector('[data-status]'), form = dialog.querySelector('[data-key-form]');
+    const go = dialog.querySelector('[data-key-go]');
+    let info;
+    try { info = await get(`${keyBase(runnerId)}/keys?runtime=${encodeURIComponent(runtime)}`); }
+    catch (error) { status.textContent = error.message; return dialog; }
+    const names = info.names || [];
+    form.innerHTML = `${info.preview && !adding ? `<p>Now: key <code>${text(info.preview)}</code>, ${text(KEY_SOURCES[info.source] || '')}.</p>` : ''}
+      ${adding ? '' : scopeHTML(info, 'replace', where)}
+      <label>New key <input name="secret" type="password" autocomplete="off" spellcheck="false" required maxlength="4000" aria-label="New ${text(name)} key"></label>
+      ${names.length > 1 ? `<label>Kind <select name="env">${names.map(n => `<option value="${text(n)}"${n === info.name ? ' selected' : ''}>${text(n)}</option>`).join('')}</select></label>` : ''}
+      <p class="muted">It is kept in Tico's credential vault and never shown again in full. The next turn uses it once the computer has checked it; the old key is then deleted.</p>`;
+    const field = form.querySelector('[name=secret]');
+    field.addEventListener('input', () => { go.disabled = !field.value.trim(); });
+    field.focus();
+    form.addEventListener('submit', event => { event.preventDefault(); go.click(); });
+    go.addEventListener('click', async () => {
+      if (go.disabled || !field.value.trim()) return;
+      const scope = adding ? 'this' : chosenScope(form);
+      const body = {runtime, secret: field.value.trim(), scope, ...(form.querySelector('[name=env]') ? {env: form.querySelector('[name=env]').value} : {})};
+      // The key leaves the page with this request and is not kept in it.
+      field.value = '';
+      dialog.querySelectorAll('[data-actions] button, [data-key-form] input, [data-key-form] select').forEach(el => { el.disabled = true; });
+      status.textContent = scope === 'all' ? 'Replacing the shared key…' : `Checking the new key on ${where}…`;
+      const close = () => { dialog.querySelector('[data-actions]').innerHTML = '<button class="ghost" type="button" data-close>Close</button>'; };
+      try {
+        const out = await post(`${keyBase(runnerId)}/keys`, body);
+        if (scope === 'all') {
+          const later = (out.computers || []).filter(c => !c.online).map(c => c.label);
+          status.textContent = `Replaced. The shared key is now ${out.shared.preview}; every computer it serves uses it from its next check.${later.length ? ` ${later.join(', ')} ${later.length === 1 ? 'gets' : 'get'} it when next online.` : ''}`;
+          close();
+          for (const c of out.computers || []) refreshUntil(c.id, runtime, '', 'ready', new Date().toISOString());
+          return;
+        }
+        followKeyJob(dialog, runnerId, runtime, out, row => {
+          status.dataset.state = row.state;
+          status.textContent = row.state === 'done' ? `${adding ? 'Added' : 'Replaced'}. ${name} on ${where} now uses ${out.key?.preview || 'the new key'}.`
+            : row.state === 'expired' ? 'The computer did not check the key in time; nothing changed.'
+            : (row.message || 'The new key did not work') + (adding ? '' : '. The old key is still in use.');
+          close();
+        });
+      } catch (error) { status.textContent = error.message; close(); }
+    });
+    return dialog;
+  }
+
+  // Replace key / Clear key for a login a key signs in (`key`: its readiness `key`, {name, source}), and Add key where
+  // none does: a key runtime (`api_keys = "computer"`) signed out, cleared or never signed in. Same rights and
+  // conditions as actionsHTML: an admin or the computer's operator (the caller checks), the computer online.
+  function keyActionsHTML({runnerId, runtime, machine = '', key = null, signedIn = false, online = true}) {
+    const caps = typeof harnessCaps === 'function' ? harnessCaps(runtime) : {};
+    if (!online || caps.api_keys !== 'computer') return '';
+    const data = `data-runner="${text(runnerId)}" data-runtime="${text(runtime)}" data-machine="${text(machine)}"`;
+    if (signedIn && key) {
+      return ` <button class="ghost machine-signin" type="button" data-model-key-replace ${data}>Replace key</button>`
+        + ` <button class="ghost machine-signin" type="button" data-model-key-clear ${data}>Clear key</button>`;
+    }
+    return signedIn ? '' : ` <button class="ghost machine-signin" type="button" data-model-key-add ${data}>Add key</button>`;
+  }
+
+  window.TicoModelLogin = {open, signOut, useSharedKey, actionsHTML, keyActionsHTML, clearKey, replaceKey, scopeHTML, chosenScope};
   document.addEventListener('click', event => {
-    const button = event.target.closest('[data-model-login], [data-model-switch], [data-model-sign-out], [data-model-shared-key]');
+    const button = event.target.closest('[data-model-login], [data-model-switch], [data-model-sign-out], [data-model-shared-key], [data-model-key-replace], [data-model-key-clear], [data-model-key-add]');
     if (!button) return;
     event.preventDefault();
     const target = {runnerId: button.dataset.runner, runtime: button.dataset.runtime, machine: button.dataset.machine || '', profile: button.dataset.profile || ''};
-    if (button.hasAttribute('data-model-sign-out')) signOut(target);
+    if (button.hasAttribute('data-model-key-clear')) void clearKey(target);
+    else if (button.hasAttribute('data-model-key-replace') || button.hasAttribute('data-model-key-add')) void replaceKey({...target, adding: button.hasAttribute('data-model-key-add')});
+    else if (button.hasAttribute('data-model-sign-out')) signOut(target);
     else if (button.hasAttribute('data-model-shared-key')) void useSharedKey(target);
     else open({...target, switchAccount: button.hasAttribute('data-model-switch')});
   });

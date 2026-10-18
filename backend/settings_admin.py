@@ -13,6 +13,7 @@ from . import bot_access as BA
 from . import models as M
 from . import placement
 from . import providers
+from . import app_delivery
 from . import rooms
 from . import shared_bots
 from . import update_feeds, wake_presets
@@ -201,7 +202,8 @@ class SettingsAdmin:
                 "update_subscriptions": update_feeds.chosen(_json(config["config_json"], {}) or {}),
                 "update_feeds": update_feeds.status(),
                 "harness": resolve_harness(effective, effective.get("runtime") or row.get("runtime")),
-                "fallback": normalize_fallback(effective.get("fallback"))}
+                "fallback": normalize_fallback(effective.get("fallback")),
+                "app_delivery": app_delivery.view(c, _json(config["config_json"], {}) or {})}
 
     @staticmethod
     def refuse_retired(choice):
@@ -585,6 +587,8 @@ class SettingsAdmin:
                 declared.pop("capture_stream", None)
                 from .stream_capture import forget_bot
                 forget_bot(c, bot)
+        if "app_delivery" in body.model_fields_set:
+            app_delivery.change(c, who, self.auth, bot, body.app_delivery, declared, config["operator"])
         if "update_subscriptions" in body.model_fields_set:
             # Its cursors live beside the definition: delivering an update never rewrites the bot (update_feeds).
             picked = [name for name in update_feeds.CATEGORIES if name in (body.update_subscriptions or [])]

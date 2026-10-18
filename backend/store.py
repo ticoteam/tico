@@ -19,10 +19,14 @@ from .harnesses import EXTERNAL_HARNESSES
 # A person's own spoken Tico turns, spoken decisions and what a live tool did are history,
 # not work: they never queue a job. A live ask does; that is how the text Tico is reached.
 # A bot run by an external agent (a Hermes profile) has no runner to claim a job: the message
-# waits in its inbox until the agent reads it, so no job is queued for it.
+# waits in its inbox until the agent reads it, so no job is queued for it. A synced bot delivered
+# through its platform's desktop app on a computer (backend/app_delivery.py) is the exception while
+# that computer is registered: the computer's runner takes the message as a job.
 EXTERNAL_BOT_SQL = ("EXISTS (SELECT 1 FROM bot_config WHERE bot=substr(NEW.to_actor,5) AND "
                     "json_extract(config_json,'$.harness') IN ("
-                    + ",".join("'" + h + "'" for h in EXTERNAL_HARNESSES) + "))")
+                    + ",".join("'" + h + "'" for h in EXTERNAL_HARNESSES) + ") AND NOT EXISTS ("
+                    "SELECT 1 FROM runners r WHERE r.id=json_extract(config_json,'$.app_delivery.computer') "
+                    "AND r.revoked_at IS NULL))")
 QUEUE_TRIGGER = (
     "CREATE TRIGGER IF NOT EXISTS queue_bot_message AFTER INSERT ON messages "
     "WHEN NEW.to_actor LIKE 'bot:%' AND COALESCE(NEW.from_actor, '') != NEW.to_actor "
@@ -114,7 +118,13 @@ CREATE TABLE IF NOT EXISTS model_logins(
 CREATE INDEX IF NOT EXISTS model_logins_by_runner ON model_logins(runner_id,state);
 CREATE TABLE IF NOT EXISTS model_login_cleared(
  runner_id TEXT NOT NULL REFERENCES runners(id), runtime TEXT NOT NULL, profile TEXT NOT NULL DEFAULT '',
- cleared_at TEXT NOT NULL, cleared_by TEXT NOT NULL, PRIMARY KEY(runner_id,runtime,profile));
+ cleared_at TEXT NOT NULL, cleared_by TEXT NOT NULL, clear_key INTEGER NOT NULL DEFAULT 0,
+ PRIMARY KEY(runner_id,runtime,profile));
+-- A model key stored in the vault for one computer (backend/computer_keys.py): staged until the computer checks it.
+CREATE TABLE IF NOT EXISTS computer_keys(
+ credential_id TEXT PRIMARY KEY REFERENCES credentials(id), runner_id TEXT NOT NULL REFERENCES runners(id),
+ runtime TEXT NOT NULL, state TEXT NOT NULL, login_id TEXT, created TEXT NOT NULL, created_by TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS computer_keys_by_runner ON computer_keys(runner_id,runtime,state);
 CREATE TABLE IF NOT EXISTS runner_harness_actions(
  id TEXT PRIMARY KEY, runner_id TEXT NOT NULL REFERENCES runners(id), harness TEXT NOT NULL,
  action TEXT NOT NULL, state TEXT NOT NULL, message TEXT NOT NULL DEFAULT '',
@@ -1126,6 +1136,8 @@ class Store:
                 # When readiness was last reported (last_seen is any contact): the app waits for a report newer than a
                 # sign-out or switch before it stops looking.
                 H.add_column(c, "runners", "readiness_at", "TEXT")
+                # Clear key: a computer that missed its job (offline) clears its key copy at its next key fetch.
+                H.add_column(c, "model_login_cleared", "clear_key", "INTEGER NOT NULL DEFAULT 0")
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=55").fetchone():
                     H._apply(c, H.MEETING_REVIEW_SCHEMA)
                     c.execute("INSERT INTO cloud_migrations VALUES(55,?)", (H.now(),))
@@ -1236,12 +1248,12 @@ class Store:
                 from .meetings import retire_capture
                 retire_capture(c)
                 retire_health_rows(c)
-                # The queue trigger names the external harnesses it skips. When one is added
-                # the stored trigger is rebuilt; no migration number, so no
-                # collision with another branch's.
+                # Whenever the queue trigger's SQL changes (an external harness added, a rule changed) the
+                # stored trigger is rebuilt; no migration number, so no collision with another branch's.
+                # SQLite keeps the statement as written, less "IF NOT EXISTS".
                 stored = c.execute("SELECT sql FROM sqlite_master WHERE type='trigger' "
                                    "AND name='queue_bot_message'").fetchone()
-                if not stored or any("'" + h + "'" not in stored[0] for h in EXTERNAL_HARNESSES):
+                if not stored or stored[0] != QUEUE_TRIGGER.replace(" IF NOT EXISTS", "", 1):
                     c.execute("DROP TRIGGER IF EXISTS queue_bot_message")
                     c.execute(QUEUE_TRIGGER)
                 if seed_market and not self.settings.test_identities:

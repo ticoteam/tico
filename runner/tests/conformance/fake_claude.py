@@ -8,7 +8,10 @@ usage windows as Claude Code 2.1.301 does (`rate_limit_event` with `unifiedWindo
 streams one delta and then waits, once per $FAKE_LOG, until its parent goes away; SLOW streams one delta and answers
 after $FAKE_SLOW seconds (2), so a steer written meanwhile is read (replayed) and answered after it, in the same
 process, as Claude Code does. RECALL answers with the code word only when the prompt itself holds it ("code word is X"),
-as a model with no other memory of the conversation would."""
+as a model with no other memory of the conversation would. With $FAKE_CLAUDE_LIMIT set, every turn ends at the session
+limit as Claude Code's does (runner/tests/fixtures/claude/session-limit.jsonl): a rejected `rate_limit_event`, the
+synthetic `rate_limit` message and an error `result`, having used no tokens (or some, when $FAKE_LIMIT_SPENDS names
+claude)."""
 import json
 import os
 import re
@@ -68,6 +71,16 @@ def main():
         send({**message, "isReplay": True})
         send({"type": "system", "subtype": "init", "session_id": session, "model": "claude-sonnet-5", "tools": []})
         send({"type": "stream_event", "event": {"type": "message_start", "message": {"id": "msg_1"}}, "parent_tool_use_id": None})
+        if os.environ.get("FAKE_CLAUDE_LIMIT"):
+            limit = "You've hit your session limit · resets 12:40am (UTC)"
+            send({"type": "rate_limit_event", "rate_limit_info": {"status": "rejected", "rateLimitType": "five_hour",
+                                                                  "resetsAt": int(time.time()) + 3600}})
+            send({"type": "assistant", "message": {"id": "msg_2", "model": "<synthetic>", "role": "assistant",
+                  "content": [{"type": "text", "text": limit}]}, "parent_tool_use_id": None, "error": "rate_limit"})
+            send({"type": "result", "subtype": "success", "is_error": True, "result": limit, "session_id": session,
+                  "usage": ({"input_tokens": 7, "output_tokens": 2} if "claude" in os.environ.get("FAKE_LIMIT_SPENDS", "")
+                            else {"input_tokens": 0, "output_tokens": 0})})
+            continue
         marker = os.environ["FAKE_LOG"] + ".hung"
         if "HANG" in text and not os.path.exists(marker):
             open(marker, "w").close()

@@ -75,7 +75,10 @@ def per_bot_view(c, settings, auth, bot, level, access, registry_roster, registr
     row["notes"] = len(H.notes_waiting(c, bot["slug"], limit=500))
     external = agents.presence(c, bot["slug"])
     row["agent"] = external["agent"] if external else None
-    if external:
+    from backend import app_delivery
+    row["app_delivery"] = app_delivery.view(c, declared) if config and external else None
+    row["app_delivery_app"] = app_delivery.HARNESS_APP.get(row.get("harness"))
+    if external and not (row["app_delivery"] or {}).get("active"):
         row["online"] = external["online"]
     return row
 

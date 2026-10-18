@@ -282,3 +282,245 @@ def test_a_task_for_a_synced_bot_is_refused_with_what_to_do_instead(api):
         c.execute("INSERT INTO schedules(id,bot,event_name,title,playbook) VALUES('old','grok-designer','meeting.ready','Notes','x')")
         assert routines.emit(c, "meeting.ready", "m1") == []
 
+
+
+# ----------------------------------------------------------------------------- delivered through the Grok app
+def mac(api, operator="cara", label="Cara's Mac", grok_ready=True, bots=()):
+    """A computer of `operator`'s whose runner reports the Grok app ready (or signed out) and `bots` ready."""
+    from backend.tests.test_api import runner
+    machine = runner(api, operator, label)
+    beat(api, machine, grok_ready, bots)
+    return machine
+
+
+def beat(api, machine, grok_ready=True, bots=()):
+    grok = {"installed": True, "running": True, "signed_in": grok_ready, "background_ok": True, "ready": grok_ready,
+            "state": "ready" if grok_ready else "not_signed_in", "detail": "" if grok_ready else "Grok shows its sign-in"}
+    post(api, "runners/heartbeat", {"version": "test", "platform": "test", "readiness": {
+        "schema_version": 1, "runtimes": {}, "bots": {slug: {"ready": True} for slug in bots},
+        "appdriver": {"trusted": True, "macos": "15.1", "apps": {"grok": grok}}}}, token=machine["token"])
+
+
+def deliver(api, computer, token="cara-test", expected=200, slug="grok-designer"):
+    revision = next(b for b in get(api, "bots", token=token) if b["slug"] == slug)["revision"]
+    value = {"computer": computer, "app": "grok"} if computer else None
+    return api.post(f"/api/v2/bots/{slug}/definition", headers=headers(token),
+                    json={"app_delivery": value, "expected_revision": revision})
+
+
+def jobs(api, slug="grok-designer"):
+    with api.app.state.store.read() as c:
+        return {r["message_id"]: r["state"] for r in c.execute("SELECT message_id,state FROM jobs WHERE bot=?", (slug,))}
+
+
+def inbox(api, token="cara-test"):
+    return [m["text"] for m in post(api, "external/sync", {"provider": "grokbot", "inbox": True, "bots": [
+        designer(id=GROK_ID, grok_id="", messages=[])]}, token=token)["bots"][0]["inbox"]]
+
+
+def test_only_the_bots_person_delivers_it_through_their_own_ready_computer_and_an_admin_may_turn_it_off(api):
+    sync(api, designer(), token="cara-test")
+    signed_out, bens = mac(api, grok_ready=False), mac(api, "ben", "Ben's Mac")
+    refused = deliver(api, signed_out["runner_id"])
+    assert refused.status_code == 422 and "Grok isn't ready on Cara's Mac: Grok shows its sign-in" in refused.text
+    assert deliver(api, bens["runner_id"]).status_code == 422          # signed in to Grok as Ben there, not Cara
+    ready = mac(api)
+    refused = deliver(api, ready["runner_id"], token="ben-test")       # an admin, not the person who synced it
+    assert refused.status_code == 422 and "Only the person who synced this Grok Bot" in refused.text
+    assert deliver(api, ready["runner_id"]).status_code == 200
+    row = next(b for b in get(api, "bots", token="cara-test") if b["slug"] == "grok-designer")
+    assert row["app_delivery"]["computer_label"] == "Cara's Mac" and row["assignment"]["runner_id"] == ready["runner_id"]
+    assert row["app_delivery_app"] == "grok"
+    employee = next(e for e in api.get("/api/employees", headers=headers("cara-test")).json() if e["name"] == "grok-designer")
+    assert employee["app_delivery"]["computer_label"] == "Cara's Mac" and employee["app_delivery_app"] == "grok"
+    assert deliver(api, None, token="ben-test").status_code == 200     # the way back is an admin's too
+    row = next(b for b in get(api, "bots", token="cara-test") if b["slug"] == "grok-designer")
+    assert row["app_delivery"] is None and row["assignment"] is None
+
+
+def test_a_message_goes_to_the_computer_while_the_app_delivers_and_to_the_sync_otherwise_never_both(api):
+    from backend.tests.test_api import claim
+    sync(api, designer(), token="cara-test")
+    before = post(api, "chat/grok-designer", {"text": "Before, for the sync."}, token="cara-test")
+    assert jobs(api) == {}                                             # off: exactly as before
+    computer = mac(api, bots=["grok-designer"])
+    assert deliver(api, computer["runner_id"]).status_code == 200
+    taken = post(api, "chat/grok-designer", {"text": "For the app."}, token="cara-test")
+    waiting = post(api, "chat/grok-designer", {"text": "Also for the app."}, token="cara-test")
+    assert jobs(api) == {taken["id"]: "queued", waiting["id"]: "queued"}
+    assert inbox(api) == ["Before, for the sync."]                     # the computer's messages are not handed over
+    attempt = claim(api, computer)
+    assert attempt["message"]["id"] == taken["id"]
+    assert attempt["config"]["app_delivery"] == {"computer": computer["runner_id"], "app": "grok"}
+    assert attempt["config"]["app_bot"] == {"id": GROK_ID, "name": "Tico Designer"}
+    assert deliver(api, None).status_code == 200                       # off again: what no runner took goes to the sync
+    assert jobs(api) == {taken["id"]: "leased", waiting["id"]: "cancelled"}
+    assert inbox(api) == ["Also for the app."] and inbox(api) == []
+    with api.app.state.store.read() as c:
+        assert not c.execute("SELECT 1 FROM messages WHERE id=? AND delivered_at IS NULL", (before["id"],)).fetchone()
+
+
+def test_what_the_app_shows_is_posted_once_without_echoes_and_a_question_reaches_needs_you(api):
+    from backend.tests.test_api import claim
+    sync(api, designer(messages=[]), token="cara-test")
+    computer = mac(api, bots=["grok-designer"])
+    deliver(api, computer["runner_id"])
+    asked = post(api, "chat/grok-designer", {"text": "Try a warmer palette."}, token="cara-test")
+    attempt = claim(api, computer)
+    post(api, f"attempts/{attempt['id']}/started", {"thread_id": "grok"}, token=computer["token"])
+    post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "text": "Warmer: sand and rust.",
+                                                     "last_seq": 0}, token=computer["token"])
+    assert get(api, "runners/me/app-delivery", token=computer["token"])["bots"] == [
+        {"slug": "grok-designer", "app": "grok", "bot": {"id": GROK_ID, "name": "Tico Designer"}, "after": None,
+         "error": False}]
+    report = lambda *messages, error=None: post(api, "runners/me/app-delivery/grok-designer", {
+        "app": "grok", "messages": list(messages), "error": error}, token=computer["token"])
+    page = [{"key": "k1", "role": "user", "text": " Try a  warmer palette."},     # Tico delivered it
+            {"key": "k2", "role": "bot", "text": "Warmer: sand and rust."},       # the turn posted it
+            {"key": "k3", "role": "user", "text": "And the logo?"},               # typed in the app itself
+            {"key": "k4", "role": "bot", "text": "Logo: keep it."}]               # the bot on its own
+    assert report(*page) == {"after": "k4", "posted": 2}
+    assert report(*page) == {"after": "k4", "posted": 0}                          # each key once
+    bodies = [(m["from_actor"], m["body"], bool(m["read_at"])) for m in room_messages_of(api, "cara", "grok-designer")]
+    assert bodies == [("human:cara", asked["body"], False), ("bot:grok-designer", "Warmer: sand and rust.", False),
+                      ("human:cara", "And the logo?", True), ("bot:grok-designer", "Logo: keep it.", False)]
+    assert get(api, "runners/me/app-delivery", token=computer["token"])["bots"][0]["after"] == "k4"
+    report(error={"code": "needs_human", "detail": "Grok asks to approve", "text": "Approve the purchase in Grok?"})
+    needs = get(api, "needs-you", token="cara-test")
+    assert any(i.get("kind") == "ask" and i["body"] == "Approve the purchase in Grok?" for i in needs["items"])
+    other = mac(api, "cara", "Cara's other Mac")
+    refused = api.post("/api/v2/runners/me/app-delivery/grok-designer", headers=headers(other["token"]),
+                       json={"app": "grok", "messages": [{"key": "k9", "role": "bot", "text": "Not mine."}]})
+    assert refused.status_code == 404
+
+
+def test_a_removed_computer_puts_the_bot_back_on_the_daily_sync(api):
+    sync(api, designer(), token="cara-test")
+    computer = mac(api, bots=["grok-designer"])
+    deliver(api, computer["runner_id"])
+    report = {"app": "grok", "error": {"code": "not_signed_in", "detail": "Grok shows its sign-in"}}
+    post(api, "runners/me/app-delivery/grok-designer", report, token=computer["token"])
+    issues = api.get("/api/v2/health", headers=headers()).json()
+    assert any("Grok on Cara's Mac: not signed in" in check["summary"] for check in issues["checks"])
+    post(api, f"runners/{computer['runner_id']}/revoke", {}, token="cara-test")
+    row = next(b for b in get(api, "bots", token="cara-test") if b["slug"] == "grok-designer")
+    assert row["app_delivery"] is None and row["assignment"] is None
+    post(api, "chat/grok-designer", {"text": "Back to the sync."}, token="cara-test")
+    assert jobs(api) == {} and inbox(api) == ["Back to the sync."]
+
+
+def room_messages_of(api, person, slug):
+    with api.app.state.store.read() as c:
+        return [dict(r) for r in c.execute(
+            "SELECT m.* FROM messages m JOIN conversations v ON v.id=m.conversation_id "
+            "WHERE v.scope='personal' AND v.owner_actor=? AND v.room_key=? ORDER BY m.created,m.rowid",
+            ("human:" + person, slug))]
+
+
+def test_an_existing_database_gets_the_queue_trigger_that_queues_for_app_delivery(api):
+    from backend import store as S
+    from backend.config import Settings
+    store = api.app.state.store
+    with store.transaction() as c:
+        c.execute("DROP TRIGGER queue_bot_message")
+        c.execute(S.QUEUE_TRIGGER.replace(" AND NOT EXISTS (SELECT 1 FROM runners r", " AND NOT EXISTS (SELECT 2 FROM runners r"))
+    S.Store(Settings(db_path=store.settings.db_path, registry_dir=store.settings.registry_dir)).initialize(seed_market=False)
+    with store.read() as c:
+        stored = c.execute("SELECT sql FROM sqlite_master WHERE name='queue_bot_message'").fetchone()[0]
+    assert stored == S.QUEUE_TRIGGER.replace(" IF NOT EXISTS", "", 1)
+
+
+def delivering(api):
+    """Cara's Grok Bot, delivered through her ready Mac: (computer, report(messages, error))."""
+    sync(api, designer(messages=[]), token="cara-test")
+    computer = mac(api, bots=["grok-designer"])
+    assert deliver(api, computer["runner_id"]).status_code == 200
+
+    def report(*messages, error=None):
+        return post(api, "runners/me/app-delivery/grok-designer", {"app": "grok", "messages": list(messages),
+                                                                  "error": error}, token=computer["token"])
+    return computer, report
+
+
+def turn(api, computer, text, reply):
+    """Cara says `text`; the computer's turn completes with `reply`."""
+    from backend.tests.test_api import claim
+    post(api, "chat/grok-designer", {"text": text}, token="cara-test")
+    attempt = claim(api, computer)
+    post(api, f"attempts/{attempt['id']}/started", {"thread_id": "grok"}, token=computer["token"])
+    post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "text": reply, "last_seq": 0},
+         token=computer["token"])
+
+
+def asks_in_needs_you(api, body):
+    return [i for i in get(api, "needs-you", token="cara-test")["items"] if i.get("kind") == "ask" and i["body"] == body]
+
+
+def test_a_question_the_app_needs_its_person_for_is_one_ask_whichever_arrives_first(api):
+    from backend.tests.test_api import claim
+    computer, report = delivering(api)
+    needs = lambda text: {"code": "needs_human", "detail": "the bot asked", "text": text}
+    # The turn's reply first, then the error report: the reply becomes the question.
+    turn(api, computer, "Send the invoice.", "Which account should I bill?")
+    report(error=needs("Which account should I bill?"))
+    # The error report first, then the turn's reply: the reply isn't posted again.
+    post(api, "chat/grok-designer", {"text": "And the receipt?"}, token="cara-test")
+    attempt = claim(api, computer)
+    post(api, f"attempts/{attempt['id']}/started", {"thread_id": "grok"}, token=computer["token"])
+    report(error=needs("Email or paper?"))
+    post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "text": "Email or paper?", "last_seq": 0},
+         token=computer["token"])
+    # The watch then reads both questions in the conversation: neither is posted again.
+    assert report({"key": "q1", "role": "bot", "text": "Which account should I bill?"},
+                  {"key": "q2", "role": "bot", "text": "Email or paper?"})["posted"] == 0
+    for question in ("Which account should I bill?", "Email or paper?"):
+        rows = [m for m in room_messages_of(api, "cara", "grok-designer") if m["body"] == question]
+        assert [(m["from_actor"], m["kind"]) for m in rows] == [("bot:grok-designer", "ask")], question
+        assert len(asks_in_needs_you(api, question)) == 1, question
+
+
+def test_old_history_is_one_message_whichever_of_the_watch_and_the_sync_brings_it_first(api):
+    computer, report = delivering(api)
+    old, older = "2026-09-20T09:00:00Z", "2026-09-19T09:00:00Z"
+    # The watch reads days-old history first, then the daily sync brings the same.
+    assert report({"key": "h1", "role": "bot", "text": "Old reply.", "at": old},
+                  {"key": "h2", "role": "user", "text": "Old question.", "at": old})["posted"] == 2
+    sync(api, designer(messages=[{"role": "bot", "text": "Old reply.", "at": old},
+                                 {"role": "user", "text": "Old question.", "at": old},
+                                 {"role": "bot", "text": "Older still.", "at": older}]), token="cara-test")
+    # The sync first, then the watch.
+    assert report({"key": "h3", "role": "bot", "text": "Older still.", "at": older})["posted"] == 0
+    bodies = [m["body"] for m in room_messages_of(api, "cara", "grok-designer")]
+    assert sorted(bodies) == ["Old question.", "Old reply.", "Older still."]
+    # The window, against the synced "Older still.": 25 hours after it is another message, 23 hours after it the same.
+    assert report({"key": "h4", "role": "bot", "text": "Older still.", "at": "2026-09-20T10:00:00Z"})["posted"] == 1
+    assert report({"key": "h5", "role": "bot", "text": "Older still.", "at": "2026-09-20T08:00:00Z"})["posted"] == 0
+    assert [m["body"] for m in room_messages_of(api, "cara", "grok-designer")].count("Older still.") == 2
+
+
+def test_a_clean_read_clears_the_apps_error_from_health(api):
+    computer, report = delivering(api)
+    listed = lambda: get(api, "runners/me/app-delivery", token=computer["token"])["bots"][0]["error"]
+    problems = lambda: [c["summary"] for c in api.get("/api/v2/health", headers=headers()).json()["checks"]
+                        if "Grok on Cara's Mac" in c["summary"]]
+    report(error={"code": "timeout", "detail": "no answer in 60s"})
+    assert listed() is True and any("it did not answer in time" in p for p in problems())
+    beat(api, computer, bots=["grok-designer"])               # a ready heartbeat alone doesn't clear a read's error
+    assert problems()
+    assert report() == {"after": None, "posted": 0}            # the computer's clean, empty read
+    assert listed() is False and problems() == []
+
+
+def test_a_thousand_and_one_keys_roll_over_and_a_resent_old_key_still_posts_nothing(api):
+    from backend import app_delivery
+    computer, report = delivering(api)
+    for start in range(0, 1001, 50):
+        report(*({"key": f"k{i}", "role": "bot", "text": f"Message {i}."} for i in range(start, min(start + 50, 1001))))
+    with api.app.state.store.read() as c:
+        seen = app_delivery._seen(c, "grok-designer")
+    assert len(seen["keys"]) == app_delivery.SEEN_KEYS and seen["keys"][0] == "k1" and seen["after"] == "k1000"
+    assert get(api, "runners/me/app-delivery", token=computer["token"])["bots"][0]["after"] == "k1000"
+    # A computer that lost its cursor sends from the start: the key no longer in the list, and a recent one.
+    assert report({"key": "k0", "role": "bot", "text": "Message 0."},
+                  {"key": "k999", "role": "bot", "text": "Message 999."}) == {"after": "k999", "posted": 0}
+    assert len([m for m in room_messages_of(api, "cara", "grok-designer") if m["from_actor"] == "bot:grok-designer"]) == 1001

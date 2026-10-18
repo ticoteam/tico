@@ -23,7 +23,7 @@ from clients.agent_skill import WHO_NEEDS_ME
 from . import go_live as pending_go_lives
 from . import repo_waits
 from . import built_on
-from . import agents, batch, external_sync, inbox_isolation, mcp_oauth, harness_actions, model_login, oidc, personal_tokens, views
+from . import agents, app_delivery, batch, external_sync, inbox_isolation, mcp_oauth, harness_actions, model_login, oidc, personal_tokens, views
 from . import check_models, team_rules, update_feeds, usage_limits, wake_presets
 from . import task_privacy as privacy
 from . import task_relations as TR
@@ -1672,7 +1672,11 @@ def create_app(settings=None):
         harness = rows.external_harness(slug)
         external = agents.presence(c, slug, harness) if harness else None
         row["agent"] = external["agent"] if external else None
-        if external:
+        # Delivered through a desktop app (backend/app_delivery.py): where, and online is that computer's.
+        # `app_delivery_app`: the desktop app the bot could be delivered through, for its settings.
+        row["app_delivery"] = app_delivery.view(c, declared) if config and harness else None
+        row["app_delivery_app"] = app_delivery.HARNESS_APP.get(row.get("harness"))
+        if external and not (row["app_delivery"] or {}).get("active"):
             row["online"] = external["online"]
         return row
 
@@ -4131,6 +4135,29 @@ def create_app(settings=None):
         return mutate(request, body, lambda c: model_login.use_shared_key(
             c, request.state.identity, rid, body.runtime, auth=auth))
 
+    # Clear key / Replace key (backend/computer_keys.py). What signs it in, and for the company's shared key every
+    # computer it serves: the "this computer only / all of them" ask. Previews only.
+    @app.get("/api/v2/runners/{rid}/keys")
+    def computer_key_info(request: Request, rid: str, runtime: str):
+        with store.read() as c:
+            return model_login.key_info(c, request.state.identity, rid, runtime, auth=auth, vault=app.state.vault)
+
+    @app.post("/api/v2/runners/{rid}/keys/clear")
+    def clear_computer_key(request: Request, rid: str, body: M.KeyClear):
+        return mutate(request, body, lambda c: model_login.clear_key(
+            c, request.state.identity, rid, body.runtime, body.scope, auth=auth))
+
+    # The key goes to the vault, never into the login relay; the vault's own write path keeps it out of the request
+    # receipt (a keyed fingerprint, as for Credentials).
+    @app.post("/api/v2/runners/{rid}/keys")
+    def replace_computer_key(request: Request, rid: str, body: M.KeyReplace):
+        who = request.state.identity
+        vault = app.state.vault
+        return vault.change(who, request.url.path, request.headers.get("idempotency-key"), body,
+                            lambda c, w: None,
+                            lambda c: model_login.replace_key(c, who, rid, body.runtime, body.secret.get_secret_value(),
+                                                              body.env, body.scope, auth=auth, vault=vault))
+
     @app.get("/api/v2/runners/{rid}/logins/{lid}")
     def read_login(request: Request, rid: str, lid: str):
         # A read that also expires: a sign-in nobody finished does not stay open.
@@ -4193,6 +4220,7 @@ def create_app(settings=None):
                 raise Problem("forbidden", "You cannot revoke this runner", 403)
             c.execute("UPDATE runners SET revoked_at=? WHERE id=?", (H.now(), rid))
             c.execute('DELETE FROM registry_metadata WHERE key=?', ('computer-repositories:' + rid,))
+            app_delivery.runner_revoked(c, who.actor, rid)
             H.event(c, who.actor, "runner.revoked", rid)
             return {"revoked": True}
         result = mutate(request, body, work)
@@ -5042,6 +5070,7 @@ def create_app(settings=None):
     app.state.task_view = task_view         # for the events' read in tests (backend/tests/test_payload_budgets.py)
     # And one for each computer, in place of its polls (runner-rs/src/events.rs).
     install_runner_events(app, store, execution)
+    app_delivery.install(app, store, execution, mutate)
 
     from .views import install_views
     from .task_types import install_task_types

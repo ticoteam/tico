@@ -17,6 +17,64 @@ All notable changes to Tico are recorded here. The format follows
   and a repeated event wakes it once. A preset turns nothing on and leaves Compact at alone. Each run says what
   woke it. Owners and admins can compare turns and tokens per accepted ticket, pickup time, blocked time and missed
   wakes per preset (`GET /api/v2/wake-presets/measures`). An install can tune the values with `TICO_WAKE_PRESETS`.
+- **Add key**, **Replace key** and **Clear key** for a computer's model API key (Codex, Claude Code, Cursor Agent,
+  Muse Code), from Settings > Computers, with no terminal. The row shows whose key it is by its preview only. A new key
+  goes to the credential vault for that computer alone and is checked on the computer before the old one is deleted;
+  one that doesn't work leaves the old key in use. Clear key names the bots that stop first, and the key given to every
+  computer doesn't sign it back in. For that shared key, both ask **this computer only** or **all of them**, listing the
+  computers; an offline computer clears its copy (or takes the new key) when it is next online. Replacing the shared key
+  for all of them needs credential rights. Needs a current runner on the computer
+  ([subscriptions](docs/subscriptions.md#api-keys-on-a-computer)).
+- A synced Grok Bot can be delivered through the Grok Mac app: set **Deliver through the app on** in its settings
+  to one of your own Macs where Grok is ready, and a message to it reaches it within a minute, it shows as working,
+  its reply streams in, and what it says on its own in Grok reaches its Tico chat within minutes. The Mac's native
+  runner works only through Accessibility (`tico-appdriver`, shipped separately): it never moves the pointer, types
+  or brings Grok forward. **Settings → Computers** shows a **Desktop apps** row per app, Health names a signed-out
+  app, missing permission or changed layout, and a reply that needs you in Grok becomes a question in your Needs
+  you. Off by default; with it off nothing changes, and no message is handed to the daily sync twice.
+
+### Changed
+- Screen: the first time a new computer offers its screen, its **Screen** setting in Settings > Computers starts at
+  **Control** instead of **View**, so its operator or an admin can drive it at once. Who may open a screen is
+  unchanged (the computer's operator and admins), a Screen setting someone already chose stays (View and Off
+  included), and a computer that already offered its screen keeps its setting.
+- Screen: on a bot's page, when its computer's screen is off in Tico, the operator's or an admin's **Turn on** button
+  now reads **Turn on (Control)** and turns the screen on at Control, matching a new computer's default, so they can
+  drive it at once. View and Off stay choices in Settings > Computers; who sees the button and who may change the
+  setting are unchanged.
+- The server, runner and updater images run Python 3.15 on Debian trixie with SQLite 3.54.1, built in and checked
+  when the image is built (Debian's own copy is 3.46.1). The update pulls the images, and Tico's own mail venv rebuilds
+  itself on first use. A runner's home volume survives the update, so anything a bot or person built there with the old
+  Python 3.12 (a project's venv, `pip install --user` packages under `~/.local/lib/python3.12`) does not run on 3.15:
+  rebuild it ([updates.md](docs/updates.md#python-environments-on-a-docker-runner) lists them and how).
+
+### Fixed
+- Automatic fallback no longer sends a bot to a login that is out of quota. When a login on a computer fails a turn
+  on its usage limit, the runner skips it for fallback until the provider's reset time, or for 30 minutes when the
+  provider gives none, and takes the next of the company's providers instead. A fallback that hits its own limit
+  mid-turn moves the turn on to the next provider rather than ending it.
+- A person's new Slack thread to a bot that is paused or quarantined is kept and runs when the bot is back, as a reply
+  in an existing thread already was, instead of being dropped. The person is told in the thread that the bot is held
+  and when it is back, with no need to resend.
+- The Overview campus moves a bot's desk as soon as its status changes, while live updates are connected, instead of at
+  the next refresh (up to two minutes).
+- An Overview replay that plays to its end goes back to the live desks, as Back to live does, instead of staying on
+  the day's last states while the bots have moved on.
+- Health no longer says a bot that ran out of quota has no fallback when the company fallback (*Fall back when a plan
+  runs out*, **Settings > AI providers**) covers it. And Health now says when a computer's default login for an AI tool
+  (the one bots without a subscription use) is out of quota, e.g. "Team box's default Codex login is out of quota":
+  turns there keep stopping on a usage limit with no reset time, so bots that fall back to it fail. It clears once a
+  turn on that login completes or the reset time passes.
+- A check or review subtask whose model's default login on its computer is out of quota (the Health finding above) now
+  moves to the next check model at once, instead of retrying that login every 30 minutes. It goes back to the model
+  it asked for once that login works again or its reset time passes; with no other check model, it waits as before.
+- On a phone, the Support pop-up fits the space above the keyboard while you type: the box, Send and the newest
+  reply stay on screen, and the page behind no longer shows below it or scrolls under it. With the keyboard down it is
+  the usual bottom sheet again.
+
+## [0.3.55] - 2026-10-18
+
+### Added
 
 - The Overview shows **Bot hours vs human hours**: bot hours per human hour over the last 7 days, and a weekly line for
   up to 12 weeks (Monday to Sunday, Pacific time) with a dashed Parity line at 1× and the current week dotted as "so far".
@@ -35,11 +93,6 @@ All notable changes to Tico are recorded here. The format follows
 
 - On Python 3.14 and later the server compresses API JSON with zstd for clients that accept it (browsers over
   HTTPS, behind Caddy): 8-14x less CPU than gzip at the same or smaller size. Python 3.12 keeps gzip.
-- The server, runner and updater images run Python 3.15 on Debian trixie with SQLite 3.54.1, built in and checked
-  when the image is built (Debian's own copy is 3.46.1). The update pulls the images, and Tico's own mail venv rebuilds
-  itself on first use. A runner's home volume survives the update, so anything a bot or person built there with the old
-  Python 3.12 (a project's venv, `pip install --user` packages under `~/.local/lib/python3.12`) does not run on 3.15:
-  rebuild it ([updates.md](docs/updates.md#python-environments-on-a-docker-runner) lists them and how).
 - Tico HQ's code (the service at `https://updates.tico.team`) moved out of this repository. Installs talk to
   `https://updates.tico.team` as before, with one fix: with `TICO_SUPPORT=off`, in a rehearsal or in demo mode, a live
   support session now ends without the install telling HQ (it used to send the end notice), so with support off nothing
@@ -60,36 +113,19 @@ All notable changes to Tico are recorded here. The format follows
   says so and links the app's permissions page, where the Owner turns it on once. Connecting and disconnecting GitHub
   stay the Owner's ([Permissions](docs/permissions.md#bots-that-create-repositories),
   [GitHub App](docs/github-app.md#bots-that-create-product-repositories)).
-- Screen: the first time a new computer offers its screen, its **Screen** setting in Settings > Computers starts at
-  **Control** instead of **View**, so its operator or an admin can drive it at once. Who may open a screen is
-  unchanged (the computer's operator and admins), a Screen setting someone already chose stays (View and Off
-  included), and a computer that already offered its screen keeps its setting.
 
 ### Fixed
 
-- On a phone, the Support pop-up fits the space above the keyboard while you type: the box, Send and the newest
-  reply stay on screen, and the page behind no longer shows below it or scrolls under it. With the keyboard down it is
-  the usual bottom sheet again.
-- Health no longer says a bot that ran out of quota has no fallback when the company fallback (*Fall back when a plan
-  runs out*, **Settings > AI providers**) covers it. And Health now says when a computer's default login for an AI tool
-  (the one bots without a subscription use) is out of quota, e.g. "Team box's default Codex login is out of quota":
-  turns there keep stopping on a usage limit with no reset time, so bots that fall back to it fail. It clears once a
-  turn on that login completes or the reset time passes.
 - `hub computer performance` and the `hub_computer_performance` tool work again: they read the computers reply as a list,
   so every call failed before it reached the computer's CPU, memory and disk history.
 - The Overview campus opened before the bots' status arrived now shows each desk's state as soon as it does, instead
   of "No current status available" until the next refresh (up to two minutes).
 - The Librarian no longer turns a team's own "runner" into "Computer" because a Tico word turns up later in the
   sentence, after a semicolon: "the runner pulls a hamstring; read the stretching instructions" stays as written.
-- The Overview campus moves a bot's desk as soon as its status changes, while live updates are connected, instead of at
-  the next refresh (up to two minutes).
 - One bot's quarantine no longer spreads to the bots that work with it. A message or task comment to a paused or
   quarantined bot is kept and runs when it is back, and the sender is told when that is. A new task or hand-off to
   one is refused as `target_inactive`, saying when the bot is back. That refusal opens no review of the sender and
   never counts as a repeat toward its quarantine; it counts only toward the 30 refusals a day that stop a loop.
-- A person's new Slack thread to a bot that is paused or quarantined is kept and runs when the bot is back, as a reply
-  in an existing thread already was, instead of being dropped. The person is told in the thread that the bot is held
-  and when it is back, with no need to resend.
 
 ## [0.3.54] - 2026-10-17
 
@@ -3264,7 +3300,8 @@ First public release.
 - Hosting: local only on a Mac, or self-hosted, including a reference AWS stack under `infra/ec2/`
   with Litestream backups.
 
-[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.54...HEAD
+[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.55...HEAD
+[0.3.55]: https://github.com/ticoteam/tico/compare/v0.3.54...v0.3.55
 [0.3.54]: https://github.com/ticoteam/tico/compare/v0.3.52...v0.3.54
 [0.3.52]: https://github.com/ticoteam/tico/compare/v0.3.50...v0.3.52
 [0.3.50]: https://github.com/ticoteam/tico/compare/v0.3.49...v0.3.50
