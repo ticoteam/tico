@@ -7,6 +7,8 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.3.59] - 2026-10-18
+
 ### Fixed
 - A queued job whose message its bot can no longer read (a private task or conversation it was taken off) no longer
   sits queued for ever. No claim ever takes it, so it aged Health's "queued since" warning. The scheduler now cancels
@@ -3439,7 +3441,8 @@ First public release.
 - Hosting: local only on a Mac, or self-hosted, including a reference AWS stack under `infra/ec2/`
   with Litestream backups.
 
-[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.58...HEAD
+[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.59...HEAD
+[0.3.59]: https://github.com/ticoteam/tico/compare/v0.3.58...v0.3.59
 [0.3.58]: https://github.com/ticoteam/tico/compare/v0.3.57...v0.3.58
 [0.3.57]: https://github.com/ticoteam/tico/compare/v0.3.56...v0.3.57
 [0.3.56]: https://github.com/ticoteam/tico/compare/v0.3.55...v0.3.56
