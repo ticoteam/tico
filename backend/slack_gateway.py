@@ -466,22 +466,22 @@ class Gateway:
         self._auth = None                   # who may write to which bot (backend/bot_access.py)
         self.last_model, self.last_usage = "", []   # the last `ask`'s model and usage per call, for the audit
         self.last_cost = 0.0                        # and what its calls cost, in USD (backend/judge.py cost_usd)
+        self.last_provider = ""                     # and who answered (the Tico AI Gateway, TypeSafe, the team's LLM)
 
     # ------------------------------------------------------------------ start-up
     @property
     def judge(self):
-        if self._judge is None and self.settings.typesafe_api_key:
-            # One short try per pass: the gateway's own retry (RETRY_SECONDS, up to ROUTE_GIVE_UP_SECONDS) is the
-            # only retry, so an outage costs one HTTP attempt a minute, not three, and never blocks the loop long.
-            from .judge import JEV_TIMEOUT
-            self._judge = J.direct(self.settings.typesafe_api_key, timeout=JEV_TIMEOUT, retries=0)
-        if self._judge is not None:
-            return self._judge
-        # No TypeSafe key: the company's own provider answers, when the server holds its API key.
-        # Looked up each time, because the owner can change the provider choice while this runs.
-        from .judge import fallback_engine
+        """The Tico AI Gateway, then an own TypeSafe key (backend/judge.py `primary_engine`), then the company's own
+        provider, each failure falling through to the next; None with none of them. One short try each per pass: the
+        gateway's own retry (RETRY_SECONDS, up to ROUTE_GIVE_UP_SECONDS) is the only retry, so an outage costs one HTTP
+        attempt a minute per provider, not three, and never blocks the loop long."""
+        from .judge import fallback_engine, ordered, primary_engine
+        if self._judge is None:
+            self._judge = primary_engine(self.settings)
+        first = list(getattr(self._judge, "steps", None) or [self._judge]) if self._judge is not None else []
+        # The company's provider is looked up each time, because the owner can change the choice while this runs.
         with self.store.read() as c:
-            return fallback_engine(providers.load(c, self.settings))
+            return ordered(first + [fallback_engine(providers.load(c, self.settings))])
 
     def verify_app(self):
         """Refuse to start unless the token is the configured workspace's and app's."""
@@ -736,17 +736,21 @@ class Gateway:
         refuses `spend_cap` before a call that would not fit under the cap, so a big fleet stops there too."""
         questions = self.questions(fleet)
         ids = list(questions)
-        from .judge import metered
-        answers, self.last_model, self.last_usage, self.last_cost = {}, "", [], 0.0
+        from .judge import metered, step_models
         judge = self.judge
-        # Each call is held at the most the model that answers can cost: Jev, or without a key the company's model.
-        models = [J.MODEL if judge is self._judge else getattr(judge, "model", "")]
+        asks_as = step_models(getattr(judge, "steps", None) or [judge])
+        answers, self.last_model, self.last_usage, self.last_cost, self.last_provider = {}, "", [], 0.0, ""
         for start in range(0, len(ids), J.MAX_QUESTIONS):
             batch = {qid: questions[qid] for qid in ids[start:start + J.MAX_QUESTIONS]}
-            result = metered(self.store, models, state, batch, JUDGE_LABEL,
-                             lambda batch=batch: judge(state, batch, JUDGE_LABEL))
+            try:
+                result = metered(self.store, asks_as, state, batch, JUDGE_LABEL,
+                                 lambda batch=batch: judge(state, batch, JUDGE_LABEL))
+            except J.JudgeError as exc:     # unusable answers before the failure were paid for too
+                self.last_cost += getattr(exc, "cost_usd", 0.0)
+                raise
             answers.update(result["answers"])
             self.last_model = str(result.get("model") or "")
+            self.last_provider = str(result.get("provider") or "")
             self.last_usage.append(result.get("usage") or {})
             self.last_cost += result["cost_usd"]
         return answers
@@ -754,9 +758,10 @@ class Gateway:
     def paid(self):
         """What the last `ask`'s answered batches cost before one failed, or None when none answered. For reading:
         the cap already counted each batch as it returned."""
-        if not self.last_usage:
+        if not self.last_usage and not self.last_cost:
             return None
-        return {"model": self.last_model, "usage": self.last_usage, "cost_usd": round(self.last_cost, 6)}
+        return {"model": self.last_model, "usage": self.last_usage, "cost_usd": round(self.last_cost, 6),
+                **({"provider": self.last_provider} if self.last_provider else {})}
 
     def spend_capped(self):
         """Whether the team's decision spend this month is at its cap (backend/judge.py): then every message routes
@@ -799,7 +804,7 @@ class Gateway:
             except (TypeError, ValueError):
                 return 0.0
         scores = {bot["slug"]: noul("bot:" + bot["slug"]) for bot in fleet}
-        decision = {"routed_by": "judge", "model": JUDGE_MODEL, "label": JUDGE_LABEL, "scores": scores, "asks": noul("asks"),
+        decision = {"routed_by": "judge", "model": self.last_model or JUDGE_MODEL, "label": JUDGE_LABEL, "scores": scores, "asks": noul("asks"),
                     "reply_to_last": noul("reply_to_last"), "names_bot": noul("names_bot"),
                     "thresholds": {"route": self.settings.slack_route_threshold, "ask": self.settings.slack_ask_threshold,
                                    "max": self.settings.slack_max_recipients},
@@ -1023,7 +1028,8 @@ class Gateway:
             if answers is not None:
                 decision = self.decide(answers, fleet)
                 called = {"model": self.last_model, "usage": self.last_usage, "cost_usd": round(self.last_cost, 6),
-                          "ms": round((time.monotonic() - started) * 1000)}
+                          "ms": round((time.monotonic() - started) * 1000),
+                          **({"provider": self.last_provider} if self.last_provider else {})}
         with self.store.transaction() as c:
             if called:
                 self.audit(c, actor, event, fleet, called)

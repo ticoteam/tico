@@ -37,7 +37,7 @@ from . import models as M
 from .auth import LOCAL_COOKIE, LOCAL_COOKIE_DAYS, LOCAL_SIGNIN_PATH, LOGOUT_PATH, Auth, Identity
 from .config import Settings
 from .observability import Observability, browser_config, staff_display_name
-from .execution import Execution, bot_repository, clear_limits
+from .execution import Execution, bot_repository, bump_bot_session_epoch, clear_limits
 from .onboarding import BOTOPS, Onboarding
 from .recruit import Recruiter
 from . import rooms
@@ -76,6 +76,7 @@ STABLE_PATH = re.compile("|".join(re.sub(r"\\\{[^}]+\\\}", "[^/]+", re.escape(sp
 
 def reset_bot_sessions(c, bot):
     """Keep durable history while fencing local provider sessions for one bot."""
+    bump_bot_session_epoch(c, bot)
     reset = 0
     for conversation in c.execute("SELECT id,participants_json FROM conversations").fetchall():
         if "bot:" + bot not in json.loads(conversation["participants_json"]):
@@ -222,6 +223,10 @@ def create_app(settings=None):
         import threading
         copy_stop = threading.Event()
         copy_task = asyncio.create_task(asyncio.to_thread(app.state.blobs.storage_loop, store, copy_stop))
+        # Answers an older server stored get their quoted-message index, beside the server (backend/idempotency_messages.py).
+        from . import idempotency_messages
+        index_stop = threading.Event()
+        index_task = asyncio.create_task(asyncio.to_thread(idempotency_messages.backfill_store, store, index_stop))
         media_task = asyncio.create_task(asyncio.to_thread(app.state.file_metadata.loop))
         demo_task = None
         if settings.demo:
@@ -237,10 +242,12 @@ def create_app(settings=None):
                 screen_sessions.http.close()
             app.state.doc_sources.stop.set()
             copy_stop.set()
+            index_stop.set()
             app.state.file_metadata.stop.set()
             app.state.file_metadata.wake.set()
             # The storage probe observes copy_stop even while its bounded SDK call is in flight.
             await copy_task
+            await index_task
             await media_task
             app.state.github_app.repository_stop.set()
             if demo_task:

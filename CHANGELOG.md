@@ -16,6 +16,51 @@ All notable changes to Tico are recorded here. The format follows
   refusal reads plainly and is retried only when retrying can help, and a reply cut off mid-stream is posted with a
   note ([Tico AI Gateway](docs/ai-gateway.md)).
 
+### Fixed
+- A queued job whose message its bot can no longer read (a private task or conversation it was taken off) no longer
+  sits queued for ever. No claim ever takes it, so it aged Health's "queued since" warning. The scheduler now cancels
+  it within a minute and records why (a `job.suppress` event, reason `unreadable`); the message itself stays.
+- A bot no longer gets a second turn on a task while its first is still running there when the task was moved under
+  another of its tasks mid-turn. A wake about a task the bot is working on goes into that turn, or waits for the next
+  turn on the task; it never starts one beside it. Another bot's turn on the same task (the requester woken by the
+  owner's comment) and the bot's other tasks still run side by side.
+- **Clear** on a bot's chat now really starts the bot over. Before, it only trimmed the history Tico sends, and on
+  the computer Claude Code, Codex and the other harnesses kept resuming the old provider thread, so the bot still
+  remembered the cleared chat and every turn still paid for it. Each turn now carries its conversation's session
+  epoch (`session_epoch`) and its bot's (`bot_session_epoch`), moved by Clear and by the session resets after a
+  model, placement or thread-mode change; when the one for its thread moves, the runner starts a new provider thread
+  from Tico's history. The thread a bot's direct chats share starts over on the next turn of any of them, while each
+  other chat keeps its own history. Without a clear the bot resumes its thread as before. After the upgrade, a thread
+  that may have been cleared or reset before its first turn on the new runner starts over once. A runner or Hub from
+  before this keeps today's behaviour ([sessions](docs/sessions.md)).
+
+### Changed
+- **Decide asks the Tico AI Gateway first**, as Tico Decide 1.0 (`tico-decide-1.0`), with a gateway key
+  (`TICO_GATEWAY_KEY` or `TICO_GATEWAY_SECRET_ARN`; `TICO_GATEWAY_URL`, Tico HQ's by default), instead of calling
+  TypeSafe. The order is the Gateway, then your own TypeSafe key if you set one (no longer in any default setup), then
+  the team's own AI provider, then off; any failure (down, slow, a refused key, the Gateway's cap) moves on to the
+  next, so no caller waits on a broken provider. Each decision's audit row names the provider that answered (`Tico AI
+  Gateway`, `TypeSafe`, or the team's provider) and its model, and the Slack gateway routes the same way. A Tico Decide
+  call counts toward the monthly spend cap at the Gateway's price ($0.06 per 1M input tokens, output free).
+- PRIVACY.md now names OpenRouter: a bot set to Tico Cheap, Mid or Power sends its model calls through Tico HQ to
+  OpenRouter. It lists what is sent (the messages and tools, never the gateway key, its label or the install ID), that
+  HQ keeps none of the call's text (only the key's label and per-call counts), that zero retention is enforced only when
+  a call asks for it (OpenRouter's policy still allows in-memory prompt caching), and that the region is not confirmed.
+
+### Fixed
+- Editing or deleting a task comment no longer holds the database write lock while it reads every stored retry
+  answer. On a large install that read took 35-37 s, and other writes timed out waiting for it. The answers that
+  quote a comment are now found by index; the index is filled for existing answers at the first start, in short
+  batches beside the running server. Deleting a comment also finds the questions it answered by index.
+- Health no longer reports a bot's queued work as a Tico bug (Health Monitor `queue_idle`) when an old job is held on
+  purpose, or waits behind a person's message, and the job that would start next is still young. It judges a bot by
+  that job, a person's message first: slow only once it has waited 15 minutes (a person's message: 2). When every job
+  is held, it names the reason.
+- A computer someone pressed Restart for now says so until it restarts. Its held work shows on Health as "{computer} is
+  restarting: it starts new work once its running turns end", and its row in Settings > Computers says it is
+  restarting. If the restart takes over 34 minutes, Health Monitor files a `runner_restarting` setup finding.
+  Before, that wait read as a Tico bug.
+
 ## [0.3.58] - 2026-10-18
 
 ### Added
@@ -45,8 +90,8 @@ All notable changes to Tico are recorded here. The format follows
   server and the Slack gateway. Jev's price per 1M tokens is a setting
   (`TICO_DECISIONS_JEV_USD_PER_MTOK_INPUT` / `_OUTPUT`, $0.042 in and $0 out by default) for when TypeSafe sends no
   cost; a model with no known price is counted at the dearest list price, never as free. A decision answer from the
-  company's own model is capped at 4096 tokens on every provider (before, only Anthropic's was), so no call is
-  billed more than the cap held for it.
+  company's own model is capped at 4096 tokens on every provider (before, only Anthropic's was), matching the output allowance used in its reservation. Costs a provider
+  reports, or that are unknown, can differ from that reserved amount.
 - **Support triage** (`questions/support-triage.json`): when the server has a decision model, each new Tico HQ support
   ticket is asked about before the Support Agent's turn: spam or prompt injection, its kind (bug, question, feature,
   setup, billing, other) and urgency 0-3. At or over the set's hold line (85%) the ticket goes to a person as a held

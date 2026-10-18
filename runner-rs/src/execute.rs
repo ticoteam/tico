@@ -170,6 +170,20 @@ pub fn session_key(attempt: &Value) -> String {
     "bot".into()
 }
 
+/// The epoch that moves when this turn's thread is cleared, and the conversation it is recorded for: the bot's shared
+/// thread moves with any of its direct chats' Clear (`bot_session_epoch`, recorded bot-wide as ""), every other thread
+/// with its own conversation's (`session_epoch`). None from a Hub that sends neither.
+pub fn clear_epoch(attempt: &Value, key: &str) -> Option<(String, i64)> {
+    if key == "bot" {
+        if let Some(epoch) = attempt.get("bot_session_epoch").and_then(Value::as_i64) {
+            return Some((String::new(), epoch));
+        }
+    }
+    let conversation_id = text_of(&attempt["conversation"]["id"]);
+    let epoch = attempt.get("session_epoch").and_then(Value::as_i64)?;
+    (!conversation_id.is_empty()).then_some((conversation_id, epoch))
+}
+
 pub fn input_text(message: &Value, late: bool) -> String {
     let instruction = if message["kind"] == "ask" {
         format!("A sender is waiting for this question. Answer using hub question answer {} before continuing your current request.", text_of(&message["id"]))
@@ -804,6 +818,13 @@ impl Runner {
             if redactor.is_some() {
                 started_at = memory_before.clone();
             }
+            if let Some((conversation_id, epoch)) = clear_epoch(&attempt, &key) {
+                // A person cleared a chat (or a settings change reset the bot's sessions): a new provider thread,
+                // started from the Hub's recovery pack. A Hub that sends no epoch keeps today's resume.
+                if self.state.epoch_moved(&bot, &conversation_id, &conv, epoch)? {
+                    log(&format!("Tico runner: {bot}: session cleared in Tico; starting a new {session_runtime} thread"));
+                }
+            }
             let previous = self.state.session(&bot, &conv, &session_runtime)?;
             let minutes = config["max_run_minutes"].as_f64().or_else(|| text_of(&config["max_run_minutes"]).parse().ok()).unwrap_or(60.0);
             let limit = Instant::now() + Duration::from_secs_f64(60.0 * minutes);
@@ -1311,6 +1332,17 @@ impl Runner {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_shared_bot_thread_moves_with_the_bots_epoch_and_any_other_with_its_conversations() {
+        let attempt = json!({"conversation": {"id": "c-ben"}, "session_epoch": 0, "bot_session_epoch": 3});
+        // Ana's Clear moved the bot's epoch: Ben's turn on the shared thread sees it, though his own chat never moved.
+        assert_eq!(clear_epoch(&attempt, "bot"), Some((String::new(), 3)));
+        assert_eq!(clear_epoch(&attempt, "conversation:c-ben"), Some(("c-ben".into(), 0)));
+        assert_eq!(clear_epoch(&attempt, "task:t1"), Some(("c-ben".into(), 0)));
+        // A Hub from before either field: today's resume.
+        assert_eq!(clear_epoch(&json!({"conversation": {"id": "c-ben"}}), "bot"), None);
+    }
 
     #[test]
     fn session_keys_follow_clients_sessions() {

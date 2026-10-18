@@ -85,11 +85,13 @@ LOG_PATTERNS = (
 MEANING = {
     "runner_outdated": "A computer runs an older Tico release than its server, or failed to update.",
     "limited_no_fallback": "A bot's turns stopped on a usage limit and it has no fallback model.",
+    "runner_restarting": "A computer has been restarting for over 34 minutes since a person pressed Restart.",
     "default_login_limited": "A computer's default AI login (no subscription) keeps stopping on a usage limit that has "
                              "no reset time or has not reset yet.",
     "stuck_setup": "A bot has been in setup for over an hour while work waits for it.",
     "computer_silent": "A computer has not checked in for 10 minutes or more while work is queued for its bots.",
-    "queue_idle": "Work stayed queued 15 minutes or more (a person's message: 2) on an online computer with room and no limit.",
+    "queue_idle": "Work a claim would hand out stayed queued 15 minutes or more (a person's message: 2) on an online "
+                  "computer with room and no limit.",
     "worktree_error": "A task worktree failed on its computer.",
     "server_cpu": f"The server averaged {SERVER_CPU:g}% CPU or more for an hour with under {QUIET_REQUESTS} requests.",
     "local_busy": "A process or container on a computer running Tico was busy in two hourly checks in a row while idle.",
@@ -170,11 +172,11 @@ def _runner_checks(c, settings):
     out = []
     online = health._online_runners(c)
     computers = health._computers(c, online, settings)
-    # Work a computer holds while it waits to update is said here, on its update, never as a queue_idle Tico bug.
-    held = {}
+    # Work a computer holds while it waits to update or restart is said here, never as a queue_idle Tico bug.
+    held, restarting = {}, {}
     for row in health._waiting(c, {r["id"] for r in online}, settings)[2]:
-        if row["reason"] == "updating":
-            held.setdefault(row["runner_id"], []).append(row)
+        if row["reason"] in ("updating", "restarting"):
+            (held if row["reason"] == "updating" else restarting).setdefault(row["runner_id"], []).append(row)
     for machine in computers:
         update = machine["update"]
         rows = held.get(machine["id"], [])
@@ -191,6 +193,23 @@ def _runner_checks(c, settings):
                                 and not update["error"] else
                                 f"BotOps: update the runner on {machine['label']} (Settings > Computers, or "
                                 "`scripts/tico install` once on that computer so it updates itself)."))
+    cutoff = H.shift(H.now(), minutes=-health.RESTART_STUCK_MINUTES)
+    for r in c.execute("SELECT id,label,restart_since FROM runners WHERE revoked_at IS NULL AND restart_since<? "
+                       "ORDER BY label", (cutoff,)).fetchall():
+        if r["id"] not in {x["id"] for x in online}:
+            continue        # a computer that stopped checking in is computer_silent
+        rows = restarting.get(r["id"], [])
+        running = c.execute("SELECT count(*) FROM attempts WHERE runner_id=? AND state IN ('leased','running')",
+                            (r["id"],)).fetchone()[0]
+        since = str(r["restart_since"])[:16]
+        holds = (f"; it holds {sum(x['queued'] for x in rows)} queued job(s) for " + ", ".join(x["name"] for x in rows)
+                 if rows else "")
+        out.append(_finding("runner_restarting:" + r["id"], "runner_restarting", SETUP,
+                            f"{r['label']} has been restarting since {since}",
+                            f"Computer {r['label']} has said since {since} UTC that it is restarting, which takes at most "
+                            f"{health.RESTART_STUCK_MINUTES} minutes; {running} turn(s) still run there{holds}.",
+                            f"BotOps: look at the turns still running on {r['label']} (Runs); stopping one is a person's "
+                            f"choice. If none runs, restart Tico on {r['label']} by hand (`tico restart`)."))
     for x in health.silent_computers(c):
         out.append(_finding("computer_silent:" + x["id"], "computer_silent", SETUP,
                             f"{x['label']} has not checked in for {x['minutes']} minutes",
