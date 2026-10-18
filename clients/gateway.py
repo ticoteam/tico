@@ -17,6 +17,7 @@ import datetime
 import json
 import re
 import urllib.error
+import urllib.parse
 import urllib.request
 
 DEFAULT_BASE = "https://updates.tico.team/v1/gateway"
@@ -29,8 +30,8 @@ CAP_REACHED, RATE_LIMITED = "cap_reached", "rate_limited"
 REVOKED_KEY, UNKNOWN_KEY = "revoked_key", "unknown_key"
 # States that say nothing about the key: the Gateway was down or asked to slow down. They never replace a real answer.
 TRANSIENT = ("unreachable", "busy")
-# States where the Gateway refuses the key: the connection is not working.
-REFUSED = ("revoked", "unknown")
+# States where the connection is not working: the Gateway refuses the key, or the key may not go to its URL.
+REFUSED = ("revoked", "unknown", "bad_url")
 CAP_MESSAGE = "Gateway cap reached"
 # What each state says to the people who own the connection.
 MESSAGES = {
@@ -45,6 +46,8 @@ MESSAGES = {
                "here.",
     "unreachable": "Not checked: the Gateway did not answer. Bots keep trying; check again later.",
     "busy": "Not checked: the Gateway asked to slow down. Checking again in a minute.",
+    "bad_url": "Not working: the Gateway URL must start with https:// (plain http:// only for localhost). Fix it where "
+               "it is set; the key is not sent until then.",
     "not_ready": "Not ready: the Gateway at this URL doesn't serve Tico models yet. Check the Gateway URL, or wait "
                  "until Tico turns them on.",
 }
@@ -61,6 +64,8 @@ FINAL = ("unknown_model", "unsupported_field", "bad_request", "upstream_refused"
 CODES = (CAP_REACHED, REVOKED_KEY, UNKNOWN_KEY, RATE_LIMITED, "unknown_model", "unsupported_field", "bad_request",
          "upstream_refused", "no_route", UNAVAILABLE)
 TICO_MODELS = "Tico Cheap 1.0, Tico Mid 1.0, Tico Power 1.0"
+# The only hosts the key goes to over plain HTTP: this computer, named exactly (a fake Gateway, a local proxy).
+LOOPBACK = ("localhost", "127.0.0.1", "::1")
 
 
 def base_url(url=""):
@@ -71,6 +76,24 @@ def base_url(url=""):
     if url.endswith(DECISIONS):
         url = url[: -len(DECISIONS)].rstrip("/")
     return url or DEFAULT_BASE
+
+
+def safe_base(url=""):
+    """`base_url(url)` if the key may be sent there, else ValueError: HTTPS, or plain HTTP to an exact loopback host,
+    with no user, password, query or fragment. The host is parsed, not prefix-matched: `http://localhost.acme.example`
+    is a remote host over plain HTTP."""
+    base = base_url(url)
+    if any(ch in base for ch in " \t\r\n\0\\?#@"):
+        raise ValueError("The Gateway URL has spaces, a query or a password")
+    try:
+        parts = urllib.parse.urlsplit(base)
+        host = parts.hostname or ""
+        parts.port
+    except ValueError:
+        raise ValueError("The Gateway URL is not a URL") from None
+    if parts.scheme == "https" and host or parts.scheme == "http" and host in LOOPBACK:
+        return base
+    raise ValueError("The Gateway URL starts with https://")
 
 
 def decisions_url(url=""):
@@ -115,8 +138,20 @@ def state_of(payload):
     return "connected", used
 
 
+class _Unredirected(urllib.request.HTTPRedirectHandler):
+    """Never follows a redirect: urllib's would resend the key's Authorization header to wherever it points."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+# `check`'s transport: a redirect is answered as the HTTP error it is.
+_send = urllib.request.build_opener(_Unredirected).open
+
+
 def state_of_error(status, code):
-    """The connection's state from an error answer of `<base>/key`: its HTTP status and the Gateway's code."""
+    """The connection's state from an error answer of `<base>/key`: its HTTP status and the Gateway's code. A
+    redirect is a URL that is not the Gateway's."""
     if code == REVOKED_KEY:
         return "revoked"
     if code == UNKNOWN_KEY or status in (401, 403):
@@ -125,7 +160,7 @@ def state_of_error(status, code):
         return "cap_reached"
     if code == RATE_LIMITED or status == 429:
         return "busy"
-    return "not_ready" if status == 404 else "unreachable"
+    return "not_ready" if status == 404 or 300 <= status < 400 else "unreachable"
 
 
 def describe(state, used=None):
@@ -135,12 +170,17 @@ def describe(state, used=None):
 
 
 def check(key, url="", timeout=TIMEOUT, opener=None):
-    """{state, working, message, used} for a gateway key. `working` is False only for a key the Gateway refuses
-    (revoked or unknown); an unreachable Gateway is not called broken. `opener(request, timeout)` is the tests' seam."""
+    """{state, working, message, used} for a gateway key. `working` is False only for a key the Gateway refuses or a
+    URL the key may not go to (`safe_base`, checked before anything is sent); an unreachable Gateway is not called
+    broken. `opener(request, timeout)` is the tests' seam."""
     if not key:
         return {"state": "none", "working": False, "message": "No gateway key saved.", "used": None}
-    opener = opener or urllib.request.urlopen
-    request = urllib.request.Request(base_url(url) + "/key", method="GET", headers={
+    try:
+        base = safe_base(url)
+    except ValueError:
+        return {"state": "bad_url", "working": False, "message": describe("bad_url"), "used": None}
+    opener = opener or _send
+    request = urllib.request.Request(base + "/key", method="GET", headers={
         "Authorization": "Bearer " + key, "Accept": "application/json"})
     try:
         with opener(request, timeout=timeout) as response:

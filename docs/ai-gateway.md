@@ -18,7 +18,8 @@ Only the owner can do this.
 1. Open **Settings → AI providers**. The **Tico AI Gateway** card is under the providers.
 2. Paste the key Tico gave you in **Gateway key**.
 3. Leave **Gateway URL** empty to use the default, `https://updates.tico.team/v1/gateway`. Enter another only if Tico gave
-   you one; it starts with `https://`.
+   you one; it starts with `https://` (plain `http://` only for `localhost`). A URL set in the server's environment
+   (`TICO_GATEWAY_URL`) follows the same rule, or the key is not sent and the card says **Not working**.
 4. Press **Connect**.
 
 The card shows **Connected**, and Tico Cheap, Mid and Power 1.0 appear in the bot model list. The key field empties as

@@ -38,7 +38,7 @@ class FakeGateway:
     flat `{"error": "<code>"}` (decisions)."""
 
     def __init__(self):
-        self.keys, self.calls = {}, []
+        self.keys, self.calls, self.moved = {}, [], ""
         owner = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -48,6 +48,12 @@ class FakeGateway:
             def do_GET(self):
                 key = self.headers.get("Authorization", "").removeprefix("Bearer ")
                 owner.calls.append((self.path, key))
+                if owner.moved:                             # `moved`: every path redirects there
+                    self.send_response(302)
+                    self.send_header("Location", owner.moved + self.path)
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
                 status, body = owner.keys.get(key, (401, {"error": {"code": "unknown_key", "message": "Unknown key"}}))
                 data = json.dumps(body).encode()
                 self.send_response(status)
@@ -222,6 +228,28 @@ def test_a_key_the_environment_sets_shows_as_connected_and_is_not_edited_here(ap
         assert get(api, "providers/gateway")["state"] == "unchecked"
         assert post(api, "providers/gateway/check", {})["state"] == "revoked"
         assert KEY not in everything(api) and OTHER not in everything(api)
+
+
+def test_the_key_goes_only_to_an_https_or_exact_loopback_url_and_never_follows_a_redirect(api, monkeypatch):
+    setup(api, monkeypatch)
+    from backend import gateway_connection
+    with fake_gateway() as fake, fake_gateway() as elsewhere:
+        for lookalike in ("http://localhost.acme.example/v1/gateway", "http://127.0.0.1.acme.example/v1/gateway",
+                          "http://localhost@acme.example/v1/gateway", "http://acme.example/v1/gateway", "https://"):
+            put(api, "providers/gateway", {"key": KEY, "url": lookalike, "expected_revision": 0}, expected=422)
+        # A redirect to another origin is not followed: the key reaches only the URL it was saved for.
+        fake.active(KEY, 0.1)
+        fake.moved = elsewhere.url.removesuffix("/v1/gateway")
+        assert save(api, fake)["state"] == "not_ready"
+        assert fake.calls == [("/v1/gateway/key", KEY)] and elsewhere.calls == []
+        # The environment's URL is held to the same rule: no check is sent and no run is handed the key.
+        monkeypatch.setenv("TICO_GATEWAY_KEY", KEY)
+        monkeypatch.setenv("TICO_GATEWAY_URL", "http://localhost.acme.example/v1/gateway/decisions")
+        shown = post(api, "providers/gateway/check", {})
+        assert shown["state"] == "bad_url" and shown["working"] is False
+        with api.app.state.store.read() as c:
+            assert gateway_connection.run_credentials(c, api.app.state.vault, None, "tico-mid-1.0") == []
+        assert len(fake.calls) == 1 and elsewhere.calls == []
 
 
 @pytest.mark.parametrize("answer,state,status,words", [

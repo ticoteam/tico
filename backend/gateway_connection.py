@@ -138,11 +138,11 @@ def _clean_url(value):
     value = str(value or "").strip()
     if not value:
         return ""
-    if not (value.startswith("https://") or value.startswith("http://localhost") or value.startswith("http://127.0.0.1")):
-        raise Problem("url", "The Gateway URL starts with https://", 422)
-    if any(ch in value for ch in " \r\n\0?#@"):
-        raise Problem("url", "Enter the Gateway URL alone, with no spaces, query or password", 422)
-    return G.base_url(value)
+    try:
+        return G.safe_base(value)
+    except ValueError:
+        raise Problem("url", "The Gateway URL starts with https:// (plain http:// only for localhost), with no spaces, "
+                      "query or password", 422) from None
 
 
 def save(c, vault, who, body, now, settings=None):
@@ -312,11 +312,15 @@ def run_credentials(c, vault, settings, model):
     if not is_tico(model):
         return []
     secret = key(c, vault, settings)
+    try:
+        base = G.safe_base(url(c, settings))
+    except ValueError:
+        return []                                     # an environment URL the key may not go to (the page says so)
     if not secret:
         return []
     return [{"id": "gateway-key", "name": G.LABEL, "env": RUN_KEY_ENV, "kind": "api_key", "value": secret},
             {"id": "gateway-url", "name": G.LABEL + " URL", "env": RUN_URL_ENV, "kind": "text",
-             "value": G.chat_base(url(c, settings))}]
+             "value": G.chat_base(base)}]
 
 
 def health(c, settings=None):
