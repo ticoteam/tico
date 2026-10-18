@@ -626,9 +626,10 @@ allowed, take control. The computer itself decides whether it offers one:
 - A Linux checkout: `sudo apt-get install xvfb x11vnc matchbox-window-manager`, then `scripts/tico screen on`
   (`screen off` and `screen status` too; a running runner follows within seconds).
 
-The first time a new computer offers its screen, its **Screen** setting in **Settings > Computers** starts at **View**, so
-its operator and admins can watch it; choose **Control** there to drive it, or **Off**. A setting someone already chose
-stays, and a computer added before this default keeps its setting. The runner runs a virtual
+The first time a new computer offers its screen, its **Screen** setting in **Settings > Computers** starts at
+**Control**, so its operator and admins can watch it and drive it; choose **View** there to watch only, or **Off**. No one
+else can open it. A setting someone already chose stays, including View and Off, and a computer added before this
+default keeps its setting. The runner runs a virtual
 display (1440x900) on the first free display from `:99` to `:120` and gives bots that `DISPLAY` (set
 `TICO_SCREEN_DISPLAY`, like `:101`, to use exactly one; when another X server holds it, the screen says which); its VNC servers listen on no network port (only on
 sockets in a directory bots cannot open), and the server relays each session. Anyone allowed to open the screen sees everything on that display, including what a bot types into a page,
@@ -1047,7 +1048,9 @@ TICO_IMAGE=tico TICO_TAG=local docker compose up -d
 TICO_RUNNER_IMAGE=tico-runner docker/smoke.sh     # local image checks
 ```
 
-Tool versions and their sha256 digests are in `docker/versions.env` and are checked during the build. The
+Tool versions and their sha256 digests are in `docker/versions.env` and are checked during the build. The images
+run Python 3.15 on Debian trixie with SQLite from `SQLITE_VERSION` there, built from source by `docker/sqlite.sh`
+in place of Debian's older copy; the build fails unless Python's `sqlite3` reports that version. The
 model CLIs are not in the image; the runner installs them (see [harnesses](harnesses.md)).
 
 ## Advanced installs

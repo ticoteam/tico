@@ -16,6 +16,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const {html, uiFile, harnesses} = require('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs');
 const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();   // load.cjs arrives with #254
 const SHOTS = process.env.TASK_CODE_SHOTS || '';
 
@@ -175,7 +176,7 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
       data.comments.push({id: 'm3', kind: 'say', from_actor: 'human:ana', body: body.text, created: now, refs: {task: 't-checkout'}});
       return json({woke: true});
     }
-    return json({});
+    return json(unrouted(p));
   });
   await page.goto('https://tico-ui.test/' + at);
   return {page, errors, writes, data};

@@ -25,10 +25,11 @@ def size(row):
 
 
 def first_offer(c, rid):
-    """A new computer's first screen offer sets its Screen to View, unless a person already chose one."""
-    if c.execute("UPDATE runners SET screen='view',screen_default_pending=0 WHERE id=? AND screen_default_pending=1",
+    """A new computer's first screen offer sets its Screen to Control, unless a person already chose one. Control
+    widens no one's access: only the computer's operator and admins open a screen (may_change)."""
+    if c.execute("UPDATE runners SET screen='control',screen_default_pending=0 WHERE id=? AND screen_default_pending=1",
                  (rid,)).rowcount:
-        H.event(c, "system", "runner.screen", rid, {"mode": "view", "reason": "first offer"})
+        H.event(c, "system", "runner.screen", rid, {"mode": "control", "reason": "first offer"})
 
 
 def listing(row):

@@ -431,6 +431,16 @@ mod updater_auth_tests {
         ));
     }
 
+    #[test]
+    fn follows_the_redirect_the_server_signs_for_a_company_artifact() {
+        // The server's real presigned URL; backend/tests/test_update_signature_contract.py keeps it in step.
+        let hub = Url::parse("https://tico.example.test/").unwrap();
+        let policy = CompanyUpdatePolicy::new(hub.clone(), hub.join("download/latest.json").unwrap(), None);
+        let source = hub.join("download/file/0.3.49/Acme%20Tico.app.tar.gz").unwrap();
+        let signed = Url::parse(include_str!("testdata/presigned-artifact-url.txt").trim()).unwrap();
+        assert!(policy.allows_hub_artifact_redirect(&source, &signed), "{signed}");
+    }
+
     #[tokio::test]
     async fn badge_poller_reads_an_access_login_redirect_or_401_as_signed_out() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();

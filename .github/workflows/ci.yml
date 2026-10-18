@@ -101,7 +101,7 @@ jobs:
       # installs from the candidate's pinned lock files and builds the candidate's own crates from source.
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
-          python-version: '3.12'
+          python-version: '3.15'
       - name: Install Python test prerequisites
         working-directory: candidate
         run: |

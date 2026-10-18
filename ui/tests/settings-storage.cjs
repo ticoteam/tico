@@ -7,6 +7,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const {html, uiFile} = require('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs');
 const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();   // load.cjs arrives with #254
 const shots = process.env.TICO_SHOTS || '';
 
@@ -53,7 +54,7 @@ const shots = process.env.TICO_SHOTS || '';
       if (p === '/api/v2/needs-you') return json({items: []});
       if (p === '/api/v2/operations') return json({machines: [], services: []});
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
-      return json({});
+      return json(unrouted(p));
     });
     const theme = mode => page.evaluate(m => document.documentElement.setAttribute('data-theme', m), mode);
     const shot = async name => { if (shots) await page.screenshot({path: path.join(shots, name + '.png')}); };
