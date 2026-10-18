@@ -1085,6 +1085,11 @@ impl Runner {
                 };
                 let th = h.start_thread(&bot, &settings).await?;
                 thread = Some(th.clone());
+                if busy.is_some() {
+                    // The primary never started (its login was busy), so this host acknowledges the turn instead.
+                    self.client.post(&format!("attempts/{aid}/started"), &json!({"thread_id": th}), Some(&format!("started:{aid}"))).await?;
+                    self.state.phase(&aid, "running")?;
+                }
                 let names = self.names().await;
                 let replay = crate::fallback::replay(&attempt, crate::fallback::REPLAY_TOKENS);
                 let because = match &busy {
