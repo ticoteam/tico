@@ -1,5 +1,5 @@
 """Tico's sample company (backend/sample_company.py): a new company starts as five real bots with short starter
-tasks, from the welcome's button or TICO_SAMPLE_COMPANY=1, on the shipped templates."""
+tasks, from the welcome's button or TICO_SAMPLE_COMPANY=on, on the shipped templates."""
 
 import re
 import uuid

@@ -310,11 +310,6 @@ Flags: `--domain`, `--front-door caddy|cloudflared`, `--server-ip`, `--tico-vers
 Credentials: `TICO_OIDC_CLIENT_SECRET`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_TUNNEL_TOKEN`, `OPENAI_API_KEY` (or
 `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`). `python3 -m setup --help` lists all of them.
 
-To open a new install as the [sample company](sample-company.md), a five-bot team whose first tasks finish in minutes,
-set `TICO_SAMPLE_COMPANY=on` in `/opt/tico/.env` (any other value loads nothing). It loads once, on the first start
-whose owner is on the roster, keeps a team name already set (`--team-name`), and never touches a company that is
-already set up.
-
 **cloud-init.** `infra/cloud-init/tico-server.yaml` and `tico-runner.yaml` are paste-ready user data for any Ubuntu 24.04
 cloud that accepts it (Hetzner, DigitalOcean, AWS, Vultr, Linode, OCI). Edit the block between the two `inputs` markers
 (release, domain, owner email, team name, sign-in). They write `/opt/tico/.env` from it, turn on `ufw`, keep containers away

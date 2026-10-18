@@ -30,7 +30,7 @@ company that is set up is left alone.
 - **From the welcome.** The first screen of the first run (`#/welcome`) offers **Start with a sample company**. One
   click, by the owner, does the whole first run (`POST /api/v2/setup/sample`) and lands on the screen after Create.
 - **At install.** `TICO_SAMPLE_COMPANY=on` in the server's environment loads it on the first start whose owner is on
-  the roster, once ([install](install.md#automation)). A restart never loads it again, and a rehearsal never loads it.
+  the roster, once. A restart never loads it again, and a rehearsal never loads it.
   Unset or any other value loads nothing.
 
 ## What it sets up

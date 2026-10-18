@@ -114,7 +114,7 @@ def create_app(settings=None):
         from . import company_storage
         company_storage.startup(store, app.state.vault, app.state.blobs)
         asyncio.get_running_loop().run_in_executor(None, auth.warm)   # Cloudflare's keys, before anyone signs in
-        # TICO_SAMPLE_COMPANY=1: a new company starts as the sample company, once (backend/sample_company.py).
+        # TICO_SAMPLE_COMPANY=on: a new company starts as the sample company, once (backend/sample_company.py).
         if settings.sample_company:
             try:
                 from . import sample_company
