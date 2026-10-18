@@ -29,7 +29,7 @@ from . import task_relations as TR
 TRASH = """CREATE TABLE IF NOT EXISTS task_trash(
  task_id TEXT PRIMARY KEY, number INTEGER, title TEXT, requester TEXT, owner TEXT, status TEXT,
  private INTEGER NOT NULL DEFAULT 1, deleted_at TEXT NOT NULL, deleted_by TEXT NOT NULL,
- rows_json TEXT NOT NULL, purged_at TEXT)"""
+ rows_json TEXT NOT NULL, purged_at TEXT, guest TEXT)"""
 # The files attached when a deleted task was made, kept past a purge: no foreign key, the task is gone.
 TRASH_ASSETS = """CREATE TABLE IF NOT EXISTS task_trash_assets(
  task_id TEXT NOT NULL, blob_id TEXT NOT NULL, PRIMARY KEY(task_id, blob_id))"""
@@ -66,6 +66,9 @@ CORE = ("tasks", "conversations", "messages")
 
 def ensure(c):
     c.execute(TRASH)
+    # A private task's guest (hubdb.task_reach) sees it in the trash as its two parties do (auth.task_sql).
+    if "guest" not in _columns(c, "task_trash"):
+        c.execute("ALTER TABLE task_trash ADD COLUMN guest TEXT")
     c.execute(TRASH_ASSETS)
     c.execute("CREATE INDEX IF NOT EXISTS task_trash_assets_blob ON task_trash_assets(blob_id)")
     # A task deleted before this table existed has its attachments only in its trash row.
@@ -213,10 +216,10 @@ def delete_tasks(c, ids, apply=False, actor=None):
         rows, convs, msgs, pointers = _snapshot(c, tid, relations[tid])
         task = rows["tasks"][0]
         c.execute("INSERT INTO task_trash(task_id,number,title,requester,owner,status,private,deleted_at,"
-                  "deleted_by,rows_json) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                  "deleted_by,rows_json,guest) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                   (tid, task.get("number"), task["title"], task["requester"], task["owner"], task["status"],
                    task.get("private", 1) if task.get("private") is not None else 1, now, actor,
-                   json.dumps({"rows": rows, "pointers": pointers}, default=str)))
+                   json.dumps({"rows": rows, "pointers": pointers}, default=str), task.get("guest")))
         for table, column in MESSAGE_ROWS:
             _delete(c, table, column, msgs)
         for table, column in CONVERSATION_ROWS:

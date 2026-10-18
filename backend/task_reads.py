@@ -153,8 +153,9 @@ def gone(c, visible_sql, was, matched):
 
 def _could_read(c, visible_sql, tid, ref):
     try:
-        owner, requester, private = json.loads(ref)
+        # A change logged before a private task could have a guest (hubdb.task_reach) has three parts.
+        owner, requester, private, guest = (json.loads(ref) + [None])[:4]
     except (TypeError, ValueError):
         return False
-    return c.execute(f"SELECT 1 FROM (SELECT ? AS id, ? AS owner, ? AS requester, ? AS private) WHERE {visible_sql}",
-                     (tid, owner, requester, private)).fetchone() is not None
+    return c.execute(f"SELECT 1 FROM (SELECT ? AS id, ? AS owner, ? AS requester, ? AS private, ? AS guest) "
+                     f"WHERE {visible_sql}", (tid, owner, requester, private, guest)).fetchone() is not None
