@@ -41,7 +41,7 @@ def answer_all(questions):
 
 class Internet:
     """`urllib.request.urlopen` for the three providers. `fail[url] = <status | exception | "garbled" | "shape" |
-    ("choice", value)>` makes that provider fail that way ("shape" and a bad choice still come with usage: paid for);
+    ("choice", value) | ("usage", value)>` makes that provider fail that way ("shape" and a bad choice still come with usage: paid for);
     every request is kept as (url, headers, body, timeout). With a `clock`, a timeout takes all of its seconds."""
 
     def __init__(self, clock=None):
@@ -80,6 +80,8 @@ class Internet:
                      for qid, q in questions.items()}
             payload = {"content": [{"text": "not JSON" if how == "shape" else json.dumps(reply)}],
                        "usage": {"input_tokens": 300, "output_tokens": 40}}
+        if isinstance(how, tuple) and how[0] == "usage":
+            payload["usage"] = how[1]
         if isinstance(how, tuple) and how[0] == "choice":
             for answer in payload["answers"].values():
                 if "choice" in answer:
@@ -308,6 +310,20 @@ def test_an_unusable_answer_is_still_paid_for_and_counted_toward_the_cap_with_th
     asked = len(net.requests)
     r = ask(api)
     assert r.status_code == 429 and r.json()["error"]["code"] == "spend_cap" and len(net.requests) == asked
+
+
+@pytest.mark.parametrize("usage", [{"input_tokens": float("nan"), "cost_usd": float("inf")},
+                                   {"input_tokens": -5, "cost_usd": -1}, {}, "lots"], ids=["nan-inf", "negative", "none", "text"])
+def test_a_usage_that_cannot_be_read_is_counted_at_the_calls_most_not_as_nothing(api, monkeypatch, net, usage):
+    wire(api, monkeypatch)
+    net.fail[GATEWAY_URL] = ("usage", usage)
+    r = ask(api)
+    assert r.status_code == 200 and r.json()["model"] == "tico-decide-1.0"
+    most = B.reservation(api.app.state.store.settings, [J.GATEWAY_MODEL],
+                         {"subject": "Invoice 4471", "snippet": SECRET}, QUESTIONS)
+    row, = spends(api)
+    assert row["cost_usd"] == most > 0 and row["usage"] == "unknown" and B._RESERVED[0] == 0
+    assert r.json()["usage"] == audits(api)[-1]["usage"] == {}, "a bad number is dropped where the answer comes in"
 
 
 def test_a_call_in_flight_reserves_what_every_provider_it_may_ask_could_cost(api, monkeypatch, net):

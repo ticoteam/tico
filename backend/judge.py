@@ -33,6 +33,7 @@ and the month's spend against the cap (backend/decide_readout.py).
 
 import json
 import logging
+import math
 import os
 import threading
 from typing import Any
@@ -117,14 +118,20 @@ def fallback_engine(record, env=None):
     return J.llm(*found) if found else None
 
 
+def _count(value):
+    """Whether `value` is a usable count or cost from a provider: a finite number, not negative."""
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value >= 0
+
+
 def tokens(usage):
-    """(uncached input, cached input, output) tokens from a provider's usage, whichever names it uses."""
+    """(uncached input, cached input, output) tokens from a provider's usage, whichever names it uses. A count that is
+    not a finite, non-negative number is not read."""
     usage = usage if isinstance(usage, dict) else {}
 
     def first(*keys, within=usage):
         for key in keys:
             value = within.get(key)
-            if isinstance(value, (int, float)) and not isinstance(value, bool):
+            if _count(value):
                 return int(value)
         return 0
     details = usage.get("prompt_tokens_details") if isinstance(usage.get("prompt_tokens_details"), dict) else {}
@@ -159,7 +166,7 @@ def cost_usd(settings, model, usage):
     usage = usage if isinstance(usage, dict) else {}
     for key in ("cost_usd", "cost"):
         value = usage.get(key)
-        if isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0:
+        if _count(value):
             return round(float(value), 6)
     fresh, cached, out = tokens(usage)
     if model in J.GATEWAY_MODELS:
@@ -236,34 +243,38 @@ def metered(store, models, state, questions, label, call):
             result = call()
         except J.JudgeError as exc:
             if getattr(exc, "paid", None):
-                exc.cost_usd = _spend(store, label, exc.paid)
+                exc.cost_usd = _spend(store, label, exc.paid, state, questions)
             raise
         result = dict(result)
         paid = result.pop("paid", None) or []
-        return {**result, "cost_usd": _spend(store, label, paid + [result])}
+        return {**result, "cost_usd": _spend(store, label, paid + [result], state, questions)}
     finally:
         with _METER:
             _RESERVED[0] = max(0.0, _RESERVED[0] - reserved)
 
 
-def _spend(store, label, attempts):
+def _spend(store, label, attempts, state, questions):
     """One `judge.spend` row per paid attempt (the answer is the last; any before it were unusable), in one
-    transaction. Returns their total USD."""
+    transaction. Returns their total USD. An attempt whose usage gives neither a cost nor any tokens is counted at its
+    most (`reservation`), not as nothing, and says `usage: unknown`."""
     settings, total = store.settings, 0.0
     with store.transaction() as c:
-        for i, attempt in enumerate(attempts):
-            cost = cost_usd(settings, attempt.get("model"), attempt.get("usage"))
+        for attempt in attempts:
+            model, usage = attempt.get("model"), attempt.get("usage")
+            known = _own_cost(attempt) or any(tokens(usage))
+            cost = cost_usd(settings, model, usage) if known else reservation(settings, [model], state, questions)
             total += cost
             H.event(c, H.KEEPER, "judge.spend", label or "", {
-                "label": label, "model": attempt.get("model"), "cost_usd": cost,
+                "label": label, "model": model, "cost_usd": cost,
                 **({} if "answers" in attempt else {"unusable": True}),
-                **({} if priced(settings, attempt.get("model")) or _own_cost(attempt) else {"price": "ceiling"})})
+                **({} if known else {"usage": "unknown"}),
+                **({} if priced(settings, model) or _own_cost(attempt) else {"price": "ceiling"})})
     return round(total, 6)
 
 
 def _own_cost(result):
     usage = result.get("usage") if isinstance(result.get("usage"), dict) else {}
-    return any(isinstance(usage.get(k), (int, float)) and not isinstance(usage.get(k), bool) for k in ("cost_usd", "cost"))
+    return any(_count(usage.get(k)) for k in ("cost_usd", "cost"))
 
 
 def gateway(settings):

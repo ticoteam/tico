@@ -99,10 +99,23 @@ def error_code(exc):
     return code if isinstance(code, str) and code in ERROR_CODES else "unreadable"
 
 
+def clean_usage(usage):
+    """A provider's usage as kept and counted: a map, with any number that is not finite and non-negative dropped."""
+    if not isinstance(usage, dict):
+        return {}
+    out = {}
+    for key, value in usage.items():
+        if isinstance(value, dict):
+            out[key] = clean_usage(value)
+        elif isinstance(value, bool) or not isinstance(value, (int, float)) or (math.isfinite(value) and value >= 0):
+            out[key] = value
+    return out
+
+
 def _paid(exc, model, usage):
     """`exc` for an answer that came back and could not be used: it was still paid for, so it carries `paid`, the
     model and usage that the server's monthly cap counts (backend/judge.py `metered`)."""
-    exc.paid = [{"model": model, "usage": usage if isinstance(usage, dict) else {}}]
+    exc.paid = [{"model": model, "usage": clean_usage(usage)}]
     return exc
 
 
@@ -272,7 +285,7 @@ def direct(api_key, model=MODEL, timeout=TIMEOUT, opener=None, sleep=time.sleep,
         except JudgeError as exc:
             raise _paid(exc, str(payload.get("model") or model), payload.get("usage"))
         return {"model": str(payload.get("model") or model), "answers": answers,
-                "usage": payload.get("usage") or {}, "ms": ms, "provider": TYPESAFE_PROVIDER}
+                "usage": clean_usage(payload.get("usage")), "ms": ms, "provider": TYPESAFE_PROVIDER}
     engine.model, engine.provider = model, TYPESAFE_PROVIDER
     return engine
 
@@ -312,7 +325,7 @@ def gateway(api_key, url, model=GATEWAY_MODEL, timeout=GATEWAY_TIMEOUT, opener=N
         if not isinstance(payload, dict):
             raise JudgeError("shape", "the Tico AI Gateway answered with something other than an object")
         answered = payload.get("model") if payload.get("model") in GATEWAY_MODELS else model
-        usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
+        usage = clean_usage(payload.get("usage"))
         try:
             answers = check_answers(payload.get("answers"), questions)
         except JudgeError as exc:
@@ -442,7 +455,7 @@ def llm(provider, api_key, model, timeout=TIMEOUT, opener=None):
         except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
             raise JudgeError("unavailable", f"{provider} did not answer: {type(exc).__name__}", retryable=True)
         # An answer came back, so it was paid for, even when it cannot be used.
-        usage = (payload.get("usage") or payload.get("usageMetadata") or {}) if isinstance(payload, dict) else {}
+        usage = clean_usage((payload.get("usage") or payload.get("usageMetadata")) if isinstance(payload, dict) else None)
         try:
             text = llm_text(provider, payload)
         except (ValueError, KeyError, IndexError, TypeError, AttributeError) as exc:
