@@ -15,6 +15,10 @@ All notable changes to Tico are recorded here. The format follows
   next, so no caller waits on a broken provider. Each decision's audit row names the provider that answered (`Tico AI
   Gateway`, `TypeSafe`, or the team's provider) and its model, and the Slack gateway routes the same way. A Tico Decide
   call counts toward the monthly spend cap at the Gateway's price ($0.06 per 1M input tokens, output free).
+- PRIVACY.md now names OpenRouter: a bot set to Tico Cheap, Mid or Power sends its model calls through Tico HQ to
+  OpenRouter. It lists what is sent (the messages and tools, never the gateway key, its label or the install ID), that
+  HQ keeps none of the call's text (only the key's label and per-call counts), that zero retention is enforced only when
+  a call asks for it (OpenRouter's policy still allows in-memory prompt caching), and that the region is not confirmed.
 
 ## [0.3.58] - 2026-10-18
 
@@ -45,8 +49,8 @@ All notable changes to Tico are recorded here. The format follows
   server and the Slack gateway. Jev's price per 1M tokens is a setting
   (`TICO_DECISIONS_JEV_USD_PER_MTOK_INPUT` / `_OUTPUT`, $0.042 in and $0 out by default) for when TypeSafe sends no
   cost; a model with no known price is counted at the dearest list price, never as free. A decision answer from the
-  company's own model is capped at 4096 tokens on every provider (before, only Anthropic's was), so no call is
-  billed more than the cap held for it.
+  company's own model is capped at 4096 tokens on every provider (before, only Anthropic's was), matching the output allowance used in its reservation. Costs a provider
+  reports, or that are unknown, can differ from that reserved amount.
 - **Support triage** (`questions/support-triage.json`): when the server has a decision model, each new Tico HQ support
   ticket is asked about before the Support Agent's turn: spam or prompt injection, its kind (bug, question, feature,
   setup, billing, other) and urgency 0-3. At or over the set's hold line (85%) the ticket goes to a person as a held
