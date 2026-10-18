@@ -4,7 +4,7 @@ as reading them one bot at a time, and about the same number of statements for 7
 import collections
 import json
 
-from backend import agents, rooms, views
+from backend import agents, rooms, update_feeds, views
 from backend import task_privacy as privacy
 from backend.chat_goals import readable_active
 from backend.harnesses import resolve_harness
@@ -48,6 +48,7 @@ def per_bot_view(c, settings, auth, bot, level, access, registry_roster, registr
                     "private_tasks_default": H.private_tasks_default(c, "bot:" + bot["slug"]),
                     "template": declared.get("template") or "",
                     "template_version": declared.get("template_version") or "",
+                    "update_subscriptions": update_feeds.chosen(declared),
                     "shared": bool(declared.get("shared")),
                     "shared_from": str(declared.get("shared_from") or ""),
                     "temp": bool(declared.get("temp")),

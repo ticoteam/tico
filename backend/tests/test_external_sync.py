@@ -223,15 +223,32 @@ def test_stale_import_warns_without_claiming_a_runtime_failure_or_changing_histo
     assert len(room_messages(api, 'grok-designer')) == 2
 
 
-def test_a_synced_bot_joins_its_humans_group_until_moved(api):
+def test_account_sync_preserves_moved_bots_and_history(api):
+    from backend.tests.test_org_chart import revision
+
     group = post(api, "groups", {"name": "Leadership", "add": {"people": ["ana"]}})
     gid = group.get("id") or group["group"]["id"]
-    sync(api, designer())
+    sync(api, designer(section="Pinned"), designer(grok_id="scout-id", name="Scout", messages=[]))
+    history_ids = [m["id"] for m in room_messages(api, "grok-designer")]
     team = lambda: next(b for b in get(api, "bots") if b["slug"] == "grok-designer")["team"]
     assert team() == gid                      # under Ana on the chart, not loose at the top
-    api.patch(f"/api/v2/groups/{gid}", json={"remove": {"bots": ["grok-designer"]}}, headers=headers())
-    sync(api, designer(messages=[]))
+    response = api.patch(f"/api/v2/groups/{gid}", json={"remove": {"bots": ["grok-designer"]}}, headers=headers())
+    assert response.status_code == 200
+    post(api, "bots/grok-designer/definition", {"reports_to": "coo", "expected_revision": revision(api, "grok-designer")})
+    post(api, "bots/scout/definition", {"reports_to": "human:cara", "expected_revision": revision(api, "scout")})
+    again = sync(api, designer(section="Design"), designer(grok_id="scout-id", name="Scout", messages=[]))
+    assert all(not bot["created"] and bot["messages_added"] == 0 for bot in again["bots"])
+    rows = {b["slug"]: b for b in get(api, "bots")}
+    assert rows["grok-designer"]["reports_to"] == "coo"
+    assert rows["scout"]["reports_to"] == "human:cara"
+    assert rows["grok-designer"]["agent"]["section"] == "Design"  # source metadata still syncs
     assert team() != gid                      # moved out by a person: a later sync leaves it there
+    assert [m["id"] for m in room_messages(api, "grok-designer")] == history_ids
+
+    other = post(api, "groups", {"name": "Design", "add": {"bots": ["grok-designer"]}})
+    other_id = other.get("id") or other["group"]["id"]
+    sync(api, designer(section="Pinned"), designer(grok_id="scout-id", name="Scout", messages=[]))
+    assert team() == other_id                 # explicit department wins over the account owner's group
 
 
 def test_muse_links_as_one_bot_beside_dots(api):

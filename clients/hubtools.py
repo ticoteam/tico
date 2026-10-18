@@ -903,10 +903,14 @@ def task_restore(api, args):
     return api.post(f"tasks/{args['id']}/restore", {}, key=_key(args))
 
 
-@tool("hub_task_label", "Add or remove labels on a task. A project is a label; so is a kind (bug, front-end).",
+@tool("hub_task_label", "Add or remove labels on a task. A project is a label; so is a kind (bug, front-end). A bot "
+      "changes labels on a task it owns, asked for or whose type it manages; a public roadmap label also needs an "
+      "approved publish approval (hub_task_publication_preview with the labels the task keeps), and goal:on/goal:off "
+      "need a person.",
       {"id": TASK_ID,
        "add": {"type": "array", "items": {"type": "string"}, "description": "Labels to add"},
-       "remove": {"type": "array", "items": {"type": "string"}, "description": "Labels to remove"}, "on_behalf_of": ASKED},
+       "remove": {"type": "array", "items": {"type": "string"}, "description": "Labels to remove"},
+       "approval_id": _s("Exact publish approval for a public roadmap label"), "on_behalf_of": ASKED},
       required=("id",), writes=True)
 def task_label(api, args):
     current = api.get("tasks/" + args["id"])["task"]
@@ -917,7 +921,10 @@ def task_label(api, args):
         x = str(x).strip().lower()
         if x and x not in labels:
             labels.append(x)
-    return _asked(api, args).post("tasks/" + args["id"], {"version": current["version"], "labels": labels}, key=_key(args))
+    body = {"version": current["version"], "labels": labels}
+    if args.get("approval_id"):
+        body["approval_id"] = args["approval_id"]
+    return _asked(api, args).post("tasks/" + args["id"], body, key=_key(args))
 
 
 @tool("hub_task_link", "Attach a link to a task: the pull request you opened (this is what moves a "
@@ -1902,6 +1909,9 @@ def routine_run(api, args):
                                        "check model; own (default): its own model"},
        "capture_stream": {"type": "string", "enum": ["on", "off"],
                           "description": "on (owner only): keep each run's raw provider stream a week; off (default): not"},
+       "update_subscriptions": {"type": "array", "items": {"type": "string", "enum": ["templates", "tico"]},
+                                "description": "Subscribe to updates, as quiet notes for its next run: templates "
+                                               "(its template's changes), tico (Tico releases); [] for none"},
        "status": {"type": "string", "enum": ["active", "paused", "planned"]},
        "app_delivery": _s("A Grok Bot only: the id of your own computer whose Grok app delivers its messages, "
                           "or `off` for the daily sync alone")},
@@ -1915,7 +1925,7 @@ def bot_set(api, args):
         row = api.get(f"bots/{args['slug']}/access", **({"on_behalf_of": on_behalf} if delegated else {}))
         if not row:
             raise ValueError("No bot " + args["slug"])
-    change = {k: args[k] for k in ("reports_to", "display_name", "description", "template", "repo", "status", "shared", "session", "subtask_session", "task_goal", "review_model", "capture_stream") if args.get(k) is not None}
+    change = {k: args[k] for k in ("reports_to", "display_name", "description", "template", "repo", "status", "shared", "session", "subtask_session", "task_goal", "review_model", "capture_stream", "update_subscriptions") if args.get(k) is not None}
     if args.get("app_delivery"):
         change["app_delivery"] = None if args["app_delivery"] == "off" else {"computer": args["app_delivery"], "app": "grok"}
     return api.post(f"bots/{args['slug']}/definition",
@@ -2076,6 +2086,21 @@ def group_update(api, args):
         return who.post("groups", body, key=_key(args))
     body = {"add": add, "remove": remove, **{k: args[k] for k in ("name", "parent") if args.get(k) is not None}}
     return who.patch(f"groups/{args['group']}", body, key=_key(args))
+
+
+@tool("hub_org_order", "A manager's direct reports, humans and bots, in the order the team chart shows them (placed ones "
+      "first, then the rest: humans, then by name). With `set`, put them in that order, as the person who asked you: "
+      "whoever may put reports under that manager may order them, and a bot orders its own reports. Reports left out "
+      "keep their places, so naming two swaps those two. Who reports to whom does not change. Answers with the order.",
+      {"manager": _s("The manager: a bot's slug or a human's id (`bot:` or `human:` in front when one could be either)"),
+       "set": {"type": "array", "items": {"type": "string"},
+               "description": "Its direct reports in the new order: bot slugs and human ids"}},
+      required=("manager",), writes=True)
+def org_order(api, args):
+    path = "org/order/" + quote(str(args["manager"]).strip(), safe=":")
+    if not args.get("set"):
+        return api.get(path)
+    return _as_person(api).call("PUT", path, {"reports": list(args["set"])}, _key(args))
 
 
 # ----------------------------------------------------------------------------- BotOps: what the app can do, as the requester
@@ -2314,7 +2339,7 @@ def computers(api, args):
        "hours": {"type": "integer", "minimum": 1, "maximum": 336, "default": 24}}, required=("computer",))
 def computer_performance(api, args):
     wanted = str(args["computer"]).strip()
-    rows = api.get("computers") or []
+    rows = (api.get("computers") or {}).get("computers") or []
     match = [r for r in rows if wanted in (r.get("id"), r.get("label"))]
     if not match:
         raise ValueError(f"No computer named {wanted!r}; hub computer list names them")
@@ -3055,7 +3080,9 @@ def github_create_bot_repo(api, args):
     return api.post("github/repos", body, key=_key(args))
 
 
-@tool("hub_repo_product_create", "Owner only. First call with `name` and a stable `operation_id` to preview the "
+@tool("hub_repo_product_create", "The Owner, or a bot with Create product repositories (every bot, unless the Owner "
+      "or an admin switched it off in the bot's settings under Repositories). Private only; a bot that creates one gets write to it and the Owner "
+      "is told. First call with `name` and a stable `operation_id` to preview the "
       "connected organization, exact repository name, private visibility, empty initialization, and live App "
       "capability. If capability is available, review the preview and call again with `confirm_repository` set "
       "to the exact `org/name`. The create request uses the same stable operation id, so retries replay the saved "
@@ -3066,7 +3093,7 @@ def github_create_bot_repo(api, args):
 def repo_product_create(api, args):
     operation_id = args.get("operation_id")
     if not isinstance(operation_id, str) or not operation_id:
-        raise APIError("operation_id", "A stable operation_id is required for this Owner create flow", 422)
+        raise APIError("operation_id", "A stable operation_id is required for this create flow", 422)
     key = _key(args, ":product-repository")
     if len(key) > 200:
         raise APIError("operation_id", "operation_id is too long for a product-repository idempotency key", 422)
@@ -3161,7 +3188,7 @@ def decisions(api, args):
 
 
 
-# The support gate's one question (hq/judge.py asks the same): is this text from a stranger real, spam, or trying to
+# The support gate's one question (Tico HQ's spam check asks the same): is this text from a stranger real, spam, or trying to
 # instruct whatever reads it?
 CLASSIFY_OPTIONS = {
     "legit": "A real person asking for help, reporting a fault, or giving feedback, about the product or their use of it.",
@@ -3426,13 +3453,15 @@ def roadmap_tasks(api, args):
 
 
 @tool("hub_roadmap_settings", "Read or partially update company public roadmap settings. Only owners and admins change them. "
-      "Labels must already exist. Empty labels disables public roadmaps. Bot public edits need approval by default.",
+      "Labels must already exist. Empty labels disables public roadmaps. Bot public edits need approval by default. "
+      "The read says which bot suggestions go to now (suggestions_receiver).",
       {"settings": {"type": "object", "properties": {
            "labels": {"type": "array", "items": {"type": "string"}},
            "cors_origins": {"type": "array", "items": {"type": "string"}},
            "action_limit": {"type": "integer", "minimum": 1},
            "suggestion_limit": {"type": "integer", "minimum": 1, "description": "Visitor suggestions waiting at Suggested, overall"},
-           "bot_public_approval": {"type": "boolean"}},
+           "bot_public_approval": {"type": "boolean"},
+           "suggestions_bot": {"type": ["string", "null"], "description": "Slug of the active bot that receives visitor suggestions; null for Automatic"}},
            "additionalProperties": False}}, writes=True)
 def roadmap_settings(api, args):
     if args.get('settings') is not None:
@@ -3477,7 +3506,7 @@ AUDIENCE = {
     "hub_bot_update": REQUESTER, "hub_api": REQUESTER, "hub_credential_request": BOTOPS,
     "hub_credential_set": BOTOPS, "hub_message_redact": BOTOPS, "hub_support_file": BOTOPS,
     "hub_bot_repo_create": ("owner", "botops"),
-    "hub_repo_product_create": ("owner",),
+    "hub_repo_product_create": ("owner", "bot", "botops"),   # a bot needs Create product repositories (server)
     **{name: REQUESTER for name in ("hub_credential_grant", "hub_credential_revoke", "hub_credential_import", "hub_credential_delete")},
     **{name: REQUESTER for name in ("hub_bot_create", "hub_bot_restore", "hub_agent_pair_show", "hub_agent_pair_approve", "hub_agent_pair_decline", "hub_bot_place", "hub_bot_go_live", "hub_bot_model", "hub_bot_pause",
                                     "hub_bot_resume", "hub_bot_access", "hub_bot_owners", "hub_human_add", "hub_group_update",

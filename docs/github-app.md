@@ -116,17 +116,21 @@ computer publishes its history into it on the bot's next run, as for any empty r
 
 An Owner can create an exact product repository without the `bot-` prefix from **Settings → Repositories**.
 Enter one repository name, review the connected organization, exact name, and private/empty settings, then
-select **Create private empty repository**. The API also exposes this flow to the Owner's Hub CLI:
+select **Create private empty repository**. The API also exposes this flow to the Hub CLI, for the Owner and
+for a bot with **Create product repositories** ([below](#bots-that-create-product-repositories)):
 
     hub repo product-create tico-recorder
+    hub repo product-create tico-recorder --confirm <org>/tico-recorder     # a bot's turn: no terminal
 
-The command prints the same preview and requires typing the exact `org/name` before it writes. Both flows
+The command prints the same preview and requires the exact `org/name` before it writes: typed at a terminal,
+or given as `--confirm`, which must match the preview exactly. Both flows
 create with `private: true` and `auto_init: false`, so GitHub receives no initial commit and existing local
 history can be published separately. The write is audited as `github.product_repo_created` and retries with
-the same request key replay the saved receipt. This path is Owner-only; it does not alter the bot-prefixed
-creator or grant repository access to any bot.
+the same request key replay the saved receipt. It does not alter the bot-prefixed creator. When the Owner
+creates one, no bot gets access to it.
 
-The Owner-only MCP tool `hub_repo_product_create` follows the same review step. Call it with `name` and a
+The MCP tool `hub_repo_product_create` (the Owner, or a bot with Create product repositories) follows the same
+review step. Call it with `name` and a
 stable `operation_id` to receive the preview. After reviewing the returned `org/name` and capability, call
 it again with the same `operation_id` and `confirm_repository` set to that exact `org/name`. The tool
 fetches a fresh preview before writing and refuses a mismatched confirmation. If the installation lacks
@@ -166,6 +170,42 @@ Administration: write is available, missing, or could not be verified; a stored 
 treated as proof. If the installation uses selected repositories, the result says when the new repository is
 not yet accessible. An Owner must add it in GitHub App installation settings and then refresh **Settings →
 Repositories**. Tico never changes the installation's repository selection or bot access grants.
+
+### Bots that create product repositories
+
+A bot creates a product repository the same way, with the same preview, exact confirmation, request key and
+name rules. Every bot has **Create product repositories** by default, BotOps and bots made later included. The
+Owner or an admin switches it off in that bot's **Settings → Repositories**
+(`PUT /api/v2/bots/<bot>/repositories {"create_product_repositories": false}`), and only the Owner's own request
+switches it back on (`true`). An off is kept as that bot's choice, so a later default, migration or template never
+turns it back on. A bot switched off is refused `403` on the preview and the create, naming the right: *Creating a
+product repository needs the Owner, or a bot with the Create product repositories right. Every bot has it unless
+the Owner or an admin switched it off; only the Owner switches it back on, in the bot's settings under
+Repositories.* A bot's turn acting for someone (BotOps' on-behalf-of, the Assistant) or an external
+agent gets `403` on both, even for the Owner. The rules are in [Permissions](permissions.md#bots-that-create-repositories).
+
+- **Private and empty only.** `visibility` must be `private`; a public repository is publishing and stays a
+  person's step. Bots never delete, rename, transfer or change the visibility of a repository.
+- **Names.** The same single-name rule as the Owner's, and a bot is also refused a `bot-` or `emp-` name, or a
+  name a bot's repository already uses (`403`).
+- **After it is created**, in the same step that saves the receipt (so a retry with the same key replays it and
+  does nothing twice): the repository is ticked for the team, the bot gets write to it (a bot on **Own repo
+  only** moves to **Chosen repos** with just this one; a bot on **Chosen repos** keeps its other grants; a bot on
+  **All ticked repos** with read access moves to **Chosen repos**, read on every repository it reached and write on
+  this one, so a repository ticked later reaches it only once chosen), and the Owner gets a notice: *Head of Engineering created private repo tico-services (acme/tico-services). Head of
+  Engineering has write access to it.* The notice also names any bot set to **All ticked repos**, which reaches
+  it too, and says when the bot moved from All ticked repos to Chosen repos. The reply's `bot_access` is `write`,
+  or `none` if the grant could not be made (the repository exists; an Owner or admin grants it in Settings). The
+  event `github.product_repo_created` records the bot, `bot_access`, `moved_to_chosen` and whether the Owner was told.
+
+**If the app lacks Administration: write**, nothing is created. The preview's `capability` is `missing` and the
+create answers `409 github_permission_missing`, both saying: *The GitHub App installation is missing
+Administration: write, so it cannot create repositories. The Owner changes this once on GitHub: set
+Administration to Read and write on `<the app's permissions page>`, then accept the new permission for the
+organization when GitHub asks.* That is the same one-time change as
+[When the app cannot create repositories](#when-the-app-cannot-create-repositories): the app's permissions page,
+**Administration: Read and write**, save, accept for the organization. After it, bots with the right (and BotOps for
+bot repositories) create repositories without anyone's help.
 
 ### A bot whose repository already exists on a computer
 

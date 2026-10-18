@@ -283,6 +283,7 @@ function machineUsageHTML(runtime, state, name, where = 'this computer') {
 // when the computer last reported).
 function machineSignInHTML(machine, online, name, auth, value) {
   const checked = machine.last_seen ? ` · last checked ${ago(machine.last_seen)}` : '';
+  if (auth !== 'ready' && machineSignedOut(machine, name)) return '<span class="pill fail" title="Signed out from Tico: the company\'s shared key does not sign it back in by itself">Signed out</span>';
   if (auth === 'ready') return `${machineAccountHTML(value.account, name, value.detail)}${online ? '' : ` <span class="muted">${esc(checked.slice(3))}</span>`}`;
   if (auth === 'rejected') return `<span class="pill fail" title="${esc(value.detail || '')}">Login expired or rejected</span>`;
   if (auth === 'missing') return `<span class="pill fail" title="${esc(value.detail || '')}">Signed out</span>`;
@@ -290,6 +291,12 @@ function machineSignInHTML(machine, online, name, auth, value) {
   if (auth === 'failed') return couldNot;
   return online ? `<span class="pill waiting" title="${esc(value.detail || '')}">Checking…</span>` : couldNot;
 }
+// A login someone signed out from Tico (backend/model_login.py model_login_cleared); '' is the computer's own login.
+const machineSignedOut = (machine, runtime, profile = '') => (machine.signed_out?.[runtime] || []).includes(profile);
+// Sign out / Switch account (or Use the shared key) for one login, from the shared sign-in module (ui/model-login.js).
+const machineLoginActions = (machine, online, runtime, profile, signedIn) => window.TicoModelLogin?.actionsHTML({
+  runnerId: machine.id, runtime, machine: machine.label, profile, signedIn, signedOut: machineSignedOut(machine, runtime, profile), online,
+  platform: machine.platform || ''}) || '';
 function machineProfileSignIn(state, runtime) {
   if (state?.signed_in === true) return machineAccountHTML(state.account, runtime);
   if (state?.signed_in === false) return '<span class="pill fail">Signed out</span>';
@@ -323,7 +330,8 @@ function machineToolsHtml(machine, online) {
         ? ` <button class="ghost machine-signin" type="button" data-model-login data-runner="${esc(machine.id)}" data-runtime="${esc(name)}" data-machine="${esc(machine.label)}">Sign in</button>` : '';
       else if (command) action = ` <span class="machine-login-command" title="Run on the computer${command.includes('<container>') ? '; docker ps shows the container name' : ''}"><code>${esc(command)}</code><button class="ghost machine-signin" type="button" data-machine-copy-login="${esc(command)}">Copy</button></span>`;
       else if (caps.api_keys === 'bot') action = ' <a class="machine-signin-link" href="#/credentials">Add key</a>';
-    }
+      if (caps.browser_sign_in) action += machineLoginActions(machine, online, name, '', false);
+    } else if (manage && installed) action = machineLoginActions(machine, online, name, '', true);
     const rejected = auth === 'rejected'
       ? `<span class="err machine-rejected" data-rejected="${esc(name)}">${value.rejected_at ? esc(ago(value.rejected_at)) + '. ' : ''}${value.rejected_reason ? esc(value.rejected_reason) + '. ' : ''}${hlCredentialFix(value.credential_source)}. It takes no work that needs ${esc(name)} until then.</span>` : '';
     const signIn = installed ? machineSignInHTML(machine, online, name, auth, value) : '<span class="muted">—</span>';
@@ -332,10 +340,14 @@ function machineToolsHtml(machine, online) {
     const own = installed ? machineUsageHTML(name, {account: value.account, weekly: value.weekly, five_hour: value.five_hour}, label) : '<span class="muted">—</span>';
     const lines = installed ? profiles.filter(p => p.runtimes?.[name]).map(p => {
       const state = p.runtimes[name];
+      // A signed-out named subscription signs in again from here, like the computer's own login above.
+      const signIn = !manage ? '' : state.signed_in === true ? machineLoginActions(machine, online, name, p.name, true)
+        : state.signed_in === false && online && harnessCaps(name).browser_sign_in
+          ? ` <button class="ghost machine-signin" type="button" data-model-login data-runner="${esc(machine.id)}" data-runtime="${esc(name)}" data-profile="${esc(p.name)}" data-machine="${esc(machine.label)}" aria-label="Sign in ${esc(p.display_name || p.name)} to ${esc(label)}">Sign in</button>` : '';
       return `<div class="machine-tool machine-tool-profile" role="row" data-machine-profile="${esc(p.name)}" data-machine-tool="${esc(name)}">
         <span role="cell" class="machine-tool-name" title="Named subscription ${esc(p.display_name || p.name)}">${esc(p.display_name || p.name)}</span>
         <span role="cell" class="machine-tool-version"></span><span role="cell" class="machine-tool-enabled"></span>
-        <span role="cell" class="machine-tool-signin">${machineProfileSignIn(state, name)}</span>
+        <span role="cell" class="machine-tool-signin">${machineProfileSignIn(state, name)}${signIn}</span>
         <span role="cell" class="machine-tool-usage">${state.signed_in === false ? '<span class="muted">—</span>' : machineUsageHTML(name, state, `${label} ${p.display_name || p.name}`, 'this subscription')}</span></div>`;
     }).join('') : '';
     return `<div class="machine-tool" role="row" data-machine-tool="${esc(name)}">
@@ -456,7 +468,8 @@ function renderSettingsMachines() {
       const id = screenBox.dataset.computerScreen, before = SETTINGS_DATA.machines.find(m => m.id === id)?.screen || 'off';
       screenBox.querySelectorAll('input').forEach(input => { input.disabled = true; });
       try {
-        await post(`/v2/computers/${encodeURIComponent(id)}/screen`, {mode: event.target.value});
+        const saved = await post(`/v2/computers/${encodeURIComponent(id)}/screen`, {mode: event.target.value});
+        screenSaved(id, {screen: event.target.value, ...saved});
         toast(event.target.value === 'off' ? 'Screen off' : `Screen: ${event.target.value}`);
         await loadSettings();
       } catch (error) {

@@ -45,14 +45,13 @@ Tico server ── GET /v1/latest?install_id&version&active_people&active_bots&f
 
 ## HQ, the collector
 
-`hq/` is a separate service: its own FastAPI app (`hq/app.py`), SQLite database (`hq/db.py`), image (`hq/Dockerfile`) and
-compose file (`hq/compose.yaml`). It is not in the Tico server image and refuses to start without `TICO_HQ_KEY` (16 or
-more characters), so it cannot be turned on by accident. The key is an enable switch: it is not sent by installs and does
-not gate the public endpoints.
+HQ ([Tico HQ](tico-hq.md)) is a separate service at `https://updates.tico.team`, with its own database. It is not in the
+Tico server image; its source and hosting live in the private ticoteam/tico-services repository. Installs send it no key,
+and its public endpoints need none.
 
 **Storage** (`installs`): `install_id`, `first_seen`, `last_seen`, `last_version`, `last_people`, `last_bots`. Dates are UTC
 days. Nothing else is stored for the count, and rows older than 13 months (by `last_seen`) are deleted daily. Support tickets, which
-a human sends on purpose, are in two other tables (`tickets`, `ticket_replies`; `hq/support.py`) and are kept until deleted: see
+a human sends on purpose, are in two other tables (`tickets`, `ticket_replies`) and are kept until deleted: see
 [Support tickets](#support-tickets).
 
 **Endpoints**
@@ -70,25 +69,25 @@ a human sends on purpose, are in two other tables (`tickets`, `ticket_replies`; 
 - `GET /healthz`.
 
 **No addresses.** The rate limiter keeps a salted hash of the address in memory, with a random salt made at start, and
-forgets it. The server runs with `access_log=False`, so no address or query string is logged. Behind a proxy set
-`HQ_CLIENT_IP_HEADER` (`X-Forwarded-For` behind Caddy, `CF-Connecting-IP` behind Cloudflare) so the limit is per client;
-the proxy in front must not log query strings either (Caddy does not by default). Do not put Cloudflare Access in front:
-installs call HQ without signing in.
+forgets it. HQ logs no address or query string. Installs call HQ without signing in.
 
 ### Support tickets
 
-`hq/support.py`. A human files a ticket from the app (Help > Contact support; [support.md](support.md)); the team works it with a
+A human files a ticket from the app (Help > Contact support; [support.md](support.md)); the team works it with a
 staff key. Bodies are JSON, at most 16 KB (48 KB for staff), with strict fields; a refusal names the field, never echoes a value
-(`422 {"error": "invalid", "field": "message"}`). Nothing here logs a request, a body or an address.
+(`422 {"error": "invalid", "field": "message"}`; a field HQ does not know is `"field": "fields"`). Nothing here logs a request,
+a body or an address. The ticket secret goes in the `X-Ticket-Secret` header; an install never puts it in the address.
 
 | Route | Auth | |
 |---|---|---|
-| `POST /v1/support` | none | `{message, email?, install_id?, version?, diagnostics?}` (no other field; `diagnostics` is a JSON object with `format: 1`, up to 256 KB, and makes the request limit larger than a message's 16 KB). `201 {ticket_id, secret, status}`. The secret is shown once and HQ keeps its SHA-256. 5 an hour per address, 10 a day per install ID, 1000 a day in all: `429`. |
-| `GET /v1/support/{id}` | ticket secret | Header `X-Ticket-Secret` (or `?secret=`). `{ticket_id, status, created, updated, messages: [{id, created, from: "staff"\|"person", body}]}`. An unknown ticket and a wrong secret are the same `404`. 600 an hour per address. |
-| `POST /v1/support/{id}/messages` | ticket secret | `{message}` from the human; reopens an answered ticket; `409` when closed or at 60 messages. |
-| `DELETE /v1/support/{id}` | ticket secret | The human deletes their ticket. |
+| `POST /v1/support` | none | `{message, email?, install_id?, version?, app_version?, kind?, diagnostics?}` (no other field; `app_version` is the desktop app's; `kind` is `support`, `setup` or `feedback`; `diagnostics` is a JSON object with `format: 1`, up to 256 KB, and makes the request limit larger than a message's 16 KB). `201 {ticket_id, secret, status}`. The secret is shown once and HQ keeps its SHA-256. 5 an hour per address, 10 a day per install ID, 1000 a day in all: `429`. |
+| `POST /v1/support` with `kind: "setup-website"` | none; `Origin: https://tico.team` only | Talk to a person on tico.team/setup. `{kind, email, step: "company"\|"chart"\|"goals"\|"team"\|"rules"\|"file", mode: "browser"\|"server", turns: 0..1000, session_id: 16-64 of [A-Za-z0-9_-], note?: up to 1000 characters, plan?: tico.company.yaml text with a top-level `version: 0.2`, up to 32 KB}`; anything else is `422 {"error": "invalid"}` with no field named, another origin `403`. The ticket's body is fixed text (the email, step, mode and turns); the note and plan are its `attachment`, labelled Untrusted public input, with key-shaped strings removed (the draft engine's scrubber, `backend/company_file/keys.py`) before the judge or the database see them. `200 {ticket_id, reply_url, keys_removed}`: `reply_url` is `https://<HQ_DOMAIN>/support/{id}#s=<secret>` (`https://updates.tico.team` when `HQ_DOMAIN` is unset). One per `session_id`, 3 a day per address and per email address, `HQ_SETUP_TICKETS_DAILY_CAP` a day in all (default 50; 0 turns the kind off): `429 {"busy": true}`. The route answers the browser's preflight and carries `Access-Control-Allow-Origin: https://tico.team` for that origin only. |
+| `GET /v1/support/{id}` | ticket secret | Header `X-Ticket-Secret` (or `?secret=`). `{ticket_id, status, created, updated, messages: [{id, created, from: "staff"\|"person", body, has_diagnostics?}]}`. An unknown ticket and a wrong secret are the same `404`. 600 an hour per address. |
+| `POST /v1/support/{id}/messages` | ticket secret | `{message, diagnostics?}` from the human: `201 {ticket_id, status: "open", message_id}`; reopens an answered ticket; `409` when closed or at 60 messages. |
+| `DELETE /v1/support/{id}` | ticket secret | The human deletes their ticket: `200 {deleted: true}`. |
 | `GET /v1/staff/stats` | staff key | `{by_version: {"0.2.24": 2, ...}, window_days: 7}`: installs heard from in the last 7 days on each exact release, with no suppression (the public `/v1/stats` still leaves out counts under 5). |
-| `GET /v1/staff/tickets?status=open\|answered\|closed\|all&since=<UTC time>&limit=` | staff key | Oldest activity first. `since` is `YYYY-MM-DDTHH:MM:SSZ` and matches `updated`, which moves when the human writes or the team replies. Each ticket has `body`, `email`, `version`, `install_id`, `email_pending`, `signature` (a Health Monitor `hm-...`, or empty), `has_diagnostics` and `messages`. `&signature=hm-...` lists only tickets with one signature, so the team works them together. |
+| `GET /v1/staff/tickets?status=open\|answered\|closed\|all&since=<UTC time>&limit=` | staff key | Oldest activity first. `since` is `YYYY-MM-DDTHH:MM:SSZ` and matches `updated`, which moves when the human writes or the team replies. Each ticket has `body`, `email`, `version`, `install_id`, `email_pending`, `signature` (a Health Monitor `hm-...`, or empty), `has_diagnostics`, `kind` and `messages`, and on a
+setup-website ticket `attachment: {label, parts}` (`show` adds the `note` and `plan` text). `&signature=hm-...` lists only tickets with one signature, so the team works them together. |
 | `GET /v1/staff/tickets/{id}` | staff key | One ticket, with its `diagnostics` bundle when the human attached one (support.md, PRIVACY.md). No other route returns it. |
 | `POST /v1/staff/tickets/{id}/reply` | staff key | `{body}` (up to 8000 characters). Sets the ticket to `answered`; with an email on the ticket it is marked `email_pending`. HQ sends no email. `409` when closed. |
 | `POST /v1/staff/tickets/{id}/status` | staff key | `{status: "open"\|"answered"\|"closed", email_sent?: true}`. |
@@ -99,51 +98,18 @@ The staff key is `HQ_STAFF_KEY` (24+ characters; unset turns every staff route i
 compared in constant time. 20 wrong keys an hour from an address are answered `429`. Ticket ids look like `TK-AB12CD34`. Statuses
 are `open`, `answered` and `closed`. Tickets are never deleted by HQ itself.
 
-### Deploy HQ
+### Hosting
 
-On the server (next to an existing Tico is fine: HQ has its own compose project, volume and hostname). This is the Tico
-team's `updates.tico.team`; anyone can run their own the same way.
-
-```
-git clone https://github.com/ticoteam/tico && cd tico
-cp hq/.env.example hq/.env
-$EDITOR hq/.env          # TICO_HQ_KEY=$(openssl rand -hex 24); HQ_DOMAIN; pick a front door; optional backup;
-                         # HQ_STAFF_KEY=$(openssl rand -hex 24) if you will work support tickets
-docker compose -f hq/compose.yaml --env-file hq/.env up -d --build
-curl -fsS http://127.0.0.1:8770/healthz
-```
-
-Front door, one of (set in `hq/.env`):
-
-- `COMPOSE_PROFILES=cloudflared`, `HQ_TUNNEL_TOKEN=...`, `HQ_DOMAIN=updates.tico.team`, `HQ_CLIENT_IP_HEADER=CF-Connecting-IP`:
-  an HQ-only Cloudflare tunnel, and the right choice on a server whose Tico already holds ports 80 and 443. Do not add an
-  Access application. HQ writes the tunnel's route at every start (`hq/tunnel.py`, into the `hq-tunnel` volume) and
-  cloudflared runs with it (`--config /tunnel/cloudflared.yml`): `HQ_DOMAIN` to `http://hq:8770`, anything else a 404.
-  So a tunnel with no route of its own (a locally managed one, or a token reused from elsewhere) serves HQ instead of
-  logging "No ingress rules" and answering 503. A Public Hostname set in the tunnel's dashboard still wins: cloudflared
-  prefers the configuration Cloudflare holds, so with one there, route `updates.tico.team` to `http://hq:8770` there too. The
-  file is world-readable (0644) because cloudflared runs as its own non-root user; it holds no secret, the token stays
-  in cloudflared's environment. A changed `HQ_DOMAIN` needs `up -d` for both services; with `HQ_DOMAIN` empty the route
-  answers only 404s, and a value that is not a plain hostname stops HQ with the reason.
-- `COMPOSE_PROFILES=caddy`, `HQ_DOMAIN=updates.tico.team`, `HQ_CLIENT_IP_HEADER=X-Forwarded-For`: HTTPS on ports 80 and 443 of a
-  host of its own.
-
-Then check `curl -fsS https://updates.tico.team/v1/stats` and `curl -fsS https://updates.tico.team/v1/latest`. Through the
-tunnel, a 404 means `HQ_DOMAIN` is empty or names another host, and a 503 means cloudflared runs without the route:
-`docker compose -f hq/compose.yaml logs cloudflared` says "No ingress rules" (it was started without `--config`) or
-"permission denied" (the file it reads is not world-readable).
-
-**Backups** are optional: add `,backup` to `COMPOSE_PROFILES` and set `HQ_BACKUP_URL` (and `HQ_BACKUP_ENDPOINT`,
-`LITESTREAM_ACCESS_KEY_ID`, `LITESTREAM_SECRET_ACCESS_KEY` for R2 or MinIO). Litestream copies `hq.db` continuously;
-the backup service runs as the HQ image's user (`10005:10005`) so it can read `hq.db`; as root it fails with "stat /data/hq.db: permission denied". Restoring is the command at the top of `hq/litestream.yml`. Update HQ with `git pull` and the same `up -d --build`.
+The Tico team runs HQ at `updates.tico.team`. How it is deployed, its front door and its backups are documented with its
+source in ticoteam/tico-services. `TICO_HQ_URL` points an install at another address that answers the same routes.
 
 ## Testing
 
 `backend/tests/test_usage_count.py` (the payload has exactly the five fields; nothing is sent when off by
 `TICO_TELEMETRY`, `DO_NOT_TRACK`, the toggle, demo mode or before the notice; HQ down falls back to GitHub; debug sends
-nothing; owner-only controls), `hq/tests/test_hq.py` (no address stored or logged; bad input refused; the stats math,
-suppression and retention; no start without the key), `hq/tests/test_support.py` (tickets: strict input, per-ticket secrets, staff
-routes need the key, replies reach the install, nothing logged, nothing deleted by itself), `hq/tests/test_support_bot.py` (the Support
-Agent's `hq-tickets` against the real routes) and `hq/tests/test_tunnel.py` (the tunnel's route names `HQ_DOMAIN`,
-ends in a 404, is world-readable, and refuses a domain that is not a plain hostname). They add about ten seconds to the
-suite.
+nothing; owner-only controls). `backend/tests/test_support.py` and `backend/tests/test_support_access.py` hold the install to
+the ticket routes above and the [support access routes](tico-hq.md#support-access) exactly: method, path, the
+`X-Ticket-Secret` header and the JSON fields. `runner/tests/test_hq_tickets.py` holds the Support Agent's `hq-tickets`
+and `gh-support` to the staff routes above and `POST /v1/staff/judge`. HQ's own tests (no address stored or logged; bad
+input refused; the stats math, suppression and retention; tickets, the judge and the staff routes as HQ serves them) are in
+ticoteam/tico-services with its code.

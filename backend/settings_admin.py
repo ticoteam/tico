@@ -16,6 +16,7 @@ from . import providers
 from . import app_delivery
 from . import rooms
 from . import shared_bots
+from . import update_feeds
 from .auth import Identity
 from .execution import _reported, stranded
 from .harnesses import EXTERNAL_HARNESSES, HARNESS_BY_ID, normalize_fallback, resolve_harness, runtime_of
@@ -196,6 +197,8 @@ class SettingsAdmin:
                 "task_goal": effective.get("task_goal"),
                 "review_model": effective.get("review_model"),
                 "capture_stream": (_json(config["config_json"], {}) or {}).get("capture_stream"),
+                "update_subscriptions": update_feeds.chosen(_json(config["config_json"], {}) or {}),
+                "update_feeds": update_feeds.status(),
                 "harness": resolve_harness(effective, effective.get("runtime") or row.get("runtime")),
                 "fallback": normalize_fallback(effective.get("fallback")),
                 "app_delivery": app_delivery.view(c, _json(config["config_json"], {}) or {})}
@@ -332,6 +335,8 @@ class SettingsAdmin:
             "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (body.slug, encode(config), team, operator, encode(owners), body.description,
              body.reports_to, repo, body.thread_mode, now, who.actor, encode([pid]), who.actor))
+        from .report_order import arrive
+        arrive(c, "bot:" + body.slug, body.reports_to)     # a new bot goes last among its manager's reports
         assignment = None
         if runner:
             assignment = self.execution.assign(c, who, body.slug, SimpleNamespace(
@@ -582,6 +587,11 @@ class SettingsAdmin:
                 forget_bot(c, bot)
         if "app_delivery" in body.model_fields_set:
             app_delivery.change(c, who, self.auth, bot, body.app_delivery, declared, config["operator"])
+        if "update_subscriptions" in body.model_fields_set:
+            # Its cursors live beside the definition: delivering an update never rewrites the bot (update_feeds).
+            picked = [name for name in update_feeds.CATEGORIES if name in (body.update_subscriptions or [])]
+            update_feeds.subscribe(c, bot, update_feeds.chosen(declared), picked)
+            declared["update_subscriptions"] = picked
         if "shared" in body.model_fields_set:
             declared["shared"] = bool(body.shared)
         if "template" in body.model_fields_set:
@@ -592,6 +602,9 @@ class SettingsAdmin:
                          "private_tasks_default": values.get("private_tasks_default") is True,
                          "status": values["status"], "repo": values["repo"],
                          "thread_mode": values["thread_mode"], "temp": bool(values.get("temp"))})
+        if (values.get("reports_to") or "") != (before.get("reports_to") or ""):
+            from .report_order import arrive
+            arrive(c, "bot:" + bot, values.get("reports_to"))   # a new manager's report goes last there
         c.execute("UPDATE bots SET display_name=?,state=? WHERE slug=?",
                   (values["display_name"], values["status"], bot))
         c.execute(
@@ -1145,6 +1158,8 @@ def _set_parent(c, actor, bot, parent, ts):
     row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
     declared = _json(row["config_json"], {}) or {}
     declared["reports_to"] = parent
+    from .report_order import arrive
+    arrive(c, "bot:" + bot, parent)
     c.execute("UPDATE bot_config SET reports_to=?,config_json=?,revision=revision+1,"
               "definition_updated=?,definition_updated_by=? WHERE bot=?",
               (parent, encode(declared), ts, actor, bot))

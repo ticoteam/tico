@@ -10,6 +10,11 @@
 .bot-request-head{font-size:var(--t-md);margin:14px 2px 6px}
 .bot-setup{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:8px 16px;margin:0;font-size:var(--t-base);align-items:center}
 .bot-setup dt{color:var(--muted)}.bot-setup dd{margin:0;min-width:0;overflow-wrap:anywhere}.bot-setup .pchip{margin-left:0;margin-right:4px}
+/* the Screen row in Setup / About: status, then why it is not ready and what to do */
+.bot-screen-row .settings-cell-note{display:block}
+.bot-screen-open{display:inline-flex;align-items:center;gap:4px}.bot-screen-open .nav-icon{width:16px;height:16px;font-size:16px}
+.bot-screen-steps{margin-top:4px;color:var(--muted)}.bot-screen-steps p{margin:6px 0 4px}
+.bot-screen-cmd{display:flex;align-items:center;gap:8px;max-width:100%}.bot-screen-cmd code{flex:1;min-width:0;overflow-x:auto;white-space:nowrap;padding:4px 8px;border:1px solid var(--line);border-radius:6px;background:var(--hover);color:var(--ink)}
 button.linkish{border:0;background:none;padding:0;color:var(--accent);cursor:pointer;font:inherit;text-decoration:underline}
 /* the tab strip stays put while the pane scrolls */
 .tabs.bottabs{position:sticky;top:-22px;z-index:8;margin:-22px 0 14px;padding-top:22px;background:var(--bg)}   /* the padding sits in .bothead's margin and hides content scrolling under #main's 22px top padding */

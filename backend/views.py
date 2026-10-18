@@ -1333,6 +1333,8 @@ def install_views(app, store, auth, mutate, task_view):
         company = providers.load(c, store.settings)
         rows = []
         access = auth.bot_accesses(c, who)
+        from .report_order import positions
+        places = positions(c)              # its place among its manager's reports on the chart, when someone set one
         # The Material Symbol a bot's avatar wears: its own, else its template's. A bot made from a `kind: helper` card
         # serves a person, and the UI shows it with the built-ins, apart from the org chart.
         from .onboarding import helper_templates, template_icons
@@ -1373,6 +1375,7 @@ def install_views(app, store, auth, mutate, task_view):
                              "private_tasks_default": H.private_tasks_default(c, "bot:" + slug),
                              "team": P.team_of(slug, configs, people),
                              "org_parent": P.org_parent("bot", slug, people, configs, archived),
+                             "report_position": places.get("bot:" + slug),
                              "operator": registry["operator"] if registry else None,
                              "is_branch": bool((configs.get(slug) or {}).get("shared_from")),
                              "users": [P.brief(p) for p in P.primary_users(slug, people, configs)],
@@ -1392,13 +1395,16 @@ def install_views(app, store, auth, mutate, task_view):
             except providers.ProviderError:
                 resolved_runtime = resolved_model = ""
             own = bool(providers._named(config.get("runtime")) or providers._named(config.get("model")))
-            rows.append({**config, "resolved_runtime": resolved_runtime, "resolved_model": resolved_model,
+            # The effort it runs at, said beside the model on hover; empty when the bot has none.
+            resolved_effort = str(config.get("reasoning_effort") or config.get("effort") or bot.get("effort") or "") if resolved_runtime else ""
+            rows.append({**config, "resolved_runtime": resolved_runtime, "resolved_model": resolved_model, "resolved_effort": resolved_effort,
                          "model_source": "" if not resolved_runtime else "bot" if own else "company", "name": slug, "display_name": bot["display_name"],
                          "state": bot["state"], "status": bot["state"],
                          "private_tasks_default": H.private_tasks_default(c, "bot:" + slug),
                          "host": "keeper", "tasks": "hub", "has_repo": location["ready"],
                          "team": P.team_of(slug, configs, people),
                          "org_parent": P.org_parent("bot", slug, people, configs, archived),
+                         "report_position": places.get("bot:" + slug),
                          "operator": registry["operator"] if registry else None,
                          "revision": registry["revision"] if registry else None,
                          "goals": (registry["goals"] if registry else "") or "",
@@ -1470,8 +1476,11 @@ def install_views(app, store, auth, mutate, task_view):
             archived = {row["slug"] for row in H.bots(c) if row.get("state") == "archived"}
             view = P.org_view(r, configs, archived)
             access = auth.bot_accesses(c, who)
+            from .report_order import positions
+            places = positions(c)
             return {**r, "by_team": P.by_team(r), "org_groups": view["org_groups"], "people": [{
                 **p, "org_parent": P.org_parent("person", p["id"], r, configs, archived),
+                "report_position": places.get("human:" + p["id"]),
                 **({"photo_url": "/api/humans/" + p["id"] + "/photo"}
                    if people_photos.may_have(store.settings, p.get("email"), p.get("photo")) else {}),
                 "bots": [b for b in P.bots_of(p["id"], r, configs)
@@ -1520,7 +1529,7 @@ def install_views(app, store, auth, mutate, task_view):
             default = {providers.default_runtime(providers.load(c, store.settings))} - {""}
             run_on = providers.runtimes_run_on(c, store.settings)
             for row in c.execute("SELECT id,label,operator,last_seen,revoked_at,platform,version,capacity,readiness_json,"
-                                 "accepts_member_bots,screen,performance,capabilities_json FROM runners ORDER BY created"):
+                                 "accepts_member_bots,screen,performance,capabilities_json,readiness_at FROM runners ORDER BY created"):
                 if not auth.bot_admin(who) and who.actor != "human:" + row["operator"]:
                     continue
                 bots = [a[0] for a in c.execute("SELECT bot FROM assignments WHERE runner_id=? ORDER BY bot", (row["id"],))]
@@ -1549,8 +1558,11 @@ def install_views(app, store, auth, mutate, task_view):
                 from .subscriptions import computer_profiles
                 # Each named subscription on it, with its sign-in, account and usage windows: this list is already
                 # limited to an administrator or the computer's operator, who may read its accounts.
+                from .model_login import cleared_logins
                 machines.append({**value, "bots": bots, "needed_runtimes": sorted(assigned.get(row["id"]) or default),
                                  "profiles": computer_profiles(c, row, True),
+                                 # {runtime: [profile, ...]} a person signed out here; they stay signed out.
+                                 "signed_out": cleared_logins(c, row["id"]),
                                  "bot_runtimes": sorted(run_on.get(row["id"], ())),
                                  "update": runner_versions.view(fleet.get(row["id"])),
                                  "harness_actions": recent(c, row["id"]) if who.role == "owner" else [],

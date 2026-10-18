@@ -1,0 +1,29 @@
+{
+ "about": "Tico's starter pack: the chart every setup begins from, then tailored from the interview. `core` comes with every chart and is not counted in the 22. `team` groups the cards on the page (factory is the software factory, department engineering); a team's head reports to the owner and its members to the head. Where nothing the visitor said applies, a bot's reason is `reason`.",
+ "reason": "Part of Tico's starter pack.",
+ "core": [{"template": "coo"}, {"template": "botops"}],
+ "bots": [
+  {"team": "product", "template": "product-lead"},
+  {"team": "factory", "template": "engineering-lead"},
+  {"team": "factory", "template": "pr-reviewer", "title": "Builder"},
+  {"team": "factory", "template": "pr-reviewer", "title": "Reviewer 1"},
+  {"team": "factory", "template": "pr-reviewer", "title": "Reviewer 2"},
+  {"team": "factory", "template": "issue-triage"},
+  {"team": "factory", "template": "release-notes"},
+  {"team": "factory", "template": "security-engineer"},
+  {"team": "factory", "template": "docs-writer"},
+  {"team": "factory", "template": "devops-engineer"},
+  {"team": "finance", "template": "finance-lead"},
+  {"team": "finance", "template": "bookkeeping"},
+  {"team": "finance", "template": "ar-followup"},
+  {"team": "marketing", "template": "marketing-lead"},
+  {"team": "marketing", "template": "content"},
+  {"team": "marketing", "template": "product-marketing"},
+  {"team": "sales", "template": "sales-lead"},
+  {"team": "sales", "template": "sales"},
+  {"team": "sales", "template": "sdr-research"},
+  {"team": "support", "template": "support-lead"},
+  {"team": "support", "template": "support"},
+  {"team": "support", "template": "customer-success"}
+ ]
+}

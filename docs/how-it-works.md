@@ -86,10 +86,18 @@ rather than a request ([Tasks](tasks.md)); title and Credential checks apply sep
 review task at 3 a day. A refusal counts toward the pause only when it repeats one the bot already had that day (same
 rule, same words): at 10 such repeats the bot is paused for an hour and resumes by itself. A bot's first try at
 something new that is refused is recorded, not counted, until 30 refusals of any kind in a day, which also pause it
-for an hour (a loop over new targets). Words that name another bot's folder or a `secrets/` path are written
+for an hour (a loop over new targets). A refused label change (rule `label`, which says who may make it instead)
+counts once per task an hour, however often the bot retries it. Words that name another bot's folder or a `secrets/` path are written
 as they are: naming a path opens nothing, so it is never refused or counted, only recorded (`path.mentioned`).
-A person's message to a
-paused or quarantined bot is kept and runs when it is back; another bot still cannot write to it.
+A message or task comment to a paused or quarantined bot, from a person or a bot, is kept and runs when it is back;
+the reply's `warning` says so and when that is. A note is kept the same way when a person leaves it, or, to a
+quarantined bot, its manager bot (the bot it reports to on the org chart). A new task or hand-off to a paused,
+quarantined or planned bot is refused as `target_inactive`, with when the bot is back, and so is any other bot's note.
+That refusal is the target's state, not the sender reaching too far: it opens no review and never counts as a repeat,
+so one bot's quarantine does not spread to the bots that work with it. It does count toward the 30 a day, so a bot
+retrying it in a loop still stops. When a quarantine lifts, by the cooldown or by a person or BotOps clearing it, Tico
+leaves the bot a quiet note that its next run carries ahead of any older notes: the refusal that stopped it, and "Do
+not retry this action; leave a note for a person if you still need it."
 
 ## The three places
 

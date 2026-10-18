@@ -26,7 +26,10 @@ const CLAIM_HINT_S: f64 = 150.0;
 const VOLATILE: &[&str] = &["free_bytes", "checked_at", "reported_at", "at", "mono", "server_time"];
 
 pub struct Runner {
+    /// runner.json as read at start; its subscription profiles are read again by `config_now`.
     pub config: Config,
+    /// runner.json as last read well, for its profiles while the file can't be read.
+    profiles_read: Mutex<Map<String, Value>>,
     pub client: Client,
     pub state: State,
     pub events: Arc<Events>,
@@ -113,6 +116,7 @@ impl Runner {
         let worktrees = Arc::new(crate::worktrees::Worktrees::new(&projects_dir, client.clone()));
         let capacity = machine_capacity(config.data.get("capacity"));
         Runner {
+            profiles_read: Mutex::new(config.data.clone()),
             config,
             client,
             events: Events::new(),
@@ -261,6 +265,17 @@ impl Runner {
         }
     }
 
+    /// The registration with runner.json's subscription profiles as they are now: one a browser sign-in or `profile
+    /// add` made, or one taken out by hand, counts at the next heartbeat and turn without a restart. Only the profile
+    /// keys are read again; while the file can't be read, the profiles last read stand.
+    pub fn config_now(&self) -> Config {
+        let mut read = self.profiles_read.lock().unwrap();
+        if let Ok(disk) = Config::load(&self.config.path) {
+            *read = disk.data;
+        }
+        self.config.with_profiles_of(&read)
+    }
+
     /// Readiness and the heartbeat. `full` re-reads this computer's bots from the server; without it the last
     /// answer stands and the heartbeat goes only when `forced`, changed, or HEARTBEAT_LIVE_S has passed.
     pub async fn maintain(&self, full: bool, forced: bool) -> Result<(), ApiError> {
@@ -281,9 +296,11 @@ impl Runner {
         let with_repositories: Vec<Value> = candidates.iter().filter(|e| crate::appdriver::delivery(&e["config"]).is_none()).cloned().collect();
         crate::product_files::bootstrap_missing(&self.config, &with_repositories).await;
         self.fetch_missing(&with_repositories).await;
-        let runtimes = readiness::runtime_report(&self.config, &self.sign_in, &self.client, &candidates).await;
+        // Profiles as runner.json has them now, so a sign-in made since start is reported and checked.
+        let config = self.config_now();
+        let runtimes = readiness::runtime_report(&config, &self.sign_in, &self.client, &candidates).await;
         *self.runtime_rows.lock().unwrap() = runtimes.clone();
-        let mut checks = readiness::preflight(&self.config, &candidates, &runtimes).await;
+        let mut checks = readiness::preflight(&config, &candidates, &runtimes).await;
         self.perbot.decorate(&self.config, &mut checks, &candidates);
         self.publish_unpublished(&candidates, &mut checks).await;
         let notes = self.publish_notes.lock().unwrap().clone();
@@ -320,10 +337,10 @@ impl Runner {
         }
         if !crate::lanes::held_back("profiles") {
             let rejected = |runtime: &str, name: &str| {
-                let profile = crate::profiles::select(&self.config.data, None, Some(name));
+                let profile = crate::profiles::select(&config.data, None, Some(name));
                 profile.is_some_and(|p| self.sign_in.rejection(runtime, Some(&p)).is_some())
             };
-            body["profiles"] = json!(crate::profiles::report(&self.config.data, &rejected).await);
+            body["profiles"] = json!(crate::profiles::report(&config.data, &rejected).await);
         }
         let host: Arc<dyn crate::worktrees::Host> = self.lanes.clone();
         let mut worktrees = if full { self.worktrees.poll(host.clone(), &[]) } else { self.worktrees.latest() };
@@ -817,6 +834,37 @@ mod tests {
         assert!(strip_accounts(&mut body) && !strip_accounts(&mut body));
         assert_eq!(body["readiness"]["runtimes"]["claude"], json!({"installed": true}));
         assert_eq!(body["profiles"][0]["runtimes"]["codex"], json!({"signed_in": true, "weekly": {"used_percent": 3}}));
+    }
+
+    #[test]
+    fn a_profile_made_or_taken_out_while_running_counts_without_a_restart() {
+        let dir = std::env::temp_dir().join(format!("tico-config-now-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(dir.join("projects")).unwrap();
+        let path = dir.join("runner.json");
+        let start = json!({"url": "http://127.0.0.1:9", "token": "t", "runner_id": "r1", "projects_dir": dir.join("projects")});
+        std::fs::write(&path, start.to_string()).unwrap();
+        let config = Config::load(&path).unwrap();
+        let client = Client::new(&config.url(), &config.token(), 1, 0).unwrap();
+        let runner = Runner::new(config, client, State::open(&dir.join("state")).unwrap());
+        assert!(crate::profiles::configured(&runner.config_now().data).is_empty());
+        // A browser sign-in for a new named subscription writes it to runner.json (login.rs begin).
+        crate::profiles::add_profile(&runner.config, "chris-chatgpt").unwrap();
+        let now = runner.config_now();
+        assert_eq!(crate::profiles::select(&now.data, Some("ops"), Some("chris-chatgpt")).unwrap().name, "chris-chatgpt");
+        assert!(crate::profiles::configured(&runner.config.data).is_empty(), "the start-up copy is unchanged");
+        // A file caught unreadable keeps the profiles last read.
+        let written = std::fs::read_to_string(&path).unwrap();
+        std::fs::write(&path, "{").unwrap();
+        assert_eq!(crate::profiles::configured(&runner.config_now().data).len(), 1);
+        // Taken out by hand: gone at the next read. Only profile keys are read again.
+        let mut edited: Value = serde_json::from_str(&written).unwrap();
+        edited.as_object_mut().unwrap().remove("profiles");
+        edited["url"] = json!("http://elsewhere.invalid");
+        std::fs::write(&path, edited.to_string()).unwrap();
+        let now = runner.config_now();
+        assert!(crate::profiles::configured(&now.data).is_empty());
+        assert_eq!(now.url(), "http://127.0.0.1:9");
+        std::fs::remove_dir_all(dir).ok();
     }
 
     #[test]

@@ -111,7 +111,7 @@ function cronWords(expr) {
   return `${when} at ${times}`;
 }
 
-// One way to write a model everywhere: "Claude Opus 5", "GPT-5.5", "Gemini 3 Pro"; a provider prefix
+// One way to write a model everywhere: "Claude Opus 5", "GPT 6.1 Sol", "Gemini 3 Pro"; a provider prefix
 // ("anthropic/") and a date stamp are dropped. A name it does not know stays as it came.
 const HARNESS_WORDS = {claude: 'Claude Code', codex: 'Codex', gemini: 'Gemini CLI', antigravity: 'Antigravity', grok: 'Grok Build',
   cursor: 'Cursor', musecode: 'Muse Code', hermes: 'Hermes', openclaw: 'OpenClaw', grokbot: 'Grok Bot', dots: 'Dots', muse: 'Muse', pi: 'pi'};
@@ -127,6 +127,7 @@ function modelWords(id) {
     const rest = /^claude$/i.test(parts[0]) ? parts.slice(1) : parts;
     return ['Claude', words(rest), version(rest)].filter(Boolean).join(' ');
   }
+  if (/^gpt$/i.test(parts[0])) return ['GPT', version(parts.slice(1)), words(parts.slice(1))].filter(Boolean).join(' ');
   if (/^gpt/i.test(raw)) return raw.replace(/^gpt/i, 'GPT');
   if (/^gemini$/i.test(parts[0])) return ['Gemini', version(parts.slice(1)), words(parts.slice(1))].filter(Boolean).join(' ');
   return raw;

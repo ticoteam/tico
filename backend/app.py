@@ -24,7 +24,7 @@ from . import go_live as pending_go_lives
 from . import repo_waits
 from . import built_on
 from . import agents, app_delivery, batch, external_sync, inbox_isolation, mcp_oauth, harness_actions, model_login, oidc, personal_tokens, views
-from . import check_models, team_rules, usage_limits
+from . import check_models, team_rules, update_feeds, usage_limits
 from . import task_privacy as privacy
 from . import task_relations as TR
 from . import task_roles as TRo
@@ -190,6 +190,8 @@ def create_app(settings=None):
                     # A bot left in setup for a day: its person hears once (backend/setup_stuck.py).
                     from . import setup_stuck
                     await asyncio.to_thread(setup_stuck.tick, store)
+                    # Subscribed updates for bots, as quiet notes; nothing is fetched while no bot subscribes.
+                    await asyncio.to_thread(update_feeds.tick, store)
                 except Exception as exc:
                     telemetry.capture("scheduler", exc)
                     import logging
@@ -272,7 +274,12 @@ def create_app(settings=None):
     @app.exception_handler(RequestValidationError)
     async def validation_error(request, exc):
         # Field names and reasons are useful; invalid input can hold credentials and is never echoed.
-        detail = "; ".join(".".join(str(part) for part in error["loc"]) + ": " + error["msg"]
+        def reason(error):
+            if (error["type"] == "extra_forbidden" and tuple(error["loc"])[-1:] == ("manager",)
+                    and request.url.path.startswith("/api/v2/task-types")):
+                return M.MANAGER_FIXED
+            return error["msg"]
+        detail = "; ".join(".".join(str(part) for part in error["loc"]) + ": " + reason(error)
                            for error in exc.errors())
         if request.url.path.endswith("/go-live") and any("routines" in error["loc"] for error in exc.errors()):
             detail += ". routines must be " + M.ROUTINES_SHAPE
@@ -1148,7 +1155,8 @@ def create_app(settings=None):
                 c.execute("INSERT OR IGNORE INTO attempt_conversations VALUES(?,?)", (who.attempt_id, conv["id"]))
             auth.conversation(c, who, conv["id"])
         # A bot still in setup starts only a person's message; anyone else's waits for its setup.
-        if note := usage_limits.warning(c, to) or (None if H.is_human(who.actor) else H.setup_hold(c, to)):
+        if note := (H.held_note(c, to) or usage_limits.warning(c, to)
+                    or (None if H.is_human(who.actor) else H.setup_hold(c, to))):
             message = {**message, "warning": note}
         return message
 
@@ -1424,6 +1432,27 @@ def create_app(settings=None):
             auth.sync_access(c)
         return result
 
+    @app.post("/api/v2/access/owner/email")
+    def access_owner_email(request: Request, body: M.OwnerEmailChange):
+        """The owner changes their own sign-in address in place: the same person, every copy of the address at once.
+        Signed in as themselves only: not through an API token, BotOps or the Assistant. From this commit on, the old
+        address no longer signs in (docs/people.md, Change the owner's sign-in email)."""
+        who = request.state.identity
+        owner_only(who, "changes the owner's sign-in email")
+        if who.via_token or who.via:
+            raise Problem("forbidden", "Change the owner's sign-in email from a signed-in browser, as yourself", 403)
+        if body.email.strip().lower() != body.confirm_email.strip().lower():
+            raise Problem("email", "The two addresses do not match", 422)
+
+        def work(c):
+            record = Access.change_owner_email(c, who.actor, views.roster(c), Access.load_owner(c, settings), body.email,
+                                               expected_revision=body.expected_revision, now=H.now(), settings=settings)
+            return {"owner": record["email"], "revision": record["revision"], "person": H.actor_id(who.actor)}
+        result = mutate(request, body, work)
+        with store.read() as c:
+            auth.sync_access(c)
+        return result
+
     @app.get("/api/v2/catalog")
     def catalog():
         """The bot templates this company may pick from, named for this company. Every signed-in
@@ -1613,6 +1642,7 @@ def create_app(settings=None):
                         "private_tasks_default": H.private_tasks_default(c, "bot:" + bot["slug"], rows.declared),
                         "template": declared.get("template") or "",
                         "template_version": declared.get("template_version") or "",
+                        "update_subscriptions": update_feeds.chosen(declared),
                         "shared": bool(declared.get("shared")),
                         "shared_from": str(declared.get("shared_from") or ""),
                         "temp": bool(declared.get("temp")),
@@ -1824,6 +1854,8 @@ def create_app(settings=None):
                     row = Access.leave(c, people, row)
                 people[i] = row
                 roster = {**roster, "people": people}
+                from .report_order import roster_saved
+                roster_saved(c, roster)                    # a new manager's report goes last there
                 c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (encode(roster),))
                 H.event(c, who.actor, "person.updated", pid, {"title": body.title is not None, "about": body.about is not None,
                                                               "goals": body.goals is not None, "notes": body.notes is not None,
@@ -2049,6 +2081,14 @@ def create_app(settings=None):
             raise Problem("not_found", "Update not found", 404)
         return ids
 
+    def require_update(c, who, row):
+        """A bot's update takes the bot's own gate (404 unseen, 403 seen without Read); a person's
+        is for everyone on the chart, so anyone else gets 404."""
+        if not updates.is_person(row["bot"]):
+            auth.require_read(c, who, row["bot"], "Update not found")
+        elif row["bot"] not in update_visible(c, who):
+            raise Problem("not_found", "Update not found", 404)
+
     @app.get("/api/v2/updates")
     def updates_list(request: Request, kind: str | None = None, bot: str | None = None, unread: bool = False,
                      before: str | None = None, limit: int = 40, mine: bool = False,
@@ -2093,8 +2133,7 @@ def create_app(settings=None):
             row = updates.one(c, uid)
             if not row:
                 raise Problem("not_found", "Update not found", 404)
-            if row["bot"] not in update_visible(c, who):
-                raise Problem("not_found", "Update not found", 404)
+            require_update(c, who, row)
             read = c.execute("SELECT 1 FROM update_reads WHERE update_id=? AND actor=?", (uid, who.actor)).fetchone()
             # A reply lands in the replier's own room with the bot; show only rooms this caller may read.
             rooms_ok = {}
@@ -2174,8 +2213,7 @@ def create_app(settings=None):
             row = updates.one(c, uid)
             if not row:
                 raise Problem("not_found", "Update not found", 404)
-            if row["bot"] not in update_visible(c, who):
-                raise Problem("not_found", "Update not found", 404)
+            require_update(c, who, row)
             if updates.is_person(row["bot"]):
                 raise Problem("reply", "A person's update takes no replies here; message them instead", 422)
             # A reply is both a comment on the update and a message in the bot's
@@ -2984,7 +3022,9 @@ def create_app(settings=None):
                 c.execute("UPDATE task_file_reviews SET comment_id=coalesce(comment_id,?) WHERE file_id=? AND version=?",
                           (msg["id"], item["id"], item["version"]))
             msg = next(m for m in H.task_comments(c, task_id, actor=privacy.actor(request.state.identity)) if m["id"] == msg["id"])
-            return {"comment": msg, "comments": H.task_comments(c, task_id, actor=privacy.actor(request.state.identity)), "woke": bool(wake)}
+            held = H.held_note(c, msg.get("to_actor"))
+            return {"comment": msg, "comments": H.task_comments(c, task_id, actor=privacy.actor(request.state.identity)),
+                    "woke": bool(wake), **({"warning": held} if held else {})}
         result = mutate(request, body, work)
         if body.attachments:
             app.state.file_metadata.wake.set()   # a chat file shared here is a new task copy: preview it now
@@ -3804,11 +3844,12 @@ def create_app(settings=None):
             return None
     app.state.botops_run_identity = botops_run_identity
 
-    def propose_card(c, acting, method, path, body, summary):
+    def propose_card(c, acting, method, path, body, summary, what=None):
         """What always needs the requesting person's own click: a Confirm card in their chat with BotOps,
-        and the answer BotOps reports back instead of asking them to go to Settings."""
+        and the answer BotOps reports back instead of asking them to go to Settings. `what`: the card's title, when the
+        route that asks already said in plain words what confirming does (never a bot's words)."""
         room = rooms.chat_room(c, auth, acting, BOTOPS)
-        card = create_proposal(c, settings, acting, room, BOTOPS, summary, method, path, body)
+        card = create_proposal(c, settings, acting, room, BOTOPS, summary, method, path, body, what=what)
         return {"proposed": True, "needs_confirm": True, **card,
                 "detail": "This needs " + ((H.human(c, H.actor_id(acting.actor)) or {}).get("name") or "the person")
                 + "'s own OK. A Confirm card is in their chat with BotOps; nothing has changed yet."}
@@ -3992,8 +4033,10 @@ def create_app(settings=None):
             execution.runner(c, request.state.identity)
         # `screen_v1`: this server takes the capability and `readiness.screen` (an older one refuses the heartbeat).
         # `limit_resets_at`: a run's result may say when its usage limit resets (an older one refuses the field).
+        # `usage_requests`: a run's usage may carry each model request's tokens (an older one refuses the field).
         return {**runner_versions.desired(), "features": {"task_files_multipart": True, "runner_commit": True,
-                                                          "screen_v1": True, "limit_resets_at": True}}
+                                                          "screen_v1": True, "limit_resets_at": True,
+                                                          "usage_requests": True}}
 
     @app.get("/api/v2/runners/assignments")
     def assigned(request: Request):
@@ -4070,7 +4113,26 @@ def create_app(settings=None):
     @app.post("/api/v2/runners/{rid}/logins")
     def start_login(request: Request, rid: str, body: M.LoginStart):
         return mutate(request, body, lambda c: model_login.start(
+            c, request.state.identity, rid, body.runtime, body.profile, auth=auth, switch=body.switch))
+
+    # Sign a login out (the computer's own, or a named subscription's); it is read back like a sign-in.
+    @app.post("/api/v2/runners/{rid}/logouts")
+    def start_logout(request: Request, rid: str, body: M.LogoutStart):
+        return mutate(request, body, lambda c: model_login.sign_out(
             c, request.state.identity, rid, body.runtime, body.profile, auth=auth))
+
+    # The bots a sign-out would stop, for the confirmation.
+    @app.get("/api/v2/runners/{rid}/logouts/bots")
+    def logout_bots(request: Request, rid: str, runtime: str, profile: str = ""):
+        with store.read() as c:
+            return model_login.affected_bots(c, request.state.identity, rid, runtime, profile, store.settings,
+                                             auth=auth)
+
+    # A signed-out computer login takes the company's shared key again.
+    @app.post("/api/v2/runners/{rid}/shared-key")
+    def use_shared_key(request: Request, rid: str, body: M.SharedKeyUse):
+        return mutate(request, body, lambda c: model_login.use_shared_key(
+            c, request.state.identity, rid, body.runtime, auth=auth))
 
     @app.get("/api/v2/runners/{rid}/logins/{lid}")
     def read_login(request: Request, rid: str, lid: str):
@@ -5077,6 +5139,8 @@ def create_app(settings=None):
     install_goal_routes(app, store, auth, mutate, settings)
     from .replay import install as install_replay
     install_replay(app, store, auth)
+    from .bot_hours import install as install_bot_hours
+    install_bot_hours(app, store, auth)
     from .usage import install as install_usage
     install_usage(app, store, auth, mutate, settings)
     from .bot_tools import install as install_bot_tools
@@ -5100,6 +5164,8 @@ def create_app(settings=None):
     install_subscriptions(app, store, auth, mutate, settings, computer_rows)
     from .groups import install as install_groups
     install_groups(app, store, auth, mutate, settings)
+    from .report_order import install as install_report_order
+    install_report_order(app, store, auth, mutate)
     from .support import install as install_support
     install_support(app, store, settings, census)
     from .support_access import install as install_support_access

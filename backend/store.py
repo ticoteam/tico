@@ -107,14 +107,18 @@ CREATE TABLE IF NOT EXISTS runners(
  revoked_at TEXT, platform TEXT, version TEXT, capacity INTEGER NOT NULL DEFAULT 4,
  readiness_json TEXT NOT NULL DEFAULT '{}', capabilities_json TEXT NOT NULL DEFAULT '[]',
  awake_since TEXT, checkout_json TEXT,
- restart_requested TEXT);
+ restart_requested TEXT, readiness_at TEXT);
 CREATE TABLE IF NOT EXISTS model_logins(
  id TEXT PRIMARY KEY, runner_id TEXT NOT NULL REFERENCES runners(id), runtime TEXT NOT NULL,
  profile TEXT NOT NULL DEFAULT '', state TEXT NOT NULL, url TEXT NOT NULL DEFAULT '',
  user_code TEXT NOT NULL DEFAULT '', lines_json TEXT NOT NULL DEFAULT '[]',
  message TEXT NOT NULL DEFAULT '', pending_code TEXT, code_sent INTEGER NOT NULL DEFAULT 0,
- created TEXT NOT NULL, updated TEXT NOT NULL, expires_at TEXT NOT NULL, requested_by TEXT NOT NULL);
+ created TEXT NOT NULL, updated TEXT NOT NULL, expires_at TEXT NOT NULL, requested_by TEXT NOT NULL,
+ kind TEXT NOT NULL DEFAULT 'sign_in');
 CREATE INDEX IF NOT EXISTS model_logins_by_runner ON model_logins(runner_id,state);
+CREATE TABLE IF NOT EXISTS model_login_cleared(
+ runner_id TEXT NOT NULL REFERENCES runners(id), runtime TEXT NOT NULL, profile TEXT NOT NULL DEFAULT '',
+ cleared_at TEXT NOT NULL, cleared_by TEXT NOT NULL, PRIMARY KEY(runner_id,runtime,profile));
 CREATE TABLE IF NOT EXISTS runner_harness_actions(
  id TEXT PRIMARY KEY, runner_id TEXT NOT NULL REFERENCES runners(id), harness TEXT NOT NULL,
  action TEXT NOT NULL, state TEXT NOT NULL, message TEXT NOT NULL DEFAULT '',
@@ -372,12 +376,12 @@ def refused(c, identity, exc):
     # Preserve refusal auditing, but never a partial domain operation.
     token = H.PRIVATE_WRITE.set(getattr(exc, 'private', False))
     try:
-        H.refuse(c, identity.actor, exc.rule, exc.detail, exc.severity)
+        H.refuse(c, identity.actor, exc.rule, exc.detail, exc.severity, task=getattr(exc, 'task', None))
     except H.Refused:
         pass
     finally:
         H.PRIVATE_WRITE.reset(token)
-    return Problem(exc.rule, exc.detail, 403 if exc.rule in ("identity", "escape", "quarantined", "close") else 422)
+    return Problem(exc.rule, exc.detail, 403 if exc.rule in ("identity", "label", "escape", "quarantined", "close") else 422)
 
 
 # A client retries a failed write with the same Idempotency-Key within seconds, so two
@@ -632,6 +636,8 @@ class Store:
             from . import updates as _updates
             c.executescript(_updates.SCHEMA)
             _updates.ensure_schema(c)
+            from . import update_feeds as _update_feeds
+            c.executescript(_update_feeds.SCHEMA)
             from . import runner_versions as _runner_versions
             c.executescript(_runner_versions.SCHEMA)
             _runner_versions.ensure_schema(c)
@@ -1119,6 +1125,11 @@ class Store:
                 # What every bot may do with a type's tasks (hubdb.TYPE_BOTS). Checked on every start
                 # rather than numbered, so no migration number collides with another branch's.
                 H.add_column(c, "task_types", "bots", "TEXT")
+                # Sign out / Switch account / Use the shared key ride the sign-in relay (backend/model_login.py).
+                H.add_column(c, "model_logins", "kind", "TEXT NOT NULL DEFAULT 'sign_in'")
+                # When readiness was last reported (last_seen is any contact): the app waits for a report newer than a
+                # sign-out or switch before it stops looking.
+                H.add_column(c, "runners", "readiness_at", "TEXT")
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=55").fetchone():
                     H._apply(c, H.MEETING_REVIEW_SCHEMA)
                     c.execute("INSERT INTO cloud_migrations VALUES(55,?)", (H.now(),))

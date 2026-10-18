@@ -66,6 +66,9 @@ async function open(browser, viewport, options = {}, data = {}) {
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     if (p === '/api/me') return json({id: 'ana', role: 'owner', name: 'Ana', email: 'ana@example.test', cloud: true});
     if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}]});
+    // A list, as the server sends it: the catch-all {} broke the sidebar tree whenever it landed ahead of
+    // /api/v2/status, and the bot page never opened (the bot-needs.cjs hang from the v0.3.54 release check).
+    if (p === '/api/issues') return json([]);
     if (p === '/api/employees') return json(data.bots || bots);
     if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: [], schedules: bots[0].schedules.map(s => ({...s, employee: 'cmo'}))});
     if (p === '/api/v2/status') return json({bots: [status]});
@@ -166,7 +169,7 @@ const railOrder = page => page.evaluate(() => [...document.querySelectorAll('#pa
       await list.locator('details').evaluateAll(els => els.forEach(el => { el.open = true; }));
       assert.equal(await repos.locator('.bt-repo').count(), 4);
       const text = await list.innerText();
-      for (const expected of ['GPT-6-luna', 'acme-co/emp-cmo', 'acme-co/website', 'GH_TOKEN', 'acme-co/pricing-api', 'PostHog project 12345 (US), personal key', '12345', 'POSTHOG_KEY',
+      for (const expected of ['GPT 6 Luna', 'acme-co/emp-cmo', 'acme-co/website', 'GH_TOKEN', 'acme-co/pricing-api', 'PostHog project 12345 (US), personal key', '12345', 'POSTHOG_KEY',
         'funnels only', 'Credential missing on Test Mac', '#ops, #launch', 'SLACK_TOKEN', 'nothing to check', 'account 3'])
         assert(text.includes(expected), scheme + ': the list says ' + expected + '\n' + text);
       assert.equal(await list.locator('[data-tool=repo] a').getAttribute('href'), 'https://github.com/acme-co/emp-cmo');
@@ -257,6 +260,8 @@ const railOrder = page => page.evaluate(() => [...document.querySelectorAll('#pa
       const banner = page.locator('#conv-paused:not([hidden])');
       await banner.waitFor();
       assert.match(await banner.innerText(), /usage limit; your messages will run when it's back\s*Try now$/);
+      // The header warning is drawn at the end of the refresh, after the issues list, so it can follow the chat banner.
+      await page.locator('#bot-alert', {hasText: /Try now/}).waitFor();
       assert.match(await page.locator('#bot-alert').innerText(), /Try now/);
       if (shots) await page.screenshot({path: path.join(shots, `bot-limit-try-now-${scheme}.png`)});
       await banner.locator('[data-limit-retry]').click();
@@ -281,6 +286,7 @@ const railOrder = page => page.evaluate(() => [...document.querySelectorAll('#pa
       assert.equal(await card.locator('a[href="#/task/t9"]').innerText(), 'Set up the tool');
       assert.doesNotMatch(await page.locator('#main').innerText(), /outside the hub|escape:/);
       if (shots) await page.screenshot({path: path.join(shots, 'bot-quarantine-review.png'), fullPage: true});
+      await page.locator('#bot-alert', {hasText: /Paused for review\s*Resume bot/}).waitFor();
       assert.match(await page.locator('#bot-alert').innerText(), /Paused for review\s*Resume bot/);
       await page.locator('#bot-alert [data-quarantine-resume]').click();
       await page.locator('#bot-alert [data-quarantine-resume]').waitFor({state: 'detached'});
