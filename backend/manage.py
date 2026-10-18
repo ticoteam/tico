@@ -16,7 +16,7 @@ from .backup import inspect, snapshot, upload_bundle
 from .blobs import Blobs
 from .config import ROOT, Settings
 from .execution import Execution
-from .store import H, P, Store, encode, repo_url
+from .store import H, P, Problem, Store, encode, repo_url
 
 
 CORE_HISTORY = ("conversations", "messages", "tasks", "task_events", "turns", "meetings",
@@ -178,6 +178,11 @@ def main(argv=None):
     p.add_argument("database", type=Path)
     p.add_argument("--older-than-days", type=int, required=True)
     p.add_argument("--apply", action="store_true", help="Purge; without it nothing changes")
+    p = sub.add_parser("owner-email", help="Change the owner's sign-in email in place (the same person), e.g. to get back in "
+                       "after a lockout; shows what would change unless --apply")
+    p.add_argument("database", type=Path)
+    p.add_argument("--to", required=True, help="The owner's new sign-in address")
+    p.add_argument("--apply", action="store_true", help="Change it; without it nothing changes")
     p = sub.add_parser("backup")
     p.add_argument("database", type=Path)
     p.add_argument("--bucket", required=True)
@@ -251,6 +256,26 @@ def main(argv=None):
         store = Store(Settings(db_path=args.database, registry_dir=registry_dir()))
         with store.transaction() as c:
             report = purge_trash(c, args.older_than_days, apply=args.apply)
+    elif args.command == "owner-email":
+        from . import access
+        from .views import roster
+        store = Store(Settings(db_path=args.database, registry_dir=registry_dir()))
+        try:
+            with store.transaction() as c:
+                owner = access.load_owner(c, store.settings)
+                # A dry run makes the same change with every check, then rolls it back.
+                c.execute("SAVEPOINT owner_email")
+                after = access.change_owner_email(c, "host", roster(c), owner, args.to, expected_revision=owner["revision"],
+                                                  now=H.now(), settings=store.settings, via="host")
+                lists = access.load_access(c, store.settings)
+                if not args.apply:
+                    c.execute("ROLLBACK TO owner_email")
+                c.execute("RELEASE owner_email")
+        except Problem as exc:
+            raise SystemExit(exc.detail) from None
+        # The server reads the owner record on its next request: no restart.
+        report = {"owner": owner["email"], "to": after["email"], "revision": after["revision"], "applied": args.apply,
+                  "allowed": lists["allowed"], "admins": lists["admins"]}
     elif args.command == "usage-count":
         from .census import Census
         from .releases import version

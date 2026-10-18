@@ -42,7 +42,8 @@ async function refresh(force) {
 // ----------------------------------------------------------------- live events (ui/app/live.js)
 // What the 30 s refresh used to find by reading everything again now arrives as it changes: a task moved (the open
 // board, the bot's columns and ticker, a person's tasks, the open task), a bot's status line (the tree, the
-// heartbeat, the paused notice), and Needs you (the tree's counts). Each surface redraws once per burst.
+// heartbeat, the paused notice, the Overview's desks), and Needs you (the tree's counts). Each surface redraws once
+// per burst.
 function liveTasksApply(events) {
   const state = TASKS_ST;
   // One change to many tasks (a type or tag edit) comes as one `bulk` event: the open list reads in full once (its
@@ -89,6 +90,7 @@ function liveWire() {
     liveSoon('bots', () => {
       renderTree(); renderHeartbeat(); pausedRender(); botAvatarsSync();
       botAlertDraw();
+      overviewRefresh();                // the campus desks too, not only at the next refresh (no read: the model is local)
     }, 200);
   });
   // Needs you comes as the ids that changed; the list is mended from them (v2NeedsChanged), then `needs-list` says so.

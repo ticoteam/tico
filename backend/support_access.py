@@ -70,7 +70,7 @@ ALWAYS_REFUSED = re.compile(r"/api/v2/(?:"
                             r"|me/tokens(?:/.*)?|access/tokens(?:/.*)?|service-keys(?:/.*)?|enrollments"
                             r"|agents/pairings(?:/.*)?|directory/scim-token|github/token"
                             r"|bots/[^/]+/(?:agent-credential(?:/revoke)?|repository-read-token)"
-                            r"|access/owner"
+                            r"|access/owner(?:/email)?"
                             r"|credentials/[^/]+/reveal|credential-runtime|runner-[a-z-]*credential[a-z-]*(?:/.*)?"
                             r")")
 # Pages that open a person's own room or calendar: Tico support has neither, so it gets a plain refusal.

@@ -205,7 +205,8 @@ document.addEventListener('click', async event => {
 // In the bot editor: Own repo only, All ticked repos (read or write), or Chosen repos with read or write each; a
 // chosen write repo may also let the bot run workflows there (GitHub Actions: write).
 // Each change saves on its own, like the other rows there. Owners and admins change it; the bot's other
-// managers see it read only. Create product repositories is the Owner's to turn on (an admin may turn it off).
+// managers see it read only. Create product repositories is on for every bot until the Owner or an admin turns it
+// off; only the Owner turns it back on.
 // Hidden while GitHub is not connected.
 const BOT_REPO_MODES = [['own', 'Own repo only'], ['all', 'All ticked repos'], ['chosen', 'Chosen repos']];
 const BOT_REPO_ACCESS = [['read', 'Read'], ['write', 'Write']];
@@ -236,7 +237,7 @@ async function botReposMount(host, slug) {
       <label class="repo-name"><input type="checkbox" data-brepo-create${state.create_repositories ? ' checked' : ''}${!admin || slug === 'botops' ? ' disabled' : ''}>Create bot repositories</label>
       <p class="muted">Private bot repositories in the connected organization. GitHub App permission is also required. Otherwise, ask BotOps.</p>
       <label class="repo-name"><input type="checkbox" data-brepo-product${state.create_product_repositories ? ' checked' : ''}${owner || admin && state.create_product_repositories ? '' : ' disabled'}>Create product repositories</label>
-      <p class="muted">Private repositories with any other name in the connected organization; the bot gets write to each one it makes and you are told. Only the Owner turns this on.</p>
+      <p class="muted">Private repositories with any other name in the connected organization; the bot gets write to each one it makes and you are told. On for every bot unless switched off; only the Owner switches it back on.</p>
       ${repoSegHTML(`${id}-mode`, 'Repository access', BOT_REPO_MODES, state.mode, !admin, ' brepo-mode')}
       ${state.mode === 'all' ? `<div class="brepo-all">${repoSegHTML(`${id}-all`, 'Access to all ticked repos', BOT_REPO_ACCESS, state.all_access, !admin, ' repo-seg-sm')}</div>` : ''}
       ${state.mode === 'chosen' ? `<ul class="brepo-list" aria-label="Chosen repos">${pick.length ? pick.map(name => {

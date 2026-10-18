@@ -8,6 +8,13 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- The owner can change their own sign-in email and stay the same person, with every task, approval, bot and role:
+  **Settings > Humans**, the ⋯ menu on their own row, **Change my sign-in email**, typed twice. One step moves the
+  address everywhere Tico keeps it (the roster, the owner record with the old address in its history, the allow list,
+  the Admins, meetings filed for them) and writes an `owner.email_changed` audit event. The old address stops signing
+  in at once and never joins as a new person. Set up the new address in Cloudflare Access first. If you are locked
+  out, `python -m backend.manage owner-email <db> --to <address> --apply` on the server changes it back without a
+  sign-in ([Humans and access](docs/people.md#change-the-owners-sign-in-email)).
 - **Sign out** and **Switch account** for Codex (ChatGPT) and Claude Code logins, from Settings > Computers and Manage
   subscription, for the computer's own login and each named subscription. Sign out names the bots that stop first;
   Switch account signs the new account in on the side, so cancelling keeps the old one, and puts the old login back if
@@ -104,12 +111,14 @@ All notable changes to Tico are recorded here. The format follows
   `https://updates.tico.team` as before, with one fix: with `TICO_SUPPORT=off`, in a rehearsal or in demo mode, a live
   support session now ends without the install telling HQ (it used to send the end notice), so with support off nothing
   is sent.
+- Bots can create private repositories by default; the Owner can switch it off per bot. **Create product
+  repositories** is on for every bot, BotOps and new bots included. The Owner or an admin switches it off in the bot's
+  **Settings → Repositories**; an off stays off, and only the Owner switches it back on. A bot's turn acting for
+  someone (BotOps, the Assistant) or an external agent still can't create one.
 - **Bots can create product repositories**, not only the Owner. A new switch in a bot's **Settings → Repositories**,
   **Create product repositories**, lets it make a private, empty repository in the connected GitHub organization with
   the same preview, exact confirmation and retry-safe receipt as the Owner (`hub repo product-create <name> --confirm
-  <org>/<name>` in a bot's turn, or the `hub_repo_product_create` tool). Only the Owner turns it on, a bot can't turn it
-  on for itself, BotOps doesn't have it built in, and no bot gets it by default. **Owner: to let Head of Engineering and
-  DevOps create repositories, turn it on in each one's settings.** Private only: a public repository is publishing and
+  <org>/<name>` in a bot's turn, or the `hub_repo_product_create` tool). Private only: a public repository is publishing and
   stays a person's step, and bots can't delete, rename, transfer or change a repository's visibility. The bot gets write
   to the repository it made and the Owner gets a notice ("Head of Engineering created private repo tico-services…"); a
   bot on All ticked repos with read access moves to Chosen repos, keeping read on what it reached, and the notice says
@@ -156,6 +165,14 @@ All notable changes to Tico are recorded here. The format follows
   `docker compose down`, run `docker compose up -d` first).
 
 ### Fixed
+- `hub computer performance` and the `hub_computer_performance` tool work again: they read the computers reply as a list,
+  so every call failed before it reached the computer's CPU, memory and disk history.
+- The Overview campus opened before the bots' status arrived now shows each desk's state as soon as it does, instead
+  of "No current status available" until the next refresh (up to two minutes).
+- The Librarian no longer turns a team's own "runner" into "Computer" because a Tico word turns up later in the
+  sentence, after a semicolon: "the runner pulls a hamstring; read the stretching instructions" stays as written.
+- The Overview campus moves a bot's desk as soon as its status changes, while live updates are connected, instead of at
+  the next refresh (up to two minutes).
 - One bot's quarantine no longer spreads to the bots that work with it. A message or task comment to a paused or
   quarantined bot is kept and runs when it is back, and the sender is told when that is. A new task or hand-off to
   one is refused as `target_inactive`, saying when the bot is back. That refusal opens no review of the sender and
