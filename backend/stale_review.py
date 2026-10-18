@@ -194,10 +194,12 @@ def _owner_reachable(c, owner):
 
 
 def candidates(c, at):
-    """[(task row, reason)] for every task plain code finds stale now."""
+    """[(task row, reason)] for every task plain code finds stale now. A private task is never one: its words never
+    go to Decide."""
     marks = ",".join("?" * len(STATUSES))
     out = []
-    for row in H._rows(c.execute(f"SELECT * FROM tasks WHERE status IN ({marks}) ORDER BY created,id", STATUSES)):
+    for row in H._rows(c.execute(f"SELECT * FROM tasks WHERE status IN ({marks}) AND private=0 ORDER BY created,id",
+                                 STATUSES)):
         if H.TS.snoozed(row, at) or not (H.is_bot(row["owner"]) or H.is_human(row["owner"])):
             continue
         why = reason(c, row, at)
@@ -284,11 +286,12 @@ def _apply(c, row, why, verdict, confidence, at):
 
 # ----------------------------------------------------------------------------- the pass
 def eligible(c, row, at):
-    """The task as it is now if it is still the candidate the pass found: unchanged since, open, not snoozed, nobody
-    working it, and an owner who can hear a suggestion. Starting a turn does not change the task's mark, so a call
-    in flight is checked again before its answer is used."""
+    """The task as it is now if it is still the candidate the pass found: unchanged since, open, not private, not
+    snoozed, nobody working it, and an owner who can hear a suggestion. Starting a turn does not change the task's
+    mark, so a call in flight is checked again before its answer is used."""
     now = H.task(c, row["id"])
-    if (not now or mark(now) != mark(row) or now["status"] not in STATUSES or H.TS.snoozed(now, at)
+    if (not now or mark(now) != mark(row) or now["status"] not in STATUSES or H.task_private(c, now)
+            or H.TS.snoozed(now, at)
             or _live(c, now["id"]) or not _owner_reachable(c, now["owner"])):
         return None
     return now

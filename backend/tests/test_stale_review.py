@@ -392,6 +392,41 @@ def test_a_turn_that_starts_while_decide_is_asked_gets_no_stale_comment(stale):
     assert judged == {other}, "the ones it could not use wait for a pass that sees them fresh"
 
 
+def test_a_private_task_is_never_sent_to_decide(stale):
+    api, store, task = stale
+    hidden = task("Settle the Acme dispute", pr="merged")
+    seen = task("Ship the export button", pr="merged")
+    with store.transaction() as c:
+        H.task_comment(c, "human:ana", hidden, "The settlement figure is in the shared folder")
+        c.execute("UPDATE tasks SET private=1 WHERE id=?", (hidden,))
+    model = FakeDecide("update")
+    done = SR.run_pass(store, engine=model)
+    assert [m["state"]["task"]["title"] for m in model.calls] == ["Ship the export button"]
+    assert "Acme" not in json.dumps([m["state"] for m in model.calls])
+    assert done["calls"] == 1 and not comments(store, hidden) and len(comments(store, seen)) == 1
+    with store.read() as c:
+        assert [row["id"] for row, _ in SR.candidates(c, H.now())] == [seen], "not even a candidate"
+        assert [r[0] for r in c.execute("SELECT task_id FROM stale_judged")] == [seen]
+
+
+def test_a_task_made_private_while_decide_is_asked_gets_no_suggestion(stale):
+    api, store, task = stale
+    tid = task("Ship the export button", pr="merged")
+    model = FakeDecide("update")
+    asked = model.__call__
+
+    def hide(state, questions, label=None):
+        out = asked(state, questions, label)
+        with store.transaction() as c:
+            c.execute("UPDATE tasks SET private=1 WHERE id=?", (tid,))     # the task row's mark stays as it was
+        return out
+    done = SR.run_pass(store, engine=hide)
+    assert len(model.calls) == 1 and done["changed"] == 1 and done["suggested"] == 0
+    assert not comments(store, tid)
+    with store.read() as c:
+        assert c.execute("SELECT count(*) FROM stale_judged").fetchone()[0] == 0
+
+
 def test_turning_the_switch_off_during_a_pass_stops_its_calls_and_output(stale):
     api, store, task = stale
     ids = [task(f"Shipped thing {n}", pr="shipped") for n in range(3)]

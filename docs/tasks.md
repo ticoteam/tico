@@ -166,6 +166,7 @@ With **Stale ticket review** on (Settings > Team, an owner or an admin turns it;
 waiting and review tasks that seem finished or forgotten: every linked PR merged, closed or shipped;
 the parent done or closed; everything it is blocked by done; a snooze that ended over a day ago with
 nothing since; the same title as an older open task of the same owner; or 7 quiet days (3 for doing).
+A private task is never looked at, so none of its words go to Decide.
 Only a task that is new to the list, or changed since it was last looked at, is judged by Tico Decide
 (`questions/stale-review.json`), at most 30 an hour within the server's daily Decide allowance, and one suggestion a
 task a week; what is left waits for the next hour. A task that changes or starts being worked while Decide is asked,

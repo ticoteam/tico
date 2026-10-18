@@ -10,8 +10,8 @@ All notable changes to Tico are recorded here. The format follows
 ### Added
 - Stale ticket review (Settings > Team, owners and admins; off by default, `TICO_STALE_REVIEW=1` turns the default
   on): once an hour plain code finds open tasks that look finished or forgotten (a PR merged or shipped, the parent
-  done, every blocker done, a long-over snooze, a twin title, a quiet week), Tico Decide judges only the new ones (at
-  most 30 an hour), and owners get suggestions, never actions: a bot one "Stale check" comment, a person one Stale
+  done, every blocker done, a long-over snooze, a twin title, a quiet week; never a private task), Tico Decide judges
+  only the new ones (at most 30 an hour), and owners get suggestions, never actions: a bot one "Stale check" comment, a person one Stale
   tickets card in Needs you with Accept, Skip and Accept all, each Accept checked like a change by hand. An hour with
   nothing new makes no Decide call and writes nothing. While it is on, "Still wanted?" questions stop.
 
