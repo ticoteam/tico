@@ -66,7 +66,8 @@ def test_only_one_read_statement_is_accepted(api, monkeypatch):
     assert "no such table: nope" in error(api, "SELECT * FROM nope")
     blob = query(api, "SELECT x'0102' AS b")
     # `ms` is measured: a loaded computer takes a millisecond or two.
-    assert isinstance(blob.pop("ms"), int)
+    ms = blob.pop("ms")
+    assert isinstance(ms, int) and ms >= 0, ms
     assert blob == {"columns": ["b"], "rows": [["AQI="]], "row_count": 1, "truncated": False,
                     "note": "BLOB values are base64"}
     # A query that takes 5 ms reports it.
