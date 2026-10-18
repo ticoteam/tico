@@ -27,6 +27,13 @@ All notable changes to Tico are recorded here. The format follows
   before this keeps today's behaviour ([sessions](docs/sessions.md)).
 
 ### Changed
+- **Codex signed in with ChatGPT runs one turn at a time per login**, as OpenAI's terms for a ChatGPT sign-in
+  require. When two bots on one computer share its ChatGPT login, one Codex turn runs and the other shows
+  *Waiting for this computer's ChatGPT login to be free (busy with <bot>)* in the chat, the task and **Runs**, then
+  starts as soon as the first turn ends. A bot with a ready fallback of its own runs there instead, and its run says
+  *ChatGPT login busy with <bot>; ran this turn on <harness>*. This also applies to two task lanes of one bot.
+  Codex on an API key, a bot on its own subscription profile login, and Claude Code are not limited. The holding bot
+  is named only to people who can see it ([how it works](docs/how-it-works.md#one-turn-per-chatgpt-login)).
 - Market is no longer marked Beta: its sidebar item, page title and pages carry no **Beta** pill, and Help no longer
   lists it under **Beta features**.
 

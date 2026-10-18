@@ -677,6 +677,69 @@ impl Runner {
         crate::profiles::turn_profile(&self.config_now().data, attempt, &rows, &assignments, &rejected).map_err(Fail::unavailable)
     }
 
+    /// The login a turn of `runtime` (`harness`) on `profile` holds while its host runs, when that CLI serves one turn
+    /// per login (`one_turn_per_login`) and the login is a subscription (Codex signed in with ChatGPT): the profile's
+    /// own login or the computer's (crate::fallback::login). None for a key login (an OpenAI API key) or another CLI.
+    pub(crate) fn serial_login(&self, runtime: &str, harness: &str, profile: Option<&Profile>) -> Option<crate::login_turns::Login> {
+        if !crate::harness_tools::caps(runtime, harness).one_turn_per_login || self.billing(runtime, profile) != "subscription" {
+            return None;
+        }
+        crate::fallback::login(runtime, harness, profile).map(|login| crate::login_turns::Login::new(runtime, &login))
+    }
+
+    /// Whether a turn whose login another turn holds can run on the bot's own fallback now instead of waiting: one is
+    /// set, it is signed in and ready here, and its own login is not busy too.
+    fn busy_fallback(&self, attempt: &Value, config: &Value) -> bool {
+        let Some(hop) = crate::fallback::configured(config) else { return false };
+        let mut hop_attempt = attempt.clone();
+        hop_attempt["config"] = hop.config(config);
+        hop_attempt["fallback"] = json!(hop.harness);
+        let Ok(profile) = self.turn_profile(&hop_attempt) else { return false };
+        self.fallback_ready(&hop.runtime, profile.as_ref())
+            && self.serial_login(&hop.runtime, &hop.harness, profile.as_ref()).is_none_or(|l| crate::login_turns::holder(&l.key).is_none())
+    }
+
+    /// `login` for this turn: at once when it is free, else once the turns that asked first are done with it. While
+    /// it waits the turn says so, "Waiting for <login> to be free (busy with <bot>)", in a `status` event the chat and
+    /// the task's Runs show (a wait, not a failure), renamed when the holder changes and cleared once the login is
+    /// this turn's. A person's Stop or a lost lease ends the wait as it ends any turn.
+    async fn take_login(&self, aid: &str, bot: &str, login: &crate::login_turns::Login, flags: &Flags, wake: &Notify) -> Result<crate::login_turns::Held, Fail> {
+        let mut holder = match crate::login_turns::try_take(&login.key, bot) {
+            Ok(held) => return Ok(held),
+            Err(holder) => holder,
+        };
+        let say = |holder: &str| {
+            let line = login.waiting(holder, bot);
+            log(&format!("Tico runner: {bot}: {line}"));
+            // The server words it for each reader: the holder is named only to whoever may see that bot.
+            let _ = self.state.append(aid, "status", &json!({"waiting": line, "login": login.label, "holder": holder}));
+            wake.notify_one();
+        };
+        say(&holder);
+        let take = crate::login_turns::take(&login.key, bot);
+        tokio::pin!(take);
+        let held = loop {
+            tokio::select! {
+                held = &mut take => break held,
+                _ = tokio::time::sleep(Duration::from_secs(1)) => {
+                    if flags.lost.load(Ordering::SeqCst) {
+                        return Err(Fail::runtime(format!("Lease expired while waiting for {} to be free", login.label)));
+                    }
+                    if flags.stopped.load(Ordering::SeqCst) {
+                        return Err(Fail::runtime(format!("Execution interrupted after stop while waiting for {} to be free", login.label)));
+                    }
+                    if let Some(now) = crate::login_turns::holder(&login.key).filter(|h| *h != holder) {
+                        holder = now;
+                        say(&holder);
+                    }
+                }
+            }
+        };
+        let _ = self.state.append(aid, "status", &json!({"waiting": ""}));
+        wake.notify_one();
+        Ok(held)
+    }
+
     /// One turn, start to result. Err only when the result could not be settled; the loop then saves an
     /// interrupted result for recovery.
     pub async fn execute(self: Arc<Self>, mut attempt: Value) -> Result<(), String> {
@@ -733,6 +796,10 @@ impl Runner {
         let mut selected: Option<Profile> = None;
         let mut subscription_unavailable: Option<Value> = None;
         let mut fallback: Option<String> = None;
+        // The ChatGPT login this turn's host runs on, held until the host stops (crate::login_turns), and why the turn
+        // went to its fallback instead when another bot's turn had it.
+        let mut login_held: Option<crate::login_turns::Held> = None;
+        let mut busy: Option<(crate::login_turns::Login, String)> = None;
         let (mut unavailable, mut prepared) = (false, false);
         let token = text_of(&attempt["token"]);
         let refs = attempt["message"]["refs"].clone();
@@ -748,6 +815,17 @@ impl Runner {
             let p = place.insert(self.enter_lanes(&attempt, &flags.lost).await.map_err(Fail::runtime)?);
             execution_path = p.main_path.clone();
             selected = self.turn_profile(&attempt)?;
+            if let Some(login) = self.serial_login(&runtime, &text_of(&config["harness"]), selected.as_ref()).filter(|_| !persistent) {
+                // One turn at a time on a ChatGPT login: taken before the checkout is brought up to date, so a turn
+                // that waits starts on a fresh one. Busy: the bot's own fallback takes the turn when it is ready (not
+                // for a command or a native goal, which belong to this harness), else the turn waits its turn.
+                let control = truthy(refs.get("command")) || goal.chat_goal.as_ref().is_some_and(|g| g["status"] == "active");
+                match crate::login_turns::try_take(&login.key, &bot) {
+                    Ok(held) => login_held = Some(held),
+                    Err(holder) if !control && self.busy_fallback(&attempt, &config) => busy = Some((login, holder)),
+                    Err(_) => login_held = Some(self.take_login(&aid, &bot, &login, &flags, &wake).await?),
+                }
+            }
             segments.push(Segment {
                 meter: Meter::default(),
                 config: config.clone(),
@@ -827,6 +905,9 @@ impl Runner {
             let minutes = config["max_run_minutes"].as_f64().or_else(|| text_of(&config["max_run_minutes"]).parse().ok()).unwrap_or(60.0);
             let limit = Instant::now() + Duration::from_secs_f64(60.0 * minutes);
             prepared = true;
+            if busy.is_some() {
+                return Ok(()); // the fallback takes the turn below; this harness never starts
+            }
             let (tx, mut rx) = unbounded_channel();
             let own = tx.clone();
             let made = if persistent {
@@ -912,6 +993,9 @@ impl Runner {
             Ok(())
         }
         .await;
+        if busy.is_some() && ran.is_ok() {
+            unavailable = true;
+        }
 
         if let Err(e) = &ran {
             if let Some(u) = &e.subscription {
@@ -949,6 +1033,7 @@ impl Runner {
             if let Some(h) = &host {
                 h.stop().await;
             }
+            login_held = None; // the primary's host is stopped: its login is free for the next turn
             fallback = Some(hop.harness.clone());
             drove = Drove::interrupted();
             let primary = Some(text_of(&config["harness"])).filter(|h| !h.is_empty()).unwrap_or_else(|| runtime.clone());
@@ -966,8 +1051,19 @@ impl Runner {
                 });
                 let hop_env = selected.as_ref().map_or_else(|| base.clone(), |p| p.environment(&hop.runtime, &base));
                 env = hop_env.clone();
-                let (from, limited) = left.clone().unwrap_or_else(|| (primary.clone(), hit_limit));
-                self.diagnose(&aid, &crate::fallback::diagnostic(&from, &hop, limited));
+                // Named with the harness it moved to, so the task's Runs say where the turn went and why.
+                let note = match (&left, &busy) {
+                    (None, Some((login, holder))) => json!({"text": crate::fallback::busy_diagnostic(&login.busy(holder, &bot), &hop),
+                                                             "fallback": hop.harness, "busy": {"login": login.label, "holder": holder}}),
+                    _ => {
+                        let (from, limited) = left.clone().unwrap_or_else(|| (primary.clone(), hit_limit));
+                        json!({"text": crate::fallback::diagnostic(&from, &hop, limited), "fallback": hop.harness})
+                    }
+                };
+                let _ = self.state.append(&aid, "diagnostic", &note);
+                if let Some(login) = self.serial_login(&hop.runtime, &hop.harness, selected.as_ref()) {
+                    login_held = Some(self.take_login(&aid, &bot, &login, &flags, &wake).await?);
+                }
                 // The primary's promise to report every tool call ends here; the fallback host makes its own.
                 let _ = self.state.append(&aid, "status", &json!({"tool_events": false}));
                 let (tx, mut rx) = unbounded_channel();
@@ -991,7 +1087,12 @@ impl Runner {
                 thread = Some(th.clone());
                 let names = self.names().await;
                 let replay = crate::fallback::replay(&attempt, crate::fallback::REPLAY_TOKENS);
-                let text = format!("{}\n\n{}", crate::prompt::replayed(&attempt, &names, None, false, &replay), crate::fallback::prompt_note(&primary, &hop, hit_limit));
+                let because = match &busy {
+                    Some(_) => format!("{primary}'s ChatGPT login was busy with another turn"),
+                    None if hit_limit => format!("{primary} hit its usage limit"),
+                    None => format!("{primary} was unavailable"),
+                };
+                let text = format!("{}\n\n{}", crate::prompt::replayed(&attempt, &names, None, false, &replay), crate::fallback::prompt_note(&because, &primary, &hop));
                 let t = h.start_turn(&th, &text, hop.reasoning_effort.as_deref()).await?;
                 turn = Some(t.clone());
                 let minutes = config["max_run_minutes"].as_f64().or_else(|| text_of(&config["max_run_minutes"]).parse().ok()).unwrap_or(60.0);
@@ -1010,8 +1111,11 @@ impl Runner {
                 drove = self.drive(&d, &mut rx, t, segments.last_mut().unwrap(), &mut carried, &mut auth_rejected, &mut goal).await?;
                 turn = Some(drove.turn.clone());
                 let how = if drove.outcome == "completed" { String::new() } else { format!(" ({})", drove.outcome) };
-                let why = if hit_limit { "hit its usage limit" } else { "unavailable" };
-                log(&format!("Tico runner: {bot}: {primary} {why}; ran the turn on {}{how}", hop.harness));
+                let why = match &busy {
+                    Some((login, holder)) => login.busy(holder, &bot),
+                    None => format!("{primary} {}", if hit_limit { "hit its usage limit" } else { "unavailable" }),
+                };
+                log(&format!("Tico runner: {bot}: {why}; ran the turn on {}{how}", hop.harness));
                 Ok(())
             }
             .await;
@@ -1059,6 +1163,8 @@ impl Runner {
                 self.warm.release(warm, drove.outcome == "completed").await;
             }
         }
+        // The host has stopped: the next turn waiting for this ChatGPT login starts now.
+        drop(login_held.take());
         if drove.outcome != "completed" && !crate::harness_tools::caps(&runtime, "").resume_after_interrupt && !goal.controlled {
             if let Some(th) = &thread {
                 // A host that aborts the next turn on an interrupted thread at once (`resume_after_interrupt =

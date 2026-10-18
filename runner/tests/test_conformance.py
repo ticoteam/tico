@@ -209,9 +209,36 @@ def computer(api, live, tmp_path, harness, setup, rust_binary):
     machine.stop()
 
 
-def reply_to(api, conversation, token="ana-test"):
+def reply_to(api, conversation, token="ana-test", bot="ops"):
     messages = get(api, f"conversations/{conversation}/messages", token)
-    return next((m for m in reversed(messages) if m["from_actor"] == "bot:ops"), None)
+    return next((m for m in reversed(messages) if m["from_actor"] == "bot:" + bot), None)
+
+
+def add_bot(api, computer, tmp_path, slug, bot=None):
+    """Another bot on this computer, on the same harness and the computer's own logins (call before start)."""
+    assign(api, computer.registration, slug)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET config_json=? WHERE bot=?",
+                  (encode({"name": slug, "runtime": computer.runtime, "harness": computer.harness,
+                           "model": MODELS[computer.harness], "status": "active", **(bot or {})}), slug))
+    repo = tmp_path / "projects" / f"bot-{slug}"
+    repo.mkdir(parents=True)
+    (repo / "AGENT.md").write_text(f"# {slug.title()}\n\nAnswer the Acme team.\n")
+    (repo / "bot.yaml").write_text(f"name: {slug}\nruntime: {computer.runtime}\nmodel: {MODELS[computer.harness]}\n")
+
+
+def codex_turns(computer):
+    """Each Codex turn's (start, end) from the fake's log, earliest start first."""
+    calls = computer.calls()
+    ends = {c["turn"]: c["at"] for c in calls if c.get("method") == "turn/completed"}
+    return sorted((c["at"], ends.get(c["turn"])) for c in calls if c.get("method") == "turn/start")
+
+
+def bot_attempts(api, computer, bot):
+    with api.app.state.store.read() as c:
+        rows = c.execute("SELECT id, result_json FROM attempts WHERE runner_id=? AND bot=? ORDER BY created",
+                         (computer.registration["runner_id"], bot)).fetchall()
+    return [{"id": r[0], "result": json.loads(r[1] or "null")} for r in rows]
 
 
 def test_a_chat_turn_streams_completes_and_resumes_the_bot_thread(api, computer):
@@ -732,9 +759,10 @@ def test_an_api_key_codex_login_is_never_asked_for_plan_usage(api, computer):
     assert not any(c.get("method") == "account/rateLimits/read" for c in computer.calls())
 
 
+# On an API-key Codex login: a ChatGPT login takes one turn at a time, lanes or not (the tests below).
 @pytest.mark.parametrize("harness", ["codex"])
 @pytest.mark.parametrize("setup", [{"bot": {"session": "task"}, "git": True, "registration": {"capacity": 4},
-                                    "env": {"FAKE_SLOW": "4"}}])
+                                    "env": {"FAKE_SLOW": "4", "FAKE_CODEX_LOGIN": "apikey"}}])
 def test_two_tasks_of_one_bot_run_side_by_side_in_their_own_lanes(api, computer):
     computer.start()
     for title in ("SLOW first", "SLOW second"):
@@ -743,6 +771,80 @@ def test_two_tasks_of_one_bot_run_side_by_side_in_their_own_lanes(api, computer)
     starts = sorted(c["at"] for c in computer.calls() if c.get("method") == "turn/start")
     ends = sorted(c["at"] for c in computer.calls() if c.get("method") == "turn/completed")
     assert len(starts) == 2 and starts[1] < ends[0], (starts, ends)
+
+
+# Brief test 16 (Dev 215): OpenAI's Codex terms allow a ChatGPT sign-in one auth.json per serialized job stream. Two bots
+# on this computer's one ChatGPT login start at once: one Codex turn runs, the other shows it is waiting (not failed),
+# then runs once the first is done.
+@pytest.mark.parametrize("harness", ["codex"])
+@pytest.mark.parametrize("setup", [{"registration": {"capacity": 4}, "env": {"FAKE_SLOW": "3"}}])
+def test_two_bots_on_one_chatgpt_login_take_turns_and_the_one_waiting_says_so(api, computer, tmp_path):
+    add_bot(api, computer, tmp_path, "finance")
+    computer.start()
+    until(lambda: computer.readiness().get("finance", {}).get("ready"), "the second bot's readiness")
+    chats = {bot: post(api, f"chat/{bot}", {"text": "Please be SLOW"})["conversation_id"] for bot in ("ops", "finance")}
+
+    def waiting():
+        for bot, cid in chats.items():
+            line = (get(api, f"conversations/{cid}/snapshot")["execution"] or {}).get("waiting")
+            if line:
+                return bot, line
+    bot, line = until(waiting, "a turn waiting for the login")
+    other = next(b for b in chats if b != bot)
+    assert line == f"Waiting for this computer's ChatGPT login to be free (busy with {other})"
+    for b, cid in chats.items():
+        until(lambda b=b, cid=cid: reply_to(api, cid, bot=b), f"{b}'s reply", timeout=40)
+    turns = codex_turns(computer)
+    assert len(turns) == 2 and turns[1][0] >= turns[0][1], turns
+    for b in chats:
+        result = until(lambda b=b: bot_attempts(api, computer, b)[-1]["result"], f"{b}'s completion")
+        assert result["outcome"] == "completed" and not result.get("fallback")
+    # The wait is a status, set while it waited and cleared once the login was its own; the first turn never waited.
+    said = lambda b: [e["payload"]["waiting"] for e in computer.events(bot_attempts(api, computer, b)[-1]["id"])
+                      if e["kind"] == "status" and "waiting" in e["payload"]]
+    assert said(bot)[0].startswith("Waiting for this computer's ChatGPT login") and said(bot)[-1] == "" and said(other) == []
+    assert (get(api, f"conversations/{chats[bot]}/snapshot")["execution"] or {}).get("waiting") is None
+
+
+# The second bot has its own fallback ready: it does not wait, it runs there, and the run says which and why.
+@pytest.mark.parametrize("harness", ["codex"])
+@pytest.mark.parametrize("setup", [{"registration": {"capacity": 4}, "env": {"FAKE_SLOW": "3"}}])
+def test_a_bot_whose_chatgpt_login_is_busy_runs_on_its_own_fallback_and_says_why(api, computer, tmp_path):
+    add_bot(api, computer, tmp_path, "finance", bot={"fallback": {"harness": "claude", "model": "claude-sonnet-5"}})
+    computer.start()
+    until(lambda: computer.readiness().get("finance", {}).get("ready"), "the second bot's readiness")
+    ops = post(api, "chat/ops", {"text": "Please be SLOW"})
+    until(lambda: codex_turns(computer), "ops's Codex turn")
+    finance = post(api, "chat/finance", {"text": "Please answer locally"})
+    assert until(lambda: reply_to(api, finance["conversation_id"], bot="finance"), "the fallback's reply")["body"] == "Acme reply."
+    attempt = until(lambda: (lambda rows: rows[-1] if rows and rows[-1]["result"] else None)(bot_attempts(api, computer, "finance")),
+                    "finance's completion")
+    assert attempt["result"]["outcome"] == "completed" and attempt["result"]["fallback"] == "claude"
+    notes = [e["payload"] for e in computer.events(attempt["id"]) if e["kind"] == "diagnostic"]
+    assert {"text": "ChatGPT login busy with ops; running this turn on claude", "fallback": "claude",
+            "busy": {"login": "this computer's ChatGPT login", "holder": "ops"}} in notes, notes
+    assert not any(e["kind"] == "status" and "waiting" in e["payload"] for e in computer.events(attempt["id"]))
+    prompt = next(p for p in computer.prompts() if p["harness"] == "claude")["prompt"]
+    assert "because codex's ChatGPT login was busy with another turn" in prompt
+    until(lambda: reply_to(api, ops["conversation_id"]), "ops's reply", timeout=40)
+    assert len(codex_turns(computer)) == 1 and bot_attempts(api, computer, "ops")[-1]["result"].get("fallback") is None
+
+
+# An API-key Codex login is not limited: two bots on it run at once, and neither waits.
+@pytest.mark.parametrize("harness", ["codex"])
+@pytest.mark.parametrize("setup", [{"registration": {"capacity": 4}, "env": {"FAKE_SLOW": "3", "FAKE_CODEX_LOGIN": "apikey"}}])
+def test_two_bots_on_an_api_key_codex_login_run_at_once(api, computer, tmp_path):
+    add_bot(api, computer, tmp_path, "finance")
+    computer.start()
+    until(lambda: computer.readiness().get("finance", {}).get("ready"), "the second bot's readiness")
+    chats = {bot: post(api, f"chat/{bot}", {"text": "Please be SLOW"})["conversation_id"] for bot in ("ops", "finance")}
+    for b, cid in chats.items():
+        until(lambda b=b, cid=cid: reply_to(api, cid, bot=b), f"{b}'s reply", timeout=40)
+    turns = codex_turns(computer)
+    assert len(turns) == 2 and turns[1][0] < turns[0][1], turns
+    for b in chats:
+        events = computer.events(bot_attempts(api, computer, b)[-1]["id"])
+        assert not any(e["kind"] == "status" and "waiting" in e["payload"] for e in events)
 
 
 @pytest.mark.parametrize("harness", ["claude"])

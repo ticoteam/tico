@@ -111,6 +111,8 @@ pub struct Capabilities {
     pub persistent_session: bool,
     pub goal_runs_across_turns: bool,
     pub serial_cold_start: bool,
+    /// A subscription login serves one turn at a time on this computer (crate::login_turns); a key login does not.
+    pub one_turn_per_login: bool,
     pub compaction: bool,
     pub resume_command: String,
     /// "" | host | command
@@ -144,6 +146,7 @@ impl Default for Capabilities {
             persistent_session: false,
             goal_runs_across_turns: false,
             serial_cold_start: false,
+            one_turn_per_login: false,
             compaction: false,
             resume_command: String::new(),
             model_list: String::new(),
@@ -484,6 +487,7 @@ fn parse_capabilities(raw: Option<&toml::Value>, at: &str) -> Result<Capabilitie
             "persistent_session" => c.persistent_session = flag(k, v)?,
             "goal_runs_across_turns" => c.goal_runs_across_turns = flag(k, v)?,
             "serial_cold_start" => c.serial_cold_start = flag(k, v)?,
+            "one_turn_per_login" => c.one_turn_per_login = flag(k, v)?,
             "compaction" => c.compaction = flag(k, v)?,
             "resume_command" => c.resume_command = text(k, v)?,
             "model_list" => c.model_list = choice(k, v, &["host", "command"])?,

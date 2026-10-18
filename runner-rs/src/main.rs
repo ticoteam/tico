@@ -32,6 +32,7 @@ mod harness_tools;
 mod goals;
 mod hosts;
 mod lanes;
+mod login_turns;
 mod lock;
 mod login;
 mod profiles;
