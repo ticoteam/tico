@@ -6,6 +6,9 @@
 //!
 //! In memory: this runner starts every turn on this computer, and a turn that ends, fails, runs out of time or
 //! panics drops what it holds, which frees the login at once. A restarted runner holds nothing.
+//!
+//! A login is never copied into another bot's home to get round this: a copy of a ChatGPT auth.json rotates apart
+//! from the original, and two bots on two copies would slip past the lock (the guard test below).
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -189,6 +192,43 @@ mod tests {
         assert!(tokio::time::timeout(Duration::from_millis(20), take(key, "gave-up")).await.is_err());
         drop(held);
         assert_eq!(try_take(key, "b").map(|_| ()).err(), None);
+    }
+
+    /// No code path copies a login file into another home. Switch account signs in inside the login's own home
+    /// (login.rs begin_switch) and seeds nothing for Codex; the only other copy is the replay recorder's, test-only.
+    #[test]
+    fn no_code_path_copies_a_codex_login_between_homes() {
+        let login = crate::harness_tools::login_command("codex").expect("Codex has a login section");
+        assert!(login.seed.is_empty(), "Switch account copies {:?} into the side home", login.seed);
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let (mut files, mut dirs) = (vec![], vec![src.clone()]);
+        while let Some(d) = dirs.pop() {
+            for e in std::fs::read_dir(&d).unwrap().flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    dirs.push(p);
+                } else if p.extension().is_some_and(|x| x == "rs") {
+                    files.push(p);
+                }
+            }
+        }
+        let copying = regex::Regex::new(r#"fs::copy|fs::write|fs::rename|write_private|"cp"|\bcopy\b"#).unwrap();
+        let mut found = vec![];
+        for path in files {
+            let rel = path.strip_prefix(&src).unwrap().display().to_string();
+            if rel == "hosts/replay.rs" || rel == "login_turns.rs" {
+                continue; // test-only (hosts/mod.rs: #[cfg(test)] mod replay), and this guard itself
+            }
+            let text = std::fs::read_to_string(&path).unwrap();
+            // Production code only: everything before the file's own test module.
+            let code = text.split("#[cfg(test)]\nmod ").next().unwrap_or_default();
+            for (n, line) in code.lines().enumerate() {
+                if line.contains("auth.json") && copying.is_match(line) {
+                    found.push(format!("{rel}:{}: {}", n + 1, line.trim()));
+                }
+            }
+        }
+        assert!(found.is_empty(), "a login file is copied: {found:#?}");
     }
 
     #[test]

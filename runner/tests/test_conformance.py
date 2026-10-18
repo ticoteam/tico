@@ -759,18 +759,28 @@ def test_an_api_key_codex_login_is_never_asked_for_plan_usage(api, computer):
     assert not any(c.get("method") == "account/rateLimits/read" for c in computer.calls())
 
 
-# On an API-key Codex login: a ChatGPT login takes one turn at a time, lanes or not (the tests below).
+# On an API-key Codex login the lanes run at once; on a ChatGPT login they run in turn, the second shown as waiting
+# (a status, not a failure), because OpenAI's rule is one job per login, not per bot.
 @pytest.mark.parametrize("harness", ["codex"])
 @pytest.mark.parametrize("setup", [{"bot": {"session": "task"}, "git": True, "registration": {"capacity": 4},
-                                    "env": {"FAKE_SLOW": "4", "FAKE_CODEX_LOGIN": "apikey"}}])
-def test_two_tasks_of_one_bot_run_side_by_side_in_their_own_lanes(api, computer):
+                                    "env": {"FAKE_SLOW": "4", "FAKE_CODEX_LOGIN": login}} for login in ("apikey", "chatgpt")],
+                         ids=["api-key", "chatgpt"])
+def test_two_tasks_of_one_bot_run_side_by_side_in_their_own_lanes(api, computer, setup):
     computer.start()
     for title in ("SLOW first", "SLOW second"):
         post(api, "tasks", {"owner": "ops", "title": title, "body": "Please do " + title + "."})
     until(lambda: len([c for c in computer.calls() if c.get("method") == "turn/completed"]) == 2, "both task turns", timeout=60)
-    starts = sorted(c["at"] for c in computer.calls() if c.get("method") == "turn/start")
-    ends = sorted(c["at"] for c in computer.calls() if c.get("method") == "turn/completed")
-    assert len(starts) == 2 and starts[1] < ends[0], (starts, ends)
+    turns = codex_turns(computer)
+    waits = [e for a in computer.attempts() for e in computer.events(a["id"]) if e["kind"] == "status" and e["payload"].get("waiting")]
+    if setup["env"]["FAKE_CODEX_LOGIN"] == "apikey":
+        assert len(turns) == 2 and turns[1][0] < turns[0][1] and not waits, (turns, waits)
+    else:
+        assert len(turns) == 2 and turns[1][0] >= turns[0][1], turns
+        assert [e["payload"]["waiting"] for e in waits] == [
+            "Waiting for this computer's ChatGPT login to be free (busy with another turn of this bot)"]
+        done = until(lambda: (lambda rows: rows if len(rows) == 2 and all(a["result"] for a in rows) else None)(computer.attempts()),
+                     "both results")
+        assert [a["result"]["outcome"] for a in done] == ["completed", "completed"]
 
 
 # Brief test 16 (Dev 215): OpenAI's Codex terms allow a ChatGPT sign-in one auth.json per serialized job stream. Two bots

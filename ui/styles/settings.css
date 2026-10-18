@@ -285,7 +285,7 @@ p:empty{display:none}
 .machine-bots .settings-cell-note{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .settings-machines td:nth-child(3){max-width:220px}
 .people-menu-check{display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:5px;font-size:var(--t-base);white-space:nowrap;cursor:pointer}.people-menu-check:hover{background:var(--surface2)}
-.machine-runtime-item{display:inline-flex;flex-wrap:wrap;align-items:center;gap:4px}.machine-rejected{flex-basis:100%;font-size:var(--t-sm)}
+.machine-runtime-item{display:inline-flex;flex-wrap:wrap;align-items:center;gap:4px}.machine-rejected{flex-basis:100%;font-size:var(--t-sm)}.machine-shared-login{display:block;flex-basis:100%;font-size:var(--t-sm)}
 .machine-signin{padding:1px 8px;font-size:var(--t-sm)}
 .machine-harnesses{display:flex;gap:5px 10px;flex-wrap:wrap;margin-top:6px}
 .machine-harness-item{display:inline-flex;align-items:center;gap:4px;flex-wrap:wrap}
