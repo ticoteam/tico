@@ -189,13 +189,16 @@ def test_an_old_held_check_beside_a_young_free_job_is_neither_held_nor_slow(api)
     queued_at(api, second, 1)
     rows, found = ops_rows(api)
     assert rows == [] and "queue_idle" not in found
-    # A person's message the claim would take is old at two minutes, behind a free job not yet old at ten.
-    waiting = queued_at(api, second, 10)
-    assert ops_rows(api)[0] == []
+    # The claim takes a person's message before older work: a young chat ahead of a free job old at sixteen minutes
+    # is not slow, and the chat itself is old at two.
+    queued_at(api, second, 16)
     chat = post(api, "chat/ops", {"text": "Are you there?"})
+    rows, found = ops_rows(api)
+    assert rows == [] and "queue_idle" not in found
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE jobs SET created=? WHERE message_id=?", (H.shift(H.now(), minutes=-3), chat["id"]))
-    assert [(r["reason"], r["oldest"]) for r in ops_rows(api)[0]] == [("slow", waiting)]
+        asked = H.shift(H.now(), minutes=-3)
+        c.execute("UPDATE jobs SET created=? WHERE message_id=?", (asked, chat["id"]))
+    assert [(r["reason"], r["oldest"]) for r in ops_rows(api)[0]] == [("slow", asked)]
     with api.app.state.store.transaction() as c:
         c.execute("DELETE FROM jobs WHERE message_id=?", (chat["id"],))
     created = queued_at(api, second, 16)

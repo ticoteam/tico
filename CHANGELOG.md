@@ -176,8 +176,9 @@ All notable changes to Tico are recorded here. The format follows
   reply stay on screen, and the page behind no longer shows below it or scrolls under it. With the keyboard down it is
   the usual bottom sheet again.
 - Health no longer reports a bot's queued work as a Tico bug (Health Monitor `queue_idle`) when an old job is held on
-  purpose and the job that would start next is still young. It judges a bot by the oldest job that could start now:
-  slow only once that job has waited 15 minutes (a person's message: 2). When every job is held, it names the reason.
+  purpose, or waits behind a person's message, and the job that would start next is still young. It judges a bot by
+  that job, a person's message first: slow only once it has waited 15 minutes (a person's message: 2). When every job
+  is held, it names the reason.
 - A computer someone pressed Restart for now says so until it restarts. Its held work shows on Health as "{computer} is
   restarting: it starts new work once its running turns end", and its row in Settings > Computers says it is
   restarting. If the restart takes over 34 minutes, Health Monitor files a `runner_restarting` setup finding.

@@ -462,10 +462,10 @@ def _waiting(c, online_ids, settings=None):
             # A bot the claim holds on purpose (a spend limit, a usage-limit cooldown, a lapsed lease whose worker still
             # runs, interrupted work awaiting review, ...) is said with that reason, not "slow".
             idle = slug not in busy and where[0] not in full
-            refused, first, person = bot_claimable(c, settings, where[0], slug, person_cutoff) if idle else (None,) * 3
+            refused, first, person = bot_claimable(c, settings, where[0], slug) if idle else (None,) * 3
             if idle and not refused:
-                if not ((first and first < cutoff) or (person and person < person_cutoff)):
-                    continue        # the job the claim would take is young: its older jobs are held, each on purpose
+                if not (first and first < (person_cutoff if person else cutoff)):
+                    continue        # the job the claim would take is young: the older ones wait behind it or are held
                 row["oldest"] = first
             reason = ("limit" if refused == "limit" else "updating" if where[0] in updating
                       else "restarting" if where[0] in restarting else refused or "slow")
