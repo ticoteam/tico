@@ -110,6 +110,9 @@ MODEL_CATALOG = tuple(attach_harnesses(row) for row in (
     {"id": "claude-fable-5-1", "label": "fable 5.1", "runtime": "claude", "provider": "anthropic",
      "efforts": ("low", "medium", "high", "xhigh", "max"),
      "default_effort": "high"},
+    {"id": "claude-haiku-5-5", "label": "haiku 5.5", "runtime": "claude", "provider": "anthropic",
+     "efforts": ("low", "medium", "high", "xhigh", "max"),
+     "default_effort": "medium"},
     # Cursor picks the model itself on `auto`; any other model it offers is named in the bot's config.
     {"id": "cursor-auto", "label": "cursor auto", "runtime": "cursor", "provider": "cursor",
      "recommended": True, "efforts": ("as-configured",), "default_effort": "as-configured"},
@@ -165,8 +168,10 @@ MODEL_BY_ID = {row["id"]: row for row in MODEL_CATALOG}
 # model missing here shows its tokens and no cost. Standard tier, prompts under the long-context
 # threshold; batch, priority, regional and cache-write premiums are not modelled (a cache write is
 # counted as input). A bot that names a model by another id than these gets no estimate.
-# Sources, read 2026-09-29:
-#   Anthropic  platform.claude.com/docs/en/about-claude/pricing (cache hit = "cache hits and refreshes")
+# Sources, read 2026-09-29 (Anthropic re-read 2026-10-17):
+#   Anthropic  platform.claude.com/docs/en/about-claude/pricing (cache hit = "cache hits and refreshes";
+#              0.025x input on Fable 5.1, 0.05x on Opus 5.5 and Sonnet 5.5, 0.1x on the rest)
+#              claude-haiku-5-5 read 2026-10-17: the rate for prompts up to 100,000 tokens (LONG_PROMPT below).
 #   OpenAI     developers.openai.com/api/docs/pricing (standard, short context)
 #   Google     ai.google.dev/gemini-api/docs/pricing (paid standard; $0.75/$3.75 until 2026-12-31, doubling from 2027-01-01)
 #   xAI        docs.x.ai/developers/models (prompts under 200k)
@@ -178,8 +183,9 @@ PRICES = {
     "claude-opus-5-5": (4.0, 0.20, 20.0),
     "claude-opus-5": (5.0, 0.50, 25.0),
     "claude-opus-4-8": (5.0, 0.50, 25.0),
-    "claude-sonnet-5-5": (2.0, 0.20, 10.0),
+    "claude-sonnet-5-5": (2.0, 0.10, 10.0),
     "claude-sonnet-5": (2.0, 0.20, 10.0),
+    "claude-haiku-5-5": (0.10, 0.01, 0.50),
     "claude-haiku-4-5": (1.0, 0.10, 5.0),
     "gpt-6-astra": (10.0, 1.0, 50.0),
     "gpt-6-sol": (2.0, 0.20, 10.0),
@@ -200,19 +206,46 @@ PRICES = {
 }
 
 
+# Models whose every rate goes up for a request with a long prompt: (prompt tokens it may have, the rates
+# above that) in the same units as PRICES. A request's prompt is all its input, cache reads and cache writes
+# included, and each request is priced on its own. Anthropic's pricing page ("Long context pricing"), read
+# 2026-10-17: only Claude Haiku 5.5; Claude 4.6 and later models bill their whole context at the standard rate.
+LONG_PROMPT_AS_OF = "2026-10-17"
+LONG_PROMPT = {
+    "claude-haiku-5-5": (100_000, (0.50, 0.05, 2.50)),
+}
+
+
 def price_of(model):
     """(input, cached input, output) USD per 1M tokens for a model id, or None when it has no list price."""
     return PRICES.get(str(model or "").strip().lower())
 
 
-def estimate_cost(model, input_tokens, cached_tokens, output_tokens):
-    """The list-price cost in USD of one run's tokens, or None for a model with no price. `input_tokens`
-    are the uncached ones; cached tokens are billed at the cached rate."""
+def estimate(model, input_tokens, cached_tokens, output_tokens, requests=None):
+    """(USD, may be low) for one run's tokens at list price; USD is None for a model with no price.
+    `input_tokens` are the uncached ones; cached tokens are billed at the cached rate. On a model with a
+    LONG_PROMPT rate each of `requests` ((input, cached, output) per model request, as the runner counted
+    them) pays its own tier. Tokens no request accounts for pay the lower rate, and the estimate may be low."""
     price = price_of(model)
     if not price:
-        return None
-    return (int(input_tokens or 0) * price[0] + int(cached_tokens or 0) * price[1]
-            + int(output_tokens or 0) * price[2]) / 1_000_000
+        return None, False
+    totals = [int(input_tokens or 0), int(cached_tokens or 0), int(output_tokens or 0)]
+    long = LONG_PROMPT.get(str(model or "").strip().lower())
+    if not long:
+        return sum(n * rate for n, rate in zip(totals, price)) / 1_000_000, False
+    limit, high = long
+    cost, rest = 0.0, totals
+    for request in requests or ():
+        counts = [int(n or 0) for n in request]
+        cost += sum(n * rate for n, rate in zip(counts, high if counts[0] + counts[1] > limit else price))
+        rest = [r - n for r, n in zip(rest, counts)]
+    rest = [max(r, 0) for r in rest]
+    return (cost + sum(n * rate for n, rate in zip(rest, price))) / 1_000_000, any(rest)
+
+
+def estimate_cost(model, input_tokens, cached_tokens, output_tokens, requests=None):
+    """The list-price cost in USD of one run's tokens (`estimate`), or None for a model with no price."""
+    return estimate(model, input_tokens, cached_tokens, output_tokens, requests)[0]
 
 
 class ProviderError(Problem):

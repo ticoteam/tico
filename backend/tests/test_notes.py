@@ -84,3 +84,18 @@ def test_a_bot_that_only_runs_tasks_gets_its_notes_once(api):
     assert first["lane"].startswith("task:") and second["lane"].startswith("task:")
     assert [x["id"] for x in first["notes"]] == [n["id"]]
     assert second["notes"] == []
+
+
+def test_the_note_a_lifted_quarantine_leaves_reaches_the_next_run_ahead_of_a_backlog(api):
+    from backend import hubdb as H
+    r = setup(api)
+    with api.app.state.store.transaction() as c:
+        H.quarantine(c, "ops", "10 repeated refusals today", refusal={"rule": "identity", "detail": "lane is a person's"})
+        for i in range(50):
+            c.execute("INSERT INTO notes(id,from_actor,to_actor,body,created) VALUES(?,?,?,?,?)",
+                      (H.new_id(), "human:ana", "bot:ops", f"Older note {i}", H.shift(H.now(), seconds=-600 + i)))
+        H.status_set(c, "human:ana", "ops", state="active", reason="reviewed")
+    post(api, "chat/ops", {"text": "Back to the exports"})
+    first = claim(api, r)["notes"]
+    assert len(first) == 50 and first[0]["from"] == H.KEEPER
+    assert "lane is a person's (identity)" in first[0]["text"] and first[0]["text"].endswith(H.QUARANTINE_LIFTED)

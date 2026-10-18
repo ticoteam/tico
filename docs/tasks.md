@@ -237,14 +237,22 @@ with `bots` on the task-types routes or `hub task type update "Dev ticket" --bot
 | `read` | Comment on company tasks and file subtasks |
 | `work` | Also change step, owner, due date, description, order and links |
 
-Private overrides every type permission. Closing, ready or closed steps and labels keep their
-existing human controls. Changing type cannot publish a private task.
+Private overrides every type permission. Closing, ready or closed steps keep their existing
+human controls. Changing type cannot publish a private task.
+
+Labels are a mover's, with one exception for bots: a bot adds and removes classification labels
+(`qa`, an area, a priority) on a task it owns, asked for, or whose type it manages (the type's
+`manager`), whatever the type's `bots` setting. A public roadmap label needs its exact approved
+publish approval (`hub task publication-preview <id> --label ...` for the labels the task keeps,
+then `hub task label <id> --add roadmap --approval-id <id>`), and `goal:on`/`goal:off` need a mover.
+Lane and number are a mover's alone ([Permissions](permissions.md#tags)).
 A bot's comment is a message to the people on the task, under the usual rules for reaching them.
 
 A person's comment wakes the task's bot when the bot owns the task, and is never quiet on a task
 with no bot on it. On a task a bot filed and a
-person owns, it wakes the bot only when it @mentions the bot (`@ops`, or its name) or the task
-waits on that person; any other comment reaches the bot on its next turn. A person @mentioned in a
+person owns, the owner's comment wakes the bot that asked them, @mention or not: it is almost always
+a reply. Anyone else's comment there wakes the bot only when it @mentions the bot (`@ops`, or its
+name) or the task waits on that person; any other comment reaches the bot on its next turn. A person @mentioned in a
 comment (by id, the part of their email before the @, full name, or first name when no one else
 shares it) gets the comment as a question, which puts the task in their Needs you; when the
 comment also wakes the bot, or names several people, each person gets their own copy of the question.
@@ -318,7 +326,9 @@ explicit positions are provided. Omitted steps are removed; new steps omit `id`.
 `GET/POST /api/v2/task-types` list and create types. `GET/POST /api/v2/task-types/{id}` read and
 update one. `DELETE /api/v2/task-types/{id}`, or `POST /api/v2/task-types/{id}/delete`, deletes an
 unused type. Create and update accept `numbered` and `steps_only`; updates accept `name` and a replacement `steps`
-array, retaining existing step ids. All writes use the existing Idempotency-Key contract. Task
+array, retaining existing step ids. A type's answer includes `role`: `product-roadmap` or `engineering` on the types
+roadmaps follow ([roadmaps](roadmaps.md)), else null; Tico sets it, no write does. All writes use the existing
+Idempotency-Key contract. Task
 create and update accept `type`, `step` and `number`, and update accepts `step_rank` and `title`; task answers
 include `type_id`, `step_id`, a `type` object, a `step` object (null when unmapped), `number` and
 `step_rank`.

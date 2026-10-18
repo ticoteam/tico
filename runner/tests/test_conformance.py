@@ -9,15 +9,17 @@ import json
 import os
 import shutil
 import signal
+import socket
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
 import pytest
 
 from backend.store import encode
-from backend.tests.test_api import api, assign, get, post, runner, settled  # noqa: F401
+from backend.tests.test_api import api, assign, get, post, put, runner, settled  # noqa: F401
 from backend.tests.live import live  # noqa: F401
 
 pytestmark = pytest.mark.slow
@@ -158,6 +160,12 @@ class Computer:
         with self.api.app.state.store.read() as c:
             row = c.execute("SELECT readiness_json FROM runners WHERE id=?", (self.registration["runner_id"],)).fetchone()
         return (json.loads(row[0] or "{}") if row else {}).get("bots", {})
+
+    def profiles(self):
+        """The subscription profiles this computer's last heartbeat listed: {name: {runtime: state}}."""
+        with self.api.app.state.store.read() as c:
+            return {r[0]: json.loads(r[1] or "{}") for r in c.execute(
+                "SELECT profile, runtimes_json FROM computer_profiles WHERE runner_id=?", (self.registration["runner_id"],))}
 
     def calls(self):
         if not self.log_path.exists():
@@ -449,6 +457,53 @@ def test_a_bot_on_a_subscription_profile_runs_in_that_profiles_home(api, live, t
         machine.stop()
 
 
+# A named subscription signed in from Settings on a running computer: the sign-in writes it into runner.json, and the
+# heartbeat lists it, shows its sign-in and a turn on it uses it, with no restart. A failed sign-in keeps the profile,
+# listed as not signed in; one taken out of runner.json goes from the next heartbeat.
+@pytest.mark.parametrize("harness", ["codex"])
+@pytest.mark.parametrize("setup", [{"env": {"FAKE_CODEX_LOGIN": "file"}}])
+def test_a_subscription_signed_in_from_the_browser_counts_without_a_restart(api, computer):
+    (Path(computer.env["CODEX_HOME"]) / "auth.json").write_text("{}")      # the computer's own login
+    computer.start()
+    rid = computer.registration["runner_id"]
+    signed = lambda name: computer.profiles().get(name, {}).get("codex", {}).get("signed_in")  # noqa: E731
+    state = lambda login: get(api, f"runners/{rid}/logins/{login['id']}")["state"]  # noqa: E731
+    assert computer.profiles() == {}
+    login = post(api, f"runners/{rid}/logins", {"runtime": "codex", "profile": "chris-chatgpt"})
+    home = computer.config.parent / "profiles" / "chris-chatgpt" / "codex"
+    until(lambda: state(login) == "waiting", "the sign-in's link and code")
+    # Listed while the person is still on the provider's page: there, not signed in yet.
+    until(lambda: signed("chris-chatgpt") is False, "the new profile in the heartbeat")
+    (home / "approve").write_text("")
+    until(lambda: state(login) == "signed_in", "the sign-in's verdict")
+    until(lambda: signed("chris-chatgpt") is True, "the profile signed in, in the heartbeat")
+    put(api, "subscriptions", {"scope": "bot", "target": "ops", "profile": "chris-chatgpt"})
+    msg = post(api, "chat/ops", {"text": "Please answer on Chris's subscription"})
+    until(lambda: reply_to(api, msg["conversation_id"]), "the bot's reply on the new subscription")
+    assert computer.prompts()[-1]["env"]["CODEX_HOME"] == str(home)
+    assert until(lambda: computer.attempts()[-1]["result"], "the completion")["profile_used"] == "chris-chatgpt"
+
+    failed = post(api, f"runners/{rid}/logins", {"runtime": "codex", "profile": "spare"})
+    until(lambda: state(failed) == "waiting", "the second sign-in's link and code")
+    (computer.config.parent / "profiles" / "spare" / "codex" / "deny").write_text("")
+    until(lambda: state(failed) == "failed", "the failed sign-in's verdict")
+    until(lambda: signed("spare") is False, "the failed profile, not signed in")
+
+    registration = json.loads(computer.config.read_text())
+    del registration["profiles"]["spare"]
+    computer.config.write_text(json.dumps(registration))
+    until(lambda: "spare" not in computer.profiles(), "the profile taken out, gone from the heartbeat", timeout=40)
+    assert signed("chris-chatgpt") is True
+    # The subscription left in place still takes turns after another one is taken out.
+    again = post(api, "chat/ops", {"text": "Please answer again on Chris's subscription"})
+    assert until(lambda: len(computer.attempts()) == 2 and computer.attempts()[-1]["result"],
+                 "the second turn's completion")["profile_used"] == "chris-chatgpt"
+    assert "answer again" in computer.prompts()[-1]["prompt"]
+    assert computer.prompts()[-1]["env"]["CODEX_HOME"] == str(home)
+    assert reply_to(api, again["conversation_id"])
+    assert not computer.died()
+
+
 # The signed-in account a computer reports per tool (#610): allow-listed fields only, Codex's without a token refresh.
 @pytest.mark.parametrize("harness", ["claude", "codex"])
 def test_the_signed_in_account_reaches_readiness_without_anything_token_like(api, computer):
@@ -683,3 +738,166 @@ def test_a_grok_turn_gets_only_its_declared_mcp_servers_never_the_operators(api,
     assert {k: env[k] for k in ("GROK_CLAUDE_MCPS_ENABLED", "GROK_CURSOR_MCPS_ENABLED", "GROK_MANAGED_MCPS_ENABLED")} == \
         {"GROK_CLAUDE_MCPS_ENABLED": "false", "GROK_CURSOR_MCPS_ENABLED": "false", "GROK_MANAGED_MCPS_ENABLED": "false"}
     assert [c["mcpServers"] for c in computer.calls() if c.get("method") == "session/new"] == [[]]
+
+
+# What Cloudflare's bot protection refuses before a request reaches Tico: no user agent, or a library's default one.
+# Matched on every product token, since a default can lead with another (aiohttp's is `Python/3.12 aiohttp/3.10.11`).
+DEFAULT_AGENTS = ("python-requests/", "python-urllib/", "python-httpx/", "aiohttp/", "go-http-client/", "curl/",
+                  "wget/", "okhttp/", "java/", "node", "undici", "axios/", "libwww-perl/")
+
+
+def refused_agent(agent):
+    return not agent or any(token.lower().startswith(DEFAULT_AGENTS) for token in agent.split())
+
+
+def status_of(response):
+    parts = response.split(b"\r\n", 1)[0].split(b" ")
+    return int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
+
+
+class RefusingProxy:
+    """A proxy in front of the test API that answers 403 to a default user agent, as a real install behind Cloudflare
+    does; CI talks to Tico directly and never sees it. One request per connection (it forwards `Connection: close`),
+    so every request is judged: `refused` keeps (method, path, user agent) and `passed` adds the server's status."""
+
+    def __init__(self, upstream):
+        host, port = upstream.removeprefix("http://").rsplit(":", 1)
+        self.upstream = (host, int(port))
+        self.listener = socket.create_server(("127.0.0.1", 0))
+        self.listener.settimeout(0.1)       # accept wakes to see `stopping`: closing the socket does not interrupt it
+        self.url = f"http://127.0.0.1:{self.listener.getsockname()[1]}"
+        self.refused, self.passed, self.workers = [], [], []
+        self.stopping = threading.Event()
+        self.acceptor = threading.Thread(target=self.accept, daemon=True)
+        self.acceptor.start()
+
+    def close(self):
+        self.stopping.set()
+        for thread in [self.acceptor, *self.workers]:
+            thread.join(timeout=10)
+        self.listener.close()
+        assert not any(t.is_alive() for t in [self.acceptor, *self.workers]), "the proxy's threads did not stop"
+
+    def accept(self):
+        while not self.stopping.is_set():
+            try:
+                client, _ = self.listener.accept()
+            except TimeoutError:
+                continue
+            client.settimeout(None)
+            worker = threading.Thread(target=self.serve, args=(client,), daemon=True)
+            self.workers.append(worker)
+            worker.start()
+
+    def serve(self, client):
+        with client:
+            head = b""
+            while b"\r\n\r\n" not in head:
+                chunk = client.recv(65536)
+                if not chunk:
+                    return
+                head += chunk
+            head, rest = head.split(b"\r\n\r\n", 1)
+            start, *fields = head.decode("latin-1").split("\r\n")
+            method, target = start.split(" ")[:2]
+            fields = [f for f in fields if f.split(":", 1)[0].strip().lower() not in ("connection", "keep-alive")]
+            agent = next((f.split(":", 1)[1].strip() for f in fields if f.lower().startswith("user-agent:")), "")
+            path = target.split("?", 1)[0]
+            if refused_agent(agent):
+                self.refused.append((method, path, agent))
+                client.sendall(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                return
+            with socket.create_connection(self.upstream) as upstream:
+                forwarded = "\r\n".join([start, *fields, "Connection: close"]).encode("latin-1")
+                upstream.sendall(forwarded + b"\r\n\r\n" + rest)
+                # The rest of a request body, and the client hanging up.
+                threading.Thread(target=self.pump, args=(client, upstream), daemon=True).start()
+                try:
+                    response = b""
+                    while b"\r\n" not in response:        # the whole status line, however the reads split it
+                        chunk = upstream.recv(65536)
+                        if not chunk:
+                            break
+                        response += chunk
+                    self.passed.append((method, path, agent, status_of(response)))
+                    while response:
+                        client.sendall(response)
+                        response = upstream.recv(65536)
+                    # A shutdown, not just a close: the pump blocked reading the client would hold the connection open.
+                    client.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+
+    @staticmethod
+    def pump(client, upstream):
+        try:
+            while chunk := client.recv(65536):
+                upstream.sendall(chunk)
+        except OSError:
+            pass
+        try:
+            upstream.shutdown(socket.SHUT_RDWR)   # the client hung up: so does the server's side of a held stream
+        except OSError:
+            pass
+
+
+def test_the_refusing_proxy_refuses_each_default_agent_and_reads_a_split_status_line():
+    """The proxy itself, against an upstream that sends its status line in two writes."""
+    upstream = socket.create_server(("127.0.0.1", 0))
+
+    def answer():
+        while True:
+            try:
+                conn, _ = upstream.accept()
+            except OSError:
+                return
+            with conn:
+                conn.recv(65536)
+                conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                conn.sendall(b"HTTP/1.1 2")
+                time.sleep(0.2)
+                conn.sendall(b"00 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+
+    threading.Thread(target=answer, daemon=True).start()
+    proxy = RefusingProxy(f"http://127.0.0.1:{upstream.getsockname()[1]}")
+
+    def status(agent):
+        with socket.create_connection(proxy.listener.getsockname()) as conn:
+            conn.sendall(f"GET /api/v2/me HTTP/1.1\r\nHost: acme.example\r\n{agent}\r\n".encode())
+            reply = b""
+            while chunk := conn.recv(65536):
+                reply += chunk
+        return status_of(reply)
+
+    agents = ["", "python-requests/2.32.3", "Python-urllib/3.12", "python-httpx/0.27.0", "Python/3.12 aiohttp/3.10.11",
+              "Go-http-client/1.1", "Tico-Client/0.2.1"]
+    try:
+        assert [status(f"User-Agent: {a}\r\n" if a else "") for a in agents] == [403] * 6 + [200]
+        assert proxy.passed == [("GET", "/api/v2/me", "Tico-Client/0.2.1", 200)]
+    finally:
+        proxy.close()
+        upstream.close()
+
+
+def test_behind_a_proxy_that_refuses_default_user_agents_the_runner_and_hub_get_through(api, live, tmp_path,
+                                                                                        rust_binary):
+    """A real install sits behind Cloudflare, which refuses a library's default user agent: v0.3.28's runners silently
+    stopped receiving events when the stream request went out without Tico's own. Here the runner and the `hub` CLI
+    reach the server only through such a proxy: the event stream opens, a turn runs, and no request is refused."""
+    proxy = RefusingProxy(live)
+    machine = Computer(api, live, tmp_path, "claude", rust_binary, registration={"url": proxy.url})
+    try:
+        machine.start()
+        msg = post(api, "chat/ops", {"text": "Please answer locally"})
+        assert until(lambda: reply_to(api, msg["conversation_id"]), "the bot's reply")["body"] == "Acme reply."
+        until(lambda: machine.attempts() and machine.attempts()[-1]["state"] == "completed", "the completed attempt")
+        events = "/api/v2/runners/me/events"
+        until(lambda: any(r[1] == events for r in proxy.passed + proxy.refused), "the event stream request")
+        hub = subprocess.run([sys.executable, str(ROOT / "scripts" / "hub"), "whoami"], capture_output=True, text=True,
+                             timeout=60, env={**machine.env, "HUB_API_URL": proxy.url, "HUB_TOKEN": "ana-test"})
+        assert proxy.refused == [], f"refused for its user agent: {proxy.refused}"
+        assert [r[3] for r in proxy.passed if r[1] == events][:1] == [200], proxy.passed
+        assert hub.returncode == 0, hub.stderr[-2000:]
+    finally:
+        machine.stop()
+        proxy.close()

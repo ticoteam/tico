@@ -120,6 +120,23 @@ def test_visible_requests_only_lets_everyone_ask_and_only_readers_look(world):
     assert call(api, "post", f"tasks/{task['id']}/comments", "ana-test", {"text": "Any news?"}).status_code == 200
 
 
+def test_an_update_takes_its_bots_gate_and_a_persons_update_is_for_the_chart(world):
+    """Replying to a bot's update needs Read like reading it: 403 when you only see the bot, 404 when
+    you can't. A person's update is read by everyone on the chart and by no outside agent."""
+    api, tokens, task = world
+    set_access(api, see=EVERYONE, read={"teams": ["legal"]}, write=EVERYONE)
+    reply = lambda who: call(api, "post", "updates/u1/reply", tokens[who], {"text": "Thanks"}).status_code  # noqa: E731
+    assert (reply("dee"), reply("cara")) == (403, 200)
+    set_access(api, see={"people": ["cara"]}, read={"people": ["cara"]}, write={"people": ["cara"]})
+    assert reply("dee") == 404
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO updates(id,bot,kind,day,headline,body,created,updated) VALUES(?,?,?,?,?,?,?,?)",
+                  ("u2", "human:ben", "daily", "2026-09-29", "Hiring plan", "- Hiring plan", H.now(), H.now()))
+    assert outcomes(api, tokens, "get", "updates/u2", callers=("ana", "cara", "dee", "stranger")) == {
+        "ana": 200, "cara": 200, "dee": 200, "stranger": 404}
+    assert call(api, "post", "updates/u2/reply", "dee-test", {"text": "Thanks"}).status_code == 422
+
+
 def test_private_hides_the_bot_from_everyone_but_its_audience_and_managers(world):
     api, tokens, task = world
     set_access(api, see={"people": ["cara"]}, read={"people": ["cara"]}, write={"people": ["cara"]})

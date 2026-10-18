@@ -9,6 +9,10 @@ team, readable by one group and open to requests from everyone.
 | **Read** | Its activity: its tasks, updates, files, status and run log, routines, the shared rooms and chats it is in, and the activity sections of its page. |
 | **Write** | Sending it messages, chatting with it, asking it; creating or reassigning tasks to it; leaving it notes; comments that wake it. Its approvals work as they always did. |
 
+Write access does not make a stopped bot run. Messages and comments to a paused or quarantined bot are kept until it
+is back; a new task or hand-off to it, or a message to a bot not started yet, is refused as `target_inactive`, which
+never counts as a repeat against the sender ([How it works](how-it-works.md), rule 8).
+
 An audience is **Everyone**, or a list of **humans**, **groups** and **bots**. Naming a group names everyone in it and in the groups nested in it. Anyone who may read or write a bot can also see it, whatever its See list says.
 
 New bots, and every bot after an upgrade, start **Open**: Everyone for all three.
@@ -113,6 +117,38 @@ Settings > Humans (**Bot limit per member**). Past it, adding a bot answers `409
 ([Finish setup](onboarding.md#what-create-does)) is parked, does nothing on its own and costs nothing, so it does not count; it counts once
 it says it is set up, and that call answers `bot_limit` when the member is already at their limit.
 
+## Bots that create repositories
+
+Two switches in a bot's **Settings → Repositories** let it create GitHub repositories in the connected organization. Each is
+kept outside the bot's editable definition, so a bot never turns one on for itself, and both need the GitHub App's
+Administration: write ([GitHub App](github-app.md#when-the-app-cannot-create-repositories)).
+
+| Switch | Lets the bot create | Who turns it on | Who turns it off | Built in |
+| --- | --- | --- | --- | --- |
+| **Create bot repositories** | `<org>/bot-<slug>` for a bot that exists | the Owner or an admin | the Owner or an admin | BotOps, always |
+| **Create product repositories** | a private repository with any other name ([GitHub App](github-app.md#bots-that-create-product-repositories)) | on by default; back on after an off: the Owner only, in their own click | the Owner or an admin | every bot, until switched off |
+
+Create product repositories is a wider reach than bot repositories, so:
+- **Every bot has it by default** (Chris, Oct 17), BotOps and bots made later included. The Owner or an admin switches it
+  off per bot; taking it away narrows a bot, so an admin may. The off is kept as that bot's own choice, so a migration, a
+  later default or a template change never turns it back on.
+- **Only the Owner switches it back on.** Only the Owner creates product repositories themselves, so an admin cannot hand
+  that back to a bot; the Owner's request carried by BotOps or the Assistant is refused too.
+- **Creating takes the Owner's own request, or the bot's own turn.** A bot's turn acting for someone (BotOps, the
+  Assistant) or an external agent cannot preview or create one, even for the Owner.
+- **Private only.** A bot cannot create a public repository: making one public is publishing, which needs a person. Bots
+  cannot delete, rename, transfer or change the visibility of a repository either.
+- A bot never creates a `bot-` or `emp-` name, or a name a bot's repository already uses: write to it would reach that
+  bot's Instructions.
+- **The bot gets write to what it made, and the Owner is told** in a notice, for example *Head of Engineering created
+  private repo tico-services (acme/tico-services). Head of Engineering has write access to it.* Granting write ticks the
+  repository for the team, so bots set to **All ticked repos** reach it too; the notice names them. A creator on **All
+  ticked repos** with read access moves to **Chosen repos**, keeping read on every repository it reached, so its write
+  stays on what it made; the notice says so, and a repository ticked later reaches it only once chosen. Every creation is
+  recorded as `github.product_repo_created` with the bot as the actor, and the grant as `bot.repos_changed`.
+
+Connecting, disconnecting and replacing the GitHub App stay the Owner's alone, as does deleting a repository.
+
 ## Bot owners
 
 Each bot has owners: its **creator** (added automatically) and any others added. Whoever the bot reports up to on
@@ -174,6 +210,14 @@ A Linux computer can show its screen in the app, so people watch its bots work o
 Only the computer's operator and admins open the screen, in the app themselves: each opening is a one-minute, single-use
 ticket, at most three at once per computer, an hour at most each. Every opening and closing is in the audit log
 (`runner.screen_open`, `runner.screen_close` with who, view or control, and how long).
+
+Where the status shows: every bot's **More** has a **Screen** row, in Setup (or About). When the screen is ready it opens
+it and says View or Control, and the bot's header has a **Screen** button too. Otherwise the row says why and what to do:
+the screen is off in Tico (the operator or an admin gets **Turn on (View)** right there; Control stays a choice in
+Settings > Computers), the computer offers no screen yet (the steps to turn it on on the computer, with commands to copy),
+it is a Mac (Linux only for now), the computer is offline, the bot has no computer, or only the operator and admins may
+open it. Someone who may see the bot but not its activity is told its computer isn't shown to them, and nothing more.
+The row follows the computer as the page refreshes (it comes online, its screen is turned on), with no reload.
 
 ## Tico support
 
@@ -452,7 +496,18 @@ and tasks follow the rule above ([Tico SQL](hub-sql.md)).
 ## Tags
 
 Task movers (the team owner and humans on the leadership, product or engineering teams) attach
-and remove tags. Creating and editing a tag is for those movers or that tag's owner, including
+and remove tags on any task. A bot attaches and removes a classification tag (`qa`, an area, a
+priority) on a task it manages: one it owns, one it asked for, or one of a type it manages (the
+type's manager, such as Head of Product on the Product roadmap or Head of Engineering on Dev
+tickets), and only when it can already read the task. Two kinds of tag keep their gate for a bot,
+both to add and to remove: a tag on a public roadmap (Settings → Public roadmap) needs the bot's
+exact approved publish approval, as public text does ([Roadmaps](roadmaps.md)), or a mover when the
+team does not ask bots for one; `goal:on` and `goal:off` change how Tico runs the task, so only a
+mover changes them. A refusal says which tags need a person or an approval and why; an approval that is
+not decided yet, already used or for other tags is the same refusal. It counts
+toward the bot's quarantine once per task an hour, so retrying it cannot quarantine the bot; any
+other refusal counts as before. Lane and number stay a mover's, and nothing here makes a bot a
+mover. Creating and editing a tag is for those movers or that tag's owner, including
 a bot owner. A teammate may create a tag they own. Owner rights on a tag do not grant mover
 rights on its tasks. Tags and templates are readable by signed-in teammates; their task lists
 show only tasks each caller may read. Every edit requires the current tag version.

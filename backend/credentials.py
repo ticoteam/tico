@@ -729,6 +729,10 @@ def install_credentials(app,store,delegate=None,propose=None):
         with store.transaction() as c:
             if not c.execute('SELECT 1 FROM runners WHERE id=? AND revoked_at IS NULL',(who.runner_id,)).fetchone():
                 raise Problem('forbidden','Only a registered computer may ask for this',403)
+            # A person signed this computer's login out: the shared key does not sign it back in (model_login).
+            from .model_login import cleared
+            if cleared(c,who.runner_id,runtime):
+                return {'credentials':[],'signed_out':True}
             found={}
             held=granted(c,COMPUTERS)
             for row in c.execute('SELECT * FROM credentials WHERE ciphertext IS NOT NULL ORDER BY id'):

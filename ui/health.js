@@ -245,6 +245,36 @@ async function hlCheckUpdates() {
   hlPageDraw();
 }
 
+// Setup check: `tico-setup doctor`'s checks run by the server against its own address, and Health's failing lines
+// (POST /v2/support/setup-check, backend/setup_check.py). It sits beside the Health list, not in it, so the minute's
+// redraw of that list keeps the result on screen; Send to support attaches it to a request (ui/support.js).
+const hlSetupCheckHTML = () => `<section class="card hl-setup" id="hl-setup-check" aria-labelledby="hl-setup-h"><header><h2 id="hl-setup-h">Setup check</h2></header>
+  <p class="muted">Runs the installer's checks from here and says how to fix what fails.</p>
+  <button class="ghost" type="button" data-hl-setup-check>Setup check</button>
+  <div class="hl-setup-result" data-hl-setup-result aria-live="polite"></div></section>`;
+async function hlSetupCheck(button) {
+  const host = button.closest('.hl-setup')?.querySelector('[data-hl-setup-result]');
+  if (!host || button.disabled) return;
+  button.disabled = true; button.textContent = 'Checking…';
+  host.innerHTML = '<p class="muted">Running the checks. This takes up to ten seconds.</p>';
+  try {
+    const r = await post('/v2/support/setup-check', {});
+    if (!host.isConnected) return;
+    const rows = r.checks || [];
+    const bad = rows.filter(c => c.status === 'bad').length, warn = rows.filter(c => c.status === 'warn').length;
+    const head = bad ? `${bad} of ${rows.length} ${rows.length === 1 ? 'check fails' : 'checks fail'}.` : warn ? `Nothing fails; ${warn} ${warn === 1 ? 'needs' : 'need'} a look.` : 'Every check passes.';
+    host.innerHTML = `<p class="hl-setup-head" role="status">${esc(head)}</p>
+      <ul class="hl-list">${rows.map(c => `<li class="hl-check ${esc(c.status)}" data-hl-setup-row="${esc(c.status)}"><span class="nav-icon hl-icon" aria-hidden="true">${HL_ICONS[c.status] || HL_ICONS.unknown}</span>
+        <div class="hl-main"><strong>${esc(c.name)}</strong><p>${esc(c.detail)}</p>${c.status !== 'ok' && c.fix ? `<p class="hl-setup-fix">Fix: ${esc(c.fix)}</p>` : ''}</div></li>`).join('')}</ul>
+      <p class="muted">${esc(r.doctor_only || '')}</p>
+      ${window.supportOn?.() && window.talkToUs ? '<button class="ghost" type="button" data-hl-setup-send>Send to support</button>' : ''}`;
+    host.querySelector('[data-hl-setup-send]')?.addEventListener('click', () => window.talkToUs({kind: 'setup_check', title: head, checks: rows,
+      group: 'setup_check:' + rows.filter(c => c.status === 'bad').map(c => c.name).join(',')}));
+  } catch (e) {
+    if (host.isConnected) host.innerHTML = `<p class="err">${esc(e.message)}</p>`;
+  } finally { button.disabled = false; button.textContent = 'Setup check'; }
+}
+
 window.hlMount = function hlMount() {
   const host = $('#hl-page');
   if (!host) return;
@@ -266,6 +296,8 @@ document.addEventListener('change', event => {
 
 document.addEventListener('click', event => {
   if (event.target.closest('[data-hl-check-updates]')) { void hlCheckUpdates(); return; }
+  const setup = event.target.closest('[data-hl-setup-check]');
+  if (setup) { void hlSetupCheck(setup); return; }
   const move = event.target.closest('[data-stuck-move]');
   if (move) { void hlStuckMove(move); return; }
   const finish = event.target.closest('[data-stuck-finish]');
