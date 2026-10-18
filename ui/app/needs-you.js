@@ -222,7 +222,16 @@ function approvalsHTML() {
 // The person's one Stale tickets card (backend/stale_review.py): a row per task the hourly check found stale, each with
 // its reason and suggestion, Accept or Skip, and Accept all. Accept is the person's own change, refused as by hand,
 // and names the task version the row showed; Accept all names the rows on screen, so a row added since is not applied.
+// The card's patch key carries what it shows (title, rows and their versions), so the list's redraw keeps it while
+// nothing changed and draws it again once a row is answered or added; a card the person folded stays folded.
 const staleCards = () => (S.v2?.needs || []).filter(it => it.kind === 'stale');
+const staleFolded = new Set();
+function staleSig(it) {
+  const text = [it.title, ...(it.rows || []).map(r => `${r.id}:${r.version ?? ''}:${r.action || ''}`)].join('|');
+  let h = 2166136261;
+  for (let i = 0; i < text.length; i++) h = Math.imul(h ^ text.charCodeAt(i), 16777619);
+  return (h >>> 0).toString(36);
+}
 function staleCardRow(r) {
   const accept = r.action ? `<button type="button" class="ghost" data-stale="${esc(r.id)}" data-stale-decision="accept">Accept</button>` : '';
   return `<li class="stale-row" data-stale-row="${esc(r.id)}" data-stale-version="${esc(String(r.version ?? ''))}"${r.action ? ' data-stale-action' : ''}>
@@ -233,7 +242,7 @@ function staleCardRow(r) {
 }
 function staleCardHTML(it) {
   const all = (it.rows || []).some(r => r.action);
-  return `<details class="req v2" data-patch-key="stale:${esc(it.id)}" data-stale-card open>
+  return `<details class="req v2" data-patch-key="stale:${esc(it.id)}:${staleSig(it)}" data-stale-card="${esc(it.id)}"${staleFolded.has(it.id) ? '' : ' open'}>
     <summary>
       ${personCircle('Tico', 24)}
       <span class="req-text"><span class="req-from">Tico:</span> ${esc(it.title)}</span>
@@ -263,8 +272,13 @@ async function staleDecide(button, path, body) {
     else toast(out.accepted ? `Accepted ${out.accepted.length}` : out.outcome === 'skipped' ? 'Skipped' : 'Accepted');
     await v2Refresh(); await refresh(true);
     if (TASKS_ST && isTasksRoute(S.route)) tasksRender(TASKS_ST);
+    if (button.isConnected) { button.disabled = false; button.textContent = label; }   // every row refused: the card stays
   } catch (e) { toast(e.message, true); button.disabled = false; button.textContent = label; }
 }
+document.addEventListener('toggle', ev => {
+  const card = ev.target.matches?.('[data-stale-card]') ? ev.target : null;
+  if (card) card.open ? staleFolded.delete(card.dataset.staleCard) : staleFolded.add(card.dataset.staleCard);
+}, true);
 // A question a bot asked the person outside any task: no task row carries it, so Needs you lists it on its own,
 // answered in place. `data-patch-key` keeps an opened row (and a half-written answer) through the list's redraws.
 const looseAsks = () => (S.v2?.needs || []).filter(it => it.kind === 'ask');
