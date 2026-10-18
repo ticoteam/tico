@@ -430,6 +430,32 @@ def test_an_answer_after_the_deadline_is_dropped_even_when_the_worker_runs_first
     assert row["error"] == "timeout" and row["clear"] is False and row["answers"]["topic"]["choice"] == "new_topic"
 
 
+def test_sends_at_the_same_moment_cannot_pass_the_daily_call_limit_together(chat):
+    """One call left today: the first send reserves it while Decide is asked; a second send at that moment finds none
+    free and asks nothing. The reservation is handed back once the first call's audit row counts it."""
+    api, _, _, model, _ = chat
+    settings = api.app.state.store.settings
+    settings.decisions_daily_calls_owner = 1
+    model.hold = threading.Event()
+    first = threading.Thread(target=lambda: post(api, "chat/ops", {"text": UNRELATED}))
+    first.start()
+    deadline = time.monotonic() + 1.0
+    while not model.calls and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert len(model.calls) == 1, "the first send is asking Decide with the last call"
+    try:
+        post(api, "chat/ops", {"text": "Plan the offsite agenda"})
+    finally:
+        model.hold.set()
+        first.join(5)
+    assert len(model.calls) == 1, "the second send found no call free and asked nothing"
+    assert [r.get("error") for r in checks(api)] == ["budget", None], "the second asked nothing; the first was answered"
+    assert T._SLOTS == {}, "every reservation is handed back"
+    settings.decisions_daily_calls_owner = 2      # the next day's room: one more call, counted from the audit rows
+    post(api, "chat/ops", {"text": "Order the team lunch"})
+    assert len(model.calls) == 1, "two rows today already use both calls"
+
+
 # -------------------------------------------------------------------------------- never checked
 
 def test_never_checked_in_a_shared_bots_room_even_with_one_person(chat):

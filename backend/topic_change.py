@@ -24,9 +24,10 @@ Fail open: no decision model, rehearsal, the spend cap, the daily call budget, a
 `not_sure`, `same_topic` or a `new_topic` under the set's threshold all send the message in the same session with no
 line. Each check is one `judge.call` row in the person's name, counted against their daily Decide calls as the Slack
 gateway's routing is (label, model, tokens, latency, cost, the answer, the decision, the delay); never the chat's text.
-It is written after the send stops waiting, so it never adds to the delay. Each clear is one `chat.topic_changed`
-event: the tokens before the clear and the delay added before the send; a decision `apply` refused is one
-`chat.topic_kept` event saying why."""
+It is written after the send stops waiting, so it never adds to the delay; the call is reserved before Decide is asked
+and handed back once that row counts it, so sends at the same moment cannot pass the daily cap together. Each clear is
+one `chat.topic_changed` event: the tokens before the clear and the delay added before the send; a decision `apply`
+refused is one `chat.topic_kept` event saying why."""
 
 import logging
 import threading
@@ -170,6 +171,30 @@ def recent(c, who, bot, conversation_id):
 
 
 _WORKERS = set()
+# Each person's daily Decide calls asked but not yet written as `judge.call` rows (`_reserve`).
+_SLOTS, _SLOTS_LOCK = {}, threading.Lock()
+
+
+def _reserve(store, who):
+    """Take one of the person's daily Decide calls before asking: True when one was free. A call in flight counts until
+    its audit row is written (`_release`), so sends at the same moment cannot pass the cap together."""
+    with _SLOTS_LOCK:
+        with store.read() as c:
+            used = used_today(c, who.actor)
+        if used + _SLOTS.get(who.actor, 0) >= daily_cap(store.settings, who.role):
+            return False
+        _SLOTS[who.actor] = _SLOTS.get(who.actor, 0) + 1
+        return True
+
+
+def _release(who):
+    """Hand back a reserved call: its audit row now counts it, or no call was made."""
+    with _SLOTS_LOCK:
+        left = _SLOTS.get(who.actor, 0) - 1
+        if left > 0:
+            _SLOTS[who.actor] = left
+        else:
+            _SLOTS.pop(who.actor, None)
 
 
 def settle(timeout=5.0):
@@ -202,13 +227,17 @@ def check(store, primary, who, bot, text, admit=None):
             if decided is None:
                 ready.set()
                 return
-            out, detail = decided
-            out["delay_ms"] = int((_clock() - started) * 1000)
-            if hand_over(out):
-                detail["delay_ms"] = out["delay_ms"]
-            else:                             # the send went on without it: its delay was the whole wait
-                detail.update(clear=False, error="timeout", delay_ms=box.get("waited_ms") or int(BUDGET * 1000))
-            _audit(store, who, detail)
+            out, detail, reserved = decided
+            try:
+                out["delay_ms"] = int((_clock() - started) * 1000)
+                if hand_over(out):
+                    detail["delay_ms"] = out["delay_ms"]
+                else:                         # the send went on without it: its delay was the whole wait
+                    detail.update(clear=False, error="timeout", delay_ms=box.get("waited_ms") or int(BUDGET * 1000))
+                _audit(store, who, detail)
+            finally:
+                if reserved:
+                    _release(who)
         except Exception as exc:              # a send never breaks on the check
             LOG.warning("Topic check failed: %s", type(exc).__name__)
             ready.set()
@@ -228,8 +257,8 @@ def check(store, primary, who, bot, text, admit=None):
 
 
 def _decide(store, primary, who, bot, text, admit, deadline, box):
-    """The check itself, on the worker: (outcome, audit detail), or None when the gate said no or the send stopped
-    waiting before a call was made."""
+    """The check itself, on the worker: (outcome, audit detail, whether it holds a reserved daily call), or None when
+    the gate said no or the send stopped waiting before a call was made."""
     settings = store.settings
     with store.read_transaction() as c:      # one snapshot: what the gate admitted is what history and the marker read
         if admit and not admit(c):
@@ -244,7 +273,6 @@ def _decide(store, primary, who, bot, text, admit, deadline, box):
         qset = J.load_set(QUESTION_SET)
         engine = server_engine(store, c, primary)
         capped = engine is None and over_spend_cap(c, settings)
-        budget_used = engine is not None and used_today(c, who.actor) >= daily_cap(settings, who.role)
         turns = recent(c, who, bot, conv["id"])
         held = snapshot(c, conv["id"])
     out = {"clear": False, "conversation_id": conv["id"], "context_tokens": facts.get("context_tokens"),
@@ -254,40 +282,46 @@ def _decide(store, primary, who, bot, text, admit, deadline, box):
     left = deadline - _clock()
     if box.get("late") or left <= 0:
         return None                           # nothing asked: no call to pay for or count
-    if engine is None:
-        error = "spend_cap" if capped else "unconfigured"
-    elif budget_used:
-        error = "budget"
-    else:
-        try:
-            with J.within(left):
-                result = engine({"recent": turns, "message": _trim(text)}, questions, qset["label"])
-        except J.JudgeError as exc:
-            error = J.error_code(exc)
-        except Exception as exc:              # a fake, a provider bug
-            LOG.warning("Topic check failed: %s", type(exc).__name__)
-            error = "error"
-        if result is not None and not isinstance(result, dict):
-            result, error = None, "shape"
-    answer = None
-    if result is not None:
-        try:
-            answer = J.choice(J.check_answers(result.get("answers"), questions), "topic")
-        except (J.JudgeError, AttributeError, KeyError, TypeError, ValueError):
-            error = "shape"
-    if answer:
-        out["answer"] = answer[0]
-        out["clear"] = answer[0] == "new_topic" and answer[1] >= qset["thresholds"].get("new_topic", 1.01)
-    out["reason"] = error or ("new_topic" if out["clear"] else (answer or ("none",))[0])
-    detail = {"label": qset["label"], "questions": 1, "types": ["choice"], "gate": reason,
-              "context_tokens": out["context_tokens"], "warm": facts.get("warm", False), "clear": out["clear"]}
-    if result is not None:
-        detail.update(audit_detail(result))
+    reserved = engine is not None and _reserve(store, who)
+    try:
+        if engine is None:
+            error = "spend_cap" if capped else "unconfigured"
+        elif not reserved:
+            error = "budget"
+        else:
+            try:
+                with J.within(left):
+                    result = engine({"recent": turns, "message": _trim(text)}, questions, qset["label"])
+            except J.JudgeError as exc:
+                error = J.error_code(exc)
+            except Exception as exc:          # a fake, a provider bug
+                LOG.warning("Topic check failed: %s", type(exc).__name__)
+                error = "error"
+            if result is not None and not isinstance(result, dict):
+                result, error = None, "shape"
+        answer = None
+        if result is not None:
+            try:
+                answer = J.choice(J.check_answers(result.get("answers"), questions), "topic")
+            except (J.JudgeError, AttributeError, KeyError, TypeError, ValueError):
+                error = "shape"
         if answer:
-            detail["answers"] = {"topic": {"choice": answer[0], "confidence": round(answer[1], 3)}}
-    if error:
-        detail["error"] = error
-    return out, detail
+            out["answer"] = answer[0]
+            out["clear"] = answer[0] == "new_topic" and answer[1] >= qset["thresholds"].get("new_topic", 1.01)
+        out["reason"] = error or ("new_topic" if out["clear"] else (answer or ("none",))[0])
+        detail = {"label": qset["label"], "questions": 1, "types": ["choice"], "gate": reason,
+                  "context_tokens": out["context_tokens"], "warm": facts.get("warm", False), "clear": out["clear"]}
+        if result is not None:
+            detail.update(audit_detail(result))
+            if answer:
+                detail["answers"] = {"topic": {"choice": answer[0], "confidence": round(answer[1], 3)}}
+        if error:
+            detail["error"] = error
+    except BaseException:
+        if reserved:
+            _release(who)
+        raise
+    return out, detail, reserved
 
 
 def _audit(store, who, detail):
