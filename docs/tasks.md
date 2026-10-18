@@ -161,23 +161,44 @@ suggestions cover the quiet week.
 
 ### Stale ticket review
 
-With **Stale ticket review** on (Settings > Team, an owner or an admin turns it; off by default,
-`TICO_STALE_REVIEW=1` on a server turns the default on), Tico looks once an hour for open, doing,
-waiting and review tasks that seem finished or forgotten: every linked PR merged, closed or shipped;
-the parent done or closed; everything it is blocked by done; a snooze that ended over a day ago with
-nothing since; the same title as an older open task of the same owner; or 7 quiet days (3 for doing).
-A private task is never looked at, so none of its words go to Decide.
-Only a task that is new to the list, or changed since it was last looked at, is judged by Tico Decide
-(`questions/stale-review.json`), at most 30 an hour within the server's daily Decide allowance, and one suggestion a
-task a week; what is left waits for the next hour. A task that changes or starts being worked while Decide is asked,
-or a switch turned off meanwhile, gets nothing. When nothing is new the hour passes with no Decide call and nothing
-written. A suggestion is never an action:
+Stale ticket review finds open tasks that look finished or forgotten and suggests what to do with
+them. It only suggests: nothing changes unless the task's owner accepts.
 
-- a bot that owns the task gets one comment, "Stale check: PR #12 merged Oct 16. Suggest: mark done.";
-- a person who owns it gets a row on their one **Stale tickets: N suggestions** card in Needs you, with
-  **Accept** and **Skip**, and **Accept all**. Accept is their own change, with the same checks as by
-  hand: the owner marks done, the requester or a person closes, and anything else is refused. It applies only
-  what the card showed: a task changed since is refused on its own, and a row that arrived since stays.
+**Turn it on.** Go to **Settings > Team** and switch on **Stale ticket review**. It is off by
+default, and an owner or an admin can turn it on or off. (A server started with
+`TICO_STALE_REVIEW=1` has it on by default; a choice saved in Settings wins.)
+
+**What it looks for.** Once an hour, Tico checks every open, doing, waiting and review task that is
+not snoozed and has no run going. A task is a candidate when one of these is true:
+
+- every pull request linked to it is merged, closed or shipped;
+- its parent task is done or closed;
+- every task blocking it is done;
+- its snooze ended more than a day ago and nothing has happened since;
+- it has the same title as an older open task with the same owner;
+- nothing has happened on it for 7 days (3 days for a task in progress).
+
+Private tasks are never looked at, so none of their words go to Tico Decide. Tico Decide judges
+only a candidate that is new or has changed since it was last looked at, up to 30 an hour; the
+rest wait for the next hour. An hour with nothing new does nothing: no Decide call, no comment, no card.
+
+**What the owner gets.** At most one suggestion per task a week, and only a suggestion:
+
+- **A bot** gets one comment on the task, for example "Stale check: PR #12 merged Oct 16. Suggest:
+  mark done." The bot decides what to do.
+- **A person** gets one **Stale tickets: N suggestions** card in **Needs you**, with a row per task:
+  the reason and the suggestion (**Mark done**, **Close it** or **Check it is still needed**). Each
+  row has **Accept** and **Skip**; **Accept all** accepts every row on the card that has an
+  **Accept** button. A **Check it is still needed** row has only **Skip**: open the task to decide.
+
+**Accept does what you could do by hand, and nothing more.** The same rules apply: the owner
+can mark a task done, and its requester or another authorized person can close it; anything else
+is refused. If the task changed after the card showed it, that row is refused and stays on the card,
+so open the task to see what changed. **Accept all** applies only the rows you saw: a row that
+arrived since stays on the card.
+
+**Still wanted? questions stop.** While Stale ticket review is on, Tico doesn't send the
+**Still wanted?** questions described above: its suggestions cover the quiet week.
 
 ### When nobody answers a bot's ask
 
