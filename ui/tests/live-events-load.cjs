@@ -11,6 +11,7 @@ const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs');
 const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();
 
 const EVENTS = 50;
@@ -59,7 +60,7 @@ const task = over => ({id: 't1', title: 'Draft the release notes', body: 'Detail
     if (p === '/api/v2/tasks') return json({tasks: [task()], next_offset: null, cursor: '12.a'});
     if (p === '/api/v2/tasks/labels') return json({labels: [], tags: []});
     if (p === '/api/v2/needs-you') return json({items: [], version: 'v0'});
-    return json({});
+    return json(unrouted(p));
   });
 
   // Waits until the page has made no request for a while: what it reads on opening is not counted.
