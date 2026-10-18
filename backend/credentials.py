@@ -702,6 +702,10 @@ def install_credentials(app,store,delegate=None,propose=None):
             for row in c.execute('SELECT * FROM credentials ORDER BY id'):
                 if row['ciphertext'] is not None and row['id'] in held:
                     values.append({'id':row['id'],'name':row['name'],'env':row['env'],'kind':row['kind'],**vault.reveal(c,who,row['id'])})
+            # A run on a Tico model gets the Tico AI Gateway's key and URL (backend/gateway_connection.py), and only it.
+            from .gateway_connection import run_credentials_for
+            taken={v['env'] for v in values}
+            values.extend(v for v in run_credentials_for(c,vault,store.settings,who) if v['env'] not in taken)
             return {'credentials':values}
 
     @app.get('/api/v2/runner-watcher-credentials')

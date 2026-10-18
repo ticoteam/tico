@@ -6,9 +6,9 @@ import secrets
 import sqlite3
 import time
 
-from clients import sessions
+from clients import gateway, sessions
 
-from . import app_delivery, check_models, inbox_isolation, providers, routines, run_triggers, runner_versions, screen, usage_limits, wake_presets
+from . import app_delivery, check_models, gateway_connection, inbox_isolation, providers, routines, run_triggers, runner_versions, screen, usage_limits, wake_presets
 from . import task_privacy as privacy
 from .auth import Identity
 from .batch_work import isolated
@@ -1383,7 +1383,8 @@ class Execution:
                             # (its person's email when it declares none), then the people below them.
                             "mailboxes": routines.token_mailboxes(c, row["bot"], people) if inbox else [], "next_run": carried, "notes": notes, "job_id": row["id"], "bot": row["bot"], "lane": lane,
                             "credential_vault": c.execute("SELECT 1 FROM credential_grants WHERE subject=? AND revoked IS NULL LIMIT 1",
-                                                          ("bot:" + row["bot"],)).fetchone() is not None,
+                                                          ("bot:" + row["bot"],)).fetchone() is not None
+                                                or gateway_connection.wanted(config),
                             "generation": row["generation"], "lease_until": until,
                             "lease_seconds": self.store.settings.lease_seconds, "token": token,
                             "message": msg, "conversation": conv, "task": task,
@@ -1994,7 +1995,11 @@ class Execution:
             hit = H.now()
             retry = H.shift(hit, seconds=limit_cooldown(c, row["bot"]))
             kind = "API quota or billing limit" if billing_limit(c, attempt_id=aid) else "usage limit"
-            if body.limit_resets_at and provider_reset(last_limit(c, row["bot"]), H.parse_ts(hit)):
+            if any(gateway.cap_reached(error) for error in limit_errors(c, aid)):
+                # The Tico AI Gateway's monthly cap for the company's key (clients/gateway.py): said as it is.
+                focus = (f"{gateway.CAP_MESSAGE} at {hit[11:16]}: the gateway key has used this month's cap; "
+                         f"retrying after {retry[:10]} {retry[11:16]} UTC")
+            elif body.limit_resets_at and provider_reset(last_limit(c, row["bot"]), H.parse_ts(hit)):
                 focus = (f"{runtime} {kind} at {hit[11:16]}; resumes at {retry[11:16]} UTC"
                          + ("" if retry[:10] == hit[:10] else f" on {retry[:10]}") + " when it resets")
             else:
@@ -2006,6 +2011,10 @@ class Execution:
             H.event(c, H.KEEPER, "attempt.limited", aid,
                     {"bot": row["bot"], "job_id": row["job_id"], "runtime": runtime, "streak": streak,
                      "retry_after": retry, "provider_reset": bool(body.limit_resets_at)})
+        elif rejected and any(gateway.key_refused(error) for error in limit_errors(c, aid)):
+            settle_status(c, row["bot"], "idle" if requeue else "crashed",
+                          "The Tico AI Gateway key is not working; save a new one in Settings > AI providers",
+                          began=row["started"] or row["created"])
         elif rejected:
             settle_status(c, row["bot"], "idle" if requeue else "crashed",
                           f"{body.auth_rejected.runtime} sign-in was rejected; " +

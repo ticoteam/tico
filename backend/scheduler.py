@@ -35,6 +35,7 @@ class Scheduler:
         self.goals_checked = None
         self.go_lives_checked = None
         self.health_scanned = None
+        self.gateway_checked = None
 
     def tick(self, at=None):
         at = at or datetime.now(timezone.utc)
@@ -219,6 +220,19 @@ class Scheduler:
                     health_monitor.scan(c, self.execution.auth, self.store.settings)
             except Exception as exc:
                 failures.append({"health_monitor": type(exc).__name__})
+        if self.gateway_checked is None or at - self.gateway_checked >= timedelta(hours=1):
+            # Every hour, while a gateway key is set: the Tico AI Gateway's word on it (revoked, 80% of the month's cap,
+            # the cap reached), for Settings and Health. On its own thread: a tick never waits on the Gateway.
+            self.gateway_checked = at
+            try:
+                from . import gateway_connection
+                from .credentials import Vault
+                with self.store.read() as c:
+                    due = gateway_connection.connected(c, self.store.settings)
+                if due:
+                    gateway_connection.check_later(self.store, Vault(self.store), self.store.settings)
+            except Exception as exc:
+                failures.append({"gateway": type(exc).__name__})
         if self.go_lives_checked is None or at - self.go_lives_checked >= timedelta(minutes=10):
             # A go-live waiting for a computer that never reports still ends, with its notice (backend/go_live.py).
             self.go_lives_checked = at
