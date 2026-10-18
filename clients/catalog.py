@@ -198,13 +198,28 @@ def company_page(names, answers, today=None):
     return "\n".join(lines)
 
 
+def set_sections(text, sections):
+    """`text` with the body of each `## <heading>` in `sections` replaced; a heading it lacks is added at the end."""
+    for heading, body in (sections or {}).items():
+        block = f"## {heading}\n{str(body).strip()}\n"
+        found = re.search(rf"^## {re.escape(heading)}[ \t]*\n.*?(?=^## |\Z)", text, re.M | re.S)
+        if found:
+            text = text[:found.start()] + block + ("\n" if found.end() < len(text) else "") + text[found.end():]
+        else:
+            text = text.rstrip("\n") + "\n\n" + block
+    return text
+
+
 def materialize(template, slug, workspace, names, answers, display_name=None, instructions=None,
-                directory=None):
+                directory=None, state=None):
     """Copy one catalog template into `<workspace>/bot-<slug>` and commit it. Returns the path.
 
     The names fill the placeholders, the onboarding answers become `knowledge/company.md`, and
     `instructions` — what the person wrote for this bot during onboarding — replaces AGENT.md
-    when it is given. An existing directory is never touched: a bot's repository is its memory.
+    when it is given. `state` maps `state.md` sections to their text, for a bot whose setup is already done when it
+    is made (the sample company, backend/sample_company.py): a template's state.md says setup has not started, and
+    its AGENT.md asks the setup questions before any other work until state.md says otherwise. An existing
+    directory is never touched: a bot's repository is its memory.
     """
     if not SLUG_RE.fullmatch(slug or ""):
         raise ValueError("A bot slug is lowercase letters, digits, and single hyphens")
@@ -241,6 +256,9 @@ def materialize(template, slug, workspace, names, answers, display_name=None, in
     (target / "knowledge" / "company.md").write_text(company_page(names, answers))
     if instructions:
         (target / "AGENT.md").write_text(str(instructions).rstrip("\n") + "\n")
+    if state:
+        page = target / "state.md"
+        page.write_text(set_sections(page.read_text() if page.is_file() else "# State\n", state))
     apply_mailbox(target, instructions)
     if (card(template, directory) or {}).get("bootstrap"):
         _stamp(target, template, {rel: _digest(text) for rel, text in _product_files(source, template, values, directory)})

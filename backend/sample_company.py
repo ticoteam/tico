@@ -116,10 +116,25 @@ def load(onboarding, c, who):
                                  goal_id=goals.get(bot_id))
             tasks.append(made["id"])
     record = O.load(c)
-    record["sample"] = {"loaded": H.now(), "by": who.actor, "bots": sorted(slugs.values()), "tasks": tasks}
+    setup = {slugs[b["id"]]: state(name, b, H.now()[:10]) for b in draft["bots"] if b is not assistant}
+    record["sample"] = {"loaded": H.now(), "by": who.actor, "bots": sorted(slugs.values()), "tasks": tasks,
+                        "setup": setup}
     onboarding._store(c, record, who.actor)
     H.event(c, who.actor, "onboarding.sample_loaded", "", {"bots": sorted(slugs.values()), "tasks": len(tasks)})
     return onboarding.view(c, who)
+
+
+def state(name, bot, today):
+    """The state.md sections a role bot's repository is made with (clients/catalog.materialize): its setup done from
+    the sample's answers, so it works its starter task instead of asking the setup questions, and its routine off."""
+    return {
+        "Setup": (f"Done {today}. You are the {bot['title']} at {name}, Tico's sample company: a made-up team for "
+                  "trying Tico. The sample's own answers stood in for the setup questions, so do not ask them."),
+        "Answers": f"- {today}: {bot['reason']}\n- {today}: The company is in `knowledge/company.md`.",
+        "Routine": ("Your first routine is off. The sample company keeps it off until a person turns it on in Tico; "
+                    "do not turn it on yourself."),
+        "Next": "Do your starter task, then ask the owner the one Yes/No question it ends with. Then work your open tasks.",
+    }
 
 
 def team_name(settings, record):

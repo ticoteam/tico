@@ -181,6 +181,37 @@ def test_the_bots_start_once_a_computer_runs_them(environment):
     assert {"coo", *ROLE_BOTS} <= queued
 
 
+def test_each_role_bot_is_made_already_set_up_so_it_does_its_starter_task(environment, tmp_path):
+    """The computer makes each bot's repository from its template (runner/catalog_job.py); a template's state.md
+    says setup has not started, and its AGENT.md asks the setup questions first until it does."""
+    import io
+    import json
+    from runner import catalog_job
+    api = environment()
+    start(api)
+    record, config = (api.get(path, headers=signed_in()).json() for path in ("/api/v2/setup", "/api/v2/config"))
+
+    class Server:                                  # the runner's view of this server, with no network
+        def get(self, path, **query):
+            return {"onboarding": record, "config": config}[path]
+
+    projects = tmp_path / "projects"
+    projects.mkdir()
+    configs = {row["bot"]: json.loads(row["config_json"]) for row in rows(api, "SELECT bot,config_json FROM bot_config")}
+    request = {"bots": [{"bot": slug, "entry": {"bot": slug, "state": "active", "config": configs[slug]},
+                         "path": str(projects / ("bot-" + slug)), "action": "bootstrap"} for slug in ROLE_BOTS]}
+    out = io.StringIO()
+    catalog_job.main({"projects_dir": str(projects)}, Server(), io.StringIO(json.dumps(request)), out)
+    answer = json.loads(out.getvalue())
+    for slug in ROLE_BOTS:
+        assert answer[slug]["problem"] == "" and answer[slug]["materialized"], answer[slug]
+        state = (projects / ("bot-" + slug) / "state.md").read_text()
+        assert re.search(r"^## Setup\nDone \d{4}-\d\d-\d\d\. .*do not ask them\.$", state, re.M), state
+        assert "Not started" not in state and "start setup" not in state and "switched on when your setup" not in state
+        # The template's own instructions still gate on state.md, which now says setup is done.
+        assert "If `state.md` says setup has not finished" in (projects / ("bot-" + slug) / "AGENT.md").read_text()
+
+
 # ---------------------------------------------------------------------------------------------- TICO_SAMPLE_COMPANY
 # The contract with the recommended install (Dev 212): TICO_SAMPLE_COMPANY=on loads the sample once, on the first start
 # of an empty team; a restart never loads it again; unset or any other value loads nothing.

@@ -43,7 +43,9 @@ company that is set up is left alone.
   bots still need the two subscriptions signed in on the computer ([subscriptions](subscriptions.md)).
 - **Bots.** The four role bots are created as **Create my team** creates them ([what Create does](onboarding.md#what-create-does)),
   then marked set up: the sample's answers stand in for the setup chat, so each one's first task is picked up as soon
-  as a computer runs it. Their routines stay off until a person turns them on, so a sample uses little of the
+  as a computer runs it. The computer makes each bot's repository with its `state.md` already saying setup is done
+  (`sample.setup` in the first-run record), because a template's own instructions ask the setup questions before any
+  other work until `state.md` says otherwise. Their routines stay off until a person turns them on, so a sample uses little of the
   subscriptions.
 - **Goals and tasks.** One goal per bot, and its first task under that goal, filed by the owner.
 
