@@ -269,7 +269,7 @@ def engine_for(store, c):
     """The server's decision model (backend/judge.py `server_engine`): the Tico AI Gateway, then an own TypeSafe key,
     each in one short try, with the company's own provider behind them; None when there is none, or the month's
     decision spend is at its cap."""
-    return server_engine(store, c, primary_engine(store.settings))
+    return server_engine(store, c, primary_engine(store.settings, store))
 
 
 class Tally:

@@ -4,7 +4,8 @@
 The server asks its providers in this order, each failure falling through to the next (fail open), with the same keys
 the Slack gateway routes with:
 1. the Tico AI Gateway as `tico-decide-1.0`, with the gateway key (`TICO_GATEWAY_KEY` or `TICO_GATEWAY_SECRET_ARN`, at
-   `TICO_GATEWAY_URL`, Tico HQ's decisions endpoint by default);
+   `TICO_GATEWAY_URL`, Tico HQ's decisions endpoint by default), else the key and URL saved in Settings > AI providers
+   (backend/gateway_connection.py), read at each call;
 2. a customer's own TypeSafe key (`TYPESAFE_API_KEY` or `TICO_TYPESAFE_SECRET_ARN`), never set by default;
 3. the team's own AI provider, when the server has that provider's API key (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`,
    `GEMINI_API_KEY`, `XAI_API_KEY`, `OPENROUTER_API_KEY`);
@@ -41,9 +42,10 @@ from typing import Any
 from fastapi import Request
 from pydantic import Field
 
+from clients import gateway as G
 from clients import judge as J
 from clients import openrouter
-from . import providers
+from . import gateway_connection, providers
 from .config import Settings
 from .models import Contract
 from .store import H, Problem
@@ -277,11 +279,36 @@ def _own_cost(result):
     return any(_count(usage.get(k)) for k in ("cost_usd", "cost"))
 
 
-def gateway(settings):
-    """The Tico AI Gateway as the server asks it: one try of at most `J.GATEWAY_TIMEOUT` seconds. None without a key."""
-    if not settings.gateway_key or not settings.gateway_url or settings.rehearsal:
+def gateway(settings, store=None, vault=None):
+    """The Tico AI Gateway as the server asks it: one try of at most `J.GATEWAY_TIMEOUT` seconds. The environment's key
+    wins; without one, and with a `store`, the key saved in Settings > AI providers, read at each call so saving or
+    clearing it counts at once (`saved` marks that step; `live` leaves it out while no key is saved). None in rehearsal
+    or with neither."""
+    if settings.rehearsal:
         return None
-    return J.gateway(settings.gateway_key, settings.gateway_url)
+    if settings.gateway_key:
+        return J.gateway(settings.gateway_key, settings.gateway_url) if settings.gateway_url else None
+    if store is None:
+        return None
+
+    def engine(state, questions, label=None):
+        from .credentials import Vault
+        keys = vault or Vault(store)
+        with store.read() as c:
+            secret = gateway_connection.key(c, keys, settings) if keys.configured else ""
+            base = gateway_connection.url(c, settings)
+        if not secret:
+            raise J.JudgeError("unconfigured", "no Tico AI Gateway key is saved")
+        return J.gateway(secret, G.decisions_url(base))(state, questions, label)
+    engine.model, engine.provider, engine.saved = J.GATEWAY_MODEL, J.GATEWAY_PROVIDER, True
+    return engine
+
+
+def live(primary, c, settings):
+    """`primary`'s steps that can ask now: the saved-key Gateway step only while a key is saved in Settings."""
+    steps = list(getattr(primary, "steps", None) or [primary]) if primary else []
+    saved = gateway_connection.source(c, settings) == "settings"
+    return [step for step in steps if saved or not getattr(step, "saved", False)]
 
 
 def jev(settings):
@@ -330,9 +357,10 @@ def step_models(steps, default=J.MODEL):
     return [getattr(step, "model", "") or default for step in steps]
 
 
-def primary_engine(settings):
-    """The server's own providers before the company's model: the Gateway, then a customer's own TypeSafe key."""
-    return ordered([gateway(settings), jev(settings)])
+def primary_engine(settings, store=None, vault=None):
+    """The server's own providers before the company's model: the Gateway (the environment's key, else with a `store`
+    the one saved in Settings), then a customer's own TypeSafe key."""
+    return ordered([gateway(settings, store, vault), jev(settings)])
 
 
 def server_engine(store, c, primary=None):
@@ -345,7 +373,7 @@ def server_engine(store, c, primary=None):
     if settings.rehearsal or over_spend_cap(c, settings):
         return None
     backup = fallback_engine(providers.load(c, settings))
-    steps = list(getattr(primary, "steps", None) or [primary]) if primary else []
+    steps = live(primary, c, settings)
     chain = ordered(steps + [backup])
     if chain is None:
         return None
@@ -398,7 +426,7 @@ def used_today(c, actor, at=None, action="judge.call"):
 
 def install_judge(app, store, auth):
     settings = store.settings
-    app.state.judge = primary_engine(settings)
+    app.state.judge = primary_engine(settings, store, getattr(app.state, "vault", None))
 
     @app.get("/api/v2/judge")
     def config(request: Request):
@@ -406,9 +434,10 @@ def install_judge(app, store, auth):
         auth.domain(who)
         with store.read() as c:
             used = used_today(c, who.actor)
-            engine = None if settings.rehearsal else app.state.judge or fallback_engine(providers.load(c, settings))
+            steps = [] if settings.rehearsal else live(app.state.judge, c, settings)
+            first = steps[0] if steps else None if settings.rehearsal else fallback_engine(providers.load(c, settings))
             spent = spent_this_month(c)
-        first = (getattr(engine, "steps", None) or [engine])[0] if engine else None
+        engine = first
         return {"configured": engine is not None, "model": step_models([first])[0] if first else "",
                 "provider": getattr(first, "provider", "") if first else "",
                 "daily_calls": daily_cap(settings, who.role), "used_today": used,

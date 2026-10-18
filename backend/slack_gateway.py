@@ -475,13 +475,13 @@ class Gateway:
         provider, each failure falling through to the next; None with none of them. One short try each per pass: the
         gateway's own retry (RETRY_SECONDS, up to ROUTE_GIVE_UP_SECONDS) is the only retry, so an outage costs one HTTP
         attempt a minute per provider, not three, and never blocks the loop long."""
-        from .judge import fallback_engine, ordered, primary_engine
+        from .judge import fallback_engine, live, ordered, primary_engine
         if self._judge is None:
-            self._judge = primary_engine(self.settings)
-        first = list(getattr(self._judge, "steps", None) or [self._judge]) if self._judge is not None else []
-        # The company's provider is looked up each time, because the owner can change the choice while this runs.
+            self._judge = primary_engine(self.settings, self.store)
+        # The saved Gateway key and the company's provider are looked up each time: the owner can change either while
+        # this runs.
         with self.store.read() as c:
-            return ordered(first + [fallback_engine(providers.load(c, self.settings))])
+            return ordered(live(self._judge, c, self.settings) + [fallback_engine(providers.load(c, self.settings))])
 
     def verify_app(self):
         """Refuse to start unless the token is the configured workspace's and app's."""

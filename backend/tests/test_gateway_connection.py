@@ -14,6 +14,8 @@ from backend.credentials import CredentialCipher
 from backend.store import H
 from backend.tests.test_api import api, assign, claim, get, headers, post, put, ready, runner  # noqa: F401
 from backend.tests.test_credentials import FakeKMS
+from backend.tests.test_decide_gateway import answer_all
+from backend.tests.test_judge import QUESTIONS
 from clients import gateway as G
 
 KEY = "tgw-synthetic-fixture-key-0042"
@@ -59,6 +61,18 @@ class FakeGateway:
                 status, body = owner.keys.get(key, (401, {"error": {"code": "unknown_key", "message": "Unknown key"}}))
                 data = json.dumps(body).encode()
                 self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def do_POST(self):                          # `<base>/decisions`: Tico Decide 1.0 answers every question
+                key = self.headers.get("Authorization", "").removeprefix("Bearer ")
+                owner.calls.append((self.path, key))
+                asked = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)))
+                data = json.dumps({"model": "tico-decide-1.0", "answers": answer_all(asked["questions"]),
+                                   "usage": {"input_tokens": 120, "output_tokens": 0, "cost_usd": 0.00001}}).encode()
+                self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(data)))
                 self.end_headers()
@@ -150,6 +164,34 @@ def test_one_key_saves_seals_and_clears_and_is_never_read_back(api, monkeypatch,
         assert cleared["connected"] is False and cleared["state"] == "none" and cleared["preview"] == ""
         with api.app.state.store.read() as c:
             assert "key" not in gateway_connection._row(c)
+
+
+def test_decide_asks_with_the_saved_key_falls_back_when_it_is_cleared_and_the_environments_key_wins(api, monkeypatch):
+    setup(api, monkeypatch)
+    from backend import judge
+    settings = api.app.state.store.settings
+    monkeypatch.setattr(settings, "gateway_key", "", raising=False)
+    own = lambda state, questions, label=None: {"model": "own", "answers": answer_all(questions), "usage": {}, "ms": 1}
+    own.model, own.provider = "own", "own"
+    monkeypatch.setattr(judge, "fallback_engine", lambda *args, **kwargs: own)
+    api.app.state.judge = judge.primary_engine(settings, api.app.state.store, api.app.state.vault)   # as at start
+
+    def decide():
+        return post(api, "decisions", {"state": {"subject": "Invoice 4471"}, "questions": QUESTIONS})["model"]
+    with fake_gateway() as fake:
+        fake.active(KEY, 0.1)
+        assert decide() == "own"                                  # no key saved: the Gateway is not asked
+        save(api, fake)
+        assert decide() == "tico-decide-1.0" and fake.calls[-1] == ("/v1/gateway/decisions", KEY)
+        delete(api, "providers/gateway")
+        asked = len(fake.calls)
+        assert decide() == "own" and len(fake.calls) == asked     # cleared: on to the next provider at once
+        # A key the environment sets wins over a saved one, at the environment's URL.
+        save(api, fake)
+        monkeypatch.setattr(settings, "gateway_key", OTHER, raising=False)
+        monkeypatch.setattr(settings, "gateway_url", fake.url + "/decisions", raising=False)
+        api.app.state.judge = judge.primary_engine(settings, api.app.state.store, api.app.state.vault)
+        assert decide() == "tico-decide-1.0" and fake.calls[-1] == ("/v1/gateway/decisions", OTHER)
 
 
 def test_only_the_owner_changes_it_and_only_the_owner_sees_its_state(api, monkeypatch):
