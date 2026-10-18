@@ -306,6 +306,8 @@ def test_a_batched_event_redelivered_after_its_batch_went_out_wakes_once_until_i
     redeliver()                                                          # while it runs
     assert [(j["state"], j["wake_class"]) for j in jobs(api, since=since)[released:]] == [("cancelled", "duplicate")] * 6
     finish(api, machine, attempt, started=True)
+    redeliver()                                                          # just after it ended
+    assert [(j["state"], j["wake_class"]) for j in jobs(api, since=since)[released:]] == [("cancelled", "duplicate")] * 9
     with api.app.state.store.transaction() as c:                         # long after the turn ended: a new event
         c.execute("UPDATE attempts SET finished=? WHERE id=?",
                   (H.shift(H.now(), seconds=-W.DUPLICATE_SECONDS - 60), attempt["id"]))
