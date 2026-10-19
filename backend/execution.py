@@ -458,9 +458,20 @@ def clear_limits(c, settings, actor, bot):
             # The plan behind the login was just renewed: its hold goes too, for every bot on it.
             login_holds.clear(c, *login_key(c, settings, place["runner_id"], slug,
                                             json.loads(row[0]) if row and row[0] else {}))
-        H.status_set(c, actor, slug, state="idle", focus="", reason="Try now")
+        if (H.status(c, slug) or {}).get("state") == "limited":
+            H.status_set(c, actor, slug, state="idle", focus="", reason="Try now")
         H.event(c, actor, "limit.cleared", slug, {"from": bot, "runtime": mine})
     return len(bots)
+
+
+def own_login_hold(c, settings, bot):
+    """The hold on the bot's own login on its computer (backend/login_holds.py), or {}: it can stand while the bot is
+    not `limited`, its work going on on a fallback."""
+    place = c.execute("SELECT runner_id FROM assignments WHERE bot=?", (bot,)).fetchone()
+    row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    if not place or not place["runner_id"] or not row:
+        return {}
+    return login_holds.get(c, *login_key(c, settings, place["runner_id"], bot, json.loads(row[0] or "{}")))
 
 
 def _github_app(c):
@@ -613,17 +624,12 @@ def claim_refusal(c, settings, runner, bot, config_json, draining, ready, held_b
         return "sign_in_rejected", None
     if usage_limits.blocked(c, bot, default=usage_limits.company(c) if default is None else default):
         return "limit", None
-    if (cooling_off(c, bot) and not on_login_hold(c, bot)
+    # While the bot's own login is held, that hold decides (login_refusal), so a ready fallback can take the turn;
+    # otherwise the bot's own cooldown does, as for a limit its fallback met.
+    if (cooling_off(c, bot) and not primary_hold(c, settings, runner["id"], bot, config, ctx=subscription_context)
             or login_refusal(c, settings, runner["id"], bot, config, ctx=subscription_context)):
         return "cooling_off", None
     return None, config
-
-
-def on_login_hold(c, bot):
-    """Whether the bot's last limit saved a hold on a login that still stands: that hold, not the bot's cooldown,
-    decides when it runs (login_refusal), so it runs on a fallback that is ready and not held itself."""
-    last = last_limit(c, bot)
-    return bool(last and login_holds.for_attempt(c, last["id"]))
 
 
 def login_refusal(c, settings, runner_id, bot, config, job_id=None, ctx=None):
@@ -633,17 +639,22 @@ def login_refusal(c, settings, runner_id, bot, config, job_id=None, ctx=None):
     the held login). Without `job_id` it answers for the bot: a probe of its own still lets it through, for
     job_refusal's per-job answer."""
     why = primary_hold(c, settings, runner_id, bot, config, job_id, ctx)
-    return None if why and fallback_open(c, settings, runner_id, bot, config, ctx) else why
+    return None if why and fallback_choice(c, settings, runner_id, bot, config, job_id, ctx) else why
 
 
 def primary_hold(c, settings, runner_id, bot, config, job_id=None, ctx=None):
     """Why the bot's own login takes no turn now ("held" or "probing"), or None."""
-    from .subscriptions import effective
-    profile = effective(c, bot, ctx)[0] or ""
-    runtime = providers.bot_choice(c, settings, config)[0]
-    why = login_holds.holding(c, runner_id, profile, runtime, job_id)
+    _, profile, runtime = login_key(c, settings, runner_id, bot, config, ctx)
+    why = login_wait(c, runner_id, profile, runtime, bot, job_id)
     if why == "held" and person_wrote_since(c, bot, login_holds.get(c, runner_id, profile, runtime).get("since") or ""):
         return None         # a person who writes has often just renewed the plan: one try (cooling_off)
+    return why
+
+
+def login_wait(c, runner_id, profile, runtime, bot, job_id=None):
+    """login_holds.holding for one of `bot`'s jobs; without `job_id`, for the bot: a probe of its own still lets
+    it through, for the per-job answer."""
+    why = login_holds.holding(c, runner_id, profile, runtime, job_id)
     if why == "probing" and job_id is None:
         probe = login_holds.get(c, runner_id, profile, runtime).get("probe_job")
         if c.execute("SELECT 1 FROM jobs WHERE id=? AND bot=?", (probe, bot)).fetchone():
@@ -651,44 +662,55 @@ def primary_hold(c, settings, runner_id, bot, config, job_id=None, ctx=None):
     return why
 
 
-def fallback_open(c, settings, runner_id, bot, config, ctx=None):
-    """Whether a turn of `bot` held off its own login has somewhere else to run on this computer, by the runner's own
-    choice (runner-rs/src/fallback.rs `configured`, `default_choice`): the fallback it names, else one of the company's
-    providers on another runtime, that the computer reports signed in and no hold keeps off. The Gateway counts when
-    the turn would be handed it (models_preset.with_gateway_fallback). A fallback turned off, or none, is no way out."""
+def fallback_choice(c, settings, runner_id, bot, config, job_id=None, ctx=None):
+    """Where a turn of `bot` held off its own login runs on this computer, as (profile, runtime), or None to wait. It
+    is the runner's own choice (runner-rs/src/fallback.rs `configured`, `default_choice`): the fallback the bot names,
+    else the first of the company's providers on another runtime that the computer reports signed in and no hold
+    keeps off (the runner skips those too, from the holds its config carries). That login's hold having just ended,
+    the turn is its one probe, so with another job's probe out on it the bot waits rather than the runner picking it
+    anyway. The Gateway counts when the turn would be handed it (models_preset.with_gateway_fallback). A fallback
+    turned off, none, or one the runner already found not ready in this hold window (`stuck`) means waiting."""
     from .harnesses import runtime_of
     from .subscriptions import effective
-    own = config.get("fallback") if isinstance(config.get("fallback"), dict) else {}
-    if own.get("off"):
-        return False
+    named = config.get("fallback") if isinstance(config.get("fallback"), dict) else {}
+    if named.get("off"):
+        return None
+    _, own, primary = login_key(c, settings, runner_id, bot, config, ctx)
+    if bot in login_holds.get(c, runner_id, own, primary).get("stuck", []):
+        return None
     row = c.execute("SELECT readiness_json FROM runners WHERE id=?", (runner_id,)).fetchone()
     ready = readiness_document(row["readiness_json"]) if row else {}
     profile = effective(c, bot, ctx)[0] or ""
-    if own.get("harness"):
-        if not own.get("model"):
-            return False
-        rows = [{"runtime": runtime_of(own["harness"]), "model": own["model"]}]
+    if named.get("harness"):
+        if not named.get("model"):
+            return None
+        rows = [{"runtime": runtime_of(named["harness"]), "model": named["model"]}]
     else:
         record = providers.load(c, settings)
-        primary = providers.bot_choice(c, settings, config)[0]
         gateway = "gateway_fallback" in models_preset.with_gateway_fallback(record, ready, providers.fill(record, config))
         rows = [r for r in providers.default_fallbacks(record) if r["runtime"] != primary
                 and (gateway or not providers.gateway_model(r["model"]))]
     for choice in rows:
         if providers.gateway_model(choice["model"]):
-            return True                         # signs in with the turn's relay: no login of its own to hold
+            return "", choice["runtime"]        # signs in with the turn's relay: no login of its own to hold
         signed = (ready.get("runtimes") or {}).get(choice["runtime"]) or {}
         if profile:
             signed = (signed.get("profiles") or {}).get(profile) or {}
-        if (signed.get("installed") is True and signed.get("authenticated") == "ready"
-                and not login_holds.holding(c, runner_id, profile, choice["runtime"])):
-            return True
-    return False
+        if signed.get("installed") is not True or signed.get("authenticated") != "ready":
+            continue
+        login = login_holds.canonical(c, runner_id, profile, choice["runtime"])
+        why = login_wait(c, runner_id, login, choice["runtime"], bot, job_id)
+        if why == "held":
+            continue
+        return None if why else (login, choice["runtime"])
+    return None
 
 
 def login_key(c, settings, runner_id, bot, config, ctx=None):
+    """(runner, login, runtime) of the bot's own login, as holds key it (login_holds.canonical)."""
     from .subscriptions import effective
-    return runner_id, effective(c, bot, ctx)[0] or "", providers.bot_choice(c, settings, config)[0]
+    runtime = providers.bot_choice(c, settings, config)[0]
+    return runner_id, login_holds.canonical(c, runner_id, effective(c, bot, ctx)[0] or "", runtime), runtime
 
 
 def unfenced_sql():
@@ -1446,8 +1468,12 @@ class Execution:
             check_models.handed(c, aid, task["id"], check)
         elif primary_hold(c, self.store.settings, who.runner_id, row["bot"], followed, row["id"]):
             # Its login is held and the claim let it through for its fallback (login_refusal): the runner starts the
-            # turn there and never tries the held login.
+            # turn there and never tries the held login. A fallback login whose own hold just ended gets this job as
+            # its one probe.
             held = login_holds.get(c, *login_key(c, self.store.settings, who.runner_id, row["bot"], followed))
+            moved = fallback_choice(c, self.store.settings, who.runner_id, row["bot"], followed, row["id"])
+            if moved:
+                login_holds.take_probe(c, who.runner_id, *moved, row["id"])
         else:
             # After a hold on the bot's login ends, the first job to start on it is the window's one probe.
             login_holds.take_probe(c, *login_key(c, self.store.settings, who.runner_id, row["bot"], followed), row["id"])
@@ -1972,8 +1998,11 @@ class Execution:
         late = row["state"] == "expired"
         # The one turn that ends before it starts: a Tico model on a runner that can't run one (clients/gateway.py
         # NOT_ISOLATED). Settled now, so the bot says why once rather than its lease lapsing into a retry.
+        # Likewise a turn sent away from a held login (`primary_held`) that found no fallback ready after all: nothing
+        # ran, and it goes back to wait out the hold (backend/login_holds.py after_turn).
         unstarted = (row["state"] == "leased" and body.outcome == "failed"
-                     and any(gateway.run_code(error) == gateway.NOT_ISOLATED for error in limit_errors(c, aid)))
+                     and (any(gateway.run_code(error) == gateway.NOT_ISOLATED for error in limit_errors(c, aid))
+                          or body.primary_held and body.limited and not body.fallback))
         if not late and row["state"] != "running" and not unstarted:
             raise Problem("not_started", "Acknowledge start before completing work", 409)
         if row["last_seq"] != body.last_seq:

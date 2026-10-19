@@ -268,8 +268,18 @@ pub fn replay(attempt: &Value, tokens: usize) -> String {
 /// server or when the owner turned automatic fallback off (Settings > AI providers).
 static CHOICES: Mutex<Option<(Instant, Vec<Value>)>> = Mutex::new(None);
 
+/// Whether the server keeps login holds (its config carries `login_holds`), and so knows a profile's `shared_login`.
+static SERVER_HOLDS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn server_keeps_holds() -> bool {
+    SERVER_HOLDS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// Keep `fallback_models` from a GET /api/v2/config answer (the harness relay reads it once a minute).
 pub fn remember(config: &Value) {
+    if config["login_holds"].is_array() {
+        SERVER_HOLDS.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
     let rows = config["fallback_models"].as_array().map(|r| r.iter().filter(|v| v.is_object()).cloned().collect()).unwrap_or_default();
     *CHOICES.lock().unwrap() = Some((Instant::now(), rows));
     // The server's saved holds on this computer's logins (backend/login_holds.py): after a restart this runner has
@@ -532,6 +542,12 @@ mod tests {
         assert!(out_of_quota("", "restart-test", now) && !out_of_quota("", "restart-test", now + 601.0));
         assert!(!out_of_quota("", "restart-test-over", now));
         forget_limit("", "restart-test");
+        // Such a server knows a profile's `shared_login` (readiness.rs), so the runner reports it from now on.
+        assert!(server_keeps_holds());
+        let shared = crate::profiles::Profile::new("team-a", "/tmp/acme-team-a", true);
+        let own = crate::profiles::Profile::new("solo", "/tmp/acme-solo", false);
+        assert_eq!(login("claude", "", Some(&shared)).as_deref(), Some(""));
+        assert_eq!(login("claude", "", Some(&own)).as_deref(), Some("solo"));
     }
 
     #[test]

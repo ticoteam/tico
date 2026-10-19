@@ -42,6 +42,19 @@ def key(runner_id, profile, runtime):
     return f"{PREFIX}{runner_id}|{profile or ''}|{runtime}"
 
 
+def canonical(c, runner_id, profile, runtime):
+    """The login a profile's turns on `runtime` sign in with, as holds key it: "" (the computer's own) for a profile
+    the computer reports shares it (`shared_login`, runner-rs/src/fallback.rs `login`), else the profile."""
+    if not profile:
+        return ""
+    from .store import readiness_document
+    row = c.execute("SELECT readiness_json FROM runners WHERE id=?", (runner_id,)).fetchone()
+    ready = readiness_document(row["readiness_json"]) if row else {}
+    report = ((ready.get("runtimes") or {}).get(runtime) or {})
+    report = (report.get("profiles") or {}).get(profile) or report
+    return "" if report.get("shared_login") is True else profile
+
+
 def get(c, runner_id, profile, runtime):
     row = c.execute("SELECT value_json FROM registry_metadata WHERE key=?",
                     (key(runner_id, profile, runtime),)).fetchone()
@@ -115,11 +128,10 @@ def believable(reset, hit):
     return reset if timedelta(0) < reset - hit <= timedelta(seconds=LIMIT_RESET_MAX) else None
 
 
-def record(c, runner_id, profile, runtime, hit, reset=None, attempt_id=None, bot=None, full=True, error=""):
+def record(c, runner_id, profile, runtime, hit, reset=None, attempt_id=None, bot=None, error=""):
     """Save a hold on the login after a turn ended on its usage limit at `hit`, and return it. A hold still saved
-    means no turn has worked on the login since, so this limit is the next in a row. `full` is False when the turn
-    went on to finish on a fallback login: the hold then keeps the runner's fallback choice off the login but holds
-    back no bot, since the bot's work still gets done."""
+    means no turn has worked on the login since, so this limit is the next in a row. A hold keeps every turn off the
+    login, even when the bot's work went on to finish on a fallback: the next turn goes straight there."""
     old = get(c, runner_id, profile, runtime)
     at = believable(reset, hit)
     hit_at = H.parse_ts(hit)
@@ -133,7 +145,7 @@ def record(c, runner_id, profile, runtime, hit, reset=None, attempt_id=None, bot
         until = at or hit_at + timedelta(seconds=BACKOFF[min(streak, len(BACKOFF)) - 1])
     hold = {"runner_id": runner_id, "profile": profile or "", "runtime": runtime, "since": _iso(hit_at),
             "until": _iso(until), "streak": streak, "reset": bool(at), "attempt_id": attempt_id, "bot": bot,
-            "full": bool(full), "error": (error or "")[:300], "probe_job": None, "probe_at": None}
+            "error": (error or "")[:300], "probe_job": None, "probe_at": None}
     _save(c, hold)
     return hold
 
@@ -161,7 +173,7 @@ def holding(c, runner_id, profile, runtime, job_id=None, now=None):
     """Why no turn may start on the login now: "held" before the hold ends, "probing" while another job's probe turn
     is out after it; None when one may (with `job_id`, when that job may)."""
     hold = get(c, runner_id, profile, runtime)
-    if not hold or not hold.get("full", True):
+    if not hold:
         return None
     now = now or H.now()
     if (hold.get("until") or "") > now:
@@ -227,37 +239,66 @@ def limit_texts(c, attempt_id):
     return out
 
 
+_HOP_RE = re.compile(r"running this turn on (\S+)")
+
+
+def chain(texts, runtime, final=None):
+    """The logins a turn ran on, in order, and the first limit notice each met: [(runtime, notice or None)]. A limit
+    belongs to the login running when it came; the runner's note "<x> hit its usage limit; running this turn on <y>"
+    moves the turn on (and says <x> was limited even when its notice carried no text); "<x> login held ..." and
+    "unavailable" move it on without a limit. `final` is the harness the runner says ended the turn."""
+    from .harnesses import runtime_of
+    steps = [[runtime, None, False]]
+    for kind, text in texts:
+        if kind == "limit":
+            if not steps[-1][2]:
+                steps[-1][1:] = [text, True]
+            continue
+        moved = _HOP_RE.search(text)
+        if not moved:
+            continue
+        if "hit its usage limit; running this turn on" in text and not steps[-1][2]:
+            steps[-1][1:] = ["", True]
+        steps.append([runtime_of(moved[1]), None, False])
+    if final and steps[-1][0] != runtime_of(final):
+        steps.append([runtime_of(final), None, False])
+    return steps
+
+
 def after_turn(c, runner_id, bot, profile, runtime, body, attempt_id, hit):
-    """Save or clear the logins' holds a finished turn shows, and return the hold that keeps the bot waiting (its
-    own login's when that one is spent, else the fallback's), or {}.
-    `profile` and `runtime` are the bot's own login; a turn the runner moved to a fallback harness after a usage
-    limit names that harness in `body.fallback` and its login in the last usage segment."""
-    texts = limit_texts(c, attempt_id)
-    hopped = any(kind == "note" and "usage limit; running this turn on" in text for kind, text in texts)
-    segments = (body.usage.segments or [body.usage]) if body.usage else []
-    last = segments[-1] if segments else None
-    fallback = None
-    if body.fallback:
-        fallback = ((last.runtime if last and last.runtime else body.fallback),
-                    (last.profile_used if last else None) or "")
-    limits = [text for kind, text in texts if kind == "limit"]
-    primary_spent = body.limited and not fallback or bool(fallback) and (body.primary_limited or hopped)
-    fallback_spent = bool(fallback) and body.limited
+    """Save or clear the logins' holds a finished turn shows, and return the hold that keeps the bot waiting, or {}.
+    `profile` and `runtime` are the bot's own login. Every login the turn met a usage limit on is held, with the reset
+    its own notice names, whatever the turn's outcome: an intermediate fallback that ran out stays held after a later
+    one finishes the turn. A login the turn completed on is cleared, but only by a turn claimed after its hold began:
+    a lane leased before the limit says nothing about the login now."""
+    steps = chain(limit_texts(c, attempt_id), runtime, body.fallback)
+    if body.primary_limited:
+        steps[0][2] = True
+    if body.limited:
+        steps[-1][2] = True
+    hop_profile = body.profile_used if body.fallback and body.profile_used is not None else profile
+    claimed = (c.execute("SELECT created FROM attempts WHERE id=?", (attempt_id,)).fetchone() or [""])[0] or ""
     kept = {}
-    if primary_spent:
-        said = next((at for at in (reset_from_text(text, hit) for text in limits[:1]) if at), None)
-        reset = said or (body.limit_resets_at if not fallback else None)
-        kept = record(c, runner_id, profile, runtime, hit, reset, attempt_id, bot, full=body.limited,
-                      error=limits[0] if limits else "")
-    elif not body.limited and body.outcome == "completed" and not fallback:
-        clear(c, runner_id, profile, runtime)
-    if fallback_spent:
-        # The fallback's own notice follows the primary's, unless the turn never tried the held primary.
-        said = next((at for at in (reset_from_text(text, hit) for text in limits[1 if primary_spent else 0:]) if at),
-                    None)
-        hold = record(c, runner_id, fallback[1], fallback[0], hit, said or body.limit_resets_at, attempt_id, bot,
-                      error=limits[-1] if limits else "")
-        kept = kept or hold
-    elif fallback and body.outcome == "completed":
-        clear(c, runner_id, fallback[1], fallback[0])
+    for n, (rt, notice, limited) in enumerate(steps):
+        login = canonical(c, runner_id, profile if n == 0 else hop_profile, rt)
+        last = n == len(steps) - 1
+        if limited:
+            if n == 0 and body.primary_held:
+                continue                # never tried: its hold stands as it is
+            reset = reset_from_text(notice, hit) or (body.limit_resets_at if last else None)
+            hold = record(c, runner_id, login, rt, hit, reset, attempt_id, bot, error=notice or "")
+            if last or n == 0:
+                kept = hold
+        elif last and body.outcome == "completed" and not (n == 0 and body.primary_held):
+            old = get(c, runner_id, login, rt)
+            if old and claimed >= (old.get("since") or ""):
+                clear(c, runner_id, login, rt)
+    if body.primary_held and not body.fallback and body.limited:
+        # Sent away from its held login, it found no fallback ready here after all: the bot waits out this hold
+        # rather than being sent to that fallback again (fallback_choice).
+        own = canonical(c, runner_id, profile, runtime)
+        hold = get(c, runner_id, own, runtime)
+        if hold:
+            _save(c, {**hold, "stuck": sorted({*hold.get("stuck", []), bot})})
+            kept = get(c, runner_id, own, runtime)
     return kept if body.limited else {}

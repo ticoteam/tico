@@ -1151,8 +1151,9 @@ impl Runner {
                 };
                 let th = h.start_thread(&bot, &settings).await?;
                 thread = Some(th.clone());
-                if busy.is_some() {
-                    // The primary never started (its login was busy), so this host acknowledges the turn instead.
+                if busy.is_some() || held.is_some() {
+                    // The primary never started (its login was busy, or held by the server), so this host
+                    // acknowledges the turn instead, before it acts.
                     self.client.post(&format!("attempts/{aid}/started"), &json!({"thread_id": th}), Some(&format!("started:{aid}"))).await?;
                     self.state.phase(&aid, "running")?;
                 }
@@ -1337,6 +1338,11 @@ impl Runner {
         }
         if drove.retryable && !drove.limited {
             completion.insert("retryable".into(), json!(true));
+        }
+        if held.is_some() {
+            // The server held the bot's own login and it was never tried; with no fallback either, the turn ends
+            // unstarted and the server settles it on the hold (backend/execution.py complete).
+            completion.insert("primary_held".into(), json!(true));
         }
         if let Some(f) = &fallback {
             completion.insert("fallback".into(), json!(f));
