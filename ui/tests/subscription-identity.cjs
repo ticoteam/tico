@@ -19,6 +19,8 @@ const {harnesses} = require('./support/page.cjs');
       window.$ = s => document.querySelector(s);
       window.esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[c]));
       window.formBusy = el => [...el.querySelectorAll('input')].some(f => f === document.activeElement || f.value !== f.defaultValue); window.toast = () => {};
+      // ui/app/settings-devices.js, loaded before subscriptions.js in ui/index.html; subscriptions.cjs covers the shared-login line.
+      window.machineSharedLoginHTML = () => '';
       window.S = {me: {id: 'ana', role: 'owner', cloud: true}, orgGroups: [], emps: [{name: 'builder', machine: {runner_id: 'r1', operator: 'ana'}}]};
       SETTINGS_DATA = {machines: [{id: 'r1', label: 'North', operator: 'ana'}, {id: 'r2', label: 'South', operator: 'ana'}]};
       window.fixture = {profiles_by_computer: ['r1','r2'].map((runner_id, i) => ({runner_id, label: ['North', 'South'][i], profiles: [

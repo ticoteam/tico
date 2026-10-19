@@ -138,15 +138,16 @@ const DEPARTMENTS = [
   head: CATALOG.find(card => card.department === id && card.lead)?.template || '', software_only: ['product', 'engineering'].includes(id)}));
 const deptCards = id => CATALOG.filter(card => card.department === id);
 // POST /api/v2/setup/recruit, as the server's local recommender would answer (backend/recruit_rank.py, tested there):
-// the head, then the defaults and commons, and a niche card only when the answer names one of its tags.
+// the head, then the defaults and commons, and a niche card only when the answer names one of its tags. Only a tag of
+// two or more words is a why; a niche card brought in by one word has none.
 function recruitFor({department, briefing, share}) {
   const dept = DEPARTMENTS.find(row => row.id === department), words = String(briefing || '').toLowerCase();
   const rows = [];
   for (const card of deptCards(department).sort((a, b) => (b.lead ? 1 : 0) - (a.lead ? 1 : 0))) {
     const tag = (card.tags || []).find(word => words.includes(word));
     if (card.suggest === 'niche' && !tag) continue;
-    rows.push({template_id: card.template, why: tag ? `Matches “${tag}”` : card.lead ? `Heads ${dept.name} and reports to you`
-      : card.suggest === 'default' ? `A starting point for ${dept.name}` : `Common in ${dept.name}`});
+    rows.push({template_id: card.template, why: card.lead ? `Heads ${dept.name} and reports to you` : tag?.includes(' ') ? `Matches “${tag}”`
+      : card.suggest === 'default' ? `A starting point for ${dept.name}` : card.suggest === 'common' ? `Common in ${dept.name}` : ''});
   }
   return {bots: rows, suggested_default: deptCards(department).filter(card => card.lead).map(card => card.template),
           source: share ? 'hq' : 'local', shared: !!share, off_by: ''};
@@ -171,6 +172,7 @@ function recruitFor({department, briefing, share}) {
       machine: {runners: [], enrolled: false}, needed: true,
     };
     let machine = {runners: [], enrolled: false};
+    let enrollCode = 'enroll-code';
     const me = {id: 'ana', name: 'Ana Rivera', role: 'owner', cloud: true,
                 email: 'ana@acme.example', credential_access: false, config: CONFIG};
     const v2bots = () => BOTS_AFTER.map((bot, i) => ({slug: bot.slug, display_name: bot.display_name, state: bot.status,
@@ -236,7 +238,7 @@ function recruitFor({department, briefing, share}) {
         return json({...record, home: 'human:ana'});
       }
       if (p === '/api/v2/setup/getting-started/state') { tourPosts.push(request.postDataJSON()); return json({tour: true, checklist: false, cards: [], skipped: []}); }
-      if (p === '/api/v2/enrollments') { enrollments.push(request.postDataJSON()); return json({code: 'enroll-code', expires: '2026-09-16T10:15:00Z'}); }
+      if (p === '/api/v2/enrollments') { enrollments.push(request.postDataJSON()); return json({code: enrollCode, expires: '2026-09-16T10:15:00Z'}); }
       if (p === '/api/v2/bots' && request.method() === 'POST') { created.push(request.postDataJSON()); return json({bot: {slug: request.postDataJSON().slug}}); }
       if (p === '/api/v2/bots') return json(v2bots());
       // A person's chat with a bot: the first message opens it, and the bot page's Chat tab lists it from then on.
@@ -297,6 +299,8 @@ function recruitFor({department, briefing, share}) {
     assert.equal(await page.locator('#nav-welcome').evaluate(el => el.hidden), false);
     assert.match(await page.locator('#nav-welcome').textContent(), /Finish setup/);
     assert.equal(await page.locator('#onb-count').textContent(), 'Step 1 of 6');
+    // Until setup is done the wizard has the sidebar to itself: no app pages beside Finish setup.
+    assert.equal(await page.locator('#side .side-scroll > [data-nav="tasks"]').isVisible(), false);
 
     // ---- a: names, prefilled from config, with no explanation under them. The assistant
     // works in the background and is not named here; its configured name rides along unchanged.
@@ -392,6 +396,8 @@ function recruitFor({department, briefing, share}) {
     assert.equal((await page.locator('#ob-recruiting').textContent()).trim(), 'Recruiting bots…');
     assert.equal(await page.locator('[data-ob-said]').textContent(), 'Inbound demos, and a few resellers');
     assert.match(await page.locator('#ob-chart [data-oc-dept=sales]').textContent(), /Recruiting…/);
+    // The group being recruited holds three places on the chart, so its lines never hang there empty.
+    assert.equal(await page.locator('#ob-chart [data-oc-dept=sales] .oc-ph').count(), 3);
     await shot(page, 'desktop-5-recruiting');
     releaseRecruit(); recruitHeld = null;
     await page.locator('#ob-suggested').waitFor();
@@ -405,17 +411,38 @@ function recruitFor({department, briefing, share}) {
     assert.deepEqual(await picked(), ['sales-lead', 'sdr-research']);
     assert.match(await page.locator('[data-ob-bot=sales-lead] .ob-bot-name').textContent(), /Sales Manager\s*Head/);
     assert.equal(await plain(page.locator('[data-ob-why=sales-lead]')), 'Heads Sales and reports to you');
-    assert.equal(await plain(page.locator('[data-ob-why=partnerships]')), 'Matches “resellers”');
+    // One word of the answer ("resellers") brings the niche bot in but is no reason to show: no why line on it.
+    assert.equal(await page.locator('[data-ob-why=partnerships]').count(), 0);
+    assert.equal(await plain(page.locator('[data-ob-why=sdr-research]')), 'A starting point for Sales');
+    assert.equal(await page.locator('#ob-chart .oc-ph').count(), 0);
     assert.equal(await page.locator('[data-ob-bot=sdr-research] .ob-bot-sum').textContent(), 'Researches accounts and writes first-touch emails.');
     // Every bot wears the avatar it will have: its blob with its template's icon, the same on its card and on the chart.
     assert.equal(await page.locator('[data-ob-bot=sdr-research] .av.blob .av-glyph').textContent(), 'person_search');
     assert.equal(await page.locator('#ob-chart [data-oc-bot=sdr-research] .av.blob .av-glyph').textContent(), 'person_search');
     assert.deepEqual(await chartBots('sales'), ['sales-lead', 'sdr-research']);
-    // Checking one grows the chart at once; the new node is the one that animates in.
+    // A long name wraps to two whole lines on the chart, never cut off, and the full name is its tooltip.
+    const sdrName = await page.locator('#ob-chart [data-oc-label=sdr-research]').evaluate(el => ({
+      cut: el.scrollHeight > el.clientHeight + 1 || el.scrollWidth > el.clientWidth + 1, lines: Math.round(el.clientHeight / parseFloat(getComputedStyle(el).lineHeight))}));
+    assert.ok(!sdrName.cut && sdrName.lines >= 2, JSON.stringify(sdrName));
+    assert.equal(await page.locator('#ob-chart [data-oc-bot=sdr-research] .oc-bnode').getAttribute('title'), 'Sales Development Representative');
     await page.locator('[data-ob-bot=partnerships]').click();
     assert.deepEqual(await chartBots('sales'), ['sales-lead', 'sdr-research', 'partnerships']);
     assert.match(await page.locator('#ob-chart [data-oc-bot=partnerships]').getAttribute('class'), /ob-new/);
     assert.doesNotMatch(await page.locator('#ob-chart [data-oc-bot=sdr-research]').getAttribute('class'), /ob-new/);
+    // Frame by frame through its entrance, the new bot's line is never drawn ahead of its card (that read as an empty gap).
+    const entrance = await page.evaluate(() => {
+      const li = document.querySelector('#ob-chart [data-oc-bot=partnerships]'), node = li.querySelector('.oc-bnode');
+      const animations = document.getAnimations().filter(a => li.contains(a.effect?.target));
+      const out = [];
+      for (const ms of [0, 100, 200, 300, 400, 600]) {
+        for (const a of animations) { a.pause(); a.currentTime = ms; }
+        const line = getComputedStyle(li, '::before').transform, scale = line === 'none' ? 1 : new DOMMatrix(line).d;
+        out.push({ms, line: +scale.toFixed(2), card: +getComputedStyle(node).opacity});
+      }
+      for (const a of animations) a.finish();
+      return out;
+    });
+    assert.ok(entrance.every(f => f.card >= f.line), 'line ahead of the card: ' + JSON.stringify(entrance));
     assert.equal(await page.locator('#ob-chart-stats').textContent(), '6 groups · 3 bots');
     assert.equal(await page.locator('#ob-more').count(), 0);                       // nothing left in Sales to show under More
     // The page scrolls (the org builder lets the document scroll); the sidebar and its bottom bar stay put, full height.
@@ -583,12 +610,19 @@ function recruitFor({department, briefing, share}) {
     assert.doesNotMatch(blurb, /Mac you own/);
     // No AI provider is chosen yet, so there is no model to sign in to: that step is left out and the rest renumber.
     assert.doesNotMatch(await page.locator('#onb-step').textContent(), /profile add default|profile login|codex login/);
-    assert.match(await page.locator('#onb-step').textContent(), /3 · Start the bot service/);
-    // Once a provider is chosen the sign-in step is there, in order, on a Mac and on a Linux server.
+    // One numbered path: make the setup file, then the lines that use it. A Mac has no other way, so no Other ways.
+    assert.deepEqual(await page.locator('.onb-steps > li > .k').allTextContents(),
+      ["Download this computer's setup file", 'Register this Mac for the team', 'Start the bot service']);
+    assert.equal(await page.locator('#onb-other').count(), 0);
+    // Copy sits inside each command's box, not on a row of its own under it.
+    assert.equal(await page.locator('.onb-cmd').count(), await page.locator('.onb-cmd > [data-onb-copy]').count());
+    // Once a provider is chosen the sign-in step is there, in order, on a Mac and on a Linux server; on Linux the
+    // plain-Docker line is the other way, after the path.
     assert.deepEqual(await page.evaluate(() => {
       const state = {...ONB, providers: {default: {runtime: 'codex'}}};
-      return [onbCommands(state).map(([label]) => label.slice(0, 3)).join(''), onbCommands({...state, kind: 'linux'}).map(([label]) => label.slice(0, 3)).join('')];
-    }), ['2 ·3 ·4 ·', '2 ·3 ·4 ·']);
+      const shape = list => list.map(([label, , other]) => (other ? 'other:' : '') + label.split(/[ ,(]/)[0]).join(' ');
+      return [shape(onbCommands(state)), shape(onbCommands({...state, kind: 'linux'}))];
+    }), ['Register Add Start', 'Set Sign other:With']);
     assert.match(await page.evaluate(() => onbCommands({...ONB, providers: {default: {runtime: 'codex'}}})[1][1]), /profile login default codex/);
     assert.match(await page.evaluate(() => onbCommands({...ONB, kind: 'linux', providers: {default: {runtime: 'claude'}}})[1][1]), /docker exec -it -u bot tico-runner-tico-[a-z0-9]+ claude auth login/);
     assert.match(await page.locator('#onb-step').textContent(), /scripts\/tico -e <slug> install bot/);
@@ -606,11 +640,66 @@ function recruitFor({department, briefing, share}) {
       return [run[1], plain[1]].join('\n'); }),
       'curl -fsSL https://github.com/ticoteam/tico/releases/download/v0.2.0/install.sh -o install.sh && sh install.sh --runner --name acme-c0de --url http://server:8765 --server-network acme_default --code \'c0de\' --label "This computer"\n'
       + 'docker run -d --name tico-runner-acme-c0de --restart unless-stopped --network acme_default -v tico-runner-acme-c0de_runner-home:/home/runner ghcr.io/ticoteam/tico-runner:v0.2.0 join --url http://server:8765 --code \'c0de\' --label "This computer"');
-    // The bare docker run stays as an alternative, pinned to the server's release and said not to update itself.
-    assert.match(await page.locator('#onb-step').textContent(), /no updater, so it will not follow the server's releases/);
-    assert.match(await page.locator('#onb-step').textContent(), /docker run -d --name tico-runner-tico-code --restart unless-stopped -v tico-runner-tico-code_runner-home:\/home\/runner ghcr\.io\/ticoteam\/tico-runner:v0\.2\.0 join --url https:\/\/initech\.test --code '<code>'/);
+    // One path is on the screen: the code, then the installer line. A label's parenthetical is a small hint under it.
+    assert.deepEqual(await page.locator('.onb-steps > li > .k').allTextContents(),
+      ['Create a one-time code for this computer', 'Set up the runner on the server']);
+    assert.match(await page.locator('.onb-steps .onb-hint').first().textContent(), /^installs Docker if it is missing; keeps itself on this server's release$/);
+    // The bare docker run stays as an alternative under Other ways, closed, pinned to the server's release and said not to update itself.
+    assert.equal(await page.locator('#onb-other').evaluate(el => el.open), false);
+    assert.equal(await page.locator('#onb-other .onb-cmd').isVisible(), false);
+    assert.match(await page.locator('#onb-other').textContent(), /no updater, so it will not follow the server's releases/);
+    assert.match(await page.locator('#onb-other').textContent(), /docker run -d --name tico-runner-tico-code --restart unless-stopped -v tico-runner-tico-code_runner-home:\/home\/runner ghcr\.io\/ticoteam\/tico-runner:v0\.2\.0 join --url https:\/\/initech\.test --code '<code>'/);
+    await page.locator('#onb-other > summary').click();
+    assert.equal(await page.locator('#onb-other .onb-cmd').isVisible(), true);
+    // Before Add computer there is no code to show.
+    assert.equal(await page.locator('#onb-code').count(), 0);
     await page.locator('#onb-enroll').click();
     await page.waitForFunction(() => /--code 'enroll-code' --label "Ana's server"/.test(document.querySelector('#onb-step').textContent));
+    // The one-time code is on the screen in large type, not only in a toast; Other ways stays as it was left.
+    assert.equal(await page.locator('#onb-code-value').textContent(), 'enroll-code');
+    assert.ok(await page.locator('#onb-code-value').evaluate(el => parseFloat(getComputedStyle(el).fontSize)) >= 20);
+    assert.equal(await page.locator('#onb-enroll').textContent(), 'New code');
+    assert.equal(await page.locator('#onb-other').evaluate(el => el.open), true);
+    // No command, and not the code, runs past the card: each wraps inside its box, on a laptop and on a phone.
+    const overflow = () => page.evaluate(() => {
+      const card = document.querySelector('#onb-step').getBoundingClientRect();
+      return [...document.querySelectorAll('#onb-step .onb-cmd, #onb-step .onb-cmd code, #onb-code-value')]
+        .filter(el => el.scrollWidth > el.clientWidth + 1 || el.getBoundingClientRect().right > card.right + 1).length;
+    });
+    assert.equal(await overflow(), 0);
+    await shot(page, 'desktop-5b-machine-code');
+    const desk = page.viewportSize();
+    await page.setViewportSize({width: 390, height: 844});
+    assert.equal(await overflow(), 0);
+    await shot(page, 'phone-5b-machine-code');
+    await page.setViewportSize(desk);
+    // Each Copy takes exactly what its box shows: the installer line, the line under Other ways and the code, and
+    // after New code the new code everywhere.
+    await page.evaluate(() => { window.copied = [];
+      Object.defineProperty(navigator, 'clipboard', {configurable: true, value: {writeText: async value => { window.copied.push(value); }}}); });
+    const copies = async () => {
+      await page.evaluate(() => { window.copied = []; });
+      for (const button of ['.onb-steps [data-onb-copy]', '#onb-other [data-onb-copy]', '#onb-code-copy']) await page.locator(button).click();
+      await page.waitForFunction(() => window.copied.length === 3);
+      return page.evaluate(() => window.copied);
+    };
+    const shown = async () => [...await page.locator('.onb-cmd code').allTextContents(), await page.locator('#onb-code-value').textContent()];
+    let [installer, other, code] = await copies();
+    assert.deepEqual([installer, other, code], await shown());
+    assert.match(installer, /^curl -fsSL .* --code 'enroll-code' /);
+    assert.match(other, /^docker run -d .* --code 'enroll-code' /);
+    assert.equal(code, 'enroll-code');
+    enrollCode = 'enroll-code-2';
+    await page.locator('#onb-enroll').click();
+    await page.locator('#onb-code-value', {hasText: 'enroll-code-2'}).waitFor();
+    [installer, other, code] = await copies();
+    assert.deepEqual([installer, other, code], await shown());
+    assert.match(installer, /--code 'enroll-code-2' /);
+    assert.match(other, /--code 'enroll-code-2' /);
+    assert.equal(code, 'enroll-code-2');
+    enrollCode = 'enroll-code';
+    await page.locator('#onb-enroll').click();
+    await page.locator('#onb-code-value', {hasText: /^enroll-code$/}).waitFor();
     assert.doesNotMatch(await page.locator('#onb-step').textContent(), /docker exec -it tico-runner/);
     await page.locator('[data-onb-kind][value=mac]').check();
     // The Mac comes online; the next save carries the live machine through to the review.
@@ -721,9 +810,11 @@ function recruitFor({department, briefing, share}) {
     await page.evaluate(() => onbRenderDone(ONB));
     assert.equal(await page.locator('#fr-admin-form [name=name]').inputValue(), 'Half typed');
     await shot(page, 'desktop-6-created');
-    // Finishing takes the setup entry out of the sidebar and puts the names on the app; the chart marks the parked bots.
+    // Finishing takes the setup entry out of the sidebar, brings the app's pages back and puts the names on the app;
+    // the chart marks the parked bots.
     await page.evaluate(() => refresh(true));
     assert.equal(await page.locator('#nav-welcome').evaluate(el => el.hidden), true);
+    await page.locator('#side .side-scroll > [data-nav="tasks"]').waitFor();
     assert.equal(await page.title(), 'Initech Hub');
     await page.locator('#tree .node[href="#/bot/support"] .tree-setup').waitFor();
     assert.equal(await page.locator('#tree .node[href="#/bot/coo"] .tree-setup').count(), 0);
