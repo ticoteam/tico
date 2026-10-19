@@ -33,6 +33,31 @@ const shownEmps = () => (S.emps || []).filter(e => !isHiddenBot(e.name));
 // Branches are personal workspaces, not additional teammates. Admin access still belongs in the branch picker.
 const orgBranchVisible = e => !(e.shared_from || e.is_branch) || (!!S.me?.id && e.operator === S.me.id);
 const orgBranchMark = e => (e.shared_from || e.is_branch) ? '<span class="org-branch">Your branch</span>' : '';
+// A team made from the catalog has several "Head of …" bots, and a narrow row cut each one to "Head of …". The first
+// words a bot's name shares with another bot's on the chart are muted, and drop out whole when the row is too narrow
+// for all of it (ui/styles/sidebar.css), so the part that tells them apart stays; the row's tooltip has the whole name.
+function orgNameLeads(names) {
+  const words = name => String(name).match(/\S+\s*/g) || [];
+  const lead = new Map();
+  for (const name of names) {
+    const mine = words(name);
+    let most = 0;
+    for (const other of names) {
+      if (other === name) continue;
+      const theirs = words(other);
+      let k = 0;
+      while (k < mine.length - 1 && k < theirs.length && mine[k].trim() === theirs[k].trim()) k++;
+      most = Math.max(most, k);
+    }
+    if (most) lead.set(name, mine.slice(0, most).join(''));
+  }
+  return lead;
+}
+function orgNodeName(e, lead) {
+  const name = (e.display_name || '').replace(TEMP_RE, ''), shared = lead.get(name);
+  if (!shared) return `<span class="nm">${shownName(e)}</span>`;
+  return `<span class="nm nm-split">${isTempBot(e) ? TEMP_FLAG : ''}<span class="nm-words"><span class="nm-lead">${esc(shared)}</span><span class="nm-rest">${esc(name.slice(shared.length))}</span></span></span>`;
+}
 const orgGroupIds = () => new Set((S.orgGroups || []).map(g => g.id));
 const orgCanGroups = () => S.me?.role === 'owner' || !!S.me?.bot_admin;
 // Who a human or bot reports to, as a key (`p:<id>` or `b:<slug>`); '' when nobody is on the chart above it.
@@ -542,6 +567,7 @@ function renderTree() {
     (c.kind === 'person' && subtreeNeeds('p:' + c.id)) ||
     (c.kind === 'group' && subtreeNeeds('g:' + c.id)));
   const nameOf = n => n.kind === 'person' ? (n.person.name || n.id) : (n.display_name || '').replace(TEMP_RE, '');
+  const leads = orgNameLeads(new Set(Object.values(byParent).flat().filter(n => n.kind === 'bot').map(nameOf).filter(Boolean)));
   const sources = {};
   for (const r of inboxNavRows()) (sources[r.bot] ||= []).push(r);
   INBOX_PLACED = new Set();
@@ -609,8 +635,8 @@ function renderTree() {
     if (own) INBOX_PLACED.add(e.name);
     return `<li class="${kids ? 'dept' : ''}"><div class="noderow">
       ${kids ? `<button class="chev ${isCol ? 'col' : ''}" data-toggle="${esc(key)}" aria-label="${isCol ? 'Expand' : 'Collapse'} ${esc(e.display_name)}">›</button>` : ''}
-      <a class="node ${e.status} ${curBot === e.name ? 'cur' : ''} ${st}" href="#/bot/${e.name}"${curBot === e.name ? ' aria-current="page"' : ''} data-org="b:${esc(e.name)}"${helper ? ' data-helper' : placeAttrs(key, at)}${!flat && !helper && (orgMayDrag(key) || at.order.includes(key)) ? ' draggable="true"' : ''}>
-        ${avatar(e.name, depth ? 16 : 20, st)}<span class="nm">${shownName(e)}</span>${orgBranchMark(e)}${runtimeTag(e)}${frTreeMark(e)}
+      <a class="node ${e.status} ${curBot === e.name ? 'cur' : ''} ${st}" href="#/bot/${e.name}" title="${esc(e.display_name || e.name)}"${curBot === e.name ? ' aria-current="page"' : ''} data-org="b:${esc(e.name)}"${helper ? ' data-helper' : placeAttrs(key, at)}${!flat && !helper && (orgMayDrag(key) || at.order.includes(key)) ? ' draggable="true"' : ''}>
+        ${avatar(e.name, depth ? 16 : 20, st)}${orgNodeName(e, leads)}${orgBranchMark(e)}${runtimeTag(e)}${frTreeMark(e)}
         ${e.goal_active ? '<span class="nav-icon tree-goal" role="img" aria-label="Goal" title="Goal">target</span>' : ''}
         ${isCol && subtreeNeeds(key) ? '<span class="dot needs" title="something inside needs attention"></span>' : ''}
         ${treeLimitMark(e.name)}${treeBadge(n, st)}</a>${moveMenu(key, e.display_name || e.name, at)}</div>

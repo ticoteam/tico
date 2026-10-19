@@ -157,10 +157,12 @@ function renderFeedbackAsk() {
   };
 }
 // "Finish setup" tops the nav while the owner has not finished setup, and disappears the
-// moment the server stops asking for one. Everyone else never sees it.
+// moment the server stops asking for one. Everyone else never sees it. On the wizard itself the rest of the app's
+// pages and What's new are not shown until setup is done: a new install has nothing there yet (ui/styles/sidebar.css).
 function renderOnboardingNav() {
   const link = $('#nav-welcome');
   if (link) link.hidden = !S.config.onboarding_needed;
+  document.body.classList.toggle('in-setup', !!S.config.onboarding_needed && S.route === WELCOME);
 }
 // "New version" in the sidebar: quiet, only when the server says a newer release exists. Anyone
 // may read the changelog; only the owner may start an update. Dismissal is per person and version.

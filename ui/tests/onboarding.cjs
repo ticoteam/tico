@@ -281,6 +281,8 @@ function recruitFor({department, briefing, share}) {
     assert.equal(await page.locator('#nav-welcome').evaluate(el => el.hidden), false);
     assert.match(await page.locator('#nav-welcome').textContent(), /Finish setup/);
     assert.equal(await page.locator('#onb-count').textContent(), 'Step 1 of 6');
+    // Until setup is done the wizard has the sidebar to itself: no app pages beside Finish setup.
+    assert.equal(await page.locator('#side .side-scroll > [data-nav="tasks"]').isVisible(), false);
 
     // ---- a: names, prefilled from config, with no explanation under them. The assistant
     // works in the background and is not named here; its configured name rides along unchanged.
@@ -686,9 +688,11 @@ function recruitFor({department, briefing, share}) {
     await page.evaluate(() => onbRenderDone(ONB));
     assert.equal(await page.locator('#fr-admin-form [name=name]').inputValue(), 'Half typed');
     await shot(page, 'desktop-6-created');
-    // Finishing takes the setup entry out of the sidebar and puts the names on the app; the chart marks the parked bots.
+    // Finishing takes the setup entry out of the sidebar, brings the app's pages back and puts the names on the app;
+    // the chart marks the parked bots.
     await page.evaluate(() => refresh(true));
     assert.equal(await page.locator('#nav-welcome').evaluate(el => el.hidden), true);
+    await page.locator('#side .side-scroll > [data-nav="tasks"]').waitFor();
     assert.equal(await page.title(), 'Initech Hub');
     await page.locator('#tree .node[href="#/bot/support"] .tree-setup').waitFor();
     assert.equal(await page.locator('#tree .node[href="#/bot/coo"] .tree-setup').count(), 0);
