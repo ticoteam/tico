@@ -4,9 +4,10 @@
 // optional "Connect your agent" step opens connectAgent()). The company says what it does, then builds its org chart:
 // it picks departments, answers one question per department, sees "Recruiting bots…", checks the suggested bots and
 // watches the chart grow; the finished chart can rename or re-point a bot. Nothing is created until "Create my team",
-// which posts /api/v2/setup/complete exactly once. After it: each
-// starter shows "Needs setup" with a Set up button that says "Let's set you up.", an admin can be
-// invited, bot owners named and where to keep keys found; the bot page and the org chart carry the same mark.
+// which posts /api/v2/setup/complete exactly once. After it: "Your team is created", one next step as the only primary
+// button, the bots in the team chart's groups and order with one status each, and no tour until Show me around. A
+// starter's Set up says "Let's set you up.", an admin can be invited, bot owners named and where to keep keys found;
+// the bot page and the org chart carry the same mark.
 // Settings -> Bots reuses the catalog cards. Fixtures only - no server, no network.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
@@ -119,6 +120,9 @@ const BOTS_AFTER = [
   {slug: 'content', display_name: 'Content Marketer', status: 'planned', template: 'content', onboarding_state: '',
    setup_task_id: 'task-content', repository_present: false},
 ];
+// The chart Create leaves: Operations before Customer Support, not the order the bots were created in.
+const CHART_GROUPS = [{id: 'support', name: 'Customer Support', parent: '', order: 2}, {id: 'operations', name: 'Operations', parent: '', order: 1}];
+const CHART_TEAMS = {support: 'support', 'meeting-notes': 'operations'};
 // The org builder's departments (templates/departments.yaml) and cards (GET /api/v2/setup/groups).
 const DEPARTMENTS = [
   ["sales", "Sales", "handshake", "Finds buyers, works every deal to a signature and keeps existing accounts renewing and growing.", "Turn interest into revenue", "What kind of sales do you do today?", "Outbound to studio owners, a two-call demo, annual contracts; two sellers and a spreadsheet pipeline"],
@@ -152,6 +156,8 @@ function recruitFor({department, briefing, share}) {
   const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
   try {
     const context = await browser.newContext({viewport: {width: 1100, height: 800}, serviceWorkers: 'block', acceptDownloads: true, colorScheme: scheme});
+    // The app is dark unless the browser saved another theme (ui/theme.js): screenshots take the one asked for.
+    if (shots) await context.addInitScript(theme => localStorage.setItem('tico.theme', theme), scheme);
     const puts = [], tourPosts = [], completes = [], definitions = [], created = [], enrollments = [], chats = [], invites = [], owners = [];
     const recruits = [], opened = {};
     let hq = {available: true, off_by: ''}, recruitHeld = null, releaseRecruit = () => {};   // a recruit answer the test holds
@@ -192,10 +198,10 @@ function recruitFor({department, briefing, share}) {
       if (p === '/api/status') return json({cloud: true, keeper_alive: true, health_issues: [], active: [], recent_runs: []});
       if (p === '/api/employees') return json([{name: 'coo', display_name: 'Tico', status: 'active',
         reports_to: '', description: 'the point of contact', revision: 1, users: [{id: 'ana', name: 'Ana Rivera', email: 'ana@acme.example'}]},
-        // After Create the two starters are on the chart, parked.
+        // After Create the two starters are on the chart, parked, each in its group (the Content Marketer is not on it yet).
         ...(record.completed ? BOTS_AFTER.filter(bot => bot.onboarding_state).map(bot => ({name: bot.slug, display_name: bot.display_name,
           status: bot.status, reports_to: '', description: '', revision: 5, can_chat: true, can_manage: true, onboarding_state: bot.onboarding_state,
-          host: 'keeper', thread_mode: 'personal', users: []})) : [])]);
+          host: 'keeper', thread_mode: 'personal', users: [], team: CHART_TEAMS[bot.slug]})) : [])]);
       if (p === '/api/issues') return json([]);
       if (p === '/api/v2/templates') return json({cards: CATALOG});
       if (p === '/api/v2/setup') {
@@ -260,7 +266,8 @@ function recruitFor({department, briefing, share}) {
           body: 'Create the repository and the first routine.'};
         return json(p === '/api/v2/tasks' ? {tasks: [task]} : {task, events: [], children: []});
       }
-      if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana Rivera', email: 'ana@acme.example'}, {id: 'ben', name: 'Ben Cole', email: 'ben@acme.example'}]});
+      if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana Rivera', email: 'ana@acme.example'}, {id: 'ben', name: 'Ben Cole', email: 'ben@acme.example'}],
+        org_groups: record.completed ? CHART_GROUPS : []});
       if (p === '/api/v2/operations') return json({machines: [], services: [], issues: [], scheduler_enabled: true});
       if (p === '/api/v2/models') return json({models: [{id: 'gpt-6-sol', label: 'Sol', runtime: 'codex', efforts: ['high', 'xhigh'], default_effort: 'high'}], harnesses});
       if (p === '/api/v2/settings/history') return json({changes: [], transitions: []});
@@ -644,27 +651,37 @@ function recruitFor({department, briefing, share}) {
     assert.equal(completes.length, 1);
     assert.deepEqual(completes[0], {});
 
-    // ---- the tour opens on the first look at the finished company, and Skip is remembered.
+    // ---- after Create, one screen: the team is created, and nothing covers it. The tour waits for Show me around.
+    assert.equal(await page.locator('#onb h1').textContent(), 'Your team is created');
+    assert.equal(await page.locator('.gs-tour').count(), 0);
+    assert.deepEqual(tourPosts, []);
+    // A computer is online and a provider chosen, so nothing is waited on: Open Tasks is the next step and the only primary.
+    assert.equal(await page.locator('#onb-next-status').textContent(), "Ana's Mac, Cloud box online");
+    assert.deepEqual(await page.locator('#onb button.primary').evaluateAll(els => els.map(el => el.id)), ['onb-tasks']);
+    // The bots in the chart's groups, in the chart's order: Operations before Customer Support as on the team list, the
+    // bot the chart does not list yet first, the built-ins last.
+    const groups = () => page.locator('#onb-bots .onb-group').evaluateAll(els => els.map(el =>
+      [el.dataset.onbGroup || '', el.querySelector('h2')?.textContent || '', [...el.querySelectorAll('[data-onb-bot]')].map(row => row.dataset.onbBot)]));
+    assert.deepEqual(await groups(), [['', '', ['content']], ['operations', 'Operations', ['meeting-notes']],
+      ['support', 'Customer Support', ['support']], ['built-in', 'Built-in', ['coo', 'botops']]]);
+    assert.deepEqual(await page.locator('#tree .org-group > .noderow').evaluateAll(els => els.map(el => el.dataset.org)), ['g:operations', 'g:support']);
+    // One status per row: a word, or the one thing to do there.
+    const status = slug => page.locator(`[data-onb-bot=${slug}] .onb-bot-actions`).evaluate(el => [el.children.length, el.textContent.trim()]);
+    assert.deepEqual(await status('coo'), [1, 'Active']);                                                  // the built-ins work at once
+    assert.deepEqual(await status('botops'), [1, 'Active']);
+    assert.deepEqual(await status('support'), [1, 'Set up']);                                              // its repository exists
+    assert.deepEqual(await status('meeting-notes'), [1, 'Setting up']);                                    // not yet: no Set up
+    assert.equal(await page.locator('[data-fr-start=meeting-notes]').count(), 0);
+    assert.deepEqual(await status('content'), [1, 'BotOps is setting it up']);                             // not a starter: BotOps builds it
+    assert.equal(await page.locator('[data-onb-bot=content] a').getAttribute('href'), '#/task/task-content');
+    assert.equal(await page.locator('#onb-bots .pill.needs, #onb-bots p').count(), 0);
+    // Show me around: the tour, once asked for; Skip is remembered.
+    await page.locator('#onb-tour').click();
     await page.locator('.gs-tour[role=dialog]').waitFor();
     assert.equal(await page.locator('.gs-tour-count').textContent(), '1 of 6');
     await page.locator('[data-tour-skip]').click();
     await page.locator('.gs-tour').waitFor({state: 'detached'});
     assert.deepEqual(tourPosts, [{tour: true}]);
-
-    // ---- after Create, one screen. Each starter is parked ("Needs setup") with its repository still being set up
-    // on the computer until it exists; only then does Set up work.
-    assert.equal(await page.locator('#onb h1').textContent(), 'Finish setup');
-    assert.match(await page.locator('[data-onb-bot=coo]').textContent(), /Ace\s+Set up automatically once a computer is online\./);
-    assert.match(await page.locator('[data-onb-bot=botops]').textContent(), /Set up automatically once a computer is online\./);
-    assert.equal(await page.locator('[data-onb-bot=coo] [data-needs-onboarding]').count(), 0);        // the built-ins work at once
-    assert.match(await page.locator('[data-onb-bot=support]').textContent(), /Needs setup/);
-    assert.match(await page.locator('[data-onb-bot=support]').textContent(), /Repository ready\./);
-    assert.match(await page.locator('[data-onb-bot=meeting-notes]').textContent(), /Setting up its repository/);
-    assert.equal(await page.locator('[data-fr-start=meeting-notes]').isDisabled(), true);
-    assert.equal(await page.locator('[data-fr-start=support]').isDisabled(), false);
-    assert.match(await page.locator('[data-onb-bot=content]').textContent(), /BotOps is setting this up\./);         // not a starter: BotOps builds it
-    assert.equal(await page.locator('[data-onb-bot=content] a').getAttribute('href'), '#/task/task-content');
-    assert.equal(await page.locator('#onb-machine-status').textContent(), "Ana's Mac, Cloud box online");
     // Invite an admin: the roster first, then the role, both as the owner.
     await page.locator('#fr-admin-form [name=name]').fill('Sam Ortiz');
     await page.locator('#fr-admin-form [name=email]').fill('sam@initech.test');
@@ -864,6 +881,7 @@ function recruitFor({department, briefing, share}) {
     await created2.goto('https://tico-ui.test/#/welcome');
     await created2.locator('#fr-admin-form').waitFor();
     assert.equal(await created2.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
+    assert.equal(await created2.locator('#onb h1').textContent(), 'Your team is created');
     await shot(created2, 'phone-5-created');
     await created2.locator('#fr-tools').scrollIntoViewIfNeeded();
     await shot(created2, 'phone-6-created-tools');
@@ -879,14 +897,30 @@ function recruitFor({department, briefing, share}) {
     waiting.on('pageerror', e => errors.push(e.message));
     await waiting.goto('https://tico-ui.test/#/welcome');
     await waiting.locator('[data-onb-bot=coo]').waitFor();
-    assert.match(await waiting.locator('[data-onb-bot=coo]').textContent(), /Waiting for a computer\./);
-    assert.match(await waiting.locator('[data-onb-bot=support]').textContent(), /Waiting for a computer\./);
+    // Said once, at the top, with Add a computer as the only primary button; each row just says Waiting.
+    assert.equal(await waiting.locator('#onb-next-status').textContent(), 'Waiting for a computer. Your bots start once one is online.');
+    assert.equal(await waiting.locator('#onb', {hasText: 'Waiting for a computer'}).count(), 1);
+    assert.equal(await waiting.locator('#onb-bots').textContent().then(text => /computer/i.test(text)), false);
+    assert.deepEqual(await waiting.locator('#onb button.primary').evaluateAll(els => els.map(el => el.textContent)), ['Add a computer']);
+    for (const slug of ['coo', 'support', 'meeting-notes', 'content'])
+      assert.equal(await waiting.locator(`[data-onb-bot=${slug}] .onb-bot-actions`).textContent().then(text => text.trim()), 'Waiting');
+    await shot(waiting, 'desktop-6b-created-no-computer');
+    await waiting.setViewportSize({width: 390, height: 844});
+    assert.equal(await waiting.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
+    await shot(waiting, 'phone-5b-created-no-computer');
+    await waiting.setViewportSize({width: 1100, height: 800});
+    // Add a computer opens Settings > Computers.
+    await waiting.locator('[data-onb-go=devices]').click();
+    await waiting.locator('#settings-tabs [data-settings-tab=devices][aria-selected=true]').waitFor();
+    await waiting.goto('https://tico-ui.test/#/welcome');
+    await waiting.locator('[data-onb-bot=coo]').waitFor();
     machine = enrolled;
     CONFIG.providers_configured = false;
     await waiting.reload();
     await waiting.locator('[data-onb-bot=coo]').waitFor();
-    assert.match(await waiting.locator('[data-onb-bot=coo]').textContent(), /Add an AI provider\./);
-    assert.equal(await waiting.locator('[data-onb-bot=coo] a[data-gs-tab=providers]').count(), 1);   // a link to Settings > AI providers
+    assert.equal(await waiting.locator('#onb-next-status').textContent(), "Ana's Mac, Cloud box online. Waiting for an AI provider.");
+    assert.deepEqual(await waiting.locator('#onb button.primary').evaluateAll(els => els.map(el => el.dataset.onbGo)), ['providers']);
+    assert.equal(await waiting.locator('[data-onb-bot=coo] .onb-bot-actions').textContent().then(text => text.trim()), 'Waiting');
     assert.equal(await waiting.locator('#onb-after > section').first().getAttribute('id'), 'fr-providers');
     await waiting.locator('#fr-providers [data-gs-tab=providers]').click();
     await waiting.locator('#settings-tabs [data-settings-tab=providers][aria-selected=true]').waitFor();   // lands on that tab

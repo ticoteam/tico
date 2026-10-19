@@ -515,6 +515,19 @@ function orgTreeWithHelpers(byParent) {
   }
   return out;
 }
+// One parent's rows in the team chart's order. The screen after Create (ui/first-run.js) lists its groups the same way.
+function orgSorted(parent, kids) {
+  const placed = byReportOrder(parent);
+  return (kids || []).slice().sort((a, b) => {
+    if (!!a.helpers !== !!b.helpers) return a.helpers ? 1 : -1;        // built-in and message groups come last
+    // A group's own humans and bots come first, then the groups nested in it.
+    if ((a.kind === 'group') !== (b.kind === 'group')) return a.kind === 'group' ? 1 : -1;
+    if (a.kind === 'group' && b.kind === 'group') return (a.order || 0) - (b.order || 0);
+    if (placed(a, b)) return placed(a, b);               // a manager's reports in the order someone put them
+    if (a.kind === 'bot' && b.kind === 'bot' && isHelperBot(a) && isHelperBot(b) && helperRank(a) !== helperRank(b)) return helperRank(a) - helperRank(b);
+    return chartFallback(a, b);                          // then the chart's own order, as on the server
+  });
+}
 // Whether one of my personal tokens has reached Tico (GET /v2/me/tokens): undefined before asking, null when I may not
 // hold tokens (no button), else true or false. Without one, my row offers Connect (ui/connect-agent.js).
 let MY_AGENT, MY_AGENT_AT = 0;
@@ -546,16 +559,7 @@ function renderTree() {
   for (const r of inboxNavRows()) (sources[r.bot] ||= []).push(r);
   INBOX_PLACED = new Set();
   const rec = (parent, depth) => {
-    const placed = byReportOrder(parent);
-    const sorted = (byParent[parent] || []).slice().sort((a, b) => {
-      if (!!a.helpers !== !!b.helpers) return a.helpers ? 1 : -1;        // built-in and message groups come last
-      // A group's own humans and bots come first, then the groups nested in it.
-      if ((a.kind === 'group') !== (b.kind === 'group')) return a.kind === 'group' ? 1 : -1;
-      if (a.kind === 'group' && b.kind === 'group') return (a.order || 0) - (b.order || 0);
-      if (placed(a, b)) return placed(a, b);               // a manager's reports in the order someone put them
-      if (a.kind === 'bot' && b.kind === 'bot' && isHelperBot(a) && isHelperBot(b) && helperRank(a) !== helperRank(b)) return helperRank(a) - helperRank(b);
-      return chartFallback(a, b);                          // then the chart's own order, as on the server
-    });
+    const sorted = orgSorted(parent, byParent[parent]);
     // The reports here that the viewer may put in order, per manager: a manager's own rows, or in a group the members
     // that share one. Each gets a place to drop before or after, and Move up and Move down.
     const lists = {};
