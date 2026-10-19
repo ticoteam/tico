@@ -79,8 +79,8 @@ as a `data:` URI.
 
 Today's upload paths cap a file well below the video and audio limit. A bot's `--visual` file (or MCP `path`) goes
 up inside a JSON request, and a picture, video or audio clip is base64-encoded there, a third bigger on the way. So
-from your checkout it can be at most about 19 MB on a chat message and 10 MB on a task comment. A page or SVG goes up as plain
-text, without that growth. A person's upload is at most 10 MB.
+from your checkout it can be at most about 19 MB on a chat message and 10 MB on a task comment. A page or SVG goes
+up as plain text, without that growth. A person's upload is at most 10 MB.
 
 Any other type, or a file over its limit, posts as a normal file chip, never as an inline card. So does a picture
 whose bytes don't match its type (a `.png` that isn't a PNG).
