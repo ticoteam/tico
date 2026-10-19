@@ -526,6 +526,17 @@ mod tests {
     }
 
     #[test]
+    fn each_assistant_message_is_one_priced_request_and_they_add_up_to_the_totals() {
+        let mut meter = crate::execute::Meter::default();
+        for usage in [json!({"input": 5_000, "cacheRead": 115_000, "output": 2_000}), json!({"input": 1_000, "cacheRead": 50_000, "output": 800})] {
+            meter.add(&json!({"usage": usage_increment(&usage)}));
+        }
+        let report = meter.report("tico-mid-1.0", "pi", "api").unwrap();
+        assert_eq!((report["input_tokens"].clone(), report["cached_tokens"].clone(), report["output_tokens"].clone()), (json!(6_000), json!(165_000), json!(2_800)));
+        assert_eq!(report["requests"], json!([[5_000, 115_000, 2_000], [1_000, 50_000, 800]]));
+    }
+
+    #[test]
     fn a_gateway_turn_never_sends_a_loopback_request_through_a_proxy() {
         let dir = std::env::temp_dir().join(format!("pi-proxy-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();

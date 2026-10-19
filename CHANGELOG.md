@@ -130,7 +130,9 @@ All notable changes to Tico are recorded here. The format follows
   100,000 tokens; above that the whole request is $0.75 per 1M input, $0.075 cached and $3.75 output, and Usage
   estimates it that way. Cheap 1.0 is retired: bots and a default model already on it keep it and keep running at its
   old price, and Settings > AI providers still saves a default left on it, but nothing new can pick it
-  ([Tico AI Gateway](docs/ai-gateway.md)).
+  ([Tico AI Gateway](docs/ai-gateway.md)). The web app's Add bot form preselects a current model when the team
+  default is Cheap 1.0, since a new bot is a new pick. The pi runner now reports each model request, so Usage prices
+  each one at its own rate.
 - **A waiting task sleeps, and a bot's own writes never wake it** (token saving): news about a task that waits on
   another task (blocked by) or on a pull request's checks (wake once), such as a step move, a relation change or a
   comment, no longer starts a run; the task wakes when its blocker finishes or its checks come back. A notice that a
