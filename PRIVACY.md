@@ -35,8 +35,8 @@ IP address is unavoidably seen by any server you connect to (GitHub sees it toda
 ### When
 
 Only while counting is on, only from a real install (never in demo mode, never from a source checkout that reports
-`dev`), and only after the owner has been shown the notice. A new install shows it in the installer, in the setup
-wizard and once in the web app; an existing install shows it in the web app when it updates to 0.2.15, and nothing is
+`dev`), and only after the owner has been shown the notice. A new install shows it in the installer and once in the web app, on the
+first page after the setup wizard (never over the wizard or the screen after **Create**); an existing install shows it in the web app when it updates to 0.2.15, and nothing is
 sent before the owner has seen it.
 
 ### What HQ stores
