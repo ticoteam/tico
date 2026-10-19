@@ -75,6 +75,10 @@ All notable changes to Tico are recorded here. The format follows
   ([Computers](docs/computers.md#remove-a-subscription)).
 
 ### Fixed
+- **Computers: a cleared key reads "No key · Add key"**, not "Signed out · Sign in", in a computer's pop-up, and its
+  chip's hover says No key. On an offline computer, a connection's **Replace key**, **Clear key**, **Switch to
+  subscription**, **Sign out** and **Switch account** stay on the line, disabled, with "Computer is offline", instead
+  of disappearing ([Computers](docs/computers.md#api-keys-on-a-computer)).
 - A locally managed Cloudflare Tunnel keeps the separate inline-visual hostname after a server restart or update.
   `TICO_VISUAL_ORIGIN` adds a route for `^/visuals/` only; app and runner routes and the 404 catch-all stay in place.
 - **Updates tree keeps archived cards out after a reload**: a card you archive on Updates no longer comes back in

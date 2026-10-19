@@ -150,6 +150,7 @@ def test_a_cleared_key_is_not_signed_back_in_by_the_shared_key(environment):
     heartbeat(api, box["token"], None)
     assert fetch(api, box)["credentials"] == []
     assert listed(api, box)["signed_out"] == {"codex": [""]}
+    assert listed(api, box)["key_cleared"] == ["codex"], "the page says No key, not Signed out"
     # Adding a key restores it with that key (still not the shared one) ...
     added = call(api, "POST", f"runners/{rid}/keys", {"runtime": "codex", "secret": "sk-proj-own-key-0123456789"})
     assert fetch(api, box)["credentials"] == [], "nothing until the computer has checked the new key"
