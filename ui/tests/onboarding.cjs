@@ -739,6 +739,7 @@ function recruitFor({department, briefing, share}) {
     assert.equal(await oneLine(page), true);
     assert.equal(await bigTitle(page), true);
     await shot(page, 'desktop-5c-agent');
+    if (shots) { await page.setViewportSize({width: 390, height: 844}); await shot(page, 'phone-5c-agent'); await page.setViewportSize({width: 1100, height: 800}); }
     await page.locator('#onb-connect').click();
     await page.locator('dialog.connect-agent[open]').waitFor();
     await page.locator('dialog.connect-agent [data-close]').click();
@@ -949,6 +950,7 @@ function recruitFor({department, briefing, share}) {
       els.filter(el => el.getBoundingClientRect().width > 1).map(el => el.textContent)), ['Names']);
     assert.equal(await oneLine(phone), true);
     assert.equal(await bigTitle(phone), true);
+    await shot(phone, 'phone-0-names');
     await phone.locator('#onb-next').click();
     await phone.locator('#onb-what').waitFor();
     assert.equal(await fits(), true);
@@ -1099,6 +1101,7 @@ function recruitFor({department, briefing, share}) {
     assert.equal(await fresh.locator('#onb-company').getAttribute('placeholder'), 'Acme Inc.');
     assert.equal(await fresh.locator('label.onb-field:has(#onb-company) .k').textContent(), 'Company name');
     await shot(fresh, 'desktop-1-names-fresh');
+    if (shots) { await fresh.setViewportSize({width: 390, height: 844}); await shot(fresh, 'phone-1-names-fresh'); await fresh.setViewportSize({width: 1100, height: 800}); }
     await fresh.locator('#onb-next').click();
     await fresh.locator('#onb-status .err', {hasText: "Add your company's name."}).waitFor();
     assert.equal(await fresh.evaluate(() => document.activeElement.id), 'onb-company');

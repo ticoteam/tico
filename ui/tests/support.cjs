@@ -777,6 +777,18 @@ const UNREACHABLE = 'Not sent. Could not reach Tico support. Try again in a mome
     await v.page.waitForTimeout(100);
     assert.equal(v.calls.filter(c => c === 'asked from health').length, 2);
     assert.equal((await v.page.locator('#support-message').inputValue()).split("I'd like help setting up Tico.").length, 2);
+    // TICO_SCREENSHOT_DIR=<dir> saves the opened snapshot at desktop and phone width, in both themes.
+    if (process.env.TICO_SCREENSHOT_DIR) for (const [size, viewport] of [['desktop', {width: 1440, height: 900}], ['phone', {width: 390, height: 844}]]) {
+      for (const theme of ['light', 'dark']) {
+        const s = await visit({viewport, theme});
+        await s.page.evaluate(() => document.querySelector('#main').insertAdjacentHTML('beforeend', '<button type="button" data-setup-help="wizard">Want help setting up?</button>'));
+        await s.page.locator('#main [data-setup-help]').click();
+        await s.page.waitForFunction(() => document.querySelector('#support-pop[open] #support-message')?.value.startsWith("I'd like help setting up Tico."));
+        await s.page.waitForTimeout(300);
+        await s.page.screenshot({path: require('node:path').join(process.env.TICO_SCREENSHOT_DIR, `${size}-help-box-${theme}.png`)});
+        await s.ctx.close();
+      }
+    }
     await v.page.locator('[data-compose] [name=message]').press('Enter');
     await v.page.locator('.support-msg.you', {hasText: 'Computer online'}).waitFor();
     assert.equal(JSON.parse(v.calls.find(c => c.startsWith('POST tickets {')).slice('POST tickets '.length)).kind, 'setup');
