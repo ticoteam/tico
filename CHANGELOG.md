@@ -106,6 +106,7 @@ All notable changes to Tico are recorded here. The format follows
   share one ChatGPT sign-in and that they take turns. Codex on an API key, a bot on its own subscription login, and
   Claude Code are not limited, and no code copies a login file between bots' homes. The holding bot is named only to
   people who can see it ([how it works](docs/how-it-works.md#one-turn-per-chatgpt-login)).
+- PDF upload and reading use pypdf 6.21.1, the latest patch release of 6.21.
 
 ## [0.3.61] - 2026-10-18
 
