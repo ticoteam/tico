@@ -3237,8 +3237,12 @@ class Execution:
         # A bot limited to one task (scoped_sql) carries only that task's work: its other next-run tasks and waiting
         # notes stay where they are for a run after the scope is released.
         scope = claim_scope(c, row["bot"])
+        # A run that holds a person's grant over the bots below it (backend/report_grants.py) carries nobody else's
+        # words: its quiet work waits for the bot's next ordinary run.
+        from . import report_grants
+        lends = report_grants.holds_rights(c, self.auth, row["bot"], aid)
         # A check runs on another model for one subtask: the bot's other work waits for its own turns.
-        if getattr(body, "next_run", False) and not check:
+        if getattr(body, "next_run", False) and not check and not lends:
             if row["bot"] == "librarian":
                 from .docs import refresh_generated_docs
                 refresh_generated_docs(c)  # Also covers a Librarian enabled after the upgrade.
@@ -3264,7 +3268,7 @@ class Execution:
         # Quiet notes ride the same way: every note waiting for this bot, each with when it was
         # sent, so the run can tell yesterday's from this morning's.
         notes = []
-        if getattr(body, "next_run", False) and not check and not scope:
+        if getattr(body, "next_run", False) and not check and not scope and not lends:
             from . import bot_to_bot
             waiting = H.notes_waiting(c, row["bot"])
             for item in waiting:

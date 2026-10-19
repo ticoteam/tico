@@ -69,6 +69,7 @@ CLI_TOOL_ALIASES = {
     "hub_task_manager_status": ("hub_task_manager",), "hub_task_manager_on": ("hub_task_manager_set",),
     "hub_task_manager_off": ("hub_task_manager_set",), "hub_task_manager_schedule": ("hub_task_manager_set",),
     "hub_task_manager_bot": ("hub_task_manager_set",),
+    "hub_bot_grant": ("hub_bot_report_grant",),                     # `hub bot grant` shows or sets a report grant
     "hub_task_show": ("hub_task_show", "hub_task_show_many"),      # `hub task show a b c` is one read
     "hub_market_size_accept": ("hub_market_size_decide",), "hub_market_size_reject": ("hub_market_size_decide",),
     "hub_market_size_params": ("hub_market_size_decide",),
@@ -268,7 +269,9 @@ def assistant_send(api, args):
 
 
 @tool("hub_bot_archive", "Archive a bot you manage. Routines and placement are removed; its External agent Credential "
-      "is revoked by default. Restore does not recover those. Built-in bots cannot be archived.",
+      "is revoked by default. Restore does not recover those. Built-in bots cannot be archived. A manager bot whose "
+      "grant allows archive (hub_bot_report_grant) archives a bot that reports straight to it, in a run its grantor's "
+      "automation or message started, up to its weekly cap.",
       {"bot": _s("Bot slug"), "successor": _s("Bot taking over its open work")}, required=("bot",), writes=True)
 def bot_archive(api, args):
     person = _as_person(api)
@@ -2949,7 +2952,8 @@ def inbox_send(api, args):
 
 
 @tool("hub_bot_update", "Change a bot's settings (reports to, name, description, status) with your own rights. "
-      "BotOps acts as the person who asked, citing their message.",
+      "BotOps acts as the person who asked, citing their message. A manager bot whose grant allows settings "
+      "(hub_bot_report_grant) changes only the name and description of a bot that reports straight to it.",
       {"slug": _s("The bot to change"), "on_behalf_of": _s("Id of the person's message to BotOps asking for it (default: the message that started this turn)"),
        "reports_to": _s("A bot slug, or human:<id>"), "display_name": _s("New display name"),
        "description": _s("New description"), "template": _s("Correct the template metadata; use hub_template_list"), "repo": _s("Its GitHub repository: <org>/bot-<slug>"),
@@ -3016,7 +3020,9 @@ def audience(value):
       "record its repository is then built for. They become its owner. Needs their create_bots (on by default) and "
       "stays within their limit of active bots. Safe to repeat for a bot they already own. `hub bot create --template T` "
       "also builds its repository on this computer. Starters build on their assigned Computer; custom templates get "
-      "a BotOps setup_task_id to watch with hub_task_show. Set build false for only the record; BotOps defaults to only the record.",
+      "a BotOps setup_task_id to watch with hub_task_show. Set build false for only the record; BotOps defaults to only the record. "
+      "A manager bot whose grant allows create (hub_bot_report_grant) registers one that reports to it, owned by its "
+      "grantor, only the record, up to its weekly cap; it may then place it and take it live.",
       {"slug": _s("Leave out: Tico picks it from the name. Only to keep a slug already chosen"),
        "name": _s("What people call it; the template's name by default"),
        "description": _s("What it does"), "reports_to": _s("A bot slug, or human:<id>; the requester by default"),
@@ -3027,11 +3033,13 @@ def audience(value):
        "model": _s("`hermes` for a bot run by a Hermes profile (it gets a credential, not a computer); leave out for the Team default")},
       writes=True)
 def bot_register(api, args):
+    kind = kind_of(api.get("me"))
     body = {**({"slug": args["slug"]} if args.get("slug") else {}), "display_name": args.get("name") or "", "description": args.get("description") or "",
             "reports_to": args.get("reports_to") or None, "template": args.get("template") or "",
             **{k: args[k] for k in ("instructions", "title_prefix") if k in args},
-            **({"model": args["model"]} if args.get("model") else {}), **_for_person(api)}
-    body["build"] = args.get("build", bool(body["template"]) and "on_behalf_of" not in body)
+            **({"model": args["model"]} if args.get("model") else {}), **({"on_behalf_of": "turn"} if kind == "botops" else {})}
+    # BotOps and a manager bot register only the record by default.
+    body["build"] = args.get("build", bool(body["template"]) and kind not in ("botops", *MANAGER))
     return api.post("bots/register", body, key=_key(args))
 
 
@@ -3069,6 +3077,37 @@ def bot_mail(api, args):
     if not body:
         return api.get(f"bots/{args['slug']}/mail-settings")
     return api.post(f"bots/{args['slug']}/mail-settings", body, key=_key(args))
+
+
+REPORT_SCOPES = ("routines", "model", "settings", "archive", "create", "instructions")
+
+
+@tool("hub_bot_report_grant", "Show what a manager bot may do to the bots that report straight to it, or set it: a person "
+      "who manages the bot, as themselves (a bot, BotOps and the Assistant are refused). `allow` replaces what it may: "
+      "routines (their daily and weekly updates; their automations it changes without a grant), model (and effort), settings (their name and description), archive "
+      "(and restore), create (register a new bot that reports to it, then place it and take it live), instructions "
+      "(its GitHub token writes each one's own repository, to change and push their instructions); `revoke`, or an "
+      "empty `allow`, ends it. The bot uses the grant only in a run its grantor's own automation or own message started, "
+      "recorded as the grantor's via the manager bot, and creates and archives at most the weekly caps (3 by default).",
+      {"bot": _s("The manager bot"),
+       "allow": {"type": "array", "items": {"type": "string", "enum": list(REPORT_SCOPES)},
+                 "description": "The scopes it may use, replacing what it had"},
+       "create_per_week": {"type": "integer", "minimum": 0, "maximum": 50, "description": "New bots a week, at most"},
+       "archive_per_week": {"type": "integer", "minimum": 0, "maximum": 50, "description": "Archives a week, at most"},
+       "revoke": {"type": "boolean", "description": "End the grant"}},
+      required=("bot",), writes=True)
+def bot_report_grant(api, args):
+    path = f"bots/{args['bot']}/report-grant"
+    caps = {k: args[k] for k in ("create_per_week", "archive_per_week") if args.get(k) is not None}
+    if args.get("revoke") or args.get("allow") == []:
+        return api.post(path, {"scopes": []}, key=_key(args))
+    if args.get("allow") is None and not caps:
+        return api.get(path)
+    # Caps alone keep the scopes it has.
+    scopes = args["allow"] if args.get("allow") is not None else ((api.get(path).get("grant") or {}).get("scopes") or [])
+    if not scopes:
+        raise ValueError("It has no grant yet: name the scopes to allow (" + ", ".join(REPORT_SCOPES) + ")")
+    return api.post(path, {"scopes": list(scopes), **caps}, key=_key(args))
 
 
 @tool("hub_bot_owners", "Add or remove people who own a bot, as the person who asked you (any owner may). The creator "
@@ -3389,7 +3428,7 @@ def bot_go_live(api, args):
 
 @tool("hub_bot_restore", "Bring an archived bot back, as the person who asked you (its owner or an admin): to the status it had "
       "when it was archived, else planned. Its routines are not restored. For a Hermes bot the answer says whether its agent "
-      "credential still works.",
+      "credential still works. A manager bot whose grant allows archive restores a bot that reports straight to it.",
       {"bot": _s("The archived bot's slug")}, required=("bot",), writes=True)
 def bot_restore(api, args):
     return _as_person(api).post(f"bots/{args['bot']}/restore", {}, key=_key(args))
@@ -3793,7 +3832,8 @@ def task_cap_set(api, args):
 
 
 @tool("hub_bot_model", "Show the models a bot may run on, or change its model, as the person who asked you. A change waits for a "
-      "run in progress to end.",
+      "run in progress to end. A manager bot whose grant allows model (hub_bot_report_grant) changes the model of a bot "
+      "that reports straight to it.",
       {"bot": _s("The bot's slug"), "model": _s("A model id or name from the list; leave out to list them"),
        "effort": _s("Reasoning effort that model supports"), "harness": _s("A harness from that model's harnesses list"),
        "on_behalf_of": ON_BEHALF_OF},
@@ -5414,7 +5454,11 @@ def query_search(queries, term):
 # `tools/call` refuses a tool that is not offered to the caller. Rules the server enforces on the routes stay where they are.
 PEOPLE = ("owner", "admin", "member")             # a human, however it connects (a personal token is that human)
 BOTS = ("bot", "botops", "agent")                 # a bot's own runs; `agent` is an external agent run by a bot (a Hermes profile)
-KINDS = PEOPLE + BOTS + ("assistant",)            # the Assistant: a human's private room, which may only propose what matters
+# A bot a person let manage the bots that report to it (backend/report_grants.py): a bot, offered what every bot is
+# (`offers`), plus the tools that change bots, which the server lets it use only on its reports and in its grantor's runs.
+# Not `manager`, which is a bot profile (how it is woken) and grants nothing.
+MANAGER = ("report_manager",)
+KINDS = PEOPLE + BOTS + MANAGER + ("assistant",)  # the Assistant: a human's private room, which may only propose what matters
 NOT_ASSISTANT = PEOPLE + BOTS
 BOTOPS = ("botops",)
 # `_as_person` tools: a human's own rights, or BotOps's as the human who asked it (the server refuses any other bot).
@@ -5433,7 +5477,7 @@ AUDIENCE = {
     **{name: REQUESTER for name in ("hub_repo_list", "hub_repo_update", "hub_bot_repos_get", "hub_bot_repos_set")},
     # Humans use their own rights; BotOps acts through `on_behalf_of`, which the server allows for no other bot.
     "hub_bot_branch": REQUESTER,
-    "hub_bot_update": REQUESTER, "hub_api": REQUESTER, "hub_credential_request": BOTOPS,
+    "hub_api": REQUESTER, "hub_credential_request": BOTOPS,
     # Org changes: the Strategy Bot's owner chat makes one the person asked for, citing their words (`on_behalf_of`).
     **{name: REQUESTER + ("assistant",) for name in ("hub_group_update", "hub_group_delete", "hub_org_reports_to")},
     "hub_credential_set": BOTOPS, "hub_message_redact": BOTOPS, "hub_support_file": BOTOPS,
@@ -5441,19 +5485,22 @@ AUDIENCE = {
     "hub_repo_review": ("bot", "botops"),
     "hub_repo_product_create": ("owner", "bot", "botops"),   # a bot needs Create product repositories (server)
     **{name: REQUESTER for name in ("hub_credential_grant", "hub_credential_revoke", "hub_credential_import", "hub_credential_delete")},
-    **{name: REQUESTER for name in ("hub_bot_create", "hub_bot_restore", "hub_bot_turns_at_once",
-                                    "hub_computer_turns_at_once", "hub_agent_pair_show", "hub_agent_pair_approve",
-                                    "hub_agent_pair_decline", "hub_bot_place", "hub_bot_go_live", "hub_bot_model",
+    **{name: REQUESTER for name in ("hub_bot_turns_at_once", "hub_computer_turns_at_once", "hub_agent_pair_show",
+                                    "hub_agent_pair_approve", "hub_agent_pair_decline",
                                     "hub_bot_keep_tasks_going", "hub_stall_triage", "hub_bot_budget",
                                     "hub_bot_profile", "hub_bot_release", "hub_bot_pause",
                                     "hub_bot_scope",
                                     "hub_bot_resume", "hub_bot_access", "hub_bot_owners", "hub_human_add",
                                     "hub_tool_add", "hub_tool_update", "hub_tool_remove",
                                     "hub_bot_copy", "hub_bot_update_from_original", "hub_bot_suggest_to_original", "hub_skill_copy")},
+    # What a manager bot does to its reports under its grant, besides their automations (which a bot above them changes).
+    **{name: REQUESTER + MANAGER for name in ("hub_bot_create", "hub_bot_restore", "hub_bot_place", "hub_bot_go_live",
+                                              "hub_bot_model", "hub_bot_archive", "hub_bot_update")},
+    "hub_bot_report_grant": PEOPLE + MANAGER,     # people set it; the manager bot reads its own
     **{name: REQUESTER_READ for name in ("hub_credential_list", "hub_health_check")},
     "hub_computer_list": KINDS,
     "hub_health_metrics": REQUESTER,
-    **{name: REQUESTER for name in ("hub_bot_archive", "hub_doc_archive", "hub_file_archive", "hub_meeting_delete", "hub_meeting_granola_status", "hub_meeting_granola_sync",
+    **{name: REQUESTER for name in ("hub_doc_archive", "hub_file_archive", "hub_meeting_delete", "hub_meeting_granola_status", "hub_meeting_granola_sync",
                                    "hub_meeting_pending", "hub_meeting_approve", "hub_meeting_dismiss", "hub_meeting_restore")},
     # The Assistant only.
     "hub_assistant_propose": ("assistant",), "hub_approval_read_back": ("assistant",),
@@ -5509,11 +5556,17 @@ def offered_to(tool_):
     return KINDS
 
 
+def offers(tool_, kind):
+    """Whether a tool is offered to this kind of caller. A manager bot is a bot with more."""
+    offered = offered_to(tool_)
+    return kind in offered or (kind in MANAGER and "bot" in offered)
+
+
 def listing(local=False, kind=None):
     """`tools/list` payload: the public fields of every tool this server may offer this kind of caller (all of them
     when the kind is not known)."""
     return [{"name": t["name"], "description": t["description"], "inputSchema": t["inputSchema"]}
-            for t in TOOLS if (local or not t.get("local")) and (kind is None or kind in offered_to(t))]
+            for t in TOOLS if (local or not t.get("local")) and (kind is None or offers(t, kind))]
 
 
 # The tools Tico 0.2.21 renamed outright (CHANGELOG 0.2.21, Breaking changes). A call by an old name is answered with the new
@@ -5680,7 +5733,7 @@ class Protocol:
         if not isinstance(args, dict):
             return self._error(rid, -32602, "arguments must be an object")
         kind = self.kind()
-        if kind and kind not in offered_to(entry):
+        if kind and not offers(entry, kind):
             return self._tool_error(rid, {"error": "forbidden", "detail": f"{name} is not available to you", "retryable": False})
         properties = entry["inputSchema"].get("properties", {})
         missing = [k for k in entry["inputSchema"].get("required", [])

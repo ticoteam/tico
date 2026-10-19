@@ -840,6 +840,13 @@ def bots(client, args):
                 raise APIError("computer", "Choose one of your computers by its id or unique label")
             fields["runner_id"] = matches[0]["id"]
         return hubtools.bot_branch(client, fields)
+    if args.fn == "bot grant":
+        from clients import hubtools
+        fields = {"bot": args.bot, "revoke": bool(args.revoke), "operation_id": os.environ.get("HUB_OPERATION_ID"),
+                  **{k: getattr(args, k) for k in ("create_per_week", "archive_per_week") if getattr(args, k) is not None}}
+        if args.allow is not None:
+            fields["allow"] = [part.strip() for part in args.allow.split(",") if part.strip()]
+        return hubtools.BY_NAME["hub_bot_report_grant"]["fn"](client, fields)
     if args.fn == "bot update":
         # The server checks the change as the person who sent the cited message (backend/app.py).
         from clients import hubtools

@@ -14,10 +14,15 @@ import re
 def request_task(c, auth, who, title, body):
     """A server-generated BotOps job carries the rights of the human who requested it.
 
-    The origin is written here, never taken from task text or caller-supplied references.
+    The origin is written here, never taken from task text or caller-supplied references. A manager bot acting with its
+    grantor's rights (backend/report_grants.py) hands BotOps nothing: the task would lend the grantor's whole rights to
+    work the bot's words describe.
     """
     from . import rooms
-    from .store import H
+    from .store import H, Problem
+    if who.via == "report_manager":
+        raise Problem("forbidden", "A manager bot does not hand BotOps work with a person's rights: register the bot "
+                      "without building it, and ask the person who granted you to have BotOps build it", 403)
     task = H.task_create(c, who.actor, title, body, H.bot_actor(H.FLEET_MAINTAINER), allow_planned=True,
                          conversation_id=rooms.task_conversation_id(c, auth, H.bot_actor(H.FLEET_MAINTAINER), who.actor))
     if who.role in ("owner", "human") and who.via != "assistant":
@@ -40,17 +45,10 @@ def own_run(c, auth, attempt_id):
     a watcher's task, a stopped job's request, a routine BotOps set itself while it worked for someone, a task someone
     commented on."""
     from .store import H
-    turn = c.execute("SELECT j.message_id FROM attempts a JOIN jobs j ON j.id=a.job_id WHERE a.id=? AND a.bot=?",
-                     (attempt_id, H.FLEET_MAINTAINER)).fetchone() if attempt_id else None
-    msg = H.message(c, turn["message_id"]) if turn and turn["message_id"] else None
-    refs = (msg or {}).get("refs") or {}
-    # A converted routine's task is opened by its automation as BotOps itself (backend/automation_actions.py).
-    if not msg or msg["from_actor"] not in (H.KEEPER, "bot:" + H.FLEET_MAINTAINER):
+    msg = keeper_turn(c, attempt_id, H.FLEET_MAINTAINER)
+    if not msg:
         return False
-    if msg["from_actor"] != H.KEEPER and not refs.get("automation"):
-        return False
-    if any(refs.get(key) for key in OTHERS_WORDS):
-        return False
+    refs = msg.get("refs") or {}
     task_id = H.message_task_id(msg)
     if not task_id:
         return msg["from_actor"] == H.KEEPER and msg["kind"] == "notice" and refs.get("wake") == "update"
@@ -60,12 +58,30 @@ def own_run(c, auth, attempt_id):
     return _owners_routine_task(c, auth, task)
 
 
-def _owners_routine_task(c, auth, task):
-    """A task the keeper opened for one of BotOps' timed routines, whose every word the owner or the product wrote:
-    the routine (created and since changed only by them), the task itself, and anything said on it."""
+def keeper_turn(c, attempt_id, bot):
+    """The product's message that started this run of `bot`, when it carries nobody else's words; else None: the
+    keeper's, or one the bot's own automation sent as the bot itself (backend/automation_actions.py)."""
     from .store import H
-    keeper, botops = H.KEEPER, "bot:" + H.FLEET_MAINTAINER
-    if not task or task["requester"] != keeper or task["owner"] != botops:
+    turn = c.execute("SELECT j.message_id FROM attempts a JOIN jobs j ON j.id=a.job_id WHERE a.id=? AND a.bot=?",
+                     (attempt_id, bot)).fetchone() if attempt_id else None
+    msg = H.message(c, turn["message_id"]) if turn and turn["message_id"] else None
+    refs = (msg or {}).get("refs") or {}
+    if not msg or msg["from_actor"] not in (H.KEEPER, "bot:" + bot):
+        return None
+    if msg["from_actor"] != H.KEEPER and not refs.get("automation"):
+        return None
+    return None if any(refs.get(key) for key in OTHERS_WORDS) else msg
+
+
+def _owners_routine_task(c, auth, task, bot=None, writer=None):
+    """A task the keeper opened for one of `bot`'s timed routines (BotOps' when no bot is named), whose every word the
+    product or the routine's writer wrote: the routine (created and since changed only by them), the task itself, and
+    anything said on it. `writer(actor, via)` says whose edit keeps it so (`_owners_routine`); a manager bot's grant
+    names its grantor (backend/report_grants.py)."""
+    from .store import H
+    bot = bot or H.FLEET_MAINTAINER
+    keeper = H.KEEPER
+    if not task or task["requester"] != keeper or task["owner"] != "bot:" + bot:
         return False
     made = c.execute("SELECT actor FROM events WHERE action='task.create' AND target=? ORDER BY ts,id LIMIT 1",
                      (task["id"],)).fetchone()
@@ -74,24 +90,29 @@ def _owners_routine_task(c, auth, task):
     # An event routine's task carries the event's content (a meeting's notes, say), so only timed and manual runs.
     schedule = c.execute("SELECT o.schedule_id FROM schedule_occurrences o JOIN schedules s ON s.id=o.schedule_id "
                          "WHERE o.task_id=? AND o.outcome<>'event' AND s.bot=? LIMIT 1",
-                         (task["id"], H.FLEET_MAINTAINER)).fetchone()
-    if not schedule or not _owners_routine(c, auth, schedule["schedule_id"]):
+                         (task["id"], bot)).fetchone()
+    if not schedule or not _owners_routine(c, auth, schedule["schedule_id"], writer):
         return False
-    return _untouched(c, task, keeper)
+    return _untouched(c, task, keeper, bot)
 
 
-def _owners_automation_task(c, auth, task, refs):
-    """A task one of BotOps' timed automations opened, whose every version and change only the owner (or the product)
-    wrote, not through the Assistant or a token. A converted routine counts only when the routine itself was the
-    owner's (`_owners_routine`): one from a bot.yaml, or one BotOps set while it worked for someone, never does."""
+def _owners_automation_task(c, auth, task, refs, bot=None, writer=None):
+    """A task one of `bot`'s timed automations (BotOps' when no bot is named) opened, whose every version and change
+    only the writer (or the product) wrote: for BotOps the owner, not through the Assistant or a token; a manager bot's
+    grant names its grantor (backend/report_grants.py). A converted routine counts only when the routine itself was the
+    writer's (`_owners_routine`): one from a bot.yaml, or one BotOps set while it worked for someone, never does."""
     from .store import H
-    botops = "bot:" + H.FLEET_MAINTAINER
+    bot = bot or H.FLEET_MAINTAINER
+    if writer is None:
+        def writer(actor, via):
+            return via != "assistant" and not str(via or "").startswith("token:") and _is_owner(c, auth, actor)
+    owner = "bot:" + bot
     automation_id = str(refs.get("automation") or "")
-    if not task or task["owner"] != botops or task["requester"] not in (H.KEEPER, botops):
+    if not task or task["owner"] != owner or task["requester"] not in (H.KEEPER, owner):
         return False
     row = c.execute("SELECT owner, flow_json, trigger_type FROM automations WHERE id=? AND deleted_at IS NULL",
                     (automation_id,)).fetchone()
-    if not row or row["owner"] != botops or row["trigger_type"] != "schedule" \
+    if not row or row["owner"] != owner or row["trigger_type"] != "schedule" \
             or refs.get("trigger_source") != "automation:" + automation_id:
         return False
     # The run that opened this task is that automation's own, from its schedule or a Run now, not a chained event.
@@ -102,21 +123,27 @@ def _owners_automation_task(c, auth, task, refs):
     source = (H._json(row["flow_json"], {}) or {}).get("source")
     if isinstance(source, dict) and source.get("kind") == "routine":
         found = c.execute("SELECT bot FROM schedules WHERE id=?", (source.get("id"),)).fetchone()
-        if not found or found["bot"] != H.FLEET_MAINTAINER or not _owners_routine(c, auth, source["id"]):
+        if not found or found["bot"] != bot or not _owners_routine(c, auth, source["id"], writer):
             return False
-    actors = {r[0] for r in c.execute("SELECT actor FROM automation_versions WHERE automation_id=?", (automation_id,))}
-    for r in c.execute("SELECT actor, via FROM audit_log WHERE object=?", ("automation:" + automation_id,)):
-        if r["via"] == "assistant" or str(r["via"] or "").startswith("token:"):
-            return False
-        actors.add(r["actor"])
-    if not actors or any(a != H.KEEPER and not _is_owner(c, auth, a) for a in actors):
+    versions = [r[0] for r in c.execute("SELECT actor FROM automation_versions WHERE automation_id=?", (automation_id,))]
+    changes = [(r["actor"], r["via"]) for r in c.execute("SELECT actor, via FROM audit_log WHERE object=?",
+                                                         ("automation:" + automation_id,))]
+    if not versions and not changes:
         return False
-    return _untouched(c, task, task["requester"])
+    if any(a != H.KEEPER and not writer(a, None) for a in versions):
+        return False
+    if any((a != H.KEEPER or via) and not writer(a, via) for a, via in changes):
+        return False
+    return _untouched(c, task, task["requester"], bot)
 
 
-def _owners_routine(c, auth, schedule_id):
-    """A routine created through the API and since changed only by the owner (or the product)."""
+def _owners_routine(c, auth, schedule_id, writer=None):
+    """A routine created through the API and since changed only by the writer (or the product): `writer(actor, via)`,
+    the owner not through the Assistant when none is given."""
     from .store import H
+    if writer is None:
+        def writer(actor, via):
+            return via != "assistant" and _is_owner(c, auth, actor)
     writers = c.execute("SELECT action,actor,detail_json FROM events WHERE target=? "
                         "AND action IN ('routine.created','routine.updated')", (schedule_id,)).fetchall()
     if not any(w["action"] == "routine.created" for w in writers):
@@ -124,20 +151,21 @@ def _owners_routine(c, auth, schedule_id):
     for w in writers:
         if w["actor"] == H.KEEPER:
             continue
-        if H._json(w["detail_json"], {}).get("via") == "assistant" or not _is_owner(c, auth, w["actor"]):
+        if not writer(w["actor"], (H._json(w["detail_json"], {}) or {}).get("via")):
             return False
     return True
 
 
-def _untouched(c, task, writer):
-    """Nobody but `writer` (who opened it) and BotOps changed the task's words or said anything on it."""
+def _untouched(c, task, writer, bot=None):
+    """Nobody but `writer` (who opened it) and the bot it is for (BotOps when none is named) changed the task's words or
+    said anything on it."""
     from .store import H
-    botops = "bot:" + H.FLEET_MAINTAINER
+    owner = "bot:" + (bot or H.FLEET_MAINTAINER)
     if c.execute("SELECT 1 FROM task_events WHERE task_id=? AND field IN ('title','body') AND actor NOT IN (?,?) LIMIT 1",
                  (task["id"], writer, H.KEEPER)).fetchone():
         return False
     said = c.execute("SELECT 1 FROM messages m WHERE " + H._task_ref_sql("$.task") + "=? AND m.from_actor NOT IN (?,?,?) "
-                     "LIMIT 1", (task["id"], H.KEEPER, botops, writer)).fetchone()
+                     "LIMIT 1", (task["id"], H.KEEPER, owner, writer)).fetchone()
     return not said
 
 

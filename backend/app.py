@@ -33,7 +33,7 @@ from . import ask_ingest, ceo_bot, invites, owner_link
 from . import login_holds
 from . import step_age
 from . import bot_stops, turn_budgets, proposals, task_caps
-from . import auto_tasks, check_models, profiles, run_triggers, task_models, team_rules, update_feeds, topic_change, usage_limits, bot_to_bot, wake_presets, visuals, wake_rules, quiet_work, milestone_waits
+from . import auto_tasks, check_models, profiles, report_grants, run_triggers, task_models, team_rules, update_feeds, topic_change, usage_limits, bot_to_bot, wake_presets, visuals, wake_rules, quiet_work, milestone_waits
 from . import task_privacy as privacy
 from . import task_relations as TR
 from . import task_roles as TRo
@@ -875,7 +875,9 @@ def create_app(settings=None):
         """The bot itself, or a person who manages it (its owners, its operator, an Admin, whoever it reports up
         to). A routine is the bot's standing work: the people who direct the bot set it, and the bot may set up
         its own. BotOps does it as the person whose chat message started its turn, checked with their rights;
-        with no such person (a bot built during setup) only for a bot still being built from its template."""
+        with no such person (a bot built during setup) only for a bot still being built from its template. A manager
+        bot does it for a bot that reports to it under its report grant (`Auth.report_manager`): the answer is then
+        the grantor's identity, which the write is recorded as; None means the caller's own."""
         auth.domain(who)
         row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
         if not H.bot(c, bot):
@@ -897,6 +899,9 @@ def create_app(settings=None):
             raise Problem("forbidden", "BotOps sets routines only as the person who asked it, or on a bot it is building", 403)
         if auth.bot_manager(c, who, bot) or auth.operator(c, who, bot):
             return
+        acting = auth.report_manager(c, who, bot, "routines")
+        if acting is not None:
+            return acting
         raise Problem("forbidden", "You cannot change this bot's routines", 403)
 
     @app.middleware("http")
@@ -2075,7 +2080,7 @@ def create_app(settings=None):
         who = request.state.identity
         return {"actor": who.actor, "role": who.role, "email": who.email,
                 "runner_id": who.runner_id, "attempt_id": who.attempt_id, "agent": who.agent,
-                "kind": caller_kind(auth, who)}
+                "kind": caller_kind(auth, who, store)}
 
     # A person's own API tokens (backend/personal_tokens.py). Managed only from a browser
     # sign-in: a token is that person everywhere else, but it cannot mint or revoke tokens.
@@ -4687,7 +4692,10 @@ def create_app(settings=None):
     def archive_bot(request: Request, bot: str, body: M.BotArchive):
         who = request.state.identity
         def work(c):
-            acting = delegated_identity(c, who, body.on_behalf_of) if body.on_behalf_of else who
+            acting = (delegated_identity(c, who, body.on_behalf_of) if body.on_behalf_of
+                      else auth.report_manager(c, who, bot, "archive") or who)
+            if acting.via == report_grants.VIA:
+                report_grants.check_cap(c, report_grants.active(c, H.actor_id(who.actor)), "archive")
             result = settings_admin.archive(c, acting, bot, body)
             rooms.archive_shared_room(c, acting.actor, bot)
             if acting is not who:
@@ -4698,12 +4706,14 @@ def create_app(settings=None):
 
     @app.post("/api/v2/bots/{bot}/restore")
     def restore_bot(request: Request, bot: str, body: M.Empty):
-        """Bring an archived bot back: the owner, an admin or the bot's owner, to the status it had, else planned."""
+        """Bring an archived bot back: the owner, an admin or the bot's owner, to the status it had, else planned. A
+        manager bot brings back one of its reports under its grant's `archive` scope."""
         who = request.state.identity
         def work(c):
-            result = settings_admin.restore(c, who, bot)
+            acting = auth.report_manager(c, who, bot, "archive") or who
+            result = settings_admin.restore(c, acting, bot)
             if rooms.thread_mode(c, bot) == rooms.SHARED:
-                rooms.sync_shared_room(c, auth, bot, actor=who.actor, create=True)
+                rooms.sync_shared_room(c, auth, bot, actor=acting.actor, create=True)
             return result
         return mutate(request, body, work)
 
@@ -5292,7 +5302,13 @@ def create_app(settings=None):
     def update_bot(request: Request, bot: str, body: M.BotDefinitionUpdate):
         who = request.state.identity
         def work(c):
-            acting = delegated_identity(c, who, body.on_behalf_of) if body.on_behalf_of else who
+            acting = (delegated_identity(c, who, body.on_behalf_of) if body.on_behalf_of
+                      else auth.report_manager(c, who, bot, "settings") or who)
+            changed = body.model_fields_set - {"expected_revision", "on_behalf_of"}
+            if acting.via == report_grants.VIA and changed - report_grants.SETTINGS_FIELDS:
+                raise Problem("forbidden", "A manager bot changes only a report's name and description; "
+                              + ", ".join(sorted(changed - report_grants.SETTINGS_FIELDS))
+                              + " is for the people who manage it", 403)
             result = settings_admin.update_bot(c, acting, bot, body)
             if acting is not who:
                 H.event(c, who.actor, "bot.definition_delegated", bot,
@@ -5839,6 +5855,13 @@ def create_app(settings=None):
                 return propose_card(c, who, "POST", "/api/v2/bots/" + bot + "/assignment",
                                     {"runner_id": runner["id"], "expected_generation": generation},
                                     placement_summary(c, bot, runner["id"]))
+            if who.via == report_grants.VIA and closed_computer(c, who, bot, runner["id"]):
+                # What BotOps puts to the admin as a card needs their own click; a manager bot has no one to ask.
+                refusal = Problem("computer_closed", "That computer does not take members' bots; placing this bot "
+                                  "there is for the admin who granted you, in their own click", 409)
+                if wanted:
+                    raise refusal
+                continue
             c.execute("SAVEPOINT place_now")
             try:
                 execution.assign(c, who, bot, M.Assignment(runner_id=runner["id"], expected_generation=generation))
@@ -5931,7 +5954,9 @@ def create_app(settings=None):
     def place_bot(request: Request, bot: str, body: M.BotPlace):
         who = request.state.identity
         history = history_on_github(bot)
-        return mutate(request, body, lambda c: place_now(c, who, bot, body.computer, history))
+        # A manager bot places a report it registered under its grant's `create` scope, as its grantor.
+        return mutate(request, body, lambda c: place_now(c, auth.report_manager(c, who, bot, "create") or who, bot,
+                                                         body.computer, history))
 
     GO_LIVE_PENDING = pending_go_lives.PREFIX
 
@@ -5948,7 +5973,9 @@ def create_app(settings=None):
                 status="active", expected_revision=settings_admin._config(c, bot)["revision"]))
         started = False
         config = c.execute("SELECT onboarding_state FROM bot_config WHERE bot=?", (bot,)).fetchone()
-        if setup and config and is_parked(config["onboarding_state"]) and who.role in ("owner", "human"):
+        # Its setup is a chat with the person; a manager bot's grantor is not in that run, so it starts none for them.
+        if (setup and config and is_parked(config["onboarding_state"]) and who.role in ("owner", "human")
+                and who.via != report_grants.VIA):
             send(c, who, M.MessageCreate(to="bot:" + bot, text="Let's set you up."))
             started = True
         # Going live turns its first routine on too: nobody approves it separately.
@@ -6065,12 +6092,14 @@ def create_app(settings=None):
         """Everything between "built" and "working": a computer, active, and its setup started with the person.
         Each step is the same one the app's own buttons take, checked with the caller's rights. A bot whose
         computer does not have its repository yet keeps its placement and finishes when the computer reports it
-        (202, state `waiting_for_repository`)."""
-        who = request.state.identity
+        (202, state `waiting_for_repository`). A manager bot takes live a report it registered under its grant's
+        `create` scope, as its grantor."""
+        caller = request.state.identity
         github, missing = repository_on_github(bot)
         history = history_on_github(bot)
 
         def work(c):
+            who = auth.report_manager(c, caller, bot, "create") or caller
             # An external agent (a Hermes profile) has a credential, not a computer.
             placed = ({"computer": None, "placed": False} if agents.external_harness(c, bot)
                       else place_now(c, who, bot, body.computer, history))
@@ -6286,7 +6315,8 @@ def create_app(settings=None):
             if not H.bot(c, bot):
                 raise Problem("not_found", "Bot not found", 404)
             auth.require_see(c, who, bot)
-            return settings_admin.access(c, who, bot)
+            # The read a manager bot's tools make first (its revision), for a report under any scope of its grant.
+            return settings_admin.access(c, auth.report_manager(c, who, bot) or who, bot)
 
     @app.post("/api/v2/bots/{bot}/access")     # the same write for the tools, whose client only posts
     @app.put("/api/v2/bots/{bot}/access")
@@ -6301,6 +6331,33 @@ def create_app(settings=None):
             return settings_admin.set_access(c, who, bot, body)
         return mutate(request, body, work)
 
+    @app.get("/api/v2/bots/{bot}/report-grant")
+    def report_grant_read(request: Request, bot: str):
+        """What a manager bot may do to the bots that report straight to it (backend/report_grants.py): for anyone
+        who may read the bot, the bot itself included."""
+        who = request.state.identity
+        auth.domain(who)
+        with store.read() as c:
+            if not H.bot(c, bot):
+                raise Problem("not_found", "Bot not found", 404)
+            auth.require_read(c, who, bot)
+            return report_grants.view(c, auth, who, bot)
+
+    @app.post("/api/v2/bots/{bot}/report-grant")     # the same write for the tools, whose client only posts
+    @app.put("/api/v2/bots/{bot}/report-grant")
+    def report_grant_write(request: Request, bot: str, body: M.BotReportGrant):
+        """Let a manager bot manage its reports, change what it may, or (no scopes) end that. A person who manages the
+        bot, as themselves: never a bot, BotOps or the Assistant for them. Ending it is also its grantor's, and any
+        admin's."""
+        who = request.state.identity
+        def work(c):
+            auth.domain(who)
+            if not H.bot(c, bot):
+                raise Problem("not_found", "Bot not found", 404)
+            auth.require_see(c, who, bot)
+            return report_grants.save(c, auth, who, bot, body.scopes, body.create_per_week, body.archive_per_week)
+        return mutate(request, body, work)
+
     @app.post("/api/v2/bots/register")
     def bot_register(request: Request, body: M.BotRegister):
         """Register a bot with the server (planned), as the person asking: the record BotOps then builds the
@@ -6309,16 +6366,36 @@ def create_app(settings=None):
         caller = request.state.identity
         def work(c):
             auth.domain(caller)
-            who = delegated_identity(c, caller, body.on_behalf_of) if body.on_behalf_of else caller
+            asked = body
+            # A manager bot registers a new report under its grant's `create` scope, as its grantor (who owns it and
+            # whose limit it counts toward); "turn", which `hub bot create` sends, names nobody else.
+            manager = (auth.report_manager(c, caller, None, "create")
+                       if caller.role == "bot" and body.on_behalf_of in (None, "turn", "default") else None)
+            if manager is not None:
+                from .message_bots import TEMPLATES as MESSAGE_TEMPLATES
+                slug = H.actor_id(caller.actor)
+                if body.reports_to not in (None, slug, caller.actor):
+                    raise Problem("forbidden", "A bot you create under your grant reports to you", 403)
+                if body.build or body.template in MESSAGE_TEMPLATES:
+                    raise Problem("forbidden", "A manager bot registers a bot without building it, and never a message "
+                                  "bot (it reads a person's mail); ask the person who granted you", 403)
+                existing = H.bot(c, body.slug) if body.slug else None
+                if existing and (existing["state"] == "archived"
+                                 or settings_admin._config(c, body.slug)["reports_to"] != slug):
+                    raise Problem("duplicate", "That bot slug already exists", 409)
+                if not existing:
+                    report_grants.check_cap(c, report_grants.active(c, slug), "create")
+                asked = body.model_copy(update={"reports_to": slug, "on_behalf_of": None})
+            who = manager or (delegated_identity(c, caller, body.on_behalf_of) if body.on_behalf_of else caller)
             if who.role not in ("owner", "human"):
                 raise Problem("forbidden", "Only people register bots", 403)
-            created = settings_admin.register(c, who, body)
-            if body.build and body.template:
+            created = settings_admin.register(c, who, asked)
+            if asked.build and asked.template:
                 current = onboarding._declared(c, created["slug"])
-                if not created["created"] and current.get("template") != body.template:
+                if not created["created"] and current.get("template") != asked.template:
                     raise Problem("template", "Change the bot's template in its definition before building it", 409)
-                created.update(onboarding.attach_template(c, who, created["slug"], body.template, body.instructions,
-                                                          queue_build=True, title_prefix=body.title_prefix))
+                created.update(onboarding.attach_template(c, who, created["slug"], asked.template, asked.instructions,
+                                                          queue_build=True, title_prefix=asked.title_prefix))
             return created
         return mutate(request, body, work)
 
@@ -6383,10 +6460,12 @@ def create_app(settings=None):
 
     @app.post("/api/v2/bots/{bot}/model")
     def model(request: Request, bot: str, body: M.BotModel):
-        who = request.state.identity
+        caller = request.state.identity
         def work(c):
             from . import ceo_acts
-            ceo_acts.gate(c, who.actor, "cost", f"change {bot}'s model to {body.model}")     # the owner's at every level
+            ceo_acts.gate(c, caller.actor, "cost", f"change {bot}'s model to {body.model}")     # the owner's at every level
+            # A manager bot changes a report's model under its grant's `model` scope, as its grantor.
+            who = auth.report_manager(c, caller, bot, "model") or caller
             settings_admin._manager(c, who, bot)
             from .shared_bots import refuse_copy
             refuse_copy(c, bot)

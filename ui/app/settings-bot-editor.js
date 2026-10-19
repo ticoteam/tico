@@ -189,6 +189,7 @@ function settingsEditBot(slug = '', inline = false) {
         <label class="bot-editor-wide">Registered computer<select name="runner_id"><option value="">Assign later</option>${machineOptions}</select><small data-computer-note></small></label>
         <p class="bot-editor-wide muted">Everyone can use it. Change that under Access once it is added.</p>`}
         ${editing && !e.agent ? '<fieldset class="bot-editor-wide brepo" data-bot-repos hidden></fieldset>' : ''}
+        ${editing ? '<fieldset class="bot-editor-wide brepo" data-bot-report-grant hidden></fieldset>' : ''}
         <details class="bot-editor-wide" data-bot-advanced><summary>Advanced</summary><div class="bot-editor-grid">
           <label>Slug<input name="slug" type="text" autocomplete="off" spellcheck="false" value="${esc(slug)}" placeholder="release-captain" pattern="[a-z0-9]+(?:-[a-z0-9]+)*" maxlength="80" ${editing ? 'readonly' : ''}><small>${editing ? 'Its id in commands and paths.' : 'Picked from the name. Tico adds -2 when it is taken.'}</small></label>
           <label>Repository<input name="repo" type="text" autocomplete="off" spellcheck="false" value="${esc(e?.repo || (slug ? `bot-${slug}` : ''))}" placeholder="bot-release-captain" maxlength="200" ${editing ? 'required' : ''}></label>
@@ -297,6 +298,7 @@ function settingsEditBot(slug = '', inline = false) {
     rows.addEventListener('input', () => paintPending());
   }
   void botReposMount(dialog.querySelector('[data-bot-repos]'), slug);   // ui/app/settings-repositories.js
+  void settingsReportGrantMount(dialog.querySelector('[data-bot-report-grant]'), slug);
   const remove = dialog.querySelector('[data-bot-remove]');
   if (remove) remove.onclick = async () => {
     // Archive (#535): off the chart, no automations or new work; open tasks go to the picked heir. It asks first.
@@ -451,6 +453,52 @@ function settingsEditBot(slug = '', inline = false) {
     dialog.onclose = () => { if (!dialog.open) dialog.innerHTML = ''; };
     dialog.showModal();
   }
+}
+// Manages its reports (backend/report_grants.py): what a person let this bot do to the bots that report straight to
+// it, which it uses only in runs its grantor's own automation or message starts. Shown for a bot with reports, or one that
+// still holds a grant; the server says who may grant (a person who manages it, as themselves) and who may revoke.
+const REPORT_GRANT_SCOPES = [['routines', 'Daily and weekly updates'], ['model', 'Model and effort'], ['settings', 'Name and description'],
+  ['archive', 'Archive and restore'], ['create', 'Create bots that report to it'],
+  ['instructions', 'Instructions (write their repositories)']];
+async function settingsReportGrantMount(host, slug) {
+  if (!host) return;
+  let view;
+  try { view = await get(`/v2/bots/${encodeURIComponent(slug)}/report-grant`); } catch { return; }   // an older server, or no Read
+  // Nothing to show to someone who may not grant one when there is none.
+  if (!host.isConnected || !view.grant && !(view.can_grant && (view.reports || []).length)) return;
+  const paint = () => {
+    const g = view.grant, on = new Set(g?.scopes || []), edit = !!view.can_grant;
+    const reports = (view.reports || []).map(settingsBotName).join(', ');
+    const who = g ? `${esc(actorLabel(g.granted_by))} let it manage ${reports ? esc(reports) : 'its reports'} on ${esc(fmt(g.created))}.`
+      : `It does not manage ${reports ? esc(reports) : 'its reports'}.`;
+    const cap = (key, label, used) => `<label>${label}<input type="number" inputmode="numeric" min="0" max="50" data-rgrant-cap="${key}" value="${esc(String(g?.[key] ?? 3))}"${edit ? '' : ' disabled'}>${g ? `<span class="muted">${used} in the last 7 days</span>` : ''}</label>`;
+    host.innerHTML = `<legend class="brepo-h">Manages its reports</legend><span class="muted brepo-status" data-rgrant-status role="status"></span>
+      <p class="muted">${who} It acts with that person's rights, only in runs their own automation or message starts.${view.rule_on === false ? ' The team rule <strong>Manager bots manage their reports</strong> is off, so it uses none of this.' : ''}</p>
+      ${REPORT_GRANT_SCOPES.map(([key, label]) => `<label class="repo-name"><input type="checkbox" data-rgrant-scope="${key}"${on.has(key) ? ' checked' : ''}${edit ? '' : ' disabled'}>${label}</label>`).join('')}
+      <div class="rgrant-caps">${cap('create_per_week', 'New bots a week', g?.used?.create ?? 0)}${cap('archive_per_week', 'Archives a week', g?.used?.archive ?? 0)}</div>
+      ${edit || view.can_revoke ? `<div class="rgrant-actions">${edit ? `<button class="ghost" type="button" data-rgrant-save>${g ? 'Save' : 'Grant'}</button>` : ''}${view.can_revoke ? '<button class="ghost danger" type="button" data-rgrant-revoke>Revoke</button>' : ''}</div>` : ''}`;
+    host.hidden = false;
+  };
+  const save = async (body, done) => {
+    const status = host.querySelector('[data-rgrant-status]');
+    host.querySelectorAll('button').forEach(button => button.disabled = true);
+    try {
+      view = await put(`/v2/bots/${encodeURIComponent(slug)}/report-grant`, body);
+      paint(); toast(done);
+    } catch (error) {
+      if (status) status.innerHTML = `<span class="err">${esc(error.message)}</span>`;
+      host.querySelectorAll('button').forEach(button => button.disabled = false);
+    }
+  };
+  host.onclick = event => {
+    if (event.target.closest('[data-rgrant-revoke]')) return void save({scopes: []}, `${settingsBotName(slug)} no longer manages its reports`);
+    if (!event.target.closest('[data-rgrant-save]')) return;
+    const scopes = [...host.querySelectorAll('[data-rgrant-scope]:checked')].map(box => box.dataset.rgrantScope);
+    const caps = Object.fromEntries([...host.querySelectorAll('[data-rgrant-cap]')].map(box => [box.dataset.rgrantCap, Math.min(50, Math.max(0, Math.round(Number(box.value)) || 0))]));
+    if (!scopes.length && !view.grant) { host.querySelector('[data-rgrant-status]').textContent = 'Tick what it may do first'; return; }
+    void save({scopes, ...caps}, scopes.length ? 'Saved' : `${settingsBotName(slug)} no longer manages its reports`);
+  };
+  paint();
 }
 // A Model or Fallback picked in the editor but not Applied (TK-BLOG3EDS): Save applies it, or says why it can't,
 // rather than closing over it. Null when the picker shows what the bot has; `ready` when Apply would take it.

@@ -1356,13 +1356,15 @@ def _one(conn, sql, args=()):
 
 
 # ----------------------------------------------------------------------------- audit
-# Who is really acting when a person's own identity is used by the Assistant ("assistant"): set for
+# Who is really acting when a person's own identity is used by the Assistant ("assistant"), BotOps ("botops") or a
+# manager bot under its report grant ("report_manager", backend/report_grants.py): set for
 # the length of one request (backend/app.py request_guard), so every event and task-history row the
 # request writes says "via assistant" without each write knowing about it.
 VIA = contextvars.ContextVar("hub_via", default="")
 # When BotOps acts with a person's rights: whose, which request lent them (a message or task id), and whether the person
 # asked in this run (`live`) or BotOps cites their open task in a later one (`follow_through`). Every event then says so.
-# The Assistant sets it too, for a task action the person asked for in their own Assistant chat (`asked`, the message cited).
+# The Assistant sets it too, for a task action the person asked for in their own Assistant chat (`asked`, the message cited),
+# and a manager bot acting on its reports with its grantor's rights (`report_manager`: whose, which grant, which bot, which run).
 DELEGATION = contextvars.ContextVar("hub_delegation", default=None)
 
 PRIVATE_WRITE = contextvars.ContextVar("hub_private_write", default=False)
@@ -1416,7 +1418,7 @@ def event(conn, actor, action, target="", detail=None):
         detail = {**(detail or {}), "attempt_id": RUN.get()}
     if VIA.get() and (detail is None or isinstance(detail, dict)):
         detail = {**(detail or {}), "via": VIA.get()}
-        if VIA.get() in ("botops", "assistant") and DELEGATION.get():
+        if VIA.get() in ("botops", "assistant", "report_manager") and DELEGATION.get():
             detail["delegation"] = DELEGATION.get()
     row = {"id": new_id(), "ts": now(), "actor": str(actor), "action": action,
            "target": str(target or ""), "detail_json": _dump(detail)}

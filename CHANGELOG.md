@@ -8,6 +8,9 @@ below word for word as its notes.
 
 ## [Unreleased]
 
+### Added
+- **Let a manager bot manage the bots that report to it.** A person who manages a bot can let it change its direct reports, each scope ticked separately: their daily and weekly updates, model and effort, name and description, archive and restore, create new bots that report to it (then place them and take them live), and instructions (its GitHub token also writes each report's own repository). Creating and archiving have weekly caps, 3 by default. The bot acts with that person's rights, never more, and only in a run their own timed automation or own message started; everything is recorded as theirs, via the manager bot. Grant and revoke in the bot editor (**Manages its reports**), with `hub bot grant`, the `hub_bot_report_grant` tool or `PUT /api/v2/bots/{bot}/report-grant`. The owner's team rule **Manager bots manage their reports when a person lets them** turns every grant off ([Permissions](docs/permissions.md#a-manager-bot-that-manages-its-reports)).
+
 ## [0.4.15] - 2026-10-27
 
 ### Fixed

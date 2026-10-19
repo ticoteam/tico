@@ -612,6 +612,27 @@ class Auth:
         from . import botops_act
         return botops_act.own_run(c, self, who.attempt_id)
 
+    def report_manager(self, c, who, target, scope=None):
+        """The grantor's identity when a manager bot may act on `target` under the report grant a person gave it
+        (`report_grants.lent`), else None. `target` is a bot's slug, or None for one it is about to create; `scope`
+        is one of report_grants.SCOPES, or None for any (a read). It never widens `bot_manager`: the route's own check
+        then runs with the grantor's rights. The caller must be a bot in its own run, not acting for anyone. What it
+        writes from here is the grantor's, via `report_manager`, its events naming the bot, the grant and the run."""
+        if (who.role != "bot" or who.via or who.agent or not who.attempt_id
+                or not str(who.actor).startswith("bot:")):
+            return None
+        from . import report_grants
+        manager = H.actor_id(who.actor)
+        found = report_grants.lent(c, self, manager, who.attempt_id, scope, (target,))
+        if not found:
+            return None
+        grantor, grant, run, _ = found
+        H.VIA.set(report_grants.VIA)
+        H.DELEGATION.set({"for": grantor.actor, "grant": grant["id"], "bot": manager, "run": run})
+        # Keep the bot's own credential so writes revalidate its lease, as BotOps' lent identity does.
+        return replace(grantor, via=report_grants.VIA, task_actor=who.actor, runner_id=who.runner_id,
+                       attempt_id=who.attempt_id, agent=who.agent)
+
     @staticmethod
     def member_bot_row(c, slug):
         """The same as `member_bot`, from the database alone (Health has no Auth): the creator's role."""

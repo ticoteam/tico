@@ -11,7 +11,7 @@ const PEOPLE_ROLE = {owner: 'Owner', admin: 'Admin', member: 'Member'};
 const PEOPLE_SOURCE = {google: 'Google Workspace', entra: 'Microsoft Entra ID', scim: 'SCIM'};
 // Team rules the owner turns off to tighten (backend/team_rules.py): all on by default.
 const PEOPLE_RULES = [['assistant_direct', 'Assistant acts without asking'], ['assistant_approvals', 'People may let their Assistant decide their approvals'], ['botops_direct', 'BotOps changes providers and limits without asking'],
-  ['botops_manages_bots', 'BotOps manages every bot'],
+  ['botops_manages_bots', 'BotOps manages every bot'], ['managers_manage_reports', 'Manager bots manage their reports when a person lets them'],
   ['admin_credentials', 'Admins store credentials'], ['members_store_credentials', 'Members store credentials for their bots'], ['admin_sql', 'Admins see SQL'], ['member_tokens', 'Members make personal tokens'],
   ['bots_go_ahead', 'Bots go ahead on their recommendation when nobody answers'], ['support_access', 'Owners and admins may let Tico support in']];
 let PEOPLE_MODE = '';        // 'manual' or 'sync' picked on this page; '' follows the saved directory source

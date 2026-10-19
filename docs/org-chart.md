@@ -60,6 +60,13 @@ manager's reports shown in a group keep that order there, and move up and down a
 Groups and reporting are two things. `reports_to` says who a human or bot works for; a group says who is on which sub-team. Changing
 one never changes the other.
 
+A bot with bots reporting to it is their **manager bot**: it reads their work, and orders them. It changes them only when a
+person who manages it lets it, in the bot editor (**Manages its reports**) or with `hub bot grant`: their daily and weekly updates, model, name
+and description, archiving, new bots that report to it, and their instructions (its GitHub token writes their repositories),
+as that person, in runs only their own automation or message starts
+([Permissions](permissions.md#a-manager-bot-that-manages-its-reports)). Only its direct reports: a bot two levels down is
+its report's to manage.
+
 Updates follow the chart: the bots lowest on it report first, and each manager, bot or person, writes its update from its
 direct reports' ([Updates](using-tico.md#updates)).
 

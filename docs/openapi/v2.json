@@ -2968,6 +2968,118 @@
         ]
       }
     },
+    "/api/v2/bots/{bot}/report-grant": {
+      "get": {
+        "summary": "What a manager bot may do to the bots that report straight to it, and who granted it (Read on the bot)",
+        "operationId": "getBotReportGrant",
+        "parameters": [
+          {
+            "name": "bot",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Bot"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotReportGrantView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Bots"
+        ]
+      },
+      "put": {
+        "summary": "Let a manager bot manage its reports (scopes routines, model, settings, archive, create, instructions; weekly caps on create and archive), or end it with no scopes: a person who manages the bot, as themselves; ending it also its grantor or an admin",
+        "operationId": "setBotReportGrant",
+        "parameters": [
+          {
+            "name": "bot",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Bot"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BotReportGrant"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotReportGrantView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Bots"
+        ]
+      }
+    },
     "/api/v2/bots/{bot}/repositories": {
       "get": {
         "summary": "Bot repository access",
@@ -25927,6 +26039,154 @@
         "required": [
           "bot",
           "released"
+        ],
+        "additionalProperties": true
+      },
+      "BotReportGrant": {
+        "properties": {
+          "scopes": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "routines",
+                "model",
+                "settings",
+                "archive",
+                "create",
+                "instructions"
+              ]
+            },
+            "type": "array",
+            "maxItems": 6,
+            "title": "Scopes"
+          },
+          "create_per_week": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 50.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Create Per Week"
+          },
+          "archive_per_week": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 50.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Archive Per Week"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "BotReportGrant",
+        "description": "What a manager bot may do to the bots that report straight to it (backend/report_grants.py SCOPES), and how many\nit may create and archive a week; no scopes ends the grant."
+      },
+      "BotReportGrantView": {
+        "type": "object",
+        "properties": {
+          "bot": {
+            "type": "string"
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "grant": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "scopes": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "granted_by": {
+                    "type": "string"
+                  },
+                  "created": {
+                    "type": "string"
+                  },
+                  "create_per_week": {
+                    "type": "integer"
+                  },
+                  "archive_per_week": {
+                    "type": "integer"
+                  },
+                  "used": {
+                    "type": "object",
+                    "properties": {
+                      "create": {
+                        "type": "integer"
+                      },
+                      "archive": {
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "archive",
+                      "create"
+                    ],
+                    "additionalProperties": true
+                  }
+                },
+                "required": [
+                  "archive_per_week",
+                  "create_per_week",
+                  "created",
+                  "granted_by",
+                  "id",
+                  "scopes",
+                  "used"
+                ],
+                "additionalProperties": true
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reports": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "rule_on": {
+            "type": "boolean"
+          },
+          "can_grant": {
+            "type": "boolean"
+          },
+          "can_revoke": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "bot",
+          "can_grant",
+          "can_revoke",
+          "grant",
+          "reports",
+          "rule_on",
+          "scopes"
         ],
         "additionalProperties": true
       },

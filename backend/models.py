@@ -1459,6 +1459,15 @@ class BotAccess(Contract):
     on_behalf_of: ID | None = None
 
 
+class BotReportGrant(Contract):
+    """What a manager bot may do to the bots that report straight to it (backend/report_grants.py SCOPES), and how many
+    it may create and archive a week; no scopes ends the grant."""
+    scopes: list[Literal["routines", "model", "settings", "archive", "create", "instructions"]] = Field(
+        default_factory=list, max_length=6)
+    create_per_week: int | None = Field(default=None, ge=0, le=50)
+    archive_per_week: int | None = Field(default=None, ge=0, le=50)
+
+
 # A bot's instructions (its AGENT.md) as a person reviewed them, one limit wherever they are sent: registering a bot,
 # adding one from the catalog and the first-run wizard. The longest shipped template is about half of it, and
 # backend/tests/test_onboarding.py checks every one against it.
@@ -2022,6 +2031,7 @@ class AccessRules(Contract):
     assistant_approvals: bool | None = None
     botops_direct: bool | None = None
     botops_manages_bots: bool | None = None
+    managers_manage_reports: bool | None = None
     admin_credentials: bool | None = None
     members_store_credentials: bool | None = None
     admin_sql: bool | None = None

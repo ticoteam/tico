@@ -1009,6 +1009,24 @@ def install_github_app(app, settings, store):
         scopes = [scope for scope, _ in found]
         return (set.intersection(*scopes) if scopes else set()), [run for _, run in found]
 
+    def report_extra_repos(c, who, bot):
+        """The direct reports whose own repositories a manager bot's token also writes under its report grant's
+        `instructions` scope (backend/report_grants.py), and the runs that decided it. As for BotOps, a turn asks for
+        its own run only, and the computer's git helper gets only what every run of the bot in progress on it may
+        have: nothing extra when none is, or when one is not its grantor's."""
+        from . import report_grants
+        if who.role == "bot":
+            attempts = ([who.attempt_id] if who.actor == "bot:" + bot and not who.via and not who.agent
+                        and who.attempt_id else [])
+        elif who.role == "runner":
+            attempts = [r["id"] for r in c.execute("SELECT id FROM attempts WHERE bot=? AND runner_id=? "
+                                                   "AND state IN ('leased','running')", (bot, who.runner_id))]
+        else:
+            attempts = []
+        found = [report_grants.instruction_reports(c, app.state.auth, bot, attempt) for attempt in attempts]
+        scopes = [scope for scope, _ in found]
+        return (set.intersection(*scopes) if scopes else set()), [run for _, run in found if run]
+
     def fixer(c):
         """Who can change the app's permissions on GitHub: the owner, else an Admin; "" when neither is on the
         roster (Health still shows the alert)."""
@@ -1162,16 +1180,29 @@ def install_github_app(app, settings, store):
             reads = R.Reads(c, [body.bot])
             grants = R.access(c, body.bot, row['org'], reads=reads)['effective']
             missing = reads.missing
-            extra, runs = botops_extra_repos(c, who) if body.bot == BOTOPS else (set(), [])
+            from . import report_grants
+            # A manager bot whose grant has `instructions` gets an answer shaped by the run asking, as BotOps does.
+            per_run = body.bot == BOTOPS or report_grants.writes_reports(c, body.bot)
+            if body.bot == BOTOPS:
+                extra, runs = botops_extra_repos(c, who)
+            elif per_run:
+                extra, runs = report_extra_repos(c, who, body.bot)
+            else:
+                extra, runs = set(), []
             if extra:
                 # The server's token cache is keyed on the exact repository set, so a narrower run never gets this one.
-                have = {g['full_name'].lower() for g in grants}
+                have = {g['full_name'].lower(): g for g in grants}
                 for other in c.execute("SELECT bot,repo FROM bot_config ORDER BY bot"):
                     name = repo_of(other["repo"] or "", row["org"])
-                    if (other["bot"] in extra and name and name.lower() not in have
-                            and name.split("/")[0].lower() == row["org"].lower() and name.lower() not in missing):
-                        have.add(name.lower())
-                        grants.append({'full_name': name, 'access': 'write'})
+                    if (other["bot"] not in extra or not name or name.split("/")[0].lower() != row["org"].lower()
+                            or name.lower() in missing):
+                        continue
+                    if name.lower() in have:
+                        # A repository it may already read (a chosen grant) is written in this run.
+                        have[name.lower()]['access'] = 'write'
+                    else:
+                        have[name.lower()] = {'full_name': name, 'access': 'write'}
+                        grants.append(have[name.lower()])
         issuer = reviewer.for_bot(body.bot)
         repos = [r['full_name'] for r in grants]
         write_repos = [r['full_name'] for r in grants if r['access'] == 'write']
@@ -1342,12 +1373,12 @@ def install_github_app(app, settings, store):
                         H.event(c, who.actor, "github.token", body.bot,
                                 {"repository": repo, "repositories": item["repositories"],
                                  "attempt": who.attempt_id or None, **({"identity": "reviewer"} if issuer is reviewer else {}),
-                                 **({"runs": runs} if body.bot == BOTOPS else {})})
+                                 **({"runs": runs} if body.bot == BOTOPS or runs else {})})
         response_tokens = [{key: value for key, value in item.items() if key != "cached"} for item in tokens]
-        # A BotOps answer is shaped by the runs live right now (botops_extra_repos): a runner must not hand it
-        # to a later run, which may be allowed less.
+        # A BotOps answer, and a manager bot's under `instructions`, is shaped by the runs live right now
+        # (botops_extra_repos, report_extra_repos): a runner must not hand it to a later run, which may be allowed less.
         return {"configured": True, "token": value, "expires_at": expires, "repository": repo,
-                "repositories": repos, "tokens": response_tokens, "hold": body.bot != BOTOPS,
+                "repositories": repos, "tokens": response_tokens, "hold": not per_run,
                 **{raised.answer: withheld[raised] for raised in RAISES if raised in withheld}}
 
     def bot_repos(c, bot):

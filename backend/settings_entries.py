@@ -32,6 +32,7 @@ _RULE_NAMES = {
     "assistant_approvals": ("People may let their Assistant decide their approvals", "confirm", ""),
     "botops_direct": ("BotOps changes providers and limits without asking", "confirm", ""),
     "botops_manages_bots": ("BotOps manages every bot", "confirm", ""),
+    "managers_manage_reports": ("Manager bots manage their reports when a person lets them", "confirm", ""),
     "admin_credentials": ("Admins store credentials", "confirm", ""),
     "members_store_credentials": ("Members store credentials for their bots", "confirm", ""),
     "admin_sql": ("Admins see SQL", "confirm", ""),
@@ -196,6 +197,11 @@ ENTRIES = TEAM_RULES + [
       value="json", card=_card("bots"), words="turns per hour day"),
     S("bot.profile", "Bot profile", BOTS + " > Bot editor", "bot", "direct", "POST", "bots/{bot}/profile",
       value="json", card=_card("bots")),
+    # The server refuses any grant BotOps or the Assistant would make for a person (backend/report_grants.py may_grant).
+    S("bot.report_grant", "Manages its reports", BOTS + " > Bot editor", "bot", "person", "PUT",
+      "bots/{bot}/report-grant", value="json", card=_card("bots"),
+      words="manager bot reports grant scopes routines model settings archive create instructions",
+      why="Only a person who manages the bot lets it manage its reports, in their own click or call"),
     # Letting a bot run workflows or edit workflow files, or turning Create product repositories back on (the Owner
     # only), is the person's own click: from BotOps, a Confirm card (backend/repositories.py bot_set).
     S("bot.repositories", "Bot repositories", REPOS, "admin", "direct", "PUT", "bots/{bot}/repositories",

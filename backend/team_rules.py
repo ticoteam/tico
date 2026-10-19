@@ -3,7 +3,7 @@
 One record, `rules`, holds only what the owner changed. Each rule is on by default, the fast way; turning it off puts
 back the click or the limit the product had before. They are read wherever the decision is made: the Assistant's
 direct writes (backend/assistant.py), what BotOps does without a card (backend/botops_act.py), the bots BotOps
-manages in its own runs and who is a credential administrator (backend/auth.py), who stores a credential for their
+manages in its own runs, whether a manager bot uses its report grant and who is a credential administrator (backend/auth.py), who stores a credential for their
 own bot (backend/credentials.py), the SQL page and personal tokens, whether a bot goes ahead on its own default when
 a person leaves its ask unanswered (backend/ask_deadlines.py), whether Tico support may be let in
 (backend/support_access.py), whether the hourly stale ticket review runs (backend/stale_review.py), and whether a direct
@@ -22,6 +22,7 @@ DEFAULTS = {
     "assistant_approvals": True,    # a person may let their own Assistant decide their approvals (backend/assistant.py)
     "botops_direct": True,          # BotOps sets AI providers and raises limits without a card
     "botops_manages_bots": True,    # BotOps, in its own runs, manages every bot that is not built in (Auth.botops_manages)
+    "managers_manage_reports": True,  # a manager bot uses the report grant a person gave it (Auth.report_manager)
     "admin_credentials": True,      # Admins store credentials, not only the owner
     "members_store_credentials": True,  # anyone on the team stores a credential for a bot they manage
     "admin_sql": True,              # Admins see the SQL page

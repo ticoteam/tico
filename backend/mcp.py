@@ -119,10 +119,12 @@ class InProcessApi:
                          key=key, query={k: v for k, v in (query or {}).items() if v is not None}, delegate=delegate)
 
 
-def caller_kind(auth, who):
+def caller_kind(auth, who, store=None):
     """What kind of caller this is, for the tools it is offered (`hubtools.KINDS`): a human as owner, admin or member,
     a bot, BotOps, an external agent run by a bot (a Hermes profile), or the Assistant working in a human's private room.
-    The checks are the server's own: `auth.bot_admin`, `Identity.agent`, `Identity.via`."""
+    With `store`, a bot a person let manage its reports is a `report_manager` (backend/report_grants.py), offered the
+    tools that change bots; not `manager`, a bot profile that grants nothing (backend/profiles.py). The checks are the
+    server's own: `auth.bot_admin`, `Identity.agent`, `Identity.via`."""
     from . import hubdb as H
     if who.via == "assistant":
         return "assistant"
@@ -131,7 +133,14 @@ def caller_kind(auth, who):
     if who.role == "human":
         return "admin" if auth.bot_admin(who) else "member"
     if who.role == "bot":
-        return "agent" if who.agent else "botops" if who.actor == H.bot_actor(H.FLEET_MAINTAINER) else "bot"
+        if who.agent or who.actor == H.bot_actor(H.FLEET_MAINTAINER):
+            return "agent" if who.agent else "botops"
+        if store is not None and not who.via:
+            from . import report_grants, team_rules
+            with store.read() as c:
+                if report_grants.active(c, H.actor_id(who.actor)) and team_rules.load(c)["managers_manage_reports"]:
+                    return "report_manager"
+        return "bot"
     return None
 
 
@@ -160,7 +169,7 @@ def install_mcp(app, settings):
                                 status_code=400)
         api = InProcessApi(app, asyncio.get_running_loop(), request.headers.get("authorization", ""), base_url)
         who = getattr(request.state, "identity", None)
-        kind = caller_kind(app.state.auth, who) if who else None
+        kind = await asyncio.to_thread(caller_kind, app.state.auth, who, app.state.store) if who else None
         protocol = hubtools.Protocol(api, api_error=ApiProblem, kind=kind)
         started = time.monotonic()
         reply = await asyncio.to_thread(protocol.handle, message)

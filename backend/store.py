@@ -910,6 +910,13 @@ class Store:
                 # `onboarded`; NULL for every other bot (backend/onboarding.py).
                 H.add_column(c, "bot_config", "onboarding_state", "TEXT")
                 H.add_column(c, "settings_changes", "via", "TEXT")
+                # A person letting a manager bot manage the bots that report to it (backend/report_grants.py): its own
+                # table, never the bot's definition, so no bot can grant itself. One grant in force per manager bot.
+                c.execute("CREATE TABLE IF NOT EXISTS bot_report_grants(id TEXT PRIMARY KEY, manager_bot TEXT NOT NULL, "
+                          "granted_by TEXT NOT NULL, scopes_json TEXT NOT NULL, create_per_week INTEGER NOT NULL DEFAULT 3, "
+                          "archive_per_week INTEGER NOT NULL DEFAULT 3, created TEXT NOT NULL, revoked TEXT, revoked_by TEXT)")
+                c.execute("CREATE UNIQUE INDEX IF NOT EXISTS one_report_grant ON bot_report_grants(manager_bot) "
+                          "WHERE revoked IS NULL")
                 H.add_column(c, "tasks", "request_id", "TEXT")
                 # When an archived bot's agent last used its still-valid credential (backend/agents.py).
                 H.add_column(c, "agents", "archived_seen", "TEXT")

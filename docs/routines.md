@@ -40,6 +40,10 @@ An install that had routines moved them once, on the upgrade to Automations; see
   The MCP tools have the same names (`hub_automation_list`, `hub_automation_create`, `hub_automation_update`,
   `hub_automation_run`, `hub_automation_guide`, ...). The API is under `/api/v2/automations`.
 
+A timed automation a person wrote for a manager bot, which only they have changed since, starts runs that may use the
+report grant they gave it ([A manager bot that manages its reports](permissions.md#a-manager-bot-that-manages-its-reports));
+once anyone else changes it, the bot itself included, its runs lend nothing.
+
 A prompt can read the trigger's values with `{{...}}`, for example `{{webhook.data}}` for a webhook call's body. Each
 one is passed as quoted data after the prompt, never as instructions.
 

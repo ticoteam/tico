@@ -97,7 +97,7 @@ read its value, and share it with their other bots ([Bot owners](#bot-owners)).
 ## Team rules
 
 The product favours getting going fast, and the owner tightens it later. Settings > People (owner only, saved as they change;
-`GET` and `PUT /api/v2/access/rules`) has ten switches, all **on** by default:
+`GET` and `PUT /api/v2/access/rules`) has eleven switches, all **on** by default:
 
 | Rule | On (default) | Off |
 | --- | --- | --- |
@@ -105,6 +105,7 @@ The product favours getting going fast, and the owner tightens it later. Setting
 | **People may let their Assistant decide their approvals** | each person may turn on "My assistant can decide approvals for me" in Settings > General; their own Assistant then approves or declines approvals addressed to them on their words in its chat, recorded and undoable ([Assistant](assistant.md#letting-it-decide-your-approvals)) | approving is the person's click on a card again, whatever their own setting |
 | **BotOps changes providers and limits without asking** (`botops_direct`) | BotOps changes the AI providers and raises spending limits for the person who asked, with their rights | a provider change, or a limit raised or removed, is a Confirm card in that person's BotOps chat; lowering a limit stays direct |
 | **BotOps manages every bot** (`botops_manages_bots`) | in its own runs (the daily update, or a routine the owner set for BotOps) BotOps manages every bot but the built-in ones: their Tools, repositories, contact and Instructions, with write access to each bot's repository in its GitHub token (below) | BotOps in its own runs changes only itself |
+| **Manager bots manage their reports when a person lets them** (`managers_manage_reports`) | a manager bot uses the grant a person gave it on the bots that report to it ([below](#a-manager-bot-that-manages-its-reports)) | no manager bot uses its grant; the grants stay, and work again when it is back on |
 | **Admins store credentials** | Admins are credential administrators | only the owner (and `TICO_CREDENTIAL_ADMINS`) stores credentials |
 | **Members store credentials for their bots** | anyone on the team stores a credential for a bot they own or manage, granted to that bot | only credential administrators store credentials |
 | **Admins see SQL** | Admins open the SQL page | the SQL page is the owner's |
@@ -204,9 +205,11 @@ is the same humans who always have full access to it. A bot owner can:
 - set its See, Read and Write access;
 - pause it, rename it, archive it (never the built-in Assistant, BotOps, Librarian or CEO Bot);
 - add or remove owners (`POST /api/v2/bots/{bot}/co-owners`, Settings > Bots, **Owned by**);
-- give it a stored credential they hold themselves or stored themselves, and no one else's.
+- give it a stored credential they hold themselves or stored themselves, and no one else's;
+- let it manage the bots that report to it ([below](#a-manager-bot-that-manages-its-reports)).
 
-A member cannot change a bot that is not theirs, through Settings, the API or BotOps.
+A member cannot change a bot that is not theirs, through Settings, the API or BotOps. A bot that others report to reads their
+work but changes them only through a person's grant ([below](#a-manager-bot-that-manages-its-reports)).
 
 A bot gets only credentials granted to it, including its own local credentials; it does not inherit another bot's credentials.
 Credential administrators store, delete and grant credentials. The human who stored a credential may give it to, and take it from,
@@ -219,6 +222,62 @@ credential may also delegate it to a bot they own or run, directly or through Bo
 delegated bot access; changing the bot owner invalidates delegation from its former owner. A holder cannot delegate a credential they do not hold ([credential-vault.md](credential-vault.md)).
 On upgrade, Tico automatically grants each existing bot its own-file values, the shared Credentials it could read,
 and its declared profile and runtime keys. New bots do not inherit the whole environment or `_shared.env`.
+
+## A manager bot that manages its reports
+
+A person who manages a bot may let it manage the bots that report straight to it (`reports_to` is its slug): a product
+manager bot, say, that reviews its ten monitors every week and fixes what it finds. The bot then acts with **that person's
+rights**, never more, and only on what they ticked:
+
+| Scope | It may, on a direct report |
+| --- | --- |
+| `routines` | turn its daily and weekly updates on or off (`POST /api/v2/bots/{bot}/updates`). Its automations need no grant: a bot above their owner changes them ([Automations](routines.md)) |
+| `model` | change its own model and effort (not what its tasks run on, its task model, effort and context length) |
+| `settings` | change its name and description (nothing else in its definition: not who it reports to, its status, repository or contact) |
+| `archive` | archive it, and restore it |
+| `create` | register a new bot that reports to it, then place it and take it live |
+| `instructions` | write its own repository (`repo` in its definition), to change its instructions and push a new version: the run's GitHub token also writes it (below). Not a branch's: that repository is its original's |
+
+**Granting.** In the bot editor (**Manages its reports**, for a bot with reports), with `hub bot grant <bot> --allow
+routines,model,settings,archive,create,instructions [--create-per-week N] [--archive-per-week N]`, the `hub_bot_report_grant` tool, or
+`PUT /api/v2/bots/{bot}/report-grant` with `{"scopes": [...]}`. Only a person who manages the bot grants it, as themselves:
+a bot, BotOps acting for a person and the Assistant are refused, and a built-in bot takes no grant. A change replaces the
+grant with a new one. The grant is kept apart from the bot's definition, so no bot can grant itself. Anyone who may read the
+bot sees it (`GET`, `hub bot grant <bot>`), the bot itself included.
+
+**Ending it.** `--revoke`, an empty `scopes`, or **Revoke**: the person who granted it, anyone who manages the bot, and the
+owner and admins. The team rule **Manager bots manage their reports when a person lets them** stops every grant at once.
+
+**When it applies.** Only in the bot's own run whose words are all its grantor's (or the product's), and only while the
+grantor still manages both the bot and the report:
+- a timed automation the bot owns that only the grantor (or Tico) wrote and changed, in their own click or call, not through
+  the Assistant, BotOps or a token, on a task nobody else has written on. If the bot rewrites that automation itself, it no
+  longer counts;
+- the grantor's own message in their own chat with the bot, or their own comment on a task they asked it for (not relayed
+  by the Assistant or Slack).
+
+A run anyone else started (another person's chat, a bot's task, an event or webhook automation, an automation someone else wrote) lends
+nothing: the bot keeps its own rights, which change no other bot. A run that could lend the grant carries no quiet notes
+and no next-run tasks: they wait for the bot's next ordinary run, so nobody else's words reach it.
+
+**Its GitHub token** (`instructions`). The token a run of the bot asks for also writes the own repository of each direct
+report that is not archived, as BotOps' own runs write every bot's: the turn's token for that run alone, and the
+computer's git helper only while every run of the bot in progress there may have it. The bot clones and pushes the report's
+repository itself in its run: the reports' repositories are not added to its Repositories setting, so they get no base
+clone or task worktree. Ending the scope or the grant takes them out of the next token; one already handed out expires
+within the hour. The `github.token` event names the run (`runs`: the attempt, the grantor, the grant and how it started).
+
+**Limits.** It creates at most `create_per_week` and archives at most `archive_per_week` bots in any seven days (3 each by
+default; `409 report_cap` past that). A bot it creates reports to it, belongs to the grantor (it counts toward their bot limit)
+and is only registered: building its repository through BotOps is for a person, and it never creates a message bot. It places
+and takes live only the bots it created that way, and starts no setup chat on the grantor's behalf. A computer that does not
+take members' bots stays an admin's own click.
+
+**On the record.** Everything it does is the grantor's, recorded via the manager: the event's `via` is `report_manager`
+and its `delegation` names the person, the grant, the bot and the run (`automation`, `chat` or `comment`), and the settings
+change says `via` `report_manager`. `bot.report_grant_created` and `bot.report_grant_revoked` record each grant. While a
+grant is in force, `GET /api/v2/me` says the bot's `kind` is `report_manager`, and MCP offers it the tools that change bots.
+This is not the **Manager** profile, which only decides what wakes a bot and grants nothing.
 
 ## Computers for members' bots
 

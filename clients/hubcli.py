@@ -2404,6 +2404,15 @@ def parser():
     s.add_argument("--from-bot-yaml", dest="from_request", action="store_true",
                    help="take what the bot's bot.yaml asks, as its computer reported it")
     s.set_defaults(fn="bot mail")
+    s = bot.add_parser("grant", help="show, or (a person who manages it) set, what a manager bot may do to the bots "
+                                     "that report to it")
+    s.add_argument("bot", help="the manager bot")
+    s.add_argument("--allow", metavar="routines,model,settings,archive,create,instructions",
+                   help="the scopes it may use on its direct reports, replacing what it had")
+    s.add_argument("--create-per-week", dest="create_per_week", type=int, help="new bots a week, at most (3 by default)")
+    s.add_argument("--archive-per-week", dest="archive_per_week", type=int, help="archives a week, at most (3 by default)")
+    s.add_argument("--revoke", action="store_true", help="end the grant")
+    s.set_defaults(fn="bot grant")
     s = bot.add_parser("setup-done", help="mark a bot's onboarding complete, as a person above it on the org chart")
     s.add_argument("slug", nargs="?", help="the bot; the one running this command by default")
     s.set_defaults(fn="bot setup-done")
