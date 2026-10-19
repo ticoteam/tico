@@ -554,7 +554,7 @@ function taskCommentsRender(state, data) {
     // At the newest comment, new ones keep it in view; scrolled up, nothing moves (ui/app/stick-scroll.js).
     const stick = stickScroll(thread);
     if (!state.rendered) stick.toBottom();
-    stick.update(() => { thread.innerHTML = html; askDraftRestore(thread, d); }, {fresh: !!state.rendered});
+    stick.update(() => { visualSwap(thread, html); askDraftRestore(thread, d); }, {fresh: !!state.rendered});
     // A working run's steps, left open, follow it as it moves on.
     const liveSteps = $('details.run-steps[data-live][open]', thread);
     if (liveSteps) void taskStepsOpen(liveSteps);
