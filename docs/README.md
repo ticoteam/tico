@@ -39,7 +39,7 @@ Use `releases/download/vX.Y.Z/install.sh` to pin a release. For a shared server,
 ## Developer or computer operator
 
 - [Register a computer](install.md#add-computers-to-run-your-bots), its logins and usage on [Computers](computers.md), [Harnesses](harnesses.md) and [Environments](environments.md).
-- [Build a bot](creating-bots.md), [Routines](routines.md), [Agent context](agent-context.md), [Watchers](watchers.md),
+- [Build a bot](creating-bots.md), [Visuals in replies](visuals.md), [Routines](routines.md), [Agent context](agent-context.md), [Watchers](watchers.md),
   [Sessions](sessions.md) and [Task worktrees](worktrees.md).
 - [API](api.md), [Custom frontend](custom-frontend.md), [Listening API](listening.md#save-decide-and-resolve),
   [Needs you batches](needs-you-batches.md) and [Service keys](service-keys.md), for another system that files tasks.

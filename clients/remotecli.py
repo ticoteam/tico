@@ -419,8 +419,9 @@ def run(args, who=None):
             local = []
             if getattr(args, "visual", None):
                 from clients import hubtools
-                visuals, local = hubtools._visuals(client, visuals_from_args(args), lambda index, made: hubtools._uploaded(
-                    post(f"tasks/{args.id}/files", made, suffix=":visual:" + index)))
+                visuals, local = hubtools._visuals(client, visuals_from_args(args), lambda index, name, data: hubtools._uploaded(
+                    hubtools._posted_file(client, f"tasks/{args.id}/files", name, data,
+                                          (key + ":visual:" + index) if key else None)))
                 references.extend(visuals)
             body = {"text": args.text}
             if references:

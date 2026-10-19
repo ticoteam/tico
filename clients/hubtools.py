@@ -132,10 +132,11 @@ VISUALS = {"type": "array", "maxItems": 10, "description": (
 
 
 def _visuals(api, items, upload):
-    """(attachments for the API, what stayed unembedded locally) from `visuals` items. `upload(index, body)` puts one
-    local file where the message goes and returns "<file id>@<version>". `index` is the item's place in the list: it
-    names that upload in the operation's idempotency key, so two files sharing a name are two uploads, and a retry of
-    the same send repeats each one's own key."""
+    """(attachments for the API, what stayed unembedded locally) from `visuals` items. `upload(index, name, data)` puts
+    one local file's bytes where the message goes and returns "<file id>@<version>". The bytes go as they are (a raw
+    body or multipart), never base64 in JSON, which grows them by a third past the path's request limit. `index` is
+    the item's place in the list: it names that upload in the operation's idempotency key, so two files sharing a name
+    are two uploads, and a retry of the same send repeats each one's own key."""
     out, local = [], []
     for index, item in enumerate(items or []):
         title = str(item.get("title") or "")
@@ -154,12 +155,17 @@ def _visuals(api, items, upload):
             local.append({"path": item["path"], "unembedded": unembedded})
         else:
             data = path.read_bytes()
-        try:
-            body = {"name": path.name, "text": data.decode("utf-8")}
-        except UnicodeDecodeError:
-            body = {"name": path.name, "content_base64": base64.b64encode(data).decode()}
-        out.append({"ref": upload(str(index), body), "title": title})
+        out.append({"ref": upload(str(index), path.name, data), "title": title})
     return out, local
+
+
+def _posted_file(api, path, name, data, key):
+    """One file to a multipart route (a task's files): bytes as they are, up to the server's file limit."""
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix="tico-visual-") as folder:
+        local = Path(folder) / name
+        local.write_bytes(data)
+        return api.post_multipart(path, {"file": local}, {"name": name}, key=key)
 
 
 def _uploaded(made):
@@ -205,9 +211,8 @@ def _message_send(api, args):
         return api.post("messages", {"to": args["to"], "text": args["text"], "kind": "notice",
                                      "conversation_id": None, "refs": {},
                                      **({"needs_action": True} if args.get("needs_action") else {})}, key=_key(args))
-    attachments, local = _visuals(api, args.get("visuals"),
-                                  lambda index, body: _uploaded(api.post("files/uploads", body,
-                                                                         key=_key(args, ":visual:" + index))))
+    attachments, local = _visuals(api, args.get("visuals"), lambda index, name, data: _uploaded(api.request(
+        "POST", "/api/v2/files/uploads?name=" + quote(name, safe=""), raw=data, key=_key(args, ":visual:" + index))))
     sent = api.post("messages", {"to": args["to"], "text": args["text"], "kind": "steer" if args.get("steer") else "say",
                                  "conversation_id": args.get("conversation_id"),
                                  "in_reply_to": args.get("in_reply_to"),
@@ -912,8 +917,8 @@ def task_comment(api, args):
     body = {k: args[k] for k in ("text", "ask", "attachments", "public", "approval_id", "needs_action") if k in args}
     local = []
     if args.get("visuals"):
-        added, local = _visuals(api, args["visuals"], lambda index, made: _uploaded(
-            api.post(f"tasks/{args['id']}/files", made, key=_key(args, ":visual:" + index))))
+        added, local = _visuals(api, args["visuals"], lambda index, name, data: _uploaded(_posted_file(
+            api, f"tasks/{args['id']}/files", name, data, _key(args, ":visual:" + index))))
         body["attachments"] = list(body.get("attachments") or []) + added
     links = s3links.apply(api, body, ("text",))
     result = s3links.annotate(_asked(api, args).post(f"tasks/{args['id']}/comments", body, key=_key(args)), links)
