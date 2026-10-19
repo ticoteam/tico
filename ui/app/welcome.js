@@ -159,14 +159,21 @@ function onbStepHTML(state, key) {
     // A runner that is already online (the server's own, installed with Tico) needs no setup: the step is one line.
     const online = (state.record.machine?.runners || []).find(runner => runner && runner.online);
     const linux = state.kind === 'linux';
+    const issued = linux ? !!state.code : !!state.enrollment;
+    // One path, numbered: make the code or file, then the lines that use it. Anything that is instead of a line sits
+    // under Other ways, closed until asked for.
     const setup = `
     <div class="onb-choices" id="onb-kind" role="radiogroup" aria-label="Kind of computer">
       <label><input type="radio" name="onb-kind" data-onb-kind value="mac" ${linux ? '' : 'checked'}>A Mac</label>
       <label><input type="radio" name="onb-kind" data-onb-kind value="linux" ${linux ? 'checked' : ''}>A Linux or cloud server (Docker)</label></div>
-    <p class="onb-field"><span class="k">1 · ${linux ? 'Create a one-time code for this computer' : "Download this computer's setup file"}</span>
-      <button class="primary" type="button" id="onb-enroll">Add computer</button>
-      <small id="onb-enroll-note">${linux ? 'A 15-minute code.' : 'A 15-minute setup file.'}</small></p>
-    ${onbCommandsHTML(state)}`;
+    <ol class="onb-steps">
+      <li><span class="k">${linux ? 'Create a one-time code for this computer' : "Download this computer's setup file"}</span>
+        <div class="onb-enroll-row"><button class="${issued ? 'ghost' : 'primary'}" type="button" id="onb-enroll">${issued ? (linux ? 'New code' : 'Download again') : 'Add computer'}</button>
+          ${issued ? '' : `<small id="onb-enroll-note">${linux ? 'A 15-minute code.' : 'A 15-minute setup file.'}</small>`}</div>
+        ${onbIssuedHTML(state)}</li>
+      ${onbCommandsHTML(state)}
+    </ol>
+    ${onbOtherWaysHTML(state)}`;
     const status = `<p class="onb-machine" id="onb-machine-status" role="status">${esc(onbMachineStatus(state.record))}</p>`;
     return online
       ? `${status}
@@ -196,26 +203,47 @@ function onbSampleHTML(state, done) {
 // The label is the one the setup file was written with, so the command and the file agree.
 const onbMachineLabel = state => state?.kind === 'linux' && S.config?.local ? 'This computer'
   : `${firstName(S.me?.name) || 'This'}'s ${state?.kind === 'linux' ? 'server' : 'Mac'}`;
+// [label, command, other]: `other` marks a line that is instead of one above, shown under Other ways.
 function onbCommands(state) {
   // Signing in to a model comes after a provider is chosen; with none, that step is left out.
   const runtime = state.providers?.default?.runtime || S.config?.default_runtime || '';
-  const numbered = list => list.filter(Boolean).map(([label, command], i) => [`${i + 2} · ${label}`, command]);
-  if (state.kind === 'linux') return numbered(dockerRunnerCommands(state.code || '<code>', onbMachineLabel(state), runtime));
+  if (state.kind === 'linux') {
+    const [run, login, plain] = dockerRunnerCommands(state.code || '<code>', onbMachineLabel(state), runtime);
+    return [run, login, ['With plain Docker instead of the installer line. It has no updater, so it will not follow the server\'s releases', plain[1], true]].filter(Boolean);
+  }
   const file = state.enrollment || '<setup-file>.json';
-  return numbered([
+  return [
     ['Register this Mac for the team',
      `scripts/tico -e <slug> enroll --code-file "$HOME/Downloads/${file}" --label "${onbMachineLabel(state)}"`],
     runtime ? ['Add the subscription the bots run on',
      `scripts/tico -e <slug> profile add default\nscripts/tico -e <slug> profile login default ${runtime}`]
             : null,
     ['Start the bot service', 'scripts/tico -e <slug> install bot'],
-  ]);
+  ].filter(Boolean);
+}
+// A label's parenthetical is a hint in small type under it, so each step reads as one short line. The command wraps
+// inside its box (never past the card), with Copy in the box; Copy takes the exact command, line breaks and all.
+function onbCommandHTML([label, command], i, tag = 'li') {
+  const [, title, hint] = /^(.*?) \((.*)\)$/.exec(label) || [label, label, ''];
+  return `<${tag} class="onb-cmd-step"><span class="k">${esc(title)}</span>${hint ? `<small class="onb-hint">${esc(hint)}</small>` : ''}
+    <div class="onb-cmd"><code>${esc(command)}</code><button class="ghost" type="button" data-onb-copy="${i}" aria-label="Copy: ${esc(title)}">Copy</button></div></${tag}>`;
 }
 function onbCommandsHTML(state) {
-  return onbCommands(state).map(([label, command], i) => `<div class="onb-cmd"><span class="k">${esc(label)}</span>
-    <code>${esc(command)}</code>
-    <button class="ghost" type="button" data-onb-copy="${i}">Copy</button></div>`).join('') +
-    (state.kind === 'linux' ? '' : '<p class="muted" style="font-size:12.5px">Replace <code class="mono">&lt;slug&gt;</code> with your environment slug.</p>');
+  return onbCommands(state).map((row, i) => row[2] ? '' : onbCommandHTML(row, i)).join('');
+}
+function onbOtherWaysHTML(state) {
+  const other = onbCommands(state).map((row, i) => row[2] ? onbCommandHTML(row, i, 'div') : '').join('');
+  const slug = state.kind === 'linux' ? '' : '<p class="muted" style="font-size:12.5px">Replace <code class="mono">&lt;slug&gt;</code> with your environment slug.</p>';
+  return slug + (other ? `<details class="onb-other" id="onb-other"${state.otherOpen ? ' open' : ''}><summary>Other ways</summary>${other}</details>` : '');
+}
+// After Add computer the code is on screen in large type (a toast alone goes before it can be read); a Mac's
+// setup file is named where it was saved.
+function onbIssuedHTML(state) {
+  if (state.kind === 'linux' && state.code) return `<div class="onb-code" id="onb-code" role="status"><span class="k">Your one-time code</span>
+    <div class="onb-code-row"><strong class="onb-code-value" id="onb-code-value">${esc(state.code)}</strong><button class="ghost" type="button" id="onb-code-copy">Copy</button></div>
+    <small>Works once, for 15 minutes. It is already in the command below.</small></div>`;
+  if (state.kind !== 'linux' && state.enrollment) return `<p class="onb-file" id="onb-code" role="status">Saved to Downloads: <code class="mono">${esc(state.enrollment)}</code></p>`;
+  return '';
 }
 function onbMachineStatus(record) {
   const runners = (record.machine?.runners || []).filter(Boolean);
@@ -284,6 +312,10 @@ function onbWire(state, key) {
     const commands = onbCommands(state);
     document.querySelectorAll('[data-onb-copy]').forEach(button => button.onclick = () =>
       void copyText(commands[Number(button.dataset.onbCopy)]?.[1] || '').then(() => toast('Command copied')));
+    const codeCopy = $('#onb-code-copy');
+    if (codeCopy) codeCopy.onclick = () => void copyText(state.code || '').then(() => toast('Code copied'));
+    const other = $('#onb-other');
+    if (other) other.ontoggle = () => { state.otherOpen = other.open; };
     document.querySelectorAll('[data-onb-kind]').forEach(input => input.onchange = () => {
       state.kind = input.value; state.enrollment = ''; state.code = ''; onbRender(state);
     });

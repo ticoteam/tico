@@ -44,6 +44,13 @@ All notable changes to Tico are recorded here. The format follows
   minutes after the update fell due, until its running turns end), a message or task for its bots shows **Waiting for
   the computer to update** in the chat and on the task instead of Queued, and Health says since when the computer has
   taken no new work. How the update waits is unchanged ([Updates](docs/updates.md)).
+- **The sidebar around first-run setup**: while the setup wizard is open, the sidebar shows only **Finish setup** and
+  the team, not the app's pages or **What's new** (on a phone the bottom bar drops Tasks and Updates). A new company's
+  owner starts with nothing unread in What's new. In the team list, words a bot's name shares with another bot's (the
+  "Head of" in "Head of Product") drop out first when the row is narrow, so each row keeps the part that tells it
+  apart; hovering a bot shows its whole name, and **Needs setup** is a small gear beside the name. The anonymous
+  usage-count notice no longer sits over the wizard or the screen after **Create**: it appears on the first other page,
+  and nothing is counted until it has.
 - **First-run wizard**: **Next** on **Your team chart** works again when the team includes BotOps. Its instructions
   (24,048 characters) were over the setup save's 20,000-character limit, so the wizard stopped with a raw field error.
   Bot instructions now have one limit of 50,000 characters wherever they are sent (the wizard, **Add from catalog**
@@ -73,6 +80,9 @@ All notable changes to Tico are recorded here. The format follows
   before this keeps today's behaviour ([sessions](docs/sessions.md)).
 
 ### Changed
+- **First run, computer step**: one numbered path (make the code, then the line that uses it), with the plain
+  `docker run` alternative behind **Other ways**, closed. After **Add computer** the one-time code shows in large type
+  on the screen, not only in a toast. Commands wrap inside their box on a phone and on a desktop, with **Copy** in the box.
 - **First run, after Create**: the screen says **Your team is created** and offers one next step as its only primary
   button (**Add a computer** while there is none). Bots are listed in the team chart's groups and order with one status
   each, *Waiting for a computer* is said once at the top, and the tour waits for **Show me around** instead of
