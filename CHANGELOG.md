@@ -8,6 +8,13 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Task links get a preview in Slack**: a link to a task pasted in Slack (`/task/<id>` or `/ticket/<number>`, either
+  with a readable slug after it, or the web app's `/#/task/<id>`) on the server's host or one in
+  `TICO_SLACK_UNFURL_HOSTS` gets a preview under it from the Slack app: the number and title, the start of the
+  description, the column, owner and due date, and an open button (`TICO_SLACK_OPEN_URL`, `TICO_SLACK_OPEN_LABEL`).
+  Only for a sender the gateway admits who can read the task, never for a private task or in a channel shared outside
+  the workspace; each is a `slack.unfurl` event. The manifest adds `links:read`, `links:write`, `link_shared`,
+  interactivity and `unfurl_domains`: paste it over the app's and reinstall (docs/slack-gateway.md, Link previews).
 - **Quiet work stays visible and comes back**: a task filed for a bot's next run now says where it stands, on the task
   and in `hub task show` (`quiet`): eligible (the next run carries it), delivered (which run took it and when, and
   until what it was deferred) or queued (a run of its own). A run that will not do a carried task now says when to
