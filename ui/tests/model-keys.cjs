@@ -1,7 +1,7 @@
 // Replace key / Clear key / Add key from the app (ui/model-login.js, backend/computer_keys.py, backend/model_login.py).
 // In a computer's pop-up on Settings > Computers, a login a model key signs in shows whose key it is by its stored preview only (this
 // computer's, or the company's shared one) and offers Replace key and Clear key in place of Sign out; a signed-out key
-// runtime offers Add key under Add connection. Clear key names the bots that stop before it can go; for the shared key it first asks "this
+// runtime offers Add key in the Add connection pop-up (API key). Clear key names the bots that stop before it can go; for the shared key it first asks "this
 // computer only" or "all of them", listing the computers, and says an offline one clears its copy when it is next
 // online. Replace key takes the key in a password field, posts it once and empties the field, and follows the
 // computer's check to the end. Replacing the shared key for all of them is a credential administrator's alone. A member
@@ -108,7 +108,15 @@ const {unrouted} = require('./support/routes.cjs');
     const detail = page.locator('#set-machines dialog.computer-detail[open]');
     const own = name => detail.locator(`[data-connection="own:${name}"]`);
     const buttons = row => row.locator('.computer-conn-signin button').allInnerTexts();
-    const addKey = name => detail.locator(`[data-add-connection] [data-add-key="${name}"]`);
+    // Add connection > the tool > API key: the pop-up at that step.
+    const apiKey = async name => {
+      await detail.locator('[data-add-connection]').click();
+      const add = page.locator('dialog.computer-add-dialog[open]');
+      await add.locator(`[data-add-tool="${name}"]`).click();
+      await add.locator('[data-add-kind=api_key]').click();
+      await add.locator('[data-add-step=api_key]').waitFor();
+      return add;
+    };
     // Whose key, by its preview only; Clear key stands in for Sign out.
     assert.match(await own('codex').locator('.machine-key').innerText(), /the company's shared key sk-…xyz/);
     assert.match(await own('claude').locator('.machine-key').innerText(), /this computer's key sk-…abc/);
@@ -116,8 +124,15 @@ const {unrouted} = require('./support/routes.cjs');
     assert.deepEqual(await buttons(own('codex')), ['Replace key', 'Clear key', 'Switch to subscription']);
     assert.deepEqual(await buttons(own('claude')), ['Replace key', 'Clear key', 'Switch to subscription']);
     assert.equal(await own('cursor').count(), 0, 'no bot uses it: not a connection');
-    assert.deepEqual(await addKey('cursor').locator('button').allInnerTexts(), ['Add key'], 'a signed-out key runtime offers Add key');
-    assert.equal(await detail.locator('[data-add-key="codex"], [data-add-key="claude"]').count(), 0, 'not where a key signs it in');
+    let add = await apiKey('cursor');
+    assert.deepEqual(await add.locator('[data-add-key="cursor"] button').allInnerTexts(), ['Add key'], 'a signed-out key runtime offers Add key');
+    await add.locator('[data-add-close]').first().click();
+    for (const name of ['codex', 'claude']) {
+      add = await apiKey(name);
+      assert.equal(await add.locator('[data-add-key]').count(), 0, 'not where a key signs it in');
+      assert.match(await add.innerText(), /already signs in with a key on Team box: Replace key is on its line/);
+      await add.locator('[data-add-close]').first().click();
+    }
 
     // Clear key on the shared key: the ask lists the computers and what the offline one does, the bots are named for
     // the choice, and the reply says Far box clears its copy when it is next online.
@@ -171,7 +186,8 @@ const {unrouted} = require('./support/routes.cjs');
     oldBox = false;
 
     // Add key where none signs it in.
-    await addKey('cursor').getByRole('button', {name: 'Add key'}).click();
+    await (await apiKey('cursor')).getByRole('button', {name: 'Add key'}).click();
+    assert.equal(await page.locator('dialog.computer-add-dialog').count(), 0, 'Add connection gives way to the key pop-up');
     await dialog.locator('h2', {hasText: 'Add a Cursor Agent key on Team box'}).waitFor();
     await dialog.locator('[data-close]').first().click();
     assert.deepEqual(errors, []);

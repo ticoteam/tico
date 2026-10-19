@@ -89,13 +89,13 @@ def test_two_files_sharing_a_name_are_two_uploads_and_a_retry_repeats_each(tmp_p
         def post_multipart(self, *a, **k):
             raise AssertionError("not used")
 
-        def post(self, path, body, key=None):
-            digest = hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest()
+        def request(self, method, path, body=None, key=None, raw=None):
+            digest = hashlib.sha256(path.encode() + (raw if raw is not None else json.dumps(body, sort_keys=True).encode())).hexdigest()
             if key in self.seen:
                 if self.seen[key][0] != digest:
                     raise RuntimeError("409 idempotency key reused with a different request")
                 return self.seen[key][1]
-            if path == "files/uploads":
+            if path.startswith("/api/v2/files/uploads?"):
                 self.uploads += 1
                 result = {"file_id": f"file-{self.uploads}", "version": 1}
             else:
@@ -103,6 +103,9 @@ def test_two_files_sharing_a_name_are_two_uploads_and_a_retry_repeats_each(tmp_p
             if key:
                 self.seen[key] = (digest, result)
             return result
+
+        def post(self, path, body, key=None):
+            return self.request("POST", "/api/v2/" + path, body, key)
 
     api = Api()
     args = {"to": "human:ben", "text": "Before and after", "operation_id": "op-1",

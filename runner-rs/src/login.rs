@@ -37,6 +37,8 @@ pub const SIGN_OUT_CAPABILITY: &str = "model_sign_out_v1";
 pub const KEYS_CAPABILITY: &str = "model_keys_v1";
 /// Switch to subscription (`to_subscription`): a switch for the computer's own login that also takes its API key off.
 pub const SWITCH_TYPE_CAPABILITY: &str = "model_switch_type_v1";
+/// Remove (`remove`): a named subscription's login for one tool comes off the computer, then the subscription itself.
+pub const REMOVE_CAPABILITY: &str = "model_remove_v1";
 const LOGOUT_TIMEOUT: Duration = Duration::from_secs(60);
 /// How long a finished switch waits for the server to agree it goes ahead (`finishing`) before giving up.
 const CONFIRM_TIMEOUT: Duration = Duration::from_secs(30);
@@ -261,6 +263,18 @@ fn model_command(exe: &str, args: &[&str], env: &Env) -> Command {
 
 /// Whether `runtime` is signed in with `env` (the profile's homes), as readiness checks it.
 fn signed_in(runtime: &str, exe: &str, env: &Env, headless: bool) -> (bool, String) {
+    let command = crate::harness_tools::caps(runtime, "").sign_in_status.check == "command";
+    match sign_in_status(runtime, exe, env) {
+        Some((true, detail)) => (true, detail),
+        // A status command is the whole answer: a key the CLI turns into a login is not a sign-in until it has.
+        _ if command => (false, String::new()),
+        _ => (headless, String::new()),
+    }
+}
+
+/// The status check's own answer: Some(signed in, detail), or None when it gave none (it could not run, timed
+/// out or said something unreadable, or this runtime has no check).
+fn sign_in_status(runtime: &str, exe: &str, env: &Env) -> Option<(bool, String)> {
     let run = |args: &[&str], secs: u64| -> Option<(bool, String)> {
         let mut c = model_command(exe, args, env);
         c.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
@@ -284,31 +298,28 @@ fn signed_in(runtime: &str, exe: &str, env: &Env, headless: bool) -> (bool, Stri
     let args: Vec<&str> = status.args.iter().map(String::as_str).collect();
     let timeout = if status.timeout_s > 0 { status.timeout_s } else { 15 };
     match status.check.as_str() {
-        // A status command is the whole answer: a key the CLI turns into a login is not a sign-in until it has.
         "command" => {
-            return match run(&args, timeout).map(|(ok, out)| (ok, out.to_lowercase())) {
-                Some((true, out)) if out.contains(&status.ready) && (status.not_ready.is_empty() || !out.contains(&status.not_ready)) => {
-                    (true, if out.contains("api key") { "Signed in with an API key".into() } else { status.ready_detail })
-                }
-                _ => (false, String::new()),
-            };
+            let (ok, out) = run(&args, timeout)?;
+            let out = out.to_lowercase();
+            if ok && out.contains(&status.ready) && (status.not_ready.is_empty() || !out.contains(&status.not_ready)) {
+                Some((true, if out.contains("api key") { "Signed in with an API key".into() } else { status.ready_detail }))
+            } else {
+                Some((false, String::new()))
+            }
         }
         "json" => {
-            let parsed = run(&args, timeout).and_then(|(_, out)| serde_json::from_str::<Value>(out.lines().next().unwrap_or("")).ok().or_else(|| serde_json::from_str(out.trim()).ok()));
-            if let Some(s) = parsed.filter(|s| s[&status.field] == true) {
-                let method = text_of(&s[&status.method_field]);
-                return (true, if method.is_empty() { status.ready_detail } else { format!("Signed in with {method}") });
+            let (_, out) = run(&args, timeout)?;
+            let s = serde_json::from_str::<Value>(out.lines().next().unwrap_or("")).ok().or_else(|| serde_json::from_str(out.trim()).ok())?;
+            if s[&status.field] != true {
+                return Some((false, String::new()));
             }
+            let method = text_of(&s[&status.method_field]);
+            Some((true, if method.is_empty() { status.ready_detail } else { format!("Signed in with {method}") }))
         }
         // No status command: the login file in this sign-in's config folder is the sign-in, as readiness checks it.
-        "file" => {
-            if crate::hosts::file_signed_in(runtime, env) == Some(true) {
-                return (true, status.ready_detail);
-            }
-        }
-        _ => {}
+        "file" => crate::hosts::file_signed_in(runtime, env).map(|on| (on, if on { status.ready_detail } else { String::new() })),
+        _ => None,
     }
-    (headless, String::new())
 }
 
 fn spawn(exe: &str, argv: &[String], env: &Env, terminal: bool) -> std::io::Result<(Child, OwnedFd, Option<OwnedFd>)> {
@@ -512,9 +523,10 @@ fn restore(moved: &[Moved], env: &Env) -> Result<(), String> {
     if failed.is_empty() { Ok(()) } else { Err(failed.join("; ")) }
 }
 
-/// The commit point of a switch: tell the server it is `finishing` and wait for it to agree. Once it has, a cancel is
-/// refused there, so the new login can go in; a cancel that came first wins, and so does no answer.
-fn confirm_switch(s: &Session, late: &str) -> Result<(), (String, String)> {
+/// The commit point of a switch or a removal: tell the server it is `finishing` and wait for it to agree. Once it
+/// has, a cancel is refused there, so the change can go ahead; a cancel (or a refusal) that came first wins, and so
+/// does no answer.
+fn confirm_commit(s: &Session, late: &str) -> Result<(), (String, String)> {
     let cancelled = || ("cancelled".to_string(), "Cancelled".to_string());
     {
         let mut i = s.inner.lock().unwrap();
@@ -670,7 +682,7 @@ fn run_session(s: Arc<Session>, runner: Arc<Runner>, config: Config, lifetime: D
             let (home, side) = switch.as_ref().unwrap();
             let files = login.files.clone();
             match signed_in(&s.runtime, &exe, &env, false) {
-                (true, _) => match confirm_switch(&s, "Tico did not confirm the switch in time, so the old account stays")
+                (true, _) => match confirm_commit(&s, "Tico did not confirm the switch in time, so the old account stays")
                     .and_then(|()| if to_subscription { hold_key_logins(&s, &runner).map(Some) } else { Ok(None) })
                 {
                     Err(verdict) => verdict,
@@ -922,7 +934,7 @@ fn run_use_key(s: Arc<Session>, runner: Arc<Runner>, config: Config, handle: tok
             return finish("failed", &format!("The new key did not sign {} in; {}", s.runtime, left()));
         }
     }
-    if let Err((state, message)) = confirm_switch(&s, "Tico did not confirm the new key in time") {
+    if let Err((state, message)) = confirm_commit(&s, "Tico did not confirm the new key in time") {
         discard_side(&s.runtime, side.as_ref());
         return finish(&state, &if state == "cancelled" { message } else { format!("{message}; {}", left()) });
     }
@@ -972,6 +984,100 @@ fn discard_side(runtime: &str, side: Option<&(String, Env, std::path::PathBuf, s
     }
 }
 
+/// Whether `runtime` is surely not signed in on `profile`: its home holds no file but what Tico put there when it
+/// made the folder, or its status check says signed out. A check that could not run (the CLI is gone, it timed
+/// out) is no answer, so its login is taken to be there.
+fn surely_signed_out(runtime: &str, config: &Config, profile: &crate::profiles::Profile, env: &Env) -> bool {
+    if profile.home(runtime).is_some_and(|home| login_files(&home, env) == Some(false)) {
+        return true;
+    }
+    login_env(runtime, config, &profile.name).ok()
+        .and_then(|(exe, env, _)| sign_in_status(runtime, &exe, &env))
+        .is_some_and(|(on, _)| !on)
+}
+
+/// Whether `home` holds any file other than the .gitconfig Tico copies in, looked at as the CLI's user (under
+/// isolation the home is that user's). None when it could not be looked at.
+fn login_files(home: &std::path::Path, env: &Env) -> Option<bool> {
+    if !home.exists() {
+        return Some(false);
+    }
+    let (dir, gitconfig) = (home.display().to_string(), home.join(".gitconfig").display().to_string());
+    let out = model_command("find", &[&dir, "!", "-type", "d", "!", "-path", &gitconfig, "-print", "-quit"], env)
+        .stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).output().ok()?;
+    out.status.success().then(|| !out.stdout.is_empty())
+}
+
+/// Remove a named subscription's login for `runtime`. Tico confirms first (no bot has come onto it since it was
+/// asked for); then its CLI's own logout runs in the subscription's home and is checked; then, once every other
+/// tool is surely signed out of that subscription, the subscription leaves runner.json and its folder is deleted.
+/// A logout that did not take leaves everything as it was.
+fn run_remove(s: Arc<Session>, runner: Arc<Runner>, config: Config) {
+    let default = profile_for(&config, "").map(|p| p.name).unwrap_or_default();
+    let fail = |msg: &str| s.finish("failed", msg, &runner, &default);
+    if s.profile == default {
+        return fail(&format!("Subscription {} is this computer's own login; sign it out instead", s.profile));
+    }
+    let (exe, env, profile) = match login_env(&s.runtime, &config, &s.profile) {
+        Ok((exe, env, Some(profile))) => (exe, env, profile),
+        Ok(_) => return fail(&format!("Subscription {} is not on this computer", s.profile)),
+        Err(e) => return fail(&e),
+    };
+    if let Err((state, msg)) = confirm_commit(&s, "Tico did not confirm the removal in time, so nothing was removed") {
+        return s.finish(&state, &msg, &runner, &default);
+    }
+    if sign_in_status(&s.runtime, &exe, &env).is_none_or(|(on, _)| on) {
+        let logout = crate::harness_tools::login_command(&s.runtime).map(|l| l.logout).unwrap_or_default();
+        if logout.is_empty() {
+            return fail(&format!("Removing a subscription from the app is not available for {}", s.runtime));
+        }
+        let args: Vec<&str> = logout.iter().map(String::as_str).collect();
+        if let Ok(mut child) = model_command(&exe, &args, &env).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn() {
+            let until = Instant::now() + LOGOUT_TIMEOUT;
+            while !matches!(child.try_wait(), Ok(Some(_)) | Err(_)) {
+                if Instant::now() > until {
+                    kill(&mut child);
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        }
+        if signed_in(&s.runtime, &exe, &env, false).0 {
+            return fail(&format!("The logout finished but {} is still signed in on {}", s.runtime, s.profile));
+        }
+    }
+    crate::accounts::forget(&profile.name, &s.runtime);
+    crate::profiles::forget_windows(&profile.name, &s.runtime);
+    // Another tool that may still be signed in on it keeps the subscription; only this tool's login went.
+    let stays: Vec<String> = crate::harness_tools::profile_runtimes().into_iter()
+        .filter(|r| *r != s.runtime && !surely_signed_out(r, &config, &profile, &env))
+        .map(|r| crate::harness_tools::name_for(&r)).collect();
+    if !stays.is_empty() {
+        let msg = format!("{} signed out of {}; it stays on this computer for {}", s.runtime, s.profile, stays.join(" and "));
+        return s.finish("done", &msg, &runner, &default);
+    }
+    // Under runner isolation each tool's home in the folder is the bot user's: empty them as that user first, so the
+    // supervisor can then delete the folder. Only a folder Tico made, never one a person pointed it at.
+    if crate::profiles::tico_made(&config, &profile) {
+        for runtime in crate::harness_tools::profile_runtimes() {
+            if let Some(home) = profile.home(&runtime).filter(|h| h.is_dir()) {
+                let home = home.display().to_string();
+                let _ = file_command(&["find", &home, "-mindepth", "1", "-delete"], &env);
+            }
+        }
+    }
+    match crate::profiles::remove_profile(&config, &s.profile) {
+        Ok(deleted) => {
+            if !deleted {
+                log(&format!("Tico runner: subscription {} unlisted; its folder is not Tico's to delete", s.profile));
+            }
+            runner.events.ask(&["heartbeat"]);
+            s.finish("done", &format!("Removed {}", s.profile), &runner, &default)
+        }
+        Err(e) => fail(&e),
+    }
+}
+
 /// The browser sign-ins this runner is running, kept in step with the server's list.
 pub struct Logins {
     sessions: HashMap<String, Arc<Session>>,
@@ -1017,11 +1123,14 @@ impl Logins {
             }
         } else if crate::harness_tools::login_command(&s.runtime).is_none() {
             s.finish("failed", &format!("Browser sign-in is not available for {}", s.runtime), runner, &default);
-        } else if !["sign_in", "switch", "sign_out", "use_shared_key", "to_subscription"].contains(&s.kind.as_str()) {
+        } else if !["sign_in", "switch", "sign_out", "use_shared_key", "to_subscription", "remove"].contains(&s.kind.as_str()) {
             // Never a sign-in in place of something this runner does not know.
             s.finish("failed", &format!("Update this computer's runner to {}", s.kind.replace('_', " ")), runner, &default);
         } else if self.sessions.values().any(|o| o.live() && o.runtime == s.runtime && o.profile == s.profile) {
             s.finish("failed", &format!("Another sign-in is already running for {}", s.runtime), runner, &default);
+        } else if !s.profile.is_empty() && self.sessions.values().any(|o| o.live() && o.profile == s.profile && (o.kind == "remove" || s.kind == "remove")) {
+            // A removal may delete the subscription's whole folder: nothing else runs on that subscription meanwhile.
+            s.finish("failed", &format!("Something else is running on {}; try again when it ends", s.profile), runner, &default);
         } else if named.as_ref().is_some_and(|p| p.share_operator) && !crate::harness_tools::caps(&s.runtime, "").own_config_home {
             // A host with its own config folder never uses the operator's login, so a shared profile still signs in to Tico's own.
             s.finish("failed", &format!("Profile {} shares the operator's own logins; sign in normally", s.profile), runner, &default);
@@ -1039,6 +1148,11 @@ impl Logins {
                 Err(e) => ("failed", format!("Could not change this computer's sign-out ({:?})", e.kind())),
             };
             s.finish(state.0, &state.1, runner, &default);
+        } else if s.kind == "remove" && named.is_none() {
+            s.finish("failed", &format!("Subscription {} is not on this computer", s.profile), runner, &default);
+        } else if s.kind == "remove" {
+            let (s2, r2) = (s.clone(), runner.clone());
+            std::thread::spawn(move || run_remove(s2, r2, config));
         } else if s.kind == "sign_out" && !s.profile.is_empty() && named.is_none() {
             s.finish("failed", &format!("Subscription {} is not on this computer", s.profile), runner, &default);
         } else if s.kind == "sign_out" {
@@ -1111,7 +1225,8 @@ impl Logins {
                 // (cancelled, expired), the runner stops too.
                 match text_of(&reply["state"]).as_str() {
                     "finishing" if body["state"] == "finishing" => s.confirmed.store(true, Ordering::SeqCst),
-                    "cancelled" | "expired" if s.live() => s.cancelled.store(true, Ordering::SeqCst),
+                    // A removal Tico refused at its commit point (a bot runs on it now) stops before anything is removed.
+                    "cancelled" | "expired" | "failed" if s.live() => s.cancelled.store(true, Ordering::SeqCst),
                     _ => {}
                 }
                 {
@@ -1831,6 +1946,81 @@ exit 2
         let before = key_logins();
         assert!(!rt.block_on(sign.key_login("codex", &root.join("bin/codex"))));
         assert_eq!((fetches(), key_logins()), (fetched + 1, before));
+    }
+
+    #[test]
+    fn remove_waits_for_tico_runs_alone_on_the_subscription_and_keeps_a_login_it_cannot_check() {
+        const CHILD: &str = "TICO_TEST_REMOVE";
+        let Some(root) = std::env::var_os(CHILD).map(std::path::PathBuf::from) else {
+            // A process of its own: the stand-in codex is the only CLI on PATH, so Claude Code cannot be checked.
+            let root = std::env::temp_dir().join(format!("tico-remove-{}", uuid::Uuid::new_v4().simple()));
+            std::fs::create_dir_all(root.join("bin")).unwrap();
+            std::fs::write(root.join("bin/codex"), FAKE_CODEX).unwrap();
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(root.join("bin/codex"), std::fs::Permissions::from_mode(0o755)).unwrap();
+            let path = format!("{}:/usr/bin:/bin", root.join("bin").display());
+            let out = Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "login::tests::remove_waits_for_tico_runs_alone_on_the_subscription_and_keeps_a_login_it_cannot_check", "--nocapture"])
+                .env(CHILD, &root).env("PATH", path).env("HOME", &root).env_remove("CODEX_HOME")
+                .env_remove(crate::isolation::UID_ENV).env_remove(crate::isolation::GID_ENV)
+                .env_remove("OPENAI_API_KEY").output().unwrap();
+            std::fs::remove_dir_all(&root).ok();
+            let said = String::from_utf8_lossy(&out.stdout);
+            assert!(out.status.success() && said.contains("1 passed"), "{said}{}", String::from_utf8_lossy(&out.stderr));
+            return;
+        };
+        let path = root.join("runner.json");
+        std::fs::write(&path, json!({"url": "http://127.0.0.1:9", "token": "t", "runner_id": "r1", "projects_dir": root.join("projects")}).to_string()).unwrap();
+        let config = Config::load(&path).unwrap();
+        let client = crate::client::Client::new(&config.url(), &config.token(), 1, 0).unwrap();
+        let runner = Arc::new(Runner::new(config.clone(), client, crate::state::State::open(&root.join("state")).unwrap()));
+        crate::profiles::add_profile(&config, "work").unwrap();
+        let folder = root.join("profiles/work");
+        let (codex, claude) = (folder.join("codex/auth.json"), folder.join("claude/.claude.json"));
+        std::fs::write(&codex, "work\n").unwrap();
+        std::fs::write(&claude, "{}").unwrap();
+        let listed = || Config::load(&path).unwrap().data["profiles"].get("work").is_some();
+        let logouts = || std::fs::read_to_string(root.join("runs")).unwrap_or_default().matches("logout").count();
+        let remove = |server: bool| {
+            let s = Session::new(&json!({"id": format!("l{}", uuid::Uuid::new_v4().simple()), "runtime": "codex", "kind": "remove", "profile": "work"}));
+            // As the relay hands it over: runner.json read again, with the profile `add_profile` wrote.
+            let (s2, r2, c2) = (s.clone(), runner.clone(), Config::load(&path).unwrap());
+            let running = std::thread::spawn(move || run_remove(s2, r2, c2));
+            wait_for(|| state(&s).0 == "finishing" || !s.live());
+            if server { s.confirmed.store(true, Ordering::SeqCst) } else { s.cancelled.store(true, Ordering::SeqCst) }
+            running.join().unwrap();
+            state(&s)
+        };
+
+        // Tico refuses at the commit point (a bot came onto it): nothing is signed out or deleted.
+        let refused = remove(false);
+        assert_eq!(refused.0, "cancelled", "{refused:?}");
+        assert!(codex.exists() && claude.exists() && listed() && logouts() == 0);
+
+        // Claude Code's login files are there but it cannot be checked (not installed here): Codex's login goes,
+        // the subscription and Claude Code's login stay.
+        let kept = remove(true);
+        assert_eq!(kept, ("done".into(), "codex signed out of work; it stays on this computer for Claude Code".into()));
+        assert!(!codex.exists() && claude.exists() && listed());
+
+        // While a removal runs nothing else starts on that subscription, and it does not start while something does.
+        let mut logins = Logins::default();
+        let held = Session::new(&json!({"id": "lheld", "runtime": "claude", "kind": "sign_in", "profile": "work"}));
+        logins.sessions.insert(held.id.clone(), held);
+        logins.begin(&runner, &json!({"id": "lrm", "runtime": "codex", "kind": "remove", "profile": "work"}));
+        assert_eq!(state(&logins.sessions["lrm"]), ("failed".into(), "Something else is running on work; try again when it ends".into()));
+        let mut logins = Logins::default();
+        let held = Session::new(&json!({"id": "lheld", "runtime": "codex", "kind": "remove", "profile": "work"}));
+        logins.sessions.insert(held.id.clone(), held);
+        logins.begin(&runner, &json!({"id": "lin", "runtime": "claude", "kind": "sign_in", "profile": "work"}));
+        assert_eq!(state(&logins.sessions["lin"]), ("failed".into(), "Something else is running on work; try again when it ends".into()));
+        assert!(claude.exists() && listed());
+
+        // Every other tool surely signed out: the subscription leaves runner.json and its folder goes.
+        std::fs::remove_file(&claude).unwrap();
+        std::fs::write(&codex, "work\n").unwrap();
+        assert_eq!(remove(true), ("done".into(), "Removed work".into()));
+        assert!(!folder.exists() && !listed());
     }
 
     #[test]

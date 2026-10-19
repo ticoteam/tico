@@ -139,12 +139,19 @@ const {unrouted} = require('./support/routes.cjs');
     assert.match(await beta.innerText(), /Signed out[\s\S]*Bots: Writer/);
     assert.equal(await beta.locator('[data-model-login][data-profile=beta]').isEnabled(), true);
     assert.match(await dialog.locator('[data-connection="own:musecode"]').innerText(), /Login expired or rejected[\s\S]*The provider refused the login/);
-    assert.equal(await dialog.locator('[data-add-connection] [data-subs-add]').count(), 1, 'Add a named subscription at the end');
-    // Installed tools no bot uses, signed in only from a terminal: their command is under Add connection, with no chip.
-    assert.deepEqual(await dialog.locator('[data-add-connection] [data-add-terminal]').evaluateAll(list => list.map(t => [t.dataset.addTerminal,
-      t.querySelector('code').textContent, t.querySelector('[data-machine-copy-login]').dataset.machineCopyLogin])),
-      [['cursor', 'cursor-agent login', 'cursor-agent login'], ['grok', 'grok login', 'grok login']]);
-    assert.match(await dialog.locator('[data-add-terminal=grok]').innerText(), /^Grok Build:\s*grok login\s*Copy$/);
+    assert.equal(await dialog.locator('[data-detail-section=connections] > :last-child [data-add-connection=box]').isEnabled(), true, 'Add connection at the end');
+    // Installed tools no bot uses, signed in only from a terminal: their command is in the Add connection pop-up, with no
+    // chip and no line.
+    const add = page.locator('dialog.computer-add-dialog[open]');
+    for (const [tool, command] of [['grok', 'grok login'], ['cursor', 'cursor-agent login']]) {
+      await dialog.locator('[data-add-connection=box]').click();
+      await add.locator(`[data-add-tool=${tool}]`).click();
+      const line = add.locator(`[data-add-terminal=${tool}]`);
+      assert.deepEqual([await line.locator('code').textContent(), await line.locator('[data-machine-copy-login]').getAttribute('data-machine-copy-login')], [command, command]);
+      assert.equal(await add.locator('[data-add-kind=subscription]').isDisabled(), true);
+      await add.locator('[data-add-close]').first().click();
+      await add.waitFor({state: 'detached'});
+    }
     assert.equal(await dialog.locator('[data-connection][data-machine-tool=grok], [data-connection][data-machine-tool=cursor]').count(), 0);
     assert.doesNotMatch(await row('box').locator('.machine-chips').innerText(), /Grok|Cursor/);
     // Usage reads as what is left, everywhere in the pop-up and the list.
@@ -178,7 +185,7 @@ const {unrouted} = require('./support/routes.cjs');
     // 24. The pop-up of a computer with no connection.
     await row('empty').locator('[data-no-connection]').click();
     assert.match(await dialog.locator('[data-detail-section=connections]').innerText(), /Bots here can't run until a connection is added/);
-    assert.equal(await dialog.locator('[data-add-connection] [data-model-login][data-runtime=codex]').count(), 1);
+    assert.equal(await dialog.locator('[data-add-connection=empty]').count(), 1);
     await page.keyboard.press('Escape');
 
     // 23. Offline: last seen on the row, chips keep their reading, actions wait for the computer.
@@ -190,7 +197,8 @@ const {unrouted} = require('./support/routes.cjs');
     await row('box').locator('.machine-name').click();
     await dialog.locator('[data-computer-offline]').waitFor();
     assert.match(await dialog.locator('[data-computer-offline]').innerText(), /Computer is offline/);
-    assert.equal(await dialog.locator('[data-model-login]:enabled, [data-subs-add] button:enabled').count(), 0);
+    assert.equal(await dialog.locator('[data-model-login]:enabled, [data-add-connection]:enabled, [data-connection-remove]:enabled, .computer-conn-rename').count(), 0);
+    assert.equal(await dialog.locator('[data-add-connection]').getAttribute('title'), 'Computer is offline');
     await page.keyboard.press('Escape');
 
     // Desktop apps (a Mac's app driver), under Versions and updates: only when the computer reports `appdriver`, one row
@@ -241,7 +249,7 @@ const {unrouted} = require('./support/routes.cjs');
       ['own:claude', 'profile:acme:codex', 'profile:beta:codex', 'own:musecode']);
     assert.match(await dialog.locator('[data-connection="profile:acme:codex"]').innerText(), /Subscription · Acme Pro\s+Computer's login/);
     assert.doesNotMatch(await dialog.innerText(), /@/, 'no account emails');
-    assert.equal(await dialog.locator('[data-model-login], [data-add-connection], [data-machine-copy-login], [data-subs-add], [data-subs-rename], [data-subs-weekly], [data-subs-refresh], [data-computer-remove], [data-inbox-only], [data-member-bots], [data-computer-screen], [data-harness-choice], [data-performance-mode]').count(), 0);
+    assert.equal(await dialog.locator('[data-model-login], [data-add-connection], [data-machine-copy-login], [data-connection-remove], .computer-conn-rename, [data-subs-rename], [data-subs-weekly], [data-subs-refresh], [data-computer-remove], [data-inbox-only], [data-member-bots], [data-computer-screen], [data-harness-choice], [data-performance-mode]').count(), 0);
     await page.keyboard.press('Escape');
 
     assert.deepEqual(errors, []);
