@@ -650,6 +650,7 @@ const UNREACHABLE = 'Not sent. Could not reach Tico support. Try again in a mome
     await v.page.evaluate(m => window.supportStart(m, 'setup'), snapshot);
     await v.page.waitForFunction(m => document.querySelector('#support-pop[open] #support-message')?.value === m, snapshot);
     await fitsAbove('setup snapshot');
+    if (process.env.TICO_SCREENSHOT_DIR) await v.page.screenshot({path: require('node:path').join(process.env.TICO_SCREENSHOT_DIR, 'phone-help-box-keyboard-light.png')});
     // Keyboard down: the whole snapshot shows, nothing left to scroll.
     await v.page.evaluate(() => window.__keys(844, 0));
     await sheetIs(844 - SHEET, 844, 'keyboard down after the snapshot');
