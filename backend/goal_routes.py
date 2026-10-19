@@ -189,10 +189,10 @@ def install(app, store, auth, mutate, settings):
         who = request.state.identity
         def work(c):
             auth.domain(who)
+            needs_switch(c, "Company section")
             if not company_editor(who):
                 raise Problem("forbidden", "Only the owner or an admin writes the company's Vision and Description, "
                               f"on their own click; a bot, the {ceo_bot.name(c)} included, proposes", 403)
-            needs_switch(c, "Company section")
             C.update(c, who.actor, vision=body.vision, description=body.description)
             return company_view(c, who)
         return mutate(request, body, work)
@@ -394,12 +394,12 @@ def install(app, store, auth, mutate, settings):
         who = request.state.identity
         def work(c):
             auth.domain(who)
+            needs_switch(c, "Why line")
             row = goal_or_404(c, gid)
             refuse_bot_why(who)
             if not may_colour(c, who, row):
                 raise Problem("forbidden", "The goal's owner, the owner of the goal it serves, or someone above them "
                               "sets its Why", 403)
-            needs_switch(c, "Why line")
             C.set_why(c, who.actor, gid, body.why)
             return {"goal": G.view(c, G.goal(c, gid), auth.task_sql(c, who))}
         return mutate(request, body, work)
@@ -668,12 +668,12 @@ def install(app, store, auth, mutate, settings):
         who = request.state.identity
         def work(c):
             auth.domain(who)
+            if body.kind == "goal_why":
+                needs_switch(c, "Why line")
             goal = goal_or_404(c, body.goal_id) if body.goal_id else None
             record = kpi_or_404(c, who, body.kpi_id) if body.kpi_id else None
             if goal and not readable_goals(c, who, [goal]):
                 raise Problem("not_found", "Unknown goal", 404)
-            if body.kind == "goal_why":
-                needs_switch(c, "Why line")
             return {"proposal": G.propose(c, who.actor, body.kind, body.goal_id, body.kpi_id, body.payload, body.reason)}
         return mutate(request, body, work)
 
@@ -686,9 +686,9 @@ def install(app, store, auth, mutate, settings):
             item = G.proposal(c, pid)
             if not item:
                 raise Problem("not_found", "Unknown proposal", 404)
-            if not decider(c, who, item):
-                raise Problem("forbidden", "Whoever owns the goal or the KPI decides, and only a person, on their own click", 403)
             if item["kind"] == "goal_why":
                 needs_switch(c, "Why line")
+            if not decider(c, who, item):
+                raise Problem("forbidden", "Whoever owns the goal or the KPI decides, and only a person, on their own click", 403)
             return {"proposal": G.decide(c, who.actor, pid, body.decision, body.note, why=body.why)}
         return mutate(request, body, work)

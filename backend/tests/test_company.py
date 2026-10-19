@@ -49,6 +49,22 @@ def test_off_there_is_no_company_section_to_write(api):
     post(api, "goal-proposals", {"kind": "goal_why", "goal_id": gid, "payload": {"why": "Landlords first."}},
          token=ceo, expected=409)
     post(api, f"goals/{gid}/why", {"why": "Landlords first."}, expected=409)
+    # Off wins over every other refusal: a bot, the Assistant acting for the owner, a member, an unknown goal.
+    api.app.state.store.settings.test_identities["ana-via"] = Identity("human:ana", "owner", "ana@acme.example",
+                                                                       via="assistant", confirmed=True)
+    for token in (ceo, "ana-via", "cara-test"):
+        post(api, "company", {"vision": "Said for her."}, token=token, expected=409)
+        post(api, f"goals/{gid}/why", {"why": "Said for her."}, token=token, expected=409)
+    post(api, "goals/no-such-goal/why", {"why": "Landlords first."}, expected=409)
+    post(api, "goal-proposals", {"kind": "goal_why", "goal_id": "no-such-goal", "payload": {"why": "Landlords first."}},
+         token=ceo, expected=409)
+    # A Why left waiting from when it was on can't be decided while off, by anyone.
+    assert post(api, "ceo-bot", {"on": True})["on"] is True
+    waiting = propose_why(api, gid, "Landlords first.", ceo)
+    assert post(api, "ceo-bot", {"on": False})["on"] is False
+    for token in (ceo, "ana-via", "cara-test", "ana-test"):
+        post(api, f"goal-proposals/{waiting['id']}/decide", {"decision": "confirm"}, token=token, expected=409)
+    assert goal(api, gid)["why"] == ""
     assert get(api, "company/history")["events"] == []
 
 
