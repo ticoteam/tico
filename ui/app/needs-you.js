@@ -69,7 +69,7 @@ function needsV2Item(it, folded, showName = true) {
     <summary>
       ${slug && S.emps.some(e => e.name === slug) ? avatar(slug, 24) : personCircle(actorLabel(from) || 'Tico', 24)}
       <span class="req-text">${showName ? `<span class="req-from">${esc(actorLabel(from) || 'Tico')}:</span> ` : ''}${esc(plainActors(title))}</span>
-      <span class="req-meta">${dueChip({due: it.due, owner: it.owner, status: it.status})}<span class="pill ${kind === 'approval' || kind === 'question' ? 'needs' : kind === 'declined' ? 'blocked' : ''}">${esc(V2_KIND[kind] || kind)}</span>${esc(ago(it.created))}</span>
+      <span class="req-meta">${dueChip({due: it.due, owner: it.owner, status: it.status})}<span class="pill ${kind === 'approval' || kind === 'question' ? 'needs' : kind === 'declined' ? 'blocked' : ''}">${esc(V2_KIND[kind] || kind)}</span>${esc(kind === 'approval' && approvalReadyAge(it) != null ? 'ready ' + waitWords(approvalReadyAge(it)) : ago(it.created))}</span>
       <span class="req-arrow" aria-hidden="true">›</span>
     </summary>
     <div class="req-body">
@@ -86,6 +86,30 @@ function needsV2Item(it, folded, showName = true) {
       <div class="issue-compose" hidden></div>
     </div>
   </details>`;
+}
+// How long an approval's exact payload has been ready to decide, in seconds (until its decision once decided), and whose
+// decision it is: "Ready 2 h 10 min, waiting on Chris" (backend/hubdb.py approval_wait). Counted here from `ready_since`
+// so a page left open stays right.
+function waitWords(s) {
+  const m = Math.floor(Math.max(0, +s || 0) / 60), d = Math.floor(m / 1440), h = Math.floor(m % 1440 / 60), r = m % 60;
+  if (d) return h ? `${d} d ${h} h` : `${d} d`;
+  if (h) return r ? `${h} h ${r} min` : `${h} h`;
+  return `${r} min`;
+}
+function approvalReadyAge(it) {
+  const at = Date.parse(it?.ready_since || '');
+  if (!Number.isFinite(at)) return null;
+  const end = it.decided_at ? Date.parse(it.decided_at) : Date.now();
+  return Math.max(0, ((Number.isFinite(end) ? end : Date.now()) - at) / 1000);
+}
+function approvalReadyLine(it) {
+  const age = approvalReadyAge(it);
+  if (age == null) return '';
+  const owner = it.decision_owner || '';
+  const who = !owner ? '' : actorPerson(owner) && actorPerson(owner) === S.me?.id ? 'you'
+    : it.decision_owner_name || actorLabel(owner);
+  if (it.decision) return `Decided ${waitWords(age)} after it was ready`;
+  return `Ready ${waitWords(age)}` + (who ? `, waiting on ${who}` : '');
 }
 // What an approval asks for, built as elements with every payload value set as text; the markup the list
 // redraws from is this element's serialization, so a value is never parsed as HTML. A send shows its
@@ -156,6 +180,8 @@ function approvalPayloadNode(it) {
   };
   const box = el('div', 'req-next approval-payload'), main = el('div', 'md');
   box.append(el('span', '', 'Exactly this'), main);
+  const ready = approvalReadyLine(it);
+  if (ready) main.append(el('p', 'approval-ready', ready));
   const raw = el('pre', '', JSON.stringify(p, null, 2));
   if (it.what !== 'send') {
     const rows = approvalFacts(it.what, p, it);

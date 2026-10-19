@@ -8,6 +8,13 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- **How long an approval has waited, and on whom**: every approval now records when its exact payload was ready to
+  decide and whose decision it is, and its card in Needs you and Decide says so plainly ("Ready 2 h 10 min, waiting
+  on you", or the person's name); the row shows "ready 2 h 10 min". The API adds `ready_since`, `decision_owner`,
+  `decision_owner_name` and `age_s`. With the Health Monitor on, a release's publish approval ready over 60 minutes
+  with no decision is one finding (`release_approval_wait`) that counts each hourly scan and wakes nobody again;
+  `TICO_RELEASE_APPROVAL_WAIT_MINUTES` sets the threshold (0 turns it off). Nothing approves for anyone, and who may
+  approve is unchanged.
 - **A usage limit holds the login, once**: a run that hits a subscription's usage limit now holds that provider
   login on that computer, for every bot signed in with it, until the reset the provider names (Claude's "resets
   2:40am (UTC)" is read too), or 30, 60 and then 120 minutes when it names none. The hold is saved on the server, so

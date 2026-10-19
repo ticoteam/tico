@@ -5,7 +5,8 @@
 // shows its whole text wrapped (in Needs you and in Decide), its HTML-looking text stays text, and the exact payload
 // (with the content hash) folds under Exact payload. A field the facts list does not name gets its own row, and a
 // publish without its text says so. A bot's report to Tico support reads "Send this to Tico support?" in both places,
-// with where it goes, what goes with it and its whole message wrapped as text.
+// with where it goes, what goes with it and its whole message wrapped as text. An approval says how long its exact
+// payload has been ready and whose decision it is ("Ready 2 h 10 min, waiting on you", or the person's name).
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const {open} = require('./tasks-page.cjs');
@@ -24,16 +25,21 @@ const REPLY = 'You asked how BotOps can restart a stuck runner without losing th
   '<img src=x onerror="window.pwned=1"> is how the ticket quoted it, and that stays text.\nThanks, Support';
 const publish = {id: 'ap-pub', kind: 'approval', what: 'publish', title: 'Approve this publish', requester: 'bot:support',
   requested_by: 'bot:support', created: new Date().toISOString(),
-  payload: {content_sha256: '355cf' + 'e'.repeat(59), text: REPLY, url: 'hq-ticket:TK-TGYWKV5A'}};
+  payload: {content_sha256: '355cf' + 'e'.repeat(59), text: REPLY, url: 'hq-ticket:TK-TGYWKV5A'},
+  ready_since: new Date(Date.now() - (130 * 60 + 5) * 1000).toISOString()};
 async function phonePublish(browser) {
   const {page, errors} = await open(browser, {viewport: {width: 390, height: 844}, hash: '#/tasks'});
+  publish.decision_owner = 'human:' + await page.evaluate(() => S.me.id);
   await page.route('**/api/v2/needs-you*', route => route.fulfill({contentType: 'application/json', body: JSON.stringify({items: [publish]})}));
   await page.evaluate(async () => { await v2Refresh(); tasksRender(TASKS_ST); });
   await page.locator('#task-view [data-view="foryou"]').click();
   const card = page.locator('[data-group="approvals"] details.req');
+  // How long its exact payload has been ready, and whose decision it is: on the row, and in the card on both pages.
+  assert.match(await card.locator('> summary .req-meta').textContent(), /ready 2 h 10 min$/);
   await card.locator('> summary').click();
   // Readable, whole and inside the phone's width, in Needs you and then on Decide's card.
   const check = async (box, where) => {
+    assert.equal(await box.locator('.approval-ready').textContent(), 'Ready 2 h 10 min, waiting on you', where);
     const facts = await box.locator('.approval-facts').evaluate(dl => [...dl.children].map(x => x.textContent));
     assert.deepEqual(facts, ['Where', 'Support ticket TK-TGYWKV5A', 'Text', REPLY], where);
     const text = box.locator('.approval-facts dd.approval-text');
@@ -72,13 +78,15 @@ async function phonePublish(browser) {
     {what: 'spend', payload: {amount: {value: 120, currency: 'USD'}, account: 'Ads', what: 'Boost', currency: 'USD',
       vendor: '<img src=x onerror="window.pwned=1">', seats: 3, tags: ['launch', 'q4'], note: null}},
     {what: 'merge', payload: {repo: 'acme/site', pr: 42}},
-    {what: 'other', payload: {x: 1}}].map(it => {
+    {what: 'other', payload: {x: 1}},
+    {what: 'merge', payload: {repo: 'acme/site', pr: 43}, decision_owner: 'human:sam', decision_owner_name: 'Sam',
+      ready_since: new Date(Date.now() - 61 * 60000).toISOString()}].map(it => {
     const node = approvalPayloadNode(it), body = document.querySelector('.decide .dc-body');
     body.replaceChildren(node);
     const fits = [...node.querySelectorAll('.approval-facts dd')].every(dd => dd.getBoundingClientRect().right <= innerWidth && dd.scrollWidth <= dd.clientWidth);
     return {facts: [...node.querySelectorAll('.approval-facts > *')].map(x => x.textContent), fits,
       links: [...node.querySelectorAll('a')].map(a => a.getAttribute('href')), folded: !!node.querySelector('details.approval-raw pre'),
-      markup: node.querySelectorAll('img').length};
+      markup: node.querySelectorAll('img').length, ...(it.ready_since ? {ready: node.querySelector('.approval-ready').textContent} : {})};
   }));
   const ok = {links: [], folded: true, fits: true, markup: 0};
   assert.deepEqual(shown, [
@@ -89,7 +97,8 @@ async function phonePublish(browser) {
     {...ok, facts: ['Amount', '{"value":120,"currency":"USD"}', 'Account', 'Ads', 'For', 'Boost', 'currency', 'USD',
       'vendor', '<img src=x onerror="window.pwned=1">', 'seats', '3', 'tags', '["launch","q4"]', 'note', 'null']},
     {...ok, facts: ['Repository', 'acme/site', 'Pull request', '#42']},
-    {...ok, facts: [], folded: false}]);
+    {...ok, facts: [], folded: false},
+    {...ok, facts: ['Repository', 'acme/site', 'Pull request', '#43'], ready: 'Ready 1 h 1 min, waiting on Sam'}]);
   assert.equal(await page.evaluate(() => window.pwned), undefined);
   assert.deepEqual(errors, []);
 }
