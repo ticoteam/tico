@@ -24,7 +24,7 @@ Settings > Bots has an **Access** column. **Edit** opens the editor, with three 
 | Preset | See | Read | Write |
 | --- | --- | --- | --- |
 | **Open** | Everyone | Everyone | Everyone |
-| **Visible, requests only** | Everyone | the humans, groups and bots you choose | Everyone |
+| **Requests only** | Everyone | the humans, groups and bots you choose | Everyone |
 | **Private** | the ones you choose | the ones you choose | the ones you choose |
 | **Custom** | each level chosen on its own | | |
 
@@ -206,20 +206,21 @@ A Linux computer can show its screen in the app, so people watch its bots work o
 
 - **On the computer**, its owner turns the screen on (`TICO_SCREEN=1` in Docker, which a new Docker runner has; or
   `tico-runner screen on`). Until then the computer offers no screen and the hub refuses any mode but Off.
-- **Screen** in Settings > Computers: **Off**, **View** or **Control**. It starts at **View** the first time a new computer offers
-  a screen, unless someone already chose a mode for it (audit: `runner.screen` by `system`); a computer added before this
+- **Screen** in Settings > Computers: **Off**, **View** or **Control**. It starts at **Control** the first time a new computer
+  offers a screen, unless someone already chose a mode for it (audit: `runner.screen` by `system`); a computer added before this
   default keeps its setting. The computer's operator or an admin sets it
   (`POST /api/v2/computers/<id>/screen {"mode": "view"}`), or BotOps as one of them. Off closes open screens; View closes the
   ones in control.
 
 Only the computer's operator and admins open the screen, in the app themselves: each opening is a one-minute, single-use
-ticket, at most three at once per computer, an hour at most each. Every opening and closing is in the audit log
-(`runner.screen_open`, `runner.screen_close` with who, view or control, and how long).
+ticket, at most three at once per computer, an hour at most each. The screen opens in the computer's mode, wherever it
+is opened from: at Control they drive it at once, with View one tap away; at View they watch only. Every opening and
+closing is in the audit log (`runner.screen_open`, `runner.screen_close` with who, view or control, and how long).
 
 Where the status shows: every bot's **More** has a **Screen** row, in Setup (or About). When the screen is ready it opens
 it and says View or Control, and the bot's header has a **Screen** button too. Otherwise the row says why and what to do:
-the screen is off in Tico (the operator or an admin gets **Turn on (View)** right there; Control stays a choice in
-Settings > Computers), the computer offers no screen yet (the steps to turn it on on the computer, with commands to copy),
+the screen is off in Tico (the operator or an admin gets **Turn on (Control)** right there, the same as a new computer's
+first offer; View stays a choice in Settings > Computers), the computer offers no screen yet (the steps to turn it on on the computer, with commands to copy),
 it is a Mac (Linux only for now), the computer is offline, the bot has no computer, or only the operator and admins may
 open it. Someone who may see the bot but not its activity is told its computer isn't shown to them, and nothing more.
 The row follows the computer as the page refreshes (it comes online, its screen is turned on), with no reload.
@@ -254,7 +255,7 @@ stops the reports, and what was recorded stays until it is 14 days old. **Delete
 `runner.performance_erased`).
 
 Every person and bot of the company reads it: **Performance** in a computer's pop-up in Settings > Computers, `hub computer performance <computer>`,
-or `GET /api/v2/computers/<id>/performance?hours=24` (1 to 336). A report holds numbers and process names only (the
+or `GET /api/v2/computers/<id or label>/performance?hours=24` (1 to 336). A report holds numbers and process names only (the
 program's own name, never its arguments), and the turns shown are the server's own record of what ran. A bot the
 reader may not see (its **See** access) shows as "another bot", without its model or turn.
 
@@ -381,7 +382,7 @@ The commands (with MCP tools of the same names):
 | `hub bot go-live <bot> [--computer C] [--routines-file F]` | places it if it has no computer, turns it on, and for a starter bot starts its setup chat as the requester. When the computer does not have the bot's repository yet but GitHub does (or GitHub cannot be asked), the placement is kept and the answer is HTTP 202 `waiting_for_repository` (the CLI says so and exits 0): the computer clones it, and the readiness report that says it has the repository finishes the go-live, once, with the requester's rights. When GitHub could not be asked the answer says so, since a repository that doesn't exist never arrives. Health lists each waiting go-live for the owner, admins and whoever manages the bot. One that can't finish, or hasn't finished within 7 days, stops, and the requester gets one notice to run go-live again. A repository GitHub does not have is refused (`repository_missing`) with how to create it; when it is waiting for the GitHub App's permission to create repositories, the refusal is `repository_waiting_for_permission` and names the owner's Needs you task with the two fixes. `--help` shows the `--routines-file` shape (docs/routines.md) |
 | `hub bot model <bot> [<model>] [--effort E] [--on-behalf-of <task>]`, `hub bot pause\|resume <bot>` | the model (none: list the choices; a change answers with the computer's `readiness`), stop and restart |
 | `hub routine on\|off <key> --bot <bot>` | a routine on or off |
-| `hub computer list`, `hub health check` | the computers a bot may go on and what runs on each; what is wrong with the bots, most urgent first, each with its fix |
+| `hub computer list [--computer C [--section S --offset N]]`, `hub health check` | the computers a bot may go on, one short row each (one computer in full with `--computer`, large sections paged); what is wrong with the bots, most urgent first, each with its fix |
 | `hub computer performance <computer> [--hours 24]` | the computer's CPU and memory over the window, its overloads and what ran in them, and its busiest processes |
 | `hub credential request\|set\|list` | a card for a credential in the chat, storing one a human pasted, the credentials with their bots (never a value); see [credential-vault.md](credential-vault.md) |
 | `hub credential grant <name> --to <bot>`, `hub credential revoke <name> --from <bot>` | give a bot a stored credential, or take it away; at once for a credential administrator, the person who stored it (for a bot they own or manage), or a holder delegating to a bot they own or run; revoke the delegation to take it away |
@@ -460,7 +461,7 @@ The Legal bot reviews contracts. Everyone should be able to send it a request, b
 Legal's business.
 
 1. Settings > Bots, **Edit** in Legal's Access column.
-2. Choose **Visible, requests only**.
+2. Choose **Requests only**.
 3. Under *Who can read its work* tick the **Legal** group. Save.
 
 Now everyone sees the bot and can chat with it or give it a task. Cara, in the Legal group, also reads its

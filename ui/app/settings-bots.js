@@ -22,6 +22,11 @@ const settingsChoiceLabel = (harness, model, effort) => {
   const row = settingsModel(model), own = row?.harnesses?.[0] || row?.runtime || harness;
   return modelChoiceWords(model, settingsEffortName(effort), harness, own) || settingsModelName(model);
 };
+// In the model list a Tico model says what runs underneath it: "Tico Mid 1.0 (Claude Sonnet 5.5 underneath)".
+const settingsModelPickName = id => {
+  const row = settingsModel(id);
+  return /^tico-/.test(id) && row?.description ? `${settingsModelName(id)} (${row.description})` : settingsModelName(id);
+};
 // A bot with no model of its own follows the team default; say which one it resolves to.
 function settingsDefaultLabel(e) {
   if (e.model || !e.resolved_model) return 'not set';
@@ -37,7 +42,7 @@ function settingsAllChoices() {
     (model.harnesses || [model.runtime]).flatMap(harness =>
       (model.efforts?.length ? model.efforts : [model.default_effort || '']).map(effort => {
         const label = settingsChoiceLabel(harness, model.id, effort);
-        const search = [harness, settingsHarnessName(harness), model.id, model.label, effort, label].join(' ').toLowerCase();
+        const search = [harness, settingsHarnessName(harness), model.id, model.label, model.description || '', effort, label].join(' ').toLowerCase();
         return {harness, model: model.id, effort, label, search, value: settingsChoiceValue(harness, model.id, effort)};
       })));
 }
@@ -128,7 +133,9 @@ function settingsWireChoiceFields(fields, onChange = () => {}) {
     const models = [...new Set(choices.filter(row => row.harness === picked.harness).map(row => row.model))];
     model.innerHTML = option('', 'Choose model', !picked.model, true)
       + (picked.model && !models.includes(picked.model) ? option(picked.model, `${settingsModelName(picked.model)} (current)`, true, true) : '')
-      + models.map(id => option(id, settingsModelName(id), id === picked.model)).join('');
+      // A Tico model on a computer that cannot run Gateway work (backend/views.py `runnable_choices`, under its model id).
+      + models.map(id => { const why = /^tico-/.test(id) ? block(id) : null;
+        return option(id, why ? `${settingsModelName(id)} (${why.short})` : settingsModelPickName(id), id === picked.model, !!why && id !== picked.model); }).join('');
     const efforts = choices.filter(row => row.harness === picked.harness && row.model === picked.model).map(row => row.effort);
     effort.innerHTML = (!picked.effort && efforts.length ? option('', 'Choose effort', true, true) : '')
       + (!efforts.length ? option(picked.effort, settingsEffortName(picked.effort) || 'Choose effort', true, true) : '')
@@ -139,7 +146,10 @@ function settingsWireChoiceFields(fields, onChange = () => {}) {
     effort.disabled = readonly || efforts.length <= 1;
   };
   const value = () => picked.model ? settingsChoiceValue(picked.harness, picked.model, picked.effort) : '';
-  const valid = () => (choices.some(row => row.value === value()) && !block(picked.harness)) || (!picked.harness && fields.hasAttribute('data-allow-none'));
+  const valid = () => (choices.some(row => row.value === value()) && !block(picked.harness) && !(/^tico-/.test(picked.model) && block(picked.model))) || (!picked.harness && fields.hasAttribute('data-allow-none'));
+  // Whether the three fields show something other than what the bot has, finished or not.
+  const changed = () => { const was = settingsChoiceFromValue(fields.dataset.current);
+    return picked.harness !== was.harness || picked.model !== was.model || picked.effort !== was.effort; };
   harness.onchange = () => {
     picked = {harness: harness.value, model: '', effort: ''};
     paint(); onChange(value(), valid());
@@ -153,7 +163,7 @@ function settingsWireChoiceFields(fields, onChange = () => {}) {
   };
   effort.onchange = () => { picked.effort = effort.value; onChange(value(), valid()); };
   paint();
-  return {value, valid};
+  return {value, valid, changed};
 }
 function settingsChoiceCombo(e, kind) {
   const fallback = kind === 'fallback', selected = fallback ? e.fallback : e;
@@ -216,6 +226,7 @@ function settingsWireCombos(root, onPick = settingsPickChoice) {
       const picker = settingsWireChoiceFields(fields, (value, valid) => {
         if (button) button.disabled = !valid || value === (box.dataset.current || '');
       });
+      box.picker = picker;   // the bot editor's Save reads a pick that was never Applied
       if (!button) return;
       button.disabled = true;
       button.onclick = async () => {
@@ -229,6 +240,11 @@ function settingsWireCombos(root, onPick = settingsPickChoice) {
     mount();
   });
 }
+// The /fallback body for a picker value ('' is None); Apply and the bot editor's Save send the same.
+function settingsFallbackBody(value) {
+  const choice = value ? settingsChoiceFromValue(value) : null;
+  return choice ? {harness: choice.harness, model: choice.model, effort: choice.effort} : null;
+}
 async function settingsPickChoice(box, value) {
   const slug = box.dataset.botChoice, e = S.emps.find(row => row.name === slug);
   const current = box.dataset.current || '';
@@ -237,9 +253,7 @@ async function settingsPickChoice(box, value) {
   if (box.dataset.kind === 'fallback') {
     try {
       const choice = value ? settingsChoiceFromValue(value) : null;
-      await post(`/v2/bots/${encodeURIComponent(slug)}/fallback`, {
-        fallback: choice ? {harness: choice.harness, model: choice.model, effort: choice.effort} : null,
-        expected_revision: e.revision});
+      await post(`/v2/bots/${encodeURIComponent(slug)}/fallback`, {fallback: settingsFallbackBody(value), expected_revision: e.revision});
       await loadSettings();
       toast(choice ? `${e.display_name} fallback is ${settingsChoiceLabel(choice.harness, choice.model, choice.effort)}`
         : `${e.display_name} fallback is none`);

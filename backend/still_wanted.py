@@ -59,7 +59,14 @@ def idle_tasks(conn, at=None):
 
 
 def ask_idle(conn, at=None):
-    """Put "Still wanted?" to the person behind each idle task. Returns the task ids asked about."""
+    """Put "Still wanted?" to the person behind each idle task. Returns the task ids asked about. Not while the team
+    has Stale ticket review on: its suggestions cover a quiet week (backend/stale_review.py)."""
+    from . import team_rules
+    try:
+        if team_rules.load(conn)["stale_review"]:
+            return []
+    except sqlite3.OperationalError:     # a local hub keeps no team rules
+        pass
     asked = []
     for row in idle_tasks(conn, at):
         with isolated(conn, "still_wanted", row["id"]):

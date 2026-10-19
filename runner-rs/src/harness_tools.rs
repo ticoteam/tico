@@ -97,6 +97,8 @@ pub struct Capabilities {
     pub subscription_profiles: bool,
     pub profile_home: String,
     pub profile_dirs: Vec<String>,
+    /// Variables the CLI reads ahead of `profile_home` (Claude Code: CLAUDE_CONFIG_DIR); a profile's environment drops them.
+    pub profile_home_overrides: Vec<String>,
     pub own_config_home: bool,
     /// "" | refresh | turns | manual
     pub weekly_usage: String,
@@ -111,6 +113,8 @@ pub struct Capabilities {
     pub persistent_session: bool,
     pub goal_runs_across_turns: bool,
     pub serial_cold_start: bool,
+    /// A subscription login serves one turn at a time on this computer (crate::login_turns); a key login does not.
+    pub one_turn_per_login: bool,
     pub compaction: bool,
     pub resume_command: String,
     /// "" | host | command
@@ -133,6 +137,7 @@ impl Default for Capabilities {
             subscription_profiles: false,
             profile_home: String::new(),
             profile_dirs: vec![],
+            profile_home_overrides: vec![],
             own_config_home: false,
             weekly_usage: String::new(),
             account: String::new(),
@@ -144,6 +149,7 @@ impl Default for Capabilities {
             persistent_session: false,
             goal_runs_across_turns: false,
             serial_cold_start: false,
+            one_turn_per_login: false,
             compaction: false,
             resume_command: String::new(),
             model_list: String::new(),
@@ -468,6 +474,7 @@ fn parse_capabilities(raw: Option<&toml::Value>, at: &str) -> Result<Capabilitie
             "subscription_profiles" => c.subscription_profiles = flag(k, v)?,
             "profile_home" => c.profile_home = text(k, v)?,
             "profile_dirs" => c.profile_dirs = list(k, v)?,
+            "profile_home_overrides" => c.profile_home_overrides = list(k, v)?,
             "own_config_home" => c.own_config_home = flag(k, v)?,
             "weekly_usage" => c.weekly_usage = choice(k, v, &["refresh", "turns", "manual"])?,
             "account" => c.account = choice(k, v, &["status-json", "app-server"])?,
@@ -484,6 +491,7 @@ fn parse_capabilities(raw: Option<&toml::Value>, at: &str) -> Result<Capabilitie
             "persistent_session" => c.persistent_session = flag(k, v)?,
             "goal_runs_across_turns" => c.goal_runs_across_turns = flag(k, v)?,
             "serial_cold_start" => c.serial_cold_start = flag(k, v)?,
+            "one_turn_per_login" => c.one_turn_per_login = flag(k, v)?,
             "compaction" => c.compaction = flag(k, v)?,
             "resume_command" => c.resume_command = text(k, v)?,
             "model_list" => c.model_list = choice(k, v, &["host", "command"])?,

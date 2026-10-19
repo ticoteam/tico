@@ -19,8 +19,10 @@ curl -fsSL https://github.com/ticoteam/tico/releases/latest/download/install.sh 
 Use `releases/download/vX.Y.Z/install.sh` to pin a release. For a shared server, follow [Hosted install](install.md#install-the-server-for-your-team).
 
 - [Build your team](onboarding-guide.md), [Team chart](org-chart.md) and [Humans](people.md).
+- [The sample company](sample-company.md): a made-up five-bot team to try Tico with.
 - [Choose and set up bots](creating-bots.md), with the full [Starter catalog](starter-bots.md).
 - [Connect tools](connect-tools.md) (including [a specialist outside Tico](connect-tools.md#work-with-a-specialist-outside-tico) and [hiring an external AI specialist](connect-tools.md#hire-an-external-ai-specialist)), [Credentials](credential-vault.md) and [Permissions](permissions.md).
+  [Tico AI Gateway](ai-gateway.md) runs bots on Tico Cheap, Mid and Power 1.0 with one key from Tico.
   Members can have 25 active bots by default; the owner can change the limit.
 - Keep Tico running: [Health and recovery](install.md#operating-it), [Updates](updates.md),
   [Backups and restore](install.md#backups-and-restore) and [Support](support.md).
@@ -36,7 +38,7 @@ Use `releases/download/vX.Y.Z/install.sh` to pin a release. For a shared server,
 
 ## Developer or computer operator
 
-- [Register a computer](install.md#add-computers-to-run-your-bots), [Harnesses](harnesses.md) and [Environments](environments.md).
+- [Register a computer](install.md#add-computers-to-run-your-bots), its logins and usage on [Computers](computers.md), [Harnesses](harnesses.md) and [Environments](environments.md).
 - [Build a bot](creating-bots.md), [Routines](routines.md), [Agent context](agent-context.md), [Watchers](watchers.md),
   [Sessions](sessions.md) and [Task worktrees](worktrees.md).
 - [API](api.md), [Custom frontend](custom-frontend.md), [Listening API](listening.md#save-decide-and-resolve),

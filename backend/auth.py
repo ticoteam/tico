@@ -700,7 +700,7 @@ class Auth:
         return False
 
     def task_sql(self, c, who, delegations="task_delegations", unreadable=None):
-        """Company tasks are readable subject to bot activity controls; private tasks have two parties.
+        """Company tasks are readable subject to bot activity controls; private tasks have two parties, and a guest.
 
         Ownership, type-wide work, ancestry and delegation never widen private visibility.
         `delegations` stays accepted for compatibility with the guarded SQL caller.
@@ -711,9 +711,12 @@ class Auth:
         hidden = ["bot:" + slug for slug in sorted(self.unreadable_bots(c, who) if unreadable is None else unreadable)]
         clear = ("NOT (owner IN %s OR requester IN %s)" % ((A.qlist(hidden),) * 2)) if hidden else "1"
         me = A.q(who.actor)
-        audience = f"({me} IN (owner,requester) OR (coalesce(private,1)=0 AND ({clear})))"
+        # A private task's guest (hubdb.task_reach) reads it as its two parties do.
+        audience = (f"({me} IN (owner,requester) OR (coalesce(private,1)<>0 AND guest={me}) "
+                    f"OR (coalesce(private,1)=0 AND ({clear})))")
         if who.task_actor:
-            audience += f" AND (coalesce(private,1)=0 OR {A.q(who.task_actor)} IN (owner,requester))"
+            actor = A.q(who.task_actor)
+            audience += f" AND (coalesce(private,1)=0 OR {actor} IN (owner,requester) OR guest={actor})"
         return audience
 
     def operator(self, c, who, bot):
@@ -919,8 +922,9 @@ class Auth:
         if who.task_actor and not H.task_private_readable(c, who.task_actor, row):
             raise Problem("not_found", "Task not found", 404)
         participants = (row["owner"], row["requester"])
-        if who.actor not in participants:
-            # A party to a task always sees it; anyone else needs Read on every bot it involves.
+        if who.actor not in participants and not (H.task_private(c, row) and H.task_private_readable(c, who.actor, row)):
+            # A party to a task, or a private task's guest, always sees it; anyone else needs Read on every bot it
+            # involves.
             bots = [H.actor_id(a) for a in participants if str(a).startswith("bot:")]
             for slug, level in (self.bot_accesses(c, who, bots).items() if bots else ()):
                 if not level["see"]:

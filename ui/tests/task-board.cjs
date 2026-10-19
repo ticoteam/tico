@@ -10,6 +10,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const {html, uiFile} = require('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs');
 const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();   // load.cjs arrives with #254
 const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
 (async () => {
@@ -174,7 +175,7 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
       }
       if (p === '/api/v2/conversations') return json({conversations: []});
       if (p.endsWith('/messages')) return json({messages: []});
-      return json({});
+      return json(unrouted(p));
     });
     if (!process.env.TICO_TAG_TEST_ONLY) {
     await page.goto('http://tico-ui.test/#/tasks');

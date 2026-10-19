@@ -1,11 +1,13 @@
 // A computer's screen: the Computers ⋯ menu offers Screen only once the computer has one (`screen_available`) or a
-// mode is set; choosing a mode POSTs it. The viewer opens a view session first, draws what a pretend VNC server sends,
-// offers Control only when the mode is control (a new session with control: true), and says when the computer did not
-// answer (close code 4404). Every request and socket is intercepted.
+// mode is set; choosing a mode POSTs it. The viewer opens at the computer's mode: at Control a control session first,
+// so a click reaches the computer at once, with View one tap away; at View a view session and no switch. It draws what
+// a pretend VNC server sends and says when the computer did not answer (close code 4404). Every request and socket is
+// intercepted.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs');
 const {fakeVnc, exposeRoutedSockets} = require('./support/fake-vnc.cjs');
 (async () => {
   const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
@@ -16,10 +18,10 @@ const {fakeVnc, exposeRoutedSockets} = require('./support/fake-vnc.cjs');
     const computer = (id, label, more) => ({id, label, operator: 'ana', bots: [], platform: 'linux', last_seen: new Date().toISOString(),
       readiness: {}, screen: 'off', screen_available: false, ...more});
     const machines = [computer('c1', 'Build server', {screen_available: true}), computer('c2', 'Old Mac')];
-    const writes = [], sessions = [];
+    const writes = [], sessions = [], heard = [];
     let answer = true;
     await page.routeWebSocket(/\/screen\/ws\?ticket=/, ws => {
-      if (answer) fakeVnc(ws); else ws.close({code: 4404, reason: 'computer did not answer'});
+      if (answer) fakeVnc(ws, undefined, heard); else ws.close({code: 4404, reason: 'computer did not answer'});
     });
     await exposeRoutedSockets(page);
     await page.route('**/*', route => {
@@ -52,7 +54,7 @@ const {fakeVnc, exposeRoutedSockets} = require('./support/fake-vnc.cjs');
                      ws_path: `/api/v2/runners/c1/screen/ws?ticket=t${sessions.length}`});
       }
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
-      return json({});
+      return json(unrouted(p));
     });
     await page.goto('https://tico-ui.test/#/settings');
     await page.locator('[data-settings-tab=devices]').click();
@@ -63,28 +65,50 @@ const {fakeVnc, exposeRoutedSockets} = require('./support/fake-vnc.cjs');
     assert.equal(await page.locator('[data-computer-screen=c2]').count(), 0);
     await page.keyboard.press('Escape');
     await page.locator('#set-machines .machine-name[data-computer-open=c1]').click();
+    // All three stay choices here; the bot page's Turn on picks Control only.
+    assert.deepEqual(await page.locator('[data-computer-screen=c1] input').evaluateAll(els => els.map(el => el.value)), ['off', 'view', 'control']);
     await page.locator('[data-computer-screen=c1] label:has(input[value=control])').click();
     await page.waitForFunction(() => SETTINGS_DATA.machines[0].screen === 'control');
     assert.deepEqual(writes, [{mode: 'control'}]);
     await page.locator('#set-machines a.machine-screen').click();
-    // The viewer: a view session first, the picture drawn, Control offered.
-    await page.waitForFunction(() => document.querySelector('#scr-state')?.textContent === 'View');
-    assert.deepEqual(sessions, [{control: false}]);
-    assert.equal(await page.locator('#scr-target canvas').count(), 1);
-    assert.equal(await page.locator('#scr-keys-btn').isVisible(), false);
-    await page.locator('#scr-mode [data-scr-control="1"]').click();
+    // The viewer at Control: a control session first, the picture drawn, and a click reaches the computer at once.
     await page.waitForFunction(() => document.querySelector('#scr-state')?.textContent === 'Control');
-    assert.deepEqual(sessions, [{control: false}, {control: true}]);
+    assert.deepEqual(sessions, [{control: true}]);
+    await page.locator('#scr-target canvas').waitFor();
     assert.equal(await page.locator('#scr-keys-btn').isVisible(), true);
+    await page.waitForFunction(() => !document.querySelector('#scr-msg-text')?.textContent);
+    await page.locator('#scr-target canvas').click({position: {x: 200, y: 150}});
+    for (const end = Date.now() + 5000; !heard.includes(5) && Date.now() < end;) await new Promise(r => setTimeout(r, 50));
+    assert(heard.includes(5), 'the click reached the computer as a pointer event');
+    // View is one tap away: a new view session, and a click sends nothing.
+    await page.locator('#scr-mode [data-scr-control="0"]').click();
+    await page.waitForFunction(() => document.querySelector('#scr-state')?.textContent === 'View');
+    assert.deepEqual(sessions, [{control: true}, {control: false}]);
+    assert.equal(await page.locator('#scr-keys-btn').isVisible(), false);
+    await page.waitForFunction(() => !document.querySelector('#scr-msg-text')?.textContent);
+    heard.length = 0;
+    await page.locator('#scr-target canvas').click({position: {x: 200, y: 150}});
+    await new Promise(r => setTimeout(r, 300));
+    assert(!heard.includes(5), 'a view session sends no pointer events');
     // A computer that does not answer says so, and Reconnect tries again.
     answer = false;
-    await page.locator('#scr-mode [data-scr-control="0"]').click();
+    await page.locator('#scr-mode [data-scr-control="1"]').click();
     await page.waitForFunction(() => document.querySelector('#scr-msg-text')?.textContent === 'Computer did not answer');
     assert.equal(await page.locator('#scr-retry').isVisible(), true);
     // Back leaves the viewer and closes the session.
     await page.locator('#scr-back').click();
     await page.waitForFunction(() => location.hash === '#/settings' && !document.querySelector('#scr'));
+    // At View the viewer opens a view session and offers no switch.
+    answer = true;
+    await page.locator('[data-settings-tab=devices]').click();
+    await page.locator('#set-machines .machine-name[data-computer-open=c1]').click();
+    await page.locator('[data-computer-screen=c1] label:has(input[value=view])').click();
+    await page.waitForFunction(() => SETTINGS_DATA.machines[0].screen === 'view');
+    await page.locator('#set-machines a.machine-screen').click();
+    await page.waitForFunction(() => document.querySelector('#scr-state')?.textContent === 'View');
+    assert.deepEqual(sessions.at(-1), {control: false});
+    assert.equal(await page.locator('#scr-mode').isVisible(), false);
     assert.deepEqual(errors, []);
-    console.log('PASS: Screen choice gated, mode saved, viewer view/control sessions, no answer, back');
+    console.log('PASS: Screen choice gated, mode saved, viewer opens at the mode (control drives at once, view sends nothing), no answer, back');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

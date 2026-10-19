@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 from croniter import croniter
 
 from . import goals as G
-from . import placement
+from . import placement, run_triggers
 from .batch_work import isolated
 from .harnesses import SYNCED_SQL
 from .statuses import PARKED_SQL
@@ -35,6 +35,8 @@ class Scheduler:
         self.goals_checked = None
         self.go_lives_checked = None
         self.health_scanned = None
+        self.gateway_checked = None
+        self.stale_checked = None
 
     def tick(self, at=None):
         at = at or datetime.now(timezone.utc)
@@ -47,6 +49,8 @@ class Scheduler:
             self.execution.auto_reconcile(c)
             self.execution.release_deploy_drains(c)
             self.execution.release_limits(c)           # a usage limit lifts at its reset, not at the next claim
+            from . import wake_presets
+            wake_presets.tick(c, H.now())                 # wake presets let go of the notices and sweeps now due
             self.execution.hold_unrunnable(c)
             placement.sweep(c, self.execution)            # an active bot with no computer gets one when one can take it
             H.lift_cooled_quarantines(c)
@@ -99,12 +103,14 @@ class Scheduler:
                                           f"Scheduled occurrence {when[:16].replace('T', ' ')}Z of {row['title']} "
                                           "absorbed into this open task; continue it or mark it done.",
                                           kind="notice", conversation_id=H.task(c, tid)["conversation_id"],
-                                          refs={"task": tid, "wake": "occurrence"})
+                                          refs=run_triggers.stamp({"task": tid, "wake": "occurrence", "sweep": row["id"]},
+                                                                  "schedule", row["id"]))
                             elif skip := routines.no_input(c, self.store.settings, row, occurrence):
                                 tid, outcome = None, "skipped"
                             else:
                                 task = routines.open_task(c, self.execution.auth, row, row["title"],
-                                                          row["playbook"] or routines.DEFAULT_TEXT, stamp(at))
+                                                          row["playbook"] or routines.DEFAULT_TEXT, stamp(at),
+                                                          sweep=True)
                                 tid, outcome = task["id"], "created"
                                 created = tid
                             c.execute("INSERT INTO schedule_occurrences VALUES(?,?,?,?)", (row["id"], when, tid, outcome))
@@ -138,7 +144,8 @@ class Scheduler:
                         continue
                     try:
                         H.say(c, H.KEEPER, row["owner"], "Due: " + row["title"], kind="notice",
-                              conversation_id=row["conversation_id"], refs={"task": row["id"], "wake": "due"})
+                              conversation_id=row["conversation_id"],
+                              refs=run_triggers.stamp({"task": row["id"], "wake": "due"}, "schedule"))
                     except H.Refused as exc:
                         H.event(c, H.KEEPER, "task.reminder-refused", row["id"], {"reason": str(exc)[:300]})
                     c.execute("INSERT INTO task_reminders VALUES(?,?,?)", (row["id"], row["due"], stamp(at)))
@@ -155,7 +162,7 @@ class Scheduler:
             from . import updates
             settings = self.store.settings
             with self.store.transaction() as c:
-                write = updates.writer_for(c, settings)
+                write = updates.writer_for(c, settings, self.store)
                 sent = updates.dispatch(c, at, settings.assistant_bot if write else None)
             if sent and updates.is_person(sent):
                 threading.Thread(target=updates.write_draft, args=(self.store, sent, write, settings.assistant_bot),
@@ -185,6 +192,8 @@ class Scheduler:
             flight.sweep(self.store, at.timestamp())       # the flight recorder's minutes become hours
             from . import performance
             performance.sweep(self.store, at.timestamp())  # computers' minutes become ten-minute points
+            from . import support_triage
+            support_triage.sweep(self.store, stamp(at))    # a support ticket waits here at most an hour
         if self.goals_checked is None or at - self.goals_checked >= timedelta(hours=1):
             # Data goes stale as time passes, so every goal's automatic colour is worked out again once an
             # hour, whether or not a reading arrived (a person's colour is only ever suggested over).
@@ -212,6 +221,28 @@ class Scheduler:
                     health_monitor.scan(c, self.execution.auth, self.store.settings)
             except Exception as exc:
                 failures.append({"health_monitor": type(exc).__name__})
+        if self.gateway_checked is None or at - self.gateway_checked >= timedelta(hours=1):
+            # Every hour, while a gateway key is set: the Tico AI Gateway's word on it (revoked, 80% of the month's cap,
+            # the cap reached), for Settings and Health. On its own thread: a tick never waits on the Gateway.
+            self.gateway_checked = at
+            try:
+                from . import gateway_connection
+                from .credentials import Vault
+                with self.store.read() as c:
+                    due = gateway_connection.connected(c, self.store.settings)
+                if due:
+                    gateway_connection.check_soon(self.store, Vault(self.store), self.store.settings)
+            except Exception as exc:
+                failures.append({"gateway": type(exc).__name__})
+        if self.stale_checked is None or at - self.stale_checked >= timedelta(minutes=5):
+            # Stale ticket review (backend/stale_review.py), while the team has it on: the watermark makes it hourly;
+            # the Decide calls run on the pass's own thread, never under this lock.
+            self.stale_checked = at
+            try:
+                from . import stale_review
+                stale_review.tick(self.store, stamp(at))
+            except Exception as exc:
+                failures.append({"stale_review": type(exc).__name__})
         if self.go_lives_checked is None or at - self.go_lives_checked >= timedelta(minutes=10):
             # A go-live waiting for a computer that never reports still ends, with its notice (backend/go_live.py).
             self.go_lives_checked = at
@@ -226,6 +257,12 @@ class Scheduler:
             self.stall_checked = at
             with self.store.transaction() as c:
                 H.wake_stalled(c, stamp(at))
+            # ...and queued jobs whose message their bot may no longer read, which no claim would ever take.
+            try:
+                with self.store.transaction() as c:
+                    self.execution.drop_unreadable(c)
+            except Exception as exc:
+                failures.append({"drop_unreadable": type(exc).__name__})
         if self.stranded is None or at - self.stranded >= timedelta(hours=1):
             # Every hour: bot tasks parked as waiting with nothing left to wait on.
             self.stranded = at

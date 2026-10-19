@@ -1,7 +1,7 @@
 # Task types and steps
 
 Every task starts on **General**, with the same statuses and behavior as before. To give work a
-pipeline such as Marketing, a mover makes a type in **Settings → Types**, adds named steps, and
+pipeline such as Marketing, a mover makes a type in **Settings → Tasks**, adds named steps, and
 chooses the status each step means. Types belong to the whole team. General keeps one step for
 each standard status.
 
@@ -82,10 +82,22 @@ task when no `--parent` is given. The answer follows the blocker link, so a prog
 doesn't lose it, and a declined or closed card no longer blocks the task. The note says the person answered only when they
 finished the card; when someone else closed it, it names who did.
 
+One open question per topic. A bot's `hub task question` to a person while its earlier one on the same topic still
+waits on them (unanswered, the task not finished) updates that one instead of filing a second: the same topic is the
+same `--topic` key under any task, or, with no key, the same parent task. The person keeps one card with the latest
+wording and options, its body lists the earlier asks under "Asked before", and nothing new is sent: no second Needs
+you item, no Slack line, no run. The ask's clock restarts, so a default goes ahead only after the team's days from
+the latest wording. The reply says `folded: true`. A different decision on the same task takes its own `--topic`;
+once the question is answered, declined or closed, the next one on the topic opens a new card. An answer picked on
+the earlier wording is refused ("reworded"), so the person answers what the card says now. A key is compared by its
+letters and digits in any script, case folded; one with none is refused.
+
 The note must be a plain ask: one or two sentences, at most 40 words, with no ids, hashes, file paths, `s3://` links
 or tool names. Without one the update is refused, saying what failed. A task with an open structured question to
 the person (`hub task question`) is already the card: it waits on them as itself, and its note is only warned
-about. Only the bot that owns the task names the person, and a private task can only ask a person who can read it.
+about. Only the bot that owns the task names the person, and a private task can only ask a person who can read it,
+or, on a private task with no person on it, the one person it brings in as its guest (see "A private task with no
+person on it: its guest").
 
 Bot tasks that were waiting on a person before this rule are moved to it within the hour when their note is a plain
 ask; the rest stay last in the person's Needs you while their bot is asked once to restate the ask.
@@ -154,7 +166,49 @@ going, and no question already waiting on someone) gets one **Still wanted?** qu
 person owns it; a task only bots are on is left alone. It shows in that person's Needs you and
 Decide. **Keep** restarts the clock; **Close** closes the task as theirs with a note. Nothing
 closes without the answer, and the task is asked again only after new activity and another idle
-week (`stale_asked_at`).
+week (`stale_asked_at`). While the team has **Stale ticket review** on, these questions stop: its
+suggestions cover the quiet week.
+
+### Stale ticket review
+
+Stale ticket review finds open tasks that look finished or forgotten and suggests what to do with
+them. It only suggests: nothing changes unless the task's owner accepts.
+
+**Turn it on.** Go to **Settings > Team** and switch on **Stale ticket review**. It is off by
+default, and an owner or an admin can turn it on or off. (A server started with
+`TICO_STALE_REVIEW=1` has it on by default; a choice saved in Settings wins.)
+
+**What it looks for.** Once an hour, Tico checks every open, doing, waiting and review task that is
+not snoozed and has no run going. A task is a candidate when one of these is true:
+
+- every pull request linked to it is merged, closed or shipped;
+- its parent task is done or closed;
+- every task blocking it is done;
+- its snooze ended more than a day ago and nothing has happened since;
+- it has the same title as an older open task with the same owner;
+- nothing has happened on it for 7 days (3 days for a task in progress).
+
+Private tasks are never looked at, so none of their words go to Tico Decide. Tico Decide judges
+only a candidate that is new or has changed since it was last looked at, up to 30 an hour; the
+rest wait for the next hour. An hour with nothing new does nothing: no Decide call, no comment, no card.
+
+**What the owner gets.** At most one suggestion per task a week, and only a suggestion:
+
+- **A bot** gets one comment on the task, for example "Stale check: PR #12 merged Oct 16. Suggest:
+  mark done." The bot decides what to do.
+- **A person** gets one **Stale tickets: N suggestions** card in **Needs you**, with a row per task:
+  the reason and the suggestion (**Mark done**, **Close it** or **Check it is still needed**). Each
+  row has **Accept** and **Skip**; **Accept all** accepts every row on the card that has an
+  **Accept** button. A **Check it is still needed** row has only **Skip**: open the task to decide.
+
+**Accept does what you could do by hand, and nothing more.** The same rules apply: the owner
+can mark a task done, and its requester or another authorized person can close it; anything else
+is refused. If the task changed after the card showed it, that row is refused and stays on the card,
+so open the task to see what changed. **Accept all** applies only the rows you saw: a row that
+arrived since stays on the card.
+
+**Still wanted? questions stop.** While Stale ticket review is on, Tico doesn't send the
+**Still wanted?** questions described above: its suggestions cover the quiet week.
 
 ### When nobody answers a bot's ask
 
@@ -228,7 +282,7 @@ duplicates are still refused.
 ## Types bots work on
 
 Every bot can read company-visible tasks subject to existing bot activity restrictions. Types
-control additional permission to comment, file subtasks or change work in **Settings → Types**,
+control additional permission to comment, file subtasks or change work in **Settings → Tasks**,
 with `bots` on the task-types routes or `hub task type update "Dev ticket" --bots work`.
 
 | `bots` | Additional permission for unrelated bots |
@@ -466,7 +520,16 @@ is refused, never run on an author's own. `--role` is `review` or `check` (the d
   "Review done (ran on <model>): <title>" (or "Subtask declined") and the note, so the verdict lands in the parent's
   session. Closing it is a cancellation and wakes nobody.
 - A usage limit on the check's model holds that subtask alone until the provider's reset: the bot's other work
-  goes on, on its own model, and the bot is not marked limited.
+  goes on, on its own model, and the bot is not marked limited. Held 12 hours with every turn stopped on the limit,
+  it is a Health Monitor setup finding (`check_limited`, docs/health-monitor.md). Once the subtask is done, closed or
+  declined, its held turn is let go instead of retrying after each reset; a person's message on it stays queued.
+- When the limit is on the computer's default login (no subscription) and Health already marks that login out of
+  quota (`default_login_limited`, docs/health-monitor.md), the check does not wait: its next turn runs at once on
+  the next check model in the company's order (Settings > AI providers) that is not from a provider whose work it
+  checks, not on another login out of quota there, and that the bot's computer can run. The task's history and the
+  bot's status say where it moved. It goes back to the model it asked for once a turn on that login completes or
+  the provider's reset passes, or once the bot moves to another computer or gets a subscription for that tool. With
+  no next model, it keeps waiting as above.
 - The check model belongs to the bot that filed it while it owns the subtask. Handed to another bot, the subtask
   is that bot's ordinary task, on its own model. Subtasks under a check continue the check's session, never the
   parent's.
@@ -711,6 +774,30 @@ Bot-requested private work stays private until a future explicit human publicati
 exists. Mentions, administrators, managers, parent ownership and delegations grant no access.
 Reassigning a private task gives the new assignee access and removes the previous assignee's
 future access unless they remain its requester. Reassignment never clears Private.
+
+### A private task with no person on it: its guest
+
+A private task between two bots (or a bot's private task to itself) has nobody who could act on it, so its owning
+bot may bring in one person, its **guest**. The first time that bot hands them work from the task, they become its
+guest: a subtask for them under it (`hub task create --owner <person> --parent <task>`), a question to them on it
+(`hub task question`), or setting it waiting on them (`--status waiting --on <person>`). The task's history records
+who it reached, and its Private row names them.
+
+- The guest reads that task as its requester and owner do: its words, comments and files, even if they may not read
+  those bots' activity. Nothing else: not the task above it, its other subtasks, or the bots' other work. Everyone else
+  still gets "not found".
+- A run that also carries private work the person cannot read reaches nobody: the subtask, the question and the
+  wait are all refused.
+- There is one guest. A hand-off to a different person is refused, naming the guest; hand the work to them instead.
+- Only the bot that owns the task brings a guest in; the requesting bot cannot. Reassigning the task ends the
+  guest's access; a new bot owner may then bring in one person of its own.
+- When a private task above it has a person on it, only someone who reads that task above can become the guest. From
+  the task's own private work the hand-off is refused; otherwise the person gets their subtask alone, as before, and
+  does not become the guest.
+- The guest's answer on their subtask or question comes back to the task, and wakes its owner, as on any task.
+- Approvals stay refused from private work (they go to the default approver): ask the person with a subtask or
+  `hub task question`.
+- `POST /api/v2/tasks/dry-run` makes the same privacy checks as the create and returns the same refusal text.
 
 Task-linked messages, files and previews, execution output, SQL results, search context and saved
 responses apply the same current-participant boundary. Retained room grants and attachment

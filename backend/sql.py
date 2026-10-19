@@ -40,11 +40,47 @@ TABLE_FUNCTIONS = {"json_each", "json_tree"}
 SAFE_COLUMNS = {"slack_posts": {"message_id", "bot", "state", "attempts", "next_attempt",
                                 "slack_ts", "created", "updated"}}
 # Columns nobody reads through SQL. Tables not named in `guarded` (credentials, credential_keys,
-# credential_grants, idempotency, runners, enrollments, session_epochs, settings_changes,
+# credential_grants, idempotency, runners, enrollments, session_epochs, bot_session_epochs, settings_changes,
 # backup_verified_blobs, _litestream_*, sqlite_* except sqlite_master) are denied outright.
 HIDDEN = {"task_requesters": {"token_hash"}, "bots": {"token_hash", "cwd", "thread_id"}, "attempts": {"token_hash"},
           "service_jobs": {"token_hash"}}
 DENIED_FUNCTIONS = {"load_extension"}
+# Read-only views built over the caller's connection: name -> (base tables it reads, SELECT over `{table}`, the
+# caller's own filtered view of each, and `{all_table}`, its unfiltered inner view). A total adds up only rows the
+# caller may read: a bucket of one run would otherwise tell them that run exists, what it cost and whether it acted.
+# `{all_table}` may only narrow what is counted, never add a row.
+DERIVED = {
+    # Runs per week (Monday, UTC), bot and what woke them, with their tokens and outcome (backend/run_triggers.py).
+    # A run from before triggers were recorded reads `unknown`, and is counted, never dropped. Input is the run's
+    # measured usage (every primary and fallback segment) first, and the runner's older one-number `tokens_in` only
+    # when there is none: a resumed thread may report its whole running total there. An attempt that never got a
+    # turn row (one that failed or expired before it started) is counted too, as `unknown`, with no tokens or outcome;
+    # one whose turn the caller may not read is not turnless, and is not counted.
+    "run_weekly": (("turns", "attempts"), """
+        SELECT date(started, '-6 days', 'weekday 1') AS week, bot, coalesce(trigger_kind, 'unknown') AS trigger,
+               count(*) AS runs,
+               sum(CASE WHEN input_tokens IS NOT NULL OR cached_tokens IS NOT NULL
+                        THEN coalesce(input_tokens, 0) + coalesce(cached_tokens, 0)
+                        ELSE coalesce(tokens_in, 0) END) AS input_tokens,
+               sum(coalesce(cached_tokens, 0)) AS cached_input_tokens,
+               sum(coalesce(output_tokens, tokens_out, 0)) AS output_tokens,
+               sum(coalesce(outcome, '') = 'acted') AS acted,
+               sum(coalesce(outcome, '') = 'no_change') AS no_change,
+               sum(coalesce(outcome, '') = 'nothing_to_do') AS nothing_to_do,
+               sum(outcome IS NULL) AS unknown,
+               sum(coalesce(did_nothing, 0) = 1) AS did_nothing,
+               round(100.0 * sum(coalesce(outcome, '') = 'acted') / count(*), 1) AS acted_pct,
+               round(100.0 * sum(coalesce(outcome, '') = 'no_change') / count(*), 1) AS no_change_pct,
+               round(100.0 * sum(coalesce(outcome, '') = 'nothing_to_do') / count(*), 1) AS nothing_to_do_pct,
+               round(100.0 * sum(outcome IS NULL) / count(*), 1) AS unknown_pct
+        FROM (SELECT started, bot, trigger_kind, input_tokens, cached_tokens, tokens_in, output_tokens, tokens_out,
+                     outcome, did_nothing
+              FROM {turns} WHERE started IS NOT NULL
+              UNION ALL
+              SELECT coalesce(a.started, a.created), a.bot, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
+              FROM {attempts} a WHERE NOT EXISTS (SELECT 1 FROM {all_turns} t WHERE t.id = a.id))
+        GROUP BY 1, 2, 3"""),
+}
 # FTS5 reads these as main.<virtual>_* with no view context; they are not a public API.
 FTS_SHADOWS = ("_data", "_idx", "_content", "_docsize", "_config")
 STATEMENT = re.compile(r"^\s*(?:(?:--[^\n]*\n?|/\*.*?\*/)\s*)*(select|with|explain\s+query\s+plan)\b", re.I | re.S)
@@ -245,6 +281,8 @@ def guarded(c, auth, who, inner, function, columns=None):
         "goal_kpis": "goal_id IN (SELECT id FROM goals)", "goal_checkins": "goal_id IN (SELECT id FROM goals)",
         "goal_proposals": "goal_id IS NULL OR goal_id IN (SELECT id FROM goals)",
         "goal_asks": "task_id IN (SELECT id FROM tasks)",
+        # The company's Vision and Description and their history: everyone's to read, like the company's goals.
+        "company_profile": "id IS NOT NULL", "company_events": "id IS NOT NULL",
         # The market graph is the company's, the same way goals are.
         "market_entities": "1", "market_edges": "1", "market_evidence": "1",
         "market_citations": "1", "market_insights": "1", "market_events": "1",
@@ -364,6 +402,9 @@ def connect(path, c, auth, who, trace=None):
         for table, (predicate, _) in tables.items():
             projection = "*"
             conn.execute(f'CREATE TEMP VIEW "{table}" AS SELECT {projection} FROM {inner(table)} WHERE {predicate}')
+        for name, (bases, select) in DERIVED.items():
+            conn.execute(f'CREATE TEMP VIEW "{name}" AS ' + select.format(
+                **{base: f'"{base}"' for base in bases}, **{"all_" + base: inner(base) for base in bases}))
         # Older SQLite versions initialize JSON virtual tables with schema authorization calls.
         # Initialize only these built-ins before installing the read-only authorizer.
         for function in sorted(TABLE_FUNCTIONS):
@@ -423,8 +464,10 @@ def connect(path, c, auth, who, trace=None):
         if schema == "temp":
             if table == visible:
                 return sqlite3.SQLITE_OK if context == "tasks" else sqlite3.SQLITE_DENY
-            if table in tables:
+            if table in tables or table in DERIVED:
                 return sqlite3.SQLITE_OK
+            if table in inner_names and context in DERIVED:
+                return sqlite3.SQLITE_OK if table[len(prefix):] in DERIVED[context][0] else sqlite3.SQLITE_DENY
             return sqlite3.SQLITE_OK if table in inner_names and context in tables else sqlite3.SQLITE_DENY
         return sqlite3.SQLITE_DENY
 

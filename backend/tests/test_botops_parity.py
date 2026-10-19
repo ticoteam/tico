@@ -438,7 +438,8 @@ def test_every_botops_tool_uses_requester_rights_by_default(api, botops, monkeyp
                 H.task_create(c, "bot:ops", "Review the QA fixture", "Review the fixture.", "bot:botops", lint=False)
             else:
                 conv = H.open_conversation(c, "bot:ops", ["bot:ops", "bot:botops"], kind="chat")
-                H.say(c, "bot:ops", "bot:botops", "Review the QA fixture", conversation_id=conv["id"])
+                H.say(c, "bot:ops", "bot:botops", "Review the QA fixture", conversation_id=conv["id"],
+              refs={"needs_action": True})
         attempt = claim(api, botops, "botops")
         expected = {"actor": "bot:ops", "role": "bot"}
     else:
@@ -506,7 +507,8 @@ def test_bot_requester_receives_only_its_granted_credentials_and_personal_tokens
         assert response.status_code == 200, response.text
     with api.app.state.store.transaction() as c:
         conv = H.open_conversation(c, "bot:ops", ["bot:ops", "bot:botops"], kind="chat")
-        H.say(c, "bot:ops", "bot:botops", "Review the QA fixture", conversation_id=conv["id"])
+        H.say(c, "bot:ops", "bot:botops", "Review the QA fixture", conversation_id=conv["id"],
+              refs={"needs_action": True})
     attempt = claim(api, botops, "botops")
     result = api.get("/api/v2/credential-runtime", headers=headers(attempt["token"]))
     assert result.status_code == 200, result.text

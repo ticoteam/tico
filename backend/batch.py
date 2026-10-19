@@ -121,8 +121,9 @@ def relevant(c, actor, items):
     covered = {it.get("task_id") for it in items if it["kind"] == "approval" and it.get("task_id")}
     out, seen = [], set()
     for it in items:
-        # A question asked outside any task is answered where it is shown; a batch applies task and approval responses.
-        if it["kind"] == "ask":
+        # A question asked outside any task, and the stale tickets card, are answered where they are shown; a batch
+        # applies task and approval responses.
+        if it["kind"] in ("ask", "stale"):
             continue
         # A person's own parked work belongs on their task board, not in a spoken decision pass.
         # It has no other requester waiting for an answer and "waiting" explicitly means there is

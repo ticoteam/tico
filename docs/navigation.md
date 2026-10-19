@@ -12,12 +12,14 @@ Controls appear when your rights allow the action.
 | Add, assign or set up a bot | Settings → Bots → Add from template; then the bot → Set up |
 | Change Instructions | Bot → More → Instructions → Edit Instructions → Ask BotOps to change |
 | Change model, effort, owners or status | Settings → Bots |
-| Register or remove a Computer | Settings → Computers → Add computer or Remove computer |
+| Register or remove a Computer | Settings → Computers → Add computer; open a computer → Revoke computer |
+| Sign a computer in to an AI tool, or add a subscription | Settings → Computers → open a computer → Connections ([Computers](computers.md)) |
 | Check problems and recovery | Settings → Health |
 | Store a Credential and grant it | Tools → Credentials → Add credential; then Access → Grant access |
 | Connect or review a Tool | Tools; Slack channels are under Tools → Slack channels |
 | Add or manage Humans and member rules | Settings → Humans |
 | Choose AI providers | Settings → AI providers |
+| Connect the Tico AI Gateway | Settings → AI providers → Tico AI Gateway ([Tico AI Gateway](ai-gateway.md)) |
 | Connect your External agent | Connect an external agent beside your email |
 | Review message work | Message bots → mailbox or channel |
 | Read or write team knowledge | Docs → Internal docs; outside sources are Linked docs |
@@ -34,7 +36,7 @@ See [Using Tico](using-tico.md), [Credentials](credential-vault.md) and [Updates
 
 ## Tags
 
-**Settings > Tags** lists templates and task tags and creates new ones. Task chips show the
+**Settings > Tasks** (under **Task tags**) lists templates and task tags and creates new ones. Task chips show the
 label and metadata; open a chip in task details to see its checklist and related tasks. A
 **Tag** filter narrows the task board by key. Templates have **Make a tag** to create a separate
 checklist with its own metadata. Tag owners and task movers can tick and edit its notes.

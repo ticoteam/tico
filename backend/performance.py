@@ -224,11 +224,15 @@ def _iso(ts):
 def _runs(c, runner_id, start, end, limit=500):
     """The turns this computer ran that overlap [start, end), oldest first: this server's own record. A busy window
     keeps its newest `limit`."""
-    # A leased turn counts from its lease: the runner reports `started` once its harness is up.
+    # A leased turn counts from its lease: the runner reports `started` once its harness is up. Only the turns still
+    # open or finished since `start` are read (attempts_runner_finished, two index ranges): an open overload runs this
+    # under the write lock on every post, and visiting each turn the computer ever ran held that lock ~100 s on a slow
+    # disk (Dev 249).
     return c.execute("SELECT a.id,a.bot,coalesce(a.started,a.created) started,a.finished,a.state,t.model FROM attempts a "
-                     "LEFT JOIN turns t ON t.id=a.id WHERE a.runner_id=? AND coalesce(a.started,a.created)<? AND "
-                     "(a.finished IS NULL OR a.finished>=?) ORDER BY coalesce(a.started,a.created) DESC LIMIT ?",
-                     (runner_id, _iso(end), _iso(start), limit)).fetchall()[::-1]
+                     "LEFT JOIN turns t ON t.id=a.id WHERE a.rowid IN (SELECT rowid FROM attempts WHERE runner_id=? "
+                     "AND finished>=? UNION ALL SELECT rowid FROM attempts WHERE runner_id=? AND finished IS NULL) AND "
+                     "coalesce(a.started,a.created)<? ORDER BY coalesce(a.started,a.created) DESC LIMIT ?",
+                     (runner_id, _iso(start), runner_id, _iso(end), limit)).fetchall()[::-1]
 
 
 def ran(c, runner_id, start, end):
@@ -525,17 +529,30 @@ def install(app, store, auth, mutate, execution):
             return {"erased": True}
         return store.write(who, work)
 
+    def named(c, name):
+        """A registered computer by id or label (any case). Every reader of this route may read every registered
+        computer, so the computer list's narrower scope does not apply. An unknown name and a removed computer's get the
+        same answer."""
+        runner = computer(c, name)
+        if runner:
+            return runner
+        hit = c.execute("SELECT * FROM runners WHERE revoked_at IS NULL AND lower(trim(label))=lower(trim(?))",
+                        (name,)).fetchall()
+        if len(hit) != 1:
+            raise Problem("not_found", f"No computer named {name!r}" + ("; more than one has that label, use its id"
+                                                                       if hit else "; hub computer list names them"), 404)
+        return hit[0]
+
     @app.get("/api/v2/runners/{rid}/performance")
     def performance_view(request: Request, rid: str, hours: int = 24):
         """The computer's performance over the last `hours` (1 to 336): CPU, memory, load, swap and disk points, the
         turns that ran, the bots with the most turns and the busiest processes, overloads and a summary. Every person
-        and bot of the company."""
+        and bot of the company; `rid` is the computer's id or its label."""
         who = request.state.identity
+        if not may_see(who):     # before the lookup, so an outsider learns nothing about which names exist
+            raise Problem("forbidden", "A person or bot of this company reads a computer's performance", 403)
         with store.read() as c:
-            runner = computer(c, rid)
-            if not runner:
-                raise Problem("not_found", "Computer not found", 404)
-            if not may_see(who):
-                raise Problem("forbidden", "A person or bot of this company reads a computer's performance", 403)
-            return {"computer": {"id": rid, "label": runner["label"]}, **listing(runner),
-                    "may_switch": may_switch(auth, who, runner), **view(c, rid, hours, access=auth.bot_accesses(c, who))}
+            runner = named(c, rid)
+            return {"computer": {"id": runner["id"], "label": runner["label"]}, **listing(runner),
+                    "may_switch": may_switch(auth, who, runner),
+                    **view(c, runner["id"], hours, access=auth.bot_accesses(c, who))}

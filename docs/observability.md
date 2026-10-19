@@ -188,12 +188,12 @@ the same rows to a local file that can be read without the server (below).
 
 | Table | What | Kept |
 | --- | --- | --- |
-| `flight_requests` | Per minute (`span` 60), per route template (`GET /api/v2/tasks`) and caller kind (`human`, `bot`, `runner`, `service`, `anonymous`): count, 5xx errors, response bytes, total, p50, p95 and max milliseconds. After two days, minutes become hours (`span` 3600). | 14 days |
+| `flight_requests` | Per minute (`span` 60), per route template (`GET /api/v2/tasks`) and caller kind (`human`, `bot`, `runner`, `service`, `anonymous`): count, 5xx errors, response bytes, total, p50, p95 and max milliseconds. A caller that hangs up while its request body is read is recorded as 499 (client closed request), not as a 5xx. After two days, minutes become hours (`span` 3600). | 14 days |
 | `flight_slow` | Each request over one second: route, caller kind, actor id, milliseconds, bytes, status (at most 50 a minute). | 14 days, 5,000 rows |
 | `flight_process` | Per minute: CPU (% of one core), memory, threads, open files and sockets, event-loop lag (p95, max), SQL statements and time, write transactions with the longest lock wait and hold, `database is locked` errors, and `dropped`: samples lost because the background thread fell behind (a gap in that minute's numbers). | 14 days |
 | `flight_sql` | Per hour, per statement shape (literals folded): count, total, p95 and max milliseconds, from the statement's start through its last row fetched (rows read by iterating, `fetchone`, `fetchmany` or `fetchall`; never the caller's own work between rows); the top 100 by time, the rest as `(other)`. | 90 days |
 | `flight_db` | Hourly: file, WAL and free bytes, row counts of the growing tables and their oldest row. Table/index sizes (when SQLite has `dbstat` aggregate mode) refresh at most once per 24 hours and are reused between scans, including across restarts. | 90 days |
-| `flight_events` | `start`: release, commit, Python, SQLite, a hash of the installed packages and of the non-secret settings (with a short hash per setting, so two starts show which changed; no values), and `provenance`: `modified` when the code on disk differs from the hash the image build stored in `release-manifest.json` (files copied over a release image), `mismatch` when the image was not built from its release tag's commit on GitHub, otherwise `match`, `unverified` or `unknown`. `stall`: the event loop late by two seconds or more, with its class and every busy thread's stack (file, line, function; never values), at most once a minute (every stall is in the file). | 90 days |
+| `flight_events` | `start`: release, commit, Python, SQLite, a hash of the installed packages and of the non-secret settings (with a short hash per setting, so two starts show which changed; no values), and `provenance`: `modified` when the code on disk differs from the hash the image build stored in `release-manifest.json` (files copied over a release image), `mismatch` when the image was not built from its release tag's commit on GitHub, otherwise `match`, `unverified` or `unknown`. `stall`: the event loop late by two seconds or more, with its class and every busy thread's stack (file, line, function; never values), at most once a minute (every stall is in the file). `long_hold`: a write transaction that held the lock five seconds or more: `route` (method and template, null for a background job), `site` (the code that held it, file, line and function), `hold_s`, `wait_s`, and `open` when it was still held at the minute's end (`site` is then where its thread is now); at most 20 a minute, also in the server log. `recorder_gap`: minutes whose rows could not be written (above). | 90 days |
 
 Times are Unix seconds. A `modified` or `mismatch` start shows as **Release image** on the Health page. The integrity of the
 database is checked by the daily verified backup (`PRAGMA integrity_check`), not here.
@@ -228,7 +228,8 @@ The tables live in the database a stall is usually about, so everything is writt
 the database: `<folder of TICO_DB>/flight/flight.ndjson` (Docker: `/data/flight/`; a local install: its environment's
 folder), rotated at 10 MB with ten files kept, by its own thread from a bounded queue that never makes a request wait (a
 full queue drops the record and counts it). The tables are written after, each write waiting at most two seconds for the
-lock. `TICO_FLIGHT_RECORDER=0` turns off both. Read it with the server running, stopped or stuck:
+lock; a write the lock kept out waits and goes in with the next one (up to 120), and minutes that still go unwritten are
+named in a `recorder_gap` event (`minutes`, `count`), so the tables never lose a minute without saying so. `TICO_FLIGHT_RECORDER=0` turns off both. Read it with the server running, stopped or stuck:
 
 ```bash
 python -m backend.flight summary --since 30m          # Docker: docker compose exec server python -m backend.flight summary
@@ -260,11 +261,12 @@ memory` sends SIGUSR2, which starts tracemalloc, and the next one writes the top
 | `kind` | Fields |
 | --- | --- |
 | `start` | `pid`, `version`, `commit`, `python`, `sqlite`, `platform` |
-| `minute` | `ts` is the minute's start. `cpu` (% of one core), `rss` (bytes), `threads`, `fds`, `sockets`, `lag_p95`, `lag_max` (ms), `requests`, `queries`, `sql_ms`, `txns`, `wait_max`, `wait_ms` (write-lock wait, longest and total), `hold_max`, `hold_p95`, `locked` (`database is locked` errors), `dropped` (samples lost in memory), `file_dropped` (records lost to a full queue since the start), `db_failed` (table writes skipped since the start) |
+| `minute` | `ts` is the minute's start. `cpu` (% of one core), `rss` (bytes), `threads`, `fds`, `sockets`, `lag_p95`, `lag_max` (ms), `requests`, `queries`, `sql_ms`, `txns`, `wait_max`, `wait_ms` (write-lock wait, longest and total), `hold_max`, `hold_p95`, `locked` (`database is locked` errors), `dropped` (samples lost in memory), `file_dropped` (records lost to a full queue since the start), `db_failed` (table writes that could not get the lock since the start), `db_pending` (writes waiting for the next try) |
 | `routes` | `ts` (the minute), `span` (60), `routes`: list of `route` (method and template), `caller`, `n`, `errors` (5xx), `bytes`, `bytes_max` (response bytes from Content-Length; 0 for streams), `total_ms`, `p50`, `p95`, `max_ms`, `sql_ms`, `wait_ms` |
 | `slow` | A request over one second: `route`, `caller`, `actor`, `ms`, `bytes`, `status`, `sql_ms`, `wait_ms`, `queries` (its own SQL and lock wait, from the threads it ran on) |
 | `stall` | `id`, `seconds` (since the loop last woke), `class`, `usage`, and `threads` (`busy`: `thread`, `loop`, `stack` innermost last; `idle`: a count) at most once a minute |
 | `stall_end` | `id` (the `stall`'s), `seconds` (between the loop's two wakes), `class`, `usage` over the whole stall |
+| `long_hold` | `route`, `site`, `hold_s`, `wait_s`, `open`: as the `long_hold` event above |
 | `drops` | `n`: records the queue had no room for |
 | `memory` | `state`: `started`, or `dumped` with `traced`, `peak` (bytes) and `top` (`where`, `bytes`, `count`) |
 

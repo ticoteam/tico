@@ -8,6 +8,7 @@
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const {html, uiFile, beta} = require('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs');
 const fs = require('node:fs');
 const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();   // load.cjs arrives with #254
 const INSTALL = '6f1c2a9e-3b7d-4c58-9a10-2d4e8b7f5a63';
@@ -18,9 +19,17 @@ const UNREACHABLE = 'Not sent. Could not reach Tico support. Try again in a mome
 (async () => {
   const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
   try {
-    const visit = async ({enabled = true, seed = [], native = false, feedback = null, viewport = {width: 1440, height: 900}, access = null, hash = '#/tasks', theme = 'light'} = {}) => {
+    const visit = async ({enabled = true, seed = [], native = false, feedback = null, viewport = {width: 1440, height: 900}, access = null, hash = '#/tasks', theme = 'light', keyboard = false} = {}) => {
       const ctx = await browser.newContext({viewport, serviceWorkers: 'block'});
       await ctx.addInitScript(v => localStorage.setItem('tico.theme', v), theme);   // ui/theme.js
+      // A phone keyboard, as iOS Safari reports it: the layout viewport keeps its size while window.visualViewport
+      // shrinks to what is left above the keyboard and pans (offsetTop); pinch zoom divides its height by the scale.
+      // __keys(height, top, scale) sets it.
+      if (keyboard) await ctx.addInitScript(() => {
+        const vv = Object.assign(new EventTarget(), {height: 0, width: 0, offsetTop: 0, offsetLeft: 0, scale: 1});
+        Object.defineProperty(window, 'visualViewport', {value: vv, configurable: true});
+        window.__keys = (height, top = 0, scale = 1) => { Object.assign(vv, {height, offsetTop: top, scale}); vv.dispatchEvent(new Event('resize')); };
+      });
       // The desktop app's bridge (app/src/main.rs BRIDGE_SCRIPT), recording what the page posts to it.
       if (native) await ctx.addInitScript(() => {
         window.__posted = [];
@@ -30,6 +39,8 @@ const UNREACHABLE = 'Not sent. Could not reach Tico support. Try again in a mome
         window.ticoNativeLog = async () => ({version: '0.3.48', lines: ['2026-10-16T06:47:31Z WARN tico_app: update check failed: 401']});
       });
       const page = await ctx.newPage();
+      // An iPhone's home bar: a 34 px safe area at the bottom.
+      if (keyboard) await (await ctx.newCDPSession(page)).send('Emulation.setSafeAreaInsetsOverride', {insets: {bottom: 34}});
       const errors = [], calls = [];
       // `seen`: how many of a request's replies the person has read (POST tickets/<id>/read).
       // `gate`: a promise that holds a follow-up's POST until the test resolves it (a slow HQ).
@@ -61,7 +72,7 @@ const UNREACHABLE = 'Not sent. Could not reach Tico support. Try again in a mome
           if (rest === 'access/sa_1/stop') { hq.access.active = null; return json({}); }
           if (rest === 'access/sa_1/log') return json({log: [{ts: new Date().toISOString(), by: 'support-agent', method: 'GET', path: '/api/v2/health' + HOSTILE, status: 200}]});
           if (rest === 'setup-snapshot') calls.push('asked from ' + new URL(req.url()).searchParams.get('asked_from'));
-          if (rest === 'setup-snapshot') return json({message: "I'd like help setting up Tico.\n\n- Computer online: no", kind: 'setup'});
+          if (rest === 'setup-snapshot') return json({message: "I'd like help setting up Tico.\n\nSetup snapshot (asked from the setup wizard):\n- Steps done: 2 of 5; left: Add a computer, Sign in a model, First bot ready\n- Computer online: no\n- Model signed in: no\n- First bot ready: no\n- Bots in Needs setup: 3", kind: 'setup'});
           if (rest === 'feedback') return json({moment: body.moment, answered: !!body.answer, ticket: null});
           if (rest === 'compose') return json({enabled: true, email: 'ana@acme.example', version: '0.2.17', install_id: INSTALL, to: 'updates.tico.team', max: 4000});
           if (rest === 'diagnostics/capture' && hq.captureGate) await hq.captureGate;
@@ -94,7 +105,7 @@ const UNREACHABLE = 'Not sent. Could not reach Tico support. Try again in a mome
         if (p === '/api/v2/status') return json({bots: []});
         if (p === '/api/v2/needs-you') return json({items: []});
         if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
-        return json({});
+        return json(unrouted(p));
       });
       await page.goto('https://tico-ui.test/' + hash);
       await page.waitForFunction(() => !document.querySelector('#account .account-email')?.textContent.includes('Signing in'));
@@ -558,6 +569,99 @@ const UNREACHABLE = 'Not sent. Could not reach Tico support. Try again in a mome
     assert.deepEqual(v.errors, []);
     await v.ctx.close();
 
+    // An iPhone (390x844) with the keyboard up: the box is 16 px so Safari doesn't zoom in on it, and the sheet fills
+    // exactly what is visible above the keyboard: the box, Send and the newest reply on screen, nothing of the page
+    // behind it showing and the page not scrolling under it. With the keyboard down it is the usual bottom sheet again.
+    v = await visit({viewport: {width: 390, height: 844}, keyboard: true, seed: [{id: 'sup_9', created: at(30), status: 'answered', message: 'Roadmap suggestions go to an archived bot.', sent: {},
+      messages: [reply(1, 25), {id: 2, created: at(20), from: 'person', body: 'Still there on 0.3.54.'},
+        {id: 3, created: at(10), from: 'staff', body: 'The setting now decides who gets suggestions.\n\nAfter that, it is safe to turn public roadmap suggestions back on. Reply here if anything still goes to the archived bot.'}]}]});
+    await openSupport(v.page, '#mobile-support');
+    const kpop = v.page.locator('#support-pop'), kbox = kpop.locator('[data-compose] [name=message]');
+    await kbox.focus();
+    assert.ok(parseFloat(await kbox.evaluate(el => getComputedStyle(el).fontSize)) >= 16, 'the box is at least 16 px: no zoom on focus');
+    assert.equal(await v.page.evaluate(() => document.querySelector('meta[name=viewport]').content.includes('user-scalable=no') || /maximum-scale=1(\D|$)/.test(document.querySelector('meta[name=viewport]').content)), false, 'zoom itself stays allowed');
+    const sheetAt = () => kpop.evaluate(el => {
+      const r = el.getBoundingClientRect(), inside = (sel, all) => { const b = (all ? [...el.querySelectorAll(sel)].at(-1) : el.querySelector(sel)).getBoundingClientRect(); return {top: b.top, bottom: b.bottom}; };
+      const thread = inside('[data-thread]'), newest = el.querySelector('.support-msg') ? inside('.support-msg', true) : null;   // a new request has none
+      // Every point along the top and bottom edges and down both sides is the sheet, not the page behind it.
+      const probes = [];
+      for (let x = 2; x < innerWidth; x += 48) probes.push([x, r.top + 1], [x, r.bottom - 1]);
+      for (let y = r.top + 1; y < r.bottom; y += 40) probes.push([2, y], [innerWidth - 2, y]);
+      return {top: r.top, bottom: r.bottom, height: r.height, pad: parseFloat(getComputedStyle(el).paddingBottom), box: inside('[name=message]'), send: inside('[type=submit]'), thread, newest,
+        covered: probes.every(([x, y]) => el.contains(document.elementFromPoint(x, y))), bodyScroll: getComputedStyle(document.body).overflowY};
+    });
+    const sheetIs = async (top, bottom, why) => {
+      await v.page.waitForFunction(([a, b]) => { const r = document.getElementById('support-pop').getBoundingClientRect(); return Math.abs(r.top - a) < 1 && Math.abs(r.bottom - b) < 1; },
+        [top, bottom], {timeout: t(3000)}).catch(() => {});   // asserted below
+      const k = await sheetAt();
+      assert.ok(Math.abs(k.top - top) < 1 && Math.abs(k.bottom - bottom) < 1, `${why}: ${top}-${bottom} (${JSON.stringify(k)})`);
+      return k;
+    };
+    assert.equal((await sheetAt()).pad, 34, 'keyboard down: the sheet keeps clear of the home bar');
+    // Safari leaves 844 - 386 = 458 px above the keyboard and its bar, panned down 120 px to keep the box in view.
+    await v.page.evaluate(() => window.__keys(458, 120));
+    await sheetIs(120, 578, 'the sheet fills what is visible above the keyboard');
+    await v.page.waitForTimeout(100);   // the thread re-pins to its newest reply on the resize (ui/app/stick-scroll.js)
+    let k = await sheetAt();
+    assert.equal(k.pad, 0, 'keyboard up: no home-bar gap above the keyboard');
+    for (const part of ['box', 'send']) assert.ok(k[part].top >= 120 && k[part].bottom <= 578, `${part} visible above the keyboard (${JSON.stringify(k[part])})`);
+    assert.ok(k.newest.top >= k.thread.top - 1 && k.newest.bottom <= k.thread.bottom + 1, `the newest reply is whole on screen (${JSON.stringify(k)})`);
+    assert.ok(k.newest.bottom <= k.box.top, 'above the box');
+    assert.equal(k.covered, true, 'nothing of the page behind shows around the sheet');
+    assert.equal(k.bodyScroll, 'hidden', 'the page behind does not scroll while the sheet is open');
+    await v.page.screenshot({path: '/tmp/tico-support-phone-keyboard.png'});
+    // Pinch zoom (2x) with the keyboard up: the sheet keeps the 458 px above the keyboard, on the bottom of the page
+    // where panning reaches it, and zoom itself still works.
+    const SHEET = 844 * 0.92;   // the usual bottom sheet: 92dvh
+    await v.page.evaluate(() => window.__keys(229, 300, 2));
+    await sheetIs(844 - 458, 844, 'zoomed with the keyboard up');
+    // The keyboard goes down while still zoomed: the usual bottom sheet, not the keyboard-sized one from before the zoom.
+    await v.page.evaluate(() => window.__keys(422, 200, 2));
+    k = await sheetIs(844 - SHEET, 844, 'keyboard down while zoomed');
+    assert.equal(k.pad, 34, 'and the home-bar gap is back');
+    // Closed and opened again while zoomed: the same.
+    await v.page.keyboard.press('Escape');
+    await kpop.waitFor({state: 'hidden'});
+    await openSupport(v.page, '#mobile-support');
+    await sheetIs(844 - SHEET, 844, 'reopened while zoomed');
+    // The keyboard comes up while already zoomed: the space above it, on the bottom of the page.
+    await v.page.evaluate(() => window.__keys(229, 100, 2));
+    await sheetIs(844 - 458, 844, 'keyboard up while already zoomed');
+    // Zoomed back out with the keyboard up, Safari panned 300 px: the sheet follows the visible area again.
+    await v.page.evaluate(() => window.__keys(458, 300));
+    await sheetIs(300, 758, 'zoomed out with the keyboard up');
+    // The keyboard goes down: the usual bottom sheet, most of the screen.
+    await v.page.evaluate(() => window.__keys(844, 0));
+    k = await sheetIs(844 - SHEET, 844, 'back to the bottom sheet');
+    assert.equal(k.pad, 34, 'with the home-bar gap');
+    // A long reply, then the "Want help setting up?" snapshot, with the keyboard up: the box grows only into the room
+    // the short sheet has left, so it and Send stay above the keyboard, and the rest scrolls inside the box.
+    const fitsAbove = async (why) => {
+      await v.page.waitForTimeout(50);
+      const s = await sheetAt();
+      for (const part of ['box', 'send']) assert.ok(s[part].top >= 120 && s[part].bottom <= 578, `${why}: ${part} above the keyboard (${JSON.stringify(s)})`);
+      assert.ok(s.thread.bottom - s.thread.top >= 119, `${why}: the thread keeps its room (${JSON.stringify(s.thread)})`);
+    };
+    await v.page.evaluate(() => window.__keys(458, 120));
+    await sheetIs(120, 578, 'keyboard up again');
+    await kbox.fill(Array.from({length: 30}, (_, i) => `Line ${i + 1} of a long reply about the archived bot.`).join('\n'));
+    await fitsAbove('long reply');
+    const snapshot = "I'd like help setting up Tico.\n\nSetup snapshot (asked from the setup wizard):\n- Steps done: 2 of 5; left: Add a computer, Sign in a model, First bot ready\n- Computer online: no\n- Model signed in: no\n- First bot ready: no\n- Bots in Needs setup: 3";
+    await v.page.evaluate(m => window.supportStart(m, 'setup'), snapshot);
+    await v.page.waitForFunction(m => document.querySelector('#support-pop[open] #support-message')?.value === m, snapshot);
+    await fitsAbove('setup snapshot');
+    if (process.env.TICO_SCREENSHOT_DIR) await v.page.screenshot({path: require('node:path').join(process.env.TICO_SCREENSHOT_DIR, 'phone-help-box-keyboard-light.png')});
+    // Keyboard down: the whole snapshot shows, nothing left to scroll.
+    await v.page.evaluate(() => window.__keys(844, 0));
+    await sheetIs(844 - SHEET, 844, 'keyboard down after the snapshot');
+    await v.page.waitForTimeout(50);
+    assert.ok(await kpop.locator('[data-compose] [name=message]').evaluate(box => box.scrollHeight <= box.clientHeight + 1), 'keyboard down: the snapshot shows whole');
+    await v.page.keyboard.press('Escape');
+    await kpop.waitFor({state: 'hidden'});
+    assert.notEqual(await v.page.evaluate(() => getComputedStyle(document.body).overflowY), 'hidden', 'closing the sheet lets the page scroll again');
+    assert.deepEqual(v.errors, []);
+    await v.ctx.close();
+
     // A computer in the dark theme, and keyboard only: Tab to the ?, Enter, focus in the box.
     v = await visit({theme: 'dark', seed: [{id: 'sup_5', created: at(30), status: 'answered', message: 'Can bots share a computer?', sent: {},
       messages: [reply(1, 20), {id: 2, created: at(10), from: 'person', body: 'Thanks, and two?'}]}]});
@@ -679,6 +783,8 @@ const UNREACHABLE = 'Not sent. Could not reach Tico support. Try again in a mome
     await v.page.locator('#main [data-setup-help]').click();
     await v.page.waitForFunction(() => document.querySelector('#support-pop[open] #support-message')?.value.startsWith("I'd like help setting up Tico."));
     assert.ok(v.calls.includes('asked from health'));
+    // The box grows to the whole snapshot: nothing is cut off or left to scroll.
+    assert.ok(await v.page.locator('#support-message').evaluate(box => box.scrollHeight <= box.clientHeight + 1), 'the snapshot shows whole');
     assert.equal(await v.page.locator('#support-pop [data-title]').innerText(), 'New request');
     assert.match(await v.page.locator('[data-sent]').textContent(), /message marked setup/);
     assert.ok(!v.calls.some(c => c.startsWith('POST tickets {')), 'nothing is sent before the person presses Send');
@@ -693,6 +799,18 @@ const UNREACHABLE = 'Not sent. Could not reach Tico support. Try again in a mome
     await v.page.waitForTimeout(100);
     assert.equal(v.calls.filter(c => c === 'asked from health').length, 2);
     assert.equal((await v.page.locator('#support-message').inputValue()).split("I'd like help setting up Tico.").length, 2);
+    // TICO_SCREENSHOT_DIR=<dir> saves the opened snapshot at desktop and phone width, in both themes.
+    if (process.env.TICO_SCREENSHOT_DIR) for (const [size, viewport] of [['desktop', {width: 1440, height: 900}], ['phone', {width: 390, height: 844}]]) {
+      for (const theme of ['light', 'dark']) {
+        const s = await visit({viewport, theme});
+        await s.page.evaluate(() => document.querySelector('#main').insertAdjacentHTML('beforeend', '<button type="button" data-setup-help="wizard">Want help setting up?</button>'));
+        await s.page.locator('#main [data-setup-help]').click();
+        await s.page.waitForFunction(() => document.querySelector('#support-pop[open] #support-message')?.value.startsWith("I'd like help setting up Tico."));
+        await s.page.waitForTimeout(300);
+        await s.page.screenshot({path: require('node:path').join(process.env.TICO_SCREENSHOT_DIR, `${size}-help-box-${theme}.png`)});
+        await s.ctx.close();
+      }
+    }
     await v.page.locator('[data-compose] [name=message]').press('Enter');
     await v.page.locator('.support-msg.you', {hasText: 'Computer online'}).waitFor();
     assert.equal(JSON.parse(v.calls.find(c => c.startsWith('POST tickets {')).slice('POST tickets '.length)).kind, 'setup');

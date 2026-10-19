@@ -196,6 +196,11 @@ def answer_task(c, auth, who, task_id, body, wake):
         if body.answers or body.other:
             raise Problem("validation", "Dismiss does not include answers or other text", 422)
     else:
+        if asked["refs"].get("asked_again_at") and set(questions) - set(body.answers):
+            # A question the bot reworded in place (hubdb.fold_question) is answered only by naming its current
+            # question id, so a pick or an Other made on the earlier wording never settles the new one.
+            raise Problem("changed", "The question was reworded after you opened it: read the new wording and answer "
+                          "again", 409)
         if set(body.answers) - set(questions):
             raise Problem("validation", "Unknown question id", 422)
         missing = set(questions) - set(body.answers)

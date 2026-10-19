@@ -11,6 +11,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const {html, uiFile} = require('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs');
 const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();   // load.cjs arrives with #254
 
 async function access(browser) {
@@ -70,7 +71,7 @@ async function access(browser) {
     if (p === '/api/v2/tasks') return json({tasks: []});
     if (p === '/api/v2/conversations') return json({conversations: []});
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
-    return json({});
+    return json(unrouted(p));
   });
   page.on('pageerror', e => errors.push(e.message));
   page.on('console', m => { if (process.env.DEBUG_UI) console.log('console:', m.text()); });
@@ -233,12 +234,20 @@ async function roles(browser) {
       {id: 'cara', name: 'Cara Diaz', org_parent: ''}], org_groups: []});
     if (p === '/api/employees') return json([
       bot('jira-manager', 'Jira Manager', {operator: 'cara', bot_owners: [{id: 'cara', name: 'Cara Diaz'}], access_policy: null}),
-      bot('botops', 'BotOps')]);
+      bot('botops', 'BotOps'),
+      // Synced Grok Bots: Ana's own, and Cara's, already delivered through the app on Cara's Mac.
+      bot('groky', 'Grok Groky', {harness: 'grokbot', app_delivery_app: 'grok', agent: {harness: 'grokbot', synced: true, credential: true, profile: 'Groky'}}),
+      bot('cara-grok', 'Grok Scout', {operator: 'cara', harness: 'grokbot', app_delivery_app: 'grok', agent: {harness: 'grokbot', synced: true, credential: true},
+        app_delivery: {computer: 'r9', app: 'grok', app_label: 'Grok', computer_label: 'Cara Mac', active: true}})]);
     if (p === '/api/issues') return json([]);
     if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: []});
     if (p === '/api/v2/status') return json({bots: []});
     if (p === '/api/v2/operations') return json({machines: [{id: 'r1', label: 'Shared Mac', operator: 'ana', last_seen: new Date().toISOString(),
-      platform: 'darwin', bots: [], readiness: {}, accepts_member_bots: accepts}], agents: [], services: []});
+      platform: 'darwin', bots: [], readiness: {}, accepts_member_bots: accepts},
+      {id: 'r2', label: 'Acme Mac', operator: 'ana', last_seen: new Date().toISOString(), platform: 'darwin', bots: [],
+       readiness: {appdriver: {trusted: true, apps: {grok: {installed: true, signed_in: true, background_ok: true, ready: true, state: 'ready'}}}}}],
+      agents: [], services: []});
+    if (p.match(/^\/api\/v2\/bots\/[^/]+\/definition$/) && method === 'POST') { posts.push(['definition', request.postDataJSON()]); return json({}); }
     if (p === '/api/v2/models') return json({models: []});
     if (p === '/api/v2/settings/history') return json({changes: [], transitions: []});
     if (p === '/api/v2/bots/jira-manager/co-owners' && method === 'POST') { posts.push(['co-owners', request.postDataJSON()]); return json({}); }
@@ -257,7 +266,7 @@ async function roles(browser) {
       {id: 'm2', conversation_id: conv.id, from_actor: 'bot:botops', to_actor: 'human:ana', kind: 'say', body: 'Needs your OK: Add Sean (sean@example.test) to the roster',
        created: new Date().toISOString(), refs: {assistant: true, action: 'act1'}}], execution: null, has_more: false, next_before: null});
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
-    return json({});
+    return json(unrouted(p));
   });
   page.on('pageerror', e => errors.push(e.message));
 
@@ -277,6 +286,25 @@ async function roles(browser) {
   await dialog.locator('[type=submit]').click();
   await page.waitForFunction(() => !document.querySelector('#bot-owners-editor[open]'));
   assert.deepEqual(posts.shift(), ['co-owners', {add: ['ben'], remove: []}]);
+  await page.locator('#bot-editor [data-bot-close]').first().click();
+
+  // ---- A Grok Bot's "Deliver through the app on": its person picks one of their own computers where Grok is ready
+  // (the others are listed, disabled); anyone else, an admin included, can only turn it off.
+  await page.locator('tr[data-settings-bot=groky] [data-edit-bot]').click();
+  const delivery = page.locator('#bot-editor [data-bot-app-delivery=groky]');
+  await delivery.waitFor();
+  assert.deepEqual(await delivery.locator('option').evaluateAll(os => os.map(o => [o.value, o.disabled])), [['', false], ['r1', true], ['r2', false]]);
+  await delivery.selectOption('r2');
+  await page.waitForFunction(() => document.querySelector('#bot-editor [data-bot-app-delivery=groky]')?.disabled === false);
+  assert.deepEqual(posts.shift(), ['definition', {app_delivery: {computer: 'r2', app: 'grok'}, expected_revision: 1}]);
+  await page.locator('#bot-editor [data-bot-close]').first().click();
+  await page.locator('tr[data-settings-bot=cara-grok] [data-edit-bot]').click();
+  const theirs = page.locator('#bot-editor [data-bot-app-delivery=cara-grok]');
+  await theirs.waitFor();
+  assert.deepEqual(await theirs.locator('option').evaluateAll(os => os.map(o => [o.value, o.selected])), [['', false], ['r9', true]]);
+  await theirs.selectOption('');
+  await page.waitForFunction(() => document.querySelector('#bot-editor [data-bot-app-delivery=cara-grok]')?.disabled === false);
+  assert.deepEqual(posts.shift(), ['definition', {app_delivery: null, expected_revision: 1}]);
   await page.locator('#bot-editor [data-bot-close]').first().click();
 
   // ---- Settings > Computers: an admin says which computers take members' bots
@@ -300,7 +328,7 @@ async function roles(browser) {
   await page.waitForFunction(() => /Done\./.test(document.querySelector('.asst-card[data-action=act1]')?.textContent || ''));
   assert.deepEqual(posts.shift(), ['confirm', {}]);
   assert.deepEqual(errors, []);
-  console.log('PASS: bot owners, the members\' bots toggle and BotOps\' Confirm cards.');
+  console.log('PASS: bot owners, a Grok Bot\'s app delivery, the members\' bots toggle and BotOps\' Confirm cards.');
 }
 
 (async () => {

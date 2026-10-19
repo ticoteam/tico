@@ -1,0 +1,41 @@
+# Opt-in: does Granola still answer in the shapes the fixtures expect? Informational, never a release gate.
+# Public API only: a Granola MCP access token lasts about an hour, so the MCP half is run by hand with a fresh token
+# (GRANOLA_MCP_TOKEN=... python scripts/granola_live_check.py).
+name: Granola live check
+on:
+  schedule:
+    - cron: '47 10 * * *'    # 10:47 UTC (03:47 PDT / 02:47 PST), after the nightly gate in ci.yml; UTC like ci.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  shapes:
+    runs-on: ubuntu-24.04
+    continue-on-error: true
+    timeout-minutes: 10
+    env:
+      HAS_KEY: ${{ secrets.GRANOLA_API_KEY != '' }}
+    steps:
+      - name: No credential, nothing checked
+        if: env.HAS_KEY != 'true'
+        run: |
+          echo "::warning::Granola live check skipped: the GRANOLA_API_KEY secret is not set"
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        if: env.HAS_KEY == 'true'
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        if: env.HAS_KEY == 'true'
+        with:
+          python-version: '3.15'
+      - name: Install
+        if: env.HAS_KEY == 'true'
+        run: |
+          python -m pip install --disable-pip-version-check uv==0.13.1
+          python -m uv pip install --system -r backend/requirements.txt
+      - name: Check Granola's answers
+        if: env.HAS_KEY == 'true'
+        env:
+          GRANOLA_API_KEY: ${{ secrets.GRANOLA_API_KEY }}
+        run: |
+          python scripts/granola_live_check.py || echo "::warning::Granola live check: exit $? (1 = shape drift, 2 = cannot check)"

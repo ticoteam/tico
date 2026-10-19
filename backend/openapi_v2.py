@@ -249,6 +249,12 @@ STABLE = [
      "Do what the bot recommends: answer its ask with what it said it would do, and close the card", None),
     ("/api/v2/needs-you/clarify", "post", "Needs you", "clarifyAsk",
      "Ask the bot behind a stale question whether it still matters, in clearer words", None),
+    ("/api/v2/stale-review/accept-all", "post", "Needs you", "acceptAllStaleSuggestions",
+     "Accept the suggestions your Stale tickets card showed (their ids and task versions), each as your own change; "
+     "a row whose task changed since is refused on its own and a row added since is left", None),
+    ("/api/v2/stale-review/{suggestion_id}", "post", "Needs you", "decideStaleSuggestion",
+     "Accept or skip one suggestion on your Stale tickets card; accept sends the task version it showed "
+     "(409 version_conflict otherwise)", None),
     ("/api/v2/approvals/{aid}", "get", "Needs you", "getApproval", "One approval request", None),
     ("/api/v2/approvals/{aid}", "post", "Needs you", "decideApproval", "Approve or reject", None),
     ("/api/v2/approvals/{aid}/undo", "post", "Needs you", "undoApproval",
@@ -359,6 +365,19 @@ STABLE = [
      "The Assistant only: post the list of approvals it is about to approve for you in your chat; only those may then "
      "be approved on your yes", None),
     # Goals and KPIs (docs/goals-and-kpis.md)
+    ("/api/v2/ceo-bot", "get", "Goals", "getCeoBotSwitch",
+     "Whether this install has the CEO Bot switch on (the Goal Manager shown as the CEO Bot, at the top of the chart)", None),
+    ("/api/v2/ceo-bot", "post", "Goals", "setCeoBotSwitch",
+     "Owners and admins: turn the CEO Bot switch on or off for this install; no bot may. Only names and the chart change",
+     None),
+    ("/api/v2/company", "get", "Goals", "getCompany",
+     "The company's Vision and Description (the Company section at the top of Goals where the CEO Bot switch is on), "
+     "and whether the caller may edit them", "CompanyResult"),
+    ("/api/v2/company", "post", "Goals", "updateCompany",
+     "The owner or an admin, on their own click: change the Vision and/or the Description; never a bot, the CEO Bot "
+     "included. Each change is kept with who and when", "CompanyResult"),
+    ("/api/v2/company/history", "get", "Goals", "getCompanyHistory",
+     "Every change to the Vision and the Description, newest first, with who made it and when", "CompanyHistory"),
     ("/api/v2/goal-manager/turn-on", "post", "Goals", "turnOnGoalManager",
      "Owner only: add the Goal Manager from the catalog or restore it, and activate it", None),
     ("/api/v2/goals", "get", "Goals", "listGoals",
@@ -384,6 +403,9 @@ STABLE = [
      "name, until a person hands it back", "GoalResult"),
     ("/api/v2/goals/{gid}/status/auto", "post", "Goals", "handBackGoalStatus",
      "\"Let Goal Manager set it\": end a colour set by hand; the automatic colour is worked out at once", "GoalResult"),
+    ("/api/v2/goals/{gid}/why", "post", "Goals", "setGoalWhy",
+     "A person who may edit the goal writes its Why (one line tying it to the vision) or clears it; a bot proposes one "
+     "instead (kind goal_why)", "GoalResult"),
     ("/api/v2/goals/{gid}/checkins", "get", "Goals", "listGoalCheckins", "A goal's check-ins, newest first", "GoalCheckins"),
     ("/api/v2/goals/{gid}/checkins", "post", "Goals", "addGoalCheckin",
      "The owner's own words on how it is going, with an optional signal; it colours a goal that has no KPI", "GoalCheckinResult"),
@@ -557,6 +579,9 @@ SCHEMAS = {
                 step_rank={"type": ["number", "null"], "description": "Its place within its step, lower first"},
                 waiting_on={"type": ["string", "null"], "description": "The person a waiting task waits on; "
                             "the task is in their Needs you"},
+                guest={"type": ["string", "null"], "description": "The one person a private task with no person on "
+                       "it reached: its owning bot's first subtask, question or wait for them made them its guest. "
+                       "They read the task as its requester and owner do, and nothing else of its tree"},
                 snoozed_until={"type": ["string", "null"], "description": "Set aside until this moment (UTC): "
                                "off lists and Needs you, and quiet, until then"},
                 snoozed_by={"type": ["string", "null"], "description": "Who snoozed it"},
@@ -774,11 +799,11 @@ SCHEMAS = {
                   stuck={"type": "array", "items": {"type": "object"}, "description":
                          "Bots with queued work that is not starting, or left in setup for over a day (the caller may "
                          "read them): bot, name, queued, oldest, computer, reason (not_ready, computer_offline, no_computer, "
-                         "slow, limit, updating, setup, or a reason the claim holds the work: draining, maintaining, "
-                         "lane_held, uncertain, cooling_off, readiness_unknown, sign_in_rejected, profile, config, "
-                         "check_model, unreadable), why, since (setup only: when the bot was added), and fix (label plus "
-                         "href/tab, login, move or finish; null unless the caller administers bots, or for setup may "
-                         "manage the bot: finish is POST /api/v2/bots/{bot}/onboarded)"},
+                         "slow, limit, updating, restarting, setup, or a reason the claim holds the work: draining, maintaining, "
+                         "lane_held, uncertain, cooling_off, readiness_unknown, sign_in_rejected, not_isolated, "
+                         "isolation_unknown, profile, config, check_model, unreadable), why, since (setup only: when the "
+                         "bot was added), and fix (label plus href/tab, login, move or finish; null unless the caller "
+                         "administers bots, or for setup may manage the bot: finish is POST /api/v2/bots/{bot}/onboarded)"},
                   on_fallback={"type": "array", "items": {"type": "object"}, "description":
                                "Bots whose latest run in the last day ran on a fallback harness (the caller may read "
                                "them): bot, harness, since (when the unbroken run of fallback turns began)"},
@@ -833,7 +858,9 @@ SCHEMAS = {
                  "suggest_note": "n", "suggest_at": "n", "rank": {"type": ["integer", "null"]}, "created": "s", "created_by": "s", "updated": "s"},
                 required=["id", "title", "owner", "parent_id", "body", "status", "status_note", "status_by", "status_at", "status_source",
                           "rank", "created", "created_by", "updated"],
-                owner_name={"type": "string"}, status_by_name={"type": "string"}),
+                owner_name={"type": "string"}, status_by_name={"type": "string"},
+                why={"type": "string", "description": "One line tying it to the company's vision; empty: not tied to the vision"},
+                why_by={"type": ["string", "null"]}, why_at={"type": ["string", "null"]}),
     "KpiLink": obj({"id": "s", "goal_id": "s", "kind": {"enum": ["none", "improve", "maintain"]}, "baseline": NUM_N, "baseline_at": "n",
                     "target": NUM_N, "deadline": {"type": ["string", "null"], "description": "YYYY-MM-DD"}, "min": NUM_N, "max": NUM_N},
                    required=["goal_id", "kind"]),
@@ -863,7 +890,7 @@ SCHEMAS = {
                         "signal": {"type": ["string", "null"], "enum": ["on_track", "at_risk", "off_track", None]}},
                        required=["id", "goal_id", "ts", "author", "source_actor", "body", "signal"],
                        author_name={"type": "string"}, source_actor_name={"type": "string"}),
-    "GoalProposalView": obj({"id": "s", "kind": {"enum": ["goal_wording", "goal_kpi", "kpi_definition", "kpi_target", "flag"]},
+    "GoalProposalView": obj({"id": "s", "kind": {"enum": ["goal_wording", "goal_kpi", "kpi_definition", "kpi_target", "flag", "goal_why"]},
                          "goal_id": "n", "kpi_id": "n", "payload": "o", "reason": "s", "proposed_by": "s", "proposed_at": "s",
                          "status": {"enum": ["pending", "confirmed", "rejected"]}, "decided_by": "n", "decided_at": "n",
                          "decision_note": "s", "result": {"type": ["object", "null"]}},
@@ -874,6 +901,12 @@ SCHEMAS = {
                     kpis=items(ref("Kpi")), children=items(ref("Goal")), chain=items(ref("Goal")), tasks=items({"type": "object"}),
                     events=items({"type": "object"}), checkins=items(ref("GoalCheckinView")), proposals=items(ref("GoalProposalView"))),
     "GoalResult": obj({"goal": {}}),
+    "CompanyResult": obj({"company": obj({"vision": "s", "description": "s", "updated": "n", "updated_by": "n",
+                                          "updated_by_name": "s"}),
+                          "on": {"type": "boolean", "description": "Whether the CEO Bot switch is on: the section shows only then"},
+                          "may_edit": {"type": "boolean", "description": "The owner or an admin, never a bot"}}),
+    "CompanyHistory": obj({"events": items(obj({"id": "s", "ts": "s", "actor": "s", "actor_name": "s",
+                                                "field": {"enum": ["vision", "description"]}, "old": "s", "new": "s"}))}),
     "GoalList": obj({"goals": items(ref("Goal"))}, required=["goals"], owner={"type": "string"},
                     chain=items(ref("Goal")), reports=items(ref("Goal")), company=items(ref("Goal"))),
     "GoalTreeRow": obj({}, required=["kpis", "open_tasks"], kpis=items(ref("Kpi")), open_tasks={"type": "integer"},

@@ -560,6 +560,8 @@ async function askSubmit(el, dismiss = false) {
     if (picked.length) answers[q.dataset.qid] = picked;
   }
   const other = $('.ask-other', el)?.value.trim() || '';
+  // An Other answer names the questions it answers, so it is bound to the wording shown (a reworded question has new ids).
+  if (other) for (const q of el.querySelectorAll('.ask-q')) answers[q.dataset.qid] ||= [];
   if (!dismiss && !Object.keys(answers).length && !other) { if (status) status.textContent = 'Pick an answer'; return; }
   const target = JSON.parse(el.dataset.ask), task = el.dataset.task;
   const body = dismiss ? {target, answers: {}, dismiss: true} : {target, answers, ...(other ? {other} : {})};

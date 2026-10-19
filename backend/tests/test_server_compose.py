@@ -63,6 +63,16 @@ def test_the_slack_gateway_gets_every_sign_in_setting_the_server_gets():
             "Cloudflare issuer and audience pass through the operator's environment"
 
 
+
+def test_the_server_and_the_slack_gateway_get_the_hosted_mark_as_set_in_env():
+    # Compose passes settings only through each service's list, so without these entries a hosted Tico's server
+    # reads TICO_HOSTED as unset and its sign-in offers the terminal again (ui/model-login.js). Both load Settings.
+    import yaml
+    services = yaml.safe_load((ROOT / "compose.yaml").read_text())["services"]
+    for name in ("server", "slack"):
+        assert "TICO_HOSTED" in services[name]["environment"], name
+        assert services[name]["environment"]["TICO_HOSTED"] is None, f"{name} takes it from .env as set, no default"
+
 def test_the_server_and_the_slack_gateway_get_the_decision_model_keys_but_not_other_services_secrets():
     import yaml
     services = yaml.safe_load((ROOT / "compose.yaml").read_text())["services"]
@@ -91,3 +101,13 @@ def test_front_doors_have_fixed_edge_addresses_the_server_trusts_and_nothing_wid
     trusted = services["server"]["environment"]["TICO_TRUSTED_PROXIES"]
     resolved = re.sub(r"\$\{\w+:-([^}$]*)\}", r"\1", trusted[len("${TICO_TRUSTED_PROXIES:-"):-1])
     assert resolved.split(",") == ["127.0.0.1/32", "::1/128", f"{doors['caddy']}/32", f"{doors['cloudflared']}/32"]
+
+
+def test_the_server_gets_every_setting_that_turns_a_team_rule_default_on():
+    # A rule's env default (team_rules.ENV_DEFAULTS) only works if compose forwards it: the server sees just the
+    # keys listed under its environment, and an update replaces compose.yaml but never .env.
+    import yaml
+    from backend import team_rules
+    environment = yaml.safe_load((ROOT / "compose.yaml").read_text())["services"]["server"]["environment"]
+    assert set(team_rules.ENV_DEFAULTS.values()) <= set(environment)
+    assert all(environment[key] is None for key in team_rules.ENV_DEFAULTS.values())

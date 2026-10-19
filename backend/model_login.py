@@ -15,8 +15,13 @@ the server stops handing that computer the shared "Every computer" key for it, a
 own mark, until a person signs in again or chooses to use the shared key.
 
 Switch to subscription (`to_subscription`) moves the computer's own login off its API key: a switch, signed in on
-the side, and only once it has worked does the key go (`model_login_key_off`; the runner deletes its copy and keeps
-its own mark). Unlike a sign-out, a later sign-in does not bring the key back; only Use the shared key does.
+the side, and only once it has worked does the key go (`model_login_key_off`; the computer's own key leaves the vault,
+and the runner deletes its copies and keeps its own mark). Unlike a sign-out, a later sign-in does not bring a key
+back; Add key or Use the shared key does.
+
+Clear key and Replace key (backend/computer_keys.py) ride it too, as `clear_key` and `use_key`, and never carry the
+key: Replace stores it in the vault for that computer and the runner fetches it from there. A key the company shares
+with every computer asks "this computer only" or "all of them" first (`key_info` lists the computers it serves).
 
 Remove (`remove`) takes a named subscription's login for one tool off a computer: the runner signs it out there and,
 once nothing else is signed in on that subscription, deletes the subscription from the computer. It is refused while
@@ -37,8 +42,11 @@ PASTE_RUNTIMES = manifests.with_capability("paste_code")
 SIGN_OUT_RUNTIMES = manifests.with_capability("sign_out")
 # What a row asks the runner to do. A runner without SIGN_OUT_CAPABILITY knows only `sign_in`, so it is never
 # handed another kind: it would start a sign-in instead.
-KINDS = ("sign_in", "switch", "sign_out", "use_shared_key", "to_subscription", "remove")
+KINDS = ("sign_in", "switch", "sign_out", "use_shared_key", "clear_key", "use_key", "to_subscription", "remove")
 SIGN_OUT_CAPABILITY = "model_sign_out_v1"
+# A runner that clears and uses a computer's key (runner-rs/src/login.rs); an older one is asked to update first.
+KEYS_CAPABILITY = "model_keys_v1"
+KEY_KINDS = ("clear_key", "use_key")
 # A runner that can take a computer login off its key once a subscription works there (runner-rs/src/login.rs).
 SWITCH_TYPE_CAPABILITY = "model_switch_type_v1"
 # A runner that can take a named subscription off the computer (runner-rs/src/login.rs run_remove).
@@ -49,8 +57,9 @@ SIDE_KINDS = ("switch", "to_subscription")
 COMMIT_KINDS = SIDE_KINDS + ("remove",)
 LIFETIME = 15 * 60
 FINISH_SECONDS = 2 * 60
-# `finishing`: a switch signed in on the side and the runner is putting it in place. It can no longer be cancelled;
-# the runner waits for the server to take that report before it moves anything, so a cancel that came first wins.
+# `finishing`: a switch signed in on the side (or a new key was checked) and the runner is putting it in place. It can
+# no longer be cancelled; the runner waits for the server to take that report before it moves anything, so a cancel
+# that came first wins.
 ACTIVE = ("requested", "starting", "waiting", "finishing")
 ACTIVE_SQL = "state IN ('requested','starting','waiting','finishing')"
 TERMINAL = ("signed_in", "signed_out", "done", "failed", "cancelled", "expired")
@@ -59,6 +68,7 @@ ORDER.update(signed_out=ORDER["signed_in"], done=ORDER["signed_in"])
 # The verdicts each kind may end with; any other is refused as the runner's mistake.
 VERDICTS = {"sign_in": ("signed_in", "failed"), "switch": ("signed_in", "failed"),
             "sign_out": ("signed_out", "failed"), "use_shared_key": ("done", "failed"),
+            "clear_key": ("signed_out", "failed"), "use_key": ("done", "failed"),
             "to_subscription": ("signed_in", "failed"), "remove": ("done", "failed")}
 MAX_LINES, MAX_LINE = 12, 200
 ONLINE_SECONDS = 60
@@ -110,6 +120,10 @@ def clean_user_code(code):
 def sweep(c):
     """Expire what ran out of time; forget what nobody needs any more."""
     now = H.now()
+    from . import computer_keys
+    for row in c.execute(f"SELECT id FROM model_logins WHERE kind='use_key' AND {ACTIVE_SQL} AND expires_at<?",
+                         (now,)).fetchall():
+        computer_keys.discard(c, row["id"])
     c.execute("UPDATE model_logins SET state='expired', url='', user_code='', pending_code=NULL, updated=? "
               f"WHERE {ACTIVE_SQL} AND expires_at<?", (now, now))
     c.execute("DELETE FROM model_logins WHERE created<?", (H.shift(now, days=-1),))
@@ -164,6 +178,14 @@ def _switches_type(runner):
     return SWITCH_TYPE_CAPABILITY in set(H._json(runner["capabilities_json"], []) or [])
 
 
+def _handles_keys(runner):
+    return KEYS_CAPABILITY in set(H._json(runner["capabilities_json"], []) or [])
+
+
+def _online(runner):
+    return bool(runner["last_seen"]) and runner["last_seen"] >= H.shift(H.now(), seconds=-ONLINE_SECONDS)
+
+
 def _removes(runner):
     return REMOVE_CAPABILITY in set(H._json(runner["capabilities_json"], []) or [])
 
@@ -184,10 +206,10 @@ def _queue(c, who, runner, runtime, profile, kind, what):
     if profile and c.execute(f"SELECT 1 FROM model_logins WHERE runner_id=? AND profile=? AND runtime<>? AND {ACTIVE_SQL} "
                              "AND (kind='remove' OR ?='remove')", (runner["id"], profile, runtime, kind)).fetchone():
         raise Problem("state", f"Something else is running on {profile} on that computer; wait for it to finish", 409)
-    if not runner["last_seen"] or runner["last_seen"] < H.shift(H.now(), seconds=-ONLINE_SECONDS):
+    if not _online(runner):
         raise Problem("offline", f"That computer is offline, so it cannot {what}", 409)
-    if kind != "sign_in" and not _signs_out(runner) or kind == "to_subscription" and not _switches_type(runner) \
-            or kind == "remove" and not _removes(runner):
+    if (kind != "sign_in" and not _signs_out(runner) or kind in KEY_KINDS and not _handles_keys(runner)
+            or kind == "to_subscription" and not _switches_type(runner) or kind == "remove" and not _removes(runner)):
         raise Problem("runner_version", f"Update {runner['label']} to {what} from here", 409)
     now = H.now()
     lid = H.new_id()
@@ -395,8 +417,13 @@ def cancel(c, who, rid, lid, auth=None):
     sweep(c)
     row = _login(c, rid, lid)
     if row["state"] == "finishing":
-        raise Problem("state", "It is already being removed, so it can't be cancelled now" if row["kind"] == "remove"
-                      else "The new account is already being put in place, so it can't be cancelled now", 409)
+        if row["kind"] == "remove":
+            raise Problem("state", "It is already being removed, so it can't be cancelled now", 409)
+        what = "key" if row["kind"] == "use_key" else "account"
+        raise Problem("state", f"The new {what} is already being put in place, so it can't be cancelled now", 409)
+    if row["kind"] == "use_key" and row["state"] in ACTIVE:
+        from .computer_keys import discard
+        discard(c, lid)
     if row["state"] in ACTIVE:
         c.execute("UPDATE model_logins SET state='cancelled', url='', user_code='', pending_code=NULL, updated=? "
                   "WHERE id=?", (H.now(), lid))
@@ -424,8 +451,8 @@ def report(c, runner_id, lid, body, settings=None):
         return {"state": row["state"]}
     if body.state in ("signed_in", "signed_out", "done") and body.state not in VERDICTS[row["kind"]]:
         raise Problem("state", f"A {row['kind'].replace('_', ' ')} does not end {body.state.replace('_', ' ')}", 422)
-    if body.state == "finishing" and row["kind"] not in COMMIT_KINDS:
-        raise Problem("state", "Only a switch puts a new login in place", 422)
+    if body.state == "finishing" and row["kind"] not in (*COMMIT_KINDS, "use_key"):
+        raise Problem("state", "Only a switch or a new key puts a new login in place", 422)
     # A removal's commit point: a bot that came to run on the subscription since it was asked for (moved to this
     # computer, or onto this tool) stops it here, before the runner signs anything out or deletes anything.
     if body.state == "finishing" and row["kind"] == "remove" and row["state"] != "finishing":
@@ -439,6 +466,11 @@ def report(c, runner_id, lid, body, settings=None):
         # From here it cannot be cancelled, and it has a little time of its own to finish in.
         c.execute("UPDATE model_logins SET expires_at=MAX(expires_at, ?) WHERE id=?",
                   (H.shift(H.now(), seconds=FINISH_SECONDS), lid))
+        if row["kind"] == "use_key":
+            # The computer checked the new key and puts it in place only once this is taken: it is this computer's
+            # key from now, so a key fetch made meanwhile hands it out, not the one it replaces.
+            from . import computer_keys
+            computer_keys.confirm(c, row["runner_id"], lid)
     state = body.state if ORDER[body.state] >= ORDER[row["state"]] else row["state"]
     terminal = state in ("signed_in", "signed_out", "done", "failed")
     # Finishing, the person has nothing left to open or enter.
@@ -452,6 +484,12 @@ def report(c, runner_id, lid, body, settings=None):
               (state, url, code, json.dumps(lines), redact(body.message), pending_code, H.now(), lid))
     if terminal:
         H.event(c, "runner:" + runner_id, "runner.login." + state, row["runner_id"], {"runtime": row["runtime"]})
+    if terminal and row["kind"] == "use_key":
+        from . import computer_keys
+        if state == "done":
+            computer_keys.confirm(c, row["runner_id"], lid)
+        else:
+            computer_keys.discard(c, lid)
     # A person signed this login in again: it is no longer signed out on purpose. A sign-out that did not take
     # leaves the login as it was, so it is not marked either.
     if (state == "signed_in" or state == "failed" and row["kind"] == "sign_out") and terminal:
@@ -464,9 +502,166 @@ def report(c, runner_id, lid, body, settings=None):
                   (row["runner_id"], row["runtime"], row["profile"]))
         c.execute("DELETE FROM registry_metadata WHERE key=?",
                   (weekly_key(row["runner_id"], row["profile"], row["runtime"]),))
-    # Switched to a subscription: the key is off this login from now on (the runner has deleted its copy).
+    # Switched to a subscription: the key is off this login from now on (the runner has deleted its copies), and the
+    # computer's own key is deleted from the vault, as Clear key does.
     if state == "signed_in" and row["kind"] == "to_subscription":
+        from . import computer_keys
+        computer_keys.delete(c, row["runner_id"], row["runtime"])
         c.execute("INSERT INTO model_login_key_off(runner_id,runtime,profile,set_at,set_by) VALUES(?,?,?,?,?) "
                   "ON CONFLICT(runner_id,runtime,profile) DO UPDATE SET set_at=excluded.set_at, set_by=excluded.set_by",
                   (row["runner_id"], row["runtime"], row["profile"], H.now(), row["requested_by"]))
     return {"state": state}
+
+
+def _key_runtime(runtime):
+    from .computer_keys import RUNTIMES as KEY_RUNTIMES
+    if runtime not in KEY_RUNTIMES:
+        raise Problem("kind", "A key signs in only " + ", ".join(KEY_RUNTIMES) + " on a computer", 422)
+
+
+def _key_source(runner, runtime):
+    """What the computer said signs `runtime` in: {name, source} ("computer", "terminal" or "shared"), or {}."""
+    found = H._json(runner["readiness_json"], {}) or {}
+    key = ((found.get("runtimes") or {}).get(runtime) or {}).get("key")
+    return key if isinstance(key, dict) else {}
+
+
+def _shared_users(c, runtime):
+    """The computers the company's shared key signs `runtime` in on, by what each last reported."""
+    return [row for row in c.execute("SELECT * FROM runners WHERE revoked_at IS NULL ORDER BY lower(label), id")
+            if _key_source(row, runtime).get("source") == "shared"]
+
+
+def _may(c, who, row, auth):
+    try:
+        _operator(c, who, row["id"], auth)
+    except Problem:
+        return False
+    return True
+
+
+def key_info(c, who, rid, runtime, auth=None, vault=None):
+    """For Clear key / Replace key: which key signs `runtime` in on this computer, and, when it is the company's
+    shared key, every computer it serves (the "this computer only / all of them" ask), each with whether it is online
+    and whether this person may change it there. Previews only, never a value."""
+    from . import computer_keys
+    from .credentials import administrator
+    _operator(c, who, rid, auth)
+    _key_runtime(runtime)
+    runner = _runner(c, rid)
+    own = computer_keys.active(c, rid, runtime)
+    reported = _key_source(runner, runtime)
+    shared = computer_keys.shared_for(c, runtime, reported.get("name"))
+    source = "computer" if own else reported.get("source") or ""
+    out = {"runtime": runtime, "source": source, "name": own["env"] if own else reported.get("name", ""),
+           "preview": own["preview"] if own else shared["preview"] if shared and source == "shared" else "",
+           "cleared": cleared(c, rid, runtime), "names": list(computer_keys.names(runtime)), "computers": []}
+    if source == "shared":
+        out["computers"] = [{"id": row["id"], "label": row["label"], "online": _online(row),
+                             "updated": _handles_keys(row), "may": _may(c, who, row, auth)}
+                            for row in _shared_users(c, runtime)]
+        out["can_replace_all"] = bool(vault and administrator(c, who, vault.admins))
+    return out
+
+
+def _clear_here(c, who, runner, runtime, queue):
+    """Clear `runtime`'s key on one computer: its own vault key is deleted, it is marked so no key (the shared one
+    included) signs it in again, and the runner is told to delete its copies, at once (`queue`) or, offline, at its
+    next key fetch (`clear_key` on the mark). Returns the job, or None when it waits for the computer."""
+    from . import computer_keys
+    rid = runner["id"]
+    row = None
+    if queue:
+        row, new = _queue(c, who, runner, runtime, "", "clear_key", "clear its key")
+        if not new:
+            return row
+    computer_keys.delete(c, rid, runtime)
+    mark_key_cleared(c, who, rid, runtime)
+    H.event(c, who.actor, "computer_key.cleared", rid, {"runtime": runtime, "queued": bool(row)})
+    return row
+
+
+def mark_key_cleared(c, who, rid, runtime):
+    """No key signs `runtime` in on this computer again until a person adds one or chooses the shared key, and its next
+    key fetch tells it to delete its copies and log out a login a key made (`clear_key`)."""
+    now = H.now()
+    c.execute("INSERT INTO model_login_cleared(runner_id,runtime,profile,cleared_at,cleared_by,clear_key) "
+              "VALUES(?,?,?,?,?,1) ON CONFLICT(runner_id,runtime,profile) DO UPDATE SET cleared_at=excluded.cleared_at, "
+              "cleared_by=excluded.cleared_by, clear_key=1", (rid, runtime, "", now, who.actor))
+    from .subscription_refresh import invalidate_signin
+    invalidate_signin(c, rid, "", runtime, now)
+
+
+def clear_key(c, who, rid, runtime, scope="this", auth=None):
+    """Clear key: the key that signs `runtime` in on this computer is removed and stays removed (the shared key does
+    not sign it back in) until a person adds a key or chooses the shared key; bots and assignments stay.
+    `scope` "all", for the company's shared key: the same on every computer it serves, each on a current runner. One
+    that is offline clears its copy when it is next online, at its first key check."""
+    _person_only(who, "clear a key")
+    _operator(c, who, rid, auth)
+    _key_runtime(runtime)
+    runner = _runner(c, rid)
+    if scope != "all":
+        return {"computers": [{"id": rid, "label": runner["label"], "login": view(_clear_here(c, who, runner, runtime, True)),
+                               "waiting": False}]}
+    if _key_source(runner, runtime).get("source") != "shared":
+        raise Problem("state", "This computer does not use the company's shared key", 409)
+    rows = _shared_users(c, runtime)
+    refused = [row["label"] for row in rows if not _may(c, who, row, auth)]
+    if refused:
+        raise Problem("forbidden", "You cannot change the key on " + ", ".join(refused) + "; clear it on this computer "
+                      "only, or ask an admin", 403)
+    # Offline too: an older runner has no clear_key handler, so a mark left for it would never clear its copy.
+    stale = [row["label"] for row in rows if not _handles_keys(row)]
+    if stale:
+        raise Problem("runner_version", "Update " + ", ".join(stale) + " to clear its key from here, or delete the "
+                      "shared key in Credentials", 409)
+    out = []
+    for row in rows:
+        job = _clear_here(c, who, row, runtime, _online(row))
+        out.append({"id": row["id"], "label": row["label"], "login": view(job) if job else None, "waiting": job is None})
+    return {"computers": out}
+
+
+def replace_key(c, who, rid, runtime, key, env="", scope="this", auth=None, vault=None):
+    """Replace key (Add key on a computer with none): the new key is stored in the vault for this computer and the
+    runner is told to fetch it, check it and use it; only then is the old one deleted. A failed check leaves the old
+    key working. `scope` "all", for the company's shared key: its value is replaced for every computer it serves, which
+    is a credential administrator's change as in Credentials; each fetches it at once, or when next online."""
+    from . import computer_keys
+    from .credentials import require_admin
+    _person_only(who, "change a key")
+    _operator(c, who, rid, auth)
+    _key_runtime(runtime)
+    runner = _runner(c, rid)
+    if scope == "all":
+        require_admin(c, who, vault.admins)
+        shared = computer_keys.shared(c, runtime)
+        reported = _key_source(runner, runtime)
+        if not shared or reported.get("source") != "shared":
+            raise Problem("state", "This computer does not use the company's shared key", 409)
+        # The kind the person chose (Claude takes an OAuth token or an API key), else the one this computer uses:
+        # each kind is its own credential, and only the one that kind names is replaced.
+        env = env or (reported.get("name") if reported.get("name") in shared else next(iter(shared)))
+        if env not in computer_keys.names(runtime):
+            raise Problem("env", f"A {runtime} key is stored as " + " or ".join(computer_keys.names(runtime)), 422)
+        if env not in shared:
+            raise Problem("env", "The shared key is " + " and ".join(shared) + ", not " + env + "; replace it as that "
+                          "kind, or add a " + env + " in Credentials", 409)
+        row = shared[env]
+        value = str(key or "").strip()
+        if not value or len(value) > 4000 or any(ch in value for ch in "\r\n\0"):
+            raise Problem("credential", "Paste the key as one line", 422)
+        ciphertext, nonce = vault.cipher.encrypt(c, row["id"], value)
+        preview = value[:3] + "…" + value[-3:] if len(value) >= 12 else "••••••"
+        c.execute("UPDATE credentials SET ciphertext=?, nonce=?, preview=?, revision=revision+1, updated=?, updated_by=? "
+                  "WHERE id=?", (ciphertext, nonce, preview, H.now(), who.actor, row["id"]))
+        H.event(c, who.actor, "credential.updated", row["id"], {"secret_changed": True, "via": "computers"})
+        return {"shared": {"id": row["id"], "env": row["env"], "preview": preview},
+                "computers": [{"id": r["id"], "label": r["label"], "online": _online(r)}
+                              for r in _shared_users(c, runtime)]}
+    row, new = _queue(c, who, runner, runtime, "", "use_key", "use a new key")
+    if not new:
+        raise Problem("state", "A new key is already being checked on that computer; wait for it to finish", 409)
+    stored = computer_keys.store(c, vault, who, runner, runtime, key, row["id"], env)
+    return {**view(row), "key": stored}

@@ -7,7 +7,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
 `hub_` dropped: `hub message send` is `hub_message_send`, `hub bot go-live` is `hub_bot_go_live`.
 
     hub whoami
-    hub message send <bot|human> "<text>" [--fyi] [--conversation ID] [--ref task:ID ...] [--steer]
+    hub message send <bot|human> "<text>" [--fyi] [--conversation ID] [--ref task:ID ...] [--steer] [--needs-action]
                                            --fyi: expects no reply, takes no conversation or references
     hub message list                       what waits for you
     hub message mark-read <message-id>     an external agent's own delivery
@@ -134,7 +134,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                 [--evidence "url or note"] [--quality measured|estimate|partial|--estimate] [--source posthog]
                 [--definition-version N] [--supersedes READING-ID]
                                            a reading: a fact with its period; to correct one, supersede it
-    hub proposal create --kind goal_wording|goal_kpi|kpi_definition|kpi_target|flag [--goal ID] [--kpi ID]
+    hub proposal create --kind goal_wording|goal_kpi|kpi_definition|kpi_target|flag|goal_why [--goal ID] [--kpi ID]
                         (--payload '{json}'|--payload-file f.json) [--reason "..."]
                                            a change you may not make yourself, for the owner to confirm
     hub proposal list [--status pending|confirmed|rejected|all] [--goal ID] [--kpi ID]
@@ -231,6 +231,8 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub decision ask --set <name> --state-file s.json [--option covered=opts.json] [--label L]
                                            ask the decision model typed questions about a state (questions/README.md);
                                            --questions-file q.json instead of --set; --list shows the sets
+    hub decision readout [--days 7]        per question set: calls, cost, Jev or fallback, answer spread; and the
+                                           month's spend against the cap (`text` is the readout in plain words)
     hub template list                      the bot templates this company can pick from
     hub bot create --template T [--name "Display"] [<slug>]
                                            set a chosen bot up in the workspace (BotOps only); the slug is picked
@@ -282,7 +284,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub api GET|POST|PUT|PATCH|DELETE <path> ['{json}']
                                            BotOps: any v2 route, as the person who asked; a Confirm card for what
                                            always needs their click. Never a secret in the body
-    hub computer list                      the computers a bot may go on, and what runs on each
+    hub computer list [--computer C]       the computers a bot may go on, one short row each; one in full
     hub computer performance <label|id> [--hours 24]
                                            its CPU, memory and disk over time, overloads and what ran then
     hub credential request <ENV> [--for-bot B] [--label "your Jira login"] [--format "you@x.com:API token"]
@@ -574,6 +576,7 @@ def parser():
     s.add_argument("--ref", action="append")
     s.add_argument("--steer", action="store_true",
                    help="with --ref task:<id> you requested: write this into its owner's running turn on that task")
+    s.add_argument("--needs-action", dest="needs_action", action="store_true", help="a bot's message to a bot waits for that bot's next run; this wakes it now")
     s.set_defaults(fn="message send")
     message.add_parser("list", help="the messages and fyis waiting for you").set_defaults(fn="message list")
     s = message.add_parser("mark-read", help="mark a message from your inbox as read (an external agent's own delivery)")
@@ -826,6 +829,8 @@ def parser():
     s.add_argument("--title")
     s.add_argument("--body")
     s.add_argument("--parent")
+    s.add_argument("--topic", help="a short key for what this decides (backup-model): your open question to them "
+                                   "on it is updated instead of a second one opened")
     s.add_argument("--private", action="store_true", default=None, help="only you and the person may read it")
     s.add_argument("--if-no-answer", dest="if_no_answer",
                    help="what you will do if they don't answer: an option (\"Yes\") or one plain sentence")
@@ -874,6 +879,7 @@ def parser():
     choices.add_argument("--ask", help="JSON file containing structured questions")
     choices.add_argument("--choices", help="comma-separated option labels")
     s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
+    s.add_argument("--needs-action", dest="needs_action", action="store_true", help="a bot's message to a bot waits for that bot's next run; this wakes it now")
     s.set_defaults(fn="task comment")
     s = task.add_parser("comment-moderate", help="hide, show again or delete a public comment on a task you manage")
     s.add_argument("id")
@@ -1141,7 +1147,7 @@ def parser():
 
     proposal = sub.add_parser("proposal", help="a change you may not make yourself, for the owner to confirm").add_subparsers(dest="sub")
     s = proposal.add_parser("create")
-    s.add_argument("--kind", required=True, choices=["goal_wording", "goal_kpi", "kpi_definition", "kpi_target", "flag"])
+    s.add_argument("--kind", required=True, choices=["goal_wording", "goal_kpi", "kpi_definition", "kpi_target", "flag", "goal_why"])
     s.add_argument("--goal", dest="goal_id")
     s.add_argument("--kpi", dest="kpi_id")
     s.add_argument("--payload", help="the proposed change, as JSON")
@@ -1563,6 +1569,10 @@ def parser():
     s.add_argument("--label", help="how the call is grouped in the audit; the set's id@version by default")
     s.add_argument("--list", action="store_true", help="print the question sets this checkout has")
     s.set_defaults(fn="decision ask")
+    s = decision.add_parser("readout", help="per question set: the last days' calls, cost, Jev or fallback and answer "
+                                            "spread, and the month's spend against the cap")
+    s.add_argument("--days", type=int, help="how many days back from now (1-31, 7 by default)")
+    s.set_defaults(fn="decision readout")
 
     # A new bot: BotOps builds the chosen template in the workspace (`hub bot create`) or only registers it (--record-only).
     # The Librarian (docs/librarian.md): ask a question, and read a linked doc on this computer.
@@ -1777,7 +1787,12 @@ def parser():
     s.add_argument("--on-behalf-of", help="the open task a person asked you for, when something else started this run")
     s.set_defaults(fn="api")
     comp = sub.add_parser("computer", help="the computers a bot may go on").add_subparsers(dest="sub")
-    comp.add_parser("list", help="the computers a bot may go on, and what runs on each").set_defaults(fn="computer list")
+    s = comp.add_parser("list", help="the computers a bot may go on, one short row each; --computer for one in full")
+    s.add_argument("--computer", help="one computer's label or id: its full detail, large sections capped")
+    s.add_argument("--section", choices=["assigned", "repositories", "bots", "runtimes", "harnesses", "recent_errors"],
+                   help="with --computer: one page of this section only")
+    s.add_argument("--offset", type=int, help="with --section: the first item to return")
+    s.set_defaults(fn="computer list")
     s = comp.add_parser("performance", help="a computer's CPU, memory and disk over time, overloads and what ran then")
     s.add_argument("computer", help="the computer's label or id")
     s.add_argument("--hours", type=int, default=24)

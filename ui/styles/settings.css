@@ -191,8 +191,12 @@ p:empty{display:none}
 .prov{display:flex;align-items:center;flex-wrap:wrap;gap:2px 8px;padding:6px 0;min-height:36px}
 .prov strong{font-weight:600}
 .prov .muted{font-size:var(--t-base);min-width:0}
+.prov-preset .muted{flex-basis:100%;padding-left:24px}
 .prov-routed{gap:6px 14px;padding-top:10px}
 .prov-chip{display:inline-flex;align-items:center;gap:4px;font-size:var(--t-base)}
+/* The Tico AI Gateway connection, below the providers: its own key and Save (ui/app/settings-providers.js). */
+.prov-gateway{margin-top:var(--s5);padding-top:var(--s4);border-top:1px solid var(--line)}
+.prov-gateway-title{display:flex;align-items:center;gap:8px;margin:0 0 4px}
 .settings-bots-filters{display:flex;align-items:center;gap:8px;margin-bottom:10px;min-width:0}
 .settings-bots-filters .settings-inline-select{flex:0 1 auto;min-width:0;max-width:170px}
 .settings-filter-search{flex:1 1 160px;min-width:120px;max-width:280px;padding:7px 10px 7px 32px;font-size:var(--t-sm);border-radius:6px;background-position:10px center}
@@ -320,7 +324,7 @@ p:empty{display:none}
 .computer-detail-check{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px;margin:4px 0}.computer-detail-check .muted{flex-basis:100%;padding-left:22px;font-size:var(--t-sm)}
 .computer-detail-revoke{display:block;margin-top:12px}
 .people-menu-check{display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:5px;font-size:var(--t-base);white-space:nowrap;cursor:pointer}.people-menu-check:hover{background:var(--surface2)}
-.machine-rejected{flex-basis:100%;font-size:var(--t-sm)}
+.machine-rejected{flex-basis:100%;font-size:var(--t-sm)}.machine-shared-login{display:block;flex-basis:100%;font-size:var(--t-sm)}
 .machine-signin{padding:1px 8px;font-size:var(--t-sm)}
 .machine-harnesses{display:flex;gap:5px 10px;flex-wrap:wrap;margin-top:6px}
 .machine-harness-item{display:inline-flex;align-items:center;gap:4px;flex-wrap:wrap}
@@ -364,6 +368,11 @@ p:empty{display:none}
 .machine-usage-line{display:flex;flex-wrap:wrap;align-items:center;gap:0 6px;flex-basis:100%;min-width:0}.machine-usage-line.stale{color:var(--muted)}
 .machine-usage-line .muted{flex-basis:100%;font-size:var(--t-xs)}
 .machine-usage-bar{width:64px;height:8px;flex-shrink:0}
+/* Desktop apps: the same rows as AI tools (app | installed version | state and its detail). On a phone the head row
+   keeps only its title, so the rows still say they are desktop apps. */
+.machine-apps{grid-template-columns:minmax(90px,max-content) minmax(0,110px) minmax(160px,1fr);margin-top:6px}
+.machine-app-detail{flex-basis:100%;font-size:var(--t-xs);overflow-wrap:anywhere}
+@media (max-width:900px){.machine-apps{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}.machine-apps .machine-tool-name,.machine-apps .machine-tool-signin{grid-column:1/-1}.machine-apps .machine-tool-head{display:contents}.machine-apps .machine-tool-head>[role=columnheader]{display:none}.machine-apps .machine-tool-head>:first-child{display:flex;grid-column:1/-1}}
 .settings-services summary{cursor:pointer;font-weight:600}
 .settings-services-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:6px 14px;margin-top:12px;font-size:var(--t-sm)}
 .settings-team-icon{display:flex;align-items:center;gap:20px;padding:16px 0}
@@ -547,3 +556,6 @@ fieldset.brepo>.repo-name+p{margin:-4px 0 4px 24px;font-size:var(--t-xs);line-he
 .trigger-deliveries{list-style:none;margin:0;padding:0;font-size:var(--t-sm)}
 .trigger-deliveries li{display:flex;flex-wrap:wrap;gap:6px;align-items:baseline;padding:3px 0}.trigger-deliveries code{overflow-wrap:anywhere}
 @media (max-width:640px){.trigger-list li{grid-template-columns:1fr}.trigger-actions{justify-content:flex-start}}
+/* Settings > Team: a team switch with its explanation beside it (Stale ticket review). */
+.settings-team-rule{display:flex;align-items:flex-start;gap:12px;cursor:pointer}
+.settings-team-rule > span{display:flex;flex-direction:column;gap:2px}

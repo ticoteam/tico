@@ -72,7 +72,9 @@ personal token; every POST has an `Idempotency-Key` for safe retries ([API](api.
    ```
 
    `/api/v2/listening/judge` is the older compatible route. This sends saved post text to the configured Decision provider.
-   Check `results` and `errors`; a successful HTTP response can contain per-post errors. Every destination whose category
+   Check `results` and `errors`; a successful HTTP response can contain per-post errors. A per-post error is only a
+   code (`auth`, `http`, `invalid`, `not_found`, `shape`, `spend_cap`, `unavailable`, `unconfigured`, `budget`, else
+   `unreadable`), never the provider's error text, which can repeat the post. Every destination whose category
    clears its threshold gets one intake row. If none clears, the post remains saved and goes nowhere.
 3. As the receiver or owner, read `GET /api/v2/intake?destination=content&status=new` (`hub_listening_item_list`).
    Keep the intake row's `id` as `<intake-id>`; this differs from the saved post id. Resolve with

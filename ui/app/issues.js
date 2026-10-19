@@ -252,12 +252,14 @@ document.addEventListener('click', async ev => {
 
 // The issue list is deliberately compact and truncated. Fetch one complete issue only when its
 // request opens so “Full request” really is the authored body/comment, without making the inbox
-// download every comment on every ticket.
+// download every comment on every ticket. Needs you cards are details.req too, but carry no issue number: they never
+// fetch one (they asked for /issues/NaN).
 document.addEventListener('toggle', async ev => {
   const details = ev.target;
-  if (!details.matches?.('.req') || !details.open || details.dataset.fullLoaded || details.dataset.fullLoading) return;
+  if (!details.matches?.('.req[data-n]') || !details.open || details.dataset.fullLoaded || details.dataset.fullLoading) return;
+  const n = Number(details.dataset.n), original = $('[data-full-request]', details);
+  if (!Number.isInteger(n) || n < 1) return;
   details.dataset.fullLoading = 'true';
-  const n = +details.dataset.n, original = $('[data-full-request]', details);
   try {
     const issue = await get(`/issues/${n}`), listed = S.issues.find(i => i.number === n);
     const comments = Array.isArray(issue.comments) ? issue.comments : [];

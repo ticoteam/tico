@@ -66,6 +66,9 @@ pub struct Runner {
     /// When a person asked for a restart (the Restart button): the runner exits once no turn runs, and claims
     /// as usual for SELF_UPDATE_DRAIN_S before it stops claiming so that moment comes (service.py restart_forced).
     restart: Mutex<Option<Instant>>,
+    /// When that restart arrived, ISO-8601 UTC: every heartbeat says so until the runner has restarted, so Health
+    /// names the restart, not a Tico bug, for the work it holds back (backend/health.py `restarting`).
+    restart_since: Mutex<Option<String>>,
     /// A restart was asked for on a runner nothing would start again: said once.
     restart_refused: AtomicBool,
     /// When the container was told to stop (`docker stop`, a host update): no new claims, the running turns
@@ -142,6 +145,7 @@ impl Runner {
             published: Mutex::new(HashMap::new()),
             beat: Mutex::new(None),
             restart: Mutex::new(None),
+            restart_since: Mutex::new(None),
             restart_refused: AtomicBool::new(false),
             shutdown: Mutex::new(None),
             warm: crate::warm::WarmSessions::new(state.directory.join("antigravity"), capacity.max(8)),
@@ -292,8 +296,10 @@ impl Runner {
         let assignments = self.assignments.lock().unwrap().clone();
         let candidates = readiness_candidates(&assignments);
         // A built-in bot is set up from the catalog first; any other (or one whose history is on GitHub) is fetched.
-        crate::product_files::bootstrap_missing(&self.config, &candidates).await;
-        self.fetch_missing(&candidates).await;
+        // A bot delivered through an app has no repository to fetch.
+        let with_repositories: Vec<Value> = candidates.iter().filter(|e| crate::appdriver::delivery(&e["config"]).is_none()).cloned().collect();
+        crate::product_files::bootstrap_missing(&self.config, &with_repositories).await;
+        self.fetch_missing(&with_repositories).await;
         // Profiles as runner.json has them now, so a sign-in made since start is reported and checked.
         let config = self.config_now();
         let runtimes = readiness::runtime_report(&config, &self.sign_in, &self.client, &candidates).await;
@@ -311,6 +317,9 @@ impl Runner {
         }
         if let Some(screen) = crate::screen::readiness() {
             readiness_doc["screen"] = screen; // only while turned on here (crate::screen)
+        }
+        if let Some(apps) = crate::appdriver::readiness(&candidates) {
+            readiness_doc["appdriver"] = apps; // only on a Mac with app delivery (crate::appdriver)
         }
         let mut body = json!({
             "version": RUNNER_VERSION,
@@ -353,6 +362,7 @@ impl Runner {
         if !self.accounts.load(Ordering::SeqCst) {
             strip_accounts(&mut body);
         }
+        add_restart(&mut body, self.restart_since.lock().unwrap().as_deref());
         // The repositories report rides only on full passes, which are always sent.
         let printed = steady(&body).to_string();
         if let Some(rows) = repository_rows {
@@ -369,39 +379,8 @@ impl Runner {
                 && beat.as_ref().is_some_and(|(p, at)| *p == printed && at.elapsed().as_secs_f64() < HEARTBEAT_LIVE_S)
         };
         if !quiet {
-            let mut tries = 0;
             let began = Instant::now();
-            let beat = loop {
-                tries += 1;
-                let e = match self.client.post("runners/heartbeat", &body, None).await {
-                    Err(e) if e.status == 422 && tries < 12 => e,
-                    other => break other,
-                };
-                // An older server refused something optional: only that goes, for ten minutes.
-                if let Some(field) = crate::lanes::refused_field(&e.detail, &body) {
-                    crate::lanes::hold_back(&field);
-                    crate::lanes::drop_held(&mut body);
-                } else if body.get("commit").is_some() && e.detail.contains("body.commit") {
-                    // A server rolled back since it said it takes the commit: it waits for `runners/desired` to say so again.
-                    body.as_object_mut().unwrap().remove("commit");
-                    crate::follow::shared().inspect(|f| f.drop_commit());
-                } else if capacity_refused(&e.detail) && body["capacity"].as_u64().unwrap_or(0) > 32 {
-                    // A server from before larger capacities accepts at most 32 and never hands out more turns
-                    // than the runner reports, so after a rollback the runner keeps working at 32.
-                    body["capacity"] = json!(32);
-                } else if let Some(hold) = crate::readiness_extra::refused(&e.detail, &body["readiness"]) {
-                    crate::lanes::hold_back(&hold);
-                    crate::readiness_extra::drop_held(&mut body);
-                } else if strip_credential_source(&mut body) {
-                    // A rollback to a server from before credential sources: the heartbeat keeps working.
-                    self.credential_source.store(false, Ordering::SeqCst);
-                } else if strip_accounts(&mut body) {
-                    // A rollback to a server from before accounts: the rest of the report still goes.
-                    self.accounts.store(false, Ordering::SeqCst);
-                } else {
-                    break Err(e);
-                }
-            };
+            let (beat, tries) = self.post_heartbeat(&mut body).await;
             crate::flight::heartbeat(began.elapsed().as_millis() as u64, tries, beat.as_ref().err());
             let beat = beat?;
             *self.beat.lock().unwrap() = Some((printed, Instant::now()));
@@ -423,6 +402,8 @@ impl Runner {
                         follower.take_main().await;
                     }
                     *self.restart.lock().unwrap() = Some(Instant::now());
+                    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+                    *self.restart_since.lock().unwrap() = crate::util::iso(&json!(now.as_secs())).as_str().map(String::from);
                     log("Tico runner: restart requested; restarting when no turn is running");
                 } else if !self.restart_refused.swap(true, Ordering::SeqCst) {
                     log("Tico runner: restart requested, but nothing would start this runner again; run `scripts/tico install` once, or restart it by hand");
@@ -448,6 +429,45 @@ impl Runner {
 }
 
 impl Runner {
+    /// Send the heartbeat `body`, and how many posts it took. A server older than this runner refuses what it doesn't
+    /// know (422): only that comes out, held back for ten minutes, and the rest goes again, so a runner updated
+    /// before its server still checks in and claims work (runners and servers update independently).
+    async fn post_heartbeat(&self, body: &mut Value) -> (Result<Value, ApiError>, u32) {
+        let mut tries = 0;
+        let beat = loop {
+            tries += 1;
+            let e = match self.client.post("runners/heartbeat", body, None).await {
+                Err(e) if e.status == 422 && tries < 12 => e,
+                other => break other,
+            };
+            // An older server refused something optional: only that goes, for ten minutes.
+            if let Some(field) = crate::lanes::refused_field(&e.detail, body) {
+                crate::lanes::hold_back(&field);
+                crate::lanes::drop_held(body);
+            } else if body.get("commit").is_some() && e.detail.contains("body.commit") {
+                // A server rolled back since it said it takes the commit: it waits for `runners/desired` to say so again.
+                body.as_object_mut().unwrap().remove("commit");
+                crate::follow::shared().inspect(|f| f.drop_commit());
+            } else if capacity_refused(&e.detail) && body["capacity"].as_u64().unwrap_or(0) > 32 {
+                // A server from before larger capacities accepts at most 32 and never hands out more turns
+                // than the runner reports, so after a rollback the runner keeps working at 32.
+                body["capacity"] = json!(32);
+            } else if let Some(hold) = crate::readiness_extra::refused(&e.detail, &body["readiness"]) {
+                crate::lanes::hold_back(&hold);
+                crate::readiness_extra::drop_held(body);
+            } else if strip_credential_source(body) {
+                // A rollback to a server from before credential sources: the heartbeat keeps working.
+                self.credential_source.store(false, Ordering::SeqCst);
+            } else if strip_accounts(body) {
+                // A rollback to a server from before accounts: the rest of the report still goes.
+                self.accounts.store(false, Ordering::SeqCst);
+            } else {
+                break Err(e);
+            }
+        };
+        (beat, tries)
+    }
+
     /// Lease expiry does not mean this worker has stopped: every live worker's lane stays busy, and a bot whose
     /// worktrees are being maintained gets nothing (service.py _claim_next).
     async fn claim_next(&self) -> Result<Value, ApiError> {
@@ -508,6 +528,13 @@ pub fn drains_on_stop() -> bool {
 /// Whether a restart asked for at `asked` has stopped this runner claiming (service.py SELF_UPDATE_DRAIN_S).
 fn drained(asked: Option<Instant>, now: Instant) -> bool {
     asked.is_some_and(|at| now.saturating_duration_since(at) >= Duration::from_secs(RESTART_DRAIN_S))
+}
+
+/// A restart under way rides on the heartbeat (an older server that refuses it gets it held back, lanes.rs ROOT_FIELDS).
+fn add_restart(body: &mut Value, since: Option<&str>) {
+    if let Some(since) = since {
+        body["restart"] = json!({"since": since});
+    }
 }
 
 /// Take `credential_source` out of every runtime row; whether there was any (service.py maintain).
@@ -619,6 +646,7 @@ impl Runner {
         tokio::spawn(self.clone().push_backlog());
         tokio::spawn(self.events.clone().run(self.client.clone()));
         tokio::spawn(crate::perf::run_loop(self.clone()));
+        tokio::spawn(crate::appdriver::run_loop(self.clone()));
         let mut clock = Clock {
             polled: HashMap::new(),
             next_claim: None,
@@ -722,6 +750,14 @@ impl Runner {
             if changed {
                 crate::relays::config_changed();
             }
+            // A credential changed in the app: its model keys are fetched again by this pass, not after KEY_REFRESH.
+            if clock.wants(&self.events, "keys", None) {
+                for runtime in crate::harness_tools::runtimes() {
+                    if !crate::signin::headless_names(&runtime).is_empty() {
+                        self.sign_in.refresh_now(&runtime);
+                    }
+                }
+            }
             let full = clock.wants(&self.events, "sync", Some(15.0)) || changed;
             let forced = clock.wants(&self.events, "heartbeat", None) | self.sign_in.take_dirty();
             if full || forced || clock.last_heartbeat.is_none_or(|t| t.elapsed().as_secs_f64() >= 15.0) {
@@ -789,6 +825,53 @@ impl Runner {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // What a server from before `isolated` (main 95cbeb29) answers a check-in that carries it, word for word.
+    const BEFORE_ISOLATED: &str = r#"{"error": {"code": "validation", "retryable": false, "detail": "body.readiness.StructuredReadiness.isolated: Extra inputs are not permitted; body.readiness.dict[constrained-str,bool].runtimes: Input should be a valid boolean; body.readiness.dict[constrained-str,bool].bots: Input should be a valid boolean"}}"#;
+
+    #[tokio::test]
+    async fn a_new_runner_checks_in_with_a_server_from_before_isolation_reports_and_still_claims_work() {
+        let (url, seen) = crate::client::tests::serve(vec![
+            (422, BEFORE_ISOLATED),
+            (200, r#"{"ok": true}"#),
+            (200, r#"{"attempt": {"id": "att-1", "bot": "ops"}}"#),
+        ]).await;
+        let dir = std::env::temp_dir().join(format!("tico-old-server-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(dir.join("projects")).unwrap();
+        let path = dir.join("runner.json");
+        std::fs::write(&path, json!({"url": url, "token": "t", "runner_id": "r1", "projects_dir": dir.join("projects")}).to_string()).unwrap();
+        let config = Config::load(&path).unwrap();
+        let client = Client::new(&config.url(), &config.token(), 5, 0).unwrap();
+        let runner = Runner::new(config, client, State::open(&dir.join("state")).unwrap());
+        let mut body = json!({"version": "test", "platform": "linux", "readiness": {"schema_version": 1, "isolated": true,
+                              "runtimes": {"pi": {"installed": true}}, "bots": {"ops": {"ready": true}}}});
+        let (beat, tries) = runner.post_heartbeat(&mut body).await;
+        crate::lanes::release("readiness.isolated");
+        assert_eq!((beat.map(|b| b["ok"] == true).ok(), tries), (Some(true), 2));
+        let claimed = runner.claim_next().await.unwrap();
+        assert_eq!(claimed["attempt"]["id"], "att-1");
+        let seen = seen.lock().unwrap();
+        assert!(seen[0].contains("\"isolated\":true"), "{}", seen[0]);
+        // The same check-in again, less the one field the older server doesn't know: then the claim.
+        assert!(seen[1].starts_with("POST /api/v2/runners/heartbeat") && !seen[1].contains("isolated"), "{}", seen[1]);
+        assert!(seen[1].contains("\"ops\":{\"ready\":true}") && seen[1].contains("\"pi\":{\"installed\":true}"), "{}", seen[1]);
+        assert!(seen[2].starts_with("POST /api/v2/jobs/claim"), "{}", seen[2]);
+    }
+
+    #[test]
+    fn a_restart_under_way_rides_on_the_heartbeat_and_an_older_server_gets_it_held_back() {
+        let mut body = json!({"version": "test"});
+        add_restart(&mut body, None);
+        assert!(body.get("restart").is_none());
+        add_restart(&mut body, Some("2026-10-17T11:41:00+00:00"));
+        assert_eq!(body["restart"], json!({"since": "2026-10-17T11:41:00+00:00"}));
+        let field = crate::lanes::refused_field("body.restart: Extra inputs are not permitted", &body);
+        assert_eq!(field.as_deref(), Some("restart"));
+        crate::lanes::hold_back("restart");
+        crate::lanes::drop_held(&mut body);
+        crate::lanes::release("restart");
+        assert!(body.get("restart").is_none() && body["version"] == "test");
+    }
 
     #[test]
     fn a_requested_restart_keeps_claiming_for_twenty_minutes_then_stops() {

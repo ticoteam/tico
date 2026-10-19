@@ -75,8 +75,8 @@ def chosen_grant(value):
 def run(args, who=None):
     if who:
         raise APIError("identity", "Remote identity comes from authentication; --human is unavailable")
-    # A query may run for 20 s on the server before it is stopped; leave room for that.
-    client = Client(os.environ["HUB_API_URL"], os.environ.get("HUB_TOKEN", ""), timeout=30 if args.cmd == "sql" else 120 if args.cmd == "listening" or args.fn == "market import" else 15)
+    # A query may run for 20 s on the server before it is stopped, a decision's providers 25 s; leave room for that.
+    client = Client(os.environ["HUB_API_URL"], os.environ.get("HUB_TOKEN", ""), timeout=30 if args.cmd in ("sql", "decision") else 120 if args.cmd == "listening" or args.fn == "market import" else 15)
     fn = args.fn
     if fn == "team icon":
         with Path(args.file).open("rb") as source:
@@ -185,6 +185,8 @@ def run(args, who=None):
         from clients import hubtools
         text = Path(args.file).read_text(errors="replace") if args.file else sys.stdin.read()
         return hubtools.BY_NAME["hub_classify"]["fn"](client, {"text": text})
+    if fn == "decision readout":
+        return via_tool(client, args)
     if args.cmd == "decision":
         return judge(client, args)
     if args.cmd == "meeting":
@@ -291,7 +293,8 @@ def run(args, who=None):
         from clients import hubtools
         return hubtools.BY_NAME["hub_message_send"]["fn"](client, {
             "to": args.to, "text": args.text, "fyi": args.fyi, "conversation_id": args.conversation,
-            "refs": args.ref or [], "steer": getattr(args, "steer", False), "operation_id": key})
+            "refs": args.ref or [], "steer": getattr(args, "steer", False),
+            "needs_action": getattr(args, "needs_action", False), "operation_id": key})
     if fn == "question answer":
         return post(f"messages/{args.message_id}/answer", {"text": args.text or args.unknown,
                     "unknown": bool(args.unknown)}, delegate=getattr(args, "on_behalf_of", None) or False)
@@ -401,6 +404,8 @@ def run(args, who=None):
                 body["attachments"] = references
             if ask is not None:
                 body["ask"] = ask
+            if getattr(args, "needs_action", False):
+                body["needs_action"] = True
             links = s3links.apply(client, body, ("text",))
             return s3links.annotate(post(f"tasks/{args.id}/comments", body, delegate=asked), links)
         if sub == "answers":
@@ -660,7 +665,7 @@ def bots(client, args):
         from clients import hubtools
         fields = {"bot": args.bot}
         if args.computer:
-            listing = hubtools.computers(client, {})
+            listing = hubtools._as_person(client).get("computers")
             rows = listing.get("computers", []) if isinstance(listing, dict) else listing
             me = hubtools._as_person(client).get("me")
             person = str(me.get("actor") or me.get("id") or "").removeprefix("human:")

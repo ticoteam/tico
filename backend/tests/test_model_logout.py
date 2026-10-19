@@ -334,7 +334,7 @@ def test_remove_takes_a_subscription_off_the_computer_and_is_refused_naming_the_
     post(api, f"runners/{rid}/removals", {"runtime": "codex", "profile": "work"}, expected=409)  # sleeper still
     with api.app.state.store.transaction() as c:
         c.execute("DELETE FROM subscription_assignments WHERE target='sleeper'")
-        c.execute("INSERT INTO model_login_cleared VALUES(?, 'codex', 'work', '2026-10-17T00:00:00+00:00', 'human:ana')", (rid,))
+        c.execute("INSERT INTO model_login_cleared(runner_id,runtime,profile,cleared_at,cleared_by) VALUES(?, 'codex', 'work', '2026-10-17T00:00:00+00:00', 'human:ana')", (rid,))
     put = api.put("/api/v2/subscriptions/weekly", json={"runner_id": rid, "profile": "work", "runtime": "codex",
                   "used_percent": 40, "resets_at": None}, headers={**headers("ana-test"), "Idempotency-Key": "w1"})
     assert put.status_code == 200, put.text

@@ -4,6 +4,7 @@ const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs');
 
 (async () => {
   const browser = await chromium.launch({headless: true});
@@ -66,7 +67,7 @@ const {html, uiFile} = require('./support/page.cjs');
     if (p.endsWith('/snapshot')) return json({messages:[]});
     if (p.endsWith('/files')) return json({files:[],total:0,can_manage:true});
     if (p.endsWith('/tools')) return json({tools:[]});
-    return json({});
+    return json(unrouted(p));
   });
   try {
     await page.goto('https://tico-ui.test/#/bot/history-copy/more');

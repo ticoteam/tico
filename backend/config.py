@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 # and TICO_ASSISTANT_NAME; nothing below carries a company's name, domain or people.
 PRODUCT_NAME = "Tico"
 ASSISTANT_NAME = "Assistant"        # what the assistant is called until a company names it
+DEFAULT_COMPANY_NAME = "Company"   # the team name when TICO_TEAM_NAME is unset: no one's real name
 
 
 def _release_origin():
@@ -29,12 +30,12 @@ def _release_origin():
 LOOPBACK = ("127.0.0.1", "localhost", "::1")
 
 
-def _typesafe_key():
-    """The optional TypeSafe (Jev) decisions key behind `POST /api/v2/decisions` and the Slack gateway."""
-    value = os.environ.get("TYPESAFE_API_KEY", "").strip()
+def _secret(env, arn_env, path):
+    """A key from `env`, else the AWS secret named in `arn_env`, else the file at `path`; "" when none holds one."""
+    value = os.environ.get(env, "").strip()
     if value:
         return value
-    secret = os.environ.get("TICO_TYPESAFE_SECRET_ARN", "").strip()
+    secret = os.environ.get(arn_env, "").strip()
     if secret:
         try:
             import boto3
@@ -43,9 +44,29 @@ def _typesafe_key():
         except Exception:
             return ""
     try:
-        return Path("/etc/tico/typesafe-api-key").read_text().strip()
+        return Path(path).read_text().strip()
     except OSError:
         return ""
+
+
+def _typesafe_key():
+    """A customer's own TypeSafe (Jev) decisions key: optional, never set by default, asked after the Tico AI Gateway."""
+    return _secret("TYPESAFE_API_KEY", "TICO_TYPESAFE_SECRET_ARN", "/etc/tico/typesafe-api-key")
+
+
+def _gateway_key():
+    """The Tico AI Gateway key behind `POST /api/v2/decisions` and the Slack gateway: the default decision provider."""
+    return _secret("TICO_GATEWAY_KEY", "TICO_GATEWAY_SECRET_ARN", "/etc/tico/gateway-key")
+
+
+def _gateway_url():
+    """Where the Gateway's decisions endpoint is: `TICO_GATEWAY_URL`, else Tico HQ's (`TICO_HQ_URL`)."""
+    url = os.environ.get("TICO_GATEWAY_URL", "").strip()
+    if url:
+        return url
+    from clients.judge import GATEWAY_PATH
+    hq = os.environ.get("TICO_HQ_URL", "").strip().rstrip("/") or "https://updates.tico.team"  # census.DEFAULT_HQ
+    return hq + GATEWAY_PATH
 
 
 def _emails(value):
@@ -53,7 +74,7 @@ def _emails(value):
 
 
 def slack_credentials(settings=None):
-    """The Slack gateway's tokens, read the way `_typesafe_key` reads the decisions key and nowhere else.
+    """The Slack gateway's tokens, read the way `_secret` reads the decisions keys and nowhere else.
 
     Only `python -m backend.slack_gateway` calls this: the API process never holds a Slack token.
     Precedence: `SLACK_BOT_TOKEN`/`SLACK_APP_TOKEN` in the environment, then the JSON secret at
@@ -101,7 +122,7 @@ class Settings:
     # <registry_dir>/integrations.
     company_integrations_dir: Path | None = None
     environment_id: str = ""
-    company_name: str = "Company"
+    company_name: str = DEFAULT_COMPANY_NAME
     app_name: str = PRODUCT_NAME
     assistant_name: str = ASSISTANT_NAME
     assistant_bot: str = "coo"
@@ -119,6 +140,10 @@ class Settings:
     owner_name: str = ""
     compose_project: str = "tico"
     server_network: str = "tico_default"
+    # TICO_HOSTED: a Tico our team runs for a company ("own" for our own team, "invited" for an invited company), set
+    # by the recommended preset; empty is self-hosted. Both behave the same for now: the person has no terminal on the
+    # server, so Settings > Computers signs models in with the provider's link and code only (ui/model-login.js).
+    hosted: str = ""
     access_issuer: str = ""
     access_audience: str = ""
     # Empty means Cloudflare Access's default JWKS path under the issuer.
@@ -190,17 +215,38 @@ class Settings:
     posthog_host: str = field(default="", repr=False)
     sentry_dsn: str = field(default="", repr=False)
     sentry_server_dsn: str = field(default="", repr=False)
+    # Decide's providers, in order (backend/judge.py): the Tico AI Gateway with its key, then a customer's own TypeSafe
+    # key (never set by default), then the team's own LLM; with none of them Decide is off.
+    gateway_key: str = field(default="", repr=False)
+    gateway_url: str = ""
     typesafe_api_key: str = field(default="", repr=False)
     # How many calls to the server's own models one actor may make in a UTC day, by role: decisions
     # (`judge.call`, Slack routing included) and, counted apart, market asks (`market.ask`). backend/judge.py.
     decisions_daily_calls_owner: int = 20_000
     decisions_daily_calls_human: int = 5_000
     decisions_daily_calls_bot: int = 5_000
+    # What the team's decision calls may cost in a UTC month, in USD, counted from the audit's `cost_usd`; 0 is no
+    # cap. At the cap every server-side caller carries on as if Decide were off. backend/judge.py.
+    decisions_monthly_usd: float = 50.0
+    # Jev's price in USD per 1M input and output tokens, for the audit's cost when TypeSafe's answer carries none:
+    # TypeSafe's published price, output free. Both 0 is unknown: the call's tokens are kept, its cost not counted.
+    decisions_jev_usd_per_mtok_input: float = 0.042
+    decisions_jev_usd_per_mtok_output: float = 0.0
+    # Idea triage on the public roadmap's suggestion form (backend/idea_triage.py, questions/idea-triage.json): off by
+    # default; when on, a confident bug or small change goes to Head of Engineering, everything else to product as before.
+    decisions_idea_triage: bool = False
+    # TICO_SAMPLE_COMPANY=on: a new company starts as Tico's sample company (backend/sample_company.py,
+    # docs/sample-company.md), loaded once on the first start whose owner is on the roster. A set-up company is never
+    # touched. Only `on` turns it on (the recommended install's contract); unset or any other value leaves it off.
+    sample_company: bool = False
     # First-boot seed for the owner's AI provider choice (backend/providers.py). Once the
     # database holds a choice, these are never read again.
     enabled_providers: tuple[str, ...] = ()
     default_runtime: str = ""
     default_model: str = ""
+    # The models choice the installer asks for (backend/models_preset.py; scripts/install.sh writes
+    # TICO_MODELS_PRESET=subscriptions-gateway for the recommended setup). First boot only, like the three above.
+    models_preset: str = ""
     credential_kms_key: str = ""
     # The Slack gateway (backend/slack_gateway.py): off unless the server configuration says so.
     # The thresholds are the routing rules in docs/slack-gateway.md; the tokens are read by
@@ -230,6 +276,9 @@ class Settings:
     rehearsal: bool = False
 
     def __post_init__(self):
+        self.hosted = self.hosted.strip()
+        if self.hosted not in ("", "own", "invited"):
+            raise ValueError("TICO_HOSTED is own or invited, or unset for a self-hosted Tico")
         if self.screen_relay_url:
             relay = urlparse(self.screen_relay_url)
             if (len(self.screen_relay_key) < 32 or relay.scheme != "http" or not relay.hostname
@@ -292,11 +341,13 @@ class Settings:
     def environment(self):
         """What a client needs to render this environment: names, links and sign-in mode."""
         return {"environment_id": self.environment_id, "company_name": self.company_name,
+                # No TICO_TEAM_NAME: "Company" is a stand-in, so the first-run wizard leaves its name field empty.
+                "company_name_default": self.company_name == DEFAULT_COMPANY_NAME,
                 "app_name": self.app_name, "assistant_name": self.assistant_name,
                 "assistant_bot": self.assistant_bot, "public_url": self.public_url,
                 "runner_url": self.runner_url, "github_owner": self.github_owner,
                 "compose_project": self.compose_project, "server_network": self.server_network,
-                "local": self.local_signin, "release": self.release_id,
+                "local": self.local_signin, "hosted": self.hosted, "release": self.release_id,
                 "owner_email": self.owner_email, "owner_name": self.owner_name, "demo": self.demo, "rehearsal": self.rehearsal}
 
     def allows_origin(self, origin):
@@ -333,7 +384,7 @@ class Settings:
             company_integrations_dir=Path(os.environ["TICO_INTEGRATIONS_DIR"]) if os.environ.get("TICO_INTEGRATIONS_DIR") else None,
             catalog_dir=Path(os.environ["TICO_CATALOG_DIR"]) if os.environ.get("TICO_CATALOG_DIR") else ROOT / "templates" / "catalog",
             environment_id=environment_id,
-            company_name=company or "Company",
+            company_name=company or DEFAULT_COMPANY_NAME,
             app_name=os.environ.get("TICO_APP_NAME", "").strip() or PRODUCT_NAME,
             assistant_name=os.environ.get("TICO_ASSISTANT_NAME", "").strip() or ASSISTANT_NAME,
             assistant_bot=os.environ.get("TICO_ASSISTANT_BOT", "").strip() or "coo",
@@ -350,6 +401,7 @@ class Settings:
             owner_name=os.environ.get("TICO_OWNER_NAME", "").strip(),
             compose_project=os.environ.get("TICO_COMPOSE_PROJECT", "tico"),
             server_network=os.environ.get("TICO_SERVER_NETWORK", "tico_default"),
+            hosted=os.environ.get("TICO_HOSTED", ""),
             runner_url=os.environ.get("TICO_RUNNER_URL", "").rstrip("/"),
             screen_relay_url=os.environ.get("TICO_SCREEN_RELAY_URL", ""),
             screen_relay_key=os.environ.get("TICO_SCREEN_RELAY_KEY", ""),
@@ -401,14 +453,22 @@ class Settings:
             posthog_host=quiet(os.environ.get("TICO_POSTHOG_HOST", "")),
             sentry_dsn=quiet(os.environ.get("TICO_SENTRY_DSN", "")),
             sentry_server_dsn=quiet(os.environ.get("TICO_SENTRY_SERVER_DSN", "")),
+            gateway_key="" if rehearsal else _gateway_key(),
+            gateway_url=_gateway_url(),
             typesafe_api_key="" if rehearsal else _typesafe_key(),
             decisions_daily_calls_owner=max(0, int(os.environ.get("TICO_DECISIONS_DAILY_CALLS_OWNER", "") or 20_000)),
             decisions_daily_calls_human=max(0, int(os.environ.get("TICO_DECISIONS_DAILY_CALLS_HUMAN", "") or 5_000)),
             decisions_daily_calls_bot=max(0, int(os.environ.get("TICO_DECISIONS_DAILY_CALLS_BOT", "") or 5_000)),
+            decisions_monthly_usd=max(0.0, float(os.environ.get("TICO_DECISIONS_MONTHLY_USD", "") or 50.0)),
+            decisions_jev_usd_per_mtok_input=max(0.0, float(os.environ.get("TICO_DECISIONS_JEV_USD_PER_MTOK_INPUT", "") or 0.042)),
+            decisions_jev_usd_per_mtok_output=max(0.0, float(os.environ.get("TICO_DECISIONS_JEV_USD_PER_MTOK_OUTPUT", "") or 0)),
+            decisions_idea_triage=not rehearsal and os.environ.get("TICO_DECISIONS_IDEA_TRIAGE", "0") == "1",
+            sample_company=not rehearsal and os.environ.get("TICO_SAMPLE_COMPANY", "").strip().lower() == "on",
             enabled_providers=tuple(part.strip().lower() for part in
                                     os.environ.get("TICO_ENABLED_PROVIDERS", "").split(",") if part.strip()),
             default_runtime=os.environ.get("TICO_DEFAULT_RUNTIME", "").strip().lower(),
             default_model=os.environ.get("TICO_DEFAULT_MODEL", "").strip(),
+            models_preset=os.environ.get("TICO_MODELS_PRESET", "").strip().lower(),
             credential_kms_key=os.environ.get("TICO_CREDENTIAL_KMS_KEY", ""),
             slack_gateway_enabled=not rehearsal and os.environ.get("TICO_SLACK_GATEWAY_ENABLED", "0") == "1",
             slack_team_id=os.environ.get("SLACK_TEAM_ID", "").strip(),

@@ -294,6 +294,47 @@ def routed_reply(gateway, hub, text="Done."):
     return reply["id"]
 
 
+@pytest.mark.parametrize("held", ["paused", "quarantined"])
+def test_a_persons_new_thread_to_a_bot_held_since_the_roster_was_read_is_kept_and_said_so(gateway, hub, held):
+    """Legal is paused or quarantined while the decision model reads the roster: the new thread's message is kept for
+    Legal, the person is told in Slack that it waits, and it is one queued job that runs when Legal is back."""
+    def hold(state):
+        with hub.transaction() as c:
+            if held == "quarantined":
+                H.quarantine(c, "legal", "10 repeated refusals today")
+            else:
+                c.execute("UPDATE bots SET state='paused' WHERE slug='legal'")
+        return answers(legal=0.9)
+
+    result = send(gateway, "please review the vendor terms", judge_answer=hold, channel=DM, kind="message")
+    assert result["state"] == "routed", result
+    (kept,) = result["decision"]["delivered"]
+    assert kept["bot"] == "legal" and kept["opened"] and result["decision"]["dropped"] == []
+    assert "Your message is kept for when it is back" in kept["held"]
+    assert ("until about" if held == "quarantined" else "until a person resumes it") in kept["held"]
+    assert [p["text"] for p in gateway.slack.posts] == [kept["held"]] and gateway.slack.posts[0]["channel"] == DM
+    message = rows(hub, "SELECT * FROM messages WHERE id=?", kept["message_id"])[0]
+    assert (message["from_actor"], message["to_actor"], message["body"]) == ("human:ana", "bot:legal",
+                                                                             "please review the vendor terms")
+    assert rows(hub, "SELECT bot,state FROM jobs WHERE message_id=?", kept["message_id"]) == [{"bot": "legal", "state": "queued"}]
+    # Nothing else woke up for it, and it is not sent again: the assistant got nothing, one job waits for Legal.
+    assert jobs(hub) == [{"bot": "legal", "state": "queued"}]
+    with hub.transaction() as c:
+        c.execute("UPDATE bots SET state='active' WHERE slug='legal'")
+    assert gateway.tick()["events"] == [] and jobs(hub) == [{"bot": "legal", "state": "queued"}]
+
+
+def test_a_new_thread_to_a_bot_that_is_gone_is_still_dropped_and_the_assistant_asks(gateway, hub):
+    def archive(state):
+        with hub.transaction() as c:
+            c.execute("UPDATE bots SET state='archived' WHERE slug='legal'")
+        return answers(legal=0.9)
+
+    result = send(gateway, "please review the vendor terms", judge_answer=archive, channel=DM, kind="message")
+    assert [d["bot"] for d in result["decision"]["dropped"]] == ["legal"]
+    assert [d["bot"] for d in result["decision"]["delivered"]] == ["coo"] and gateway.slack.posts == []
+
+
 def test_a_post_is_attempted_once_and_a_crash_between_send_and_record_is_uncertain(gateway, hub):
     slack, clock = gateway.slack, gateway.clock
     mid = routed_reply(gateway, hub)
@@ -482,6 +523,13 @@ def test_a_shared_dm_with_56_active_bots_is_asked_in_calls_within_the_cap_and_ro
     assert events(hub)[0]["state"] == "routed"
 
 
+def test_a_persons_message_the_model_reads_as_asking_for_nothing_still_reaches_the_assistant(gateway, hub):
+    """Decide picks who gets a person's message, never whether anyone does (the Decide on Jev spec)."""
+    result = send(gateway, "thanks, that's all", judge_answer=answers(asks=0.1, legal=0.9), channel=DM, kind="message")
+    assert result["state"] == "routed" and [r["bot"] for r in result["decision"]["recipients"]] == ["coo"]
+    assert "asks for nothing" in result["decision"]["reason"] and [j["bot"] for j in jobs(hub)] == ["coo"]
+
+
 def test_a_decision_outage_retries_for_ten_minutes_and_then_fails_instead_of_looping(gateway, hub):
     gateway._judge = CappedJudge({}, fail=J.JudgeError("unavailable", "the decision model answered 503", 503, retryable=True))
     assert send(gateway, "hello there", channel=DM, kind="message")["state"] == "received"
@@ -601,7 +649,7 @@ def test_a_routing_retry_is_one_short_http_attempt_and_one_audited_call(hub, mon
         attempts.append(timeout)
         raise TimeoutError()
 
-    monkeypatch.setattr("urllib.request.urlopen", opener)
+    monkeypatch.setattr("clients.judge.urlopen", opener)
     hub.settings.typesafe_api_key = "synthetic"
     gw = G.Gateway(hub, FakeSlack(), clock=Clock())
     gw.verify_app()

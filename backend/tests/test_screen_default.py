@@ -1,5 +1,7 @@
-"""A new computer's Screen setting starts at View the first time it offers a screen, unless a person already chose one;
-a computer from before this default keeps what it had."""
+"""A new computer's Screen setting starts at Control the first time it offers a screen, unless a person already chose
+one; a computer from before this default keeps what it had."""
+
+import json
 
 from backend.tests.test_api import api, get, post, runner  # noqa: F401  (the api fixture)
 
@@ -20,19 +22,21 @@ def mode(api, rid):
     return next(m for m in get(api, "operations")["computers"] if m["id"] == rid)["screen"]
 
 
-def test_a_new_computer_offering_its_screen_starts_at_view_and_a_persons_choice_stands(api):
+def test_a_new_computer_offering_its_screen_starts_at_control_and_a_persons_choice_stands(api):
     r = runner(api)
     rid = r["runner_id"]
     heartbeat(api, r, False)
     assert mode(api, rid) == "off"                      # no screen offered, nothing to view
     heartbeat(api, r, True)
-    assert mode(api, rid) == "view"
+    assert mode(api, rid) == "control"
     with api.app.state.store.read() as c:
-        rows = c.execute("SELECT actor FROM events WHERE action='runner.screen' AND target=?", (rid,)).fetchall()
-    assert [row["actor"] for row in rows] == ["system"]
-    post(api, f"computers/{rid}/screen", {"mode": "off"})
+        rows = c.execute("SELECT actor,detail_json FROM events WHERE action='runner.screen' AND target=?",
+                         (rid,)).fetchall()
+    assert [(row["actor"], json.loads(row["detail_json"])) for row in rows] == [
+        ("system", {"mode": "control", "reason": "first offer"})]
+    post(api, f"computers/{rid}/screen", {"mode": "view"})
     restart(api, r)
-    assert mode(api, rid) == "off"
+    assert mode(api, rid) == "view"
 
 
 def test_a_choice_made_before_the_first_offer_stands(api):

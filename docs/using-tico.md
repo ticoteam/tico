@@ -80,7 +80,7 @@ your own, and anyone's below you.
 **How do I add a routine?**
 **Settings → Routines → New routine** (or the Routines card on the bot's page): pick the bot, a
 title, a cron (five fields, America/Los_Angeles by default) or a Tico event, and the text the bot
-is told each time. A bot can set up its own with `hub routine set`. Details: `docs/routines.md`.
+is told each time. A bot can set up its own with `hub routine set`. Details: [Routines](routines.md).
 
 **How do I change what a bot does?**
 Open **Bot → More → Instructions → Edit Instructions**, describe the change, and choose
@@ -92,6 +92,14 @@ For a manual edit, change `AGENT.md` in `bot-<slug>` (playbooks and `knowledge/`
 facts), commit and push. The computer pulls before the next run; if you maintain its checkout by
 hand, pull the update there too. Model, effort, computer, owners and status are changed in
 **Settings → Bots**. One-off requests are tasks, not edits.
+
+How often a bot wakes for routine news is its **Wakes** row in **Settings → Bots**: **Token saver** (the default for
+new bots) or **Performance**. Under **Subscribe to updates** in the bot editor you choose whether it hears about
+template changes and Tico releases. See [Creating bots](creating-bots.md#subscribe-to-updates).
+
+**How do I contact the Tico team?**
+Click **?** at the bottom of the sidebar (**Support** on a phone), write your message and press Enter. Replies come
+back into the same pop-up. See [Support](support.md).
 
 ## Updates
 
@@ -209,7 +217,7 @@ Tags give related tasks a shared label, metadata and a Markdown checklist. A chi
 Click a tag chip to open its notes and tasks. The task filter uses tags. Existing label strings,
 `hub task label` and `--label` continue to use the same keys. Unknown keys create plain tags.
 
-Open **Settings > Tags** to create tags or templates. A template holds a reusable checklist and
+Open **Settings > Tasks**, under **Task tags**, to create tags or templates. A template holds a reusable checklist and
 metadata defaults. Open it and choose a key under **Make a tag** to copy those defaults into a new
 tag; later template edits leave existing instances alone. Put the instance on tasks. Templates
 cannot be attached directly.
@@ -247,7 +255,7 @@ a stale version returns `409 version_conflict` without overwriting the checklist
 ## Task types and steps
 
 Tasks use **General** until you choose another type. Movers add types and named steps in
-**Settings → Types**. A custom task's **Step** control sets its status; General keeps the usual
+**Settings → Tasks**. A custom task's **Step** control sets its status; General keeps the usual
 **Status** control. Select **Filter → Type** on the board to use that type's steps as columns.
 Bots and older runners keep using statuses. See [Task types and steps](tasks.md) for mapping rules,
 CLI, MCP and API examples.

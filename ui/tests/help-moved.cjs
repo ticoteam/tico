@@ -6,6 +6,7 @@ const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile, beta} = require('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs');
 const ISSUES = [{id: 5, title: 'Board stays empty after a restart', since: '0.2.15', fixed_in: '0.2.18', url: 'https://github.com/ticoteam/tico/issues/700'},
   {id: 6, title: '<img src=x onerror=alert(1)>', since: '0.2.16', fixed_in: '', url: 'javascript:alert(1)'}];
 const CHECKS = [{name: 'HTTPS certificate', status: 'bad', detail: 'could not connect to tico.acme.example:443', fix: 'Open port 443 to the server.', source: 'doctor'},
@@ -55,7 +56,7 @@ const CHECKS = [{name: 'HTTPS certificate', status: 'bad', detail: 'could not co
         if (p === '/api/v2/status') return json({bots: []});
         if (p === '/api/v2/needs-you') return json({items: []});
         if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
-        return json({});
+        return json(unrouted(p));
       });
       await page.goto('https://tico-ui.test/' + hash);
       await page.waitForFunction(() => !document.querySelector('#account .account-email')?.textContent.includes('Signing in'));

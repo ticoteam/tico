@@ -7,6 +7,14 @@ The chart in the app is the **Team** sidebar: each group is a section that opens
 with the groups inside it below them. A human or bot with no group sits at the top. The built-in bots (the Assistant, BotOps, the
 Librarian and the Goal Manager) stay out of the chart and the Goals tree. Assistant and BotOps have main rail entries;
 the Goal Manager is reached from Goals and the Librarian from Docs and Market. Settings > Bots still lists all four.
+When bots' names start with the same words (the "Head of" in **Head of Product** and **Head of Sales**), those words are
+muted, and on a narrow sidebar they drop out whole so each row keeps the part that tells it apart. Hover a bot to see its
+whole name. A bot waiting for its setup conversation has a small amber gear beside its name (**Needs setup**).
+With the [CEO Bot switch](goals-and-kpis.md#the-ceo-bot-switch) on, the Goal Manager is named **CEO Bot** and joins
+the chart under the owner. The Heads, each in its department's group, and the bots that report to no one sit under it.
+The Assistant, BotOps, the Librarian and message bots stay apart. Only the chart moves: nobody's `reports_to` and
+nobody's access changes, and `hub team show` still gives each bot the `reports_to` it has. With the switch off, which
+is the default, the chart is as described above.
 Message bots such as Inbox Manager follow in a separate **Message bots** section on the chart and Goals. The mailboxes and
 A message bot's mailboxes and Slack channels are listed under it in the sidebar; any other bot's Slack channels are
 under Slack in its Tools on the bot's page.

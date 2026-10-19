@@ -11,6 +11,9 @@ The words Tico uses, and what each replaces.
 - **Human**: a human teammate. The **Humans** page lists them.
 - **Bot**: an AI teammate.
 - **Built-in**: a bot that comes with Tico, serves everyone and belongs to no group: Assistant, BotOps, Librarian, Goal Manager. These four appear as **Built-in** in Settings > Bots. Assistant and BotOps have main rail entries; the Goal Manager is on Goals and the Librarian is on Docs and Market. They stay out of the team chart and goal owner list.
+- **CEO Bot**: the Goal Manager's name on an install with the CEO Bot switch on. It then sits under the owner on the team chart, with the Heads under it ([Goals](goals-and-kpis.md#the-ceo-bot-switch)).
+- **Company section**: the Vision and Description at the top of Goals, shown only with the CEO Bot switch on ([Goals](goals-and-kpis.md#the-company-section)).
+- **Why**: one line on a goal tying it to the company's Vision. The CEO Bot proposes it and a person accepts it ([Goals](goals-and-kpis.md#a-goals-why)).
 - **Message bot**: a bot that works a human's email or a Slack channel, such as Inbox Manager. These appear separately under **Message bots** in the sidebar, Goals and setup.
 - **External agent**: an agent outside the team connected to Tico (Codex, Claude, Grok), run by a human or a bot.
 - **MCP** and **CLI**: two ways for humans and agents to reach the same shared Tico tools; an external agent connects over MCP with a token.
@@ -20,7 +23,7 @@ The words Tico uses, and what each replaces.
 
 - **Instructions**: what a bot is told it does (`AGENT.md` in developer docs).
 - **Tools**: everything a bot uses: its model and harness, GitHub, Slack, Google, AWS.
-- **Model** and **Harness**: kinds of tool. The model (GPT-5.5, Opus) and the harness it runs in (Codex, Claude Code).
+- **Model** and **Harness**: kinds of tool. The model (GPT 6.1 Sol, Claude Opus 5.5) and the harness it runs in (Codex, Claude Code).
 - **AI provider**: the account a model comes from.
 - **Credential**: a stored secret a bot is granted. "API key" or "token" only names what a service gives you, or sign-in.
 - **Template**: what you create a bot from.
@@ -29,6 +32,7 @@ The words Tico uses, and what each replaces.
 ## Where bots run
 
 - **Computer**: what you register and add (Settings > Computers).
+- **Connection**: a login an AI tool on a computer runs on: a **subscription** (a named plan login), the **Computer's login**, or an API key. See [Computers](computers.md).
 - **Runner**: the software installed on a computer (install docs only).
 - **Health**: what is wrong. Each problem is an **issue**.
 

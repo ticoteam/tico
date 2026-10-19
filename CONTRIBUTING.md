@@ -27,7 +27,8 @@ npx playwright install chromium
 npm run test:ui                                # the core browser scripts (CORE in scripts/ui-tests.cjs)
 ```
 
-Run both locally before you open a pull request: GitHub Actions does not run tests. The default run leaves out
+Run both locally before you open a pull request. GitHub Actions runs them again on the pull request (the PR checks
+workflow), so a failure shows there too. The default run leaves out
 tests marked `@pytest.mark.slow` (real git, Docker, servers, long timers) and the browser scripts outside the core
 list; `python -m pytest -q -m slow` and `node scripts/ui-tests.cjs --all` run them, and the release check does. Run
 them too when you change what they cover. To run less while you work: `python -m pytest -q backend/tests/test_x.py`
@@ -58,8 +59,8 @@ Resolve runtime packages first, then development packages against those pins. Th
 same shared dependencies as installations. Use the supported Python version for both commands:
 
 ```bash
-uv pip compile backend/requirements.in --python-version 3.12 -o backend/requirements.txt
-uv pip compile backend/requirements-dev.in --python-version 3.12 -o backend/requirements-dev.txt
+uv pip compile backend/requirements.in --python-version 3.15 -o backend/requirements.txt
+uv pip compile backend/requirements-dev.in --python-version 3.15 -o backend/requirements-dev.txt
 ```
 
 Upgrade a small compatible group with `--upgrade-package NAME` on the first command, then regenerate
@@ -109,4 +110,6 @@ the Docker images and publishes the GitHub release, with that CHANGELOG section 
 running installs then offer the update. Contributors do not tag; add your change to `[Unreleased]` in
 the CHANGELOG instead. Before merging a PR branched before the last release's notes landed, merge main
 and check its CHANGELOG line sits under `[Unreleased]`, not the released section (`backend/tests/test_changelog.py`
-fails until it does). The steps are in [docs/releasing.md](docs/releasing.md).
+fails until it does). PR checks refuse a pull request whose CHANGELOG lines, merged with main, land anywhere else; a
+release notes merge-back or an erratum names each released section it changes in a `Changelog-Release: vX.Y.Z` commit
+trailer. The steps are in [docs/releasing.md](docs/releasing.md).

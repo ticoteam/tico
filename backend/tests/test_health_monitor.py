@@ -1,7 +1,7 @@
 """The Health Monitor (backend/health_monitor.py, docs/health-monitor.md): off until the owner turns it on, a scan that
-wakes it only for a finding the last scan did not have, a day of quiet when a finding comes straight back, and one
-Tico bug report per signature that carries the finding and the redacted diagnostics, never task text, with a message
-on the same ticket when it comes back."""
+wakes it only for a new finding, one whose severity rose or one back after its task was finished (seeing a finding
+again counts and starts no run), and one Tico bug report per signature that carries the finding and the redacted
+diagnostics, never task text, with a message on the same ticket when it comes back."""
 
 import calendar
 import json
@@ -12,7 +12,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from backend import diagnostics, health_monitor, support
+from backend import diagnostics, health_monitor, providers, support
 from backend.auth import Identity
 from backend.store import H
 from backend.tests.test_goal_manager import BASE
@@ -63,10 +63,21 @@ def monitor_tasks(api):
                                            ("bot:" + health_monitor.SLUG,))]
 
 
-def notices(api, task_id):
+def notices(api, task_id, start="Seen again"):
     with api.app.state.store.read() as c:
         return c.execute("SELECT count(*) FROM messages m JOIN tasks t ON t.conversation_id=m.conversation_id "
-                         "WHERE t.id=? AND m.body LIKE 'Seen again%'", (task_id,)).fetchone()[0]
+                         "WHERE t.id=? AND m.body LIKE ?", (task_id, start + "%")).fetchone()[0]
+
+
+def wakes(api):
+    """Runs queued for the Health Monitor: the jobs its messages started (the runs token saving 1/9 records)."""
+    with api.app.state.store.read() as c:
+        return c.execute("SELECT count(*) FROM jobs WHERE bot=?", (health_monitor.SLUG,)).fetchone()[0]
+
+
+def finding(api, key):
+    with api.app.state.store.read() as c:
+        return dict(c.execute("SELECT * FROM health_findings WHERE key=?", (key,)).fetchone())
 
 
 def runner_errors(api, runner, lines):
@@ -119,22 +130,120 @@ def test_a_finding_wakes_it_once_is_filed_once_without_task_text_and_a_repeat_go
     runner_errors(api, runner, [])
     scan(api)                                                             # gone
     runner_errors(api, runner, STREAM)
-    assert scan(api) == []                                                # back within a day: counted, wakes nothing
-    assert len(monitor_tasks(api)) == 1 and notices(api, task["id"]) == 0
-    with api.app.state.store.read() as c:
-        assert c.execute("SELECT occurrences FROM health_findings WHERE key=?", (key,)).fetchone()[0] == 2
+    assert scan(api) == []                                    # back while its task is open: counted, wakes nothing
+    assert len(monitor_tasks(api)) == 1 and notices(api, task["id"]) == 1
+    assert finding(api, key)["occurrences"] == 3                          # seen by three scans
     repeat = api.post(f"/api/v2/health-monitor/findings/{key}/report", json={}, headers=bot).json()
     assert repeat["comment"] and len(hq.tickets) == 1
     (ticket,) = hq.tickets.values()
-    assert [m["body"][:37] for m in ticket["messages"]] == ["[Health Monitor] Seen again (2 times)"]
-    with api.app.state.store.transaction() as c:                          # a day after its last wake it wakes again
-        c.execute("UPDATE health_findings SET last_woke=?, present=0 WHERE key=?",
-                  (H.shift(H.now(), hours=-25), key))
+    assert [m["body"][:37] for m in ticket["messages"]] == ["[Health Monitor] Seen again (3 times)"]
+    with api.app.state.store.transaction() as c:          # a day since its last wake no longer wakes it again
+        c.execute("UPDATE health_findings SET last_woke=? WHERE key=?", (H.shift(H.now(), hours=-25), key))
     runner_errors(api, runner, [])
     scan(api)
     runner_errors(api, runner, STREAM)
+    assert scan(api) == [] and len(monitor_tasks(api)) == 1 and notices(api, task["id"]) == 2
+
+
+def test_a_finding_seen_again_counts_and_starts_no_run(environment):
+    api, runner = built(environment)
+    api.post("/api/v2/health-monitor/turn-on", json={}, headers=signed_in())
+    runner_errors(api, runner, STREAM)
+    key = "event_stream:" + runner["runner_id"]
+    before = wakes(api)
+    assert scan(api) == [key] and wakes(api) == before + 1                # new: one run
+    (task,) = monitor_tasks(api)
+    first = finding(api, key)
+    assert first["occurrences"] == 1 and first["severity"] == "warn"
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE health_findings SET last_seen=? WHERE key=?", (H.shift(H.now(), hours=-1), key))
+    assert scan(api) == []                                                # still there an hour later
+    again = finding(api, key)
+    assert again["occurrences"] == 2 and again["last_seen"] > H.shift(H.now(), minutes=-1)
+    runner_errors(api, runner, [])
+    scan(api)                                                             # gone, its task still open
+    assert finding(api, key)["present"] == 0
+    runner_errors(api, runner, STREAM)
+    assert scan(api) == [] and wakes(api) == before + 1                   # back: counted, no run for anyone
+    assert finding(api, key)["occurrences"] == 3 and len(monitor_tasks(api)) == 1
+    with api.app.state.store.read() as c:                                 # a quiet note the bot reads next turn
+        (note,) = c.execute("SELECT m.body,m.refs_json FROM messages m JOIN tasks t ON t.conversation_id=m.conversation_id "
+                            "WHERE t.id=? AND m.body LIKE 'Seen again%'", (task["id"],)).fetchall()
+    assert note["body"].startswith("Seen again (3 times, last ") and json.loads(note["refs_json"])["quiet"]
+    shown = api.get("/api/v2/health-monitor", headers=signed_in()).json()["findings"]
+    assert [(f["key"], f["occurrences"], f["severity"]) for f in shown] == [(key, 3, "warn")]
+    assert shown[0]["last_seen"] == finding(api, key)["last_seen"]
+
+
+def test_a_finding_back_after_its_task_was_finished_counts_as_new(environment):
+    api, runner = built(environment)
+    api.post("/api/v2/health-monitor/turn-on", json={}, headers=signed_in())
+    runner_errors(api, runner, STREAM)
+    key = "event_stream:" + runner["runner_id"]
     assert scan(api) == [key]
-    assert len(monitor_tasks(api)) == 1 and notices(api, task["id"]) == 1
+    (task,) = monitor_tasks(api)
+    with api.app.state.store.transaction() as c:                          # the bot finished it ("Cleared on its own")
+        c.execute("UPDATE tasks SET status='done' WHERE id=?", (task["id"],))
+    assert scan(api) == []                                                # still there: its task being done says nothing
+    runner_errors(api, runner, [])
+    scan(api)
+    runner_errors(api, runner, STREAM)
+    before = wakes(api)
+    assert scan(api) == [key] and wakes(api) == before + 1                # back after it was cleared: new, it runs
+    assert notices(api, task["id"], "Back after its task was finished (seen 3 times)") == 1
+    assert notices(api, task["id"]) == 0
+    with api.app.state.store.transaction() as c:                          # a closed task: a new one
+        c.execute("UPDATE tasks SET status='closed' WHERE id=?", (task["id"],))
+    runner_errors(api, runner, [])
+    scan(api)
+    runner_errors(api, runner, STREAM)
+    assert scan(api) == [key] and wakes(api) == before + 2
+    old, new = monitor_tasks(api)
+    assert old["id"] == task["id"] and "Seen: 4 time(s)" in new["body"]
+    with api.app.state.store.transaction() as c:                          # a declined task: a new one too
+        c.execute("UPDATE tasks SET status='declined' WHERE id=?", (new["id"],))
+    runner_errors(api, runner, [])
+    scan(api)
+    runner_errors(api, runner, STREAM)
+    assert scan(api) == [key] and wakes(api) == before + 3
+    assert len(monitor_tasks(api)) == 3 and "Seen: 5 time(s)" in monitor_tasks(api)[-1]["body"]
+
+
+def test_a_finding_whose_severity_rises_wakes_it(environment, monkeypatch):
+    api, _ = built(environment)
+    api.post("/api/v2/health-monitor/turn-on", json={}, headers=signed_in())
+    level = {"now": "warn"}
+    item = lambda: health_monitor._finding("runner_outdated:r1", "runner_outdated", health_monitor.SETUP,
+                                           "Studio Mac runs an older Tico release", "Release 0.0.9.", "Update it.",
+                                           severity=level["now"])
+    monkeypatch.setattr(health_monitor, "findings", lambda c, settings: [item()])
+    key = "runner_outdated:r1"
+    assert scan(api) == [key]
+    (task,) = monitor_tasks(api)
+    assert "Severity: warn" in task["body"]
+    before = wakes(api)
+    level["now"] = "bad"
+    assert scan(api) == [key] and wakes(api) == before + 1                # worse: woken on its open task
+    assert notices(api, task["id"], "Worse now (bad, was warn") == 1 and len(monitor_tasks(api)) == 1
+    assert scan(api) == [] and wakes(api) == before + 1                   # still bad: counted only
+    level["now"] = "warn"
+    assert scan(api) == [] and finding(api, key)["severity"] == "warn"    # better: counted, nobody woken
+    level["now"] = "bad"
+    assert scan(api) == [key] and wakes(api) == before + 2                # worse again
+    assert finding(api, key)["occurrences"] == 5
+
+
+@pytest.mark.parametrize("release,severity", [("0.0.9", "bad"), ("0.3.40", "warn")])
+def test_a_computer_on_a_release_the_server_cannot_work_with_is_bad(environment, monkeypatch, release, severity):
+    monkeypatch.setenv("TICO_VERSION", "0.3.45")
+    api, runner = built(environment)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runners SET last_seen=? WHERE id=?", (H.now(), runner["runner_id"]))
+        c.execute("INSERT INTO runner_versions(runner_id,release,reported) VALUES(?,?,?) ON CONFLICT(runner_id) "
+                  "DO UPDATE SET release=excluded.release,update_state='',update_error=''",
+                  (runner["runner_id"], release, H.now()))
+        found = {f["check_id"]: f for f in health_monitor.findings(c, api.app.state.store.settings)}
+    assert found["runner_outdated"]["severity"] == severity
 
 
 def test_event_stream_counts_drops_and_not_the_ones_a_server_restart_caused(environment, monkeypatch):
@@ -304,3 +413,211 @@ def test_a_paused_bots_routines_are_not_a_finding(environment):
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bots SET state='paused' WHERE slug='coo'")
     assert scan(api) == []
+
+
+def company(api, enabled=("anthropic", "openai"), auto=True):
+    """The company's providers, the first one's runtime the default, and whether a bot out of quota falls back to the
+    others."""
+    with api.app.state.store.transaction() as c:
+        providers.save(c, "human:test", {"expected_revision": providers.load(c)["revision"], "enabled": list(enabled),
+                                         "runtime": providers.PROVIDER_BY_ID[enabled[0]]["runtime"],
+                                         "auto_fallback": auto}, H.now())
+
+
+def limited(api, bot=SECRET_BOT, config=None):
+    """A bot whose turn stopped on a usage limit within the day, with its own config when given."""
+    with api.app.state.store.transaction() as c:
+        H.sync_registry(c, {bot: {"name": bot, "status": "active"}}, None)
+        if config is not None:
+            c.execute("INSERT OR REPLACE INTO bot_config(bot,config_json,operator) VALUES(?,?,'ana')",
+                      (bot, json.dumps(config)))
+        H.event(c, H.KEEPER, "attempt.limited", "a-" + bot, {"bot": bot})
+
+
+@pytest.mark.parametrize("auto,enabled,config,raised", [
+    (True, ("anthropic", "openai"), None, False),                      # the company's Codex row takes the turn
+    (True, ("anthropic", "openai"), {"runtime": "claude"}, False),
+    (False, ("anthropic", "openai"), None, True),                      # the owner turned automatic fallback off
+    (True, ("anthropic",), None, True),                                # no row on another runtime
+    (True, ("openai",), {"runtime": "codex"}, True),                   # the only row is the bot's own runtime...
+    (True, ("anthropic", "openai"), {"fallback": {"off": True}}, True),   # ...or the bot turned fallback off...
+    (True, ("anthropic", "openai"), {"fallback": {"harness": "codex"}}, True),   # ...or names one with no model
+])
+def test_limited_no_fallback_counts_the_company_fallback(environment, auto, enabled, config, raised):
+    api, _ = built(environment)
+    api.post("/api/v2/health-monitor/turn-on", json={}, headers=signed_in())
+    company(api, enabled, auto)
+    limited(api, config=config)
+    with api.app.state.store.read() as c:
+        keys = {item["key"] for item in health_monitor.findings(c, api.app.state.store.settings)}
+    assert ("limited_no_fallback:" + SECRET_BOT in keys) is raised
+
+
+def test_a_bots_own_fallback_still_counts_with_company_fallback_off(environment):
+    api, _ = built(environment)
+    company(api, auto=False)
+    limited(api, config={"fallback": {"harness": "codex", "model": "gpt-6-luna"}})
+    with api.app.state.store.read() as c:
+        assert not [i for i in health_monitor.findings(c, api.app.state.store.settings)
+                    if i["check_id"] == "limited_no_fallback"]
+
+
+def turn(api, runner_id, result, minutes_ago, bot="coo", state=None):
+    """A finished turn on `runner_id` with the runner's result (backend/execution.py stores it as result_json)."""
+    with api.app.state.store.transaction() as c:
+        at = H.shift(H.now(), minutes=-minutes_ago)
+        mid = "m-" + H.new_id()
+        c.execute("INSERT INTO messages(id,from_actor,to_actor,kind,body,created) VALUES(?,'human:ana',?,'chat','hi',?)",
+                  (mid, "bot:" + bot, at))
+        c.execute("INSERT OR IGNORE INTO jobs(id,message_id,bot,state,created) VALUES(?,?,?,'completed',?)",
+                  ("j-" + mid, mid, bot, at))
+        job = c.execute("SELECT id FROM jobs WHERE message_id=?", (mid,)).fetchone()["id"]
+        aid = "a-" + mid
+        c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created,finished,"
+                  "result_json) VALUES(?,?,?,?,1,?,?,?,?,?,?)",
+                  (aid, job, bot, runner_id, "hash-" + aid, state or result["outcome"], at, at, at, json.dumps(result)))
+
+
+QUOTA = {"outcome": "failed", "limited": True, "limit_resets_at": None, "profile_used": None}
+
+
+def login_findings(api):
+    with api.app.state.store.read() as c:
+        return {i["key"]: i for i in health_monitor.findings(c, api.app.state.store.settings)
+                if i["check_id"] == "default_login_limited"}
+
+
+def test_a_default_login_out_of_quota_is_a_finding_until_a_turn_there_completes(environment):
+    api, runner = built(environment)
+    rid = runner["runner_id"]
+    key = f"default_login_limited:{rid}:codex"
+    # The Oct 18 case: hops to Codex on the computer's default login (no profile) and a check model, all refused at
+    # once with no reset time. A hop's usage names only the primary that spent tokens.
+    turn(api, rid, {**QUOTA, "fallback": "codex", "primary_limited": True,
+                    "usage": {"runtime": "claude", "segments": [{"runtime": "claude"}]}}, 50)
+    assert key not in login_findings(api)                            # one limit is not yet a pattern
+    turn(api, rid, {**QUOTA, "check": "codex"}, 40)
+    turn(api, rid, {"outcome": "failed", "fallback": "codex", "profile_used": None}, 35)   # another failure: says nothing
+    turn(api, rid, {**QUOTA, "fallback": "codex"}, 30)
+    # The same runtime signed in as a subscription profile is not the default login, and works.
+    turn(api, rid, {"outcome": "completed", "fallback": "codex", "profile_used": "work"}, 20)
+    # Claude on the default login works: only Codex is out.
+    turn(api, rid, {"outcome": "completed", "profile_used": None, "usage": {"runtime": "claude"}}, 10)
+    found = login_findings(api)
+    assert list(found) == [key], found
+    item = found[key]
+    assert item["kind"] == "setup" and item["title"] == f"{CANARY}'s default Codex login is out of quota", item
+    assert "3 turns on it since" in item["detail"] and "no reset time" in item["detail"], item["detail"]
+    assert "fall back to it, will fail" in item["detail"]
+    # The finding goes through the scan like any other, and goes away once a turn on that login completes.
+    api.post("/api/v2/health-monitor/turn-on", json={}, headers=signed_in())
+    assert key in scan(api)
+    turn(api, rid, {"outcome": "completed", "check": "codex", "profile_used": None}, 5)
+    assert login_findings(api) == {}
+    scan(api)
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT present FROM health_findings WHERE key=?", (key,)).fetchone()["present"] == 0
+
+
+@pytest.mark.parametrize("reset_minutes,raised", [(None, True), (60, True), (-1, False)])
+def test_a_default_login_limit_clears_when_its_reset_time_passes(environment, reset_minutes, raised):
+    api, runner = built(environment)
+    reset = None if reset_minutes is None else H.shift(H.now(), minutes=reset_minutes)
+    for ago in (30, 20):
+        turn(api, runner["runner_id"], {**QUOTA, "check": "codex", "limit_resets_at": reset}, ago)
+    found = login_findings(api)
+    assert bool(found) is raised, found
+    if reset_minutes == 60:
+        assert "resets at " + reset[:16].replace("T", " ") + " UTC" in next(iter(found.values()))["detail"]
+
+
+def test_a_default_login_limit_older_than_a_day_is_not_a_finding(environment):
+    api, runner = built(environment)
+    for ago in (25 * 60, 24 * 60 + 30):
+        turn(api, runner["runner_id"], {**QUOTA, "check": "codex"}, ago)
+    assert login_findings(api) == {}
+
+
+def test_turns_that_failed_without_a_limit_are_not_a_quota_finding(environment):
+    api, runner = built(environment)
+    for ago in (30, 20):
+        turn(api, runner["runner_id"], {"outcome": "failed", "check": "codex", "profile_used": None}, ago)
+    assert login_findings(api) == {}
+    turn(api, runner["runner_id"], {**QUOTA, "check": "codex"}, 10)       # one limit among them is still one
+    assert login_findings(api) == {}
+
+
+def test_a_bots_own_key_is_not_the_computers_login(environment):
+    api, runner = built(environment)
+    rid = runner["runner_id"]
+    company(api, ("google", "openrouter", "openai"))
+    with api.app.state.store.transaction() as c:
+        H.sync_registry(c, {b: {"name": b, "status": "active"} for b in ("gem-a", "gem-b", "pi-a")}, None)
+        for bot, harness in (("gem-a", "gemini-cli"), ("gem-b", "gemini-cli"), ("pi-a", "pi")):
+            c.execute("INSERT OR REPLACE INTO bot_config(bot,config_json,operator) VALUES(?,?,'ana')",
+                      (bot, json.dumps({"harness": harness})))
+    # The Gemini CLI and pi sign in with each bot's own key (`api_keys = "bot"`): gem-a out of quota on its key, as a
+    # turn of its own, a check and a fallback, says nothing about the computer, and gem-b working there clears nothing.
+    turn(api, rid, {**QUOTA}, 50, bot="gem-a")
+    turn(api, rid, {**QUOTA, "usage": {"runtime": "gemini", "harness": "gemini-cli"}}, 45, bot="gem-a")
+    turn(api, rid, {**QUOTA, "check": "gemini"}, 40, bot="gem-a")
+    turn(api, rid, {**QUOTA, "fallback": "pi"}, 35, bot="pi-a")
+    turn(api, rid, {**QUOTA, "fallback": "pi"}, 30, bot="pi-a")
+    assert login_findings(api) == {}
+    # Codex is signed in by the computer: two limits there are its finding, and gem-b's completed turn leaves it.
+    turn(api, rid, {**QUOTA, "check": "codex"}, 25, bot="gem-a")
+    turn(api, rid, {**QUOTA, "fallback": "codex"}, 20, bot="pi-a")
+    turn(api, rid, {"outcome": "completed", "profile_used": None}, 10, bot="gem-b")
+    assert list(login_findings(api)) == [f"default_login_limited:{rid}:codex"]
+
+
+def gateway_choice(api, monkeypatch, runner_id, isolated, enabled=("anthropic",)):
+    """The recommended models choice with the Gateway connected, on a computer that does (or does not) run Gateway work."""
+    from backend import gateway_connection
+    monkeypatch.setattr(gateway_connection, "connected", lambda c, settings=None: True)
+    with api.app.state.store.transaction() as c:
+        providers.save(c, "human:test", {"expected_revision": providers.load(c)["revision"], "enabled": list(enabled),
+                                         "runtime": "claude", "auto_fallback": True, "preset": "subscriptions-gateway"},
+                       H.now())
+        c.execute("UPDATE runners SET readiness_json=? WHERE id=?",
+                  (json.dumps({"schema_version": 1, "isolated": isolated, "runtimes": {}, "bots": {}}), runner_id))
+
+
+@pytest.mark.parametrize("isolated", [True, False])
+def test_a_used_up_login_under_the_gateway_choice_is_one_plain_finding(environment, monkeypatch, isolated):
+    api, runner = built(environment)
+    rid = runner["runner_id"]
+    gateway_choice(api, monkeypatch, rid, isolated)
+    limited(api, config={"runtime": "claude"})
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO assignments(bot,runner_id,generation,updated,updated_by) VALUES(?,?,1,?,'t')",
+                  (SECRET_BOT, rid, H.now()))
+    for ago in (30, 20):
+        turn(api, rid, {**QUOTA, "usage": {"runtime": "claude"}}, ago, bot=SECRET_BOT)
+    with api.app.state.store.read() as c:
+        found = [i for i in health_monitor.findings(c, api.app.state.store.settings)
+                 if i["check_id"] in ("limited_no_fallback", "default_login_limited")]
+    if isolated:
+        # The Gateway takes the turn last: the bot is not stuck, and the login says so in plain words.
+        assert [(i["check_id"], i["title"]) for i in found] == [
+            ("default_login_limited", f"{CANARY}'s Claude login is used up")]
+        assert found[0]["detail"] == f"{CANARY}'s Claude login is used up. Bots are on Tico Gateway until it resets."
+        return
+    # A Mac skips the Gateway row, so the bot is stopped, and that finding says why and what to do.
+    stopped = [i for i in found if i["check_id"] == "limited_no_fallback"]
+    assert [i["title"] for i in stopped] == [f"{SECRET_BOT} stopped: its Claude login is used up"]
+    assert "no computer here can run Tico Gateway work" in stopped[0]["detail"]
+    assert stopped[0]["fix"] == "Sign in another Claude login, or add a Docker runner."
+
+
+def test_the_gateway_row_counts_as_a_fallback_only_under_the_gateway_choices(environment, monkeypatch):
+    api, runner = built(environment)
+    gateway_choice(api, monkeypatch, runner["runner_id"], True)
+    with api.app.state.store.transaction() as c:
+        record = providers.load(c)
+        providers.save(c, "human:test", {"expected_revision": record["revision"], "preset": "subscriptions"}, H.now())
+    limited(api, config={"runtime": "claude"})
+    with api.app.state.store.read() as c:
+        found = [i for i in health_monitor.findings(c, api.app.state.store.settings)
+                 if i["check_id"] == "limited_no_fallback"]
+    assert [i["title"] for i in found] == [f"{SECRET_BOT} stopped on a usage limit and has no fallback model"]

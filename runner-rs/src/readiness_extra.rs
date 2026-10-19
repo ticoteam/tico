@@ -18,7 +18,7 @@ pub const PUBLISH_WARNING: &str = "GitHub history not published: ";
 const DENIED_WARNING: &str = "Claude Code denies what AGENT.md asks for: ";
 const DENIES_WARNING: &str = "Claude Code settings deny: ";
 /// Readiness fields an older server may refuse; each is left out for ten minutes after a refusal.
-pub const OPTIONAL: &[&str] = &["engine", "worktree_waits", "worktrees", "harnesses", "mail_key", "shared_env", "recent_errors", "container_exec", "github_auth", "browser_launch", "disk", "screen"];
+pub const OPTIONAL: &[&str] = &["engine", "worktree_waits", "worktrees", "harnesses", "mail_key", "shared_env", "recent_errors", "container_exec", "github_auth", "browser_launch", "disk", "screen", "appdriver", "isolated"];
 
 // ------------------------------------------------------------------------------------- credential grants
 
@@ -450,6 +450,12 @@ pub fn refused(detail: &str, readiness: &Value) -> Option<String> {
     if extra && usage.is_match(detail) && runtime_usage(readiness) {
         return Some("readiness.runtime_usage".into());
     }
+    // Which key signs the computer's own login in, from before servers took it on a runtime row.
+    static KEY: OnceLock<regex::Regex> = OnceLock::new();
+    let key = KEY.get_or_init(|| regex::Regex::new(r"readiness\.(?:StructuredReadiness\.)?runtimes\.[^ .:;]+\.key(?:[.: ;]|$)").unwrap());
+    if extra && key.is_match(detail) && readiness["runtimes"].as_object().into_iter().flat_map(|m| m.values()).any(|r| r.get("key").is_some()) {
+        return Some("readiness.runtime_key".into());
+    }
     static CMD: OnceLock<regex::Regex> = OnceLock::new();
     if CMD.get_or_init(|| regex::Regex::new(r"bots\.[^. :;]+\.commands").unwrap()).is_match(detail) && any("commands") {
         return Some("readiness.repo_commands".into());
@@ -512,6 +518,11 @@ pub fn drop_held(body: &mut Value) {
         strip_runtime_usage(&mut body["readiness"]);
     }
     let readiness = &mut body["readiness"];
+    if crate::lanes::held_back("readiness.runtime_key") {
+        for row in readiness["runtimes"].as_object_mut().into_iter().flat_map(|m| m.values_mut()).filter_map(|v| v.as_object_mut()) {
+            row.remove("key");
+        }
+    }
     for field in OPTIONAL {
         if crate::lanes::held_back(&format!("readiness.{field}")) {
             if let Some(r) = readiness.as_object_mut() {
@@ -582,6 +593,26 @@ mod tests {
     }
 
     #[test]
+    fn a_server_from_before_isolation_reports_gets_the_same_check_in_without_it() {
+        // The refusal a server from before `isolated` sends (backend/models.py StructuredReadiness forbids unknown
+        // fields), word for word: that field alone is held back and the check-in is sent again with the rest, so
+        // the computer keeps claiming work.
+        let detail = "body.readiness.StructuredReadiness.isolated: Extra inputs are not permitted; \
+                      body.readiness.dict[constrained-str,bool].runtimes: Input should be a valid boolean; \
+                      body.readiness.dict[constrained-str,bool].bots: Input should be a valid boolean";
+        let mut body = json!({"version": "test", "readiness": {"schema_version": 1, "isolated": true,
+                              "recent_errors": ["x"], "runtimes": {"claude": {"installed": true}}, "bots": {}}});
+        let hold = refused(detail, &body["readiness"]);
+        assert_eq!(hold.as_deref(), Some("readiness.isolated"));
+        crate::lanes::hold_back("readiness.isolated");
+        drop_held(&mut body);
+        crate::lanes::release("readiness.isolated");
+        assert!(body["readiness"].get("isolated").is_none(), "only the refused field goes");
+        assert_eq!(body["readiness"]["recent_errors"], json!(["x"]));
+        assert_eq!(body["readiness"]["runtimes"]["claude"]["installed"], json!(true));
+    }
+
+    #[test]
     fn an_older_server_loses_only_the_own_logins_usage_windows() {
         let window = json!({"used_percent": 53.0, "resets_at": "2026-10-16T03:10:00+00:00", "reported_at": "2026-10-16T02:47:00+00:00", "status": "allowed"});
         let mut body = json!({"readiness": {"recent_errors": ["x"], "bots": {},
@@ -597,6 +628,21 @@ mod tests {
         assert_eq!(body["readiness"]["runtimes"]["claude"], json!({"installed": true, "account": {"plan": "max"}}));
         assert_eq!(refused(detail, &body["readiness"]), None, "nothing left to hold back");
         crate::lanes::release("readiness.runtime_usage");
+    }
+
+    #[test]
+    fn an_older_server_loses_only_the_own_logins_key_source() {
+        let mut body = json!({"readiness": {"recent_errors": ["x"], "bots": {},
+                              "runtimes": {"codex": {"installed": true, "key": {"name": "OPENAI_API_KEY", "source": "computer"}}, "claude": {"installed": true}}}});
+        let detail = "body.readiness.StructuredReadiness.runtimes.codex.key: Extra inputs are not permitted";
+        assert_eq!(refused(detail, &body["readiness"]).as_deref(), Some("readiness.runtime_key"));
+        assert_eq!(refused("readiness.recent_errors: Extra inputs are not permitted", &body["readiness"]).as_deref(), Some("readiness.recent_errors"));
+        crate::lanes::hold_back("readiness.runtime_key");
+        drop_held(&mut body);
+        assert_eq!(body["readiness"]["runtimes"]["codex"], json!({"installed": true}));
+        assert_eq!(body["readiness"]["recent_errors"], json!(["x"]));
+        assert_eq!(refused(detail, &body["readiness"]), None, "nothing left to hold back");
+        crate::lanes::release("readiness.runtime_key");
     }
 
     #[test]

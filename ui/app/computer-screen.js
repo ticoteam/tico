@@ -81,7 +81,7 @@ function botScreenRowHTML(slug) {
   const body = {
     ready: () => `<a class="bot-screen-open" href="${screenHref(s.id)}"><span class="nav-icon" aria-hidden="true">computer</span>Open</a>${status(` · ${s.machine.screen === 'control' ? 'Control' : 'View'}`)}`,
     off: () => status('Screen is off for this computer.') + (s.may
-      ? ` <button class="ghost" type="button" data-screen-on="${esc(s.id)}">Turn on (View)</button><span class="settings-cell-note">Control is a separate choice in Settings > Computers.</span>`
+      ? ` <button class="ghost" type="button" data-screen-on="${esc(s.id)}">Turn on (Control)</button><span class="settings-cell-note">View is a choice in Settings > Computers.</span>`
       : `<span class="settings-cell-note">${ask}</span>`),
     not_offered: () => status("This computer's screen isn't turned on.") + (s.may
       ? `<div class="bot-screen-steps"><p>Docker: in the runner's folder on the computer (<code>/opt/tico-runner</code>, or <code>/opt/tico-runner-&lt;name&gt;</code> for a named runner), turn it on live. Nothing restarts, so no running turn is cut off:</p>${screenCmdHTML(SCREEN_DOCKER_CMD, 'Docker')}
@@ -128,9 +128,10 @@ function botScreenWire(slug) {
     const id = on.dataset.screenOn;
     on.disabled = true;
     try {
-      const saved = await post(`/v2/computers/${encodeURIComponent(id)}/screen`, {mode: 'view'});
-      screenSaved(id, {screen: 'view', ...saved});
-      toast('Screen: view');
+      // Control, as a new computer's first offer starts (backend/screen.py first_offer); View and Off are in Settings.
+      const saved = await post(`/v2/computers/${encodeURIComponent(id)}/screen`, {mode: 'control'});
+      screenSaved(id, {screen: 'control', ...saved});
+      toast('Screen: control');
       if (BOT?.slug === slug) botScreenPaint(slug);
     } catch (error) { toast(error.message, true); on.disabled = false; }
   };
@@ -177,7 +178,8 @@ async function pageComputerScreen(id, from) {
   screenKeys(state);
   screenGestures(state);
   addEventListener('resize', state.onResize);
-  // The View | Control switch needs the computer's mode; Settings' listing has it, else one read of it.
+  // The first session and the View | Control switch follow the computer's mode; Settings' listing has it, else one
+  // read of it. At Control the person drives at once, and View stays one tap away.
   if (!screenMachine(id)?.screen && S.me?.cloud) {
     try { SETTINGS_DATA.machines = (await get('/v2/operations')).machines || SETTINGS_DATA.machines; } catch {}
     if (SCREEN !== state) return;
@@ -185,7 +187,7 @@ async function pageComputerScreen(id, from) {
   const machine = screenMachine(id);
   if (machine?.label) $('#scr-name').textContent = machine.label;
   state.mode = machine?.screen || '';
-  await screenConnect(state, false);
+  await screenConnect(state, state.mode === 'control');
 }
 function screenShow(state, text, retry) {
   if (SCREEN !== state) return;

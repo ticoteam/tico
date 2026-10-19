@@ -62,6 +62,9 @@ class State:
                 CREATE TABLE IF NOT EXISTS inputs(
                   attempt_id TEXT NOT NULL, message_id TEXT NOT NULL, phase TEXT NOT NULL,
                   PRIMARY KEY(attempt_id,message_id));
+                CREATE TABLE IF NOT EXISTS session_epochs(
+                  bot TEXT NOT NULL, conversation_id TEXT NOT NULL, session TEXT NOT NULL,
+                  epoch INTEGER NOT NULL, PRIMARY KEY(bot,conversation_id,session));
                 CREATE TABLE IF NOT EXISTS session_cursors(
                   thread TEXT PRIMARY KEY, message TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS session_repo_rules(

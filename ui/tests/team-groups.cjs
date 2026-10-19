@@ -11,6 +11,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const {html, uiFile, beta} = require('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs');
 
 const FULL = {see: true, read: true, write: true};
 async function shot(page, name) {
@@ -124,7 +125,7 @@ async function open(browser, me, branches = false) {
     if (p === '/api/v2/tasks') return json({tasks: []});
     if (p === '/api/v2/conversations') return json({conversations: []});
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
-    return json({});
+    return json(unrouted(p));
   });
   page.on('pageerror', e => errors.push(e.message));
   await page.goto('https://tico-ui.test/#/updates');
@@ -492,7 +493,7 @@ async function deleteGroups(browser) {
     const {page, errors, calls, people, groups, bots, deletion} = await open(browser, me);
     const reporting = [...people, ...bots].map(p => [p.id || p.name, p.reports_to]);
     assert.equal(await row(page, 'Message bots').locator('[data-group-delete]').count(), 0);
-    page.once('dialog', async dialog => { assert.match(dialog.message(), /^Delete Sales\? Its teammates and groups move to .+; its subscriptions are unassigned\.$/); await dialog.dismiss(); });
+    page.once('dialog', async dialog => { assert.match(dialog.message(), /^Delete Sales\? Its teammates and groups move to [^;]+\.$/); await dialog.dismiss(); });
     await clickDelete(page, 'sales');
     assert.deepEqual(calls, [], 'cancellation never sends a delete');
 
@@ -509,7 +510,7 @@ async function deleteGroups(browser) {
     let release;
     deletion.hold = new Promise(resolve => { release = resolve; });
     page.once('dialog', async dialog => {
-      assert.equal(dialog.message(), 'Delete SEO? Its teammates and groups move to Marketing; its subscriptions are unassigned.');
+      assert.equal(dialog.message(), 'Delete SEO? Its teammates and groups move to Marketing.');
       await dialog.accept();
     });
     await clickDelete(page, 'seo');

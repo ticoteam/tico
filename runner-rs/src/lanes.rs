@@ -11,7 +11,7 @@ use serde_json::Value;
 
 use crate::util::text_of;
 
-pub const CAPABILITIES: &[&str] = &["task_lanes_v2", "session_roots_v1", "task_goals_v1", crate::login::SIGN_OUT_CAPABILITY, crate::login::SWITCH_TYPE_CAPABILITY, crate::login::REMOVE_CAPABILITY];
+pub const CAPABILITIES: &[&str] = &["task_lanes_v2", "session_roots_v1", "task_goals_v1", crate::login::SIGN_OUT_CAPABILITY, crate::login::KEYS_CAPABILITY, crate::login::SWITCH_TYPE_CAPABILITY, crate::login::REMOVE_CAPABILITY];
 const DROP_FOR: Duration = Duration::from_secs(600);
 
 #[derive(Clone, Debug)]
@@ -71,7 +71,7 @@ pub fn capabilities() -> Vec<&'static str> {
 }
 
 /// Root-level heartbeat fields an older server may refuse; each is left out for ten minutes after a refusal.
-const ROOT_FIELDS: &[&str] = &["worktrees", "profiles", "repositories"];
+const ROOT_FIELDS: &[&str] = &["worktrees", "profiles", "repositories", "restart"];
 
 fn rows<'a>(body: &'a Value, key: &str) -> impl Iterator<Item = &'a Value> {
     body[key].as_array().into_iter().flatten()
@@ -103,7 +103,7 @@ pub fn refused_field(detail: &str, body: &Value) -> Option<String> {
     }
     let caps: Vec<String> = rows(body, "capabilities").map(text_of).collect();
     if detail.contains("capabilities") {
-        for name in [crate::login::REMOVE_CAPABILITY, crate::login::SWITCH_TYPE_CAPABILITY, crate::login::SIGN_OUT_CAPABILITY, crate::screen::CAPABILITY, "task_goals_v1", "session_roots_v1", "task_lanes_v2"] {
+        for name in [crate::login::REMOVE_CAPABILITY, crate::login::SWITCH_TYPE_CAPABILITY, crate::login::KEYS_CAPABILITY, crate::login::SIGN_OUT_CAPABILITY, crate::screen::CAPABILITY, "task_goals_v1", "session_roots_v1", "task_lanes_v2"] {
             if caps.iter().any(|c| c == name) {
                 return Some(name.into());
             }
@@ -167,6 +167,10 @@ mod tests {
         forget("a1");
         forget("a2");
         assert_eq!(refused_field("body.capabilities: bad", &json!({"capabilities": ["task_lanes_v2", "task_goals_v1"]})).as_deref(), Some("task_goals_v1"));
+        // A server from before model keys refuses only that capability; the sign-out one stays.
+        let both = json!({"capabilities": ["task_lanes_v2", crate::login::SIGN_OUT_CAPABILITY, crate::login::KEYS_CAPABILITY]});
+        assert!(CAPABILITIES.contains(&crate::login::KEYS_CAPABILITY));
+        assert_eq!(refused_field("body.capabilities.2: Input should be 'task_lanes_v2'", &both).as_deref(), Some(crate::login::KEYS_CAPABILITY));
     }
 
     #[test]
