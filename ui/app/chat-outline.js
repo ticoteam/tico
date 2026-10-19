@@ -6,7 +6,9 @@
 // exchange that is not loaded yet; the jump pages back with the same request "Load older messages" uses.
 const OUTLINE_MIN = 6;               // prompts before a chat is long enough to need it
 const JUMP_PAGES = 40;               // pages a jump loads before it gives up (200 messages each)
-let CHAT_JUMP = null;                // {slug, id}: a jump waiting for that bot's chat to load
+// {slug, id, conversation}: a jump waiting for that bot's chat to load; `conversation` names the room it is in when that
+// is not the bot's usual one (a Slack thread's room), and the chat opens that room when the reader is in it.
+let CHAT_JUMP = ENTRY_JUMP?.slug ? {slug: ENTRY_JUMP.slug, id: ENTRY_JUMP.id, conversation: ENTRY_JUMP.conversation} : null;
 
 function chatOutlineSync(state) {
   const conv = $('#conv');
@@ -100,6 +102,7 @@ function jumpToMessage(slug, id) {
   if (location.hash !== href) location.hash = href;
   return Promise.resolve(true);
 }
+const chatJumpRoom = slug => CHAT_JUMP?.slug === slug ? CHAT_JUMP.conversation || '' : '';
 async function chatJumpPending(state) {
   if (!CHAT_JUMP || CHAT_JUMP.slug !== state.slug || V2C !== state) return;
   const {id} = CHAT_JUMP; CHAT_JUMP = null;

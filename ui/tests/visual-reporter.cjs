@@ -37,6 +37,19 @@ const visual = `<!doctype html><p style="margin:0;font:16px/20px sans-serif">${'
     assert.ok(real<zeroHeight,`the zero-width height ${zeroHeight} should be the inflated one, not ${real}`);
     assert.equal(await page.evaluate(()=>seen.filter(m=>'ticoVisualHeight' in m).at(-1).ticoVisualHeight),real);
     console.log(`given a width it sends its real height${observer?'':' (no ResizeObserver)'}`);
+
+    // In a frame taller than the page, it still sends the page's own height (scrollHeight would say the frame's), so a
+    // page measured too tall once, then widened, comes back down.
+    const last=()=>page.evaluate(()=>seen.filter(m=>'ticoVisualHeight' in m).at(-1)?.ticoVisualHeight);
+    await page.evaluate(h=>{seen.length=0;document.getElementById('v').style.height=h+'px';},real+300);
+    await page.waitForFunction(()=>seen.some(m=>'ticoVisualHeight' in m));
+    assert.equal(await last(),real,`in a frame ${real+300}px tall the page still says its own ${real}px`);
+    await page.evaluate(()=>{seen.length=0;document.getElementById('v').style.width='780px';});
+    await page.waitForFunction(()=>seen.some(m=>'ticoVisualHeight' in m));
+    const wide=await frame.evaluate(()=>Math.ceil(document.documentElement.getBoundingClientRect().height));
+    assert.ok(wide<real,`widened, the page wraps less (${wide} < ${real})`);
+    assert.equal(await last(),wide,`widened in the same tall frame, it comes back down to ${wide}`);
+    console.log(`in a frame taller than the page it sends the page's own height, down as well as up${observer?'':' (no ResizeObserver)'}`);
     await page.close();
    }
   }finally{await browser.close();}

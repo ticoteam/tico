@@ -808,6 +808,9 @@ class ProfileReadiness(GoalReadiness):
     models: list[ID] = Field(default_factory=list, max_length=50)
     controls: list[Literal["interrupt", "new-session"]] = Field(default_factory=list)
     detail: str = Field(default="", max_length=500)
+    # Its turns on this runtime use the computer's own login (a profile that shares the operator's): one login, held
+    # once (backend/login_holds.py canonical).
+    shared_login: bool | None = None
 
 
 class HarnessReadiness(GoalReadiness):
@@ -852,6 +855,7 @@ class RuntimeReadiness(GoalReadiness):
     # One machine may hold several subscriptions for the same runtime. The runtime row keeps
     # the profile that needs attention first; this is the per-profile breakdown behind it.
     profiles: dict[str, ProfileReadiness] = Field(default_factory=dict, max_length=50)
+    shared_login: bool | None = None    # the one profile's row shown as the runtime's (ProfileReadiness)
     # The computer's own login's account, beside a ready sign-in. Shown only to an administrator or the
     # computer's operator (backend/views.py computer_details, /api/v2/operations).
     account: Account = None
@@ -1842,6 +1846,7 @@ class Completion(Contract):
     retryable: bool = False  # the runtime could not renew its sign-in; the turn never started
     fallback: str | None = Field(default=None, max_length=80)  # harness that actually ran the turn
     primary_limited: bool = False  # the bot's own runtime hit its usage limit and the company's default `fallback` ran the turn
+    primary_held: bool = False  # the claim held the bot's own login (config `primary_held`): the runner never tried it
     auth_rejected: AuthRejected | None = None  # the provider refused this computer's key or sign-in
     usage: RunUsage | None = None  # the run's token counts and the model that ran it
     # Inputs this run took from `attempts/{aid}/inputs` but never gave the runtime (the turn ended between
