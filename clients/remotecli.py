@@ -22,10 +22,26 @@ def tool_name(fn):
     return "hub_" + fn.replace(" ", "_").replace("-", "_")
 
 
+def visuals_from_args(args):
+    """`--visual` values with their `--title`s, in order: a file in the checkout, or ID@VERSION already in Tico."""
+    paths, titles = list(getattr(args, "visual", None) or []), list(getattr(args, "visual_title", None) or [])
+    if len(titles) > len(paths):
+        raise APIError("validation", "Each --title goes with a --visual", 422)
+    out = []
+    for index, value in enumerate(paths):
+        title = titles[index] if index < len(titles) else ""
+        known = re.fullmatch(r"[^/@\s]+@[1-9][0-9]*", value) and not os.path.exists(value)
+        out.append({"file" if known else "path": value, "title": title})
+    return out
+
+
 def via_tool(client, args, **more):
     """Run the tool of the command's own name with the command's flags as its arguments."""
     from clients import hubtools
-    fields = {k: v for k, v in vars(args).items() if k not in ("cmd", "sub", "subsub", "fn") and v is not None}
+    fields = {k: v for k, v in vars(args).items() if k not in ("cmd", "sub", "subsub", "fn", "visual", "visual_title")
+              and v is not None}
+    if getattr(args, "visual", None):
+        fields["visuals"] = visuals_from_args(args)
     fields["operation_id"] = os.environ.get("HUB_OPERATION_ID")
     fields.update(more)
     return hubtools.BY_NAME[tool_name(args.fn)]["fn"](client, fields)
@@ -294,7 +310,8 @@ def run(args, who=None):
         return hubtools.BY_NAME["hub_message_send"]["fn"](client, {
             "to": args.to, "text": args.text, "fyi": args.fyi, "conversation_id": args.conversation,
             "refs": args.ref or [], "steer": getattr(args, "steer", False),
-            "needs_action": getattr(args, "needs_action", False), "operation_id": key})
+            "needs_action": getattr(args, "needs_action", False), "operation_id": key,
+            **({"visuals": visuals_from_args(args)} if getattr(args, "visual", None) else {})})
     if fn == "question answer":
         return post(f"messages/{args.message_id}/answer", {"text": args.text or args.unknown,
                     "unknown": bool(args.unknown)}, delegate=getattr(args, "on_behalf_of", None) or False)
@@ -399,6 +416,12 @@ def run(args, who=None):
             for index, path in enumerate(getattr(args, "attach", None) or []):
                 made = post(f"tasks/{args.id}/files", attachment(path), suffix=f":attachment:{index}")
                 references.append(f"{made['file_id']}@{made['version']}")
+            local = []
+            if getattr(args, "visual", None):
+                from clients import hubtools
+                visuals, local = hubtools._visuals(client, visuals_from_args(args), lambda index, made: hubtools._uploaded(
+                    post(f"tasks/{args.id}/files", made, suffix=":visual:" + index)))
+                references.extend(visuals)
             body = {"text": args.text}
             if references:
                 body["attachments"] = references
@@ -407,7 +430,8 @@ def run(args, who=None):
             if getattr(args, "needs_action", False):
                 body["needs_action"] = True
             links = s3links.apply(client, body, ("text",))
-            return s3links.annotate(post(f"tasks/{args.id}/comments", body, delegate=asked), links)
+            result = s3links.annotate(post(f"tasks/{args.id}/comments", body, delegate=asked), links)
+            return {**result, "visuals_local": local} if local and isinstance(result, dict) else result
         if sub == "answers":
             return client.get(f"tasks/{args.id}/answers")
         if sub == "comment-edit":

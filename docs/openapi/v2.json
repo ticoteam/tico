@@ -17255,6 +17255,31 @@
             "additionalProperties": true,
             "type": "object",
             "title": "Refs"
+          },
+          "attachments": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^[^@]+@[1-9][0-9]*$"
+                },
+                {
+                  "$ref": "#/components/schemas/VisualRef"
+                }
+              ]
+            },
+            "type": "array",
+            "maxItems": 10,
+            "title": "Attachments"
+          },
+          "titles": {
+            "items": {
+              "type": "string",
+              "maxLength": 200
+            },
+            "type": "array",
+            "maxItems": 10,
+            "title": "Titles"
           }
         },
         "additionalProperties": false,
@@ -22531,6 +22556,22 @@
             ],
             "title": "Wait S"
           },
+          "attachments": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^[^@]+@[1-9][0-9]*$"
+                },
+                {
+                  "$ref": "#/components/schemas/VisualRef"
+                }
+              ]
+            },
+            "type": "array",
+            "maxItems": 10,
+            "title": "Attachments"
+          },
           "needs_action": {
             "type": "boolean",
             "title": "Needs Action",
@@ -25876,8 +25917,15 @@
           },
           "attachments": {
             "items": {
-              "type": "string",
-              "pattern": "^[^@]+@[1-9][0-9]*$"
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^[^@]+@[1-9][0-9]*$"
+                },
+                {
+                  "$ref": "#/components/schemas/VisualRef"
+                }
+              ]
             },
             "type": "array",
             "maxItems": 10,
@@ -28010,6 +28058,28 @@
           "note"
         ],
         "additionalProperties": true
+      },
+      "VisualRef": {
+        "properties": {
+          "ref": {
+            "type": "string",
+            "pattern": "^[^@]+@[1-9][0-9]*$",
+            "title": "Ref"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 200,
+            "title": "Title",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "ref"
+        ],
+        "title": "VisualRef",
+        "description": "A file version attached to a message with the title it shows under (backend/visuals.py)."
       }
     },
     "securitySchemes": {

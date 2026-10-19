@@ -29,6 +29,7 @@ import httpx
 from fastapi import Request
 
 from . import models as M
+from . import visuals
 from . import rooms
 from .store import H, Problem, digest
 
@@ -1255,6 +1256,7 @@ def install(app, store, auth, mutate, onboarding):
         from .views import conversation_snapshot
         snap = conversation_snapshot(c, room["id"], settings=settings) if room else {"messages": [], "execution": None, "has_more": False,
                                                                      "next_before": None}
+        visuals.for_reader(app, settings, c, who, snap["messages"])
         ids = [m["refs"]["action"] for m in snap["messages"] if isinstance(m.get("refs"), dict) and m["refs"].get("action")]
         pending = [action_view(dict(r), c) for r in c.execute(
             "SELECT * FROM assistant_actions WHERE owner=? AND status='pending' ORDER BY created", (who.actor,))]

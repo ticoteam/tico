@@ -25,7 +25,7 @@ from . import go_live as pending_go_lives
 from . import repo_waits
 from . import built_on
 from . import agents, app_delivery, batch, external_sync, inbox_isolation, mcp_oauth, harness_actions, model_login, oidc, personal_tokens, views
-from . import check_models, run_triggers, team_rules, update_feeds, topic_change, usage_limits, wake_presets, wake_rules
+from . import check_models, run_triggers, team_rules, update_feeds, topic_change, usage_limits, wake_presets, visuals, wake_rules
 from . import task_privacy as privacy
 from . import task_relations as TR
 from . import task_roles as TRo
@@ -413,6 +413,10 @@ def create_app(settings=None):
                 return await public_roadmap_guard(request, call_next, store)
             if request.url.path == "/healthz":
                 return await call_next(request)
+            # A visual in a reply (backend/visuals.py): its signed token is the credential, and the app's cookies are
+            # never read there. Its own headers stand: nothing below adds the app's framing or caching rules.
+            if request.url.path.startswith("/visuals/") and request.method in ("GET", "HEAD"):
+                return await call_next(request)
             if request.url.path == "/_tico/screen/v1/authorize":
                 from .screen_relay import private_request
                 if not private_request(request, settings):
@@ -719,7 +723,8 @@ def create_app(settings=None):
         request.state.auth_ms = 0.0
         app.state.timing.begin()
         # This request's SQL time and write-lock wait, added to by the threads it runs on (backend/flight.py).
-        cost, cost_token = flight.request_started() if recorder is not None else (None, None)
+        cost, cost_token = (flight.request_started(request.method, request.scope) if recorder is not None
+                            else (None, None))
         route = request.url.path
         response = None
         try:
@@ -1089,6 +1094,25 @@ def create_app(settings=None):
         page, has_more = rows[:limit], len(rows) > limit
         return task_views(page, c, who, visible_sql), offset + limit if has_more else None
 
+    def visual_view(c, who, rows):
+        """Messages with each visual as this reader sees it now: fresh addresses on /visuals (backend/visuals.py), or
+        none at all while inline display is off (a file chip)."""
+        return visuals.for_reader(app, settings, c, who, rows)
+
+    def visual_key():
+        return visuals.key_for(app, settings)
+
+    def visual_ancestors():
+        from .visuals import origin_of
+        return list(dict.fromkeys(["'self'", origin_of(settings.public_url), *settings.cors_origins]))
+
+    @app.api_route("/visuals/{token}", methods=["GET", "HEAD"], include_in_schema=False)
+    def visual(request: Request, token: str):
+        """A visual for inline display, apart from the app's sign-in: the signed token is the only credential, and
+        the reader it names is checked again on every request (each range request too)."""
+        return visuals.serve(request, store, auth, app.state.files, app.state.blobs, visual_key(),
+                             visual_ancestors(), token, on=visuals.inline_on(settings))
+
     def check_refs(c, who, refs):
         # Validate referenced objects rather than trusting an arbitrary ID in a payload.
         for kind, values in refs.items():
@@ -1186,6 +1210,13 @@ def create_app(settings=None):
             refs["goal_context"] = {"id": goal["id"], "updated_at": goal["updated_at"]}
             c.execute("UPDATE messages SET refs_json=? WHERE id=?", (encode(refs), message["id"]))
             message = H.message(c, message["id"])
+        if body.attachments:
+            # The visuals go on the message it was sent as: versions of files in this conversation (backend/visuals.py).
+            attached, report = visuals.attach(c, who, app.state.files, app.state.blobs, body.attachments,
+                                              conversation_id=message["conversation_id"])
+            refs["attachments"] = attached
+            c.execute("UPDATE messages SET refs_json=? WHERE id=?", (encode(refs), message["id"]))
+            message = {**visual_view(c, who, [H.message(c, message["id"])])[0], "visuals": report}
         if who.role == "bot":
             conv = H.conversation(c, message["conversation_id"])
             if who.attempt_id and all(p.startswith("bot:") for p in conv["participants"]):
@@ -2015,7 +2046,7 @@ def create_app(settings=None):
                     auth.conversation(c, who, conv["id"])
                 except Problem:
                     continue
-                messages = privacy.page(c, who, conv["id"])["messages"]
+                messages = visual_view(c, who, privacy.page(c, who, conv["id"])["messages"])
                 bot = H.bot(c, row["bot"]) or {}
                 threads.append({"bot": row["bot"], "display_name": bot.get("display_name") or row["bot"],
                                 "conversation_id": conv["id"], "channel": row["channel"],
@@ -2108,6 +2139,7 @@ def create_app(settings=None):
             page = privacy.page(c, request.state.identity, cid, since=views.since_time(since), before=before,
                                 **views.page_options(limit, max_bytes))
             turn_work.annotate(c, auth, request.state.identity, page["messages"])
+            visual_view(c, request.state.identity, page["messages"])
             return {"conversation": H.conversation(c, cid), **page}
 
     @app.get("/api/v2/conversations/{cid}/outline")
@@ -2147,9 +2179,9 @@ def create_app(settings=None):
             who = request.state.identity
             privacy.require_message(c, who, row)
             if who.role == "bot" and (row.get("to_actor") == who.actor or row.get("from_actor") == who.actor):
-                return row
+                return visual_view(c, who, [row])[0]
             auth.conversation(c, who, row["conversation_id"])
-            return row
+            return visual_view(c, who, [row])[0]
 
     @app.post("/api/v2/chat/{bot}")
     def chat(request: Request, bot: str, body: M.ChatCreate):
@@ -2159,7 +2191,8 @@ def create_app(settings=None):
 
         def work(c):
             cleared = topic_change.apply(c, settings, who, bot, topic)
-            message = send(c, who, M.MessageCreate(to="bot:" + bot, text=body.text, refs=body.refs, command=body.command))
+            message = send(c, who, M.MessageCreate(to="bot:" + bot, text=body.text, refs=body.refs, command=body.command,
+                                                   attachments=body.attachments))
             if cleared:
                 message = topic_change.record(c, who, message, topic)
             onboarding.start_setup(c, who, bot)
@@ -2521,7 +2554,8 @@ def create_app(settings=None):
             target = target or next((p for p in conv["participants"] if p != who.actor), None)
             if not target:
                 raise Problem("recipient", "This conversation has no other recipient", 422)
-            return {"message": send(c, who, M.MessageCreate(to=target, text=body.text, conversation_id=cid, refs=body.refs, command=body.command))}
+            return {"message": send(c, who, M.MessageCreate(to=target, text=body.text, conversation_id=cid, refs=body.refs,
+                                                            command=body.command, attachments=body.attachments))}
         return mutate(request, body, work)
 
     @app.post("/api/v2/messages/{mid}/answer")
@@ -2822,7 +2856,8 @@ def create_app(settings=None):
                     "children": children,
                     # The task page reads as its session's chat: each bot reply carries the run behind it (`run`,
                     # the steps one click away) and `execution` is the owner's run while it works.
-                    "comments": turn_work.annotate(c, auth, who, H.task_comments(c, tid, actor=privacy.actor(who))),
+                    "comments": visual_view(c, who, turn_work.annotate(c, auth, who,
+                                                                          H.task_comments(c, tid, actor=privacy.actor(who)))),
                     "execution": task_execution(c, who, row),
                     "mover": mover(c, request.state.identity),
                     "waiting_for": task_wait(c, tid, settings),
@@ -3136,17 +3171,10 @@ def create_app(settings=None):
         def work(c):
             task_id = auth.resolve_task(c, who, tid)
             row = auth.task(c, who, task_id)
-            from .task_review import comment_rights, check_ask, comment_file
+            from .task_review import comment_rights, check_ask
             comment_rights(c, auth, who, task_id)
             ask = check_ask(c, task_id, body.ask, auth, who)
-            attached = []
-            for reference in body.attachments:
-                fid, number = reference.rsplit("@", 1)
-                fid, version = comment_file(c, auth, app.state.files, who, task_id, fid, int(number))
-                number, reference = version["version"], f"{fid}@{version['version']}"
-                attached.append({"id": fid, "file_id": fid, "version": int(number), "ref": reference,
-                                 "name": version["name"], "size": version["size"], "content_type": version["mime"],
-                                 "url": f"/api/v2/files/{fid}?v={number}"})
+            attached, report = visuals.attach(c, who, app.state.files, app.state.blobs, body.attachments, task_id=task_id)
             moves = mover(c, who)
             # A person @mentioned in a comment gets it as a question, so it reaches their Needs you.
             # The comment itself is the question to the first one, unless it would wake the bot,
@@ -3171,10 +3199,12 @@ def create_app(settings=None):
                           (item["id"], item["version"]))
                 c.execute("UPDATE task_file_reviews SET comment_id=coalesce(comment_id,?) WHERE file_id=? AND version=?",
                           (msg["id"], item["id"], item["version"]))
-            msg = next(m for m in H.task_comments(c, task_id, actor=privacy.actor(request.state.identity)) if m["id"] == msg["id"])
+            comments = visual_view(c, who, H.task_comments(c, task_id, actor=privacy.actor(request.state.identity)))
+            msg = next(m for m in comments if m["id"] == msg["id"])
             held = H.held_note(c, msg.get("to_actor"))
-            return {"comment": msg, "comments": H.task_comments(c, task_id, actor=privacy.actor(request.state.identity)),
-                    "woke": bool(wake) and not ({"can_wait", wake_rules.MARK} & set(msg.get("refs") or {})), **({"warning": held} if held else {})}
+            return {"comment": msg, "comments": comments,
+                    "woke": bool(wake) and not ({"can_wait", wake_rules.MARK} & set(msg.get("refs") or {})),
+                    **({"warning": held} if held else {}), **({"visuals": report} if report else {})}
         result = mutate(request, body, work)
         if body.attachments:
             app.state.file_metadata.wake.set()   # a chat file shared here is a new task copy: preview it now
@@ -3185,7 +3215,8 @@ def create_app(settings=None):
         with store.read() as c:
             task_id = auth.resolve_task(c, request.state.identity, tid)
             auth.task(c, request.state.identity, task_id)
-            return {"comments": H.task_comments(c, task_id, actor=privacy.actor(request.state.identity))}
+            return {"comments": visual_view(c, request.state.identity,
+                                            H.task_comments(c, task_id, actor=privacy.actor(request.state.identity)))}
 
     @app.get("/api/v2/tasks/{tid}/answers")
     def task_answers(request: Request, tid: str):
@@ -3267,7 +3298,9 @@ def create_app(settings=None):
             from .task_review import comment_rights
             comment_rights(c, auth, who, row["id"])
             msg = H.task_comment_edit(c, who.actor, row["id"], mid, body.text, approval_id=body.approval_id)
-            return {"comment": msg, "comments": H.task_comments(c, row["id"], actor=privacy.actor(request.state.identity)), "woke": False}
+            return {"comment": visual_view(c, request.state.identity, [msg])[0],
+                    "comments": visual_view(c, request.state.identity, H.task_comments(
+                c, row["id"], actor=privacy.actor(request.state.identity))), "woke": False}
         return mutate(request, body, work, check=lambda c: own_comment(c, who, tid, mid, allow_deleted=True))
 
     @app.post("/api/v2/tasks/{tid}/comments/{mid}/delete")
@@ -3277,7 +3310,9 @@ def create_app(settings=None):
         def work(c):
             row = own_comment(c, who, tid, mid)
             msg = H.task_comment_delete(c, who.actor, row["id"], mid)
-            return {"comment": msg, "comments": H.task_comments(c, row["id"], actor=privacy.actor(request.state.identity)), "woke": False}
+            return {"comment": visual_view(c, request.state.identity, [msg])[0],
+                    "comments": visual_view(c, request.state.identity, H.task_comments(
+                c, row["id"], actor=privacy.actor(request.state.identity))), "woke": False}
         return mutate(request, body, work, check=lambda c: own_comment(c, who, tid, mid, allow_deleted=True))
 
     @app.post("/api/v2/tasks/{tid}/comments/{mid}/resolve")
@@ -3296,8 +3331,8 @@ def create_app(settings=None):
         def work(c):
             row = readable(c)
             out = H.task_ask_resolve(c, who.actor, row["id"], mid, body.quote)
-            return {"comment": out["answer"] or out["ask"],
-                    "comments": H.task_comments(c, row["id"], actor=privacy.actor(who)), "woke": False}
+            return {"comment": visual_view(c, who, [out["answer"] or out["ask"]])[0],
+                    "comments": visual_view(c, who, H.task_comments(c, row["id"], actor=privacy.actor(who))), "woke": False}
         return mutate(request, body, work, check=readable)
 
     @app.post("/api/v2/tasks/{tid}/delete")
@@ -4264,7 +4299,7 @@ def create_app(settings=None):
     @app.post("/api/v2/runners/{rid}/logins")
     def start_login(request: Request, rid: str, body: M.LoginStart):
         return mutate(request, body, lambda c: model_login.start(
-            c, request.state.identity, rid, body.runtime, body.profile, auth=auth, switch=body.switch))
+            c, request.state.identity, rid, body.runtime, body.profile, auth=auth, switch=body.switch, to=body.to))
 
     # Sign a login out (the computer's own, or a named subscription's); it is read back like a sign-in.
     @app.post("/api/v2/runners/{rid}/logouts")

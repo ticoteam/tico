@@ -110,4 +110,6 @@ the Docker images and publishes the GitHub release, with that CHANGELOG section 
 running installs then offer the update. Contributors do not tag; add your change to `[Unreleased]` in
 the CHANGELOG instead. Before merging a PR branched before the last release's notes landed, merge main
 and check its CHANGELOG line sits under `[Unreleased]`, not the released section (`backend/tests/test_changelog.py`
-fails until it does). The steps are in [docs/releasing.md](docs/releasing.md).
+fails until it does). PR checks refuse a pull request whose CHANGELOG lines, merged with main, land anywhere else; a
+release notes merge-back or an erratum names each released section it changes in a `Changelog-Release: vX.Y.Z` commit
+trailer. The steps are in [docs/releasing.md](docs/releasing.md).

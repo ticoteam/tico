@@ -478,7 +478,14 @@ async function onbSample(state) {
 }
 async function onbCompleted(state, record) {
   onbAdopt(state, record);
-  applyConfig({...S.config, onboarding_needed: !!state.record.needed});
+  // Completing setup marks What's new read for the owner: take the server's count before the full nav comes back. A
+  // slow or failed read never holds the nav back; a late answer still lands.
+  const done = config => ({...config, onboarding_needed: !!state.record.needed});
+  const fresh = get('/v2/config').catch(() => null);
+  const config = await Promise.race([fresh, new Promise(resolve => setTimeout(resolve, 2500, null))]);
+  if (ONB !== state) return;
+  applyConfig(done(config || S.config));
+  if (!config) void fresh.then(late => { if (late && ONB === state) applyConfig(done(late)); });
   state.step = state.steps.length;
   await onbRevisions(state);
   if (ONB !== state) return;

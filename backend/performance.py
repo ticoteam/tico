@@ -224,11 +224,15 @@ def _iso(ts):
 def _runs(c, runner_id, start, end, limit=500):
     """The turns this computer ran that overlap [start, end), oldest first: this server's own record. A busy window
     keeps its newest `limit`."""
-    # A leased turn counts from its lease: the runner reports `started` once its harness is up.
+    # A leased turn counts from its lease: the runner reports `started` once its harness is up. Only the turns still
+    # open or finished since `start` are read (attempts_runner_finished, two index ranges): an open overload runs this
+    # under the write lock on every post, and visiting each turn the computer ever ran held that lock ~100 s on a slow
+    # disk (Dev 249).
     return c.execute("SELECT a.id,a.bot,coalesce(a.started,a.created) started,a.finished,a.state,t.model FROM attempts a "
-                     "LEFT JOIN turns t ON t.id=a.id WHERE a.runner_id=? AND coalesce(a.started,a.created)<? AND "
-                     "(a.finished IS NULL OR a.finished>=?) ORDER BY coalesce(a.started,a.created) DESC LIMIT ?",
-                     (runner_id, _iso(end), _iso(start), limit)).fetchall()[::-1]
+                     "LEFT JOIN turns t ON t.id=a.id WHERE a.rowid IN (SELECT rowid FROM attempts WHERE runner_id=? "
+                     "AND finished>=? UNION ALL SELECT rowid FROM attempts WHERE runner_id=? AND finished IS NULL) AND "
+                     "coalesce(a.started,a.created)<? ORDER BY coalesce(a.started,a.created) DESC LIMIT ?",
+                     (runner_id, _iso(start), runner_id, _iso(end), limit)).fetchall()[::-1]
 
 
 def ran(c, runner_id, start, end):

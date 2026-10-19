@@ -17,6 +17,7 @@ from . import access as Access
 from . import bot_access as A
 from . import models as M
 from . import changelog as CL
+from . import visuals
 from . import app_delivery, providers, runner_versions
 from .harnesses import resolve_harness
 from . import personal_tokens, rooms, team_rules, turns, wake_presets
@@ -2090,6 +2091,7 @@ def install_views(app, store, auth, mutate, task_view):
             auth.conversation(c, request.state.identity, cid)
             snap = conversation_snapshot(c, cid, request.state.identity, auth.settings, page_options(limit, max_bytes), auth=auth)
             turns.annotate(c, auth, request.state.identity, snap["messages"])
+            visuals.for_reader(app, auth.settings, c, request.state.identity, snap["messages"])
             return snap
 
 

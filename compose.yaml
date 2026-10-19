@@ -34,6 +34,10 @@ services:
       TICO_DOMAIN:
       TICO_PORT: ${TICO_PORT:-8765}
       TICO_PUBLIC_URL:
+      # Visuals in replies (backend/visuals.py): a separate site of their own; unset in production = file chips.
+      TICO_VISUAL_ORIGIN:
+      TICO_VISUAL_SECRET:
+      TICO_VISUAL_SAME_ORIGIN:
       TICO_RUNNER_URL:
       TICO_COMPOSE_PROJECT: ${COMPOSE_PROJECT_NAME:-tico}
       TICO_SERVER_NETWORK: ${TICO_SERVER_NETWORK:-${COMPOSE_PROJECT_NAME:-tico}_default}

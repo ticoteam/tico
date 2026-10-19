@@ -22,6 +22,7 @@ from .blobs import Blobs, brief, register
 from .files import is_file_id
 from clients import bot_files as BF
 from . import rooms
+from . import visuals
 from .store import H, P, Problem, encode, digest as request_digest
 from .views import default_bot, human_only, roster
 
@@ -175,7 +176,7 @@ async def form(request, model, blobs, store):
                         raise ValueError("Duplicate or unnamed form field")
                     else:
                         fields[name] = data.decode("utf-8")
-                for field in ("calendar", "refs", "acceptance_criteria", "participants", "context",
+                for field in ("calendar", "refs", "acceptance_criteria", "participants", "context", "titles",
                               "labels", "links"):
                     if field in fields:
                         fields[field] = json.loads(fields[field])
@@ -458,11 +459,22 @@ def install_media(app, store, auth, mutate, send_message, task_create):
             items = [register(c, who, **upload) for upload in uploads]
             for item in items:
                 c.execute("INSERT INTO message_assets VALUES(?,?)", (message["id"], item["id"]))
+            for index, (item, upload) in enumerate(zip(items, uploads)):
+                # Each is also a versioned file in this conversation, so a picture, video or audio a person sends
+                # is a visual like a bot's (backend/visuals.py); `id` and `url` stay the blob's for older clients.
+                cid = message["conversation_id"]
+                row, _, _ = files.add_version(
+                    c, bot=bot, actor=who.actor, scope="conversation:" + cid, task=None, conversation=cid, attempt="",
+                    identity="chat-file:" + item["id"], title=item["name"], name=item["name"],
+                    mime=item["content_type"], blob_id=item["id"], digest=upload["digest"], size=item["size"])
+                title = body.titles[index] if index < len(body.titles) else ""
+                item.update(file_id=row["id"], version=row["current_version"], title=title or item["name"],
+                            kind=visuals.kind_of(item["content_type"], item["size"], visuals._head(blobs, upload["digest"])))
             if items:
                 refs = {**message["refs"], "attachments": items}
                 c.execute("UPDATE messages SET refs_json=? WHERE id=?", (encode(refs), message["id"]))
             return {"conversation": H.conversation(c, message["conversation_id"]),
-                    "message": H.message(c, message["id"])}
+                    "message": visuals.for_reader(app, store.settings, c, who, [H.message(c, message["id"])])[0]}
         return await asyncio.to_thread(write, request, body, uploads, work)
 
     @app.post("/api/v2/uploads/tasks", openapi_extra=upload_contract(M.TaskCreate))
