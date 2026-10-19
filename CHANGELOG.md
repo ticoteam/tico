@@ -8,6 +8,13 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- **How long an approval has waited, and on whom**: every approval now records when its exact payload was ready to
+  decide and whose decision it is, and its card in Needs you and Decide says so plainly ("Ready 2 h 10 min, waiting
+  on you", or the person's name); the row shows "ready 2 h 10 min". The API adds `ready_since`, `decision_owner`,
+  `decision_owner_name` and `age_s`. With the Health Monitor on, a release's publish approval ready over 60 minutes
+  with no decision is one finding (`release_approval_wait`) that counts each hourly scan and wakes nobody again;
+  `TICO_RELEASE_APPROVAL_WAIT_MINUTES` sets the threshold (0 turns it off). Nothing approves for anyone, and who may
+  approve is unchanged.
 - **Visuals in replies outside Tico (part 4 of 4)**: a bot's reply with visuals that reaches Slack keeps its text and
   adds one line, "1 visual - view in Tico" (or "N visuals"), linking to that message in Tico. A task-done post does
   the same for the owner's result comment when it has visuals. The link opens only for people who can read the

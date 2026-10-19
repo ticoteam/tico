@@ -1332,13 +1332,19 @@ def needs_key(x):
                        x.get("from_person"), x["pressing"], bool(x.get("ask_missing")), deadline(x))
 
 
+CLOCK_FIELDS = ("age_s",)     # item fields that move with the clock alone (hubdb.approval_wait)
+
+
 def needs_marks(items):
     """({id: fingerprint}, version) of a Needs-you list as needs_items orders it. A fingerprint covers the item and its
     place in the order, so an item whose mark is unchanged kept its content and its order against the others: a page
     that holds the list mends it from the changed ids alone (the live `needs` event, `GET /api/v2/needs-you?ids=`)."""
     marks = {}
     for x in items:
-        marks[str(x["id"])] = hashlib.sha1((json.dumps(x, sort_keys=True, default=str) + repr(needs_key(x)))
+        # Elapsed time is read off the clock, not a change: an approval's `age_s` follows from its stable `ready_since`
+        # and `decided_at`, so it stays out, or an untouched approval would change its mark every second.
+        same = {k: v for k, v in x.items() if k not in CLOCK_FIELDS}
+        marks[str(x["id"])] = hashlib.sha1((json.dumps(same, sort_keys=True, default=str) + repr(needs_key(x)))
                                            .encode()).hexdigest()[:12]
     version = hashlib.sha1("|".join(f"{k}:{v}" for k, v in marks.items()).encode()).hexdigest()[:16]
     return marks, version
