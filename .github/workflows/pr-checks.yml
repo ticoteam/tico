@@ -1,5 +1,6 @@
 # The default Python and core browser suites on every pull request and main push, on free GitHub-hosted VMs,
 # so a failing test shows on the PR instead of at Release validation. Read-only: no secrets, no publication.
+# The Python suite runs as three file groups balanced by test count (python-1/2/3), one per VM, like Release validation.
 name: PR checks
 
 on:
@@ -23,7 +24,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        suite: [python, browser]
+        include:
+          - {suite: python-1, shard: '1/3'}
+          - {suite: python-2, shard: '2/3'}
+          - {suite: python-3, shard: '3/3'}
+          - {suite: browser, shard: ''}
     env:
       PYTHONUNBUFFERED: '1'
       TICO_BROWSER_CHANNEL: ''
@@ -54,11 +59,12 @@ jobs:
           npm ci
           npx playwright install --with-deps chromium webkit
           "$RUNNER_TEMP/venv/bin/python" -m playwright install --with-deps chromium
-      - name: Python tests (default suite, every core)
-        if: matrix.suite == 'python'
+      - name: Python tests (default suite, file group ${{ matrix.shard }}, every core)
+        if: matrix.shard != ''
         env:
           TICO_PYTHON: ${{ runner.temp }}/venv/bin/python
-        run: '"$RUNNER_TEMP/venv/bin/python" -m pytest -q -n auto'
+          TICO_PR_SHARD: ${{ matrix.shard }}
+        run: '"$RUNNER_TEMP/venv/bin/python" scripts/release_checks.py --shard "$TICO_PR_SHARD"'
       - name: Core browser tests
         if: matrix.suite == 'browser'
         env:

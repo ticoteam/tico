@@ -96,6 +96,16 @@ pub struct SignIn {
     changes: Mutex<HashMap<String, (u64, bool)>>,
 }
 
+/// What a Switch to API key may change for one runtime on this computer, as it was before it began: its marks and
+/// its names in the computer's own key file and `_shared.env` (`SignIn::keys_before`, `SignIn::put_keys_back`).
+pub struct KeysBefore {
+    runtime: String,
+    signed_out: bool,
+    key_off: bool,
+    computer: Env,
+    hand: Env,
+}
+
 /// A key change running for `runtime` (`SignIn::begin_key_change`): over however it ends.
 pub struct KeyChange<'a> {
     sign: &'a SignIn,
@@ -322,6 +332,77 @@ impl SignIn {
         }
     }
 
+    /// `runtime`'s marks and its keys in the computer's own key file and `_shared.env`, as they are now.
+    pub fn keys_before(&self, runtime: &str) -> std::io::Result<KeysBefore> {
+        let _keys = self.keys.lock().unwrap_or_else(|e| e.into_inner());
+        let names = headless_names(runtime);
+        // A file that cannot be read is an error, not "no key": put back as empty, it would lose the key.
+        let read = |file: &str| -> std::io::Result<Env> {
+            match std::fs::metadata(self.secrets.join(file)) {
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Env::new()),
+                Err(e) => return Err(e),
+                Ok(_) => {}
+            }
+            std::fs::read_to_string(self.secrets.join(file))?;
+            Ok(read_env(&self.secrets.join(file)).into_iter().filter(|(k, _)| names.contains(k)).collect())
+        };
+        let (computer, hand) = (read(COMPUTER_KEYS_FILE)?, read(HAND_KEYS_FILE)?);
+        Ok(KeysBefore { runtime: runtime.into(), signed_out: self.signed_out(runtime), key_off: self.key_off(runtime), computer, hand })
+    }
+
+    /// Put `before` back: the runtime's keys first (each file's other lines and runtimes as they are now), its marks
+    /// last, under the `keys` lock. Every step is tried; the first error is returned.
+    pub fn put_keys_back(&self, before: &KeysBefore) -> std::io::Result<()> {
+        let _keys = self.keys.lock().unwrap_or_else(|e| e.into_inner());
+        let names = headless_names(&before.runtime);
+        let mut first = None;
+        for (file, keys) in [(COMPUTER_KEYS_FILE, &before.computer), (HAND_KEYS_FILE, &before.hand)] {
+            if let Err(e) = self.set_names(file, &names, keys) {
+                first.get_or_insert(e);
+            }
+        }
+        for (file, marked) in [(SIGNED_OUT_FILE, before.signed_out), (KEY_OFF_FILE, before.key_off)] {
+            let mut list = self.list(file);
+            if list.iter().any(|r| *r == before.runtime) == marked {
+                continue;
+            }
+            list.retain(|r| *r != before.runtime);
+            if marked {
+                list.push(before.runtime.clone());
+                list.sort();
+            }
+            if let Err(e) = self.write_file(file, serde_json::to_string(&list).unwrap_or_default().as_bytes()) {
+                first.get_or_insert(e);
+            }
+        }
+        self.refresh_now(&before.runtime);
+        self.dirty.store(true, std::sync::atomic::Ordering::SeqCst);
+        first.map_or(Ok(()), Err)
+    }
+
+    /// `names` in the key file `file` set to `keys` (none: taken out), every other line kept as it was. Under the
+    /// `keys` lock.
+    fn set_names(&self, file: &str, names: &[String], keys: &Env) -> std::io::Result<()> {
+        let now = read_env(&self.secrets.join(file));
+        if names.iter().all(|n| now.get(n) == keys.get(n)) {
+            return Ok(());
+        }
+        self.drop_names(file, names)?;
+        if keys.is_empty() {
+            return Ok(());
+        }
+        let mut kept = match std::fs::read_to_string(self.secrets.join(file)) {
+            Ok(text) => text,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(e) => return Err(e),
+        };
+        if !kept.is_empty() && !kept.ends_with('\n') {
+            kept.push('\n');
+        }
+        kept.extend(keys.iter().map(|(k, v)| format!("{k}={v}\n")));
+        self.write_file(file, kept.as_bytes())
+    }
+
     /// A person added a key, or chose the shared key, for a login switched to a subscription: keys reach it again.
     pub fn unmark_key_off(&self, runtime: &str) -> std::io::Result<()> {
         {
@@ -502,8 +583,9 @@ impl SignIn {
             }
             return true;
         }
-        // A login a person signed out, or switched to a subscription, from the app runs through its own job.
-        if reply["signed_out"] == true || reply["key_off"] == true {
+        // A login a person signed out, or switched to a subscription, from the app runs through its own job; so does
+        // one being switched to an API key (`switching`: the job puts the key in place, and Tico has not got its verdict).
+        if reply["signed_out"] == true || reply["key_off"] == true || reply["switching"] == true {
             return false;
         }
         // Per file: the keys given, or None when one was unusable and the file is left as it is. An older server
@@ -801,6 +883,11 @@ mod tests {
         sign.refresh_now("codex");
         assert!(!sign.team_model_keys(&client, "codex").await);
         assert_eq!(read_env(&team)["OPENAI_API_KEY"], "sk-team-0123456789");
+        // Nor does one switching it to an API key: that job puts the key in place, and Tico has not got its verdict.
+        *reply.lock().unwrap() = r#"{"credentials":[],"switching":true}"#.into();
+        sign.refresh_now("codex");
+        assert!(!sign.team_model_keys(&client, "codex").await);
+        assert_eq!(read_env(&team)["OPENAI_API_KEY"], "sk-team-0123456789");
         // An older server names no source: its key is the company's.
         *reply.lock().unwrap() = r#"{"credentials":[{"env":"OPENAI_API_KEY","value":"sk-team-rotated-0123"}]}"#.into();
         sign.refresh_now("codex");
@@ -815,7 +902,7 @@ mod tests {
         assert!(sign.team_model_keys(&client, "codex").await);
         assert_eq!(read_env(&team).get("OTHER").map(String::as_str), Some("kept"));
         assert_eq!(sign.key_source("codex"), None);
-        assert_eq!(asked.load(Ordering::SeqCst), 6);
+        assert_eq!(asked.load(Ordering::SeqCst), 7);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

@@ -87,6 +87,11 @@ services:
       TICO_GATEWAY_KEY:
       TICO_GATEWAY_SECRET_ARN:
       TICO_GATEWAY_URL:
+      # The recommended setup's choices (scripts/install.sh --recommended), read on the server's first start.
+      TICO_GATEWAY_INVITE:
+      TICO_INSTALL_PRESET:
+      TICO_SAMPLE_COMPANY:
+      TICO_MODELS_PRESET:
       TYPESAFE_API_KEY:
       TICO_TYPESAFE_SECRET_ARN:
       TICO_DECISIONS_DAILY_CALLS_OWNER:

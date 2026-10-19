@@ -28,6 +28,9 @@ Use the test environment's Python to invoke this script. The release gate defaul
 Python workers (at least one); the browser runner selects free-core concurrency and load-scaled timeouts.
 TICO_PYTHON_WORKERS, TICO_UI_JOBS and TICO_UI_SLOWDOWN override those defaults.
 Existing pytest and TICO_UI_JOBS settings still select concurrency for the default suites.
+
+Run locally, it first takes one of the computer's heavy-job slots (scripts/heavy.sh): at most TICO_HEAVY_SLOTS heavy
+runs at once on a box, the others waiting their turn. Hosted CI goes straight on.
 """
 import argparse
 import ipaddress
@@ -327,5 +330,13 @@ def main(argv=None):
     return python_shard(*args.shard) if args.shard else full()
 
 
+def in_slot(env=os.environ):
+    """Whether this run goes straight on: hosted CI, or a run already in one of the box's heavy-job slots."""
+    return bool(env.get('CI') or env.get('TICO_HEAVY_HELD')) or os.name == 'nt'
+
+
 if __name__ == '__main__':
+    if not in_slot():
+        # A local run first takes one of the box's heavy-job slots, at low priority (scripts/heavy.sh).
+        os.execvp('bash', ['bash', str(ROOT / 'scripts/heavy.sh'), sys.executable, __file__, *sys.argv[1:]])
     raise SystemExit(main())

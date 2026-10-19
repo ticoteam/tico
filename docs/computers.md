@@ -101,7 +101,9 @@ Click a row to open its pop-up. Its sections, top to bottom:
    **Performance**, and **Revoke computer** at the bottom.
 
 When the computer is offline, the pop-up says "Computer is offline" and its sign-in, usage refresh, screen and update
-actions are disabled until it is back.
+actions are disabled until it is back. So are a connection's **Sign out**, **Switch account**, **Replace key**,
+**Clear key** and the switches between a subscription and an API key: they stay on the line, greyed, and say "Computer
+is offline" on hover; nothing is queued for later.
 
 ### Who sees and changes what
 
@@ -213,11 +215,26 @@ and on a current runner; an older one answers `Update <computer> to sign out fro
   not bring a key back; **Add key** or **Use the shared key** does. Bots keep the connection. Not offered for Claude
   Code on a Mac (Keychain), and it needs a runner that knows it (`Update <computer> to switch to a subscription from
   here` otherwise).
+- **Switch to API key** is the way back: it sits on a Computer's own login on a subscription, next to **Switch
+  account** and **Sign out**, for Codex and Claude Code. The key is pasted once and kept in the vault as the Computer's
+  own key (like **Add key**). The subscription stays signed in and in use while the Computer checks the key with the
+  provider, in a home of its own with no login so the subscription cannot answer for it (Codex signs in with the key;
+  Claude Code asks Anthropic for one short reply). **Cancel switch**, closing the dialog, a key that doesn't work or
+  running out of time deletes the key and leaves the subscription as it was. Once the key works there it is put in place, the marks **Switch to subscription** and **Clear
+  key** left are lifted so the next turn runs on the key, and then the subscription is signed out. Codex keeps both
+  logins in one file, so its key login has already replaced the subscription's and nothing more is signed out; Claude
+  Code keeps them apart, so its login files are kept aside, its subscription is logged out and the key stays. If any
+  step after the check fails, or the sign-in check gives no answer, the Computer puts back everything it changed and
+  the subscription stays in use; when it cannot put something back, the dialog says what and where, not that the
+  subscription is in use. Bots keep the connection. Not offered for Claude Code on a Mac, where the subscription is in
+  the Keychain and a logout could not be undone (sign out, then **Add key**). It needs a runner that knows it
+  (`Update <computer> to switch to an API key from here` otherwise).
 
 None of this restarts the runner. `POST /api/v2/runners/{runner_id}/logouts` with `{"runtime":"codex"}` (and
 `"profile"` for a named subscription) signs out; `GET /api/v2/runners/{runner_id}/logouts/bots?runtime=codex` lists the
 bots it stops; `POST /api/v2/runners/{runner_id}/logins` with `"switch": true` switches (with `"to": "subscription"`,
-switches the Computer's own login off its API key); `POST
+switches the Computer's own login off its API key); `POST /api/v2/runners/{runner_id}/keys` with `"switch": true`
+switches it from its subscription to the key in `secret`; `POST
 /api/v2/runners/{runner_id}/shared-key` with `{"runtime":"codex"}` lets the shared key back. Each is followed like a
 sign-in, with `GET /api/v2/runners/{runner_id}/logins/{id}` (`kind` says which; a sign-out ends `signed_out`). BotOps
 cannot sign a login out, because it stops bots. A turn already running when the account changes is not stopped and
@@ -249,8 +266,8 @@ login with none. The Computer must be online and on a current runner; an older o
   Code, a key added here is used even when the computer also has a browser login.
 - **Clear key** first names the bots that stop, like **Sign out**. The Computer then deletes the key from its key files
   (and, for Codex, logs out a login the key made; a browser or subscription login is not the key's and stays), and
-  Tico deletes this computer's key from the vault. Bots and assignments stay. Afterwards the line reads **Signed out**
-  with **Add key**: like a sign-out, the company's shared key does not sign it back in (the server does not hand it
+  Tico deletes this computer's key from the vault. Bots and assignments stay. Afterwards the line reads **No key ·
+  Add key**, with **Sign in** and **Use the shared key** beside it, and its chip has a red dot: like a sign-out, the company's shared key does not sign it back in (the server does not hand it
   out, and the runner's ten-minute re-apply skips it) until someone adds a key, signs in or chooses **Use the shared
   key**.
 
@@ -273,8 +290,8 @@ them**, listing every Computer it signs in and which of them are offline.
 
 A Computer's own key is also a credential in **Credentials**. Deleting it there: the Computer falls back to the shared
 key at its next key fetch (Codex signs in again with it). With no shared key, the deletion is **Clear key** on that
-Computer: its next key fetch deletes its copies and logs out the login the key made, and the line reads **Signed out**
-with **Add key**. A key a Computer is still checking cannot be deleted there; cancel **Replace key** or let the check
+Computer: its next key fetch deletes its copies and logs out the login the key made, and the line reads **No key ·
+Add key**. A key a Computer is still checking cannot be deleted there; cancel **Replace key** or let the check
 end first.
 
 `GET /api/v2/runners/{runner_id}/keys?runtime=codex` says which key signs it in (`source`, `preview`) and, for the

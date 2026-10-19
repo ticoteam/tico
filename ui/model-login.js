@@ -9,6 +9,8 @@
    Clear key / Replace key / Add key (backend/computer_keys.py) are here too, for a login a model key signs in: the key
    is pasted once, stored in the vault for that computer and shown only by its preview. A key the company shares with
    every computer first asks "this computer only" or "all of them", listing them (`scopeHTML`, `chosenScope`).
+   Switch to API key (`toKey`) is Replace key for the computer's own login on a subscription: the key is checked while the
+   subscription stays signed in and in use, and only once it is in place is the subscription signed out.
    On a hosted Tico (config `hosted`, TICO_HOSTED) the person has no terminal on the computer, so the sign-in shows only
    the provider's link and code (never what else the CLI printed; a failure gives its message), never points to a
    terminal, and closes by itself once it has signed in or its cancel is confirmed. */
@@ -372,20 +374,27 @@
     } catch (error) { toast(error.message, true); }
   }
 
+  // Every action here waits for the computer: offline, its button stays, disabled, and says why (nothing queues).
+  const offline = online => online ? '' : ' disabled title="Computer is offline"';
+
   // The Sign out / Switch account buttons for a signed-in login, and Use the shared key for a computer login a person
-  // signed out. Only for a CLI whose manifest has a logout (`sign_out`), on a computer that is online, to whoever may
-  // sign it in (the caller checks: an admin or the computer's operator). The computer's login running on an API key
-  // (`onKey`) offers Switch to subscription instead of Switch account.
+  // signed out. Only for a CLI whose manifest has a logout (`sign_out`), to whoever may sign it in (the caller checks:
+  // an admin or the computer's operator), disabled while the computer is offline. The computer's login running on an API key
+  // (`onKey`) offers Switch to subscription instead of Switch account; on a subscription, a runtime Tico keeps a key for
+  // (`api_keys = "computer"`) and can check one (`api_key_login` or `api_key_check`) also offers Switch to API key, except
+  // where its login is in the system keychain (a logout there could not be undone).
   // No switch where the CLI keeps the login in the system keychain (`switch_unavailable_on`, by the computer's
   // `platform`): there is no side to sign in on, so a cancel could not keep the old login.
   function actionsHTML({runnerId, runtime, machine = '', profile = '', signedIn = false, signedOut = false, online = true, platform = '', onKey = false}) {
     const caps = typeof harnessCaps === 'function' ? harnessCaps(runtime) : {};
-    if (!online || !caps.sign_out) return '';
-    const data = `data-runner="${text(runnerId)}" data-runtime="${text(runtime)}" data-machine="${text(machine)}"${profile ? ` data-profile="${text(profile)}"` : ''}`;
+    if (!caps.sign_out) return '';
+    const data = `data-runner="${text(runnerId)}" data-runtime="${text(runtime)}" data-machine="${text(machine)}"${profile ? ` data-profile="${text(profile)}"` : ''}${offline(online)}`;
     if (signedIn) {
       const switches = !(caps.switch_unavailable_on || []).includes(platform);
+      const toKey = switches && !onKey && !profile && caps.api_keys === 'computer' && (caps.api_key_login || caps.api_key_check);
       return (onKey && !profile ? toSubscriptionHTML({runnerId, runtime, machine, online, platform})
         : switches ? ` <button class="ghost machine-signin" type="button" data-model-switch ${data}>Switch account</button>` : '')
+        + (toKey ? ` <button class="ghost machine-signin" type="button" data-model-to-key ${data}>Switch to API key</button>` : '')
         + ` <button class="ghost machine-signin" type="button" data-model-sign-out ${data}>Sign out</button>`;
     }
     return signedOut && !profile ? ` <button class="ghost machine-signin" type="button" data-model-shared-key ${data}>Use the shared key</button>` : '';
@@ -396,8 +405,8 @@
   // login lives in the system keychain.
   function toSubscriptionHTML({runnerId, runtime, machine = '', online = true, platform = ''}) {
     const caps = typeof harnessCaps === 'function' ? harnessCaps(runtime) : {};
-    if (!online || !caps.sign_out || !caps.browser_sign_in || (caps.switch_unavailable_on || []).includes(platform)) return '';
-    return ` <button class="ghost machine-signin" type="button" data-model-to-subscription data-runner="${text(runnerId)}" data-runtime="${text(runtime)}" data-machine="${text(machine)}">Switch to subscription</button>`;
+    if (!caps.sign_out || !caps.browser_sign_in || (caps.switch_unavailable_on || []).includes(platform)) return '';
+    return ` <button class="ghost machine-signin" type="button" data-model-to-subscription data-runner="${text(runnerId)}" data-runtime="${text(runtime)}" data-machine="${text(machine)}"${offline(online)}>Switch to subscription</button>`;
   }
 
   const KEY_SOURCES = {computer: 'added from Tico', terminal: 'set on the computer', shared: 'the company\'s shared key'};
@@ -522,10 +531,13 @@
   }
 
   // Replace key, or Add key where none signs it in: the key is pasted once and goes to the vault; the computer checks
-  // it before the old one is deleted, so a key that doesn't work leaves the old one in use.
-  async function replaceKey({runnerId, runtime, machine, adding = false}) {
+  // it before the old one is deleted, so a key that doesn't work leaves the old one in use. `toKey`: Switch to API key
+  // from a subscription, which stays in use until the key is in place (Cancel switch, or closing, cancels the check).
+  async function replaceKey({runnerId, runtime, machine, adding = false, toKey = false}) {
     const name = keyName(runtime), where = machine || 'the computer';
-    const dialog = keyDialog(`${adding ? 'Add a' : 'Replace the'} ${name} key on ${where}`, '<p>Checking which key it uses…</p>', adding ? 'Add key' : 'Replace key');
+    adding = adding || toKey;
+    const dialog = keyDialog(toKey ? `Switch ${name} on ${where} to an API key` : `${adding ? 'Add a' : 'Replace the'} ${name} key on ${where}`,
+      '<p>Checking which key it uses…</p>', toKey ? 'Switch to API key' : adding ? 'Add key' : 'Replace key');
     const status = dialog.querySelector('[data-status]'), form = dialog.querySelector('[data-key-form]');
     const go = dialog.querySelector('[data-key-go]');
     let info;
@@ -536,7 +548,9 @@
       ${adding ? '' : scopeHTML(info, 'replace', where)}
       <label>New key <input name="secret" type="password" autocomplete="off" spellcheck="false" required maxlength="4000" aria-label="New ${text(name)} key"></label>
       ${names.length > 1 ? `<label>Kind <select name="env">${names.map(n => `<option value="${text(n)}"${n === info.name ? ' selected' : ''}>${text(n)}</option>`).join('')}</select></label>` : ''}
-      <p class="muted">It is kept in Tico's credential vault and never shown again in full. The next turn uses it once the computer has checked it; the old key is then deleted.</p>`;
+      <p class="muted">It is kept in Tico's credential vault and never shown again in full. ${toKey
+        ? `The subscription stays signed in and in use while ${text(where)} checks the key; once it works there the subscription is signed out and the next turn uses the key. Bots keep this login, so nothing needs reassigning.`
+        : 'The next turn uses it once the computer has checked it; the old key is then deleted.'}</p>`;
     const field = form.querySelector('[name=secret]');
     field.addEventListener('input', () => { go.disabled = !field.value.trim(); });
     field.focus();
@@ -544,14 +558,23 @@
     go.addEventListener('click', async () => {
       if (go.disabled || !field.value.trim()) return;
       const scope = adding ? 'this' : chosenScope(form);
-      const body = {runtime, secret: field.value.trim(), scope, ...(form.querySelector('[name=env]') ? {env: form.querySelector('[name=env]').value} : {})};
+      const body = {runtime, secret: field.value.trim(), scope, ...(form.querySelector('[name=env]') ? {env: form.querySelector('[name=env]').value} : {}), ...(toKey ? {switch: true} : {})};
       // The key leaves the page with this request and is not kept in it.
       field.value = '';
       dialog.querySelectorAll('[data-actions] button, [data-key-form] input, [data-key-form] select').forEach(el => { el.disabled = true; });
       status.textContent = scope === 'all' ? 'Replacing the shared key…' : `Checking the new key on ${where}…`;
       const close = () => { dialog.querySelector('[data-actions]').innerHTML = '<button class="ghost" type="button" data-close>Close</button>'; };
+      // Switch to API key: closing the dialog cancels the switch, also while it is being asked for (`job` not back yet).
+      let job = null;
+      const cancel = async () => {
+        try { await post(`${keyBase(runnerId)}/logins/${encodeURIComponent(job.id)}/cancel`, {}); }
+        catch (error) { status.textContent = error.message; }
+      };
+      if (toKey) dialog.addEventListener('close', () => { if (job && !dialog.ended) void cancel(); });
       try {
         const out = await post(`${keyBase(runnerId)}/keys`, body);
+        job = out;
+        if (toKey && dialog.closed) { void cancel(); return; }
         if (scope === 'all') {
           const later = (out.computers || []).filter(c => !c.online).map(c => c.label);
           status.textContent = `Replaced. The shared key is now ${out.shared.preview}; every computer it serves uses it from its next check.${later.length ? ` ${later.join(', ')} ${later.length === 1 ? 'gets' : 'get'} it when next online.` : ''}`;
@@ -559,9 +582,23 @@
           for (const c of out.computers || []) refreshUntil(c.id, runtime, '', 'ready', new Date().toISOString());
           return;
         }
+        if (toKey) {
+          dialog.querySelector('[data-actions]').innerHTML = '<button class="ghost" type="button" data-key-cancel>Cancel switch</button>';
+          dialog.querySelector('[data-key-cancel]').addEventListener('click', () => void cancel());
+        }
         followKeyJob(dialog, runnerId, runtime, out, row => {
+          dialog.ended = true;
           status.dataset.state = row.state;
-          status.textContent = row.state === 'done' ? `${adding ? 'Added' : 'Replaced'}. ${name} on ${where} now uses ${out.key?.preview || 'the new key'}.`
+          // A failure says what the computer reported, which says whether the subscription is still in use: when putting
+          // things back did not work either, it says that instead.
+          const said = String(row.message || '').trim();
+          status.textContent = toKey
+            ? (row.state === 'done' ? `Switched. ${name} on ${where} now uses ${out.key?.preview || 'the API key'}; the subscription is signed out.`
+              : row.state === 'expired' ? `${where} did not finish the switch in time. Check this connection once it reports again.`
+              : row.state === 'cancelled' ? 'Cancelled. The subscription is still in use.'
+              : said ? said[0].toUpperCase() + said.slice(1) + (/[.!?]$/.test(said) ? '' : '.')
+              : 'The switch did not finish.')
+            : row.state === 'done' ? `${adding ? 'Added' : 'Replaced'}. ${name} on ${where} now uses ${out.key?.preview || 'the new key'}.`
             : row.state === 'expired' ? 'The computer did not check the key in time; nothing changed.'
             : (row.message || 'The new key did not work') + (adding ? '' : '. The old key is still in use.');
           close();
@@ -573,11 +610,11 @@
 
   // Replace key / Clear key for a login a key signs in (`key`: its readiness `key`, {name, source}), and Add key where
   // none does: a key runtime (`api_keys = "computer"`) signed out, cleared or never signed in. Same rights and
-  // conditions as actionsHTML: an admin or the computer's operator (the caller checks), the computer online.
+  // conditions as actionsHTML: an admin or the computer's operator (the caller checks), disabled while it is offline.
   function keyActionsHTML({runnerId, runtime, machine = '', key = null, signedIn = false, online = true}) {
     const caps = typeof harnessCaps === 'function' ? harnessCaps(runtime) : {};
-    if (!online || caps.api_keys !== 'computer') return '';
-    const data = `data-runner="${text(runnerId)}" data-runtime="${text(runtime)}" data-machine="${text(machine)}"`;
+    if (caps.api_keys !== 'computer') return '';
+    const data = `data-runner="${text(runnerId)}" data-runtime="${text(runtime)}" data-machine="${text(machine)}"${offline(online)}`;
     if (signedIn && key) {
       return ` <button class="ghost machine-signin" type="button" data-model-key-replace ${data}>Replace key</button>`
         + ` <button class="ghost machine-signin" type="button" data-model-key-clear ${data}>Clear key</button>`;
@@ -587,12 +624,13 @@
 
   window.TicoModelLogin = {open, signOut, remove, useSharedKey, actionsHTML, toSubscriptionHTML, keyActionsHTML, clearKey, replaceKey, scopeHTML, chosenScope};
   document.addEventListener('click', event => {
-    const button = event.target.closest('[data-model-login], [data-model-switch], [data-model-to-subscription], [data-model-sign-out], [data-model-shared-key], [data-model-key-replace], [data-model-key-clear], [data-model-key-add]');
+    const button = event.target.closest('[data-model-login], [data-model-switch], [data-model-to-subscription], [data-model-to-key], [data-model-sign-out], [data-model-shared-key], [data-model-key-replace], [data-model-key-clear], [data-model-key-add]');
     if (!button) return;
     event.preventDefault();
     const target = {runnerId: button.dataset.runner, runtime: button.dataset.runtime, machine: button.dataset.machine || '', profile: button.dataset.profile || ''};
     if (button.hasAttribute('data-model-key-clear')) void clearKey(target);
     else if (button.hasAttribute('data-model-key-replace') || button.hasAttribute('data-model-key-add')) void replaceKey({...target, adding: button.hasAttribute('data-model-key-add')});
+    else if (button.hasAttribute('data-model-to-key')) void replaceKey({...target, toKey: true});
     else if (button.hasAttribute('data-model-sign-out')) signOut(target);
     else if (button.hasAttribute('data-model-shared-key')) void useSharedKey(target);
     else open({...target, switchAccount: button.hasAttribute('data-model-switch'), toSubscription: button.hasAttribute('data-model-to-subscription')});

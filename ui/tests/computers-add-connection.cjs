@@ -6,6 +6,7 @@ const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs');
 const SHOTS = process.env.SHOTS;
 const shot = async (locator, name) => { if (SHOTS) await locator.screenshot({path: `${SHOTS}/${name}.png`}); };
 (async () => {
@@ -74,7 +75,7 @@ const shot = async (locator, name) => { if (SHOTS) await locator.screenshot({pat
         {id: 'grok', runtime: 'grok', name: 'Grok Build', capabilities: {account: '', weekly_usage: 'manual'}}]});
       if (p === '/api/v2/subscriptions') return json({profiles_by_computer: [], assignments: []});
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
-      return json({});
+      return json(unrouted(p));
     });
     await page.goto('https://tico-ui.test/#/settings');
     await page.locator('[data-settings-tab=devices]').click();
