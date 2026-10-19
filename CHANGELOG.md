@@ -47,6 +47,11 @@ All notable changes to Tico are recorded here. The format follows
   apart; hovering a bot shows its whole name, and **Needs setup** is a small gear beside the name. The anonymous
   usage-count notice no longer sits over the wizard or the screen after **Create**: it appears on the first other page,
   and nothing is counted until it has.
+- **First-run wizard**: **Next** on **Your team chart** works again when the team includes BotOps. Its instructions
+  (24,048 characters) were over the setup save's 20,000-character limit, so the wizard stopped with a raw field error.
+  Bot instructions now have one limit of 50,000 characters wherever they are sent (the wizard, **Add from catalog**
+  and registering a bot), and a test checks every shipped template against it. If the wizard cannot save a step it
+  now says so in plain words and what to do, never the field the server named.
 - **Claude sign-in on a subscription profile stays in that profile.** A runner whose own environment set
   `CLAUDE_CONFIG_DIR` signed Claude Code in there (Settings > Computers and `tico-runner profile login`) and checked
   it there, while turns read the profile's `HOME`: sign-in looked done but turns were signed out or ran on another
@@ -63,6 +68,21 @@ All notable changes to Tico are recorded here. The format follows
   other chat keeps its own history. Without a clear the bot resumes its thread as before. After the upgrade, a thread
   that may have been cleared or reset before its first turn on the new runner starts over once. A runner or Hub from
   before this keeps today's behaviour ([sessions](docs/sessions.md)).
+
+### Changed
+- **First run, after Create**: the screen says **Your team is created** and offers one next step as its only primary
+  button (**Add a computer** while there is none). Bots are listed in the team chart's groups and order with one status
+  each, *Waiting for a computer* is said once at the top, and the tour waits for **Show me around** instead of
+  covering the screen.
+- **Codex signed in with ChatGPT runs one turn at a time per login**, as OpenAI's terms for a ChatGPT sign-in
+  require. When two bots on one computer share its ChatGPT login, one Codex turn runs and the other shows
+  *Waiting for this computer's ChatGPT login to be free (busy with <bot>)* in the chat, the task and **Runs**, then
+  starts as soon as the first turn ends. A bot with a ready fallback of its own runs there instead, and its run says
+  *ChatGPT login busy with <bot>; ran this turn on <harness>*. One bot's parallel task lanes on a ChatGPT login now
+  take turns too (shown as waiting, not failed). **Settings → Computers** and **Subscriptions** say when several bots
+  share one ChatGPT sign-in and that they take turns. Codex on an API key, a bot on its own subscription login, and
+  Claude Code are not limited, and no code copies a login file between bots' homes. The holding bot is named only to
+  people who can see it ([how it works](docs/how-it-works.md#one-turn-per-chatgpt-login)).
 
 ## [0.3.61] - 2026-10-18
 

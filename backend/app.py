@@ -2833,7 +2833,7 @@ def create_app(settings=None):
         if not room or room.get("task_id") != row["id"] or not owner.startswith("bot:"):
             return None
         from .views import conversation_execution
-        return conversation_execution(c, cid, who, settings, bot=owner.removeprefix("bot:"))
+        return conversation_execution(c, cid, who, settings, bot=owner.removeprefix("bot:"), auth=auth)
 
     def task_runs(c, who, tid, limit=200):
         """The runs that worked this task, each with the model that actually ran it (`ran_on`). A review that

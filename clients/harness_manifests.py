@@ -34,6 +34,7 @@ FIELDS = {
     "persistent_session": (bool, False),
     "goal_runs_across_turns": (bool, False),
     "serial_cold_start": (bool, False),
+    "one_turn_per_login": (bool, False),
     "compaction": (bool, False),
     "resume_command": (str, ""),
     "model_list": (str, ""),

@@ -1202,6 +1202,12 @@ class BotAccess(Contract):
     on_behalf_of: ID | None = None
 
 
+# A bot's instructions (its AGENT.md) as a person reviewed them, one limit wherever they are sent: registering a bot,
+# adding one from the catalog and the first-run wizard. The longest shipped template is about half of it, and
+# backend/tests/test_onboarding.py checks every one against it.
+INSTRUCTIONS_MAX = 50_000
+
+
 class BotRegister(Contract):
     """Register a bot with the server, planned, before BotOps builds its repository. Left out, the slug is
     picked from the name (or the template's name)."""
@@ -1210,7 +1216,7 @@ class BotRegister(Contract):
     description: str = Field(default="", max_length=2000)
     reports_to: ID | None = None
     template: str = Field(default="", max_length=80)
-    instructions: str = Field(default="", max_length=50000)
+    instructions: str = Field(default="", max_length=INSTRUCTIONS_MAX)
     title_prefix: str = Field(default="", max_length=100)
     model: ID | None = None
     build: bool = False
@@ -1320,7 +1326,7 @@ class BotDefinitionCreate(Contract):
     # "Add from catalog": the template this bot is built from and the instructions a person
     # reviewed for it. Both are empty for a bot typed in by hand.
     template: str = Field(default="", max_length=80)
-    instructions: str = Field(default="", max_length=20_000)
+    instructions: str = Field(default="", max_length=INSTRUCTIONS_MAX)
 
 
 class BotBranch(Contract):
@@ -1685,7 +1691,7 @@ class OnboardingSelection(Contract):
     """One bot the person chose: which template builds it, and what they named and told it."""
     template: str = Field(min_length=1, max_length=80)
     display_name: str = Field(min_length=1, max_length=100)
-    instructions: str = Field(default="", max_length=20_000)
+    instructions: str = Field(default="", max_length=INSTRUCTIONS_MAX)
     # Who it reports to: `human:<id>` or a bot slug. Empty is the company owner.
     reports_to: str = Field(default="", max_length=120)
 

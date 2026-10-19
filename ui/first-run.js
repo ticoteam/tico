@@ -94,25 +94,64 @@ function frSummaryTeamHTML(state) {
 }
 
 // ----------------------------------------------------------------- after Create
-// One screen: each bot's setup, an admin to invite, an owner for each bot, and where tools are connected.
-// What every bot is waiting on when the team was created first: bots are placed when a computer appears and run once there is a provider.
-const frWaiting = state => ((state.record.machine?.runners || []).length ? (S.config?.providers_configured === false ? 'Add an AI provider' : '') : 'Waiting for a computer');
-function frBotRowHTML(state, bot, botOps) {
+// One screen: the team is created, the one next step, each bot's setup, an admin to invite, an owner for each bot, and
+// where tools are connected. What every bot waits on is said once, at the top: bots are placed when a computer appears
+// and run once there is a provider.
+const frWaiting = state => ((state.record.machine?.runners || []).length ? (S.config?.providers_configured === false ? 'provider' : '') : 'computer');
+// The next step, with the only primary button on the screen (with nothing to wait on, Open Tasks at the bottom), and the tour.
+function frNextStepHTML(state) {
+  const waiting = frWaiting(state);
+  const line = waiting === 'computer' ? 'Waiting for a computer. Your bots start once one is online.'
+    : `${onbMachineStatus(state.record)}${waiting === 'provider' ? '. Waiting for an AI provider.' : ''}`;
+  const button = waiting === 'computer' ? '<button class="primary" type="button" data-onb-go="devices">Add a computer</button>'
+    : waiting === 'provider' ? '<button class="primary" type="button" data-onb-go="providers">Add an AI provider</button>' : '';
+  return `<p class="onb-machine" id="onb-next-status" role="status">${esc(line)}</p>${button}
+    <button class="ghost" type="button" id="onb-tour" data-gs-tour>Show me around</button>`;
+}
+// A row's one status: a word, or the one thing to do there (Set up, Activate, the setup task BotOps is working).
+function frBotStatusHTML(state, bot, botOps) {
   const card = state.catalog.cards.find(row => row.slug === bot.slug || row.template === bot.template);
   const bootstrap = bot.slug === assistantBot() || !!card?.bootstrap;
   const ready = !!bot.repository_present, active = bot.status === 'active', parked = ['needs_setup', 'needs_onboarding'].includes(bot.onboarding_state);
-  const waiting = frWaiting(state);
-  const where = waiting === 'Add an AI provider' ? '<a href="#/settings" data-gs-tab="providers">Add an AI provider</a>.' : waiting ? waiting + '.' : bootstrap ? 'Set up automatically once a computer is online.'
-    : parked ? (ready ? 'Repository ready.' : 'Setting up its repository…')
-    : active ? 'Set up and running.'
-    : `${esc(botOps)} is setting this up.`;
+  const name = esc(bot.display_name || bot.slug);
+  if (frWaiting(state)) return '<span class="pill waiting">Waiting</span>';
+  if (parked) return ready ? `<button class="ghost" type="button" data-fr-start="${esc(bot.slug)}" aria-label="Set up ${name}">Set up</button>`
+    : '<span class="pill waiting">Setting up</span>';
+  if (active) return '<span class="pill ok">Active</span>';
+  if (ready && !bootstrap) return `<button class="ghost" type="button" data-onb-activate="${esc(bot.slug)}" aria-label="Activate ${name}">Activate</button>`;
+  if (!bootstrap && bot.setup_task_id) return `<a href="#/task/${esc(bot.setup_task_id)}" data-onb-task="${esc(bot.slug)}">${esc(botOps)} is setting it up</a>`;
+  return '<span class="pill waiting">Setting up</span>';
+}
+function frBotRowHTML(state, bot, botOps) {
   return `<div class="onb-bot" data-onb-bot="${esc(bot.slug)}">${avatar(bot.slug, 27)}
-      <div class="onb-bot-main"><strong>${esc(bot.display_name || bot.slug)}</strong>${parked ? ' <span class="pill needs" data-needs-onboarding>Needs setup</span>' : ''}
-        <p>${where}</p>
-        ${!bootstrap && !parked && bot.setup_task_id ? `<p><a href="#/task/${esc(bot.setup_task_id)}" data-onb-task="${esc(bot.slug)}">Open the setup task</a></p>` : ''}</div>
-      <div class="onb-bot-actions"><span class="pill ${active ? 'ok' : ready ? 'ready' : 'waiting'}">${esc(parked && !ready ? 'setting up' : active ? 'active' : ready ? 'repository ready' : 'waiting')}</span>
-        ${parked ? `<button class="primary" type="button" data-fr-start="${esc(bot.slug)}" ${ready ? '' : 'disabled title="Its repository is not ready yet"'}>Set up</button>`
-          : ready && !active && !bootstrap ? `<button class="ghost" type="button" data-onb-activate="${esc(bot.slug)}">Activate</button>` : ''}</div></div>`;
+      <strong class="onb-bot-name">${esc(bot.display_name || bot.slug)}</strong>
+      <div class="onb-bot-actions">${frBotStatusHTML(state, bot, botOps)}</div></div>`;
+}
+// The bots in the team chart's groups and order (ui/app/sidebar.js): the bots outside any group first, as on the chart,
+// then each group, nested ones after their parent, then the built-ins. A bot the chart does not list yet joins the first.
+function frBotGroups(bots) {
+  const bySlug = new Map(bots.map(bot => [bot.slug, bot])), seen = new Set();
+  const loose = {id: '', name: '', bots: []}, groups = [loose];
+  const tree = orgTreeWithHelpers(orgTreeByParent());
+  const walk = (parent, group) => {
+    for (const node of orgSorted(parent, tree[parent])) {
+      if (node.kind === 'group') {
+        const inner = {id: node.id, name: node.name, bots: []};
+        groups.push(inner);
+        walk('g:' + node.id, inner);
+      } else if (node.kind === 'person') walk('p:' + node.id, group);
+      else {
+        if (bySlug.has(node.name) && !seen.has(node.name)) { seen.add(node.name); group.bots.push(bySlug.get(node.name)); }
+        walk('b:' + node.name, group);
+      }
+    }
+  };
+  walk('', loose);
+  const rest = bots.filter(bot => !seen.has(bot.slug));
+  loose.bots.push(...rest.filter(bot => !isBuiltInBot(bot.slug)));
+  groups.push({id: 'built-in', name: 'Built-in', bots: rest.filter(bot => isBuiltInBot(bot.slug))
+    .sort((a, b) => helperRank({name: a.slug}) - helperRank({name: b.slug}))});
+  return groups.filter(group => group.bots.length);
 }
 function frNextHTML(state) {
   const bots = (state.record.bots || []).filter(bot => bot.slug !== assistantBot() && bot.slug !== 'botops' && bot.slug !== 'librarian' && bot.slug !== 'goal-manager');
@@ -126,7 +165,7 @@ function frNextHTML(state) {
     <section class="card fr-card" id="fr-admin"><header><h2>Add an admin</h2></header>
       <form id="fr-admin-form" class="fr-form"><label class="onb-field"><span class="k">Name</span><input name="name" autocomplete="off" placeholder="Sam"></label>
         <label class="onb-field"><span class="k">Email</span><input name="email" type="email" autocomplete="off" required placeholder="sam@example.com"></label>
-        <div class="onb-actions"><button class="primary" type="submit">Add admin</button><span class="muted" id="fr-admin-status" role="status"></span></div></form>
+        <div class="onb-actions"><button class="ghost" type="submit">Add admin</button><span class="muted" id="fr-admin-status" role="status"></span></div></form>
       <small class="muted">Tico sends no email: tell them.${S.config?.local ? ' Only you can sign in until you add a domain and sign-in.' : ''}</small></section>
     <section class="card fr-card" id="fr-owners"><header><h2>Who owns each bot</h2></header>
       ${owners || '<p class="muted">No bots yet.</p>'}</section>
@@ -138,6 +177,11 @@ function frNextHTML(state) {
 }
 function frWireDone(state) {
   document.querySelectorAll('[data-fr-start]').forEach(button => button.onclick = () => void frStartSetup(button.dataset.frStart, button));
+  // Add a computer and Add an AI provider open their Settings tab.
+  document.querySelectorAll('[data-onb-go]').forEach(button => button.onclick = () => {
+    SETTINGS_TAB = button.dataset.onbGo;
+    if (location.hash === '#/settings') route(); else location.hash = '#/settings';
+  });
 }
 async function frStartSetup(slug, button) {
   if (button) button.disabled = true;

@@ -108,6 +108,7 @@ def computer_details(c, row, who, auth):
     assigned = {r[0] for r in c.execute(
         "SELECT a.bot FROM assignments a JOIN bots b ON b.slug=a.bot "
         "WHERE a.runner_id=? AND b.state<>'archived'", (row["id"],))}
+    shared = shared_logins(c, row["id"], readiness, assigned, access)
     readiness["bots"] = {bot: {k: v for k, v in report.items() if k != "tools"}
                          for bot, report in readiness.get("bots", {}).items()
                          if bot in assigned and (access.get(bot) or {}).get("read") and isinstance(report, dict)}
@@ -120,7 +121,43 @@ def computer_details(c, row, who, auth):
     return {"repositories": metadata(c, "computer-repositories:" + row["id"]).get("repositories", "unknown"),
             "version": value.get("version") or "", "release": update.get("release") or "", "last_seen": value.get("last_seen"),
             "readiness": readiness, "update": update, "fix": "Open Settings > Computers to retry the update" if update.get("error") else "Open Settings > Computers",
-            "services": [], "services_scope": "team"}
+            "services": [], "services_scope": "team", "shared_logins": shared}
+
+
+def subscription_login(runtime, detail):
+    """Whether a sign-in detail names a subscription login, as the runner bills it (runner-rs/src/execute.rs
+    billing_for): "Signed in ..." naming the harness's `subscription_marker` and no API key."""
+    from .harnesses import harness_caps
+    marker = str(harness_caps(runtime).get("subscription_marker") or "").lower()
+    detail = str(detail or "")
+    return (bool(marker) and detail.lower().startswith("signed in") and marker in detail.lower()
+            and not re.search(r"(?i)api[ _-]?key", detail))
+
+
+def shared_logins(c, runner_id, readiness, assigned, access):
+    """The sign-ins on this computer that several bots run on, for a harness whose subscription login serves one turn
+    at a time (`one_turn_per_login`): those bots take turns (runner-rs/src/login_turns.rs). One row per login: its
+    runtime, its subscription (`profile`, '' for the computer's own sign-in) and `display_name`, how many bots share
+    it and the ones this reader may see. A key login runs its bots side by side and is left out."""
+    from .harnesses import harness_caps
+    runtimes = readiness.get("runtimes") or {}
+    logins = {}
+    for bot, report in (readiness.get("bots") or {}).items():
+        if bot not in assigned or not isinstance(report, dict):
+            continue
+        runtime, profile = str(report.get("runtime") or ""), str(report.get("profile") or "")
+        if not harness_caps(runtime).get("one_turn_per_login"):
+            continue
+        row = runtimes.get(runtime) or {}
+        login = ((row.get("profiles") or {}).get(profile) if profile and row.get("profiles") else row) or {}
+        if not subscription_login(runtime, login.get("detail")):
+            continue
+        logins.setdefault((runtime, profile), []).append(bot)
+    from .subscription_identity import identity
+    return [{"runtime": runtime, "profile": profile,
+             "display_name": identity(c, runner_id, profile)["display_name"] if profile else "",
+             "count": len(bots), "bots": sorted(b for b in bots if (access.get(b) or {}).get("read"))}
+            for (runtime, profile), bots in sorted(logins.items()) if len(bots) > 1]
 
 
 SERVICE_NAMES = {"connector:calendar": "Calendar Tool", "connector:mail": "Mail Tool"}
@@ -650,15 +687,16 @@ def live_parts(parts):
     return cut, len(parts) - len(kept)
 
 
-def conversation_snapshot(c, cid, who=None, settings=None, page_args=None):
+def conversation_snapshot(c, cid, who=None, settings=None, page_args=None, auth=None):
     page = privacy.page(c, who, cid, **(page_args or {})) if who else message_page(c, cid)
     from .chat_goals import current
-    return {**page, "execution": conversation_execution(c, cid, who, settings), "goal": current(c, cid)}
+    return {**page, "execution": conversation_execution(c, cid, who, settings, auth=auth), "goal": current(c, cid)}
 
 
-def conversation_execution(c, cid, who=None, settings=None, bot=None):
+def conversation_execution(c, cid, who=None, settings=None, bot=None, auth=None):
     """The newest run in this conversation as the chat shows it while it works: its state, a label and its reply so
-    far, or None. `bot` keeps to that bot's runs (a task's page follows its owner's session)."""
+    far, or None. `bot` keeps to that bot's runs (a task's page follows its owner's session). A run waiting for its
+    ChatGPT login (backend/login_waits.py) says so in `waiting` and its label; `auth` lets it name the bot holding it."""
     job = c.execute("SELECT j.*,a.state AS attempt_state,a.lease_until,a.stop_requested FROM jobs j JOIN messages m ON m.id=j.message_id "
                     "LEFT JOIN attempts a ON a.id=j.attempt_id WHERE m.conversation_id=? "
                     "AND coalesce(json_extract(m.refs_json,'$.maintenance'),'')!='checkpoint' "
@@ -683,6 +721,12 @@ def conversation_execution(c, cid, who=None, settings=None, bot=None):
             label = "Working — follow-up added"
         if state == "uncertain" and job["attempt_state"] == "failed":
             label = "Reply failed — your message is saved"
+        waiting = None
+        if state in ("leased", "running") and job["attempt_id"]:
+            # Before it starts, or after: a fallback hop takes its own login once the turn has started.
+            from .login_waits import waiting as login_wait
+            waiting = login_wait(c, job["attempt_id"], job["bot"], who, auth)
+            label = waiting or label
         readiness_reason = ""
         if state == "queued":
             message = H.message(c, job["message_id"]) or {}
@@ -701,6 +745,8 @@ def conversation_execution(c, cid, who=None, settings=None, bot=None):
                      "text": "\n\n".join(p["text"] for p in parts if p["kind"] != "tool"), "parts": parts, **location}
         if omitted:
             execution["parts_omitted"] = omitted
+        if waiting:
+            execution["waiting"] = waiting
         if readiness_reason:
             execution["readiness_reason"] = readiness_reason
     return execution
@@ -1601,6 +1647,7 @@ def install_views(app, store, auth, mutate, task_view):
             run_on = providers.runtimes_run_on(c, store.settings)
             from .computer_keys import shared_all, shared_listing
             shared_keys = shared_all(c)
+            access = auth.bot_accesses(c, who)
             for row in c.execute("SELECT id,label,operator,last_seen,revoked_at,platform,version,capacity,readiness_json,"
                                  "accepts_member_bots,screen,performance,capabilities_json,restart_since,readiness_at "
                                  "FROM runners ORDER BY created"):
@@ -1644,6 +1691,8 @@ def install_views(app, store, auth, mutate, task_view):
                                  # ones, for the rows a key signs in (backend/computer_keys.py). Never a value.
                                  "keys": computer_key_listing(c, row["id"]),
                                  "shared_keys": shared_listing(shared_keys, value["readiness"]),
+                                 # The sign-ins several of its bots share, which they take turns on.
+                                 "shared_logins": shared_logins(c, row["id"], value["readiness"], assigned_here, access),
                                  "bot_runtimes": sorted(run_on.get(row["id"], ())),
                                  "update": runner_versions.view(fleet.get(row["id"])),
                                  "harness_actions": recent(c, row["id"]) if who.role == "owner" else [],
@@ -2002,7 +2051,7 @@ def install_views(app, store, auth, mutate, task_view):
     def snapshot(request: Request, cid: str, limit: int | None = None, max_bytes: int | None = None):
         with store.read() as c:
             auth.conversation(c, request.state.identity, cid)
-            snap = conversation_snapshot(c, cid, request.state.identity, auth.settings, page_options(limit, max_bytes))
+            snap = conversation_snapshot(c, cid, request.state.identity, auth.settings, page_options(limit, max_bytes), auth=auth)
             turns.annotate(c, auth, request.state.identity, snap["messages"])
             return snap
 
