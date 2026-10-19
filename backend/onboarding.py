@@ -525,9 +525,6 @@ class Onboarding:
         # The team builder builds the chart by group: each bot goes in the group of its template, made if the team
         # has none yet (backend/groups.py).
         Groups.place(c, self.settings, list(plan))
-        if not record["completed"]:
-            # A new company starts caught up: the releases shipped before it existed are not news to its owner.
-            changelog.mark_read(c, self.settings, who.actor, [row["id"] for row in changelog.products(c, self.settings)])
         # Completing twice keeps the moment the company actually finished.
         record.update(selected=plan, completed=record["completed"] or H.now())
         self._wire(c, record, who.actor)

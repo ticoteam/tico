@@ -231,8 +231,8 @@ function frWireNext(state) {
 
 // ----------------------------------------------------------------- the bot page and the org chart
 const frNeedsSetup = e => !!e && ['needs_setup', 'needs_onboarding'].includes(e.onboarding_state);
-// The org chart's mark: small, beside the name, a gear so the name keeps the row; it says the bot page's words on hover.
-const frTreeMark = e => (frNeedsSetup(e) ? '<span class="tree-setup" role="img" aria-label="Needs setup" title="Needs setup: set it up together before it does anything on its own"><span class="nav-icon" aria-hidden="true">settings</span></span>' : '');
+// The org chart's mark: small, beside the name, and the same word as the bot page.
+const frTreeMark = e => (frNeedsSetup(e) ? '<span class="tree-setup" title="Needs setup: set it up together before it does anything on its own">Setup</span>' : '');
 function frBotBannerHTML(e) {
   if (!frNeedsSetup(e)) return '';
   const manager = typeof settingsCanManageBot === 'function' && settingsCanManageBot(e);
