@@ -40,6 +40,8 @@ The words Tico uses, and what each replaces.
 - **Needs you**: only when it needs the viewer. Otherwise **Needs <Name>**, as in "Needs Sam".
 - **Approval**: a yes or no on one exact action.
 - **Proposal**: a suggested change to a goal or KPI, for its owner to confirm.
+- **Vision** and **Description**: the company's own words at the top of Goals, under **Company**, where the CEO Bot switch is on ([Goals](goals-and-kpis.md#the-company-section)).
+- **Why**: one line on how a goal serves the vision. The CEO Bot proposes it; a person accepts it. A goal without one is "Not tied to the vision" ([Goals](goals-and-kpis.md#each-goals-why)).
 - **Run**: one time a bot works.
 - **Update**: a bot's daily or weekly post, and a new Tico version.
 - **Message**, **Comment**, **Note**: a message is chat. A comment is on a task. A note is quiet, for a bot's next run ([leave work for the next run](using-tico.md#leave-work-for-the-next-run)).

@@ -13,7 +13,7 @@ All notable changes to Tico are recorded here. The format follows
   **History** lists every change with who made it and when. Each goal shows a one-line **Why** tying it to the
   vision: the CEO Bot proposes it and a person accepts it as it is, edits it or writes their own. A goal with none
   says "Not tied to the vision". No bot can change the Vision or the Description or accept a Why, the CEO Bot
-  included. With the switch off none of this shows.
+  included. With the switch off none of this shows ([Goals](docs/goals-and-kpis.md#the-company-section)).
 - **Tico AI Gateway** in Settings > AI providers: the owner saves the gateway key Tico gives them (or the server's
   `TICO_GATEWAY_KEY` sets it, and wins), Decide asks the Gateway with that same key, and bots can then pick **Tico Cheap, Mid and Power 1.0** (Claude Haiku, Sonnet and Opus
   5.5 underneath) like any other model, streamed through the Gateway on pi. The key is sealed and never shown after

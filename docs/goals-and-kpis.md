@@ -161,6 +161,7 @@ their own click) or rejects it; confirming makes the change as that human.
 | `kpi_definition` | any of `name`, `definition`, `unit`, `direction`, `cadence`, `source_note` | the KPI's owner |
 | `kpi_target` | the target fields, with `goal_id` | the goal's owner or the KPI's |
 | `flag` | `issue`: `vague`, `duplicate` or `unmeasured`, and a `note` | the goal's owner |
+| `goal_why` | `why`: one line, under 200 characters ([The Why](#each-goals-why)) | the goal's owner; may be edited as it is confirmed |
 
 Pending proposals appear under **Needs you** on the Goals page for the human who decides them.
 
@@ -232,6 +233,36 @@ the historical KPI view load only when opened.
 People who may edit an owner's KPIs can open **Archived KPIs** in that owner's panel. The historical list is separate
 from active KPIs; a KPI's detail panel offers **Restore KPI** to return it to active lists and freshness checks.
 
+## The Company section
+
+With the [CEO Bot switch](#the-ceo-bot-switch) on, Goals opens with **Company**: the company's **Vision** (one or two
+sentences on where it is going, up to 400 characters) and its **Description** (a short paragraph on what it does and
+for whom, up to 2,000 characters). With the switch off, none of this section or the Why lines below shows, and the
+routes refuse.
+
+- The owner and admins see **Edit**, change either field and **Save**. Everyone else reads them.
+- While both are empty, the section reads "Tell your CEO Bot what this company is for." The owner and admins get the
+  form straight away; anyone else sees "Not written yet".
+- **History** lists every change, newest first: which field, who changed it, when, the new words and what they were.
+  Saving the same words again adds nothing.
+- No bot changes the Vision or the Description, the CEO Bot and the Assistant acting for you included.
+
+### Each goal's Why
+
+Each goal in an owner's panel has a **Why**: one line, under 200 characters, on how the goal serves the vision.
+
+- The CEO Bot can only propose a Why. Its proposal shows under the goal as "CEO Bot proposes" and the line, with
+  **Accept**, **Edit** and **Reject** for whoever may edit the goal: its owner, the owner of the goal it supports, or
+  anyone above them on the team chart. **Edit** lets you change the line before you save it.
+- A goal has at most one Why waiting. A newer proposal replaces the one waiting, and an **Accept** on the old one is
+  refused, so you never confirm words you did not see.
+- You can also **Write a Why** yourself, or **Edit** the one there. Saving a Why settles any proposal still waiting.
+  Saving an empty line clears it.
+- A goal with no accepted Why shows "Not tied to the vision". That is normal, not an error.
+- No bot sets or accepts a Why, the CEO Bot and the Assistant acting for you included. Why proposals wait on their goal
+  and are not listed under **Needs you**.
+- Each change to a Why is kept in the goal's history with who made it and when.
+
 ## Permissions
 
 - Team goals and team KPIs are visible to everyone signed in. A bot's goals and KPIs, and its automatic KPIs, are
@@ -242,6 +273,8 @@ from active KPIs; a KPI's detail panel offers **Restore KPI** to return it to ac
   human, by the Goal Manager, or by the owner of a goal that uses it.
 - The Goal Manager reads every goal and KPI, writes readings and the automatic colours, records check-ins, and proposes. It
   cannot set a colour by hand, edit a goal, create or link a KPI, change a definition or a target, or archive a KPI.
+- With the CEO Bot switch on, the owner and admins write the [Vision and Description](#the-company-section); whoever may
+  edit a goal sets or accepts its [Why](#each-goals-why). No bot does either.
 
 ## `hub` and the API
 
@@ -284,7 +317,10 @@ The stable v2 routes are in [openapi/v2.json](openapi/v2.json):
 | `POST /api/v2/kpis/{id}/archive`, `/restore` | hide or restore a KPI; only its owner or someone above them; history stays |
 | `GET/POST /api/v2/kpis/{id}/readings` | the readings (`?effective=true` leaves out corrected ones); post one |
 | `GET /api/v2/bots/{bot}/kpis` | a bot's automatic KPIs |
-| `GET/POST /api/v2/proposals`, `POST .../{id}/decide` | list, propose, confirm or reject |
+| `GET/POST /api/v2/proposals`, `POST .../{id}/decide` | list, propose, confirm or reject; a `goal_why` is confirmed as edited with `why` |
+| `GET/POST /api/v2/company` | the Vision and the Description; only the owner or an admin writes them |
+| `GET /api/v2/company/history` | every change to them, newest first, with who and when |
+| `POST /api/v2/goals/{id}/why` | set a goal's Why (`why`; `""` clears it); a person who may edit the goal |
 
 A goal's KPI on any of these answers has `latest`, `freshness`, `spark`, and, under a goal, `link`, `target_label`, `status`
 (`green`, `yellow`, `red`, `gray` or `none`) and `reason`.
