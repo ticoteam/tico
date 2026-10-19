@@ -4,6 +4,7 @@ again counts and starts no run), and one Tico bug report per signature that carr
 diagnostics, never task text, with a message on the same ticket when it comes back."""
 
 import calendar
+import dataclasses
 import json
 import shutil
 import time
@@ -55,6 +56,11 @@ def as_monitor(api):
 def scan(api):
     with api.app.state.store.transaction() as c:
         return health_monitor.scan(c, api.app.state.auth, api.app.state.store.settings)
+
+
+def scan_with(api, settings):
+    with api.app.state.store.transaction() as c:
+        return health_monitor.scan(c, api.app.state.auth, settings)
 
 
 def monitor_tasks(api):
@@ -231,6 +237,35 @@ def test_a_finding_whose_severity_rises_wakes_it(environment, monkeypatch):
     level["now"] = "bad"
     assert scan(api) == [key] and wakes(api) == before + 2                # worse again
     assert finding(api, key)["occurrences"] == 5
+
+
+def test_a_release_approval_ready_past_the_setting_is_one_finding_counted_not_repeated(environment):
+    api, _ = built(environment)
+    api.post("/api/v2/health-monitor/turn-on", json={}, headers=signed_in())
+    settings = dataclasses.replace(api.app.state.store.settings, release_approval_wait_minutes=5)
+    release = {"url": "https://github.com/acme/tico/releases/tag/v1.2.0", "version": "1.2.0", "commit": "c" * 40,
+               "content_sha256": "a" * 64}
+    with api.app.state.store.transaction() as c:
+        appr = H.approval_request(c, "bot:coo", "publish", release)
+        blog = H.approval_request(c, "bot:coo", "publish", {"url": "https://acme.example/blog", "content_sha256": "b" * 64})
+        c.execute("UPDATE approvals SET ready_since=? WHERE id IN (?,?)", (H.shift(H.now(), minutes=-4), appr["id"], blog["id"]))
+    key = "release_approval_wait:" + appr["id"]
+    assert scan_with(api, settings) == []                                  # under the setting: nothing yet
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE approvals SET ready_since=? WHERE id IN (?,?)", (H.shift(H.now(), minutes=-6), appr["id"], blog["id"]))
+    before = wakes(api)
+    assert scan_with(api, settings) == [key] and wakes(api) == before + 1  # a blog post's wait is not a release's
+    (task,) = monitor_tasks(api)
+    with api.app.state.store.read() as c:
+        who = H.person_name(c, H.actor_id(appr["decision_owner"]))
+    assert f"has waited 6 min on {who}" in task["title"] and "1.2.0 (commit cccccccccccc)" in task["body"]
+    assert scan_with(api, settings) == [] and wakes(api) == before + 1     # seen again: counted, no run, one finding
+    assert finding(api, key)["occurrences"] == 2 and len(monitor_tasks(api)) == 1
+    assert scan_with(api, dataclasses.replace(settings, release_approval_wait_minutes=0)) == []
+    assert finding(api, key)["present"] == 0                               # 0 turns the check off
+    with api.app.state.store.transaction() as c:
+        H.approval_decide(c, appr["decision_owner"], appr["id"], "declined")
+    assert scan_with(api, settings) == [] and finding(api, key)["present"] == 0
 
 
 @pytest.mark.parametrize("release,severity", [("0.0.9", "bad"), ("0.3.40", "warn")])

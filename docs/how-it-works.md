@@ -58,6 +58,9 @@ Words are defined in the [Glossary](glossary.md).
 - **Approval** — a human's yes or no to one exact action. Kinds: `send`, `spend`, `publish`,
   `merge`. A bot may request one when uncertain about a specific action; authorized work needs no separate
   approval. Only a human decides; an approval is spent once and does not turn outbound sending on. Rules: `policies/approvals.md`.
+  Each one records when its exact payload was ready (`ready_since`, when the request passed its checks) and whose decision
+  it is (`decision_owner`, the person it was sent to); reads add `age_s`, and its card says "Ready 2 h 10 min, waiting on
+  Sam". A release's publish approval waiting over an hour is a [Health Monitor](health-monitor.md) finding.
 - **Routine** — a cron schedule owned by a bot: `id`, `title`, `cron`, `timezone`, `template`
   (a playbook file) or inline `instructions`, `labels`. Each occurrence becomes a task.
 - **Goal** — what a human or a bot is for: a title, an owner (`company`, a human or a bot), the goal it

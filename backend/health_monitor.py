@@ -387,6 +387,34 @@ def _check_hold_checks(c):
     return out
 
 
+def _release_approval_checks(c, settings):
+    """A release's publish approval ready longer than the setting (release_approval_wait_minutes) with nobody's decision:
+    one finding per approval, so the same wait seen again only counts (scan) and a re-cut release's new ask is its own.
+    The person decides it in Needs you; nothing here approves or changes who may."""
+    minutes = getattr(settings, "release_approval_wait_minutes", 60)
+    if not minutes:
+        return []
+    at = H.now()
+    out = []
+    for row in H._rows(c.execute("SELECT * FROM approvals WHERE decision IS NULL AND kind='publish' "
+                                 "AND coalesce(ready_since,created)<? ORDER BY created",
+                                 (H.shift(at, minutes=-minutes),))):
+        row["payload"] = H._json(row.get("payload_json"), {}) or {}
+        if not H.is_release_approval(row["kind"], row["payload"]):
+            continue
+        H.approval_wait(c, row, at)
+        who = row["decision_owner_name"] or "a person"
+        version, commit = str(row["payload"]["version"])[:40], str(row["payload"]["commit"])[:12]
+        out.append(_finding("release_approval_wait:" + row["id"], "release_approval_wait", SETUP,
+                            f"The release {version} approval has waited {H.wait_words(row['age_s'])} on {who}",
+                            f"The publish approval for {version} (commit {commit}) has been ready since "
+                            f"{row['ready_since'][:16].replace('T', ' ')} UTC, {H.wait_words(row['age_s'])}, with no "
+                            f"decision. It is {who}'s to decide; the release waits until then.",
+                            f"{who}: approve or decline it in Needs you (or `hub approval show {row['id']}`). Tico does "
+                            "not decide it for anyone."))
+    return out
+
+
 def _brief_drops(lines):
     """Where the "lost" lines are whose next word on the stream, before another drop, is that it was back within
     BRIEF_DROP_S."""
@@ -539,7 +567,7 @@ def findings(c, settings):
     """Everything wrong right now, each once by key."""
     out = {}
     for part in (_runner_checks(c, settings), _login_checks(c, settings), _check_hold_checks(c),
-                 _bot_checks(c, settings), _server_checks(c)):
+                 _bot_checks(c, settings), _release_approval_checks(c, settings), _server_checks(c)):
         for item in part:
             out.setdefault(item["key"], item)
     return list(out.values())

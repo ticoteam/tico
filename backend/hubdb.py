@@ -1005,6 +1005,10 @@ def migrate(conn, adopt_legacy=False):
     # An approval a person's own Assistant decided for them: whose assistant, and the person's words it acted on.
     add_column(conn, "approvals", "decided_via", "TEXT")
     add_column(conn, "approvals", "decided_for_json", "TEXT")
+    # When an approval's exact payload passed its checks and could be decided, and whose decision it is (the person it
+    # was sent to). Older rows read their request time and their message's recipient (approval_wait).
+    add_column(conn, "approvals", "ready_since", "TEXT")
+    add_column(conn, "approvals", "decision_owner", "TEXT")
     # 1 when a run segment's estimate may be low: its model's long prompts cost more and the runner did not
     # send every request's tokens (providers.estimate). NULL on segments from before it was recorded.
     add_column(conn, "turn_usage_segments", "est_cost_low", "INTEGER")
@@ -6032,11 +6036,12 @@ def approval_request(conn, actor, kind, payload, task_id=None, supersedes=None):
     row = {"id": new_id(), "kind": kind, "task_id": task_id, "message_id": msg["id"],
            "payload_json": _dump(payload), "payload_hash": digest, "requested_by": actor,
            "decided_by": None, "decision": None, "decided_at": None, "consumed_at": None,
-           "created": ts}
+           "created": ts, "ready_since": ts, "decision_owner": owner}
+    # Ready now: a payload that fails its checks is refused above, so this is when it became a decision for `owner`.
     conn.execute("INSERT INTO approvals (id, kind, task_id, message_id, payload_json, payload_hash, "
-                 "requested_by, decided_by, decision, decided_at, consumed_at, created) VALUES "
-                 "(:id, :kind, :task_id, :message_id, :payload_json, :payload_hash, :requested_by, "
-                 ":decided_by, :decision, :decided_at, :consumed_at, :created)", row)
+                 "requested_by, decided_by, decision, decided_at, consumed_at, created, ready_since, decision_owner) "
+                 "VALUES (:id, :kind, :task_id, :message_id, :payload_json, :payload_hash, :requested_by, "
+                 ":decided_by, :decision, :decided_at, :consumed_at, :created, :ready_since, :decision_owner)", row)
     conn.execute("UPDATE messages SET refs_json=? WHERE id=?",
                  (_dump({"approval": row["id"], "task": task_id}), msg["id"]))
     event(conn, actor, "approval.request", row["id"], {"kind": kind, "to": owner})
@@ -6749,8 +6754,10 @@ def needs_you(conn, who):
     requester's list."""
     actor = who if actor_kind(who) else human_actor(who)
     pending = _rows(conn.execute("SELECT * FROM approvals WHERE decision IS NULL ORDER BY created"))
+    at = now()
     for row in pending:
         row["payload"] = _json(row.get("payload_json"), {}) or {}
+        approval_wait(conn, row, at)
     # The person's queue: asks first (each blocks a bot), then their own tasks in rank order.
     # Product-lane work is a backlog a developer works through on the Product board, not a
     # decision owed today: it counts here only when it carries a question for the person.
@@ -6776,7 +6783,45 @@ def approval(conn, approval_id):
     if row:
         row["payload"] = _json(row.get("payload_json"), {}) or {}
         row["decided_for"] = _json(row.pop("decided_for_json", None), None)
+        approval_wait(conn, row)
     return row
+
+
+def is_release_approval(kind, payload):
+    """A release's publish approval: asked by its release page with the exact `version` and `commit` it would ship."""
+    payload = payload if isinstance(payload, dict) else {}
+    return kind == "publish" and all(payload.get(k) not in (None, "") for k in ("version", "commit"))
+
+
+def approval_wait(conn, row, at=None):
+    """Adds to an approval row how long it has waited and on whom: `ready_since`, `decision_owner` and its
+    `decision_owner_name`, and `age_s`, the seconds from ready until its decision (until now while undecided). A row from
+    before these were recorded reads its request time and the person its request was sent to."""
+    row["ready_since"] = row.get("ready_since") or row.get("created")
+    if not row.get("decision_owner") and row.get("message_id"):
+        row["decision_owner"] = (message(conn, row["message_id"]) or {}).get("to_actor")
+    owner = row.get("decision_owner")
+    row["decision_owner_name"] = person_name(conn, actor_id(owner)) if owner and is_human(owner) else ""
+    start, end = parse_ts(row["ready_since"]), parse_ts(row.get("decided_at") or at or now())
+    row["age_s"] = max(0, int((end - start).total_seconds())) if start and end else None
+    return row
+
+
+def wait_words(seconds):
+    """'2 h 10 min' for a wait; under a minute is '0 min'."""
+    minutes = max(0, int(seconds or 0)) // 60
+    days, hours, mins = minutes // 1440, minutes % 1440 // 60, minutes % 60
+    if days:
+        return f"{days} d {hours} h" if hours else f"{days} d"
+    if hours:
+        return f"{hours} h {mins} min" if mins else f"{hours} h"
+    return f"{mins} min"
+
+
+def approval_wait_line(row):
+    """'Ready 2 h 10 min, waiting on Chris': what Needs you says of an undecided approval (approval_wait's fields)."""
+    who = row.get("decision_owner_name") or "a person"
+    return f"Ready {wait_words(row.get('age_s'))}, waiting on {who}"
 
 
 def approval_undo(conn, actor, approval_id):
@@ -6820,9 +6865,11 @@ def approvals(conn, requested_by=None, decision=None, pending=False):
     if where:
         sql += " WHERE " + " AND ".join(where)
     out = _rows(conn.execute(sql + " ORDER BY created", args))
+    at = now()
     for row in out:
         row["payload"] = _json(row.get("payload_json"), {}) or {}
         row["decided_for"] = _json(row.pop("decided_for_json", None), None)
+        approval_wait(conn, row, at)
     return out
 
 

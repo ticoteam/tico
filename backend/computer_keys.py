@@ -2,10 +2,10 @@
 
 The key is a credential in the vault (backend/credentials.py), sealed like any other and shown only by its preview.
 It is this computer's alone: `computer_keys` names the computer and runtime it signs in, and whether it is in use
-(`active`) or waiting for the computer to check it (`staged`). The login queue never carries it: a `use_key` job
-(backend/model_login.py) has no value, and the runner fetches the staged key from `GET runner-model-credentials`
-with that job's id, checks it, and reports. `confirm` then puts it in use and deletes the key it replaces;
-`discard` deletes a key that failed, so the old one stays (runner-rs/src/signin.rs).
+(`active`) or waiting for the computer to check it (`staged`). The login queue never carries it: a `use_key` job, or a
+`to_key` one (Switch to API key) (backend/model_login.py), has no value, and the runner fetches the staged key from
+`GET runner-model-credentials` with that job's id, checks it, and reports. `confirm` then puts it in use and deletes
+the key it replaces; `discard` deletes a key that failed, so the old one stays (runner-rs/src/signin.rs).
 
 `keys_for` is the one place that decides which key a computer gets: its own active key, else the company's shared
 "Every computer" key, else none; and none while a person cleared its key or signed it out (`model_login_cleared`), or
@@ -70,8 +70,8 @@ def confirm(c, runner_id, login_id):
                          (runner_id, row["runtime"], ACTIVE)).fetchall():
         _remove(c, old["credential_id"])
     c.execute("UPDATE computer_keys SET state=?, login_id=NULL WHERE credential_id=?", (ACTIVE, row["credential_id"]))
-    # In use again: a key added after a clear, or after a switch to a subscription, signs it in (the shared key stays
-    # behind it).
+    # In use again: a key added after a clear, or after a switch to a subscription (Switch to API key included), signs
+    # it in (the shared key stays behind it).
     for table in ("model_login_cleared", "model_login_key_off"):
         c.execute(f"DELETE FROM {table} WHERE runner_id=? AND runtime=? AND profile=''", (runner_id, row["runtime"]))
     H.event(c, "runner:" + runner_id, "computer_key.active", runner_id,
@@ -148,15 +148,20 @@ def keys_for(c, vault, runner_id, runtime, login_id=""):
     live `use_key` job (`login_id`), else its own active key, else the shared key; nothing while its key was cleared
     or its login signed out. `clear_key` tells a computer that missed its Clear key job (it was offline) to clear
     its copy now. Returns (reply, credential ids sent)."""
-    from .model_login import ACTIVE_SQL
+    from .model_login import ACTIVE_SQL, KEY_JOBS_SQL
     if login_id:
         row = c.execute("SELECT cr.* FROM computer_keys k JOIN credentials cr ON cr.id=k.credential_id "
                         "JOIN model_logins l ON l.id=k.login_id WHERE k.login_id=? AND k.runner_id=? AND k.runtime=? "
-                        f"AND k.state=? AND l.kind='use_key' AND l.{ACTIVE_SQL}",
+                        f"AND k.state=? AND l.{KEY_JOBS_SQL} AND l.{ACTIVE_SQL}",
                         (login_id, runner_id, runtime, STAGED)).fetchone()
         if not row:
             return {"credentials": []}, []
         return {"credentials": [{"env": row["env"], "value": vault.cipher.decrypt(c, row), "source": "computer"}]}, [row["id"]]
+    # A Switch to API key is running: the computer puts the new key in place itself, and until it says it is done what
+    # Tico holds is still the subscription's. A regular fetch meanwhile changes nothing there (runner-rs/src/signin.rs).
+    if c.execute(f"SELECT 1 FROM model_logins WHERE runner_id=? AND runtime=? AND profile='' AND kind='to_key' "
+                 f"AND {ACTIVE_SQL}", (runner_id, runtime)).fetchone():
+        return {"credentials": [], "switching": True}, []
     mark = c.execute("SELECT clear_key FROM model_login_cleared WHERE runner_id=? AND runtime=? AND profile=''",
                      (runner_id, runtime)).fetchone()
     if mark:

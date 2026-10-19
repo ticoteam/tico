@@ -2208,9 +2208,10 @@ def create_app(settings=None):
         return mutate(request, body, work)
 
     def topic_check(request, who, bot, body):
-        """The topic check's outcome for a person's chat message, or None: not a person, a command, a retried request
-        (its first try already decided), or a bot whose chat is another's (a shared or the Assistant's)."""
-        if who.role not in ("owner", "human") or who.via or body.command or (body.refs or {}).get("task"):
+        """The topic check's outcome for a person's chat message, or None: not a person, a retried request (its first
+        try already decided), a bot whose chat is another's (a shared or the Assistant's), or a send the check never
+        looks at (`topic_change.considered`: a command, a task chat's, or one carrying files)."""
+        if who.role not in ("owner", "human") or who.via:
             return None
         key, path = request.headers.get("idempotency-key"), request.url.path
         if not key:
@@ -2223,7 +2224,7 @@ def create_app(settings=None):
                 return False
             target = H.actor_id(route(c, who.actor, "bot:" + bot))
             return target == bot and bot != settings.assistant_bot and views.may_chat(c, auth, who, bot)
-        return topic_change.check(store, app.state.judge, who, bot, body.text, admit)
+        return topic_change.check(store, app.state.judge, who, bot, body, admit, uploads=())
 
     # ------------------------------------------------------------------ updates (backend/updates.py)
     def update_visible(c, who, mine=False, scope=None):
@@ -4373,7 +4374,8 @@ def create_app(settings=None):
         return vault.change(who, request.url.path, request.headers.get("idempotency-key"), body,
                             lambda c, w: None,
                             lambda c: model_login.replace_key(c, who, rid, body.runtime, body.secret.get_secret_value(),
-                                                              body.env, body.scope, auth=auth, vault=vault))
+                                                              body.env, body.scope, auth=auth, vault=vault,
+                                                              switch=body.switch))
 
     @app.get("/api/v2/runners/{rid}/logins/{lid}")
     def read_login(request: Request, rid: str, lid: str):

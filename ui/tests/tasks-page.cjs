@@ -87,7 +87,7 @@ const BOTS = [['engineer', 'Engineer', 'engineering'], ['support', 'Support', 's
   ({name, display_name, team, host: 'keeper', status: 'active', state: 'active', can_chat: true}));
 
 async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'dark', hash = '#/issues', failIds = [], prefs = null, mover = true,
-  types = [], local = {}, people = null, baseTasks = null, extraTasks = [], byNeed = false} = {}) {
+  types = [], local = {}, people = null, baseTasks = null, extraTasks = [], byNeed = false, clock = null} = {}) {
   const tasks = [...(baseTasks ?? fixtures()), ...extraTasks];
   // These scripts read Needs you grouped by who asks; `byNeed` keeps the default, What it takes.
   if (!byNeed && !('hub.tasks.layout' in local)) local = {...local, 'hub.tasks.layout': JSON.stringify({group: {foryou: 'requester'}})};
@@ -186,6 +186,7 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
     if (p.endsWith('/messages')) return json({messages: []});
     return json(unrouted(p));
   });
+  if (clock) await page.clock.install({time: clock});     // the page's timers too, so a test moves time on
   await page.goto('https://tico-ui.test/' + hash);
   await page.waitForFunction(() => TASKS_ST && !TASKS_ST.loading && document.querySelector('#task-body .tl-row, #task-body .bcard, #task-body .tl-empty'))
     .catch(e => { throw new Error(`${e.message}\npage errors: ${errors.join(' | ')}`); });

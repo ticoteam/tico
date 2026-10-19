@@ -138,8 +138,8 @@ const {unrouted} = require('./support/routes.cjs');
     const table = page.locator('#set-machines dialog.computer-detail[open]');
     const own = name => table.locator(`[data-connection="own:${name}"]`);
     const buttons = row => row.locator('.computer-conn-signin button').allInnerTexts();
-    assert.deepEqual(await buttons(own('codex')), ['Switch account', 'Sign out']);
-    assert.deepEqual(await buttons(own('claude')), ['Switch account', 'Sign out']);
+    assert.deepEqual(await buttons(own('codex')), ['Switch account', 'Switch to API key', 'Sign out']);
+    assert.deepEqual(await buttons(own('claude')), ['Switch account', 'Switch to API key', 'Sign out']);
     assert.deepEqual(await buttons(table.locator('[data-connection="profile:acme:codex"]')), ['Switch account', 'Sign out']);
     assert.deepEqual(await buttons(own('gemini')), [], 'no logout in its manifest: nothing to offer');
 
@@ -280,7 +280,8 @@ const {unrouted} = require('./support/routes.cjs');
     await page.evaluate(() => loadSettings());
     await own('claude').getByRole('button', {name: 'Sign out'}).waitFor();
 
-    // A Mac: Claude Code keeps its login in the keychain there, so it offers Sign out but no Switch account.
+    // A Mac: Claude Code keeps its login in the keychain there, so it offers Sign out but no Switch account, nor Switch
+    // to API key (a logout there could not be undone).
     box.platform = 'darwin';
     await page.evaluate(() => loadSettings());
     await own('claude').getByRole('button', {name: 'Sign out'}).waitFor();
@@ -297,7 +298,7 @@ const {unrouted} = require('./support/routes.cjs');
     await both.locator('.computer-conn-login').first().waitFor();
     assert.equal(await own('codex').count(), 0);
     assert.deepEqual(await both.locator('.computer-conn-login').evaluateAll(groups => groups.map(g => g.innerText.replace(/\s+/g, ' ').trim())),
-      ['Subscription Switch account Sign out', "Computer's login Switch account Sign out"]);
+      ['Subscription Switch account Sign out', "Computer's login Switch account Switch to API key Sign out"]);
     await both.locator('[data-login=""]').getByRole('button', {name: 'Switch account'}).click();
     await login.locator('h2', {hasText: 'Switch account for Codex (ChatGPT) on Team box'}).waitFor();
     assert.deepEqual(writes.at(-1), {p: '/api/v2/computers/box/logins', body: {runtime: 'codex', switch: true}});
