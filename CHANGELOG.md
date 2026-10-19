@@ -8,6 +8,14 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- **A Claude bot's turn no longer waits an hour on its own background commands**: once the bot has answered and the
+  turn is only waiting on background shells (a test suite, `gh pr checks --watch`, `gh run watch`) for 5 minutes
+  (`background_wait_s` in bot.yaml, 0 for off), the runner ends the turn as completed and the commands keep running.
+  When the last one ends, the bot gets one message on the same task with each command's exit code and the end of
+  its output; one still running at the run's time limit is killed and says so. A new turn on that session meanwhile
+  is told which commands still run. The run's events record "Turn ended: background wait" with the minutes saved,
+  and the wake counts as `background_done` in `hub sql`. On a Mac the exit code reads "unknown". A turn still
+  working, or running a subagent, waits as before.
 - **Visuals in replies outside Tico (part 4 of 4)**: a bot's reply with visuals that reaches Slack keeps its text and
   adds one line, "1 visual - view in Tico" (or "N visuals"), linking to that message in Tico. A task-done post does
   the same for the owner's result comment when it has visuals. The link opens only for people who can read the
@@ -92,6 +100,10 @@ All notable changes to Tico are recorded here. The format follows
   ([Computers](docs/computers.md#remove-a-subscription)).
 
 ### Fixed
+- **A resumed Claude session keeps reading follow-ups**: Claude answers a resumed session with an empty result
+  before it reads the new prompt. The runner took that as the turn's answer and stopped reading follow-up
+  messages for the rest of the turn; it now waits for the answer to the prompt. This applies to every resumed
+  Claude turn.
 - **A bot's finished answer is no longer lost or given twice when its computer stalls before handing it in.** A
   turn's lease now renews on a thread of its own, so busy work on the computer can't stop it. If a finished
   answer still comes in late, after its run was dismissed or cancelled, it is kept: the run ends completed and the

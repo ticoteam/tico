@@ -164,6 +164,8 @@ pub mod tests {
         std::process::exit(main(&args));
     }
 
+    // A child subreaper is Linux's.
+    #[cfg(target_os = "linux")]
     #[test]
     fn kept_shells_outlive_claude_and_their_exit_codes_are_reaped() {
         let dir = std::env::temp_dir().join(format!("reap-{}", uuid::Uuid::new_v4().simple()));
@@ -188,6 +190,7 @@ pub mod tests {
         assert_eq!(done.code(), Some(128 + libc::SIGKILL));
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn a_stop_still_ends_claude_and_what_it_ends() {
         let dir = std::env::temp_dir().join(format!("reap-{}", uuid::Uuid::new_v4().simple()));

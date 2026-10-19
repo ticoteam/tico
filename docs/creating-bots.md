@@ -610,6 +610,9 @@ Levers set in **Settings → Bots**, not in the repository:
   permission, and leaves Compact at alone. The line under the picker shows what the bot runs on. Each run
   in a task's **Runs** says what woke it. A branch picks its own.
 - **`max_run_minutes`**: the ceiling on one run. Set it from the longest real routine, not hope.
+- **`background_wait_s`** (Claude bots): how long an answered turn may wait only on its own background commands
+  before the runner ends it, in seconds; 300 when unset, 0 to wait for them as before. The commands keep running,
+  and the bot gets one message with their exit codes when they end, or when the run's time limit kills them.
 - **`hermes`** (and **`openclaw`**, [the same way](openclaw-agents.md)) is the one kind of harness that is not a
   CLI on a registered computer: the bot is a Hermes profile somewhere else, with its own model, reached through a credential minted in
   Settings and never dispatched to. Model, effort, fallback and computer do not apply to it.

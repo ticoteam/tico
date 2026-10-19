@@ -202,7 +202,7 @@ pub fn ci_watch(command: &str) -> Option<Value> {
     if rest.iter().any(|w| ["&&", ";", "||", "|"].iter().any(|op| w.contains(op))) {
         return None;
     }
-    let number = |from: &[&str]| from.iter().find(|w| !w.is_empty() && w.chars().all(|c| c.is_ascii_digit())).map(|w| w.parse::<u64>().ok()).flatten();
+    let number = |from: &[&str]| from.iter().find(|w| !w.is_empty() && w.chars().all(|c| c.is_ascii_digit())).and_then(|w| w.parse::<u64>().ok());
     match rest {
         ["pr", "checks", args @ ..] if args.contains(&"--watch") => number(args).map(|n| json!({"pr": n})),
         ["run", "watch", args @ ..] => number(args).map(|n| json!({"run": n})),
