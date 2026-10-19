@@ -289,6 +289,12 @@ async function outlineJump(browser) {
   if(process.env.TICO_SHOTS)await page.screenshot({path:process.env.TICO_SHOTS+'/outline-phone.png'});
   await page.keyboard.press('Escape');
   assert.equal(await page.locator('#chat-outline').evaluate(d=>d.open),false,'Escape closes');
+  // The Slack "1 visual - view in Tico" line from a plain chat: ?bot=&message= opens that bot's chat at the message,
+  // paging back to it like the outline does, and the query goes.
+  await page.goto('https://tico-ui.test/?bot=ops&message=h0');
+  await page.locator('#conv-thread .jump-mark[data-message="h0"]').waitFor();
+  assert.equal(new URL(page.url()).hash,'#/bot/ops');
+  assert.equal(new URL(page.url()).search,'');
   assert.deepEqual(errors,[]);
   console.log('chat outline jump: ok');
 }

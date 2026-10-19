@@ -8,6 +8,13 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Visuals in replies outside Tico (part 4 of 4)**: a bot's reply or task-done post that reaches Slack with
+  visuals keeps its full text and adds one line, "1 visual - view in Tico" (or "N visuals"), linking to that message:
+  in its task, or in that bot's chat for a plain chat. The link opens only for people who can read the conversation,
+  and nothing from a private task is sent to Slack. No visual is shown in Slack itself. Every bot's instructions now
+  say to add a visual (chart, table, diagram, mockup, screenshot, clip or recording) when it makes the answer
+  clearer, never for a plain answer, with the text answer complete on its own; brand assets, designed graphics and
+  edited video still go to Design and Video Producer.
 - **Visuals in replies (API, part 1 of 4)**: a bot or a person attaches a picture, SVG, self-contained HTML page,
   video or audio clip to a chat reply or a task comment with a title (`--visual PATH --title "…"` on `hub message
   send`, `hub chat send` and `hub task comment`; `visuals` on the same MCP tools; `attachments: [{ref, title}]` in the

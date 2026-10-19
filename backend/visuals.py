@@ -17,7 +17,7 @@ import stat
 import time
 from html.parser import HTMLParser
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
 
 # What may show inline, by stored type; anything else, or bigger, is a normal file chip.
 KINDS = {"image/png": "image", "image/jpeg": "image", "image/gif": "image", "image/webp": "image",
@@ -470,6 +470,24 @@ def decorate(c, who, files, key, base, messages):
             fresh.append(view)
         message["refs"] = {**message["refs"], "attachments": fresh}
     return messages
+
+
+def elsewhere(base, message, task=None):
+    """The one line a message with visuals carries where it leaves Tico (Slack today; an email or push outlet later),
+    as {"count", "label", "url"}, or None when it has none. Nothing visual is rendered there (Visual replies, choice 4).
+    The link is a query, not a #fragment, because some clients drop fragments (ui/app/state.js turns it into the
+    route): a message on a task (`task`, as hubdb.message_task_id finds it) opens the task, a plain chat reply that
+    bot's chat, each at the message. It names ids only; whether the reader may open them is checked when they do."""
+    refs = (message or {}).get("refs") or {}
+    count = sum(1 for a in refs.get("attachments") or [] if isinstance(a, dict) and a.get("kind") in INLINE)
+    if not count:
+        return None
+    where = {"task": task} if task else {}
+    sender = str(message.get("from_actor") or "")
+    if not where and sender.startswith("bot:"):
+        where = {"bot": sender[4:]}
+    url = (base or "") + "/" + ("?" + urlencode({**where, "message": message["id"]}) if where else "")
+    return {"count": count, "label": f"{count} visual{'' if count == 1 else 's'} - view in Tico", "url": url}
 
 
 def key_for(app, settings):

@@ -73,6 +73,7 @@ from . import hubdb as H
 from . import people as P
 from . import providers
 from . import task_privacy as privacy
+from . import visuals
 from . import slack_app
 from . import slack_channels as SC
 from .config import Settings, slack_credentials
@@ -1275,11 +1276,14 @@ class Gateway:
 
     def rendered(self, c, post):
         """What Slack shows: the reply, then the footer that names the bot even where customize is not honoured."""
+        message = H.message(c, post["message_id"]) or {}
+        conv = H.conversation(c, message["conversation_id"]) if message.get("conversation_id") else None
+        line = visuals.elsewhere(self.settings.public_url, message, H.message_task_id(message, conv))
+        seen = "\n<" + slack_escape(line["url"]) + "|" + line["label"] + ">" if line else ""
         if not post["bot"]:
-            message = H.message(c, post["message_id"])
             task_id = message["refs"]["task"]
             url = self.settings.public_url + "/#/task/" + urllib.parse.quote(task_id, safe="")
-            return {"text": slack_escape(str(post["text"])[:POST_CHARS]) + "\n<" + slack_escape(url) + "|Open task>",
+            return {"text": slack_escape(str(post["text"])[:POST_CHARS]) + seen + "\n<" + slack_escape(url) + "|Open task>",
                     "username": None, "icon_emoji": None, "icon_url": None}
         bot = H.bot(c, post["bot"]) or {}
         name = bot.get("display_name") or post["bot"]
@@ -1287,7 +1291,7 @@ class Gateway:
         text = str(post["text"] or "").strip()
         if len(text) > POST_CHARS:
             text = text[:POST_CHARS].rstrip() + " …"
-        return {"text": slack_escape(text) + f"\n\n(sent from {name})", "username": name,
+        return {"text": slack_escape(text) + ("\n" + seen if seen else "") + f"\n\n(sent from {name})", "username": name,
                 "icon_emoji": str(config.get("slack_icon") or "") or None,
                 "icon_url": str(config.get("slack_icon_url") or "") or None}
 

@@ -6,7 +6,7 @@
 // exchange that is not loaded yet; the jump pages back with the same request "Load older messages" uses.
 const OUTLINE_MIN = 6;               // prompts before a chat is long enough to need it
 const JUMP_PAGES = 40;               // pages a jump loads before it gives up (200 messages each)
-let CHAT_JUMP = null;                // {slug, id}: a jump waiting for that bot's chat to load
+let CHAT_JUMP = ENTRY_JUMP?.slug ? {slug: ENTRY_JUMP.slug, id: ENTRY_JUMP.id} : null;   // {slug, id}: a jump waiting for that bot's chat to load
 
 function chatOutlineSync(state) {
   const conv = $('#conv');

@@ -405,6 +405,15 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
     await page.goto('http://tico-ui.test/?bot=cmo&tab=tasks');
     await page.waitForFunction(() => location.hash === '#/bot/cmo/tasks');
     assert.equal(new URL(page.url()).search, '', 'the entry query is removed after routing');
+    // The Slack "1 visual - view in Tico" line links to one message: the task opens at it, marked for a moment.
+    await page.goto('http://tico-ui.test/?task=Draft%20the%20newsletter&message=m1');
+    await page.locator('#task-modal .tcomment.jump-mark[data-message="m1"]').waitFor();
+    assert.equal(new URL(page.url()).hash, '#/task/Draft%20the%20newsletter');
+    assert.equal(new URL(page.url()).search, '', 'the message query is removed too');
+    // A message that is not in the conversation says so rather than jumping somewhere else.
+    await page.goto('http://tico-ui.test/?task=Draft%20the%20newsletter&message=gone');
+    await page.locator('.toast', {hasText: 'That message is not in this conversation'}).waitFor();
+    assert.equal(await page.locator('#task-modal .tcomment.jump-mark').count(), 0);
     // The org panel shows a bot's harness as a small mark, not a word; a bot with no harness shows none.
     // Hover and screen readers say harness, model and effort, nothing more; no effort, nothing after the model.
     const rt = name => page.locator(`#tree a.node[href="#/bot/${name}"] .rt`);
