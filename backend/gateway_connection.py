@@ -298,7 +298,9 @@ def ran_tico(config, body):
         fallback = config.get("fallback") if isinstance(config.get("fallback"), dict) else {}
         if fallback.get("harness"):
             return fallback.get("harness") == body.fallback and is_tico(fallback.get("model"))
-        return body.fallback == "pi" and is_tico(config.get("gateway_fallback"))
+        # The harness the Gateway's own provider row runs on (providers.PROVIDERS), not a CLI name.
+        from .providers import PROVIDER_BY_ID
+        return body.fallback == PROVIDER_BY_ID[PROVIDER]["harness"] and is_tico(config.get("gateway_fallback"))
     return is_tico(config.get("model"))
 
 
