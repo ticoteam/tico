@@ -1006,6 +1006,10 @@ def migrate(conn, adopt_legacy=False):
     # 1 when a run segment's estimate may be low: its model's long prompts cost more and the runner did not
     # send every request's tokens (providers.estimate). NULL on segments from before it was recorded.
     add_column(conn, "turn_usage_segments", "est_cost_low", "INTEGER")
+    # The newest of the bot's own model requests' whole prompt (uncached + cached), when its runner marked them from
+    # its subagents': the session's context size (backend/topic_change.py). NULL when it did not; the summed columns
+    # are not a context size.
+    add_column(conn, "turns", "prompt_tokens", "INTEGER")
     conn.execute("CREATE INDEX IF NOT EXISTS tasks_snoozed ON tasks(snoozed_until) WHERE snoozed_until IS NOT NULL")
     # A type whose tasks change status only by moving between its steps (`_task_state`).
     add_column(conn, "task_types", "steps_only", "INTEGER NOT NULL DEFAULT 0")
@@ -6195,7 +6199,7 @@ def turn_finish(conn, actor, turn_id, exit_code="ok", tokens_in=None, tokens_out
                 summary=None, usage=None):
     """Close a turn. `exit_code` is the `exit` column (`exit` is a builtin, not a keyword here).
     `usage` is what the run cost in tokens: input_tokens, cached_tokens, output_tokens, model, provider,
-    est_cost_usd and billing (see USAGE_SCHEMA)."""
+    est_cost_usd and billing (see USAGE_SCHEMA), and prompt_tokens, its newest request's prompt when known."""
     _writer(conn, actor)
     ts = now()
     conn.execute("UPDATE turns SET finished=?, exit=?, tokens_in=?, tokens_out=?, cost=?, summary=? "
@@ -6205,9 +6209,10 @@ def turn_finish(conn, actor, turn_id, exit_code="ok", tokens_in=None, tokens_out
     if usage:
         conn.execute("UPDATE turns SET input_tokens=:input_tokens, cached_tokens=:cached_tokens, "
                      "output_tokens=:output_tokens, model=:model, provider=:provider, est_cost_usd=:est_cost_usd, "
-                     "billing=:billing WHERE id=:id",
+                     "billing=:billing, prompt_tokens=:prompt_tokens WHERE id=:id",
                      {"input_tokens": None, "cached_tokens": None, "output_tokens": None, "model": None,
-                      "provider": None, "est_cost_usd": None, "billing": None, **usage, "id": turn_id})
+                      "provider": None, "est_cost_usd": None, "billing": None, "prompt_tokens": None, **usage,
+                      "id": turn_id})
     if usage and usage.get("segments"):
         conn.execute("DELETE FROM turn_usage_segments WHERE turn_id=?", (turn_id,))
         for position, part in enumerate(usage["segments"]):

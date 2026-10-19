@@ -165,8 +165,8 @@ struct Usage {
     cached: i64,
     cost: Option<f64>,
     texts: Vec<String>,
-    /// Each model request this turn, the bot's and its subagents', in the order Claude made them.
-    requests: Vec<(String, [i64; 3])>,
+    /// Each model request this turn, the bot's and its subagents', in the order Claude made them; true for the bot's own.
+    requests: Vec<(String, [i64; 3], bool)>,
     /// The request each stream (the bot's, or a subagent's by its `parent_tool_use_id`) is in, for its `message_delta`.
     streaming: HashMap<String, String>,
 }
@@ -655,6 +655,7 @@ impl ClaudeHost {
         if let Some((id, tokens)) = request_usage(msg) {
             // Some models price each request by its prompt length (backend/providers.py LONG_PROMPT), subagents' too.
             let stream = msg["parent_tool_use_id"].as_str().unwrap_or_default().to_string();
+            let main = stream.is_empty();
             let mut inner = self.inner();
             let u = inner.usage.entry(turn.into()).or_default();
             let id = match id {
@@ -665,9 +666,9 @@ impl ClaudeHost {
                 None => u.streaming.get(&stream).cloned(),
             };
             if let Some(id) = id {
-                match u.requests.iter_mut().find(|(seen, _)| *seen == id) {
-                    Some((_, had)) => (0..3).for_each(|i| had[i] = had[i].max(tokens[i])),
-                    None => u.requests.push((id, tokens)),
+                match u.requests.iter_mut().find(|(seen, _, _)| *seen == id) {
+                    Some((_, had, _)) => (0..3).for_each(|i| had[i] = had[i].max(tokens[i])),
+                    None => u.requests.push((id, tokens, main)),
                 }
             }
         }
@@ -883,7 +884,10 @@ impl ClaudeHost {
                 Some(turn),
                 json!({"input": u.input, "output": u.output, "total": u.input + u.output, "cost_usd": u.cost,
                        "usage": {"input": u.input, "cached": u.cached, "output": u.output,
-                                 "requests": u.requests.iter().map(|(_, r)| r).collect::<Vec<_>>()}}),
+                                 // The fourth count marks the bot's own requests (1) from its subagents' (0): the
+                                 // newest of the bot's own is the session's context size (backend/topic_change.py).
+                                 "requests": u.requests.iter().map(|(_, r, main)| json!([r[0], r[1], r[2], i64::from(*main)]))
+                                     .collect::<Vec<_>>()}}),
             ));
         }
         self.poll_goal(tid);
@@ -1292,7 +1296,7 @@ mod tests {
         let lines = [start.as_str(), &think, sub_start, &tool, delta, sub_delta, result].join("\n") + "\n";
         let (got, _) = background_turn(&lines, "", "", false).await;
         let tokens = got.iter().find(|e| e["kind"] == "tokens").unwrap();
-        assert_eq!(tokens["usage"]["requests"], json!([[3002, 120000, 78], [900, 0, 5]]), "{got:?}");
+        assert_eq!(tokens["usage"]["requests"], json!([[3002, 120000, 78, 1], [900, 0, 5, 0]]), "{got:?}");
         // Together they are the whole run, so the server prices every token at its request's own rate.
         assert_eq!((&tokens["usage"]["input"], &tokens["usage"]["cached"], &tokens["usage"]["output"]), (&json!(123902), &json!(120000), &json!(83)));
     }

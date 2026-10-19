@@ -1530,8 +1530,9 @@ class Execution:
                     "est_cost_usd": cost, "est_cost_low": int(low),
                     "billing": item.billing, "runtime": runtime or None, "harness": item.harness or None,
                     "effort": item.effort or None, "profile": item.profile_used or None}
-        segments = [part(item) for item in (used.segments or [used])
-                    if item.input_tokens or item.cached_tokens or item.output_tokens]
+        items = [item for item in (used.segments or [used])
+                 if item.input_tokens or item.cached_tokens or item.output_tokens]
+        segments = [part(item) for item in items]
         if not segments:
             return None
         result = dict(segments[-1])
@@ -1547,6 +1548,10 @@ class Execution:
             if len({p[key] for p in segments}) > 1:
                 result[key] = None
         result["segments"] = segments
+        # The session's context size: the newest of the bot's own requests' prompt, when the last portion's runner
+        # marked them (a subagent's request is not the session's). Unknown otherwise.
+        own = [r for r in items[-1].requests or () if len(r) > 3 and r[3] == 1]
+        result["prompt_tokens"] = own[-1][0] + own[-1][1] if own else None
         return result
 
     def file_result(self, c, row, body):
