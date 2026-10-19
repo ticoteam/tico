@@ -57,6 +57,11 @@ All notable changes to Tico are recorded here. The format follows
   newest), says "This visual was removed" when the file was removed and "Couldn't show this visual" when it can't
   render. Up to 4 per message; the rest stay file chips
   ([Visuals in replies](docs/visuals.md#in-a-chat-or-task-conversation)).
+- **Video and audio in replies (part 3 of 4)**: a video or audio clip attached to a chat reply or task comment plays
+  in the conversation: a video with its first frame, play, seek, volume and full screen (also in the desktop app on
+  a Mac), an audio clip as a compact player that keeps playing while you scroll. Nothing starts by itself, starting
+  one clip pauses the other, and seeking a long clip loads only that part. A clip the device can't play shows why,
+  with Download.
 - **The company on Goals**: with the CEO Bot switch on, Goals opens with a **Company** section: the Vision (one or
   two sentences) and the Description (a short paragraph). The owner and admins edit it, everyone else reads it, and
   **History** lists every change with who made it and when. Each goal shows a one-line **Why** tying it to the
@@ -120,6 +125,10 @@ All notable changes to Tico are recorded here. The format follows
   missed GitHub webhook no longer keeps a finished tree counted against the bot's limit. A tree whose own commits no
   pull request carries is held with the reason shown, and a move to review or done names the unlinked branch
   ([Task worktrees](docs/worktrees.md)).
+- **Computers: a cleared key reads "No key · Add key"**, not "Signed out · Sign in", in a computer's pop-up, and its
+  chip's hover says No key. On an offline computer, a connection's **Replace key**, **Clear key**, **Switch to
+  subscription**, **Sign out** and **Switch account** stay on the line, disabled, with "Computer is offline", instead
+  of disappearing ([Computers](docs/computers.md#api-keys-on-a-computer)).
 - A locally managed Cloudflare Tunnel keeps the separate inline-visual hostname after a server restart or update.
   `TICO_VISUAL_ORIGIN` adds a route for `^/visuals/` only; app and runner routes and the 404 catch-all stay in place.
 - **A bot's finished answer is no longer lost or given twice when its computer stalls before handing it in.** A
@@ -163,7 +172,8 @@ All notable changes to Tico are recorded here. The format follows
   bot's own write caused never wakes that same bot. Nothing is dropped: the notice stays in the task's room and is
   handed to the bot's next run, whatever starts it, in order. A person's message, comment, approval or answer, an
   ask, a needs-action message, a gate verdict, an assignment, a finished subtask and a sweep still wake at once.
-  Each skipped wake is logged as `wake.skipped` in `events` for the weekly audit ([hub sql](docs/hub-sql.md)).
+  Each skipped wake, a bot's own comment on its task included, is logged as `wake.skipped` in `events` for the
+  weekly audit ([hub sql](docs/hub-sql.md)).
 - **Health Monitor: seeing a finding again only counts**: each hourly scan that sees a finding adds one to its count
   and moves its last-seen time, and no bot runs for it. Only a new finding, one whose severity rises (a computer on a
   release the server cannot work with is `bad`, an older one `warn`), or one back after its task was finished wakes
