@@ -14,6 +14,15 @@ All notable changes to Tico are recorded here. The format follows
   vision: the CEO Bot proposes it and a person accepts it as it is, edits it or writes their own. A goal with none
   says "Not tied to the vision". No bot can change the Vision or the Description or accept a Why, the CEO Bot
   included. With the switch off none of this shows.
+- **Tico AI Gateway** in Settings > AI providers: the owner saves the gateway key Tico gives them (or the server's
+  `TICO_GATEWAY_KEY` sets it, and wins), Decide asks the Gateway with that same key, and bots can then pick **Tico Cheap, Mid and Power 1.0** (Claude Haiku, Sonnet and Opus
+  5.5 underneath) like any other model, streamed through the Gateway on pi. The key is sealed and never shown after
+  save. No bot holds it: the computer running a bot on a Tico model passes its model calls on with the key, so Tico
+  models run only on a computer that runs bots as their own user (Tico's Docker runner); elsewhere a bot on one says
+  so once. The owner sees the 80% monthly cap warning and a key the Gateway doesn't
+  recognise. A bot stopped by the cap says "Gateway cap reached" and waits for next month; every other Gateway
+  refusal reads plainly and is retried only when retrying can help, and a reply cut off mid-stream is posted with a
+  note ([Tico AI Gateway](docs/ai-gateway.md)).
 - **Sign in on a Tico we host**: with `TICO_HOSTED` set (`own` or `invited`), **Sign in** for Claude Code and
   Codex (ChatGPT) in Settings > Computers shows only the provider's link and code, never what else the computer
   printed and never a terminal, and closes by itself once signed in or cancelled. Any other value of `TICO_HOSTED`
@@ -37,6 +46,11 @@ All notable changes to Tico are recorded here. The format follows
   failed check (over 1.5 s) sends the message in the same session with no line.
 
 ### Fixed
+- **Claude sign-in on a subscription profile stays in that profile.** A runner whose own environment set
+  `CLAUDE_CONFIG_DIR` signed Claude Code in there (Settings > Computers and `tico-runner profile login`) and checked
+  it there, while turns read the profile's `HOME`: sign-in looked done but turns were signed out or ran on another
+  login. A profile's Claude now never gets an inherited `CLAUDE_CONFIG_DIR`, no Claude turn runs with one, and
+  `CLAUDE_CONFIG_DIR` is a reserved variable name, so a credential can no longer be granted under it.
 - Opening a card in **Needs you** (an approval, a task, a question) no longer sends a failing request for issue
   "NaN" in the background. Only an issues inbox card fetches its full request.
 - **Clear** on a bot's chat now really starts the bot over. Before, it only trimmed the history Tico sends, and on
@@ -48,6 +62,17 @@ All notable changes to Tico are recorded here. The format follows
   other chat keeps its own history. Without a clear the bot resumes its thread as before. After the upgrade, a thread
   that may have been cleared or reset before its first turn on the new runner starts over once. A runner or Hub from
   before this keeps today's behaviour ([sessions](docs/sessions.md)).
+
+### Changed
+- **Codex signed in with ChatGPT runs one turn at a time per login**, as OpenAI's terms for a ChatGPT sign-in
+  require. When two bots on one computer share its ChatGPT login, one Codex turn runs and the other shows
+  *Waiting for this computer's ChatGPT login to be free (busy with <bot>)* in the chat, the task and **Runs**, then
+  starts as soon as the first turn ends. A bot with a ready fallback of its own runs there instead, and its run says
+  *ChatGPT login busy with <bot>; ran this turn on <harness>*. One bot's parallel task lanes on a ChatGPT login now
+  take turns too (shown as waiting, not failed). **Settings → Computers** and **Subscriptions** say when several bots
+  share one ChatGPT sign-in and that they take turns. Codex on an API key, a bot on its own subscription login, and
+  Claude Code are not limited, and no code copies a login file between bots' homes. The holding bot is named only to
+  people who can see it ([how it works](docs/how-it-works.md#one-turn-per-chatgpt-login)).
 
 ## [0.3.61] - 2026-10-18
 

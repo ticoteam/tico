@@ -43,6 +43,10 @@ Each run pins its selected local profile directory before preparing the provider
 
 Profile directories separate provider logins. Browser-created profiles live outside the bot workspace, with directories set to 0700 and owned by the same user that runs sign-in, probes and turns. Linux Docker harnesses currently retain the existing shared bot Unix user; profiles do not yet provide a Unix permission boundary between groups. Do not rely on profile assignments to isolate files from another bot on the same Computer.
 
+### Bots sharing one ChatGPT sign-in take turns
+
+A Codex ChatGPT sign-in is one login file whose refresh token rotates as it is used, and OpenAI allows one such login per machine or serialized job stream. So on a Computer, the bots that use one ChatGPT sign-in (the same named subscription, or the Computer's own login) run one Codex turn at a time, in arrival order, and one bot's parallel tasks on it take turns too. A waiting run reads **Waiting for <login> to be free (busy with <bot>)** until its turn comes, or runs on the bot's own fallback when one is ready ([how it works](how-it-works.md#one-turn-per-chatgpt-login)). **Settings → Computers** and **Subscriptions** say when several bots share one sign-in and that they take turns; give a bot its own subscription when it needs to run alongside the others. Bots on an OpenAI API key still run side by side. Tico never copies a login file into another bot's home to get around this, because a copy would rotate apart from the original. The rule is per runner process: two runners on one machine that share a login folder don't wait for each other.
+
 The Engineering Manager template gives owners and admins an initial read grant to all enabled repositories. Member-created bots keep the team default. Its child-task and worktree instructions require phases 2 and 3 to ship first.
 
 ### Signing out and switching accounts

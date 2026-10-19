@@ -142,7 +142,7 @@ do not enforce file isolation between groups.
 | Runtime | How the profile moves its login |
 |---|---|
 | `codex` | `CODEX_HOME` points at `<profile>/codex` |
-| `claude` | `HOME` points at `<profile>/claude`, keeping the existing login layout |
+| `claude` | `HOME` points at `<profile>/claude`, keeping the existing login layout; an inherited `CLAUDE_CONFIG_DIR` is dropped, since Claude Code would read it ahead of `HOME` |
 | `grok` | `HOME` points at `<profile>/grok`. Grok Build 1.0.30 also honours `GROK_HOME` (probed 2026-09-15), but one rule for both keeps a profile a single directory |
 | `gemini` | No variable in the run's environment: the Gemini host is handed `<profile>/gemini` and sets `GEMINI_CLI_HOME` and `GEMINI_CLI_SYSTEM_SETTINGS_PATH` itself |
 

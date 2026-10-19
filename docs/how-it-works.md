@@ -298,6 +298,20 @@ the run is limited as above. Every turn tries the bot's own provider first, so t
 bot moves back on its own once the limit resets. The owner turns this off in **Settings → AI providers**
 (*Fall back when a plan runs out*, `auto_fallback`). Overview lists how many bots are on a fallback and
 since when, and how many are limited.
+
+<a id="one-turn-per-chatgpt-login"></a>**One turn per ChatGPT login.** OpenAI lets a Codex ChatGPT sign-in serve
+one job stream at a time, so the runner gives a ChatGPT login (`one_turn_per_login` in the harness manifest) to one
+turn at a time, from before the turn's Codex process starts until it stops. A turn from another bot, or from another
+task lane of the same bot, that wants the same login waits its turn in order. While it waits, its run streams a
+`status` event `{"waiting", "login", "holder"}`, and the chat, the task and **Runs** show *Waiting for <login> to be
+free (busy with <bot>)*. A waiting run counts toward the computer's capacity and is not failed. If the bot has a fallback
+of its own that is ready, the turn runs there instead of waiting. Its diagnostic says *ChatGPT login busy with
+<bot>; running this turn on <harness>*, and the run reports `fallback` as with a usage limit. A command or an active
+native goal always waits. The company's default fallback is not used for a busy login, because the login is
+free again within one turn. To run two Codex bots side by side on a ChatGPT plan, put each on its own subscription
+profile login ([Subscription profiles](environments.md#subscription-profiles)). Codex on an API key is never held, and neither are other harnesses. Only
+people who can see the holding bot see its name; others read "another bot". The lock lives in the runner, so a
+runner restart frees every login.
 **Settings → Health** counts this company fallback: a limited bot covered by it gets no "has no fallback
 model" finding. When a computer's default login (no subscription) keeps stopping on a usage limit, Health
 says so once per computer and tool, e.g. "Team box's default Codex login is out of quota", until a turn on

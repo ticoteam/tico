@@ -1538,6 +1538,14 @@ class SettingsUndo(Contract):
     expected_revision: int = Field(ge=1)
 
 
+class GatewayConnectionSave(Contract):
+    """The Tico AI Gateway connection (backend/gateway_connection.py): a new key, or none to keep the saved one, and
+    the Gateway's URL ('' for Tico's). `expected_revision` is the revision the editor read."""
+    key: SecretStr | None = None
+    url: str = Field(default="", max_length=300)
+    expected_revision: int = Field(default=0, ge=0)
+
+
 class ProvidersUpdate(Contract):
     """The owner's AI provider choice. `expected_revision` is the revision the editor read."""
     enabled: list[Annotated[str, Field(min_length=1, max_length=40)]] = Field(max_length=10)

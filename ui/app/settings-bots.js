@@ -22,6 +22,11 @@ const settingsChoiceLabel = (harness, model, effort) => {
   const row = settingsModel(model), own = row?.harnesses?.[0] || row?.runtime || harness;
   return modelChoiceWords(model, settingsEffortName(effort), harness, own) || settingsModelName(model);
 };
+// In the model list a Tico model says what runs underneath it: "Tico Mid 1.0 (Claude Sonnet 5.5 underneath)".
+const settingsModelPickName = id => {
+  const row = settingsModel(id);
+  return /^tico-/.test(id) && row?.description ? `${settingsModelName(id)} (${row.description})` : settingsModelName(id);
+};
 // A bot with no model of its own follows the team default; say which one it resolves to.
 function settingsDefaultLabel(e) {
   if (e.model || !e.resolved_model) return 'not set';
@@ -37,7 +42,7 @@ function settingsAllChoices() {
     (model.harnesses || [model.runtime]).flatMap(harness =>
       (model.efforts?.length ? model.efforts : [model.default_effort || '']).map(effort => {
         const label = settingsChoiceLabel(harness, model.id, effort);
-        const search = [harness, settingsHarnessName(harness), model.id, model.label, effort, label].join(' ').toLowerCase();
+        const search = [harness, settingsHarnessName(harness), model.id, model.label, model.description || '', effort, label].join(' ').toLowerCase();
         return {harness, model: model.id, effort, label, search, value: settingsChoiceValue(harness, model.id, effort)};
       })));
 }
@@ -128,7 +133,7 @@ function settingsWireChoiceFields(fields, onChange = () => {}) {
     const models = [...new Set(choices.filter(row => row.harness === picked.harness).map(row => row.model))];
     model.innerHTML = option('', 'Choose model', !picked.model, true)
       + (picked.model && !models.includes(picked.model) ? option(picked.model, `${settingsModelName(picked.model)} (current)`, true, true) : '')
-      + models.map(id => option(id, settingsModelName(id), id === picked.model)).join('');
+      + models.map(id => option(id, settingsModelPickName(id), id === picked.model)).join('');
     const efforts = choices.filter(row => row.harness === picked.harness && row.model === picked.model).map(row => row.effort);
     effort.innerHTML = (!picked.effort && efforts.length ? option('', 'Choose effort', true, true) : '')
       + (!efforts.length ? option(picked.effort, settingsEffortName(picked.effort) || 'Choose effort', true, true) : '')

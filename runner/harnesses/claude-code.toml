@@ -43,6 +43,8 @@ subscription_marker = "signed in"
 subscription_profiles = true
 profile_home = "HOME"
 profile_dirs = [".claude"]
+# Claude Code reads CLAUDE_CONFIG_DIR ahead of $HOME/.claude: a profile's sign-in, check and turns never inherit it.
+profile_home_overrides = ["CLAUDE_CONFIG_DIR"]
 weekly_usage = "turns"
 account = "status-json"
 mcp_transports = ["http", "sse"]
