@@ -91,6 +91,10 @@ const {unrouted} = require('./support/routes.cjs');
     // Another choice keeps what is ticked.
     await choices.locator('[data-provider-preset][value=own-keys]').check();
     assert.equal(await page.locator('#set-prov [data-provider]:checked').count(), 2);
+    // A phone: the choices wrap, with no sideways scroll.
+    await page.setViewportSize({width: 390, height: 844});
+    await open();
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), 'no sideways scroll on a phone');
     // The first-run step is the same form.
     const first = await page.evaluate(() => providersFormHTML({presets: ['subscriptions-gateway', 'subscriptions', 'gateway', 'own-keys'],
       providers: [], enabled: []}, [], 'onb-prov'));
