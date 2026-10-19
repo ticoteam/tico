@@ -51,6 +51,10 @@ All notable changes to Tico are recorded here. The format follows
   failed check (over 1.5 s) sends the message in the same session with no line.
 
 ### Fixed
+- Work waiting while its computer updates now says so: once a computer due an update stops taking new work (20
+  minutes after the update fell due, until its running turns end), a message or task for its bots shows **Waiting for
+  the computer to update** in the chat and on the task instead of Queued, and Health says since when the computer has
+  taken no new work. How the update waits is unchanged ([Updates](docs/updates.md)).
 - **The sidebar around first-run setup**: while the setup wizard is open, the sidebar shows only **Finish setup** and
   the team, not the app's pages or **What's new** (on a phone the bottom bar drops Tasks and Updates). A new company's
   owner starts with nothing unread in What's new. In the team list, words a bot's name shares with another bot's (the
@@ -87,6 +91,10 @@ All notable changes to Tico are recorded here. The format follows
   before this keeps today's behaviour ([sessions](docs/sessions.md)).
 
 ### Changed
+- **Updates cards use icons**: Reply, Mark unread (or read) and Archive (Restore in the Archive) are icons, named by a
+  tooltip, a long press on a phone and screen readers. A card's reports open from **8** and a chevron at the right end
+  of its icon row, in place of the **8 reports** row under it and its broken glyph, and open reports hang from the
+  card on one line with an elbow into each card, the same at every level.
 - **First run, computer step**: one numbered path (make the code, then the line that uses it), with the plain
   `docker run` alternative behind **Other ways**, closed. After **Add computer** the one-time code shows in large type
   on the screen, not only in a toast. Commands wrap inside their box on a phone and on a desktop, with **Copy** in the box.

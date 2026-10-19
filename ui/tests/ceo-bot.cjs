@@ -11,21 +11,23 @@ const {unrouted} = require('./support/routes.cjs');
 const bot = (name, display_name, org_parent, over) => ({name, display_name, org_parent, host: 'keeper', status: 'active', can_chat: true, ...over});
 // What the server sends either way: with the switch on it has renamed the bot and hung the Heads, and the Head's
 // department (Marketing), under it.
-const bots = on => [
+const bots = (on, home) => [
   bot('coo', 'Assistant', 'p:ana'), bot('botops', 'BotOps', 'b:coo'), bot('librarian', 'Librarian', 'p:ana'),
   bot('goal-manager', on ? 'CEO Bot' : 'Goal Manager', 'p:ana', {reports_to: ''}),
   bot('cmo', 'Head of Marketing', on ? 'b:goal-manager' : 'p:ana', {reports_to: '', team: 'marketing'}),
   bot('seo', 'SEO', 'b:cmo', {reports_to: 'cmo', team: 'marketing'}),
-  bot('scribe', 'Scribe', on ? 'b:goal-manager' : 'p:ana', {reports_to: ''}),
+  bot('scribe', 'Scribe', on ? 'b:goal-manager' : 'p:ana', {reports_to: '', ...(home ? {team: 'home'} : {})}),
 ];
-const groups = on => [{id: 'marketing', name: 'Marketing', reports_to: '', parent: '', org_parent: on ? 'b:goal-manager' : '', order: 0}];
+// With `home`, the owner and Scribe are in a group of their own, which the server never hangs under the CEO Bot.
+const groups = (on, home) => [{id: 'marketing', name: 'Marketing', reports_to: '', parent: '', org_parent: on ? 'b:goal-manager' : '', order: 0},
+  ...(home ? [{id: 'home', name: 'Home', reports_to: '', parent: '', org_parent: '', order: 1}] : [])];
 
-async function open(browser, server) {
-  const page = await browser.newPage({viewport: {width: 1440, height: 900}, serviceWorkers: 'block'});
+async function open(browser, server, width = 1440) {
+  const page = await browser.newPage({viewport: {width, height: 900}, serviceWorkers: 'block'});
   const errors = [];
   page.on('pageerror', e => errors.push(e.message));
   await page.route('**/*', async route => {
-    const req = route.request(), url = new URL(req.url()), p = url.pathname, on = server.on;
+    const req = route.request(), url = new URL(req.url()), p = url.pathname, on = server.on, home = !!server.home;
     const json = body => route.fulfill({status: 200, contentType: 'application/json', body: JSON.stringify(body)});
     if (url.origin !== 'http://tico-ui.test') return route.abort();
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
@@ -33,9 +35,9 @@ async function open(browser, server) {
     if (ui) { const file = uiFile(ui[1]); if (fs.existsSync(file)) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(file, 'utf8')}); }
     if (p === '/api/v2/events') return;
     if (p === '/api/v2/config') return json({ceo_bot: on});
-    if (p === '/api/employees') return json(bots(on));
+    if (p === '/api/employees') return json(bots(on, home));
     if (p === '/api/me') return json({id: 'ana', name: 'Ana Silva', email: 'ana@example.test', role: 'owner', mover: true, cloud: true, config: {ceo_bot: on}});
-    if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana Silva', org_parent: ''}], org_groups: groups(on)});
+    if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana Silva', org_parent: '', ...(home ? {team: 'home'} : {})}], org_groups: groups(on, home)});
     if (p === '/api/status') return json({active: [], employees: []});
     if (p === '/api/v2/status') return json({bots: []});
     if (p === '/api/v2/goals/tree') return json({goals: [], owners: {}, other_kpis: [], proposals: []});
@@ -118,6 +120,22 @@ async function flip(page, server, on) {
       await flip(page, server, false);
       await checkOff(page);
       assert.equal(await draft.inputValue(), 'Move the launch goal to May');
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+    // The owner in a group of their own, with a bot that has no manager: the CEO Bot still hangs under the owner, and
+    // that bot leaves the owner's group for the CEO Bot's branch, at desktop and phone widths.
+    for (const width of [1280, 390]) {
+      const server = {on: true, home: true};
+      const {page, errors} = await open(browser, server, width);
+      assert.deepEqual(await above(page, 'b:goal-manager'), ['p:ana', 'g:home'], `${width}: the CEO Bot under the owner`);
+      assert.deepEqual(await above(page, 'b:scribe'), ['b:goal-manager', 'p:ana', 'g:home'], `${width}: Scribe under the CEO Bot`);
+      assert.deepEqual(await above(page, 'b:seo'), ['b:cmo', 'g:marketing', 'b:goal-manager', 'p:ana', 'g:home']);
+      assert.deepEqual(await goalLines(page), ['group:Home@0', 'bot:goal-manager@2', 'bot:scribe@3', 'group:Marketing@3', 'bot:cmo@4', 'bot:seo@5']);
+      await flip(page, server, false);
+      assert.deepEqual(await above(page, 'b:scribe'), ['p:ana', 'g:home'], `${width}: off, Scribe back in the owner's group`);
+      assert.deepEqual(await above(page, 'g:marketing'), []);
+      assert.deepEqual(await goalLines(page), ['group:Marketing@0', 'bot:cmo@1', 'bot:seo@2', 'group:Home@0', 'bot:scribe@2']);
       assert.deepEqual(errors, []);
       await page.close();
     }
