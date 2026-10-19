@@ -302,7 +302,7 @@ private GitHub repositories.
 
 ## Developer notes
 
-The suite is small on purpose and runs locally; GitHub Actions does not run tests. Write tests while you build if they help, then keep only the few that
+The suite is small on purpose. Run it locally; GitHub Actions also runs the default suite on every pull request to main and every push to main (PR checks). Write tests while you build if they help, then keep only the few that
 guard what matters most: security and privacy boundaries, data safety (migrations, backup, restore),
 the updater and release path, and core contracts (job claim and lease, task writes, chat, the API
 schema), plus one happy path per major feature. The default Python suite runs in about a minute on a laptop;

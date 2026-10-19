@@ -25,7 +25,7 @@ from . import go_live as pending_go_lives
 from . import repo_waits
 from . import built_on
 from . import agents, app_delivery, batch, external_sync, inbox_isolation, mcp_oauth, harness_actions, model_login, oidc, personal_tokens, views
-from . import check_models, run_triggers, team_rules, update_feeds, usage_limits, wake_presets
+from . import check_models, run_triggers, team_rules, update_feeds, topic_change, usage_limits, wake_presets
 from . import task_privacy as privacy
 from . import task_relations as TR
 from . import task_roles as TRo
@@ -37,7 +37,7 @@ from . import models as M
 from .auth import LOCAL_COOKIE, LOCAL_COOKIE_DAYS, LOCAL_SIGNIN_PATH, LOGOUT_PATH, Auth, Identity
 from .config import Settings
 from .observability import Observability, browser_config, staff_display_name
-from .execution import Execution, bot_repository, clear_limits
+from .execution import Execution, bot_repository, bump_bot_session_epoch, clear_limits
 from .onboarding import BOTOPS, Onboarding
 from .recruit import Recruiter
 from . import rooms
@@ -46,6 +46,7 @@ from . import names as actor_names
 from .openapi_v2 import STABLE as STABLE_ROUTES
 from .route_renames import old_paths as old_route_paths
 from . import updates
+from . import gateway_connection
 from . import providers as Providers
 from . import access as Access
 from . import releases, runner_versions, ui_bundle
@@ -75,6 +76,7 @@ STABLE_PATH = re.compile("|".join(re.sub(r"\\\{[^}]+\\\}", "[^/]+", re.escape(sp
 
 def reset_bot_sessions(c, bot):
     """Keep durable history while fencing local provider sessions for one bot."""
+    bump_bot_session_epoch(c, bot)
     reset = 0
     for conversation in c.execute("SELECT id,participants_json FROM conversations").fetchall():
         if "bot:" + bot not in json.loads(conversation["participants_json"]):
@@ -113,6 +115,14 @@ def create_app(settings=None):
         from . import company_storage
         company_storage.startup(store, app.state.vault, app.state.blobs)
         asyncio.get_running_loop().run_in_executor(None, auth.warm)   # Cloudflare's keys, before anyone signs in
+        # TICO_SAMPLE_COMPANY=on: a new company starts as the sample company, once (backend/sample_company.py).
+        if settings.sample_company:
+            try:
+                from . import sample_company
+                with store.transaction() as c:
+                    sample_company.load_on_start(onboarding, c)
+            except Exception as exc:
+                telemetry.capture("sample_company", exc)
         # A company from before the Librarian was built in gets it on update, once it can run it.
         try:
             with store.transaction() as c:
@@ -221,6 +231,10 @@ def create_app(settings=None):
         import threading
         copy_stop = threading.Event()
         copy_task = asyncio.create_task(asyncio.to_thread(app.state.blobs.storage_loop, store, copy_stop))
+        # Answers an older server stored get their quoted-message index, beside the server (backend/idempotency_messages.py).
+        from . import idempotency_messages
+        index_stop = threading.Event()
+        index_task = asyncio.create_task(asyncio.to_thread(idempotency_messages.backfill_store, store, index_stop))
         media_task = asyncio.create_task(asyncio.to_thread(app.state.file_metadata.loop))
         demo_task = None
         if settings.demo:
@@ -236,10 +250,12 @@ def create_app(settings=None):
                 screen_sessions.http.close()
             app.state.doc_sources.stop.set()
             copy_stop.set()
+            index_stop.set()
             app.state.file_metadata.stop.set()
             app.state.file_metadata.wake.set()
             # The storage probe observes copy_stop even while its bounded SDK call is in flight.
             await copy_task
+            await index_task
             await media_task
             app.state.github_app.repository_stop.set()
             if demo_task:
@@ -1297,6 +1313,50 @@ def create_app(settings=None):
             return Providers.view(after)
         return mutate(request, body, work)
 
+    @app.get("/api/v2/providers/gateway")
+    def gateway_view(request: Request):
+        """The Tico AI Gateway connection: whether it is set and where from. Its preview and the Gateway's last word on
+        the key (working, revoked, the month's cap) only to the owner, who manages it. Never the key."""
+        who = request.state.identity
+        auth.domain(who)
+        if who.role == "owner":
+            gateway_connection.check_soon(store, app.state.vault, settings)   # the page's answer is the last check's
+        with store.read() as c:
+            return gateway_connection.view(c, settings, manage=who.role == "owner")
+
+    @app.put("/api/v2/providers/gateway")
+    def gateway_save(request: Request, body: M.GatewayConnectionSave):
+        """Save the gateway key (and URL), then ask the Gateway about it. The owner only; the key is sealed at once and
+        is never in a response, an event or the idempotency table (this route keeps no receipt)."""
+        who = request.state.identity
+        auth.domain(who)
+        vault = app.state.vault
+        with store.transaction() as c:
+            gateway_connection.save(c, vault, who, {"key": body.key.get_secret_value() if body.key else "",
+                                                    "url": body.url, "expected_revision": body.expected_revision},
+                                    H.now(), settings)
+        gateway_connection.check_now(store, vault, settings)
+        with store.read() as c:
+            return gateway_connection.view(c, settings, manage=True)
+
+    @app.delete("/api/v2/providers/gateway")
+    def gateway_clear(request: Request):
+        who = request.state.identity
+        auth.domain(who)
+        with store.transaction() as c:
+            gateway_connection.clear(c, who, H.now(), settings)
+            return gateway_connection.view(c, settings, manage=True)
+
+    @app.post("/api/v2/providers/gateway/check")
+    def gateway_check(request: Request):
+        """Check now: ask the Gateway whether the key works and how much of its cap is used."""
+        who = request.state.identity
+        auth.domain(who)
+        gateway_connection.owner_only(who)
+        gateway_connection.check_now(store, app.state.vault, settings)
+        with store.read() as c:
+            return gateway_connection.view(c, settings, manage=True)
+
     # ------------------------------------------------------------------ people and access
     def owner_only(who, what):
         auth.domain(who)
@@ -1403,9 +1463,14 @@ def create_app(settings=None):
 
     @app.put("/api/v2/access/rules")
     def access_rules(request: Request, body: M.AccessRules):
-        """Turn the team's fast defaults off, or back on (backend/team_rules.py). The owner."""
+        """Turn the team's fast defaults off, or back on (backend/team_rules.py). The owner; an admin may change only
+        the rules in `team_rules.ADMIN_RULES` (Stale ticket review, Start fresh when the topic changes)."""
         who = request.state.identity
-        owner_only(who, "changes the team's rules")
+        sent = {name for name, value in body.model_dump().items() if value is not None}
+        if sent and sent <= set(team_rules.ADMIN_RULES):
+            admin_only(who, "changes " + ", ".join(sorted(sent)))
+        else:
+            owner_only(who, "changes the team's rules")
         result = mutate(request, body, lambda c: team_rules.save(c, who.actor, body.model_dump()))
         with store.read() as c:
             auth.sync_access(c)          # who is a credential administrator follows the rule
@@ -1474,11 +1539,29 @@ def create_app(settings=None):
         with store.read() as c:
             return {"cards": onboarding.catalog(c)}
 
+    @app.get("/api/v2/ceo-bot")
+    def ceo_bot_switch(request: Request):
+        """The CEO Bot rollout switch (backend/ceo_bot.py)."""
+        auth.domain(request.state.identity)
+        from . import ceo_bot
+        with store.read() as c:
+            return ceo_bot.view(c)
+
+    @app.post("/api/v2/ceo-bot")
+    def ceo_bot_switch_set(request: Request, body: M.CeoBotSwitch):
+        """Owners and admins flip it at runtime, no release; a bot never does, the Goal Manager included."""
+        who = request.state.identity
+        admin_only(who, "turns the CEO Bot on or off")
+        from . import ceo_bot
+        return mutate(request, body, lambda c: ceo_bot.set_on(c, who.actor, body.on))
+
     @app.post("/api/v2/goal-manager/turn-on")
     def turn_on_goal_manager(request: Request, body: M.Empty):
         who = request.state.identity
         if who.role != "owner":
-            raise Problem("forbidden", "Only the owner turns the Goal Manager on", 403)
+            from . import ceo_bot
+            with store.read() as c:
+                raise Problem("forbidden", "Only the owner turns the " + ceo_bot.name(c) + " on", 403)
         return mutate(request, body, lambda c: onboarding.turn_on_goal_manager(c, who))
 
     @app.get("/api/v2/onboarding")
@@ -1508,6 +1591,13 @@ def create_app(settings=None):
     def onboarding_complete(request: Request, body: M.Empty):
         who = request.state.identity
         return mutate(request, body, lambda c: onboarding.complete(c, who))
+
+    @app.post("/api/v2/onboarding/sample")
+    def onboarding_sample(request: Request, body: M.Empty):
+        """Start as Tico's sample company (backend/sample_company.py): five bots with short starter tasks. The owner,
+        on a company not set up yet; it answers like `complete`."""
+        who = request.state.identity
+        return mutate(request, body, lambda c: onboarding.start_sample(c, who))
 
     @app.get(LOCAL_SIGNIN_PATH)
     def local_signin(token: str = "", next: str = "/"):
@@ -1766,7 +1856,13 @@ def create_app(settings=None):
             access = auth.bot_accesses(c, who)
             roster, configs = views.roster(c), views.entries(c)
             archived = {row["slug"] for row in H.bots(c) if row.get("state") == "archived"}
-            view = P.org_view(roster, configs, archived, person_id=person or "", team=team or "")
+            # The CEO Bot switch moves bots on the chart only; each keeps the `reports_to` it has (backend/ceo_bot.py).
+            from . import ceo_bot
+            chart = ceo_bot.chart_entries(c, settings, roster, configs, archived)
+            view = P.org_view(roster, chart, archived, person_id=person or "", team=team or "")
+            view["org_groups"] = ceo_bot.chart_groups(roster, configs, chart, view["org_groups"], archived)
+            for row in view["bots"]:
+                row["reports_to"] = P._clean((configs.get(row["id"]) or {}).get("reports_to"))
             live = {row["slug"]: row for row in H.bots(c)}
             bots = []
             by_id = {row["id"]: row for row in view["bots"]}
@@ -2050,12 +2146,36 @@ def create_app(settings=None):
 
     @app.post("/api/v2/chat/{bot}")
     def chat(request: Request, bot: str, body: M.ChatCreate):
+        who = request.state.identity
+        # A person's message in their direct chat: a new topic clears the session first (backend/topic_change.py).
+        topic = topic_check(request, who, bot, body)
+
         def work(c):
-            who = request.state.identity
+            cleared = topic_change.apply(c, settings, who, bot, topic)
             message = send(c, who, M.MessageCreate(to="bot:" + bot, text=body.text, refs=body.refs, command=body.command))
+            if cleared:
+                message = topic_change.record(c, who, message, topic)
             onboarding.start_setup(c, who, bot)
             return {"conversation": H.conversation(c, message["conversation_id"]), "message": message}
         return mutate(request, body, work)
+
+    def topic_check(request, who, bot, body):
+        """The topic check's outcome for a person's chat message, or None: not a person, a command, a retried request
+        (its first try already decided), or a bot whose chat is another's (a shared or the Assistant's)."""
+        if who.role not in ("owner", "human") or who.via or body.command or (body.refs or {}).get("task"):
+            return None
+        key, path = request.headers.get("idempotency-key"), request.url.path
+        if not key:
+            return None
+
+        def admit(c):                         # read with the gate, inside the check's time budget
+            from .shared_bots import route
+            if c.execute("SELECT 1 FROM idempotency WHERE actor=? AND operation=? AND key=?",
+                         (who.actor, path, key)).fetchone():
+                return False
+            target = H.actor_id(route(c, who.actor, "bot:" + bot))
+            return target == bot and bot != settings.assistant_bot and views.may_chat(c, auth, who, bot)
+        return topic_change.check(store, app.state.judge, who, bot, body.text, admit)
 
     # ------------------------------------------------------------------ updates (backend/updates.py)
     def update_visible(c, who, mine=False, scope=None):
@@ -2713,7 +2833,7 @@ def create_app(settings=None):
         if not room or room.get("task_id") != row["id"] or not owner.startswith("bot:"):
             return None
         from .views import conversation_execution
-        return conversation_execution(c, cid, who, settings, bot=owner.removeprefix("bot:"))
+        return conversation_execution(c, cid, who, settings, bot=owner.removeprefix("bot:"), auth=auth)
 
     def task_runs(c, who, tid, limit=200):
         """The runs that worked this task, each with the model that actually ran it (`ran_on`). A review that
@@ -4053,9 +4173,10 @@ def create_app(settings=None):
         # `screen_v1`: this server takes the capability and `readiness.screen` (an older one refuses the heartbeat).
         # `limit_resets_at`: a run's result may say when its usage limit resets (an older one refuses the field).
         # `usage_requests`: a run's usage may carry each model request's tokens (an older one refuses the field).
+        # `usage_request_main`: ... and a fourth count marking the bot's own requests (an older one refuses it).
         return {**runner_versions.desired(), "features": {"task_files_multipart": True, "runner_commit": True,
                                                           "screen_v1": True, "limit_resets_at": True,
-                                                          "usage_requests": True}}
+                                                          "usage_requests": True, "usage_request_main": True}}
 
     @app.get("/api/v2/runners/assignments")
     def assigned(request: Request):
@@ -5150,6 +5271,8 @@ def create_app(settings=None):
     install_sql(app, store, auth)
     from .judge import install_judge
     install_judge(app, store, auth)
+    from . import stale_review
+    stale_review.install(app, store, auth, mutate)
     from .live_meetings import install_live_meetings
     install_live_meetings(app, store, auth, mutate)
     from .mail import install_mail

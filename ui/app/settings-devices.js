@@ -308,6 +308,15 @@ function machineKeyHTML(machine, runtime, key) {
 // Replace key / Clear key, or Add key, from the shared sign-in module (ui/model-login.js).
 const machineKeyActions = (machine, online, runtime, key, signedIn) => window.TicoModelLogin?.keyActionsHTML({
   runnerId: machine.id, runtime, machine: machine.label, key, signedIn, online}) || '';
+// A sign-in several of the computer's bots run on (`shared_logins`, backend/views.py shared_logins), for a harness whose
+// login serves one run at a time (`one_turn_per_login`): those bots take turns, so it says so beside that login.
+function machineSharedLoginHTML(machine, runtime, profile = '') {
+  const row = (machine?.shared_logins || []).find(r => r.runtime === runtime && (r.profile || '') === profile);
+  if (!row) return '';
+  const names = (row.bots || []).map(settingsBotName), more = row.count - names.length;
+  const who = names.length ? ` (${names.join(', ')}${more > 0 ? ` and ${more} more` : ''})` : '';
+  return `<span class="muted machine-shared-login" data-shared-login="${esc(runtime)}:${esc(profile)}">${row.count} bots share this sign-in${esc(who)}. They take turns: one ${esc(harnessWords(runtime))} run at a time.</span>`;
+}
 function machineProfileSignIn(state, runtime) {
   if (state?.signed_in === true) return machineAccountHTML(state.account, runtime);
   if (state?.signed_in === false) return '<span class="pill fail">Signed out</span>';
@@ -362,14 +371,14 @@ function machineToolsHtml(machine, online) {
       return `<div class="machine-tool machine-tool-profile" role="row" data-machine-profile="${esc(p.name)}" data-machine-tool="${esc(name)}">
         <span role="cell" class="machine-tool-name" title="Named subscription ${esc(p.display_name || p.name)}">${esc(p.display_name || p.name)}</span>
         <span role="cell" class="machine-tool-version"></span><span role="cell" class="machine-tool-enabled"></span>
-        <span role="cell" class="machine-tool-signin">${machineProfileSignIn(state, name)}${signIn}</span>
+        <span role="cell" class="machine-tool-signin">${machineProfileSignIn(state, name)}${signIn}${machineSharedLoginHTML(machine, name, p.name)}</span>
         <span role="cell" class="machine-tool-usage">${state.signed_in === false ? '<span class="muted">—</span>' : machineUsageHTML(name, state, `${label} ${p.display_name || p.name}`, 'this subscription')}</span></div>`;
     }).join('') : '';
     return `<div class="machine-tool" role="row" data-machine-tool="${esc(name)}">
       <span role="cell" class="machine-tool-name">${esc(label)}</span>
       <span role="cell" class="machine-tool-version"${version ? ` title="${esc(version)}"` : ''}>${installed ? esc(version || 'Installed') : '<span class="muted">Not installed</span>'}</span>
       <span role="cell" class="machine-tool-enabled"${botRuntimes.has(name) ? ' title="Its bots use it"' : ''}>${enabled ? esc(enabled) : '<span class="muted">—</span>'}</span>
-      <span role="cell" class="machine-tool-signin">${signIn}${action}${rejected}</span>
+      <span role="cell" class="machine-tool-signin">${signIn}${action}${rejected}${installed ? machineSharedLoginHTML(machine, name) : ''}</span>
       <span role="cell" class="machine-tool-usage">${own}</span></div>${lines}`;
   }).join('');
   if (!rows) return '';
@@ -468,7 +477,7 @@ function renderSettingsMachines() {
       <td data-label="Operator">${esc(settingsPersonName(machine.operator))}${!machine.revoked_at && machine.accepts_member_bots ? '<span class="settings-cell-note">Accepts members\' bots</span>' : ''}</td>
       <td data-label="Bots">${bots.length ? `<a href="#/settings" class="machine-bots" data-computer-bots="${esc(machine.id)}" title="${esc(botNames.join(', '))}"><strong>${bots.length} bot${bots.length === 1 ? '' : 's'}</strong><span class="settings-cell-note">${esc(botNames.join(', '))}</span></a>` : '<span class="muted">No bots</span>'}${failures ? `<span class="settings-cell-note err">${failures} not ready</span>` : ''}</td>
       <td data-label="AI tools"><div class="machine-runtime">${tools || '<span class="muted">No AI tools reported</span>'}</div>${machineAppsHtml(machine)}${harnesses ? `<details data-machine-details="${esc(machine.id)}:tools"><summary>Installation and updates</summary><p class="settings-cell-note">Enabled tools stay installed. Sign-in status is shown above.</p><div class="machine-harnesses">${harnesses}</div></details>` : ''}</td>
-      <td data-label="Status"><span class="machine-status"><span class="dot ${status[0]}" aria-hidden="true"></span>${status[1]}${machine.last_seen ? `<span class="muted"> · ${esc(ago(machine.last_seen))}</span>` : ''}</span>${machineScreenHTML(machine)}</td>
+      <td data-label="Status"><span class="machine-status"><span class="dot ${status[0]}" aria-hidden="true"></span>${status[1]}${machine.last_seen ? `<span class="muted"> · ${esc(ago(machine.last_seen))}</span>` : ''}</span>${online && machine.restarting ? `<span class="settings-cell-note" data-machine-restarting title="${esc(`Since ${machine.restarting.slice(0, 16).replace('T', ' ')} UTC`)}">Restarting: it starts new work once its running turns end</span>` : ''}${machineScreenHTML(machine)}</td>
       <td class="settings-row-actions"><div class="people-cell-more">${menu ? `<button class="people-more" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="More for ${esc(machine.label)}"><span class="nav-icon" aria-hidden="true">more_horiz</span></button><div class="people-menu" role="menu" hidden>${menu}</div>` : ''}</div></td></tr>`;
   }).join('');
   el.onchange = async event => {

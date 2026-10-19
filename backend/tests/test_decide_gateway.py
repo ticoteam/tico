@@ -4,7 +4,12 @@ every step. All against a fake Gateway, a fake TypeSafe and a fake Anthropic: no
 
 import io
 import json
+import socketserver
+import ssl
+import threading
+import time
 import urllib.error
+import urllib.request
 from pathlib import Path
 
 import pytest
@@ -117,7 +122,8 @@ class Trickle(io.BytesIO):
 @pytest.fixture
 def net(monkeypatch):
     internet = Internet()
-    monkeypatch.setattr("urllib.request.urlopen", internet)
+    monkeypatch.setattr("clients.judge.urlopen", internet)       # what every decision transport opens with
+    monkeypatch.setattr("clients.judge.gateway_open", internet)  # the Gateway's own (no redirect, no loopback proxy)
     return internet
 
 
@@ -207,6 +213,19 @@ def test_when_the_gateway_fails_the_own_key_answers_then_the_team_llm_then_decid
     assert r.status_code == 503 and r.json()["error"]["code"] == "judge_unavailable"
     assert SECRET not in r.text and SECRET not in json.dumps(audits(api))
     assert len(net.calls(GATEWAY_URL)) == 3, "the Gateway gets one try per call, never a retry"
+
+
+@pytest.mark.parametrize("only", ["gateway key, 401", "own TypeSafe key, 403"])
+def test_a_revoked_key_with_no_provider_after_it_is_decide_off_and_the_caller_carries_on(api, monkeypatch, net, only):
+    gateway_only = only.startswith("gateway")
+    wire(api, monkeypatch, gateway_key="gw-synthetic" if gateway_only else "",
+         own_key="" if gateway_only else "ts-synthetic", team_llm=False)
+    net.fail[GATEWAY_URL if gateway_only else J.URL] = 401 if gateway_only else 403
+    r = ask(api)
+    assert r.status_code == 503 and r.json()["error"]["code"] == "judge_unavailable", r.text
+    assert (len(net.calls(GATEWAY_URL)), len(net.calls(J.URL))) == ((1, 0) if gateway_only else (0, 1))
+    assert audits(api)[-1]["error"] == "auth", "the audit still tells an admin the key was refused"
+    assert SECRET not in r.text
 
 
 def test_without_an_own_key_a_failed_gateway_goes_straight_to_the_team_llm(api, monkeypatch, net):
@@ -327,7 +346,7 @@ def test_an_unusable_answer_is_still_paid_for_and_counted_toward_the_cap_with_th
     # reaches the cap the next call asks no one.
     net.fail[ANTHROPIC] = "shape"
     r = ask(api)
-    assert r.status_code == 502 and r.json()["error"]["code"] == "judge_shape" and B._RESERVED[0] == 0
+    assert r.status_code == 503 and r.json()["error"]["code"] == "judge_unavailable" and B._RESERVED[0] == 0
     assert [(row["model"], row.get("unusable")) for row in spends(api)[2:]] == [
         ("tico-decide-1.0", True), ("claude-sonnet-5-5", True)]
     assert audits(api)[-1]["error"] == "shape" and audits(api)[-1]["cost_usd"] == round(0.000012 + llm_cost, 6)
@@ -462,6 +481,87 @@ def test_an_answer_that_trickles_in_is_cut_off_at_its_deadline_and_the_next_prov
     assert caught.value.code == "unavailable" and clock.now - start <= J.GATEWAY_TIMEOUT + 2
 
 
+def self_signed(tmp_path):
+    """A certificate for 127.0.0.1 that only this test trusts (SSL_CERT_FILE), and its key."""
+    import datetime
+    import ipaddress
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.x509.oid import NameOID
+    key = ec.generate_private_key(ec.SECP256R1())
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "127.0.0.1")])
+    now = datetime.datetime.now(datetime.timezone.utc)
+    cert = (x509.CertificateBuilder().subject_name(name).issuer_name(name).public_key(key.public_key())
+            .serial_number(1).not_valid_before(now - datetime.timedelta(days=1))
+            .not_valid_after(now + datetime.timedelta(days=1))
+            .add_extension(x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]), False)
+            .add_extension(x509.BasicConstraints(ca=True, path_length=None), True)
+            .add_extension(x509.KeyUsage(True, False, False, False, False, True, False, False, False), True)
+            .add_extension(x509.SubjectKeyIdentifier.from_public_key(key.public_key()), False)
+            .add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(key.public_key()), False)
+            .sign(key, hashes.SHA256()))
+    (tmp_path / "cert.pem").write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+    (tmp_path / "key.pem").write_bytes(key.private_bytes(serialization.Encoding.PEM,
+                                                         serialization.PrivateFormat.PKCS8,
+                                                         serialization.NoEncryption()))
+    return tmp_path / "cert.pem", tmp_path / "key.pem"
+
+
+class Dribble(socketserver.BaseRequestHandler):
+    """A peer that never finishes its headers: a status line, then a header byte every 0.1 s, over TLS when the
+    server has a `tls` context. Each wait is far under any socket timeout."""
+
+    def handle(self):
+        conn = self.request
+        try:
+            if self.server.tls:
+                conn = self.server.tls.wrap_socket(conn, server_side=True)
+            conn.settimeout(0.5)
+            conn.recv(65536)
+            conn.sendall(b"HTTP/1.1 200 OK\r\nX-Slow: ")
+            for _ in range(100):
+                time.sleep(0.1)
+                conn.sendall(b"a")
+        except (OSError, ssl.SSLError):
+            pass                                    # the client shut the connection: what the test wants
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("scheme", ["http", "https"])
+def test_a_peer_that_dribbles_its_headers_is_cut_at_the_deadline_and_the_next_provider_answers(monkeypatch, tmp_path,
+                                                                                               scheme):
+    server = socketserver.ThreadingTCPServer(("127.0.0.1", 0), Dribble)
+    server.daemon_threads, server.tls = True, None
+    if scheme == "https":
+        cert, key = self_signed(tmp_path)
+        server.tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        server.tls.load_cert_chain(cert, key)
+        monkeypatch.setenv("SSL_CERT_FILE", str(cert))
+        # The opener's TLS context reads the trusted certificates when it is built.
+        monkeypatch.setattr(J, "_OPENER", urllib.request.build_opener(J._HTTPHandler, J._HTTPSHandler))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    url = f"{scheme}://127.0.0.1:{server.server_address[1]}/v1/decisions"
+
+    def answers(state, questions, label=None):
+        return {"answers": answer_all(questions), "model": "next-provider"}
+    try:
+        monkeypatch.setattr(B, "CHAIN_SECONDS", 2.5)
+        start = time.monotonic()
+        result = B.ordered([J.gateway("gw-synthetic", url, timeout=1.2), answers])({"team": "Acme"}, QUESTIONS)
+        assert result["model"] == "next-provider" and result["fallback"] == "unavailable"
+        assert time.monotonic() - start < 1.2 + 1, "the attempt is cut at its own deadline"
+        # Every provider dribbling: the whole chain still ends by its deadline.
+        start = time.monotonic()
+        with pytest.raises(J.JudgeError) as caught:
+            B.ordered([J.gateway("gw-synthetic", url, timeout=1.2), J.gateway("gw-synthetic", url)])(
+                {"team": "Acme"}, QUESTIONS)
+        assert caught.value.code == "unavailable" and time.monotonic() - start < B.CHAIN_SECONDS + 1
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def test_every_client_that_asks_for_a_decision_waits_longer_than_the_chain_takes(monkeypatch):
     from clients import remotecli
     waits = []
@@ -556,3 +656,97 @@ def test_slack_routing_asks_the_gateway_first_and_audits_it(hub, monkeypatch, ne
     gw.tick()
     detail = json.loads(rows(hub, "SELECT detail_json FROM events WHERE action='judge.call'")[-1]["detail_json"])
     assert detail["provider"] == "TypeSafe" and len(net.calls(J.URL)) >= 1
+
+
+class _Recorder:
+    """A loopback HTTP server that keeps each request's (path, Authorization) and answers with `reply(handler)`."""
+
+    def __init__(self, reply):
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        calls = self.calls = []
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+
+            def _any(self):
+                self.rfile.read(int(self.headers.get("Content-Length") or 0))
+                calls.append((self.path, self.headers.get("Authorization", "")))
+                reply(self)
+            do_GET = do_POST = do_CONNECT = _any
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.url = f"http://127.0.0.1:{self.server.server_address[1]}"
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def close(self):
+        self.server.shutdown()
+        self.server.server_close()
+
+
+def _json(handler, status, payload):
+    body = json.dumps(payload).encode()
+    handler.send_response(status)
+    handler.send_header("Content-Type", "application/json")
+    handler.send_header("Content-Length", str(len(body)))
+    handler.end_headers()
+    handler.wfile.write(body)
+
+
+def _answers(handler):
+    _json(handler, 200, {"answers": answer_all(QUESTIONS), "model": "tico-decide-1.0"})
+
+
+def test_decide_sends_the_gateway_key_only_where_it_is_set_never_through_a_redirect_or_a_loopback_proxy(monkeypatch):
+    """Decide's Gateway transport holds the same line as the key check (clients/gateway.py): the key never follows a
+    redirect, a plain-http loopback Gateway is reached without the environment's proxy, and a URL that is neither
+    https nor this computer gets nothing (the next provider answers)."""
+    other = _Recorder(_answers)
+    moved = _Recorder(lambda h: (h.send_response(302), h.send_header("Location", other.url + "/v1/decisions"),
+                                 h.send_header("Content-Length", "0"), h.end_headers()))
+    gateway = _Recorder(_answers)
+    proxy = _Recorder(lambda h: _json(h, 502, {}))
+    try:
+        request = lambda url: urllib.request.Request(url, data=b"{}", method="POST",
+                                                     headers={"Authorization": "Bearer gw-synthetic"})
+        # Control: urllib's default opener follows the redirect and hands the key to the other server.
+        with J.urlopen(request(moved.url + "/v1/decisions"), timeout=5) as response:
+            response.read()
+        assert other.calls == [("/v1/decisions", "Bearer gw-synthetic")]
+        other.calls.clear()
+        moved.calls.clear()
+        with pytest.raises(J.JudgeError) as caught:
+            J.gateway("gw-synthetic", moved.url + "/v1/decisions")({"team": "Acme"}, QUESTIONS)
+        assert (caught.value.code, caught.value.status) == ("http", 302)
+        assert len(moved.calls) == 1 and other.calls == []
+
+        for name in ("no_proxy", "NO_PROXY"):
+            monkeypatch.delenv(name, raising=False)
+        for name in ("http_proxy", "HTTP_PROXY"):
+            monkeypatch.setenv(name, proxy.url)
+        # Control: with a proxy set and no loopback bypass, urllib sends a loopback request, key and all, to the proxy.
+        with pytest.raises(urllib.error.HTTPError):
+            urllib.request.build_opener().open(request(gateway.url + "/v1/decisions"), timeout=5)
+        assert proxy.calls and gateway.calls == []
+        proxy.calls.clear()
+        result = J.gateway("gw-synthetic", gateway.url + "/v1/decisions")({"team": "Acme"}, QUESTIONS)
+        assert result["provider"] == J.GATEWAY_PROVIDER
+        assert gateway.calls == [("/v1/decisions", "Bearer gw-synthetic")] and proxy.calls == []
+
+        seen = []
+
+        def spy(request, timeout=None):
+            seen.append(request.full_url)
+            raise AssertionError("nothing may be sent")
+
+        def answers(state, questions, label=None):
+            return {"answers": answer_all(questions), "model": "next-provider"}
+        for url in ("http://localhost.acme.example/v1/decisions", "http://127.0.0.1.acme.example/v1/decisions",
+                    "http://hq.example/v1/decisions", "https://user@hq.example/v1/decisions",
+                    "https://hq.example/v1/decisions?x=1"):
+            result = B.ordered([J.gateway("gw-synthetic", url, opener=spy), answers])({"team": "Acme"}, QUESTIONS)
+            assert result["model"] == "next-provider" and result["fallback"] == "unconfigured", url
+        assert seen == []
+    finally:
+        for server in (other, moved, gateway, proxy):
+            server.close()

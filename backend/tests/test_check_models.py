@@ -375,3 +375,105 @@ def test_a_check_skips_a_next_model_its_computer_cannot_run(api):
     out_of_quota(api, machine, check)
     moved = claim(api, machine)
     assert moved["task"]["id"] == sub["id"] and moved["config"]["runtime"] == "cursor", "Grok is signed out here"
+
+
+def limited_check(api):
+    """A Grok review whose first turn stopped on Grok's usage limit: its job back in the queue, held."""
+    machine, parent, sub = check_filed(api)
+    check = claim(api, machine)
+    assert check["task"]["id"] == sub["id"]
+    post(api, f"attempts/{check['id']}/started", {"thread_id": "grok-" + check["id"][:8]}, machine["token"])
+    post(api, f"attempts/{check['id']}/complete", {"outcome": "failed", "last_seq": 0, "limited": True, "text": ""},
+         machine["token"])
+    return machine, sub, check
+
+
+def check_held(api, check, hours=None):
+    """The Health Monitor's check_limited findings, with the check's limited turn `hours` old."""
+    from backend import health_monitor
+    store = api.app.state.store
+    with store.transaction() as c:
+        if hours is not None:
+            c.execute("UPDATE attempts SET finished=? WHERE id=?", (H.shift(H.now(), hours=-hours), check["id"]))
+        return [f for f in health_monitor.findings(c, store.settings) if f["check_id"] == "check_limited"]
+
+
+def queue_on(api, sub, sender, to="bot:ops", hours=0):
+    """A message to `to` on the check task, its job `hours` old: its id."""
+    with api.app.state.store.transaction() as c:
+        conv = H.task(c, sub["id"])["conversation_id"]
+        msg = H.say(c, sender, to, "One more thing on this review.", conversation_id=conv, refs={"task": sub["id"]})
+        c.execute("UPDATE jobs SET created=? WHERE message_id=?", (H.shift(H.now(), hours=-hours), msg["id"]))
+        return msg["id"]
+
+
+def test_a_check_its_limit_held_twelve_hours_is_one_setup_finding_until_a_turn_gets_past_it(api, monkeypatch):
+    machine, sub, check = limited_check(api)
+    # An older notice the claim has not handed out yet waits beside the job that keeps stopping.
+    queue_on(api, sub, H.KEEPER, hours=20)
+    assert check_held(api, check, hours=11) == []
+    [found] = check_held(api, check, hours=13)
+    with api.app.state.store.read() as c:
+        name = H.bot(c, "ops")["display_name"]
+        since = c.execute("SELECT finished FROM attempts WHERE id=?", (check["id"],)).fetchone()[0]
+    assert (found["key"], found["kind"]) == ("check_limited:" + sub["id"], "setup")
+    assert found["detail"].startswith(f"{name}'s check on Grok Build (grok-4.6) has been held by its usage limit for "
+                                      f"13 h (since {since[:16].replace('T', ' ')} UTC); Review PR 701 on Grok.")
+    assert found["fix"].startswith("BotOps: wait for Grok Build (grok-4.6)'s limit to reset; or switch the check model")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET private=1 WHERE id=?", (sub["id"],))
+    assert "; a private task." in check_held(api, check)[0]["detail"]
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET private=0 WHERE id=?", (sub["id"],))
+    # Past the reset the claim hands it out again; a turn that ends any other way than the limit clears it, even
+    # with the job back in the queue.
+    later(api, monkeypatch, machine, H.shift(H.now(), minutes=31))
+    again = claim(api, machine)
+    assert again["task"]["id"] == sub["id"]
+    post(api, f"attempts/{again['id']}/started", {"thread_id": "grok-" + again["id"][:8]}, machine["token"])
+    post(api, f"attempts/{again['id']}/complete", {"outcome": "failed", "last_seq": 0, "retryable": True, "text": ""},
+         machine["token"])
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT state FROM jobs WHERE id=?", (again["job_id"],)).fetchone()[0] == "queued"
+    assert check_held(api, check) == []
+
+
+@pytest.mark.parametrize("status", ["declined", "closed", "done"])
+def test_a_held_check_that_leaves_the_board_lets_its_queued_turn_go(api, monkeypatch, status):
+    machine, sub, check = limited_check(api)
+    execution = api.app.state.execution
+    person = queue_on(api, sub, "human:ana")
+    with api.app.state.store.transaction() as c:
+        assert check["job_id"] not in execution.hold_unrunnable(c), "an open check keeps its turn"
+        # The task left the board while held, or before this server started: the next tick lets the turn go.
+        c.execute("UPDATE tasks SET status=? WHERE id=?", (status, sub["id"]))
+        assert check["job_id"] in execution.hold_unrunnable(c)
+        assert c.execute("SELECT state FROM jobs WHERE id=?", (check["job_id"],)).fetchone()[0] == "cancelled"
+        event = c.execute("SELECT detail_json FROM events WHERE action='job.suppress' AND target=?",
+                          (check["job_id"],)).fetchone()
+        assert json.loads(event[0])["task_id"] == sub["id"]
+        assert check["job_id"] not in execution.hold_unrunnable(c), "once"
+        assert c.execute("SELECT state FROM jobs WHERE message_id=?", (person,)).fetchone()[0] == "queued"
+    assert check_held(api, check, hours=13) == []
+    later(api, monkeypatch, machine, H.shift(H.now(), minutes=31))
+    assert claim(api, machine)["job_id"] == person, "only the person's message is handed out"
+
+
+def test_a_declined_check_is_not_handed_out_before_the_tick_lets_it_go(api, monkeypatch):
+    machine, sub, check = limited_check(api)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET status='declined' WHERE id=?", (sub["id"],))
+    later(api, monkeypatch, machine, H.shift(H.now(), minutes=31))
+    assert claim(api, machine) is None
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT state FROM jobs WHERE id=?", (check["job_id"],)).fetchone()[0] == "queued"
+
+
+def test_a_held_check_handed_to_another_bot_is_its_ordinary_task_when_it_closes(api):
+    machine, sub, check = limited_check(api)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET owner='bot:finance',status='done' WHERE id=?", (sub["id"],))
+    follow_up = queue_on(api, sub, "bot:ops", to="bot:finance")
+    with api.app.state.store.transaction() as c:
+        assert api.app.state.execution.hold_unrunnable(c) == []
+        assert c.execute("SELECT state FROM jobs WHERE message_id=?", (follow_up,)).fetchone()[0] == "queued"

@@ -139,6 +139,10 @@ class Settings:
     owner_name: str = ""
     compose_project: str = "tico"
     server_network: str = "tico_default"
+    # TICO_HOSTED: a Tico our team runs for a company ("own" for our own team, "invited" for an invited company), set
+    # by the recommended preset; empty is self-hosted. Both behave the same for now: the person has no terminal on the
+    # server, so Settings > Computers signs models in with the provider's link and code only (ui/model-login.js).
+    hosted: str = ""
     access_issuer: str = ""
     access_audience: str = ""
     # Empty means Cloudflare Access's default JWKS path under the issuer.
@@ -230,6 +234,10 @@ class Settings:
     # Idea triage on the public roadmap's suggestion form (backend/idea_triage.py, questions/idea-triage.json): off by
     # default; when on, a confident bug or small change goes to Head of Engineering, everything else to product as before.
     decisions_idea_triage: bool = False
+    # TICO_SAMPLE_COMPANY=on: a new company starts as Tico's sample company (backend/sample_company.py,
+    # docs/sample-company.md), loaded once on the first start whose owner is on the roster. A set-up company is never
+    # touched. Only `on` turns it on (the recommended install's contract); unset or any other value leaves it off.
+    sample_company: bool = False
     # First-boot seed for the owner's AI provider choice (backend/providers.py). Once the
     # database holds a choice, these are never read again.
     enabled_providers: tuple[str, ...] = ()
@@ -264,6 +272,9 @@ class Settings:
     rehearsal: bool = False
 
     def __post_init__(self):
+        self.hosted = self.hosted.strip()
+        if self.hosted not in ("", "own", "invited"):
+            raise ValueError("TICO_HOSTED is own or invited, or unset for a self-hosted Tico")
         if self.screen_relay_url:
             relay = urlparse(self.screen_relay_url)
             if (len(self.screen_relay_key) < 32 or relay.scheme != "http" or not relay.hostname
@@ -330,7 +341,7 @@ class Settings:
                 "assistant_bot": self.assistant_bot, "public_url": self.public_url,
                 "runner_url": self.runner_url, "github_owner": self.github_owner,
                 "compose_project": self.compose_project, "server_network": self.server_network,
-                "local": self.local_signin, "release": self.release_id,
+                "local": self.local_signin, "hosted": self.hosted, "release": self.release_id,
                 "owner_email": self.owner_email, "owner_name": self.owner_name, "demo": self.demo, "rehearsal": self.rehearsal}
 
     def allows_origin(self, origin):
@@ -384,6 +395,7 @@ class Settings:
             owner_name=os.environ.get("TICO_OWNER_NAME", "").strip(),
             compose_project=os.environ.get("TICO_COMPOSE_PROJECT", "tico"),
             server_network=os.environ.get("TICO_SERVER_NETWORK", "tico_default"),
+            hosted=os.environ.get("TICO_HOSTED", ""),
             runner_url=os.environ.get("TICO_RUNNER_URL", "").rstrip("/"),
             screen_relay_url=os.environ.get("TICO_SCREEN_RELAY_URL", ""),
             screen_relay_key=os.environ.get("TICO_SCREEN_RELAY_KEY", ""),
@@ -445,6 +457,7 @@ class Settings:
             decisions_jev_usd_per_mtok_input=max(0.0, float(os.environ.get("TICO_DECISIONS_JEV_USD_PER_MTOK_INPUT", "") or 0.042)),
             decisions_jev_usd_per_mtok_output=max(0.0, float(os.environ.get("TICO_DECISIONS_JEV_USD_PER_MTOK_OUTPUT", "") or 0)),
             decisions_idea_triage=not rehearsal and os.environ.get("TICO_DECISIONS_IDEA_TRIAGE", "0") == "1",
+            sample_company=not rehearsal and os.environ.get("TICO_SAMPLE_COMPANY", "").strip().lower() == "on",
             enabled_providers=tuple(part.strip().lower() for part in
                                     os.environ.get("TICO_ENABLED_PROVIDERS", "").split(",") if part.strip()),
             default_runtime=os.environ.get("TICO_DEFAULT_RUNTIME", "").strip().lower(),

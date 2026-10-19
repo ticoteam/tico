@@ -35,6 +35,8 @@ class Scheduler:
         self.goals_checked = None
         self.go_lives_checked = None
         self.health_scanned = None
+        self.gateway_checked = None
+        self.stale_checked = None
 
     def tick(self, at=None):
         at = at or datetime.now(timezone.utc)
@@ -219,6 +221,28 @@ class Scheduler:
                     health_monitor.scan(c, self.execution.auth, self.store.settings)
             except Exception as exc:
                 failures.append({"health_monitor": type(exc).__name__})
+        if self.gateway_checked is None or at - self.gateway_checked >= timedelta(hours=1):
+            # Every hour, while a gateway key is set: the Tico AI Gateway's word on it (revoked, 80% of the month's cap,
+            # the cap reached), for Settings and Health. On its own thread: a tick never waits on the Gateway.
+            self.gateway_checked = at
+            try:
+                from . import gateway_connection
+                from .credentials import Vault
+                with self.store.read() as c:
+                    due = gateway_connection.connected(c, self.store.settings)
+                if due:
+                    gateway_connection.check_soon(self.store, Vault(self.store), self.store.settings)
+            except Exception as exc:
+                failures.append({"gateway": type(exc).__name__})
+        if self.stale_checked is None or at - self.stale_checked >= timedelta(minutes=5):
+            # Stale ticket review (backend/stale_review.py), while the team has it on: the watermark makes it hourly;
+            # the Decide calls run on the pass's own thread, never under this lock.
+            self.stale_checked = at
+            try:
+                from . import stale_review
+                stale_review.tick(self.store, stamp(at))
+            except Exception as exc:
+                failures.append({"stale_review": type(exc).__name__})
         if self.go_lives_checked is None or at - self.go_lives_checked >= timedelta(minutes=10):
             # A go-live waiting for a computer that never reports still ends, with its notice (backend/go_live.py).
             self.go_lives_checked = at
@@ -233,6 +257,12 @@ class Scheduler:
             self.stall_checked = at
             with self.store.transaction() as c:
                 H.wake_stalled(c, stamp(at))
+            # ...and queued jobs whose message their bot may no longer read, which no claim would ever take.
+            try:
+                with self.store.transaction() as c:
+                    self.execution.drop_unreadable(c)
+            except Exception as exc:
+                failures.append({"drop_unreadable": type(exc).__name__})
         if self.stranded is None or at - self.stranded >= timedelta(hours=1):
             # Every hour: bot tasks parked as waiting with nothing left to wait on.
             self.stranded = at

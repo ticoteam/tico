@@ -42,17 +42,24 @@ def test_the_decide_route_answers_and_audits_the_code_not_the_echoed_request(api
     api.app.state.judge = echoing()
     ask = {"state": {"ticket": SECRET}, "questions": QUESTIONS, "label": "mail-triage@1"}
     result = api.post("/api/v2/decisions", json=ask, headers=headers())
-    assert result.status_code == 422 and result.json()["error"]["code"] == "judge_invalid"
-    assert result.json()["error"]["detail"] == B.FAILED["invalid"] and "7Q4X" not in result.text
+    # TypeSafe's own 422 (the request passed the contract, so the refusal is the provider's) is Decide off for the call.
+    assert result.status_code == 503 and result.json()["error"]["code"] == "judge_unavailable"
+    assert result.json()["error"]["detail"].startswith(B.FAILED["invalid"]) and "7Q4X" not in result.text
     (target, detail), = events(api, "human:ana")
     assert target == "mail-triage@1" and detail["error"] == "invalid" and "detail" not in detail
     assert "7Q4X" not in json.dumps(detail)
 
-    # Every other branch, the spend cap included, keeps its status and says only its fixed sentence.
+    # Every other branch, the spend cap included, keeps its status and says only its fixed sentence. Any provider-side
+    # failure at the chain's end is Decide off for the call (503), whatever its code; the audit keeps the code.
     for error, status, code in ((J.JudgeError("spend_cap", SECRET), 429, "spend_cap"),
                                 (J.JudgeError("unavailable", SECRET, 503, retryable=True), 503, "judge_unavailable"),
-                                (J.JudgeError("http", SECRET, 418), 502, "judge_http"),
-                                (J.JudgeError(SECRET, SECRET), 502, "judge_unreadable")):
+                                (J.JudgeError("unconfigured", SECRET), 503, "judge_unconfigured"),
+                                (J.JudgeError("auth", SECRET, 401), 503, "judge_unavailable"),
+                                (J.JudgeError("invalid", SECRET, 422), 503, "judge_unavailable"),
+                                (J.JudgeError("http", SECRET, 418), 503, "judge_unavailable"),
+                                (J.JudgeError("not_found", SECRET, 404), 503, "judge_unavailable"),
+                                (J.JudgeError("shape", SECRET), 503, "judge_unavailable"),
+                                (J.JudgeError(SECRET, SECRET), 503, "judge_unavailable")):
         def failing(state, questions, label=None, error=error):
             raise error
         api.app.state.judge = failing

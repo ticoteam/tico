@@ -33,12 +33,16 @@ import it.
 import contextlib
 import contextvars
 import hashlib
+import http.client
 import json
 import math
 import os
+import socket
 import stat
+import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -167,10 +171,133 @@ def read_json(response):
 @contextlib.contextmanager
 def one_try(timeout):
     """One HTTP attempt: at most `timeout` seconds from its start to the last byte of its answer, and never past the
-    chain's deadline. Yields the socket timeout to open it with."""
+    chain's deadline. Yields the socket timeout to open it with. A connection `urlopen` makes inside it is shut at the
+    deadline whatever it is doing (connecting, TLS, headers, the answer), and its watch ends with the attempt."""
     seconds = time_left(timeout)
-    with within(seconds):
-        yield seconds
+    watches = []
+    token = _WATCHES.set(watches)
+    try:
+        with within(seconds):
+            yield seconds
+    finally:
+        _WATCHES.reset(token)
+        for watch in watches:
+            watch.cancel()
+
+
+# Each decision connection is shut when its attempt's deadline passes: urllib's timeout is per wait, so without this a
+# peer sending a byte now and then (in its TLS handshake or its headers, before any answer is read) could hold it open.
+_WATCHES = contextvars.ContextVar("tico_judge_watches", default=None)
+
+
+class _Watch:
+    """Shuts one connection at its deadline. It holds its own descriptor of the socket (`dup`): TLS wraps the plain
+    socket by detaching it, and a socket shut down through any of its descriptors is shut for all of them, so the
+    handshake, the headers and the answer are all cut. Its own descriptor also means it can never shut a later socket
+    that reused the number."""
+
+    def __init__(self, sock, seconds):
+        self._sock = sock.dup()
+        self._timer = threading.Timer(seconds, self._shut)
+        self._timer.daemon = True
+        self._timer.start()
+
+    def _shut(self):
+        try:
+            self._sock.shutdown(socket.SHUT_RDWR)   # a blocked read returns at once; the attempt fails `unavailable`
+        except OSError:
+            pass
+        self._sock.close()
+
+    def cancel(self):
+        self._timer.cancel()
+        self._timer.join()
+        self._sock.close()
+
+
+class _ByDeadline:
+    """An HTTP(S) connection whose socket is shut at the deadline in force when it connects (`within`)."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._create_connection = self._connect
+
+    def _connect(self, address, timeout=socket._GLOBAL_DEFAULT_TIMEOUT, source_address=None):
+        deadline = _DEADLINE.get()
+        if deadline is None:
+            return socket.create_connection(address, timeout, source_address)
+        left = deadline - clock()
+        if left <= 0:
+            raise TimeoutError("no time left to connect")
+        wait = min(timeout, left) if isinstance(timeout, (int, float)) else left
+        sock = socket.create_connection(address, wait, source_address)
+        watch = _Watch(sock, deadline - clock())
+        watches = _WATCHES.get()
+        if watches is not None:
+            watches.append(watch)
+        return sock
+
+
+class _HTTPByDeadline(_ByDeadline, http.client.HTTPConnection):
+    pass
+
+
+class _HTTPSByDeadline(_ByDeadline, http.client.HTTPSConnection):
+    pass
+
+
+class _HTTPHandler(urllib.request.HTTPHandler):
+    def http_open(self, req):
+        return self.do_open(_HTTPByDeadline, req)
+
+
+class _HTTPSHandler(urllib.request.HTTPSHandler):
+    def https_open(self, req):
+        return self.do_open(_HTTPSByDeadline, req, context=self._context)
+
+
+_OPENER = urllib.request.build_opener(_HTTPHandler, _HTTPSHandler)
+
+
+def urlopen(request, timeout):
+    """`urllib.request.urlopen` for the decision transports, with each connection held to its attempt's deadline."""
+    return _OPENER.open(request, timeout=timeout)
+
+
+# The only hosts the gateway key goes to over plain HTTP: this computer, named exactly (clients/gateway.py LOOPBACK).
+LOOPBACK = ("localhost", "127.0.0.1", "::1")
+
+
+def safe_gateway_url(url):
+    """`url` if the gateway key may be sent there, else None: HTTPS, or plain HTTP to an exact loopback host, with no
+    user, password, query or fragment. The host is parsed, not prefix-matched (clients/gateway.py `safe_base`)."""
+    url = str(url or "").strip()
+    if not url or any(ch in url for ch in " \t\r\n\0\\?#@"):
+        return None
+    try:
+        parts = urllib.parse.urlsplit(url)
+        host = parts.hostname or ""
+        parts.port
+    except ValueError:
+        return None
+    return url if parts.scheme == "https" and host or parts.scheme == "http" and host in LOOPBACK else None
+
+
+class _Unredirected(urllib.request.HTTPRedirectHandler):
+    """Never follows a redirect: urllib's would resend the key's Authorization header to wherever it points."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def gateway_open(request, timeout):
+    """`urlopen` for the Gateway's key, built for each call: a redirect is answered as the HTTP error it is, and plain
+    HTTP (only ever to this computer, `safe_gateway_url`) goes straight there, never through a proxy, which would get
+    the key in clear. HTTPS may use the environment's proxy, which only tunnels it."""
+    handlers = [_HTTPHandler, _HTTPSHandler, _Unredirected]
+    if urllib.parse.urlsplit(request.full_url).scheme == "http":
+        handlers.append(urllib.request.ProxyHandler({}))
+    return urllib.request.build_opener(*handlers).open(request, timeout=timeout)
 
 
 def time_left(timeout):
@@ -302,7 +429,7 @@ def direct(api_key, model=MODEL, timeout=TIMEOUT, opener=None, sleep=time.sleep,
     briefly, and falls back to the company's own model (backend/judge.py); a direct caller keeps the retries."""
     if not api_key:
         raise JudgeError("unconfigured", "no TypeSafe key")
-    opener = opener or urllib.request.urlopen
+    opener = opener or urlopen
 
     def engine(state, questions, label=None):
         validate(state, questions, label)
@@ -323,8 +450,8 @@ def direct(api_key, model=MODEL, timeout=TIMEOUT, opener=None, sleep=time.sleep,
                     detail = json.load(exc)
                 except ValueError:
                     detail = {}
-                if status == 401:
-                    raise JudgeError("auth", "TypeSafe refused the key", 401)
+                if status in (401, 403):
+                    raise JudgeError("auth", f"TypeSafe refused the key ({status})", status)
                 if status == 422:
                     raise JudgeError("invalid", str(detail.get("detail") or detail or "TypeSafe refused the request"), 422)
                 if status in (429, 529) or status >= 500:
@@ -333,7 +460,7 @@ def direct(api_key, model=MODEL, timeout=TIMEOUT, opener=None, sleep=time.sleep,
                         continue
                     raise JudgeError("unavailable", f"TypeSafe answered {status}", status, retryable=True)
                 raise JudgeError("http", f"TypeSafe answered {status}", status)
-            except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
+            except (urllib.error.URLError, http.client.HTTPException, TimeoutError, OSError, ValueError) as exc:
                 if attempt < retries:
                     sleep(BACKOFF[min(attempt, len(BACKOFF) - 1)])
                     continue
@@ -354,13 +481,16 @@ def direct(api_key, model=MODEL, timeout=TIMEOUT, opener=None, sleep=time.sleep,
 def gateway(api_key, url, model=GATEWAY_MODEL, timeout=GATEWAY_TIMEOUT, opener=None):
     """The Tico AI Gateway with a gateway key: one try of at most `timeout` seconds, no retry (the Gateway makes none
     either; the server falls back instead). A refusal keeps the HTTP status and a code, never the Gateway's text.
-    `opener(request, timeout)` is the seam the tests use."""
+    The key goes only to an https or exact-loopback `url` (`safe_gateway_url`), never follows a redirect, and reaches
+    a loopback URL without a proxy (`gateway_open`). `opener(request, timeout)` is the seam the tests use."""
     if not api_key or not url:
         raise JudgeError("unconfigured", "no Tico AI Gateway key or URL")
-    opener = opener or urllib.request.urlopen
+    opener = opener or gateway_open
 
     def engine(state, questions, label=None):
         validate(state, questions, label)
+        if not safe_gateway_url(url):                   # checked at use, so the next provider is asked instead
+            raise JudgeError("unconfigured", "the Tico AI Gateway URL is neither https nor this computer")
         body = {"state": state, "model": model, "questions": clean(questions)}
         if label:
             body["label"] = label
@@ -372,6 +502,8 @@ def gateway(api_key, url, model=GATEWAY_MODEL, timeout=GATEWAY_TIMEOUT, opener=N
                 payload = read_json(response)
         except urllib.error.HTTPError as exc:
             status = exc.code
+            if 300 <= status < 400:                     # not the Gateway's own answer: its key went no further
+                raise JudgeError("http", f"the Tico AI Gateway answered with a redirect ({status})", status)
             if status in (401, 403):                    # unknown or revoked key
                 raise JudgeError("auth", f"the Tico AI Gateway refused the key ({status})", status)
             if status in (402, 429, 529) or status >= 500:  # the Gateway's cap, a rate limit, or down
@@ -379,7 +511,7 @@ def gateway(api_key, url, model=GATEWAY_MODEL, timeout=GATEWAY_TIMEOUT, opener=N
             # A 422 too: the request passed `validate` here, so the Gateway disagreeing is its problem, not the
             # caller's, and the next provider is asked.
             raise JudgeError("http", f"the Tico AI Gateway answered {status}", status)
-        except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
+        except (urllib.error.URLError, http.client.HTTPException, TimeoutError, OSError, ValueError) as exc:
             raise JudgeError("unavailable", f"the Tico AI Gateway did not answer: {type(exc).__name__}",
                              retryable=True)
         ms = round((time.monotonic() - started) * 1000)
@@ -499,7 +631,7 @@ def llm(provider, api_key, model, timeout=TIMEOUT, opener=None):
     classifier: the probabilities are the model's stated ones. `opener` is the test seam."""
     if provider not in LLM_URLS or not api_key or not model:
         raise JudgeError("unconfigured", "no provider key or model for the decision model")
-    opener = opener or urllib.request.urlopen
+    opener = opener or urlopen
 
     def engine(state, questions, label=None):
         validate(state, questions, label)
@@ -514,7 +646,7 @@ def llm(provider, api_key, model, timeout=TIMEOUT, opener=None):
             raise JudgeError("unavailable" if exc.code in (429, 529) or exc.code >= 500 else "http",
                              f"{provider} answered {exc.code}", exc.code,
                              retryable=exc.code in (429, 529) or exc.code >= 500)
-        except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
+        except (urllib.error.URLError, http.client.HTTPException, TimeoutError, OSError, ValueError) as exc:
             raise JudgeError("unavailable", f"{provider} did not answer: {type(exc).__name__}", retryable=True)
         # An answer came back, so it was paid for, even when it cannot be used.
         usage = clean_usage((payload.get("usage") or payload.get("usageMetadata")) if isinstance(payload, dict) else None)

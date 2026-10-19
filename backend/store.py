@@ -11,6 +11,7 @@ import yaml
 
 from . import goals as G
 from . import hubdb as H
+from . import idempotency_messages
 from . import message_links
 from . import people as P
 from .harnesses import EXTERNAL_HARNESSES
@@ -76,6 +77,10 @@ CREATE TABLE IF NOT EXISTS settings_changes(
 CREATE INDEX IF NOT EXISTS settings_changes_created ON settings_changes(created);
 CREATE TABLE IF NOT EXISTS session_epochs(
  conversation_id TEXT PRIMARY KEY REFERENCES conversations(id), epoch INTEGER NOT NULL DEFAULT 0, updated TEXT NOT NULL);
+-- Moved by every clear or reset of one bot: a bot's direct chats share its one `bot` thread
+-- (clients/sessions.py), so one chat's Clear must reach the next turn of any of them.
+CREATE TABLE IF NOT EXISTS bot_session_epochs(
+ bot TEXT PRIMARY KEY REFERENCES bots(slug), epoch INTEGER NOT NULL DEFAULT 0, updated TEXT NOT NULL);
 -- Current provider thread for one bot+runtime+model. Local files hold the real
 -- context; this pointer lets a runner try resume, then fall back to a Hub pack.
 CREATE TABLE IF NOT EXISTS bot_sessions(
@@ -653,6 +658,8 @@ class Store:
             c.executescript(_memory_history.SCHEMA)
             from . import learnings as _learnings
             c.executescript(_learnings.SCHEMA)
+            from . import stale_review as _stale_review
+            c.executescript(_stale_review.SCHEMA)
             from . import docs as _docs
             _docs.ensure_schema(c, self.settings)
             from . import doc_sources as _doc_sources
@@ -684,6 +691,8 @@ class Store:
             from . import performance as _performance
             c.executescript(_performance.SCHEMA)
             _updates.purge_rejected(c)
+            # Which stored retry answers quote which message (backend/idempotency_messages.py).
+            idempotency_messages.ensure(c)
             c.execute("BEGIN IMMEDIATE")
             try:
                 # Who may see, read and write to each bot (backend/bot_access.py); NULL is Open.
@@ -702,6 +711,9 @@ class Store:
                 H.add_column(c, "runners", "screen_default_pending", "INTEGER NOT NULL DEFAULT 0")
                 # Performance diagnostics: on unless a person turns them off (backend/performance.py).
                 H.add_column(c, "runners", "performance", "TEXT NOT NULL DEFAULT 'on'")
+                # When a computer said it is restarting after a person pressed Restart, from its heartbeat; NULL once
+                # a heartbeat no longer says so (backend/health.py `restarting`).
+                H.add_column(c, "runners", "restart_since", "TEXT")
                 # A starter bot is `needs_onboarding` until it says its setup is done, then
                 # `onboarded`; NULL for every other bot (backend/onboarding.py).
                 H.add_column(c, "bot_config", "onboarding_state", "TEXT")
@@ -1169,6 +1181,10 @@ class Store:
                 # Tasks waiting for room for a worktree (backend/worktree_waits.py). Unversioned like the trash.
                 from .worktree_waits import ensure as ensure_worktree_waits
                 ensure_worktree_waits(c)
+                # The company's Vision, Description and their history, and each goal's Why (backend/company.py).
+                # Unversioned like the trash: an older release never reads the tables or the columns.
+                from .company import ensure as ensure_company
+                ensure_company(c)
                 # Temporary task assignments are retired (#420): their actors are archived and off every computer,
                 # their open tasks back with the role. Unversioned and idempotent like the trash; the tables stay inert.
                 from .shared_bots import retire_assignments

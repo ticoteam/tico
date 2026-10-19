@@ -75,6 +75,7 @@ from urllib.parse import urlsplit
 from pathlib import Path
 
 from .batch_work import isolated
+from . import idempotency_messages
 from . import task_relations as TR
 from . import task_roles as TRo
 from . import task_snooze as TS
@@ -1005,6 +1006,10 @@ def migrate(conn, adopt_legacy=False):
     # 1 when a run segment's estimate may be low: its model's long prompts cost more and the runner did not
     # send every request's tokens (providers.estimate). NULL on segments from before it was recorded.
     add_column(conn, "turn_usage_segments", "est_cost_low", "INTEGER")
+    # The newest of the bot's own model requests' whole prompt (uncached + cached), when its runner marked them from
+    # its subagents': the session's context size (backend/topic_change.py). NULL when it did not; the summed columns
+    # are not a context size.
+    add_column(conn, "turns", "prompt_tokens", "INTEGER")
     conn.execute("CREATE INDEX IF NOT EXISTS tasks_snoozed ON tasks(snoozed_until) WHERE snoozed_until IS NOT NULL")
     # A type whose tasks change status only by moving between its steps (`_task_state`).
     add_column(conn, "task_types", "steps_only", "INTEGER NOT NULL DEFAULT 0")
@@ -1021,6 +1026,9 @@ def migrate(conn, adopt_legacy=False):
                  "WHERE kind='ask' AND answered_by IS NULL AND deleted_at IS NULL")
     conn.execute("CREATE INDEX IF NOT EXISTS messages_pending_conversation ON messages(conversation_id) "
                  "WHERE kind='ask' AND answered_by IS NULL AND deleted_at IS NULL")
+    # The questions a comment answered, reopened when it is deleted (`task_comment_delete`, inside the write
+    # transaction): without it that lookup read every message.
+    conn.execute("CREATE INDEX IF NOT EXISTS messages_answered_by ON messages(answered_by) WHERE answered_by IS NOT NULL")
     # The media check visits blobs often; an unindexed version lookup multiplies both histories.
     conn.execute("CREATE INDEX IF NOT EXISTS bot_file_versions_blob_media ON bot_file_versions(blob_id,media_state)")
     # The media poll's pending rows, a handful even when blobs number in the tens of thousands.
@@ -3984,8 +3992,12 @@ def _refresh_comment_replies(conn, msg):
             return [refresh(v) for v in value if not (msg.get("deleted_at") and isinstance(v, dict)
                     and v.get("id") == msg["id"] and "from_actor" in v)]
         return value
-    for row in conn.execute("SELECT rowid,response_json FROM idempotency WHERE instr(response_json,?)>0",
-                            (msg["id"],)).fetchall():
+    # By index (backend/idempotency_messages.py): reading every stored answer here held the write lock for 35 s.
+    rows = idempotency_messages.quoting(conn, msg["id"]) if _has_table(conn, "idempotency_messages") else None
+    if rows is None:        # not indexed yet: an older file, or before its first start's backfill finished
+        rows = conn.execute("SELECT rowid,response_json FROM idempotency WHERE instr(response_json,?)>0",
+                            (msg["id"],)).fetchall()
+    for row in rows:
         conn.execute("UPDATE idempotency SET response_json=? WHERE rowid=?",
                      (_dump(refresh(_json(row["response_json"], {}))), row["rowid"]))
 
@@ -6187,7 +6199,7 @@ def turn_finish(conn, actor, turn_id, exit_code="ok", tokens_in=None, tokens_out
                 summary=None, usage=None):
     """Close a turn. `exit_code` is the `exit` column (`exit` is a builtin, not a keyword here).
     `usage` is what the run cost in tokens: input_tokens, cached_tokens, output_tokens, model, provider,
-    est_cost_usd and billing (see USAGE_SCHEMA)."""
+    est_cost_usd and billing (see USAGE_SCHEMA), and prompt_tokens, its newest request's prompt when known."""
     _writer(conn, actor)
     ts = now()
     conn.execute("UPDATE turns SET finished=?, exit=?, tokens_in=?, tokens_out=?, cost=?, summary=? "
@@ -6197,9 +6209,10 @@ def turn_finish(conn, actor, turn_id, exit_code="ok", tokens_in=None, tokens_out
     if usage:
         conn.execute("UPDATE turns SET input_tokens=:input_tokens, cached_tokens=:cached_tokens, "
                      "output_tokens=:output_tokens, model=:model, provider=:provider, est_cost_usd=:est_cost_usd, "
-                     "billing=:billing WHERE id=:id",
+                     "billing=:billing, prompt_tokens=:prompt_tokens WHERE id=:id",
                      {"input_tokens": None, "cached_tokens": None, "output_tokens": None, "model": None,
-                      "provider": None, "est_cost_usd": None, "billing": None, **usage, "id": turn_id})
+                      "provider": None, "est_cost_usd": None, "billing": None, "prompt_tokens": None, **usage,
+                      "id": turn_id})
     if usage and usage.get("segments"):
         conn.execute("DELETE FROM turn_usage_segments WHERE turn_id=?", (turn_id,))
         for position, part in enumerate(usage["segments"]):

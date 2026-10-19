@@ -49,7 +49,7 @@ TASK_STATUSES = ("open", "doing", "waiting", "review", "ready", "done", "closed"
 APPROVAL_KINDS = ("send", "spend", "publish", "merge", "support")
 GOAL_STATUSES = ("red", "yellow", "green", "done", "dropped")     # what a person or bot sets by hand
 GOAL_FILTERS = GOAL_STATUSES + ("gray",)                        # gray is the automatic "no data"
-PROPOSAL_KINDS = ("goal_wording", "goal_kpi", "kpi_definition", "kpi_target", "flag")
+PROPOSAL_KINDS = ("goal_wording", "goal_kpi", "kpi_definition", "kpi_target", "flag", "goal_why")
 
 # What an agent reads on connect: the hub in one line, then the skill a person's own agent
 # follows to work their bots (clients/agent_skill.py). Bots ignore the skill; it is for people.
@@ -1191,7 +1191,8 @@ def kpi_log(api, args):
 @tool("hub_proposal_create", "Propose a change you may not make yourself, for the owner to confirm: clearer "
       "goal wording (goal_wording: payload title/body), a KPI for a goal (goal_kpi: payload kpi or kpi_id, and "
       "target), a new definition (kpi_definition), a target (kpi_target: payload is the target fields), or a "
-      "flag (flag: payload issue vague|duplicate|unmeasured). The Goal Manager cannot change a definition "
+      "flag (flag: payload issue vague|duplicate|unmeasured), or, where the CEO Bot is on, a goal's Why (goal_why: "
+      "payload why, one line tying the goal to the company's vision). The Goal Manager cannot change a definition "
       "or a target it is judged against without one.",
       {"kind": {"type": "string", "enum": list(PROPOSAL_KINDS)}, "goal_id": _s("The goal it is about"),
        "kpi_id": _s("The KPI it is about"), "payload": {"type": "object", "description": "The proposed change"},
