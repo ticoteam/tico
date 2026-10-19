@@ -115,7 +115,7 @@ function onbRender(state) {
 
   const done = state.step >= state.steps.length, key = done ? 'done' : state.steps[state.step];
   host.classList.toggle('onb-org', key === 'org');
-  const heading = done ? 'Finish setup' : ONB_TITLES[key];
+  const heading = done ? 'Your team is created' : ONB_TITLES[key];
   host.innerHTML = `<div class="onb-head"><div class="onb-brand">${brandLogo()}</div><h1>${esc(heading)}</h1>${ONB_BLURB[key] ? `<p data-onb-hint>${esc(ONB_BLURB[key])}</p>` : ''}</div>
     ${done ? '' : `<ol class="onb-progress" aria-label="Setup steps">${state.steps.map((step, i) =>
       `<li class="${i < state.step ? 'done' : i === state.step ? 'cur' : ''}"${i === state.step ? ' aria-current="step"' : ''}>${esc(ONB_TITLES[step])}</li>`).join('')}</ol>
@@ -265,19 +265,21 @@ function onbSummaryHTML(state) {
     ${frSummaryTeamHTML(state)}
   </div>`;
 }
+// The tour waits for this screen to be seen: Show me around starts it, and otherwise the next visit does (ui/getting-started.js).
 function onbDoneHTML(state) {
-  return `<p class="onb-machine" id="onb-machine-status" role="status">${esc(onbMachineStatus(state.record))}</p>
+  return `<div class="onb-next" id="onb-next-step">${frNextStepHTML(state)}</div>
     <div id="onb-bots">${onbBotRowsHTML(state)}</div>
     <div id="onb-after">${frNextHTML(state)}</div>
     ${window.talkLineHTML?.() || ''}
-    <div class="onb-actions"><button class="primary" type="button" id="onb-tasks">Open Tasks</button>
+    <div class="onb-actions"><button class="${frWaiting(state) ? 'ghost' : 'primary'}" type="button" id="onb-tasks">Open Tasks</button>
       <span class="spacer"></span><span class="muted" id="onb-status"></span><button class="ghost" type="button" data-setup-help="wizard">Want help setting up?</button></div>`;
 }
 function onbBotRowsHTML(state) {
   const botOps = onbBotOpsName(state);
   const chosen = new Set(Object.keys(state.record.selected || {}));
-  const rows = (state.record.bots || []).filter(bot => !chosen.size || chosen.has(bot.slug)).map(bot => frBotRowHTML(state, bot, botOps)).join('');
-  return rows || '<div class="empty">No bots were created.</div>';
+  const groups = frBotGroups((state.record.bots || []).filter(bot => !chosen.size || chosen.has(bot.slug)));
+  return groups.map(group => `<section class="onb-group"${group.id ? ` data-onb-group="${esc(group.id)}"` : ''}>${group.name ? `<h2>${esc(group.name)}</h2>` : ''}
+    ${group.bots.map(bot => frBotRowHTML(state, bot, botOps)).join('')}</section>`).join('') || '<div class="empty">No bots were created.</div>';
 }
 // The poll redraws only the progress rows: the forms below them keep what was typed.
 function onbRenderDone(state) {
@@ -286,7 +288,11 @@ function onbRenderDone(state) {
   const rows = $('#onb-bots');
   if (!rows) { host.innerHTML = onbDoneHTML(state); onbWire(state, 'done'); return; }
   rows.innerHTML = onbBotRowsHTML(state);
-  const status = $('#onb-machine-status'); if (status) status.textContent = onbMachineStatus(state.record);
+  // The next step is redrawn only when it changes, so keyboard focus on its button survives a poll.
+  const next = $('#onb-next-step'), step = document.createElement('div');
+  step.innerHTML = frNextStepHTML(state);
+  if (next && next.innerHTML !== step.innerHTML) next.innerHTML = step.innerHTML;
+  const tasks = $('#onb-tasks'); if (tasks) tasks.className = frWaiting(state) ? 'ghost' : 'primary';
   document.querySelectorAll('[data-onb-activate]').forEach(button => button.onclick = () =>
     void onbActivate(state, button.dataset.onbActivate, button));
   frWireDone(state);
@@ -358,6 +364,10 @@ function onbBusy(state, busy, message) {
   const status = $('#onb-status');
   if (status) status.innerHTML = message === undefined ? '' : message;
 }
+// A save the server refuses for its shape (a field over its limit, a value it does not know) is never the owner's
+// to fix, so they read what happened and what to do, not the field path the API names for developers.
+const ONB_REFUSED = 'Tico could not save this step, so it has not moved on. Your choices are still here: press the button again to retry. If it keeps happening, reload the page and tell Tico support what you picked.';
+const onbSaveError = error => `<span class="err">${esc(error?.body?.error?.code === 'validation' ? ONB_REFUSED : error.message)}</span>`;
 async function onbSave(state) {
   const saved = await put('/v2/setup', {names: state.record.names, answers: state.record.answers,
                                              selected: state.record.selected});
@@ -404,7 +414,7 @@ async function onbAdvance(state, key) {
       onbRender(state);
     } catch (error) {
       if (ONB !== state) return;
-      onbBusy(state, false, `<span class="err">${esc(error.message)}</span>`);
+      onbBusy(state, false, onbSaveError(error));
     }
     return;
   }
@@ -419,7 +429,7 @@ async function onbAdvance(state, key) {
     onbRender(state);
   } catch (error) {
     if (ONB !== state) return;
-    onbBusy(state, false, `<span class="err">${esc(error.message)}</span>`);
+    onbBusy(state, false, onbSaveError(error));
   }
 }
 async function onbFinish(state) {
@@ -436,7 +446,7 @@ async function onbFinish(state) {
   } catch (error) {
     state.completing = false;
     if (ONB !== state) return;
-    onbBusy(state, false, `<span class="err">${esc(error.message)}</span>`);
+    onbBusy(state, false, onbSaveError(error));
   }
 }
 // The sample company is the whole first run done at once: its names, providers and bots come back from the server.
@@ -454,7 +464,7 @@ async function onbSample(state) {
   } catch (error) {
     state.completing = false;
     if (ONB !== state) return;
-    onbBusy(state, false, `<span class="err">${esc(error.message)}</span>`);
+    onbBusy(state, false, onbSaveError(error));
   }
 }
 async function onbCompleted(state, record) {
@@ -464,9 +474,9 @@ async function onbCompleted(state, record) {
   await onbRevisions(state);
   if (ONB !== state) return;
   clearInterval(state.poll); state.poll = setInterval(() => void onbPoll(state), 4000);   // repositories appear within seconds
+  await refresh(true);                      // the new bots on the chart first: the screen lists them in its groups
+  if (ONB !== state) return;
   onbRender(state);
-  await refresh(true);
-  void window.gsTourAfterSetup?.();
 }
 async function onbRevisions(state) {
   const bots = await v2Get('/v2/bots?include_archived=1');

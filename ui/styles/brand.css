@@ -77,9 +77,12 @@
 .cat-instructions textarea{margin-top:6px;resize:vertical;font:var(--t-base)/1.5 var(--mono)}
 .cat-mailbox{display:grid;gap:4px;margin-top:10px;font-size:var(--t-sm);color:var(--muted)}
 .cat-mailbox select{width:100%;font-size:var(--t-base)}
-.onb-bot{display:flex;gap:var(--s3);align-items:flex-start;padding:var(--s3) 0;border-bottom:1px solid var(--line);flex-wrap:wrap}
-.onb-bot:last-child{border-bottom:0}
-.onb-bot-main{flex:1;min-width:190px}
-.onb-bot-main p{margin:2px 0;font-size:var(--t-base);color:var(--muted)}
-.onb-bot-actions{display:flex;gap:var(--s2);align-items:center;flex-wrap:wrap}
+/* After Create: the one next step on top, then the bots in the chart's groups, one status each. */
+.onb-next{display:flex;align-items:center;gap:var(--s3);flex-wrap:wrap;padding:0 0 var(--s4);border-bottom:1px solid var(--line)}
+.onb-next .onb-machine{flex:1 1 260px}
+.onb-group h2{margin:var(--s4) 0 0;font-size:var(--t-label);text-transform:uppercase;letter-spacing:var(--track-caps);color:var(--muted);font-weight:600}
+.onb-bot{display:flex;gap:var(--s3);align-items:center;padding:var(--s2) 0;border-bottom:1px solid var(--line)}
+.onb-group:last-child .onb-bot:last-child{border-bottom:0}
+.onb-bot-name{flex:1;min-width:0;overflow-wrap:anywhere}
+.onb-bot-actions{display:flex;gap:var(--s2);align-items:center;flex:none}
 @media (max-width:760px){.cat-grid{grid-template-columns:minmax(0,1fr)}.onb-summary .k{flex-basis:100%}.onb{max-width:none}.onb-code-value{font-size:20px}}

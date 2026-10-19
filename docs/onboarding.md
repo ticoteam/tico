@@ -157,8 +157,12 @@ lets its routines run and counts it toward a member's limit. Until then it stays
 
 ### After Create: one screen
 
-- **Finish setup**: each bot with its progress. A starter says *Setting up its repository* until the repository exists,
-  then its **Set up** works.
+- **Your team is created**: the heading, then the one next step as the only primary button. With no computer yet it says
+  *Waiting for a computer* once and offers **Add a computer** (Settings > Computers); with a computer but no AI provider,
+  **Add an AI provider**; otherwise **Open Tasks** at the bottom. **Show me around** starts the tour.
+- Each bot, in the team chart's groups and order (bots outside any group first, the built-ins last), with one status:
+  *Waiting* while the team waits on a computer or provider, *Setting up* until a starter's repository exists, then its
+  **Set up** button; *Active*; or a link to the setup task BotOps is working.
 - **AI providers**: the first link opens Settings > AI providers so bots can start working.
 - **Add an admin**: a name and an email. The human joins the roster and the sign-in list and is made an admin (`POST /api/v2/access/humans`,
   then `POST /api/v2/access/humans/{id}` with `role: admin`). Tico sends no email. On a local install, only you can sign in
@@ -182,7 +186,8 @@ wizard  ->  tour (once)  ->  "Talk to BotOps" line
 
 Six spotlight steps: Updates, Tasks, your bots (the team list), Docs, Market, Meetings. **Next** moves
 on, **Skip** or **Esc** closes it, and focus stays inside it. On a phone it opens the navigation drawer
-and shows the same steps. It opens by itself once, right after **Finish setup**, and can be replayed
+and shows the same steps. It never opens over the wizard: the owner starts it with **Show me around** on the screen after Create, or it opens
+by itself once on their next visit (anyone else: their first visit). It can be replayed
 from **?** (How Tico works) with **Take the tour**. That it was seen is kept per human.
 
 ### Bots
