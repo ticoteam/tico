@@ -71,6 +71,25 @@ input.goal-ed-text:hover:not([readonly]){border-color:var(--line)}input.goal-ed-
 .gdot.none{background:transparent;border:1.5px solid var(--idle)}
 .goal-note{font-size:var(--t-sm);line-height:1.4;color:var(--muted);margin:-4px 0 6px 19px;overflow-wrap:anywhere}
 .goal-note b{font-weight:600}.goal-suggest{margin-top:-2px}
+/* a goal's Why: one line tying it to the company's vision; none is a quiet note, not an error */
+.goal-why{font-size:var(--t-sm);line-height:1.4;margin:-2px 0 6px 19px;overflow-wrap:anywhere}
+.goal-why-k{font-weight:600;color:var(--muted)}.goal-why-none{color:var(--muted);font-style:italic}
+.goal-why .linkish{font-size:var(--t-sm);font-style:normal}
+.goal-why-prop{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 0 8px 19px;padding:6px 10px;border:1px solid var(--line);border-radius:var(--radius);font-size:var(--t-sm)}
+.goal-why-ed{display:flex;gap:8px;align-items:center;margin:0 0 8px 19px}.goal-why-ed input{flex:1 1 auto;min-width:0}
+/* the company, at the top of Goals where the CEO Bot switch is on */
+.gco{margin:0 0 var(--s3);padding:8px 12px 10px;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius)}
+.gco-head{display:flex;align-items:center;gap:8px;min-height:32px}
+.gco-head h2{margin:0;font-size:var(--t-label);font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:var(--track-caps)}
+.gco-prompt{margin:2px 0 8px;font-size:var(--t-md)}
+.gco-fields{display:grid;grid-template-columns:auto 1fr;gap:4px 16px;margin:4px 0 0}
+.gco-fields dt{font-size:var(--t-sm);font-weight:600;color:var(--muted);padding-top:1px}
+.gco-fields dd{margin:0;line-height:1.45;overflow-wrap:anywhere;white-space:pre-line}
+.gco-form textarea{width:100%;resize:vertical}
+.gco-events{list-style:none;margin:0;padding:0}
+.gco-events li{display:flex;flex-direction:column;gap:2px;padding:6px 0;border-top:1px solid var(--line);font-size:var(--t-sm)}
+.gco-events li:first-child{border-top:0}.gco-new,.gco-old{overflow-wrap:anywhere;white-space:pre-line}
+@media (max-width:760px){.gco-fields{grid-template-columns:1fr}.goal-why-prop{flex-direction:column;align-items:stretch}.goal-why-ed{flex-wrap:wrap}}
 .kpi-lines{list-style:none;margin:0 0 4px 19px;padding:0}
 .kpi-line{display:flex;align-items:center;gap:10px;min-height:32px;padding:3px 6px;margin:0 -6px;border-radius:6px;cursor:pointer;font-size:var(--t-base);line-height:1.35}
 .kpi-line:hover,.need-row:hover{background:var(--surface2)}

@@ -496,7 +496,7 @@ class KpiReading(Contract):
 
 
 class GoalProposalCreate(Contract):
-    kind: Literal["goal_wording", "goal_kpi", "kpi_definition", "kpi_target", "flag"]
+    kind: Literal["goal_wording", "goal_kpi", "kpi_definition", "kpi_target", "flag", "goal_why"]
     goal_id: str | None = Field(default=None, max_length=200)
     kpi_id: str | None = Field(default=None, max_length=200)
     payload: dict = Field(default_factory=dict)
@@ -509,6 +509,17 @@ GoalProposal = GoalProposalCreate
 class GoalProposalDecision(Contract):
     decision: Literal["confirm", "reject"]
     note: str = Field(default="", max_length=1000)
+    why: str | None = Field(default=None, max_length=1000)    # a Why proposal confirmed as edited
+
+
+# The company at the top of Goals (backend/company.py): only the fields sent change.
+class CompanyUpdate(Contract):
+    vision: str | None = Field(default=None, max_length=4000)
+    description: str | None = Field(default=None, max_length=10_000)
+
+
+class GoalWhy(Contract):
+    why: str = Field(default="", max_length=1000)     # "" clears it: the goal is not tied to the vision
 
 
 # Market (backend/market.py). Reporters send prose. The Librarian (the curator) and the owner write the graph.

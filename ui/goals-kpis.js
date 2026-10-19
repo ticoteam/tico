@@ -140,12 +140,13 @@ function kpiTargetKinds(form) {
 }
 
 function kpiProposalLine(p) {
-  const what = {goal_wording: 'New wording', goal_kpi: 'Add a KPI', kpi_definition: 'New definition', kpi_target: 'New target', flag: 'Flag'}[p.kind] || p.kind;
+  const what = {goal_wording: 'New wording', goal_kpi: 'Add a KPI', kpi_definition: 'New definition', kpi_target: 'New target', flag: 'Flag', goal_why: 'A Why'}[p.kind] || p.kind;
   const pl = p.payload || {};
   const detail = p.kind === 'goal_wording' ? (pl.title || pl.body || '')
     : p.kind === 'kpi_definition' ? (pl.definition || pl.name || Object.keys(pl).join(', '))
     : p.kind === 'kpi_target' ? (pl.kind === 'maintain' ? `range ${pl.min ?? ''}–${pl.max ?? ''}` : pl.kind === 'improve' ? `→ ${pl.target} by ${kpiDay(pl.deadline + 'T00:00:00Z')}` : 'no target')
     : p.kind === 'goal_kpi' ? (pl.kpi?.name || 'existing KPI')
+    : p.kind === 'goal_why' ? (pl.why || '')
     : `${pl.issue || ''}${pl.note ? ': ' + pl.note : ''}`;
   return {what, detail, reason: p.reason || ''};
 }
@@ -468,7 +469,7 @@ function goalStatusNote(g) {
 function goalTreeRows(actor, depth, goals, loose, standing = '') {
   const info = goalOwnerInfo(actor);
   const av = actor === GOAL_COMPANY ? `<span class="av gt-co-av" aria-hidden="true">${esc(String(info.name || 'C').trim()[0] || 'C').toUpperCase()}</span>` : info.avatar;
-  const goalCell = g => `<span class="gt-goal" title="${esc(g.title)}">${gdot(g.status, goalStatusNote(g))}<span class="gt-title">${esc(g.title)}</span></span>`;
+  const goalCell = g => `<span class="gt-goal" title="${esc(g.title + (ceoBotOn() ? ' · Why: ' + (g.why || GOAL_NOT_TIED) : ''))}">${gdot(g.status, goalStatusNote(g))}<span class="gt-title">${esc(g.title)}</span></span>`;
   const row = (cls, goal, inner) => `<li class="gt-row${cls}" data-owner="${esc(actor)}"${goal ? ` data-goal="${esc(goal.id)}"` : ''} style="--d:${depth}" tabindex="0" role="button">`
     + `<span class="gt-ind" aria-hidden="true"></span>${inner}</li>`;
   const first = goals[0], words = String(standing || '').trim();
@@ -478,6 +479,130 @@ function goalTreeRows(actor, depth, goals, loose, standing = '') {
   return row(actor === GOAL_COMPANY ? ' gt-co' : '', first, `<span class="gt-av">${av}</span><span class="gt-name"><span>${esc(info.name)}</span></span>${lead}`)
     + goals.slice(1).map(g => row(' gt-cont', g, goalCell(g) + `<span class="gt-kpis">${goalChips(g.kpis)}</span>`)).join('');
 }
+// ---------------------------------------------------------------- the company
+// Where the CEO Bot switch is on (ui/app/state.js ceoBotOn), the top of Goals is the company itself: its Vision and its
+// Description (backend/company.py). The owner and admins edit them; everyone else reads them. Every change is kept with
+// who and when, behind History.
+const GOAL_COMPANY_PROMPT = 'Tell your CEO Bot what this company is for.';
+function goalCompanyHtml(state) {
+  const C = state.company;
+  if (!ceoBotOn() || !C?.data?.company) return '';
+  const {company: co, may_edit: may} = C.data;
+  const empty = !co.vision && !co.description;
+  const editing = may && (C.editing || empty);
+  // What they have typed and not saved survives a redraw (a reply, a live update).
+  const draft = C.draft || {vision: co.vision, description: co.description};
+  const fields = editing
+    ? `<form class="gco-form" data-gco-form novalidate>
+        <label class="goal-f"><span>Vision</span><textarea name="vision" rows="2" maxlength="400" placeholder="One or two sentences: where the company is going">${esc(draft.vision)}</textarea></label>
+        <label class="goal-f"><span>Description</span><textarea name="description" rows="4" maxlength="2000" placeholder="A short paragraph: what the company does, and for whom">${esc(draft.description)}</textarea></label>
+        <div class="goal-actions"><button class="primary" type="submit"${C.saving ? ' disabled' : ''}>Save</button>${empty ? '' : '<button class="ghost" type="button" data-gco-cancel>Cancel</button>'}</div></form>`
+    : `<dl class="gco-fields"><dt>Vision</dt><dd data-gco-vision>${co.vision ? esc(co.vision) : '<span class="muted">Not written yet</span>'}</dd>
+        <dt>Description</dt><dd data-gco-description>${co.description ? esc(co.description) : '<span class="muted">Not written yet</span>'}</dd></dl>`;
+  const events = C.events;
+  const history = C.history ? `<div class="gco-history"><h3 class="kpi-h">History</h3>${
+    !events ? '<p class="muted">Loading history…</p>' : events.error ? '<p class="err">Could not load the history.</p>'
+      : events.length ? `<ul class="gco-events">${events.map(e => `<li data-gco-event><span><b>${e.field === 'vision' ? 'Vision' : 'Description'}</b> changed by ${esc(e.actor_name || goalActorName(e.actor))} · <time datetime="${esc(e.ts)}" title="${esc(new Date(e.ts).toLocaleString())}">${esc(ago(e.ts))}</time></span>
+          <span class="gco-new">${e.new ? esc(e.new) : '<span class="muted">Cleared</span>'}</span>${e.old ? `<span class="muted gco-old">Was: ${esc(e.old)}</span>` : ''}</li>`).join('')}</ul>`
+      : '<p class="muted">No changes yet.</p>'}</div>` : '';
+  return `<section class="gco" id="goal-company" aria-labelledby="gco-h">
+      <div class="gco-head"><h2 id="gco-h">Company</h2><span class="spacer"></span>
+        ${may && !editing ? '<button class="ghost" type="button" data-gco-edit>Edit</button>' : ''}
+        <button class="linkish" type="button" data-gco-history aria-expanded="${C.history ? 'true' : 'false'}">${C.history ? 'Hide history' : 'History'}</button></div>
+      ${empty ? `<p class="gco-prompt">${esc(GOAL_COMPANY_PROMPT)}</p>` : ''}${fields}${history}</section>`;
+}
+function bindGoalCompany(state, root) {
+  const C = state.company, el = root.querySelector('#goal-company');
+  if (!el || !C) return;
+  const redraw = () => goalsRender(state);
+  const edit = el.querySelector('[data-gco-edit]');
+  if (edit) edit.onclick = () => { C.editing = true; redraw(); el.ownerDocument.querySelector('#goal-company textarea')?.focus(); };
+  const cancel = el.querySelector('[data-gco-cancel]');
+  if (cancel) cancel.onclick = () => { C.editing = false; C.draft = null; redraw(); };
+  const toggle = el.querySelector('[data-gco-history]');
+  if (toggle) toggle.onclick = async () => {
+    C.history = !C.history;
+    if (C.history) C.events = null;
+    redraw();
+    if (!C.history) return;
+    const r = await v2Get('/v2/company/history');
+    if (GOALS_ST !== state || state.company !== C || !C.history) return;
+    C.events = r ? r.events || [] : {error: true};
+    redraw();
+  };
+  const form = el.querySelector('[data-gco-form]');
+  if (form) form.oninput = () => { C.draft = {vision: form.elements.vision.value, description: form.elements.description.value}; };
+  if (form) form.onsubmit = async ev => {
+    ev.preventDefault();
+    if (C.saving) return;
+    C.saving = true;
+    try {
+      C.data = await post('/v2/company', {vision: form.elements.vision.value.trim(), description: form.elements.description.value.trim()});
+      C.editing = false; C.draft = null;
+      if (C.history) C.events = (await v2Get('/v2/company/history'))?.events || C.events;
+      toast('Saved');
+    } catch (e) { toast(e.message || 'Could not save the company', true); }
+    C.saving = false;
+    if (GOALS_ST === state) redraw();
+  };
+}
+
+// ---------------------------------------------------------------- a goal's Why
+// One line tying a goal to the vision (backend/company.py). The CEO Bot proposes it; a person who may edit the goal
+// accepts it, edits it or writes their own. A goal with none is "Not tied to the vision": a note, not an error.
+const GOAL_NOT_TIED = 'Not tied to the vision';
+const goalWhyProposal = (state, g) => state.proposals.find(p => p.kind === 'goal_why' && p.goal_id === g.id);
+function goalWhyHtml(state, g, may) {
+  if (!ceoBotOn()) return '';
+  const P = state.panel, p = goalWhyProposal(state, g), why = String(g.why || '');
+  const editing = P?.why === g.id ? (P.whyFrom || 'own') : '';
+  if (editing) {
+    const start = editing === 'proposal' && p ? p.payload?.why || '' : why;
+    return `<form class="goal-why-ed" data-why-form="${esc(g.id)}" data-why-from="${esc(editing)}"${p ? ` data-why-prop="${esc(p.id)}"` : ''} novalidate>
+        <input type="text" name="why" maxlength="200" autocomplete="off" value="${esc(start)}" aria-label="Why: how this goal serves the vision" placeholder="One line: how this goal serves the vision">
+        <button class="primary" type="submit">Save</button><button class="ghost" type="button" data-why-cancel>Cancel</button></form>`;
+  }
+  const line = why
+    ? `<div class="goal-why" data-why="${esc(g.id)}"><span class="goal-why-k">Why</span> <span data-why-text>${esc(why)}</span>${may ? ` <button class="linkish" type="button" data-why-edit="${esc(g.id)}">Edit</button>` : ''}</div>`
+    : `<div class="goal-why goal-why-none" data-why="${esc(g.id)}"><span data-why-none>${GOAL_NOT_TIED}</span>${may && !p ? ` <button class="linkish" type="button" data-why-edit="${esc(g.id)}">Write a Why</button>` : ''}</div>`;
+  const proposed = p ? `<div class="goal-why-prop" data-why-prop="${esc(p.id)}"><span class="kpi-prop-main"><span><b>${esc(goalActorName(p.proposed_by))} proposes</b> <span data-why-proposed>${esc(p.payload?.why || '')}</span></span>${p.reason ? `<span class="muted kpi-prop-why">${esc(p.reason)}</span>` : ''}</span>
+      ${p.may_decide ? `<span class="kpi-prop-do"><button class="primary" type="button" data-why-accept>Accept</button><button class="ghost" type="button" data-why-edit="${esc(g.id)}" data-why-from="proposal">Edit</button><button class="ghost" type="button" data-why-reject>Reject</button></span>` : ''}</div>` : '';
+  return line + proposed;
+}
+function bindGoalWhy(state, root, reload) {
+  const P = state.panel, redraw = () => goalPanelRender(state);
+  for (const b of root.querySelectorAll('[data-why-edit]')) b.onclick = () => { P.why = b.dataset.whyEdit; P.whyFrom = b.dataset.whyFrom || 'own'; redraw(); };
+  const decide = async (b, body) => {
+    const id = b.closest('[data-why-prop]').dataset.whyProp;
+    b.disabled = true;
+    try { await post(`/v2/proposals/${encodeURIComponent(id)}/decide`, body); await reload(); }
+    catch (e) { toast(e.message || 'Could not decide', true); b.disabled = false; }
+  };
+  for (const b of root.querySelectorAll('[data-why-accept]')) b.onclick = () => decide(b, {decision: 'confirm'});
+  for (const b of root.querySelectorAll('[data-why-reject]')) b.onclick = () => decide(b, {decision: 'reject'});
+  const form = root.querySelector('[data-why-form]');
+  if (!form) return;
+  const input = form.elements.why, done = () => { P.why = ''; P.whyFrom = ''; redraw(); };
+  form.querySelector('[data-why-cancel]').onclick = done;
+  form.onkeydown = ev => { if (ev.key === 'Escape') { ev.preventDefault(); done(); } };
+  form.onsubmit = async ev => {
+    ev.preventDefault();
+    const text = input.value.trim(), gid = form.dataset.whyForm;
+    if (P.whySaving) return;
+    P.whySaving = true;
+    try {
+      if (form.dataset.whyFrom === 'proposal' && form.dataset.whyProp) {
+        if (!text) { toast('Write the Why, or reject the proposal', true); P.whySaving = false; return; }
+        await post(`/v2/proposals/${encodeURIComponent(form.dataset.whyProp)}/decide`, {decision: 'confirm', why: text});
+      } else await post(`/v2/goals/${encodeURIComponent(gid)}/why`, {why: text});
+      P.why = ''; P.whyFrom = '';
+      await reload();
+    } catch (e) { toast(e.message || 'Could not save the Why', true); }
+    finally { P.whySaving = false; }
+  };
+  input.focus();
+}
+
 function goalsRender(state) {
   const body = $('#goal-body');
   if (!body || !state.loaded) return;
@@ -501,8 +626,9 @@ function goalsRender(state) {
   ].map(([name, members]) => members.length ? `<li class="gt-sep">${name}</li>` + members.map(e => rows('bot:' + e.name, 0)).join('') : '').join('');
   // Anyone else with goals (someone gone from the roster) still shows, at the end.
   const rest = Object.keys(owned).filter(a => !seen.has(a)).map(a => rows(a, 0)).join('');
-  body.innerHTML = goalNeedsHtml(state.needs) + `<ul class="gt" id="goal-tree" aria-label="Goals">${tree}${rest}`
+  body.innerHTML = goalCompanyHtml(state) + goalNeedsHtml(state.needs) + `<ul class="gt" id="goal-tree" aria-label="Goals">${tree}${rest}`
     + help + '</ul>';
+  bindGoalCompany(state, body);
   for (const li of body.querySelectorAll('.gt-row')) {
     const open = () => goalPanelOpen(state, li.dataset.owner, {tapped: li.dataset.goal || ''});
     li.onclick = open;
@@ -555,7 +681,7 @@ function goalPanelOpen(state, owner, {goal = '', tapped = ''} = {}) {
   if (!goal && !live.length && goalMayEdit({owner}, state.goals)) goal = 'new';
   if (!goal && owner === GOAL_COMPANY && live.length === 1) goal = live[0].id;
   state.panel = {owner, goal, kpiAdd: '', kpi: '', standing: false, tapped, history: false, historyKpis: null,
-    historyLoading: false, historyError: false};
+    historyLoading: false, historyError: false, why: '', whyFrom: ''};
   history.replaceState(null, '', goal && goal !== 'new' ? GOALS + '/' + encodeURIComponent(goal) : GOALS);
   const dlg = goalPanelDialog(state);
   delete dlg.dataset.kpi;
@@ -575,9 +701,10 @@ function goalPanelHtml(state) {
   const av = actor === GOAL_COMPANY ? `<span class="av gt-co-av" aria-hidden="true">${esc((String(info.name || 'C').trim()[0] || 'C').toUpperCase())}</span>` : info.avatar;
   const item = g => {
     const mayG = goalMayEdit(g, state.goals);
-    const head = P.goal === g.id ? goalFormHtml(g, state.goals)
-      : `<button class="gp-gline" type="button" data-gp-edit="${esc(g.id)}" title="${esc(g.title)}">${gdot(g.status, goalStatusNote(g))}<span>${esc(g.title)}</span></button>${goalNoteHtml(g, mayG)}`;
-    const props = state.proposals.filter(p => p.goal_id === g.id);
+    // The Why stays in view while the goal is being edited: beside its form, not in it, as it saves on its own.
+    const head = (P.goal === g.id ? goalFormHtml(g, state.goals)
+      : `<button class="gp-gline" type="button" data-gp-edit="${esc(g.id)}" title="${esc(g.title)}">${gdot(g.status, goalStatusNote(g))}<span>${esc(g.title)}</span></button>${goalNoteHtml(g, mayG)}`) + goalWhyHtml(state, g, mayG);
+    const props = state.proposals.filter(p => p.goal_id === g.id && p.kind !== 'goal_why');
     return `<li class="gp-goal" data-gp-goal="${esc(g.id)}">${head}${kpiLinesHtml(g.kpis, {goal: g.id})}
       ${props.length ? `<ul class="kpi-props">${props.map(p => proposalHtml(p)).join('')}</ul>` : ''}
       ${g.checkin ? `<div data-gp-checkins="${esc(g.id)}">${goalCheckinHtml(g.checkin)}</div><button class="linkish" type="button" data-gp-more="${esc(g.id)}">Check-ins</button>` : ''}
@@ -639,6 +766,7 @@ function goalPanelRender(state) {
   };
   bindKpiLines(body);
   bindProposals(body, reload);
+  bindGoalWhy(state, body, reload);
   for (const b of body.querySelectorAll('[data-gp-kpi-add]')) b.onclick = () => { P.kpiAdd = b.dataset.gpKpiAdd; P.goal = ''; redraw(); };
   const newGoal = body.querySelector('[data-gp-goal-new]'), newKpi = body.querySelector('[data-gp-kpi-new]');
   if (newGoal) newGoal.onclick = () => setGoal('new');

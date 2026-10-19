@@ -1181,6 +1181,10 @@ class Store:
                 # Tasks waiting for room for a worktree (backend/worktree_waits.py). Unversioned like the trash.
                 from .worktree_waits import ensure as ensure_worktree_waits
                 ensure_worktree_waits(c)
+                # The company's Vision, Description and their history, and each goal's Why (backend/company.py).
+                # Unversioned like the trash: an older release never reads the tables or the columns.
+                from .company import ensure as ensure_company
+                ensure_company(c)
                 # Temporary task assignments are retired (#420): their actors are archived and off every computer,
                 # their open tasks back with the role. Unversioned and idempotent like the trash; the tables stay inert.
                 from .shared_bots import retire_assignments

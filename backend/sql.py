@@ -281,6 +281,8 @@ def guarded(c, auth, who, inner, function, columns=None):
         "goal_kpis": "goal_id IN (SELECT id FROM goals)", "goal_checkins": "goal_id IN (SELECT id FROM goals)",
         "goal_proposals": "goal_id IS NULL OR goal_id IN (SELECT id FROM goals)",
         "goal_asks": "task_id IN (SELECT id FROM tasks)",
+        # The company's Vision and Description and their history: everyone's to read, like the company's goals.
+        "company_profile": "id IS NOT NULL", "company_events": "id IS NOT NULL",
         # The market graph is the company's, the same way goals are.
         "market_entities": "1", "market_edges": "1", "market_evidence": "1",
         "market_citations": "1", "market_insights": "1", "market_events": "1",

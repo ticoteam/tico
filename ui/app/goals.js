@@ -227,7 +227,8 @@ function pageGoals() {
   const open = S.route.startsWith(GOALS + '/') ? decodeURIComponent(S.route.slice(GOALS.length + 1)) : '';
   const was = document.getElementById('goal-panel');
   if (was) { was._state = null; if (was.open) was.close(); }
-  const state = GOALS_ST = {goals: [], other: [], proposals: [], needs: [], owners: {}, loaded: false, open, panel: null};
+  const state = GOALS_ST = {goals: [], other: [], proposals: [], needs: [], owners: {}, loaded: false, open, panel: null,
+    company: {data: null, editing: false, saving: false, history: false, events: null, draft: null}};
   // The tree is the page; the Goal Manager is its right rail (under the tree on a narrow window). The sidebar
   // says where you are, so the title is for screen readers only.
   $('#main').classList.add('goals-layout');
@@ -245,11 +246,15 @@ function goalsApply(state, data, needs) {
   if (needs !== undefined) state.needs = (needs?.items || []).filter(n => !goalBuiltInOwner(n.goal_owner) && !goalBuiltInOwner(n.owner) && !(data.goals || []).some(g => g.id === (n.goal_id || n.proposal?.goal_id) && goalBuiltInOwner(g.owner)));
 }
 // Two requests: the tree and what needs you. The roster (people, bots, departments) is already in S.
+// The Company section's record comes with them where the CEO Bot switch is on (ui/goals-kpis.js goalCompanyHtml).
+// The goals never wait on the company: if it cannot be read, the section is left out and the tree still draws.
+const goalCompanyGet = () => ceoBotOn() ? v2Get('/v2/company').catch(() => null) : Promise.resolve(null);
 async function goalsLoad(state) {
-  let data, needs;
-  try { [data, needs] = await Promise.all([get('/v2/goals/tree'), v2Get('/v2/goals/needs-you')]); }
+  let data, needs, company;
+  try { [data, needs, company] = await Promise.all([get('/v2/goals/tree'), v2Get('/v2/goals/needs-you'), goalCompanyGet()]); }
   catch (e) { $('#goal-body').innerHTML = `<p class="err">${esc(e.message || 'Could not load goals')}</p>`; return; }
   if (GOALS_ST !== state) return;
+  state.company.data = company;
   goalsApply(state, data, needs);
   state.loaded = true;
   goalsRender(state);
@@ -279,8 +284,9 @@ function openGoal(id) { location.hash = GOALS + '/' + encodeURIComponent(id); }
 async function goalsRefresh() {
   GOAL_OPTIONS = null;
   if (GOALS_ST && $('#goal-body')) {
-    const [r, needs] = await Promise.all([v2Get('/v2/goals/tree'), v2Get('/v2/goals/needs-you')]);
-    if (r) goalsApply(GOALS_ST, r, needs);
+    const st = GOALS_ST;
+    const [r, needs, company] = await Promise.all([v2Get('/v2/goals/tree'), v2Get('/v2/goals/needs-you'), goalCompanyGet()]);
+    if (r && st === GOALS_ST) { goalsApply(st, r, needs); if (company || !ceoBotOn()) st.company.data = company; }
   }
   headGoalsReload();
 }

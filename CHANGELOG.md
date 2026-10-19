@@ -8,6 +8,12 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- **The company on Goals**: with the CEO Bot switch on, Goals opens with a **Company** section: the Vision (one or
+  two sentences) and the Description (a short paragraph). The owner and admins edit it, everyone else reads it, and
+  **History** lists every change with who made it and when. Each goal shows a one-line **Why** tying it to the
+  vision: the CEO Bot proposes it and a person accepts it as it is, edits it or writes their own. A goal with none
+  says "Not tied to the vision". No bot can change the Vision or the Description or accept a Why, the CEO Bot
+  included. With the switch off none of this shows.
 - **Sign in on a Tico we host**: with `TICO_HOSTED` set (`own` or `invited`), **Sign in** for Claude Code and
   Codex (ChatGPT) in Settings > Computers shows only the provider's link and code, never what else the computer
   printed and never a terminal, and closes by itself once signed in or cancelled. Any other value of `TICO_HOSTED`
