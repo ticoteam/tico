@@ -187,7 +187,9 @@ const {unrouted} = require('./support/routes.cjs');
 
     // Add key where none signs it in.
     await (await apiKey('cursor')).getByRole('button', {name: 'Add key'}).click();
-    assert.equal(await page.locator('dialog.computer-add-dialog').count(), 0, 'Add connection gives way to the key pop-up');
+    // It closes in the click itself and leaves the page on its close event, a task later: count it shut now, then gone.
+    assert.equal(await page.locator('dialog.computer-add-dialog[open]').count(), 0, 'Add connection gives way to the key pop-up');
+    await page.locator('dialog.computer-add-dialog').waitFor({state: 'detached'});
     await dialog.locator('h2', {hasText: 'Add a Cursor Agent key on Team box'}).waitFor();
     await dialog.locator('[data-close]').first().click();
     assert.deepEqual(errors, []);

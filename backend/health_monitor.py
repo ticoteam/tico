@@ -387,6 +387,34 @@ def _check_hold_checks(c):
     return out
 
 
+def _release_approval_checks(c, settings):
+    """A release's publish approval ready longer than the setting (release_approval_wait_minutes) with nobody's decision:
+    one finding per approval, so the same wait seen again only counts (scan) and a re-cut release's new ask is its own.
+    The person decides it in Needs you; nothing here approves or changes who may."""
+    minutes = getattr(settings, "release_approval_wait_minutes", 60)
+    if not minutes:
+        return []
+    at = H.now()
+    out = []
+    for row in H._rows(c.execute("SELECT * FROM approvals WHERE decision IS NULL AND kind='publish' "
+                                 "AND coalesce(ready_since,created)<? ORDER BY created",
+                                 (H.shift(at, minutes=-minutes),))):
+        row["payload"] = H._json(row.get("payload_json"), {}) or {}
+        if not H.is_release_approval(row["kind"], row["payload"]):
+            continue
+        H.approval_wait(c, row, at)
+        who = row["decision_owner_name"] or "a person"
+        version, commit = str(row["payload"]["version"])[:40], str(row["payload"]["commit"])[:12]
+        out.append(_finding("release_approval_wait:" + row["id"], "release_approval_wait", SETUP,
+                            f"The release {version} approval has waited {H.wait_words(row['age_s'])} on {who}",
+                            f"The publish approval for {version} (commit {commit}) has been ready since "
+                            f"{row['ready_since'][:16].replace('T', ' ')} UTC, {H.wait_words(row['age_s'])}, with no "
+                            f"decision. It is {who}'s to decide; the release waits until then.",
+                            f"{who}: approve or decline it in Needs you (or `hub approval show {row['id']}`). Tico does "
+                            "not decide it for anyone."))
+    return out
+
+
 def _brief_drops(lines):
     """Where the "lost" lines are whose next word on the stream, before another drop, is that it was back within
     BRIEF_DROP_S."""
@@ -496,6 +524,26 @@ def _bot_checks(c, settings=None):
                                     f"{bot}: {error[:400]}",
                                     "BotOps: save any unique work in that worktree on a branch, then remove its link so "
                                     "the computer can make it again (docs/worktrees.md)."))
+    out.extend(_quiet_work_checks(c))
+    return out
+
+
+def _quiet_work_checks(c):
+    """A quiet task handed to a bot's run over two hours ago and not worked since, with no time set to pick it up
+    (backend/quiet_work.py stale): one finding per bot and task. It names them; it asks no person anything."""
+    from . import quiet_work
+    out = []
+    for item in quiet_work.stale(c):
+        task, bot = item["task"], item["bot"]
+        # A private task's title stays out of a finding other people read; its number or short id names it.
+        name = quiet_work._task_name(task) if H.task_private(c, task) else f"{quiet_work._task_name(task)} {task['title']}"
+        out.append(_finding(f"quiet_unworked:{bot}:{task['id']}", "quiet_unworked", SETUP,
+                            f"{bot} was handed a quiet task and has not worked it",
+                            f"{bot} was handed the next-run task {name} at {item['since'][:16]} UTC (run "
+                            f"{str(item['run'] or '')[:8]}) and has not worked it since, with no time set to pick it "
+                            "up again.",
+                            f"{bot}: work it, or say when to pick it up (hub task defer {task['id']} --after <task> | "
+                            "--at <time>). Anyone may press Run now on it to give it a run of its own."))
     return out
 
 
@@ -519,7 +567,7 @@ def findings(c, settings):
     """Everything wrong right now, each once by key."""
     out = {}
     for part in (_runner_checks(c, settings), _login_checks(c, settings), _check_hold_checks(c),
-                 _bot_checks(c, settings), _server_checks(c)):
+                 _bot_checks(c, settings), _release_approval_checks(c, settings), _server_checks(c)):
         for item in part:
             out.setdefault(item["key"], item)
     return list(out.values())

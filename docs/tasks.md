@@ -132,7 +132,7 @@ stuck or unavailable, the diagnostic goes to the human requester, or the team's 
 bot-requested work. An unresolved diagnostic is reused on later days. Health warns when repeated
 runs have escalated a public task without progress; an explicit run is still available.
 
-Task worktrees have a separate lifecycle. The 30-worktree limit stays in effect, and cleanup
+Task worktrees have a separate lifecycle. The 50-worktree limit stays in effect, and cleanup
 waits until the owning bot is idle so it cannot remove a checkout in use. A supported cleanup
 request continues to occupy its slot until the runner removes it. For merged work that is still
 awaiting release, request cleanup of the worktree link rather than marking the task Done or Closed
@@ -742,7 +742,11 @@ tab, and SVG, HTML and other files offer a download. The `v1 · v2 · v3` switch
 **Compare** shows two versions side by side, or a line diff for text. Each version shows who added
 it, when, its note and its question. Esc or the tile again closes it.
 
-A comment that carried files shows a small thumbnail for an image and a chip for anything else;
+A comment's pictures, SVG and visual pages (up to 4) show under its text as cards; see
+[Visuals in replies](visuals.md#in-a-chat-or-task-conversation). A visual on a comment is a normal versioned file on
+the task, listed in the **Files** strip. Its card shows the version the comment was posted with; when the file has a
+newer one, **Newer version** opens the newest. **Open in file viewer** in the card's menu opens the file's tile here
+at the posted version. The comment's other files show a small thumbnail for an image and a chip for anything else;
 either opens that file's tile at that version.
 
 A question (on a comment or a file version) shows its options as buttons. One question that takes

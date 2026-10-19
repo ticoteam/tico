@@ -403,6 +403,9 @@ def run(args, who=None):
             return client.get("tasks/" + ids[0])
         if sub == "run":
             return post(f"tasks/{args.id}/run-now", {})
+        if sub == "defer":
+            return post(f"tasks/{args.id}/defer", {"after": args.after, "at": args.at,
+                                                   "next_run": bool(args.next_run), "handled": bool(args.handled)})
         if sub in ("list", "snooze", "unsnooze"):
             return via_tool(client, args)
         if sub == "ask":

@@ -87,7 +87,7 @@ const BOTS = [['engineer', 'Engineer', 'engineering'], ['support', 'Support', 's
   ({name, display_name, team, host: 'keeper', status: 'active', state: 'active', can_chat: true}));
 
 async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'dark', hash = '#/issues', failIds = [], prefs = null, mover = true,
-  types = [], local = {}, people = null, baseTasks = null, extraTasks = [], byNeed = false} = {}) {
+  types = [], local = {}, people = null, baseTasks = null, extraTasks = [], byNeed = false, clock = null} = {}) {
   const tasks = [...(baseTasks ?? fixtures()), ...extraTasks];
   // These scripts read Needs you grouped by who asks; `byNeed` keeps the default, What it takes.
   if (!byNeed && !('hub.tasks.layout' in local)) local = {...local, 'hub.tasks.layout': JSON.stringify({group: {foryou: 'requester'}})};
@@ -186,6 +186,7 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
     if (p.endsWith('/messages')) return json({messages: []});
     return json(unrouted(p));
   });
+  if (clock) await page.clock.install({time: clock});     // the page's timers too, so a test moves time on
   await page.goto('https://tico-ui.test/' + hash);
   await page.waitForFunction(() => TASKS_ST && !TASKS_ST.loading && document.querySelector('#task-body .tl-row, #task-body .bcard, #task-body .tl-empty'))
     .catch(e => { throw new Error(`${e.message}\npage errors: ${errors.join(' | ')}`); });
@@ -847,6 +848,32 @@ async function snoozing(browser) {
   console.log('snoozing: ok');
   await page.close();
 }
+async function quietWork(browser) {
+  // Dev 257: a quiet (next-run) task says where it stands: deferred until something (and by which run), eligible for
+  // the bot's next run, or queued with a run of its own. An ordinary task says nothing.
+  const base = fixtures().find(x => x.id === 't-digest');
+  const quiet = (id, title, q) => ({...base, id, title, next_run: q.state !== 'queued', quiet: q});
+  const {page, errors} = await open(browser, {extraTasks: [
+    quiet('t-q-deferred', 'Quiet deferred', {state: 'delivered', run: 'edec5d00-0000', at: at(120),
+      resume: {kind: 'task', task: 't-idem'}, words: 'Picked up again after Add idempotency keys to the payments API is done.'}),
+    quiet('t-q-eligible', 'Quiet eligible', {state: 'eligible', words: "The bot's next run carries it."}),
+    quiet('t-q-queued', 'Quiet queued', {state: 'queued', job: 'j1', run: null, words: 'A run of its own is waiting.'})]});
+  const line = async (key, title) => {
+    await page.locator(`[data-task-key="${key}"] .tl-title`).click();
+    await peekTitle(page, title);
+    const found = page.locator('#task-peek [data-task-quiet]');
+    return (await found.count()) ? {state: await found.getAttribute('data-task-quiet'), text: (await found.textContent()).trim()} : null;
+  };
+  const deferred = await line('tt-q-deferred', 'Quiet deferred');
+  assert.equal(deferred.state, 'deferred');
+  assert.match(deferred.text, /^Quiet work: Deferred Picked up again after Add idempotency keys to the payments API is done\. \(run edec5d00, handed over 2h ago\)$/);
+  assert.deepEqual(await line('tt-q-eligible', 'Quiet eligible'), {state: 'eligible', text: "Quiet work: Eligible The bot's next run carries it."});
+  assert.deepEqual(await line('tt-q-queued', 'Quiet queued'), {state: 'queued', text: 'Quiet work: Queued A run of its own is waiting.'});
+  assert.equal(await line('tt-digest', 'Weekly metrics digest'), null, 'an ordinary task has no quiet line');
+  assert.deepEqual(errors, []);
+  console.log('quiet work: ok');
+  await page.close();
+}
 async function views(browser) {
   // Needs you: what waits on you, grouped by what it takes, or by who asks. A bot's heading has a visible Chat link; a
   // person's has none.
@@ -1255,7 +1282,7 @@ if (require.main === module) (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
     const only = process.env.TASKS_ONLY ? process.env.TASKS_ONLY.split(',') : null;
-    for (const [name, run] of Object.entries({listAndTabs, typeSelection, filters, carriedOver, peekAndKeys, properties, snoozing, bulk, views, waitingOnYou, donePagination, ages, polling, phone, recheckSaves, recheckLists, recheckPhone, recheckFinal}))
+    for (const [name, run] of Object.entries({listAndTabs, typeSelection, filters, carriedOver, peekAndKeys, properties, snoozing, quietWork, bulk, views, waitingOnYou, donePagination, ages, polling, phone, recheckSaves, recheckLists, recheckPhone, recheckFinal}))
       if (!only || only.includes(name)) await run(browser);
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

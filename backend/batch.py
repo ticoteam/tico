@@ -78,6 +78,9 @@ def _row(it, actor):
         row["body"] = _clip(it["body"], 800)
     if isinstance(it.get("payload"), dict) and it["payload"]:
         row["payload"] = _clip(json.dumps(it["payload"], sort_keys=True, default=str), 800)
+    if it["kind"] == "approval" and it.get("ready_since"):
+        row["ready"] = H.approval_wait_line(it)            # "Ready 2 h 10 min, waiting on Chris"
+        row["ready_since"] = it["ready_since"]
     if it.get("note"):
         row["note"] = _clip(it["note"], 300)
     if it.get("created"):

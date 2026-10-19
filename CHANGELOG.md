@@ -8,6 +8,33 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Quiet work stays visible and comes back**: a task filed for a bot's next run now says where it stands, on the task
+  and in `hub task show` (`quiet`): eligible (the next run carries it), delivered (which run took it and when, and
+  until what it was deferred) or queued (a run of its own). A run that will not do a carried task now says when to
+  pick it up with `hub task defer <id> --after <task> | --at <time> | --next-run`, and the task gets one run of its own
+  then. A run that ends without working a carried task or saying when hands it back to the next run instead of
+  keeping it. The Health Monitor names a quiet task handed to a run over two hours ago and not worked since
+  ([Leave work for the next run](docs/using-tico.md#leave-work-for-the-next-run)).
+- **Recommended setup** in the installer: `sh install.sh --recommended` is the quick start with the sample company,
+  your Claude and ChatGPT subscriptions plus Tico Gateway, Tico Support on and a computer on the server, so the only
+  setup left is signing in to Claude and ChatGPT in Settings > Computers. Run on a terminal with no options, the
+  installer asks which setup to use and offers this one first; with any option, or without a terminal, it does what it did
+  before. `--support off` turns Support off. The Gateway invite comes from `TICO_GATEWAY_INVITE` in the environment and
+  is never printed. The quick start, your own domain and sign-in, and your own keys install as before.
+  ([Install](docs/install.md#recommended-setup))
+- **How long an approval has waited, and on whom**: every approval now records when its exact payload was ready to
+  decide and whose decision it is, and its card in Needs you and Decide says so plainly ("Ready 2 h 10 min, waiting
+  on you", or the person's name); the row shows "ready 2 h 10 min". The API adds `ready_since`, `decision_owner`,
+  `decision_owner_name` and `age_s`. With the Health Monitor on, a release's publish approval ready over 60 minutes
+  with no decision is one finding (`release_approval_wait`) that counts each hourly scan and wakes nobody again;
+  `TICO_RELEASE_APPROVAL_WAIT_MINUTES` sets the threshold (0 turns it off). Nothing approves for anyone, and who may
+  approve is unchanged.
+- **Visuals in replies outside Tico (part 4 of 4)**: a bot's reply with visuals that reaches Slack keeps its text and
+  adds one line, "1 visual - view in Tico" (or "N visuals"), linking to that message in Tico. A task-done post does
+  the same for the owner's result comment when it has visuals. The link opens only for people who can read the
+  conversation, nothing from a private task is sent to Slack, and no visual is shown in Slack. Every bot's
+  instructions now say when to add a visual; brand assets, designed graphics and edited video still go to Design and
+  Video Producer ([Visuals in replies](docs/visuals.md#when-a-bot-adds-a-visual)).
 - **A usage limit holds the login, once**: a run that hits a subscription's usage limit now holds that provider
   login on that computer, for every bot signed in with it, until the reset the provider names (Claude's "resets
   2:40am (UTC)" is read too), or 30, 60 and then 120 minutes when it names none. The hold is saved on the server, so
@@ -18,7 +45,7 @@ All notable changes to Tico are recorded here. The format follows
   audio clip to a chat reply or task comment (`--visual PATH --title "…"` on `hub message send`, `hub chat send` and
   `hub task comment`; `visuals` over MCP; `attachments: [{ref, title}]` in the API). It is a versioned file there,
   shown only to that conversation's readers. A page's local images and fonts are embedded; remote ones are removed
-  and listed. Self-hosters set `TICO_VISUAL_ORIGIN`, a separate site. Visuals still show as file chips until part 2
+  and listed. Self-hosters set `TICO_VISUAL_ORIGIN`, a separate site. Video and audio still show as file chips until part 3
   ([Visuals in replies](docs/visuals.md)).
 - **Visuals in replies (part 2 of 4): pictures, SVG and visual pages show inline** under a chat message or a task
   comment, a person's attachments too. Each is a card the width of the message, never wider than the screen, with its
@@ -28,7 +55,8 @@ All notable changes to Tico are recorded here. The format follows
   pictures, scroll in pages; Close, Esc, swipe down or Back return to the same place. SVG and pages sit on a light card
   in dark mode. A card holds its space while it loads, keeps the version it was posted with ("Newer version" links the
   newest), says "This visual was removed" when the file was removed and "Couldn't show this visual" when it can't
-  render. Up to 4 per message; the rest stay file chips.
+  render. Up to 4 per message; the rest stay file chips
+  ([Visuals in replies](docs/visuals.md#in-a-chat-or-task-conversation)).
 - **The company on Goals**: with the CEO Bot switch on, Goals opens with a **Company** section: the Vision (one or
   two sentences) and the Description (a short paragraph). The owner and admins edit it, everyone else reads it, and
   **History** lists every change with who made it and when. Each goal shows a one-line **Why** tying it to the
@@ -50,8 +78,9 @@ All notable changes to Tico are recorded here. The format follows
 - **Start fresh when the topic changes** (Settings > Team; off by default, an owner or an admin turns it on): in a
   long or idle direct chat with a bot, Tico asks Decide whether your new message starts a new topic before it is sent.
   If it does, the bot's session is cleared the same way Clear does, and the chat shows a quiet **Topic changed** line
-  above your message. A chat with an active goal, a running turn or fewer than 3 turns is never checked, and a slow or
-  failed check (over 1.5 s) sends the message in the same session with no line.
+  above your message. A chat with an active goal, a running turn or fewer than 3 turns, and a message with files
+  attached, are never checked, and a slow or failed check (over 1.5 s) sends the message in the same session with no
+  line.
 - **Settings → Computers** shows one compact row per computer: name, Tico version (with **Update** only when one is
   waiting), operator, bots, a chip for each AI connection, and status. A chip shows the tool, a thin bar and the share
   of the weekly allowance that is left; hover for when it resets and how old the reading is. A red dot means bots
@@ -69,6 +98,11 @@ All notable changes to Tico are recorded here. The format follows
   "Every computer" key is not applied to it again, nor put in its turns) until someone adds a key or chooses **Use the
   shared key**. Bots keep the connection. Needs a
   current runner ([Computers](docs/computers.md#signing-out-and-switching-accounts)).
+- **Switch to API key** on a computer's own Codex or Claude Code login that runs on a subscription, in the computer's
+  pop-up on Settings > Computers. The subscription stays signed in and in use while the computer checks the key with
+  the provider, so a cancel, a key that doesn't work or a step that fails changes nothing; once the key is in place the
+  next turn uses it and the subscription is signed out (Codex's key login replaces it in the same file). Bots keep the
+  connection. Not for Claude Code on a Mac (Keychain). Needs a current runner ([Computers](docs/computers.md#signing-out-and-switching-accounts)).
 - A signed-out connection in the computer pop-up reads **Signed out · Sign in** and its chip gets a red dot, and the
   sign-out confirmation names the bots in a line ("Reviewer 1, QA and 2 more will stop running until this is signed in
   again").
@@ -80,6 +114,11 @@ All notable changes to Tico are recorded here. The format follows
   ([Computers](docs/computers.md#remove-a-subscription)).
 
 ### Fixed
+- **A bot's finished answer is no longer lost or given twice when its computer stalls before handing it in.** A
+  turn's lease now renews on a thread of its own, so busy work on the computer can't stop it. If a finished
+  answer still comes in late, after its run was dismissed or cancelled, it is kept: the run ends completed and the
+  answer shows where the person asked, and a closed task stays closed. A run whose lease lapsed is not started again
+  for 90 minutes while its own answer may still arrive.
 - **Updates tree keeps archived cards out after a reload**: a card you archive on Updates no longer comes back in
   the tree when the page reloads, and Restore brings it back for good. Archive stays yours alone: others still see the
   card. A manager whose own card you archived stays in the tree with "No update yet" and their reports below. The
@@ -109,6 +148,7 @@ All notable changes to Tico are recorded here. The format follows
   before this keeps today's behaviour ([sessions](docs/sessions.md)).
 
 ### Changed
+- **A bot can hold 50 task worktrees, up from 30.** The computer's 5 GB free-disk floor and normal cleanup rules still apply.
 - **A waiting task sleeps, and a bot's own writes never wake it** (token saving): news about a task that waits on
   another task (blocked by) or on a pull request's checks (wake once), such as a step move, a relation change or a
   comment, no longer starts a run; the task wakes when its blocker finishes or its checks come back. A notice that a
