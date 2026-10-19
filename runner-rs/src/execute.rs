@@ -483,35 +483,6 @@ fn claude_cold_start() -> &'static tokio::sync::Mutex<()> {
 const CLAUDE_COLD_START_HOLD_S: u64 = 45;
 
 impl Runner {
-    /// Lease renewal: a definite answer about the attempt ends the turn; an unreachable hub does not.
-    async fn renew_loop(self: Arc<Self>, aid: String, flags: Arc<Flags>) {
-        loop {
-            tokio::select! {
-                _ = tokio::time::sleep(RENEW_INTERVAL) => {}
-                _ = flags.done_notify.notified() => return,
-            }
-            if flags.done.load(Ordering::SeqCst) {
-                return;
-            }
-            let before = Instant::now();
-            match self.client.post(&format!("attempts/{aid}/renew"), &json!({}), None).await {
-                Ok(reply) => {
-                    let lease = reply["lease_seconds"].as_f64().unwrap_or(60.0);
-                    *flags.deadline.lock().unwrap() = before + Duration::from_secs_f64((lease - 10.0).max(0.0));
-                    if reply["stop"] == true {
-                        // A person pressed Stop: the turn is interrupted and reported as interrupted, not lost.
-                        flags.stopped.store(true, Ordering::SeqCst);
-                    }
-                }
-                Err(e) if !e.retryable => {
-                    flags.lost.store(true, Ordering::SeqCst);
-                    return;
-                }
-                Err(_) => {}
-            }
-        }
-    }
-
     /// Posts the outbox as events land: at once for the first, then at most once per STREAM_WINDOW, so a
     /// burst of deltas is one request and a lone first delta waits for nothing.
     async fn stream_loop(self: Arc<Self>, aid: String, wake: Arc<Notify>, flags: Arc<Flags>) {
@@ -796,7 +767,8 @@ impl Runner {
             deadline: Mutex::new(Instant::now() + Duration::from_secs_f64((lease - 15.0).max(0.0))),
         });
         let wake = Arc::new(Notify::new());
-        let renewer = tokio::spawn(self.clone().renew_loop(aid.clone(), flags.clone()));
+        // On the lease thread, so blocking work on this runtime's two workers cannot starve it (Dev 242).
+        let renewer = crate::lease::spawn(&self.client, aid.clone(), flags.clone(), RENEW_INTERVAL);
         let streamer = tokio::spawn(self.clone().stream_loop(aid.clone(), wake.clone(), flags.clone()));
         let runtime = text_of(&config["runtime"]);
         // A harness that keeps one process per conversation between turns (crate::warm) has sessions of its own.
