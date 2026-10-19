@@ -369,7 +369,7 @@ No open ports, and Cloudflare Access can do the sign-in. The wizard creates the 
 5. `docker compose up -d`
 
 **How long a sign-in lasts.** The Access application's Session Duration (24 hours unless you change it) decides how
-often people sign in again; behind Access, Tico keeps no session of its own. When it ends, Cloudflare sends the app's next
+often people sign in again; behind Access, Tico has no sign-in timeout of its own. When it ends, Cloudflare sends the app's next
 request to its login page, which a page cannot follow in the background, and Cloudflare offers no way to renew the
 session from the page. Tico then stops reconnecting and shows "You've been signed out" with **Sign in again**: Access's
 login opens in the same window, and afterwards the page comes back where it was, with any text typed in an open box. The
