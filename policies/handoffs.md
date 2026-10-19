@@ -85,7 +85,10 @@ hub task create --owner <slug> --title "<verb-first title>" --body "<what and wh
 
 It does not wake the bot. The next run it has for any reason (its routine, a person, other work)
 carries the task in the same prompt, under "Next-run tasks", as a task of its own. Handle each one
-in that run and mark it done or declined like any other. Until a run carries it, closing it is a
+in that run and mark it done or declined like any other. When the run that carries it is not the
+time to do it, store when it is: `hub task defer <id> --after <task>` (when that task is done),
+`--at <time>` or `--next-run`; it then gets a run of its own. A run that neither works it nor
+defers it hands it back to the next run. Until a run carries it, closing it is a
 cancel and wakes nobody. Only a bot has a next run; a task for a person is always an ordinary one.
 
 ## Quiet notes: telling a bot something without waking it

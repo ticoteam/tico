@@ -169,6 +169,28 @@ ordinary task states and needs a completion result. Close it with
 **Run now** on the task to start it sooner. Deferred does not mean delayed forever: the stalled-task
 check can wake an idle bot after 30 minutes when no other work or Routine will move it.
 
+The task shows where it stands, under **Quiet work** on the task and as `quiet` in `hub task show`:
+
+- **Eligible**: the bot's next run carries it.
+- **Delivered**: a run carried it; which run and when are shown. **Deferred** is a delivered task whose run said
+  when to pick it up again.
+- **Queued**: it has a run of its own, waiting or going (after **Run now**, or when its resume condition came true).
+
+A run that carries a task it will not do now says when to pick it up, rather than in its reply's words:
+
+```bash
+hub task defer <task-id> --after <other-task>   # when that task is done or closed
+hub task defer <task-id> --at 2026-10-20T09:00Z # at a time
+hub task defer <task-id> --next-run             # with the next run, whatever starts it
+hub task defer <task-id> --handled              # this run is done with it for now (MCP: hub_task_defer)
+```
+
+When the condition comes true the task gets one run of its own, as **Run now** gives it. A run that ends without
+working a carried task (a comment, a step, status or note change, a pull request, or `--handled`) and without a
+condition hands it back: it is eligible again and the next run carries it, with a line in its history. The bot's
+own task, or a person, may defer it (`POST /api/v2/tasks/{id}/defer`). The Health Monitor names a quiet task handed
+to a run more than two hours ago and not worked since, with no condition (`quiet_unworked`).
+
 The equivalent API calls are internal routes (subject to change); use your own rights and an
 `Idempotency-Key` on writes:
 

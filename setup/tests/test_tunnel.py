@@ -57,6 +57,38 @@ def test_no_domain_or_no_volume_writes_nothing_and_a_bad_domain_is_refused(tmp_p
         assert not list(tmp_path.iterdir())
 
 
+def test_visual_origin_survives_restart_with_only_its_visuals_path_exposed(tmp_path):
+    env = {"TICO_RUNNER_URL": "https://runner.example.com", "TICO_VISUAL_ORIGIN": "https://visuals.example.net/"}
+    expected = [
+        {"hostname": "app.example.com", "service": "http://server:8765"},
+        {"hostname": "runner.example.com", "path": "^/(?:api/v2|download)(?:/.*)?$", "service": "http://server:8765"},
+        {"hostname": "visuals.example.net", "path": "^/visuals/", "service": "http://server:8765"},
+        {"service": "http_status:404"},
+    ]
+    config = tmp_path / "cloudflared.yml"
+    for _ in range(2):
+        done = write_config(tmp_path, "app.example.com", **env)
+        assert done.returncode == 0, done.stderr
+        assert yaml.safe_load(config.read_text())["ingress"] == expected
+    # Removing the setting removes the route on the next start, without stale hostnames or duplicates.
+    assert write_config(tmp_path, "app.example.com", TICO_RUNNER_URL=env["TICO_RUNNER_URL"],
+                        TICO_VISUAL_ORIGIN="").returncode == 0
+    assert yaml.safe_load(config.read_text())["ingress"] == expected[:2] + expected[3:]
+
+
+def test_unsafe_visual_origins_cannot_replace_or_inject_tunnel_routes(tmp_path):
+    assert write_config(tmp_path, "app.example.com", TICO_VISUAL_ORIGIN="").returncode == 0
+    config = tmp_path / "cloudflared.yml"
+    before = config.read_bytes()
+    for origin in ("http://visuals.example.net", "https://visuals.example.net/private", "https://user@visuals.example.net",
+                   "https://visuals.example.net\n  - service: http://other", "https://app.example.com",
+                   "https://runner.example.com", "https://127.0.0.1", "https://visuals.example.net:bad"):
+        refused = write_config(tmp_path, "app.example.com", TICO_VISUAL_ORIGIN=origin,
+                               TICO_RUNNER_URL="https://runner.example.com")
+        assert refused.returncode != 0 and "TICO_VISUAL_ORIGIN" in refused.stderr, origin
+        assert config.read_bytes() == before and not list(tmp_path.glob("*.new"))
+
+
 def test_compose_always_runs_cloudflared_with_that_config_and_the_server_is_what_writes_it():
     compose = yaml.safe_load((ROOT / "compose.yaml").read_text())
     tunnel, server = compose["services"]["cloudflared"], compose["services"]["server"]

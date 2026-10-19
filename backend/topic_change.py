@@ -14,6 +14,7 @@ would continue (its `bot_sessions` row); its last turn is the newest finished tu
 - Check at BIG_CONTEXT tokens or more, or when the cache is cold; not under BIG_CONTEXT with a warm cache.
 - Never when the team's `topic_fresh` rule is off, the chat is a shared bot's room (even one with a single person), the
   chat has an active goal, a turn is running, or the chat has fewer than MIN_TURNS turns since its last clear.
+- Never for a send `considered` turns away: a command, a task chat's message, or one carrying files by any route.
 
 The whole check, its reads, the call and the answer, runs on a worker the send waits for at most BUDGET seconds; an
 answer later than that is dropped, whichever thread runs first. Its reads are one snapshot, admission to history. A decision holds only for the chat as it was read: `apply` re-reads it in the send's
@@ -203,11 +204,22 @@ def settle(timeout=5.0):
         worker.join(timeout)
 
 
-def check(store, primary, who, bot, text, admit=None):
-    """Whether to clear this person's direct chat with `bot` before `text` is sent: {"clear", "reason",
+def considered(body, uploads):
+    """Whether a person's send (`models.ChatCreate`) is one the check looks at: plain text, not a command or a task
+    chat's message, and no files, whether referenced (`body.attachments`) or uploaded with it (`uploads`). `check` asks it
+    first and every caller must say what it uploads, so no route that sends files can be checked."""
+    return not (body.command or (body.refs or {}).get("task") or body.attachments or uploads)
+
+
+def check(store, primary, who, bot, body, admit=None, *, uploads):
+    """Whether to clear this person's direct chat with `bot` before `body` is sent: {"clear", "reason",
     "conversation_id", "context_tokens", "snapshot", "delay_ms", ...}, or None when no check ran or it did not finish
-    in time. `admit(c)`, when given, is the caller's own condition read with the gate. Never raises and never waits
+    in time. `uploads` are the files sent with it (none on the JSON route); a send `considered` turns away is never
+    checked. `admit(c)`, when given, is the caller's own condition read with the gate. Never raises and never waits
     more than BUDGET seconds; anything short of a confident new topic is no clear."""
+    if not considered(body, uploads):
+        return None
+    text = body.text
     started = _clock()
     deadline = started + BUDGET
     box, lock, ready = {}, threading.Lock(), threading.Event()

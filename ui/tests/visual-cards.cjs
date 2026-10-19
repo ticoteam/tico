@@ -380,19 +380,27 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
       assert.deepEqual(clip, [[true, true, true], [true, true, true]], `${label} (${way}): a clip at 40 s is the same element, at >= 39 s and playing after a redraw`);
     }
     // the same for a page card: the kept frame is the same element, and whether it loads again is recorded. Moved in
-    // place it does not, and its card holds its height through the redraw: no collapse, no jump.
-    const redrawPage = () => page.evaluate(async () => {
+    // place it does not, and its card holds its height through the redraw: no collapse, no jump. Given a pin, the redraw
+    // runs in the same task as the card takes that height from its page's message: the page answers its new size with its
+    // real height within milliseconds, so a separate wait for the pinned height can miss it and wait forever.
+    const redrawPage = pin => page.evaluate(async pin => {
       const card = document.querySelector('[data-message="m1"] figure.vcard[data-file="f-short"]'), f = card.querySelector('iframe'), body = card.querySelector('.vcard-body');
-      const h = () => Math.round(body.getBoundingClientRect().height), before = h(), seen = [];
+      const h = () => Math.round(body.getBoundingClientRect().height), seen = [];
       let loads = 0;
       f.addEventListener('load', () => loads++);
-      V2C.html = ''; v2ChatRender(V2C);
+      const before = await new Promise((go, fail) => {
+        const redraw = () => { const b = h(); V2C.html = ''; v2ChatRender(V2C); go(b); };
+        if (!pin) return redraw();
+        const t = setTimeout(() => fail(new Error(`the card never took the height ${pin} its page sent`)), 10000);
+        addEventListener('message', function took() { if (f.visualHeight !== pin) return; removeEventListener('message', took); clearTimeout(t); redraw(); });
+        window.vcardPinning = true;
+      });
       const same = document.querySelector('[data-message="m1"] figure.vcard[data-file="f-short"] iframe') === f;
       for (let i = 0; i < 40; i++) { seen.push(h()); await new Promise(r => requestAnimationFrame(r)); }
       await new Promise(r => setTimeout(r, 800));
       seen.push(h());
       return {same, loads, before, heights: [...new Set(seen)]};
-    });
+    }, pin);
     const moved = await redrawPage();
     console.log(`${label}: a kept page card's frame loaded ${moved.loads} time(s) on a redraw (moveBefore); heights ${moved.heights}`);
     assert.deepEqual([moved.same, moved.loads, moved.heights], [true, 0, [moved.before]], `${label}: a kept page card is the same frame, not loaded again, and holds its height through a redraw ${JSON.stringify(moved)}`);
@@ -412,15 +420,16 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
     // and the page loaded again sets the height down as well as up: a card pinned taller than its page (200, as a page
     // measured at no width would leave it) comes back to the page's own height after a redraw, holding 200 until then
     const shortFrame = page.frames().find(f => f.url().includes('tok-f-short'));
-    await shortFrame.evaluate("parent.postMessage({ticoVisualHeight: 200}, '*')");
-    await page.waitForFunction(() => document.querySelector('[data-message="m1"] figure.vcard[data-file="f-short"] iframe').visualHeight === 200, null, {timeout: 3000});
     await noMove(true);
-    const down = await redrawPage();
+    const pinned = redrawPage(200);
+    await page.waitForFunction(() => window.vcardPinning);
+    await shortFrame.evaluate("parent.postMessage({ticoVisualHeight: 200}, '*')");
+    const down = await pinned;
     await noMove(false);
     await shortCard.scrollIntoViewIfNeeded();
     await page.waitForFunction(() => { const f = document.querySelector('[data-message="m1"] figure.vcard[data-file="f-short"] iframe'); return f.getBoundingClientRect().height > 1; }, null, {timeout: 5000}).catch(() => {});
     const downTo = await shortCard.evaluate(c => [c.querySelector('.vcard-body'), c.querySelector('iframe')].map(e => Math.round(e.getBoundingClientRect().height)));
-    assert(down.heights.every(h => h === 200 || Math.abs(h - moved.before) <= 1) && downTo.every(h => Math.abs(h - moved.before) <= 1),
+    assert(down.before === 200 && down.heights.every(h => h === 200 || Math.abs(h - moved.before) <= 1) && downTo.every(h => Math.abs(h - moved.before) <= 1),
       `${label}: without moveBefore, a card pinned at 200 comes back down to ${moved.before} after a redraw ${JSON.stringify(down)} ${downTo}`);
     // a page measured at one width is re-measured at another: narrowed, the short page wraps and grows; widened back,
     // it comes back down (a page measures at least its frame, so it could not say so by itself)

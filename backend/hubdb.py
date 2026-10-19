@@ -976,6 +976,8 @@ def migrate(conn, adopt_legacy=False):
     if "carried_by" not in columns:
         conn.execute("ALTER TABLE tasks ADD COLUMN carried_by TEXT")
     conn.execute("CREATE INDEX IF NOT EXISTS tasks_carried_by ON tasks(carried_by) WHERE carried_by IS NOT NULL")
+    # When a run that carried a next-run task without doing it picks it up again (backend/quiet_work.py).
+    add_column(conn, "tasks", "resume_json", "TEXT")
     if "private" in {r[1] for r in conn.execute("PRAGMA table_info(tasks)")}:
         # The few private tasks, which every privacy-checked read loads (backend/privacy_index.py).
         conn.execute("CREATE INDEX IF NOT EXISTS tasks_private ON tasks(id) WHERE private IS NOT 0")
@@ -3249,6 +3251,9 @@ def _queue_end(conn, owner, top=False):
 def _unblock(conn, done_task, told=()):
     """A finished task frees whatever waited on it; a bot owner hears about it once nothing else
     blocks the task. `told` are the tasks already woken about it (_answered)."""
+    # A quiet task a run deferred until this one is done gets its run (backend/quiet_work.py).
+    from . import quiet_work
+    quiet_work.finished(conn, done_task)
     for blocked_id in TR.blocked_ids(conn, done_task["id"]):
         row = task(conn, blocked_id)
         if task_private(conn, done_task) and not subtask_flows_up(conn, done_task, row) and (
@@ -5335,17 +5340,20 @@ def tasks_only(conn, actor):
     return (_json(row["config_json"], {}) or {}).get("bot_contact") == "tasks"
 
 
-# A next-run task still waiting for its owner's next run: open, and not taken by a run that is
-# under way or finished. A run that failed or was interrupted gives it back, so the next one
-# carries it again; a task the bot already moved on (doing, done) is its own business by then.
+# A next-run task still waiting for its owner's next run: open, with no resume condition holding it, and not taken
+# by a run that is under way or finished. A run that failed or was interrupted gives it back, so the next one
+# carries it again, and so does one that finished without working it or saying when to (backend/quiet_work.py
+# settle); a task the bot already moved on (doing, done) is its own business by then.
 NEXT_RUN_WAITING_SQL = (
-    "t.next_run=1 AND t.status='open' AND t.snoozed_until IS NULL AND (t.carried_by IS NULL OR NOT EXISTS("
+    "t.next_run=1 AND t.status='open' AND t.snoozed_until IS NULL AND t.resume_json IS NULL "
+    "AND (t.carried_by IS NULL OR NOT EXISTS("
     "SELECT 1 FROM attempts a WHERE a.id=t.carried_by AND a.state IN ('leased','running','completed')))")
 
 
 def next_run_waiting(conn, row):
     """Whether this task (a row) is a next-run task still waiting to be carried."""
-    if not row or not row.get("next_run") or row.get("status") != "open" or row.get("snoozed_until"):
+    if not row or not row.get("next_run") or row.get("status") != "open" or row.get("snoozed_until") \
+            or row.get("resume_json"):
         return False
     if not row.get("carried_by"):
         return True
@@ -5497,6 +5505,8 @@ def stalled_tasks(conn, at=None):
             continue
         if row.get("next_run") and row["updated"] > shift(at, seconds=-STALL_NEXT_RUN_MINUTES * 60):
             continue
+        if row.get("resume_json"):
+            continue        # a run said when to pick it up (backend/quiet_work.py): that brings it back
         if TR.live_blocker(conn, row["id"], ACTIVE_STATUSES):
             continue
         quiet = int((base - parse_ts(row["updated"])).total_seconds() // 60)
@@ -5789,7 +5799,7 @@ def task_run_now(conn, actor, task_id):
     if why := setup_hold(conn, row["owner"]):
         raise Refused("run-now", why)       # not a refused write: nothing to count against the caller
     if row.get("next_run"):
-        conn.execute("UPDATE tasks SET next_run=0, updated=? WHERE id=?", (now(), task_id))
+        conn.execute("UPDATE tasks SET next_run=0, resume_json=NULL, updated=? WHERE id=?", (now(), task_id))
         _task_event(conn, task_id, actor, "next_run", "1", "0", "run now")
     waiting = None
     try:
