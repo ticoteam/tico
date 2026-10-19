@@ -8,6 +8,14 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- **"Sign in with Tico account" on hosted servers, through the ordinary OpenID Connect sign-in**: a new optional
+  `TICO_OIDC_LABEL` puts one "Sign in with <label>" button in front of any OpenID Connect provider (unset, sign-in goes
+  straight to the provider as before). The setup wizard's new `--auth oidc --issuer <url> --client-id <id>
+  [--signin-label <name>]` takes any issuer, with the client secret only from `TICO_OIDC_CLIENT_SECRET` in the
+  environment, never printed. With `--hosted`, the owner email is the owner, invited teammates sign in as members, and
+  the owner sign-in link stays as break-glass beside it: it works while the issuer is down, and people already
+  signed in stay signed in. Google, Microsoft, Cloudflare Access and the other sign-in options work as before.
+  ([Install](docs/install.md#sign-in))
 - **Recommended setup** in the installer: `sh install.sh --recommended` is the quick start with the sample company,
   your Claude and ChatGPT subscriptions plus Tico Gateway, Tico Support on and a computer on the server, so the only
   setup left is signing in to Claude and ChatGPT in Settings > Computers. Run on a terminal with no options, the

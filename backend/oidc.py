@@ -37,7 +37,10 @@ log = logging.getLogger("tico.oidc")
 LOGIN_PATH = "/auth/login"
 CALLBACK_PATH = "/auth/callback"
 SIGNED_OUT_PATH = "/auth/signed-out"
-AUTH_PATHS = (LOGIN_PATH, CALLBACK_PATH, SIGNED_OUT_PATH)
+# With TICO_OIDC_LABEL set, a signed-out browser lands here first: one "Sign in with <label>" button to LOGIN_PATH.
+SIGN_IN_PATH = "/auth/sign-in"
+AUTH_PATHS = (LOGIN_PATH, CALLBACK_PATH, SIGNED_OUT_PATH, SIGN_IN_PATH)
+LABEL = re.compile(r"[^\x00-\x1f\x7f<>]{1,40}")
 # A separate browser app on an allowed origin (TICO_CORS_ORIGINS, backend/cors.py) signs in here:
 # `/auth/login?next=<its URL>&code_challenge=<S256>` returns it a one-time code in the URL fragment,
 # and `POST /auth/token` exchanges the code (with the PKCE verifier) for a bearer session.
@@ -133,6 +136,8 @@ def check(settings):
         raise RuntimeError("TICO_SESSION_SECRET must be at least 32 characters")
     if any("@" in d or "." not in d for d in settings.oidc_allowed_domains):
         raise RuntimeError("TICO_OIDC_ALLOWED_DOMAINS is a comma-separated list of domains such as acme.com")
+    if settings.oidc_label and not LABEL.fullmatch(settings.oidc_label):
+        raise RuntimeError("TICO_OIDC_LABEL is the provider's name for the sign-in button, at most 40 characters")
 
 
 def _session_secret(settings):
@@ -168,6 +173,8 @@ class Oidc:
         self.cookie = prefix + "tico_session"
         self.login_cookie = prefix + "tico_login"
         self.redirect_uri = settings.public_url + CALLBACK_PATH
+        # Where a signed-out browser goes: the button page when the provider has a name to show, else the provider.
+        self.sign_in_path = SIGN_IN_PATH if settings.oidc_label else LOGIN_PATH
         self.jwks_min_interval = JWKS_MIN_INTERVAL
         self._lock = threading.Lock()
         self._discovery, self._discovered_at = None, 0.0
@@ -540,6 +547,19 @@ def register(app, auth):
         response = RedirectResponse(url, status_code=302)
         oidc.set_cookie(response, oidc.login_cookie, cookie, LOGIN_WINDOW)
         return response
+
+    @app.get(SIGN_IN_PATH)
+    def sign_in_page(next: str = "/"):
+        """One button, "Sign in with <TICO_OIDC_LABEL>", to the provider; without a label, straight to it."""
+        active()
+        target = LOGIN_PATH + ("?" + urlencode({"next": safe_next(next)}) if safe_next(next) != "/" else "")
+        if not settings.oidc_label:
+            return RedirectResponse(target, status_code=302)
+        page = _page(settings, 200, "Sign in to " + settings.app_name,
+                     "You come straight back here once you're signed in.",
+                     (target, "Sign in with " + settings.oidc_label))
+        page.headers["Cache-Control"] = "no-store"
+        return page
 
     @app.get(CALLBACK_PATH)
     def callback(request: Request):

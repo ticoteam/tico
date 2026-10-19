@@ -62,8 +62,10 @@ def check(settings):
         if not ALB_REGION.fullmatch(settings.alb_region):
             raise RuntimeError("TICO_ALB_REGION must be an AWS region such as us-west-2")
     if kind == "oidc":
-        from . import oidc
+        from . import oidc, owner_link
         oidc.check(settings)
+        if owner_link.break_glass(settings):
+            owner_link.check(settings)
     if kind == "owner-link":
         from . import owner_link
         owner_link.check(settings)

@@ -664,7 +664,7 @@ def create_app(settings=None):
                     and not path.startswith(("/api", "/mcp")) and "authorization" not in request.headers
                     and "text/html" in request.headers.get("accept", "")):
                 back = path + ("?" + request.url.query if request.url.query else "")
-                return RedirectResponse(oidc.LOGIN_PATH + "?" + urlencode({"next": oidc.safe_next(back)}),
+                return RedirectResponse(auth.proxy.sign_in_path + "?" + urlencode({"next": oidc.safe_next(back)}),
                                         status_code=302)
             if (exc.status == 401 and auth.proxy and auth.proxy.name == owner_link.KIND
                     and request.method in ("GET", "HEAD") and not hasattr(request.state, "identity")
