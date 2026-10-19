@@ -30,7 +30,7 @@ def test_plain_message_from_another_conversation_does_not_interrupt_running_turn
     ready(api, r, ["ops", "finance"])
     post(api, "chat/finance", {"text": "Send COO a separate update"})
     finance = claim(api, r)
-    update = post(api, "messages", {"to": "ops", "kind": "say", "text": "Separate FYI"}, finance["token"])
+    update = post(api, "messages", {"to": "ops", "kind": "say", "text": "Separate FYI", "needs_action": True}, finance["token"])
 
     assert post(api, f"attempts/{active['id']}/inputs", {}, r["token"])["messages"] == []
     with api.app.state.store.read() as c:

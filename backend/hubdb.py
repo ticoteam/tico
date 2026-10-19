@@ -2263,7 +2263,7 @@ def say(conn, actor, to_actor, body, conversation_id=None, kind="say", refs=None
         refs.update(quiet=True, **{bot_to_bot.MARK: bot_to_bot.RULE})
     msg = _write_message(conn, actor, target, body, conv, kind, refs, in_reply_to, wait_s)
     if waits:
-        bot_to_bot.hold(conn, msg, task(conn, on_task) if on_task else None)
+        bot_to_bot.hold(conn, msg, task(conn, on_task) if isinstance(on_task, str) and on_task else None)
     _close_open_asks(conn, actor, target, kind, msg)
     if kind == "ask" and is_bot(actor) and is_human(target):
         about = message_task_id({"refs": refs}, conv)

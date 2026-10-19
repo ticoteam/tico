@@ -3168,7 +3168,7 @@ def create_app(settings=None):
             msg = next(m for m in H.task_comments(c, task_id, actor=privacy.actor(request.state.identity)) if m["id"] == msg["id"])
             held = H.held_note(c, msg.get("to_actor"))
             return {"comment": msg, "comments": H.task_comments(c, task_id, actor=privacy.actor(request.state.identity)),
-                    "woke": bool(wake), **({"warning": held} if held else {})}
+                    "woke": bool(wake) and not (msg.get("refs") or {}).get("can_wait"), **({"warning": held} if held else {})}
         result = mutate(request, body, work)
         if body.attachments:
             app.state.file_metadata.wake.set()   # a chat file shared here is a new task copy: preview it now

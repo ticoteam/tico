@@ -30,6 +30,7 @@ WAKES = ("flagged needs-action", "an ask, answer or steer", "references beyond a
 FLAG = "needs_action"
 MARK = "can_wait"
 RULE = "bot_to_bot"
+BACKLOG = "held-messages"
 
 
 def can_wait(conn, actor, target, kind, refs, body, in_reply_to=None):
@@ -77,17 +78,30 @@ def hold(conn, msg, task_row=None):
     return row
 
 
-def carried(conn, notes, conversation_id, at):
-    """Mark the waiting messages these carried notes stand for read. A message in the run's own room is in the
-    room history the run already reads, so its note is not repeated: the returned list leaves it out."""
-    out = []
+def carried(conn, notes, at):
+    """Mark the waiting messages these carried notes stand for read. Every note goes into the prompt, one in the
+    run's own room too: a fresh session reads no room history and a resumed one only a recent page, so the room
+    alone never proves the run saw it."""
     for item in notes:
-        mid = item.get("message_id")
-        if mid:
+        if item.get("message_id"):
             conn.execute("UPDATE messages SET delivered_at=coalesce(delivered_at,?), read_at=coalesce(read_at,?) "
-                         "WHERE id=?", (at, at, mid))
-            row = conn.execute("SELECT conversation_id FROM messages WHERE id=?", (mid,)).fetchone()
-            if row and row["conversation_id"] == conversation_id:
-                continue
-        out.append(item)
-    return out
+                         "WHERE id=?", (at, at, item["message_id"]))
+    return notes
+
+
+def continue_backlog(conn, bot):
+    """More held messages wait than one run carries (H.notes_waiting's limit): one keeper notice starts the run
+    that carries the next ones, so none is left without a run to deliver it. Called after this run's notes are
+    marked carried; at most one such notice waits at a time."""
+    from . import hubdb as H
+    left = conn.execute(f"SELECT 1 FROM notes n WHERE n.to_actor=? AND n.message_id IS NOT NULL AND "
+                        f"{H.NOTE_WAITING_SQL} LIMIT 1", ("bot:" + bot,)).fetchone()
+    if not left:
+        return None
+    pending = conn.execute("SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot=? "
+                           "AND j.state IN ('queued','leased') AND json_extract(m.refs_json,'$.wake')=?",
+                           (bot, BACKLOG)).fetchone()
+    if pending:
+        return None
+    return H.say(conn, H.KEEPER, "bot:" + bot, "More bot messages waited than one run carries; this run "
+                 "carries the next ones.", kind="notice", refs={"wake": BACKLOG, "trigger": "other"})

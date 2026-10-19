@@ -101,7 +101,7 @@ def test_several_waiting_messages_reach_the_next_run_in_the_order_sent(api):
     assert [n["message"] for n in claim(api, r, "cpo")["notes"] if n.get("message")] == ids
 
 
-def test_a_bots_comment_to_a_bot_on_a_task_waits_and_that_tasks_next_run_reads_it_in_its_history(api):
+def test_a_bots_comment_to_a_bot_on_a_task_waits_and_that_tasks_fresh_session_gets_it_in_its_prompt(api):
     r = setup(api)
     with api.app.state.store.transaction() as c:
         t = H.task_create(c, "bot:ops", "Ship the export", "Build it", "bot:cpo")
@@ -112,14 +112,43 @@ def test_a_bots_comment_to_a_bot_on_a_task_waits_and_that_tasks_next_run_reads_i
     with api.app.state.store.transaction() as c:
         notes = H._rows(c.execute("SELECT * FROM notes WHERE message_id=?", (msg["id"],)))
     assert len(notes) == 1 and f"on task Ship the export ({t['id']})" in notes[0]["body"]
-    # The task's next run, whatever starts it, reads the held comment in the task's own history, so the note is
-    # marked carried and the message read without repeating it.
+    # The task's first run is a fresh session, which reads no room history: the held comment still reaches its
+    # prompt as a note (the runner puts every carried note in the prompt), and is read then.
     attempt = claim(api, r, "cpo")
     assert attempt["task"]["id"] == t["id"]
-    assert not [n for n in attempt["notes"] if n.get("message") == msg["id"]]
+    assert [n["message"] for n in attempt["notes"] if n.get("message")] == [msg["id"]]
     assert message(api, msg["id"])["read_at"] is not None
-    with api.app.state.store.read() as c:
-        assert c.execute("SELECT carried_by FROM notes WHERE message_id=?", (msg["id"],)).fetchone()[0] == attempt["id"]
+    # That run fails; the retry, a fresh session in the same room again, gets the comment again.
+    post(api, f"attempts/{attempt['id']}/started", {"thread_id": "t1"}, token=r["token"])
+    post(api, f"attempts/{attempt['id']}/complete", {"outcome": "failed", "text": "boom", "last_seq": 0}, token=r["token"])
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE jobs SET state='queued',attempt_id=NULL WHERE state='uncertain'")
+    retry = claim(api, r, "cpo")
+    assert retry and [n["message"] for n in retry["notes"] if n.get("message")] == [msg["id"]]
+
+
+def test_a_backlog_past_one_runs_notes_gets_the_next_run_and_nothing_is_left(api):
+    r = setup(api)
+    with api.app.state.store.transaction() as c:
+        for i in range(3):
+            H.note_create(c, "human:ana", "bot:cpo", f"Ordinary note {i}")
+        # Three senders: one room takes at most 20 bot-to-bot messages an hour.
+        ids = [H.say(c, ("bot:ops", "bot:coo", "bot:finance")[i % 3], "bot:cpo", f"Update {i}")["id"] for i in range(55)]
+    assert jobs(api, "cpo") == 0
+    post(api, "chat/cpo", {"text": "Go"})
+    seen, runs = [], 0
+    while True:
+        attempt = claim(api, r, "cpo")
+        if not attempt:
+            break
+        runs += 1
+        seen += [n["message"] for n in attempt["notes"] if n.get("message")]
+        post(api, f"attempts/{attempt['id']}/started", {"thread_id": f"t{runs}"}, token=r["token"])
+        post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "text": "ok", "last_seq": 0},
+             token=r["token"])
+        assert runs < 5
+    assert seen == ids and runs == 2
+    assert all(message(api, mid)["read_at"] for mid in ids)
 
 
 def test_a_bots_comment_flagged_needs_action_wakes_the_task_owner(api):
@@ -179,5 +208,14 @@ def test_a_flagged_wake_counts_in_the_weekly_table_and_a_waiting_one_does_not(ap
     assert [row["body"] for row in queued] == ["Act now"]
     attempt = claim(api, r, "cpo")
     assert attempt["message"]["body"] == "Act now"
-    # The FYI is in the same room, which the run reads: it is read now, not repeated as a note.
-    assert not [n for n in attempt["notes"] if n.get("message")] and message(api, fyi["id"])["read_at"]
+    assert [n["message"] for n in attempt["notes"] if n.get("message")] == [fyi["id"]] and message(api, fyi["id"])["read_at"]
+
+
+def test_a_task_comment_says_whether_it_woke_the_bot(api):
+    r = setup(api)
+    token = ops_token(api, r)
+    with api.app.state.store.transaction() as c:
+        t = H.task_create(c, "bot:ops", "Ship the export", "Build it", "bot:cpo")
+    plain = post(api, f"tasks/{t['id']}/comments", {"text": "FYI: docs merged."}, token=token)
+    flagged = post(api, f"tasks/{t['id']}/comments", {"text": "Blocked on you.", "needs_action": True}, token=token)
+    assert plain["woke"] is False and flagged["woke"] is True
