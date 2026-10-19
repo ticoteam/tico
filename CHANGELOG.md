@@ -107,11 +107,6 @@ All notable changes to Tico are recorded here. The format follows
   ([Computers](docs/computers.md#remove-a-subscription)).
 
 ### Fixed
-- **A bot's finished answer is no longer lost or given twice when its computer stalls before handing it in.** A
-  turn's lease now renews on a thread of its own, so busy work on the computer can't stop it. If a finished
-  answer still comes in late, after its run was dismissed or cancelled, it is kept: the run ends completed and the
-  answer shows where the person asked, and a closed task stays closed. A run whose lease lapsed is not started again
-  for 90 minutes while its own answer may still arrive.
 - **Updates tree keeps archived cards out after a reload**: a card you archive on Updates no longer comes back in
   the tree when the page reloads, and Restore brings it back for good. Archive stays yours alone: others still see the
   card. A manager whose own card you archived stays in the tree with "No update yet" and their reports below. The
