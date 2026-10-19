@@ -584,7 +584,8 @@ Levers set in **Settings → Bots**, not in the repository:
 - **Harness**: which CLI performs the run (`openai` / Codex, `claude`, `gemini`, `antigravity`,
   `grok`, `cursor` / Cursor Agent, `musecode` / Muse Code, `pi`). A harness whose provider is off still
   shows in the picker, greyed out, with where to turn it on. **Model**: the latest model in that family (Sol, Astra, Grok 4.6, Gemini Flash,
-  Claude Opus 5, Claude Fable 5.1). Search the picker: `grok` shows `grok/grok 4.6` at every
+  Claude Opus 5, Claude Fable 5.1). While the [Tico AI Gateway](ai-gateway.md) is connected, `pi` also offers
+  Tico Cheap, Mid and Power 1.0, each listed with what runs underneath. Search the picker: `grok` shows `grok/grok 4.6` at every
   effort; `sol` shows `openai/gpt 5.6 sol`. The same levers set the built-in BotOps bot: it may
   run on any harness and model here, limited in practice to the providers the company enabled
   and what its computer is signed in to.

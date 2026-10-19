@@ -42,6 +42,7 @@ import stat
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -263,6 +264,42 @@ def urlopen(request, timeout):
     return _OPENER.open(request, timeout=timeout)
 
 
+# The only hosts the gateway key goes to over plain HTTP: this computer, named exactly (clients/gateway.py LOOPBACK).
+LOOPBACK = ("localhost", "127.0.0.1", "::1")
+
+
+def safe_gateway_url(url):
+    """`url` if the gateway key may be sent there, else None: HTTPS, or plain HTTP to an exact loopback host, with no
+    user, password, query or fragment. The host is parsed, not prefix-matched (clients/gateway.py `safe_base`)."""
+    url = str(url or "").strip()
+    if not url or any(ch in url for ch in " \t\r\n\0\\?#@"):
+        return None
+    try:
+        parts = urllib.parse.urlsplit(url)
+        host = parts.hostname or ""
+        parts.port
+    except ValueError:
+        return None
+    return url if parts.scheme == "https" and host or parts.scheme == "http" and host in LOOPBACK else None
+
+
+class _Unredirected(urllib.request.HTTPRedirectHandler):
+    """Never follows a redirect: urllib's would resend the key's Authorization header to wherever it points."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def gateway_open(request, timeout):
+    """`urlopen` for the Gateway's key, built for each call: a redirect is answered as the HTTP error it is, and plain
+    HTTP (only ever to this computer, `safe_gateway_url`) goes straight there, never through a proxy, which would get
+    the key in clear. HTTPS may use the environment's proxy, which only tunnels it."""
+    handlers = [_HTTPHandler, _HTTPSHandler, _Unredirected]
+    if urllib.parse.urlsplit(request.full_url).scheme == "http":
+        handlers.append(urllib.request.ProxyHandler({}))
+    return urllib.request.build_opener(*handlers).open(request, timeout=timeout)
+
+
 def time_left(timeout):
     """`timeout`, cut to what is left of the deadline; `unavailable`, asking nothing, when less than MIN_ATTEMPT is."""
     deadline = _DEADLINE.get()
@@ -444,13 +481,16 @@ def direct(api_key, model=MODEL, timeout=TIMEOUT, opener=None, sleep=time.sleep,
 def gateway(api_key, url, model=GATEWAY_MODEL, timeout=GATEWAY_TIMEOUT, opener=None):
     """The Tico AI Gateway with a gateway key: one try of at most `timeout` seconds, no retry (the Gateway makes none
     either; the server falls back instead). A refusal keeps the HTTP status and a code, never the Gateway's text.
-    `opener(request, timeout)` is the seam the tests use."""
+    The key goes only to an https or exact-loopback `url` (`safe_gateway_url`), never follows a redirect, and reaches
+    a loopback URL without a proxy (`gateway_open`). `opener(request, timeout)` is the seam the tests use."""
     if not api_key or not url:
         raise JudgeError("unconfigured", "no Tico AI Gateway key or URL")
-    opener = opener or urlopen
+    opener = opener or gateway_open
 
     def engine(state, questions, label=None):
         validate(state, questions, label)
+        if not safe_gateway_url(url):                   # checked at use, so the next provider is asked instead
+            raise JudgeError("unconfigured", "the Tico AI Gateway URL is neither https nor this computer")
         body = {"state": state, "model": model, "questions": clean(questions)}
         if label:
             body["label"] = label
@@ -462,6 +502,8 @@ def gateway(api_key, url, model=GATEWAY_MODEL, timeout=GATEWAY_TIMEOUT, opener=N
                 payload = read_json(response)
         except urllib.error.HTTPError as exc:
             status = exc.code
+            if 300 <= status < 400:                     # not the Gateway's own answer: its key went no further
+                raise JudgeError("http", f"the Tico AI Gateway answered with a redirect ({status})", status)
             if status in (401, 403):                    # unknown or revoked key
                 raise JudgeError("auth", f"the Tico AI Gateway refused the key ({status})", status)
             if status in (402, 429, 529) or status >= 500:  # the Gateway's cap, a rate limit, or down

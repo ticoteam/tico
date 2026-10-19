@@ -193,6 +193,9 @@ p:empty{display:none}
 .prov .muted{font-size:var(--t-base);min-width:0}
 .prov-routed{gap:6px 14px;padding-top:10px}
 .prov-chip{display:inline-flex;align-items:center;gap:4px;font-size:var(--t-base)}
+/* The Tico AI Gateway connection, below the providers: its own key and Save (ui/app/settings-providers.js). */
+.prov-gateway{margin-top:var(--s5);padding-top:var(--s4);border-top:1px solid var(--line)}
+.prov-gateway-title{display:flex;align-items:center;gap:8px;margin:0 0 4px}
 .settings-bots-filters{display:flex;align-items:center;gap:8px;margin-bottom:10px;min-width:0}
 .settings-bots-filters .settings-inline-select{flex:0 1 auto;min-width:0;max-width:170px}
 .settings-filter-search{flex:1 1 160px;min-width:120px;max-width:280px;padding:7px 10px 7px 32px;font-size:var(--t-sm);border-radius:6px;background-position:10px center}

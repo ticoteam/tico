@@ -802,6 +802,16 @@ impl Runner {
                     }
                 }
             }
+            // The Gateway's key stays with this runner: the turn gets a relay and a token good for this turn only.
+            let isolated = crate::isolation::enabled();
+            if let Err(why) = crate::gateway_relay::hand_to_turn(&self.client, &attempt, &mut env, &mut vault, isolated).await {
+                // A failed turn whose error carries its code: the server settles it unstarted (`not_isolated`), so it
+                // is said once and not retried.
+                let _ = self.state.append(&aid, "error", &json!({"error": why}));
+                drove.outcome = "failed".into();
+                drove.reply = why.clone();
+                return Err(Fail::runtime(why));
+            }
             base_env = Some(env.clone());
             let pairs: Vec<(String, String)> = env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
             redactor = redact::for_turn(&pairs, &vault.values);
@@ -958,6 +968,8 @@ impl Runner {
             let choices = self.default_fallbacks().await;
             pending = crate::fallback::default_choice(&config, &choices, &turn_env, |rt| self.fallback_ready(rt, selected.as_ref()));
         }
+        // A Tico fallback needs the turn's relay; without one it is left out and the primary's outcome stands.
+        pending = crate::gateway_relay::admit(pending, vault.relay.is_some());
         // Only a server that sent `fallback_models` knows the field (an older one refuses unknown fields).
         let primary_limited = pending.as_ref().is_some_and(|h| h.default && hit_limit);
         let mut tried: Vec<String> = vec![runtime.clone()];
@@ -1053,7 +1065,8 @@ impl Runner {
             if drove.limited && hop.default && !native_control && spent < 2 {
                 left = Some((hop.harness.clone(), true));
                 let choices = self.default_fallbacks().await;
-                pending = crate::fallback::next_choice(&config, &choices, &turn_env, &tried, |rt| self.fallback_ready(rt, selected.as_ref()));
+                let next = crate::fallback::next_choice(&config, &choices, &turn_env, &tried, |rt| self.fallback_ready(rt, selected.as_ref()));
+                pending = crate::gateway_relay::admit(next, vault.relay.is_some());
             }
         }
         let ran_on = fallback.clone().unwrap_or_else(|| runtime.clone());

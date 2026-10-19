@@ -11,7 +11,7 @@ import yaml
 from fastapi import Query, Request
 from fastapi.responses import PlainTextResponse, RedirectResponse, Response
 
-from clients import sessions
+from clients import gateway, sessions
 
 from . import access as Access
 from . import bot_access as A
@@ -397,13 +397,21 @@ def operation_issues(c, who, auth):
                            if queued else " Other work can continue.")
             # A stopped run is held so an automatic retry cannot repeat an outside action. It is
             # useful in Settings, but age alone never turns it into an interruption for a person.
-            from .execution import held_runs
+            from .execution import held_runs, isolation_refused
             named = "; ".join(f"\"{h['title']}\" (owner {h['owner_name']})" for h in held_runs(c, who, auth, slug))
             held_note = f" Held: {named}." if named else ""
-            add("uncertain_work", f"{bot['display_name']} saved {uncertain} stopped {noun} for later",
-                "The bot stopped before returning an answer. Tico paused only that request so it "
-                f"will not repeat a possible outside action.{held_note}{queued_note} Review it whenever useful.",
-                bot=slug, severity="warning", needs_person=False, action="review")
+            if isolation_refused(c, who, auth, slug):
+                # Not a possible outside action: the bot's model can't run on its computer, and its later work waits
+                # behind the held run until a person acts.
+                add("uncertain_work", f"{bot['display_name']} can't run on its computer",
+                    gateway.run_status(gateway.NOT_ISOLATED) + f".{held_note} Its other work waits behind this run.",
+                    bot=slug, action="Pick another model in Settings → Bots, or move the bot to a computer with "
+                    "Tico's Docker runner, then review its stopped run.")
+            else:
+                add("uncertain_work", f"{bot['display_name']} saved {uncertain} stopped {noun} for later",
+                    "The bot stopped before returning an answer. Tico paused only that request so it "
+                    f"will not repeat a possible outside action.{held_note}{queued_note} Review it whenever useful.",
+                    bot=slug, severity="warning", needs_person=False, action="review")
         agent = location.get("agent")
         if agent and bot["state"] == "active" and not agent["credential"]:
             add("agent", bot["display_name"] + " has no agent credential",

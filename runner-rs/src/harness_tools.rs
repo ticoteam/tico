@@ -97,6 +97,8 @@ pub struct Capabilities {
     pub subscription_profiles: bool,
     pub profile_home: String,
     pub profile_dirs: Vec<String>,
+    /// Variables the CLI reads ahead of `profile_home` (Claude Code: CLAUDE_CONFIG_DIR); a profile's environment drops them.
+    pub profile_home_overrides: Vec<String>,
     pub own_config_home: bool,
     /// "" | refresh | turns | manual
     pub weekly_usage: String,
@@ -133,6 +135,7 @@ impl Default for Capabilities {
             subscription_profiles: false,
             profile_home: String::new(),
             profile_dirs: vec![],
+            profile_home_overrides: vec![],
             own_config_home: false,
             weekly_usage: String::new(),
             account: String::new(),
@@ -468,6 +471,7 @@ fn parse_capabilities(raw: Option<&toml::Value>, at: &str) -> Result<Capabilitie
             "subscription_profiles" => c.subscription_profiles = flag(k, v)?,
             "profile_home" => c.profile_home = text(k, v)?,
             "profile_dirs" => c.profile_dirs = list(k, v)?,
+            "profile_home_overrides" => c.profile_home_overrides = list(k, v)?,
             "own_config_home" => c.own_config_home = flag(k, v)?,
             "weekly_usage" => c.weekly_usage = choice(k, v, &["refresh", "turns", "manual"])?,
             "account" => c.account = choice(k, v, &["status-json", "app-server"])?,
