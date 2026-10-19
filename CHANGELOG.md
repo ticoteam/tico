@@ -7,6 +7,8 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.3.64] - 2026-10-19
+
 ### Added
 - **A usage limit holds the login, once**: a run that hits a subscription's usage limit now holds that provider
   login on that computer, for every bot signed in with it, until the reset the provider names (Claude's "resets
@@ -20,15 +22,11 @@ All notable changes to Tico are recorded here. The format follows
   shown only to that conversation's readers. A page's local images and fonts are embedded; remote ones are removed
   and listed. Self-hosters set `TICO_VISUAL_ORIGIN`, a separate site. Visuals still show as file chips until part 2
   ([Visuals in replies](docs/visuals.md)).
-- **Visuals in replies (part 2 of 4): pictures, SVG and visual pages show inline** under a chat message or a task
-  comment, a person's attachments too. Each is a card the width of the message, never wider than the screen, with its
-  title as the caption and a menu: Expand, Open in file viewer, Download. A visual page shows at its own height up to
-  480 px (60% of a phone screen), then fades with **Expand**; it cannot run its own scripts, open forms, load anything
-  or reach the app, and a link in it opens a new tab only when clicked. Expand (or a tap) opens it full screen: zoom on
-  pictures, scroll in pages; Close, Esc, swipe down or Back return to the same place. SVG and pages sit on a light card
-  in dark mode. A card holds its space while it loads, keeps the version it was posted with ("Newer version" links the
-  newest), says "This visual was removed" when the file was removed and "Couldn't show this visual" when it can't
-  render. Up to 4 per message; the rest stay file chips.
+- Pictures, SVG and visual pages now show inline under chat messages and task comments, as cards the width of the
+  message with the title as caption and Expand, Open in file viewer and Download. Pages show at their own height up to
+  a cap (480 px, 60% of a phone screen) and can't run scripts or reach the app. Expand opens them full screen with
+  zoom and scroll. Cards keep the version they were posted with, link a newer one, and say when a visual was removed
+  or can't be shown.
 - **The company on Goals**: with the CEO Bot switch on, Goals opens with a **Company** section: the Vision (one or
   two sentences) and the Description (a short paragraph). The owner and admins edit it, everyone else reads it, and
   **History** lists every change with who made it and when. Each goal shows a one-line **Why** tying it to the
@@ -63,15 +61,9 @@ All notable changes to Tico are recorded here. The format follows
   subscription. Subscriptions moved here from **Settings → AI providers**, and usage reads as "% left"
   everywhere. Every member now sees every computer; only an admin or the computer's operator sees its signed-in
   accounts and changes anything on it.
-- **Switch to subscription** on a computer's own Codex or Claude Code login that runs on an API key, in the computer's
-  pop-up on Settings > Computers. The key stays in use until the subscription has signed in and is in place, so a cancel
-  or failure changes nothing; then the key is removed from that login as **Clear key** removes it (the company's
-  "Every computer" key is not applied to it again, nor put in its turns) until someone adds a key or chooses **Use the
-  shared key**. Bots keep the connection. Needs a
-  current runner ([Computers](docs/computers.md#signing-out-and-switching-accounts)).
-- A signed-out connection in the computer pop-up reads **Signed out · Sign in** and its chip gets a red dot, and the
-  sign-out confirmation names the bots in a line ("Reviewer 1, QA and 2 more will stop running until this is signed in
-  again").
+- Computers: in a computer's pop-up, Sign out now names the bots that will stop running and leaves the connection
+  marked "Signed out · Sign in" with a red dot. New "Switch to subscription" moves an API-key connection to a
+  subscription sign-in; the key stays in use until the new sign-in works, then it's removed.
 - **Add connection** in each computer's pop-up on Settings > Computers: pick an AI tool installed there, then Subscription
   or API key; a subscription is named and signed in with the provider in the same pop-up, and its chip appears on the
   computer's row without a restart. API key opens **Add key** for a tool that takes a key of the computer's own, and
@@ -109,13 +101,9 @@ All notable changes to Tico are recorded here. The format follows
   before this keeps today's behaviour ([sessions](docs/sessions.md)).
 
 ### Changed
-- **A waiting task sleeps, and a bot's own writes never wake it** (token saving): news about a task that waits on
-  another task (blocked by) or on a pull request's checks (wake once), such as a step move, a relation change or a
-  comment, no longer starts a run; the task wakes when its blocker finishes or its checks come back. A notice that a
-  bot's own write caused never wakes that same bot. Nothing is dropped: the notice stays in the task's room and is
-  handed to the bot's next run, whatever starts it, in order. A person's message, comment, approval or answer, an
-  ask, a needs-action message, a gate verdict, an assignment, a finished subtask and a sweep still wake at once.
-  Each skipped wake is logged as `wake.skipped` in `events` for the weekly audit ([hub sql](docs/hub-sql.md)).
+- Bots sleep while waiting: a task waiting on another task or a set time no longer wakes its bot for unrelated news,
+  and a bot is never woken by its own comments or moves. People's messages, approvals, questions to the bot and
+  review/QA verdicts always wake it; held updates reach the bot in order on its next run on that task.
 - **Health Monitor: seeing a finding again only counts**: each hourly scan that sees a finding adds one to its count
   and moves its last-seen time, and no bot runs for it. Only a new finding, one whose severity rises (a computer on a
   release the server cannot work with is `bad`, an older one `warn`), or one back after its task was finished wakes
@@ -147,6 +135,11 @@ All notable changes to Tico are recorded here. The format follows
   setting up?** grows to show the whole message, never past the room left above a phone keyboard, so **Send** stays
   on screen.
 - PDF upload and reading use pypdf 6.21.1, the latest patch release of 6.21.
+
+### Documentation
+- Decide skill guide now matches the Review 2 behaviour.
+- Help pages: fixed outdated click paths and names (Settings -> Tasks), pinned computer label, wizard --company flag,
+  and shipped labels in creating bots.
 
 ## [0.3.63] - 2026-10-19
 
