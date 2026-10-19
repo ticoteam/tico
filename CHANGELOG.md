@@ -8,6 +8,10 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Sign in on a Tico we host**: with `TICO_HOSTED` set (`own` or `invited`), **Sign in** for Claude Code and
+  Codex (ChatGPT) in Settings > Computers shows only the provider's link and code, never what else the computer
+  printed and never a terminal, and closes by itself once signed in or cancelled. Any other value of `TICO_HOSTED`
+  stops the server with a one-line error. A self-hosted Tico signs in as before.
 - **Sample company**: a new Tico can start as Sample Co, a made-up team of five bots (Assistant, Head of Product,
   Builder, Support Agent and Content Marketer) spread over the Claude and ChatGPT subscriptions. Each has a goal and a
   first task that takes minutes and ends by asking the owner a Yes/No approval in Needs you; nothing is sent outside
@@ -16,10 +20,15 @@ All notable changes to Tico are recorded here. The format follows
 - **CEO Bot switch** (off by default; one per install, no release needed): an owner or admin turns it on with
   `POST /api/v2/ceo-bot {"on": true}` (`hub api POST ceo-bot '{"on": true}'`), never a bot. On, the Goal Manager is
   named the CEO Bot in the bot list, the org chart, Goals and its messages, and sits on the org chart under the owner
-  with the Heads and the bots that report to no one under it; the Assistant, the other built-ins and message bots stay
-  apart. It keeps its slug, so its KPI readings, goal history and old messages stay its own. Only the chart moves:
+  with the Heads (in their departments) and the bots that report to no one under it; the Assistant, the other
+  built-ins and message bots stay apart. It keeps its slug, so its KPI readings, goal history and old messages stay its own. Only the chart moves:
   nobody's `reports_to` and nobody's access changes. Turning it off gives back the Goal Manager's name and the chart as
   they were.
+- **Start fresh when the topic changes** (Settings > Team; off by default, an owner or an admin turns it on): in a
+  long or idle direct chat with a bot, Tico asks Decide whether your new message starts a new topic before it is sent.
+  If it does, the bot's session is cleared the same way Clear does, and the chat shows a quiet **Topic changed** line
+  above your message. A chat with an active goal, a running turn or fewer than 3 turns is never checked, and a slow or
+  failed check (over 1.5 s) sends the message in the same session with no line.
 
 ### Fixed
 - **Clear** on a bot's chat now really starts the bot over. Before, it only trimmed the history Tico sends, and on

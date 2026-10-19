@@ -63,6 +63,16 @@ def test_the_slack_gateway_gets_every_sign_in_setting_the_server_gets():
             "Cloudflare issuer and audience pass through the operator's environment"
 
 
+
+def test_the_server_and_the_slack_gateway_get_the_hosted_mark_as_set_in_env():
+    # Compose passes settings only through each service's list, so without these entries a hosted Tico's server
+    # reads TICO_HOSTED as unset and its sign-in offers the terminal again (ui/model-login.js). Both load Settings.
+    import yaml
+    services = yaml.safe_load((ROOT / "compose.yaml").read_text())["services"]
+    for name in ("server", "slack"):
+        assert "TICO_HOSTED" in services[name]["environment"], name
+        assert services[name]["environment"]["TICO_HOSTED"] is None, f"{name} takes it from .env as set, no default"
+
 def test_the_server_and_the_slack_gateway_get_the_decision_model_keys_but_not_other_services_secrets():
     import yaml
     services = yaml.safe_load((ROOT / "compose.yaml").read_text())["services"]
