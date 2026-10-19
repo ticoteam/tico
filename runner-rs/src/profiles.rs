@@ -21,15 +21,6 @@ pub fn home_var(runtime: &str) -> Option<String> {
     Some(crate::harness_tools::caps(runtime, "").profile_home).filter(|v| !v.is_empty())
 }
 
-/// Variables `runtime` reads ahead of its profile home (Claude Code: CLAUDE_CONFIG_DIR over `$HOME/.claude`). A
-/// profile's environment never carries them, or the CLI would sign in and run on some other folder's login.
-pub fn home_overrides(runtime: &str) -> &'static [&'static str] {
-    match runtime {
-        "claude" => &["CLAUDE_CONFIG_DIR"],
-        _ => &[],
-    }
-}
-
 /// The command a person runs in a terminal to sign `runtime` in (its executable and `terminal_login`), when it has one.
 pub fn login_command(runtime: &str) -> Option<Vec<String>> {
     let args = crate::harness_tools::caps(runtime, "").terminal_login;
@@ -89,8 +80,10 @@ impl Profile {
         let mut env = env.clone();
         if let (Some(home), Some(var)) = (self.home(runtime), home_var(runtime)) {
             env.insert(var, home.display().to_string());
-            for key in home_overrides(runtime) {
-                env.remove(*key);
+            // Variables the CLI reads ahead of that home (`profile_home_overrides`) would sign it in and run it on some
+            // other folder's login.
+            for key in crate::harness_tools::caps(runtime, "").profile_home_overrides {
+                env.remove(&key);
             }
         }
         env
