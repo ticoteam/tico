@@ -122,3 +122,70 @@ def test_a_pinned_computer_shows_outdated_but_its_owner_is_not_nudged(api):
     assert ben_notices(api) == []
     machine = next(m for m in get(api, "operations", token="ben-test")["computers"] if m["id"] == r["runner_id"])
     assert machine["update"]["outdated"] is True and machine["update"]["update_state"] == "pinned"
+
+
+def test_queued_work_says_it_waits_for_the_computer_to_update_only_once_the_computer_stops_taking_work(api):
+    """Dev 207 (Oct 18, v0.3.60): a computer due an update keeps claiming for 20 minutes, then takes no new work until
+    its running turns end. Chat and task said only "Queued" for those 18 minutes; now they say why."""
+    from backend import health, health_monitor
+    from backend.store import H
+    r = runner(api, label="Team box")
+    assign(api, r, "ops")
+    chat = post(api, "chat/ops", {"text": "Are you there?"})
+    task = post(api, "tasks", {"owner": "ops", "title": "Check the invoices", "body": "Today."})
+    store = api.app.state.store
+    waiting = {"state": "waiting", "target": "0.3.0", "error": ""}
+
+    def shown():
+        label = get(api, f"conversations/{chat['conversation_id']}/snapshot")["execution"]["label"]
+        return label, get(api, f"tasks/{task['id']}")["waiting_for"]
+
+    def due_for(minutes):
+        with store.transaction() as c:
+            c.execute("UPDATE runner_versions SET outdated_since=? WHERE runner_id=?",
+                      (H.shift(H.now(), minutes=-minutes), r["runner_id"]))
+
+    report(api, r, "0.3.0")
+    assert shown() == ("Saved — queued", "Queued")                      # claiming as usual
+    report(api, r, "0.2.5", update=waiting)
+    assert shown() == ("Saved — queued", "Queued")                      # due an update, still claiming
+    due_for(19)
+    report(api, r, "0.2.5", update=waiting)
+    assert shown() == ("Saved — queued", "Queued")
+    due_for(21)
+    report(api, r, "0.2.5", update=waiting)
+    assert shown() == ("Saved — waiting for the computer to update", "Waiting for the computer to update")
+    # Health names the hold and how long it has run; it is still not a queue_idle Tico bug (PR 623).
+    with store.transaction() as c:
+        c.execute("UPDATE jobs SET created=? WHERE bot='ops'", (H.shift(H.now(), minutes=-30),))
+        online = {x["id"] for x in health._online_runners(c)}
+        assert {row["reason"] for row in health._waiting(c, online)[2]} == {"updating"}
+        found = {f["check_id"]: f for f in health_monitor.findings(c, store.settings)}
+    assert "queue_idle" not in found
+    assert "It has taken no new work since " in found["runner_outdated"]["detail"]
+    assert "UTC (1 min), waiting to update." in found["runner_outdated"]["detail"]
+    # Its update failed: it claims again, so the work is plain queued (an update error is Health's to say).
+    report(api, r, "0.2.5", update={"state": "failed", "target": "0.3.0", "error": "the updater did not answer"})
+    assert shown() == ("Saved — queued", "Queued")
+    report(api, r, "0.2.5", update={"state": "pinned", "target": "0.3.0", "error": "pinned"})
+    assert shown() == ("Saved — queued", "Queued")
+    # Idle, it updates at once: no drain time to wait out.
+    due_for(1)
+    report(api, r, "0.2.5", update={"state": "updating", "target": "0.3.0", "error": ""})
+    assert shown() == ("Saved — waiting for the computer to update", "Waiting for the computer to update")
+    report(api, r, "0.3.0")                                             # updated: the label goes on its own
+    assert shown() == ("Saved — queued", "Queued")
+
+
+def test_a_computer_that_does_not_say_when_its_update_fell_due_is_not_said_to_be_updating(api):
+    from backend.store import H
+    r = runner(api)
+    assign(api, r, "ops")
+    report(api, r, "0.2.5", update={"state": "waiting", "target": "0.3.0", "error": ""})
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runner_versions SET outdated_since=NULL WHERE runner_id=?", (r["runner_id"],))
+        assert runner_versions.holding_since(c, r["runner_id"]) is None
+        assert runner_versions.holding_since(c, "no-such-computer") is None
+        due = H.shift(H.now(), minutes=-25)
+        c.execute("UPDATE runner_versions SET outdated_since=? WHERE runner_id=?", (due, r["runner_id"]))
+        assert runner_versions.holding_since(c, r["runner_id"]) == H.shift(due, seconds=runner_versions.UPDATE_DRAIN_S)

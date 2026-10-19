@@ -132,6 +132,25 @@ def nudge(c, runner_id, server=None):
     return True
 
 
+# runner-rs/src/follow.rs DRAIN_S: how long a computer due an update keeps claiming while its turns run.
+UPDATE_DRAIN_S = 20 * 60
+
+
+def holding_since(c, runner_id):
+    """Since when this computer has taken no new work because it is updating, or None while it still takes work.
+    A computer due an update keeps claiming for UPDATE_DRAIN_S, then claims nothing until its running turns end and it
+    updates (follow.rs blocks_claims); one with nothing running updates at once and says `updating`. The wait starts at
+    its first heartbeat behind this server's release (`outdated_since`), which is when its update fell due."""
+    row = c.execute("SELECT update_state,outdated_since FROM runner_versions WHERE runner_id=?", (runner_id,)).fetchone()
+    if not row or row["update_state"] not in ("waiting", "updating") or not row["outdated_since"]:
+        return None
+    since = H.shift(row["outdated_since"], seconds=UPDATE_DRAIN_S)
+    if since <= H.now():
+        return since
+    # Updating before the drain time: it had nothing running, so it started almost as soon as the update fell due.
+    return row["outdated_since"] if row["update_state"] == "updating" else None
+
+
 def paused(c, runner_id):
     """Why this computer must not claim work, or "" when it may."""
     row = c.execute("SELECT release FROM runner_versions WHERE runner_id=?", (runner_id,)).fetchone()

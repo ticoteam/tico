@@ -28,7 +28,7 @@ from datetime import timezone
 from fastapi import Request
 from pydantic import Field
 
-from . import diagnostics, providers, team_rules
+from . import diagnostics, providers, runner_versions, team_rules
 from .auth import Identity
 from .models import Contract
 from .store import H, Problem
@@ -183,6 +183,9 @@ def _runner_checks(c, settings):
         rows = held.get(machine["id"], [])
         holds = (f" {health.updating_words(rows[0], advise=False)}; it holds {sum(r['queued'] for r in rows)} queued "
                  "job(s) for " + ", ".join(r["name"] for r in rows) + ".") if rows else ""
+        if rows and (since := runner_versions.holding_since(c, machine["id"])):
+            minutes = max(0, int((H.parse_ts(H.now()) - H.parse_ts(since)).total_seconds() // 60))
+            holds += f" It has taken no new work since {since[11:16]} UTC ({minutes} min), waiting to update."
         if machine["online"] and (update["state"] in ("needs_update", "incompatible") or update["error"] or rows):
             out.append(_finding("runner_outdated:" + machine["id"], "runner_outdated", SETUP,
                                 f"{machine['label']} runs an older Tico release ({update['release'] or 'unknown'})",

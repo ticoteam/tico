@@ -647,6 +647,9 @@ def queued_label(c, bot, location, settings=None, human=False, behind=False):
         config = json.loads(config[0]) if config else {}
         label = ("Saved — steering this turn" if steers(config, config.get("runtime"))
                  else "Saved — queued for the next turn")
+    elif runner_versions.holding_since(c, (location.get("machine") or {}).get("runner_id")):
+        # Its computer takes no new work until its running turns end and it updates (docs/updates.md).
+        label = "Saved — waiting for the computer to update"
     elif (computer := free_turn(c, bot, location, human)):
         label = "Saved — waiting for a free turn on " + computer
     return label, readiness_reason

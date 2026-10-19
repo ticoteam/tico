@@ -133,8 +133,10 @@ The runner is a git checkout. When the server's release is newer, the runner:
 1. waits until no run is going, then updates. For the first 20 minutes it keeps taking new work as usual; after
    that it takes no new work until every run that is going has ended, so a busy computer cannot hold the update
    back for ever. It never interrupts a run. Work sent to it after those 20 minutes waits for the longest run
-   still going; Settings > Health shows the computer as Needs update meanwhile, and names each run it waits for:
-   the bot, its task and when the run started (a bot or task you may not read is not named). A run that only waits
+   still going. Meanwhile that work says why in the chat and on its task: **Waiting for the computer to update**
+   instead of Queued, until the computer takes work again (this also shows while the update itself runs).
+   Settings > Health shows the computer as Needs update, says since when it has taken no new work, and names each
+   run it waits for: the bot, its task and when the run started (a bot or task you may not read is not named). A run that only waits
    on something elsewhere (another computer's update, a review) can note the wait on its task and end, and pick it
    up on its next run. Stopping a run is left to a person (Runs); Tico never stops one to update;
 2. starts a separate update process, which fetches the tag `vX.Y.Z` from `origin` (the public repository) and

@@ -40,6 +40,10 @@ All notable changes to Tico are recorded here. The format follows
   failed check (over 1.5 s) sends the message in the same session with no line.
 
 ### Fixed
+- Work waiting while its computer updates now says so: once a computer due an update stops taking new work (20
+  minutes after the update fell due, until its running turns end), a message or task for its bots shows **Waiting for
+  the computer to update** in the chat and on the task instead of Queued, and Health says since when the computer has
+  taken no new work. How the update waits is unchanged ([Updates](docs/updates.md)).
 - **First-run wizard**: **Next** on **Your team chart** works again when the team includes BotOps. Its instructions
   (24,048 characters) were over the setup save's 20,000-character limit, so the wizard stopped with a raw field error.
   Bot instructions now have one limit of 50,000 characters wherever they are sent (the wizard, **Add from catalog**
