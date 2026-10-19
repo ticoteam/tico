@@ -364,27 +364,29 @@ def test_an_updater_stopped_during_the_switch_settles_it_when_it_starts_again(mo
 
 
 def test_an_update_is_refused_while_the_last_one_is_unsettled(monkeypatch, tmp_path):
+    import io
     import json
-    import threading
-    import urllib.error
-    import urllib.request
+    from types import SimpleNamespace
     updater = load(monkeypatch, "runner", tmp_path)
     (tmp_path / "token").write_text("secret\n")
     updater.status.update(state="uncertain", message="Not settled")
-    server = updater.ThreadingHTTPServer(("127.0.0.1", 0), updater.Handler)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    try:
-        ask = urllib.request.Request("http://127.0.0.1:%d/update" % server.server_port, method="POST",
-                                     data=json.dumps({"version": "v0.2.0"}).encode(),
-                                     headers={"Authorization": "Bearer secret"})
-        try:
-            urllib.request.urlopen(ask, timeout=5)
-            code = 202
-        except urllib.error.HTTPError as exc:
-            code = exc.code
-    finally:
-        server.shutdown()
-    assert code == 409 and updater.status["state"] == "uncertain"
+    before = dict(updater.status)
+    # This guards the refusal, not socket scheduling under a parallel test run.
+    handler = object.__new__(updater.Handler)
+    handler.path = "/update"
+    body = json.dumps({"version": "v0.2.0"}).encode()
+    handler.headers = {"Authorization": "Bearer secret", "Content-Length": str(len(body))}
+    handler.rfile = io.BytesIO(body)
+    replies = []
+    handler.reply = lambda code, body: replies.append((code, body))
+
+    def must_not_start(*args, **kwargs):
+        raise AssertionError("an unsettled update must not start another update")
+
+    monkeypatch.setattr(updater, "threading", SimpleNamespace(Thread=must_not_start))
+    handler.do_POST()
+    assert replies == [(409, {"error": "an update is already running", **before})]
+    assert updater.status == before
 
 
 def test_a_runner_that_cannot_be_read_is_not_updated_and_says_so(monkeypatch, tmp_path):
