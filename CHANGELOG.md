@@ -111,6 +111,9 @@ All notable changes to Tico are recorded here. The format follows
 
 ### Changed
 - **A bot can hold 50 task worktrees, up from 30.** The computer's 5 GB free-disk floor and normal cleanup rules still apply.
+- Bots sleep while waiting: a task waiting on another task or a set time no longer wakes its bot for unrelated news,
+  and a bot is never woken by its own comments or moves. People's messages, approvals, questions to the bot and
+  review/QA verdicts always wake it; held updates reach the bot in order on its next run on that task.
 - **Health Monitor: seeing a finding again only counts**: each hourly scan that sees a finding adds one to its count
   and moves its last-seen time, and no bot runs for it. Only a new finding, one whose severity rises (a computer on a
   release the server cannot work with is `bad`, an older one `warn`), or one back after its task was finished wakes

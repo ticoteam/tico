@@ -28,7 +28,7 @@ UNKNOWN = "unknown"
 BOOKKEEPING = frozenset({
     "status.set", "sql.query", "db.query", "conversation.open", "message.read", "message.delivered",
     "mail.read", "calendar.read", "credential.revealed", "bot.repository_read", "task.inspect",
-    "refused", "message.lint", "task.lint", "path.mentioned", "judge.call", "mcp.call", "service_key.use",
+    "refused", "message.lint", "wake.skipped", "task.lint", "path.mentioned", "judge.call", "mcp.call", "service_key.use",
 })
 BOOKKEEPING_PREFIXES = ("attempt.", "job.", "turn.", "runner.")
 # The runner's own calls about the run (claim, events, complete) carry the run token too; they are not the run's work.
