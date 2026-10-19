@@ -32,6 +32,8 @@ print(json.dumps(out))
   // min-height 100dvh, inside the default margins).
   vh: ['<!doctype html><html><body style="margin:0"><div style="height:100vh;overflow:hidden;background:#0a0">Full screen</div></body></html>', true],
   // Sized by their content: one under the 24px minimum, one between the phone cap and the desktop cap.
+  // Sized by its content and used for nothing else: the clamp and zero-width checks post fake heights to it.
+  clamp: ['<!doctype html><html><body style="margin:0"><div style="height:120px;background:#eee">Plain page</div></body></html>', true],
   tiny: ['<!doctype html><html><body style="margin:0"><div style="height:10px;font-size:8px;line-height:10px">Hi</div></body></html>', true],
   mid: ['<!doctype html><html><body style="margin:0"><div style="height:400px;background:#eee">Mid page</div></body></html>', true],
   dvh: ['<!doctype html><html><body><h1>Report</h1><main style="min-height:100dvh;background:#00a;color:#fff">Fills the screen</main></body></html>', true],
@@ -71,6 +73,7 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
       A('f-bad', 'page'), A('f-nosrc', 'image', {src: null, width: 400, height: 200}), A('f-hostile', 'page')]}},
     {id: 'm4', from_actor: 'human:ana', body: 'My photo', created: now, refs: {attachments: [A('f-mine', 'image', {width: 300, height: 300, title: 'Ana photo'})]}},
     {id: 'm5', from_actor: 'bot:designer', body: 'Two full-screen pages.', created: now, refs: {attachments: [A('f-vh', 'page'), A('f-dvh', 'page'), A('f-tiny', 'page'), A('f-mid', 'page')]}},
+    {id: 'm7', from_actor: 'bot:designer', body: 'A plain page.', created: now, refs: {attachments: [A('f-clamp', 'page')]}},
   ];
   const run = async ({viewport, hasTouch = false, label}) => {
     const context = await browser.newContext({viewport, hasTouch, isMobile: hasTouch, serviceWorkers: 'block'});
@@ -93,7 +96,7 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
         if (hold && id === 'f-chart') await hold;
         const headers = {'Cross-Origin-Resource-Policy': 'cross-origin', 'Referrer-Policy': 'no-referrer', 'X-Content-Type-Options': 'nosniff'};
         if (id === 'f-bad' || id === 'f-gone') return route.fulfill({status: 404, headers: {...headers, 'Content-Security-Policy': "default-src 'none'; sandbox"}, body: ''});
-        const page = {'f-short': 'short', 'f-tall': 'tall', 'f-hostile': 'hostile', 'f-vh': 'vh', 'f-dvh': 'dvh', 'f-tiny': 'tiny', 'f-mid': 'mid', 'f-live-page': 'short'}[id];
+        const page = {'f-short': 'short', 'f-tall': 'tall', 'f-hostile': 'hostile', 'f-vh': 'vh', 'f-dvh': 'dvh', 'f-tiny': 'tiny', 'f-mid': 'mid', 'f-clamp': 'clamp', 'f-live-page': 'short'}[id];
         if (page) return route.fulfill({contentType: 'text/html', headers: {...headers, 'Content-Security-Policy': server.policy}, body: server.pages[page]});
         if (id === 'f-clip') {
           const m = /bytes=(\d+)-(\d*)/.exec(req.headers().range || ''), from = m ? +m[1] : 0, to = m && m[2] ? +m[2] : CLIP.length - 1;
@@ -240,10 +243,17 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
       const was = one.firstChild; visualKeep(one, two); return two.firstChild === was;
     })), [false, false, false, false, true], `${label}: a same-key card whose state or newest version changed is redrawn`);
     // a height from the card's own frame: a number, finite, clamped to 24..20000
-    const hostileFrame = page.frames().find(f => f.url().includes('tok-f-hostile'));
-    const frameH = () => hostile.evaluate(c => [c.querySelector('iframe').visualHeight, Math.round(c.querySelector('iframe').getBoundingClientRect().height)]);
+    // on a plain page of its own: a page already taken for a screen-sized one (the hostile page was, on the hosted
+    // run) follows no reports at all, so it would prove nothing here
+    console.log(`${label}: the hostile page settled ${await hostile.evaluate(c => { const f = c.querySelector('iframe'); return `${f.visualFill ? 'as screen-sized (at the cap)' : 'by its content'}, ${f.visualHeight}px`; })}`);
+    const plain = page.locator('[data-message="m7"] figure.vcard[data-file="f-clamp"]');
+    await plain.scrollIntoViewIfNeeded();
+    await plain.locator('.vcard-body.ready').waitFor();
+    assert.equal(await plain.evaluate(c => c.querySelector('iframe').visualFill || false), false, `${label}: the plain page is sized by its content`);
+    const plainFrame = page.frames().find(f => f.url().includes('tok-f-clamp'));
+    const frameH = () => plain.evaluate(c => [c.querySelector('iframe').visualHeight, Math.round(c.querySelector('iframe').getBoundingClientRect().height)]);
     const settled = await frameH();
-    for (const v of ["'5000'", 'NaN', 'Infinity', '-Infinity', 'null', '{}', '[900]']) await hostileFrame.evaluate(`parent.postMessage({ticoVisualHeight: ${v}}, '*')`);
+    for (const v of ["'5000'", 'NaN', 'Infinity', '-Infinity', 'null', '{}', '[900]']) await plainFrame.evaluate(`parent.postMessage({ticoVisualHeight: ${v}}, '*')`);
     await page.waitForTimeout(200);
     assert.deepEqual(await frameH(), settled, `${label}: a height that is not a finite number is ignored, even from the card's own frame`);
     // the height a message sets is the one recorded first: the page then answers its new size with its real height
@@ -252,20 +262,20 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
     await page.evaluate(() => { window.vhReports = 0; addEventListener('message', ev => { if (ev.data && 'ticoVisualHeight' in ev.data) window.vhReports++; }); });
     const quiet = () => page.evaluate(() => new Promise(done => { let n = -1; const t = setInterval(() => { if (window.vhReports === n) { clearInterval(t); done(); } n = window.vhReports; }, 500); }));
     const clampTo = async v => {
-      await hostile.evaluate(c => { const f = c.querySelector('iframe'); f.seen = []; f.mo = new MutationObserver(() => f.seen.push(f.style.height)); f.mo.observe(f, {attributes: true, attributeFilter: ['style']}); });
-      await hostileFrame.evaluate(`parent.postMessage({ticoVisualHeight: ${v}}, '*')`);
+      await plain.evaluate(c => { const f = c.querySelector('iframe'); f.seen = []; f.mo = new MutationObserver(() => f.seen.push(f.style.height)); f.mo.observe(f, {attributes: true, attributeFilter: ['style']}); });
+      await plainFrame.evaluate(`parent.postMessage({ticoVisualHeight: ${v}}, '*')`);
       await quiet();
-      return hostile.evaluate(c => { const f = c.querySelector('iframe'); f.mo.disconnect(); return f.seen[0]; });
+      return plain.evaluate(c => { const f = c.querySelector('iframe'); f.mo.disconnect(); return f.seen[0]; });
     };
     assert.equal(await clampTo('1e9'), '20000px', `${label}: a huge height is clamped to 20000`);
     assert.equal(await clampTo('-50'), '24px', `${label}: a negative height is clamped to 24`);
     // a frame shown at no width measures nothing real: its report is dropped
-    const shown = await hostile.evaluate(c => c.querySelector('iframe').visualHeight);
-    await hostile.evaluate(c => { c.style.display = 'none'; });
-    await hostileFrame.evaluate("parent.postMessage({ticoVisualHeight: 900}, '*')");
+    const shown = await plain.evaluate(c => c.querySelector('iframe').visualHeight);
+    await plain.evaluate(c => { c.style.display = 'none'; });
+    await plainFrame.evaluate("parent.postMessage({ticoVisualHeight: 900}, '*')");
     await page.waitForTimeout(200);
-    const hidden = await hostile.evaluate(c => c.querySelector('iframe').visualHeight);
-    await hostile.evaluate(c => { c.style.display = ''; });
+    const hidden = await plain.evaluate(c => c.querySelector('iframe').visualHeight);
+    await plain.evaluate(c => { c.style.display = ''; });
     assert.equal(hidden, shown, `${label}: a height from a frame shown at no width is dropped`);
     await noSideways('chat');
 
@@ -411,6 +421,17 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
     const downTo = await shortCard.evaluate(c => [c.querySelector('.vcard-body'), c.querySelector('iframe')].map(e => Math.round(e.getBoundingClientRect().height)));
     assert(down.heights.every(h => h === 200 || Math.abs(h - moved.before) <= 1) && downTo.every(h => Math.abs(h - moved.before) <= 1),
       `${label}: without moveBefore, a card pinned at 200 comes back down to ${moved.before} after a redraw ${JSON.stringify(down)} ${downTo}`);
+    // a page measured at one width is re-measured at another: narrowed, the short page wraps and grows; widened back,
+    // it comes back down (a page measures at least its frame, so it could not say so by itself)
+    const shortH = () => shortCard.evaluate(c => [c.querySelector('iframe').visualHeight, Math.round(c.querySelector('iframe').getBoundingClientRect().width)]);
+    const widthTo = async w => {
+      await shortCard.evaluate((c, w) => { c.style.width = w; c.style.maxWidth = w; }, w);
+      await quiet();
+      return shortH();
+    };
+    const [narrowH, narrowW] = await widthTo('50px'), [wideH, wideW] = await widthTo('');
+    assert(narrowW < 70 && narrowH > moved.before + 10 && Math.abs(wideH - moved.before) <= 1,
+      `${label}: a page card narrowed grows (${narrowH} at ${narrowW}px) and widened back comes down to ${moved.before} (${wideH} at ${wideW}px)`);
 
     // ---- live: a new message comes on the event stream; the snapshot read again signs every address afresh. A card
     // already on screen keeps its node and its height and takes the new address; the new message's cards show.
