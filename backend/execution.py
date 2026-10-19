@@ -28,6 +28,11 @@ BILLING_LIMIT_RE = re.compile(r"quota exceeded\. check your plan|exceeded your c
 # get grace instead of expiring, and a runner reporting in afterwards gets its attempt back.
 # A backup can starve a single small API worker for minutes: 90 s leases lapsed and healthy running turns were marked interrupted for review.
 STALL_MAX = 900
+# How long the sweep waits for a run whose lease lapsed (its runner never said it stopped) before running it again. On
+# Oct 17-18 eight finished turns reached the hub 15 to 76 minutes after their lease lapsed, while their runner was
+# stalled between the model's last word and the hand-in; one sweep resumed at 15 minutes and the request ran twice.
+# 90 minutes covers the slowest seen with room, and outlasts a whole turn (max_run_minutes defaults to 60).
+RESULT_GRACE = 90 * 60
 # A failed turn whose only events are these produced nothing and touched nothing.
 SILENT_KINDS = {"error", "diagnostic", "status"}
 NO_EFFECT_TRIES = 3
@@ -1711,6 +1716,18 @@ class Execution:
                     and not c.execute("SELECT 1 FROM attempts WHERE bot=? AND lane=? AND state IN ('leased','running')",
                                       (row["bot"], row["lane"])).fetchone())
 
+    def settles_late(self, c, who, row, body):
+        """Whether a finished turn whose job the sweep or a person let go meanwhile still settles it. A completed
+        result is the answer the dismissal assumed would never come: the job was cancelled (the task was closed, or
+        nothing was left to deliver) or queued to run again, and no later attempt has taken it. It settles the job
+        completed and its answer is posted where the request was made, a closed task's own room included, and the
+        queued rerun never happens. Any other outcome, or a job another attempt (`attempt_id`) or another computer now
+        owns, is only filed (`file_result`)."""
+        if body.outcome != "completed" or not self.current_owner(c, who, row):
+            return False
+        job = c.execute("SELECT state FROM jobs WHERE id=? AND attempt_id=?", (row["job_id"], row["id"])).fetchone()
+        return bool(job and job["state"] in ("cancelled", "queued"))
+
     def run_usage(self, c, row, body):
         """The turn's usage columns from the tokens its runner counted, or None when it counted none.
         The model is the runner's choice for each primary/fallback portion. Unknown values stay
@@ -2014,8 +2031,11 @@ class Execution:
             raise Problem("not_started", "Acknowledge start before completing work", 409)
         if row["last_seq"] != body.last_seq:
             raise Problem("event_gap", "Upload all events before completing the attempt", 409)
-        if late and not self.settleable(c, who, row):
+        if late and not self.settleable(c, who, row) and not self.settles_late(c, who, row, body):
             return self.file_result(c, row, body)
+        if late:
+            H.event(c, H.KEEPER, "attempt.late-settled", aid, {"bot": row["bot"], "job_id": row["job_id"],
+                                                                "outcome": body.outcome})
         self.release_undelivered(c, aid, body.undelivered)
         # A message its author took back during the turn (H.task_comment_delete) still started it: read its row.
         msg = H.message(c, c.execute("SELECT message_id FROM jobs WHERE id=?", (row["job_id"],)).fetchone()[0],
@@ -2050,11 +2070,13 @@ class Execution:
                               or (humans[0] if humans else None) or task["requester"])
                     # A task in the bot's chat room always delivers, and so does one filed from a chat into
                     # its own room (H.task_from_chat). Any other dedicated task thread waits until the owner
-                    # has marked the work done.
+                    # has marked the work done, or, for a finished turn that came in after its lease lapsed,
+                    # until the task was closed under it: no later turn will answer that room.
                     if conv.get("kind") == "chat" or (conv.get("task_id") == task["id"] and H.task_from_chat(c, task["id"])):
                         replyable = target not in (H.KEEPER, actor)
                     else:
-                        replyable = actor == task["owner"] and task["status"] == "done"
+                        replyable = actor == task["owner"] and (
+                            task["status"] == "done" or (late and task["status"] == "closed"))
                 if target not in (H.KEEPER, actor) and replyable:
                     refs = {"turn_id": aid, **({"task": task["id"]} if task else {}),
                             **({"warnings": notices} if notices and msg["kind"] != "ask" else {})}
@@ -2618,13 +2640,17 @@ class Execution:
         interrupted (it restarted) is not alive, so a run that is safe to repeat resumes at once; when
         the same computer picks the job up again it continues the same provider session.
 
+        A run whose lease lapsed without its runner saying it stopped is resumed only after RESULT_GRACE: its
+        runner may be stalled after the turn finished, and that result settles the job when it comes.
+
         Resuming is offered once. A job whose second attempt is also uncertain is not a turn
         that was unlucky, it is one that keeps ending the same way, and running it a third time
         is how a bot once opened the same request eighteen times.
         """
         cutoff = H.shift(H.now(), seconds=-STALL_MAX)
         decided = []
-        rows = c.execute("SELECT j.*, a.started, a.finished, coalesce(a.finished, j.created) <= ? AS aged "
+        rows = c.execute("SELECT j.*, a.started, a.finished, a.state AS attempt_state, "
+                         "coalesce(a.finished, j.created) <= ? AS aged "
                          "FROM jobs j LEFT JOIN attempts a ON a.id=j.attempt_id "
                          "WHERE j.state='uncertain' AND (coalesce(a.finished, j.created) <= ? "
                          "OR a.state='interrupted') "
@@ -2683,6 +2709,11 @@ class Execution:
                         H.event(c, H.KEEPER, 'job.held', row['attempt_id'], {'job_id': row['id'], 'tools': acted})
                         if privacy.message_readable(c, 'bot:' + H.FLEET_MAINTAINER, msg):
                             self._hand_to_maintainer(c, row, msg, task, acted)
+                    continue
+                if (row['attempt_state'] == 'expired' and row['started'] and row['finished']
+                        and row['finished'] > H.shift(H.now(), seconds=-RESULT_GRACE)):
+                    # Its lease lapsed but its runner never said the turn stopped: the finished turn may still come
+                    # in (`settles_late`), and running it again now would answer the request twice.
                     continue
                 reads = sorted({call['tool'] for call in calls})
                 did = f"only read ({', '.join(reads)})" if reads else "recorded no tool call"

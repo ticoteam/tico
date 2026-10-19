@@ -375,6 +375,7 @@ async function taskSave(d, id, body, then, field) {
 // "Working" line shows its newest step, with Stop for whoever may stop it. The box says it in the task (a comment),
 // which wakes its bot. `taskChatStop` and `taskChatLoad` keep their names: the router and the chat cards call them.
 let TASK_CHAT = null;
+let TASK_JUMP = ENTRY_JUMP?.task ? {task: ENTRY_JUMP.task, id: ENTRY_JUMP.id} : null;   // {task, id}: a link's message, once that task's conversation shows
 const TASK_DRAFTS = new Map();         // an unsent comment, per task, kept across redraws until it is sent or cleared
 function taskChatStop() {
   if (TASK_CHAT) { clearInterval(TASK_CHAT.poll); TASK_CHAT.liveOff?.(); }
@@ -589,6 +590,7 @@ async function taskChatLoad(id, dialog, data = null) {
   if (data?.task?.conversation_id) state.cid = data.task.conversation_id;
   if (data) taskCommentsRender(state, data); else await taskChatRead(state);
   if (!taskChatCurrent(state) || state.stopped) return;
+  taskJumpPending(state);
   // Without live events, the poll they replaced.
   state.poll = liveFallback(() => {
     if (document.hidden || !taskChatCurrent(state)) return;
@@ -607,6 +609,18 @@ async function taskChatLoad(id, dialog, data = null) {
       liveThrottle('task-run:' + state.id, () => { if (taskChatCurrent(state) && !state.stopped) void taskChatRead(state); }, 1500);
     })] : [];
   state.liveOff = () => { offs.forEach(off => off()); state.liveOff = null; };
+}
+// A link from outside Tico (the Slack visuals line) names a message: bring it into view and mark it for a moment.
+// The task opened only because the reader may read it; a message not on the page loaded says so.
+function taskJumpPending(state) {
+  if (!TASK_JUMP || ![String(state.id), state.data?.task?.id].includes(TASK_JUMP.task)) return;
+  const {id} = TASK_JUMP; TASK_JUMP = null;
+  const thread = $('.task-comments', state.host), el = thread?.querySelector(`[data-message="${CSS.escape(id)}"]`);
+  if (!el) { toast('That message is not in this conversation', true); return; }
+  stickScroll(thread).release();           // the first paint follows the newest comment; the jump stops that
+  el.scrollIntoView({block: 'center', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'});
+  el.classList.add('jump-mark');
+  setTimeout(() => el.classList.remove('jump-mark'), 2000);
 }
 async function taskCommentSend(state) {
   if (!taskChatCurrent(state) || state.sending) return;

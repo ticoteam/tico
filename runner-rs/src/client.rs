@@ -90,6 +90,7 @@ pub struct Client {
     pub token: String,
     pub retries: u32,
     http: reqwest::Client,
+    timeout: Duration,
     /// Multiplies the retry backoff; tests set it near zero.
     pub backoff_scale: f64,
 }
@@ -151,13 +152,14 @@ pub fn error_from(status: u16, body: &[u8], key: &str) -> ApiError {
 impl Client {
     pub fn new(url: &str, token: &str, timeout_s: u64, retries: u32) -> Result<Client, String> {
         let url = check_origin(url)?;
-        Ok(Client {
-            url,
-            token: token.to_string(),
-            retries,
-            http: http_client(Some(Duration::from_secs(timeout_s))),
-            backoff_scale: 1.0,
-        })
+        let timeout = Duration::from_secs(timeout_s);
+        Ok(Client { url, token: token.to_string(), retries, http: http_client(Some(timeout)), timeout, backoff_scale: 1.0 })
+    }
+
+    /// The same hub and token over connections of its own, for a client that lives on another runtime: a pooled
+    /// connection belongs to the runtime that opened it.
+    pub fn detached(&self) -> Client {
+        Client { http: http_client(Some(self.timeout)), ..self.clone() }
     }
 
     pub async fn get(&self, path: &str) -> Result<Value, ApiError> {
