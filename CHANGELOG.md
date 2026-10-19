@@ -39,11 +39,6 @@ All notable changes to Tico are recorded here. The format follows
   above your message. A chat with an active goal, a running turn or fewer than 3 turns is never checked, and a slow or
   failed check (over 1.5 s) sends the message in the same session with no line.
 
-### Changed
-- **First run, computer step**: one numbered path (make the code, then the line that uses it), with the plain
-  `docker run` alternative behind **Other ways**, closed. After **Add computer** the one-time code shows in large type
-  on the screen, not only in a toast. Commands wrap inside their box on a phone and on a desktop, with **Copy** in the box.
-
 ### Fixed
 - **Claude sign-in on a subscription profile stays in that profile.** A runner whose own environment set
   `CLAUDE_CONFIG_DIR` signed Claude Code in there (Settings > Computers and `tico-runner profile login`) and checked
@@ -63,6 +58,9 @@ All notable changes to Tico are recorded here. The format follows
   before this keeps today's behaviour ([sessions](docs/sessions.md)).
 
 ### Changed
+- **First run, computer step**: one numbered path (make the code, then the line that uses it), with the plain
+  `docker run` alternative behind **Other ways**, closed. After **Add computer** the one-time code shows in large type
+  on the screen, not only in a toast. Commands wrap inside their box on a phone and on a desktop, with **Copy** in the box.
 - **Codex signed in with ChatGPT runs one turn at a time per login**, as OpenAI's terms for a ChatGPT sign-in
   require. When two bots on one computer share its ChatGPT login, one Codex turn runs and the other shows
   *Waiting for this computer's ChatGPT login to be free (busy with <bot>)* in the chat, the task and **Runs**, then
