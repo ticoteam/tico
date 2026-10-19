@@ -35,7 +35,9 @@ All notable changes to Tico are recorded here. The format follows
   the team, not the app's pages or **What's new** (on a phone the bottom bar drops Tasks and Updates). A new company's
   owner starts with nothing unread in What's new. In the team list, words a bot's name shares with another bot's (the
   "Head of" in "Head of Product") drop out first when the row is narrow, so each row keeps the part that tells it
-  apart; hovering a bot shows its whole name, and **Needs setup** is a small gear beside the name.
+  apart; hovering a bot shows its whole name, and **Needs setup** is a small gear beside the name. The anonymous
+  usage-count notice no longer sits over the wizard or the screen after **Create**: it appears on the first other page,
+  and nothing is counted until it has.
 - Opening a card in **Needs you** (an approval, a task, a question) no longer sends a failing request for issue
   "NaN" in the background. Only an issues inbox card fetches its full request.
 - **Clear** on a bot's chat now really starts the bot over. Before, it only trimmed the history Tico sends, and on

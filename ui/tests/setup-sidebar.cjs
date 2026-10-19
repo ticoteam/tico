@@ -22,7 +22,7 @@ async function shot(page, name) {
 const CONFIG = {environment_id: 'initech', company_name: 'Initech', app_name: 'Initech Hub', assistant_name: 'Ace',
   assistant_bot: 'coo', public_url: 'https://initech.test', runner_url: 'https://initech.test', local: false, release: '',
   version: '0.3.62', runner_compat: {version: '0.3.62', min_runner: '0.1.0'}, providers_configured: true,
-  changelog: {unread_count: 103}};
+  changelog: {unread_count: 103}, usage_count_notice: true};
 const people = [{id: 'ana', name: 'Ana Rivera', email: 'ana@initech.test', org_parent: 'g:leadership', team: 'leadership'}];
 const groups = ['Leadership', 'Engineering', 'Finance', 'Marketing', 'Product'].map((name, order) =>
   ({id: name.toLowerCase(), name, parent: '', org_parent: '', order}));
@@ -47,7 +47,7 @@ async function open(browser, {theme, phone, needed, team, route}) {
     isMobile: !!phone, hasTouch: !!phone, serviceWorkers: 'block'});
   await context.addInitScript(value => { try { localStorage.setItem('tico.theme', value); } catch {} }, theme);
   const me = {id: 'ana', name: 'Ana Rivera', role: 'owner', cloud: true, email: 'ana@initech.test'};
-  const config = {...CONFIG, onboarding_needed: needed, ...(needed ? {} : {changelog: {unread_count: 0}})};
+  const config = {...CONFIG, onboarding_needed: needed, ...(needed ? {} : {changelog: {unread_count: 0}})}, notices = [];
   await context.route('**/*', async r => {
     const request = r.request(), url = new URL(request.url()), p = url.pathname;
     const json = body => r.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
@@ -62,6 +62,7 @@ async function open(browser, {theme, phone, needed, team, route}) {
     }
     if (p === '/api/me') return json({...me, config});
     if (p === '/api/v2/config') return json(config);
+    if (p === '/api/v2/system/usage-count/notice') { notices.push(JSON.parse(request.postData()).state); return json({ok: true}); }
     if (p === '/api/humans') return json(team ? {people, org_groups: groups} : {people: [{...people[0], org_parent: '', team: ''}], org_groups: []});
     if (p === '/api/employees') return json(team ? TEAM : []);
     if (p === '/api/status') return json({cloud: true, keeper_alive: true, health_issues: [], active: [], queued: [], recent_runs: []});
@@ -83,14 +84,23 @@ async function open(browser, {theme, phone, needed, team, route}) {
   page.on('pageerror', e => errors.push(e.message));
   await page.goto('https://tico-ui.test/' + route);
   await page.locator('#tree li').first().waitFor();
-  return {page, errors, close: () => context.close()};
+  return {page, errors, notices, close: () => context.close()};
 }
 
 const shown = (page, selector) => page.locator(selector).evaluateAll(els => els.filter(el => el.checkVisibility()).map(el => el.dataset.nav || el.id));
 
+// The anonymous usage count's notice: not over the wizard or the after-Create screen, and not counted as seen there.
+const noNotice = async ({page, notices}) => {
+  assert.equal(await page.locator('#usage-notice').isVisible(), false, 'the usage notice waits until setup is left');
+  assert.deepEqual(notices, []);
+};
+
 async function wizard(browser, theme) {
-  const {page, errors, close} = await open(browser, {theme, needed: true, route: '#/welcome'});
+  // A new install opens with no page in the address: the boot sends it to the wizard.
+  const {page, errors, notices, close} = await open(browser, {theme, needed: true, route: ''});
   await page.locator('#onb-company').waitFor();
+  assert.equal(await page.evaluate(() => location.hash), '#/welcome');
+  await noNotice({page, notices});
   assert.deepEqual(await shown(page, '#side .side-scroll > .nav-link, #side .side-scroll > .nav-row'), ['welcome'], 'only Finish setup');
   assert.equal(await page.locator('#changelog-notice').isVisible(), false, 'no What\'s new on a fresh install');
   await page.locator('#account').click();
@@ -103,18 +113,23 @@ async function wizard(browser, theme) {
   await page.locator('#side [data-nav="tasks"]').waitFor();
   assert.equal(await page.locator('#changelog-notice').isVisible(), true);
   assert.ok((await shown(page, '#side .side-scroll > .nav-link')).includes('overview'));
+  await page.locator('#usage-notice').waitFor({state: 'visible'});
+  assert.deepEqual(notices, ['shown'], 'and counts as seen only then');
+  await shot(page, `left-setup-desktop-${theme}`);
   assert.deepEqual(errors, []);
   await close();
 
   const phone = await open(browser, {theme, phone: true, needed: true, route: '#/welcome'});
   await phone.page.locator('#onb-company').waitFor();
   assert.deepEqual(await shown(phone.page, '#mobile-nav > *'), ['org', 'search', 'mobile-support', 'more']);
+  await noNotice(phone);
   await shot(phone.page, `wizard-phone-${theme}`);
   await phone.page.locator('#mobile-more').click();
   await phone.page.locator('#tree').waitFor();
   assert.deepEqual(await shown(phone.page, '#side .side-scroll > .nav-link, #side .side-scroll > .nav-row'), ['welcome']);
   assert.equal(await phone.page.locator('#changelog-notice').isVisible(), false);
   await shot(phone.page, `wizard-phone-drawer-${theme}`);
+  await noNotice(phone);
   assert.deepEqual(phone.errors, []);
   await phone.close();
 }
@@ -148,8 +163,9 @@ const readable = (team, where) => {
 };
 
 async function created(browser, theme) {
-  const {page, errors, close} = await open(browser, {theme, needed: false, team: true, route: '#/welcome'});
+  const {page, errors, notices, close} = await open(browser, {theme, needed: false, team: true, route: '#/welcome'});
   await page.locator('#tree a.node[data-org="b:head-of-product"]').waitFor();
+  await noNotice({page, notices});
   // Setup is done: the app's pages are back.
   assert.ok((await shown(page, '#side .side-scroll > .nav-link')).includes('tasks'));
   await expand(page);
@@ -161,15 +177,20 @@ async function created(browser, theme) {
   assert.ok(heads.every(row => row.setup && row.mark), 'the harness mark and the Setup pill stay');
   assert.equal(await page.locator('#tree [data-org="b:bookkeeper"] .nm-split').count(), 0, 'a name nobody shares is whole');
   await shot(page, `created-desktop-${theme}`);
+  await noNotice({page, notices});
   assert.deepEqual(errors, []);
   await close();
 
   const phone = await open(browser, {theme, phone: true, needed: false, team: true, route: '#/welcome'});
+  await phone.page.locator('#onb-bots').getByText('Customer Insights Analyst').waitFor();
+  await noNotice(phone);
+  await shot(phone.page, `created-phone-screen-${theme}`);
   await phone.page.locator('#mobile-more').click();
   await phone.page.locator('#tree a.node[data-org="b:head-of-product"]').waitFor({state: 'visible'});
   await expand(phone.page);
   readable(await rows(phone.page), 'on a phone');
   await shot(phone.page, `created-phone-${theme}`);
+  await noNotice(phone);
   assert.deepEqual(phone.errors, []);
   await phone.close();
 }
@@ -193,7 +214,7 @@ async function leads(browser) {
       await created(browser, theme);
     }
     await leads(browser);
-    console.log('PASS: on the wizard the sidebar shows setup and the team only; after Create each bot row reads as its own name.');
+    console.log('PASS: on the wizard the sidebar shows setup and the team only, and the usage notice waits; after Create each bot row reads as its own name.');
   } finally {
     await browser.close();
   }
