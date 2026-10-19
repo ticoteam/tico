@@ -97,3 +97,29 @@ def fallback_row(record):
     if spends_gateway(record) and gateway_on(record):
         return {"runtime": GATEWAY_RUNTIME, "harness": GATEWAY_RUNTIME, "model": WAITING_MODEL}
     return None
+
+
+SIGN_IN_TITLE = "Sign in to Claude and ChatGPT, or add API keys"
+SIGN_IN_LINE = ("Sign in with your own Claude and ChatGPT accounts in Settings > Computers. "
+                "Don't share one login across your team.")
+NOT_ISOLATED_LINE = ("This computer can't run Gateway work without the Docker runner; sign in to Claude and ChatGPT "
+                     "or add API keys. Until then its bots wait.")
+
+
+def card(c, settings=None):
+    """The one Needs you card for the company's owner while the recommended choice waits for a sign-in: Claude or
+    ChatGPT is signed in (by subscription or API key) on no computer. One card, never one per bot or per computer.
+    It says so plainly when no computer can run Gateway work meanwhile, so bots that wait are not silently stuck."""
+    from .providers import load
+    from .store import readiness_document
+    record = load(c, settings)
+    if of(record) != RECOMMENDED:
+        return None
+    documents = [readiness_document(row[0]) for row in
+                 c.execute("SELECT readiness_json FROM runners WHERE revoked_at IS NULL ORDER BY id").fetchall()]
+    if all(any(signed_in(d, runtime) for d in documents) for runtime in SUBSCRIPTION_RUNTIMES):
+        return None
+    lines = [SIGN_IN_LINE] + ([] if any(isolated(d) for d in documents) else [NOT_ISOLATED_LINE])
+    return {"kind": "setup", "id": "setup:sign-in", "title": SIGN_IN_TITLE, "first_line": " ".join(lines),
+            "created": record.get("updated") or "", "requester": None, "origin_actor": None, "from_person": None,
+            "link": "#/settings", "link_label": "Open Settings > Computers"}

@@ -117,3 +117,41 @@ def test_the_installer_choice_seeds_claude_and_chatgpt_and_an_unknown_choice_is_
         record = providers.load(c, settings)
         providers.save(c, "human:ana", {"enabled": ["anthropic"], "preset": "something-else",
                                         "expected_revision": record["revision"]}, "2026-10-19T00:00:00Z")
+
+
+def needs(api, token="ana-test"):
+    from backend.tests.test_api import get
+    return [it for it in get(api, "needs-you", token)["items"] if it["kind"] == "setup"]
+
+
+@pytest.mark.parametrize("isolated", [True, False])
+def test_one_sign_in_card_until_claude_and_chatgpt_are_signed_in_and_it_names_the_docker_runner(api, isolated):
+    choose(api, models_preset.RECOMMENDED)
+    for bot in ("ops", "finance"):
+        on_claude(api, bot)
+    first, second = runner(api), runner(api)
+    for machine, bot in ((first, "ops"), (second, "finance")):
+        assign(api, machine, bot)
+        heartbeat(api, machine, bot, signed_in=False, isolated=isolated)
+    cards = needs(api)
+    # One card for the company, not one per bot or per computer.
+    assert [c["title"] for c in cards] == [models_preset.SIGN_IN_TITLE]
+    assert (models_preset.NOT_ISOLATED_LINE in cards[0]["first_line"]) is (not isolated)
+    assert cards[0]["need"] == "connect"
+    # Nothing failed while the bots waited.
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM jobs WHERE state='failed'").fetchone()[0] == 0
+    # Claude signed in on one computer is not enough; ChatGPT too and the card goes by itself.
+    heartbeat(api, first, "ops", signed_in=True, isolated=isolated)
+    assert len(needs(api)) == 1
+    readiness = {"schema_version": 1, "runtimes": {"claude": {"installed": True, "authenticated": "ready"},
+                                                   "codex": {"installed": True, "authenticated": "ready"}}, "bots": {}}
+    post(api, "runners/heartbeat", {"version": "test", "platform": "test", "readiness": readiness},
+         token=second["token"])
+    assert needs(api) == []
+
+
+def test_no_sign_in_card_under_the_other_choices(api):
+    for preset in ("subscriptions", "gateway", "own-keys", ""):
+        choose(api, preset)
+        assert needs(api) == []
