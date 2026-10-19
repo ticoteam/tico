@@ -1006,6 +1006,10 @@ def migrate(conn, adopt_legacy=False):
     # 1 when a run segment's estimate may be low: its model's long prompts cost more and the runner did not
     # send every request's tokens (providers.estimate). NULL on segments from before it was recorded.
     add_column(conn, "turn_usage_segments", "est_cost_low", "INTEGER")
+    # On a Tico AI Gateway segment, which gateway key paid for it (backend/gateway_connection.py `key_id`, never the key)
+    # and this install's id (backend/census.py), so the Gateway's own ledger can be matched. NULL on every other one.
+    add_column(conn, "turn_usage_segments", "gateway_key_id", "TEXT")
+    add_column(conn, "turn_usage_segments", "install_id", "TEXT")
     # The newest of the bot's own model requests' whole prompt (uncached + cached), when its runner marked them from
     # its subagents': the session's context size (backend/topic_change.py). NULL when it did not; the summed columns
     # are not a context size.
@@ -6217,10 +6221,13 @@ def turn_finish(conn, actor, turn_id, exit_code="ok", tokens_in=None, tokens_out
         conn.execute("DELETE FROM turn_usage_segments WHERE turn_id=?", (turn_id,))
         for position, part in enumerate(usage["segments"]):
             conn.execute("INSERT INTO turn_usage_segments(turn_id,position,input_tokens,cached_tokens,output_tokens,"
-                         "model,provider,est_cost_usd,billing,runtime,harness,effort,profile,est_cost_low) "
+                         "model,provider,est_cost_usd,billing,runtime,harness,effort,profile,est_cost_low,"
+                         "gateway_key_id,install_id) "
                          "VALUES(:turn_id,:position,:input_tokens,:cached_tokens,:output_tokens,:model,:provider,"
-                         ":est_cost_usd,:billing,:runtime,:harness,:effort,:profile,:est_cost_low)",
-                         {"est_cost_low": None, **part, "turn_id": turn_id, "position": position})
+                         ":est_cost_usd,:billing,:runtime,:harness,:effort,:profile,:est_cost_low,"
+                         ":gateway_key_id,:install_id)",
+                         {"est_cost_low": None, "gateway_key_id": None, "install_id": None, **part,
+                          "turn_id": turn_id, "position": position})
     row = _one(conn, "SELECT * FROM turns WHERE id=?", (turn_id,))
     if row:
         conn.execute("UPDATE bots SET last_turn_at=? WHERE slug=?", (ts, row["bot"]))

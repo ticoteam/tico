@@ -99,6 +99,24 @@ def fallback_row(record):
     return None
 
 
+# What the person calls a subscription login, in Health's plain wording under the two Gateway choices.
+LOGIN_NAMES = {"claude": "Claude", "codex": "ChatGPT"}
+
+
+def computer_of(c, bot):
+    """The readiness document of the computer `bot` is on, or {}."""
+    from .store import readiness_document
+    row = c.execute("SELECT r.readiness_json FROM assignments a JOIN runners r ON r.id=a.runner_id "
+                    "WHERE a.bot=? AND r.revoked_at IS NULL", (bot,)).fetchone()
+    return readiness_document(row[0]) if row else {}
+
+
+def runnable_fallbacks(record, ready, rows):
+    """The company's fallback rows a bot on the computer `ready` can use: the Gateway row only where it can run it."""
+    return [row for row in rows if row.get("model") != WAITING_MODEL or row.get("runtime") != GATEWAY_RUNTIME
+            or isolated(ready)]
+
+
 SIGN_IN_TITLE = "Sign in to Claude and ChatGPT, or add API keys"
 SIGN_IN_LINE = ("Sign in with your own Claude and ChatGPT accounts in Settings > Computers. "
                 "Don't share one login across your team.")

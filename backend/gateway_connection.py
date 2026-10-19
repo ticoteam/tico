@@ -122,6 +122,11 @@ def _fingerprint(c, settings=None):
     return f"{where}:{_row(c).get('revision', 0)}" if where else ""
 
 
+def key_id(c, settings=None):
+    """A non-secret id of the gateway key in use, for usage records (`_fingerprint`): never the key, '' with none."""
+    return _fingerprint(c, settings)
+
+
 def owner_only(who):
     if who.role != "owner":
         raise Problem("forbidden", "Only the owner may change the Tico AI Gateway connection", 403)

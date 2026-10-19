@@ -1585,7 +1585,14 @@ class Execution:
                     "output_tokens": item.output_tokens, "model": model or None, "provider": provider or None,
                     "est_cost_usd": cost, "est_cost_low": int(low),
                     "billing": item.billing, "runtime": runtime or None, "harness": item.harness or None,
-                    "effort": item.effort or None, "profile": item.profile_used or None}
+                    "effort": item.effort or None, "profile": item.profile_used or None,
+                    **(gateway(model) if gateway_connection.is_tico(model) else {})}
+
+        def gateway(model):
+            # Ledger-ready: which gateway key and install a Gateway segment was spent under; never the key itself.
+            from .census import install_id_in
+            return {"gateway_key_id": gateway_connection.key_id(c, self.store.settings) or None,
+                    "install_id": install_id_in(c)}
         items = [item for item in (used.segments or [used])
                  if item.input_tokens or item.cached_tokens or item.output_tokens]
         segments = [part(item) for item in items]

@@ -460,3 +460,55 @@ def test_a_bots_own_key_is_not_the_computers_login(environment):
     turn(api, rid, {**QUOTA, "fallback": "codex"}, 20, bot="pi-a")
     turn(api, rid, {"outcome": "completed", "profile_used": None}, 10, bot="gem-b")
     assert list(login_findings(api)) == [f"default_login_limited:{rid}:codex"]
+
+
+def gateway_choice(api, monkeypatch, runner_id, isolated, enabled=("anthropic",)):
+    """The recommended models choice with the Gateway connected, on a computer that does (or does not) run Gateway work."""
+    from backend import gateway_connection
+    monkeypatch.setattr(gateway_connection, "connected", lambda c, settings=None: True)
+    with api.app.state.store.transaction() as c:
+        providers.save(c, "human:test", {"expected_revision": providers.load(c)["revision"], "enabled": list(enabled),
+                                         "runtime": "claude", "auto_fallback": True, "preset": "subscriptions-gateway"},
+                       H.now())
+        c.execute("UPDATE runners SET readiness_json=? WHERE id=?",
+                  (json.dumps({"schema_version": 1, "isolated": isolated, "runtimes": {}, "bots": {}}), runner_id))
+
+
+@pytest.mark.parametrize("isolated", [True, False])
+def test_a_used_up_login_under_the_gateway_choice_is_one_plain_finding(environment, monkeypatch, isolated):
+    api, runner = built(environment)
+    rid = runner["runner_id"]
+    gateway_choice(api, monkeypatch, rid, isolated)
+    limited(api, config={"runtime": "claude"})
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO assignments(bot,runner_id,generation,updated,updated_by) VALUES(?,?,1,?,'t')",
+                  (SECRET_BOT, rid, H.now()))
+    for ago in (30, 20):
+        turn(api, rid, {**QUOTA, "usage": {"runtime": "claude"}}, ago, bot=SECRET_BOT)
+    with api.app.state.store.read() as c:
+        found = [i for i in health_monitor.findings(c, api.app.state.store.settings)
+                 if i["check_id"] in ("limited_no_fallback", "default_login_limited")]
+    if isolated:
+        # The Gateway takes the turn last: the bot is not stuck, and the login says so in plain words.
+        assert [(i["check_id"], i["title"]) for i in found] == [
+            ("default_login_limited", f"{CANARY}'s Claude login is used up")]
+        assert found[0]["detail"] == f"{CANARY}'s Claude login is used up. Bots are on Tico Gateway until it resets."
+        return
+    # A Mac skips the Gateway row, so the bot is stopped, and that finding says why and what to do.
+    stopped = [i for i in found if i["check_id"] == "limited_no_fallback"]
+    assert [i["title"] for i in stopped] == [f"{SECRET_BOT} stopped: its Claude login is used up"]
+    assert "no computer here can run Tico Gateway work" in stopped[0]["detail"]
+    assert stopped[0]["fix"] == "Sign in another Claude login, or add a Docker runner."
+
+
+def test_the_gateway_row_counts_as_a_fallback_only_under_the_gateway_choices(environment, monkeypatch):
+    api, runner = built(environment)
+    gateway_choice(api, monkeypatch, runner["runner_id"], True)
+    with api.app.state.store.transaction() as c:
+        record = providers.load(c)
+        providers.save(c, "human:test", {"expected_revision": record["revision"], "preset": "subscriptions"}, H.now())
+    limited(api, config={"runtime": "claude"})
+    with api.app.state.store.read() as c:
+        found = [i for i in health_monitor.findings(c, api.app.state.store.settings)
+                 if i["check_id"] == "limited_no_fallback"]
+    assert [i["title"] for i in found] == [f"{SECRET_BOT} stopped on a usage limit and has no fallback model"]

@@ -108,6 +108,12 @@ def can_run(c, bot, runtime, runner=None, harness="", model=""):
         if not gateway_connection.connected(c):
             return verdict(False, "The Tico AI Gateway is not connected", "Save the gateway key in Settings > AI providers",
                            "#/settings")
+        # Only a computer that runs bots as their own user runs a Tico turn (runner-rs/src/gateway_relay.rs). One that
+        # says it does not (a Mac, a server without Tico's Docker runner) is refused plainly; an older runner that does
+        # not say is judged as before, and the runner itself still refuses the turn.
+        if readiness.get("isolated") is False:
+            return verdict(False, label + " can't run Tico Gateway work (it needs Tico's Docker runner)",
+                           "Sign in to Claude or ChatGPT in Settings > Computers, or add a Docker runner", "#/settings")
         return verdict(True)
     # A harness whose key each bot holds (`api_keys = "bot"`): the bot's own grant is its sign-in.
     own = harness or config.get("harness") or runtime

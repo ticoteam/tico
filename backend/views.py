@@ -2075,6 +2075,8 @@ def runnable_choices(c, who, auth, settings):
                         and (not enabled or not model.get("provider") or model["provider"] in enabled)
                         for h in model.get("harnesses") or () if not (HARNESS_BY_ID.get(h) or {}).get("external")})
     computers = _movable(c, who, {r["id"] for r in _online_runners(c)})
+    tico = {model["id"] for model in providers.MODEL_CATALOG if model.get("provider") == "tico"
+            and not model.get("deprecated") and (not enabled or "tico" in enabled)}
     out = {}
     from .harnesses import resolve_harness
     for row in c.execute("SELECT a.bot,b.runtime,bc.config_json FROM assignments a JOIN bots b ON b.slug=a.bot "
@@ -2089,4 +2091,10 @@ def runnable_choices(c, who, auth, settings):
             answer = runtime_choice(c, bot, runtime, who, computers, harness=harness)
             if answer.get("can_run") is False:
                 out.setdefault(bot, {})[harness] = answer
+        # A Tico model on a computer that cannot run Gateway work, under its model id: the picker marks it "not on this
+        # computer" while the harness itself (pi on the bot's own key) stays offered.
+        if tico:
+            answer = runtime_choice(c, bot, "pi", who, computers, harness="pi", model=sorted(tico)[0])
+            if answer.get("can_run") is False:
+                out.setdefault(bot, {}).update({model: answer for model in tico})
     return out

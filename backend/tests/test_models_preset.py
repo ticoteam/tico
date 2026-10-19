@@ -155,3 +155,73 @@ def test_no_sign_in_card_under_the_other_choices(api):
     for preset in ("subscriptions", "gateway", "own-keys", ""):
         choose(api, preset)
         assert needs(api) == []
+
+
+@pytest.mark.parametrize("isolated", [True, False])
+def test_a_computer_that_cannot_run_gateway_work_says_so_and_the_picker_marks_tico_models(api, monkeypatch, isolated):
+    from backend import readiness
+    from backend.tests.test_api import get
+    connected(api, monkeypatch)
+    choose(api, models_preset.RECOMMENDED, enabled=("anthropic", "openai", "tico"))
+    on_claude(api, "ops")
+    machine = runner(api)
+    assign(api, machine, "ops")
+    heartbeat(api, machine, "ops", signed_in=True, isolated=isolated)
+    with api.app.state.store.read() as c:
+        verdict = readiness.can_run(c, "ops", "pi", model="tico-mid-1.0")
+    marked = get(api, "operations", "ana-test")["runnable"].get("ops", {})
+    if isolated:
+        assert verdict["can_run"] is True and "tico-mid-1.0" not in marked
+        return
+    assert verdict["can_run"] is False
+    assert "can't run Tico Gateway work" in verdict["problem"] and "Docker runner" in verdict["fix"]
+    assert marked["tico-mid-1.0"]["short"] == "not on this computer"
+    # The harness itself stays offered: pi on the bot's own key still runs here.
+    assert "pi" not in marked or marked["pi"]["short"] != "not on this computer"
+
+
+@pytest.mark.parametrize("preset", models_preset.PRESETS)
+def test_drafts_are_written_on_the_gateway_only_under_the_two_gateway_choices(api, monkeypatch, preset):
+    import io
+    from backend import updates
+    from clients import judge as J
+    connected(api, monkeypatch)
+    choose(api, preset)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    store = api.app.state.store
+    with store.read() as c:
+        write = updates.writer_for(c, store.settings, store, api.app.state.vault)
+    if preset not in models_preset.GATEWAY_PRESETS:
+        assert write is None       # no server key for Claude or ChatGPT here, and the Gateway is not spent for it
+        return
+    sent = []
+
+    def opener(request, timeout):
+        sent.append(request)
+        return io.BytesIO(json.dumps({"choices": [{"message": {"content": '{"text": "ok"}'}}]}).encode())
+    monkeypatch.setattr(J, "gateway_open", opener)
+    with store.read() as c:
+        write = updates.writer_for(c, store.settings, store, api.app.state.vault)
+    assert write.model == "tico-mid-1.0" and write("system", "facts") == {"text": "ok"}
+    [request] = sent
+    assert request.full_url.endswith("/chat/completions") and request.get_header("Authorization") == "Bearer " + KEY
+    assert json.loads(request.data)["model"] == "tico-mid-1.0"
+
+
+def test_a_gateway_segment_records_which_key_and_install_paid_never_the_key(api, monkeypatch):
+    from backend.tests.test_check_models import finish
+    connected(api, monkeypatch)
+    choose(api, models_preset.RECOMMENDED)
+    on_claude(api, "ops")
+    machine = runner(api)
+    assign(api, machine, "ops")
+    heartbeat(api, machine, "ops", signed_in=False, isolated=True)
+    post(api, "chat/ops", {"text": "Use only the synthetic fixture"})
+    attempt = post(api, "jobs/claim", {"bot": "ops"}, token=machine["token"])["attempt"]
+    finish(api, machine, attempt, {"model": "tico-mid-1.0", "runtime": "pi", "harness": "pi", "billing": "api"})
+    with api.app.state.store.read() as c:
+        row = dict(c.execute("SELECT * FROM turn_usage_segments").fetchone())
+        install = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='usage-count'").fetchone()[0])
+    assert row["model"] == "tico-mid-1.0" and row["gateway_key_id"] and row["install_id"] == install["install_id"]
+    assert KEY not in json.dumps(row) and KEY[3:-3] not in json.dumps(row)

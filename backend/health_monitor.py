@@ -28,7 +28,7 @@ from datetime import timezone
 from fastapi import Request
 from pydantic import Field
 
-from . import diagnostics, providers, team_rules
+from . import diagnostics, models_preset, providers, team_rules
 from .auth import Identity
 from .models import Contract
 from .store import H, Problem
@@ -296,12 +296,25 @@ def out_of_quota_logins(c, settings=None):
 
 
 def _login_checks(c, settings):
-    labels = {r["id"]: r["label"] for r in c.execute("SELECT id,label FROM runners WHERE revoked_at IS NULL")}
+    from .store import readiness_document
+    runners = {r["id"]: r for r in c.execute("SELECT id,label,readiness_json FROM runners WHERE revoked_at IS NULL")}
+    labels = {rid: r["label"] for rid, r in runners.items()}
+    record = providers.load(c, settings)
     out = []
     for x in out_of_quota_logins(c, settings):
         label = labels.get(x["runner_id"])
         if not label:
             continue                                  # a removed computer runs nothing more
+        login = models_preset.LOGIN_NAMES.get(x["runtime"])
+        if (login and models_preset.fallback_row(record) and record.get("auto_fallback")
+                and models_preset.isolated(readiness_document(runners[x["runner_id"]]["readiness_json"]))):
+            # Under the two Gateway choices the bots there finish on Tico Gateway, last: one plain line.
+            out.append(_finding(f"default_login_limited:{x['runner_id']}:{x['runtime']}", "default_login_limited", SETUP,
+                                f"{label}'s {login} login is used up",
+                                f"{label}'s {login} login is used up. Bots are on Tico Gateway until it resets.",
+                                f"Sign in another {login} login on {label} in Settings > Computers, or wait for it "
+                                "to reset."))
+            continue
         name = providers.RUNTIME_LABELS.get(x["runtime"], x["runtime"])
         reset = (f"; the provider says it resets at {x['resets_at'][:16].replace('T', ' ')} UTC" if x["resets_at"]
                  else "; the provider gave no reset time")
@@ -414,11 +427,25 @@ def _bot_checks(c, settings=None):
         detail = json.loads(r["detail_json"] or "{}")
         if detail.get("bot"):
             limited[detail["bot"]] = limited.get(detail["bot"], 0) + 1
-    company = providers.default_fallbacks(providers.load(c, settings))
+    record = providers.load(c, settings)
+    company = providers.default_fallbacks(record)
     for bot, n in sorted(limited.items()):
         config = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
         declared = json.loads(config["config_json"] or "{}") if config and config["config_json"] else {}
-        if not normalize_fallback(declared.get("fallback")) and not _company_fallback(c, settings, declared, company):
+        # The Gateway row counts only where the bot's computer can run it (a Mac skips it: runner-rs/src/fallback.rs).
+        computer = models_preset.computer_of(c, bot)
+        here = models_preset.runnable_fallbacks(record, computer, company)
+        if normalize_fallback(declared.get("fallback")) or _company_fallback(c, settings, declared, here):
+            continue
+        login = models_preset.LOGIN_NAMES.get(providers.bot_choice(c, settings, declared)[0])
+        if login and models_preset.fallback_row(record) and record.get("auto_fallback") \
+                and not models_preset.isolated(computer):
+            out.append(_finding("limited_no_fallback:" + bot, "limited_no_fallback", SETUP,
+                                f"{bot} stopped: its {login} login is used up",
+                                f"{bot} stopped: its {login} login is used up, and no computer here can run Tico "
+                                f"Gateway work. {n} turn(s) stopped in the last 24 hours.",
+                                f"Sign in another {login} login, or add a Docker runner."))
+        else:
             out.append(_finding("limited_no_fallback:" + bot, "limited_no_fallback", SETUP,
                                 f"{bot} stopped on a usage limit and has no fallback model",
                                 f"{n} turn(s) of {bot} stopped on a subscription or spend limit in the last 24 hours, "
