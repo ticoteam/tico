@@ -167,7 +167,8 @@ def view(conn, row, history=True):
 # ------------------------------------------------------------------------------------------------ the carrier ends
 def worked(conn, row, bot, since, until=None):
     """Whether bot `bot` (a slug) worked task `row` between `since` and `until`: a comment or message in its room, a
-    change to its fields (step, status, note, ...), or a pull request linked or moved."""
+    change to its fields (step, status, note, ...), a link it added, or a pull request on the task opened or pushed
+    to. A link refreshed from GitHub (checks, mergeable, review) is not work."""
     actor = "bot:" + bot
     until = until or "9999"
     if conn.execute("SELECT 1 FROM task_events WHERE task_id=? AND actor=? AND ts>=? AND ts<=? AND field<>? LIMIT 1",
@@ -177,11 +178,13 @@ def worked(conn, row, bot, since, until=None):
             "SELECT 1 FROM messages WHERE conversation_id=? AND from_actor=? AND created>=? AND created<=? LIMIT 1",
             (row["conversation_id"], actor, since, until)).fetchone():
         return True
+    if conn.execute("SELECT 1 FROM events WHERE action='github.pull_request' AND target=? AND ts>=? AND ts<=? "
+                    "AND json_extract(detail_json,'$.action') IN ('opened','synchronize') LIMIT 1",
+                    (row["id"], since, until)).fetchone():
+        return True
     try:
-        return conn.execute(
-            "SELECT 1 FROM task_links WHERE task_id=? AND ((added_by=? AND created>=? AND created<=?) "
-            "OR (kind='pr' AND updated>=? AND updated<=?)) LIMIT 1",
-            (row["id"], actor, since, until, since, until)).fetchone() is not None
+        return conn.execute("SELECT 1 FROM task_links WHERE task_id=? AND added_by=? AND created>=? AND created<=? "
+                            "LIMIT 1", (row["id"], actor, since, until)).fetchone() is not None
     except Exception:  # noqa: BLE001 - a local hub has no task_links table
         return False
 
@@ -236,6 +239,9 @@ def defer(conn, actor, task_id, after=None, at=None, next_run=False, handled=Fal
     if handled:
         if not aid:
             H.refuse(conn, actor, "defer", "no run has carried it yet, so there is nothing to have handled")
+        if row.get("resume_json"):
+            # Done with it for now: a condition stored earlier no longer brings it back.
+            conn.execute("UPDATE tasks SET resume_json=NULL, updated=? WHERE id=?", (H.now(), task_id))
         H._task_event(conn, task_id, actor, FIELD, aid, HANDLED, "")
         return H.task(conn, task_id)
     was = condition(row)
@@ -336,10 +342,12 @@ def stale(conn, at=None, hours=STALE_HOURS):
         if not since or since > cutoff:
             continue
         if not first:
-            # Carried and not settled: a run still going, or one that ended before runs were settled.
+            # Carried and not settled: a run still going, or one that ended before runs were settled. Either may
+            # have worked it, or said it is done with it, already.
             attempt = _attempt(conn, aid)
-            if attempt and attempt["state"] not in ("leased", "running") and worked(
-                    conn, row, bot, since, attempt["finished"] or at):
+            going = not attempt or attempt["state"] in ("leased", "running")
+            if _last_since(conn, row["id"], HANDLED, since) or worked(
+                    conn, row, bot, since, at if going else attempt["finished"] or at):
                 continue
         out.append({"task": row, "bot": bot, "since": since, "run": aid})
     return out
