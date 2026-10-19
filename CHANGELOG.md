@@ -125,6 +125,9 @@ All notable changes to Tico are recorded here. The format follows
   ([Computers](docs/computers.md#remove-a-subscription)).
 
 ### Fixed
+- **Bots on Tico models are not refused at the edge**: the runner's Gateway relay now sends Tico's own user agent
+  (`Tico-Client/<runner version>`) instead of the harness's, so a turn's model calls are not blocked by Cloudflare in
+  front of the Tico AI Gateway.
 - **A task's chat shows your message being answered, whichever bot answers it.** After you send a message on a task,
   the task's chat shows the same line as a bot's chat: Sent, Queued (and why, when the bot is busy or at a limit),
   Starting, "<Bot> is working" with its latest step, then the reply, or "Reply failed" when the turn errors. This now
