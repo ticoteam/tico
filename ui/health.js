@@ -184,12 +184,16 @@ function hlPageDraw() {
     : notes.length ? `Nothing urgent. ${notes.length} note${notes.length === 1 ? '' : 's'} below.` : 'Everything looks fine.'}</p>
     <ul class="hl-list">${HL.checks.map(hlCheckHtml).join('')}</ul>${hlMonitorHtml(HL_MONITOR)}
     ${stuck.length ? `<h2>Stuck</h2><ul class="hl-bots">${hlStuckHtml(stuck)}</ul>` : ''}${hlStorageHtml(HL.storage)}
-    ${notes.length ? `<h2>Not urgent</h2><ul class="hl-notes">${notes.map(issue => `<li><strong>${esc(issue.title)}</strong> <span class="muted">${esc(issue.detail || '')}</span></li>`).join('')}</ul>` : ''}
+    ${notes.length ? `<h2>Not urgent</h2><ul class="hl-notes">${notes.map(issue => `<li><strong>${esc(issue.title)}</strong> <span class="muted">${esc(issue.detail || '')}</span>${issue.kind === 'uncertain_work' && issue.bot ? ` <button class="ghost" type="button" data-execution-review="${esc(issue.bot)}">Review stopped runs</button>` : ''}</li>`).join('')}</ul>` : ''}
     ${hlMetricsHtml(HL_METRICS)}
     ${HL.computers.length ? `<h2>Computers</h2><ul class="hl-computers">${HL.computers.map(hlComputerHtml).join('')}</ul>` : ''}
     ${idle.length ? `<h2>Bots waiting</h2><ul class="hl-bots">${bots(idle)}</ul>` : ''}
     ${HL.failures.length ? `<h2>Failed in the last day</h2><ul class="hl-bots">${HL.failures.map(row => `<li>${esc(botDisplayName(row.bot))} <span class="muted">${esc(ago(row.at))}</span></li>`).join('')}</ul>` : ''}
     <p class="hl-help"><button class="ghost" type="button" data-setup-help="health">Want help setting up?</button></p>`;
+  // A stopped run saved for later is still reviewed from here, so a person never needs a hidden control (Dev 280).
+  host.querySelectorAll('[data-execution-review]').forEach(button => {
+    button.onclick = () => executionReview(button.dataset.executionReview);
+  });
 }
 
 const hlMs = ms => ms == null ? '–' : ms >= 60000 ? `${(ms / 60000).toFixed(1)} min` : ms >= 1000 ? `${(ms / 1000).toFixed(1)} s` : `${Math.round(ms)} ms`;

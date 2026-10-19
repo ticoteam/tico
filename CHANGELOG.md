@@ -125,6 +125,12 @@ All notable changes to Tico are recorded here. The format follows
   ([Computers](docs/computers.md#remove-a-subscription)).
 
 ### Fixed
+- **A stopped run that holds up work can be reviewed again**: when a bot's unreviewed stopped run keeps its other
+  queued work on that task or chat from running, it is now something that needs you: Settings → System checks and
+  Needs you list it with its Review stopped runs button, and say how many requests wait and on which tasks. So is a
+  run that rode along on a stopped run the keeper already settled but could not settle itself. A stopped run that holds
+  nothing stays a note under Health, which now has the Review stopped runs button too. Before, every stopped run was
+  "not urgent" and the button showed nowhere, so 14 queued wake-ups waited with no control to free them (Dev 280).
 - **A task's chat shows your message being answered, whichever bot answers it.** After you send a message on a task,
   the task's chat shows the same line as a bot's chat: Sent, Queued (and why, when the bot is busy or at a limit),
   Starting, "<Bot> is working" with its latest step, then the reply, or "Reply failed" when the turn errors. This now
