@@ -91,6 +91,7 @@ All notable changes to Tico are recorded here. The format follows
 - Groups no longer give their bots a subscription: a bot runs on its own choice, or else on its computer's own login.
   The bot editor's **Connection** line says "Runs on <tool> · <connection> on <computer>". Existing group choices
   are not moved to the bots; choose one per bot where it is needed.
+- PDF upload and reading use pypdf 6.21.1, the latest patch release of 6.21.
 
 ## [0.3.62] - 2026-10-19
 

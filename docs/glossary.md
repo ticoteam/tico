@@ -12,6 +12,8 @@ The words Tico uses, and what each replaces.
 - **Bot**: an AI teammate.
 - **Built-in**: a bot that comes with Tico, serves everyone and belongs to no group: Assistant, BotOps, Librarian, Goal Manager. These four appear as **Built-in** in Settings > Bots. Assistant and BotOps have main rail entries; the Goal Manager is on Goals and the Librarian is on Docs and Market. They stay out of the team chart and goal owner list.
 - **CEO Bot**: the Goal Manager's name on an install with the CEO Bot switch on. It then sits under the owner on the team chart, with the Heads under it ([Goals](goals-and-kpis.md#the-ceo-bot-switch)).
+- **Company section**: the Vision and Description at the top of Goals, shown only with the CEO Bot switch on ([Goals](goals-and-kpis.md#the-company-section)).
+- **Why**: one line on a goal tying it to the company's Vision. The CEO Bot proposes it and a person accepts it ([Goals](goals-and-kpis.md#a-goals-why)).
 - **Message bot**: a bot that works a human's email or a Slack channel, such as Inbox Manager. These appear separately under **Message bots** in the sidebar, Goals and setup.
 - **External agent**: an agent outside the team connected to Tico (Codex, Claude, Grok), run by a human or a bot.
 - **MCP** and **CLI**: two ways for humans and agents to reach the same shared Tico tools; an external agent connects over MCP with a token.
