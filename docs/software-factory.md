@@ -89,9 +89,11 @@ you create named Dev tickets. Move any tasks off a step before you delete it or 
 
 ## The roadmap
 
-Feature ideas live in the **Product roadmap** type: Suggested → Exploring → Spec → Approved → Building → Shipped (or
-Declined). Head of Product moves them. A roadmap item's Dev tickets are its children, and the item moves to Building
-and Shipped as they finish. In Settings → Types, give Spec and Approved the public step name "Planned", and Building
+Feature ideas live in the **Product roadmap** type: Suggested → Exploring → Spec → Approved → Building → Ready to
+ship → Shipped (or Declined). Head of Product moves them. A roadmap item's Dev tickets are its children or the
+tickets it is blocked by, and the item moves to Building when the first one is In Progress, Ready to ship when every
+one is at Pending Release or later, and Shipped when every one is Done ([Public roadmaps](roadmaps.md) has the
+rule). In Settings → Types, give Spec and Approved the public step name "Planned", and Building and Ready to ship
 "In progress"; otherwise each step shows publicly under its own name. Shipped goes out with the release notes, after
 post-release QA. Publishing a roadmap is covered in [Public roadmaps](roadmaps.md).
 

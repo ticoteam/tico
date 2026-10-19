@@ -8,6 +8,14 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Roadmap items move with their Dev tickets by rule**: a Product roadmap item counts the Dev tickets linked to
+  it as children and as blocked by alike. Linking alone moves nothing: it is **Building** once the first ticket is In
+  Progress or later, at the new **Ready to ship** step (right after Building, shown publicly as "In progress") once
+  every ticket is at Pending Release or later, and **Shipped** once every one is done. A ticket closed or declined
+  without shipping counts for neither. On every change the item follows its tickets, back as well as forward. A
+  finished Dev ticket stays linked to the item it delivered. Each Dev ticket that starts, gets an open blocker or
+  reaches done leaves one quiet line from a fixed template (ticket, step, blocker, pull request) on its roadmap
+  item, else for its requester on the ticket; it wakes nobody.
 - **The company on Goals**: with the CEO Bot switch on, Goals opens with a **Company** section: the Vision (one or
   two sentences) and the Description (a short paragraph). The owner and admins edit it, everyone else reads it, and
   **History** lists every change with who made it and when. Each goal shows a one-line **Why** tying it to the

@@ -1021,6 +1021,8 @@ def migrate(conn, adopt_legacy=False):
         ensure_roadmap_types(conn)
     from .roadmaps import migrate as migrate_roadmaps
     migrate_roadmaps(conn)
+    from .roadmap_flow import ready_step as roadmap_ready_step
+    roadmap_ready_step(conn)
     # A person's open asks, read on every Needs-you load (loose_asks_to).
     conn.execute("CREATE INDEX IF NOT EXISTS messages_open_asks_to ON messages(to_actor, created) "
                  "WHERE kind='ask' AND answered_by IS NULL AND deleted_at IS NULL")
@@ -2896,6 +2898,9 @@ def _set_status(conn, actor, row, status=None, type=None, step=None, note=""):
             withdraw_task_approvals(conn, row["id"], f"Its task was {TASK_ENDED[effective]}.")
     from .roadmap_flow import changed as roadmap_changed
     roadmap_changed(conn, row["id"])
+    if row.get("status") != effective:
+        from .ticket_notices import moved as ticket_moved
+        ticket_moved(conn, actor, row["id"], row.get("status"), effective)
     return effective
 
 
@@ -3216,15 +3221,25 @@ def _queue_end(conn, owner, top=False):
 def _unblock(conn, done_task, told=()):
     """A finished task frees whatever waited on it; a bot owner hears about it once nothing else
     blocks the task. `told` are the tasks already woken about it (_answered)."""
+    from .roadmap_flow import delivers
     for blocked_id in TR.blocked_ids(conn, done_task["id"]):
         row = task(conn, blocked_id)
         if task_private(conn, done_task) and not subtask_flows_up(conn, done_task, row) and (
                 not task_private(conn, row) or not all(
                     task_private_readable(conn, party, done_task) for party in (row['owner'], row['requester']))):
             continue                  # do not copy private completion into a wider task
-        TR.remove_blocker(conn, KEEPER, row["id"], done_task["id"], keeper_note=f"unblocked: {done_task['title']}")
+        # A roadmap item keeps its finished Dev tickets: they are what it shipped, and it follows one that reopens.
+        # A done blocker blocks nothing (live_blocker).
+        kept = delivers(conn, row, done_task)
+        if not kept:
+            TR.remove_blocker(conn, KEEPER, row["id"], done_task["id"], keeper_note=f"unblocked: {done_task['title']}")
         conn.execute("UPDATE tasks SET version=version+1 WHERE id=?", (row["id"],))
-        if row["status"] in ACTIVE_STATUSES and not TR.blocker_ids(conn, row["id"]) and row["id"] not in told:
+        # A kept ticket that finishes again (reopened, then done) does not wake the item's owner twice.
+        waits = (TR.live_blocker(conn, row["id"], ACTIVE_STATUSES) or _one(
+            conn, "SELECT 1 FROM messages WHERE conversation_id=? AND json_extract(refs_json,'$.task')=? "
+                  "AND json_extract(refs_json,'$.trigger_source')=? AND body LIKE 'Unblocked: %' LIMIT 1",
+            (row["conversation_id"], row["id"], done_task["id"]))) if kept else TR.blocker_ids(conn, row["id"])
+        if row["status"] in ACTIVE_STATUSES and not waits and row["id"] not in told:
             _wake(conn, row, row["owner"], f"Unblocked: {row['title']}\n{done_task['title']} is finished.",
                   source=done_task["id"])
 
