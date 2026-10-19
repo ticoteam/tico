@@ -184,18 +184,24 @@ function chatImageURL(f) {
 function chatAttachmentsHTML(files, key = '') {
   return visualCardsHTML(files, {key, chips: rest => chatChipsHTML(rest)});
 }
+// A chip or thumbnail shows the title the sender gave the file (refs.attachments[].title), else its name; data-name
+// keeps the file's own name for the viewer and the download.
+const chatFileLabel = f => String(f?.title || '').trim() || f?.name || 'file';
 function chatChipsHTML(files) {
   if (!files.length) return '';
-  return `<div class="chat-files">${files.map(f => isChatImage(f)
-    ? `<button type="button" class="chat-thumb" data-chat-image="${esc(f.id)}" data-type="${esc(f.content_type || '')}" data-name="${esc(f.name || 'image')}" aria-label="View ${esc(f.name || 'image')}" title="${esc(f.name || 'image')}"><img alt="${esc(f.name || 'image')}" hidden></button>`
-    : `<a class="pill" href="${API}/v2/files/${encodeURIComponent(f.id)}">${esc(f.name)}</a>`).join('')}</div>`;   // opens in the viewer, or downloads
+  return `<div class="chat-files">${files.map(f => {
+    const label = chatFileLabel(f), titled = label !== (f.name || 'file');
+    if (!isChatImage(f)) return `<a class="pill" href="${API}/v2/files/${encodeURIComponent(f.id)}" data-name="${esc(f.name || 'file')}"${titled ? ` title="${esc(f.name || '')}"` : ''}>${esc(label)}</a>`;   // opens in the viewer, or downloads
+    const thumb = `<button type="button" class="chat-thumb" data-chat-image="${esc(f.id)}" data-type="${esc(f.content_type || '')}" data-name="${esc(f.name || 'image')}" data-title="${esc(label)}" aria-label="View ${esc(label)}" title="${esc(label)}"><img alt="${esc(label)}" hidden></button>`;
+    return titled ? `<span class="chat-titled">${thumb}<span class="chat-file-title" aria-hidden="true">${esc(label)}</span></span>` : thumb;
+  }).join('')}</div>`;
 }
 function chatThumbsLoad(root = document) {
   for (const button of root.querySelectorAll('.chat-thumb:not([data-loading])')) {
     button.dataset.loading = '1';
     const f = {id: button.dataset.chatImage, content_type: button.dataset.type, name: button.dataset.name};
     chatImageURL(f).then(url => { const img = button.querySelector('img'); img.src = url; img.hidden = false; button.classList.add('ready'); })
-      .catch(() => { button.replaceWith(Object.assign(document.createElement('a'), {className: 'pill', href: `${API}/v2/files/${encodeURIComponent(f.id)}`, download: f.name, textContent: f.name})); });
+      .catch(() => { (button.closest('.chat-titled') || button).replaceWith(Object.assign(document.createElement('a'), {className: 'pill', href: `${API}/v2/files/${encodeURIComponent(f.id)}`, download: f.name, textContent: button.dataset.title || f.name})); });
   }
 }
 new MutationObserver(() => { if (document.querySelector('.chat-thumb:not([data-loading])')) chatThumbsLoad(); })
@@ -209,7 +215,7 @@ function chatImageOpen(button) {
   }
   const src = button.querySelector('img')?.src; if (!src) return;
   const download = button.dataset.chatImage ? `<a href="${API}/v2/files/${encodeURIComponent(button.dataset.chatImage)}" download>Download</a>` : '';
-  d.innerHTML = `<img src="${esc(src)}" alt="${esc(button.dataset.name)}"><div class="img-lightbox-bar"><span>${esc(button.dataset.name)}</span>${download}</div>`;
+  d.innerHTML = `<img src="${esc(src)}" alt="${esc(button.dataset.name)}"><div class="img-lightbox-bar"><span>${esc(button.dataset.title || button.dataset.name)}</span>${download}</div>`;
   d.showModal();
 }
 // Attached chat images open in the one viewer (see viewerOpenFrom), with the message's other files.
