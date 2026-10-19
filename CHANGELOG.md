@@ -49,6 +49,15 @@ All notable changes to Tico are recorded here. The format follows
   subscription. Subscriptions moved here from **Settings → AI providers**, and usage reads as "% left"
   everywhere. Every member now sees every computer; only an admin or the computer's operator sees its signed-in
   accounts and changes anything on it.
+- **Switch to subscription** on a computer's own Codex or Claude Code login that runs on an API key, in the computer's
+  pop-up on Settings > Computers. The key stays in use until the subscription has signed in and is in place, so a cancel
+  or failure changes nothing; then the key is removed from that login as **Clear key** removes it (the company's
+  "Every computer" key is not applied to it again, nor put in its turns) until someone adds a key or chooses **Use the
+  shared key**. Bots keep the connection. Needs a
+  current runner ([Computers](docs/computers.md#signing-out-and-switching-accounts)).
+- A signed-out connection in the computer pop-up reads **Signed out · Sign in** and its chip gets a red dot, and the
+  sign-out confirmation names the bots in a line ("Reviewer 1, QA and 2 more will stop running until this is signed in
+  again").
 
 ### Fixed
 - **A bot's finished answer is no longer lost or given twice when its computer stalls before handing it in.** A
@@ -56,6 +65,11 @@ All notable changes to Tico are recorded here. The format follows
   answer still comes in late, after its run was dismissed or cancelled, it is kept: the run ends completed and the
   answer shows where the person asked, and a closed task stays closed. A run whose lease lapsed is not started again
   for 90 minutes while its own answer may still arrive.
+- **Updates tree keeps archived cards out after a reload**: a card you archive on Updates no longer comes back in
+  the tree when the page reloads, and Restore brings it back for good. Archive stays yours alone: others still see the
+  card. A manager whose own card you archived stays in the tree with "No update yet" and their reports below. The
+  tree endpoint (`GET /api/v2/updates/tree`) now applies the same archive rule as the Inbox, so an explicit past `day`
+  leaves out that day's cards a newer day has replaced, unless you restored them.
 - A computer's performance report no longer holds the database's write lock while it reads every turn that computer
   ever ran. During an open overload each report did, and on Oct 19 on a slow disk that held the lock about 100 s, so
   heartbeats, claims and lease renewals waited and got "storage unavailable". It now reads only the turns of the
