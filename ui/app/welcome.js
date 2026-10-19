@@ -260,7 +260,10 @@ function onbRenderDone(state) {
   const rows = $('#onb-bots');
   if (!rows) { host.innerHTML = onbDoneHTML(state); onbWire(state, 'done'); return; }
   rows.innerHTML = onbBotRowsHTML(state);
-  const next = $('#onb-next-step'); if (next) next.innerHTML = frNextStepHTML(state);
+  // The next step is redrawn only when it changes, so keyboard focus on its button survives a poll.
+  const next = $('#onb-next-step'), step = document.createElement('div');
+  step.innerHTML = frNextStepHTML(state);
+  if (next && next.innerHTML !== step.innerHTML) next.innerHTML = step.innerHTML;
   const tasks = $('#onb-tasks'); if (tasks) tasks.className = frWaiting(state) ? 'ghost' : 'primary';
   document.querySelectorAll('[data-onb-activate]').forEach(button => button.onclick = () =>
     void onbActivate(state, button.dataset.onbActivate, button));

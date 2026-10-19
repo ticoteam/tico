@@ -158,6 +158,7 @@ function recruitFor({department, briefing, share}) {
     const context = await browser.newContext({viewport: {width: 1100, height: 800}, serviceWorkers: 'block', acceptDownloads: true, colorScheme: scheme});
     // The app is dark unless the browser saved another theme (ui/theme.js): screenshots take the one asked for.
     if (shots) await context.addInitScript(theme => localStorage.setItem('tico.theme', theme), scheme);
+    let setupGets = 0;
     const puts = [], tourPosts = [], completes = [], definitions = [], created = [], enrollments = [], chats = [], invites = [], owners = [];
     const recruits = [], opened = {};
     let hq = {available: true, off_by: ''}, recruitHeld = null, releaseRecruit = () => {};   // a recruit answer the test holds
@@ -211,6 +212,7 @@ function recruitFor({department, briefing, share}) {
           record = {...record, ...body, machine};
           return json({...record, home: 'human:ana'});
         }
+        setupGets++;
         return json({...record, machine, home: 'human:ana'});
       }
       if (p === '/api/v2/setup/groups') return json({version: 'fixture', departments: DEPARTMENTS, cards: CATALOG.filter(card => card.department), hq});
@@ -914,7 +916,26 @@ function recruitFor({department, briefing, share}) {
     await waiting.locator('#settings-tabs [data-settings-tab=devices][aria-selected=true]').waitFor();
     await waiting.goto('https://tico-ui.test/#/welcome');
     await waiting.locator('[data-onb-bot=coo]').waitFor();
+    // A poll that changes nothing leaves Add a computer focused; one that sees a computer arrive swaps the next step in place.
+    await waiting.locator('[data-onb-go=devices]').focus();
+    const gets = setupGets;
+    for (let i = 0; setupGets === gets && i < 90; i++) await waiting.waitForTimeout(100);
+    assert.notEqual(setupGets, gets);
+    await waiting.waitForTimeout(200);
+    assert.equal(await waiting.evaluate(() => document.activeElement?.dataset.onbGo), 'devices');
+    await waiting.keyboard.press('Enter');
+    await waiting.locator('#settings-tabs [data-settings-tab=devices][aria-selected=true]').waitFor();
+    await waiting.goto('https://tico-ui.test/#/welcome');
+    await waiting.locator('[data-onb-bot=coo]').waitFor();
     machine = enrolled;
+    await waiting.waitForFunction(() => !/^Waiting for a computer/.test(document.querySelector('#onb-next-status').textContent), null, {timeout: 9000});
+    assert.equal(await waiting.locator('#onb-next-status').textContent(), "Ana's Mac, Cloud box online");
+    assert.deepEqual(await waiting.locator('#onb button.primary').evaluateAll(els => els.map(el => el.id)), ['onb-tasks']);
+    assert.notEqual(await waiting.locator('[data-onb-bot=coo] .onb-bot-actions').textContent().then(text => text.trim()), 'Waiting');
+    await waiting.locator('#onb-tour').click();
+    await waiting.locator('.gs-tour[role=dialog]').waitFor();
+    await waiting.keyboard.press('Escape');
+    await waiting.locator('.gs-tour').waitFor({state: 'detached'});
     CONFIG.providers_configured = false;
     await waiting.reload();
     await waiting.locator('[data-onb-bot=coo]').waitFor();
