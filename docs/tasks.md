@@ -476,7 +476,7 @@ its session, with each repo's AGENTS.md (else CLAUDE.md) in the prompt as rules 
 new owner's session replaces it, and the old one stays as an alternate. Anyone with link rights can add other sessions to track:
 a thread URL, a `claude --resume <id>` or `codex resume <id>` command, or another reference
 (`hub task link <id> <value> --session`, `hub_task_link` with `kind: session`, or Sessions + on the task).
-They are for tracking only: task chat and comments always go to the owning bot.
+They are for tracking only: task chat and comments go to the owning bot, or to the bot that asked when a person owns the task.
 
 A subtask someone else files for a bot under its task does not get a session of its own. A turn on a task runs in its
 **session root**: Tico walks up the parents the same bot owns (up to 20) and takes the topmost, so the bot's turns on
@@ -560,13 +560,19 @@ not at all. A runner from before lanes (`task_lanes_v2`) still reads the whole r
 The task's page shows that room as a chat with the task's session, under **Conversation**, in place of a list of
 comments. The bot's updates and replies are messages, and each reply opens to the steps of the run behind it. What
 people say shows on the right under their names, as in a bot's chat with several people; your own line has no name.
-Changes to status, type, owner and the like are one-line markers between the messages. While the owner's run works, a
-**Working…** line shows its newest step and opens to the steps so far. Whoever manages the bot gets **Stop** beside
-it, the same stop as in the bot's chat (`POST /v2/bots/{slug}/stop`). The box at the foot is the chat's composer, and
-what you type there is a comment: it wakes the bot as before. `GET /v2/tasks/{id}` carries this view: each bot reply in
-`comments` has its `run`, and `execution` is the owning bot's newest run in the task's own room, shaped as in a
-conversation snapshot. A task still in a chat room (a person's task, or one filed into a chat before task rooms) has
-no `execution`: that room's runs belong to the chat.
+Changes to status, type, owner and the like are one-line markers between the messages. Under a message you send, the
+line from the bot's chat shows what happens to it: **Sent**, **Queued** (and why, when the bot is busy or at a limit),
+**Starting**, then **<Bot> is working…** with its newest step, opening to the steps so far, until the reply, or
+**Reply failed** when the turn errors. It follows the bot your message went to, which on a task you own that a bot
+asked is that bot, and the owner's own runs as before; a bot's message to another bot does not take it. Whoever
+manages the bot gets **Stop** beside it, the same stop as in the bot's chat (`POST /v2/bots/{slug}/stop`). The box at
+the foot is the chat's composer, and what you type there is a comment: it wakes the bot as before. Before you send,
+the box says when no bot will get the message (everyone on the task is a person), or when it waits for the bot's next
+run on the task; an @mention of the bot that asked wakes it, and the note goes. `GET /v2/tasks/{id}` carries this
+view: each bot reply in `comments` has its `run`; `execution` is the owning bot's newest run in the task's own room,
+or a newer one for a person's message there, shaped as in a conversation snapshot with `from_person`; and
+`comment_to` (`bot`, `wakes`, `mention`) is who your next comment reaches. A task still in a chat room (one filed into
+a chat before task rooms) has no `execution`: that room's runs belong to the chat.
 `hub task comment`, `hub_task_comment` and `POST /v2/tasks/{id}/comments` are unchanged.
 
 Tico spot-checks running work. A bot's open or doing task whose own session ran in the last day (or runs now) and
