@@ -16,6 +16,13 @@ All notable changes to Tico are recorded here. The format follows
   the owner sign-in link stays as break-glass beside it: it works while the issuer is down, and people already
   signed in stay signed in. Google, Microsoft, Cloudflare Access and the other sign-in options work as before.
   ([Install](docs/install.md#sign-in))
+- **Quiet work stays visible and comes back**: a task filed for a bot's next run now says where it stands, on the task
+  and in `hub task show` (`quiet`): eligible (the next run carries it), delivered (which run took it and when, and
+  until what it was deferred) or queued (a run of its own). A run that will not do a carried task now says when to
+  pick it up with `hub task defer <id> --after <task> | --at <time> | --next-run`, and the task gets one run of its own
+  then. A run that ends without working a carried task or saying when hands it back to the next run instead of
+  keeping it. The Health Monitor names a quiet task handed to a run over two hours ago and not worked since
+  ([Leave work for the next run](docs/using-tico.md#leave-work-for-the-next-run)).
 - **Recommended setup** in the installer: `sh install.sh --recommended` is the quick start with the sample company,
   your Claude and ChatGPT subscriptions plus Tico Gateway, Tico Support on and a computer on the server, so the only
   setup left is signing in to Claude and ChatGPT in Settings > Computers. Run on a terminal with no options, the
@@ -85,8 +92,9 @@ All notable changes to Tico are recorded here. The format follows
 - **Start fresh when the topic changes** (Settings > Team; off by default, an owner or an admin turns it on): in a
   long or idle direct chat with a bot, Tico asks Decide whether your new message starts a new topic before it is sent.
   If it does, the bot's session is cleared the same way Clear does, and the chat shows a quiet **Topic changed** line
-  above your message. A chat with an active goal, a running turn or fewer than 3 turns is never checked, and a slow or
-  failed check (over 1.5 s) sends the message in the same session with no line.
+  above your message. A chat with an active goal, a running turn or fewer than 3 turns, and a message with files
+  attached, are never checked, and a slow or failed check (over 1.5 s) sends the message in the same session with no
+  line.
 - **Settings → Computers** shows one compact row per computer: name, Tico version (with **Update** only when one is
   waiting), operator, bots, a chip for each AI connection, and status. A chip shows the tool, a thin bar and the share
   of the weekly allowance that is left; hover for when it resets and how old the reading is. A red dot means bots

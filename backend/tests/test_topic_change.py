@@ -513,6 +513,52 @@ def test_never_checked_in_a_task_chat(chat):
     assert model.calls == [] and checks(api) == []
 
 
+def test_never_checked_with_files_uploaded_alongside(chat):
+    """The multipart route (files uploaded with the message): no check, the session kept."""
+    api, machine, conversation, model, usage = chat
+    before = session_state(api, conversation)
+    r = api.post("/api/v2/uploads/chat/ops", data={"text": UNRELATED},
+                 files={"files": ("note.txt", b"Agenda for the offsite", "text/plain")}, headers=headers())
+    assert r.status_code == 200, r.text
+    assert model.calls == [] and checks(api) == [] and session_state(api, conversation) == before
+    assert not r.json()["message"]["refs"].get("topic_changed")
+    finish(api, machine, claim(api, machine))
+    usage()
+    post(api, "chat/ops", {"text": UNRELATED})
+    assert len(model.calls) == 1, "the same chat, without files, is checked"
+
+
+def test_never_checked_with_files_attached_on_the_json_route(chat):
+    """A file already in the chat, attached by reference on the JSON route (`attachments`): no check, the session
+    kept, as for files uploaded alongside. QA on the v0.3.64 candidate saw one Decide call and a clear here."""
+    api, machine, conversation, model, usage = chat
+    r = api.post("/api/v2/uploads/chat/ops", data={"text": "Here is the note"},
+                 files={"files": ("note.txt", b"Agenda for the offsite", "text/plain")}, headers=headers())
+    fid = r.json()["message"]["refs"]["attachments"][0]["file_id"]
+    finish(api, machine, claim(api, machine))
+    usage()
+    before = session_state(api, conversation)
+    message = post(api, "chat/ops", {"text": UNRELATED, "attachments": [f"{fid}@1"]})
+    assert [a["file_id"] for a in message["refs"]["attachments"]] == [fid], "the file still goes with the message"
+    assert model.calls == [] and checks(api) == [] and session_state(api, conversation) == before
+    assert not message["refs"].get("topic_changed")
+    finish(api, machine, claim(api, machine))
+    usage()
+    post(api, "chat/ops", {"text": UNRELATED})
+    assert len(model.calls) == 1, "the same chat, without files, is checked"
+
+
+def test_a_send_with_files_is_never_considered_whatever_the_route():
+    """The one rule both routes answer to: referenced files, uploaded files, a command or a task chat's message."""
+    from backend import models as M
+    plain = M.ChatCreate(text="Hello")
+    assert T.considered(plain, uploads=())
+    assert not T.considered(plain, uploads=[{"name": "note.txt"}])
+    assert not T.considered(M.ChatCreate(text="Hello", attachments=["f1@1"]), uploads=())
+    assert not T.considered(M.ChatCreate(text="/clear", command=True), uploads=())
+    assert not T.considered(M.ChatCreate(text="Hello", refs={"task": "t1"}), uploads=())
+
+
 def test_a_retried_send_does_not_check_again(chat):
     api, _, _, model, _ = chat
     key = "retry-1"

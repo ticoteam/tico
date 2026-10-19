@@ -3,7 +3,8 @@
 // Each script's output is held and printed together, so a failure reads as one block.
 // Usage: node scripts/ui-tests.cjs [-j N] [--all] [name-or-path ...]   (free-core jobs, or $TICO_UI_JOBS)
 // With no names it runs CORE, the main pages and the privacy boundaries; --all runs every script (the release
-// check does). A name runs that script whether or not it is in CORE.
+// check does). A name runs that script whether or not it is in CORE. Run locally, it waits for one of the box's
+// heavy-job slots first (scripts/heavy.sh).
 const {spawn} = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -85,5 +86,20 @@ async function main() {
   process.exit(failed.length ? 1 : 0);
 }
 
-module.exports = {resources, sampleCpu};
-if (require.main === module) main().catch(error => { console.error(error.message); process.exitCode = 1; });
+module.exports = {resources, sampleCpu, inSlot};
+// A local run first takes one of the box's heavy-job slots, at low priority (scripts/heavy.sh), before it samples
+// the CPU; hosted CI, a run already in a slot, or a computer without bash goes straight on.
+function inSlot(env = process.env) { return Boolean(env.CI || env.TICO_HEAVY_HELD) || process.platform === 'win32'; }
+
+if (require.main === module) {
+  const go = () => main().catch(error => { console.error(error.message); process.exitCode = 1; });
+  if (inSlot()) go();
+  else {
+    // The wrapper's own stop ends the browser scripts, so a stop here is passed on and the exit waits for it.
+    const slotted = spawn(path.join(__dirname, 'heavy.sh'), [process.execPath, __filename, ...process.argv.slice(2)],
+                          {stdio: 'inherit'});
+    for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) process.on(signal, () => slotted.kill('SIGTERM'));
+    slotted.on('error', go);
+    slotted.on('exit', code => process.exit(code ?? 1));
+  }
+}

@@ -129,6 +129,9 @@ class Scheduler:
             # Snoozes whose date came: back on every list, and one notice to the owner bot (backend/task_snooze.py).
             from . import task_snooze
             task_snooze.wake_ended(c, stamp(at), failures)
+            # Quiet tasks a run deferred to a time that has come get their run (backend/quiet_work.py).
+            from . import quiet_work
+            quiet_work.due(c, stamp(at), failures)
             for row in H.tasks_due_for_bots(c, stamp(at + timedelta(days=1))[:10]):
                 with isolated(c, "reminder", row["id"], failures):
                     due = H.parse_ts(row.get("due"))
