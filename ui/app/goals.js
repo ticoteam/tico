@@ -227,7 +227,8 @@ function pageGoals() {
   const open = S.route.startsWith(GOALS + '/') ? decodeURIComponent(S.route.slice(GOALS.length + 1)) : '';
   const was = document.getElementById('goal-panel');
   if (was) { was._state = null; if (was.open) was.close(); }
-  const state = GOALS_ST = {goals: [], other: [], proposals: [], needs: [], owners: {}, loaded: false, open, panel: null};
+  const state = GOALS_ST = {goals: [], other: [], proposals: [], needs: [], owners: {}, loaded: false, open, panel: null,
+    company: {data: null, editing: false, saving: false, history: false, events: null, draft: null}, ceoOn: ceoBotOn()};
   // The tree is the page; the Goal Manager is its right rail (under the tree on a narrow window). The sidebar
   // says where you are, so the title is for screen readers only.
   $('#main').classList.add('goals-layout');
@@ -245,16 +246,22 @@ function goalsApply(state, data, needs) {
   if (needs !== undefined) state.needs = (needs?.items || []).filter(n => !goalBuiltInOwner(n.goal_owner) && !goalBuiltInOwner(n.owner) && !(data.goals || []).some(g => g.id === (n.goal_id || n.proposal?.goal_id) && goalBuiltInOwner(g.owner)));
 }
 // Two requests: the tree and what needs you. The roster (people, bots, departments) is already in S.
+// The Company section's record comes with them where the CEO Bot switch is on (ui/goals-kpis.js goalCompanyHtml).
+// The goals never wait on the company: if it cannot be read, the section is left out and the tree still draws.
+const goalCompanyGet = () => ceoBotOn() ? v2Get('/v2/company').catch(() => null) : Promise.resolve(null);
 async function goalsLoad(state) {
-  let data, needs;
-  try { [data, needs] = await Promise.all([get('/v2/goals/tree'), v2Get('/v2/goals/needs-you')]); }
+  let data, needs, company;
+  state.ceoOn = ceoBotOn();
+  try { [data, needs, company] = await Promise.all([get('/v2/goals/tree'), v2Get('/v2/goals/needs-you'), goalCompanyGet()]); }
   catch (e) { $('#goal-body').innerHTML = `<p class="err">${esc(e.message || 'Could not load goals')}</p>`; return; }
   if (GOALS_ST !== state) return;
+  state.company.data = company;
   goalsApply(state, data, needs);
   state.loaded = true;
   goalsRender(state);
   const g = state.open && state.goals.find(x => x.id === state.open);
   if (g) goalPanelOpen(state, g.owner, {goal: g.id});
+  if (state.ceoOn !== ceoBotOn()) void goalsFollowSwitch(state);     // flipped while it loaded
 }
 // The goals of whoever's page this is, at the top under their name: one line each. Tapping one
 // opens it on the Goals page.
@@ -279,8 +286,9 @@ function openGoal(id) { location.hash = GOALS + '/' + encodeURIComponent(id); }
 async function goalsRefresh() {
   GOAL_OPTIONS = null;
   if (GOALS_ST && $('#goal-body')) {
-    const [r, needs] = await Promise.all([v2Get('/v2/goals/tree'), v2Get('/v2/goals/needs-you')]);
-    if (r) goalsApply(GOALS_ST, r, needs);
+    const st = GOALS_ST;
+    const [r, needs, company] = await Promise.all([v2Get('/v2/goals/tree'), v2Get('/v2/goals/needs-you'), goalCompanyGet()]);
+    if (r && st === GOALS_ST) { goalsApply(st, r, needs); if (company || !ceoBotOn()) st.company.data = company; }
   }
   headGoalsReload();
 }
@@ -296,8 +304,23 @@ function goalsFollowRoster() {
   host.querySelector('[data-gm-thread]')?.setAttribute('aria-label', name + ' conversation');
   host.querySelector('.gm-form .p-text')?.setAttribute('aria-label', 'Message to the ' + name);
   host._gmDraw?.();
+  if (state.loaded && state.ceoOn !== ceoBotOn()) { void goalsFollowSwitch(state); return; }
   const body = $('#goal-body'), typing = document.activeElement?.matches?.('input, textarea, select') && body?.contains(document.activeElement);
   if (state.loaded && !typing && state.shape !== goalTreeKey()) goalsRender(state);
+}
+// The switch itself flipped: the Company section and every Why line come or go together, even while a Company field
+// is being typed in (its draft is kept for when the section is back), and an open goal panel's Why lines follow.
+// Turned on, the page reads what the server left out while it was off: the company and the waiting Why proposals.
+async function goalsFollowSwitch(state) {
+  const on = state.ceoOn = ceoBotOn();
+  if (on) {
+    const [r, company] = await Promise.all([v2Get('/v2/goals/tree'), goalCompanyGet()]);
+    if (GOALS_ST !== state || state.ceoOn !== on) return;
+    if (r) goalsApply(state, r);
+    state.company.data = company;
+  } else if (state.panel) { state.panel.why = ''; state.panel.whyFrom = ''; state.panel.whyDraft = null; }
+  goalsRender(state);
+  goalPanelWhySync(state);
 }
 // The Goal Manager in the right rail of Goals (docs/goals-and-kpis.md): what it does, its routines from the server (when
 // each next runs), its last run, and the viewer's chat with it: the room its bot page shows, loaded with the page. A reply

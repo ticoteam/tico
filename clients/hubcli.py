@@ -134,7 +134,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                 [--evidence "url or note"] [--quality measured|estimate|partial|--estimate] [--source posthog]
                 [--definition-version N] [--supersedes READING-ID]
                                            a reading: a fact with its period; to correct one, supersede it
-    hub proposal create --kind goal_wording|goal_kpi|kpi_definition|kpi_target|flag [--goal ID] [--kpi ID]
+    hub proposal create --kind goal_wording|goal_kpi|kpi_definition|kpi_target|flag|goal_why [--goal ID] [--kpi ID]
                         (--payload '{json}'|--payload-file f.json) [--reason "..."]
                                            a change you may not make yourself, for the owner to confirm
     hub proposal list [--status pending|confirmed|rejected|all] [--goal ID] [--kpi ID]
@@ -1143,7 +1143,7 @@ def parser():
 
     proposal = sub.add_parser("proposal", help="a change you may not make yourself, for the owner to confirm").add_subparsers(dest="sub")
     s = proposal.add_parser("create")
-    s.add_argument("--kind", required=True, choices=["goal_wording", "goal_kpi", "kpi_definition", "kpi_target", "flag"])
+    s.add_argument("--kind", required=True, choices=["goal_wording", "goal_kpi", "kpi_definition", "kpi_target", "flag", "goal_why"])
     s.add_argument("--goal", dest="goal_id")
     s.add_argument("--kpi", dest="kpi_id")
     s.add_argument("--payload", help="the proposed change, as JSON")

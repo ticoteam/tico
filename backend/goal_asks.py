@@ -77,6 +77,8 @@ def wanted(conn, owner_id, at=None):
             items.append({"kind": "kpi_stale", "ref": record["id"], "owner": who, "kpi_id": record["id"],
                           "kpi_name": record["name"], "freshness": state["freshness"], "reason": state["reason"]})
     for p in G.proposals(conn, "pending"):
+        if p["kind"] == "goal_why":
+            continue        # never one task per goal: Why lines are asked for as one bundled item
         goal = G.goal(conn, p["goal_id"]) if p["goal_id"] else None
         record = K.kpi(conn, p["kpi_id"]) if p["kpi_id"] else None
         if p["kind"] == "kpi_definition":
