@@ -136,14 +136,13 @@ def head_of(catalog, department_id):
 
 def _match(card, found, common=frozenset()):
     """How well the answer fits this card (a tag, then a word of its name, then two or more words of its summary) and the
-    reasons to show for it, as the person wrote them. A reason is a short tag of two or more words the answer says whole
-    ("meetings booked"), unless every word of it is `common` in the department. A single word, a word of the name, or
-    two words picked out of a summary or a long `pains` phrase only score: as a why they read as keyword matching
-    ("Matches “managers”" on four Sales cards). Returns (score, reasons)."""
+    reasons to show for it, as the person wrote them. A reason is a short tag of two or more words the answer says as a
+    phrase, those words in that order with only small words between ("meetings booked", "meetings are booked"), unless
+    every word of it is `common` in the department. A single word, a word of the name, words scattered over the answer
+    ("flaky deploys but reliable tests" is not "flaky tests"), or two words picked out of a summary or a long `pains`
+    phrase only score: as a why they read as keyword matching ("Matches “managers”" on four Sales cards). `found` is
+    the answer's words in order; an empty stem holds the place of a word that matches nothing. Returns (score, reasons)."""
     stems = {stem for stem, _ in found}
-    said = {}
-    for stem, word in found:
-        said.setdefault(stem, word)
     score, reasons = 0, []
     for tag in card["tags"]:
         # A short tag ("cold email") matches whole; a longer phrase (a card's `pains` sentence) on any two of its words.
@@ -151,13 +150,23 @@ def _match(card, found, common=frozenset()):
         matched = [stem for stem in wanted if stem in stems]
         if wanted and len(matched) >= min(len(wanted), 2):
             score += 3 * len(matched)
-            if 2 <= len(wanted) <= REASON_WORDS and matched == wanted and not set(wanted) <= common:
-                reasons.append(" ".join(said[stem] for stem in wanted))
+            phrase = _phrase(wanted, found) if 2 <= len(wanted) <= REASON_WORDS and not set(wanted) <= common else ""
+            if phrase:
+                reasons.append(phrase)
     score += 2 * len(_stems(card["name"]) & stems)
     shared = _stems(card["summary"]) & stems
     if len(shared) >= 2:
         score += len(shared)
     return score, list(dict.fromkeys(reasons))
+
+
+def _phrase(wanted, found):
+    """The tag's words as the answer writes them where it says them next to each other in the tag's order, else ""."""
+    for start in range(len(found) - len(wanted) + 1):
+        run = found[start:start + len(wanted)]
+        if [stem for stem, _ in run] == wanted:
+            return " ".join(word for _, word in run)
+    return ""
 
 
 def _common(cards):
@@ -182,8 +191,9 @@ def rank(catalog, department_id, briefing="", about=None, limit=MAX_BOTS):
     head = head_of(catalog, department_id)
     # The department's own name matches every card in it ("support" in Customer Support), so it says nothing.
     own = _stems(dept["name"] + " " + dept["id"])
-    briefing_words = [row for row in _words(_text(briefing, BRIEFING_LIMIT)) if row[0] not in own]
-    about_words = [row for row in _words(_text(about.get("what"), BRIEFING_LIMIT)) if row[0] not in own]
+    # Such a word keeps its place (an empty stem), so the words either side of it are not read as one phrase.
+    briefing_words = [("" if stem in own else stem, word) for stem, word in _words(_text(briefing, BRIEFING_LIMIT))]
+    about_words = [("" if stem in own else stem, word) for stem, word in _words(_text(about.get("what"), BRIEFING_LIMIT))]
     consumers = str(about.get("sells_to") or "") == "consumers"
     members = [card for card in catalog["cards"] if card["department"] == department_id]
     common = _common(members)

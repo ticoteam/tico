@@ -88,7 +88,7 @@ def test_a_why_is_never_a_single_word_a_word_of_a_name_or_a_phrase_most_of_the_g
     (two summary words) on the SDR, and Matches “github” on most of Engineering. Each still ranks; none is a why."""
     built = R.build({"departments": [{"id": "engineering", "name": "Engineering", "head": "eng-lead"}]}, [
         card("eng-lead", "engineering", lead=True, tags=["github", "github actions", "weekly review"]),
-        card("devops", "engineering", name="DevOps Engineer", tags=["github", "flaky tests", "build times"],
+        card("devops", "engineering", name="DevOps Engineer", tags=["github", "flaky-tests", "build times", "pager alert noise"],
              summary="Runs the build and keeps the deploys booking green."),
         card("qa", "engineering", name="QA Engineer", suggest="default", tags=["github", "github actions", "bugs"]),
         card("architect", "engineering", name="Software Architect", tags=["github actions", "design docs"]),
@@ -109,6 +109,14 @@ def test_a_why_is_never_a_single_word_a_word_of_a_name_or_a_phrase_most_of_the_g
                    "tech-writer": "Common in Engineering"}        # two words of a long pains phrase
     assert ids(asked)[:2] == ["eng-lead", "devops"]               # the words still rank; "eng-manager" is in on them
     assert not any(re.fullmatch(r"Matches “[^ ”]*”", row["why"]) for row in asked["bots"])
+    # A reason quotes the tag's words only as a phrase the answer wrote: in order, side by side, a hyphen or a small
+    # word between them at most. Scattered, reversed or partial words still rank, but are no reason.
+    for answer, said in [("Our flaky-tests block deploys", "Matches “flaky tests”"),
+                         ("Tests are flaky again", ""), ("We have flaky deploys but reliable tests", ""),
+                         ("Flaky engineering tests", ""), ("The pager alert noise never stops", "Matches “pager alert noise”"),
+                         ("Pager noise all night", "")]:
+        devops = next(row["why"] for row in R.rank(built, "engineering", answer)["bots"] if row["template_id"] == "devops")
+        assert devops == said or not said and not devops.startswith("Matches"), (answer, devops)
 
 
 def test_the_shipped_catalog_has_a_head_for_every_department_and_the_setup_page_role_list_is_current():
