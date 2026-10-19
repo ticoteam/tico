@@ -15,9 +15,6 @@ Search changes, expand a release's remaining bullets, or open its full release n
 page marks the product entries it shows as read, and **Load older changes** does the same for the ones
 it adds; they stay listed and marked **New** until you leave the page.
 Read status belongs to each person and follows them across sign-ins and devices.
-A new company starts caught up: when the owner completes Finish setup, every release shipped before then is marked
-read for them, so a fresh install shows no count on **What's new**. Later releases count as usual, everyone else keeps
-their own read status, and completing setup a second time changes nothing.
 
 Release entries come directly from the installed `CHANGELOG.md`. They work offline and require
 neither a Git checkout nor manual announcement posting. Unreleased notes and releases newer than
