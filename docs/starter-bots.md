@@ -1,7 +1,8 @@
 # Starter bots
 
-There are 93 templates: 90 in nine groups (Sales, Marketing, Customer Support, Finance, Operations, Legal, HR,
-Product and Engineering), a small Leadership extra and one message bot, enough to staff a team of ten to two hundred humans. **Every
+There are 94 templates: 91 in nine groups (Sales, Marketing, Customer Support, Finance, Operations, Legal, HR,
+Product and Engineering), a small Leadership extra and one message bot, plus the built-in bots (BotOps, the Assistant,
+the Librarian, Goal Manager and Health Monitor), enough to staff a team of ten to two hundred humans. **Every
 template is a real role that does the work within its granted Tools.** Each is a job title a team would
 hire and put on its team chart (Sales Development Representative, Bookkeeper, Recruiter, Site Reliability Engineer), never a
 feature or a document: it does the research, keeps its records, prepares the finished work and carries it to the point of
@@ -35,7 +36,7 @@ Chief of Staff is no longer a default.
 | Legal | `gavel` | General Counsel (`general-counsel`) | 8 | Sign with eyes open |
 | HR | `groups` | Head of People (`people-lead`) | 11 | Hire well, keep good people |
 | Product | `category` | Head of Product (`product-lead`) | 8 | Build what customers need |
-| Engineering | `code` | Head of Engineering (`engineering-lead`) | 10 | Ship reliable software, steadily |
+| Engineering | `code` | Head of Engineering (`engineering-lead`) | 11 | Ship reliable software, steadily |
 | Leadership | `star` | Chief of Staff (`chief-of-staff`) | 2 | Keep the leaders focused |
 
 Every group has a head (`lead: true`): it writes the group's weekly summary from what its bots and humans
@@ -184,6 +185,7 @@ fill); `scripts/build-icon-font.py` adds every card's and group's icon to the su
 | Icon | Template | Role | What it does | Suggest | Needs |
 |---|---|---|---|---|---|
 | `developer_board` | `engineering-lead` | Head of Engineering (head) | A weekly engineering summary (shipped, stuck pull requests, incidents, blocked work), routing proposals, and a hiring proposal when repeated work has no owner | default | GitHub connected |
+| `developer_board` | `engineering-manager` | Engineering Manager | A daily delivery check: progress on each parent task, blocked child tasks per repository or area, pull request links and next actions, with child tasks assigned to engineer bots | common | GitHub connected; offer it when engineer bots work across several repositories |
 | `bug_report` | `issue-triage` | QA Engineer | Label and duplicate proposals, repro-step requests, a weekly issue digest, and a risk-ranked test plan and regression checklist per release | default | GitHub connected; offer it only then |
 | `code_blocks` | `pr-reviewer` | Senior Software Engineer | A weekday review queue with a finished review per pull request (blocking issues first) for a human to post | common | GitHub connected |
 | `new_releases` | `release-notes` | Release Manager | A readiness checklist with a go or no-go call, the changelog entry, plain-language release notes and a suggested version | common | GitHub connected |
