@@ -3152,7 +3152,8 @@ def create_app(settings=None):
             if ask:
                 wake = who.role == "bot" or who.actor in (row["owner"], row["requester"]) or moves
             else:
-                wake = H.comment_wakes(c, who.actor, row, body.text, mover=moves)
+                wake = H.comment_wakes(c, who.actor, row, body.text, mover=moves) or (
+                    who.role == "bot" and body.needs_action)
             extra = {"attachments": attached, "files": [a["ref"] for a in attached]} if attached else {}
             if body.needs_action:
                 extra["needs_action"] = True

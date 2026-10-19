@@ -219,3 +219,19 @@ def test_a_task_comment_says_whether_it_woke_the_bot(api):
     plain = post(api, f"tasks/{t['id']}/comments", {"text": "FYI: docs merged."}, token=token)
     flagged = post(api, f"tasks/{t['id']}/comments", {"text": "Blocked on you.", "needs_action": True}, token=token)
     assert plain["woke"] is False and flagged["woke"] is True
+
+
+def test_needs_action_wakes_the_owner_of_a_snoozed_task_where_a_plain_comment_does_not(api):
+    r = setup(api)
+    token = ops_token(api, r)
+    with api.app.state.store.transaction() as c:
+        t = H.task_create(c, "bot:ops", "Ship the export", "Build it", "bot:cpo")
+        c.execute("UPDATE tasks SET snoozed_until=? WHERE id=?", (H.shift(H.now(), days=2), t["id"]))
+        c.execute("DELETE FROM jobs WHERE bot='cpo'")
+    plain = post(api, f"tasks/{t['id']}/comments", {"text": "FYI: docs merged."}, token=token)
+    assert plain["woke"] is False and jobs(api, "cpo") == 0
+    flagged = post(api, f"tasks/{t['id']}/comments", {"text": "Blocked on you.", "needs_action": True}, token=token)
+    assert flagged["woke"] is True and jobs(api, "cpo") == 1
+    with api.app.state.store.transaction() as c:
+        direct = H.task_comment(c, "bot:ops", t["id"], "Still blocked.", wake=False, extra_refs={"needs_action": True})
+        assert not direct["refs"].get("quiet")

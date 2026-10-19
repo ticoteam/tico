@@ -3789,7 +3789,9 @@ def task_comment(conn, actor, task_id, text, wake=True, *, ask=None, extra_refs=
               if a and a not in (actor, KEEPER) and task_private_readable(conn, a, row)]
     target = next((a for a in others if is_bot(a)), None) or (others[0] if others else None)
     refs = {"task": task_id, "comment": True, **(extra_refs or {})}
-    if not wake:
+    # A bot's comment flagged needs-action wakes the other side even where its comment alone would not (a snoozed
+    # task): the sender said it cannot wait (backend/bot_to_bot.py).
+    if not wake and not (is_bot(actor) and refs.get("needs_action") is True):
         refs["quiet"] = True
     conv = conversation(conn, row["conversation_id"])
     if not conv:
