@@ -8,12 +8,12 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
-- **Visuals in replies outside Tico (part 4 of 4)**: a bot's reply with visuals that reaches Slack keeps its text
-  and adds one line, "1 visual - view in Tico" (or "N visuals"), linking to that message in Tico. A task-done post
-  does the same for the owner's result comment when it has visuals. The link opens only for people who can read the conversation,
-  nothing from a private task is sent to Slack, and no visual is shown in Slack. Every bot's instructions now say
-  when to add a visual; brand assets, designed graphics and edited video still go to Design and Video Producer
-  ([Visuals in replies](docs/visuals.md#when-a-bot-adds-a-visual)).
+- **Visuals in replies outside Tico (part 4 of 4)**: a bot's reply with visuals that reaches Slack keeps its text and
+  adds one line, "1 visual - view in Tico" (or "N visuals"), linking to that message in Tico. A task-done post does
+  the same for the owner's result comment when it has visuals. The link opens only for people who can read the
+  conversation, nothing from a private task is sent to Slack, and no visual is shown in Slack. Every bot's
+  instructions now say when to add a visual; brand assets, designed graphics and edited video still go to Design and
+  Video Producer ([Visuals in replies](docs/visuals.md#when-a-bot-adds-a-visual)).
 - **A usage limit holds the login, once**: a run that hits a subscription's usage limit now holds that provider
   login on that computer, for every bot signed in with it, until the reset the provider names (Claude's "resets
   2:40am (UTC)" is read too), or 30, 60 and then 120 minutes when it names none. The hold is saved on the server, so
