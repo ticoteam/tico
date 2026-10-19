@@ -669,6 +669,21 @@ def task_snooze(api, args):
     return api.post(f"tasks/{args['id']}/snooze", {"until": args["until"]}, key=_key(args))
 
 
+@tool("hub_task_defer", "A quiet (next-run) task carried into this run that you will not do now: say when it is "
+      "picked up again, and it gets one run of its own then. Exactly one of `after` (when that task is done or closed), "
+      "`at` (a time), `next_run` (with your next run), or `handled` (this run is done with it for now). With none, "
+      "and without working it, your next run is handed it again. The task's own bot, or a person.",
+      {"id": TASK_ID, "after": _s("A task id or number: pick it up when that task is done or closed"),
+       "at": _s("An ISO-8601 date-time with a zone, or a date (the start of that day, Pacific)"),
+       "next_run": {"type": "boolean", "description": "Pick it up with your next run, whatever starts it"},
+       "handled": {"type": "boolean", "description": "This run is done with it for now; nothing to resume"}},
+      required=("id",), writes=True)
+def task_defer(api, args):
+    return api.post(f"tasks/{args['id']}/defer", {"after": args.get("after"), "at": args.get("at"),
+                                                   "next_run": bool(args.get("next_run")),
+                                                   "handled": bool(args.get("handled"))}, key=_key(args))
+
+
 @tool("hub_task_unsnooze", "Bring a snoozed task back now, before its date; its owner bot is woken once.",
       {"id": TASK_ID}, required=("id",), writes=True)
 def task_unsnooze(api, args):

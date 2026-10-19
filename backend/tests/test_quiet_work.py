@@ -179,7 +179,7 @@ def test_run_now_drops_a_stored_condition(api):
     task = later(api)
     post(api, f"tasks/{task['id']}/defer", {"after": blocker["id"]})
     got = post(api, f"tasks/{task['id']}/run-now", {})["task"]
-    assert got["resume_json"] is None and got["quiet"]["state"] == "queued"
+    assert "resume_json" not in got and got["quiet"]["state"] == "queued"
 
 
 def test_health_names_a_task_handed_over_two_hours_ago_and_not_worked(api):

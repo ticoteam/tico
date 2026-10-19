@@ -182,7 +182,7 @@ A run that carries a task it will not do now says when to pick it up, rather tha
 hub task defer <task-id> --after <other-task>   # when that task is done or closed
 hub task defer <task-id> --at 2026-10-20T09:00Z # at a time
 hub task defer <task-id> --next-run             # with the next run, whatever starts it
-hub task defer <task-id> --handled              # this run is done with it for now
+hub task defer <task-id> --handled              # this run is done with it for now (MCP: hub_task_defer)
 ```
 
 When the condition comes true the task gets one run of its own, as **Run now** gives it. A run that ends without

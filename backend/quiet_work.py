@@ -36,8 +36,8 @@ FIELD = "quiet"
 WORKED, RETURNED, DEFERRED, HANDLED = "worked", "returned", "deferred", "handled"
 # What a carried task tells the run, beside its id and title (execution.claim): how to say "not now".
 HINT = ("Not doing it in this run? Store when to pick it up: hub task defer {id} --after <task id> (when that task is "
-        "done), --at <ISO time>, or --next-run. With none, and without working it here, your next run is handed it "
-        "again.")
+        "done), --at <ISO time>, or --next-run (MCP: hub_task_defer). With none, and without working it here, your "
+        "next run is handed it again.")
 
 
 def _H():

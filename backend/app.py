@@ -938,9 +938,11 @@ def create_app(settings=None):
                  "next_run": bool(row.get("next_run")), "private": H.task_private(c, row), "cover": None}
         if c is not None and row.get("next_run"):
             value["next_run_waiting"] = H.next_run_waiting(c, row)
-        if c is not None:
+        if c is not None and (quiet := quiet_work.view(c, row)):
             # Quiet work: delivered (into which run, when; deferred until what), eligible or queued (quiet_work.view).
-            value["quiet"] = quiet_work.view(c, row)
+            value["quiet"] = quiet
+        # The stored condition is in `quiet.resume`; a board of 500 tasks does not carry the column besides.
+        value.pop("resume_json", None)
         value.pop("labels_json", None)
         if pipelines is None:
             if c is None:
@@ -1071,7 +1073,8 @@ def create_app(settings=None):
             })
             if row.get("next_run"):
                 value["next_run_waiting"] = H.next_run_waiting(c, row)
-                value["quiet"] = quiet_work.view(c, row, history=False)
+                if quiet := quiet_work.view(c, row, history=False):
+                    value["quiet"] = quiet
             if row["id"] in routines_by_task:
                 value["routine_id"] = routines_by_task[row["id"]]
             if row["id"] in origins:
