@@ -44,7 +44,7 @@ def test_a_loose_message_says_what_kind_of_sender_started_its_run(api):
     assign(api, r, "ops")
     ready(api, r, ["ops"])
     with api.app.state.store.transaction() as c:
-        H.say(c, "bot:finance", "bot:ops", "The census is delivered; please tell Ana.")
+        H.say(c, "bot:finance", "bot:ops", "The census is delivered; please tell Ana.", refs={"needs_action": True})
     attempt = claim(api, r)
     post(api, f"attempts/{attempt['id']}/started", {"thread_id": "relay"}, token=r["token"])
     with api.app.state.store.transaction() as c:
@@ -68,7 +68,7 @@ def test_a_run_that_failed_before_starting_does_not_claim_later_messages(api):
     assign(api, r, "ops")
     ready(api, r, ["ops"])
     with api.app.state.store.transaction() as c:
-        H.say(c, "bot:finance", "bot:ops", "Please tell Ana the census is delivered.")
+        H.say(c, "bot:finance", "bot:ops", "Please tell Ana the census is delivered.", refs={"needs_action": True})
     failed = claim(api, r)
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE attempts SET state='failed', started=NULL, finished=NULL WHERE id=?", (failed["id"],))

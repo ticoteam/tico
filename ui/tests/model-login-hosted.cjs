@@ -77,18 +77,20 @@ const {unrouted} = require('./support/routes.cjs');
       });
       await page.goto('https://tico-ui.test/#/settings');
       await page.locator('[data-settings-tab=devices]').click();
-      const table = page.locator('#set-machines [role=table][aria-label="AI tools on Server"]');
-      await table.waitFor();
-      const row = name => table.locator(`[data-machine-tool="${name}"]:not([data-machine-profile])`);
-      return {page, box, writes, errors, rows, row, last: () => rows[`in${seq}`], refuse: r => { refusal = {times: 1, ...r}; }};
+      // A tool it is not signed in to is signed in from Add connection in the computer's pop-up.
+      await page.locator('#set-machines .machine-name[data-computer-open=box]').click();
+      const add = page.locator('#set-machines dialog[open] [data-add-connection]');
+      await add.waitFor();
+      const signIn = name => add.locator(`[data-model-login][data-runtime="${name}"]`);
+      return {page, box, writes, errors, rows, signIn, last: () => rows[`in${seq}`], refuse: r => { refusal = {times: 1, ...r}; }};
     }
     const login = page => page.locator('dialog.model-login:not(.model-logout)');
 
     // ---- Hosted: Claude Code. The dialog starts the sign-in itself; waiting, it shows no CLI lines and no terminal.
     {
-      const {page, writes, errors, row, last} = await open('own');
+      const {page, writes, errors, signIn, last} = await open('own');
       assert.equal(await page.locator('#set-machines').getByText(/terminal|docker exec/i).count(), 0, 'Computers points to no terminal');
-      await row('claude').getByRole('button', {name: 'Sign in'}).click();
+      await signIn('claude').click();
       const dialog = login(page);
       await dialog.locator('[data-status]', {hasText: 'Starting the sign-in on Server'}).waitFor();
       assert.deepEqual(writes, [{p: '/api/v2/computers/box/logins', body: {runtime: 'claude'}}], 'it started by itself');
@@ -120,8 +122,8 @@ const {unrouted} = require('./support/routes.cjs');
 
     // ---- Hosted: Codex. Link and one-time code; Cancel sign-in closes only once the computer's sign-in is cancelled.
     {
-      const {page, writes, errors, row, last, refuse} = await open('invited');
-      await row('codex').getByRole('button', {name: 'Sign in'}).click();
+      const {page, writes, errors, signIn, last, refuse} = await open('invited');
+      await signIn('codex').click();
       const dialog = login(page);
       await dialog.locator('[data-status]', {hasText: 'Starting the sign-in'}).waitFor();
       Object.assign(last(), {state: 'waiting', url: 'https://auth.openai.com/codex/device', code: 'ABCD-12345'});
@@ -144,7 +146,7 @@ const {unrouted} = require('./support/routes.cjs');
       await page.locator('.toast', {hasText: 'The sign-in was cancelled.'}).waitFor();
       // Refused because the computer is already putting the account in place (409): the pane stays, follows it to
       // signed in, and closes then.
-      await row('codex').getByRole('button', {name: 'Sign in'}).click();
+      await signIn('codex').click();
       await dialog.locator('[data-status]', {hasText: 'Starting the sign-in'}).waitFor();
       Object.assign(last(), {state: 'waiting', url: 'https://auth.openai.com/codex/device', code: 'WXYZ-67890'});
       await dialog.locator('code[data-code]', {hasText: 'WXYZ-67890'}).waitFor();
@@ -157,7 +159,7 @@ const {unrouted} = require('./support/routes.cjs');
       await dialog.waitFor({state: 'detached'});
       await page.locator('.toast', {hasText: 'Signed in. Codex (ChatGPT) is ready on Server.'}).waitFor();
       // A failure gives its message, still without the computer's lines.
-      await row('codex').getByRole('button', {name: 'Sign in'}).click();
+      await signIn('codex').click();
       await dialog.locator('[data-status]', {hasText: 'Starting the sign-in'}).waitFor();
       Object.assign(last(), {state: 'failed', message: 'The sign-in failed on the computer.'});
       await dialog.locator('[data-status][data-state=failed]', {hasText: 'The sign-in failed on the computer.'}).waitFor();
@@ -169,8 +171,8 @@ const {unrouted} = require('./support/routes.cjs');
     // ---- Self-hosted: unchanged. The computer's lines show while there is no link, the slow start mentions its
     // terminal, a cancel keeps the dialog open to say so, and a sign-in stays open on Done.
     {
-      const {page, errors, row, last} = await open('');
-      await row('claude').getByRole('button', {name: 'Sign in'}).click();
+      const {page, errors, signIn, last} = await open('');
+      await signIn('claude').click();
       const dialog = login(page);
       await dialog.locator('[data-status]', {hasText: 'Starting the sign-in'}).waitFor();
       Object.assign(last(), {created: new Date(Date.now() - 60000).toISOString()});

@@ -59,6 +59,8 @@ class MessageCreate(Contract):
     refs: dict = Field(default_factory=dict)
     in_reply_to: ID | None = None
     wait_s: int | None = Field(default=None, ge=0, le=300)
+    # A bot's message to a bot waits for that bot's next run unless it needs action now (backend/bot_to_bot.py).
+    needs_action: bool = False
 
 
 class ChatCreate(Contract):
@@ -359,6 +361,8 @@ class FileVersionEdit(Contract):
 
 class TaskComment(Contract):
     public: bool = False
+    # As MessageCreate.needs_action: a bot's comment to a bot wakes it now only when this is set.
+    needs_action: bool = False
     approval_id: ID | None = None
     text: Text
     ask: ReviewAsk | None = None
@@ -1078,7 +1082,8 @@ class ComputerProfile(Contract):
 
 
 class SubscriptionAssignment(Contract):
-    scope: Literal["group", "bot"]
+    # Only a bot chooses a subscription; a group no longer gives its bots one.
+    scope: Literal["bot"] = "bot"
     target: str = Field(min_length=1, max_length=100)
     profile: str | None = Field(default=None, pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$", max_length=80)
 

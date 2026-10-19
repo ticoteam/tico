@@ -55,7 +55,7 @@
 .support-closed{padding:0 16px}
 .support-write{display:grid;gap:6px;flex:none;padding:10px 12px 12px;border-top:1px solid var(--line)}
 .support-input{display:flex;align-items:flex-end;gap:8px}
-.support-input textarea{flex:1;min-width:0;min-height:44px;max-height:160px;resize:vertical;box-sizing:border-box}
+.support-input textarea{flex:1;min-width:0;min-height:44px;max-height:min(60vh,360px);resize:vertical;box-sizing:border-box}
 .support-send{flex:none;display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;padding:0;border:0;border-radius:50%;background:var(--accent);color:var(--accent-ink);cursor:pointer}
 .support-send:hover:not(:disabled){filter:brightness(1.06)}
 .support-error{margin:0;font-size:var(--t-sm)}

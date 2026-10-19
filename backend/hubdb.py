@@ -1045,6 +1045,8 @@ def migrate(conn, adopt_legacy=False):
                  "to_actor TEXT NOT NULL, body TEXT NOT NULL, created TEXT NOT NULL, carried_by TEXT, "
                  "cancelled_at TEXT, cancelled_by TEXT)")
     conn.execute("CREATE INDEX IF NOT EXISTS notes_to_created ON notes(to_actor, created)")
+    # A bot-to-bot message that could wait (backend/bot_to_bot.py) rides to the next run as a note linked to it.
+    add_column(conn, "notes", "message_id", "TEXT")
     conn.execute("CREATE INDEX IF NOT EXISTS tasks_owner_rank ON tasks(owner, rank)")
     # Health's waits-on-a-person check (backend/health.py silent_waits) reads only these few rows.
     conn.execute("CREATE INDEX IF NOT EXISTS tasks_waiting_on ON tasks(waiting_on) WHERE waiting_on IS NOT NULL")
@@ -2258,7 +2260,14 @@ def say(conn, actor, to_actor, body, conversation_id=None, kind="say", refs=None
             warnings = style_problems(conn, actor, lint_human_item(body), severity)
             refs["unsolicited"] = True
 
+    # Token saving (Dev 149): a plain bot-to-bot message waits for the target's next run unless flagged.
+    from . import bot_to_bot
+    waits = bot_to_bot.can_wait(conn, actor, target, kind, refs, body, in_reply_to)
+    if waits:
+        refs.update(quiet=True, **{bot_to_bot.MARK: bot_to_bot.RULE})
     msg = _write_message(conn, actor, target, body, conv, kind, refs, in_reply_to, wait_s)
+    if waits:
+        bot_to_bot.hold(conn, msg, task(conn, on_task) if isinstance(on_task, str) and on_task else None)
     _close_open_asks(conn, actor, target, kind, msg)
     if kind == "ask" and is_bot(actor) and is_human(target):
         about = message_task_id({"refs": refs}, conv)
@@ -3793,7 +3802,9 @@ def task_comment(conn, actor, task_id, text, wake=True, *, ask=None, extra_refs=
               if a and a not in (actor, KEEPER) and task_private_readable(conn, a, row)]
     target = next((a for a in others if is_bot(a)), None) or (others[0] if others else None)
     refs = {"task": task_id, "comment": True, **(extra_refs or {})}
-    if not wake:
+    # A bot's comment flagged needs-action wakes the other side even where its comment alone would not (a snoozed
+    # task): the sender said it cannot wait (backend/bot_to_bot.py).
+    if not wake and not (is_bot(actor) and refs.get("needs_action") is True):
         refs["quiet"] = True
     conv = conversation(conn, row["conversation_id"])
     if not conv:

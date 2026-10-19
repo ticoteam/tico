@@ -1,7 +1,7 @@
 # Task types and steps
 
 Every task starts on **General**, with the same statuses and behavior as before. To give work a
-pipeline such as Marketing, a mover makes a type in **Settings → Types**, adds named steps, and
+pipeline such as Marketing, a mover makes a type in **Settings → Tasks**, adds named steps, and
 chooses the status each step means. Types belong to the whole team. General keeps one step for
 each standard status.
 
@@ -282,7 +282,7 @@ duplicates are still refused.
 ## Types bots work on
 
 Every bot can read company-visible tasks subject to existing bot activity restrictions. Types
-control additional permission to comment, file subtasks or change work in **Settings → Types**,
+control additional permission to comment, file subtasks or change work in **Settings → Tasks**,
 with `bots` on the task-types routes or `hub task type update "Dev ticket" --bots work`.
 
 | `bots` | Additional permission for unrelated bots |

@@ -1464,10 +1464,15 @@ class Execution:
         # sent, so the run can tell yesterday's from this morning's.
         notes = []
         if getattr(body, "next_run", False) and not check:
-            for item in H.notes_waiting(c, row["bot"]):
+            from . import bot_to_bot
+            waiting = H.notes_waiting(c, row["bot"])
+            for item in waiting:
                 c.execute("UPDATE notes SET carried_by=? WHERE id=?", (aid, item["id"]))
+            # A bot's message that waited for this run is read now; a backlog past one run's notes gets a run of its own.
+            for item in bot_to_bot.carried(c, waiting, H.now()):
                 notes.append({"id": item["id"], "from": item["from_actor"], "sent": item["created"],
-                              "text": item["body"]})
+                              "text": item["body"], **({"message": item["message_id"]} if item.get("message_id") else {})})
+            bot_to_bot.continue_backlog(c, row["bot"])
             if notes:
                 H.event(c, H.KEEPER, "note.carried", aid, {"bot": row["bot"], "notes": [n["id"] for n in notes]})
         from .views import roster

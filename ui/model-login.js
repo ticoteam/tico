@@ -24,21 +24,19 @@
   // The computer shows a sign-in, switch or sign-out only in the readiness it reports next. Look again until it has
   // reported since the change finished (`since`, the server's time on the finished row; `readiness_at` is when the
   // computer last reported) and that report shows `want` ('ready' or 'signed_out') for this login, redrawing
-  // Settings > Computers and, for a named subscription, Subscriptions too. About a minute at most.
+  // Settings > Computers. About a minute at most; until then its row and pop-up say "Waiting for <computer>"
+  // (`machineLoginPending`, ui/app/computer-detail.js).
+  const pending = window.machineLoginPending = window.machineLoginPending || new Map();
   function refreshUntil(runnerId, runtime, profile, want, since) {
     const after = Date.parse(since) || Date.now();
     let tries = 0;
+    pending.set(runnerId, Date.now() + 65000);
     const look = async () => {
       tries += 1;
       try { if (typeof loadSettings === 'function') await loadSettings(); } catch { /* the next try asks again */ }
       try { if (typeof gsRefresh === 'function') await gsRefresh(); } catch { /* same */ }
-      if (profile) {
-        // Read the subscriptions here, so a redraw held back (someone typing a new name) never stops the look.
-        try {
-          if (typeof subsLoad === 'function') await subsLoad();
-          if (typeof renderSettingsSubs === 'function') await renderSettingsSubs(false, true);
-        } catch { /* not on Settings */ }
-      }
+      // The bot editor's subscription list, for a named subscription.
+      if (profile) try { if (typeof subsLoad === 'function') await subsLoad(); } catch { /* not on Settings */ }
       let shown = false;
       try {
         const machine = SETTINGS_DATA.machines.find(row => row.id === runnerId);
@@ -46,6 +44,10 @@
           : machine?.readiness?.runtimes?.[runtime]?.authenticated === 'ready';
         shown = Date.parse(machine?.readiness_at) > after && (want === 'ready' ? ready : !ready);
       } catch { /* not on Settings */ }
+      if (shown || tries >= 20) {
+        pending.delete(runnerId);
+        try { if (typeof renderSettingsMachines === 'function') renderSettingsMachines(); } catch { /* not on Settings */ }
+      }
       if (!shown && tries < 20) setTimeout(look, 3000);
     };
     setTimeout(look, 1500);

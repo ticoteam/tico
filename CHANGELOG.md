@@ -38,6 +38,17 @@ All notable changes to Tico are recorded here. The format follows
   If it does, the bot's session is cleared the same way Clear does, and the chat shows a quiet **Topic changed** line
   above your message. A chat with an active goal, a running turn or fewer than 3 turns is never checked, and a slow or
   failed check (over 1.5 s) sends the message in the same session with no line.
+- **Settings → Computers** shows one compact row per computer: name, Tico version (with **Update** only when one is
+  waiting), operator, bots, a chip for each AI connection, and status. A chip shows the tool, a thin bar and the share
+  of the weekly allowance that is left; hover for when it resets and how old the reading is. A red dot means bots
+  depend on a connection that is signed out or rejected. Click a row for everything else: its connections (the
+  computer's own login and a named subscription on the same account show as one), Screen, the bots on it and the
+  connection each one actually runs on, versions and updates, and settings, including **Keep for inbox bots only**
+  and **Revoke computer**. Its **Add connection** signs in an installed tool (in the browser, or with the command to
+  copy and run on the computer for a tool such as Grok Build that signs in only from a terminal) or adds a named
+  subscription. Subscriptions moved here from **Settings → AI providers**, and usage reads as "% left"
+  everywhere. Every member now sees every computer; only an admin or the computer's operator sees its signed-in
+  accounts and changes anything on it.
 
 ### Fixed
 - A computer's performance report no longer holds the database's write lock while it reads every turn that computer
@@ -79,6 +90,16 @@ All notable changes to Tico are recorded here. The format follows
   before this keeps today's behaviour ([sessions](docs/sessions.md)).
 
 ### Changed
+- **Health Monitor: seeing a finding again only counts**: each hourly scan that sees a finding adds one to its count
+  and moves its last-seen time, and no bot runs for it. Only a new finding, one whose severity rises (a computer on a
+  release the server cannot work with is `bad`, an older one `warn`), or one back after its task was finished wakes
+  the Health Monitor. **Settings > Health** shows each finding as "seen N times, last ...". A finding no longer
+  wakes it again just because a day has passed since its last wake.
+- **Bot-to-bot messages wait for the next run** (token saving): a plain message or task comment one bot sends
+  another no longer starts a run. It is kept in its room and handed to that bot's next run, whatever starts it,
+  in the order sent, and marked read then. The sender wakes it at once with `--needs-action`
+  (`hub message send`, `hub task comment`, or `needs_action` in the API and tools). Asks, answers, steers,
+  approvals, gate verdicts, replies the other bot waits on, and anything from a person or Tico still wake at once.
 - **One open question per topic**: a bot that asks a person again on a topic it already has an open question about
   (the same `--topic` key, or the same task) now updates that question instead of filing a second one. The person
   sees one card with the latest wording and the earlier asks listed under it, gets no new Needs you item or Slack
@@ -95,6 +116,21 @@ All notable changes to Tico are recorded here. The format follows
   button (**Add a computer** while there is none). Bots are listed in the team chart's groups and order with one status
   each, *Waiting for a computer* is said once at the top, and the tour waits for **Show me around** instead of
   covering the screen.
+- **Sign out** and **Switch account** moved into each computer's pop-up on **Settings > Computers**, on each connection
+  line, for the computer's own login and each named subscription (they were on the tool table and in Manage subscription
+  on AI providers). A subscription is now signed in from a computer on **Settings > Computers**. **Replace key**,
+  **Clear key** and **Add key**, the note that several bots share a sign-in, the desktop apps table and the
+  restarting note moved there too; a member sees which kind of key a computer uses but not its preview.
+- Groups no longer give their bots a subscription: a bot runs on its own choice, or else on its computer's own login.
+  The bot editor's **Connection** line says "Runs on <tool> · <connection> on <computer>". Existing group choices
+  are not moved to the bots; choose one per bot where it is needed.
+- **First run, the form steps**: the progress row uses short names (Providers, Names, About, Team, Computer, Agent,
+  Review) on one line; on a phone it shows dots and the current step's name. Step titles are larger, and the form
+  cards match the team chart's. A fresh install starts with an empty **Company name** (placeholder *Acme Inc.*), not
+  the server's stand-in "Company", and **Next** asks for one. The external agent step says why you might connect one,
+  with **Connect** as a secondary button and **Next** as the only primary. The Support box opened by **Want help
+  setting up?** grows to show the whole message, never past the room left above a phone keyboard, so **Send** stays
+  on screen.
 - PDF upload and reading use pypdf 6.21.1, the latest patch release of 6.21.
 
 ## [0.3.62] - 2026-10-19

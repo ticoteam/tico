@@ -62,15 +62,13 @@ const {unrouted} = require('./support/routes.cjs');
     });
     await page.goto('https://tico-ui.test/#/settings');
     await page.locator('[data-settings-tab=devices]').click();
-    const more = page.locator('#set-machines [aria-label="More for Build server"]');
-    await more.click();
+    // In the computer's pop-up, under Settings; it stays open while the choice saves.
+    await page.locator('#set-machines .machine-name[data-computer-open=c1]').click();
     await page.locator('[data-performance-mode=c1]').uncheck();
     await page.waitForFunction(() => SETTINGS_DATA.machines[0].performance === 'off');
-    await page.locator('#set-machines [aria-label="More for Build server"]').click();
-    await page.locator('[data-performance-mode=c1]').check();
+    await page.locator('[data-performance-mode=c1]:enabled').check();
     await page.waitForFunction(() => SETTINGS_DATA.machines[0].performance === 'on');
     assert.deepEqual(writes, [{mode: 'off'}, {mode: 'on'}]);
-    await page.locator('#set-machines [aria-label="More for Build server"]').click();
     await page.locator('[data-computer-performance=c1]').click();
     await page.waitForSelector('#perf-chart svg');
     assert.equal(await page.evaluate(() => location.hash), '#/computers/c1/performance');

@@ -1656,15 +1656,26 @@ def install_views(app, store, auth, mutate, task_view):
             _, assigned = providers.runtimes_needed(c, store.settings)
             default = {providers.default_runtime(providers.load(c, store.settings))} - {""}
             run_on = providers.runtimes_run_on(c, store.settings)
+            from . import subscriptions, inbox_isolation
             from .computer_keys import shared_all, shared_listing
+            subscription_context = subscriptions.context(c, store.settings)
+            kept_for_inbox = inbox_isolation.inbox_only(c, roster(c))
             shared_keys = shared_all(c)
             access = auth.bot_accesses(c, who)
+            # The bots a member may not even see (an admin sees them all): left off another person's computer.
+            unseen = set() if auth.bot_admin(who) else {bot for bot, a in access.items() if not a["see"]}
             for row in c.execute("SELECT id,label,operator,last_seen,revoked_at,platform,version,capacity,readiness_json,"
                                  "accepts_member_bots,screen,performance,capabilities_json,restart_since,readiness_at "
                                  "FROM runners ORDER BY created"):
-                if not auth.bot_admin(who) and who.actor != "human:" + row["operator"]:
+                # Every person sees every working computer; only an admin or its operator may change it, and only
+                # they read its signed-in accounts, own login's usage and key previews (#610, as in /v2/computers).
+                # Another member gets the bots they may see on it.
+                manage = auth.bot_admin(who) or who.actor == "human:" + row["operator"]
+                if not manage and row["revoked_at"]:
                     continue
-                bots = [a[0] for a in c.execute("SELECT bot FROM assignments WHERE runner_id=? ORDER BY bot", (row["id"],))]
+                hidden = set() if manage else unseen
+                bots = [a[0] for a in c.execute("SELECT bot FROM assignments WHERE runner_id=? ORDER BY bot", (row["id"],))
+                        if a[0] not in hidden]
                 value = dict(row)
                 value["release"] = runner_versions.view(fleet.get(row["id"])).get("release") or ""
                 value["accepts_member_bots"] = bool(row["accepts_member_bots"])
@@ -1682,28 +1693,43 @@ def install_views(app, store, auth, mutate, task_view):
                     "SELECT a.bot FROM assignments a JOIN bots b ON b.slug=a.bot "
                     "WHERE a.runner_id=? AND b.state<>'archived'", (row["id"],))}
                 value["readiness"]["bots"] = {bot: report for bot, report in value["readiness"].get("bots", {}).items()
-                                             if bot in assigned_here}
+                                             if bot in assigned_here and bot not in hidden}
                 for report in value["readiness"].get("bots", {}).values():
                     report.pop("tools", None)
                 from .harness_actions import choices, recent
                 # A computer installs only what its bots run on, so only those are its business; with no bot yet,
                 # the company's one default, which it installs for its first sign-in (config_view default_runtime).
                 # `bot_runtimes` adds the bots' fallbacks: what it installs for them, so their on/off stays locked.
-                from .subscriptions import computer_profiles
-                # Each named subscription on it, with its sign-in, account and usage windows: this list is already
-                # limited to an administrator or the computer's operator, who may read its accounts.
+                # Each named subscription on it, with its sign-in and usage windows; its account only for whoever
+                # may change the computer (`may_manage`). `same_account`: {runtime: subscription} where the
+                # computer's own login is that subscription's account, so a member's page shows them as one too.
+                # `bot_connections`: the connection each of its bots actually runs on. `signed_out`:
+                # {runtime: [profile, ...]} a person signed out here ('' is its own login); they stay signed out.
                 from .model_login import cleared_logins
                 from .computer_keys import listing as computer_key_listing
+                profiles = subscriptions.computer_profiles(c, row, True)
+                same_account = subscriptions.same_account(value["readiness"].get("runtimes") or {}, profiles)
+                keys, shared = computer_key_listing(c, row["id"]), shared_listing(shared_keys, value["readiness"])
+                if not manage:
+                    for profile in profiles:
+                        subscriptions.without_accounts(profile["runtimes"])
+                    subscriptions.without_accounts(value["readiness"].get("runtimes") or {}, windows=True)
+                    for key in (*keys.values(), *shared.values()):
+                        key.pop("preview", None)
                 machines.append({**value, "bots": bots, "needed_runtimes": sorted(assigned.get(row["id"]) or default),
-                                 "profiles": computer_profiles(c, row, True),
-                                 # {runtime: [profile, ...]} a person signed out here; they stay signed out.
+                                 "may_manage": manage, "profiles": profiles, "same_account": same_account,
+                                 "bot_connections": [link for link in subscriptions.connections(
+                                     c, row["id"], store.settings, subscription_context) if link["bot"] not in hidden],
                                  "signed_out": cleared_logins(c, row["id"]),
+                                 "inbox_only": row["id"] in kept_for_inbox,
                                  # {runtime: {env, preview}}: its own keys stored from here, and the company's shared
-                                 # ones, for the rows a key signs in (backend/computer_keys.py). Never a value.
-                                 "keys": computer_key_listing(c, row["id"]),
-                                 "shared_keys": shared_listing(shared_keys, value["readiness"]),
-                                 # The sign-ins several of its bots share, which they take turns on.
-                                 "shared_logins": shared_logins(c, row["id"], value["readiness"], assigned_here, access),
+                                 # ones, for the rows a key signs in (backend/computer_keys.py). Never a value, and a
+                                 # preview only for whoever may change the computer.
+                                 "keys": keys,
+                                 "shared_keys": shared,
+                                 # The sign-ins several of its bots share, which they take turns on (counting only
+                                 # the bots this reader may see).
+                                 "shared_logins": shared_logins(c, row["id"], value["readiness"], assigned_here - hidden, access),
                                  "bot_runtimes": sorted(run_on.get(row["id"], ())),
                                  "update": runner_versions.view(fleet.get(row["id"])),
                                  "harness_actions": recent(c, row["id"]) if who.role == "owner" else [],

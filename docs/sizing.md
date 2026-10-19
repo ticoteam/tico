@@ -37,7 +37,7 @@ Concurrency is the number to estimate: how many bots will realistically be mid-r
 | 100 | 20 to 30 | 2 GB, 2 vCPUs | Three or four computers of 16 GB and 4 to 8 vCPUs each, 250 GB disk each |
 | 300 | 60 to 90 | 2 GB, 2 vCPUs (4 GB if uploads are heavy) | Eight to twelve computers of 16 GB, or five or six of 32 GB, 250 to 500 GB disk each |
 
-Only the smallest row resembles anything measured. The 100 and 300 rows are estimates and untested. They are starting points. Watch memory on the computers and add another when they run hot. Each computer's **Performance** page (Settings > Computers > ⋯ > Performance) shows its CPU and memory over the last 14 days, the overloads it had and which bots were running then.
+Only the smallest row resembles anything measured. The 100 and 300 rows are estimates and untested. They are starting points. Watch memory on the computers and add another when they run hot. Each computer's **Performance** page (Settings > Computers, open the computer, Performance) shows its CPU and memory over the last 14 days, the overloads it had and which bots were running then.
 
 ## Adding computers and spreading bots
 
