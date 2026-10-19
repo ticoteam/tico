@@ -1672,6 +1672,10 @@ def install_views(app, store, auth, mutate, task_view):
             subscription_context = subscriptions.context(c, store.settings)
             kept_for_inbox = inbox_isolation.inbox_only(c, roster(c))
             shared_keys = serving(c)
+            # A company key's name and preview are a credential administrator's to read, as in Credentials; a
+            # computer's operator reads its own key's.
+            from .credentials import administrator
+            key_admin = administrator(c, who, store.settings.credential_admins)
             access = auth.bot_accesses(c, who)
             # The bots a member may not even see (an admin sees them all): left off another person's computer.
             unseen = set() if auth.bot_admin(who) else {bot for bot, a in access.items() if not a["see"]}
@@ -1732,7 +1736,10 @@ def install_views(app, store, auth, mutate, task_view):
                     for profile in profiles:
                         subscriptions.without_accounts(profile["runtimes"])
                     subscriptions.without_accounts(value["readiness"].get("runtimes") or {}, windows=True)
-                    for key in (*keys.values(), *shared.values()):
+                    for key in keys.values():
+                        key.pop("preview", None)
+                if not key_admin:
+                    for key in shared.values():
                         key.pop("preview", None)
                     for key in shared_with.values():
                         key.pop("name", None)

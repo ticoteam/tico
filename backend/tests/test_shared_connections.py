@@ -2,6 +2,8 @@
 `attach_shared_key`): a key shared with some computers by name, or with every computer in Credentials, shows on each
 computer it serves with the same computers listed, and "this computer only" takes one computer off it for good."""
 
+import json
+
 from backend.store import H
 from backend.tests.test_computer_keys import SHARED, call, computer, fetch, heartbeat, listed, pending, report, setup
 from backend.tests.test_computer_signin import grant, store
@@ -244,3 +246,32 @@ def test_a_computer_still_reporting_a_key_that_stopped_serving_it_is_described_a
     assert info["source"] == "" and "shared" not in info
     heartbeat(api, two["token"], "shared")
     assert call(api, "GET", f"computers/{two['runner_id']}/keys?runtime=codex")["source"] == ""
+
+
+def test_a_computers_operator_reads_which_computers_share_its_key_but_not_the_key(environment):
+    """A shared key is a company credential: its name and preview are a credential administrator's to read, in the
+    Clear / Replace key ask and on the Computers page alike. The computer's operator who is not one still reads which
+    computers it serves, and its own key's preview."""
+    api = setup(environment)
+    mine = computer(api, "Quinn's box", operator="quinn")
+    other = computer(api, "Team box")
+    made = call(api, "POST", f"computers/{other['runner_id']}/keys",
+                {"runtime": "codex", "secret": PASTED, "share": [mine["runner_id"]]})["shared"]
+    admin = call(api, "GET", f"computers/{mine['runner_id']}/keys?runtime=codex")
+    assert admin["preview"] == "sk-…789" and admin["shared"]["id"] == made["id"] and admin["shared"]["name"]
+    info = call(api, "GET", f"computers/{mine['runner_id']}/keys?runtime=codex", who=as_person(api, "quinn"))
+    assert info["source"] == "shared" and info["preview"] == "" and labels(info) == ["Quinn's box", "Team box"]
+    assert info["shared"] == {"env": "OPENAI_API_KEY", "every": False} and info["can_replace_all"] is False
+    page = next(m for m in call(api, "GET", "operations", who=as_person(api, "quinn"))["computers"]
+                if m["id"] == mine["runner_id"])
+    assert page["may_manage"] is True
+    assert page["shared_with"]["codex"] == {"every": False, "computers": [
+        {"id": mine["runner_id"], "label": "Quinn's box"}, {"id": other["runner_id"], "label": "Team box"}]}
+    assert page["shared_keys"]["codex"] == {"env": "OPENAI_API_KEY"} and "sk-" not in json.dumps(page)
+    # Its own key, once it has one, it reads in full preview.
+    job = call(api, "POST", f"computers/{mine['runner_id']}/keys", {"runtime": "codex", "secret": "sk-quinn-own-0123456789"},
+               who=as_person(api, "quinn"))
+    report(api, mine, job["id"], "done")
+    page = next(m for m in call(api, "GET", "operations", who=as_person(api, "quinn"))["computers"]
+                if m["id"] == mine["runner_id"])
+    assert page["keys"]["codex"]["preview"] == "sk-…789"

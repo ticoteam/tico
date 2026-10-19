@@ -676,18 +676,22 @@ def key_info(c, who, rid, runtime, auth=None, vault=None):
     # revoked, the key deleted) until its next heartbeat: then no shared key is described.
     source = ("computer" if own else "shared" if shared else
               "" if reported.get("source") == "shared" else reported.get("source") or "")
+    # A company key's name and preview are a credential administrator's to read, as in Credentials; the computer's
+    # operator still reads its own key's.
+    key_admin = bool(vault and administrator(c, who, vault.admins))
     out = {"runtime": runtime, "source": source, "name": own["env"] if own else reported.get("name", "") if source else "",
-           "preview": own["preview"] if own else shared["preview"] if shared and source == "shared" else "",
+           "preview": own["preview"] if own else shared["preview"] if shared and key_admin else "",
            "cleared": cleared(c, rid, runtime), "names": list(computer_keys.names(runtime)), "computers": []}
     if source == "shared":
         out["computers"] = [{"id": row["id"], "label": row["label"], "online": _online(row),
                              "updated": _handles_keys(row), "may": _may(c, who, row, auth)}
                             for row in _shared_users(c, runner, runtime)]
-        out["shared"] = {"id": shared["id"], "name": shared["name"], "env": shared["env"],
-                         "every": shared["id"] in granted(c, COMPUTERS)}
-        out["can_replace_all"] = bool(vault and administrator(c, who, vault.admins))
+        out["shared"] = {"env": shared["env"], "every": shared["id"] in granted(c, COMPUTERS)}
+        if key_admin:
+            out["shared"].update(id=shared["id"], name=shared["name"])
+        out["can_replace_all"] = key_admin
     # Add connection > API key: the shared keys an administrator may attach here instead of pasting one.
-    if vault and administrator(c, who, vault.admins):
+    if key_admin:
         out["can_share"], out["shared_choices"] = True, shared_choices(c, runtime)
     return out
 
