@@ -49,8 +49,9 @@ running it fetches the key and passes the bot's model calls on to the Gateway. T
 that run and only for model calls. That is why Tico models need a computer that runs bots as their own user: Tico's
 Docker runner does. On a computer that runs bots as itself (a Mac), a bot on a Tico model stops once with "Tico models
 need a runner that runs bots as their own user (Tico's Docker runner). This computer can't, so pick another model or
-move the bot", and the run is saved for later rather than tried again. A Tico fallback is left out there: the bot's
-own model's outcome stands.
+move the bot", and the run is saved for later rather than tried again. The bot's status and **Needs you** say so,
+and its other work waits until you pick another model or move the bot, then review the stopped run. A Tico fallback
+is left out there: the bot's own model's outcome stands.
 
 ## What the card says
 

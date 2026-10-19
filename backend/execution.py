@@ -296,6 +296,14 @@ def held_runs(c, who, auth, bot, limit=3):
     return held
 
 
+def isolation_refused(c, bot):
+    """Whether one of the bot's runs saved for later is a Tico turn its runner refused for want of isolation
+    (clients/gateway.py NOT_ISOLATED): held until a person moves the bot or changes its model."""
+    return any(any(gateway.run_code(error) == gateway.NOT_ISOLATED for error in limit_errors(c, row[0]))
+               for row in c.execute("SELECT attempt_id FROM jobs WHERE bot=? AND state='uncertain' "
+                                    "AND attempt_id IS NOT NULL", (bot,)))
+
+
 def limit_streak(c, bot):
     """How many of the bot's latest finished attempts in a row ended on a usage limit (capped
     at LIMIT_STRIKES; a lapsed lease or any other outcome ends the run)."""
