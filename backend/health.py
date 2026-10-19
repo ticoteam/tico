@@ -542,6 +542,11 @@ HELD = {
     "cooling_off": ("Waiting out a usage limit, or a Tico AI Gateway outage, before it tries again", RUNS),
     "readiness_unknown": ("{computer} has not said whether it can run this bot", COMPUTERS),
     "sign_in_rejected": ("Its model sign-in was rejected on {computer}", COMPUTERS),
+    # A Tico model runs only where bots run as their own user (execution.claim_refusal): the bot waits, it never fails.
+    "not_isolated": ("{computer} can't run Tico Gateway work (it needs Tico's Docker runner): it waits for another "
+                     "model or computer", BOT_SETTINGS),
+    "isolation_unknown": ("{computer} hasn't said it can run Tico Gateway work: it waits until its runner is updated",
+                          COMPUTERS),
     "profile": ("Its subscription profile is not signed in or not reported on {computer}", COMPUTERS),
     "config": ("Its settings cannot be read", BOT_SETTINGS),
     "check_model": ("Its check model does not run on {computer}, or is on hold", BOT_SETTINGS),

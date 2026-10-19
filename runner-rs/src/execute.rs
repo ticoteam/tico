@@ -1065,11 +1065,12 @@ impl Runner {
         pending = crate::gateway_relay::admit(pending, vault.relay.is_some());
         // Only a server that sent `fallback_models` knows the field (an older one refuses unknown fields).
         let primary_limited = pending.as_ref().is_some_and(|h| h.default && hit_limit);
-        let mut tried: Vec<String> = vec![runtime.clone()];
+        // Where the turn ran, by slot: the Gateway counts apart from the pi it runs on (fallback.rs `slot`).
+        let mut tried: Vec<String> = vec![crate::fallback::slot(&runtime, &text_of(&config["model"]))];
         // Why the turn left the harness before the hop, for its diagnostic: the primary, then each spent hop.
         let mut left = None;
         while let (Some(hop), true, Some(base)) = (pending.take(), prepared, base_env.clone()) {
-            tried.push(hop.runtime.clone());
+            tried.push(crate::fallback::slot(&hop.runtime, &hop.model));
             uses.push(hop.runtime.clone());
             crate::harness_tools::turn_runtimes(&aid, &uses);
             if let Some(th) = &thread {

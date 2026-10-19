@@ -42,36 +42,51 @@ pub fn configured(config: &Value) -> Option<Hop> {
 /// (`fallback: {off: true}`), or no other runtime is ready. A harness signed in by the bot's own key is
 /// skipped unless the turn's `env` carries that key.
 pub fn default_choice(config: &Value, choices: &[Value], env: &crate::env::Env, ready: impl Fn(&str) -> bool) -> Option<Hop> {
+    choose(config, choices, env, &[], ready)
+}
+
+/// The next of the company's providers once a default hop's own login hit its usage limit too: the first row
+/// whose slot (`slot`) this turn has not run on yet (`tried`) that `ready` still takes.
+pub fn next_choice(config: &Value, choices: &[Value], env: &crate::env::Env, tried: &[String], ready: impl Fn(&str) -> bool) -> Option<Hop> {
+    choose(config, choices, env, tried, ready)
+}
+
+/// What a turn counts as one place it ran, for `next_choice`'s `tried`: the runtime, except that the Tico AI
+/// Gateway is a place of its own though it runs on pi. So a pi bot on its own key can still end on the Gateway,
+/// and a Gateway hop that hit its cap is never chosen again for the same turn.
+pub const GATEWAY_SLOT: &str = "tico-gateway";
+
+pub fn slot(runtime: &str, model: &str) -> String {
+    if crate::hosts::pi::is_gateway(Some(model)) { GATEWAY_SLOT.to_string() } else { runtime.to_string() }
+}
+
+fn choose(config: &Value, choices: &[Value], env: &crate::env::Env, tried: &[String], ready: impl Fn(&str) -> bool) -> Option<Hop> {
     let fallback = &config["fallback"];
     if fallback.is_object() && (crate::util::truthy(fallback.get("off")) || crate::util::truthy(fallback.get("harness"))) {
         return None;
     }
     let primary = text_of(&config["runtime"]);
+    let primary_on_gateway = crate::hosts::pi::is_gateway(Some(&text_of(&config["model"])));
     choices.iter().find_map(|row| {
         let (runtime, model) = (text_of(&row["runtime"]), text_of(&row["model"]));
-        if runtime.is_empty() || model.is_empty() || runtime == primary {
+        if runtime.is_empty() || model.is_empty() || tried.iter().any(|t| *t == slot(&runtime, &model)) {
             return None;
         }
         let harness = Some(text_of(&row["harness"])).filter(|h| !h.is_empty()).unwrap_or_else(|| runtime.clone());
         // The Gateway (last under the company's Gateway choices, backend/models_preset.py) signs in with the turn's
-        // relay alone (gateway_relay.rs): no login or key of its own here, and no relay means no hop.
+        // relay alone (gateway_relay.rs): no login or key of its own here, and no relay means no hop. It is never a
+        // hop from itself; any other row is never one on the primary's own runtime.
         if crate::hosts::pi::is_gateway(Some(&model)) {
-            if env.get(crate::gateway_relay::KEY_ENV).is_none_or(|v| v.trim().is_empty()) {
+            if primary_on_gateway || env.get(crate::gateway_relay::KEY_ENV).is_none_or(|v| v.trim().is_empty()) {
                 return None;
             }
-        } else if !ready(&runtime) || !bot_key(&harness).iter().all(|k| env.get(k).is_some_and(|v| !v.trim().is_empty())) {
+        } else if runtime == primary || !ready(&runtime) || !bot_key(&harness).iter().all(|k| env.get(k).is_some_and(|v| !v.trim().is_empty())) {
             return None;
         }
         let runtime = crate::harness_tools::runtime_of(&harness);
         let effort = Some(text_of(&config["reasoning_effort"])).filter(|e| !e.is_empty());
         Some(Hop { harness, runtime, model, reasoning_effort: effort, default: true })
     })
-}
-
-/// The next of the company's providers once a default hop's own login hit its usage limit too: the first row
-/// after the runtimes this turn already ran on (`tried`) that `ready` still takes.
-pub fn next_choice(config: &Value, choices: &[Value], env: &crate::env::Env, tried: &[String], ready: impl Fn(&str) -> bool) -> Option<Hop> {
-    default_choice(config, choices, env, |rt| !tried.iter().any(|t| t == rt) && ready(rt))
 }
 
 /// How long a login that failed a turn on its usage limit, with no reset time from the provider, stays out of the
@@ -359,6 +374,62 @@ mod tests {
         // With the relay, the Gateway needs neither a pi login nor an OpenRouter key.
         let hop = default_choice(&config, &choices, &env, |_| false).unwrap();
         assert_eq!((hop.harness.as_str(), hop.model.as_str(), hop.default), ("pi", "tico-mid-1.0", true));
+    }
+
+    #[test]
+    fn a_gateway_hop_that_hit_its_cap_is_not_chosen_again_for_the_turn() {
+        // Claude over quota -> the Gateway -> the Gateway's cap, with no tokens spent: what execute.rs builds as
+        // `tried` (the primary's slot, then each hop's) leaves no next hop, so the turn settles on the cap.
+        let config = json!({"runtime": "claude", "harness": "claude-code", "model": "claude-sonnet-5-5"});
+        let choices = vec![json!({"runtime": "pi", "harness": "pi", "model": "tico-mid-1.0"})];
+        let mut env = crate::env::Env::new();
+        env.insert(crate::gateway_relay::KEY_ENV.into(), "relay-fixture".into());
+        let hop = default_choice(&config, &choices, &env, |_| false).unwrap();
+        let tried = vec![slot("claude", "claude-sonnet-5-5"), slot(&hop.runtime, &hop.model)];
+        assert_eq!(tried[1], GATEWAY_SLOT);
+        assert!(next_choice(&config, &choices, &env, &tried, |_| true).is_none(), "a capped Gateway is never picked again");
+        // The no-pi-login case still takes the Gateway the first time.
+        assert!(next_choice(&config, &choices, &env, &tried[..1], |_| false).is_some());
+    }
+
+    #[test]
+    fn a_turn_whose_every_hop_hits_its_limit_tries_each_place_once_and_ends() {
+        // execute.rs's hop loop, with every hop limited and spending no tokens (a Gateway cap answers before any):
+        // `tried` grows by each hop's slot, so the loop ends after each of the company's rows ran once at most.
+        let choices = vec![json!({"runtime": "codex", "harness": "codex", "model": "gpt-5.5"}),
+                           json!({"runtime": "pi", "harness": "pi", "model": "tico-mid-1.0"})];
+        let mut env = crate::env::Env::new();
+        env.insert(crate::gateway_relay::KEY_ENV.into(), "relay-fixture".into());
+        for config in [json!({"runtime": "claude", "harness": "claude-code", "model": "claude-sonnet-5-5"}),
+                       json!({"runtime": "pi", "harness": "pi", "model": "openrouter/other-model"})] {
+            let mut tried = vec![slot(&text_of(&config["runtime"]), &text_of(&config["model"]))];
+            let mut ran = vec![];
+            let mut pending = default_choice(&config, &choices, &env, |_| true);
+            while let Some(hop) = pending.take() {
+                tried.push(slot(&hop.runtime, &hop.model));
+                ran.push(hop.model.clone());
+                assert!(ran.len() <= choices.len(), "{config}: hopped {ran:?}");
+                pending = next_choice(&config, &choices, &env, &tried, |_| true);
+            }
+            assert_eq!(ran, ["gpt-5.5", "tico-mid-1.0"], "{config}: the Gateway last, once");
+        }
+    }
+
+    #[test]
+    fn a_pi_bot_on_its_own_key_can_end_on_the_gateway_and_a_gateway_bot_never_hops_to_itself() {
+        let choices = vec![json!({"runtime": "pi", "harness": "pi", "model": "openrouter/some-model"}),
+                           json!({"runtime": "pi", "harness": "pi", "model": "tico-mid-1.0"})];
+        let mut env = crate::env::Env::new();
+        env.insert(crate::gateway_relay::KEY_ENV.into(), "relay-fixture".into());
+        let own = json!({"runtime": "pi", "harness": "pi", "model": "openrouter/other-model"});
+        // Another pi row is still never a hop from a pi primary; the Gateway is.
+        let hop = default_choice(&own, &choices, &env, |_| true).unwrap();
+        assert_eq!(hop.model, "tico-mid-1.0");
+        let tried = vec![slot("pi", "openrouter/other-model"), slot(&hop.runtime, &hop.model)];
+        assert!(next_choice(&own, &choices, &env, &tried, |_| true).is_none());
+        // A bot already on the Gateway: no hop to the Gateway.
+        let tico = json!({"runtime": "pi", "harness": "pi", "model": "tico-mid-1.0"});
+        assert!(default_choice(&tico, &choices[1..], &env, |_| true).is_none());
     }
 
     // TK-EKWAFWPD: the computer's own Codex login answered every turn "Quota exceeded" with no reset time, and each

@@ -157,7 +157,7 @@ def test_no_sign_in_card_under_the_other_choices(api):
         assert needs(api) == []
 
 
-@pytest.mark.parametrize("isolated", [True, False])
+@pytest.mark.parametrize("isolated", [True, False, None])
 def test_a_computer_that_cannot_run_gateway_work_says_so_and_the_picker_marks_tico_models(api, monkeypatch, isolated):
     from backend import readiness
     from backend.tests.test_api import get
@@ -174,10 +174,99 @@ def test_a_computer_that_cannot_run_gateway_work_says_so_and_the_picker_marks_ti
         assert verdict["can_run"] is True and "tico-mid-1.0" not in marked
         return
     assert verdict["can_run"] is False
-    assert "can't run Tico Gateway work" in verdict["problem"] and "Docker runner" in verdict["fix"]
+    if isolated is False:
+        assert "can't run Tico Gateway work" in verdict["problem"] and "Docker runner" in verdict["fix"]
+    else:
+        # A runner from before it said: only an explicit yes runs Gateway work, and the fix is to update it.
+        assert "hasn't said it can run Tico Gateway work" in verdict["problem"] and "Update" in verdict["fix"]
     assert marked["tico-mid-1.0"]["short"] == "not on this computer"
     # The harness itself stays offered: pi on the bot's own key still runs here.
     assert "pi" not in marked or marked["pi"]["short"] != "not on this computer"
+
+
+def on_tico(api, machine, isolated):
+    """ops on Tico Mid 1.0 itself, ready on `machine`, which says (or does not say) it runs bots as their own user."""
+    from backend.tests.test_gateway_connection import put_bot_on
+    put_bot_on(api, "ops", "tico-mid-1.0")
+    readiness = {"schema_version": 1, "runtimes": {"pi": {"installed": True, "authenticated": "missing"}},
+                 "bots": {"ops": {"ready": True, "runtime": "pi", "model": "tico-mid-1.0",
+                                  "repository_present": True, "configuration_valid": True}}}
+    if isolated is not None:
+        readiness["isolated"] = isolated
+    post(api, "runners/heartbeat", {"version": "test", "platform": "test", "readiness": readiness},
+         token=machine["token"])
+
+
+@pytest.mark.parametrize("preset", [models_preset.RECOMMENDED, ""])
+@pytest.mark.parametrize("isolated", [True, False, None])
+def test_a_bot_on_a_tico_model_waits_where_the_computer_does_not_say_it_runs_bots_as_their_own_user(
+        api, monkeypatch, preset, isolated):
+    """A Tico model the bot names itself, under any choice: no attempt is handed out that its runner must refuse
+    (runner-rs/src/gateway_relay.rs NOT_ISOLATED). The work stays queued and Health says why."""
+    from backend import health
+    from backend.tests.test_claim_refusals import health_admin, held
+    connected(api, monkeypatch)
+    choose(api, preset, enabled=("anthropic", "openai", "tico"))
+    machine = runner(api)
+    assign(api, machine, "ops")
+    on_tico(api, machine, isolated)
+    post(api, "chat/ops", {"text": "Use only the synthetic fixture"})
+    if isolated:
+        attempt = claim(api, machine, "ops")
+        assert attempt["config"]["model"] == "tico-mid-1.0" and attempt["gateway"] is True
+        return
+    rows, found = held(api, machine)
+    reason = "not_isolated" if isolated is False else "isolation_unknown"
+    assert [r["reason"] for r in rows] == [reason] and "queue_idle" not in found
+    with api.app.state.store.read() as c:
+        assert {r[0] for r in c.execute("SELECT state FROM jobs WHERE bot='ops'")} == {"queued"}
+        assert c.execute("SELECT count(*) FROM attempts WHERE bot='ops'").fetchone()[0] == 0
+        [row] = health._stuck(c, rows, set(), health_admin(api), True)
+    assert "Tico Gateway work" in row["why"], row
+    # Once the computer says it can, the same work starts.
+    on_tico(api, machine, True)
+    assert claim(api, machine, "ops")["config"]["model"] == "tico-mid-1.0"
+
+
+def waiting_heartbeat(api, machine, change):
+    """ops on Claude Code, not signed in on an isolated computer, with one other thing wrong (`change`)."""
+    bot = {"ready": False, "runtime": "claude", "model": CLAUDE["model"], "repository_present": True,
+           "configuration_valid": True, "problems": ["claude is not signed in"]}
+    pi = {"installed": True, "authenticated": "missing"}
+    if change == "no repository":
+        bot = {**bot, "repository_present": False, "problems": bot["problems"] + ["Missing bot repository or AGENT.md"]}
+    elif change == "settings differ":
+        bot = {**bot, "configuration_valid": False, "problems": bot["problems"] + ["Configuration differs from server"]}
+    elif change == "no pi":
+        pi = {"installed": False}
+    readiness = {"schema_version": 1, "isolated": True,
+                 "runtimes": {"claude": {"installed": True, "authenticated": "missing"}, "pi": pi},
+                 "bots": {} if change == "no report" else {"ops": bot}}
+    post(api, "runners/heartbeat", {"version": "test", "platform": "test", "readiness": readiness},
+         token=machine["token"])
+
+
+@pytest.mark.parametrize("change", ["only the sign-in", "no repository", "settings differ", "no pi", "no report"])
+def test_waiting_for_a_sign_in_lets_through_only_the_missing_sign_in(api, monkeypatch, change):
+    """The Gateway turn before sign-in passes over the bot's missing subscription and nothing else: its checkout, its
+    settings and the Gateway's own runtime must still be ready, and the computer must have reported the bot."""
+    from backend.tests.test_claim_refusals import held
+    connected(api, monkeypatch)
+    choose(api, models_preset.RECOMMENDED)
+    on_claude(api, "ops")
+    machine = runner(api)
+    assign(api, machine, "ops")
+    waiting_heartbeat(api, machine, change)
+    post(api, "chat/ops", {"text": "Use only the synthetic fixture"})
+    if change == "only the sign-in":
+        attempt = claim(api, machine, "ops")
+        assert (attempt["config"]["model"], attempt["config"]["waiting_for_sign_in"]) == ("tico-mid-1.0", "claude")
+        return
+    rows, found = held(api, machine)
+    assert [r["reason"] for r in rows] == ["readiness_unknown" if change == "no report" else "not_ready"], rows
+    assert "queue_idle" not in found
+    with api.app.state.store.read() as c:
+        assert {r[0] for r in c.execute("SELECT state FROM jobs WHERE bot='ops'")} == {"queued"}
 
 
 @pytest.mark.parametrize("preset", models_preset.PRESETS)
@@ -209,22 +298,46 @@ def test_drafts_are_written_on_the_gateway_only_under_the_two_gateway_choices(ap
     assert json.loads(request.data)["model"] == "tico-mid-1.0"
 
 
-def test_a_gateway_segment_records_which_key_and_install_paid_never_the_key(api, monkeypatch):
-    from backend.tests.test_check_models import finish
+@pytest.mark.parametrize("change", ["none", "rotated", "cleared"])
+def test_a_gateway_segment_records_the_key_its_runner_was_handed_and_the_install_never_the_key(api, monkeypatch, change):
+    """The key id is the one handed with the credentials: a key rotated or cleared before the run ends doesn't change
+    which key paid. A turn that used up Claude and finished on the Gateway records it on the Gateway segment only."""
+    from backend import gateway_connection
+    from backend.tests.test_gateway_connection import OTHER, delete
     connected(api, monkeypatch)
     choose(api, models_preset.RECOMMENDED)
     on_claude(api, "ops")
     machine = runner(api)
     assign(api, machine, "ops")
-    heartbeat(api, machine, "ops", signed_in=False, isolated=True)
+    heartbeat(api, machine, "ops", signed_in=True, isolated=True)
     post(api, "chat/ops", {"text": "Use only the synthetic fixture"})
-    attempt = post(api, "jobs/claim", {"bot": "ops"}, token=machine["token"])["attempt"]
-    finish(api, machine, attempt, {"model": "tico-mid-1.0", "runtime": "pi", "harness": "pi", "billing": "api"})
+    attempt = claim(api, machine, "ops")
     with api.app.state.store.read() as c:
-        row = dict(c.execute("SELECT * FROM turn_usage_segments").fetchone())
+        paid = gateway_connection.key_id(c, api.app.state.store.settings)
+    assert paid and "TICOAI_GATEWAY_KEY" in handed_to(api, machine, attempt)
+    post(api, f"attempts/{attempt['id']}/started", {"thread_id": "t-" + attempt["id"][:8]}, machine["token"])
+    # While it runs, the owner rotates the key or clears the connection.
+    if change == "rotated":
+        with fake_gateway() as fake:
+            fake.active(OTHER, 0.1)
+            save(api, fake, key=OTHER)
+    elif change == "cleared":
+        delete(api, "providers/gateway")
+    with api.app.state.store.read() as c:
+        assert (gateway_connection.key_id(c, api.app.state.store.settings) == paid) is (change == "none")
+    claude = {"model": CLAUDE["model"], "runtime": "claude", "harness": "claude-code", "billing": "subscription"}
+    tico = {"model": "tico-mid-1.0", "runtime": "pi", "harness": "pi", "billing": "api"}
+    post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "last_seq": 0, "text": "Done.", "fallback": "pi",
+         "usage": {**tico, "input_tokens": 60, "output_tokens": 60, "segments": [
+             {**claude, "input_tokens": 30, "output_tokens": 30}, {**tico, "input_tokens": 30, "output_tokens": 30}]}},
+         machine["token"])
+    with api.app.state.store.read() as c:
+        rows = {r["model"]: dict(r) for r in c.execute("SELECT * FROM turn_usage_segments")}
         install = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='usage-count'").fetchone()[0])
-    assert row["model"] == "tico-mid-1.0" and row["gateway_key_id"] and row["install_id"] == install["install_id"]
-    assert KEY not in json.dumps(row) and KEY[3:-3] not in json.dumps(row)
+    assert rows["tico-mid-1.0"]["gateway_key_id"] == paid
+    assert rows["tico-mid-1.0"]["install_id"] == install["install_id"]
+    assert rows[CLAUDE["model"]]["gateway_key_id"] is None and rows[CLAUDE["model"]]["install_id"] is None
+    assert KEY not in json.dumps(rows) and KEY[3:-3] not in json.dumps(rows)
 
 
 def test_the_owner_saves_the_choice_through_the_api_and_reads_it_back(api):

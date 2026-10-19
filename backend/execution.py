@@ -578,13 +578,24 @@ def claim_refusal(c, settings, runner, bot, config_json, draining, ready, held_b
         if not report or json.loads(report[0] or "{}").get(runtime, {}).get("signed_in") is False:
             return "profile", None
     record = providers.load(c, settings)
-    if models_preset.waiting(record, ready, providers.fill(record, config)):
+    filled = providers.fill(record, config)
+    if gateway_connection.is_tico(filled.get("model")) and not models_preset.isolated(ready):
+        # A Tico model runs only where bots run as their own user (runner-rs/src/gateway_relay.rs): elsewhere the
+        # runner would refuse the turn, so the work waits here instead of failing there.
+        return ("not_isolated" if ready.get("isolated") is False else "isolation_unknown"), None
+    check = bot_readiness(ready, bot)
+    if models_preset.waiting(record, ready, filled):
         # Its subscription is not signed in on this computer yet: the turn runs on the Gateway instead
-        # (backend/models_preset.py), so the bot's own sign-in is not what holds it.
+        # (backend/models_preset.py), so the missing sign-in is the one problem that doesn't hold it. Its checkout,
+        # its settings and the Gateway's own runtime still have to be ready.
+        if bot not in (ready.get("bots") or {}):
+            return "readiness_unknown", None
+        if (check.get("repository_present") is not True or check.get("configuration_valid") is not True
+                or ((ready.get("runtimes") or {}).get(models_preset.GATEWAY_RUNTIME) or {}).get("installed") is not True):
+            return "not_ready", None
         if usage_limits.blocked(c, bot, default=usage_limits.company(c) if default is None else default):
             return "limit", None
         return ("cooling_off", None) if cooling_off(c, bot) else (None, config)
-    check = bot_readiness(ready, bot)
     if check.get("ready") is not True:
         reported = check.get("ready") is False and bot in (ready.get("bots") or {})
         return ("not_ready" if reported else "readiness_unknown"), None
@@ -1589,10 +1600,10 @@ class Execution:
                     **(gateway(model) if gateway_connection.is_tico(model) else {})}
 
         def gateway(model):
-            # Ledger-ready: which gateway key and install a Gateway segment was spent under; never the key itself.
+            # Ledger-ready: which gateway key and install a Gateway segment was spent under; never the key itself. The
+            # key is the one its runner was handed (gateway_connection.run_credentials_for), not the one saved now.
             from .census import install_id_in
-            return {"gateway_key_id": gateway_connection.key_id(c, self.store.settings) or None,
-                    "install_id": install_id_in(c)}
+            return {"gateway_key_id": row["gateway_key_id"] or None, "install_id": install_id_in(c)}
         items = [item for item in (used.segments or [used])
                  if item.input_tokens or item.cached_tokens or item.output_tokens]
         segments = [part(item) for item in items]

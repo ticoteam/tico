@@ -317,6 +317,8 @@ def run_credentials_for(c, vault, settings, who, attempt_id):
                             else fallback.get("model") if is_tico(fallback.get("model"))
                             else config.get("gateway_fallback"))
     if items:
+        # Which key paid is fixed now: the runner's relay holds this one for the whole turn (execution.run_usage).
+        c.execute("UPDATE attempts SET gateway_key_id=? WHERE id=?", (key_id(c, settings) or None, attempt_id))
         H.event(c, who.actor, "gateway.key_sent", PROVIDER,
                 {"bot": row["bot"], "attempt": attempt_id, "runner": who.runner_id})
     return items
