@@ -16,6 +16,34 @@ browser -> caddy (HTTPS) or cloudflared --> server :8765 (data volume)
                     Mac (native) and Linux runners join from anywhere over https://<your domain>
 ```
 
+## Recommended setup
+
+The quick start below with the recommended choices already made: a **sample company** (Sample Co: the Assistant and
+four role bots with short starter tasks), models on **your Claude and ChatGPT subscriptions, plus Tico Gateway**, **Tico
+Support on**, and a computer on this server that runs the bots (a Docker runner on the server's network, named *Server
+computer*). There is no domain, DNS or sign-in provider to set up:
+
+```
+curl -fsSL https://github.com/ticoteam/tico/releases/latest/download/install.sh -o install.sh && sh install.sh --recommended --owner-email you@example.com
+```
+
+Run on a terminal with no options, the installer asks which setup you want and offers this one first (press Enter); with
+any option, or piped without a terminal, it asks nothing and installs as before. It
+prints the owner sign-in link, as the quick start does. What is left is one step: open the link, then **Settings >
+Computers > Server computer > Sign in**, to Claude and to ChatGPT.
+
+- `--support off` turns Tico Support off (`TICO_SUPPORT=off`: the **?** chat sends nothing; [PRIVACY.md](../PRIVACY.md)).
+  With Support on, its tickets are tied to this install. On an installed Tico, `sh install.sh --local --support off`
+  (or `on`) saves the switch and restarts; every other setting stays as it is.
+- The Gateway is enrolled from an invite whoever runs the install puts in the environment, `TICO_GATEWAY_INVITE`; you
+  never type it, and the installer never prints it. With one, the Gateway connects on Tico's first start; without one
+  the install still runs, on your subscriptions, and says the Gateway is not set up.
+- If the server computer cannot start, Tico keeps running and the installer says how to add it from **Settings >
+  Computers > Add computer**.
+- It writes `TICO_INSTALL_PRESET=recommended`, `TICO_SAMPLE_COMPANY=on`, `TICO_MODELS_PRESET=subscriptions-gateway` and
+  `TICO_SUPPORT` into `.env`; the server reads them on its first start. Every other choice below (the quick start, your own
+  domain with Google, Microsoft or Cloudflare Access, your own API keys) installs as before.
+
 ## Quick start on your own computer
 
 Nothing to set up first: no domain, no DNS, no sign-in provider. Tico runs on this computer only, at

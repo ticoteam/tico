@@ -19,6 +19,20 @@ All notable changes to Tico are recorded here. The format follows
   key again when it is given one (refused, naming it, while it is offline). A shared key's name and preview show only
   to credential administrators; a computer's operator sees which computers it serves. Credentials names each computer
   it is shared with, and revoking one there stops sharing it with that computer.
+- **Recommended setup** in the installer: `sh install.sh --recommended` is the quick start with the sample company,
+  your Claude and ChatGPT subscriptions plus Tico Gateway, Tico Support on and a computer on the server, so the only
+  setup left is signing in to Claude and ChatGPT in Settings > Computers. Run on a terminal with no options, the
+  installer asks which setup to use and offers this one first; with any option, or without a terminal, it does what it did
+  before. `--support off` turns Support off. The Gateway invite comes from `TICO_GATEWAY_INVITE` in the environment and
+  is never printed. The quick start, your own domain and sign-in, and your own keys install as before.
+  ([Install](docs/install.md#recommended-setup))
+- **How long an approval has waited, and on whom**: every approval now records when its exact payload was ready to
+  decide and whose decision it is, and its card in Needs you and Decide says so plainly ("Ready 2 h 10 min, waiting
+  on you", or the person's name); the row shows "ready 2 h 10 min". The API adds `ready_since`, `decision_owner`,
+  `decision_owner_name` and `age_s`. With the Health Monitor on, a release's publish approval ready over 60 minutes
+  with no decision is one finding (`release_approval_wait`) that counts each hourly scan and wakes nobody again;
+  `TICO_RELEASE_APPROVAL_WAIT_MINUTES` sets the threshold (0 turns it off). Nothing approves for anyone, and who may
+  approve is unchanged.
 - **Visuals in replies outside Tico (part 4 of 4)**: a bot's reply with visuals that reaches Slack keeps its text and
   adds one line, "1 visual - view in Tico" (or "N visuals"), linking to that message in Tico. A task-done post does
   the same for the owner's result comment when it has visuals. The link opens only for people who can read the
@@ -87,6 +101,11 @@ All notable changes to Tico are recorded here. The format follows
   "Every computer" key is not applied to it again, nor put in its turns) until someone adds a key or chooses **Use the
   shared key**. Bots keep the connection. Needs a
   current runner ([Computers](docs/computers.md#signing-out-and-switching-accounts)).
+- **Switch to API key** on a computer's own Codex or Claude Code login that runs on a subscription, in the computer's
+  pop-up on Settings > Computers. The subscription stays signed in and in use while the computer checks the key with
+  the provider, so a cancel, a key that doesn't work or a step that fails changes nothing; once the key is in place the
+  next turn uses it and the subscription is signed out (Codex's key login replaces it in the same file). Bots keep the
+  connection. Not for Claude Code on a Mac (Keychain). Needs a current runner ([Computers](docs/computers.md#signing-out-and-switching-accounts)).
 - A signed-out connection in the computer pop-up reads **Signed out · Sign in** and its chip gets a red dot, and the
   sign-out confirmation names the bots in a line ("Reviewer 1, QA and 2 more will stop running until this is signed in
   again").
@@ -132,6 +151,7 @@ All notable changes to Tico are recorded here. The format follows
   before this keeps today's behaviour ([sessions](docs/sessions.md)).
 
 ### Changed
+- **A bot can hold 50 task worktrees, up from 30.** The computer's 5 GB free-disk floor and normal cleanup rules still apply.
 - **A waiting task sleeps, and a bot's own writes never wake it** (token saving): news about a task that waits on
   another task (blocked by) or on a pull request's checks (wake once), such as a step move, a relation change or a
   comment, no longer starts a run; the task wakes when its blocker finishes or its checks come back. A notice that a

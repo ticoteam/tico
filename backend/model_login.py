@@ -20,7 +20,13 @@ and the runner deletes its copies and keeps its own mark). Unlike a sign-out, a 
 back; Add key or Use the shared key does.
 
 Clear key and Replace key (backend/computer_keys.py) ride it too, as `clear_key` and `use_key`, and never carry the
-key: Replace stores it in the vault for that computer and the runner fetches it from there. A key the company shares
+key: Replace stores it in the vault for that computer and the runner fetches it from there.
+
+Switch to API key (`to_key`) is the way back from a subscription: a `use_key` job whose key is checked while the
+subscription stays signed in and in use, and only once it is in place is the subscription signed out (unless the CLI
+keeps both in one login, where the key's login already took its place). Its key becomes this computer's, and the
+switch's marks are lifted, only when the runner says it is done; a cancel, a failed check or one that runs out leaves
+the subscription, the marks and the vault as they were. A key the company shares
 with every computer asks "this computer only" or "all of them" first (`key_info` lists the computers it serves).
 
 Remove (`remove`) takes a named subscription's login for one tool off a computer: the runner signs it out there and,
@@ -42,15 +48,20 @@ PASTE_RUNTIMES = manifests.with_capability("paste_code")
 SIGN_OUT_RUNTIMES = manifests.with_capability("sign_out")
 # What a row asks the runner to do. A runner without SIGN_OUT_CAPABILITY knows only `sign_in`, so it is never
 # handed another kind: it would start a sign-in instead.
-KINDS = ("sign_in", "switch", "sign_out", "use_shared_key", "clear_key", "use_key", "to_subscription", "remove")
+KINDS = ("sign_in", "switch", "sign_out", "use_shared_key", "clear_key", "use_key", "to_subscription", "remove", "to_key")
 SIGN_OUT_CAPABILITY = "model_sign_out_v1"
 # A runner that clears and uses a computer's key (runner-rs/src/login.rs); an older one is asked to update first.
 KEYS_CAPABILITY = "model_keys_v1"
-KEY_KINDS = ("clear_key", "use_key")
+KEY_KINDS = ("clear_key", "use_key", "to_key")
+# The kinds that check a key staged in the vault for them (backend/computer_keys.py store/confirm/discard).
+KEY_JOBS = ("use_key", "to_key")
+KEY_JOBS_SQL = "kind IN ('use_key','to_key')"
 # A runner that can take a computer login off its key once a subscription works there (runner-rs/src/login.rs).
 SWITCH_TYPE_CAPABILITY = "model_switch_type_v1"
 # A runner that can take a named subscription off the computer (runner-rs/src/login.rs run_remove).
 REMOVE_CAPABILITY = "model_remove_v1"
+# A runner that can move a computer login off its subscription onto a key (`to_key`, runner-rs/src/login.rs).
+SWITCH_TO_KEY_CAPABILITY = "model_switch_to_key_v1"
 # The kinds that sign in on the side and have a commit point (`finishing`).
 SIDE_KINDS = ("switch", "to_subscription")
 # A removal has a commit point too: the bots check is made again there, before anything is signed out or deleted.
@@ -69,7 +80,8 @@ ORDER.update(signed_out=ORDER["signed_in"], done=ORDER["signed_in"])
 VERDICTS = {"sign_in": ("signed_in", "failed"), "switch": ("signed_in", "failed"),
             "sign_out": ("signed_out", "failed"), "use_shared_key": ("done", "failed"),
             "clear_key": ("signed_out", "failed"), "use_key": ("done", "failed"),
-            "to_subscription": ("signed_in", "failed"), "remove": ("done", "failed")}
+            "to_subscription": ("signed_in", "failed"), "remove": ("done", "failed"),
+            "to_key": ("done", "failed")}
 MAX_LINES, MAX_LINE = 12, 200
 ONLINE_SECONDS = 60
 PASTE_RE = re.compile(r"^[A-Za-z0-9_\-#.~%+=/]{6,600}$")
@@ -121,7 +133,7 @@ def sweep(c):
     """Expire what ran out of time; forget what nobody needs any more."""
     now = H.now()
     from . import computer_keys
-    for row in c.execute(f"SELECT id FROM model_logins WHERE kind='use_key' AND {ACTIVE_SQL} AND expires_at<?",
+    for row in c.execute(f"SELECT id FROM model_logins WHERE {KEY_JOBS_SQL} AND {ACTIVE_SQL} AND expires_at<?",
                          (now,)).fetchall():
         computer_keys.discard(c, row["id"])
     c.execute("UPDATE model_logins SET state='expired', url='', user_code='', pending_code=NULL, updated=? "
@@ -178,6 +190,10 @@ def _switches_type(runner):
     return SWITCH_TYPE_CAPABILITY in set(H._json(runner["capabilities_json"], []) or [])
 
 
+def _switches_to_key(runner):
+    return SWITCH_TO_KEY_CAPABILITY in set(H._json(runner["capabilities_json"], []) or [])
+
+
 def _handles_keys(runner):
     return KEYS_CAPABILITY in set(H._json(runner["capabilities_json"], []) or [])
 
@@ -209,7 +225,8 @@ def _queue(c, who, runner, runtime, profile, kind, what):
     if not _online(runner):
         raise Problem("offline", f"That computer is offline, so it cannot {what}", 409)
     if (kind != "sign_in" and not _signs_out(runner) or kind in KEY_KINDS and not _handles_keys(runner)
-            or kind == "to_subscription" and not _switches_type(runner) or kind == "remove" and not _removes(runner)):
+            or kind == "to_subscription" and not _switches_type(runner) or kind == "remove" and not _removes(runner)
+            or kind == "to_key" and not _switches_to_key(runner)):
         raise Problem("runner_version", f"Update {runner['label']} to {what} from here", 409)
     now = H.now()
     lid = H.new_id()
@@ -538,9 +555,9 @@ def cancel(c, who, rid, lid, auth=None):
     if row["state"] == "finishing":
         if row["kind"] == "remove":
             raise Problem("state", "It is already being removed, so it can't be cancelled now", 409)
-        what = "key" if row["kind"] == "use_key" else "account"
+        what = "key" if row["kind"] in KEY_JOBS else "account"
         raise Problem("state", f"The new {what} is already being put in place, so it can't be cancelled now", 409)
-    if row["kind"] == "use_key" and row["state"] in ACTIVE:
+    if row["kind"] in KEY_JOBS and row["state"] in ACTIVE:
         from .computer_keys import discard
         discard(c, lid)
     if row["state"] in ACTIVE:
@@ -570,7 +587,7 @@ def report(c, runner_id, lid, body, settings=None):
         return {"state": row["state"]}
     if body.state in ("signed_in", "signed_out", "done") and body.state not in VERDICTS[row["kind"]]:
         raise Problem("state", f"A {row['kind'].replace('_', ' ')} does not end {body.state.replace('_', ' ')}", 422)
-    if body.state == "finishing" and row["kind"] not in (*COMMIT_KINDS, "use_key"):
+    if body.state == "finishing" and row["kind"] not in (*COMMIT_KINDS, *KEY_JOBS):
         raise Problem("state", "Only a switch or a new key puts a new login in place", 422)
     # A removal's commit point: a bot that came to run on the subscription since it was asked for (moved to this
     # computer, or onto this tool) stops it here, before the runner signs anything out or deletes anything.
@@ -603,7 +620,10 @@ def report(c, runner_id, lid, body, settings=None):
               (state, url, code, json.dumps(lines), redact(body.message), pending_code, H.now(), lid))
     if terminal:
         H.event(c, "runner:" + runner_id, "runner.login." + state, row["runner_id"], {"runtime": row["runtime"]})
-    if terminal and row["kind"] == "use_key":
+    # Switch to API key: only now is the key this computer's and the switch's marks lifted (confirm). Until the runner
+    # says so the subscription is what the login runs on, so a failure after its commit point, which the runner undoes
+    # on the computer, has nothing to undo here.
+    if terminal and row["kind"] in KEY_JOBS:
         from . import computer_keys
         if state == "done":
             computer_keys.confirm(c, row["runner_id"], lid)
@@ -755,17 +775,36 @@ def clear_key(c, who, rid, runtime, scope="this", auth=None):
     return {"computers": out}
 
 
-def replace_key(c, who, rid, runtime, key, env="", scope="this", auth=None, vault=None):
+def replace_key(c, who, rid, runtime, key, env="", scope="this", auth=None, vault=None, switch=False):
     """Replace key (Add key on a computer with none): the new key is stored in the vault for this computer and the
     runner is told to fetch it, check it and use it; only then is the old one deleted. A failed check leaves the old
     key working. `scope` "all", for the company's shared key: its value is replaced for every computer it serves, which
-    is a credential administrator's change as in Credentials; each fetches it at once, or when next online."""
+    is a credential administrator's change as in Credentials; each fetches it at once, or when next online.
+    `switch` is Switch to API key for the computer's own login on a subscription (`to_key`): the same check, and once
+    the key is in place the subscription is signed out."""
     from . import computer_keys
     from .credentials import require_admin
-    _person_only(who, "change a key")
+    _person_only(who, "switch to an API key" if switch else "change a key")
     _operator(c, who, rid, auth)
     _key_runtime(runtime)
     runner = _runner(c, rid)
+    if switch:
+        if scope != "this":
+            raise Problem("scope", "Switch to API key is for this computer's own login", 422)
+        caps = manifests.caps(runtime)
+        # The key is checked before the subscription is signed out, by the CLI's key login or a key check of its own.
+        if runtime not in SIGN_OUT_RUNTIMES or not (caps.get("api_key_login") or caps.get("api_key_check")):
+            raise Problem("kind", "You can't switch to an API key from here for " + runtime, 422)
+        if runner["platform"] in caps.get("switch_unavailable_on", []):
+            raise Problem("kind", f"You can't switch {runtime} to an API key on {runner['label']} from here: it keeps "
+                          "the login in the system keychain. Sign out, then add a key", 422)
+        row, new = _queue(c, who, runner, runtime, "", "to_key", "switch to an API key")
+        if not new:
+            raise Problem("state", "A switch to an API key is already running on that computer; wait for it to finish",
+                          409)
+        stored = computer_keys.store(c, vault, who, runner, runtime, key, row["id"], env)
+        H.event(c, who.actor, "runner.login.to_key", rid, {"runtime": runtime})
+        return {**view(row), "key": stored}
     if scope == "all":
         require_admin(c, who, vault.admins)
         shared = computer_keys.shared(c, runtime, rid)

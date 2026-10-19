@@ -175,6 +175,9 @@ def test_sharing_or_attaching_a_key_is_an_administrators_change(environment):
     # Only connected computers.
     call(api, "POST", f"computers/{other['runner_id']}/keys",
          {"runtime": "codex", "secret": PASTED, "share": ["no-such-computer"]}, expected=422)
+    # Switch to API key gives the computer a key of its own: it is never also a share.
+    call(api, "POST", f"computers/{other['runner_id']}/keys",
+         {"runtime": "codex", "secret": PASTED, "share": [mine["runner_id"]], "switch": True}, expected=422)
 
 
 def test_a_cleared_computer_given_a_shared_key_is_told_to_take_it_again(environment):

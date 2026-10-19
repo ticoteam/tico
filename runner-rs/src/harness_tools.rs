@@ -92,6 +92,8 @@ pub struct Capabilities {
     /// "" | computer | bot
     pub api_keys: String,
     pub api_key_login: Vec<String>,
+    /// A command that asks the provider about the key in its environment, in a home with no login (Switch to API key).
+    pub api_key_check: Vec<String>,
     pub api_key_in_turn: bool,
     pub subscription_marker: String,
     pub subscription_profiles: bool,
@@ -132,6 +134,7 @@ impl Default for Capabilities {
             terminal_login: vec![],
             api_keys: String::new(),
             api_key_login: vec![],
+            api_key_check: vec![],
             api_key_in_turn: false,
             subscription_marker: String::new(),
             subscription_profiles: false,
@@ -469,6 +472,7 @@ fn parse_capabilities(raw: Option<&toml::Value>, at: &str) -> Result<Capabilitie
             "terminal_login" => c.terminal_login = list(k, v)?,
             "api_keys" => c.api_keys = choice(k, v, &["computer", "bot"])?,
             "api_key_login" => c.api_key_login = list(k, v)?,
+            "api_key_check" => c.api_key_check = list(k, v)?,
             "api_key_in_turn" => c.api_key_in_turn = flag(k, v)?,
             "subscription_marker" => c.subscription_marker = text(k, v)?,
             "subscription_profiles" => c.subscription_profiles = flag(k, v)?,

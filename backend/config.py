@@ -178,6 +178,9 @@ class Settings:
     block_external_invites: bool = False
     # Health warns about a bot whose uncached input tokens pass this in a day (TICO_TOKEN_ALERT_INPUT); 0 is off.
     token_alert_input: int = 100_000_000
+    # The Health Monitor reports a release's publish approval ready this many minutes with no decision
+    # (TICO_RELEASE_APPROVAL_WAIT_MINUTES); 0 is off.
+    release_approval_wait_minutes: int = 60
     session_idle_seconds: int = 30 * 86400
     session_absolute_seconds: int = 90 * 86400
     # How often a quiet event stream (a page's, a computer's) sends a keepalive (TICO_STREAM_KEEPALIVE_SECONDS,
@@ -434,6 +437,8 @@ class Settings:
             session_secret=os.environ.get("TICO_SESSION_SECRET", "").strip(),
             block_external_invites=os.environ.get("TICO_BLOCK_EXTERNAL_INVITES", "0") == "1",
             token_alert_input=int(os.environ.get("TICO_TOKEN_ALERT_INPUT", "").strip() or 100_000_000),
+            release_approval_wait_minutes=max(0, int(os.environ.get("TICO_RELEASE_APPROVAL_WAIT_MINUTES", "").strip()
+                                                     or 60)),
             session_idle_seconds=max(60, int(os.environ.get("TICO_SESSION_IDLE_SECONDS", "") or 30 * 86400)),
             session_absolute_seconds=max(60, int(os.environ.get("TICO_SESSION_ABSOLUTE_SECONDS", "") or 90 * 86400)),
             stream_keepalive_seconds=(min(50, max(5, int(os.environ["TICO_STREAM_KEEPALIVE_SECONDS"])))
