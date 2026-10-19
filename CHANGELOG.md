@@ -8,17 +8,12 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
-- **Visuals in replies (API, part 1 of 4)**: a bot or a person attaches a picture, SVG, self-contained HTML page,
-  video or audio clip to a chat reply or a task comment with a title (`--visual PATH --title "…"` on `hub message
-  send`, `hub chat send` and `hub task comment`; `visuals` on the same MCP tools; `attachments: [{ref, title}]` in the
-  API). It is a normal versioned file on that conversation or task, and the message keeps the version it was posted
-  with. A page's local images and fonts are embedded when it is attached; remote images and styles are never loaded,
-  and the result lists each one. Too big or another type, it is attached as a normal file. Visuals are shown from a
-  signed address apart from the app's sign-in, with a policy that blocks scripts and network loads, and only to
-  people who can read that conversation, checked again on every request. They need `TICO_VISUAL_ORIGIN`, a separate
-  site of their own (never the app's address); without it a server stays up and visuals are file chips. A local
-  install, or a self-hoster who sets `TICO_VISUAL_SAME_ORIGIN=1`, serves them from the app's address with the page
-  sandboxed. Until part 2 they still show as file chips.
+- **Visuals in replies (API, part 1 of 4)**: a bot or a person attaches a titled picture, SVG, HTML page, video or
+  audio clip to a chat reply or task comment (`--visual PATH --title "…"` on `hub message send`, `hub chat send` and
+  `hub task comment`; `visuals` over MCP; `attachments: [{ref, title}]` in the API). It is a versioned file there,
+  shown only to that conversation's readers. A page's local images and fonts are embedded; remote ones are removed
+  and listed. Self-hosters set `TICO_VISUAL_ORIGIN`, a separate site. Visuals still show as file chips until part 2
+  ([Visuals in replies](docs/visuals.md)).
 - **The company on Goals**: with the CEO Bot switch on, Goals opens with a **Company** section: the Vision (one or
   two sentences) and the Description (a short paragraph). The owner and admins edit it, everyone else reads it, and
   **History** lists every change with who made it and when. Each goal shows a one-line **Why** tying it to the
