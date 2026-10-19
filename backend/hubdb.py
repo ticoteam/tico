@@ -2372,11 +2372,6 @@ def _write_message(conn, actor, target, body, conv, kind, refs, in_reply_to, wai
         body = librarian_text(body)
     if VIA.get() and is_human(actor):
         refs = {**(refs or {}), "via": VIA.get()}         # the Assistant wrote this for the person
-    # Token saving 2/9: a wake its bot's own write caused, or news about a parked task, waits for the next run.
-    from . import wake_rules
-    held = wake_rules.gate(conn, actor, target, kind, refs, body, conv, in_reply_to)
-    if held:
-        refs = {**(refs or {}), "quiet": True, wake_rules.MARK: held}
     row = {"id": new_id(), "conversation_id": conv["id"], "from_actor": actor, "to_actor": target,
            "kind": kind, "body": str(body or ""), "refs_json": _dump(refs or {}),
            "in_reply_to": in_reply_to, "created": now(), "delivered_at": delivered_at,
@@ -2388,8 +2383,6 @@ def _write_message(conn, actor, target, body, conv, kind, refs, in_reply_to, wai
         ":created, :delivered_at, :read_at, :expires_at, :wait_s)", row)
     conn.execute("UPDATE conversations SET last_message_at=? WHERE id=?", (row["created"], conv["id"]))
     event(conn, actor, f"message.{kind}", row["id"], {"to": target, "conversation": conv["id"]})
-    if held:
-        wake_rules.hold(conn, message(conn, row["id"]), held)
     return message(conn, row["id"])
 
 
@@ -3259,7 +3252,7 @@ def _unblock(conn, done_task, told=()):
         conn.execute("UPDATE tasks SET version=version+1 WHERE id=?", (row["id"],))
         if row["status"] in ACTIVE_STATUSES and not TR.blocker_ids(conn, row["id"]) and row["id"] not in told:
             _wake(conn, row, row["owner"], f"Unblocked: {row['title']}\n{done_task['title']} is finished.",
-                  refs={"blocker_done": done_task["id"]}, source=done_task["id"])
+                  source=done_task["id"])
 
 
 def _answered(conn, actor, task_id, card, told=None):
@@ -5875,11 +5868,10 @@ def note_cancel(conn, actor, note_id, human=False):
 
 def notes_waiting(conn, bot, limit=50):
     """The notes waiting for `bot` (a slug), oldest first after Tico's own: the one a lifted quarantine leaves
-    (quarantine_lifted_note) must reach the next run even behind a full backlog. A note that stands for a held
-    message (`message_id`) is the message, in the order messages arrived, whoever sent it, the keeper too."""
+    (quarantine_lifted_note) must reach the next run even behind a full backlog."""
     return _rows(conn.execute(
         f"SELECT n.* FROM notes n WHERE n.to_actor=? AND {NOTE_WAITING_SQL} "
-        f"ORDER BY NOT (n.from_actor=? AND n.message_id IS NULL),n.created,n.id LIMIT ?", ("bot:" + bot, KEEPER, limit)))
+        f"ORDER BY n.from_actor<>?,n.created,n.id LIMIT ?", ("bot:" + bot, KEEPER, limit)))
 
 
 def notes_waiting_counts(conn, bots, limit=500):
