@@ -3,6 +3,7 @@
 
     python scripts/release_checks.py            # the default Python and core browser suites, under 300 s
     python scripts/release_checks.py --release  # the release gate: every test and the whole product, under 480 s
+    python scripts/release_checks.py --shard 2/3  # file group 2 of 3 of the default Python suite (a PR check job)
 
 A PR runs only the tests for what it changed, so the full suite runs here, once, right before a release. `--release`
 runs the journey's previous-release install while it builds the candidate images once. After all builds finish,
@@ -18,6 +19,10 @@ side by side; two release checks must not run at once, since the journey's candi
 spread it over several VMs: `product` is the journey, image builds, smoke, side-jobs and Docker isolation; `python`
 is the Python tests (with `--shard K/N`, the Kth of N file groups balanced by test count); `browser` is every browser
 test. Without `--part` the whole gate runs on this machine, as before.
+
+`--shard K/N` without `--release` runs the Kth of N file groups of the default Python suite (plain `pytest`, what PR
+checks run), balanced the same way, so the PR-check Python job can spread over several VMs. The N groups together run
+every file the single default run collects, each once.
 
 Use the test environment's Python to invoke this script. The release gate defaults to half the CPU count in
 Python workers (at least one); the browser runner selects free-core concurrency and load-scaled timeouts.
@@ -183,12 +188,15 @@ def parse_shard(text):
     return int(match.group(1)), int(match.group(2))
 
 
-def shard_files(index, total, env):
-    """The test files of shard `index` of `total`: every file the release Python step collects, grouped so each
-    shard holds about the same number of tests (largest file first, into the lightest shard). Deterministic, so the
-    N shards together cover each collected file exactly once."""
-    result = subprocess.run([sys.executable, '-m', 'pytest', '--collect-only', '-q', '-n', '0',
-                             '-m', 'slow or not slow', f'--ignore={ISOLATION_FILE}'],
+# What the release Python step selects; the default suite (PR checks) selects with pytest.ini alone.
+RELEASE_SELECTION = ('-m', 'slow or not slow', f'--ignore={ISOLATION_FILE}')
+
+
+def shard_files(index, total, env, selection=RELEASE_SELECTION):
+    """The test files of shard `index` of `total`: every file pytest collects with `selection` (by default the
+    release Python step's), grouped so each shard holds about the same number of tests (largest file first, into the
+    lightest shard). Deterministic, so the N shards together cover each collected file exactly once."""
+    result = subprocess.run([sys.executable, '-m', 'pytest', '--collect-only', '-q', '-n', '0', *selection],
                             cwd=ROOT, env=env, capture_output=True, text=True)
     if result.returncode:
         print(result.stdout[-4000:] + result.stderr[-4000:], flush=True)
@@ -208,6 +216,17 @@ def shard_files(index, total, env):
     print(f'Python shard {index}/{total}: {len(groups[index - 1])} files, {loads[index - 1]} of '
           f'{sum(loads)} tests', flush=True)
     return sorted(groups[index - 1])
+
+
+def python_shard(index, total):
+    """File group `index` of `total` of the default Python suite: the PR-check Python job, split over VMs."""
+    started, initial_load = time.monotonic(), load()
+    env = {**os.environ, 'TICO_PYTHON': sys.executable}
+    result = subprocess.run([sys.executable, '-m', 'pytest', '-q'] + shard_files(index, total, env, selection=()),
+                            cwd=ROOT, env=env)
+    print(f'Python shard {index}/{total}: exit {result.returncode}, {time.monotonic() - started:.2f}s; '
+          f'load {initial_load} -> {load()}', flush=True)
+    return result.returncode
 
 
 def phase_table(checks, started, not_run=()):
@@ -290,18 +309,22 @@ def release(args):
     return 1 if failed else 0
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split('\n')[0])
     parser.add_argument('--release', action='store_true', help='every test and the whole-product checks (the release gate)')
     parser.add_argument('--previous', help='with --release: the release the journey upgrades from (default: newest tag)')
     parser.add_argument('--part', choices=PARTS, help='with --release: run only this slice of the gate')
-    parser.add_argument('--shard', type=parse_shard, help='with --part python: run file group K of N (K/N)')
-    args = parser.parse_args()
-    if (args.part or args.shard) and not args.release:
-        parser.error('--part and --shard need --release')
-    if args.shard and args.part != 'python':
-        parser.error('--shard needs --part python')
-    return release(args) if args.release else full()
+    parser.add_argument('--shard', type=parse_shard,
+                        help='run file group K of N (K/N) of the Python tests: alone, of the default suite (PR checks); '
+                             'with --release --part python, of the release set')
+    args = parser.parse_args(argv)
+    if args.part and not args.release:
+        parser.error('--part needs --release')
+    if args.shard and args.release and args.part != 'python':
+        parser.error('--shard with --release needs --part python')
+    if args.release:
+        return release(args)
+    return python_shard(*args.shard) if args.shard else full()
 
 
 if __name__ == '__main__':
