@@ -216,7 +216,7 @@ fn is_shell(task: &Value) -> bool {
 }
 
 /// Every process's parent, by pid.
-fn parents() -> HashMap<u32, u32> {
+pub(crate) fn parents() -> HashMap<u32, u32> {
     let mut parent: HashMap<u32, u32> = HashMap::new();
     #[cfg(target_os = "linux")]
     for entry in std::fs::read_dir("/proc").into_iter().flatten().flatten() {
@@ -884,6 +884,11 @@ impl ClaudeHost {
                 p.idle_since = None;
                 return false;
             }
+            // Taken under the lock that `steer` takes: from here a follow-up is refused and goes to the next turn,
+            // never accepted into a Claude about to be killed.
+            p.close();
+            p.idle_since = None;
+            p.kept = Some(vec![]);
             let mut held = p.held.clone();
             for t in held.iter_mut() {
                 let call = p.task_calls.get(t["task_id"].as_str().unwrap_or_default());
@@ -899,6 +904,8 @@ impl ClaudeHost {
             };
             (claude, held, p.wait.unwrap_or_default())
         };
+        #[cfg(test)]
+        tests::before_discovery(self);
         let kept = pid.map(|pid| shells_of(pid, &held)).unwrap_or_default();
         let kept_pids: Vec<u32> = kept.iter().filter_map(|k| k["pid"].as_u64()).map(|p| p as u32).collect();
         let strays = pid.map(|pid| strays_of(pid, &kept_pids)).unwrap_or_default();
@@ -912,8 +919,6 @@ impl ClaudeHost {
             let mut reaping = None;
             if let Some(p) = inner.pipe.as_mut() {
                 p.kept = Some(kept.clone());
-                p.idle_since = None;
-                p.close();
                 match &p.reaping {
                     Some(path) => {
                         reaping = Some(path.display().to_string());
@@ -939,9 +944,12 @@ impl ClaudeHost {
     }
 
     /// A resumed session first reports what its previous process left (a background task it no longer runs) and
-    /// closes that with a `result` of no model turns, before it reads this turn's prompt: that one answers nothing.
+    /// closes that with an empty, successful `result` of no model turns, before it reads this turn's prompt: that one
+    /// answers nothing. An error result before the prompt (a session not on this computer, a refused sign-in) is the
+    /// turn's outcome, and stays one.
     fn before_prompt(&self, result: &Value) -> bool {
-        result["num_turns"] == 0 && self.inner().pipe.as_ref().is_some_and(|p| p.unread.contains(&p.first))
+        let empty = result["subtype"] == "success" && !crate::util::truthy(result.get("is_error")) && result["result"].as_str().is_none_or(str::is_empty);
+        empty && result["num_turns"] == 0 && self.inner().pipe.as_ref().is_some_and(|p| p.unread.contains(&p.first))
     }
 
     /// A `result` arrived: the turn is over when Claude read every message written to it.
@@ -1662,6 +1670,10 @@ mod tests {
     /// to `tasks/s1.output` (its pid in `bg.pid`), writes `first`, then runs `rest` and never exits by itself. Returns
     /// the events, how long the turn took, and the shell's pid.
     async fn wait_turn(first: &str, rest: &str, wait: Duration) -> (Vec<Value>, Duration, i32) {
+        wait_turn_as("acme", first, rest, wait).await
+    }
+
+    async fn wait_turn_as(bot: &str, first: &str, rest: &str, wait: Duration) -> (Vec<Value>, Duration, i32) {
         let dir = std::env::temp_dir().join(format!("claude-wait-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(dir.join("tasks")).unwrap();
         std::fs::write(dir.join("first.jsonl"), first).unwrap();
@@ -1671,7 +1683,7 @@ mod tests {
             &format!("#!/bin/sh\ncase \"$1\" in --version) echo '2.1.296 (Claude Code)'; exit 0;; --help) echo '  --autocompact <tokens>'; exit 0;; esac\nIFS= read -r line\nsleep 30 > tasks/s1.output 2>&1 &\necho $! > bg.pid\ncat first.jsonl\n{rest}\nwhile :; do sleep 1 >/dev/null; done\n"),
         );
         let (tx, mut rx) = mpsc::unbounded_channel();
-        let host = ClaudeHost::new("acme", vec![path.display().to_string()], tx);
+        let host = ClaudeHost::new(bot, vec![path.display().to_string()], tx);
         host.start().await.unwrap();
         let mut settings = Settings { cwd: dir.display().to_string(), background_wait: Some(wait), ..Default::default() };
         settings.env.insert("PATH".into(), "/usr/bin:/bin".into());
@@ -1759,6 +1771,42 @@ mod tests {
         assert!(stopped.as_array().unwrap().contains(&json!(mcp)), "{stopped}");
     }
 
+    type Hook = Box<dyn Fn(&ClaudeHost) + Send + Sync>;
+
+    /// Per bot, what a test runs in `end_waiting` once it has decided to end the turn and before it looks for shells.
+    fn hooks() -> &'static Mutex<HashMap<String, Hook>> {
+        static H: OnceLock<Mutex<HashMap<String, Hook>>> = OnceLock::new();
+        H.get_or_init(Default::default)
+    }
+
+    pub(super) fn before_discovery(host: &ClaudeHost) {
+        if let Some(hook) = hooks().lock().unwrap().get(&host.0.bot) {
+            hook(host);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_follow_up_sent_while_the_wait_ends_is_refused_for_the_next_turn_not_lost() {
+        let refused = Arc::new(Mutex::new(None));
+        let seen = refused.clone();
+        hooks().lock().unwrap().insert(
+            "acme-steer".into(),
+            Box::new(move |host: &ClaudeHost| {
+                let (thread, turn) = host.inner().turn.clone().unwrap();
+                let sent = host.steer(&thread, &turn, "Also check the docs.");
+                *seen.lock().unwrap() = Some(matches!(sent, Err(HostError::SteerRefused(_))));
+            }),
+        );
+        let first = format!("{SHELL_STARTED}\n{}\n", result_line("Suite running."));
+        let (got, _, shell) = wait_turn_as("acme-steer", &first, "", Duration::from_millis(300)).await;
+        hooks().lock().unwrap().remove("acme-steer");
+        // SAFETY: the shell this test's fake started.
+        unsafe { libc::kill(shell, libc::SIGKILL) };
+        // Refused, so the runner carries it to the next turn instead of acknowledging it into this one.
+        assert_eq!(*refused.lock().unwrap(), Some(true), "{got:?}");
+        assert!(got.iter().any(|e| e["kind"] == "turn_completed" && e["status"] == "completed"), "{got:?}");
+    }
+
     #[tokio::test]
     async fn a_turn_still_working_or_running_a_subagent_waits_as_before() {
         // Model output keeps coming past the wait: the turn stays open until the shell ends.
@@ -1785,6 +1833,50 @@ mod tests {
         assert_eq!(ci_watch("gh pr checks 958"), None);
         assert_eq!(ci_watch("gh pr checks 958 --watch && gh pr merge 958 --squash"), None);
         assert_eq!(ci_watch("python3 -m pytest -q"), None);
+    }
+
+    /// One turn on a `claude` that writes `first` and exits 1 the first time it runs, and `then` the next time.
+    async fn error_first_turn(first: &str, then: &str, resumed: bool) -> Vec<Value> {
+        let dir = std::env::temp_dir().join(format!("claude-err-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("first.jsonl"), first).unwrap();
+        std::fs::write(dir.join("then.jsonl"), then).unwrap();
+        let path = dir.join("claude");
+        crate::util::write_script(
+            &path,
+            "#!/bin/sh\ncase \"$1\" in --version) echo '2.1.296 (Claude Code)'; exit 0;; --help) echo '  --autocompact <tokens>'; exit 0;; esac\nIFS= read -r line\nif [ -f ran ]; then cat then.jsonl; cat >/dev/null; exit 0; fi\ntouch ran\ncat first.jsonl\nexit 1\n",
+        );
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let host = ClaudeHost::new("acme", vec![path.display().to_string()], tx);
+        host.start().await.unwrap();
+        let mut settings = Settings { cwd: dir.display().to_string(), ..Default::default() };
+        settings.env.insert("PATH".into(), "/usr/bin:/bin".into());
+        let thread = if resumed { host.resume_thread(&uuid::Uuid::new_v4().to_string(), &settings) } else { host.start_thread(&settings) };
+        host.start_turn(&thread, "hello", None).unwrap();
+        let mut got = vec![];
+        while let Ok(Some(ev)) = tokio::time::timeout(Duration::from_secs(10), rx.recv()).await {
+            let idle = ev["kind"] == "status" && ev["state"] == "idle";
+            got.push(ev);
+            if idle {
+                break;
+            }
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+        got
+    }
+
+    #[tokio::test]
+    async fn a_zero_turn_error_before_the_prompt_is_still_the_turns_outcome() {
+        // A resumed session that is not on this computer: restarted once as a new session, as before.
+        let missing = r#"{"type": "result", "subtype": "error_during_execution", "is_error": true, "num_turns": 0, "errors": ["No conversation found with session ID: 5b1"], "usage": {"input_tokens": 0, "output_tokens": 0}}"#;
+        let got = error_first_turn(&format!("{missing}\n"), &format!("{}\n{}\n", assistant_line("m1", "Recovered."), result_line("Recovered.")), true).await;
+        assert!(got.iter().any(|e| e["kind"] == "diagnostic" && e["text"] == RESTORING), "{got:?}");
+        assert!(got.iter().any(|e| e["kind"] == "turn_completed"), "{got:?}");
+        // Any other error before the prompt, on a fresh session too, fails the turn with its own text.
+        let refused = r#"{"type": "result", "subtype": "success", "is_error": true, "num_turns": 0, "result": "Invalid API key · Please run /login", "usage": {"input_tokens": 0, "output_tokens": 0}}"#;
+        let got = error_first_turn(&format!("{refused}\n"), "", false).await;
+        let failed = got.iter().find(|e| e["kind"] == "turn_failed").expect("a failed turn");
+        assert!(text_of(&failed["error"]).contains("Invalid API key"), "{failed}");
     }
 
     #[tokio::test]

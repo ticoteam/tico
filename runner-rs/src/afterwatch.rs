@@ -112,6 +112,29 @@ fn tail(path: &str) -> String {
     text.chars().skip(n.saturating_sub(TAIL_CHARS)).collect()
 }
 
+/// Ends a kept command and everything it runs, not just its shell: a suite's runner and workers would run on. That is
+/// the shell's process group (Claude starts each background shell as a group leader) and every process under the
+/// shell, all found before any is signalled. A job another command started is in neither and is left alone.
+fn kill_workload(pid: u32) {
+    let parent = crate::hosts::claude::parents();
+    let mut tree = vec![pid];
+    let mut i = 0;
+    while i < tree.len() {
+        let at = tree[i];
+        tree.extend(parent.iter().filter(|(_, &p)| p == at).map(|(&c, _)| c));
+        i += 1;
+    }
+    // SAFETY: the kept shell, its group and the processes under it, found a moment ago; the shell is not reaped yet.
+    unsafe {
+        if libc::getpgid(pid as i32) == pid as i32 {
+            libc::kill(-(pid as i32), libc::SIGKILL);
+        }
+        for p in tree {
+            libc::kill(p as i32, libc::SIGKILL);
+        }
+    }
+}
+
 /// Moves one turn's commands on; true when every one has ended.
 fn poll(turn: &mut Value, now: f64) -> bool {
     let codes = turn["status_file"].as_str().map(|p| crate::reap::statuses(Path::new(p))).unwrap_or_default();
@@ -127,7 +150,7 @@ fn poll(turn: &mut Value, now: f64) -> bool {
             c["ended"] = json!(now); // its exit code is not known (no reaping parent, or the parent went)
         } else if late && c["killed"].is_null() {
             // Its reaping parent has not reaped it, so the pid is still this shell's.
-            unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+            kill_workload(pid);
             c["killed"] = json!(true);
             if !reaped {
                 c["ended"] = json!(now);
@@ -246,5 +269,58 @@ mod tests {
         assert_eq!(report(&late, None)["commands"][0]["killed"], true);
         watched().lock().unwrap().turns.retain(|t| t["aid"] != "a1");
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Gone, or a zombie no one has reaped yet.
+    fn gone(pid: u32) -> bool {
+        // SAFETY: signal 0 only checks the pid.
+        if unsafe { libc::kill(pid as i32, 0) } != 0 {
+            return true;
+        }
+        std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|s| s.rsplit_once(')').is_some_and(|(_, r)| r.trim_start().starts_with('Z')))
+    }
+
+    #[test]
+    fn the_run_limit_ends_a_kept_commands_whole_workload_and_nothing_else() {
+        use std::os::unix::process::CommandExt;
+        let dir = std::env::temp_dir().join(format!("afterwatch-tree-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let out = dir.join("s1.output");
+        // A suite under a shell that waits for it, with a worker under that: no exec anywhere.
+        let mut shell = std::process::Command::new("sh")
+            .arg("-c")
+            .arg("sh -c 'sleep 30; true'; true")
+            .stdout(std::fs::File::create(&out).unwrap())
+            .process_group(0)
+            .spawn()
+            .unwrap();
+        // Another command's job, in a group of its own.
+        let mut other = std::process::Command::new("sleep").arg("30").stdout(std::process::Stdio::null()).process_group(0).spawn().unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let workload = loop {
+            let parent = crate::hosts::claude::parents();
+            let under: Vec<u32> = parent.iter().filter(|(_, &p)| p == shell.id() || parent.get(&p) == Some(&shell.id())).map(|(&c, _)| c).collect();
+            if under.len() >= 2 || std::time::Instant::now() > deadline {
+                break under;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        assert_eq!(workload.len(), 2, "the suite and its worker");
+        let mut turn = json!({"aid": "a2", "deadline": epoch_s() - 1.0, "status_file": null,
+                              "commands": [{"task_id": "s1", "description": "Run the full suite", "pid": shell.id(), "output_file": out.display().to_string()}]});
+        assert!(poll(&mut turn, epoch_s()));
+        assert_eq!(shell.wait().unwrap().signal(), Some(libc::SIGKILL));
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !workload.iter().all(|p| gone(*p)) && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let left: Vec<&u32> = workload.iter().filter(|p| !gone(**p)).collect();
+        let other_alive = !gone(other.id());
+        let _ = other.kill();
+        let _ = other.wait();
+        std::fs::remove_dir_all(dir).unwrap();
+        assert!(left.is_empty(), "the suite ran on after its shell was killed: {left:?}");
+        assert!(other_alive, "another command's job was killed");
+        assert_eq!(report(&turn, None)["commands"][0]["killed"], true);
     }
 }
