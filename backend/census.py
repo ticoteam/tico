@@ -75,6 +75,15 @@ def _save(c, value):
               (KEY, encode(value)))
 
 
+def install_id_in(c):
+    """This install's random ID inside the caller's write transaction, made if there is none yet (Census._id)."""
+    record = _load(c)
+    if not str(record.get("install_id") or ""):
+        record["install_id"] = str(uuid.uuid4())
+        _save(c, record)
+    return record["install_id"]
+
+
 class Census:
     def __init__(self, store, settings, clock=H.now):
         self.store, self.settings, self.clock = store, settings, clock

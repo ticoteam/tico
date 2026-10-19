@@ -62,11 +62,12 @@ def open_asks(conn, at):
 
 def last_word(conn, person, asked, task):
     """When `person` last said or did anything on this ask: asked it, wrote in its conversation, or changed its task."""
+    clock = H.ask_clock(asked)
     said = conn.execute("SELECT max(created) FROM messages WHERE conversation_id=? AND from_actor=? AND created>?",
-                        (asked["conversation_id"], person, asked["created"])).fetchone()[0]
+                        (asked["conversation_id"], person, clock)).fetchone()[0]
     did = conn.execute("SELECT max(ts) FROM task_events WHERE task_id=? AND actor=? AND ts>?",
-                       (task["id"], person, asked["created"])).fetchone()[0] if task else None
-    return max(x for x in (asked["created"], said, did) if x)
+                       (task["id"], person, clock)).fetchone()[0] if task else None
+    return max(x for x in (clock, said, did) if x)
 
 
 def deadline(asked, rules):
@@ -74,7 +75,7 @@ def deadline(asked, rules):
     default = (asked.get("refs") or {}).get("if_no_answer") or {}
     if not rules["bots_go_ahead"] or default.get("kind") != GOES_AHEAD or not default.get("do"):
         return None
-    least = H.shift(asked["created"], days=rules["go_ahead_days"])
+    least = H.shift(H.ask_clock(asked), days=rules["go_ahead_days"])
     return max(default.get("by") or least, least)
 
 
@@ -130,7 +131,7 @@ def sweep(conn, at=None):
         spoke = last_word(conn, person, asked, task)
         due = deadline(asked, rules)
         with isolated(conn, "ask_deadlines", asked["id"]):
-            if due and due <= at and spoke == asked["created"]:
+            if due and due <= at and spoke == H.ask_clock(asked):
                 settle(conn, asked, task, f"No answer from {_name(conn, person)} by {_day(due)}, so "
                        f"{_name(conn, bot)} goes ahead with what it said it would do: {default['do']}",
                        "went_ahead", answers=_picked(asked, default))

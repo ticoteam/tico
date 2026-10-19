@@ -12,7 +12,7 @@ import pytest
 
 from backend.credentials import CredentialCipher
 from backend.store import H
-from backend.tests.test_api import api, assign, claim, get, headers, post, put, ready, runner  # noqa: F401
+from backend.tests.test_api import api, assign, claim, get, headers, post, put, runner  # noqa: F401
 from backend.tests.test_credentials import FakeKMS
 from backend.tests.test_decide_gateway import answer_all
 from backend.tests.test_judge import QUESTIONS
@@ -102,6 +102,14 @@ def fake_gateway():
         yield fake
     finally:
         fake.server.shutdown()
+
+
+def ready(api, r, bots):
+    """test_api's `ready` from a computer that runs bots as their own user, the only kind a Tico model runs on
+    (execution.claim_refusal holds it anywhere else)."""
+    row = {"ready": True, "repository_present": True, "configuration_valid": True}
+    return post(api, "runners/heartbeat", {"version": "test", "platform": "test", "readiness": {
+        "schema_version": 1, "isolated": True, "runtimes": {}, "bots": {bot: row for bot in bots}}}, token=r["token"])
 
 
 def setup(api, monkeypatch, page_checks=False):
@@ -562,7 +570,7 @@ def test_a_tico_bot_is_ready_with_the_connection_not_an_openrouter_grant(api, mo
     machine = runner(api)
     assign(api, machine, "ops")
     post(api, "runners/heartbeat", {"version": "test", "platform": "test", "readiness": {
-        "schema_version": 1, "runtimes": {"pi": {"installed": True}}, "bots": {"ops": {"ready": True}}}},
+        "schema_version": 1, "isolated": True, "runtimes": {"pi": {"installed": True}}, "bots": {"ops": {"ready": True}}}},
         token=machine["token"])
     with api.app.state.store.read() as c:
         verdict = readiness.can_run(c, "ops", "pi", model="tico-mid-1.0")

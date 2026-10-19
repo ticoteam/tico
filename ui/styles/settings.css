@@ -191,6 +191,7 @@ p:empty{display:none}
 .prov{display:flex;align-items:center;flex-wrap:wrap;gap:2px 8px;padding:6px 0;min-height:36px}
 .prov strong{font-weight:600}
 .prov .muted{font-size:var(--t-base);min-width:0}
+.prov-preset .muted{flex-basis:100%;padding-left:24px}
 .prov-routed{gap:6px 14px;padding-top:10px}
 .prov-chip{display:inline-flex;align-items:center;gap:4px;font-size:var(--t-base)}
 /* The Tico AI Gateway connection, below the providers: its own key and Save (ui/app/settings-providers.js). */

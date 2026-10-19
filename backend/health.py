@@ -505,12 +505,12 @@ def _movable(c, who, online_ids):
             if r["id"] in online_ids and (who.role == "owner" or r["operator"] == me)]
 
 
-def runtime_choice(c, bot, runtime, who, computers, harness=""):
+def runtime_choice(c, bot, runtime, who, computers, harness="", model=""):
     """What Settings and Health show for running `runtime` on this bot's computer, from the one rule
     (backend/readiness.py `can_run`): the answer, a short label, and at most one way out: sign in there (a computer's
     shared sign-in for a runtime that signs in from the browser) or a computer `who` may move it to that can run it."""
     from .readiness import can_run
-    answer = can_run(c, bot, runtime, harness=harness)
+    answer = can_run(c, bot, runtime, harness=harness, model=model)
     view = {key: answer.get(key) for key in ("can_run", "problem", "fix", "link")}
     view["computer"] = answer.get("computer")
     if answer.get("can_run") is not False:
@@ -520,11 +520,11 @@ def runtime_choice(c, bot, runtime, who, computers, harness=""):
     if here.get("label") and here["label"] not in problem and answer.get("link") != "#/credentials":
         view["problem"] = f"{problem} on {here['label']}"      # the runner's own words name no computer
     view["short"] = ("not installed" if "not installed" in problem else "no key" if answer.get("link") == "#/credentials"
-                     else "sign in")
+                     else "not on this computer" if "Tico Gateway work" in problem else "sign in")
     if (runtime in model_login.RUNTIMES and str(answer.get("fix") or "").startswith(f"Sign in {runtime} ")):
         view["sign_in"] = {"runner_id": here.get("id"), "runtime": runtime, "computer": here.get("label")}
     view["move"] = next(({"id": rid, "label": label} for rid, label in computers
-                         if rid != here.get("id") and can_run(c, bot, runtime, runner=rid, harness=harness)["can_run"] is True), None)
+                         if rid != here.get("id") and can_run(c, bot, runtime, runner=rid, harness=harness, model=model)["can_run"] is True), None)
     return view
 
 
@@ -542,6 +542,11 @@ HELD = {
     "cooling_off": ("Waiting out a usage limit, or a Tico AI Gateway outage, before it tries again", RUNS),
     "readiness_unknown": ("{computer} has not said whether it can run this bot", COMPUTERS),
     "sign_in_rejected": ("Its model sign-in was rejected on {computer}", COMPUTERS),
+    # A Tico model runs only where bots run as their own user (execution.claim_refusal): the bot waits, it never fails.
+    "not_isolated": ("{computer} can't run Tico Gateway work (it needs Tico's Docker runner): it waits for another "
+                     "model or computer", BOT_SETTINGS),
+    "isolation_unknown": ("{computer} hasn't said it can run Tico Gateway work: it waits until its runner is updated",
+                          COMPUTERS),
     "profile": ("Its subscription profile is not signed in or not reported on {computer}", COMPUTERS),
     "config": ("Its settings cannot be read", BOT_SETTINGS),
     "check_model": ("Its check model does not run on {computer}, or is on hold", BOT_SETTINGS),

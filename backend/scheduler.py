@@ -162,7 +162,7 @@ class Scheduler:
             from . import updates
             settings = self.store.settings
             with self.store.transaction() as c:
-                write = updates.writer_for(c, settings)
+                write = updates.writer_for(c, settings, self.store)
                 sent = updates.dispatch(c, at, settings.assistant_bot if write else None)
             if sent and updates.is_person(sent):
                 threading.Thread(target=updates.write_draft, args=(self.store, sent, write, settings.assistant_bot),

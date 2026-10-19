@@ -762,7 +762,7 @@ def conversation_execution(c, cid, who=None, settings=None, bot=None, auth=None)
 PRESSING_DAYS = 3
 DECISIVE_DAYS = 1
 # A bot's task set waiting on the person blocks that bot just as its question does.
-KIND_RANK = {"approval": 0, "question": 1, "ask": 1, "waiting": 1, "declined": 2, "stale": 3, "task": 3, "report": 4}
+KIND_RANK = {"approval": 0, "question": 1, "ask": 1, "waiting": 1, "setup": 1, "declined": 2, "stale": 3, "task": 3, "report": 4}
 # A card whose bot has not yet said plainly what it needs (`ask_missing`) waits at the very bottom: there is nothing
 # for the person to do on it until the bot restates it (backend/restate_asks.py asks it to).
 
@@ -905,6 +905,8 @@ def need_of(item):
     kind = item.get("kind")
     if kind == "stale":
         return "decide"         # Accept or Skip, row by row
+    if kind == "setup":
+        return "connect"        # sign in to a provider (backend/models_preset.py)
     if kind == "approval":
         return {"spend": "pay", "send": "review", "publish": "review", "support": "review", "merge": "review"}.get(
             item.get("what"), "decide")
@@ -1284,6 +1286,12 @@ def needs_items(c, auth, who, task_view, older=None):
         stale["rows"] = [r for r in stale["rows"] if _readable(auth, c, who, r["task"])]
         if stale["rows"]:
             items.append(stale_review.retitle(stale))
+    if who.role == "owner":
+        # The recommended models choice waiting for a Claude or ChatGPT sign-in (backend/models_preset.py).
+        from . import models_preset
+        setup = models_preset.card(c)
+        if setup:
+            items.append(setup)
     items = fold_related(items, c, who.actor)
     at = H.now()
     for item in items:
@@ -2096,6 +2104,8 @@ def runnable_choices(c, who, auth, settings):
                         and (not enabled or not model.get("provider") or model["provider"] in enabled)
                         for h in model.get("harnesses") or () if not (HARNESS_BY_ID.get(h) or {}).get("external")})
     computers = _movable(c, who, {r["id"] for r in _online_runners(c)})
+    tico = {model["id"] for model in providers.MODEL_CATALOG if model.get("provider") == "tico"
+            and not model.get("deprecated") and (not enabled or "tico" in enabled)}
     out = {}
     from .harnesses import resolve_harness
     for row in c.execute("SELECT a.bot,b.runtime,bc.config_json FROM assignments a JOIN bots b ON b.slug=a.bot "
@@ -2110,4 +2120,10 @@ def runnable_choices(c, who, auth, settings):
             answer = runtime_choice(c, bot, runtime, who, computers, harness=harness)
             if answer.get("can_run") is False:
                 out.setdefault(bot, {})[harness] = answer
+        # A Tico model on a computer that cannot run Gateway work, under its model id: the picker marks it "not on this
+        # computer" while the harness itself (pi on the bot's own key) stays offered.
+        if tico:
+            answer = runtime_choice(c, bot, "pi", who, computers, harness="pi", model=sorted(tico)[0])
+            if answer.get("can_run") is False:
+                out.setdefault(bot, {}).update({model: answer for model in tico})
     return out
