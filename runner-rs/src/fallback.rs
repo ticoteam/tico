@@ -49,11 +49,17 @@ pub fn default_choice(config: &Value, choices: &[Value], env: &crate::env::Env, 
     let primary = text_of(&config["runtime"]);
     choices.iter().find_map(|row| {
         let (runtime, model) = (text_of(&row["runtime"]), text_of(&row["model"]));
-        if runtime.is_empty() || model.is_empty() || runtime == primary || !ready(&runtime) {
+        if runtime.is_empty() || model.is_empty() || runtime == primary {
             return None;
         }
         let harness = Some(text_of(&row["harness"])).filter(|h| !h.is_empty()).unwrap_or_else(|| runtime.clone());
-        if !bot_key(&harness).iter().all(|k| env.get(k).is_some_and(|v| !v.trim().is_empty())) {
+        // The Gateway (last under the company's Gateway choices, backend/models_preset.py) signs in with the turn's
+        // relay alone (gateway_relay.rs): no login or key of its own here, and no relay means no hop.
+        if crate::hosts::pi::is_gateway(Some(&model)) {
+            if env.get(crate::gateway_relay::KEY_ENV).is_none_or(|v| v.trim().is_empty()) {
+                return None;
+            }
+        } else if !ready(&runtime) || !bot_key(&harness).iter().all(|k| env.get(k).is_some_and(|v| !v.trim().is_empty())) {
             return None;
         }
         let runtime = crate::harness_tools::runtime_of(&harness);
@@ -337,6 +343,22 @@ mod tests {
         env.insert("OPENROUTER_API_KEY".into(), "or-key".into());
         assert_eq!(default_choice(&config, &choices, &env, |_| true).unwrap().harness, "pi");
         assert!(default_choice(&config, &[json!({"runtime": "gemini", "model": "g"})], &env, |_| true).is_none());
+    }
+
+    #[test]
+    fn the_gateway_row_runs_only_with_the_turn_relay_and_last() {
+        let config = json!({"runtime": "claude", "harness": "claude-code", "model": "claude-sonnet-5-5"});
+        let choices = vec![json!({"runtime": "codex", "harness": "codex", "model": "gpt-5.5"}),
+                           json!({"runtime": "pi", "harness": "pi", "model": "tico-mid-1.0"})];
+        let mut env = crate::env::Env::new();
+        // The signed-in provider comes first; the Gateway is the last row.
+        assert_eq!(default_choice(&config, &choices, &env, |_| true).unwrap().harness, "codex");
+        // No relay for the turn: never the Gateway, even when pi reports ready.
+        assert!(default_choice(&config, &choices, &env, |r| r == "pi").is_none());
+        env.insert(crate::gateway_relay::KEY_ENV.into(), "turn-token".into());
+        // With the relay, the Gateway needs neither a pi login nor an OpenRouter key.
+        let hop = default_choice(&config, &choices, &env, |_| false).unwrap();
+        assert_eq!((hop.harness.as_str(), hop.model.as_str(), hop.default), ("pi", "tico-mid-1.0", true));
     }
 
     // TK-EKWAFWPD: the computer's own Codex login answered every turn "Quota exceeded" with no reset time, and each
