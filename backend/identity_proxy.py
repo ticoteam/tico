@@ -1,4 +1,5 @@
-"""Verifiers for who a browser is: Cloudflare Access, an AWS ALB, or the built-in OIDC sign-in.
+"""Verifiers for who a browser is: Cloudflare Access, an AWS ALB, the built-in OIDC sign-in, or a hosted owner's
+sign-in link (backend/owner_link.py).
 
 Each verifier reads only its own provider's credentials, so a header meant for the other
 provider is inert. `email()` returns the verified, lowercased email, or None when the request
@@ -18,7 +19,7 @@ import jwt
 
 from .store import Problem
 
-PROXIES = ("cloudflare", "aws-alb", "oidc")
+PROXIES = ("cloudflare", "aws-alb", "oidc", "owner-link")
 ALB_KID = re.compile(r"[A-Za-z0-9-]{1,64}")
 ALB_REGION = re.compile(r"[a-z]{2}(?:-[a-z]+)+-\d")
 ALB_ARN = re.compile(r"arn:aws[a-z-]*:elasticloadbalancing:[a-z0-9-]+:\d{12}:loadbalancer/.+")
@@ -63,6 +64,9 @@ def check(settings):
     if kind == "oidc":
         from . import oidc
         oidc.check(settings)
+    if kind == "owner-link":
+        from . import owner_link
+        owner_link.check(settings)
     if settings.cognito_logout_url and not settings.cognito_logout_url.startswith("https://"):
         raise RuntimeError("TICO_COGNITO_LOGOUT_URL must be an https URL")
 
@@ -75,6 +79,9 @@ def build(settings, store=None):
     if settings.proxy_kind == "oidc":
         from . import oidc
         return oidc.Oidc(settings, store)
+    if settings.proxy_kind == "owner-link":
+        from . import owner_link
+        return owner_link.OwnerLink(settings, store)
     return None
 
 

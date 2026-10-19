@@ -85,7 +85,7 @@
 .task-chat .task-pill .p-pill{display:flex;flex-wrap:nowrap;align-items:flex-end;gap:6px;min-height:46px;padding:5px 6px 5px 12px;border-radius:24px}
 .task-chat .task-pill .p-text{order:0;flex:1;min-width:0;width:auto;height:36px;max-height:min(200px,30vh);margin:0;padding:6px 4px;resize:none;font-size:var(--t-base);border:0;background:transparent;box-shadow:none;outline:0}
 .task-chat .task-pill .p-send-icon{margin-bottom:1px}
-.task-chat .task-pill [data-task-chat-status]:empty{display:none}
-.task-chat .task-pill [data-task-chat-status]{font-size:var(--t-sm);padding:0 12px}
+.task-chat .task-pill [data-task-chat-status]:empty,.task-chat .task-pill [data-task-chat-to]:empty{display:none}
+.task-chat .task-pill [data-task-chat-status],.task-chat .task-pill [data-task-chat-to]{font-size:var(--t-sm);padding:0 12px}
 @media (max-width:760px){.task-chat .task-pill .p-text{font-size:16px}}
 @media (min-width:761px){#task-modal.thread[open]{width:min(680px,calc(100vw - 32px));height:min(86vh,900px)}}
