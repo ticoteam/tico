@@ -75,6 +75,8 @@ All notable changes to Tico are recorded here. The format follows
   ([Computers](docs/computers.md#remove-a-subscription)).
 
 ### Fixed
+- A locally managed Cloudflare Tunnel keeps the separate inline-visual hostname after a server restart or update.
+  `TICO_VISUAL_ORIGIN` adds a route for `^/visuals/` only; app and runner routes and the 404 catch-all stay in place.
 - **Updates tree keeps archived cards out after a reload**: a card you archive on Updates no longer comes back in
   the tree when the page reloads, and Restore brings it back for good. Archive stays yours alone: others still see the
   card. A manager whose own card you archived stays in the tree with "No update yet" and their reports below. The

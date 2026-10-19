@@ -360,6 +360,11 @@ No open ports, and Cloudflare Access can do the sign-in. The wizard creates the 
    `runner.<domain>`, or `tico-runner.example.com` for `tico.example.com`, which Cloudflare's universal certificate covers;
    `none` to skip): its route for `/api/v2` and `/download` only, its DNS record, and `TICO_RUNNER_URL`, so computers and
    external agents connect without a bypass. Keep that hostname out of the Access application; `setup doctor` checks it.
+   When `TICO_VISUAL_ORIGIN` names a separate HTTPS site for inline visuals, the generated config also routes that
+   hostname to the same server, for `^/visuals/` only, on every start. Add its proxied CNAME to the same tunnel,
+   bypass caching for that hostname, and keep it out of Access. Malformed origins and the app or runner hostname
+   are refused before the tunnel config is replaced. Dashboard-managed tunnels need this path-limited route added
+   in Cloudflare instead ([Visuals in replies](visuals.md)).
 3. Create an Access application for the hostname with your identity provider and a policy for your humans.
    Note the team URL (`https://<team>.cloudflareaccess.com`) and the application's Audience tag. Any identity
    provider Access offers works with the desktop app too (Google, Microsoft Entra, Okta, GitHub, a one-time PIN): the

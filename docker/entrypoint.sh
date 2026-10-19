@@ -82,11 +82,49 @@ runner_host() {
   [ "$host" = "$(printf '%s' "$TICO_DOMAIN" | tr '[:upper:]' '[:lower:]')" ] || printf '%s' "$host"
 }
 
+# A visual origin must not turn its cookie-free hostname into another way to reach the whole app.
+# Parse it before writing YAML; malformed origins must leave the previous tunnel config untouched.
+visual_host() {
+  [ -n "${TICO_VISUAL_ORIGIN:-}" ] || return 0
+  python3 - "$1" <<'PY'
+import ipaddress
+import os
+import re
+import sys
+from urllib.parse import urlsplit
+
+try:
+    value = os.environ["TICO_VISUAL_ORIGIN"]
+    origin = urlsplit(value)
+    host = origin.hostname or ""
+    valid = (not any(ch.isspace() or ord(ch) < 32 for ch in value)
+             and origin.scheme == "https" and origin.path in ("", "/")
+             and not origin.query and not origin.fragment
+             and origin.username is None and origin.password is None
+             and origin.port != 0 and len(host) <= 253 and "." in host
+             and all(re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label)
+                     for label in host.split("."))
+             and host not in (os.environ["TICO_DOMAIN"].lower(), sys.argv[1]))
+    if not valid:
+        raise ValueError
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        pass
+    else:
+        raise ValueError
+except ValueError:
+    sys.exit(1)
+print(host)
+PY
+}
+
 tunnel_config() {
   [ -n "${TICO_DOMAIN:-}" ] && [ -d "$TUNNEL_DIR" ] && [ -w "$TUNNEL_DIR" ] || return 0
   case "$TICO_DOMAIN" in *[!A-Za-z0-9.-]*|.*|*.|'') die "TICO_DOMAIN is not a plain hostname: $TICO_DOMAIN" ;; esac
-  local runner origin=http://server:8765
+  local runner visual origin=http://server:8765
   runner=$(runner_host)
+  visual=$(visual_host "$runner") || die "TICO_VISUAL_ORIGIN needs a separate HTTPS origin with a plain DNS hostname"
   {
     echo "ingress:"
     echo "  - hostname: $TICO_DOMAIN"
@@ -96,6 +134,11 @@ tunnel_config() {
       # external agents call: the API (which checks their tokens) and the runner download.
       echo "  - hostname: $runner"
       echo "    path: '^/(?:api/v2|download)(?:/.*)?\$'"
+      echo "    service: $origin"
+    fi
+    if [ -n "$visual" ]; then
+      echo "  - hostname: $visual"
+      echo "    path: '^/visuals/'"
       echo "    service: $origin"
     fi
     echo "  - service: http_status:404"
