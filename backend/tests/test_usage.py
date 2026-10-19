@@ -164,3 +164,16 @@ def test_without_each_request_the_estimate_may_be_low_and_other_models_are_uncha
     # A model with no long-prompt rate is priced from its totals, whatever its requests' prompts.
     assert providers.estimate("claude-sonnet-5-5", 5_000, 115_000, 2_000, [[5_000, 115_000, 2_000]]) == (
         pytest.approx(price("claude-sonnet-5-5", 5_000, 115_000, 2_000)), False)
+
+
+def test_tico_cheap_1_1_bills_a_prompt_over_100k_whole_at_its_long_rate():
+    # 100,000 prompt tokens is the standard Cheap price; one more and the whole request is at $0.75 / $3.75, cached 10%.
+    assert providers.estimate("tico-cheap-1.1", 100_000, 0, 1_000, [[100_000, 0, 1_000]]) == (
+        pytest.approx(0.01575), False)
+    assert providers.estimate("tico-cheap-1.1", 100_001, 0, 1_000, [[100_001, 0, 1_000]]) == (
+        pytest.approx(0.07875075), False)
+    assert providers.estimate("tico-cheap-1.1", 1, 100_000, 0, [[1, 100_000, 0]])[0] == pytest.approx(
+        (1 * 0.75 + 100_000 * 0.075) / 1e6)
+    # Cheap 1.0 keeps its one price.
+    assert providers.estimate("tico-cheap-1.0", 100_001, 0, 1_000, [[100_001, 0, 1_000]])[0] == pytest.approx(
+        (100_001 * 0.15 + 1_000 * 0.75) / 1e6)

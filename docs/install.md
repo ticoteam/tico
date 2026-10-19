@@ -41,7 +41,7 @@ Open the link in your browser: the app opens on **Finish setup**. Then:
 
 1. **Choose AI providers** (optional): leave them all unticked to do it later. Bots need one to run; until then each bot says
    "Add an AI provider", and Settings > AI providers adds it. With a gateway key from Tico, the
-   [Tico AI Gateway](ai-gateway.md) card there adds Tico Cheap, Mid and Power 1.0. The step starts with how bots get
+   [Tico AI Gateway](ai-gateway.md) card there adds Tico Cheap 1.1, Mid 1.0 and Power 1.0. The step starts with how bots get
    their models; **Your Claude and ChatGPT subscriptions, plus Tico Gateway** is recommended
    ([the four choices](ai-gateway.md#choose-how-bots-get-their-models)).
 2. **Name the team**, say what it does, and pick its groups. A few bots are suggested for each group. For the first result

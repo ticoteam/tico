@@ -7,7 +7,7 @@
 //! Pi has no MCP and no permission prompts (the bot uses the hub CLI over bash); `steer` is refused.
 //! OPENROUTER_API_KEY reaches the process from the bot's granted credential.
 //!
-//! The Tico AI Gateway's models (`tico-cheap-1.0`, `tico-mid-1.0`, `tico-power-1.0`) run on pi too, as pi's custom
+//! The Tico AI Gateway's models (`tico-cheap-1.1`, `tico-mid-1.0`, `tico-power-1.0`) run on pi too, as pi's custom
 //! provider `tico` over the Gateway's OpenAI-chat endpoint: the server hands a run on one the gateway key and URL
 //! (TICOAI_GATEWAY_KEY / TICOAI_GATEWAY_URL, backend/gateway_connection.py), and the turn's pi reads a `models.json`
 //! naming that URL and the key's variable, never the key itself.
@@ -35,8 +35,14 @@ pub const MODELS: &[(&str, &str)] = &[
 const DEFAULT_MODEL: &str = "deepseek-v4.1-flash";
 /// The Tico AI Gateway's chat models: pi's custom provider `tico` (`gateway_models_json`).
 pub const GATEWAY_PROVIDER: &str = "tico";
-pub const GATEWAY_MODELS: &[(&str, &str)] =
-    &[("tico-cheap-1.0", "Tico Cheap 1.0"), ("tico-mid-1.0", "Tico Mid 1.0"), ("tico-power-1.0", "Tico Power 1.0")];
+pub const GATEWAY_MODELS: &[(&str, &str)] = &[
+    ("tico-cheap-1.1", "Tico Cheap 1.1"),
+    ("tico-mid-1.0", "Tico Mid 1.0"),
+    ("tico-power-1.0", "Tico Power 1.0"),
+    ("tico-cheap-1.0", "Tico Cheap 1.0"),
+];
+/// Retired from the lineup (backend/providers.py `deprecated`): still run for the bots already on them, never offered.
+const GATEWAY_RETIRED: &[&str] = &["tico-cheap-1.0"];
 pub const GATEWAY_KEY_ENV: &str = "TICOAI_GATEWAY_KEY";
 pub const GATEWAY_URL_ENV: &str = "TICOAI_GATEWAY_URL";
 /// The turn's own directory for pi's Gateway configuration, set with the relay (gateway_relay.rs `turn_dir`).
@@ -168,7 +174,8 @@ pub fn plain_error(text: &str) -> String {
         "revoked_key" | "unknown_key" => format!("Tico AI Gateway: key not recognised (api key invalid: {code})"),
         "rate_limited" => "Tico AI Gateway: rate limited after too many refused keys from this address; wait an hour (rate_limited)".into(),
         "unknown_model" => {
-            let names: Vec<&str> = GATEWAY_MODELS.iter().map(|(_, name)| *name).collect();
+            let names: Vec<&str> =
+                GATEWAY_MODELS.iter().filter(|(id, _)| !GATEWAY_RETIRED.contains(id)).map(|(_, name)| *name).collect();
             format!("Tico AI Gateway: this model isn't offered. Tico models: {} (unknown_model)", names.join(", "))
         }
         "no_route" => "Tico AI Gateway: no Tico route for this request (no_route)".into(),
@@ -207,7 +214,9 @@ pub fn usage_tokens(usage: &Value) -> (i64, i64, i64) {
 pub fn usage_increment(usage: &Value) -> Value {
     let read = first(usage, &["cacheRead", "cache_read", "cachedTokens"]);
     let inp = first(usage, INPUT) + read + first(usage, &["cacheWrite", "cache_write"]);
-    json!({"input": inp, "cached": read, "output": first(usage, OUTPUT)})
+    let out = first(usage, OUTPUT);
+    // One assistant message is one model request, so the server prices a long prompt on its own (Tico Cheap 1.1).
+    json!({"input": inp, "cached": read, "output": out, "requests": [[inp - read, read, out]]})
 }
 
 /// The run's granted key; outside a turn (no bot environment) also the machine's, as local diagnostics read it.
@@ -446,6 +455,10 @@ mod tests {
 
     /// The events of one turn of a Tico-model bot whose fake pi prints `lines`, and the turn's workspace.
     async fn gateway_turn(lines: &[&str]) -> (Vec<Value>, PathBuf) {
+        gateway_turn_on("tico-mid-1.0", lines).await
+    }
+
+    async fn gateway_turn_on(model: &str, lines: &[&str]) -> (Vec<Value>, PathBuf) {
         let dir = std::env::temp_dir().join(format!("fake-pi-gw-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&dir).unwrap();
         let cmd = fake(&dir, "pi");
@@ -454,7 +467,7 @@ mod tests {
         let (tx, mut rx) = mpsc::unbounded_channel();
         let host = PiHost::new("acme", vec![cmd.clone()], tx);
         host.start();
-        let mut s = Settings { cwd: dir.display().to_string(), model: Some("tico-mid-1.0".into()), slug: "acme".into(), ..Default::default() };
+        let mut s = Settings { cwd: dir.display().to_string(), model: Some(model.into()), slug: "acme".into(), ..Default::default() };
         for (k, v) in [("PATH", "/usr/bin:/bin".to_string()), ("HUB_WORKSPACE", dir.display().to_string()), (GATEWAY_KEY_ENV, "tgw-synthetic-fixture".into()), (GATEWAY_URL_ENV, "https://gw.example/v1/gateway/".into()), ("ARGS_LOG", dir.join("args.log").display().to_string()), ("FIXTURE", fixture.display().to_string()), ("RC", "0".into())] {
             s.env.insert(k.into(), v);
         }
@@ -496,6 +509,19 @@ mod tests {
         assert_eq!(settings["retry"]["enabled"], false);
         // Every bash command pi runs starts without the key in its environment.
         assert_eq!(settings["shellCommandPrefix"], "unset TICOAI_GATEWAY_KEY");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_bot_still_on_retired_cheap_1_0_keeps_running_on_the_gateway() {
+        let (_, dir) = gateway_turn_on("tico-cheap-1.0", &[SESSION, r#"{"type":"agent_start"}"#, r#"{"type":"agent_end"}"#]).await;
+        let args = std::fs::read_to_string(dir.join("args.log")).unwrap();
+        assert!(args.lines().last().unwrap().starts_with("--mode json -p --provider tico --model tico-cheap-1.0 "), "{args}");
+        let models: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("runtime/pi-gateway/models.json")).unwrap()).unwrap();
+        let ids: Vec<&str> = models["providers"]["tico"]["models"].as_array().unwrap().iter().map(|m| m["id"].as_str().unwrap()).collect();
+        assert!(ids.contains(&"tico-cheap-1.0") && ids.contains(&"tico-cheap-1.1"), "{ids:?}");
+        // What a person is told to pick names only the current lineup.
+        assert!(!plain_error(r#"400: {"code":"unknown_model"}"#).contains("Cheap 1.0"));
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -554,7 +580,7 @@ mod tests {
             (401, "revoked_key", "This gateway key was revoked.", "Tico AI Gateway: key not recognised (api key invalid: revoked_key)"),
             (401, "unknown_key", "Unknown gateway key.", "Tico AI Gateway: key not recognised (api key invalid: unknown_key)"),
             (429, "rate_limited", "Too many refused keys from this address. Try again later.", "Tico AI Gateway: rate limited after too many refused keys from this address; wait an hour (rate_limited)"),
-            (400, "unknown_model", "Unknown model. Tico models: tico-cheap-1.0, tico-mid-1.0, tico-power-1.0.", "Tico AI Gateway: this model isn't offered. Tico models: Tico Cheap 1.0, Tico Mid 1.0, Tico Power 1.0 (unknown_model)"),
+            (400, "unknown_model", "Unknown model. Tico models: tico-cheap-1.0, tico-mid-1.0, tico-power-1.0.", "Tico AI Gateway: this model isn't offered. Tico models: Tico Cheap 1.1, Tico Mid 1.0, Tico Power 1.0 (unknown_model)"),
             (400, "unsupported_field", "Tico models here take text and tools only: no images, audio, files or more than one choice.", "Tico AI Gateway refused the request as sent: Tico models here take text and tools only: no images, audio, files or more than one choice. (unsupported_field)"),
             (400, "bad_request", "The request is not a chat completion the gateway can send.", "Tico AI Gateway refused the request as sent: The request is not a chat completion the gateway can send. (bad_request)"),
             (400, "upstream_refused", "The model refused this request as it was sent.", "Tico AI Gateway refused the request as sent: The model refused this request as it was sent. (upstream_refused)"),
@@ -593,7 +619,7 @@ mod tests {
         assert_eq!(model_for(Some("qwen/qwen3-coder")), "qwen/qwen3-coder");
         assert_eq!((effort_for(Some("Medium")), effort_for(Some("high")), effort_for(Some("max")), effort_for(None)), ("low", "high", "max", "low"));
         assert_eq!(usage_tokens(&json!({"promptTokens": "7", "output": 0, "completion_tokens": 3})), (7, 3, 10));
-        assert_eq!(usage_increment(&json!({"input": 5, "cacheRead": 4, "cacheWrite": 1, "output": 2})), json!({"input": 10, "cached": 4, "output": 2}));
+        assert_eq!(usage_increment(&json!({"input": 5, "cacheRead": 4, "cacheWrite": 1, "output": 2})), json!({"input": 10, "cached": 4, "output": 2, "requests": [[6, 4, 2]]}));
         let mut env = Env::new();
         assert_eq!(openrouter_key(&env, false), "");
         env.insert("OPENROUTER_API_KEY".into(), " k ".into());

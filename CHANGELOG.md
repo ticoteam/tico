@@ -126,6 +126,11 @@ All notable changes to Tico are recorded here. The format follows
   before this keeps today's behaviour ([sessions](docs/sessions.md)).
 
 ### Changed
+- **Tico AI Gateway: Tico Cheap 1.1 replaces Cheap 1.0** in every model list. It costs the same for a prompt up to
+  100,000 tokens; above that the whole request is $0.75 per 1M input, $0.075 cached and $3.75 output, and Usage
+  estimates it that way. Cheap 1.0 is retired: bots and a default model already on it keep it and keep running at its
+  old price, and Settings > AI providers still saves a default left on it, but nothing new can pick it
+  ([Tico AI Gateway](docs/ai-gateway.md)).
 - **A waiting task sleeps, and a bot's own writes never wake it** (token saving): news about a task that waits on
   another task (blocked by) or on a pull request's checks (wake once), such as a step move, a relation change or a
   comment, no longer starts a run; the task wakes when its blocker finishes or its checks come back. A notice that a

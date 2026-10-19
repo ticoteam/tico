@@ -66,7 +66,7 @@ FINAL = ("unknown_model", "unsupported_field", "bad_request", "upstream_refused"
 # (runner-rs/src/hosts/pi.rs `plain_error`).
 CODES = (CAP_REACHED, REVOKED_KEY, UNKNOWN_KEY, RATE_LIMITED, "unknown_model", "unsupported_field", "bad_request",
          "upstream_refused", "no_route", UNAVAILABLE, NOT_ISOLATED)
-TICO_MODELS = "Tico Cheap 1.0, Tico Mid 1.0, Tico Power 1.0"
+TICO_MODELS = "Tico Cheap 1.1, Tico Mid 1.0, Tico Power 1.0"
 # The only hosts the key goes to over plain HTTP: this computer, named exactly (a fake Gateway, a local proxy).
 LOOPBACK = ("localhost", "127.0.0.1", "::1")
 
