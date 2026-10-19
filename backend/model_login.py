@@ -22,6 +22,10 @@ back; Add key or Use the shared key does.
 Clear key and Replace key (backend/computer_keys.py) ride it too, as `clear_key` and `use_key`, and never carry the
 key: Replace stores it in the vault for that computer and the runner fetches it from there. A key the company shares
 with every computer asks "this computer only" or "all of them" first (`key_info` lists the computers it serves).
+
+Remove (`remove`) takes a named subscription's login for one tool off a computer: the runner signs it out there and,
+once nothing else is signed in on that subscription, deletes the subscription from the computer. It is refused while
+bots run on it; they are moved on the Bots page first, never by this.
 """
 
 import json
@@ -38,15 +42,19 @@ PASTE_RUNTIMES = manifests.with_capability("paste_code")
 SIGN_OUT_RUNTIMES = manifests.with_capability("sign_out")
 # What a row asks the runner to do. A runner without SIGN_OUT_CAPABILITY knows only `sign_in`, so it is never
 # handed another kind: it would start a sign-in instead.
-KINDS = ("sign_in", "switch", "sign_out", "use_shared_key", "clear_key", "use_key", "to_subscription")
+KINDS = ("sign_in", "switch", "sign_out", "use_shared_key", "clear_key", "use_key", "to_subscription", "remove")
 SIGN_OUT_CAPABILITY = "model_sign_out_v1"
 # A runner that clears and uses a computer's key (runner-rs/src/login.rs); an older one is asked to update first.
 KEYS_CAPABILITY = "model_keys_v1"
 KEY_KINDS = ("clear_key", "use_key")
 # A runner that can take a computer login off its key once a subscription works there (runner-rs/src/login.rs).
 SWITCH_TYPE_CAPABILITY = "model_switch_type_v1"
+# A runner that can take a named subscription off the computer (runner-rs/src/login.rs run_remove).
+REMOVE_CAPABILITY = "model_remove_v1"
 # The kinds that sign in on the side and have a commit point (`finishing`).
 SIDE_KINDS = ("switch", "to_subscription")
+# A removal has a commit point too: the bots check is made again there, before anything is signed out or deleted.
+COMMIT_KINDS = SIDE_KINDS + ("remove",)
 LIFETIME = 15 * 60
 FINISH_SECONDS = 2 * 60
 # `finishing`: a switch signed in on the side (or a new key was checked) and the runner is putting it in place. It can
@@ -61,7 +69,7 @@ ORDER.update(signed_out=ORDER["signed_in"], done=ORDER["signed_in"])
 VERDICTS = {"sign_in": ("signed_in", "failed"), "switch": ("signed_in", "failed"),
             "sign_out": ("signed_out", "failed"), "use_shared_key": ("done", "failed"),
             "clear_key": ("signed_out", "failed"), "use_key": ("done", "failed"),
-            "to_subscription": ("signed_in", "failed")}
+            "to_subscription": ("signed_in", "failed"), "remove": ("done", "failed")}
 MAX_LINES, MAX_LINE = 12, 200
 ONLINE_SECONDS = 60
 PASTE_RE = re.compile(r"^[A-Za-z0-9_\-#.~%+=/]{6,600}$")
@@ -178,6 +186,10 @@ def _online(runner):
     return bool(runner["last_seen"]) and runner["last_seen"] >= H.shift(H.now(), seconds=-ONLINE_SECONDS)
 
 
+def _removes(runner):
+    return REMOVE_CAPABILITY in set(H._json(runner["capabilities_json"], []) or [])
+
+
 def _queue(c, who, runner, runtime, profile, kind, what):
     """(row, new): a new row for the runner to run, or the one already running for this login. One thing at a time
     per login: a sign-out never races a sign-in on the same files."""
@@ -189,10 +201,15 @@ def _queue(c, who, runner, runtime, profile, kind, what):
     if running:
         raise Problem("state", "Something else is running for this login on that computer; cancel it or wait for it "
                       "to finish", 409)
+    # A removal can delete the subscription's whole folder, so it runs alone on it: no other tool signs in there
+    # meanwhile, and it does not start while one is.
+    if profile and c.execute(f"SELECT 1 FROM model_logins WHERE runner_id=? AND profile=? AND runtime<>? AND {ACTIVE_SQL} "
+                             "AND (kind='remove' OR ?='remove')", (runner["id"], profile, runtime, kind)).fetchone():
+        raise Problem("state", f"Something else is running on {profile} on that computer; wait for it to finish", 409)
     if not _online(runner):
         raise Problem("offline", f"That computer is offline, so it cannot {what}", 409)
     if (kind != "sign_in" and not _signs_out(runner) or kind in KEY_KINDS and not _handles_keys(runner)
-            or kind == "to_subscription" and not _switches_type(runner)):
+            or kind == "to_subscription" and not _switches_type(runner) or kind == "remove" and not _removes(runner)):
         raise Problem("runner_version", f"Update {runner['label']} to {what} from here", 409)
     now = H.now()
     lid = H.new_id()
@@ -290,16 +307,22 @@ def use_shared_key(c, who, rid, runtime, auth=None):
     return view(row)
 
 
-def affected_bots(c, who, rid, runtime, profile, settings, auth=None):
-    """The active bots on this computer that run `runtime` on this login: the ones a sign-out stops."""
+def affected_bots(c, who, rid, runtime, profile, settings, auth=None, every=False):
+    """The active bots on this computer that run `runtime` on this login: the ones a sign-out stops. `every` counts
+    paused bots too: what a removal would leave with nothing to run on when they start again."""
     _operator(c, who, rid, auth)
     _runner(c, rid)
+    return {"runtime": runtime, "profile": profile, "bots": _bots_on(c, rid, runtime, profile, settings, every)}
+
+
+def _bots_on(c, rid, runtime, profile, settings, every):
     from . import providers, subscriptions
     from .shared_bots import follow
     ctx = subscriptions.context(c, settings)
     out = []
+    active = "" if every else "AND b.state='active' "
     for row in c.execute("SELECT a.bot, b.display_name, bc.config_json FROM assignments a JOIN bots b ON b.slug=a.bot "
-                         "AND b.state='active' LEFT JOIN bot_config bc ON bc.bot=a.bot WHERE a.runner_id=? "
+                         f"{active}LEFT JOIN bot_config bc ON bc.bot=a.bot WHERE a.runner_id=? "
                          "ORDER BY a.bot", (rid,)):
         try:
             config = providers.fill(ctx["providers"], follow(c, row["bot"], json.loads(row["config_json"] or "{}")))
@@ -310,7 +333,59 @@ def affected_bots(c, who, rid, runtime, profile, settings, auth=None):
         assigned, _ = subscriptions.effective(c, row["bot"], ctx)
         if (assigned or "") == profile:
             out.append({"bot": row["bot"], "name": row["display_name"] or row["bot"]})
-    return {"runtime": runtime, "profile": profile, "bots": out}
+    return out
+
+
+def _names(names):
+    return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+
+
+def _in_use(bots):
+    return (f"{_names([b['name'] for b in bots])} run on it. Move them to another connection on the Bots page "
+            "first")
+
+
+def hold_removals(c, settings, bots=None):
+    """Refuse a change that makes a bot (any of `bots`, or any bot) run on a subscription being taken off its
+    computer: a placement, a model or tool change, the company's default, a shared bot's original. Called after the
+    change is written, inside its transaction, so the refusal undoes it. A removal is held from its ask to its end,
+    the commit point and the deletion after it included."""
+    for row in c.execute(f"SELECT runner_id, runtime, profile FROM model_logins WHERE kind='remove' AND {ACTIVE_SQL}").fetchall():
+        on = [b for b in _bots_on(c, row["runner_id"], row["runtime"], row["profile"], settings, True)
+              if bots is None or b["bot"] in bots]
+        if on:
+            label = (c.execute("SELECT label FROM runners WHERE id=?", (row["runner_id"],)).fetchone() or ["the computer"])[0]
+            raise Problem("removing", f"{row['profile']} is being removed from {label}, and {_names([b['name'] for b in on])} "
+                          "would run on it. Wait until it is removed, or choose another connection on the Bots page", 409,
+                          extra={"bots": on})
+
+
+def removing(c, rid, profile):
+    """Whether `profile` is being taken off computer `rid` (a removal not yet ended): no bot chooses it meanwhile."""
+    return bool(profile) and c.execute(f"SELECT 1 FROM model_logins WHERE runner_id=? AND profile=? AND kind='remove' "
+                                       f"AND {ACTIVE_SQL}", (rid, profile)).fetchone() is not None
+
+
+def remove(c, who, rid, runtime, profile, settings, auth=None):
+    """Take a named subscription's login for `runtime` off a computer. Refused while any bot here runs on it, naming
+    them: a person moves them on the Bots page first."""
+    _person_only(who, "remove a subscription")
+    _operator(c, who, rid, auth)
+    if not profile:
+        raise Problem("kind", "Only a named subscription can be removed; sign the computer's own login out instead", 422)
+    if runtime not in SIGN_OUT_RUNTIMES:
+        raise Problem("kind", "Removing a subscription from here isn't available for " + runtime, 422)
+    runner = _runner(c, rid)
+    row = c.execute("SELECT runtimes_json FROM computer_profiles WHERE runner_id=? AND profile=?", (rid, profile)).fetchone()
+    if not row or runtime not in json.loads(row[0] or "{}"):
+        raise Problem("not_found", "That subscription is not on this computer", 404)
+    bots = affected_bots(c, who, rid, runtime, profile, settings, auth=auth, every=True)["bots"]
+    if bots:
+        raise Problem("in_use", _in_use(bots), 409, extra={"bots": bots})
+    row, new = _queue(c, who, runner, runtime, profile, "remove", "remove a subscription")
+    if new:
+        H.event(c, who.actor, "runner.login.remove", rid, {"runtime": runtime, "profile": profile})
+    return view(row)
 
 
 def read(c, who, rid, lid, auth=None):
@@ -342,6 +417,8 @@ def cancel(c, who, rid, lid, auth=None):
     sweep(c)
     row = _login(c, rid, lid)
     if row["state"] == "finishing":
+        if row["kind"] == "remove":
+            raise Problem("state", "It is already being removed, so it can't be cancelled now", 409)
         what = "key" if row["kind"] == "use_key" else "account"
         raise Problem("state", f"The new {what} is already being put in place, so it can't be cancelled now", 409)
     if row["kind"] == "use_key" and row["state"] in ACTIVE:
@@ -364,7 +441,7 @@ def pending(c, runner_id):
              **({"code": r["pending_code"]} if r["pending_code"] else {})} for r in rows]
 
 
-def report(c, runner_id, lid, body):
+def report(c, runner_id, lid, body, settings=None):
     row = c.execute("SELECT * FROM model_logins WHERE id=? AND runner_id=?", (lid, runner_id)).fetchone()
     if not row:
         raise Problem("not_found", "That sign-in does not exist", 404)
@@ -374,8 +451,17 @@ def report(c, runner_id, lid, body):
         return {"state": row["state"]}
     if body.state in ("signed_in", "signed_out", "done") and body.state not in VERDICTS[row["kind"]]:
         raise Problem("state", f"A {row['kind'].replace('_', ' ')} does not end {body.state.replace('_', ' ')}", 422)
-    if body.state == "finishing" and row["kind"] not in (*SIDE_KINDS, "use_key"):
+    if body.state == "finishing" and row["kind"] not in (*COMMIT_KINDS, "use_key"):
         raise Problem("state", "Only a switch or a new key puts a new login in place", 422)
+    # A removal's commit point: a bot that came to run on the subscription since it was asked for (moved to this
+    # computer, or onto this tool) stops it here, before the runner signs anything out or deletes anything.
+    if body.state == "finishing" and row["kind"] == "remove" and row["state"] != "finishing":
+        bots = _bots_on(c, runner_id, row["runtime"], row["profile"], settings, True)
+        if bots:
+            c.execute("UPDATE model_logins SET state='failed', message=?, updated=? WHERE id=?",
+                      (redact(_in_use(bots)), H.now(), lid))
+            H.event(c, "runner:" + runner_id, "runner.login.failed", runner_id, {"runtime": row["runtime"]})
+            return {"state": "failed"}
     if body.state == "finishing" and row["state"] != "finishing":
         # From here it cannot be cancelled, and it has a little time of its own to finish in.
         c.execute("UPDATE model_logins SET expires_at=MAX(expires_at, ?) WHERE id=?",
@@ -409,6 +495,13 @@ def report(c, runner_id, lid, body):
     if (state == "signed_in" or state == "failed" and row["kind"] == "sign_out") and terminal:
         c.execute("DELETE FROM model_login_cleared WHERE runner_id=? AND runtime=? AND profile=?",
                   (row["runner_id"], row["runtime"], row["profile"]))
+    # Removed: nothing of it stays here to fill a line again (its sign-out mark, its manual weekly reading).
+    if state == "done" and row["kind"] == "remove":
+        from .subscriptions import weekly_key
+        c.execute("DELETE FROM model_login_cleared WHERE runner_id=? AND runtime=? AND profile=?",
+                  (row["runner_id"], row["runtime"], row["profile"]))
+        c.execute("DELETE FROM registry_metadata WHERE key=?",
+                  (weekly_key(row["runner_id"], row["profile"], row["runtime"]),))
     # Switched to a subscription: the key is off this login from now on (the runner has deleted its copies), and the
     # computer's own key is deleted from the vault, as Clear key does.
     if state == "signed_in" and row["kind"] == "to_subscription":

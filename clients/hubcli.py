@@ -576,6 +576,11 @@ def parser():
     s.add_argument("--ref", action="append")
     s.add_argument("--steer", action="store_true",
                    help="with --ref task:<id> you requested: write this into its owner's running turn on that task")
+    s.add_argument("--visual", action="append", metavar="PATH",
+                   help="a picture, SVG, HTML page, video or audio to show with it (a file in your checkout, or ID@VERSION "
+                        "already in Tico); repeat for more")
+    s.add_argument("--title", action="append", dest="visual_title", metavar="TITLE",
+                   help="the caption for each --visual, in the same order")
     s.add_argument("--needs-action", dest="needs_action", action="store_true", help="a bot's message to a bot waits for that bot's next run; this wakes it now")
     s.set_defaults(fn="message send")
     message.add_parser("list", help="the messages and fyis waiting for you").set_defaults(fn="message list")
@@ -696,6 +701,11 @@ def parser():
     s.add_argument("text")
     s.add_argument("--conversation", dest="conversation_id")
     s.add_argument("--command", action="store_true")
+    s.add_argument("--visual", action="append", metavar="PATH",
+                   help="a picture, SVG, HTML page, video or audio to show with it (a file in your checkout, or ID@VERSION "
+                        "already in Tico); repeat for more")
+    s.add_argument("--title", action="append", dest="visual_title", metavar="TITLE",
+                   help="the caption for each --visual, in the same order")
     s.set_defaults(fn="chat send")
     assistant = sub.add_parser("assistant", help="the Assistant's proposals for a person to confirm").add_subparsers(dest="sub")
     assistant.add_parser("read", help="read your private Assistant chat").set_defaults(fn="assistant read")
@@ -875,6 +885,11 @@ def parser():
     s.add_argument("--attach", action="append", help="file to attach; repeat for more files")
     s.add_argument("--file", action="append", metavar="ID@VERSION",
                    help="a file already in Tico: one on this task, or (a person) a chat file you can open, as ID@1")
+    s.add_argument("--visual", action="append", metavar="PATH",
+                   help="a picture, SVG, HTML page, video or audio to show with it (a file in your checkout, or ID@VERSION "
+                        "already in Tico); repeat for more")
+    s.add_argument("--title", action="append", dest="visual_title", metavar="TITLE",
+                   help="the caption for each --visual, in the same order")
     choices = s.add_mutually_exclusive_group()
     choices.add_argument("--ask", help="JSON file containing structured questions")
     choices.add_argument("--choices", help="comma-separated option labels")

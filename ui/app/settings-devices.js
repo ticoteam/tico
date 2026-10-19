@@ -441,7 +441,6 @@ function renderSettingsMachines() {
       await loadSettings();
     } catch (error) { toast(error.message, true); box.checked = !box.checked; box.disabled = false; }
   };
-  el.oninput = subsHandleInput;
   el.onsubmit = event => { subsHandleSubmit(event); };   // a bare `false` would cancel any other form's submit
   el.onclick = async event => {
     // The pop-up: a click on a row (its name, a chip, anywhere on it) opens it; ✕ or the backdrop closes it.
@@ -451,6 +450,10 @@ function renderSettingsMachines() {
     const row = event.target.closest('[data-computer-open], [data-computer-row]');
     if (row && !event.target.closest('a')) { computerDetailOpen(row.dataset.computerOpen || row.dataset.computerRow); return; }
     if (subsHandleClick(event)) return;
+    const add = event.target.closest('[data-add-connection]');
+    if (add) { if (!add.disabled) computerAddOpen(add.dataset.addConnection); return; }
+    const removeLine = event.target.closest('[data-connection-remove]');
+    if (removeLine) { if (!removeLine.disabled) computerRemoveOpen(removeLine); return; }
     const perfLink = event.target.closest('[data-computer-performance]');
     if (perfLink) { dialog?.close(); location.hash = performanceHref(perfLink.dataset.computerPerformance); return; }
     const shown = event.target.closest('[data-computer-bots]');

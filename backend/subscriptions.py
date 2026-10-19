@@ -209,6 +209,14 @@ def assign(c, auth, who, body):
             'WHERE a.bot=? AND r.operator=? AND r.revoked_at IS NULL',
             (body.target, H.actor_id(who.actor))).fetchone())):
         raise Problem('forbidden', 'You cannot change this bot', 403)
+    runner = c.execute('SELECT r.id,r.label FROM assignments a JOIN runners r ON r.id=a.runner_id WHERE a.bot=? '
+                       'AND r.revoked_at IS NULL', (body.target,)).fetchone()
+    from .model_login import removing
+    # A removal checked the bots once when asked for, and checks again before it deletes anything; between the two
+    # no bot comes onto it from here.
+    if runner and removing(c, runner['id'], body.profile):
+        raise Problem('state', f"{body.profile} is being removed from {runner['label']}; choose another "
+                      'connection', 409)
     if body.profile is None:
         c.execute('DELETE FROM subscription_assignments WHERE scope=? AND target=?', (body.scope, body.target))
     else:

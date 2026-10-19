@@ -176,7 +176,11 @@ function chatImageURL(f) {
     .catch(error => { CHAT_IMAGES.delete(f.id); throw error; }));
   return CHAT_IMAGES.get(f.id);
 }
-function chatAttachmentsHTML(files) {
+// The first visuals show as cards (ui/app/visual-cards.js); the rest stay these chips and thumbnails.
+function chatAttachmentsHTML(files, key = '') {
+  return visualCardsHTML(files, {key, chips: rest => chatChipsHTML(rest)});
+}
+function chatChipsHTML(files) {
   if (!files.length) return '';
   return `<div class="chat-files">${files.map(f => isChatImage(f)
     ? `<button type="button" class="chat-thumb" data-chat-image="${esc(f.id)}" data-type="${esc(f.content_type || '')}" data-name="${esc(f.name || 'image')}" aria-label="View ${esc(f.name || 'image')}" title="${esc(f.name || 'image')}"><img alt="${esc(f.name || 'image')}" hidden></button>`
@@ -375,7 +379,7 @@ function v2MessageHTML(m) {
         : `<div class="md">${safeMd(m.body || '', {shortLinks: true})}</div>`}${chatCopyHTML(m.body)}</div>
     ${v2DeliveryHTML(m)}
     ${(m.refs?.warnings || []).map(w => `<div class="chat-warn" title="From the runner, not the bot">${esc(w.charAt(0).toUpperCase() + w.slice(1))}</div>`).join('')}
-    ${S.me?.cloud ? chatAttachmentsHTML(m.refs?.attachments || []) : ''}
+    ${S.me?.cloud ? chatAttachmentsHTML(m.refs?.attachments || [], m.id || '') : ''}
     ${v2RunHTML(m)}${v2MessageCards(m)}</div>`;
 }
 // A message sent while the bot answers here is written into that turn, or held for the next one (`delivery`, from the
@@ -445,7 +449,7 @@ function chatSideItemHTML(m) {
   const when = m.created ? `<time class="chat-time" title="${esc(fmt(m.created))}">${esc(ago(m.created))}</time>` : '';
   return `<div class="cs-item${open ? ' open' : ''}" data-message="${esc(m.id || '')}">
     <div class="cs-head"><b>${esc(chatSideHead(m))}</b>${when}</div>
-    <div class="cs-text md${open ? '' : ' clamp'}">${safeMd(text, {shortLinks: true})}</div>${open && S.me?.cloud ? chatAttachmentsHTML(m.refs?.attachments || []) : ''}
+    <div class="cs-text md${open ? '' : ' clamp'}">${safeMd(text, {shortLinks: true})}</div>${open && S.me?.cloud ? chatAttachmentsHTML(m.refs?.attachments || [], m.id || '') : ''}
     ${long ? `<button type="button" class="link cs-more" data-cs-more="${esc(m.id || '')}" aria-expanded="${open}">${open ? 'Show less' : 'Show more'}</button>` : ''}${
       m.elsewhere?.preview ? `<button type="button" class="link cs-more" data-bots-open="${esc(m.elsewhere.id)}">Earlier messages</button>` : ''}</div>`;
 }
@@ -607,7 +611,7 @@ function v2ChatRender(state) {
     state.stick.update(() => {
       // A Confirm card kept through the rebuild (assistantChat.cards puts the same element back) keeps its focus too.
       const focused = thread.contains(document.activeElement) ? document.activeElement : null;
-      thread.innerHTML = html;
+      visualSwap(thread, html);              // cards both trees share keep their node (ui/app/visual-cards.js)
       if (thread.querySelector('[data-action-host]')) void window.assistantChat?.cards(thread, {get, post, esc, toast,
         reload: () => v2ChatMessages(state).then(() => { if (V2C === state) v2ChatRender(state); })});
       if (focused?.isConnected && document.activeElement !== focused) focused.focus({preventScroll: true});

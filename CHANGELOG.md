@@ -8,6 +8,27 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- **A usage limit holds the login, once**: a run that hits a subscription's usage limit now holds that provider
+  login on that computer, for every bot signed in with it, until the reset the provider names (Claude's "resets
+  2:40am (UTC)" is read too), or 30, 60 and then 120 minutes when it names none. The hold is saved on the server, so
+  a restart does not lift it, and when it ends one queued run tries first while the others wait for its result,
+  instead of every waiting run starting at once. A bot with a ready fallback that is not held itself runs there
+  meanwhile instead of waiting. Health names the provider whose limit it is.
+- **Visuals in replies (API, part 1 of 4)**: a bot or a person attaches a titled picture, SVG, HTML page, video or
+  audio clip to a chat reply or task comment (`--visual PATH --title "…"` on `hub message send`, `hub chat send` and
+  `hub task comment`; `visuals` over MCP; `attachments: [{ref, title}]` in the API). It is a versioned file there,
+  shown only to that conversation's readers. A page's local images and fonts are embedded; remote ones are removed
+  and listed. Self-hosters set `TICO_VISUAL_ORIGIN`, a separate site. Visuals still show as file chips until part 2
+  ([Visuals in replies](docs/visuals.md)).
+- **Visuals in replies (part 2 of 4): pictures, SVG and visual pages show inline** under a chat message or a task
+  comment, a person's attachments too. Each is a card the width of the message, never wider than the screen, with its
+  title as the caption and a menu: Expand, Open in file viewer, Download. A visual page shows at its own height up to
+  480 px (60% of a phone screen), then fades with **Expand**; it cannot run its own scripts, open forms, load anything
+  or reach the app, and a link in it opens a new tab only when clicked. Expand (or a tap) opens it full screen: zoom on
+  pictures, scroll in pages; Close, Esc, swipe down or Back return to the same place. SVG and pages sit on a light card
+  in dark mode. A card holds its space while it loads, keeps the version it was posted with ("Newer version" links the
+  newest), says "This visual was removed" when the file was removed and "Couldn't show this visual" when it can't
+  render. Up to 4 per message; the rest stay file chips.
 - **The company on Goals**: with the CEO Bot switch on, Goals opens with a **Company** section: the Vision (one or
   two sentences) and the Description (a short paragraph). The owner and admins edit it, everyone else reads it, and
   **History** lists every change with who made it and when. Each goal shows a one-line **Why** tying it to the
@@ -26,13 +47,6 @@ All notable changes to Tico are recorded here. The format follows
   plainly when a used-up login has bots on the Gateway. Gateway usage records keep which gateway key and install
   paid, never the key. The other three choices, and a team that never picks one, keep working
   as before ([Tico AI Gateway](docs/ai-gateway.md#choose-how-bots-get-their-models)).
-- **CEO Bot switch** (off by default; one per install, no release needed): an owner or admin turns it on with
-  `POST /api/v2/ceo-bot {"on": true}` (`hub api POST ceo-bot '{"on": true}'`), never a bot. On, the Goal Manager is
-  named the CEO Bot in the bot list, the org chart, Goals and its messages, and sits on the org chart under the owner
-  with the Heads (in their departments) and the bots that report to no one under it; the Assistant, the other
-  built-ins and message bots stay apart. It keeps its slug, so its KPI readings, goal history and old messages stay its own. Only the chart moves:
-  nobody's `reports_to` and nobody's access changes. Turning it off gives back the Goal Manager's name and the chart as
-  they were.
 - **Start fresh when the topic changes** (Settings > Team; off by default, an owner or an admin turns it on): in a
   long or idle direct chat with a bot, Tico asks Decide whether your new message starts a new topic before it is sent.
   If it does, the bot's session is cleared the same way Clear does, and the chat shows a quiet **Topic changed** line
@@ -58,6 +72,12 @@ All notable changes to Tico are recorded here. The format follows
 - A signed-out connection in the computer pop-up reads **Signed out · Sign in** and its chip gets a red dot, and the
   sign-out confirmation names the bots in a line ("Reviewer 1, QA and 2 more will stop running until this is signed in
   again").
+- **Add connection** in each computer's pop-up on Settings > Computers: pick an AI tool installed there, then Subscription
+  or API key; a subscription is named and signed in with the provider in the same pop-up, and its chip appears on the
+  computer's row without a restart. API key opens **Add key** for a tool that takes a key of the computer's own, and
+  points to Credentials for the others. Each subscription line gets **Rename** and **Remove**; Remove is refused while
+  bots run on it, naming them and offering the Bots page. Remove needs a current runner
+  ([Computers](docs/computers.md#remove-a-subscription)).
 
 ### Fixed
 - **A bot's finished answer is no longer lost or given twice when its computer stalls before handing it in.** A
@@ -76,10 +96,6 @@ All notable changes to Tico are recorded here. The format follows
   overload's window. A write that holds the lock 5 s or more is logged with its route and code line (server log,
   flight file, and a `long_hold` event in the server metrics), and the metrics keep a minute's rows when the lock is
   busy instead of skipping them, or name the minutes they lost in a `recorder_gap` event.
-- Work waiting while its computer updates now says so: once a computer due an update stops taking new work (20
-  minutes after the update fell due, until its running turns end), a message or task for its bots shows **Waiting for
-  the computer to update** in the chat and on the task instead of Queued, and Health says since when the computer has
-  taken no new work. How the update waits is unchanged ([Updates](docs/updates.md)).
 - **The sidebar around first-run setup**: while the setup wizard is open, the sidebar shows only **Finish setup** and
   the team, not the app's pages or **What's new** (on a phone the bottom bar drops Tasks and Updates). A new company's
   owner starts with nothing unread in What's new. In the team list, words a bot's name shares with another bot's (the
@@ -87,17 +103,6 @@ All notable changes to Tico are recorded here. The format follows
   apart; hovering a bot shows its whole name, and **Needs setup** is a small gear beside the name. The anonymous
   usage-count notice no longer sits over the wizard or the screen after **Create**: it appears on the first other page,
   and nothing is counted until it has.
-- **First-run wizard**: **Next** on **Your team chart** works again when the team includes BotOps. Its instructions
-  (24,048 characters) were over the setup save's 20,000-character limit, so the wizard stopped with a raw field error.
-  Bot instructions now have one limit of 50,000 characters wherever they are sent (the wizard, **Add from catalog**
-  and registering a bot), and a test checks every shipped template against it. If the wizard cannot save a step it
-  now says so in plain words and what to do, never the field the server named.
-- **Team chart reasons and chart while picking** (first run): a suggested bot's reason is no longer a single word of
-  your answer ("Matches “managers”" on four Sales cards, "Matches “github”" across Engineering). Only a short phrase
-  you wrote whole that fits that bot is shown ("Matches “flaky tests”"); otherwise it says "Common in Sales" or "A
-  starting point for Sales", or nothing for a bot your words brought in. The live chart holds places for the group
-  being recruited and draws each bot's line together with its card, so it never shows empty lines, and long bot names
-  wrap instead of being cut off ("Sales Developm…"), with the full name as a tooltip.
 - **Clear** on a bot's chat now really starts the bot over. Before, it only trimmed the history Tico sends, and on
   the computer Claude Code, Codex and the other harnesses kept resuming the old provider thread, so the bot still
   remembered the cleared chat and every turn still paid for it. Each turn now carries its conversation's session
@@ -109,6 +114,13 @@ All notable changes to Tico are recorded here. The format follows
   before this keeps today's behaviour ([sessions](docs/sessions.md)).
 
 ### Changed
+- **A waiting task sleeps, and a bot's own writes never wake it** (token saving): news about a task that waits on
+  another task (blocked by) or on a pull request's checks (wake once), such as a step move, a relation change or a
+  comment, no longer starts a run; the task wakes when its blocker finishes or its checks come back. A notice that a
+  bot's own write caused never wakes that same bot. Nothing is dropped: the notice stays in the task's room and is
+  handed to the bot's next run, whatever starts it, in order. A person's message, comment, approval or answer, an
+  ask, a needs-action message, a gate verdict, an assignment, a finished subtask and a sweep still wake at once.
+  Each skipped wake is logged as `wake.skipped` in `events` for the weekly audit ([hub sql](docs/hub-sql.md)).
 - **Health Monitor: seeing a finding again only counts**: each hourly scan that sees a finding adds one to its count
   and moves its last-seen time, and no bot runs for it. Only a new finding, one whose severity rises (a computer on a
   release the server cannot work with is `bad`, an older one `warn`), or one back after its task was finished wakes
@@ -124,17 +136,6 @@ All notable changes to Tico are recorded here. The format follows
   sees one card with the latest wording and the earlier asks listed under it, gets no new Needs you item or Slack
   line, and has the team's days from the latest wording before any default goes ahead. A different topic still opens
   its own question, and once a question is answered or closed the next one opens normally.
-- **Updates cards use icons**: Reply, Mark unread (or read) and Archive (Restore in the Archive) are icons, named by a
-  tooltip, a long press on a phone and screen readers. A card's reports open from **8** and a chevron at the right end
-  of its icon row, in place of the **8 reports** row under it and its broken glyph, and open reports hang from the
-  card on one line with an elbow into each card, the same at every level.
-- **First run, computer step**: one numbered path (make the code, then the line that uses it), with the plain
-  `docker run` alternative behind **Other ways**, closed. After **Add computer** the one-time code shows in large type
-  on the screen, not only in a toast. Commands wrap inside their box on a phone and on a desktop, with **Copy** in the box.
-- **First run, after Create**: the screen says **Your team is created** and offers one next step as its only primary
-  button (**Add a computer** while there is none). Bots are listed in the team chart's groups and order with one status
-  each, *Waiting for a computer* is said once at the top, and the tour waits for **Show me around** instead of
-  covering the screen.
 - **Sign out** and **Switch account** moved into each computer's pop-up on **Settings > Computers**, on each connection
   line, for the computer's own login and each named subscription (they were on the tool table and in Manage subscription
   on AI providers). A subscription is now signed in from a computer on **Settings > Computers**. **Replace key**,
@@ -151,6 +152,44 @@ All notable changes to Tico are recorded here. The format follows
   setting up?** grows to show the whole message, never past the room left above a phone keyboard, so **Send** stays
   on screen.
 - PDF upload and reading use pypdf 6.21.1, the latest patch release of 6.21.
+
+## [0.3.63] - 2026-10-19
+
+### Added
+- **CEO Bot switch** (off by default; one per install, no release needed): an owner or admin turns it on with
+  `POST /api/v2/ceo-bot {"on": true}` (`hub api POST ceo-bot '{"on": true}'`), never a bot. On, the Goal Manager is
+  named the CEO Bot in the bot list, the org chart, Goals and its messages, and sits on the org chart under the owner
+  with the Heads (in their departments) and the bots that report to no one under it; the Assistant, the other
+  built-ins and message bots stay apart. It keeps its slug, so its KPI readings, goal history and old messages stay its own. Only the chart moves:
+  nobody's `reports_to` and nobody's access changes. Turning it off gives back the Goal Manager's name and the chart as
+  they were.
+
+### Fixed
+- Work waiting while its computer updates now says so: once a computer due an update stops taking new work (20
+  minutes after the update fell due, until its running turns end), a message or task for its bots shows **Waiting for
+  the computer to update** in the chat and on the task instead of Queued, and Health says since when the computer has
+  taken no new work. How the update waits is unchanged ([Updates](docs/updates.md)).
+- **First-run wizard**: **Next** on **Your team chart** works again when the team includes BotOps. Its instructions
+  (24,048 characters) were over the setup save's 20,000-character limit, so the wizard stopped with a raw field error.
+  Bot instructions now have one limit of 50,000 characters wherever they are sent (the wizard, **Add from catalog**
+  and registering a bot), and a test checks every shipped template against it. If the wizard cannot save a step it
+  now says so in plain words and what to do, never the field the server named.
+- **First-run wizard**: suggested bots no longer show one-word 'Matches' reasons (now a real phrase from your
+  answer, 'Common in <team>', or none); the live chart shows placeholder cards for the group you're answering, and
+  long bot names wrap with the full name on hover.
+
+### Changed
+- **Updates cards use icons**: Reply, Mark unread (or read) and Archive (Restore in the Archive) are icons, named by a
+  tooltip, a long press on a phone and screen readers. A card's reports open from **8** and a chevron at the right end
+  of its icon row, in place of the **8 reports** row under it and its broken glyph, and open reports hang from the
+  card on one line with an elbow into each card, the same at every level.
+- **First run, computer step**: one numbered path (make the code, then the line that uses it), with the plain
+  `docker run` alternative behind **Other ways**, closed. After **Add computer** the one-time code shows in large type
+  on the screen, not only in a toast. Commands wrap inside their box on a phone and on a desktop, with **Copy** in the box.
+- **First run, after Create**: the screen says **Your team is created** and offers one next step as its only primary
+  button (**Add a computer** while there is none). Bots are listed in the team chart's groups and order with one status
+  each, *Waiting for a computer* is said once at the top, and the tour waits for **Show me around** instead of
+  covering the screen.
 
 ## [0.3.62] - 2026-10-19
 
@@ -3661,7 +3700,8 @@ First public release.
 - Hosting: local only on a Mac, or self-hosted, including a reference AWS stack under `infra/ec2/`
   with Litestream backups.
 
-[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.62...HEAD
+[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.63...HEAD
+[0.3.63]: https://github.com/ticoteam/tico/compare/v0.3.62...v0.3.63
 [0.3.62]: https://github.com/ticoteam/tico/compare/v0.3.61...v0.3.62
 [0.3.61]: https://github.com/ticoteam/tico/compare/v0.3.60...v0.3.61
 [0.3.60]: https://github.com/ticoteam/tico/compare/v0.3.59...v0.3.60

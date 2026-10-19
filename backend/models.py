@@ -50,6 +50,15 @@ class ConversationCreate(Contract):
     subject: str = Field(default="", max_length=300)
 
 
+class VisualRef(Contract):
+    """A file version attached to a message with the title it shows under (backend/visuals.py)."""
+    ref: Annotated[StrictStr, Field(pattern=r"^[^@]+@[1-9][0-9]*$")]
+    title: Annotated[StrictStr, Field(max_length=200)] = ""
+
+
+Attachment = Annotated[StrictStr, Field(pattern=r"^[^@]+@[1-9][0-9]*$")] | VisualRef
+
+
 class MessageCreate(Contract):
     command: bool = False
     to: ID
@@ -59,6 +68,8 @@ class MessageCreate(Contract):
     refs: dict = Field(default_factory=dict)
     in_reply_to: ID | None = None
     wait_s: int | None = Field(default=None, ge=0, le=300)
+    # Versions of files in this conversation, shown with the message (backend/visuals.py), in this order.
+    attachments: list[Attachment] = Field(default_factory=list, max_length=10)
     # A bot's message to a bot waits for that bot's next run unless it needs action now (backend/bot_to_bot.py).
     needs_action: bool = False
 
@@ -67,6 +78,9 @@ class ChatCreate(Contract):
     command: bool = False
     text: Text
     refs: dict = Field(default_factory=dict)
+    attachments: list[Attachment] = Field(default_factory=list, max_length=10)
+    # With files uploaded alongside (POST /api/v2/uploads/chat/{bot}): each one's caption, in upload order.
+    titles: list[Annotated[StrictStr, Field(max_length=200)]] = Field(default_factory=list, max_length=10)
 
 
 class BatchStart(Contract):
@@ -366,7 +380,7 @@ class TaskComment(Contract):
     approval_id: ID | None = None
     text: Text
     ask: ReviewAsk | None = None
-    attachments: list[Annotated[StrictStr, Field(pattern=r"^[^@]+@[1-9][0-9]*$")]] = Field(default_factory=list, max_length=10)
+    attachments: list[Attachment] = Field(default_factory=list, max_length=10)
 
 
 class TaskAskResolve(Contract):
@@ -794,6 +808,9 @@ class ProfileReadiness(GoalReadiness):
     models: list[ID] = Field(default_factory=list, max_length=50)
     controls: list[Literal["interrupt", "new-session"]] = Field(default_factory=list)
     detail: str = Field(default="", max_length=500)
+    # Its turns on this runtime use the computer's own login (a profile that shares the operator's): one login, held
+    # once (backend/login_holds.py canonical).
+    shared_login: bool | None = None
 
 
 class HarnessReadiness(GoalReadiness):
@@ -838,6 +855,7 @@ class RuntimeReadiness(GoalReadiness):
     # One machine may hold several subscriptions for the same runtime. The runtime row keeps
     # the profile that needs attention first; this is the per-profile breakdown behind it.
     profiles: dict[str, ProfileReadiness] = Field(default_factory=dict, max_length=50)
+    shared_login: bool | None = None    # the one profile's row shown as the runtime's (ProfileReadiness)
     # The computer's own login's account, beside a ready sign-in. Shown only to an administrator or the
     # computer's operator (backend/views.py computer_details, /api/v2/operations).
     account: Account = None
@@ -1116,7 +1134,7 @@ class Heartbeat(Contract):
     platform: str = Field(max_length=100)
     capacity: int = Field(default=4, ge=1, le=256)
     # The assignment_* values name the retired temporary assignments (#420); an older runner still sends them.
-    capabilities: list[Literal["assignment_instances_v1", "assignment_cleanup_v1", "task_lanes_v1", "task_lanes_v2", "session_roots_v1", "task_goals_v1", "screen_v1", "model_sign_out_v1", "model_keys_v1", "model_switch_type_v1"]] = Field(default_factory=list, max_length=20)
+    capabilities: list[Literal["assignment_instances_v1", "assignment_cleanup_v1", "task_lanes_v1", "task_lanes_v2", "session_roots_v1", "task_goals_v1", "screen_v1", "model_sign_out_v1", "model_keys_v1", "model_switch_type_v1", "model_remove_v1"]] = Field(default_factory=list, max_length=20)
     # The bool map remains accepted during runner rollout. The server normalizes both
     # shapes before storing them, so every read path sees one structured document.
     readiness: StructuredReadiness | dict[str, bool] = Field(default_factory=dict)
@@ -1828,6 +1846,7 @@ class Completion(Contract):
     retryable: bool = False  # the runtime could not renew its sign-in; the turn never started
     fallback: str | None = Field(default=None, max_length=80)  # harness that actually ran the turn
     primary_limited: bool = False  # the bot's own runtime hit its usage limit and the company's default `fallback` ran the turn
+    primary_held: bool = False  # the claim held the bot's own login (config `primary_held`): the runner never tried it
     auth_rejected: AuthRejected | None = None  # the provider refused this computer's key or sign-in
     usage: RunUsage | None = None  # the run's token counts and the model that ran it
     # Inputs this run took from `attempts/{aid}/inputs` but never gave the runtime (the turn ended between
@@ -2002,6 +2021,11 @@ class LoginStart(Contract):
 class LogoutStart(Contract):
     runtime: Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]*$", max_length=40)]
     profile: Annotated[str, Field(pattern=r"^(?:[a-z0-9]+(?:-[a-z0-9]+)*)?$", max_length=80)] = ""
+
+
+class RemovalStart(Contract):
+    runtime: Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]*$", max_length=40)]
+    profile: Annotated[str, Field(pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$", max_length=80)]
 
 
 class SharedKeyUse(Contract):
