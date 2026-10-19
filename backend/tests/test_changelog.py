@@ -106,9 +106,9 @@ def test_read_state_is_personal_and_only_acknowledges_shown_changes(api, monkeyp
 def released_edits(root):
     """Released versions whose CHANGELOG section here differs from the one at their tag, or None when no tag is readable.
 
-    A branch made before a release's notes landed has no section for that release yet; merging it would put its
-    line under the nearest heading, which is the released one, so a missing section counts as an edit when this
-    branch changes CHANGELOG.md, unless it is part of that release's history (an older commit checked out on purpose).
+    A release whose section is not here yet (tagged on its release branch, notes not merged back to main) is not an
+    edit: lines main gains meanwhile stay under Unreleased. A pull request whose line would land in a released section
+    once merged is refused by test_pr_changelog_lines_stay_under_unreleased instead.
     """
     git = lambda *args, **kw: subprocess.run(["git", "-C", str(root), *args], capture_output=True, **kw)
     text = (root / "CHANGELOG.md").read_text()
@@ -123,13 +123,8 @@ def released_edits(root):
             size = int(header.split()[2])
             shipped, out = section(out[:size].decode(), tag[1:]), out[size + 1:]
             read += 1
-            if tag[1:] in here:
-                edited += [tag[1:]] if section(text, tag[1:]) != shipped else []
-            elif shipped and git("merge-base", "--is-ancestor", "HEAD", tag).returncode == 1:
-                fork = git("merge-base", "HEAD", tag).stdout.decode().strip()
-                # Only a branch that adds its own CHANGELOG line can have it land in the released section.
-                if not fork or git("diff", "--quiet", fork, "--", "CHANGELOG.md").returncode:
-                    edited.append(tag[1:])
+            if tag[1:] in here and section(text, tag[1:]) != shipped:
+                edited.append(tag[1:])
     return edited if read else None
 
 
@@ -157,8 +152,8 @@ def regions(text):
     return out
 
 
-def changes_outside_unreleased(root, main="origin/main"):
-    """Places outside ## [Unreleased] whose lines this branch adds or changes once merged into main, or None.
+def changes_outside_unreleased(root, main="origin/main", head="HEAD"):
+    """Places outside ## [Unreleased] whose lines `head` adds or changes once merged into main, or None.
 
     The branch is merged with main the way GitHub squashes it (git merge-tree), so a line the branch wrote under
     Unreleased before a release's notes landed, and that the merge would put in the released section, counts too.
@@ -167,7 +162,7 @@ def changes_outside_unreleased(root, main="origin/main"):
     git = lambda *args: subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True)
     if git("rev-parse", "--verify", "--quiet", main + "^{commit}").returncode:
         return None
-    merge = git("merge-tree", "--write-tree", "--name-only", main, "HEAD")
+    merge = git("merge-tree", "--write-tree", "--name-only", main, head)
     tree, _, conflicted = merge.stdout.partition("\n")
     if merge.returncode not in (0, 1) or not tree:
         return None
@@ -181,7 +176,7 @@ def changes_outside_unreleased(root, main="origin/main"):
         start, count, start2, count2 = (int(n) if n is not None else 1 for n in hunk.groups())
         # A side with count 0 (a pure addition or removal) reads no lines.
         places += before[start - 1:start - 1 + count] + after[start2 - 1:start2 - 1 + count2]
-    allowed = set(RELEASE_TRAILER.findall(git("log", "--format=%B", main + "..HEAD").stdout))
+    allowed = set(RELEASE_TRAILER.findall(git("log", "--format=%B", main + ".." + head).stdout))
     allowed |= {"links", "preamble"} if allowed else set()  # a merge-back also moves the compare links
     return sorted(set(places) - allowed - {"Unreleased"})
 
@@ -272,3 +267,41 @@ def test_changelog_guard_refuses_lines_outside_unreleased(tmp_path):
     commit(shipped.replace("## [Unreleased]\n\n", "## [Unreleased]\n\n## [9.9.9]\n\n") + links)
     assert changes_outside_unreleased(tmp_path) == [CONFLICT]
     assert outside_unreleased_message([CONFLICT]).startswith("CHANGELOG.md: this branch conflicts with main; merge main")
+
+
+def test_tag_before_its_notes_reach_main_is_not_an_edit(tmp_path):
+    def git(*args):
+        return subprocess.run(["git", "-C", str(tmp_path), "-c", "user.name=t", "-c", "user.email=t@acme.example", *args],
+                              capture_output=True, text=True, check=True).stdout
+
+    def commit(text):
+        (tmp_path / "CHANGELOG.md").write_text(text)
+        git("commit", "-qam", "Change")
+
+    git("init", "-q", "-b", "main")
+    (tmp_path / "CHANGELOG.md").write_text("# Changelog\n\n## [Unreleased]\n- Search tasks.\n\n## [1.0.0] - 2026-10-01\n- Browse.\n")
+    git("add", "CHANGELOG.md")
+    git("commit", "-qm", "Start")
+    git("tag", "v1.0.0")
+    # The release is tagged on its own branch; main gains a line before the notes are merged back.
+    git("checkout", "-q", "-b", "release")
+    notes = "# Changelog\n\n## [Unreleased]\n\n## [1.1.0] - 2026-10-02\n- Search tasks.\n\n## [1.0.0] - 2026-10-01\n- Browse.\n"
+    commit(notes)
+    git("tag", "v1.1.0")
+    git("checkout", "-q", "main")
+    commit("# Changelog\n\n## [Unreleased]\n- Archive tasks.\n- Search tasks.\n\n## [1.0.0] - 2026-10-01\n- Browse.\n")
+    assert released_edits(tmp_path) == []
+    # Once merged back, a released section that differs from its tag still fails.
+    commit(notes.replace("## [Unreleased]\n", "## [Unreleased]\n- Archive tasks.\n"))
+    assert released_edits(tmp_path) == []
+    commit(notes.replace("- Search tasks.", "- Search tasks across the team."))
+    assert released_edits(tmp_path) == ["1.1.0"]
+
+
+def test_guard_refuses_lines_that_landed_in_released_sections():
+    # #831 and #855 put their lines in the section just released; each squash against its parent replays that merge.
+    replays = {"0f93d87a4f66f8880b948f75c4df1685132f6709": "0.3.55", "6b180f1fc191b098593fe5b5a29d427461168d7a": "0.3.56"}
+    if not shutil.which("git") or any(subprocess.run(["git", "-C", str(ROOT), "cat-file", "-e", c + "^"]).returncode for c in replays):
+        pytest.skip("no full history in this checkout")
+    for squash, version in replays.items():
+        assert changes_outside_unreleased(ROOT, main=squash + "^", head=squash) == [version]

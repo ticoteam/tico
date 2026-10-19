@@ -9,7 +9,10 @@ Keep those versioned sections on `main` after publishing a tag; move only new wo
 so later builds retain the complete history and do not announce already shipped work again.
 PR checks refuse a pull request that adds or changes CHANGELOG lines outside `## [Unreleased]` once merged with main.
 The pull request that merges a release's notes back to `main`, or corrects a shipped section, passes by naming each
-released section it changes in a commit trailer: `Changelog-Release: vX.Y.Z`.
+released section it changes in a commit trailer: `Changelog-Release: vX.Y.Z`, one line per section. Every notes
+merge-back needs it, starting with the first one after this check was added. Between a tag and its merge-back,
+`main` has no section for that release yet; pull requests merged meanwhile keep their lines under Unreleased and
+stay green. Once the notes are back, a released section on `main` that differs from its tag fails the tests.
 
 **One release path.** On a team that runs Tico with a Release Manager bot, only the Release Manager publishes
 releases. A Claude Code session or any other outside session that finishes work hands it to the Release Manager on a
