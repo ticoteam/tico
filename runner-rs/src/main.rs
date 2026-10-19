@@ -237,8 +237,8 @@ fn profile_main(action: ProfileAction, config: &mut config::Config) -> i32 {
             let status = std::process::Command::new(&command[0])
                 .args(&command[1..])
                 .env_clear()
-                .envs(profile.environment(&runtime, &std::env::vars().collect()))
-                .envs(harness_tools::env_for(&runtime)) // e.g. MUSE_NO_AUTO_UPDATE: the runner updates its harnesses
+                // The manifest's [env] too, e.g. MUSE_NO_AUTO_UPDATE: the runner updates its harnesses.
+                .envs(profile.login_environment(&runtime, &std::env::vars().collect()))
                 .status();
             return status.ok().and_then(|s| s.code()).unwrap_or(1);
         }

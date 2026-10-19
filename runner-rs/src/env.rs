@@ -26,7 +26,7 @@ pub const RUNNER_HUB_ENV: &[&str] = &[
     "HUB_TOKEN", "HUB_API_URL", "HUB_WORKSPACE", "HUB_EMPLOYEE", "HUB_OPERATION_ID", "HUB_BOT", "HUB_DIR", "HUB_DB",
     "HUB_HUMAN_OVERRIDE", "HUB_INGEST_TOKEN", "HUB_RUNNER_CONFIG", "HUB_TASK_ID",
 ];
-pub const RESERVED_ENV: &[&str] = &["HOME", "PATH", "SHELL", "PYTHONPATH", "PYTHONHOME", "NODE_OPTIONS", "LD_PRELOAD", "DYLD_INSERT_LIBRARIES", "CODEX_HOME"];
+pub const RESERVED_ENV: &[&str] = &["HOME", "PATH", "SHELL", "PYTHONPATH", "PYTHONHOME", "NODE_OPTIONS", "LD_PRELOAD", "DYLD_INSERT_LIBRARIES", "CODEX_HOME", "CLAUDE_CONFIG_DIR"];
 pub const RESERVED_PREFIXES: &[&str] = &["TICO_", "DYLD_", "LD_"];
 /// Keys a turn never inherits unless a grant brings them (`runner/op.py` SECRET_KEYS).
 pub const SECRET_KEYS: &[&str] = &["OPENROUTER_API_KEY", "HUB_INGEST_TOKEN", "OP_SERVICE_ACCOUNT_TOKEN"];
@@ -254,11 +254,28 @@ mod tests {
 
     #[test]
     fn reserved_names_are_the_python_list() {
-        for k in ["HOME", "PATH", "HUB_TOKEN", "TICO_X", "DYLD_X", "LD_PRELOAD", "lower", "1ABC", "CODEX_HOME"] {
+        for k in ["HOME", "PATH", "HUB_TOKEN", "TICO_X", "DYLD_X", "LD_PRELOAD", "lower", "1ABC", "CODEX_HOME", "CLAUDE_CONFIG_DIR"] {
             assert!(reserved_credential(k), "{k}");
         }
         for k in ["GOOGLE_SA_KEY", "OPENROUTER_API_KEY", "_X", ""] {
             assert!(!reserved_credential(k), "{k}");
         }
+    }
+
+    #[tokio::test]
+    async fn a_credential_granted_as_claude_config_dir_never_reaches_the_turn() {
+        let dir = std::env::temp_dir().join(format!("tico-env-reserved-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let ctx = EnvContext { url: "http://hub.invalid", projects_dir: &dir, state_dir: &dir };
+        let granted = serde_json::json!({"credentials": [
+            {"id": "c1", "name": "Elsewhere", "env": "CLAUDE_CONFIG_DIR", "kind": "env", "value": "/elsewhere/.claude"},
+            {"id": "c2", "name": "Acme", "env": "ACME_API_KEY", "kind": "env", "value": "acme-synthetic"},
+        ]});
+        let mut vault = Vault::default();
+        let env = environment_with(&ctx, &serde_json::json!({"bot": "ops", "token": "t"}), &mut vault, Some(granted)).await.unwrap();
+        assert!(!env.contains_key("CLAUDE_CONFIG_DIR"), "{env:?}");
+        assert!(!vault.names.contains("CLAUDE_CONFIG_DIR"));
+        assert_eq!(env["ACME_API_KEY"], "acme-synthetic");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
