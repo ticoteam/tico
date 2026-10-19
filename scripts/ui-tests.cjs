@@ -92,8 +92,14 @@ module.exports = {resources, sampleCpu, inSlot};
 function inSlot(env = process.env) { return Boolean(env.CI || env.TICO_HEAVY_HELD) || process.platform === 'win32'; }
 
 if (require.main === module) {
-  const slotted = inSlot() ? null : require('node:child_process').spawnSync(
-    path.join(__dirname, 'heavy.sh'), [process.execPath, __filename, ...process.argv.slice(2)], {stdio: 'inherit'});
-  if (slotted && !slotted.error) process.exit(slotted.status ?? 1);
-  main().catch(error => { console.error(error.message); process.exitCode = 1; });
+  const go = () => main().catch(error => { console.error(error.message); process.exitCode = 1; });
+  if (inSlot()) go();
+  else {
+    // The wrapper's own stop ends the browser scripts, so a stop here is passed on and the exit waits for it.
+    const slotted = spawn(path.join(__dirname, 'heavy.sh'), [process.execPath, __filename, ...process.argv.slice(2)],
+                          {stdio: 'inherit'});
+    for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) process.on(signal, () => slotted.kill('SIGTERM'));
+    slotted.on('error', go);
+    slotted.on('exit', code => process.exit(code ?? 1));
+  }
 }
