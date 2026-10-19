@@ -365,11 +365,6 @@ STABLE = [
      "The Assistant only: post the list of approvals it is about to approve for you in your chat; only those may then "
      "be approved on your yes", None),
     # Goals and KPIs (docs/goals-and-kpis.md)
-    ("/api/v2/ceo-bot", "get", "Goals", "getCeoBotSwitch",
-     "Whether this install has the CEO Bot switch on (the Goal Manager shown as the CEO Bot, at the top of the chart)", None),
-    ("/api/v2/ceo-bot", "post", "Goals", "setCeoBotSwitch",
-     "Owners and admins: turn the CEO Bot switch on or off for this install; no bot may. Only names and the chart change",
-     None),
     ("/api/v2/goal-manager/turn-on", "post", "Goals", "turnOnGoalManager",
      "Owner only: add the Goal Manager from the catalog or restore it, and activate it", None),
     ("/api/v2/goals", "get", "Goals", "listGoals",

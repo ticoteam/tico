@@ -8,7 +8,6 @@ from types import SimpleNamespace
 from clients.catalog import free_slug, slug_from_name
 
 from . import access as Access
-from . import ceo_bot
 from . import message_bots as MessageBots
 from . import bot_access as BA
 from . import models as M
@@ -456,7 +455,7 @@ class SettingsAdmin:
         if bot in (self.settings.assistant_bot, "botops", "librarian", "goal-manager"):
             raise Problem("system_bot", (self.settings.assistant_name if bot == self.settings.assistant_bot
                                          else "BotOps" if bot == "botops" else "The Librarian" if bot == "librarian"
-                                         else "The " + ceo_bot.name(c))
+                                         else "The Goal Manager")
                           + " is built in to every team and cannot be archived or deleted; you can pause or rename it", 409)
         self._manager(c, who, bot)
         if self._config(c, bot)["revision"] != body.expected_revision:
