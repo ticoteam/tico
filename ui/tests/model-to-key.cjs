@@ -180,11 +180,14 @@ const {unrouted} = require('./support/routes.cjs');
     assert.equal(await fails(keys), keys + '.');
     for (const said of [lost, keys]) assert.doesNotMatch(said, /still in use/);
 
-    // Offline: nothing to offer.
+    // Offline: Switch to API key stays, disabled, saying why.
+    const offered = await detail.locator('[data-model-to-key]').count();
     box.last_seen = at(-3 * 3600000);
     await page.evaluate(() => loadSettings());
     await own('claude').locator('.computer-conn-signin', {hasText: 'last checked'}).waitFor();
-    assert.equal(await detail.locator('[data-model-to-key]').count(), 0);
+    assert.ok(offered > 0);
+    assert.deepEqual(await detail.locator('[data-model-to-key]').evaluateAll(all => all.map(b => b.disabled && b.title)),
+      Array(offered).fill('Computer is offline'));
     assert.deepEqual(errors, []);
     await page.close();
 
