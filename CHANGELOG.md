@@ -76,6 +76,9 @@ All notable changes to Tico are recorded here. The format follows
   before this keeps today's behaviour ([sessions](docs/sessions.md)).
 
 ### Changed
+- **First run, computer step**: one numbered path (make the code, then the line that uses it), with the plain
+  `docker run` alternative behind **Other ways**, closed. After **Add computer** the one-time code shows in large type
+  on the screen, not only in a toast. Commands wrap inside their box on a phone and on a desktop, with **Copy** in the box.
 - **First run, after Create**: the screen says **Your team is created** and offers one next step as its only primary
   button (**Add a computer** while there is none). Bots are listed in the team chart's groups and order with one status
   each, *Waiting for a computer* is said once at the top, and the tour waits for **Show me around** instead of
