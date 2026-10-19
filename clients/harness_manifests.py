@@ -22,6 +22,7 @@ FIELDS = {
     "subscription_profiles": (bool, False),
     "profile_home": (str, ""),
     "profile_dirs": (list, []),
+    "profile_home_overrides": (list, []),
     "own_config_home": (bool, False),
     "weekly_usage": (str, ""),
     "account": (str, ""),

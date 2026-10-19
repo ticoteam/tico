@@ -1042,9 +1042,9 @@ fn session_of(thread_id: &str, t: &Thread) -> String {
 
 /// This exact session's transcript: other bots' and people's transcripts stay private.
 fn transcript(settings: &Settings, session: &str) -> Option<std::path::PathBuf> {
-    let get = |k: &str| if settings.env.is_empty() { std::env::var(k).ok() } else { settings.env.get(k).cloned() }.filter(|v| !v.is_empty());
-    let home = get("HOME").or_else(|| std::env::var("HOME").ok()).unwrap_or_default();
-    let dir = get("CLAUDE_CONFIG_DIR").map(std::path::PathBuf::from).unwrap_or_else(|| std::path::Path::new(&home).join(".claude"));
+    // Where the turn's Claude keeps it: its HOME's .claude, as turn_env never lets CLAUDE_CONFIG_DIR through.
+    let home = turn_env(settings).remove("HOME").unwrap_or_default();
+    let dir = std::path::Path::new(&home).join(".claude");
     let name = format!("{session}.jsonl");
     std::fs::read_dir(dir.join("projects")).ok()?.flatten().map(|e| e.path().join(&name)).find(|p| p.is_file())
 }
@@ -1094,6 +1094,9 @@ fn turn_env(settings: &Settings) -> crate::env::Env {
             env.insert("HOME".into(), home);
         }
     }
+    // Claude reads CLAUDE_CONFIG_DIR ahead of HOME: one inherited from this process (or brought by a grant) would run
+    // the turn on some other folder's login, not the one its sign-in and readiness check wrote under HOME.
+    env.remove("CLAUDE_CONFIG_DIR");
     env
 }
 
@@ -1167,6 +1170,41 @@ mod tests {
         assert!(!env.contains_key("CLAUDE_CODE_DISABLE_AUTO_MEMORY"));
         assert_eq!(turn_env(&Settings { shared: true, ..settings })["CLAUDE_CODE_DISABLE_AUTO_MEMORY"], "1");
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_turn_never_runs_claude_on_an_inherited_or_granted_config_dir() {
+        const CHILD: &str = "TICO_TEST_TURN_CONFIG_DIR";
+        let Some(root) = std::env::var_os(CHILD).map(std::path::PathBuf::from) else {
+            // A process of its own, whose environment points Claude at a folder outside the turn's HOME.
+            let root = std::env::temp_dir().join(format!("tico-turn-config-dir-{}", uuid::Uuid::new_v4().simple()));
+            let out = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "hosts::claude::tests::a_turn_never_runs_claude_on_an_inherited_or_granted_config_dir", "--nocapture"])
+                .env(CHILD, &root).env("HOME", root.join("home")).env("CLAUDE_CONFIG_DIR", root.join("outside")).output().unwrap();
+            std::fs::remove_dir_all(&root).ok();
+            let said = String::from_utf8_lossy(&out.stdout);
+            assert!(out.status.success() && said.contains("1 passed"), "{said}{}", String::from_utf8_lossy(&out.stderr));
+            return;
+        };
+        // The same session's transcript in both folders: the turn's is the one under its HOME.
+        for dir in ["home/.claude", "outside", "profile/.claude"] {
+            std::fs::create_dir_all(root.join(dir).join("projects/p")).unwrap();
+            std::fs::write(root.join(dir).join("projects/p/s1.jsonl"), dir).unwrap();
+        }
+        // No environment given: this process's, without its CLAUDE_CONFIG_DIR.
+        let bare = Settings::default();
+        let env = turn_env(&bare);
+        assert_eq!(env["HOME"], root.join("home").display().to_string());
+        assert!(!env.contains_key("CLAUDE_CONFIG_DIR"), "{env:?}");
+        assert_eq!(transcript(&bare, "s1"), Some(root.join("home/.claude/projects/p/s1.jsonl")));
+        // A profile's environment that carries one anyway (an inherited or granted value): left out too.
+        let mut given = Settings::default();
+        given.env.insert("HOME".into(), root.join("profile").display().to_string());
+        given.env.insert("CLAUDE_CONFIG_DIR".into(), root.join("outside").display().to_string());
+        let env = turn_env(&given);
+        assert_eq!(env["HOME"], root.join("profile").display().to_string());
+        assert!(!env.contains_key("CLAUDE_CONFIG_DIR"), "{env:?}");
+        assert_eq!(transcript(&given, "s1"), Some(root.join("profile/.claude/projects/p/s1.jsonl")));
     }
 
     /// Runs one turn on a `claude` that writes `first`, waits a second, writes `then`, and exits when stdin closes.

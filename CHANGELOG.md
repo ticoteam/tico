@@ -8,6 +8,15 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Tico AI Gateway** in Settings > AI providers: the owner saves the gateway key Tico gives them (or the server's
+  `TICO_GATEWAY_KEY` sets it, and wins), Decide asks the Gateway with that same key, and bots can then pick **Tico Cheap, Mid and Power 1.0** (Claude Haiku, Sonnet and Opus
+  5.5 underneath) like any other model, streamed through the Gateway on pi. The key is sealed and never shown after
+  save. No bot holds it: the computer running a bot on a Tico model passes its model calls on with the key, so Tico
+  models run only on a computer that runs bots as their own user (Tico's Docker runner); elsewhere a bot on one says
+  so once. The owner sees the 80% monthly cap warning and a key the Gateway doesn't
+  recognise. A bot stopped by the cap says "Gateway cap reached" and waits for next month; every other Gateway
+  refusal reads plainly and is retried only when retrying can help, and a reply cut off mid-stream is posted with a
+  note ([Tico AI Gateway](docs/ai-gateway.md)).
 - **Sign in on a Tico we host**: with `TICO_HOSTED` set (`own` or `invited`), **Sign in** for Claude Code and
   Codex (ChatGPT) in Settings > Computers shows only the provider's link and code, never what else the computer
   printed and never a terminal, and closes by itself once signed in or cancelled. Any other value of `TICO_HOSTED`
@@ -38,6 +47,11 @@ All notable changes to Tico are recorded here. The format follows
   apart; hovering a bot shows its whole name, and **Needs setup** is a small gear beside the name. The anonymous
   usage-count notice no longer sits over the wizard or the screen after **Create**: it appears on the first other page,
   and nothing is counted until it has.
+- **Claude sign-in on a subscription profile stays in that profile.** A runner whose own environment set
+  `CLAUDE_CONFIG_DIR` signed Claude Code in there (Settings > Computers and `tico-runner profile login`) and checked
+  it there, while turns read the profile's `HOME`: sign-in looked done but turns were signed out or ran on another
+  login. A profile's Claude now never gets an inherited `CLAUDE_CONFIG_DIR`, no Claude turn runs with one, and
+  `CLAUDE_CONFIG_DIR` is a reserved variable name, so a credential can no longer be granted under it.
 - Opening a card in **Needs you** (an approval, a task, a question) no longer sends a failing request for issue
   "NaN" in the background. Only an issues inbox card fetches its full request.
 - **Clear** on a bot's chat now really starts the bot over. Before, it only trimmed the history Tico sends, and on
