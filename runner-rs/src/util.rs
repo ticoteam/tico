@@ -259,4 +259,19 @@ mod tests {
     fn py_dumps_spaces_like_python() {
         assert_eq!(py_dumps(&json!({"a": [1, "é"], "b": {"c": null}})), "{\"a\": [1, \"é\"], \"b\": {\"c\": null}}");
     }
+
+    #[tokio::test]
+    async fn a_panic_off_the_workers_is_the_callers_panic_and_nothing_after_it_runs() {
+        // A scrub that panics must never read as an empty tree (nothing left out) and go on to publish.
+        let reached = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let after = reached.clone();
+        let ran = tokio::spawn(async move {
+            let tree: crate::redact::Tree = off_worker(|| panic!("scrub failed")).await;
+            after.store(true, std::sync::atomic::Ordering::SeqCst);
+            tree
+        })
+        .await;
+        assert!(ran.unwrap_err().is_panic());
+        assert!(!reached.load(std::sync::atomic::Ordering::SeqCst));
+    }
 }

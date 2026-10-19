@@ -336,10 +336,6 @@ fn same_repository(url: &str, repository: &str) -> bool {
     text.ends_with(&format!("github.com/{repo}")) || text.ends_with(&format!("github.com:{repo}"))
 }
 
-/// Give a bot's local history its first home on GitHub (git_credentials.publish_history): a checkout with commits
-/// and no upstream gets `origin` set to the bot's repository and `git push -u origin <branch>`, with the turn's own
-/// scoped token. Never forces; a remote holding history this checkout lacks is left alone and reported.
-/// (state, detail): `published`, `current` (nothing to do), `skipped` or `failed`.
 /// The secret scrub of what a turn changed, on the blocking pool: it runs git and reads every changed file, which
 /// on a busy computer takes long enough to stall every turn sharing the two async workers.
 pub(crate) async fn scrub_changes(r: &Arc<Redactor>, root: &Path, since: &str) -> crate::redact::Tree {
@@ -347,6 +343,23 @@ pub(crate) async fn scrub_changes(r: &Arc<Redactor>, root: &Path, since: &str) -
     crate::util::off_worker(move || r.scrub_tree(&root, &since)).await
 }
 
+/// The provider thread a turn resumes next, saved as its model ends, on the blocking pool: two turns ending while
+/// the database is busy must not take both async workers from every other turn's events and result.
+pub(crate) async fn keep_session(state: &crate::state::State, bot: &str, conversation: &str, runtime: &str, thread: &str) -> Result<(), String> {
+    let (bot, conversation, runtime, thread) = (bot.to_string(), conversation.to_string(), runtime.to_string(), thread.to_string());
+    state.off(move |s| s.save_session(&bot, &conversation, &runtime, &thread)).await
+}
+
+/// A thread the next turn must not resume, dropped on the blocking pool like `keep_session`.
+async fn drop_session(state: &crate::state::State, bot: &str, conversation: &str, runtime: &str, thread: &str) -> Result<(), String> {
+    let (bot, conversation, runtime, thread) = (bot.to_string(), conversation.to_string(), runtime.to_string(), thread.to_string());
+    state.off(move |s| s.forget_session(&bot, &conversation, &runtime, &thread)).await
+}
+
+/// Give a bot's local history its first home on GitHub (git_credentials.publish_history): a checkout with commits
+/// and no upstream gets `origin` set to the bot's repository and `git push -u origin <branch>`, with the turn's own
+/// scoped token. Never forces; a remote holding history this checkout lacks is left alone and reported.
+/// (state, detail): `published`, `current` (nothing to do), `skipped` or `failed`.
 pub async fn publish_history(path: &Path, repository: &str, env: &Env) -> (&'static str, String) {
     if repository.is_empty() || !path.join(".git").exists() {
         return ("skipped", if repository.is_empty() { "no repository link" } else { "not a git checkout" }.into());
@@ -1011,7 +1024,7 @@ impl Runner {
             let d = Drive { aid: &aid, host: h, thread: &th, effort: effort.as_deref(), limit, flags: &flags, wake: &wake, redactor: redactor.as_ref(), runtime: &runtime };
             drove = self.drive(&d, &mut rx, t, segments.last_mut().unwrap(), &mut carried, &mut auth_rejected, &mut goal).await?;
             turn = Some(drove.turn.clone());
-            self.state.save_session(&bot, &conv, &session_runtime, &h.session_id(&th))?;
+            keep_session(&self.state, &bot, &conv, &session_runtime, &h.session_id(&th)).await?;
             // A runtime that cannot sign itself in is as unavailable as one out of quota: a bot with a fallback
             // harness runs the turn there instead of losing it.
             unavailable = drove.limited || drove.retryable;
@@ -1069,7 +1082,7 @@ impl Runner {
             uses.push(hop.runtime.clone());
             crate::harness_tools::turn_runtimes(&aid, &uses);
             if let Some(th) = &thread {
-                let _ = self.state.forget_session(&bot, &conv, &runtime, th);
+                let _ = drop_session(&self.state, &bot, &conv, &runtime, th).await;
             }
             if let Some(h) = &host {
                 h.stop().await;
@@ -1237,7 +1250,7 @@ impl Runner {
             if let Some(th) = &thread {
                 // A host that aborts the next turn on an interrupted thread at once (`resume_after_interrupt =
                 // false`): a retry starts fresh.
-                let _ = self.state.forget_session(&bot, &conv, &runtime, th);
+                let _ = drop_session(&self.state, &bot, &conv, &runtime, th).await;
             }
         }
         let mut reply = std::mem::take(&mut drove.reply);
@@ -1806,6 +1819,29 @@ mod tests {
         seen.lock().unwrap().iter().filter(|(m, p, _)| m == "POST" && p.ends_with(end)).count()
     }
 
+    /// Waits for the third turn's result, or for the hold to end without it.
+    fn until_posted(seen: &Mutex<Vec<(String, String, Value)>>, end: &str, held: &std::thread::JoinHandle<()>) {
+        while posted(seen, end) == 0 && !held.is_finished() {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// The database busy for `ms` (a long fsync or checkpoint), returned once the connection is really held.
+    fn hold_state(state: &crate::state::State, ms: u64) -> std::thread::JoinHandle<()> {
+        let (state, (tx, rx)) = (state.clone(), std::sync::mpsc::channel());
+        let held = std::thread::spawn(move || {
+            state
+                .with(|_| {
+                    tx.send(()).unwrap();
+                    std::thread::sleep(Duration::from_millis(ms));
+                    Ok(())
+                })
+                .unwrap()
+        });
+        rx.recv().unwrap();
+        held
+    }
+
     #[test]
     fn two_slow_scrubs_do_not_hold_up_another_turns_events_and_result() {
         let (url, seen) = hub_apart();
@@ -1816,9 +1852,9 @@ mod tests {
         rt.block_on(async {
             // Two turns' scrubs stuck for 3 s, as many as the runtime has async workers.
             let redactor = Arc::new(Redactor::new(&["granted-secret-value".into()]));
-            let r = redactor.clone();
-            let held = std::thread::spawn(move || r.hold_for(Duration::from_millis(3000)));
-            std::thread::sleep(Duration::from_millis(50));
+            let (r, (tx, rx)) = (redactor.clone(), std::sync::mpsc::channel());
+            let held = std::thread::spawn(move || r.hold_for(Duration::from_millis(3000), tx));
+            rx.recv().unwrap();
             let scrubs: Vec<_> = (0..2)
                 .map(|_| {
                     let (r, root) = (redactor.clone(), dir.clone());
@@ -1832,7 +1868,7 @@ mod tests {
                 other.flush("c").await.unwrap();
                 other.complete("c", &json!({"outcome": "completed", "text": "Acme's summary is ready", "last_seq": 1})).await.unwrap();
             });
-            std::thread::sleep(Duration::from_millis(1500));
+            until_posted(&seen, "/attempts/c/complete", &held);
             let (events, results) = (posted(&seen, "/attempts/c/events"), posted(&seen, "/attempts/c/complete"));
             assert!(!held.is_finished(), "the scrubs were still held");
             assert_eq!((events, results), (1, 1), "the other turn's events and result went out while two scrubs were stuck");
@@ -1856,9 +1892,7 @@ mod tests {
         let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap();
         rt.block_on(async {
             // The database busy for 3 s (a long fsync or checkpoint); two turns' flushes wait on it.
-            let state = runner.state.clone();
-            let held = std::thread::spawn(move || state.with(|_| Ok(std::thread::sleep(Duration::from_millis(3000)))).unwrap());
-            std::thread::sleep(Duration::from_millis(50));
+            let held = hold_state(&runner.state, 3000);
             let flushes: Vec<_> = ["a", "b"]
                 .into_iter()
                 .map(|aid| {
@@ -1871,7 +1905,7 @@ mod tests {
             let handed = tokio::spawn(async move {
                 other.complete("c", &json!({"outcome": "completed", "text": "done", "last_seq": 0})).await.unwrap();
             });
-            std::thread::sleep(Duration::from_millis(1500));
+            until_posted(&seen, "/attempts/c/complete", &held);
             assert!(!held.is_finished(), "the database was still busy");
             assert_eq!(posted(&seen, "/attempts/c/complete"), 1, "the other turn's result went out while two flushes waited");
             assert_eq!(posted(&seen, "/attempts/a/events") + posted(&seen, "/attempts/b/events"), 0);
@@ -1882,6 +1916,41 @@ mod tests {
             handed.await.unwrap();
             assert_eq!((posted(&seen, "/attempts/a/events"), posted(&seen, "/attempts/b/events")), (1, 1), "the waiting flushes went out after");
         });
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn two_turns_saving_their_session_as_the_model_ends_do_not_hold_up_another_turns_result() {
+        let (url, seen) = hub_apart();
+        let (runner, dir) = runner_at(&url, "slow-session");
+        let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap();
+        rt.block_on(async {
+            // Two turns' models end while the database is busy: each saves its thread where `drive` returns.
+            let held = hold_state(&runner.state, 3000);
+            let saves: Vec<_> = ["t-a", "t-b"]
+                .into_iter()
+                .map(|th| {
+                    let state = runner.state.clone();
+                    tokio::spawn(async move { keep_session(&state, "acme-ops", &format!("conversation:{th}"), "claude", th).await.unwrap() })
+                })
+                .collect();
+            std::thread::sleep(Duration::from_millis(100));
+            let other = runner.clone();
+            let handed = tokio::spawn(async move {
+                other.complete("c", &json!({"outcome": "completed", "text": "done", "last_seq": 0})).await.unwrap();
+            });
+            until_posted(&seen, "/attempts/c/complete", &held);
+            assert!(!held.is_finished(), "the database was still busy");
+            assert_eq!(posted(&seen, "/attempts/c/complete"), 1, "the other turn's result went out while two session saves waited");
+            held.join().unwrap();
+            for s in saves {
+                s.await.unwrap();
+            }
+            handed.await.unwrap();
+        });
+        for th in ["t-a", "t-b"] {
+            assert_eq!(runner.state.session("acme-ops", &format!("conversation:{th}"), "claude").unwrap().as_deref(), Some(th), "saved after the wait");
+        }
         std::fs::remove_dir_all(&dir).ok();
     }
 }

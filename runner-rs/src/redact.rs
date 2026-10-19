@@ -103,10 +103,12 @@ impl Redactor {
         Redactor { inner: RwLock::new(build(secrets)) }
     }
 
-    /// Holds the redactor for `d`, the way a scrub stuck in git or in a large file holds its thread.
+    /// Holds the redactor for `d`, the way a scrub stuck in git or in a large file holds its thread; `held` hears
+    /// once it is.
     #[cfg(test)]
-    pub fn hold_for(&self, d: std::time::Duration) {
+    pub fn hold_for(&self, d: std::time::Duration, held: std::sync::mpsc::Sender<()>) {
         let _held = self.inner.write().unwrap();
+        held.send(()).unwrap();
         std::thread::sleep(d);
     }
 
