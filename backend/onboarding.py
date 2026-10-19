@@ -24,7 +24,7 @@ from . import models as M
 from . import providers
 from . import beta, census, changelog, releases, replication, runner_versions, support_asks, ui_bundle
 from .config import ASSISTANT_NAME
-from . import rooms, routines, statuses
+from . import ceo_bot, rooms, routines, statuses
 from . import access as Access
 from . import groups as Groups
 from . import message_bots as MessageBots
@@ -159,7 +159,7 @@ def _card(document, instructions):
 # A template's avatar symbol: a Material Symbols name (card.yaml `icon`). Read on every bot list, so
 # the names are parsed again only when a card file changes.
 ICON_NAME = re.compile(r"^[a-z0-9_]{1,48}$")
-_icon_cache = {"key": None, "icons": {}, "helpers": frozenset()}
+_icon_cache = {"key": None, "icons": {}, "helpers": frozenset(), "leads": frozenset()}
 
 
 def template_icons(settings):
@@ -172,15 +172,20 @@ def helper_templates(settings):
     return _template_marks(settings)["helpers"]
 
 
+def lead_templates(settings):
+    """The templates whose card says `lead: true`: a department's Head (backend/recruit_rank.py)."""
+    return _template_marks(settings)["leads"]
+
+
 def _template_marks(settings):
     root = Path(settings.catalog_dir)
     try:
         files = sorted(root.glob("*/" + CARD_FILE))
         key = (str(root), tuple((p.name, p.parent.name, p.stat().st_mtime_ns) for p in files))
     except OSError:
-        return {"icons": {}, "helpers": frozenset()}
+        return {"icons": {}, "helpers": frozenset(), "leads": frozenset()}
     if _icon_cache["key"] != key:
-        icons, helpers = {}, set()
+        icons, helpers, leads = {}, set(), set()
         for path in files:
             try:
                 document = yaml.safe_load(path.read_text())
@@ -193,7 +198,9 @@ def _template_marks(settings):
                 icons[template] = icon
             if template and document.get("kind") == "helper":
                 helpers.add(template)
-        _icon_cache.update(key=key, icons=icons, helpers=frozenset(helpers))
+            if template and document.get("lead") is True:
+                leads.add(template)
+        _icon_cache.update(key=key, icons=icons, helpers=frozenset(helpers), leads=frozenset(leads))
     return _icon_cache
 
 
@@ -316,6 +323,7 @@ def config_view(c, settings, who=None):
     value["backup"] = replication.status()
     value["runner_compat"] = runner_versions.desired()
     value["beta"] = beta.listing()      # the Beta pill and Help's Beta list (ui/app/state.js betaPill)
+    value["ceo_bot"] = ceo_bot.on(c)    # the CEO Bot switch: its name and place on the chart (ui/app/state.js ceoBotOn)
     from . import update_feeds
     value["update_feeds"] = update_feeds.status()   # what Subscribe to updates can send (settings-bot-editor.js)
     return value
@@ -669,7 +677,7 @@ class Onboarding:
 
     def turn_on_goal_manager(self, c, who):
         """The same for the built-in Goal Manager (docs/goals-and-kpis.md)."""
-        return self._turn_on(c, who, GOAL_MANAGER, GOAL_MANAGER, "Goal Manager", "goal_manager.turned_on")
+        return self._turn_on(c, who, GOAL_MANAGER, GOAL_MANAGER, ceo_bot.name(c), "goal_manager.turned_on")
 
     def ensure_librarian(self, c):
         """A company set up before the Librarian was built in gets it without anyone clicking, once
@@ -681,7 +689,7 @@ class Onboarding:
 
     def ensure_goal_manager(self, c):
         """The same for the Goal Manager: a company from before it was built in gets it once it can run it."""
-        return self._ensure_builtin(c, GOAL_MANAGER, "Goal Manager", "goal_manager.turned_on")
+        return self._ensure_builtin(c, GOAL_MANAGER, ceo_bot.name(c), "goal_manager.turned_on")
 
     def _ensure_builtin(self, c, slug, name, event):
         if not load(c)["completed"] or not providers.configured(providers.load(c, self.settings)):
@@ -941,6 +949,8 @@ class Onboarding:
         """Create the bot, or bring an existing definition up to the chosen name. A bot that
         is already running is never demoted back to planned."""
         summary = str(card.get("summary") or "")
+        if slug == GOAL_MANAGER and ceo_bot.on(c):
+            choice = {**choice, "display_name": ceo_bot.NAME}      # a plan run again never names it back
         existing = c.execute("SELECT revision FROM bot_config WHERE bot=?", (slug,)).fetchone()
         if not existing:
             picked = self._runtime(c, card)

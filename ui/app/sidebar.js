@@ -72,6 +72,10 @@ function orgHang(key, boss, groupOf) {
   if (group) return boss && groupOf[boss] === group ? boss : 'g:' + group;
   return boss && !groupOf[boss] ? boss : '';
 }
+// Where a group hangs: in its parent group, else at the top. With the CEO Bot switch on, the server hangs the top-level
+// group of a Head it puts under the CEO Bot there too (`org_parent`, backend/ceo_bot.py), when the CEO Bot is on the chart.
+const orgGroupParent = (g, keys) => g.parent && keys.has('g:' + g.parent) ? 'g:' + g.parent
+  : ceoBotOn() && g.org_parent === 'b:goal-manager' && keys.has('b:goal-manager') ? 'b:goal-manager' : '';
 function orgGroupOf(people, bots) {
   const groups = orgGroupIds(), out = {};
   for (const p of people) if (groups.has(p.team)) out['p:' + p.id] = p.team;
@@ -87,8 +91,9 @@ function orgTreeByParent() {
   const bots = (S.emps || []).filter(e => orgBranchVisible(e) && orgMineKeep(e));
   const empIds = new Set(bots.map(e => e.name));
   const groupOf = orgGroupOf(people, bots);
+  const keys = new Set([...[...groups].map(id => 'g:' + id), ...bots.map(e => 'b:' + e.name)]);
   for (const g of (S.orgGroups || [])) {
-    (byParent[g.parent && groups.has(g.parent) ? 'g:' + g.parent : ''] ||= []).push({kind: 'group', id: g.id, name: g.name, order: g.order || 0});
+    (byParent[orgGroupParent(g, keys)] ||= []).push({kind: 'group', id: g.id, name: g.name, order: g.order || 0});
   }
   for (const p of people) {
     (byParent[orgHang('p:' + p.id, orgBossKey({kind: 'person', person: p}), groupOf)] ||= []).push({kind: 'person', id: p.id, person: p});
@@ -205,6 +210,7 @@ function defaultCollapsed() {
     if (!k || !by[k].length) continue;
     if (k.startsWith('g:')) continue;
     if (founder && k === 'p:' + founder.id) continue;
+    if (k === 'b:goal-manager' && ceoBotOn()) continue;        // the CEO Bot heads the chart: its Heads show
     keys.add(k);
   }
   return keys;
@@ -516,7 +522,9 @@ $('#org-history').onclick = () => {
 // Message bots sit in their own group after the team chart; built-ins have separate entry points. `reports_to` is untouched,
 // and a bot that reports to one hangs where it would have.
 const MESSAGE_BOTS_GROUP = '__message_bots';
-const isHelperBot = e => isBuiltInBot(e.name) || !!e.helper || (S.people || []).some(p => p.inbox_bot === e.name);
+// With the CEO Bot switch on, the Goal Manager is on the chart as the CEO Bot (ceoBotOn).
+const isHelperBot = e => (isBuiltInBot(e.name) && !(e.name === 'goal-manager' && ceoBotOn())) || !!e.helper
+  || (S.people || []).some(p => p.inbox_bot === e.name);
 // The order here and on Goals: the Assistant, then the other built-ins, then message bots.
 const HELPER_ORDER = ['botops', 'librarian', 'goal-manager', 'inbox'];
 const helperRank = e => e.name === assistantBot() ? -1 : HELPER_ORDER.includes(e.name) ? HELPER_ORDER.indexOf(e.name) : 99;
