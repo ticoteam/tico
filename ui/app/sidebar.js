@@ -491,7 +491,9 @@ $('#org-history').onclick = () => {
 // Message bots sit in their own group after the team chart; built-ins have separate entry points. `reports_to` is untouched,
 // and a bot that reports to one hangs where it would have.
 const MESSAGE_BOTS_GROUP = '__message_bots';
-const isHelperBot = e => isBuiltInBot(e.name) || !!e.helper || (S.people || []).some(p => p.inbox_bot === e.name);
+// With the CEO Bot switch on, the Goal Manager is on the chart as the CEO Bot (ceoBotOn).
+const isHelperBot = e => (isBuiltInBot(e.name) && !(e.name === 'goal-manager' && ceoBotOn())) || !!e.helper
+  || (S.people || []).some(p => p.inbox_bot === e.name);
 // The order here and on Goals: the Assistant, then the other built-ins, then message bots.
 const HELPER_ORDER = ['botops', 'librarian', 'goal-manager', 'inbox'];
 const helperRank = e => e.name === assistantBot() ? -1 : HELPER_ORDER.includes(e.name) ? HELPER_ORDER.indexOf(e.name) : 99;

@@ -148,13 +148,13 @@ function goalColourHtml(g) {
   return `<div class="goal-f goal-colour"><span>Colour</span><div class="goal-colour-row">
       <select name="status" aria-label="Colour"><option value="">${byHand ? 'Set by hand' : 'Automatic'}</option>${GOAL_COLOURS.map(([v, label]) => `<option value="${v}">${label}</option>`).join('')}</select>
       <input name="note" type="text" maxlength="2000" autocomplete="off" placeholder="One sentence: why" aria-label="Why"></div>
-      ${byHand ? '<button class="linkish goal-auto" type="button" data-goal-auto>Let Goal Manager set it</button>' : ''}</div>`;
+      ${byHand ? `<button class="linkish goal-auto" type="button" data-goal-auto>Let ${esc(goalManagerName())} set it</button>` : ''}</div>`;
 }
 function goalNoteHtml(g, may) {
   const byHand = g.status_source === 'person' && ['red', 'yellow', 'green'].includes(g.status);
   const said = byHand ? `Set by ${goalActorName(g.status_by)}${g.status_note ? ': ' + g.status_note : ''}` : g.status_note || '';
   const suggest = byHand && g.suggest_status
-    ? `<div class="goal-note goal-suggest">Goal Manager suggests <b>${esc(g.suggest_status)}</b>${g.suggest_note ? ': ' + esc(g.suggest_note) : ''}${may ? ' <button class="linkish" type="button" data-goal-auto="' + esc(g.id) + '">Let Goal Manager set it</button>' : ''}</div>` : '';
+    ? `<div class="goal-note goal-suggest">${esc(goalManagerName())} suggests <b>${esc(g.suggest_status)}</b>${g.suggest_note ? ': ' + esc(g.suggest_note) : ''}${may ? ' <button class="linkish" type="button" data-goal-auto="' + esc(g.id) + '">Let ' + esc(goalManagerName()) + ' set it</button>' : ''}</div>` : '';
   return (said ? `<div class="goal-note">${esc(said)}</div>` : '') + suggest;
 }
 function goalFormHtml(g, goals, {owner = '', company = false, fixed = false} = {}) {
@@ -233,7 +233,7 @@ function pageGoals() {
   $('#main').classList.add('goals-layout');
   $('#main').innerHTML = `<div class="goals-main"><h1 class="sr-only">Goals</h1>
       <div id="goal-body"><p class="muted">Loading…</p></div></div>
-    <aside class="gm gm-rail" id="goal-manager-panel" aria-label="Goal Manager"></aside>`;
+    <aside class="gm gm-rail" id="goal-manager-panel" aria-label="${esc(goalManagerName())}"></aside>`;
   goalManagerMount(state);
   goalsLoad(state);
 }
@@ -304,7 +304,7 @@ async function goalManagerMount(pageState) {
   GOAL_MANAGER_STOP = () => { stopped = true; stopStream(); if (composer) PILLS.delete(composer); };
   const off = !bot ? 'Not set up' : GM_STATE[bot.status] || '';
   host.innerHTML = `<section class="rail-sec gm-info">
-      <header class="gm-head"><h2>Goal Manager</h2>${off ? `<span class="pill">${esc(off)}</span>` : ''}<a href="#/bot/${GM}">Open bot</a></header>
+      <header class="gm-head"><h2>${esc(goalManagerName())}</h2>${off ? `<span class="pill">${esc(off)}</span>` : ''}<a href="#/bot/${GM}">Open bot</a></header>
       <p class="gm-what">Keeps KPIs current and each goal green, yellow or red. Humans set the goals.</p></section>
     ${bot ? `<section class="rail-sec" aria-labelledby="gm-routines-h"><h3 class="rail-h" id="gm-routines-h">Routines</h3>
       <ul class="gm-routines" data-gm-routines><li class="muted">Loading…</li></ul><p class="gm-last" data-gm-result></p></section>` : ''}
@@ -329,7 +329,7 @@ async function goalManagerMount(pageState) {
     };
   } else {
     chat.innerHTML = `<h3 class="rail-h" id="gm-chat-h">Chat</h3>
-      <div class="gm-thread" data-gm-thread role="log" aria-label="Goal Manager conversation" tabindex="0"><p class="muted">Loading conversation…</p></div>
+      <div class="gm-thread" data-gm-thread role="log" aria-label="${esc(goalManagerName())} conversation" tabindex="0"><p class="muted">Loading conversation…</p></div>
       <div class="gm-form"></div>
       <p class="err" data-gm-error role="alert" hidden></p>`;
     const error = chat.querySelector('[data-gm-error]');
@@ -345,9 +345,9 @@ async function goalManagerMount(pageState) {
       const rows = messages.map(m => v2MessageHTML({...m, run:null}));
       const live = execution && execution.state !== 'completed' ? execution.text : '';
       if (live) rows.push(`<div data-gm-live>${v2MessageHTML({from_actor:'bot:' + GM, body:live})}</div>`);
-      else if (noProvider()) rows.push('<p class="muted" data-gm-provider>The Goal Manager needs an AI provider. <a href="#/settings" data-gs-tab="providers">Settings &gt; AI providers</a></p>');
+      else if (noProvider()) rows.push('<p class="muted" data-gm-provider>The ' + esc(goalManagerName()) + ' needs an AI provider. <a href="#/settings" data-gs-tab="providers">Settings &gt; AI providers</a></p>');
       else if (messages.length && !isReply(messages.at(-1))) rows.push(`<p class="muted" role="status">${esc(execution?.label || 'Waiting for reply…')}</p>`);
-      const html = rows.join('') || '<p class="muted">Ask the Goal Manager about your goals.</p>';
+      const html = rows.join('') || '<p class="muted">Ask the ' + esc(goalManagerName()) + ' about your goals.</p>';
       if (html === rendered) return;
       // Keep an older message in view while new replies arrive (ui/app/stick-scroll.js).
       stickScroll(thread).update(() => {
@@ -402,7 +402,7 @@ async function goalManagerMount(pageState) {
       } catch (e) { fail(e.message); }
       finally { sending = P.sending = false; if (current()) pillButtons(P); }
     };
-    composer = makePill({mode:'chat', files:false, label:'Message to the Goal Manager', placeholder:'Ask it to change a goal…', send});
+    composer = makePill({mode:'chat', files:false, label:'Message to the ' + goalManagerName(), placeholder:'Ask it to change a goal…', send});
     pq(composer, '.p-text').maxLength = 4000;
     chat.querySelector('.gm-form').append(composer.el);
     void (async () => {

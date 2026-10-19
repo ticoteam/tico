@@ -13,7 +13,7 @@ function goalActorName(actor) {
   if (!actor) return '';
   if (actor === 'keeper') return S.config?.app_name || 'Tico';
   const info = goalOwnerInfo(actor);
-  return actor === GOAL_MANAGER_ACTOR && info.name === 'goal-manager' ? 'Goal Manager' : info.name;
+  return actor === GOAL_MANAGER_ACTOR && (ceoBotOn() || info.name === 'goal-manager') ? goalManagerName() : info.name;
 }
 
 // A status dot: green, yellow, red, gray (stale, missing or no data) or a ring (fresh, no target to judge by).

@@ -13,6 +13,13 @@ All notable changes to Tico are recorded here. The format follows
   first task that takes minutes and ends by asking the owner a Yes/No approval in Needs you; nothing is sent outside
   the company. Start it from the first-run welcome's **Start with a sample company**, or at install with
   `TICO_SAMPLE_COMPANY=on`. ([The sample company](docs/sample-company.md))
+- **CEO Bot switch** (off by default; one per install, no release needed): an owner or admin turns it on with
+  `POST /api/v2/ceo-bot {"on": true}` (`hub api POST ceo-bot '{"on": true}'`), never a bot. On, the Goal Manager is
+  named the CEO Bot in the bot list, the org chart, Goals and its messages, and sits on the org chart under the owner
+  with the Heads and the bots that report to no one under it; the Assistant, the other built-ins and message bots stay
+  apart. It keeps its slug, so its KPI readings, goal history and old messages stay its own. Only the chart moves:
+  nobody's `reports_to` and nobody's access changes. Turning it off gives back the Goal Manager's name and the chart as
+  they were.
 
 ### Fixed
 - **Clear** on a bot's chat now really starts the bot over. Before, it only trimmed the history Tico sends, and on

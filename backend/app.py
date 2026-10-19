@@ -1494,11 +1494,29 @@ def create_app(settings=None):
         with store.read() as c:
             return {"cards": onboarding.catalog(c)}
 
+    @app.get("/api/v2/ceo-bot")
+    def ceo_bot_switch(request: Request):
+        """The CEO Bot rollout switch (backend/ceo_bot.py)."""
+        auth.domain(request.state.identity)
+        from . import ceo_bot
+        with store.read() as c:
+            return ceo_bot.view(c)
+
+    @app.post("/api/v2/ceo-bot")
+    def ceo_bot_switch_set(request: Request, body: M.CeoBotSwitch):
+        """Owners and admins flip it at runtime, no release; a bot never does, the Goal Manager included."""
+        who = request.state.identity
+        admin_only(who, "turns the CEO Bot on or off")
+        from . import ceo_bot
+        return mutate(request, body, lambda c: ceo_bot.set_on(c, who.actor, body.on))
+
     @app.post("/api/v2/goal-manager/turn-on")
     def turn_on_goal_manager(request: Request, body: M.Empty):
         who = request.state.identity
         if who.role != "owner":
-            raise Problem("forbidden", "Only the owner turns the Goal Manager on", 403)
+            from . import ceo_bot
+            with store.read() as c:
+                raise Problem("forbidden", "Only the owner turns the " + ceo_bot.name(c) + " on", 403)
         return mutate(request, body, lambda c: onboarding.turn_on_goal_manager(c, who))
 
     @app.get("/api/v2/onboarding")
@@ -1793,7 +1811,12 @@ def create_app(settings=None):
             access = auth.bot_accesses(c, who)
             roster, configs = views.roster(c), views.entries(c)
             archived = {row["slug"] for row in H.bots(c) if row.get("state") == "archived"}
-            view = P.org_view(roster, configs, archived, person_id=person or "", team=team or "")
+            # The CEO Bot switch moves bots on the chart only; each keeps the `reports_to` it has (backend/ceo_bot.py).
+            from . import ceo_bot
+            view = P.org_view(roster, ceo_bot.chart_entries(c, settings, roster, configs, archived), archived,
+                              person_id=person or "", team=team or "")
+            for row in view["bots"]:
+                row["reports_to"] = P._clean((configs.get(row["id"]) or {}).get("reports_to"))
             live = {row["slug"]: row for row in H.bots(c)}
             bots = []
             by_id = {row["id"]: row for row in view["bots"]}
