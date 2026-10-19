@@ -208,3 +208,24 @@ def test_native_hub_upgrade_from_23_is_atomic_and_preserves_tasks_messages(tmp_p
         assert c.execute('PRAGMA foreign_key_check').fetchall() == []
     finally:
         c.close()
+
+
+def test_a_visuals_line_link_to_a_private_task_message_opens_only_for_its_readers(api):
+    """The "N visuals - view in Tico" link names a task and a message, nothing else (backend/visuals.py elsewhere).
+    What it opens is the task as the reader may see it: its readers get the message, anyone else not-found."""
+    from urllib.parse import parse_qs, urlsplit
+    from backend import visuals
+    task = post(api, 'tasks', {'owner': 'ben', 'title': 'Board pack', 'body': 'Chart the quarter.', 'private': True})
+    with api.app.state.store.transaction() as c:
+        cid = H.task(c, task['id'])['conversation_id']
+        said = H.say(c, 'human:ben', 'human:ana', 'Quarter attached, revenue up.', conversation_id=cid,
+                     refs={'task': task['id'], 'attachments': [{'file_id': 'f1', 'version': 1, 'kind': 'image', 'title': 'Q3'}]})
+        message = H.message(c, said['id'])
+    line = visuals.elsewhere('https://tico.example.com', message, task['id'])
+    assert line['label'] == '1 visual - view in Tico'
+    query = parse_qs(urlsplit(line['url']).query)
+    assert query == {'task': [task['id']], 'message': [said['id']]}
+    for token, readable in (('ana-test', True), ('ben-test', True), ('priya-test', False)):
+        response = api.get('/api/v2/tasks/' + query['task'][0], headers=headers(token))
+        assert response.status_code == (200 if readable else 404), response.text
+        assert ('revenue up' in response.text) == readable and (said['id'] in response.text) == readable

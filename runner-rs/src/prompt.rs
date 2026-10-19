@@ -98,8 +98,12 @@ pub fn replayed(attempt: &Value, names: &Names, after: Option<&str>, resumed: bo
             "For requests to create, modify, debug, test, deploy, or maintain bots, delegate the substantive engineering to BotOps with `hub task create --owner botops`. Keep this low-reasoning assistant turn responsive: confirm the handoff, then report BotOps's result when the task returns.".into(),
         ]);
     }
+    // Every bot, by its own judgement (Visual replies, choice 5); Design and Video Producer are the ones the rest file
+    // brand and edited work with, so they get the first sentence only.
     if bot != "designer" && bot != "video-producer" {
-        lines.push("Need visuals or video? File a task for bot:designer (images, graphics, brand assets) or bot:video-producer (scripts, edits, clips); do not make or buy them yourself.".into());
+        lines.push("Add a visual (chart, table, diagram, mockup, screenshot, clip or recording) to a reply when it makes the answer clearer, never for a plain answer, and keep the text answer complete on its own. For brand assets, designed graphics or edited video, file a task for bot:designer or bot:video-producer; do not buy them.".into());
+    } else {
+        lines.push("Add a visual (chart, table, diagram, mockup, screenshot, clip or recording) to a reply when it makes the answer clearer, never for a plain answer, and keep the text answer complete on its own.".into());
     }
     if conversation["scope"] == "shared" {
         lines.push("This is a shared bot room. Preserve each message's human author and assume every room member can read the reply.".into());

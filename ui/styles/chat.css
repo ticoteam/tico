@@ -204,9 +204,9 @@ a.ref::before,.run-did .ref::before{content:'';display:inline-block;width:.8em;h
   .chat-outline .co-close{min-width:44px;min-height:44px}
 }
 /* The exchange a jump landed on, marked for a moment. */
-.conv-run.chat.jump-mark{animation:jump-mark 2s ease-out}
+.conv-run.chat.jump-mark,.tcomment.jump-mark{animation:jump-mark 2s ease-out}
 @keyframes jump-mark{0%,30%{background:color-mix(in srgb,var(--accent) 16%,transparent)}100%{background:transparent}}
-@media (prefers-reduced-motion:reduce){.conv-run.chat.jump-mark{animation:none;background:color-mix(in srgb,var(--accent) 12%,transparent)}}
+@media (prefers-reduced-motion:reduce){.conv-run.chat.jump-mark,.tcomment.jump-mark{animation:none;background:color-mix(in srgb,var(--accent) 12%,transparent)}}
 /* Files dragged anywhere over the chat: the composer says where they will land. */
 #chat-composer .p-pill{position:relative}
 #chat-composer .p-pill.over::after{content:'Drop to attach';position:absolute;inset:0;display:flex;align-items:center;justify-content:center;border-radius:inherit;background:color-mix(in srgb,var(--surface) 90%,transparent);color:var(--accent);font-size:var(--t-base);font-weight:600;pointer-events:none}

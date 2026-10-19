@@ -17,7 +17,7 @@ import stat
 import time
 from html.parser import HTMLParser
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
 
 # What may show inline, by stored type; anything else, or bigger, is a normal file chip.
 KINDS = {"image/png": "image", "image/jpeg": "image", "image/gif": "image", "image/webp": "image",
@@ -256,7 +256,9 @@ def loading_references(data):
 # The one script a visual page runs (lead, Oct 19): it tells the frame around it how tall the page is. Its hash is
 # the only script the page's content policy allows, so the page's own scripts and inline handlers stay dead. A frame
 # laid out at zero width reports an inflated height the app cannot shrink back from, so it sends nothing until the
-# page has a width and reports again on every resize (ui/tests/visual-reporter.cjs runs the same file).
+# page has a width and reports again on every resize (ui/tests/visual-reporter.cjs runs the same file). It reports
+# the content's own height when the content fits the frame, not scrollHeight, which never goes below the frame: a
+# page measured once too tall (wrapped at a passing narrow width) could otherwise never come back down.
 REPORTER = Path(__file__).with_name("visual-reporter.js").read_text().strip()
 REPORTER_HASH = "sha256-" + base64.b64encode(hashlib.sha256(REPORTER.encode()).digest()).decode()
 
@@ -470,6 +472,26 @@ def decorate(c, who, files, key, base, messages):
             fresh.append(view)
         message["refs"] = {**message["refs"], "attachments": fresh}
     return messages
+
+
+def elsewhere(base, message, task=None):
+    """The one line a message with visuals carries where it leaves Tico (Slack today; an email or push outlet later),
+    as {"count", "label", "url"}, or None when it has none. Nothing visual is rendered there (Visual replies, choice 4).
+    The link is a query, not a #fragment, because some clients drop fragments (ui/app/state.js turns it into the
+    route): a message on a task (`task`, as hubdb.message_task_id finds it) opens the task, a plain chat reply that
+    bot's chat in the room the reply is in, each at the message. It names ids only; whether the reader may open them
+    is checked when they do."""
+    refs = (message or {}).get("refs") or {}
+    count = sum(1 for a in refs.get("attachments") or [] if isinstance(a, dict) and a.get("kind") in INLINE)
+    if not count:
+        return None
+    where = {"task": task} if task else {}
+    sender = str(message.get("from_actor") or "")
+    if not where and sender.startswith("bot:"):
+        # A bot has more than one chat with a person (each Slack thread is a room of its own): name the room.
+        where = {"bot": sender[4:], "conversation": message.get("conversation_id") or ""}
+    url = (base or "") + "/" + ("?" + urlencode({**where, "message": message["id"]}) if where else "")
+    return {"count": count, "label": f"{count} visual{'' if count == 1 else 's'} - view in Tico", "url": url}
 
 
 def key_for(app, settings):

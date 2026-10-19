@@ -275,7 +275,7 @@ Every run is the same shape, and `AGENT.md` should say so plainly:
 3. **Check `memory/learnings.md` and the playbook the task names** before touching anything.
 4. **Do the work**, updating `knowledge/` as it learns rather than at the end.
 5. **Report in the task conversation.** The result goes in the task's completion note, first line
-   first. A chart or a mockup can go with the comment as a titled [visual](visuals.md). Put the ask first and stay under 120 words. The lint checks that the first line is not empty; it does not judge its meaning.
+   first. A chart or a mockup can go with the comment as a titled [visual](visuals.md); every bot's instructions already say when to add one ([When a bot adds a visual](visuals.md#when-a-bot-adds-a-visual)), so `AGENT.md` needn't. Put the ask first and stay under 120 words. The lint checks that the first line is not empty; it does not judge its meaning.
 6. **When blocked, ask through the task**, having read the record first, since most questions a bot
    wants to ask are already answered there. One open clarifying question per task, phrased so the
    question is the only thing the human has to read. Internal routing, reminders, task closure,

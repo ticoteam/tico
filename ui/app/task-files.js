@@ -455,8 +455,12 @@ function tfCommentFiles(m, files) {
   }
   return out;
 }
+// The comment's first visuals are cards (ui/app/visual-cards.js); its other files stay thumbs and chips.
 function tfCommentFilesHTML(m, files) {
-  const list = tfCommentFiles(m, files);
+  return visualCardsHTML(m.refs?.attachments || [], {key: m.id || '', chips: (rest, shown) => tfCommentChipsHTML(m, files, shown)});
+}
+function tfCommentChipsHTML(m, files, shown = new Set()) {
+  const list = tfCommentFiles(m, files).filter(x => x.loose ? !shown.has(`${x.loose.file_id}@${x.loose.version}`) : !shown.has(`${x.f.id}@${x.v.n}`));
   if (!list.length) return '';
   return `<div class="tc-files">${list.map(({f, v, loose}) => {
     if (loose) return `<a class="tc-file" href="${API}/v2/files/${encodeURIComponent(loose.id)}">${esc(loose.name || 'file')}</a>`;

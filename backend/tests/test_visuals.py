@@ -1,6 +1,8 @@
 """Visual replies 1/4 (Dev 245): a visual attached to a chat reply or a task comment, its clean-up, its signed
 cookie-free address and who may open it. Spec tests 1-4, 18, 19 and 22 (Product roadmap "Visual replies")."""
 import base64
+import hashlib
+import pathlib
 import re
 
 from backend import visuals as V
@@ -328,6 +330,11 @@ def test_the_visual_route_is_apart_from_the_sign_in_with_a_policy_that_blocks_sc
     assert "set-cookie" not in r.headers and r.headers["referrer-policy"] == "no-referrer"
     assert r.headers["cross-origin-resource-policy"] == "cross-origin"
     assert b'<base target="_blank">' in r.content and V.REPORTER.encode() in r.content
+    # The hash is the served script's own, taken from backend/visual-reporter.js, never typed in by hand.
+    script = (pathlib.Path(V.__file__).with_name("visual-reporter.js")).read_text().strip()
+    assert V.REPORTER == script and f"script-src '{V.REPORTER_HASH}';" in rule
+    assert V.REPORTER_HASH == "sha256-" + base64.b64encode(hashlib.sha256(script.encode()).digest()).decode()
+    assert f"<script>{script}</script>".encode() in r.content
     # The signed-in app has no way in without the token, and the token needs no cookie.
     assert api.get("/visuals/", headers=headers("ben-test")).status_code == 404
     assert api.get("/visuals/nonsense", headers=headers("ben-test")).status_code == 404
