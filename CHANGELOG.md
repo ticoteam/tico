@@ -97,6 +97,13 @@ All notable changes to Tico are recorded here. The format follows
   button (**Add a computer** while there is none). Bots are listed in the team chart's groups and order with one status
   each, *Waiting for a computer* is said once at the top, and the tour waits for **Show me around** instead of
   covering the screen.
+- **First run, the form steps**: the progress row uses short names (Providers, Names, About, Team, Computer, Agent,
+  Review) on one line; on a phone it shows dots and the current step's name. Step titles are larger, and the form
+  cards match the team chart's. A fresh install starts with an empty **Company name** (placeholder *Acme Inc.*), not
+  the server's stand-in "Company", and **Next** asks for one. The external agent step says why you might connect one,
+  with **Connect** as a secondary button and **Next** as the only primary. The Support box opened by **Want help
+  setting up?** grows to show the whole message, never past the room left above a phone keyboard, so **Send** stays
+  on screen.
 - **Codex signed in with ChatGPT runs one turn at a time per login**, as OpenAI's terms for a ChatGPT sign-in
   require. When two bots on one computer share its ChatGPT login, one Codex turn runs and the other shows
   *Waiting for this computer's ChatGPT login to be free (busy with <bot>)* in the chat, the task and **Runs**, then

@@ -582,7 +582,7 @@ const UNREACHABLE = 'Not sent. Could not reach Tico support. Try again in a mome
     assert.equal(await v.page.evaluate(() => document.querySelector('meta[name=viewport]').content.includes('user-scalable=no') || /maximum-scale=1(\D|$)/.test(document.querySelector('meta[name=viewport]').content)), false, 'zoom itself stays allowed');
     const sheetAt = () => kpop.evaluate(el => {
       const r = el.getBoundingClientRect(), inside = (sel, all) => { const b = (all ? [...el.querySelectorAll(sel)].at(-1) : el.querySelector(sel)).getBoundingClientRect(); return {top: b.top, bottom: b.bottom}; };
-      const thread = inside('[data-thread]'), newest = inside('.support-msg', true);
+      const thread = inside('[data-thread]'), newest = el.querySelector('.support-msg') ? inside('.support-msg', true) : null;   // a new request has none
       // Every point along the top and bottom edges and down both sides is the sheet, not the page behind it.
       const probes = [];
       for (let x = 2; x < innerWidth; x += 48) probes.push([x, r.top + 1], [x, r.bottom - 1]);
@@ -634,6 +634,27 @@ const UNREACHABLE = 'Not sent. Could not reach Tico support. Try again in a mome
     await v.page.evaluate(() => window.__keys(844, 0));
     k = await sheetIs(844 - SHEET, 844, 'back to the bottom sheet');
     assert.equal(k.pad, 34, 'with the home-bar gap');
+    // A long reply, then the "Want help setting up?" snapshot, with the keyboard up: the box grows only into the room
+    // the short sheet has left, so it and Send stay above the keyboard, and the rest scrolls inside the box.
+    const fitsAbove = async (why) => {
+      await v.page.waitForTimeout(50);
+      const s = await sheetAt();
+      for (const part of ['box', 'send']) assert.ok(s[part].top >= 120 && s[part].bottom <= 578, `${why}: ${part} above the keyboard (${JSON.stringify(s)})`);
+      assert.ok(s.thread.bottom - s.thread.top >= 119, `${why}: the thread keeps its room (${JSON.stringify(s.thread)})`);
+    };
+    await v.page.evaluate(() => window.__keys(458, 120));
+    await sheetIs(120, 578, 'keyboard up again');
+    await kbox.fill(Array.from({length: 30}, (_, i) => `Line ${i + 1} of a long reply about the archived bot.`).join('\n'));
+    await fitsAbove('long reply');
+    const snapshot = "I'd like help setting up Tico.\n\nSetup snapshot (asked from the setup wizard):\n- Steps done: 2 of 5; left: Add a computer, Sign in a model, First bot ready\n- Computer online: no\n- Model signed in: no\n- First bot ready: no\n- Bots in Needs setup: 3";
+    await v.page.evaluate(m => window.supportStart(m, 'setup'), snapshot);
+    await v.page.waitForFunction(m => document.querySelector('#support-pop[open] #support-message')?.value === m, snapshot);
+    await fitsAbove('setup snapshot');
+    // Keyboard down: the whole snapshot shows, nothing left to scroll.
+    await v.page.evaluate(() => window.__keys(844, 0));
+    await sheetIs(844 - SHEET, 844, 'keyboard down after the snapshot');
+    await v.page.waitForTimeout(50);
+    assert.ok(await kpop.locator('[data-compose] [name=message]').evaluate(box => box.scrollHeight <= box.clientHeight + 1), 'keyboard down: the snapshot shows whole');
     await v.page.keyboard.press('Escape');
     await kpop.waitFor({state: 'hidden'});
     assert.notEqual(await v.page.evaluate(() => getComputedStyle(document.body).overflowY), 'hidden', 'closing the sheet lets the page scroll again');

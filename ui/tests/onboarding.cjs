@@ -752,6 +752,7 @@ function recruitFor({department, briefing, share}) {
     assert.equal(await page.locator('#onb-count').textContent(), 'Step 6 of 6');
     assert.equal(await bigTitle(page), true);
     await shot(page, 'desktop-5d-review');
+    if (shots) { await page.setViewportSize({width: 390, height: 844}); await shot(page, 'phone-5d-review'); await page.setViewportSize({width: 1100, height: 800}); }
     const review = await page.locator('#onb-step').textContent();
     assert.match(review, /Initech Hub/);
     assert.match(review, /Businesses/);
@@ -951,6 +952,17 @@ function recruitFor({department, briefing, share}) {
     assert.equal(await oneLine(phone), true);
     assert.equal(await bigTitle(phone), true);
     await shot(phone, 'phone-0-names');
+    // A team that has not chosen its AI providers has seven steps: still one line on a phone.
+    const seven = await context.newPage();
+    seven.on('pageerror', e => errors.push(e.message));
+    await seven.setViewportSize({width: 390, height: 844});
+    await seven.route('**/v2/providers', r => r.fulfill({json: {configured: false, enabled: [], providers: []}}));
+    await seven.goto('https://tico-ui.test/#/welcome');
+    await seven.locator('#onb-step').waitFor();
+    assert.equal(await seven.locator('.onb-progress li').count(), 7);
+    assert.equal(await oneLine(seven), true);
+    await shot(seven, 'phone-0-providers');
+    await seven.close();
     await phone.locator('#onb-next').click();
     await phone.locator('#onb-what').waitFor();
     assert.equal(await fits(), true);
