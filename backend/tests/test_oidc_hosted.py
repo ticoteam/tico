@@ -122,13 +122,34 @@ def test_without_a_label_every_bring_your_own_oidc_install_goes_straight_to_the_
     assert signin.api.get(owner_link.LINK_PATH).status_code == 404
 
 
-def test_the_owner_link_is_off_on_a_hosted_oidc_install_without_one(signin):  # noqa: F811
+@pytest.mark.parametrize("hosted, linked", [("", True), ("invited", False)], ids=["self-hosted", "no-link"])
+def test_the_owner_link_is_off_unless_the_install_is_hosted_and_was_given_one(signin, hosted, linked):  # noqa: F811
+    token = secrets.token_urlsafe(32)
     signin.settings.owner_email = OWNER
-    signin.start(public_url=URL, hosted="invited", owner_link_hash="")
+    signin.start(public_url=URL, hosted=hosted, owner_link_hash=digest(token) if linked else "")
     assert not owner_link.break_glass(signin.settings)
+    signin.auth.warm()
+    with signin.auth.store.read() as c:
+        assert c.execute("SELECT count(*) FROM owner_links").fetchone()[0] == 0
+    with signin.auth.store.transaction() as c:      # even a link that is in the table opens nothing
+        owner_link.place(c, digest(token), OWNER)
     browser = TestClient(signin.api.app, base_url="https://testserver")
     assert browser.get(owner_link.LINK_PATH).status_code == 404
-    assert browser.post(owner_link.LINK_PATH, data={"token": secrets.token_urlsafe(32)}).status_code == 404
+    assert browser.get(owner_link.SCRIPT_PATH).status_code == 404
+    pressed = browser.post(owner_link.LINK_PATH, data={"token": token}, follow_redirects=False)
+    assert pressed.status_code == 404 and "set-cookie" not in pressed.headers
+
+
+def test_wrong_break_glass_links_are_rate_limited_per_address(hosted):
+    hosted.auth.warm()
+    for _ in range(owner_link.FAILURES_PER_WINDOW):
+        wrong = hosted.browser.post(owner_link.LINK_PATH, data={"token": secrets.token_urlsafe(32)})
+        assert wrong.status_code == 410
+    blocked = hosted.browser.post(owner_link.LINK_PATH, data={"token": hosted.token}, follow_redirects=False)
+    assert blocked.status_code == 429 and "set-cookie" not in blocked.headers
+    elsewhere = TestClient(hosted.api.app, base_url="https://testserver", client=("198.51.100.7", 50000))
+    pressed = elsewhere.post(owner_link.LINK_PATH, data={"token": hosted.token}, follow_redirects=False)
+    assert pressed.status_code == 303 and pressed.headers["set-cookie"].startswith("__Host-tico_session=")
 
 
 def base(tmp_path, **kw):
