@@ -215,54 +215,80 @@ fn is_shell(task: &Value) -> bool {
     matches!(task["task_type"].as_str(), Some("local_bash") | Some("monitor"))
 }
 
-/// The pid of each shell Claude (`claude`) runs for one of `tasks`, by the output file Claude points its stdout at
-/// (`.../tasks/<task_id>.output`). Linux reads /proc; elsewhere nothing is found and nothing is kept.
-fn shells_of(claude: u32, tasks: &[Value]) -> Vec<Value> {
-    let mut found = vec![];
+/// Every process's parent, by pid.
+fn parents() -> HashMap<u32, u32> {
+    let mut parent: HashMap<u32, u32> = HashMap::new();
     #[cfg(target_os = "linux")]
-    {
-        let mut parent: HashMap<u32, u32> = HashMap::new();
-        for entry in std::fs::read_dir("/proc").into_iter().flatten().flatten() {
-            let Some(pid) = entry.file_name().to_str().and_then(|n| n.parse::<u32>().ok()) else { continue };
-            let Ok(stat) = std::fs::read_to_string(entry.path().join("stat")) else { continue };
-            // After the command's closing paren: state, then ppid.
-            if let Some(ppid) = stat.rsplit_once(')').and_then(|(_, rest)| rest.split_whitespace().nth(1)).and_then(|p| p.parse().ok()) {
-                parent.insert(pid, ppid);
-            }
-        }
-        let under = |mut pid: u32| {
-            while let Some(&p) = parent.get(&pid) {
-                if p == claude {
-                    return true;
-                }
-                if p <= 1 {
-                    break;
-                }
-                pid = p;
-            }
-            false
-        };
-        for (&pid, _) in parent.iter().filter(|(&pid, _)| under(pid)) {
-            let Ok(out) = std::fs::read_link(format!("/proc/{pid}/fd/1")) else { continue };
-            let out = out.display().to_string();
-            for t in tasks {
-                let id = t["task_id"].as_str().unwrap_or_default();
-                // The task's own shell, not a command inside it writing to the same file.
-                let inherited = parent.get(&pid).and_then(|p| std::fs::read_link(format!("/proc/{p}/fd/1")).ok()).is_some_and(|o| o.display().to_string() == out);
-                if !id.is_empty() && out.ends_with(&format!("/tasks/{id}.output")) && !inherited {
-                    let mut kept = json!({"task_id": id, "description": t["description"], "pid": pid, "output_file": out});
-                    for key in ["command", "ci_watch"] {
-                        if !t[key].is_null() {
-                            kept[key] = t[key].clone();
-                        }
-                    }
-                    found.push(kept);
-                }
-            }
+    for entry in std::fs::read_dir("/proc").into_iter().flatten().flatten() {
+        let Some(pid) = entry.file_name().to_str().and_then(|n| n.parse::<u32>().ok()) else { continue };
+        let Ok(stat) = std::fs::read_to_string(entry.path().join("stat")) else { continue };
+        // After the command's closing paren: state, then ppid.
+        if let Some(ppid) = stat.rsplit_once(')').and_then(|(_, rest)| rest.split_whitespace().nth(1)).and_then(|p| p.parse().ok()) {
+            parent.insert(pid, ppid);
         }
     }
     #[cfg(not(target_os = "linux"))]
-    let _ = (claude, tasks);
+    if let Ok(out) = std::process::Command::new("ps").args(["-A", "-o", "pid=,ppid="]).stderr(Stdio::null()).output() {
+        for line in String::from_utf8_lossy(&out.stdout).lines() {
+            let mut cols = line.split_whitespace().filter_map(|c| c.parse::<u32>().ok());
+            if let (Some(pid), Some(ppid)) = (cols.next(), cols.next()) {
+                parent.insert(pid, ppid);
+            }
+        }
+    }
+    parent
+}
+
+/// The file a process's standard output goes to.
+pub fn stdout_of(pid: u32) -> Option<String> {
+    #[cfg(target_os = "linux")]
+    {
+        std::fs::read_link(format!("/proc/{pid}/fd/1")).ok().map(|o| o.display().to_string())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let out = std::process::Command::new("lsof").args(["-a", "-p", &pid.to_string(), "-d", "1", "-Fn"]).stderr(Stdio::null()).output().ok()?;
+        String::from_utf8_lossy(&out.stdout).lines().find_map(|l| l.strip_prefix('n').map(str::to_string))
+    }
+}
+
+/// The pid of each shell Claude (`claude`) runs for one of `tasks`, by the output file Claude points its stdout at
+/// (`.../tasks/<task_id>.output`).
+fn shells_of(claude: u32, tasks: &[Value]) -> Vec<Value> {
+    let mut found = vec![];
+    let parent = parents();
+    let under = |mut pid: u32| {
+        while let Some(&p) = parent.get(&pid) {
+            if p == claude {
+                return true;
+            }
+            if p <= 1 {
+                break;
+            }
+            pid = p;
+        }
+        false
+    };
+    for (&pid, _) in parent.iter().filter(|(&pid, _)| under(pid)) {
+        let Some(out) = stdout_of(pid) else { continue };
+        for t in tasks {
+            let id = t["task_id"].as_str().unwrap_or_default();
+            if id.is_empty() || !out.ends_with(&format!("/tasks/{id}.output")) {
+                continue;
+            }
+            // The task's own shell, not a command inside it writing to the same file.
+            if parent.get(&pid).is_some_and(|&p| p != claude && stdout_of(p).as_deref() == Some(out.as_str())) {
+                continue;
+            }
+            let mut kept = json!({"task_id": id, "description": t["description"], "pid": pid, "output_file": out});
+            for key in ["command", "ci_watch"] {
+                if !t[key].is_null() {
+                    kept[key] = t[key].clone();
+                }
+            }
+            found.push(kept);
+        }
+    }
     found
 }
 
@@ -1653,8 +1679,7 @@ mod tests {
         let ended = got.iter().find(|e| e["kind"] == "diagnostic" && e["background_wait"].is_object()).expect("a background-wait event");
         assert_eq!(ended["background_wait"]["commands"], 1);
         assert!(survived, "the shell was killed with the turn");
-        assert_eq!(ended["background_wait"]["kept"], if cfg!(target_os = "linux") { 1 } else { 0 }, "{ended}");
-        #[cfg(target_os = "linux")]
+        assert_eq!(ended["background_wait"]["kept"], 1, "{ended}");
         assert_eq!(got.iter().find(|e| e["kind"] == "background_kept").unwrap()["kept"][0]["pid"], pid);
     }
 

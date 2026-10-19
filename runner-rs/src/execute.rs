@@ -979,7 +979,10 @@ impl Runner {
             let names = self.names().await;
             let after = if resumed { self.state.cursor(&th, None)? } else { None };
             attempt["_stale_playbook"] = json!(crate::playbook::note(&crate::readiness::local_path(&self.config, &bot), &attempt));
-            let prompt = crate::prompt::prompt(&attempt, &names, after.as_deref(), resumed);
+            let mut prompt = crate::prompt::prompt(&attempt, &names, after.as_deref(), resumed);
+            if let Some(line) = crate::afterwatch::still_running(&bot, &key) {
+                prompt = format!("{prompt}\n\n{line}");
+            }
             let cold = crate::harness_tools::caps(&runtime, "").serial_cold_start && crate::hosts::token_cold(&runtime, selected.as_ref());
             let t = if cold {
                 // Held only until the sign-in this turn triggers has landed, not for the length of the turn: the
@@ -1002,7 +1005,7 @@ impl Runner {
                 self.state.repo_rules(&th, Some(&digest))?;
             }
             turn = Some(t.clone());
-            let d = Drive { aid: &aid, host: h, thread: &th, effort: effort.as_deref(), limit, flags: &flags, wake: &wake, redactor: redactor.as_ref(), runtime: &runtime };
+            let d = Drive { aid: &aid, host: h, thread: &th, effort: effort.as_deref(), limit, flags: &flags, wake: &wake, redactor: redactor.as_ref(), runtime: &runtime, bot: &bot, session: &key };
             drove = self.drive(&d, &mut rx, t, segments.last_mut().unwrap(), &mut carried, &mut auth_rejected, &mut goal).await?;
             turn = Some(drove.turn.clone());
             self.state.save_session(&bot, &conv, &session_runtime, &h.session_id(&th))?;
@@ -1156,6 +1159,8 @@ impl Runner {
                     wake: &wake,
                     redactor: redactor.as_ref(),
                     runtime: &hop.runtime,
+                    bot: &bot,
+                    session: &key,
                 };
                 drove = self.drive(&d, &mut rx, t, segments.last_mut().unwrap(), &mut carried, &mut auth_rejected, &mut goal).await?;
                 turn = Some(drove.turn.clone());

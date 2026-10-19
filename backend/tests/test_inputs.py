@@ -435,3 +435,21 @@ def test_a_reply_does_not_list_a_comment_taken_back_mid_turn_among_those_it_answ
                           (said["id"],)).fetchone()
         assert reply, done
         assert json.loads(reply[0])["answers"] == [said["id"], kept["id"]]
+
+
+def test_background_commands_a_finished_turn_kept_wake_the_bot_once(api):
+    r, origin, a = setup_attempt(api)
+    post(api, f"attempts/{a['id']}/started", {"thread_id": "thread"}, r["token"])
+    post(api, f"attempts/{a['id']}/complete", {"outcome": "completed", "text": "Suite running.", "last_seq": 0}, r["token"])
+    done = {"commands": [{"description": "Run the full suite", "exit": 1, "tail": "2 failed, 3788 passed"},
+                         {"description": "Watch PR checks", "killed": True, "ci_watch": {"pr": 958}}]}
+    assert post(api, f"attempts/{a['id']}/background-done", done, r["token"]) == {"woke": True}
+    # The runner retries a report it is not sure landed: the bot is woken once.
+    assert post(api, f"attempts/{a['id']}/background-done", done, r["token"]) == {"woke": False}
+    with api.app.state.store.read() as c:
+        rows = c.execute("SELECT body,refs_json,conversation_id FROM messages WHERE to_actor='bot:ops' AND kind='notice'").fetchall()
+        assert c.execute("SELECT state FROM jobs WHERE message_id IN (SELECT id FROM messages WHERE to_actor='bot:ops' "
+                         "AND kind='notice')").fetchone()[0] == "queued"
+    assert len(rows) == 1 and rows[0]["conversation_id"] == origin["conversation_id"]
+    assert json.loads(rows[0]["refs_json"])["trigger"] == "background_done"
+    assert "exit 1" in rows[0]["body"] and "2 failed, 3788 passed" in rows[0]["body"] and "ran over" in rows[0]["body"]

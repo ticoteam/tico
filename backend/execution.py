@@ -2013,6 +2013,40 @@ class Execution:
         c.execute("UPDATE attempts SET last_seq=? WHERE id=?", (seq, aid))
         return {"ack_seq": seq, "historical": row["lease_until"] <= H.now() or row["state"] == "expired"}
 
+    def background_done(self, c, who, aid, body):
+        """The commands a turn left running when it ended on its wait have all ended: one wake for the bot, in the
+        turn's task and conversation, with each command's exit and the end of its output. A second report of the same
+        turn changes nothing."""
+        from . import run_triggers
+        from .watchers import defang, live
+        row = self.attempt(c, who, aid, active=False)
+        if c.execute("SELECT 1 FROM events WHERE action='attempt.background-done' AND target=?", (aid,)).fetchone():
+            return {"woke": False}
+        job = c.execute("SELECT message_id FROM jobs WHERE id=?", (row["job_id"],)).fetchone()
+        origin = H.message(c, job["message_id"]) if job else None
+        task = H.task(c, H.message_task_id(origin) or "") if origin else None
+        lines = []
+        for cmd in body.commands:
+            ended = ("killed: ran over the run's time limit" if cmd.killed
+                     else "exit code unknown" if cmd.exit is None else f"exit {cmd.exit}")
+            what = cmd.description or "A background command"
+            if cmd.ci_watch:
+                what += " (CI watch: " + ", ".join(f"{k} {v}" for k, v in cmd.ci_watch.items()) + ")"
+            tail = cmd.tail.strip()
+            lines.append(f"- {what}: {ended}" + (f"\n  Last output:\n```\n{tail}\n```" if tail else ""))
+        text = ("The background commands your earlier turn left running have ended. The runner kept them when that "
+                "turn ended on its wait (Claude may have said they did not finish; they did).\n" + "\n".join(lines))
+        woke = bool(origin) and (task is None or live(task))
+        if woke:
+            refs = {"task": task["id"]} if task else {}
+            H.say(c, H.KEEPER, "bot:" + row["bot"], defang(text, c), kind="notice",
+                  conversation_id=task["conversation_id"] if task else origin["conversation_id"],
+                  refs=run_triggers.stamp({**refs, "wake": "background-done"}, "background_done", aid))
+        H.event(c, H.KEEPER, "attempt.background-done", aid,
+                {"bot": row["bot"], "task": task["id"] if task else None, "woke": woke,
+                 "commands": [{"exit": cmd.exit, "killed": cmd.killed} for cmd in body.commands]})
+        return {"woke": woke}
+
     def complete(self, c, who, aid, body):
         row = self.attempt(c, who, aid, final=True)
         # `attempt` has already given `restore` its chance. What is left is a finished turn whose

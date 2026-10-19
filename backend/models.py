@@ -1776,6 +1776,19 @@ class EventBatch(Contract):
     events: list[Event] = Field(min_length=1, max_length=100)
 
 
+class BackgroundCommand(Contract):
+    description: str = Field(default="", max_length=300)
+    exit: int | None = Field(default=None, ge=-255, le=255)
+    killed: bool = False
+    ci_watch: dict[str, int] | None = None
+    tail: str = Field(default="", max_length=2000)
+
+
+class BackgroundDone(Contract):
+    """The commands a Claude turn left running when it ended on its wait, all ended (runner-rs/src/afterwatch.rs)."""
+    commands: list[BackgroundCommand] = Field(min_length=1, max_length=20)
+
+
 class StreamCapture(Contract):
     """A run's raw provider stream, one JSON record per line (runner-rs/src/capture.rs)."""
     provider: str = Field(min_length=1, max_length=40)

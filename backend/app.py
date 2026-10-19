@@ -5240,6 +5240,11 @@ def create_app(settings=None):
     def input_ack(request: Request, aid: str, mid: str, body: M.Empty):
         return mutate(request, body, lambda c: execution.acknowledge_input(c, request.state.identity, aid, mid))
 
+    @app.post("/api/v2/attempts/{aid}/background-done")
+    def background_done(request: Request, aid: str, body: M.BackgroundDone):
+        body = scrub_attempt(aid, body)          # a secret set in this run never reaches the wake
+        return mutate(request, body, lambda c: execution.background_done(c, request.state.identity, aid, body))
+
     @app.post("/api/v2/attempts/{aid}/complete")
     def complete(request: Request, aid: str, body: M.Completion):
         body = scrub_attempt(aid, body)

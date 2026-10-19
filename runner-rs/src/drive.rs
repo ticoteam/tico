@@ -57,6 +57,9 @@ pub struct Drive<'a> {
     pub redactor: Option<&'a Arc<Redactor>>,
     /// The runtime this stretch runs on (a fallback's after a hop).
     pub runtime: &'a str,
+    pub bot: &'a str,
+    /// The provider thread's session key (execute::session_key), for commands a turn leaves running.
+    pub session: &'a str,
 }
 
 impl Runner {
@@ -212,6 +215,16 @@ impl Runner {
                 if kind == "message" || kind == "tool" {
                     // Proof the turn reached the model and may have changed something outside this computer.
                     acted = true;
+                }
+                if kind == "background_kept" {
+                    // Watched after the run; a command still running at the run's time limit is killed then.
+                    let deadline = crate::util::epoch_s() + d.limit.saturating_duration_since(Instant::now()).as_secs_f64();
+                    crate::afterwatch::keep(&self.state.directory, aid, d.bot, d.session, deadline, &event, d.redactor);
+                    continue;
+                }
+                if kind == "diagnostic" && event["background_wait"].is_object() {
+                    // What ending the wait saved: the rest of the run's time, which the wait would have held.
+                    event["background_wait"]["minutes_saved"] = json!(d.limit.saturating_duration_since(Instant::now()).as_secs() / 60);
                 }
                 if ["delta", "message", "tokens", "status", "error", "tool", "diagnostic", "turn_failed"].contains(&kind.as_str()) {
                     let clean = redact(&event);
