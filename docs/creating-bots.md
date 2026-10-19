@@ -42,6 +42,37 @@ New repositories default to `bot-<slug>`.
 
 New bots start with their own repository unless the team selected all ticked repositories in Settings → Repositories. An Owner or admin can choose own only, all ticked or chosen repositories, with read or write access. Existing extra repositories keep write access automatically. See [Repositories](repositories.md).
 
+## Subscribe to updates
+
+> **Unreleased**: this setting is on `main` and not in a published release yet.
+
+A bot can hear about changes that may matter to it, as information only. In the bot editor (**Settings → Bots →
+Edit**, or **Bot settings** on the bot's Setup card), under **Subscribe to updates**, people who manage the bot tick
+either, both or neither:
+
+- **Default employee settings**: changes to the template the bot was made from (its `template`), read from that
+  template's public changelog feed on tico.team. These are source changes to the template, which may not be in a
+  release yet; a bot made from no template has nothing to follow here.
+- **Tico updates**: Tico's published releases, including MCP and tool changes. Each one says which version your
+  server runs, since a release's changes reach the bot only once the server is updated.
+
+Each update reaches the bot as one quiet note: a short quoted summary, links to the release or commit and its
+changelog, and **Action may be needed: yes or no** with a one-line reason. Notes wake nothing; they wait for the bot's
+next run, whatever wakes it, so several updates arrive together. Tico releases are checked every hour and template
+feeds every six hours. Feed text is shown to the bot as quoted data, never
+as instructions. An update never changes the bot's Instructions, settings or access and grants nothing. To adopt a
+change, use [Edit Instructions](#edit-instructions) as usual, with its approvals.
+
+Turning a category on, or back on, starts from the newest update: the bot gets what comes out from then on, never a
+backlog of what came out while it was off. The same holds when the bot's template changes: it follows the new
+template from its newest update. Unticking a category stops it at once: updates of that category the bot
+has not picked up yet are cancelled too, and unticking both stops all delivery. A server that was down catches up on
+everything it missed, once each and in order, over as many polls as it takes (up to 40 feed pages back; past that it
+starts from the newest 40 pages). Nothing is fetched while no bot subscribes; `TICO_UPDATE_CHECK=off`
+stops the fetching, and `TICO_TEMPLATE_FEED=off` leaves the template category without a feed (it then says so and
+sends nothing). From the command line: `hub bot update <slug> --subscribe-updates templates,tico` (or `none`), or
+`update_subscriptions` on `hub_bot_update`.
+
 ## Branches
 
 A branch is your own bot for work with an original's instructions and repository. Its chats and tasks are personal,
@@ -68,7 +99,7 @@ New tasks and chats addressed to the original go to your active branch while bra
 People without an active branch reach the original. Selecting another person's branch addresses it directly, with the usual access checks.
 Existing task threads keep their participants and history.
 
-A branch follows the original's model, harness, runtime, effort, Compact at, session mode and fallback. Its editor changes only its status;
+A branch follows the original's model, harness, runtime, effort, Compact at, session mode and fallback. Its editor changes only its status (and, coming soon, its own **Wakes**);
 change the original to change its definition. Every task is its own provider session by default, and chat keeps its own; `session: task` also gives each chat conversation its own, and `session: bot` keeps one session for everything. A subtask someone else files under the bot's task continues that task's session (one the bot files for itself gets its own) unless `subtask_session: own` (`hub bot update <slug> --subtask-session own`) gives each its own ([Sessions](sessions.md), [Tasks](tasks.md#subtasks-and-prs)).
 Routines run only on the original, including event routines. Archiving the original archives its branches, and restoring it restores
 those branches to their previous statuses with their work and computers preserved. Branches archived separately stay archived.
@@ -553,17 +584,29 @@ Levers set in **Settings → Bots**, not in the repository:
 - **Harness**: which CLI performs the run (`openai` / Codex, `claude`, `gemini`, `antigravity`,
   `grok`, `cursor` / Cursor Agent, `musecode` / Muse Code, `pi`). A harness whose provider is off still
   shows in the picker, greyed out, with where to turn it on. **Model**: the latest model in that family (Sol, Astra, Grok 4.6, Gemini Flash,
-  Claude Opus 5, Claude Fable 5.1). Search the picker: `grok` shows `grok/grok 4.6` at every
+  Claude Opus 5, Claude Fable 5.1). While the [Tico AI Gateway](ai-gateway.md) is connected, `pi` also offers
+  Tico Cheap, Mid and Power 1.0, each listed with what runs underneath. Search the picker: `grok` shows `grok/grok 4.6` at every
   effort; `sol` shows `openai/gpt 5.6 sol`. The same levers set the built-in BotOps bot: it may
   run on any harness and model here, limited in practice to the providers the company enabled
   and what its computer is signed in to.
 - **Reasoning effort**: how hard it thinks. The main cost control, and the one to reach for first.
 - **Fallback**: one optional harness/model if the primary is unavailable (billing, capacity,
-  the runtime refused). **None (fail)** is the default. The hop starts a fresh session. OpenRouter
+  the runtime refused). **None (fail)** is the default. A pick is saved with **Apply** next to it or with
+  **Save bot** ([harnesses.md](harnesses.md#choosing-a-harness-model-and-effort)). The hop starts a fresh session. OpenRouter
   is not a bot harness. With none set, a usage limit still moves the turn to another provider signed in on
   the bot's computer unless the owner turned that off in **Settings → AI providers** (docs/how-it-works.md).
 - **Compact at**: how full the bot's conversation gets before it is compacted: 150k, 250k tokens (the default),
   400k, 600k or 1M. Claude Code and Codex only. Changing it keeps the session.
+- **Wakes** (Coming soon): how soon news starts a run. **Token saver**, the default for a new bot, holds
+  nonblocking news (a request it asked for finished, review comments, a failing check nobody waits on) and
+  sends it as one wake at most every 30 minutes. It also runs an enabled routine, or a stall check on a task,
+  at most every 2 hours. **Performance** coalesces the same news for 1 minute and runs those sweeps at most
+  every 15 minutes. **Current behaviour**, which every bot made before presets keeps until someone picks
+  one, wakes on each piece of news as it arrives. In every preset, these wake the bot at once, and only once
+  when the same event repeats before its run is over: a person's message, an assignment, a question, something it waits on
+  resolving, a blocker, and a review or QA request. A preset turns on no routine, hook, subscription or
+  permission, and leaves Compact at alone. The line under the picker shows what the bot runs on. Each run
+  in a task's **Runs** says what woke it. A branch picks its own.
 - **`max_run_minutes`**: the ceiling on one run. Set it from the longest real routine, not hope.
 - **`hermes`** (and **`openclaw`**, [the same way](openclaw-agents.md)) is the one kind of harness that is not a
   CLI on a registered computer: the bot is a Hermes profile somewhere else, with its own model, reached through a credential minted in

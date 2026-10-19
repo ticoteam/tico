@@ -193,6 +193,7 @@ class Auth:
         self.acl = yaml.safe_load(acl_path.read_text()) if acl_path.exists() else {}
         self.bot_admins = set()
         self.allowed_emails, self.allowed_domains = set(), set()
+        self.retired_emails = set()
         self.owner_email = self.settings.owner_email
         self._owner_id = ""
         self._access_seen = None
@@ -214,6 +215,7 @@ class Auth:
         self._owner_id = ""
         self.bot_admins = set(lists["admins"])
         self.allowed_emails, self.allowed_domains = set(lists["allowed"]), set(lists["allowed_domains"])
+        self.retired_emails = set(access.retired_emails(c))
         # Everything that still reads the settings sees the owner in force.
         previous, self.settings.owner_email = self.settings.owner_email, self.owner_email
         # Unless the server names its own list (TICO_CREDENTIAL_ADMINS), the credential administrators are the owner
@@ -449,8 +451,11 @@ class Auth:
                 if not email:
                     raise Problem("identity", "This sign-in carries no email address", 401)
                 row = c.execute("SELECT id FROM humans WHERE lower(email)=?", (email,)).fetchone()
+                # The owner's old address after an email change joins no one: it would be a second owner-to-be.
+                if not row and email in self.retired_emails:
+                    raise self.retired()
                 if not row and self.admits(email):
-                    row = {"id": self.join(email)}
+                    row = self.join(email)
                 # The people roster is the approved internal-user list; the allow list adds to it.
                 if not row:
                     raise Problem("identity", "This account is not on the " + self.settings.app_name
@@ -482,11 +487,23 @@ class Auth:
             return who
 
     def join(self, email):
-        """The allow list admitted this verified address: add them to the roster as a person."""
+        """The allow list admitted this verified address: add them to the roster as a person. Decided again from the
+        stored lists under the write lock, since an owner email change that committed after this request read them
+        retires the old address and takes it off the lists. Returns the row, or None when no longer admitted."""
         from . import access
         with self.store.transaction() as c:
             row = c.execute("SELECT id FROM humans WHERE lower(email)=?", (email,)).fetchone()
-            return row["id"] if row else access.join_on_sign_in(c, email)
+            if row:
+                return {"id": row["id"]}
+            if email in access.retired_emails(c):
+                raise self.retired()
+            if not access.admitted(access.load_access(c, self.settings), email):
+                return None
+            return {"id": access.join_on_sign_in(c, email)}
+
+    def retired(self):
+        return Problem("identity", "This address no longer signs in to " + self.settings.app_name
+                       + ". Sign in with your new address, or ask the owner to add this one", 403)
 
     # ------------------------------------------------------------------ per-bot access
     # See, Read and Write are decided here and nowhere else (backend/bot_access.py has the stored
@@ -683,7 +700,7 @@ class Auth:
         return False
 
     def task_sql(self, c, who, delegations="task_delegations", unreadable=None):
-        """Company tasks are readable subject to bot activity controls; private tasks have two parties.
+        """Company tasks are readable subject to bot activity controls; private tasks have two parties, and a guest.
 
         Ownership, type-wide work, ancestry and delegation never widen private visibility.
         `delegations` stays accepted for compatibility with the guarded SQL caller.
@@ -694,9 +711,12 @@ class Auth:
         hidden = ["bot:" + slug for slug in sorted(self.unreadable_bots(c, who) if unreadable is None else unreadable)]
         clear = ("NOT (owner IN %s OR requester IN %s)" % ((A.qlist(hidden),) * 2)) if hidden else "1"
         me = A.q(who.actor)
-        audience = f"({me} IN (owner,requester) OR (coalesce(private,1)=0 AND ({clear})))"
+        # A private task's guest (hubdb.task_reach) reads it as its two parties do.
+        audience = (f"({me} IN (owner,requester) OR (coalesce(private,1)<>0 AND guest={me}) "
+                    f"OR (coalesce(private,1)=0 AND ({clear})))")
         if who.task_actor:
-            audience += f" AND (coalesce(private,1)=0 OR {A.q(who.task_actor)} IN (owner,requester))"
+            actor = A.q(who.task_actor)
+            audience += f" AND (coalesce(private,1)=0 OR {actor} IN (owner,requester) OR guest={actor})"
         return audience
 
     def operator(self, c, who, bot):
@@ -902,8 +922,9 @@ class Auth:
         if who.task_actor and not H.task_private_readable(c, who.task_actor, row):
             raise Problem("not_found", "Task not found", 404)
         participants = (row["owner"], row["requester"])
-        if who.actor not in participants:
-            # A party to a task always sees it; anyone else needs Read on every bot it involves.
+        if who.actor not in participants and not (H.task_private(c, row) and H.task_private_readable(c, who.actor, row)):
+            # A party to a task, or a private task's guest, always sees it; anyone else needs Read on every bot it
+            # involves.
             bots = [H.actor_id(a) for a in participants if str(a).startswith("bot:")]
             for slug, level in (self.bot_accesses(c, who, bots).items() if bots else ()):
                 if not level["see"]:

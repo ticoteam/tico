@@ -1,12 +1,13 @@
 // A bot's Screen row in More: always there, with its status, and when the screen is not ready, why and what to do.
 // One bot per state (ready, off, not offered on Linux, a Mac, offline, no computer, someone who may not open it).
-// The header's Screen button shows only for the ready one. Turn on (View) is offered to the operator or an admin
-// only; it saves view and the row (and the header button) become ready. A normal refresh redraws both, even with
+// The header's Screen button shows only for the ready one. Turn on (Control) is offered to the operator or an admin
+// only; it saves control, as a new computer starts, and the row (and the header button) become ready. A normal refresh redraws both, even with
 // Settings' older copy of the computer loaded. Someone who may only see a bot is told its computer isn't shown.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs');
 const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();
 
 (async () => {
@@ -61,7 +62,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
         }
         if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
         if (p.endsWith('/files')) return json({files: []});
-        return json({});
+        return json(unrouted(p));
       });
       // The row's words, without the icon's ligature name.
       const rowText = () => page.locator('#bot-screen-row').evaluate(el => {
@@ -109,14 +110,14 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     row = await admin.open('none');
     assert.deepEqual([row.state, row.text, row.header], ['none', 'This bot has no computer yet.', 0]);
 
-    // Off: the operator or an admin turns it on (View) right here; the row and the header button become ready.
+    // Off: the operator or an admin turns it on (Control) right here; the row and the header button become ready.
     row = await admin.open('off');
     assert.deepEqual([row.state, row.header], ['off', 0]);
-    assert.match(row.text, /^Screen is off for this computer\. Turn on \(View\) Control is a separate choice in Settings > Computers\.$/);
+    assert.match(row.text, /^Screen is off for this computer\. Turn on \(Control\) View is a choice in Settings > Computers\.$/);
     await admin.page.locator('#bot-screen-row [data-screen-on]').click();
     await admin.page.locator('#bot-screen-row[data-screen-state=ready]').waitFor();
-    assert.deepEqual(admin.writes, [{mode: 'view'}]);
-    assert.equal(await admin.rowText(), 'Open · View');
+    assert.deepEqual(admin.writes, [{mode: 'control'}]);
+    assert.equal(await admin.rowText(), 'Open · Control');
     assert.equal(await admin.page.locator('#bot-top #bot-screen').getAttribute('href'), '#/computers/c-off/screen');
     assert.equal(await admin.page.locator('#bot-screen-row').evaluate(el => el.previousElementSibling.textContent), 'Screen');
 
@@ -140,13 +141,14 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     assert.deepEqual(admin.errors, []);
     await admin.page.close();
 
-    // Sam operates these computers and is not an admin: Turn on (View) is theirs too.
+    // Sam operates these computers and is not an admin: Turn on (Control) is theirs too.
     const operator = await visit({id: 'sam', name: 'Sam', role: 'member'});
     row = await operator.open('off');
-    assert.match(row.text, /^Screen is off for this computer\. Turn on \(View\)/);
+    assert.match(row.text, /^Screen is off for this computer\. Turn on \(Control\)/);
     await operator.page.locator('#bot-screen-row [data-screen-on]').click();
     await operator.page.locator('#bot-screen-row[data-screen-state=ready]').waitFor();
-    assert.deepEqual(operator.writes, [{mode: 'view'}]);
+    assert.deepEqual(operator.writes, [{mode: 'control'}]);
+    assert.equal(await operator.rowText(), 'Open · Control');
     assert.equal(await operator.page.locator('#bot-top #bot-screen').getAttribute('href'), '#/computers/c-off/screen');
     assert.deepEqual(operator.errors, []);
     await operator.page.close();
@@ -172,6 +174,6 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     assert.deepEqual(member.writes, []);
     assert.deepEqual(member.errors, []);
     await member.page.close();
-    console.log('PASS: Screen row in More for each state; header button only when ready; Turn on (View) for operator/admin only; refresh redraws; see-only told it is not shown');
+    console.log('PASS: Screen row in More for each state; header button only when ready; Turn on (Control) for operator/admin only; refresh redraws; see-only told it is not shown');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

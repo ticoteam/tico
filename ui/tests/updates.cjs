@@ -10,6 +10,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const {html, uiFile} = require('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs');
 const {t} = require('./support/load.cjs');
 const shots = process.env.TICO_SCREENSHOT_DIR;
 const now = Date.now(), iso = ms => new Date(now + ms).toISOString(), hour = 3600e3;
@@ -122,7 +123,7 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
         const u = updates.find(x => x.id === one[1]) || older[one[1]];
         return u ? json({update: u, thread: threads[one[1]] || []}) : json({error: {code: 'not_found', detail: 'Update not found'}}, 404);
       }
-      return json({});
+      return json(unrouted(p));
     });
     return {page, errors};
   };
@@ -172,7 +173,15 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
     // No Unread filter. Unread first, then newest; marking one unread (or read)
     // never moves anything while the page is open.
     assert.equal(await page.locator('#upd-unread').count(), 0);
+    // The action row is icons, each named for a screen reader and a tooltip; no words on the card.
+    const acts = page.locator('[data-upd="u-cmo"] .upd-actions .upd-act');
+    assert.deepEqual(await acts.evaluateAll(els => els.map(b => [b.getAttribute('aria-label'), b.title, b.querySelector('.nav-icon')?.textContent])),
+      [['Reply', 'Reply', 'chat_bubble'], ['Mark unread', 'Mark unread', 'mark_email_unread'], ['Archive', 'Archive', 'archive']]);
+    assert.deepEqual(await acts.evaluateAll(els => els.map(b => [...b.childNodes].filter(n => !n.classList?.contains('nav-icon')).map(n => n.textContent).join('').trim())),
+      ['', '', ''], 'no visible words');
+    assert.equal(await page.locator('#upd-feed [data-upd-kids]').count(), 0, 'the List has no reports toggle');
     await page.locator('[data-upd="u-cmo"] [data-upd-toggle]').click();
+    assert.equal(await page.locator('[data-upd="u-cmo"] [data-upd-toggle]').getAttribute('aria-label'), 'Mark read', 'Mark unread marked it unread');
     assert.deepEqual(await page.locator('#upd-feed .upd-card').evaluateAll(els => els.map(e => e.dataset.upd)), ['u-seo', 'u-fin', 'u-cmo'],
       'nothing re-sorts while you are on the page');
     // Archive failure leaves the card and its unsent reply draft in place. A later successful
@@ -209,7 +218,8 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
     await page.waitForFunction(() => location.hash === '#/updates?view=archive' && document.querySelector('[data-upd="u-cmo"]'));
     assert.equal(await page.locator('#upd-allread').isHidden(), true);
     assert.equal(await page.locator('.upd-head h1').innerText(), 'Archive', 'the reader knows they are in the Archive');
-    assert.equal(await page.locator('[data-upd="u-cmo"] [data-upd-archive]').innerText(), 'Restore');
+    assert.equal(await page.locator('[data-upd="u-cmo"] [data-upd-archive]').getAttribute('aria-label'), 'Restore');
+    assert.equal(await page.locator('[data-upd="u-cmo"] [data-upd-archive] .nav-icon').textContent(), 'unarchive');
     await page.locator('[data-upd="u-cmo"] [data-upd-archive]').click();
     await page.locator('[data-upd="u-cmo"]').waitFor({state: 'detached'});
     assert.deepEqual(archiveRequests[2], {ids: ['u-cmo'], archived: false});
@@ -365,7 +375,7 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
     const p = phone.page;
     await p.goto('http://tico-ui.test/#/updates');
     await p.locator('#upd-feed .upd-card').first().waitFor();
-    assert.deepEqual(await p.locator('#mobile-nav .mobile-nav-label').allInnerTexts(), ['Team', 'Search', 'Tasks', 'Updates', 'Talk to us', 'More']);
+    assert.deepEqual(await p.locator('#mobile-nav .mobile-nav-label').allInnerTexts(), ['Team', 'Search', 'Tasks', 'Updates', 'Support', 'More']);
     const navWidths=await p.locator('#mobile-nav .mobile-nav-item').evaluateAll(items=>items.map(el=>el.getBoundingClientRect().width));
     assert.equal(navWidths.length,6);
     assert.ok(Math.max(...navWidths)-Math.min(...navWidths)<1,'six evenly spaced navigation items');
@@ -442,6 +452,6 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
     assert.equal(await p.locator('.side-scroll [data-nav="overview"]').isVisible(), true, 'Overview remains in More');
     assert.deepEqual(phone.errors, []);
     await p.close();
-    console.log('PASS: Updates first in the rail with an unread badge, just the bullets (no title, sections, greeting, day headers or missed list), seen-is-read in one batched request, mark unread without re-sorting, unread first on the next visit, an instant reply that goes to the bot\'s chat, threads, j/k, Daily/Weekly toggle, a week in review as five swipeable slides with KPI lines, cached paint, and on a phone Tasks and Updates in a six-item bottom bar (with Talk to us) that fits 360px, with Tasks also in More.');
+    console.log('PASS: Updates first in the rail with an unread badge, just the bullets (no title, sections, greeting, day headers or missed list), seen-is-read in one batched request, mark unread without re-sorting, unread first on the next visit, an instant reply that goes to the bot\'s chat, threads, j/k, Daily/Weekly toggle, a week in review as five swipeable slides with KPI lines, cached paint, and on a phone Tasks and Updates in a six-item bottom bar (with Support) that fits 360px, with Tasks also in More.');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exitCode = 1; });

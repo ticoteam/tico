@@ -8,13 +8,16 @@ from types import SimpleNamespace
 from clients.catalog import free_slug, slug_from_name
 
 from . import access as Access
+from . import ceo_bot
 from . import message_bots as MessageBots
 from . import bot_access as BA
 from . import models as M
 from . import placement
 from . import providers
+from . import app_delivery
 from . import rooms
 from . import shared_bots
+from . import update_feeds, wake_presets
 from .auth import Identity
 from .execution import _reported, stranded
 from .harnesses import EXTERNAL_HARNESSES, HARNESS_BY_ID, normalize_fallback, resolve_harness, runtime_of
@@ -190,13 +193,18 @@ class SettingsAdmin:
                 "model": effective.get("model") or row["model"], "runtime": effective.get("runtime") or row["runtime"],
                 "effort": effective.get("reasoning_effort") or row["effort"],
                 "compact_at": compact_at(effective),
+                # The bot's own, never its original's: a branch's queue is its own (backend/wake_presets.py).
+                "wake": wake_presets.effective(_json(config["config_json"], {}) or {}),
                 "session": effective.get("session"),
                 "subtask_session": effective.get("subtask_session"),
                 "task_goal": effective.get("task_goal"),
                 "review_model": effective.get("review_model"),
                 "capture_stream": (_json(config["config_json"], {}) or {}).get("capture_stream"),
+                "update_subscriptions": update_feeds.chosen(_json(config["config_json"], {}) or {}),
+                "update_feeds": update_feeds.status(),
                 "harness": resolve_harness(effective, effective.get("runtime") or row.get("runtime")),
-                "fallback": normalize_fallback(effective.get("fallback"))}
+                "fallback": normalize_fallback(effective.get("fallback")),
+                "app_delivery": app_delivery.view(c, _json(config["config_json"], {}) or {})}
 
     @staticmethod
     def refuse_retired(choice):
@@ -313,7 +321,7 @@ class SettingsAdmin:
                   "harness": harness, "reasoning_effort": effort, "thread_mode": body.thread_mode, "shared": body.shared,
                   "private_tasks_default": (body.private_tasks_default if "private_tasks_default" in body.model_fields_set
                                             else body.template == "general-counsel"),
-                  "model_managed_by": "cloud"}
+                  "model_managed_by": "cloud", "wake_preset": wake_presets.NEW_BOT_PRESET}
         if body.template:
             config["template"] = body.template
             if privileged:
@@ -330,6 +338,8 @@ class SettingsAdmin:
             "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (body.slug, encode(config), team, operator, encode(owners), body.description,
              body.reports_to, repo, body.thread_mode, now, who.actor, encode([pid]), who.actor))
+        from .report_order import arrive
+        arrive(c, "bot:" + body.slug, body.reports_to)     # a new bot goes last among its manager's reports
         assignment = None
         if runner:
             assignment = self.execution.assign(c, who, body.slug, SimpleNamespace(
@@ -446,7 +456,7 @@ class SettingsAdmin:
         if bot in (self.settings.assistant_bot, "botops", "librarian", "goal-manager"):
             raise Problem("system_bot", (self.settings.assistant_name if bot == self.settings.assistant_bot
                                          else "BotOps" if bot == "botops" else "The Librarian" if bot == "librarian"
-                                         else "The Goal Manager")
+                                         else "The " + ceo_bot.name(c))
                           + " is built in to every team and cannot be archived or deleted; you can pause or rename it", 409)
         self._manager(c, who, bot)
         if self._config(c, bot)["revision"] != body.expected_revision:
@@ -578,6 +588,13 @@ class SettingsAdmin:
                 declared.pop("capture_stream", None)
                 from .stream_capture import forget_bot
                 forget_bot(c, bot)
+        if "app_delivery" in body.model_fields_set:
+            app_delivery.change(c, who, self.auth, bot, body.app_delivery, declared, config["operator"])
+        if "update_subscriptions" in body.model_fields_set:
+            # Its cursors live beside the definition: delivering an update never rewrites the bot (update_feeds).
+            picked = [name for name in update_feeds.CATEGORIES if name in (body.update_subscriptions or [])]
+            update_feeds.subscribe(c, bot, update_feeds.chosen(declared), picked)
+            declared["update_subscriptions"] = picked
         if "shared" in body.model_fields_set:
             declared["shared"] = bool(body.shared)
         if "template" in body.model_fields_set:
@@ -588,6 +605,9 @@ class SettingsAdmin:
                          "private_tasks_default": values.get("private_tasks_default") is True,
                          "status": values["status"], "repo": values["repo"],
                          "thread_mode": values["thread_mode"], "temp": bool(values.get("temp"))})
+        if (values.get("reports_to") or "") != (before.get("reports_to") or ""):
+            from .report_order import arrive
+            arrive(c, "bot:" + bot, values.get("reports_to"))   # a new manager's report goes last there
         c.execute("UPDATE bots SET display_name=?,state=? WHERE slug=?",
                   (values["display_name"], values["status"], bot))
         c.execute(
@@ -623,6 +643,8 @@ class SettingsAdmin:
             return normalize_fallback((_json(config["config_json"], {}) or {}).get("fallback"))
         if field == "compact_at":
             return compact_at(_json(config["config_json"], {}))
+        if field == "wake_preset":
+            return wake_presets.preset_of(_json(config["config_json"], {}))
         if field == "placement":
             row = c.execute("SELECT a.runner_id,a.generation,r.label,r.operator AS runner_operator "
                             "FROM assignments a JOIN runners r ON r.id=a.runner_id WHERE a.bot=?", (bot,)).fetchone()
@@ -1048,6 +1070,27 @@ class SettingsAdmin:
         H.event(c, who.actor, "bot.compact_at_changed", bot, {"before": before, "after": body.compact_at})
         return {"bot": bot, "compact_at": body.compact_at, "revision": config["revision"] + 1}
 
+    def set_wake_preset(self, c, who, bot, body):
+        """How soon the bot's nonblocking notices and enabled sweeps start a turn (backend/wake_presets.py). Only the
+        one key changes: no routine, hook, subscription, permission or compaction setting moves with it. A branch
+        picks its own, since the queue it holds is its own. Jobs already held are planned again on the new values."""
+        self._manager(c, who, bot)
+        config = self._config(c, bot)
+        if config["revision"] != body.expected_revision:
+            raise Problem("version_conflict", "Bot configuration changed; refresh before saving", 409)
+        before = self.snapshot(c, bot, "wake_preset")
+        declared = _json(config["config_json"], {}) or {}
+        if body.wake_preset == wake_presets.CURRENT:
+            declared.pop("wake_preset", None)
+        else:
+            declared["wake_preset"] = body.wake_preset
+        c.execute("UPDATE bot_config SET config_json=?,revision=revision+1 WHERE bot=?", (encode(declared), bot))
+        wake_presets.replan(c, bot)
+        self.record(c, who.actor, bot, "wake_preset", before, body.wake_preset)
+        H.event(c, who.actor, "bot.wake_preset_changed", bot, {"before": before, "after": body.wake_preset})
+        return {"bot": bot, "wake_preset": body.wake_preset, "wake": wake_presets.effective(declared),
+                "revision": config["revision"] + 1}
+
 
 def archive_bot(c, actor, bot, successor="", revoke_agent=True):
     """Take a bot off the org chart and out of work (#535). Its routines are deleted, queued
@@ -1141,6 +1184,8 @@ def _set_parent(c, actor, bot, parent, ts):
     row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
     declared = _json(row["config_json"], {}) or {}
     declared["reports_to"] = parent
+    from .report_order import arrive
+    arrive(c, "bot:" + bot, parent)
     c.execute("UPDATE bot_config SET reports_to=?,config_json=?,revision=revision+1,"
               "definition_updated=?,definition_updated_by=? WHERE bot=?",
               (parent, encode(declared), ts, actor, bot))

@@ -359,7 +359,9 @@ function v2MessageHTML(m) {
   const mine = !!pid;                       // any person's message sits on the right, under their name
   const who = mine ? esc(personHandle(pid)) : esc(actorLabel(m.from_actor));
   const me = m.from_actor === myActor();    // your own lines need no name on a bot's page
-  return `<div class="conv-run chat${me ? ' from-me' : ''}" data-message="${esc(m.id || '')}">
+  // The message a new topic started a fresh session for (backend/topic_change.py): one quiet line above it.
+  const fresh = mine && m.refs?.topic_changed ? '<div class="conv-break chat-topic-break" role="separator">Topic changed</div>' : '';
+  return `${fresh}<div class="conv-run chat${me ? ' from-me' : ''}" data-message="${esc(m.id || '')}">
     <time class="chat-stamp" datetime="${esc(m.created || '')}" title="${esc(fmt(m.created))}">${esc(ago(m.created))}</time>
     <div class="conv-run-head">${mine ? `<span class="mono muted">${who}</span>` : actorChip(m.from_actor)}
       ${m.kind && m.kind !== 'say' ? `<span class="pill">${esc(m.kind)}</span>` : ''}
@@ -499,6 +501,8 @@ function v2PendingText(state) {
     return {word: 'Queued', mode: 'wait', tip: s?.state === 'running' && s.focus
       ? `${name} is on another run: ${s.focus}` : 'Starts when its computer picks it up'};
   }
+  // Its ChatGPT login is busy with another turn (backend/login_waits.py): waiting, not failed.
+  if (x.waiting && ['leased', 'running'].includes(x.state)) return {word: x.waiting, tip: x.waiting, mode: 'wait'};
   if (x.state === 'leased') return {word: 'Starting', tip: `${name} is starting`, mode: 'run'};
   if (x.state === 'running') return x.label && x.label !== 'Working'
     ? {word: x.label, tip: x.label, mode: 'run'} : {word: '', tip: `${name} is working`, mode: 'run'};
@@ -601,9 +605,12 @@ function v2ChatRender(state) {
   if (html !== state.html) {
     state.html = html;
     state.stick.update(() => {
+      // A Confirm card kept through the rebuild (assistantChat.cards puts the same element back) keeps its focus too.
+      const focused = thread.contains(document.activeElement) ? document.activeElement : null;
       thread.innerHTML = html;
       if (thread.querySelector('[data-action-host]')) void window.assistantChat?.cards(thread, {get, post, esc, toast,
         reload: () => v2ChatMessages(state).then(() => { if (V2C === state) v2ChatRender(state); })});
+      if (focused?.isConnected && document.activeElement !== focused) focused.focus({preventScroll: true});
       if (thread.querySelector('[data-credential-host]')) void window.credentialCards?.mount(thread, {get, post, esc, toast,
         reload: () => v2ChatMessages(state).then(() => { if (V2C === state) v2ChatRender(state); })});
     }, {fresh: state.rendered && v2Jump(state), prepended: state.prepending});

@@ -134,7 +134,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                 [--evidence "url or note"] [--quality measured|estimate|partial|--estimate] [--source posthog]
                 [--definition-version N] [--supersedes READING-ID]
                                            a reading: a fact with its period; to correct one, supersede it
-    hub proposal create --kind goal_wording|goal_kpi|kpi_definition|kpi_target|flag [--goal ID] [--kpi ID]
+    hub proposal create --kind goal_wording|goal_kpi|kpi_definition|kpi_target|flag|goal_why [--goal ID] [--kpi ID]
                         (--payload '{json}'|--payload-file f.json) [--reason "..."]
                                            a change you may not make yourself, for the owner to confirm
     hub proposal list [--status pending|confirmed|rejected|all] [--goal ID] [--kpi ID]
@@ -192,6 +192,8 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub team show [--person ID] [--team NAME]
                                            humans and bots: who they are, Slack, what they own; each bot
                                            with its reports_to, group and template (the bots you may see)
+    hub org order <manager> [--set a,b,c]  a manager's direct reports in the chart's order; --set puts them in
+                                           that order (the ones left out keep their places)
     hub health check                       what is wrong with the bots, most urgent first, each with its fix
     hub health metrics [--minutes N]       the server's flight recorder (owners, admins and bots)
                                            (the Assistant gets the live snapshot)
@@ -229,6 +231,8 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub decision ask --set <name> --state-file s.json [--option covered=opts.json] [--label L]
                                            ask the decision model typed questions about a state (questions/README.md);
                                            --questions-file q.json instead of --set; --list shows the sets
+    hub decision readout [--days 7]        per question set: calls, cost, Jev or fallback, answer spread; and the
+                                           month's spend against the cap (`text` is the readout in plain words)
     hub template list                      the bot templates this company can pick from
     hub bot create --template T [--name "Display"] [<slug>]
                                            set a chosen bot up in the workspace (BotOps only); the slug is picked
@@ -280,7 +284,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub api GET|POST|PUT|PATCH|DELETE <path> ['{json}']
                                            BotOps: any v2 route, as the person who asked; a Confirm card for what
                                            always needs their click. Never a secret in the body
-    hub computer list                      the computers a bot may go on, and what runs on each
+    hub computer list [--computer C]       the computers a bot may go on, one short row each; one in full
     hub computer performance <label|id> [--hours 24]
                                            its CPU, memory and disk over time, overloads and what ran then
     hub credential request <ENV> [--for-bot B] [--label "your Jira login"] [--format "you@x.com:API token"]
@@ -953,6 +957,7 @@ def parser():
     s.add_argument("id")
     s.add_argument("--add", action="append")
     s.add_argument("--remove", action="append")
+    s.add_argument("--approval-id", dest="approval_id", help="an approved publish approval, for a public roadmap label")
     s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
     s.set_defaults(fn="task label")
     s = task.add_parser("close")
@@ -1138,7 +1143,7 @@ def parser():
 
     proposal = sub.add_parser("proposal", help="a change you may not make yourself, for the owner to confirm").add_subparsers(dest="sub")
     s = proposal.add_parser("create")
-    s.add_argument("--kind", required=True, choices=["goal_wording", "goal_kpi", "kpi_definition", "kpi_target", "flag"])
+    s.add_argument("--kind", required=True, choices=["goal_wording", "goal_kpi", "kpi_definition", "kpi_target", "flag", "goal_why"])
     s.add_argument("--goal", dest="goal_id")
     s.add_argument("--kpi", dest="kpi_id")
     s.add_argument("--payload", help="the proposed change, as JSON")
@@ -1430,6 +1435,12 @@ def parser():
     s.add_argument("--person", help="that human and everyone under them")
     s.add_argument("--team", help="a group id, like engineering or sales: that group and the groups in it")
     s.set_defaults(fn="team show")
+    org = sub.add_parser("org", help="the order of the team chart").add_subparsers(dest="sub")
+    s = org.add_parser("order", help="a manager's direct reports in the chart's order; --set puts them in an order")
+    s.add_argument("manager", help="a bot's slug or a human's id (human:<id> when one could be either)")
+    s.add_argument("--set", type=lambda text: [x.strip() for x in text.split(",") if x.strip()], metavar="A,B,C",
+                   help="its reports in the new order, comma-separated; the ones left out keep their places")
+    s.set_defaults(fn="org order")
     health = sub.add_parser("health", help="what is wrong, and where").add_subparsers(dest="sub")
     s = health.add_parser("check", help="what is wrong with the bots, most urgent first, each with its fix")
     s.set_defaults(fn="health check")
@@ -1554,6 +1565,10 @@ def parser():
     s.add_argument("--label", help="how the call is grouped in the audit; the set's id@version by default")
     s.add_argument("--list", action="store_true", help="print the question sets this checkout has")
     s.set_defaults(fn="decision ask")
+    s = decision.add_parser("readout", help="per question set: the last days' calls, cost, Jev or fallback and answer "
+                                            "spread, and the month's spend against the cap")
+    s.add_argument("--days", type=int, help="how many days back from now (1-31, 7 by default)")
+    s.set_defaults(fn="decision readout")
 
     # A new bot: BotOps builds the chosen template in the workspace (`hub bot create`) or only registers it (--record-only).
     # The Librarian (docs/librarian.md): ask a question, and read a linked doc on this computer.
@@ -1601,6 +1616,9 @@ def parser():
                         "for a reviewer bot; own (default): its own model")
     s.add_argument("--capture-stream", choices=("on", "off"),
                    help="on (owner only): keep each run's raw provider stream a week for hub run export; off (default): not")
+    s.add_argument("--subscribe-updates", metavar="templates,tico|none",
+                   help="Subscribe to updates, as quiet notes for its next run: templates (its template's changes), "
+                        "tico (Tico releases), both, or none")
     s.add_argument("--shared", action=argparse.BooleanOptionalAction, default=None, help="allow branches")
     s.set_defaults(fn="bot update")
     s = bot.add_parser("check", help="what preflight would still refuse about that repository")
@@ -1691,8 +1709,10 @@ def parser():
         s = repos.add_parser(verb)
         s.add_argument("full_name")
         s.set_defaults(fn="repo " + verb)
-    s = repos.add_parser("product-create", help="preview, then confirm an exact private empty product repository (Owner only)")
+    s = repos.add_parser("product-create", help="preview, then confirm an exact private empty product repository "
+                         "(the Owner, or a bot with Create product repositories)")
     s.add_argument("name", help="exact GitHub repository name, without an organization")
+    s.add_argument("--confirm", metavar="ORG/NAME", help="the exact preview target, instead of typing it at a terminal")
     s.set_defaults(fn="repo product-create")
     s = bot.add_parser("repo-create", help="owner or BotOps: create <org>/bot-<slug> from a template, or empty")
     s.add_argument("slug")
@@ -1763,7 +1783,12 @@ def parser():
     s.add_argument("--on-behalf-of", help="the open task a person asked you for, when something else started this run")
     s.set_defaults(fn="api")
     comp = sub.add_parser("computer", help="the computers a bot may go on").add_subparsers(dest="sub")
-    comp.add_parser("list", help="the computers a bot may go on, and what runs on each").set_defaults(fn="computer list")
+    s = comp.add_parser("list", help="the computers a bot may go on, one short row each; --computer for one in full")
+    s.add_argument("--computer", help="one computer's label or id: its full detail, large sections capped")
+    s.add_argument("--section", choices=["assigned", "repositories", "bots", "runtimes", "harnesses", "recent_errors"],
+                   help="with --computer: one page of this section only")
+    s.add_argument("--offset", type=int, help="with --section: the first item to return")
+    s.set_defaults(fn="computer list")
     s = comp.add_parser("performance", help="a computer's CPU, memory and disk over time, overloads and what ran then")
     s.add_argument("computer", help="the computer's label or id")
     s.add_argument("--hours", type=int, default=24)
@@ -1968,6 +1993,8 @@ def rename_argv(argv):
     argv = list(argv)
     if argv[:1] == ["note"] and len(argv) > 1 and argv[1] not in ("create", "list", "delete") and not argv[1].startswith("-"):
         return ["note", "create"] + argv[1:], '"hub note <bot> <text>" is now "hub note create <bot> <text>"'
+    if argv[:2] == ["org", "order"]:                   # `hub org` alone is the old `hub team show`; this one is new
+        return argv, None
     for old, new, tail, rewrite in RENAMED:
         if tuple(argv[:len(old)]) == old:
             rest = argv[len(old):]

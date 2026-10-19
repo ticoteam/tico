@@ -6,6 +6,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const {html, uiFile} = require('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs');
 const launch = () => chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
 const SHOTS = process.env.TICO_UI_SHOTS || '';
 
@@ -70,7 +71,7 @@ async function run(viewport, shot) {
         return json({task: {...tasks[id], conversation_id: 'r-' + id}, comments: comments[id], events: [], can_comment: true, children: []});
       }
       if (p.startsWith('/api/v2/tasks/') && p.endsWith('/files')) return json({files: []});
-      return json({});
+      return json(unrouted(p));
     });
     await page.goto('https://tico-ui.test/#/bot/botops');
     await page.waitForFunction(() => V2C?.loaded && document.querySelector('#conv-thread .chat-task-row'));

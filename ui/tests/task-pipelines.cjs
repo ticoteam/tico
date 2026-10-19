@@ -3,6 +3,7 @@ const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs');
 const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();   // load.cjs arrives with #254
 (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
@@ -87,7 +88,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
       if (p === '/api/v2/conversations') return json({conversations: []});
       if (p.endsWith('/messages')) return json({messages: []});
       if (p === '/api/v2/models') return json({models: [], harnesses: []});
-      return json({});
+      return json(unrouted(p));
     });
     await page.goto('http://tico-ui.test/#/tasks');
     await page.waitForFunction(() => TASKS_ST?.doneLoaded && TASKS_ST.type === 'marketing');

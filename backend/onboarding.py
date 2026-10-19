@@ -24,7 +24,7 @@ from . import models as M
 from . import providers
 from . import beta, census, changelog, releases, replication, runner_versions, support_asks, ui_bundle
 from .config import ASSISTANT_NAME
-from . import rooms, routines, statuses
+from . import ceo_bot, rooms, routines, statuses
 from . import access as Access
 from . import groups as Groups
 from . import message_bots as MessageBots
@@ -159,7 +159,7 @@ def _card(document, instructions):
 # A template's avatar symbol: a Material Symbols name (card.yaml `icon`). Read on every bot list, so
 # the names are parsed again only when a card file changes.
 ICON_NAME = re.compile(r"^[a-z0-9_]{1,48}$")
-_icon_cache = {"key": None, "icons": {}, "helpers": frozenset()}
+_icon_cache = {"key": None, "icons": {}, "helpers": frozenset(), "leads": frozenset()}
 
 
 def template_icons(settings):
@@ -172,15 +172,20 @@ def helper_templates(settings):
     return _template_marks(settings)["helpers"]
 
 
+def lead_templates(settings):
+    """The templates whose card says `lead: true`: a department's Head (backend/recruit_rank.py)."""
+    return _template_marks(settings)["leads"]
+
+
 def _template_marks(settings):
     root = Path(settings.catalog_dir)
     try:
         files = sorted(root.glob("*/" + CARD_FILE))
         key = (str(root), tuple((p.name, p.parent.name, p.stat().st_mtime_ns) for p in files))
     except OSError:
-        return {"icons": {}, "helpers": frozenset()}
+        return {"icons": {}, "helpers": frozenset(), "leads": frozenset()}
     if _icon_cache["key"] != key:
-        icons, helpers = {}, set()
+        icons, helpers, leads = {}, set(), set()
         for path in files:
             try:
                 document = yaml.safe_load(path.read_text())
@@ -193,7 +198,9 @@ def _template_marks(settings):
                 icons[template] = icon
             if template and document.get("kind") == "helper":
                 helpers.add(template)
-        _icon_cache.update(key=key, icons=icons, helpers=frozenset(helpers))
+            if template and document.get("lead") is True:
+                leads.add(template)
+        _icon_cache.update(key=key, icons=icons, helpers=frozenset(helpers), leads=frozenset(leads))
     return _icon_cache
 
 
@@ -252,6 +259,8 @@ def load(c):
             "selected": dict(stored.get("selected") or {}),
             "completed": stored.get("completed") or None,
             "assigned_to": stored.get("assigned_to") or None,
+            # When the company started as the sample company (backend/sample_company.py): when, by whom, what it made.
+            "sample": stored.get("sample") or None,
             "updated": stored.get("updated") or "", "updated_by": stored.get("updated_by") or ""}
 
 
@@ -314,6 +323,9 @@ def config_view(c, settings, who=None):
     value["backup"] = replication.status()
     value["runner_compat"] = runner_versions.desired()
     value["beta"] = beta.listing()      # the Beta pill and Help's Beta list (ui/app/state.js betaPill)
+    value["ceo_bot"] = ceo_bot.on(c)    # the CEO Bot switch: its name and place on the chart (ui/app/state.js ceoBotOn)
+    from . import update_feeds
+    value["update_feeds"] = update_feeds.status()   # what Subscribe to updates can send (settings-bot-editor.js)
     return value
 
 
@@ -474,7 +486,9 @@ class Onboarding:
         elif reports_to == slug:
             raise Problem("hierarchy", "A bot cannot report to itself", 422)
 
-    def complete(self, c, who):
+    def complete(self, c, who, models=None):
+        """Create the plan's bots. `models` names the model a new bot runs on, by slug, in place of its card's
+        (the sample company spreads its bots over two subscriptions); a model whose provider is off is ignored."""
         self._owner(who)
         record = load(c)
         names = display_names(self.settings, record)
@@ -486,6 +500,8 @@ class Onboarding:
         for slug, choice in plan.items():
             raw = cards.get(choice["template"])
             card = render(raw, names, choice["display_name"]) if raw else {}
+            if (models or {}).get(slug):
+                card["model"] = models[slug]
             starter = bool(card.get("starter")) and not card.get("bootstrap")
             reports_to = str(choice.get("reports_to") or "") or (home if starter else "")
             now = reports_to if reports_to.startswith("human:") or (reports_to and H.bot(c, reports_to)) else ""
@@ -509,12 +525,22 @@ class Onboarding:
         # The team builder builds the chart by group: each bot goes in the group of its template, made if the team
         # has none yet (backend/groups.py).
         Groups.place(c, self.settings, list(plan))
+        if not record["completed"]:
+            # A new company starts caught up: the releases shipped before it existed are not news to its owner.
+            changelog.mark_read(c, self.settings, who.actor, [row["id"] for row in changelog.products(c, self.settings)])
         # Completing twice keeps the moment the company actually finished.
         record.update(selected=plan, completed=record["completed"] or H.now())
         self._wire(c, record, who.actor)
         self._store(c, record, who.actor)
         H.event(c, who.actor, "onboarding.completed", "", {"bots": sorted(plan)})
         return self.view(c, who)
+
+    def start_sample(self, c, who):
+        """The welcome's "Start with a sample company": this new company becomes Tico's sample company
+        (backend/sample_company.py). The owner only; refused once the company is set up."""
+        self._owner(who)
+        from . import sample_company
+        return sample_company.load(self, c, who)
 
     def _make_starter(self, c, who, slug, template, rank=None):
         """A starter template's bot, as first run creates it: it records the template and its version,
@@ -532,10 +558,11 @@ class Onboarding:
         self._seed_routines(c, who, slug, template)
         H.event(c, who.actor, "bot.needs_onboarding", slug, {"template": template})
 
-    def onboarded(self, c, who, slug):
+    def onboarded(self, c, who, slug, arm=True):
         """The bot's own word, or its manager's, that its setup is done: it stops being
         parked, its routines may run and its work is claimed. A member's bot counts toward their
-        limit from here on, so the limit is checked now."""
+        limit from here on, so the limit is checked now. `arm` False leaves its first routine off (the sample
+        company's bots, set up by the sample's own answers)."""
         if not H.bot(c, slug):
             raise Problem("not_found", "Bot not found", 404)
         if not (who.role == "bot" and H.actor_id(who.actor) == slug):
@@ -556,7 +583,7 @@ class Onboarding:
         H.setup_finished(c, slug)
         # A bot whose setup was never started (Finish with defaults on Overview) gets its first routine as Start setup
         # would have given it; once only, so one already armed or turned off by a person is left alone.
-        routine = self.arm_first_routine(c, who, slug)
+        routine = self.arm_first_routine(c, who, slug) if arm else None
         return {"bot": slug, "onboarding_state": ONBOARDED, "changed": True, "routine": routine}
 
     def attach_template(self, c, who, slug, template, instructions, *, queue_build=False, title_prefix=""):
@@ -650,7 +677,7 @@ class Onboarding:
 
     def turn_on_goal_manager(self, c, who):
         """The same for the built-in Goal Manager (docs/goals-and-kpis.md)."""
-        return self._turn_on(c, who, GOAL_MANAGER, GOAL_MANAGER, "Goal Manager", "goal_manager.turned_on")
+        return self._turn_on(c, who, GOAL_MANAGER, GOAL_MANAGER, ceo_bot.name(c), "goal_manager.turned_on")
 
     def ensure_librarian(self, c):
         """A company set up before the Librarian was built in gets it without anyone clicking, once
@@ -662,7 +689,7 @@ class Onboarding:
 
     def ensure_goal_manager(self, c):
         """The same for the Goal Manager: a company from before it was built in gets it once it can run it."""
-        return self._ensure_builtin(c, GOAL_MANAGER, "Goal Manager", "goal_manager.turned_on")
+        return self._ensure_builtin(c, GOAL_MANAGER, ceo_bot.name(c), "goal_manager.turned_on")
 
     def _ensure_builtin(self, c, slug, name, event):
         if not load(c)["completed"] or not providers.configured(providers.load(c, self.settings)):
@@ -922,6 +949,8 @@ class Onboarding:
         """Create the bot, or bring an existing definition up to the chosen name. A bot that
         is already running is never demoted back to planned."""
         summary = str(card.get("summary") or "")
+        if slug == GOAL_MANAGER and ceo_bot.on(c):
+            choice = {**choice, "display_name": ceo_bot.NAME}      # a plan run again never names it back
         existing = c.execute("SELECT revision FROM bot_config WHERE bot=?", (slug,)).fetchone()
         if not existing:
             picked = self._runtime(c, card)

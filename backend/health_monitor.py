@@ -23,11 +23,12 @@ import json
 import logging
 import re
 import time
+from datetime import timezone
 
 from fastapi import Request
 from pydantic import Field
 
-from . import diagnostics, team_rules
+from . import diagnostics, providers, runner_versions, team_rules
 from .auth import Identity
 from .models import Contract
 from .store import H, Problem
@@ -51,6 +52,8 @@ SERVER_CPU = 40.0            # the server's average CPU over an hour, in percent
 QUIET_REQUESTS = 600         # requests in that hour below which the server counts as idle
 REPEATED = 3                 # a runner error line seen this often in its last 50 is a pattern, not a blip
 REWAKE_HOURS = 24            # a finding back within this long of its last wake counts but wakes nothing
+CHECK_HELD_HOURS = 12        # a check subtask whose every turn this long stopped on its model's usage limit
+LOGIN_LIMITS = 2             # turns in a row on a computer's default login that stopped on a usage limit: out of quota
 # A server start (a deploy, an update, a restart) ends every runner's event stream: a drop from this long before a start
 # to this long after it is the restart, not the stream. The span allows for the old server stopping first and for clocks.
 RESTART_BEFORE, RESTART_AFTER = 300, 120
@@ -83,9 +86,13 @@ LOG_PATTERNS = (
 MEANING = {
     "runner_outdated": "A computer runs an older Tico release than its server, or failed to update.",
     "limited_no_fallback": "A bot's turns stopped on a usage limit and it has no fallback model.",
+    "runner_restarting": "A computer has been restarting for over 34 minutes since a person pressed Restart.",
+    "default_login_limited": "A computer's default AI login (no subscription) keeps stopping on a usage limit that has "
+                             "no reset time or has not reset yet.",
     "stuck_setup": "A bot has been in setup for over an hour while work waits for it.",
     "computer_silent": "A computer has not checked in for 10 minutes or more while work is queued for its bots.",
-    "queue_idle": "Work stayed queued 15 minutes or more (a person's message: 2) on an online computer with room and no limit.",
+    "queue_idle": "Work a claim would hand out stayed queued 15 minutes or more (a person's message: 2) on an online "
+                  "computer with room and no limit.",
     "worktree_error": "A task worktree failed on its computer.",
     "server_cpu": f"The server averaged {SERVER_CPU:g}% CPU or more for an hour with under {QUIET_REQUESTS} requests.",
     "local_busy": "A process or container on a computer running Tico was busy in two hourly checks in a row while idle.",
@@ -166,16 +173,19 @@ def _runner_checks(c, settings):
     out = []
     online = health._online_runners(c)
     computers = health._computers(c, online, settings)
-    # Work a computer holds while it waits to update is said here, on its update, never as a queue_idle Tico bug.
-    held = {}
+    # Work a computer holds while it waits to update or restart is said here, never as a queue_idle Tico bug.
+    held, restarting = {}, {}
     for row in health._waiting(c, {r["id"] for r in online}, settings)[2]:
-        if row["reason"] == "updating":
-            held.setdefault(row["runner_id"], []).append(row)
+        if row["reason"] in ("updating", "restarting"):
+            (held if row["reason"] == "updating" else restarting).setdefault(row["runner_id"], []).append(row)
     for machine in computers:
         update = machine["update"]
         rows = held.get(machine["id"], [])
         holds = (f" {health.updating_words(rows[0], advise=False)}; it holds {sum(r['queued'] for r in rows)} queued "
                  "job(s) for " + ", ".join(r["name"] for r in rows) + ".") if rows else ""
+        if rows and (since := runner_versions.holding_since(c, machine["id"])):
+            minutes = max(0, int((H.parse_ts(H.now()) - H.parse_ts(since)).total_seconds() // 60))
+            holds += f" It has taken no new work since {since[11:16]} UTC ({minutes} min), waiting to update."
         if machine["online"] and (update["state"] in ("needs_update", "incompatible") or update["error"] or rows):
             out.append(_finding("runner_outdated:" + machine["id"], "runner_outdated", SETUP,
                                 f"{machine['label']} runs an older Tico release ({update['release'] or 'unknown'})",
@@ -187,6 +197,23 @@ def _runner_checks(c, settings):
                                 and not update["error"] else
                                 f"BotOps: update the runner on {machine['label']} (Settings > Computers, or "
                                 "`scripts/tico install` once on that computer so it updates itself)."))
+    cutoff = H.shift(H.now(), minutes=-health.RESTART_STUCK_MINUTES)
+    for r in c.execute("SELECT id,label,restart_since FROM runners WHERE revoked_at IS NULL AND restart_since<? "
+                       "ORDER BY label", (cutoff,)).fetchall():
+        if r["id"] not in {x["id"] for x in online}:
+            continue        # a computer that stopped checking in is computer_silent
+        rows = restarting.get(r["id"], [])
+        running = c.execute("SELECT count(*) FROM attempts WHERE runner_id=? AND state IN ('leased','running')",
+                            (r["id"],)).fetchone()[0]
+        since = str(r["restart_since"])[:16]
+        holds = (f"; it holds {sum(x['queued'] for x in rows)} queued job(s) for " + ", ".join(x["name"] for x in rows)
+                 if rows else "")
+        out.append(_finding("runner_restarting:" + r["id"], "runner_restarting", SETUP,
+                            f"{r['label']} has been restarting since {since}",
+                            f"Computer {r['label']} has said since {since} UTC that it is restarting, which takes at most "
+                            f"{health.RESTART_STUCK_MINUTES} minutes; {running} turn(s) still run there{holds}.",
+                            f"BotOps: look at the turns still running on {r['label']} (Runs); stopping one is a person's "
+                            f"choice. If none runs, restart Tico on {r['label']} by hand (`tico restart`)."))
     for x in health.silent_computers(c):
         out.append(_finding("computer_silent:" + x["id"], "computer_silent", SETUP,
                             f"{x['label']} has not checked in for {x['minutes']} minutes",
@@ -208,6 +235,130 @@ def _runner_checks(c, settings):
                 out.append(_finding(f"{check_id}:{r['id']}", check_id, kind, f"{title} ({r['label']})",
                                     f"{len(hits)} of the last {len(lines)} error lines from {r['label']} match. "
                                     "Latest: " + hits[-1][:280], fix))
+    return out
+
+
+def _login(c, settings, bot, result, configs):
+    """(runtime, harness) of the login that ended a finished turn: the fallback's when the turn hopped (its usage names
+    only the segments that spent tokens, so a hop refused at once is not in it), the check model's on a check, else
+    what its usage or the bot's config names. An empty harness means the runtime's own CLI."""
+    from .harnesses import resolve_harness, runtime_of
+    if result.get("fallback"):
+        return runtime_of(str(result["fallback"])), str(result["fallback"])
+    if result.get("check"):
+        return str(result["check"]), ""
+    usage = result.get("usage") if isinstance(result.get("usage"), dict) else {}
+    if usage.get("runtime"):
+        return str(usage["runtime"]), str(usage.get("harness") or "")
+    if bot not in configs:
+        row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
+        configs[bot] = json.loads(row[0] or "{}") if row else {}
+    return providers.bot_choice(c, settings, configs[bot])[0], resolve_harness(configs[bot])
+
+
+def _computer_login(runtime, harness):
+    """Whether a turn with no subscription profile ran on the computer's own sign-in. A harness whose key each bot
+    holds (`api_keys = "bot"`) signs in with the bot's own Credential instead: one bot's quota is not the computer's."""
+    from .harnesses import harness_caps
+    return bool(runtime) and harness_caps(harness, runtime).get("api_keys") != "bot"
+
+
+def out_of_quota_logins(c, settings=None):
+    """Each computer's default login (a turn with no subscription profile, on a harness the computer signs in rather
+    than each bot's own key) whose latest turns in the last day, on one runtime, stopped on a usage limit LOGIN_LIMITS
+    times or more with no turn there completing since, and whose provider gave no reset time or one still ahead. A turn
+    that failed for another reason says nothing either way. [{runner_id, runtime, limits, since, resets_at}]"""
+    now = H.now()
+    seen, configs, out = {}, {}, []
+    for r in c.execute("SELECT bot,runner_id,state,finished,result_json FROM attempts WHERE finished>? "
+                       "AND state IN ('completed','failed','interrupted') AND result_json IS NOT NULL "
+                       "AND json_extract(result_json,'$.profile_used') IS NULL ORDER BY finished DESC",
+                       (H.shift(now, hours=-24),)):
+        result = json.loads(r["result_json"])
+        runtime, harness = _login(c, settings, r["bot"], result, configs)
+        if not _computer_login(runtime, harness):
+            continue
+        login = seen.setdefault((r["runner_id"], runtime), {"runner_id": r["runner_id"], "runtime": runtime,
+                                                            "limits": 0, "since": "", "resets_at": None, "open": True})
+        if not login["open"]:
+            continue
+        if result.get("limited") and r["state"] != "completed":
+            if not login["limits"]:
+                login["resets_at"] = result.get("limit_resets_at")    # the latest limit's reset is the one that counts
+            login["limits"] += 1
+            login["since"] = r["finished"]
+        elif r["state"] == "completed":
+            login["open"] = False                                       # it worked after its last limit
+    for login in seen.values():
+        reset = H.parse_ts(login["resets_at"])            # a reset Tico cannot read counts as none
+        reset = reset.replace(tzinfo=timezone.utc) if reset and not reset.tzinfo else reset
+        if login["limits"] >= LOGIN_LIMITS and (reset is None or reset > H.parse_ts(now)):
+            out.append({**{k: login[k] for k in ("runner_id", "runtime", "limits", "since")},
+                        "resets_at": reset.strftime("%Y-%m-%dT%H:%M:%SZ") if reset else None})
+    return out
+
+
+def _login_checks(c, settings):
+    labels = {r["id"]: r["label"] for r in c.execute("SELECT id,label FROM runners WHERE revoked_at IS NULL")}
+    out = []
+    for x in out_of_quota_logins(c, settings):
+        label = labels.get(x["runner_id"])
+        if not label:
+            continue                                  # a removed computer runs nothing more
+        name = providers.RUNTIME_LABELS.get(x["runtime"], x["runtime"])
+        reset = (f"; the provider says it resets at {x['resets_at'][:16].replace('T', ' ')} UTC" if x["resets_at"]
+                 else "; the provider gave no reset time")
+        out.append(_finding(f"default_login_limited:{x['runner_id']}:{x['runtime']}", "default_login_limited", SETUP,
+                            f"{label}'s default {name} login is out of quota",
+                            f"{label}'s default {name} login is out of quota: {x['limits']} turns on it since "
+                            f"{x['since'][:16].replace('T', ' ')} UTC stopped on a usage limit and none has completed "
+                            f"since{reset}. Bots on {label} "
+                            f"without a subscription that run on {name}, or fall back to it, will fail there.",
+                            f"BotOps: on {label}, sign the default {name} login in to an account with quota, or top up "
+                            "its plan or billing; or give the bots there a subscription with quota (Settings > AI "
+                            "providers > Subscriptions)."))
+    return out
+
+
+def _check_hold_checks(c):
+    """A check subtask whose queued turn has stopped on its model's usage limit on every try for CHECK_HELD_HOURS: the
+    claim hands it out again after each reset (check_models.hold) and nothing else tells anyone. A turn on it that
+    ends any other way, the turn completing, or the task leaving the board clears it. One finding per check task."""
+    from . import check_models
+    now = H.now()
+    out = []
+    limited = "(coalesce(json_extract(result_json,'$.limited'),0) AND state<>'completed')"
+    for t in c.execute("SELECT t.id,t.title,t.private,t.owner FROM registry_metadata r "
+                       "JOIN tasks t ON t.id=substr(r.key,15) WHERE r.key>='check-limited:' AND r.key<'check-limited;' "
+                       f"AND t.status IN ({','.join('?' * len(H.ACTIVE_STATUSES))}) AND t.owner LIKE 'bot:%'",
+                       H.ACTIVE_STATUSES).fetchall():
+        bot = H.actor_id(t["owner"])
+        check = check_models.of(c, t["id"], bot)
+        if not check:
+            continue
+        # The limits on its queued jobs since the last turn on any of them that ended another way. One pool, not the
+        # oldest job: the claim hands out a person's message before an older notice, and one turn takes several.
+        queued = ("SELECT j.id FROM jobs j CROSS JOIN messages m JOIN conversations cv ON cv.id=m.conversation_id "
+                  f"WHERE j.bot=? AND j.state='queued' AND m.id=j.message_id AND {H.MESSAGE_TASK_SQL}=?")
+        since, tries = c.execute(
+            f"WITH a AS (SELECT finished,{limited} AS hit FROM attempts WHERE job_id IN ({queued}) "
+            "AND finished IS NOT NULL) SELECT min(finished),count(*) FROM a WHERE hit "
+            "AND finished>coalesce((SELECT max(finished) FROM a WHERE NOT hit),'')", (bot, t["id"])).fetchone()
+        if not tries or since > H.shift(now, hours=-CHECK_HELD_HOURS):
+            continue
+        hours = int((H.parse_ts(now) - H.parse_ts(since)).total_seconds() // 3600)
+        name = (H.bot(c, bot) or {}).get("display_name") or bot
+        model = providers.RUNTIME_LABELS.get(check["runtime"], check["runtime"]) + (
+            f" ({check['model']})" if check.get("model") else "")
+        title = "a private task" if t["private"] else t["title"]
+        out.append(_finding("check_limited:" + t["id"], "check_limited", SETUP,
+                            f"{name}'s check on {model} is held by its usage limit",
+                            f"{name}'s check on {model} has been held by its usage limit for {hours} h (since "
+                            f"{since[:16].replace('T', ' ')} UTC); {title}. Every turn on it since then ({tries}) "
+                            "stopped on the limit, and Tico retries it after every reset.",
+                            f"BotOps: wait for {model}'s limit to reset; or switch the check model: {name} declines "
+                            "this check and files it again on another model (hub task child --check-model); or drop "
+                            f"the check: {name} declines it. A declined check's queued turn is let go."))
     return out
 
 
@@ -244,6 +395,18 @@ def _near_start(line, starts):
     return any(start - RESTART_BEFORE <= at <= start + RESTART_AFTER for start in starts)
 
 
+def _company_fallback(c, settings, declared, company):
+    """Whether a bot that names no fallback of its own still has the company's (Settings > AI providers, *Fall back
+    when a plan runs out*): automatic fallback is on and lists a model on another runtime than the bot's. The runner
+    picks from the same rows (runner-rs/src/fallback.rs default_choice); a bot that turned fallback off, or names a
+    harness without a model, gets none."""
+    own = declared.get("fallback")
+    if isinstance(own, dict) and (own.get("off") or own.get("harness")):
+        return False
+    runtime = providers.bot_choice(c, settings, declared)[0]
+    return any(row["runtime"] and row["model"] and row["runtime"] != runtime for row in company)
+
+
 def _bot_checks(c, settings=None):
     from . import health
     from .harnesses import normalize_fallback
@@ -254,10 +417,11 @@ def _bot_checks(c, settings=None):
         detail = json.loads(r["detail_json"] or "{}")
         if detail.get("bot"):
             limited[detail["bot"]] = limited.get(detail["bot"], 0) + 1
+    company = providers.default_fallbacks(providers.load(c, settings))
     for bot, n in sorted(limited.items()):
         config = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
         declared = json.loads(config["config_json"] or "{}") if config and config["config_json"] else {}
-        if not normalize_fallback(declared.get("fallback")):
+        if not normalize_fallback(declared.get("fallback")) and not _company_fallback(c, settings, declared, company):
             out.append(_finding("limited_no_fallback:" + bot, "limited_no_fallback", SETUP,
                                 f"{bot} stopped on a usage limit and has no fallback model",
                                 f"{n} turn(s) of {bot} stopped on a subscription or spend limit in the last 24 hours, "
@@ -315,7 +479,8 @@ def _server_checks(c):
 def findings(c, settings):
     """Everything wrong right now, each once by key."""
     out = {}
-    for part in (_runner_checks(c, settings), _bot_checks(c, settings), _server_checks(c)):
+    for part in (_runner_checks(c, settings), _login_checks(c, settings), _check_hold_checks(c),
+                 _bot_checks(c, settings), _server_checks(c)):
         for item in part:
             out.setdefault(item["key"], item)
     return list(out.values())

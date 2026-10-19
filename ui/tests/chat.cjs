@@ -11,11 +11,13 @@
 //    comes as its newest message until it is opened.
 //  - stays at the bottom: new messages, streamed text and images keep the newest line in view; scrolled up, nothing
 //    moves and a "New reply" pill takes you down.
+//  - Settings links: the waiting line's Add an AI provider and Sign in on Settings > Computers open Settings on that tab.
 const {chromium, webkit} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const {html, uiFile} = require('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs');
 
 async function offlineRetry(browser) {
   const page = await browser.newPage({viewport:{width:390,height:844},hasTouch:true,serviceWorkers:'block'});
@@ -47,7 +49,7 @@ async function offlineRetry(browser) {
       if(false)return route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:{detail:'Fixture upload unavailable'}})});
       return json({conversation:{id:'legal-upload'},message:{id:'m1',from_actor:'human:ana',body:'Review this fixture',created:new Date().toISOString()}});
     }
-    return json({});
+    return json(unrouted(p));
   });
   await page.goto('https://tico-ui.test/#/bot/legal/chat');
   await page.waitForFunction(()=>BOT?.slug==='legal' && V2C?.rendered);
@@ -119,7 +121,9 @@ async function liveReply(browser) {
       return json({conversations:b?[{id:'c-ops',kind:'chat',scope:'personal',participants:['human:ana','bot:ops']}]:[]});}
     if(p.startsWith('/api/v2/conversations/c-')&&p.endsWith('/snapshot'))return json(snapshot);
     if(p==='/api/v2/bots/ops/stop'){stops.push(route.request().postDataJSON());return json({attempt_id:'a1',stopping:true});}
-    return json({});
+    // Support off: its load 3 s in would otherwise add Report this to the copy-error toasts matched below.
+    if(p==='/api/v2/support/tickets')return json({enabled:false});
+    return json(unrouted(p));
   });
   await page.goto('https://tico-ui.test/#/bot/ops/chat');
   await page.locator('#v2-live').waitFor();
@@ -253,7 +257,7 @@ async function outlineJump(browser) {
     if(p==='/api/v2/conversations/c-ops/snapshot')return json(snapshot);
     if(p==='/api/v2/conversations/c-ops/outline')return json({prompts});
     if(p==='/api/v2/conversations/c-ops/messages'){pages.push(url.searchParams.get('before'));return json({messages:older,next_before:null});}
-    return json({});
+    return json(unrouted(p));
   });
   await page.goto('https://tico-ui.test/#/bot/ops/chat');
   await page.waitForFunction(()=>V2C?.rendered&&V2C.loaded);
@@ -332,7 +336,7 @@ async function activityFold(browser) {
         : {messages:[{id:'older-b',kind:'say',from_actor:'bot:ops',body:'Earlier answer',created:at(-1),refs:{}}],next_before:null});
     }
     if (p === '/api/v2/conversations/c-ops/goal') return json({goal:endedGoal,supported:true,commands:[]});
-    return json({});
+    return json(unrouted(p));
   });
   await page.goto('https://tico-ui.test/#/bot/ops/chat');
   await page.waitForFunction(() => V2C?.rendered && V2C.loaded);
@@ -451,7 +455,7 @@ async function sideThreads(browser) {
       if (url.searchParams.get('limit') === '1') return json({messages: talk.slice(-1), has_more: true, next_before: 'b2'});
       return json(url.searchParams.get('before') === 'b1' ? {messages: talk.slice(0, 1)} : {messages: talk.slice(1), has_more: true, next_before: 'b1'});
     }
-    return json({});
+    return json(unrouted(p));
   });
   const asked = [];
   await page.goto('https://tico-ui.test/#/bot/cmo/chat');
@@ -557,7 +561,7 @@ async function stickToBottom(browser) {
     if (p === '/api/v2/conversations') return json({conversations: url.searchParams.get('bot') ? []
       : [{id: 'c-ops', kind: 'chat', scope: 'personal', participants: ['human:ana', 'bot:ops']}]});
     if (p === '/api/v2/conversations/c-ops/snapshot' || p === '/api/v2/conversations/c-ops/messages') return json(snapshot);
-    return json({});
+    return json(unrouted(p));
   });
   await page.goto('https://tico-ui.test/#/bot/ops/chat');
   await page.waitForFunction(() => V2C?.rendered && V2C.loaded && document.querySelectorAll('#conv-thread .bubble').length === 30);
@@ -613,11 +617,58 @@ async function stickToBottom(browser) {
   console.log('chat stays at the bottom, or where you scrolled: ok');
 }
 
+// A message waiting on setup links to the Settings tab that fixes it, and the link lands on that tab, not on the last
+// one open (one listener for every data-gs-tab link, ui/getting-started.js; the Goal Manager's is in goals.cjs).
+async function settingsLinks(browser) {
+  const page = await browser.newPage({viewport:{width:1200,height:800},serviceWorkers:'block'});
+  const errors=[];
+  page.on('pageerror',e=>errors.push(e.message));
+  const now=new Date().toISOString();
+  let reason='missing_provider';
+  const snapshot=()=>({messages:[{id:'q1',from_actor:'human:ana',to_actor:'bot:ops',body:'Plan the build',created:now}],
+    execution:{message_id:'q1',bot:'ops',state:'queued',label:'Saved',readiness_reason:reason}});
+  await page.context().route('**/*',route=>{
+    const url=new URL(route.request().url()),p=url.pathname;
+    const json=body=>route.fulfill({contentType:'application/json',body:JSON.stringify(body)});
+    if(p==='/')return route.fulfill({contentType:'text/html',body:html});
+    const ui=p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+    if(ui){const file=uiFile(ui[1]);
+      if(fs.existsSync(file))return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript',body:fs.readFileSync(file,'utf8')});}
+    if(/\/marked\.min\.js$/.test(p))return route.fulfill({contentType:'application/javascript',body:fs.readFileSync(path.join(__dirname,'../vendor/marked.min.js'),'utf8')});
+    if(p==='/api/me')return json({id:'ana',name:'Ana',role:'owner',cloud:true});
+    if(p==='/api/employees')return json([{name:'ops',display_name:'Ops',host:'keeper',status:'active',can_chat:true,schedules:[]}]);
+    if(p==='/api/issues')return json([]);
+    if(p.endsWith('/watch'))return route.fulfill({contentType:'text/event-stream',body:'event: snapshot\ndata: '+JSON.stringify(snapshot())+'\n\n'});
+    if(p==='/api/v2/conversations'){const b=url.searchParams.get('chat_with');
+      return json({conversations:b?[{id:'c-ops',kind:'chat',scope:'personal',participants:['human:ana','bot:ops']}]:[]});}
+    if(p.startsWith('/api/v2/conversations/c-')&&p.endsWith('/snapshot'))return json(snapshot());
+    if(p==='/api/v2/support/tickets')return json({enabled:false});
+    return json(unrouted(p));
+  });
+  for (const [why, name, tab] of [['missing_provider', 'Add an AI provider', 'providers'],
+    ['model_sign_in', 'Sign in on Settings > Computers', 'devices']]) {
+    reason=why;
+    // Settings was last left on another tab, which a plain link to #/settings would reopen.
+    await page.goto('https://tico-ui.test/#/settings');
+    await page.locator('#settings-tabs [data-settings-tab=repos]').click();
+    await page.locator('#settings-tabs [data-settings-tab=repos][aria-selected=true]').waitFor();
+    await page.goto('https://tico-ui.test/#/bot/ops/chat');
+    await page.locator('.conv-run.chat .thinking').getByRole('link',{name,exact:true}).click();
+    await page.locator(`#settings-tabs [data-settings-tab=${tab}][aria-selected=true]`).waitFor();
+    assert.equal(new URL(page.url()).hash,'#/settings');
+    assert.equal(await page.locator('#settings-'+tab).isVisible(),true,name+' opens Settings on its tab');
+  }
+  assert.deepEqual(errors,[]);
+  await page.close();
+  console.log('chat links to a Settings tab open that tab: ok');
+}
+
 (async () => {
   const browser = process.env.TICO_BROWSER === 'webkit' ? await webkit.launch({headless:true}) : await chromium.launch({channel:process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined,headless:true});
   try {
     await offlineRetry(browser);
     await liveReply(browser);
+    await settingsLinks(browser);
     await outlineJump(browser);
     await activityFold(browser);
     await sideThreads(browser);

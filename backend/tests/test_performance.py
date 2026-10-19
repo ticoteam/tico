@@ -5,7 +5,8 @@ import time
 
 from backend import performance as P
 from backend.auth import Identity
-from backend.tests.test_api import api, get, headers, post, setup_attempt  # noqa: F401  (the api fixture)
+from backend.store import H
+from backend.tests.test_api import api, get, headers, post, runner, setup_attempt  # noqa: F401  (the api fixture)
 from backend.tests.test_bot_access import world  # noqa: F401  (a Legal bot and who may see it)
 
 
@@ -175,3 +176,38 @@ def test_turning_it_off_ends_an_open_overload(api):
     post(api, f"computers/{rid}/performance", {"mode": "off"})
     assert get(api, f"computers/{rid}/performance?hours=1")["overloads"][0]["ended"] == start + 600
     assert not any(x["id"] == "performance:" + rid and "overloaded now" in x["summary"] for x in get(api, "health")["checks"])
+
+
+def test_a_bot_the_computer_list_does_not_show_reads_any_computer_by_label_or_id(api):
+    """The computer list shows a bot only some computers; performance is every bot's to read, by label or id. An unknown
+    name and a removed computer's get the same answer, and a caller who may not read it learns nothing either way."""
+    from backend.tests.test_mcp import call
+    r, _, attempt = setup_attempt(api)
+    rid = r["runner_id"]
+    post(api, "runners/performance", {"samples": [sample(time.time() - 30)]}, token=r["token"])
+    gone = runner(api, label="Old Mac")["runner_id"]
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runners SET revoked_at=? WHERE id=?", (H.now(), gone))
+        c.execute("UPDATE runners SET accepts_member_bots=0 WHERE id=?", (rid,))    # not opened to members' bots
+    bot = attempt["token"]
+    assert get(api, "computers", token=bot)["computers"] == []
+    for wanted in ("Test Mac", "test mac ", rid):
+        failed, seen = call(api, "hub_computer_performance", {"computer": wanted, "hours": 1}, token=bot)
+        assert not failed, seen
+        assert seen["computer"] == {"id": rid, "label": "Test Mac"} and seen["points"][0][1] == 20.0
+    for wanted in ("No such box", "Old Mac", gone):
+        failed, seen = call(api, "hub_computer_performance", {"computer": wanted}, token=bot)
+        assert failed and f"No computer named {wanted!r}; hub computer list names them" in str(seen), seen
+    for wanted in ("Test Mac", "No such box"):     # a runner credential is neither a person nor a bot
+        assert api.get(f"/api/v2/computers/{wanted}/performance", headers=headers(r["token"])).status_code == 403
+    # Two computers whose labels match once case and spaces are ignored: the label is refused, each id still reads its own.
+    twins = [runner(api, label=label) for label in ("Shared Mac", "Shared Mac 2")]
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runners SET label=' shared MAC ' WHERE id=?", (twins[1]["runner_id"],))
+    for twin, cpu in zip(twins, (31.0, 62.0)):
+        post(api, "runners/performance", {"samples": [sample(time.time() - 30, cpu=cpu)]}, token=twin["token"])
+    failed, seen = call(api, "hub_computer_performance", {"computer": "Shared Mac"}, token=bot)
+    assert failed and "No computer named 'Shared Mac'; more than one has that label, use its id" in str(seen), seen
+    for twin, cpu in zip(twins, (31.0, 62.0)):
+        failed, seen = call(api, "hub_computer_performance", {"computer": twin["runner_id"], "hours": 1}, token=bot)
+        assert not failed and seen["computer"]["id"] == twin["runner_id"] and seen["points"][0][1] == cpu, seen

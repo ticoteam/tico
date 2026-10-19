@@ -32,11 +32,13 @@ from .hubdb import now, shift
 EMPTY = (
     # queued work
     "job_recovery", "service_jobs", "doc_source_jobs", "update_queue", "task_reminders", "calendar_actions",
-    "meeting_deliveries", "worktree_waits", "idempotency", "blob_media_retries", "github_product_repo_operations",
+    "meeting_deliveries", "worktree_waits", "idempotency", "idempotency_messages", "blob_media_retries",
+    "github_product_repo_operations",
     # routines and watchers
     "schedules", "schedule_config", "schedule_occurrences", "triggers", "trigger_deliveries", "watcher_runs", "watcher_items", "watcher_refs",
+    "watcher_pending", "watcher_triage",    # support triage: tickets waiting for their check (customer text), and its verdicts
     # runner and bot sessions
-    "enrollments", "assignments", "agent_pairings", "bot_sessions", "session_epochs", "model_logins",
+    "enrollments", "assignments", "agent_pairings", "bot_sessions", "session_epochs", "bot_session_epochs", "model_logins", "model_login_cleared", "computer_keys",
     "computer_profiles", "subscription_assignments", "runner_harness_actions", "runner_harness_choices",
     "runner_versions",
     # human sign-in and service keys
@@ -52,6 +54,9 @@ EMPTY = (
     "usage_alerts", "task_requesters", "roadmap_actions",
     # raw provider streams: customer text, and whatever the secret scrub missed
     "attempt_captures", "attempt_capture_drops",
+    # Subscribe to updates: a part-way catch-up, where each bot is in a feed and what it was sent. Without a
+    # cursor a subscriber starts again from the newest update, so the copy owes no bot a backlog.
+    "feed_walks", "feed_cursors", "feed_deliveries",
 )
 # Cut to `--days`, in this order: {table: its time column}. A row a kept row still points at stays.
 HISTORY = {"attempts": "created", "jobs": "created", "messages": "created", "events": "ts", "deltas": "ts",
@@ -63,9 +68,10 @@ KEEP = frozenset((
     "bot_agent_instructions", "bot_config", "bot_control", "bot_file_activity", "bot_file_versions", "bot_files",
     "bot_memory_documents", "bot_memory_seen", "bot_memory_updates", "bot_repo_access", "bot_status",
     "bot_tool_requests", "bot_transition_checkpoints", "bot_transitions", "bots", "changes", "chat_goals",
-    "cloud_migrations", "connector_snapshots", "conversations", "doc_sources", "doc_versions", "docs",
+    "cloud_migrations", "company_events", "company_profile", "connector_snapshots", "conversations", "doc_sources", "doc_versions", "docs",
     "document_versions", "documents", "external_documents", "external_sections", "external_snapshot_docs",
-    "external_snapshots", "external_versions", "flight_db", "flight_events", "flight_process", "flight_requests",
+    "external_snapshots", "external_versions", "feed_sources", "feed_updates", "flight_db", "flight_events",
+    "flight_process", "flight_requests",
     "flight_slow", "flight_sql", "goal_asks", "goal_checkins", "goal_events", "goal_kpis", "goal_proposals", "goals",
     "health_findings", "health_reports", "humans", "import_refs", "intake_items", "kpi_definitions", "kpi_readings",
     "kpis", "learning_cursors", "learning_deliveries", "learning_items", "learning_runs", "learnings", "linked_docs",
@@ -77,7 +83,8 @@ KEEP = frozenset((
     "meeting_items", "meeting_versions", "meetings", "message_assets", "message_links", "message_links_dirty",
     "message_links_seen", "notes", "perf_overloads", "perf_points", "perf_usage", "preferences", "rate_limits",
     "recording_source_refs", "recording_transcripts", "refusals", "registry_metadata", "repositories", "runners",
-    "service_health", "settings_changes", "slack_channels", "slack_digests", "slack_reads", "tags", "task_assets",
+    "service_health", "settings_changes", "slack_channels", "slack_digests", "slack_reads", "stale_judged",
+    "stale_suggestions", "tags", "task_assets",
     "task_check_models", "task_delegations", "task_events", "task_file_reviews", "task_links", "task_relations",
     "task_roles", "task_steps", "task_tags", "task_trash", "task_trash_assets", "task_types", "tasks",
     "turn_usage_segments", "turns", "update_archive_overrides", "update_reads", "update_settings", "updates",

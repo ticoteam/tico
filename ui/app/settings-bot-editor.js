@@ -3,7 +3,10 @@
 'use strict';
 
 // What the bot editor shows for an existing bot beyond its definition: who may use it, who it works for and who
-// owns it (each opens its own dialog), and its model, fallback and computer (each applies as soon as it is picked).
+// owns it (each opens its own dialog); its computer, where it compacts, how soon it wakes and, for a synced bot, the
+// app it is delivered through (each applies as soon as it is picked); and its model and fallback, whose pickers hold
+// a pick until Apply next to them, or until Save bot applies it (settingsEditorPendingChoice). A model change, either
+// way, goes through its transition dialog.
 function settingsBotEditorRows(e) {
   const chips = list => (list || []).map(o => `<span class="pchip">${personCircle(o.name || o.id, 16)}<span>${esc(firstName(o.name) || o.id)}</span></span>`).join('');
   const manage = settingsCanManageBot(e);
@@ -12,7 +15,8 @@ function settingsBotEditorRows(e) {
     <div class="sb-row"><span>Works for</span><div class="settings-owner-list">${chips(e.users) || '<span class="muted">Nobody</span>'}</div>${change('data-edit-owners', 'who it works for')}</div>
     <div class="sb-row"><span>Owners</span><div class="settings-owner-list" data-bot-owners>${chips(e.bot_owners) || '<span class="muted">Its owner</span>'}</div>${change('data-edit-bot-owners', 'owners')}</div>
     ${manage ? `<div class="sb-row"><span>Mail sending</span><span class="muted" data-mail-summary="${esc(e.name)}">…</span>${change('data-edit-mail', 'mail sending')}</div>` : ''}
-    ${e.agent ? `<div class="sb-row"><span>Computer</span>${settingsAgentCell(e)}</div>`
+    ${settingsWakeRow(e)}
+    ${e.agent ? `<div class="sb-row"><span>Computer</span>${settingsAgentCell(e)}</div>${settingsAppDeliveryRow(e)}`
       : `<div class="sb-row"><span>Model</span>${settingsChoiceCombo(e, 'model')}<span></span></div>
     <div class="sb-sub" data-bot-sub-line hidden></div>
     ${settingsCompactRow(e)}
@@ -46,6 +50,72 @@ async function settingsSetCompact(select) {
     toast(error.message, true);
   } finally { if (select.isConnected) select.disabled = false; }
 }
+// How soon the bot's nonblocking notices and enabled sweeps start a turn (backend/wake_presets.py). A bot made before
+// presets shows "Current behaviour" until someone picks one; the line under it is what the server says it runs on.
+const SETTINGS_WAKE_PRESETS = [['token_saver', 'Token saver'], ['performance', 'Performance'], ['current', 'Current behaviour']];
+function settingsWakeRow(e) {
+  const current = e.wake?.preset || 'current';
+  return `<div class="sb-row"><span>Wakes</span><select class="settings-inline-select" data-bot-wake="${esc(e.name)}" data-current="${esc(current)}" aria-label="Wake preset for ${esc(e.display_name)}" ${settingsCanManageBot(e) ? '' : 'disabled'}>
+      ${SETTINGS_WAKE_PRESETS.map(([value, label]) => `<option value="${value}" ${value === current ? 'selected' : ''}>${label}</option>`).join('')}
+    </select><span></span></div>
+    ${e.wake?.summary ? `<div class="sb-sub muted" data-bot-wake-summary>${esc(e.wake.summary)}</div>` : ''}`;
+}
+async function settingsSetWake(select) {
+  const slug = select.dataset.botWake, e = S.emps.find(row => row.name === slug);
+  if (!e || select.value === select.dataset.current) return;
+  select.disabled = true;
+  try {
+    await post(`/v2/bots/${encodeURIComponent(slug)}/wake-preset`, {wake_preset: select.value, expected_revision: e.revision});
+    await loadSettings();
+    toast(`${e.display_name} wakes on ${select.selectedOptions[0]?.textContent || select.value}`);
+  } catch (error) {
+    select.value = select.dataset.current;
+    toast(error.message, true);
+  } finally { if (select.isConnected) select.disabled = false; }
+}
+// A synced bot whose platform has a desktop app a Mac's runner drives (backend/app_delivery.py APPS) can be delivered
+// through that app on one of its person's computers instead of waiting for the daily sync. Only that person chooses a
+// computer, one of their own where the app is ready (the rest are listed, disabled, with why); they or an admin turn it
+// off. Everyone else reads the current value. It saves on its own, like the computer.
+function settingsAppDeliveryRow(e) {
+  // The server names the app a synced bot can be delivered through; none means the bot has no app.
+  const app = e.agent?.synced && e.app_delivery_app;
+  if (!app) return '';
+  const current = e.app_delivery?.computer || '', name = machineAppName(app);
+  const label = id => SETTINGS_DATA.machines.find(machine => machine.id === id)?.label || e.app_delivery?.computer_label || 'a computer';
+  const mine = !!S.me?.id && e.operator === S.me.id;
+  const off = 'Off (daily sync)';
+  if (!mine && !(current && settingsIsAdmin())) {
+    return `<div class="sb-row"><span>Deliver through the app on</span><span data-app-delivery-value="${esc(e.name)}">${current ? `${esc(label(current))} <span class="muted">· ${esc(name)} app</span>` : `<span class="muted">${off}</span>`}</span><span></span></div>`;
+  }
+  const own = mine ? SETTINGS_DATA.machines.filter(machine => !machine.revoked_at && machine.operator === S.me.id) : [];
+  const options = own.map(machine => {
+    const report = machine.readiness?.appdriver?.apps?.[app];
+    const why = report?.ready === true ? '' : report ? [machineAppState(report), report.detail].filter(Boolean).join(': ') : `${name} not reported`;
+    // The chosen computer stays selectable even when its app stops being ready, so the select shows it.
+    return `<option value="${esc(machine.id)}" ${machine.id === current ? 'selected' : why ? 'disabled' : ''}>${esc(machine.label)}${why ? ` · ${esc(why)}` : ''}</option>`;
+  });
+  if (current && !own.some(machine => machine.id === current)) options.push(`<option value="${esc(current)}" selected>${esc(label(current))}</option>`);
+  return `<div class="sb-row"><span>Deliver through the app on</span><select class="settings-inline-select" data-bot-app-delivery="${esc(e.name)}" data-app="${esc(app)}" data-current="${esc(current)}" aria-label="Deliver ${esc(e.display_name)} through the ${esc(name)} app on">
+      <option value="" ${current ? '' : 'selected'}>${off}</option>${options.join('')}
+    </select><span></span></div>`;
+}
+async function settingsSetAppDelivery(select) {
+  const slug = select.dataset.botAppDelivery, e = S.emps.find(row => row.name === slug);
+  if (!e || select.value === select.dataset.current) return;
+  const chosen = select.value, where = select.selectedOptions[0]?.textContent.split(' · ')[0] || 'that computer';
+  select.disabled = true;
+  try {
+    // The server refuses (422, with why) a computer that isn't the person's own or where the app isn't ready.
+    await post(`/v2/bots/${encodeURIComponent(slug)}/definition`, {
+      app_delivery: chosen ? {computer: chosen, app: select.dataset.app} : null, expected_revision: e.revision});
+    await loadSettings();
+    toast(chosen ? `${e.display_name} is delivered through the app on ${where}` : `${e.display_name} is back on the daily sync`);
+  } catch (error) {
+    select.value = select.dataset.current;
+    toast(error.message, true);
+  } finally { if (select.isConnected) select.disabled = false; }
+}
 // The slug the server would pick for this name (clients/catalog.py slug_from_name), shown under Advanced.
 function slugFromName(name) {
   const words = String(name || '').normalize('NFKD').replace(/[^\x00-\x7f]/g, '').toLowerCase().match(/[a-z0-9]+/g) || [];
@@ -58,6 +128,23 @@ function slugFromName(name) {
   return slug || (words[0] || '').slice(0, 40);
 }
 
+// Subscribe to updates (backend/update_feeds.py): what the bot hears about as quiet notes. Information only, so it
+// changes nothing about the bot; the feeds' state comes from the server's config.
+function settingsUpdateSubscriptions(e) {
+  const feeds = S.config.update_feeds || {}, chosen = new Set(e?.update_subscriptions || []);
+  const unreleased = feeds.unreleased ? ' <span class="pill unreleased" title="Not in a published release yet">Unreleased</span>' : '';
+  const templateNote = !feeds.templates?.feed ? feeds.templates?.status || 'No feed yet.'
+    : !e?.template ? feeds.templates?.no_template || '' : `Changes to its template, ${e.template}: public source changes, which may not be released yet.`;
+  return `<h3 class="bot-editor-sec bot-editor-wide">Subscribe to updates${unreleased}</h3>
+        <p class="bot-editor-hint bot-editor-wide">Each update waits as a note for the bot's next run and wakes nothing. It never changes the bot's Instructions, settings or access.</p>
+        <label class="bot-editor-check"><input type="checkbox" name="update_templates" ${chosen.has('templates') ? 'checked' : ''}><span>Default employee settings<small>${esc(templateNote)}</small></span></label>
+        <label class="bot-editor-check"><input type="checkbox" name="update_tico" ${chosen.has('tico') ? 'checked' : ''}><span>Tico updates<small>Published Tico releases, including MCP and tool changes.</small></span></label>`;
+}
+function settingsUpdateSubscriptionsChange(form, e) {
+  const picked = ['templates', 'tico'].filter(name => form.elements['update_' + name]?.checked);
+  const before = ['templates', 'tico'].filter(name => (e?.update_subscriptions || []).includes(name));
+  return picked.join() === before.join() ? {} : {update_subscriptions: picked};
+}
 function settingsEditBot(slug = '') {
   const editing = !!slug, e = editing ? S.emps.find(row => row.name === slug) : null;
   const dialog = $('#bot-editor');
@@ -94,7 +181,8 @@ function settingsEditBot(slug = '') {
         <label class="bot-editor-check bot-editor-wide"><input type="checkbox" name="private_tasks_default" ${e?.private_tasks_default ? 'checked' : ''}><span>Create private tasks by default<small>Tasks created by or assigned to this bot start private. A human requester can choose company visibility.</small></span></label>
         <label class="bot-editor-check"><input type="checkbox" name="shared" ${e?.shared ? 'checked' : ''}><span>Allow branches<small>People can make their own branch of it, on their computer and subscription.</small></span></label>
         <label class="bot-editor-check"><input type="checkbox" name="temp" ${e?.temp ? 'checked' : ''}><span>Temp bot<small>For work expected to end.</small></span></label>
-        ${editing ? `<h3 class="bot-editor-sec bot-editor-wide">Access, model and computer</h3><p class="bot-editor-hint bot-editor-wide">Each of these saves as soon as you change it.</p><div class="bot-editor-wide sb-rows" data-bot-people></div>` : ''}
+        ${editing ? settingsUpdateSubscriptions(e) : ''}
+        ${editing ? `<h3 class="bot-editor-sec bot-editor-wide">Access, model and computer</h3><p class="bot-editor-hint bot-editor-wide">Access, owners and computer save as soon as you change them. A model or fallback pick applies with Apply or Save bot.</p><div class="bot-editor-wide sb-rows" data-bot-people></div>` : ''}
         ${editing ? '' : `<h3 class="bot-editor-sec bot-editor-wide">Model and computer</h3><div class="bot-editor-wide" data-add-choice>
           ${settingsChoiceFields(currentModel)}
           <input type="hidden" name="model_effort" value="${esc(currentModel)}">
@@ -112,8 +200,8 @@ function settingsEditBot(slug = '') {
     <div class="bot-editor-foot"><button class="primary" type="submit">${editing ? 'Save bot' : 'Add bot'}</button><button class="ghost" type="button" data-bot-close>Cancel</button><span class="muted" data-bot-status></span>${editing && !isBuiltInBot(e.name) ? `<span class="spacer"></span><select name="successor" aria-label="Hand its work to"><option value="">Hand its work to ${esc(settingsPersonName(e.operator))}</option>${S.emps.filter(row => row.name !== slug).map(row => `<option value="${esc(row.name)}">Hand its work to ${esc(row.display_name || row.name)}</option>`).join('')}</select>${['hermes', 'openclaw'].includes(e.agent?.harness) ? `<label class="bot-editor-check" title="Its agent stops either way; revoking makes it stop reporting in"><input type="checkbox" name="revoke_agent" checked> Revoke its credential</label>` : ''}<button class="ghost danger" type="button" data-bot-remove>Remove bot</button>` : ''}</div></form>`;
   const form = dialog.querySelector('form'), status = dialog.querySelector('[data-bot-status]');
   dialog.querySelectorAll('[data-bot-close]').forEach(button => button.onclick = () => dialog.close());
-  // The rows for who owns it, its model and its computer: they save on their own, so keep them fresh, and
-  // once one has changed the bot use the newer revision for Save.
+  // The rows for who owns it, its model and its computer save on their own (on change, or Apply), so keep them
+  // fresh, and once one has changed the bot use the newer revision for Save.
   let rev = e?.revision, touched = false;
   const rows = dialog.querySelector('[data-bot-people]');
   if (rows) {
@@ -145,6 +233,10 @@ function settingsEditBot(slug = '') {
       if (machine) { touched = true; void settingsMoveBot(machine); }
       const compact = event.target.closest('[data-bot-compact]');
       if (compact) { touched = true; void settingsSetCompact(compact); }
+      const wake = event.target.closest('[data-bot-wake]');
+      if (wake) { touched = true; void settingsSetWake(wake); }
+      const delivery = event.target.closest('[data-bot-app-delivery]');
+      if (delivery) { touched = true; void settingsSetAppDelivery(delivery); }
     });
   }
   void botReposMount(dialog.querySelector('[data-bot-repos]'), slug);   // ui/app/settings-repositories.js
@@ -209,13 +301,30 @@ function settingsEditBot(slug = '') {
     let added = null;
     try {
       if (editing) {
-        await post(`/v2/bots/${encodeURIComponent(slug)}/definition`, {
+        const model = settingsEditorPendingChoice(rows, 'model'), fallback = settingsEditorPendingChoice(rows, 'fallback');
+        const unfinished = [model, fallback].find(pick => pick && !pick.ready);
+        if (unfinished) throw new Error(`${unfinished === model ? 'Model' : 'Fallback'} change not applied: finish choosing it, or reset it.`);
+        // A model change starts a fresh session, so Save asks first, as Apply does; saying no saves nothing.
+        const bot = S.emps.find(row => row.name === slug) || e, target = model && settingsChoiceFromValue(model.value);
+        if (model && !await settingsConfirmTransition(bot, 'model', settingsChoiceLabel(target.harness, target.model, target.effort)))
+          throw new Error('Model change not applied: press Apply next to Model, or reset it.');
+        if (fallback) {
+          rev = (await post(`/v2/bots/${encodeURIComponent(slug)}/fallback`, {fallback: settingsFallbackBody(fallback.value), expected_revision: rev})).revision;
+          // Saved now: if the definition fails below, pressing Save again does not send it twice.
+          fallback.box.dataset.current = fallback.box.querySelector('[data-choice-fields]').dataset.current = fallback.value;
+        }
+        rev = (await post(`/v2/bots/${encodeURIComponent(slug)}/definition`, {
           display_name: form.elements.display_name.value, description: form.elements.description.value,
           reports_to: form.elements.reports_to.value || null, status: form.elements.status.value,
           bot_contact: form.elements.bot_contact.value,
           private_tasks_default: form.elements.private_tasks_default.checked,
           repo: form.elements.repo.value, thread_mode: form.elements.thread_mode.value,
-          temp: form.elements.temp.checked, shared: form.elements.shared.checked, expected_revision: rev});
+          temp: form.elements.temp.checked, shared: form.elements.shared.checked, expected_revision: rev,
+          ...settingsUpdateSubscriptionsChange(form, e)}))?.revision ?? rev;
+        // Last, since the transition holds the revision it started from; its own dialog shows the progress.
+        if (model) settingsWatchTransition((await post(`/v2/bots/${encodeURIComponent(slug)}/transitions`, {kind: 'model',
+          model: target.model, effort: target.effort, harness: target.harness,
+          expected_generation: bot.machine?.generation || 0, expected_revision: rev})).id);
       } else {
         const choice = settingsChoiceFromValue(form.elements.model_effort.value);
         if (!choice.harness || !choice.model || !choice.effort) throw new Error('Choose a harness, model and effort.');
@@ -235,6 +344,14 @@ function settingsEditBot(slug = '') {
   };
   dialog.onclose = () => { if (!dialog.open) dialog.innerHTML = ''; };
   dialog.showModal();
+}
+// A Model or Fallback picked in the editor but not Applied (TK-BLOG3EDS): Save applies it, or says why it can't,
+// rather than closing over it. Null when the picker shows what the bot has; `ready` when Apply would take it.
+function settingsEditorPendingChoice(rows, kind) {
+  const box = rows?.querySelector(`[data-bot-choice][data-kind="${kind}"]`);
+  if (!box?.picker?.changed()) return null;
+  const value = box.picker.value();
+  return {box, value, ready: box.picker.valid() && value !== (box.dataset.current || '')};
 }
 function settingsEditOwners(slug) {
   const e = S.emps.find(row => row.name === slug), dialog = $('#owner-picker');

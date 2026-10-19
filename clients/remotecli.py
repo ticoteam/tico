@@ -31,8 +31,9 @@ def via_tool(client, args, **more):
     return hubtools.BY_NAME[tool_name(args.fn)]["fn"](client, fields)
 
 
-def product_repo_create(client, name, *, stdin=None, stderr=None):
-    """Preview the exact target and require an interactive exact-name confirmation before writing."""
+def product_repo_create(client, name, *, confirm=None, stdin=None, stderr=None):
+    """Preview the exact target and require the exact org/name before writing: typed at a terminal, or given as
+    `confirm` (`--confirm`, for a bot's turn, which has no terminal) and checked against the preview."""
     stdin = stdin or sys.stdin
     stderr = stderr or sys.stderr
     request_id = os.environ.get("HUB_OPERATION_ID") or uuid.uuid4().hex
@@ -44,11 +45,15 @@ def product_repo_create(client, name, *, stdin=None, stderr=None):
     print(f"GitHub App capability: {preview['capability']}. {preview['capability_detail']}", file=stderr)
     if preview["capability"] != "available":
         raise APIError("github_capability", preview["capability_detail"], 409)
-    if not stdin.isatty():
-        raise APIError("confirmation_required", "This command requires an interactive terminal. Type the exact org/name shown to confirm; no repository was created")
-    print(f"Type {preview['repository']} to create it: ", end="", file=stderr, flush=True)
-    if stdin.readline().strip() != preview["repository"]:
-        raise APIError("cancelled", "Confirmation did not match; no repository was created")
+    if confirm is not None:
+        if confirm != preview["repository"]:
+            raise APIError("confirmation_required", f"--confirm must be the exact preview target {preview['repository']}; no repository was created", 409)
+    elif not stdin.isatty():
+        raise APIError("confirmation_required", f"Confirm the exact target: run it again with --confirm {preview['repository']}, or type it at an interactive terminal; no repository was created")
+    else:
+        print(f"Type {preview['repository']} to create it: ", end="", file=stderr, flush=True)
+        if stdin.readline().strip() != preview["repository"]:
+            raise APIError("cancelled", "Confirmation did not match; no repository was created")
     return client.post("github/product-repos", {
         "org": preview["org"], "name": preview["name"], "visibility": preview["visibility"],
         "auto_init": preview["auto_init"], "confirmed": True,
@@ -70,8 +75,8 @@ def chosen_grant(value):
 def run(args, who=None):
     if who:
         raise APIError("identity", "Remote identity comes from authentication; --human is unavailable")
-    # A query may run for 20 s on the server before it is stopped; leave room for that.
-    client = Client(os.environ["HUB_API_URL"], os.environ.get("HUB_TOKEN", ""), timeout=30 if args.cmd == "sql" else 120 if args.cmd == "listening" or args.fn == "market import" else 15)
+    # A query may run for 20 s on the server before it is stopped, a decision's providers 25 s; leave room for that.
+    client = Client(os.environ["HUB_API_URL"], os.environ.get("HUB_TOKEN", ""), timeout=30 if args.cmd in ("sql", "decision") else 120 if args.cmd == "listening" or args.fn == "market import" else 15)
     fn = args.fn
     if fn == "team icon":
         with Path(args.file).open("rb") as source:
@@ -82,7 +87,7 @@ def run(args, who=None):
     if args.cmd == "repo":
         from clients import hubtools
         if args.fn == "repo product-create":
-            return product_repo_create(client, args.name)
+            return product_repo_create(client, args.name, confirm=args.confirm)
         if args.sub == "list":
             return hubtools.repo_list(client, {})
         return hubtools.repo_update(client, {"full_name": args.full_name, "enabled": args.sub == "tick"})
@@ -98,6 +103,7 @@ def run(args, who=None):
         lost = [r["full_name"] + " (" + r["access"] + ")" for r in (result or {}).get("stopped") or []]
         lost += [name + " (run workflows)" for name in (result or {}).get("workflows_stopped") or []]
         lost += ["repository creation"] if (result or {}).get("creation_stopped") else []
+        lost += ["product repository creation"] if (result or {}).get("product_creation_stopped") else []
         if lost:
             print(f"{args.bot} no longer has: " + ", ".join(lost), file=sys.stderr)
         return result
@@ -126,7 +132,7 @@ def run(args, who=None):
               "update create", "update redo", "update list", "update show", "update mark-read", "update reply", "update settings",
               "changelog list", "changelog mark-read",
               "needs-you start", "needs-you next", "needs-you respond", "needs-you commit", "needs-you abandon",
-              "brief", "mcp stats", "calendar list", "calendar status", "routine update", "team show", "run list",
+              "brief", "mcp stats", "calendar list", "calendar status", "routine update", "team show", "org order", "run list",
               "message list", "message mark-read", "bot recent", "agent pair show", "agent pair approve", "agent pair decline",
               "slack channel list", "slack channel add", "slack channel remove", "slack channel import"):
         if fn == "routine update":                  # --enable / --disable are the tool's `enabled`; a key or an id names it
@@ -179,6 +185,8 @@ def run(args, who=None):
         from clients import hubtools
         text = Path(args.file).read_text(errors="replace") if args.file else sys.stdin.read()
         return hubtools.BY_NAME["hub_classify"]["fn"](client, {"text": text})
+    if fn == "decision readout":
+        return via_tool(client, args)
     if args.cmd == "decision":
         return judge(client, args)
     if args.cmd == "meeting":
@@ -654,7 +662,7 @@ def bots(client, args):
         from clients import hubtools
         fields = {"bot": args.bot}
         if args.computer:
-            listing = hubtools.computers(client, {})
+            listing = hubtools._as_person(client).get("computers")
             rows = listing.get("computers", []) if isinstance(listing, dict) else listing
             me = hubtools._as_person(client).get("me")
             person = str(me.get("actor") or me.get("id") or "").removeprefix("human:")
@@ -674,6 +682,9 @@ def bots(client, args):
                                     ("task_goal", getattr(args, "task_goal", None)),
                                     ("review_model", getattr(args, "review_model", None)),
                                     ("capture_stream", getattr(args, "capture_stream", None))) if v is not None}
+        if getattr(args, "subscribe_updates", None) is not None:
+            picked = [p.strip() for p in args.subscribe_updates.split(",") if p.strip() and p.strip() != "none"]
+            fields["update_subscriptions"] = picked
         try:
             return hubtools.BY_NAME["hub_bot_update"]["fn"](client, fields)
         except ValueError as exc:

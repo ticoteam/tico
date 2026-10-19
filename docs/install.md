@@ -40,7 +40,8 @@ Recover the token any time with `docker compose exec server cat /data/local-owne
 Open the link in your browser: the app opens on **Finish setup**. Then:
 
 1. **Choose AI providers** (optional): leave them all unticked to do it later. Bots need one to run; until then each bot says
-   "Add an AI provider", and Settings > AI providers adds it.
+   "Add an AI provider", and Settings > AI providers adds it. With a gateway key from Tico, the
+   [Tico AI Gateway](ai-gateway.md) card there adds Tico Cheap, Mid and Power 1.0.
 2. **Name the team**, say what it does, and pick its groups. A few bots are suggested for each group. For the first result
    below, pick **Marketing** and keep **Content Marketer** (`content`) checked; untick the other suggestions if you want only it.
 3. **Add computer**: choose *A Linux or cloud server (Docker)*, press **Add computer**, and run the line it shows on this computer.
@@ -358,7 +359,9 @@ No open ports, and Cloudflare Access can do the sign-in. The wizard creates the 
    `none` to skip): its route for `/api/v2` and `/download` only, its DNS record, and `TICO_RUNNER_URL`, so computers and
    external agents connect without a bypass. Keep that hostname out of the Access application; `setup doctor` checks it.
 3. Create an Access application for the hostname with your identity provider and a policy for your humans.
-   Note the team URL (`https://<team>.cloudflareaccess.com`) and the application's Audience tag.
+   Note the team URL (`https://<team>.cloudflareaccess.com`) and the application's Audience tag. Any identity
+   provider Access offers works with the desktop app too (Google, Microsoft Entra, Okta, GitHub, a one-time PIN): the
+   whole sign-in stays in the app's window, so the app gets the session, not the browser.
 4. In `.env`: `COMPOSE_PROFILES=cloudflared,updater`, `TICO_DOMAIN=<hostname>`, `CLOUDFLARE_TUNNEL_TOKEN=<token>`,
    `TICO_AUTH_PROXY=cloudflare`, `TICO_ACCESS_ISSUER=<team URL>`, `TICO_ACCESS_AUDIENCE=<AUD tag>`.
 5. `docker compose up -d`
@@ -430,6 +433,17 @@ Only that model credential comes this way: a bot's own credentials stay with tha
 A subscription login (a ChatGPT or Claude plan) cannot be copied. If that is how your team signs in, Settings > Health shows
 "*computer name*: sign in to Codex" (or Claude Code) for each new computer that needs it. Sign it in from Settings > Computers, or ask
 BotOps to start it, then finish the sign-in in your browser.
+
+To change the account a computer uses, choose **Switch account** next to it in Settings > Computers: the new account is
+signed in on the side, and the old one keeps working until that finishes (or if you cancel). **Sign out** names the bots
+that stop first; they wait until someone signs in again. A computer you signed out is not signed back in by the model key
+given to every computer until you sign in or choose **Use the shared key**. See [subscriptions](subscriptions.md#signing-out-and-switching-accounts).
+
+A computer can also run on a model API key of its own, with no terminal: **Add key** (or **Replace key**) next to it in
+Settings > Computers keeps the key in Tico's credential vault for that computer alone, and the computer checks it before
+the old one goes. **Clear key** names the bots that stop, then takes the key off the computer. For the key given to every
+computer, both ask whether to change **this computer only** or **all of them**; an offline computer clears its copy when
+it is next online. See [subscriptions](subscriptions.md#api-keys-on-a-computer).
 
 ### Linux or cloud server (Docker)
 
@@ -523,6 +537,7 @@ that provider's CLI into `/home/runner/tools` in the volume (a minute or two; Se
 keeps it current between runs, and lets the owner pin a version. See [harnesses](harnesses.md).
 
 Use **Settings > Computers > Sign in** on the Computer you registered. The login stays in its volume.
+**Switch account** and **Sign out** there change or remove it without a terminal or a restart.
 For terminal recovery, replace `<container-name>` in every command below with the name from that Computer's
 Docker sign-in command in **Add computer**, or find it with `docker ps`. An installer command with
 `--name build` creates `tico-runner-build`; use the full container name, including `tico-runner-`.
@@ -618,9 +633,11 @@ allowed, take control. The computer itself decides whether it offers one:
 - A Linux checkout: `sudo apt-get install xvfb x11vnc matchbox-window-manager`, then `scripts/tico screen on`
   (`screen off` and `screen status` too; a running runner follows within seconds).
 
-The first time a new computer offers its screen, its **Screen** setting in **Settings > Computers** starts at **View**, so
-its operator and admins can watch it; choose **Control** there to drive it, or **Off**. A setting someone already chose
-stays, and a computer added before this default keeps its setting. The runner runs a virtual
+The first time a new computer offers its screen, its **Screen** setting in **Settings > Computers** starts at
+**Control**, so its operator and admins can watch it and drive it: the screen opens in Control, with **View** one tap
+away; choose **View** there to watch only, or **Off**. No one
+else can open it. A setting someone already chose stays, including View and Off, and a computer added before this
+default keeps its setting. The runner runs a virtual
 display (1440x900) on the first free display from `:99` to `:120` and gives bots that `DISPLAY` (set
 `TICO_SCREEN_DISPLAY`, like `:101`, to use exactly one; when another X server holds it, the screen says which); its VNC servers listen on no network port (only on
 sockets in a directory bots cannot open), and the server relays each session. Anyone allowed to open the screen sees everything on that display, including what a bot types into a page,
@@ -1039,7 +1056,9 @@ TICO_IMAGE=tico TICO_TAG=local docker compose up -d
 TICO_RUNNER_IMAGE=tico-runner docker/smoke.sh     # local image checks
 ```
 
-Tool versions and their sha256 digests are in `docker/versions.env` and are checked during the build. The
+Tool versions and their sha256 digests are in `docker/versions.env` and are checked during the build. The images
+run Python 3.15 on Debian trixie with SQLite from `SQLITE_VERSION` there, built from source by `docker/sqlite.sh`
+in place of Debian's older copy; the build fails unless Python's `sqlite3` reports that version. The
 model CLIs are not in the image; the runner installs them (see [harnesses](harnesses.md)).
 
 ## Advanced installs

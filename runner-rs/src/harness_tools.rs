@@ -55,6 +55,16 @@ fn re(p: &str) -> Regex {
 pub struct Login {
     pub command: Vec<String>,
     pub terminal: bool,
+    /// The CLI's own sign-out (`codex logout`), run by Sign out in Settings > Computers. Empty: not offered.
+    pub logout: Vec<String>,
+    /// The files under the runtime's home that hold its login, which Switch account moves into place once the new
+    /// sign-in has finished on the side.
+    pub files: Vec<String>,
+    /// Files copied from the home into the switch's own home first, so the CLI's settings in them survive it.
+    pub seed: Vec<String>,
+    /// Platforms (runner::platform, e.g. "darwin") where the CLI keeps this login in the system keychain rather than in
+    /// `files`: a switch cannot sign in on the side there, so it is not offered.
+    pub keychain: Vec<String>,
 }
 
 /// How readiness tells whether a CLI is signed in (`[capabilities.sign_in_status]`, docs/harnesses.md).
@@ -87,6 +97,8 @@ pub struct Capabilities {
     pub subscription_profiles: bool,
     pub profile_home: String,
     pub profile_dirs: Vec<String>,
+    /// Variables the CLI reads ahead of `profile_home` (Claude Code: CLAUDE_CONFIG_DIR); a profile's environment drops them.
+    pub profile_home_overrides: Vec<String>,
     pub own_config_home: bool,
     /// "" | refresh | turns | manual
     pub weekly_usage: String,
@@ -101,6 +113,8 @@ pub struct Capabilities {
     pub persistent_session: bool,
     pub goal_runs_across_turns: bool,
     pub serial_cold_start: bool,
+    /// A subscription login serves one turn at a time on this computer (crate::login_turns); a key login does not.
+    pub one_turn_per_login: bool,
     pub compaction: bool,
     pub resume_command: String,
     /// "" | host | command
@@ -123,6 +137,7 @@ impl Default for Capabilities {
             subscription_profiles: false,
             profile_home: String::new(),
             profile_dirs: vec![],
+            profile_home_overrides: vec![],
             own_config_home: false,
             weekly_usage: String::new(),
             account: String::new(),
@@ -134,6 +149,7 @@ impl Default for Capabilities {
             persistent_session: false,
             goal_runs_across_turns: false,
             serial_cold_start: false,
+            one_turn_per_login: false,
             compaction: false,
             resume_command: String::new(),
             model_list: String::new(),
@@ -355,7 +371,24 @@ pub fn parse(data: &toml::Table, source: &str) -> Result<Manifest, String> {
             return Err(format!("{at}: login is for device-code or subscription sign-in"));
         }
         let flag = |k: &str| raw.get(k).and_then(|v| v.as_bool()).unwrap_or(false);
-        Some(Login { command, terminal: flag("terminal") })
+        let logout = strings(raw.get("logout"), "login.logout", &at, None, 0, &[])?;
+        // Paths inside the runtime's home: never absolute (a leading / leaves an empty part), never climbing out of it.
+        let inside = |k: &str| -> Result<Vec<String>, String> {
+            let paths = strings(raw.get(k), &format!("login.{k}"), &at, None, 0, &[])?;
+            match paths.iter().find(|p| p.split('/').any(|part| part == ".." || part.is_empty())) {
+                Some(bad) => Err(format!("{at}: login.{k} names a path inside the runtime's home, not {bad:?}")),
+                None => Ok(paths),
+            }
+        };
+        let (files, seed) = (inside("files")?, inside("seed")?);
+        if !logout.is_empty() && files.is_empty() {
+            return Err(format!("{at}: login.logout needs login.files, the files a Switch account moves into place"));
+        }
+        if let Some(extra) = seed.iter().find(|p| !files.contains(p)) {
+            return Err(format!("{at}: login.seed {extra:?} is not one of login.files"));
+        }
+        let keychain = strings(raw.get("keychain"), "login.keychain", &at, None, 0, &[])?;
+        Some(Login { command, terminal: flag("terminal"), logout, files, seed, keychain })
     } else if methods.iter().any(|m| m == "device-code") {
         return Err(format!("{at}: device-code sign-in needs a [login] command for the browser relay"));
     } else {
@@ -441,6 +474,7 @@ fn parse_capabilities(raw: Option<&toml::Value>, at: &str) -> Result<Capabilitie
             "subscription_profiles" => c.subscription_profiles = flag(k, v)?,
             "profile_home" => c.profile_home = text(k, v)?,
             "profile_dirs" => c.profile_dirs = list(k, v)?,
+            "profile_home_overrides" => c.profile_home_overrides = list(k, v)?,
             "own_config_home" => c.own_config_home = flag(k, v)?,
             "weekly_usage" => c.weekly_usage = choice(k, v, &["refresh", "turns", "manual"])?,
             "account" => c.account = choice(k, v, &["status-json", "app-server"])?,
@@ -457,6 +491,7 @@ fn parse_capabilities(raw: Option<&toml::Value>, at: &str) -> Result<Capabilitie
             "persistent_session" => c.persistent_session = flag(k, v)?,
             "goal_runs_across_turns" => c.goal_runs_across_turns = flag(k, v)?,
             "serial_cold_start" => c.serial_cold_start = flag(k, v)?,
+            "one_turn_per_login" => c.one_turn_per_login = flag(k, v)?,
             "compaction" => c.compaction = flag(k, v)?,
             "resume_command" => c.resume_command = text(k, v)?,
             "model_list" => c.model_list = choice(k, v, &["host", "command"])?,
@@ -1560,6 +1595,36 @@ mod tests {
         assert!(load_from(&dup).unwrap_err().contains("already claimed"));
         let bad: toml::Table = toml::from_str("id = \"x\"\nname = \"X\"\nhost = \"codex\"\nexecutable = \"x\"\nproviders = [\"x\"]\n[install]\nmethod = \"apt\"").unwrap();
         assert!(parse(&bad, "x.toml").unwrap_err().contains("install.method"));
+    }
+
+    #[test]
+    fn a_login_moves_only_files_inside_its_home_and_seeds_only_those() {
+        // Sign out and Switch account move and remove these as the CLI's user, so a manifest never reaches outside the
+        // runtime's home.
+        let codex = BUILT_IN[1].1;
+        let with = |files: &str| {
+            let text = codex.replace("files = [\"auth.json\"]", files);
+            assert_ne!(text, codex);
+            parse(&toml::from_str(&text).unwrap(), "codex.toml")
+        };
+        for bad in ["/etc/passwd", "../auth.json", "sub/../../auth.json", "sub//auth.json", "sub/"] {
+            let err = with(&format!("files = [{bad:?}]")).unwrap_err();
+            assert!(err.contains("login.files names a path inside the runtime's home"), "{bad:?}: {err}");
+        }
+        assert!(with("files = [\"\"]").unwrap_err().contains("login.files must be a list of string"));
+        for bad in ["/etc/passwd", "../auth.json"] {
+            let err = with(&format!("files = [\"auth.json\"]\nseed = [{bad:?}]")).unwrap_err();
+            assert!(err.contains("login.seed names a path inside the runtime's home"), "{bad:?}: {err}");
+        }
+        let err = with("files = [\"auth.json\"]\nseed = [\"config.toml\"]").unwrap_err();
+        assert!(err.contains("login.seed \"config.toml\" is not one of login.files"), "{err}");
+        let err = with("files = []").unwrap_err();
+        assert!(err.contains("login.logout needs login.files"), "{err}");
+        let login = with("files = [\"auth.json\", \"sub/state.json\"]\nseed = [\"sub/state.json\"]\nkeychain = [\"darwin\"]").unwrap().login.unwrap();
+        assert_eq!((login.files, login.seed, login.keychain), (vec!["auth.json".to_string(), "sub/state.json".to_string()],
+            vec!["sub/state.json".to_string()], vec!["darwin".to_string()]));
+        assert_eq!(built_in()["claude-code"].login.as_ref().unwrap().keychain, vec!["darwin"]);
+        assert!(built_in()["codex"].login.as_ref().unwrap().keychain.is_empty());
     }
 
     #[test]

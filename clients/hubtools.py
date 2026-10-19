@@ -49,7 +49,7 @@ TASK_STATUSES = ("open", "doing", "waiting", "review", "ready", "done", "closed"
 APPROVAL_KINDS = ("send", "spend", "publish", "merge", "support")
 GOAL_STATUSES = ("red", "yellow", "green", "done", "dropped")     # what a person or bot sets by hand
 GOAL_FILTERS = GOAL_STATUSES + ("gray",)                        # gray is the automatic "no data"
-PROPOSAL_KINDS = ("goal_wording", "goal_kpi", "kpi_definition", "kpi_target", "flag")
+PROPOSAL_KINDS = ("goal_wording", "goal_kpi", "kpi_definition", "kpi_target", "flag", "goal_why")
 
 # What an agent reads on connect: the hub in one line, then the skill a person's own agent
 # follows to work their bots (clients/agent_skill.py). Bots ignore the skill; it is for people.
@@ -903,10 +903,14 @@ def task_restore(api, args):
     return api.post(f"tasks/{args['id']}/restore", {}, key=_key(args))
 
 
-@tool("hub_task_label", "Add or remove labels on a task. A project is a label; so is a kind (bug, front-end).",
+@tool("hub_task_label", "Add or remove labels on a task. A project is a label; so is a kind (bug, front-end). A bot "
+      "changes labels on a task it owns, asked for or whose type it manages; a public roadmap label also needs an "
+      "approved publish approval (hub_task_publication_preview with the labels the task keeps), and goal:on/goal:off "
+      "need a person.",
       {"id": TASK_ID,
        "add": {"type": "array", "items": {"type": "string"}, "description": "Labels to add"},
-       "remove": {"type": "array", "items": {"type": "string"}, "description": "Labels to remove"}, "on_behalf_of": ASKED},
+       "remove": {"type": "array", "items": {"type": "string"}, "description": "Labels to remove"},
+       "approval_id": _s("Exact publish approval for a public roadmap label"), "on_behalf_of": ASKED},
       required=("id",), writes=True)
 def task_label(api, args):
     current = api.get("tasks/" + args["id"])["task"]
@@ -917,7 +921,10 @@ def task_label(api, args):
         x = str(x).strip().lower()
         if x and x not in labels:
             labels.append(x)
-    return _asked(api, args).post("tasks/" + args["id"], {"version": current["version"], "labels": labels}, key=_key(args))
+    body = {"version": current["version"], "labels": labels}
+    if args.get("approval_id"):
+        body["approval_id"] = args["approval_id"]
+    return _asked(api, args).post("tasks/" + args["id"], body, key=_key(args))
 
 
 @tool("hub_task_link", "Attach a link to a task: the pull request you opened (this is what moves a "
@@ -1184,7 +1191,8 @@ def kpi_log(api, args):
 @tool("hub_proposal_create", "Propose a change you may not make yourself, for the owner to confirm: clearer "
       "goal wording (goal_wording: payload title/body), a KPI for a goal (goal_kpi: payload kpi or kpi_id, and "
       "target), a new definition (kpi_definition), a target (kpi_target: payload is the target fields), or a "
-      "flag (flag: payload issue vague|duplicate|unmeasured). The Goal Manager cannot change a definition "
+      "flag (flag: payload issue vague|duplicate|unmeasured), or, where the CEO Bot is on, a goal's Why (goal_why: "
+      "payload why, one line tying the goal to the company's vision). The Goal Manager cannot change a definition "
       "or a target it is judged against without one.",
       {"kind": {"type": "string", "enum": list(PROPOSAL_KINDS)}, "goal_id": _s("The goal it is about"),
        "kpi_id": _s("The KPI it is about"), "payload": {"type": "object", "description": "The proposed change"},
@@ -1902,7 +1910,12 @@ def routine_run(api, args):
                                        "check model; own (default): its own model"},
        "capture_stream": {"type": "string", "enum": ["on", "off"],
                           "description": "on (owner only): keep each run's raw provider stream a week; off (default): not"},
-       "status": {"type": "string", "enum": ["active", "paused", "planned"]}},
+       "update_subscriptions": {"type": "array", "items": {"type": "string", "enum": ["templates", "tico"]},
+                                "description": "Subscribe to updates, as quiet notes for its next run: templates "
+                                               "(its template's changes), tico (Tico releases); [] for none"},
+       "status": {"type": "string", "enum": ["active", "paused", "planned"]},
+       "app_delivery": _s("A Grok Bot only: the id of your own computer whose Grok app delivers its messages, "
+                          "or `off` for the daily sync alone")},
       required=("slug",), writes=True)
 def bot_set(api, args):
     delegated = _for_person(api)
@@ -1913,7 +1926,9 @@ def bot_set(api, args):
         row = api.get(f"bots/{args['slug']}/access", **({"on_behalf_of": on_behalf} if delegated else {}))
         if not row:
             raise ValueError("No bot " + args["slug"])
-    change = {k: args[k] for k in ("reports_to", "display_name", "description", "template", "repo", "status", "shared", "session", "subtask_session", "task_goal", "review_model", "capture_stream") if args.get(k) is not None}
+    change = {k: args[k] for k in ("reports_to", "display_name", "description", "template", "repo", "status", "shared", "session", "subtask_session", "task_goal", "review_model", "capture_stream", "update_subscriptions") if args.get(k) is not None}
+    if args.get("app_delivery"):
+        change["app_delivery"] = None if args["app_delivery"] == "off" else {"computer": args["app_delivery"], "app": "grok"}
     return api.post(f"bots/{args['slug']}/definition",
                     {**change, "expected_revision": row["revision"],
                      **({"on_behalf_of": on_behalf} if delegated else {})}, key=_key(args))
@@ -2072,6 +2087,21 @@ def group_update(api, args):
         return who.post("groups", body, key=_key(args))
     body = {"add": add, "remove": remove, **{k: args[k] for k in ("name", "parent") if args.get(k) is not None}}
     return who.patch(f"groups/{args['group']}", body, key=_key(args))
+
+
+@tool("hub_org_order", "A manager's direct reports, humans and bots, in the order the team chart shows them (placed ones "
+      "first, then the rest: humans, then by name). With `set`, put them in that order, as the person who asked you: "
+      "whoever may put reports under that manager may order them, and a bot orders its own reports. Reports left out "
+      "keep their places, so naming two swaps those two. Who reports to whom does not change. Answers with the order.",
+      {"manager": _s("The manager: a bot's slug or a human's id (`bot:` or `human:` in front when one could be either)"),
+       "set": {"type": "array", "items": {"type": "string"},
+               "description": "Its direct reports in the new order: bot slugs and human ids"}},
+      required=("manager",), writes=True)
+def org_order(api, args):
+    path = "org/order/" + quote(str(args["manager"]).strip(), safe=":")
+    if not args.get("set"):
+        return api.get(path)
+    return _as_person(api).call("PUT", path, {"reports": list(args["set"])}, _key(args))
 
 
 # ----------------------------------------------------------------------------- BotOps: what the app can do, as the requester
@@ -2297,10 +2327,153 @@ tool("hub_bot_resume", "Resume a paused bot, as the person who asked you; one wi
      {"bot": _s("The bot's slug")}, required=("bot",), writes=True)(_control("resume"))
 
 
-@tool("hub_computer_list", "The computers a bot may go on, as the person who asked you: label, whether it is online, whether it "
-      "takes members' bots, which bots run there, release (Tico), version (runner software), wanted release, update state, last error and service readiness.", {})
+# A computer's full row runs to tens of thousands of characters (every repository, each bot's readiness, runtime
+# catalogs, recent log errors), so the list is one short row each and the detail is paged section by section.
+COMPUTER_SECTIONS = ("assigned", "repositories", "bots", "runtimes", "harnesses", "recent_errors")
+COMPUTER_PAGE = 20
+COMPUTER_TEXT = 300
+COMPUTER_DETAIL_CHARS = 40_000
+
+
+def _computer_counts(row):
+    """Warnings and errors as numbers: each bot's warnings and problems (a bot not ready that names none counts one),
+    and a failed update."""
+    readiness = row.get("readiness") if isinstance(row.get("readiness"), dict) else {}
+    reports = [r for r in (readiness.get("bots") or {}).values() if isinstance(r, dict)]
+    warnings = sum(len(r.get("warnings") or []) for r in reports)
+    errors = sum(len(r.get("problems") or []) or (0 if r.get("ready") else 1) for r in reports)
+    return warnings, errors + bool((row.get("update") or {}).get("error")), readiness
+
+
+def computer_summary(row):
+    """One computer in a few hundred characters: who runs it, whether it is up, its release and update, and how
+    ready it is, with counts in place of the text."""
+    update = row.get("update") or {}
+    warnings, errors, readiness = _computer_counts(row)
+    state = "failed" if update.get("error") else {"needs_update": "update_available"}.get(
+        update.get("state"), update.get("state") or "unknown")
+    level = ("offline" if not row.get("online") else "not_ready" if errors else "warnings" if warnings else "ready")
+    return {"id": row.get("id"), "label": row.get("label"), "online": bool(row.get("online")),
+            "last_seen": row.get("last_seen"), "operator": row.get("operator"), "platform": row.get("platform") or "",
+            "accepts_member_bots": bool(row.get("accepts_member_bots")), "release": row.get("release") or "",
+            "version": row.get("version") or "", "wanted_release": update.get("wanted_release") or "",
+            "update": state, "readiness": level, "bots": len(row.get("bots") or []),
+            "signed_in": sorted(name for name, r in (readiness.get("runtimes") or {}).items()
+                                if isinstance(r, dict) and r.get("authenticated") == "ready"),
+            "warnings": warnings, "errors": errors, "recent_errors": len(readiness.get("recent_errors") or [])}
+
+
+def _bounded(value, cap, text=COMPUTER_TEXT):
+    """Cut long text, long lists and long maps of records inside one section item, and say how much was cut."""
+    if isinstance(value, str):
+        return value if len(value) <= text else value[:text] + "… (cut)"
+    if isinstance(value, list):
+        cut = [f"… {len(value) - cap} more"] if len(value) > cap else []
+        return [_bounded(v, cap, text) for v in value[:cap]] + cut
+    if isinstance(value, dict):
+        keys = list(value)
+        many = len(keys) > cap and all(isinstance(v, dict) for v in value.values())
+        out = {k: _bounded(value[k], cap, text) for k in (keys[:cap] if many else keys)}
+        return {**out, "…": f"{len(keys) - cap} more"} if many else out
+    return value
+
+
+def _computer_section(row, name):
+    """A section's items in a stable order, or None when the computer has none: maps by name, recent errors
+    newest first."""
+    readiness = row.get("readiness") if isinstance(row.get("readiness"), dict) else {}
+    found = {"assigned": row.get("bots"), "repositories": row.get("repositories")}.get(name, readiness.get(name))
+    if isinstance(found, dict):
+        return sorted(found.items())
+    if isinstance(found, list):
+        return list(reversed(found)) if name == "recent_errors" else found
+    return None
+
+
+def _page(items, name, offset, cap, text):
+    """One page of a section's items, each cut to size (a map's records by name), and where the next page starts
+    (None on the last page)."""
+    chosen = items[offset:offset + cap]
+    page = ([_bounded(v, cap, text) for v in chosen] if name in ("assigned", "repositories", "recent_errors")
+            else {k: _bounded(v, cap, text) for k, v in chosen})
+    return page, offset + cap if offset + cap < len(items) else None
+
+
+def computer_detail(row, section=None, offset=0):
+    """One computer in full, every large section capped at COMPUTER_PAGE items and long text cut, with a note on each
+    cut saying how to read the rest; with `section`, one page of that section from `offset`. A row still over
+    COMPUTER_DETAIL_CHARS is paged smaller and cut shorter; one that cannot fit at all names the sections and how to
+    read them instead."""
+    more = lambda name, at: f"hub_computer_list computer={row.get('id')} section={name} offset={at}"  # noqa: E731
+    fits = lambda result: len(json.dumps(result, default=str)) <= COMPUTER_DETAIL_CHARS  # noqa: E731
+    offset = max(0, int(offset or 0))
+    for cap, text in ((COMPUTER_PAGE, COMPUTER_TEXT), (10, COMPUTER_TEXT), (5, 200), (2, 100), (1, 50)):
+        if section:
+            items = _computer_section(row, section) or []
+            page, after = _page(items, section, offset, cap, text)
+            result = {"id": row.get("id"), "label": row.get("label"), "section": section, "offset": offset,
+                      "total": len(items), "items": page, **({"more": more(section, after)} if after else {})}
+        else:
+            readiness = row.get("readiness") if isinstance(row.get("readiness"), dict) else {}
+            result = {k: _bounded(v, cap, text) for k, v in row.items() if k not in ("readiness", "bots")}
+            result["readiness"] = {k: _bounded(v, cap, text) for k, v in readiness.items() if k not in COMPUTER_SECTIONS}
+            result["truncated"] = {}
+            for name in COMPUTER_SECTIONS:
+                items = _computer_section(row, name)
+                if items is None:
+                    continue
+                page, after = _page(items, name, 0, cap, text)
+                if name in ("assigned", "repositories"):
+                    result["bots" if name == "assigned" else name] = page
+                else:
+                    result["readiness"][name] = page
+                if after:
+                    result["truncated"][name] = {"shown": len(page), "total": len(items), "more": more(name, after)}
+        if fits(result):
+            return result
+    keep = {k: _bounded(row.get(k), 1, 50) for k in ("id", "label", "online", "last_seen", "release", "version")}
+    if section:
+        items = _computer_section(row, section) or []
+        return {**keep, "section": section, "offset": offset, "total": len(items), "items": [],
+                "too_large": f"Item {offset + 1} is too large to show here; Settings > Computers shows it",
+                **({"more": more(section, offset + 1)} if offset + 1 < len(items) else {})}
+    sections = {name: _computer_section(row, name) for name in COMPUTER_SECTIONS}
+    return {**keep, "too_large": "This computer's detail is too large to show at once; read it a section at a time",
+            "truncated": {name: {"shown": 0, "total": len(items), "more": more(name, 0)}
+                          for name, items in sections.items() if items}}
+
+
+@tool("hub_computer_list", "The computers a bot may go on, as the person who asked you, one short row each: id, label, "
+      "online and last seen, operator, release (Tico), version (runner software), wanted release, update (current, "
+      "update_available, updating, failed, incompatible or unknown), readiness (ready, warnings, not_ready or offline), "
+      "how many bots run there, the AI tools signed in, and counts of warnings, errors and recent log errors; and "
+      "whether each team service is ok. "
+      "For one computer in full (the bots on it, repositories, each bot's readiness, runtimes, update error, recent "
+      "errors) pass "
+      "`computer`: large sections come capped, and `truncated` says how to read the rest with `section` and `offset`.",
+      {"computer": _s("One computer's label or id: its full detail instead of the list"),
+       "section": {"type": "string", "enum": list(COMPUTER_SECTIONS),
+                   "description": "With `computer`: one page of this section only"},
+       "offset": {"type": "integer", "minimum": 0, "description": "With `section`: the first item to return (default 0)"}})
 def computers(api, args):
-    return _as_person(api).get("computers")
+    listing = _as_person(api).get("computers") or {}
+    rows = listing.get("computers") or []
+    wanted = str(args.get("computer") or "").strip()
+    if not wanted:
+        if args.get("section"):
+            raise ValueError("Name the computer whose section you want: `computer`")
+        return {"computers": [computer_summary(r) for r in rows],
+                "services": [{"name": s.get("name"), "ok": not s.get("last_error"), "last_success": s.get("last_success")}
+                             for s in listing.get("services") or []],
+                "detail": "One computer in full: hub_computer_list computer=<label or id>"}
+    match = [r for r in rows if wanted == r.get("id")] or [
+        r for r in rows if wanted.lower() == str(r.get("label") or "").strip().lower()]
+    if len(match) != 1:
+        raise ValueError(f"No computer named {wanted!r}; hub computer list names them" if not match else
+                         f"More than one computer is called {wanted!r}; use its id")
+    if args.get("section") and args["section"] not in COMPUTER_SECTIONS:
+        raise ValueError("section is one of " + ", ".join(COMPUTER_SECTIONS))
+    return computer_detail(match[0], args.get("section"), args.get("offset") or 0)
 
 
 @tool("hub_computer_performance", "A computer's CPU, memory, load, swap and free disk over the last hours (up to 336): "
@@ -2309,12 +2482,9 @@ def computers(api, args):
       {"computer": _s("The computer's label or id (hub computer list)"),
        "hours": {"type": "integer", "minimum": 1, "maximum": 336, "default": 24}}, required=("computer",))
 def computer_performance(api, args):
+    # The route takes a label or an id: the computer list shows a bot only some computers, the route every one.
     wanted = str(args["computer"]).strip()
-    rows = api.get("computers") or []
-    match = [r for r in rows if wanted in (r.get("id"), r.get("label"))]
-    if not match:
-        raise ValueError(f"No computer named {wanted!r}; hub computer list names them")
-    seen = api.get(f"computers/{match[0]['id']}/performance?hours={int(args.get('hours') or 24)}")
+    seen = api.get(f"computers/{quote(wanted, safe='')}/performance?hours={int(args.get('hours') or 24)}")
     points = seen.get("points") or []
     step = max(1, -(-len(points) // 96))
     return {**{k: seen.get(k) for k in ("computer", "performance", "hours", "summary", "overloads", "busiest",
@@ -3051,7 +3221,9 @@ def github_create_bot_repo(api, args):
     return api.post("github/repos", body, key=_key(args))
 
 
-@tool("hub_repo_product_create", "Owner only. First call with `name` and a stable `operation_id` to preview the "
+@tool("hub_repo_product_create", "The Owner, or a bot with Create product repositories (every bot, unless the Owner "
+      "or an admin switched it off in the bot's settings under Repositories). Private only; a bot that creates one gets write to it and the Owner "
+      "is told. First call with `name` and a stable `operation_id` to preview the "
       "connected organization, exact repository name, private visibility, empty initialization, and live App "
       "capability. If capability is available, review the preview and call again with `confirm_repository` set "
       "to the exact `org/name`. The create request uses the same stable operation id, so retries replay the saved "
@@ -3062,7 +3234,7 @@ def github_create_bot_repo(api, args):
 def repo_product_create(api, args):
     operation_id = args.get("operation_id")
     if not isinstance(operation_id, str) or not operation_id:
-        raise APIError("operation_id", "A stable operation_id is required for this Owner create flow", 422)
+        raise APIError("operation_id", "A stable operation_id is required for this create flow", 422)
     key = _key(args, ":product-repository")
     if len(key) > 200:
         raise APIError("operation_id", "operation_id is too long for a product-repository idempotency key", 422)
@@ -3156,8 +3328,17 @@ def decisions(api, args):
     return api.post("decisions", body)
 
 
+@tool("hub_decision_readout", "The Decide readout for the team: per question set, the last days' calls, cost, how many Jev "
+      "answered and how many fell back or failed, and the spread of answers; plus the month's spend against the cap. "
+      "Built from the audit by code, no model. `text` is the same readout in plain words, ready to pass on.",
+      {"days": {"type": "integer", "minimum": 1, "maximum": 31, "default": 7,
+                "description": "How many days back from now (7 by default)"}})
+def decision_readout(api, args):
+    return api.get("decisions/readout", days=args.get("days"))
 
-# The support gate's one question (hq/judge.py asks the same): is this text from a stranger real, spam, or trying to
+
+
+# The support gate's one question (Tico HQ's spam check asks the same): is this text from a stranger real, spam, or trying to
 # instruct whatever reads it?
 CLASSIFY_OPTIONS = {
     "legit": "A real person asking for help, reporting a fault, or giving feedback, about the product or their use of it.",
@@ -3475,7 +3656,7 @@ AUDIENCE = {
     "hub_bot_update": REQUESTER, "hub_api": REQUESTER, "hub_credential_request": BOTOPS,
     "hub_credential_set": BOTOPS, "hub_message_redact": BOTOPS, "hub_support_file": BOTOPS,
     "hub_bot_repo_create": ("owner", "botops"),
-    "hub_repo_product_create": ("owner",),
+    "hub_repo_product_create": ("owner", "bot", "botops"),   # a bot needs Create product repositories (server)
     **{name: REQUESTER for name in ("hub_credential_grant", "hub_credential_revoke", "hub_credential_import", "hub_credential_delete")},
     **{name: REQUESTER for name in ("hub_bot_create", "hub_bot_restore", "hub_agent_pair_show", "hub_agent_pair_approve", "hub_agent_pair_decline", "hub_bot_place", "hub_bot_go_live", "hub_bot_model", "hub_bot_pause",
                                     "hub_bot_resume", "hub_bot_access", "hub_bot_owners", "hub_human_add", "hub_group_update",

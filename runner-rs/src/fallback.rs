@@ -2,7 +2,8 @@
 //! out of quota or cannot sign in, the turn runs again there on a fresh thread. A bot out of quota that names no
 //! fallback runs the turn once on another provider signed in here (service.py default_fallback, #504).
 
-use std::sync::Mutex;
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
@@ -61,6 +62,85 @@ pub fn default_choice(config: &Value, choices: &[Value], env: &crate::env::Env, 
     })
 }
 
+/// The next of the company's providers once a default hop's own login hit its usage limit too: the first row
+/// after the runtimes this turn already ran on (`tried`) that `ready` still takes.
+pub fn next_choice(config: &Value, choices: &[Value], env: &crate::env::Env, tried: &[String], ready: impl Fn(&str) -> bool) -> Option<Hop> {
+    default_choice(config, choices, env, |rt| !tried.iter().any(|t| t == rt) && ready(rt))
+}
+
+/// How long a login that failed a turn on its usage limit, with no reset time from the provider, stays out of the
+/// fallback choice. A spent login (billing, a monthly cap) then costs one quick failed try each half hour, and a
+/// limit that lifts on its own is used again within the half hour.
+pub const LIMIT_WINDOW_S: f64 = 30.0 * 60.0;
+
+/// The logins here that failed a turn on a usage limit: (profile, "" for the computer's own login; runtime) -> when,
+/// and the provider's reset when it reported one.
+#[derive(Default)]
+pub struct Limits(HashMap<(String, String), (f64, Option<f64>)>);
+
+impl Limits {
+    pub fn remember(&mut self, profile: &str, runtime: &str, now: f64, reset: Option<f64>) {
+        self.0.insert((profile.into(), runtime.into()), (now, reset.filter(|at| at.is_finite())));
+    }
+
+    pub fn forget(&mut self, profile: &str, runtime: &str) {
+        self.0.remove(&(profile.to_string(), runtime.to_string()));
+    }
+
+    /// Whether that login is still out of quota at `now`: until the provider's reset, or for LIMIT_WINDOW_S after
+    /// the failure when it gave none.
+    pub fn out_of_quota(&self, profile: &str, runtime: &str, now: f64) -> bool {
+        self.0.get(&(profile.to_string(), runtime.to_string())).is_some_and(|(at, reset)| match reset {
+            Some(reset) => now < *reset,
+            None => now < at + LIMIT_WINDOW_S,
+        })
+    }
+}
+
+/// This runner's limits, in memory only: a restarted runner tries each login once again.
+fn limits() -> &'static Mutex<Limits> {
+    static L: OnceLock<Mutex<Limits>> = OnceLock::new();
+    L.get_or_init(Default::default)
+}
+
+/// `profile`'s `runtime` login failed a turn on its usage limit at `now`; the reset is the provider's
+/// (crate::profiles::limit_reset), if it reported one.
+pub fn remember_limit(profile: &str, runtime: &str, now: f64) {
+    let reset = crate::profiles::limit_reset(profile, runtime, now).map(|at| crate::util::parse_iso(&at));
+    limits().lock().unwrap().remember(profile, runtime, now, reset);
+}
+
+/// A turn on that login completed, or its sign-in changed: it is no longer out of quota.
+pub fn forget_limit(profile: &str, runtime: &str) {
+    limits().lock().unwrap().forget(profile, runtime);
+}
+
+pub fn out_of_quota(profile: &str, runtime: &str, now: f64) -> bool {
+    limits().lock().unwrap().out_of_quota(profile, runtime, now)
+}
+
+/// The login a turn on `runtime` (`harness`) with `profile` signs in with, as `limits` keeps it: the profile's own
+/// login, or "" for the computer's own (no profile, or one that shares the operator's logins or has no home of its
+/// own for that runtime). None for a harness that signs in with each bot's own key (`api_keys = "bot"`): that quota
+/// is one bot's, so it is never kept for another bot's turn.
+pub fn login(runtime: &str, harness: &str, profile: Option<&crate::profiles::Profile>) -> Option<String> {
+    if crate::harness_tools::caps(runtime, harness).api_keys == "bot" {
+        return None;
+    }
+    let own = profile.filter(|p| p.home(runtime).is_some() && crate::profiles::home_var(runtime).is_some());
+    Some(own.map_or_else(String::new, |p| p.name.clone()))
+}
+
+/// What a turn says about its login's quota: a usage limit is kept, a completed turn ends one.
+pub fn settle_limit(runtime: &str, harness: &str, profile: Option<&crate::profiles::Profile>, limited: bool, completed: bool) {
+    let Some(login) = login(runtime, harness, profile) else { return };
+    if limited {
+        remember_limit(&login, runtime, crate::util::epoch_s());
+    } else if completed {
+        forget_limit(&login, runtime);
+    }
+}
+
 /// The key a harness signs in with from the bot's own grant (`api_keys = "bot"`, its preferred `api_key_env`), not a
 /// login on the computer.
 fn bot_key(harness: &str) -> Vec<String> {
@@ -78,12 +158,18 @@ pub fn diagnostic(primary: &str, hop: &Hop, hit_limit: bool) -> String {
     format!("{primary} {why}; running this turn on {}{auto}", hop.harness)
 }
 
+/// The turn's note when its ChatGPT login was busy with another turn (crate::login_turns) and its own fallback took
+/// it: `why` is the login's line ("ChatGPT login busy with builder").
+pub fn busy_diagnostic(why: &str, hop: &Hop) -> String {
+    format!("{why}; running this turn on {}", hop.harness)
+}
+
 /// What the agent is told on a fallback turn: its configured model is not doing this work, so whatever it records
-/// about who did it (a review's provenance, a pull request, a task note) names the model that is.
-pub fn prompt_note(primary: &str, hop: &Hop, hit_limit: bool) -> String {
-    let why = if hit_limit { "hit its usage limit" } else { "was unavailable" };
+/// about who did it (a review's provenance, a pull request, a task note) names the model that is. `because` says why
+/// ("claude hit its usage limit").
+pub fn prompt_note(because: &str, primary: &str, hop: &Hop) -> String {
     format!(
-        "This turn runs on the fallback {} with model {} because {primary} {why}; your configured model is not doing this work. Wherever you record which model did it (a review's provenance, a pull request, a task note), name {}, not {primary}.",
+        "This turn runs on the fallback {} with model {} because {because}; your configured model is not doing this work. Wherever you record which model did it (a review's provenance, a pull request, a task note), name {}, not {primary}.",
         hop.harness, hop.model, hop.model
     )
 }
@@ -171,7 +257,8 @@ impl Runner {
     }
 
     /// Whether `runtime` can take a turn here now (service.py fallback_ready): installed, signed in (on `profile`
-    /// when the turn runs on one), not refused, and not turned off here by the owner. Read from the last readiness
+    /// when the turn runs on one), not refused, not out of quota on that login (`out_of_quota`), and not turned off
+    /// here by the owner. Read from the last readiness
     /// report, never probed mid-turn. A runtime signed in only by a key in the environment is left out: a turn's
     /// environment carries only its own runtime's keys. A runtime that turns a key into a login needs none.
     pub fn fallback_ready(&self, runtime: &str, profile: Option<&crate::profiles::Profile>) -> bool {
@@ -188,6 +275,7 @@ impl Runner {
         crate::util::truthy(row.get("installed"))
             && row["authenticated"] == "ready"
             && self.sign_in.rejection(runtime, profile).is_none()
+            && login(runtime, "", profile).is_none_or(|l| !out_of_quota(&l, runtime, crate::util::epoch_s()))
             && (!crate::harness_tools::caps(runtime, "").api_key_login.is_empty() || self.sign_in.headless_secret(runtime).is_none())
     }
 }
@@ -233,9 +321,11 @@ mod tests {
                    "claude hit its usage limit; running this turn on codex (no fallback set; another provider signed in here)");
         assert_eq!(diagnostic("codex", &configured(&json!({"fallback": {"harness": "claude", "model": "m"}})).unwrap(), false),
                    "codex unavailable; running this turn on claude");
-        let note = prompt_note("claude", &Hop { runtime: "codex".into(), harness: "codex".into(), model: "gpt-test".into(), ..hop }, true);
+        let codex = Hop { runtime: "codex".into(), harness: "codex".into(), model: "gpt-test".into(), ..hop };
+        let note = prompt_note("claude hit its usage limit", "claude", &codex);
         assert!(note.starts_with("This turn runs on the fallback codex with model gpt-test because claude hit its usage limit"));
         assert!(note.contains("name gpt-test, not claude"));
+        assert_eq!(busy_diagnostic("ChatGPT login busy with builder", &codex), "ChatGPT login busy with builder; running this turn on codex");
     }
 
     #[test]
@@ -247,6 +337,111 @@ mod tests {
         env.insert("OPENROUTER_API_KEY".into(), "or-key".into());
         assert_eq!(default_choice(&config, &choices, &env, |_| true).unwrap().harness, "pi");
         assert!(default_choice(&config, &[json!({"runtime": "gemini", "model": "g"})], &env, |_| true).is_none());
+    }
+
+    // TK-EKWAFWPD: the computer's own Codex login answered every turn "Quota exceeded" with no reset time, and each
+    // automatic fallback still picked it first. (A Limits of its own: a readiness check elsewhere that finds the
+    // computer's Codex signed out forgets the shared one's "" row.)
+    #[test]
+    fn a_login_out_of_quota_with_no_reset_is_skipped_for_the_next_fallback_row_until_the_window_passes() {
+        let choices = [json!({"runtime": "codex", "harness": "codex", "model": "gpt-test"}), json!({"runtime": "gemini", "harness": "antigravity", "model": "g"})];
+        let config = json!({"runtime": "claude", "harness": "claude"});
+        let none = crate::env::Env::new();
+        let now = 1_792_000_000.0;
+        let mut limits = Limits::default();
+        assert_eq!(default_choice(&config, &choices, &none, |rt| !limits.out_of_quota("", rt, now)).unwrap().runtime, "codex");
+        limits.remember("", "codex", now, None);
+        assert!(limits.out_of_quota("", "codex", now + 1.0) && !limits.out_of_quota("", "gemini", now + 1.0));
+        assert_eq!(default_choice(&config, &choices, &none, |rt| !limits.out_of_quota("", rt, now + 1.0)).unwrap().harness, "antigravity");
+        // Another login of the same runtime is a different account and keeps its own quota.
+        assert!(!limits.out_of_quota("work", "codex", now + 1.0));
+        // The window passed: the login is tried again.
+        assert!(limits.out_of_quota("", "codex", now + LIMIT_WINDOW_S - 1.0));
+        assert_eq!(default_choice(&config, &choices, &none, |rt| !limits.out_of_quota("", rt, now + LIMIT_WINDOW_S)).unwrap().runtime, "codex");
+    }
+
+    #[test]
+    fn a_profile_on_the_operators_logins_shares_its_quota_and_an_isolated_profile_keeps_its_own() {
+        use crate::profiles::Profile;
+        let shared = Profile::new("shared", "/tmp/acme-profiles/shared", true);
+        let work = Profile::new("work", "/tmp/acme-profiles/work", false);
+        let key = |p: Option<&Profile>| login("codex", "codex", p).unwrap();
+        assert_eq!((key(None), key(Some(&shared)), key(Some(&work))), (String::new(), String::new(), "work".to_string()));
+        let now = 1_792_000_000.0;
+        // The computer's own login out of quota: a turn on the sharing profile is on that same login.
+        let mut limits = Limits::default();
+        limits.remember(&key(None), "codex", now, None);
+        assert!(limits.out_of_quota(&key(Some(&shared)), "codex", now + 1.0));
+        assert!(!limits.out_of_quota(&key(Some(&work)), "codex", now + 1.0));
+        // And the other way: a limit hit on the sharing profile holds for no-profile turns, and its success clears it.
+        let mut limits = Limits::default();
+        limits.remember(&key(Some(&shared)), "codex", now, None);
+        assert!(limits.out_of_quota(&key(None), "codex", now + 1.0));
+        limits.forget(&key(Some(&shared)), "codex");
+        assert!(!limits.out_of_quota(&key(None), "codex", now + 1.0));
+        // An isolated profile's limit is its own.
+        limits.remember(&key(Some(&work)), "codex", now, None);
+        assert!(!limits.out_of_quota(&key(None), "codex", now + 1.0) && !limits.out_of_quota(&key(Some(&shared)), "codex", now + 1.0));
+    }
+
+    #[test]
+    fn a_bots_own_key_is_never_kept_as_a_login_another_bot_shares() {
+        // Gemini CLI and pi sign in with each bot's own key: one bot's spent key says nothing about another's.
+        assert_eq!((login("pi", "pi", None), login("gemini", "gemini", None)), (None, None));
+        let now = crate::util::epoch_s();
+        let profile = crate::profiles::Profile::new("limit-test-key", "/tmp/acme-profiles/key", false);
+        settle_limit("pi", "pi", Some(&profile), true, false);
+        assert!(!out_of_quota("limit-test-key", "pi", now + 1.0) && !out_of_quota("", "pi", now + 1.0));
+        // A computer login on the same profile is kept, and a completed turn there clears it.
+        settle_limit("codex", "codex", Some(&profile), true, false);
+        assert!(out_of_quota("limit-test-key", "codex", now + 1.0));
+        settle_limit("codex", "codex", Some(&profile), false, true);
+        assert!(!out_of_quota("limit-test-key", "codex", now + 1.0));
+    }
+
+    #[test]
+    fn a_login_out_of_quota_is_ready_again_at_the_providers_reset_or_once_it_works_or_signs_out() {
+        let now = crate::util::epoch_s();
+        let reset = |s: f64| crate::util::iso(&json!(now + s));
+        // The provider says the week is spent until an hour from now: that holds past the half-hour window.
+        crate::profiles::remember_weekly("limit-test", "codex", &json!({"used_percent": 100, "window_minutes": 10080, "resets_at": reset(3600.0)}));
+        remember_limit("limit-test", "codex", now);
+        assert!(out_of_quota("limit-test", "codex", now + LIMIT_WINDOW_S + 60.0));
+        assert!(!out_of_quota("limit-test", "codex", now + 3601.0));
+        // A reset already behind: no reset kept, so the window applies.
+        crate::profiles::remember_weekly("limit-test-past", "codex", &json!({"used_percent": 100, "window_minutes": 10080, "resets_at": reset(-60.0)}));
+        remember_limit("limit-test-past", "codex", now);
+        assert!(out_of_quota("limit-test-past", "codex", now + 60.0) && !out_of_quota("limit-test-past", "codex", now + LIMIT_WINDOW_S));
+        // A turn that completed on the login, or a sign-out, ends it at once.
+        forget_limit("limit-test-past", "codex");
+        assert!(!out_of_quota("limit-test-past", "codex", now + 60.0));
+        crate::profiles::forget_windows("limit-test", "codex");
+        assert!(!out_of_quota("limit-test", "codex", now + 60.0));
+    }
+
+    #[test]
+    fn a_hop_that_hits_its_limit_too_moves_on_to_the_next_row_it_has_not_tried() {
+        let choices = [
+            json!({"runtime": "codex", "harness": "codex", "model": "gpt-test"}),
+            json!({"runtime": "claude", "harness": "claude", "model": "claude-test"}),
+            json!({"runtime": "gemini", "harness": "antigravity", "model": "g"}),
+        ];
+        let config = json!({"runtime": "claude", "harness": "claude"});
+        let none = crate::env::Env::new();
+        let now = 1_792_000_000.0;
+        let ready = |rt: &str| !out_of_quota("limit-test-hop", rt, now + 1.0);
+        let first = default_choice(&config, &choices, &none, ready).unwrap();
+        assert_eq!(first.runtime, "codex");
+        // The codex hop failed on its limit (execute: remember_limit, then next_choice with what the turn tried).
+        remember_limit("limit-test-hop", "codex", now);
+        let tried = ["claude".to_string(), first.runtime.clone()];
+        let next = next_choice(&config, &choices, &none, &tried, ready).unwrap();
+        assert_eq!((next.harness.as_str(), next.default), ("antigravity", true));
+        // A row tried already is never taken again, even when it still reads ready; none left ends the chain.
+        let all = ["claude".to_string(), "codex".to_string(), "gemini".to_string()];
+        assert!(next_choice(&config, &choices, &none, &all, |_| true).is_none());
+        assert_eq!(next_choice(&config, &choices, &none, &tried[..1], |_| true).unwrap().runtime, "codex");
+        assert_eq!(diagnostic("codex", &next, true), "codex hit its usage limit; running this turn on antigravity (no fallback set; another provider signed in here)");
     }
 
     #[test]

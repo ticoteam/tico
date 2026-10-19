@@ -113,6 +113,9 @@ function subsRuntimeHTML(c, p) {
       ? `<button class="ghost subs-signin" type="button" data-model-login data-runner="${esc(c.runner_id)}" data-runtime="${esc(id)}" data-profile="${esc(p.name)}" data-machine="${esc(c.label)}" aria-label="Sign in ${esc(p.name)} to ${esc(label)} on ${esc(c.label)}">Sign in</button>` : ''}</span>`;
   }).join('');
 }
+// The bots that take turns on this subscription's sign-in, as the computer's row in Settings > Computers says it.
+const subsSharedHTML = (c, p) => Object.keys(p.runtimes || {}).map(runtime =>
+  machineSharedLoginHTML((SETTINGS_DATA?.machines || []).find(m => m.id === c.runner_id), runtime, p.name)).join('');
 // Allowance is a provider percentage, not a token estimate. Never roll an old report forward.
 const subsWeeklyRuntimes = p => Object.entries(p.runtimes || {}).filter(([runtime, state]) =>
   subsWeeklyName(runtime) && (state.signed_in === true || state.weekly || subsRuntimes().some(([id]) => id === runtime)));
@@ -137,9 +140,23 @@ function subsWeeklyHTML(c, p) {
         </div>`;
     }).join('');
 }
+// Switch account / Sign out for each signed-in runtime of the subscription (ui/model-login.js); the computer must be online.
+function subsAccountHTML(c, p) {
+  const machine = (SETTINGS_DATA?.machines || []).find(m => m.id === c.runner_id);
+  const online = !machine || (!machine.revoked_at && !!machine.last_seen && Date.now() - new Date(machine.last_seen) < 60000);
+  return subsRuntimes().filter(([id]) => p.runtimes?.[id]?.signed_in === true).map(([id, label]) => {
+    const buttons = window.TicoModelLogin?.actionsHTML({runnerId: c.runner_id, runtime: id, machine: c.label, profile: p.name, signedIn: true, online,
+      platform: machine?.platform || ''}) || '';
+    // Where Switch account isn't offered (the CLI keeps its login in the keychain there), neither is the promise.
+    const note = buttons.includes('data-model-switch')
+      ? '<span class="muted">Switching signs in on the side: the account signed in now keeps working until the new one is in.</span>' : '';
+    return buttons ? `<div class="subs-account" data-subs-account="${esc(id)}"><strong>${esc(label)} account</strong>${buttons}
+      ${note}</div>` : '';
+  }).join('');
+}
 function subsControlsHTML(c, p) {
   if (!subsMaySignIn(c)) return '';
-  const forms = subsRenameHTML(c, p) + subsWeeklyRuntimes(p).map(([runtime, state]) => {
+  const forms = subsRenameHTML(c, p) + subsAccountHTML(c, p) + subsWeeklyRuntimes(p).map(([runtime, state]) => {
     const percent = state.weekly?.used_percent, reset = Date.parse(state.weekly?.resets_at);
     const localReset = Number.isFinite(reset) ? new Date(reset - new Date(reset).getTimezoneOffset() * 60000).toISOString().slice(0, 16) : '';
     return `<form data-subs-weekly data-runner="${esc(c.runner_id)}" data-profile="${esc(p.name)}" data-runtime="${esc(runtime)}">
@@ -221,7 +238,7 @@ async function renderSettingsSubs(force = false, loaded = false) {
   if (!computers.length && !add) { card.hidden = true; return; }
   const openControls = new Set([...el.querySelectorAll('.subs-controls[open]')].map(subsControlsKey));
   el.innerHTML = `<p class="muted">Named subscriptions stay on their computer. Weekly allowance is approximate and may include use outside Tico. Matching names on different computers are not combined.</p>${computers.map(c => `<div class="subs-pc"><h3 class="subs-h">${esc(c.label)}</h3><ul class="subs-list">${c.profiles.map(p =>
-      `<li class="subs-row" data-subs-profile="${esc(p.name)}"><span class="subs-name">${esc(p.display_name || p.name)}</span>${subsRuntimeHTML(c, p)}${subsWeeklyHTML(c, p)}${subsControlsHTML(c, p)}</li>`).join('')}</ul></div>`).join('')}
+      `<li class="subs-row" data-subs-profile="${esc(p.name)}"><span class="subs-name">${esc(p.display_name || p.name)}</span>${subsRuntimeHTML(c, p)}${subsSharedHTML(c, p)}${subsWeeklyHTML(c, p)}${subsControlsHTML(c, p)}</li>`).join('')}</ul></div>`).join('')}
     ${groups.length ? `<div class="subs-pc subs-groups"><h3 class="subs-h">Groups</h3><ul class="subs-list">${groups.map(g => subsGroupRowHTML(g, names)).join('')}</ul></div>` : ''}
     ${add}`;
   el.querySelectorAll('.subs-controls').forEach(control => { control.open = openControls.has(subsControlsKey(control)); });

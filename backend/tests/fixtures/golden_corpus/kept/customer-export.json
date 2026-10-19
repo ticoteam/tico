@@ -1,0 +1,13 @@
+{
+    "exported": "2026-10-01T08:00:00Z",
+    "company": "Brightwater Laundry Co.",
+    "owner": "human:ana",
+    "requester": "bot:ops",
+    "customers": [
+        {"id": 1001, "name": "Renée Okafor", "plan": "weekly", "balance": 12.50, "ratio": 1e3},
+        {"id": 1002, "name": "M. Díaz", "plan": "fortnightly", "balance": -0.0, "big": 12345678901234567890},
+        {"id": 1003, "name": "東京 Tower", "notes": "ring twice\/side door", "tags": []}
+    ],
+    "from_actor": "bot:ops",
+    "z_last": null, "a_first": true
+}

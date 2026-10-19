@@ -6,6 +6,7 @@ const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs');
 const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();   // load.cjs arrives with #254
 const launch = () => chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
 const LONG = 'Ship the Acme onboarding checklist: write the welcome email, set up the three sample projects, '
@@ -83,7 +84,7 @@ async function open(browser, viewport, touch = false, {empty = false, messages =
       const body = req.postDataJSON(); api.sends.push(body);
       return json({conversation: {id: 'c1'}, message: {id: 'm' + api.sends.length, from_actor: 'human:ana', body: body.text, created: now()}});
     }
-    return json({});
+    return json(unrouted(p));
   });
   await page.goto('https://tico-ui.test/#/bot/ops');
   await page.locator('#chat-composer textarea').waitFor();

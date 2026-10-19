@@ -8,6 +8,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const {html, uiFile} = require('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs');
 const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();   // load.cjs arrives with #254
 const shots = process.env.TICO_SCREENSHOT_DIR;
 
@@ -46,6 +47,9 @@ async function open(browser, viewport, state) {
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     if (p === '/api/me') return json({id: 'ana', role: 'owner', name: 'Ana', email: 'ana@example.test', cloud: true});
     if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}]});
+    // A list, as the server sends it: the catch-all {} broke the sidebar tree whenever it landed ahead of
+    // /api/v2/status, and the bot page never opened (the bot-needs.cjs hang from the v0.3.54 release check).
+    if (p === '/api/issues') return json([]);
     if (p === '/api/employees') return json(bots);
     if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: [], schedules: []});
     if (p === '/api/v2/status') return json({bots: [{bot: 'cmo', state: 'idle'}]});
@@ -68,7 +72,7 @@ async function open(browser, viewport, state) {
     if (patch && patch[1] === CSV.id) { state.opened.push(patch[1]); return route.fulfill({contentType: 'text/csv', headers: {'Content-Disposition': "attachment; filename*=UTF-8''traffic.csv"}, body: csvText}); }
     if (patch) { state.opened.push(patch[1]); return route.fulfill({contentType: 'application/octet-stream', headers: {'Content-Disposition': "attachment; filename*=UTF-8''weekly.md"}, body: '# Weekly'}); }
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
-    return json({});
+    return json(unrouted(p));
   });
   return {page, errors};
 }

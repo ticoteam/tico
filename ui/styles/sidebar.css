@@ -67,6 +67,10 @@ button.nav-librarian{border:0;background:none;cursor:pointer;padding:0}
 #changelog-notice:hover{background:var(--surface2);color:var(--ink)}
 .changelog-notice-dot{width:7px;height:7px;flex:none;border-radius:50%;background:var(--accent)}
 #changelog-badge{margin-left:auto;font-size:var(--t-2xs)}
+/* The first-run wizard while setup is not done (renderOnboardingNav): Finish setup and the team, not the app's pages
+   or What's new. */
+body.in-setup .side-scroll>.nav-link:not(#nav-welcome),body.in-setup .side-scroll>.nav-row,body.in-setup #nav-pins,
+body.in-setup #nav-inboxes-section,body.in-setup #gs-org-hint,body.in-setup #changelog-notice,body.in-setup #changelog-badge{display:none}
 #new-version{display:flex;align-items:center;gap:8px;width:100%;padding:6px 8px;border:0;border-radius:6px;background:none;color:var(--muted);font:inherit;font-size:var(--t-sm);text-align:left;cursor:pointer}
 #new-version:hover,#new-version[aria-expanded="true"]{background:var(--surface2);color:var(--ink)}
 #new-version .nv-dot{width:7px;height:7px;flex:none;border-radius:50%;background:var(--accent)}
@@ -106,6 +110,17 @@ button.nav-librarian{border:0;background:none;cursor:pointer;padding:0}
 .org-name{flex:1;min-width:0;font:inherit;font-size:var(--t-base);padding:2px 6px;border:1px solid var(--accent);border-radius:6px;background:var(--surface);color:var(--ink)}
 .tree li.org-new{padding:2px 0 2px 16px;display:flex}
 .tree .noderow.drop-target,.tree .org-no-group.drop-target{outline:2px solid var(--accent);outline-offset:1px;border-radius:6px}
+/* A report's place among its manager's reports: a line where it will go, and its Move menu (ui/app/sidebar.js). */
+#tree .node.drop-before{box-shadow:0 -2px 0 var(--accent)}#tree .node.drop-after{box-shadow:0 2px 0 var(--accent)}
+#tree .node.drop-refused{outline:2px dashed var(--muted);outline-offset:1px;border-radius:6px;cursor:not-allowed}
+/* Folded to no width rather than hidden, so focus can come back to it after a move. */
+.org-order{display:inline-flex;position:relative;flex:none;width:0;overflow:hidden}
+.tree .noderow:hover>.org-order,.tree .noderow:focus-within>.org-order,.org-order.open{width:auto;overflow:visible;margin-left:2px}
+@media (hover:none){.org-order{width:auto;overflow:visible;margin-left:2px}}
+.org-order-menu{position:absolute;right:0;top:calc(100% + 4px);z-index:30;display:flex;flex-direction:column;min-width:140px;padding:var(--s1);background:var(--surface);border:1px solid var(--line);border-radius:var(--r-pop);box-shadow:0 8px 24px rgba(0,0,0,.16)}
+.org-order-menu button{width:100%;padding:7px 10px;border:0;border-radius:5px;background:none;color:var(--ink);font:inherit;font-size:var(--t-base);text-align:left;cursor:pointer;white-space:nowrap}
+.org-order-menu button:hover,.org-order-menu button:focus-visible{background:var(--surface2)}
+.org-order-menu button:disabled{color:var(--muted);background:none;cursor:default}
 .tree .org-no-group{display:none;margin-top:8px;padding:6px 8px;color:var(--muted);font-size:var(--t-sm);border:1px dashed var(--line);border-radius:6px}
 .tree.org-dragging .org-no-group{display:block}
 .tree .dept-label{flex:1;padding:6px 6px 4px 2px;color:var(--muted);font-size:var(--t-label);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase;user-select:none}
@@ -122,6 +137,13 @@ button.nav-librarian{border:0;background:none;cursor:pointer;padding:0}
 .person-mail-link{display:inline-flex;align-items:center;justify-content:center;flex:none;width:30px;height:30px;margin-left:2px;border-radius:6px;color:var(--muted);font-family:"Material Symbols Outlined";font-size:18px;text-decoration:none}
 .person-mail-link:hover,.person-mail-link.cur{background:var(--surface2);color:var(--accent);text-decoration:none}
 .tree .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* A name split at the first words it shares with another bot's (orgNameLeads): those are muted, and when the row is
+   too narrow for the whole name they wrap onto a second line that is cut off, so the rest keeps the row. The name takes
+   the row's free width, so its marks line up at the end however much of it shows. */
+.tree .nm-split{display:inline-flex;flex-grow:1;min-width:0}.tree .nm-split .proj{flex:none}
+.tree .nm-words{display:flex;flex-wrap:wrap-reverse;align-content:flex-end;min-width:0;height:1.5em;line-height:1.5;overflow:hidden}
+.tree .nm-lead{white-space:pre;color:var(--muted)}
+.tree .nm-rest{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .org-connect{flex:none;height:22px;margin-left:2px;padding:0 9px;border:1px solid var(--line);border-radius:11px;background:none;color:var(--accent);font:inherit;font-size:var(--t-sm);font-weight:600;cursor:pointer}
 .org-connect:hover{background:var(--surface2)}
 

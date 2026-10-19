@@ -12,10 +12,13 @@ person confirms.
 from fastapi import Request
 
 from . import botkpis
+from . import ceo_bot
+from . import company as C
 from . import goal_asks as GA
 from . import goals as G
 from . import kpis as K
 from . import models as M
+from . import names as N
 from . import views
 from .store import H, Problem
 
@@ -114,9 +117,9 @@ def install(app, store, auth, mutate, settings):
             raise Problem("not_found", "Unknown KPI", 404)
         return record
 
-    def refuse_manager(who, what):
+    def refuse_manager(c, who, what):
         if is_manager(who):
-            raise Problem("forbidden", f"The Goal Manager proposes {what}; the owner confirms it "
+            raise Problem("forbidden", f"The {ceo_bot.name(c)} proposes {what}; the owner confirms it "
                           "(POST /api/v2/goal-proposals)", 403)
 
     def owner_names(c, rows):
@@ -145,11 +148,64 @@ def install(app, store, auth, mutate, settings):
         record = K.kpi(c, item["kpi_id"]) if item["kpi_id"] else None
         by_goal = bool(goal) and may_colour(c, who, goal)
         by_kpi = bool(record) and may_edit_kpi(c, who, record)
-        if item["kind"] in ("goal_wording", "flag"):
+        if item["kind"] in ("goal_wording", "flag", "goal_why"):
             return by_goal
         if item["kind"] == "kpi_definition":
             return by_kpi
         return by_goal or by_kpi
+
+    def company_editor(who):
+        """The owner or an admin, on their own click: never a bot (the CEO Bot proposes), never someone acting for them."""
+        return who.role in ("owner", "human") and not who.via and auth.company_role(who) in ("owner", "admin")
+
+    def needs_switch(c, what):
+        if not ceo_bot.on(c):
+            raise Problem("state", f"The CEO Bot is off on this install, so there is no {what} to change", 409)
+
+    def refuse_bot_why(who):
+        if who.role not in ("owner", "human") or who.via:
+            raise Problem("forbidden", "A person sets a goal's Why on their own click; a bot proposes one "
+                          "(POST /api/v2/goal-proposals, kind goal_why)", 403)
+
+    def company_view(c, who):
+        record = C.profile(c)
+        by = record.get("updated_by")
+        known = N.lookup(c, {by}) if by else {}
+        return {"company": {**record, "updated_by_name": known.get(by, H.actor_id(by or "") or "")},
+                "on": ceo_bot.on(c), "may_edit": company_editor(who)}
+
+    # ------------------------------------------------------------------ the company
+    @app.get("/api/v2/company")
+    def company_show(request: Request):
+        """The company's Vision and Description, at the top of Goals where the CEO Bot switch is on."""
+        who = request.state.identity
+        auth.domain(who)
+        with store.read() as c:
+            return company_view(c, who)
+
+    @app.post("/api/v2/company")
+    def company_update(request: Request, body: M.CompanyUpdate):
+        """The owner or an admin writes the Vision and the Description; every change is kept with who and when."""
+        who = request.state.identity
+        def work(c):
+            auth.domain(who)
+            needs_switch(c, "Company section")
+            if not company_editor(who):
+                raise Problem("forbidden", "Only the owner or an admin writes the company's Vision and Description, "
+                              f"on their own click; a bot, the {ceo_bot.name(c)} included, proposes", 403)
+            C.update(c, who.actor, vision=body.vision, description=body.description)
+            return company_view(c, who)
+        return mutate(request, body, work)
+
+    @app.get("/api/v2/company/history")
+    def company_history(request: Request):
+        """Every change to the Vision and the Description, newest first, with who made it."""
+        who = request.state.identity
+        auth.domain(who)
+        with store.read() as c:
+            rows = C.history(c)
+            known = N.lookup(c, {r["actor"] for r in rows})
+            return {"events": [{**r, "actor_name": known.get(r["actor"], H.actor_id(r["actor"]))} for r in rows]}
 
     # ------------------------------------------------------------------ goals
     @app.get("/api/v2/goals")
@@ -204,7 +260,10 @@ def install(app, store, auth, mutate, settings):
             other = [K.view(r, data.get(r["id"], []), None) for r in loose]
             names.update(owner_names(c, other))
             visible = {r["id"] for r in rows}
-            pending = [p for p in G.proposals(c, "pending") if not p["goal_id"] or p["goal_id"] in visible]
+            # Why proposals show on their goals only where the CEO Bot switch is on (backend/company.py).
+            whys = ceo_bot.on(c)
+            pending = [p for p in G.proposals(c, "pending") if (not p["goal_id"] or p["goal_id"] in visible)
+                       and (whys or p["kind"] != "goal_why")]
             return {"goals": rows, "owners": names, "unaligned": unaligned, "other_kpis": other,
                     "proposals": [{**p, "may_decide": decider(c, who, p)} for p in pending]}
 
@@ -222,7 +281,8 @@ def install(app, store, auth, mutate, settings):
             items = [i for i in wanted if i["kind"] != "proposal" and i["owner"] == who.actor]
             asked = {i["ref"]: i for i in wanted if i["kind"] == "proposal"}
             for p in G.proposals(c, "pending"):
-                if decider(c, who, p):
+                # A Why waits on its goal, not here: the CEO Bot asks for them as one item (spec, level 1).
+                if p["kind"] != "goal_why" and decider(c, who, p):
                     goal = G.goal(c, p["goal_id"]) if p["goal_id"] else None
                     record = K.kpi(c, p["kpi_id"]) if p["kpi_id"] else None
                     items.append(asked.get(p["id"]) or {"kind": "proposal", "ref": p["id"], "proposal": p,
@@ -238,7 +298,7 @@ def install(app, store, auth, mutate, settings):
         def work(c):
             auth.domain(who)
             if not (is_manager(who) or who.role == "owner"):
-                raise Problem("forbidden", "The Goal Manager or the owner runs the status pass", 403)
+                raise Problem("forbidden", f"The {ceo_bot.name(c)} or the owner runs the status pass", 403)
             return G.refresh(c, body.goal_ids)
         return mutate(request, body, work)
 
@@ -276,7 +336,7 @@ def install(app, store, auth, mutate, settings):
         def work(c):
             auth.domain(who)
             row = goal_or_404(c, gid)
-            refuse_manager(who, "a colour with the automatic status pass, and never sets one by hand")
+            refuse_manager(c, who, "a colour with the automatic status pass, and never sets one by hand")
             if not may_colour(c, who, row):
                 raise Problem("forbidden", "The goal's owner, the owner of the goal it serves, or someone "
                               "above them sets the colour", 403)
@@ -309,7 +369,7 @@ def install(app, store, auth, mutate, settings):
         def work(c):
             auth.domain(who)
             row = goal_or_404(c, gid)
-            refuse_manager(who, "clearer wording or a change of goal")
+            refuse_manager(c, who, "clearer wording or a change of goal")
             # Handing a goal to someone else is for whoever sits above; linking it to the goal it
             # supports is also its owner's (the link icon on the Goals page), and the new goal's owner
             # sees it there.
@@ -326,6 +386,22 @@ def install(app, store, auth, mutate, settings):
             return {"goal": G.view(c, G.update(c, who.actor, gid, title=body.title, body=body.body,
                                                parent_id=body.parent_id, owner=owner, rank=body.rank,
                                                top=body.top))}
+        return mutate(request, body, work)
+
+    @app.post("/api/v2/goals/{gid}/why")
+    def goal_why(request: Request, gid: str, body: M.GoalWhy):
+        """Write a goal's Why (one line tying it to the vision) or clear it; whoever may edit the goal, a person."""
+        who = request.state.identity
+        def work(c):
+            auth.domain(who)
+            needs_switch(c, "Why line")
+            row = goal_or_404(c, gid)
+            refuse_bot_why(who)
+            if not may_colour(c, who, row):
+                raise Problem("forbidden", "The goal's owner, the owner of the goal it serves, or someone above them "
+                              "sets its Why", 403)
+            C.set_why(c, who.actor, gid, body.why)
+            return {"goal": G.view(c, G.goal(c, gid), auth.task_sql(c, who))}
         return mutate(request, body, work)
 
     # ------------------------------------------------------------------ check-ins
@@ -348,7 +424,7 @@ def install(app, store, auth, mutate, settings):
             row = goal_or_404(c, gid)
             if not (may_colour(c, who, row) or is_manager(who)):
                 raise Problem("forbidden", "The goal's owner, the owner of the goal it serves, someone above them "
-                              "or the Goal Manager records a check-in", 403)
+                              f"or the {ceo_bot.name(c)} records a check-in", 403)
             source = None
             if body.from_actor:
                 source = auth.target(c, who, body.from_actor)
@@ -363,7 +439,7 @@ def install(app, store, auth, mutate, settings):
         def work(c):
             auth.domain(who)
             row = goal_or_404(c, gid)
-            refuse_manager(who, "a KPI for a goal")
+            refuse_manager(c, who, "a KPI for a goal")
             if not may_colour(c, who, row):
                 raise Problem("forbidden", "The goal's owner or someone above them adds a measure", 403)
             target = {k: getattr(body, k) for k in ("kind", "baseline", "baseline_at", "target", "deadline", "min", "max")}
@@ -389,7 +465,7 @@ def install(app, store, auth, mutate, settings):
         def work(c):
             auth.domain(who)
             row = goal_or_404(c, gid)
-            refuse_manager(who, "a target it is judged against")
+            refuse_manager(c, who, "a target it is judged against")
             if not may_colour(c, who, row):
                 raise Problem("forbidden", "The goal's owner or someone above them sets a target", 403)
             kpi_or_404(c, who, kid)
@@ -405,7 +481,7 @@ def install(app, store, auth, mutate, settings):
         def work(c):
             auth.domain(who)
             row = goal_or_404(c, gid)
-            refuse_manager(who, "removing a KPI from a goal")
+            refuse_manager(c, who, "removing a KPI from a goal")
             if not may_colour(c, who, row):
                 raise Problem("forbidden", "The goal's owner or someone above them removes a measure", 403)
             G.kpi_unlink(c, who.actor, gid, kid)
@@ -475,7 +551,7 @@ def install(app, store, auth, mutate, settings):
         who = request.state.identity
         def work(c):
             auth.domain(who)
-            refuse_manager(who, "a new KPI (a proposal of kind goal_kpi)")
+            refuse_manager(c, who, "a new KPI (a proposal of kind goal_kpi)")
             goal = goal_or_404(c, body.goal_id) if body.goal_id else None
             if goal and not may_colour(c, who, goal):
                 raise Problem("forbidden", "The goal's owner or someone above them adds a measure", 403)
@@ -500,7 +576,7 @@ def install(app, store, auth, mutate, settings):
         def work(c):
             auth.domain(who)
             record = kpi_or_404(c, who, kid)
-            refuse_manager(who, "a change to a definition")
+            refuse_manager(c, who, "a change to a definition")
             if K.auto(kid):
                 raise Problem("forbidden", "Tico computes this KPI itself; its definition is fixed", 403)
             if not may_edit_kpi(c, who, record):
@@ -516,7 +592,7 @@ def install(app, store, auth, mutate, settings):
         def work(c):
             auth.domain(who)
             record = kpi_or_404(c, who, kid)
-            refuse_manager(who, "archiving or restoring a KPI definition")
+            refuse_manager(c, who, "archiving or restoring a KPI definition")
             if K.auto(kid) or not may_edit_kpi(c, who, record):
                 raise Problem("forbidden", "The KPI's owner or someone above them archives or restores it", 403)
             updated = K.set_archived(c, who.actor, kid, archived)
@@ -550,7 +626,7 @@ def install(app, store, auth, mutate, settings):
             auth.domain(who)
             record = kpi_or_404(c, who, kid)
             if not may_log(c, who, record):
-                raise Problem("forbidden", "The KPI's owner, the Goal Manager, or the owner of a goal that uses it "
+                raise Problem("forbidden", f"The KPI's owner, the {ceo_bot.name(c)}, or the owner of a goal that uses it "
                               "logs a reading", 403)
             fields = body.model_dump(exclude={"value", "note", "source", "at"})
             return {"reading": G.kpi_log(c, who.actor, kid, body.value, body.note, body.source, body.at, **fields)}
@@ -592,6 +668,8 @@ def install(app, store, auth, mutate, settings):
         who = request.state.identity
         def work(c):
             auth.domain(who)
+            if body.kind == "goal_why":
+                needs_switch(c, "Why line")
             goal = goal_or_404(c, body.goal_id) if body.goal_id else None
             record = kpi_or_404(c, who, body.kpi_id) if body.kpi_id else None
             if goal and not readable_goals(c, who, [goal]):
@@ -608,7 +686,9 @@ def install(app, store, auth, mutate, settings):
             item = G.proposal(c, pid)
             if not item:
                 raise Problem("not_found", "Unknown proposal", 404)
+            if item["kind"] == "goal_why":
+                needs_switch(c, "Why line")
             if not decider(c, who, item):
                 raise Problem("forbidden", "Whoever owns the goal or the KPI decides, and only a person, on their own click", 403)
-            return {"proposal": G.decide(c, who.actor, pid, body.decision, body.note)}
+            return {"proposal": G.decide(c, who.actor, pid, body.decision, body.note, why=body.why)}
         return mutate(request, body, work)

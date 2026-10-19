@@ -200,7 +200,9 @@ def task_dry_run(c, auth, who, body):
     else:
         if H.is_bot(target):
             state = (H.bot(c, H.actor_id(target)) or {}).get("state")
-            if state != "active":
+            if state in H.INACTIVE_STATES:
+                problems.append(H.target_inactive(c, H.actor_id(target), state))
+            elif state != "active":
                 problems.append(f"{H.actor_id(target)} is {state}, not active")
             if not auth.bot_access(c, who, H.actor_id(target))["write"]:
                 problems.append(f"you can see {H.actor_id(target)} but may not give it work; "
@@ -225,6 +227,16 @@ def task_dry_run(c, auth, who, body):
         if dup and H.task_private_readable(c, who.actor, H.task(c, dup["id"])) and (
                 not who.task_actor or H.task_private_readable(c, who.task_actor, H.task(c, dup["id"]))):
             problems.append(f"{dup['id']} already asks {H.actor_id(target)} for this")
+        # The create's own privacy refusals, word for word (task_privacy.require_create): private work handed to
+        # someone who cannot read it, or a private task's guest refused.
+        from . import task_privacy as privacy
+        from .store import Problem
+        try:
+            parents = [r.task for r in body.relations if r.kind == "parent"]
+            parent = H.task(c, auth.task(c, who, auth.resolve_task(c, who, parents[0]))["id"]) if parents else None
+            privacy.require_create(c, who, body.private, target, parent)
+        except Problem as exc:
+            problems.append(exc.detail)
     if body.roles:
         from . import task_roles as TRo
         try:

@@ -6,6 +6,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const {html, uiFile} = require('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs');
 const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();   // load.cjs arrives with #254
 const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
 
@@ -104,7 +105,7 @@ const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence:
       if (/^\/api\/v2\/proposals\/[^/]+\/decide$/.test(p) && post) { needs.splice(1); return json({proposal: {}}); }
       const edit = p.match(/^\/api\/v2\/goals\/([^/]+)$/);
       if (edit && post) { Object.assign(goals.find(g => g.id === edit[1]), body); return json({goal: {}}); }
-      return json({});
+      return json(unrouted(p));
     });
     const until = async (fn, what) => { for (const end = Date.now() + t(4000); Date.now() < end;) { if (await fn()) return; await new Promise(r => setTimeout(r, 50)); } if (!await fn()) assert.fail('timed out: ' + what); };
     const last = () => posted.at(-1);
@@ -181,7 +182,11 @@ const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence:
     await page.locator('[data-gm-provider]').waitFor();
     assert.equal(await page.locator('[data-gm-provider] a').getAttribute('data-gs-tab'), 'providers');
     if (screenshotDir) await page.screenshot({animations: 'disabled', path: path.join(screenshotDir, 'goals-gm-no-provider-test.png')});
+    await page.locator('[data-gm-provider] a').click();
+    await page.locator('#settings-tabs [data-settings-tab=providers][aria-selected=true]').waitFor();
+    assert.equal(await page.locator('#settings-providers').isVisible(), true, 'the link lands on Settings > AI providers');
     gmQueued = false;
+    await page.goto('http://tico-ui.test/#/goals');
     await page.reload();
     await page.locator('[data-gm-thread]', {hasText: 'Updated the goal.'}).waitFor();
 

@@ -537,8 +537,11 @@ def install_media(app, store, auth, mutate, send_message, task_create):
 
         def readable_by(c, person, private, parent):
             """The person reads the task this question makes, by every rule a read checks: a company-visible one by
-            the bot's activity access; a private one as its other party, given they read the run's private work."""
-            if private and not privacy.question_party(c, who, person, parent):
+            the bot's activity access; a private one as its other party, given they read the run's private work.
+            A question under a private task with no person on it, from the bot that owns it, makes the person that
+            task's one guest (task_privacy.guest_for); returned for the write to make."""
+            guest = privacy.guest_for(c, who, person, parent) if private else None
+            if private and not privacy.question_party(c, who, person, parent, guest):
                 raise unreadable(person)
             try:
                 auth.task_row(c, auth.identity_for_actor(c, person),
@@ -546,6 +549,7 @@ def install_media(app, store, auth, mutate, send_message, task_create):
                                "private": int(private)})
             except Problem as exc:
                 raise unreadable(person) from exc
+            return guest
 
         if any(decoded):
             replay = replay_upload(store, request, body.model_dump())
@@ -565,7 +569,12 @@ def install_media(app, store, auth, mutate, send_message, task_create):
         stored = [blobs.put(item[0], item[2]) if item else None for item in decoded]
 
         def work(c):
-            person, _ = checked(c)
+            person, parent = checked(c)
+            private = bool(body.private or privacy.private_execution(c, who) or H.private_tasks_default(c, who.actor)
+                           or parent and H.task_private(c, parent))
+            guest = readable_by(c, person, private, parent)
+            if guest:
+                H.task_reach(c, who.actor, parent, person)
             made = task_create(c, who, M.TaskCreate(
                 title=body.title or question, body=body.body or question, owner=who.actor, private=body.private,
                 relations=[M.TaskRelationRef(task=body.parent, kind="parent")] if body.parent else []), asked=person)

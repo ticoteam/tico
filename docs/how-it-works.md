@@ -86,10 +86,18 @@ rather than a request ([Tasks](tasks.md)); title and Credential checks apply sep
 review task at 3 a day. A refusal counts toward the pause only when it repeats one the bot already had that day (same
 rule, same words): at 10 such repeats the bot is paused for an hour and resumes by itself. A bot's first try at
 something new that is refused is recorded, not counted, until 30 refusals of any kind in a day, which also pause it
-for an hour (a loop over new targets). Words that name another bot's folder or a `secrets/` path are written
+for an hour (a loop over new targets). A refused label change (rule `label`, which says who may make it instead)
+counts once per task an hour, however often the bot retries it. Words that name another bot's folder or a `secrets/` path are written
 as they are: naming a path opens nothing, so it is never refused or counted, only recorded (`path.mentioned`).
-A person's message to a
-paused or quarantined bot is kept and runs when it is back; another bot still cannot write to it.
+A message or task comment to a paused or quarantined bot, from a person or a bot, is kept and runs when it is back;
+the reply's `warning` says so and when that is. A note is kept the same way when a person leaves it, or, to a
+quarantined bot, its manager bot (the bot it reports to on the org chart). A new task or hand-off to a paused,
+quarantined or planned bot is refused as `target_inactive`, with when the bot is back, and so is any other bot's note.
+That refusal is the target's state, not the sender reaching too far: it opens no review and never counts as a repeat,
+so one bot's quarantine does not spread to the bots that work with it. It does count toward the 30 a day, so a bot
+retrying it in a loop still stops. When a quarantine lifts, by the cooldown or by a person or BotOps clearing it, Tico
+leaves the bot a quiet note that its next run carries ahead of any older notes: the refusal that stopped it, and "Do
+not retry this action; leave a note for a person if you still need it."
 
 ## The three places
 
@@ -282,10 +290,32 @@ limit" counts): the runner runs that turn once on the first of the company's oth
 signed in on the same computer, with that provider's default model (`fallback_models` in
 `GET /api/v2/config`), and reports `fallback` with `primary_limited`. A provider signed in only by a key in
 the environment is skipped (a turn carries only its own runtime's keys; Codex turns its key into a login).
-With no ready provider the run is limited as above. Every turn tries the bot's own provider first, so the
+A login on that computer that failed a turn on its usage limit is skipped until the provider's reset time, or for
+30 minutes when the provider gives none, and the next provider in the list takes the turn (a subscription profile
+that shares the computer's own logins counts as that login; a bot's own key is never shared with another bot). When the fallback itself
+hits its limit, the same turn moves on to the next signed-in provider instead of ending. With no ready provider
+the run is limited as above. Every turn tries the bot's own provider first, so the
 bot moves back on its own once the limit resets. The owner turns this off in **Settings → AI providers**
 (*Fall back when a plan runs out*, `auto_fallback`). Overview lists how many bots are on a fallback and
 since when, and how many are limited.
+
+<a id="one-turn-per-chatgpt-login"></a>**One turn per ChatGPT login.** OpenAI lets a Codex ChatGPT sign-in serve
+one job stream at a time, so the runner gives a ChatGPT login (`one_turn_per_login` in the harness manifest) to one
+turn at a time, from before the turn's Codex process starts until it stops. A turn from another bot, or from another
+task lane of the same bot, that wants the same login waits its turn in order. While it waits, its run streams a
+`status` event `{"waiting", "login", "holder"}`, and the chat, the task and **Runs** show *Waiting for <login> to be
+free (busy with <bot>)*. A waiting run counts toward the computer's capacity and is not failed. If the bot has a fallback
+of its own that is ready, the turn runs there instead of waiting. Its diagnostic says *ChatGPT login busy with
+<bot>; running this turn on <harness>*, and the run reports `fallback` as with a usage limit. A command or an active
+native goal always waits. The company's default fallback is not used for a busy login, because the login is
+free again within one turn. To run two Codex bots side by side on a ChatGPT plan, put each on its own subscription
+profile login ([Subscription profiles](environments.md#subscription-profiles)). Codex on an API key is never held, and neither are other harnesses. Only
+people who can see the holding bot see its name; others read "another bot". The lock lives in the runner, so a
+runner restart frees every login.
+**Settings → Health** counts this company fallback: a limited bot covered by it gets no "has no fallback
+model" finding. When a computer's default login (no subscription) keeps stopping on a usage limit, Health
+says so once per computer and tool, e.g. "Team box's default Codex login is out of quota", until a turn on
+it completes or the reset time passes ([Health Monitor](health-monitor.md), `default_login_limited`).
 
 The company's **check model** (*Check model* in **Settings → AI providers**, `check_models` on
 `/api/v2/providers`) is what review and check subtasks run on when they name no model: an ordered list such as
@@ -303,7 +333,8 @@ AGENTS.md (else CLAUDE.md), labelled as rules for writing code there that never 
 a link out of the worktree is refused, the whole is capped at 16 KB, and a resumed thread gets
 them again only when they change. A bot's chat and its own thread use the local
 `bot-<slug>` checkout one turn at a time; with a session per task, each task's turns run in that
-task's own worktree (`sessions/bot-<slug>/<task>`), beside the bot's other tasks. Only that
+task's own worktree (`sessions/bot-<slug>/<task>`), beside the bot's other tasks. A bot never has two turns on
+one task at once: a wake about a task its turn is on goes into that turn, or waits for the next one there. Only that
 computer knows which thread
 it is. Tico never ends a thread, never asks the bot for a checkpoint before a model or computer
 change, and never rebuilds history into a prompt (a fresh session on a task starts from the task's last

@@ -106,8 +106,63 @@ def record(c, actor, task_id, check):
 
 
 def of(c, task_id, bot):
-    """The check model `bot`'s turns on the task run on, or None: only the bot that filed the check, while it owns it."""
-    return H.check_model(c, task_id, bot)
+    """The check model `bot`'s turns on the task run on, or None: only the bot that filed the check, while it owns it.
+    While its first model would run on the default login that move_on found out of quota, and that login still is, the
+    next check model it moved to. A bot moved to another computer, or given a subscription for that tool, tries its
+    first model again."""
+    first = H.check_model(c, task_id, bot)
+    from .repositories import metadata
+    moved = metadata(c, "check-moved:" + task_id) if first else None
+    if (moved and _default_login(c, bot, first, moved["runner_id"])
+            and _out_of_quota(c, moved["runner_id"], first["runtime"])):
+        return {k: moved[k] for k in ("runtime", "model", "harness", "effort", "role")}
+    return first
+
+
+def _default_login(c, bot, check, runner_id):
+    """Whether `bot`'s turns on `check` run on `runner_id`'s default login: the bot is assigned to that computer and no
+    subscription of its covers the check's harness."""
+    from .subscriptions import covers, effective
+    row = c.execute("SELECT runner_id FROM assignments WHERE bot=?", (bot,)).fetchone()
+    if not row or row[0] != runner_id:
+        return False
+    return not (effective(c, bot)[0] and covers({"runtime": check["runtime"], "harness": check["harness"]}))
+
+
+def _out_of_quota(c, runner_id, runtime, settings=None):
+    """Whether Health's default_login_limited marks `runner_id`'s default `runtime` login out of quota: a turn there
+    completing, or the provider's reset passing, ends it (health_monitor.out_of_quota_logins)."""
+    from .health_monitor import out_of_quota_logins
+    return any(x["runner_id"] == runner_id and x["runtime"] == runtime for x in out_of_quota_logins(c, settings))
+
+
+def move_on(c, settings, bot, task_id, check, runner_id):
+    """When a usage limit stops a check on `runner_id`'s default login that Health already marks out of quota, the
+    next check model it runs on from its next turn, or None (no next model: the check keeps its hold). The next is the
+    first in the company's check order that is not the limited model, not from a provider whose work it checks, not on
+    another login out of quota there, and that this bot's computer can run. It goes back to its first model once
+    that model's login is not out of quota any more (of)."""
+    from .health_monitor import out_of_quota_logins
+    from .repositories import save_metadata
+    from .task_relations import parent_of
+    first = H.check_model(c, task_id, bot)
+    out = {x["runtime"] for x in out_of_quota_logins(c, settings) if x["runner_id"] == runner_id}
+    if not first or check["runtime"] not in out or not _default_login(c, bot, check, runner_id):
+        return None
+    authors = authors_of(c, settings, parent_of(c, task_id))
+    for row in providers.check_order(providers.load(c, settings)):
+        if row["model"] == check["model"] or row["runtime"] in out or row["provider"] in authors:
+            continue
+        try:
+            nxt = choose(c, settings, bot, f"{row['runtime']}:{row['model']}", first["role"])
+        except CheckModelError:
+            continue
+        save_metadata(c, "check-moved:" + task_id, {**nxt, "runner_id": runner_id})
+        H._task_event(c, task_id, H.KEEPER, "check_model", f"{check['runtime']}:{check['model']}",
+                      f"{nxt['runtime']}:{nxt['model']}", f"the computer's default {check['runtime']} login is out "
+                      f"of quota; back to {first['runtime']}:{first['model']} once it works again")
+        return nxt
+    return None
 
 
 def handed(c, attempt_id, task_id, check):
@@ -136,6 +191,16 @@ def held(c, task_id):
     """Whether a usage limit on the check's model still holds the check."""
     from .repositories import metadata
     return bool(task_id) and str(metadata(c, "check-limited:" + task_id).get("until") or "") > H.now()
+
+
+def dropped(c, task_id):
+    """Whether a check a usage limit has held has left the board (done, closed or declined): its queued turn is let go
+    (Execution.hold_unrunnable) instead of retrying after every reset and running once on a finished task."""
+    from .repositories import metadata
+    if not task_id or not metadata(c, "check-limited:" + task_id):
+        return False
+    row = c.execute("SELECT status FROM tasks WHERE id=?", (task_id,)).fetchone()
+    return bool(row) and row[0] not in H.ACTIVE_STATUSES
 
 
 def apply(config, check):

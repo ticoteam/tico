@@ -1,8 +1,14 @@
-# One explicitly requested release check, on an isolated native VM. No PR/push tests or publication.
+# One explicitly requested release check, split across isolated native VMs that run side by side.
+# No PR/push tests or publication. Every night it also runs the same gate on main against the latest release, so a
+# break in the slow tests (real processes, Docker, the upgrade journey) shows the next morning instead of at the cut.
 name: Release validation
-run-name: Validate ${{ inputs.candidate_sha }} from ${{ inputs.previous_release }}
+run-name: ${{ github.event_name == 'schedule' && 'Nightly gate on main' || format('Validate {0} from {1}', inputs.candidate_sha, inputs.previous_release) }}
 
 on:
+  schedule:
+    # UTC (no timezone: key): with one, neither scheduled workflow fired on Oct 18. 10:17 UTC = 03:17 PDT / 02:17 PST,
+    # off the top of the hour, when GitHub drops scheduled runs under load.
+    - cron: '17 10 * * *'
   workflow_dispatch:
     inputs:
       candidate_sha:
@@ -19,19 +25,49 @@ permissions:
   contents: read
 
 concurrency:
-  group: manual-release-validation
+  group: ${{ github.event_name == 'schedule' && 'nightly-release-gate' || 'manual-release-validation' }}
   cancel-in-progress: false
 
 jobs:
-  release-check:
+  # What to validate: the requested candidate, or (nightly) main's head against the latest published release.
+  candidate:
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    outputs:
+      sha: ${{ steps.pick.outputs.sha }}
+      previous: ${{ steps.pick.outputs.previous }}
+    steps:
+      - id: pick
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ inputs.candidate_sha || github.sha }}
+          PREVIOUS: ${{ inputs.previous_release }}
+        run: |
+          [ -n "$PREVIOUS" ] || PREVIOUS="$(gh release view -R "$GITHUB_REPOSITORY" --json tagName -q .tagName)"
+          { echo "sha=$SHA"; echo "previous=$PREVIOUS"; } >> "$GITHUB_OUTPUT"
+
+  # Each VM runs one part of the candidate's own `release_checks.py --release`; together they are the whole gate.
+  gate:
+    needs: candidate
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {name: product, part: product, shard: '', workers: '2'}
+          - {name: browser, part: browser, shard: '', workers: '2'}
+          - {name: python-1, part: python, shard: '1/3', workers: '4'}
+          - {name: python-2, part: python, shard: '2/3', workers: '4'}
+          - {name: python-3, part: python, shard: '3/3', workers: '4'}
     env:
-      CANDIDATE_SHA: ${{ inputs.candidate_sha }}
-      PREVIOUS_RELEASE: ${{ inputs.previous_release }}
+      CANDIDATE_SHA: ${{ needs.candidate.outputs.sha }}
+      PREVIOUS_RELEASE: ${{ needs.candidate.outputs.previous }}
       TICO_VALIDATION_WORKFLOW_SHA: ${{ github.workflow_sha }}
-      TICO_PYTHON_WORKERS: '2'
-      TICO_UI_JOBS: '2'
+      TICO_RELEASE_PART: ${{ matrix.part }}
+      TICO_RELEASE_SHARD: ${{ matrix.shard }}
+      TICO_PYTHON_WORKERS: ${{ matrix.workers }}
+      TICO_UI_JOBS: '3'
       TICO_UI_SLOWDOWN: '2'
       TICO_BROWSER_CHANNEL: ''
       PYTHONUNBUFFERED: '1'
@@ -56,32 +92,74 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
-          ref: ${{ inputs.candidate_sha }}
+          ref: ${{ needs.candidate.outputs.sha }}
           path: candidate
           fetch-depth: 0
           persist-credentials: false
       - name: Runtime and disposable capacity preflight
         run: python3 validation-control/scripts/hosted_release_check.py prepare
+      # Caches hold downloads only (npm tarballs, browsers, compiled Cargo dependencies); every job still
+      # installs from the candidate's pinned lock files and builds the candidate's own crates from source.
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
-          python-version: '3.12'
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: '22'
-      - name: Install prerequisites and build matching native binaries
+          python-version: '3.15'
+      - name: Install Python test prerequisites
         working-directory: candidate
         run: |
           python3 -m venv "$RUNNER_TEMP/release-venv"
-          "$RUNNER_TEMP/release-venv/bin/python" -m pip install -r backend/requirements-dev.txt
+          # uv installs the same pinned lock as pip, in seconds instead of about a minute.
+          python3 -m pip install --disable-pip-version-check uv==0.13.1
+          python3 -m uv pip install --python "$RUNNER_TEMP/release-venv/bin/python" -r backend/requirements-dev.txt
+      # The browser VM runs the browser tests; for a candidate frozen before --part existed, the helper runs its whole
+      # gate on the product VM instead, so that VM needs browsers too.
+      - name: Does this VM run browser tests
+        id: browsers
+        run: |
+          needed=false
+          if [ "$TICO_RELEASE_PART" = browser ]; then needed=true
+          elif [ "$TICO_RELEASE_PART" = product ] && ! grep -q "add_argument('--part'" candidate/scripts/release_checks.py
+          then needed=true; fi
+          echo "needed=$needed" >> "$GITHUB_OUTPUT"
+      - if: steps.browsers.outputs.needed == 'true'
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: candidate/package-lock.json
+      - if: steps.browsers.outputs.needed == 'true'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('candidate/package-lock.json') }}
+      - name: Install browsers
+        if: steps.browsers.outputs.needed == 'true'
+        working-directory: candidate
+        run: |
           npm ci
           npx playwright install --with-deps chromium webkit
-          "$RUNNER_TEMP/release-venv/bin/python" -m playwright install --with-deps chromium
+      # hosted_release_check.py run verifies both native binaries on every VM, so every part builds them.
+      - name: Install Rust
+        run: |
           rustup toolchain install 1.92 --profile minimal
           rustup default 1.92
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: |
+            candidate/runner-rs -> target
+            candidate/relay-rs -> target
+          shared-key: release-native
+          save-if: ${{ matrix.shard == '1/3' }}
+      - name: Build matching native binaries
+        working-directory: candidate
+        run: |
           cargo build --release --locked --manifest-path runner-rs/Cargo.toml
           cargo build --release --locked --manifest-path relay-rs/Cargo.toml
-      - name: Run the candidate's unchanged full release gate
-        run: '"$RUNNER_TEMP/release-venv/bin/python" validation-control/scripts/hosted_release_check.py run'
+      - name: Run the candidate's unchanged release gate, this part
+        # The helper takes its slice only from --part/--shard (argparse), never from the environment.
+        run: |
+          set -- --part "$TICO_RELEASE_PART"
+          [ -z "$TICO_RELEASE_SHARD" ] || set -- "$@" --shard "$TICO_RELEASE_SHARD"
+          "$RUNNER_TEMP/release-venv/bin/python" validation-control/scripts/hosted_release_check.py run "$@"
       - name: Collect only bounded validation logs
         if: always()
         run: |
@@ -91,7 +169,21 @@ jobs:
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
-          name: release-validation-${{ github.run_id }}-${{ github.run_attempt }}
+          name: release-validation-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.name }}
           path: ${{ runner.temp }}/release-validation-report
           retention-days: 3
           if-no-files-found: warn
+
+  # The one verdict: the release passes only when every part passed.
+  release-check:
+    needs: gate
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Every part of the release gate passed
+        env:
+          GATE: ${{ needs.gate.result }}
+        run: |
+          echo "Release gate parts: $GATE"
+          test "$GATE" = success

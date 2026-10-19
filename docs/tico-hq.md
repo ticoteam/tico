@@ -1,8 +1,9 @@
 # Tico HQ
 
-Tico HQ (`hq/`) is the small public service the Tico team runs at `https://updates.tico.team`. It is not part of a team's install and
-has its own image, database and compose file. An install reaches it only through its own server, and only for what is listed here;
-[PRIVACY.md](../PRIVACY.md) is what an owner reads about it.
+Tico HQ is the small public service the Tico team runs at `https://updates.tico.team`. It is not part of a team's install.
+An install reaches it only through its own server, and only for what is listed here; [PRIVACY.md](../PRIVACY.md) is what an
+owner reads about it. This page is HQ's public API: what an install calls and what HQ stores. HQ's source and hosting now
+live in the private ticoteam/tico-services repository.
 
 ## Endpoints
 
@@ -13,8 +14,12 @@ has its own image, database and compose file. An install reaches it only through
 | (in `GET /v1/latest`) | Tico's short messages for given versions and its known issues by version, the same lists for every install ([Messages, known issues and fixed-in notices](#messages-known-issues-and-fixed-in-notices)) | Nothing from installs |
 | `POST /v1/recruit` | Bot suggestions for one group while a team builds its team chart ([Finish setup](onboarding.md#the-team-builder)) | Nothing |
 | `GET /v1/onboarding/health`, `POST /v1/onboarding/event` | The setup page on tico.team: whether the assistant can answer, and the page's download count ([below](#the-setup-page-v1onboarding)) | With counts switched on, one row of counts per planning session; no text |
-| `/v1/support/...`, `/v1/staff/...` | Support tickets ([support.md](support.md#what-is-sent-and-kept)) and support access, below | The tickets; access sessions and their request log |
+| `/v1/support/...`, `/v1/staff/...` | Support tickets ([routes](telemetry.md#support-tickets), [support.md](support.md#what-is-sent-and-kept)) and support access, below | The tickets; access sessions and their request log |
 | `GET /healthz` | Liveness | Nothing |
+
+Across every endpoint, HQ also counts the requests it answered per route group (support, support access, recruit, other)
+and result class (2xx to 5xx), in memory only: no install id, address, path or time, never logged or written, and reset
+when HQ restarts. Staff read them on `GET /v1/staff/about`.
 
 ## Support access
 
@@ -62,21 +67,17 @@ answer body. What an install answers is untrusted data, for staff and for the Su
 
 ### The templates HQ reads
 
-HQ has no templates of its own. `scripts/build_catalog_json.py` builds `hq/catalog.json` (the groups and each card's template,
-name, group, icon, tags, suggest level, one-sentence summary and head flag, with no instructions) and copies the recommender
-`backend/recruit_rank.py` to `hq/recruit_rank.py`. The Tico server builds its own template list with the same function, so the two agree on
-`catalog_version`. Run the script after changing a card or `templates/groups.yaml`; `--check` (run by the test suite) fails when
-either copy is stale.
-
-### Running it
-
-`hq/app.py` adds the route with `recruit.install(app, address=address)`, so the client address comes from the same header as the
-collector's. Set `OPENAI_API_KEY` (without it every answer is local), and optionally `HQ_RECRUIT_DAILY_CAP` and `HQ_RECRUIT_MODEL`, in
-`hq/.env`; `hq/compose.yaml` passes them to the container. The tests are `hq/tests/test_recruit.py`, with the model mocked.
+HQ has no templates of its own. It is built from a published Tico release: the groups and each card's template, name, group, icon,
+tags, suggest level, one-sentence summary and head flag (no instructions), made with `build()` in `backend/recruit_rank.py`,
+and a copy of that recommender. The Tico server builds its own template list with the same function, so the two agree on
+`catalog_version` for that release. At the release's tag, `python3 scripts/build_catalog_json.py --out DIR` writes into DIR
+`catalog.json`, `onboarding-actions.json` (the setup page's browser planner: the draft engine's actions, vocabulary and
+limits, the role list and the starter pack), `recruit_rank.py` and `company_file/` (the draft engine, whose `keys.py` is the
+scrubber for setup-website attachments); `--out DIR --check` exits 1 when DIR is stale.
 
 ## The setup page: `/v1/onboarding`
 
-The page at [tico.team/setup](https://tico.team/setup) calls these from the visitor's browser (`hq/onboarding.py`). The
+The page at [tico.team/setup](https://tico.team/setup) calls these from the visitor's browser. The
 assistant that answers there comes later; these routes work without it, so the page's download count can be measured
 in the browser alone first.
 
@@ -107,7 +108,7 @@ GET  /v1/staff/onboarding?days=14   (staff key) -> {"counting": bool, "days": [{
   it. A preflight (`OPTIONS`) for `GET` or `POST` with at most `Content-Type` is answered `204` before the request limit and
   is not counted against it. Staff routes send no CORS headers.
 - **Request budget.** `POST /event` is left out of HQ's 60 requests an hour per address, so a long chat still leaves room
-  for its download count, and has its own limit of 300 an hour per address (in memory, salted, as `hq/limits.py`).
+  for its download count, and has its own limit of 300 an hour per address (in memory, salted, as HQ's other limits).
   `/health` stays under the shared limit.
 - **Staff read** for the Customer Insights Analyst's report: totals per UTC day, today last, 1 to 90 days (default 14).
   `sessions_2plus_messages_downloaded` over `sessions_2plus_messages` is the main measure; `downloads` is every download,
@@ -115,7 +116,7 @@ GET  /v1/staff/onboarding?days=14   (staff key) -> {"counting": bool, "days": [{
 
 ## Messages, known issues and fixed-in notices
 
-`hq/notices.py`. The answer to `GET /v1/latest` also carries `notices` (`{id, versions, body, url}`: a message for a release such
+The answer to `GET /v1/latest` also carries `notices` (`{id, versions, body, url}`: a message for a release such
 as `0.3.50` or a whole line such as `0.2`) and `known_issues` (`{id, title, since, fixed_in, url}`: in `since` and later, until
 `fixed_in`). Every install gets the same lists and picks its own version's, so nothing more is sent or stored for them. An install
 shows its version's newest message once to each person, and Help lists **Known issues in your version** (or says it could not

@@ -182,6 +182,8 @@ DO = _routes(
     ("PUT", r"access/rules"),
     # Groups: an owner or an admin changes them (the route says so), and a delete moves what is in the group up.
     ("POST", r"groups"), ("PATCH", rf"groups/{_S}"), ("DELETE", rf"groups/{_S}"),
+    # The order of a manager's reports on the chart: whoever may put reports under that manager (the route checks).
+    ("PUT", rf"org/order/{_S}"),
     # Which Slack channels bots read and post in: an owner or an admin's call, which the route checks.
     ("POST", r"slack/channels"), ("POST", r"slack/channels/(remove|import)"),
     ("POST", rf"credentials/{_S}/grants"), ("POST", rf"credentials/{_S}/grants/{_S}/revoke"),
@@ -226,7 +228,7 @@ ADMIN_ONLY = _routes(
 
 # Read as the person, except what hands back a secret or is a computer's own channel.
 NO_READ = re.compile(API + r"(credential-runtime|runner-credential-(migration|grants)|me/tokens.*|mcp|agents/setup-script|jobs.*|attempts.*"
-                     r"|runner-logins.*|runner-model-credentials|runners/desired|runners/assignments|runners/eligible|runners/me/events|directory/scim-token)")
+                     r"|runner-logins.*|runner-(model|gateway)-credentials|runners/desired|runners/assignments|runners/eligible|runners/me/events|directory/scim-token)")
 
 # Named like a secret: refused whatever route it is on.
 SECRET_KEYS = re.compile(r"^(secret|password|passwd|passphrase|token|access_token|refresh_token|api_key|apikey|"

@@ -25,6 +25,15 @@ api_key_env = ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"]
 command = ["auth", "login", "--claudeai"]
 terminal = true
 paste_code = true
+# Sign out (Settings > Computers): the CLI's own logout, and the files under HOME that hold the login, which a Switch
+# account moves into place only once the new sign-in has finished. `seed` is copied into the switch's own home first,
+# so the CLI's settings in it survive the switch.
+logout = ["auth", "logout"]
+files = [".claude/.credentials.json", ".claude.json"]
+seed = [".claude.json"]
+# On a Mac the CLI keeps this login in the Keychain, not in `files`, so it cannot be signed in on the side: Switch
+# account is not offered there (sign out, then sign in).
+keychain = ["darwin"]
 
 # What Tico does differently for this CLI (docs/harnesses.md, Capabilities).
 [capabilities]
@@ -34,6 +43,8 @@ subscription_marker = "signed in"
 subscription_profiles = true
 profile_home = "HOME"
 profile_dirs = [".claude"]
+# Claude Code reads CLAUDE_CONFIG_DIR ahead of $HOME/.claude: a profile's sign-in, check and turns never inherit it.
+profile_home_overrides = ["CLAUDE_CONFIG_DIR"]
 weekly_usage = "turns"
 account = "status-json"
 mcp_transports = ["http", "sse"]

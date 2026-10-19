@@ -10,6 +10,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const {html, uiFile} = require('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs');
 const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();   // load.cjs arrives with #254
 const shots = process.env.TICO_SCREENSHOT_DIR;
 // Before a screenshot: the new viewport is laid out and no finite transition is still running.
@@ -99,7 +100,7 @@ const bots = [['coo', 'Ace'], ['botops', 'BotOps']].map(([name, display_name]) =
       if (p === '/api/company-docs') return json({documents: market.docs});
       if (p.startsWith('/api/company-docs/')) return json({content: '# Overview\n\nNorthwind sells office cleaning. [Source](https://northwind.example/about)'});
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
-      return json({});
+      return json(unrouted(p));
     });
     const errors = [];
     const ready = page => page.waitForFunction(() => typeof GS !== 'undefined' && !!GS);
@@ -248,22 +249,10 @@ const bots = [['coo', 'Ace'], ['botops', 'BotOps']].map(([name, display_name]) =
     await page.close();
     canBuild = true;
 
-    // ---- the tour: replay from Help, focus stays inside, Escape closes and is remembered
-    page = await open('#/help');
-    // Help is short: what Tico is, where to start and how to get help, with the map and the rest in the docs.
-    const help = await page.evaluate(() => ({
-      items: [...document.querySelectorAll('.help-essentials li strong')].map(el => el.textContent),
-      setup: document.querySelectorAll('.help-essentials [data-setup-check]').length,
-      docs: [...document.querySelectorAll('.help-essentials a')].map(a => a.getAttribute('href').split('/docs/')[1]),
-      map: document.querySelectorAll('#help-map, .help-who').length,
-      fits: document.documentElement.scrollWidth <= innerWidth,
-    }));
-    assert.deepEqual(help.items, ['Start', 'Get help', 'Learn more']);
-    assert.equal(help.setup, 1, 'Setup check is on Help');
-    assert.deepEqual(help.docs, ['how-it-works.md', 'glossary.md', 'connect-an-agent.md', 'README.md']);
-    assert.equal(help.map, 0);
-    assert.equal(help.fits, true);
-    await page.locator('#help-page [data-gs-tour]').click();
+    // ---- the tour: replay from the account menu, focus stays inside, Escape closes and is remembered
+    page = await open('#/updates');
+    await page.locator('#account').click();
+    await page.locator('#account-tour').click();
     const tour = page.locator('.gs-tour[role=dialog][aria-modal=true]');
     await tour.waitFor();
     assert.equal(await tour.locator('.gs-tour-count').textContent(), '1 of 6');
@@ -288,7 +277,7 @@ const bots = [['coo', 'Ace'], ['botops', 'BotOps']].map(([name, display_name]) =
     assert.deepEqual(calls.filter(c => c.body.tour).length >= 1, true);
     await page.close();
 
-    // Take the tour is in the account menu too: the menu closes as the tour starts, and focus comes back to the account button.
+    // From the keyboard too: the menu closes as the tour starts, and focus comes back to the account button.
     page = await open('#/updates');
     const menuTour = page.locator('.gs-tour[role=dialog]');
     await page.locator('#account').click();
@@ -324,8 +313,7 @@ const bots = [['coo', 'Ace'], ['botops', 'BotOps']].map(([name, display_name]) =
     await page.close();
 
     // Skip is the same as closing, and the tour works on a phone, through the drawer.
-    page = await open('#/help', {width: 390, height: 844});
-    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'Help on a phone has no sideways scroll');
+    page = await open('#/updates', {width: 390, height: 844});
     await page.evaluate(() => window.gsStartTour());
     const phoneTour = page.locator('.gs-tour');
     await phoneTour.waitFor();

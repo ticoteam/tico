@@ -7,6 +7,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const {html, uiFile} = require('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs');
 
 const now = new Date().toISOString();
 const msg = (id, from, body, refs = {}) => ({id, from_actor: from, body, refs, created: now, kind: 'say'});
@@ -50,7 +51,7 @@ async function open(browser, viewport, state) {
       return json({action: card});
     }
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
-    return json({});
+    return json(unrouted(p));
   });
   return {page, errors};
 }
@@ -142,7 +143,7 @@ function fixture() {
       const card = page.locator('.asst-card[data-action="act1"]');
       await card.waitFor();
       assert.equal(await card.locator('[data-what]').innerText(), 'Archive bot Ops', tag + ': the server\'s description leads');
-      assert.ok((await card.locator('.asst-long').innerHTML()).includes('THE-END'), tag + ': a long value is whole, behind Show more');
+      assert.ok((await card.locator('[aria-label="What is sent"] .asst-long').innerHTML()).includes('THE-END'), tag + ': a long value is whole, behind Show more');
       assert.equal(state.decided.length, 0, tag + ': nothing ran before the click');
       await card.locator('[data-confirm]').click();
       await page.locator('.asst-card[data-status="done"]').waitFor();

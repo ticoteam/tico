@@ -6,6 +6,7 @@ views and an authorizer; these tests hold the two to the same answers.
 
 import json
 import re
+from types import SimpleNamespace
 
 import pytest
 
@@ -13,7 +14,7 @@ from backend.store import H
 from backend.tests.test_api import api, as_member, assign, claim, headers, post, ready, runner
 
 SECRET_TABLES = ("credentials", "credential_keys", "credential_grants", "idempotency", "runners",
-                 "enrollments", "session_epochs", "settings_changes", "backup_verified_blobs",
+                 "enrollments", "session_epochs", "bot_session_epochs", "settings_changes", "backup_verified_blobs",
                  "sqlite_temp_master", "sqlite_sequence", "_litestream_seq")
 SECRET_COLUMNS = (("attempts", "token_hash"), ("bots", "token_hash"), ("service_jobs", "token_hash"))
 REJECTED = ("PRAGMA table_info(messages)", "DELETE FROM messages", "ATTACH ':memory:' AS other",
@@ -55,7 +56,7 @@ def world(api):
             "private": private, "coo_task": coo_task, "finance_task": finance_task}
 
 
-def test_only_one_read_statement_is_accepted(api):
+def test_only_one_read_statement_is_accepted(api, monkeypatch):
     for sql in REJECTED:
         detail = error(api, sql)
         assert "statement" in detail, (sql, detail)
@@ -63,8 +64,16 @@ def test_only_one_read_statement_is_accepted(api):
     assert query(api, "select 1 as one")["columns"] == ["one"]
     assert query(api, "EXPLAIN QUERY PLAN SELECT * FROM tasks")["columns"] == ["id", "parent", "notused", "detail"]
     assert "no such table: nope" in error(api, "SELECT * FROM nope")
-    assert query(api, "SELECT x'0102' AS b") == {"columns": ["b"], "rows": [["AQI="]], "row_count": 1,
-                                                 "truncated": False, "ms": 0, "note": "BLOB values are base64"}
+    blob = query(api, "SELECT x'0102' AS b")
+    # `ms` is measured: a loaded computer takes a millisecond or two.
+    ms = blob.pop("ms")
+    assert isinstance(ms, int) and ms >= 0, ms
+    assert blob == {"columns": ["b"], "rows": [["AQI="]], "row_count": 1, "truncated": False,
+                    "note": "BLOB values are base64"}
+    # A query that takes 5 ms reports it.
+    clock = iter(range(1000))
+    monkeypatch.setattr("backend.sql.time", SimpleNamespace(monotonic=lambda: next(clock) * 0.005))
+    assert query(api, "SELECT 1 AS one")["ms"] == 5
 
 
 def test_secret_tables_and_columns_are_denied_for_everyone(api, world):
@@ -125,7 +134,7 @@ def test_owner_sees_everything_but_other_peoples_rooms(api, world):
     # Every queued job but the one Ben's private room raised.
     assert jobs == 5 and len(column(api, "SELECT id FROM jobs")) == 4
     # Clone and subscription profile reports have per-computer keys; the rest are fixed.
-    assert column(api, "SELECT key FROM registry_metadata WHERE key NOT LIKE 'computer-repositories:%' AND key NOT LIKE 'computer-profiles:%'") == ["access", "access_bot_limit", "bot_access", "credential-file-migration-v1", "credential-file-migration-v2-hub", "docs_migrated", "inbox-only-runners", "librarian_wording35", "librarian_wording36", "message_links.ready", "onboarding", "owner", "people", "release-history", "repositories-access-migrated", "roadmaps_copies_cleared_by_field", "roadmaps_explicit_public_text", "task_session_default", "usage-count"]
+    assert column(api, "SELECT key FROM registry_metadata WHERE key NOT LIKE 'computer-repositories:%' AND key NOT LIKE 'computer-profiles:%'") == ["access", "access_bot_limit", "bot_access", "credential-file-migration-v1", "credential-file-migration-v2-hub", "docs_migrated", "idempotency_messages.ready", "inbox-only-runners", "librarian_wording35", "librarian_wording36", "message_links.ready", "onboarding", "owner", "people", "release-history", "repositories-access-migrated", "roadmaps_copies_cleared_by_field", "roadmaps_explicit_public_text", "task_session_default", "usage-count"]
 
 
 def test_a_person_sees_the_company_but_not_private_bots_or_other_rooms(api, world):

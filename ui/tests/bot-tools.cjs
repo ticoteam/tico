@@ -6,6 +6,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const {html, uiFile} = require('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs');
 const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();   // load.cjs arrives with #254
 const shots = process.env.TICO_SCREENSHOT_DIR;
 
@@ -66,6 +67,9 @@ async function open(browser, viewport, options = {}, data = {}) {
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     if (p === '/api/me') return json({id: 'ana', role: 'owner', name: 'Ana', email: 'ana@example.test', cloud: true});
     if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}]});
+    // A list, as the server sends it: the catch-all {} broke the sidebar tree whenever it landed ahead of
+    // /api/v2/status, and the bot page never opened (the bot-needs.cjs hang from the v0.3.54 release check).
+    if (p === '/api/issues') return json([]);
     if (p === '/api/employees') return json(data.bots || bots);
     if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: [], schedules: bots[0].schedules.map(s => ({...s, employee: 'cmo'}))});
     if (p === '/api/v2/status') return json({bots: [status]});
@@ -83,7 +87,7 @@ async function open(browser, viewport, options = {}, data = {}) {
       return json({bot: 'cmo', files: files.slice(0, limit), total: files.length, next_cursor: files.length > limit ? 'next' : null, has_more: files.length > limit, can_manage: true, actors: {}});
     }
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
-    return json({});
+    return json(unrouted(p));
   });
   return {page, errors, read, context, cleared};
 }
@@ -257,6 +261,8 @@ const railOrder = page => page.evaluate(() => [...document.querySelectorAll('#pa
       const banner = page.locator('#conv-paused:not([hidden])');
       await banner.waitFor();
       assert.match(await banner.innerText(), /usage limit; your messages will run when it's back\s*Try now$/);
+      // The header warning is drawn at the end of the refresh, after the issues list, so it can follow the chat banner.
+      await page.locator('#bot-alert', {hasText: /Try now/}).waitFor();
       assert.match(await page.locator('#bot-alert').innerText(), /Try now/);
       if (shots) await page.screenshot({path: path.join(shots, `bot-limit-try-now-${scheme}.png`)});
       await banner.locator('[data-limit-retry]').click();
@@ -281,6 +287,7 @@ const railOrder = page => page.evaluate(() => [...document.querySelectorAll('#pa
       assert.equal(await card.locator('a[href="#/task/t9"]').innerText(), 'Set up the tool');
       assert.doesNotMatch(await page.locator('#main').innerText(), /outside the hub|escape:/);
       if (shots) await page.screenshot({path: path.join(shots, 'bot-quarantine-review.png'), fullPage: true});
+      await page.locator('#bot-alert', {hasText: /Paused for review\s*Resume bot/}).waitFor();
       assert.match(await page.locator('#bot-alert').innerText(), /Paused for review\s*Resume bot/);
       await page.locator('#bot-alert [data-quarantine-resume]').click();
       await page.locator('#bot-alert [data-quarantine-resume]').waitFor({state: 'detached'});

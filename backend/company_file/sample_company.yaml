@@ -1,0 +1,171 @@
+# tico.company.yaml
+# Tico's sample company: a made-up team to try Tico with (docs/sample-company.md).
+# Format 0.2. Two fields only the sample loader reads (backend/sample_company.py): each employee's `runs_on`, the
+# subscription its main work uses (claude or codex), and its `starter_tasks`, which finish in minutes, send nothing
+# outside the company and end by asking the owner to approve what they made (`approve`).
+# No passwords, keys or credentials are stored here; tools are connected on your own install.
+version: 0.2
+created: 2026-10-18T00:00:00.000Z
+company:
+  name: "Sample Co"
+  about: "Sample Co is a made-up company for trying Tico. It sells Brightbook, a small online booking app that hair salons and barbers use to take appointments, send reminders and see the week ahead. Five people's worth of work is done by five bots: an Assistant, a Head of Product, a Builder, a Support Agent and a Content Marketer. Nothing here is real: there are no customers to email, no website to publish to and no payments."
+  signals: [sells_software, sells_to_businesses, publishes_content, has_support_inbox, small_team]
+people:
+  - id: you
+    name: "You"
+    role: "Owner"
+    owner: true
+employees:
+  - id: assistant
+    template: coo
+    title: "Assistant"
+    department: core
+    reports_to: you
+    start: now
+    reason: "Your own Assistant: it shows you around Sample Co and routes work to the bot that owns it."
+    runs_on: claude
+    starter_tasks:
+      - title: "Write a one-page welcome to Sample Co for the owner"
+        approve: "the welcome note"
+        body: |
+          Write a short welcome note for the owner of Sample Co, the made-up company this Tico was started with.
+
+          1. Read the team (`hub team show`) and the first tasks the other four bots were just given.
+          2. Write the note, under 250 words: one line on what Sample Co is, one line per bot (who it is, what it is
+             doing first, what it will ask the owner), and where the owner answers them (Needs you).
+          3. Put the note on this task as one comment, so the owner reads it where they answer.
+  - id: head-of-product
+    template: product-lead
+    title: "Head of Product"
+    department: product
+    reports_to: you
+    start: now
+    reason: "Decides what Brightbook builds next and writes it down for the Builder."
+    runs_on: claude
+    starter_tasks:
+      - title: "Write a one-page brief for Brightbook's text-message reminders"
+        approve: "the reminders brief"
+        body: |
+          Salon owners keep asking Brightbook for a text message the day before each appointment, so fewer clients
+          forget to come. Write the brief for it.
+
+          1. Write the brief, under 400 words: the problem in the salon owner's words, what the first version does and
+             does not do, three acceptance tests (Given/When/Then), and one open question.
+          2. Put the brief on this task as one comment, so the owner reads it where they answer.
+  - id: builder
+    template: pr-reviewer
+    title: "Builder"
+    department: engineering
+    reports_to: head-of-product
+    start: now
+    reason: "Builds Brightbook. The sample has no code yet, so it plans the work instead."
+    runs_on: codex
+    starter_tasks:
+      - title: "Plan how to build Brightbook's text-message reminders"
+        approve: "the build plan"
+        body: |
+          Brightbook (Sample Co's booking app) wants a text message to each client the day before their appointment.
+          The sample has no code repository, so plan the build instead of writing code.
+
+          1. Write the plan, under 400 words: the parts to build (a nightly job, a message template, an opt-out), the
+             order to build them in, how each is tested, and the biggest risk.
+          2. Put the plan on this task as one comment, so the owner reads it where they answer.
+  - id: support-agent
+    template: support
+    title: "Support Agent"
+    department: support
+    reports_to: you
+    start: now
+    reason: "Answers Brightbook's customers. In the sample it drafts replies; nothing is sent."
+    runs_on: codex
+    starter_tasks:
+      - title: "Draft replies to three sample customer questions"
+        approve: "the three draft replies"
+        body: |
+          These three questions are made up for the sample. Draft a reply to each; nothing is sent to anyone.
+
+          - "Can my clients book two services back to back, like a cut and a colour?"
+          - "I changed my opening hours but old slots still show. How do I fix that?"
+          - "Do you send appointment reminders by text?"
+
+          1. Write a friendly reply to each, under 120 words, and anything you would check before sending it. Say
+             plainly where Brightbook does not do something yet (text reminders are planned, not built).
+          2. Put the three replies on this task as one comment, so the owner reads them where they answer.
+  - id: content-marketer
+    template: content
+    title: "Content Marketer"
+    department: marketing
+    reports_to: you
+    start: now
+    reason: "Writes Brightbook's posts. It only drafts: nothing is published."
+    runs_on: codex
+    starter_tasks:
+      - title: "Draft a short post: three ways salons cut no-shows"
+        approve: "the draft post"
+        body: |
+          Draft a short blog post for salon owners: three practical ways to cut no-shows, with Brightbook mentioned
+          once. It stays a draft: Sample Co has no blog, and nothing is published or posted anywhere.
+
+          1. Write a title, about 350 words, and a two-line version for social media. Invent no numbers, customer
+             names or quotes.
+          2. Put the draft on this task as one comment, so the owner reads it where they answer.
+existing_agents: []
+goals:
+  - id: welcome-the-owner
+    title: "The owner knows the Sample Co team and what each bot does"
+    owner: assistant
+    measure: null  # not set yet: which number, and by when?
+    unit: ""
+    direction: up
+    target: null
+    baseline: null
+    deadline: null
+  - id: reminders-specified
+    title: "Text-message reminders are specified and agreed"
+    owner: head-of-product
+    measure: null  # not set yet: which number, and by when?
+    unit: ""
+    direction: up
+    target: null
+    baseline: null
+    deadline: null
+  - id: reminders-planned
+    title: "Text-message reminders have a build plan"
+    owner: builder
+    measure: null  # not set yet: which number, and by when?
+    unit: ""
+    direction: up
+    target: null
+    baseline: null
+    deadline: null
+  - id: customers-answered
+    title: "Every customer question has a reply ready within a day"
+    owner: support-agent
+    measure: null  # not set yet: which number, and by when?
+    unit: ""
+    direction: up
+    target: null
+    baseline: null
+    deadline: null
+  - id: one-post-a-week
+    title: "One useful post for salon owners drafted each week"
+    owner: content-marketer
+    measure: null  # not set yet: which number, and by when?
+    unit: ""
+    direction: up
+    target: null
+    baseline: null
+    deadline: null
+rules:
+  mode: defaults
+  never_without_a_person:
+    - send  # Send email or messages outside the company
+    - publish  # Publish or post anything public
+    - spend  # Spend money or start a paid plan
+    - delete  # Delete data or close an account
+    - access  # Invite people or change who has access
+    - sign  # Sign or accept a contract
+  review: one  # A person reviews each draft before it goes out
+tools:
+  mode: defaults
+  connect: []  # connected after setup, never during it

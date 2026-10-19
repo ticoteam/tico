@@ -14,7 +14,7 @@ A connection ID identifies a local login slot, not a verified provider account. 
 
 Weekly reports are scoped to a Computer, profile and runtime. Codex reports its seven-day window when its running host emits one. Claude Code may report the seven-day reset and limit state without a percentage; that percentage stays unknown. No API calls or token-to-percentage estimates are used to invent a provider balance. Usage elsewhere on the same provider account can count toward that allowance. The page does not combine matching names across Computers because they might be different accounts.
 
-The last provider report includes its observation time and reset. Reports older than a day are labelled as possibly out of date. After reset they stay labelled as the previous week, never automatically become zero. Reports survive a runner restart on the server. An updated computer can refresh Codex weekly usage directly; other providers need a supported subscription-backed run or a manual provider reading. Shorter windows are shown on **Settings → Computers**, not here. An unnamed computer-default login has no named subscription snapshot; it remains unknown rather than being assigned to another profile.
+The last provider report includes its observation time and reset. Reports older than a day are labelled as possibly out of date. After reset they stay labelled as the previous week, never automatically become zero. Reports survive a runner restart on the server. An updated computer can refresh Codex weekly usage directly; other providers need a supported subscription-backed run or a manual provider reading. Shorter windows are shown on **Settings → Computers**, not here. An unnamed computer-default login has no named subscription snapshot; it remains unknown rather than being assigned to another profile. When that default login keeps stopping on a usage limit, **Settings → Health** says it is out of quota ([Health Monitor](health-monitor.md), `default_login_limited`).
 
 A Computer operator or administrator can open **Manage subscription** and use the provider’s **manual weekly report** form to copy the provider's percentage used and reset time. This is a labelled manual observation, not an editable provider quota. The newest manual or provider observation is shown. Clear manual report restores the last provider report, or unknown if none exists. This neither changes provider limits nor schedules or blocks bots, and introduces no new permissions.
 
@@ -43,7 +43,108 @@ Each run pins its selected local profile directory before preparing the provider
 
 Profile directories separate provider logins. Browser-created profiles live outside the bot workspace, with directories set to 0700 and owned by the same user that runs sign-in, probes and turns. Linux Docker harnesses currently retain the existing shared bot Unix user; profiles do not yet provide a Unix permission boundary between groups. Do not rely on profile assignments to isolate files from another bot on the same Computer.
 
+### Bots sharing one ChatGPT sign-in take turns
+
+A Codex ChatGPT sign-in is one login file whose refresh token rotates as it is used, and OpenAI allows one such login per machine or serialized job stream. So on a Computer, the bots that use one ChatGPT sign-in (the same named subscription, or the Computer's own login) run one Codex turn at a time, in arrival order, and one bot's parallel tasks on it take turns too. A waiting run reads **Waiting for <login> to be free (busy with <bot>)** until its turn comes, or runs on the bot's own fallback when one is ready ([how it works](how-it-works.md#one-turn-per-chatgpt-login)). **Settings → Computers** and **Subscriptions** say when several bots share one sign-in and that they take turns; give a bot its own subscription when it needs to run alongside the others. Bots on an OpenAI API key still run side by side. Tico never copies a login file into another bot's home to get around this, because a copy would rotate apart from the original. The rule is per runner process: two runners on one machine that share a login folder don't wait for each other.
+
 The Engineering Manager template gives owners and admins an initial read grant to all enabled repositories. Member-created bots keep the team default. Its child-task and worktree instructions require phases 2 and 3 to ship first.
+
+### Signing out and switching accounts
+
+On **Settings → Computers** a signed-in Codex or Claude Code login, the Computer's own or a named subscription's, has
+**Switch account** and **Sign out**; **Manage subscription** on **AI providers** has the same for each signed-in runtime.
+The same people who may sign a login in see them: the Computer's operator, owners and admins. The Computer must be online
+and on a current runner; an older one answers `Update <computer> to sign out from here` and is never asked.
+
+- **Sign out** first names the bots that stop: the active bots assigned to that Computer whose runtime and subscription
+  are that login. The button stays off until they are named; if they can't be looked up, the dialog says so and offers
+  **Try again**. The Computer then runs the CLI's own logout (`codex logout`, `claude auth logout`) as the user that
+  signs in, and checks the login again. If it is still signed in, the sign-out fails and the login is as it was. A
+  shared-key sign-in already running there is waited for (up to 40 seconds) so it cannot sign the login back in; if it
+  is still running, the sign-out fails with "try again in a minute". Bots and assignments stay: those bots wait, as for
+  any signed-out login, until someone signs in again. A signed-out named subscription has **Sign in** on its row.
+- **Switch account** is a sign-in on the side. The Computer signs the new account in to a private folder inside the
+  login's home (`.tico-switch-<id>`, 0700, with copies of the files the CLI keeps beside the login). Once the new
+  account is signed in there, the dialog reads **Putting the new account in place**: the Computer asks Tico to go
+  ahead, and from Tico's yes the switch can no longer be cancelled (it gets two more minutes of its own to finish).
+  Only then does it move the new login files in, keeping the old ones until it has checked the login again; if moving
+  a file or that check fails, the old files go back. Cancelling before that point, failing or running out of time leaves
+  the old account working, and the side folder is removed (kept, and named in the message, only if the old files could
+  not be put back). Runs that start afterwards use the new account. The account and usage readings of the old account
+  are cleared.
+- A **Computer's own login that someone signed out stays signed out**. The company's model key given to **Every
+  computer** does not sign it back in: the server does not hand it out for that runtime, the runner neither applies it
+  again (its ten-minute retry included) nor puts it in turns, and Claude Code no longer reads "ready" because of it.
+  Signing in again, or **Use the shared key** next to it, ends that. A named subscription never takes the shared key.
+
+None of this restarts the runner. `POST /api/v2/runners/{runner_id}/logouts` with `{"runtime":"codex"}` (and
+`"profile"` for a named subscription) signs out; `GET /api/v2/runners/{runner_id}/logouts/bots?runtime=codex` lists the
+bots it stops; `POST /api/v2/runners/{runner_id}/logins` with `"switch": true` switches; `POST
+/api/v2/runners/{runner_id}/shared-key` with `{"runtime":"codex"}` lets the shared key back. Each is followed like a
+sign-in, with `GET /api/v2/runners/{runner_id}/logins/{id}` (`kind` says which; a sign-out ends `signed_out`). BotOps
+cannot sign a login out, because it stops bots. A turn already running when the account changes is not stopped and
+may finish on the old account. On a Mac, Claude Code keeps its login in the Keychain rather than in files, so there is
+no side to sign in on: Switch account isn't offered for it there (the server and the runner refuse it too); sign out,
+then sign in. Codex switches on a Mac as anywhere.
+
+After a sign-in, switch, sign-out or **Use the shared key**, the page looks again until the Computer has reported since
+the change finished (its heartbeat; `readiness_at` on the computer in `GET /api/v2/operations`) and that report shows
+the change, redrawing **Settings → Computers** and **AI providers** together, for about a minute.
+
+### API keys on a Computer
+
+A Computer's own login can run on a model API key instead of a subscription (Codex, Claude Code, Cursor Agent and
+Muse Code take one). Its row on **Settings → Computers** says whose key it is, by its preview only (`sk-…xyz`): **this
+computer's key** (added from Tico), **the company's shared key** (the credential given to **Every computer**), or **a
+key set on the computer** (its environment or `secrets/_shared.env`). The same people who may sign it in (the Computer's
+operator, owners and admins) see **Replace key** and **Clear key** in place of **Sign out**, and **Add key** next to a
+login with none. The Computer must be online and on a current runner; an older one answers `Update <computer> to …`.
+
+- **Add key** and **Replace key** take the key in a password field. It goes once to Tico's credential vault, sealed
+  like any other credential, for that Computer alone, and is never shown again in full. The Computer fetches it over its
+  own connection (the sign-in queue never carries a key) and checks it (Codex signs in with it; the others read it on
+  each turn). Until the check passes and Tico agrees the key goes in, the old key stays in use for runs and in the
+  Computer's key files, and the Computer's regular key fetch leaves them alone. From Tico's yes the change can no longer
+  be cancelled: the key it replaces is deleted from the vault, and a key set on the computer is taken out of
+  `secrets/_shared.env`. A key that does not work, a cancel, or a check that runs out of time deletes the new key and
+  leaves the old one in use (for Codex, signed in again with it). Runs that start afterwards use the new key; for Claude
+  Code, a key added here is used even when the computer also has a browser login.
+- **Clear key** first names the bots that stop, like **Sign out**. The Computer then deletes the key from its key files
+  (and, for Codex, logs out a login the key made; a browser or subscription login is not the key's and stays), and
+  Tico deletes this computer's key from the vault. Bots and assignments stay. Afterwards the row reads **Signed out**
+  with **Add key**: like a sign-out, the company's shared key does not sign it back in (the server does not hand it
+  out, and the runner's ten-minute re-apply skips it) until someone adds a key, signs in or chooses **Use the shared
+  key**.
+
+**The company's shared key.** Replacing or clearing it from one Computer first asks **This computer only** or **All of
+them**, listing every Computer it signs in and which of them are offline.
+
+- *This computer only*: Replace gives this Computer a key of its own, which signs it in before the shared one; Clear
+  stops this Computer using the shared key. The others keep it.
+- *All of them*, Replace: the shared credential's value is replaced, in **Credentials** too. Only someone who may manage
+  credentials can do this. Online Computers fetch it at once; an offline one gets it when it is next online. Claude
+  Code takes an OAuth token or an API key, each its own credential: the **Kind** chosen is the one replaced (by default
+  the one this Computer runs on), and a kind that is not shared is refused rather than written into the other.
+- *All of them*, Clear: offered only to someone who may change every Computer listed (otherwise Tico names the ones they
+  may not). Each online Computer clears its copy as above. **An offline Computer keeps its copy only until it is next
+  online**: Tico marks it cleared at once, so its first key fetch when it comes back (at start-up, then every ten
+  minutes) tells it to clear the key, and it does, with no one needing to act. That needs a current runner: while any
+  Computer listed, online or offline, runs one too old to clear its key, **All of them** is not offered and Tico answers
+  `Update <computer> to clear its key from here, or delete the shared key in Credentials`. A computer that
+  joins later still gets the shared key, which stays in **Credentials**.
+
+A Computer's own key is also a credential in **Credentials**. Deleting it there: the Computer falls back to the shared
+key at its next key fetch (Codex signs in again with it). With no shared key, the deletion is **Clear key** on that
+Computer: its next key fetch deletes its copies and logs out the login the key made, and the row reads **Signed out**
+with **Add key**. A key a Computer is still checking cannot be deleted there; cancel **Replace key** or let the check
+end first.
+
+`GET /api/v2/runners/{runner_id}/keys?runtime=codex` says which key signs it in (`source`, `preview`) and, for the
+shared key, the Computers it serves. `POST /api/v2/runners/{runner_id}/keys` with `{"runtime":"codex","secret":"…",
+"scope":"this"}` adds or replaces a key and returns a `use_key` row to follow with `GET …/logins/{id}` (it ends `done`
+or `failed`); `"scope":"all"` replaces the shared key. `POST /api/v2/runners/{runner_id}/keys/clear` with
+`{"runtime":"codex","scope":"this"}` (or `"all"`) clears it and returns each Computer's `clear_key` row, or `waiting`
+for one that is offline. A named subscription holds no key, so **Manage subscription** has none of these.
 
 ### Refreshing weekly allowance
 
@@ -61,7 +162,7 @@ never means a fresh allowance or a repaired sign-in. Claude and other runtimes w
 a supported standalone weekly read use observations from normal runs or a manual
 provider reading. Missing percentages remain unknown, not zero.
 
-Starting a new sign-in through Tico invalidates earlier readings and in-flight refresh
+Starting a new sign-in, a switch or a sign-out through Tico invalidates earlier readings and in-flight refresh
 results for that profile/runtime. Replacing credentials outside Tico under the same
 local profile cannot currently be detected: refresh and confirm the provider reading
 after such a change. Usage reported by a turn that was already running during sign-in

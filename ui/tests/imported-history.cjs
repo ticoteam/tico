@@ -4,6 +4,7 @@ const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs');
 
 (async () => {
   const browser = await chromium.launch({headless: true});
@@ -66,7 +67,7 @@ const {html, uiFile} = require('./support/page.cjs');
     if (p.endsWith('/snapshot')) return json({messages:[]});
     if (p.endsWith('/files')) return json({files:[],total:0,can_manage:true});
     if (p.endsWith('/tools')) return json({tools:[]});
-    return json({});
+    return json(unrouted(p));
   });
   try {
     await page.goto('https://tico-ui.test/#/bot/history-copy/more');
@@ -110,7 +111,9 @@ const {html, uiFile} = require('./support/page.cjs');
     for (const name of ['groky','grok-scout','grok-poetry']) {
       assert.equal(await node('b:' + name).count(),1);
       assert.equal(await node('b:' + name).getAttribute('draggable'),'true');
-      assert.equal(await node('b:' + name).locator('.rt[aria-label="Runs on Grok Bot"]').count(),1);
+      // The harness mark reads harness, model and effort (#749); these rows name no model or effort.
+      assert.equal(await node('b:' + name).locator('.rt[aria-label="Grok Bot"]').count(),1);
+      assert.equal(await node('b:' + name).locator('.rt').getAttribute('title'),'Grok Bot');
     }
     assert.equal(await page.locator('#tree a.node[href="#/bot/dots"]').count(),1);
     if (process.env.TICO_SCREENSHOT_DIR) await page.screenshot({path:process.env.TICO_SCREENSHOT_DIR+'/grok-org-chart.png'});

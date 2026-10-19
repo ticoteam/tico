@@ -9,6 +9,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const ui = path.join(__dirname, '..');
 const {html, uiFile} = require('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs');
 const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();   // load.cjs arrives with #254
 const shots = process.env.TICO_SCREENSHOT_DIR;
 const shot = async (page, name) => {
@@ -218,7 +219,7 @@ const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
         if (body.archived) linked.splice(linked.indexOf(link), 1); else Object.assign(link, {title: body.title ?? link.title, description: body.description ?? link.description, url: body.url ?? link.url});
         return json({linked: linkView(link || {})});
       }
-      return json({});
+      return json(unrouted(p));
     });
 
     const errors = [];
@@ -388,7 +389,10 @@ const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
     const created = requests.find(r => r.api === 'docs' && r.method === 'POST');
     assert.deepEqual([created.body.title, created.body.path], ['Onboarding checklist', 'people/onboarding']);
     assert.ok(created.key);
-    assert.equal(await page.locator('details[data-docs-folder="people"] .docs-item').count(), 1);
+    // The reader can show the new doc before the folder list re-renders: wait for the item, then count.
+    const peopleDocs = page.locator('details[data-docs-folder="people"] .docs-item');
+    await peopleDocs.filter({hasText: 'Onboarding checklist'}).first().waitFor();
+    assert.equal(await peopleDocs.count(), 1);
     assert.equal(await page.locator('.docs-reader-head').textContent().then(t => /Version 1/.test(t)), true);
     const newId = new URL(page.url()).hash.split('/')[2];
 

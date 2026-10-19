@@ -81,14 +81,16 @@ def test_a_slow_or_down_typesafe_falls_back_to_the_companys_model_instead_of_a_5
     out = post(api, "decisions", {"state": {"subject": "Invoice 4471"}, "questions": QUESTIONS, "label": "mail-triage@1"})
     assert out["answers"]["bucket"]["choice"] == "reply" and len(jev.calls) == 1 and len(backup.calls) == 1
     assert events(api, "human:ana")[-1][1]["fallback"] == "unavailable"
-    # With nothing to fall back to, the caller still gets a quick, honest 503; a refused request is not retried elsewhere.
+    # With nothing to fall back to, the caller still gets a quick, honest 503; TypeSafe refusing a request that passed
+    # the contract here is TypeSafe's problem, so the company's model answers it.
     monkeypatch.setattr(B, "fallback_engine", lambda *args, **kwargs: None)
     result = api.post("/api/v2/decisions", json={"state": {"team": "Acme"}, "questions": QUESTIONS}, headers=headers())
     assert result.status_code == 503 and result.json()["error"]["code"] == "judge_unavailable"
     jev.fail = J.JudgeError("invalid", "TypeSafe refused the request", 422)
     monkeypatch.setattr(B, "fallback_engine", lambda *args, **kwargs: backup)
     result = api.post("/api/v2/decisions", json={"state": {"team": "Acme"}, "questions": QUESTIONS}, headers=headers())
-    assert result.status_code == 422 and len(backup.calls) == 1
+    assert result.status_code == 200 and len(backup.calls) == 2
+    assert events(api, "human:ana")[-1][1]["fallback"] == "invalid"
 
 
 def test_the_server_asks_typesafe_once_and_briefly():
@@ -138,7 +140,7 @@ class Captured:
 
 def test_the_openrouter_fallback_sends_the_openrouter_model_id_and_skips_providers_without_a_key(monkeypatch, caplog):
     opener = Captured()
-    monkeypatch.setattr("urllib.request.urlopen", opener)
+    monkeypatch.setattr("clients.judge.urlopen", opener)
     pi = {"runtime": "pi", "model": "deepseek-v4.1-flash", "enabled": ["openrouter"]}
     engine = B.fallback_engine(pi, env={"OPENROUTER_API_KEY": "synthetic"})
     engine({"team": "Acme"}, QUESTIONS)

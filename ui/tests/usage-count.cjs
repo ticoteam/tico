@@ -5,10 +5,11 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const {html, uiFile} = require('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs');
 (async () => {
   const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
   try {
-    const visit = async ({role = 'owner', notice = true, hash = '#/help'} = {}) => {
+    const visit = async ({role = 'owner', notice = true, hash = '#/tasks'} = {}) => {
       const ctx = await browser.newContext({viewport: {width: 1440, height: 900}, serviceWorkers: 'block'});
       const page = await ctx.newPage();
       const errors = [], calls = [];
@@ -34,7 +35,7 @@ const {html, uiFile} = require('./support/page.cjs');
         if (p === '/api/v2/status') return json({bots: []});
         if (p === '/api/v2/needs-you') return json({items: []});
         if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
-        return json({});
+        return json(unrouted(p));
       });
       await page.goto('https://tico-ui.test/' + hash);
       await page.waitForFunction(() => !document.querySelector('#account .account-email')?.textContent.includes('Signing in'));

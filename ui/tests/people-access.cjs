@@ -1,12 +1,13 @@
 // Offline browser regression for Settings -> People: one choice between adding people by hand and syncing a
 // directory, an inline add row, and one compact row per person whose role (owner only), sign-in and menu
-// (what a member may do, mark as left, make owner) save as they change. Domain sign-in maps onto the allow
+// (what a member may do, mark as left, make owner, the owner's own sign-in email) save as they change. Domain sign-in maps onto the allow
 // list with the revision it was read at; the bot limit shows 25 by default. Fixtures only.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const {html, uiFile} = require('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs');
 const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();   // load.cjs arrives with #254
 
 const CONFIG = {environment_id: 'initech', company_name: 'Initech', app_name: 'Initech Hub',
@@ -84,13 +85,20 @@ const CONFIG = {environment_id: 'initech', company_name: 'Initech', app_name: 'I
         allowedPeople = body.allowed; allowedDomains = body.allowed_domains;
         return json({revision, allowed: allowedPeople, allowed_domains: allowedDomains});
       }
+      if (p === '/api/v2/access/owner/email') {
+        const body = request.postDataJSON(); calls.push(['owner-email', body]);
+        if (body.email === 'taken@acme.example') return route.fulfill({status: 409, contentType: 'application/json',
+          body: JSON.stringify({error: {code: 'conflict', detail: 'taken@acme.example already belongs to someone else on the roster'}})});
+        owner = body.email; people.find(x => x.id === 'ana').email = body.email; return json({owner, revision: 2, person: 'ana'});
+      }
+      if (p === '/api/v2/logout') { calls.push(['logout']); return route.fulfill({contentType: 'text/html', body: '<p>Signed out</p>'}); }
       if (p === '/api/v2/access/owner') {
         calls.push(['owner', request.postDataJSON()]); owner = people.find(x => x.id === request.postDataJSON().person).email;
         return json({owner});
       }
       if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
-      return json({});
+      return json(unrouted(p));
     });
     const page = await context.newPage();
     const errors = [];
@@ -213,8 +221,47 @@ const CONFIG = {environment_id: 'initech', company_name: 'Initech', app_name: 'I
     await go.click();
     assert.deepEqual(await next(), ['owner', {person: 'ben', previous_owner_bot_admin: true, expected_revision: 1, confirm: true}]);
 
+    // The owner changes their own sign-in email: only on their own row, typed twice, then signs in again.
+    owner = 'ana@acme.example';
+    me = {...me, proxy_session: true};
+    const own = await context.newPage();
+    own.on('pageerror', e => errors.push(e.message));
+    await own.goto('https://tico-ui.test/#/settings');
+    await own.getByRole('tab', {name: 'Humans'}).click();
+    const ownRow = id => own.locator(`.people-row[data-person=${id}]`);
+    await ownRow('ben').waitFor();
+    assert.equal(await own.locator('[data-person-act=email]').count(), 1, 'only on the owner\'s own row');
+    assert.equal(await ownRow('ben').locator('[data-person-act=email]').count(), 0);
+    await ownRow('ana').locator('.people-more').click();
+    await ownRow('ana').locator('[data-person-act=email]').click();
+    const box = own.locator('#people-dialog'), change = box.locator('[type=submit]');
+    assert.match(await box.textContent(), /Cloudflare Access/);
+    assert.match(await box.textContent(), /ana@acme\.example stops working/);
+    assert.equal(await change.isDisabled(), true);
+    await box.locator('[name=email]').fill('ana@new.example');
+    await box.locator('[name=again]').fill('ana@new.exampel');
+    assert.equal(await change.isDisabled(), true, 'the two must match');
+    await box.locator('[name=email]').fill('ANA@acme.example');
+    await box.locator('[name=again]').fill('ana@acme.example');
+    assert.equal(await change.isDisabled(), true, 'the address it already is');
+    await box.locator('[name=email]').fill('taken@acme.example');
+    await box.locator('[name=again]').fill('taken@acme.example');
+    await change.click();
+    assert.equal((await next())[0], 'owner-email');
+    await box.locator('.people-status .err').waitFor();
+    assert.match(await box.locator('.people-status').textContent(), /already belongs to someone else/);
+    await box.locator('[name=email]').fill(' Ana@New.example ');
+    await box.locator('[name=again]').fill('ana@new.example');
+    assert.equal(calls.length, 0);
+    await change.click();
+    assert.deepEqual(await next(), ['owner-email', {email: 'ana@new.example', confirm_email: 'ana@new.example',
+      expected_revision: 1, confirm: true}]);
+    assert.deepEqual(await next(), ['logout'], 'a proxy session signs in again as the new address');
+    await own.close();
+
     // An admin sees no mode choice and no role picker, and cannot switch another admin's sign-in.
     owner = 'ana@acme.example';
+    people.find(p => p.id === 'ana').email = 'ana@acme.example';
     me = {...me, id: 'ben', name: 'Ben Cole', role: 'human', bot_admin: true, email: 'ben@acme.example'};
     people.find(p => p.id === 'cy').admin = true;
     const admin = await context.newPage();
@@ -225,8 +272,9 @@ const CONFIG = {environment_id: 'initech', company_name: 'Initech', app_name: 'I
     assert.equal(await admin.locator('[data-people-mode], [data-person-role]').count(), 0);
     assert.equal(await admin.locator('.people-row[data-person=cy] [data-person-signin]').isDisabled(), true);
     assert.equal(await admin.locator('.people-row[data-person=ben] [data-person-signin]').isDisabled(), true);
+    assert.equal(await admin.locator('[data-person-act=email]').count(), 0, 'not the owner: no email change');
     assert.deepEqual(errors, []);
-    console.log('PASS: People tab switches sync and manual, adds inline, saves role, sign-in, domain sign-in and bot limit as they change.');
+    console.log('PASS: People tab switches sync and manual, adds inline, saves role, sign-in, domain sign-in and bot limit as they change; the owner changes their own sign-in email typed twice.');
   } finally {
     await browser.close();
   }

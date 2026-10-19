@@ -13,9 +13,18 @@ owner asks for market research. To choose a first team and get the most from it,
 Nobody else sees the wizard. Only the owner may write it, and the sidebar entry
 **Finish setup** appears only while it is unfinished.
 
+While the wizard is open, the sidebar shows only **Finish setup** and the team: the app's pages, pins, Message bots,
+**What's new** and the Changelog count in the account menu are hidden. They come back once **Create my team** finishes
+(the screen after Create has the full sidebar) and on any other page. On a phone the bottom bar drops Tasks and Updates
+during setup. The anonymous usage-count notice is not shown over the wizard or the screen after Create; it appears on the
+first other page you open (for example Tasks), and counting starts only once it has been shown ([PRIVACY.md](../PRIVACY.md)).
+
+The first screen also offers **Start with a sample company**, which skips the wizard and starts a made-up five-bot
+team instead ([The sample company](sample-company.md)).
+
 The implementation is `backend/onboarding.py` (the record, creating the team), `backend/recruit.py` and `backend/recruit_rank.py`
 (the team builder's templates and suggestions), `ui/org-builder.js` (the team chart screen), `ui/first-run.js` (who reports to whom, the review
-and the screen after Create), `hq/recruit.py` (Tico HQ's suggestions), `clients/catalog.py` (turning a template into a repository),
+and the screen after Create), Tico HQ's `POST /v1/recruit` ([its API](tico-hq.md), for HQ's suggestions), `clients/catalog.py` (turning a template into a repository),
 `runner/catalog_job.py` (the bots the computer sets up itself, run by the runner as `python -m runner catalog`) and `templates/catalog/` (the templates). The quick start in the
 [README](../README.md) is the same flow with the commands in it.
 
@@ -105,8 +114,11 @@ follow. What is sent and kept is in [PRIVACY.md](../PRIVACY.md).
 Otherwise, or on any failure, the **local recommender** (`backend/recruit_rank.py`) answers, with no network: the head first, then the
 cards the answer matches (a tag, or two words of a longer tag phrase; a word of the name; two or more words of the summary; the answer
 counts double "What you do", and the group's own name counts for nothing), then `default` and `common` cards; a `niche` card only when the answer names it; a business-only card last for a team that sells
-only to consumers. The why is the words that matched ("Matches “resellers”"), else "Heads Sales and reports to you", "A starting point for
-Sales" or "Common in Sales". The same answer always gives the same list.
+only to consumers. The why is "Heads Sales and reports to you" for the head; a short tag of two or more words the answer writes as a
+phrase, in order and side by side ("Matches “flaky tests”"; not for "flaky deploys but reliable tests"), unless most of the group's cards carry those words; else "A starting point for Sales" or "Common in Sales",
+and no why for a `niche` card the answer brought in on single words. A single word, a word of a name or two words of a summary only
+rank: shown as a why they read as keyword matching. When Tico HQ's answer still says "Matches “<word>”", the install's own why replaces
+it. The same answer always gives the same list.
 
 ### What Create does
 
@@ -142,7 +154,7 @@ second). It reaches no computer.
 
 ### Needs setup
 
-A parked starter shows **Needs setup** on the team chart (a small *Setup* mark), on its page and after Create. **Set up** sends it
+A parked starter shows **Needs setup** on the team chart (a small amber gear; hover it for *Needs setup*), on its page and after Create. **Set up** sends it
 the message "Let's set you up." as the human, in the human's own chat with the bot: the conversation the bot page's **Chat** tab shows,
 open or not when the button is pressed. It starts the setup conversation its `AGENT.md` describes; any first message from a human
 does the same. While the bot is parked, the runner gives its chat runs one Setup instruction in place of the generic chat rules: follow
@@ -154,8 +166,12 @@ lets its routines run and counts it toward a member's limit. Until then it stays
 
 ### After Create: one screen
 
-- **Finish setup**: each bot with its progress. A starter says *Setting up its repository* until the repository exists,
-  then its **Set up** works.
+- **Your team is created**: the heading, then the one next step as the only primary button. With no computer yet it says
+  *Waiting for a computer* once and offers **Add a computer** (Settings > Computers); with a computer but no AI provider,
+  **Add an AI provider**; otherwise **Open Tasks** at the bottom. **Show me around** starts the tour.
+- Each bot, in the team chart's groups and order (bots outside any group first, the built-ins last), with one status:
+  *Waiting* while the team waits on a computer or provider, *Setting up* until a starter's repository exists, then its
+  **Set up** button; *Active*; or a link to the setup task BotOps is working.
 - **AI providers**: the first link opens Settings > AI providers so bots can start working.
 - **Add an admin**: a name and an email. The human joins the roster and the sign-in list and is made an admin (`POST /api/v2/access/humans`,
   then `POST /api/v2/access/humans/{id}` with `role: admin`). Tico sends no email. On a local install, only you can sign in
@@ -179,7 +195,8 @@ wizard  ->  tour (once)  ->  "Talk to BotOps" line
 
 Six spotlight steps: Updates, Tasks, your bots (the team list), Docs, Market, Meetings. **Next** moves
 on, **Skip** or **Esc** closes it, and focus stays inside it. On a phone it opens the navigation drawer
-and shows the same steps. It opens by itself once, right after **Finish setup**, and can be replayed
+and shows the same steps. It never opens over the wizard: the owner starts it with **Show me around** on the screen after Create, or it opens
+by itself once on their next visit (anyone else: their first visit). It can be replayed
 from **?** (How Tico works) with **Take the tour**. That it was seen is kept per human.
 
 ### Bots
@@ -341,7 +358,7 @@ Tico ships 93 templates, by group, each with a card; [Starter bots](starter-bots
   `marketing`, `support`, `operations` or `engineering`), `lead` (on each group head), `group`, `icon`, `tags`, `suggest`,
   `team_templates`, `kind` (`helper` on a card that serves one human and sits outside the team chart), `pains`, `prerequisites` and, for a starter, `onboarding`, `first_routine`, `approval_required` and `example_output`. The
   server serves all of them except `onboarding` and `example_output`; the team builder reads `group`, `pack`, `lead`, `kind`, `icon`, `tags`,
-  `suggest`, `pains`, `summary` and `recommend_when` ([The team builder](#the-team-builder)); `prerequisites` are shown by the bot's own setup, not by the wizard ([Starter bots](starter-bots.md)). After changing a card or `templates/groups.yaml`, run `python3 scripts/build_catalog_json.py` (Tico HQ's copy) and `python3 scripts/build-icon-font.py` (a new icon). A card with a `first_routine` and an
+  `suggest`, `pains`, `summary` and `recommend_when` ([The team builder](#the-team-builder)); `prerequisites` are shown by the bot's own setup, not by the wizard ([Starter bots](starter-bots.md)). After changing a card or `templates/groups.yaml`, run `python3 scripts/build_catalog_json.py` (the setup page's role list; Tico HQ builds its own copy from each published release, [docs/tico-hq.md](tico-hq.md#the-templates-hq-reads)) and `python3 scripts/build-icon-font.py` (a new icon). A card with a `first_routine` and an
   `onboarding` list is a **starter**: Create parks it (`needs_setup`), so its `onboarding` playbook must end with `hub bot setup-done`.
 - Everything else in the folder is the repository the bot starts from: `AGENT.md`,
   `bot.yaml`, `playbooks/`, `knowledge/`, `memory/`, `state.md`, `.env.example`, `.gitignore`.

@@ -13,6 +13,7 @@ const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs');
 const path = require('node:path');
 const SHOTS = process.env.TICO_UI_SHOTS || '';
 const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();
@@ -74,7 +75,7 @@ async function scenario(browser, name, down, check, viewport = {width: 1300, hei
     if (one) return json({task: task(one[1]), comments: [], events: [], can_comment: true, children: []});
     if (/^\/api\/v2\/tasks\/t-[ab]\/files$/.test(p)) return json({files: []});
     if (p === '/api/v2/needs-you') return json({items: [], version: 'v0'});
-    return json({});
+    return json(unrouted(p));
   });
   try {
     await page.goto('https://tico-ui.test/#/bot/ops/chat');
@@ -114,6 +115,9 @@ async function signInAndReturn(page, state, seen, press) {
   await press();
   await until('a top-level visit to this address', () => seen.top);
   assert.equal(seen.top, 'https://tico-ui.test/');
+  // The visit is still on its way when the server sees it. Coming back before it lands (on the browser's error page
+  // here) lets that page cut this navigation off.
+  await until('the visit leaves for the login', () => !page.url().startsWith('https://tico-ui.test/'));
   state.mode = 'ok';
   await page.goto('https://tico-ui.test/');
   await page.waitForFunction(() => location.hash === '#/bot/ops/chat');
@@ -132,15 +136,8 @@ async function signInAndReturn(page, state, seen, press) {
         state.mode = 'stream';
         await page.evaluate(() => LIVE.es.close() || LIVE.es.onerror());     // the five-minute stream ends
         await signedOutAndStill(page, seen);
-        state.mode = 'redirect';
-        // Sign in again: a top-level visit to this address, which the proxy sends to its login.
-        await page.click('#signed-out button');
-        await until('a top-level visit to this address', () => seen.top);
-        assert.equal(seen.top, 'https://tico-ui.test/');
-        state.mode = 'ok';
-        // Back from the login, at the address without its # (the server never saw it).
-        await page.goto('https://tico-ui.test/');
-        await page.waitForFunction(() => location.hash === '#/bot/ops/chat');
+        // Sign in again: a top-level visit to this address, which the proxy sends to its login, then back.
+        await signInAndReturn(page, state, seen, () => page.click('#signed-out button'));
         await page.waitForFunction(() => document.querySelector('.p-text')?.value === 'Half-written reply to Ops');
         await box();
         await page.waitForFunction(() => document.querySelector('textarea[aria-label="Message"]').value === 'A comment on the task');

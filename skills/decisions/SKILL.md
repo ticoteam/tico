@@ -10,8 +10,10 @@ You have a second model that cannot write: a decision model. It takes a JSON sta
 questions (`noul` for yes/no, `choice`, `score`; the same format as OpenRouter's Decisions API)
 and answers each one with a probability, in one round trip of about two hundred milliseconds.
 It invents nothing, because it produces nothing but numbers. Tico holds the key; you call it
-with the credential you already have. The provider is optional and configured by the owner:
-TypeSafe's Jev, or the team's own model provider as a fallback.
+with the credential you already have. The server asks the Tico AI Gateway first (Tico Decide 1.0,
+`tico-decide-1.0`), then the owner's own TypeSafe key if they set one, then the team's own model
+provider; a provider that fails hands the question to the next. With none of them Decide is off,
+and you carry on without it.
 
 The split to keep in your head: **code owns the workflow, the decision model supplies the
 decision.** Rules, arithmetic, lookups, date math and the action itself stay in your own hands;
@@ -129,7 +131,7 @@ credential request) get a tight criterion and a low threshold, not trust.
 
 ## What the decision model is bad at
 
-TypeSafe's Jev is the reference provider; its own list is `https://docs.typesafe.ai/model-jaggedness/jev-1.13.md`; the short
+Tico Decide 1.0 answers on TypeSafe's Jev 1.13, whose own list is `https://docs.typesafe.ai/model-jaggedness/jev-1.13.md`; the short
 version for a bot:
 
 - **Counting, arithmetic, magnitudes.** Count in code (one noul per item, then sum). Do not
@@ -179,6 +181,9 @@ version for a bot:
   access request (`policies/access.md`).
 - There is a budget per actor per day (`GET /api/v2/decisions` reports it; the server sets it with
   `TICO_DECISIONS_DAILY_CALLS_OWNER`, `_HUMAN` and `_BOT`). A loop that spends it is a bug; stop and say so.
+- There is also a spend cap for the whole team per UTC month (`TICO_DECISIONS_MONTHLY_USD`, $50 by default;
+  `GET /api/v2/decisions` shows `spent_this_month_usd`). At the cap, or when a call's most would not fit under it, the call is a 429 `spend_cap`: carry on as you
+  would without Decide (your own judgment, or a person), and do not retry before the 1st.
 - Test before you trust. Run a new question over ten rows you already know the answer to and
   read the misses: missing evidence in the state, a literal reading of your words, a model
   miss, or a code bug are four different fixes. Cookbook thresholds are examples, not rules.
@@ -196,9 +201,13 @@ the cookbook nearest your shape (`cookbooks/rerank_typesafe.md`, `hierarchical_c
 ## Limits and the audit
 
 - Tico's audit keeps each call's label, question ids, the value and confidence per answer,
-  token usage and latency, never the state. Read a set's history back with `hub sql "SELECT ts,
+  token usage, latency, cost (`cost_usd`, when the price is known), the provider and model that answered
+  (`Tico AI Gateway` / `tico-decide-1.0`, `TypeSafe`, or the team's provider) and `fallback` with the first
+  failure's code when a later provider answered, never the state. Read a set's history back with `hub sql "SELECT ts,
   actor, target, detail_json FROM events WHERE action='judge.call' AND target='mail-triage@1'
-  ORDER BY ts DESC LIMIT 200"`.
+  ORDER BY ts DESC LIMIT 200"`. For the week at a glance, `hub decision readout` (`hub_decision_readout`): per
+  question set, calls, cost, how many Jev answered (a Tico Decide answer counts as Jev), fell back or failed, the spread of answers, and the month's spend
+  against the cap (`--days N` for another window, up to 31).
 - A 422 is the request's shape, not its content: an unknown key on a question, a criteria map with
   one option, levels outside two to ten. `clients/judge.py` refuses these before sending.
 - A 429 or 529 is retried twice with backoff by the client, then `judge_unavailable`.

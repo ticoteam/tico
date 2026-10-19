@@ -42,6 +42,8 @@ hub bot repos sales --own
 - `GET /api/v2/bots/{bot}/repositories`: `mode`, `all_access`, `chosen`, `effective`. A grant that may run workflows has `run_workflows: true`.
 - `PUT /api/v2/bots/{bot}/repositories`: `mode`, optional `all_access`, optional `chosen` entries with `full_name`, `access` and optional `run_workflows` (write grants only; left out, a grant keeps its setting; setting or clearing it needs an Owner or admin).
 
+Two switches above the modes let a bot create repositories: **Create bot repositories** (an Owner or admin turns it on) and **Create product repositories** (on for every bot by default; the Owner or an admin turns it off, and only the Owner turns it back on). A bot that creates a product repository gets write to it and the Owner is told ([Permissions](permissions.md#bots-that-create-repositories)).
+
 Changes are audited as `repositories.changed` or `bot.repos_changed`, with before and after values; a change that stops a bot running workflows also lists `workflows_stopped`. The older `GET/PUT /api/v2/bots/{bot}/github-repos` API remains an alias for chosen write repositories; only an Owner or admin may tick new repositories through it. Other bot managers can choose already ticked product repositories. Legacy saves preserve existing grants and their read or write level, adding only new write grants. Use the current repository API to remove or change a grant. Changing an own or all mode through this alias asks the caller to use Settings. Only an Owner or admin can explicitly choose another bot’s repository. Existing chosen grants remain available; upgrading another bot’s repository from read to write requires an Owner or admin.
 
 ## Computers and tokens
@@ -66,6 +68,6 @@ Clone and fetch operations check a free-space floor of 5 GB plus twice the repos
 
 When a GitHub App is connected, a failed token request blocks GitHub Git and CLI operations. The message names the cause, for example that the App is not installed on the repository or that the repository is outside the connected organization. Machine credential helpers and askpass cannot supply wider credentials. With no App connected, the computer's existing Git login keeps working. Text supplied through GitHub CLI options such as `--comment`, `--body`, `--title`, `--notes`, `--jq`, `-m`, `-f` and `-F` does not select a repository token.
 
-Computer answers (`GET /api/v2/computers`, Operations and `hub_computer_list`) include `release`
+Computer answers (`GET /api/v2/computers`, Operations, `hub_computer_list` and its one-computer detail) include `release`
 for the installed Tico release. The legacy `version` field is the runner software version.
 A Computer that does not report its release returns an empty `release`.

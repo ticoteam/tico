@@ -2,12 +2,13 @@
 // account, and usage; a line per named subscription. Covers each sign-in state (signed in as <email> · <plan>, signed
 // out, login expired or rejected, checking, couldn't check with the time), real usage against unavailable usage (never
 // 0% or a full allowance), an account reading older than its refresh marked with when it was last checked, the 5-hour
-// window label, the computer's own login's windows (and Claude's before its first turn here), several profiles, a long version kept to its cell, revoked computers hidden by default, and no account
+// window label, the computer's own login's windows (and Claude's before its first turn here), several profiles, the note on a sign-in several bots share and take turns on, a long version kept to its cell, revoked computers hidden by default, and no account
 // where the server sent none. Every request is intercepted.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs');
 (async () => {
   const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
   try {
@@ -77,7 +78,7 @@ const {html, uiFile} = require('./support/page.cjs');
         {id: 'cursor', runtime: 'cursor', name: 'Cursor Agent', capabilities: {account: '', weekly_usage: ''}},
         {id: 'musecode', runtime: 'musecode', name: 'Muse Code', capabilities: {account: '', weekly_usage: ''}}]});
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
-      return json({});
+      return json(unrouted(p));
     });
     await page.goto('https://tico-ui.test/#/settings');
     await page.locator('[data-settings-tab=devices]').click();
@@ -167,6 +168,38 @@ const {html, uiFile} = require('./support/page.cjs');
     await page.locator('#set-machines [data-machine-tool="grok"]', {hasText: "Couldn't check"}).waitFor();
     assert.match((await cells(page.locator('#set-machines [data-machine-tool="grok"]').first()))[3], /^Couldn't check last checked 3h ago/);
 
+    // Desktop apps (a Mac's app driver): only when the computer reports `appdriver`, one row per app with its state
+    // and the driver's detail; still titled on a phone, where the head row is otherwise hidden.
+    assert.equal(await page.locator('#set-machines .machine-apps').count(), 0, 'no driver, no Desktop apps');
+    box.readiness.appdriver = {trusted: false, macos: '15.1', detail: '', apps: {grok: {installed: true, version: '1.2.0', running: true,
+      signed_in: true, background_ok: false, ready: false, state: 'no_permission', detail: 'Turn on tico-appdriver in System Settings > Privacy & Security > Accessibility'}}};
+    await page.evaluate(() => loadSettings());
+    const apps = page.locator('#set-machines [role=table][aria-label="Desktop apps on Team box"]');
+    await apps.waitFor();
+    assert.deepEqual(await cells(apps.locator('[data-machine-app="grok"]')),
+      ['Grok', '1.2.0', 'Needs Accessibility permission Turn on tico-appdriver in System Settings > Privacy & Security > Accessibility']);
+    await page.setViewportSize({width: 390, height: 844});
+    assert.ok(await apps.locator('[role=columnheader]', {hasText: 'Desktop apps'}).isVisible(), 'titled on a phone');
+    assert.ok(await apps.evaluate(el => el.scrollWidth <= el.clientWidth + 1), 'fits a phone');
+    await page.setViewportSize({width: 1440, height: 900});
+
+    // Bots sharing one ChatGPT sign-in take turns (backend/views.py shared_logins): the sign-in they share says so,
+    // naming the bots this reader may see; another login and an unshared one say nothing.
+    assert.equal(await page.locator('#set-machines [data-shared-login]').count(), 0, 'no shared sign-in, no note');
+    box.profiles = [{name: 'acme', display_name: 'Acme Max', runtimes: {codex: {signed_in: true}}},
+                    {name: 'solo', display_name: 'solo', runtimes: {codex: {signed_in: true}}}];
+    box.shared_logins = [{runtime: 'codex', profile: '', display_name: '', count: 3, bots: ['helper']},
+                         {runtime: 'codex', profile: 'acme', display_name: 'Acme Max', count: 2, bots: []}];
+    await page.evaluate(() => loadSettings());
+    const sharedNote = page.locator('#set-machines [data-shared-login="codex:"]');
+    await sharedNote.waitFor();
+    assert.equal(await sharedNote.innerText(), '3 bots share this sign-in (Helper and 2 more). They take turns: one Codex run at a time.');
+    assert.ok(await own('codex').locator('[data-shared-login]').count() === 1, 'on the computer\'s own Codex sign-in');
+    assert.equal(await table.locator('[data-machine-profile="acme"][data-machine-tool="codex"] [data-shared-login="codex:acme"]').innerText(),
+      '2 bots share this sign-in. They take turns: one Codex run at a time.', 'no names this reader may not see');
+    assert.equal(await table.locator('[data-machine-profile="solo"] [data-shared-login]').count(), 0);
+    assert.equal(await own('claude').locator('[data-shared-login]').count(), 0);
+
     // Revoked computers stay hidden until asked for.
     assert.equal(await page.locator('#set-machines [aria-label="AI tools on Old laptop"]').count(), 0);
     await page.locator('#set-machines [data-show-revoked-computers]').check();
@@ -176,6 +209,6 @@ const {html, uiFile} = require('./support/page.cjs');
     // The install, pin and update controls stay in their own disclosure.
     assert.equal(await page.locator('#set-machines details[data-machine-details="box:tools"] > summary').innerText(), 'Installation and updates');
     assert.deepEqual(errors, []);
-    console.log('PASS: AI tools rows, sign-in states, usage windows, profiles, long versions, revoked hidden');
+    console.log('PASS: AI tools rows, sign-in states, usage windows, profiles, shared sign-ins, long versions, desktop apps, revoked hidden');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

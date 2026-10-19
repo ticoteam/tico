@@ -213,8 +213,9 @@ const userChips = e => (e?.users || []).map(u =>
 // older "Temp X" name. Either way the name shows with a flag instead of the word.
 const TEMP_RE = /^Temp\s+/;
 const isTempBot = e => !!e?.temp || TEMP_RE.test(e?.display_name || '');
+const TEMP_FLAG = '<span class="proj" title="temporary: expected to end">\u2691</span>';
 const shownName = e => isTempBot(e)
-  ? `<span class="proj" title="temporary: expected to end">\u2691</span>${esc((e.display_name || '').replace(TEMP_RE, ''))}`
+  ? `${TEMP_FLAG}${esc((e.display_name || '').replace(TEMP_RE, ''))}`
   : esc(e.display_name || '');
 // The harness a bot runs on, as a small muted mark beside its name (ui/tool-icons.js). One rule: the
 // harness (runtime), never the provider or model; the model rides in the tooltip. No runtime, nothing shown.
@@ -241,3 +242,32 @@ function runtimeTag(e) {
 // Renaming a bot never changes where it sits: the order field decides, the name does not.
 const botOrder = e => { const n = Number(e?.order); return e?.order == null || e.order === '' || !Number.isFinite(n) ? Infinity : n; };
 const byBotOrder = (a, b) => { const x = botOrder(a), y = botOrder(b); return x === y ? 0 : x < y ? -1 : 1; };
+// Whom a chart node reports to, as a tree key (`p:<id>` or `b:<slug>`); '' at the top.
+const orgReportsTo = n => {
+  const to = String((n.kind === 'person' ? n.person?.reports_to : n.reports_to) || '');
+  return !to ? '' : n.kind === 'person' ? 'p:' + to : to.startsWith('human:') ? 'p:' + to.slice(6) : 'b:' + to;
+};
+// A manager's reports in the order someone put them on the chart (backend/report_order.py): the placed ones first, by
+// place, before the chart's own order. Only a direct report of `parent` has a place there; in a group (`g:<id>`), each
+// member has its place among its own manager's reports.
+const reportPlace = (n, parent) => {
+  const at = n.kind === 'person' ? n.person?.report_position : n.report_position;
+  const manager = String(parent || '').startsWith('g:') ? orgReportsTo(n) : parent;
+  return at == null || !manager || orgReportsTo(n) !== manager ? Infinity : at;
+};
+const byReportOrder = parent => (a, b) => { const x = reportPlace(a, parent), y = reportPlace(b, parent); return x === y ? 0 : x < y ? -1 : 1; };
+// The chart's own order for reports with no place, the same everywhere they are listed and on the server
+// (backend/report_order.py fallback): humans first; then bots, temporary ones last and a bot's `order` lowest first;
+// then the name, accents and case aside; the id breaks a tie. Nodes are `{kind: 'person', person}` or bot rows.
+const chartNameKey = s => String(s || '').normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase();
+const chartFallback = (a, b) => {
+  const human = n => n.kind === 'person';
+  if (human(a) !== human(b)) return human(a) ? -1 : 1;
+  if (!human(a) && isTempBot(a) !== isTempBot(b)) return isTempBot(a) - isTempBot(b);
+  if (!human(a) && byBotOrder(a, b)) return byBotOrder(a, b);
+  const name = n => chartNameKey(human(n) ? n.person?.name || n.person?.id || n.id : String(n.display_name || n.name || '').replace(TEMP_RE, ''));
+  const id = n => String(human(n) ? n.person?.id || n.id : n.name || '');
+  const x = name(a), y = name(b);
+  if (x !== y) return x < y ? -1 : 1;
+  return id(a) < id(b) ? -1 : id(a) > id(b) ? 1 : 0;
+};

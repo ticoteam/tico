@@ -3,11 +3,15 @@
 //    under whoever they report to when that one is in the same group; the Built-in bots stay outside every group;
 //  - owners and admins add a group, rename it, drag a human or a bot into a group (or out, onto "No group") and
 //    nest a group in another; a member has none of those handles.
+//  - a manager's reports keep the order they are dragged (or moved up and down by keyboard) into, through a reload;
+//    a drop onto a manager the viewer may not put reports under says so and moves nothing; reports nobody placed
+//    follow the server's rule on the chart and a person's page; reports shown in a group move up and down there.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const {html, uiFile, beta} = require('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs');
 
 const FULL = {see: true, read: true, write: true};
 async function shot(page, name) {
@@ -110,10 +114,18 @@ async function open(browser, me, branches = false) {
       groups.splice(groups.indexOf(group), 1);
       return json({id: m[1], deleted: true, moved_to: group.parent});
     }
+    if ((m = p.match(/^\/api\/v2\/org\/order\/([^/]+)$/)) && method === 'PUT') {
+      const body = request.postDataJSON(); calls.push(['PUT', decodeURIComponent(m[1]), body]);
+      body.reports.forEach((id, i) => {
+        const [kind, key] = id.split(':');
+        (kind === 'human' ? people.find(r => r.id === key) : bots.find(r => r.name === key)).report_position = i;
+      });
+      return json({});
+    }
     if (p === '/api/v2/tasks') return json({tasks: []});
     if (p === '/api/v2/conversations') return json({conversations: []});
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
-    return json({});
+    return json(unrouted(p));
   });
   page.on('pageerror', e => errors.push(e.message));
   await page.goto('https://tico-ui.test/#/updates');
@@ -140,6 +152,105 @@ async function drag(page, from, to) {
   await page.mouse.move(45, 45);
   await to.hover();
   await page.mouse.up();
+}
+
+async function reportOrder(browser) {
+  const {page, errors, calls, bots} = await open(browser, {id: 'ana', role: 'owner', name: 'Ana', email: 'ana@example.test', cloud: true});
+  for (const [name, display_name] of [['analyst', 'Analyst'], ['builder', 'Builder']])
+    bots.push({...bots.find(b => b.name === 'scout'), name, display_name});
+  await page.evaluate(() => refresh(true));
+  const under = async () => (await shape(page))[0].Ana;
+  assert.deepEqual(await under(), ['Cara', 'Analyst', 'Builder', 'Scout'], 'nobody placed them: humans, then names');
+  // Dragged onto the top of a fellow report, Scout goes above it, and stays there through a reload.
+  const analyst = node(page, 'b:analyst');
+  await node(page, 'b:scout').hover();
+  await page.mouse.down();
+  await page.mouse.move(40, 40);
+  await analyst.hover({position: {x: 20, y: 2}});
+  await page.mouse.up();
+  await page.waitForFunction(() => document.querySelectorAll('#tree [data-org-place]')[1]?.dataset.org === 'b:scout');
+  assert.deepEqual(calls.shift(), ['PUT', 'human:ana', {reports: ['human:cara', 'bot:scout', 'bot:analyst', 'bot:builder']}]);
+  await page.reload();
+  await page.locator('#tree a.node').first().waitFor();
+  assert.deepEqual(await under(), ['Cara', 'Scout', 'Analyst', 'Builder']);
+  // By keyboard: Tab from the row to its Move menu, then Move up, Move down.
+  await node(page, 'b:builder').focus();
+  await page.keyboard.press('Tab');
+  assert.equal(await page.evaluate(() => document.activeElement.dataset.orgMenu), 'b:builder');
+  await page.keyboard.press('Enter');
+  assert.equal(await page.getByRole('menuitem', {name: 'Move down'}).isDisabled(), true, 'the last one goes no lower');
+  assert.equal(await page.evaluate(() => document.activeElement.textContent), 'Move up');
+  await page.keyboard.press('Enter');
+  await page.waitForFunction(() => document.activeElement?.dataset.orgMenu === 'b:builder' && !document.querySelector('#tree .org-order-menu'));
+  assert.deepEqual(calls.shift(), ['PUT', 'human:ana', {reports: ['human:cara', 'bot:scout', 'bot:builder', 'bot:analyst']}]);
+  assert.deepEqual(await under(), ['Cara', 'Scout', 'Builder', 'Analyst']);
+  await page.keyboard.press('Enter');
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('Enter');
+  await page.waitForFunction(() => document.querySelectorAll('#tree [data-org-place]')[3]?.dataset.org === 'b:builder');
+  assert.deepEqual(calls.shift(), ['PUT', 'human:ana', {reports: ['human:cara', 'bot:scout', 'bot:analyst', 'bot:builder']}]);
+  // Escape closes the menu, back on its button, and moves nothing.
+  await page.keyboard.press('Enter');
+  await page.keyboard.press('Escape');
+  assert.equal(await page.locator('#tree .org-order-menu').count(), 0);
+  assert.equal(await page.evaluate(() => document.activeElement.dataset.orgMenu), 'b:builder');
+  assert.deepEqual(calls, []);
+  assert.deepEqual(errors, []);
+  await page.close();
+
+  // Ben may move his CMO, but not under Scout, who is not his: he is told so, and nothing moves.
+  const ben = await open(browser, {id: 'ben', role: 'viewer', name: 'Ben', email: 'ben@example.test', cloud: true, company_role: 'member'});
+  assert.equal(await ben.page.locator('#tree [data-org-menu], #tree [data-org-place]').count(), 0, 'nothing of his to order');
+  const before = await shape(ben.page);
+  await ben.page.locator('#tree [data-toggle="p:ben"]').first().click();
+  await drag(ben.page, node(ben.page, 'b:cmo'), node(ben.page, 'b:scout'));
+  await ben.page.locator('.toast.err', {hasText: "You can't put CMO under Scout"}).waitFor();
+  assert.deepEqual(ben.calls, []);
+  assert.deepEqual(await shape(ben.page), before);
+  assert.deepEqual(ben.errors, []);
+  await ben.page.close();
+}
+
+// Reports nobody placed follow the server's rule (backend/tests/test_report_order.py) on the chart and a person's page:
+// humans first, by name with accents and case aside, not as listed; then bots with an `order`, lowest first. A place
+// someone saved comes first. In a group, a manager's reports there keep their order and move up and down in it.
+async function reportFallback(browser) {
+  const {page, errors, calls, people, groups, bots} = await open(browser, {id: 'ana', role: 'owner', name: 'Ana', email: 'ana@example.test', cloud: true});
+  for (const [id, name] of [['zoe', 'Zoë'], ['eli', 'Éli'], ['bea', 'bea']])
+    people.push({id, name, org_parent: 'p:ana', team: '', reports_to: 'ana'});
+  for (const [name, display_name, order] of [['analyst', 'Analyst', 2], ['builder', 'Builder', 1]])
+    bots.push({...bots.find(b => b.name === 'scout'), name, display_name, order});
+  await page.evaluate(() => refresh(true));
+  const under = async () => (await shape(page))[0].Ana;
+  assert.deepEqual(await under(), ['bea', 'Cara', 'Éli', 'Zoë', 'Builder', 'Analyst', 'Scout']);
+  bots.find(b => b.name === 'scout').report_position = 0;
+  await page.evaluate(() => refresh(true));
+  const chart = ['Scout', 'bea', 'Cara', 'Éli', 'Zoë', 'Builder', 'Analyst'];
+  assert.deepEqual(await under(), chart, 'a saved place first, the rest by the same rule');
+  await page.goto('https://tico-ui.test/#/person/ana');
+  const chips = title => page.locator('#main section.card', {has: page.locator('h2', {hasText: new RegExp('^' + title + '$')})}).locator('a.chip > span:not([class])');
+  await chips('Reports').first().waitFor();
+  assert.deepEqual(await chips('Reports').allTextContents(), ['bea', 'Ben', 'Cara', 'Éli', 'Zoë'], "Ana's page: the same humans' order (Ben too, in his group on the chart)");
+  assert.deepEqual((await chips('Bots').allTextContents()).filter(n => ['Scout', 'Builder', 'Analyst'].includes(n)), ['Scout', 'Builder', 'Analyst'],
+    "and the same bots' order");
+  // Two of Ana's reports shown in a group of their own: Move down there swaps them in her order.
+  await page.goto('https://tico-ui.test/#/updates');
+  groups.push({id: 'campaigns', name: 'Campaigns', parent: ''});
+  for (const r of [...people, ...bots]) if (['cara', 'builder'].includes(r.id || r.name)) r.team = 'campaigns';
+  await page.evaluate(() => refresh(true));
+  assert.deepEqual((await shape(page)).find(n => n.Campaigns)?.Campaigns, ['Cara', 'Builder']);
+  await node(page, 'p:cara').focus();
+  await page.keyboard.press('Tab');
+  await page.keyboard.press('Enter');
+  assert.equal(await page.getByRole('menuitem', {name: 'Move up'}).isDisabled(), true, 'first in the group');
+  assert.equal(await page.evaluate(() => document.activeElement.textContent), 'Move down');
+  await page.keyboard.press('Enter');
+  await page.waitForFunction(() => document.activeElement?.dataset.orgMenu === 'p:cara' && !document.querySelector('#tree .org-order-menu'));
+  assert.deepEqual(calls, [['PUT', 'human:ana', {reports: ['bot:scout', 'human:bea', 'human:eli', 'human:zoe', 'bot:analyst', 'bot:builder', 'human:cara']}]]);
+  assert.deepEqual((await shape(page)).find(n => n.Campaigns)?.Campaigns, ['Builder', 'Cara']);
+  assert.equal(await page.getByRole('button', {name: 'Move Cara Mendes'}).count(), 1);
+  assert.deepEqual(errors, []);
+  await page.close();
 }
 
 async function externalChanges(browser) {
@@ -470,6 +581,8 @@ async function personalBranches(browser) {
     await teamAdd(browser);
     await deleteGroups(browser);
     await personalBranches(browser);
-    console.log('PASS: groups nest in the team chart; owners add, rename, drag into and nest groups; members read.');
+    await reportOrder(browser);
+    await reportFallback(browser);
+    console.log('PASS: groups nest in the team chart; owners add, rename, drag into and nest groups; reports keep their order; members read.');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

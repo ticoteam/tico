@@ -11,6 +11,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const {html, uiFile} = require('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs');
 const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();   // load.cjs arrives with #254
 const SHOTS = process.env.REPO_SHOTS || '';
 
@@ -34,7 +35,8 @@ function fixtures() {
       repo('acme/bot-support', {bot_repo: true}),
     ],
     new_bot_default: 'own', github_connected: true,
-    bot: {mode: 'chosen', all_access: 'write', chosen: [{full_name: 'acme/web', access: 'write'}, {full_name: 'acme/api', access: 'read'}]},
+    // Create product repositories is on for a bot nobody switched off, as the server says.
+    bot: {mode: 'chosen', all_access: 'write', create_product_repositories: true, chosen: [{full_name: 'acme/web', access: 'write'}, {full_name: 'acme/api', access: 'read'}]},
   };
 }
 const effective = (data) => {
@@ -45,12 +47,12 @@ const effective = (data) => {
   return own;
 };
 
-async function open(browser, {role = 'owner', connected = true, viewport = {width: 1440, height: 900}, theme = 'dark'} = {}) {
-  const data = fixtures(); data.github_connected = connected;
+async function open(browser, {role = 'owner', admin = false, connected = true, viewport = {width: 1440, height: 900}, theme = 'dark', bot: botMore = {}} = {}) {
+  const data = fixtures(); data.github_connected = connected; data.bot = {...data.bot, ...botMore};
   const page = await browser.newPage({viewport, serviceWorkers: 'block'});
   const errors = [], writes = [];
   await page.addInitScript(t => { try { localStorage.setItem('tico.theme', t); } catch {} }, theme);
-  const me = {id: role === 'owner' ? 'ana' : 'sam', role, name: role === 'owner' ? 'Ana' : 'Sam', email: 'ana@example.com', cloud: true, registered: true};
+  const me = {id: role === 'owner' ? 'ana' : 'sam', role, name: role === 'owner' ? 'Ana' : 'Sam', email: 'ana@example.com', cloud: true, registered: true, bot_admin: admin};
   const bot = {name: 'release-captain', display_name: 'Release Captain', status: 'active', state: 'active', operator: 'ana',
     repo: 'bot-release-captain', can_manage: true, revision: 3, users: [{id: 'ana', name: 'Ana'}], bot_owners: [{id: 'sam', name: 'Sam'}],
     my_access: {see: true, read: true, write: true}, access_policy: {}};
@@ -112,7 +114,7 @@ async function open(browser, {role = 'owner', connected = true, viewport = {widt
       return json({...data.bot, effective: effective(data)});         // GET and PUT both answer the whole access (backend access())
     }
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
-    return json({});
+    return json(unrouted(p));
   });
   page.on('pageerror', e => errors.push(e.message));
   await page.goto('https://tico-ui.test/#/repositories');
@@ -198,7 +200,7 @@ async function owner(browser) {
   await box.locator('[data-brepo="acme/mobile"] [data-brepo-pick]').check();
   await page.waitForFunction(() => document.querySelector('#bot-editor [data-brepo-status]')?.textContent === 'Saved');
   assert.deepEqual(lastWrite(writes, '/api/v2/bots/release-captain/repositories'), {mode: 'chosen', all_access: 'write', create_repositories: false,
-    chosen: [{full_name: 'acme/web', access: 'write'}, {full_name: 'acme/api', access: 'read'}, {full_name: 'acme/mobile', access: 'write'}]});
+    create_product_repositories: true, chosen: [{full_name: 'acme/web', access: 'write'}, {full_name: 'acme/api', access: 'read'}, {full_name: 'acme/mobile', access: 'write'}]});
   // Run workflows: only on a ticked write repo; sent when turned on or off, left out otherwise.
   const runs = name => box.locator(`[data-brepo="${name}"] [data-brepo-run]`);
   assert.equal(await runs('acme/api').isDisabled(), true, 'a read grant cannot run workflows');
@@ -233,16 +235,31 @@ async function owner(browser) {
   await box.locator('input[type=radio][value=own]').focus();
   await page.keyboard.press('ArrowRight');
   await page.waitForFunction(() => document.querySelector('#bot-editor input[type=radio][value=all]')?.checked);
-  assert.equal(lastWrite(writes, '/api/v2/bots/release-captain/repositories').mode, 'all');
+  // The radio moves at once; its save reaches the mock a moment later, so wait for the save itself.
+  await until(() => lastWrite(writes, '/api/v2/bots/release-captain/repositories').mode === 'all', 'the All ticked repos save');
   // Creation is a separate explicit grant; keyboard changes save and preserve focus.
   const creation = box.locator('[data-brepo-create]');
   assert.equal(await creation.isChecked(), false);
   await creation.focus();
   await page.keyboard.press('Space');
   await page.waitForFunction(() => document.querySelector('#bot-editor [data-brepo-status]')?.textContent === 'Saved');
-  assert.equal(lastWrite(writes, '/api/v2/bots/release-captain/repositories').create_repositories, true);
+  // 'Saved' may still be the mode save's; the creation save is the one to wait for.
+  await until(() => lastWrite(writes, '/api/v2/bots/release-captain/repositories').create_repositories === true, 'the Create bot repositories save');
   assert.equal(await creation.isChecked(), true);
   assert.equal(await creation.evaluate(el => el === document.activeElement), true);
+  // Create product repositories: its own grant, on by default; the Owner switches it off and back on.
+  const product = box.locator('[data-brepo-product]');
+  assert.equal(await product.isChecked(), true);
+  assert.equal(await product.isDisabled(), false);
+  await product.focus();
+  for (const on of [false, true]) {
+    await page.evaluate(() => { document.querySelector('#bot-editor [data-brepo-status]').textContent = ''; });
+    await page.keyboard.press('Space');
+    await page.waitForFunction(() => document.querySelector('#bot-editor [data-brepo-status]')?.textContent === 'Saved');
+    assert.equal(lastWrite(writes, '/api/v2/bots/release-captain/repositories').create_product_repositories, on);
+    assert.equal(await product.isChecked(), on);
+    assert.equal(await product.evaluate(el => el === document.activeElement), true);
+  }
   // The old free-text box is gone; Save bot no longer writes github-repos.
   assert.equal(await page.locator('#bot-editor textarea[name=extra_repos]').count(), 0);
   assert.deepEqual(errors, []);
@@ -294,6 +311,8 @@ async function saves(browser) {
   await page.waitForFunction(() => document.querySelector('#bot-editor [data-brepo-status]')?.textContent === 'Saved');
   await box.locator('[data-brepo="acme/web"] [data-brepo-pick]').click();
   await page.waitForFunction(() => document.querySelector('#bot-editor [data-brepo-status]')?.textContent === 'Saved');
+  // 'Saved' may still be the Chosen repos save's; acme/web's save must land before saves are refused.
+  await until(() => lastWrite(writes, '/api/v2/bots/release-captain/repositories').chosen.some(c => c.full_name === 'acme/web'), 'the acme/web save');
   data.refuse = 'Repository access is locked';
   await box.locator('[data-brepo="acme/mobile"] [data-brepo-pick]').click();
   await page.waitForFunction(() => /locked/.test(document.querySelector('#bot-editor [data-brepo-status]')?.textContent || ''));
@@ -401,6 +420,28 @@ async function phone(browser) {
   await page.close();
 }
 
+// An admin may turn Create product repositories off, never on (the server refuses it too).
+async function admin(browser) {
+  for (const on of [false, true]) {
+    const {page, errors, writes} = await open(browser, {role: 'human', admin: true, bot: {create_product_repositories: on}});
+    await page.locator('#set-repos .repo-row').first().waitFor();
+    await page.evaluate(() => settingsEditBot('release-captain'));
+    const product = page.locator('#bot-editor [data-bot-repos] [data-brepo-product]');
+    await product.waitFor();
+    assert.equal(await product.isChecked(), on);
+    assert.equal(await product.isDisabled(), !on, on ? 'an admin may take it away' : 'only the Owner turns it on');
+    assert.equal(await page.locator('#bot-editor [data-brepo-create]').isDisabled(), false, 'bot repositories stay an admin grant');
+    if (on) {
+      await product.uncheck();
+      await page.waitForFunction(() => document.querySelector('#bot-editor [data-brepo-status]')?.textContent === 'Saved');
+      assert.equal(lastWrite(writes, '/api/v2/bots/release-captain/repositories').create_product_repositories, false);
+      assert.equal(await product.isDisabled(), true, 'once off, the admin cannot turn it back on');
+    }
+    assert.deepEqual(errors, []);
+    await page.close();
+  }
+}
+
 (async () => {
   if (SHOTS) fs.mkdirSync(SHOTS, {recursive: true});
   const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
@@ -409,6 +450,7 @@ async function phone(browser) {
     await productCreate(browser);
     await saves(browser);
     await member(browser);
+    await admin(browser);
     await notConnected(browser);
     await phone(browser);
     console.log('ok');

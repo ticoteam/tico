@@ -6,6 +6,7 @@ const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs');
 
 const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
 const bots = ['lead', 'qa', 'senior'].map(name => ({name, display_name: {lead: 'Head of Engineering', qa: 'QA Engineer',
@@ -43,6 +44,9 @@ const NEEDS = [{...T.asked, kind: 'question'}, {...T.forAna, kind: 'task'}, {...
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       if (p === '/api/me') return json({id: 'ana', role: 'owner', name: 'Ana', email: 'ana@example.test', cloud: true});
       if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}]});
+      // A list, as the server sends it: the catch-all {} broke the tree drawn before Needs you whenever it landed ahead
+      // of /api/v2/status, and the page never opened (v0.3.54 release check).
+      if (p === '/api/issues') return json([]);
       if (p === '/api/employees') return json(bots);
       if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: [], schedules: []});
       if (p === '/api/v2/status') return json({bots: bots.map(b => ({bot: b.name, state: 'idle'}))});
@@ -57,7 +61,7 @@ const NEEDS = [{...T.asked, kind: 'question'}, {...T.forAna, kind: 'task'}, {...
       }
       if (p === '/api/v2/conversations') return json({conversations: []});
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
-      return json({});
+      return json(unrouted(p));
     });
     await page.goto('https://tico-ui.test/#/bot/lead/tasks');
     const rail = page.locator('#pane-tasks');

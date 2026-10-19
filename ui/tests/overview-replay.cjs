@@ -5,6 +5,7 @@ const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs');
 
 const SCENE = `export function createBuilding(data) {
   const rec = window.__scene = {created: (window.__scene?.created || 0) + 1, data, updates: [], links: []};
@@ -56,16 +57,19 @@ const SCENE = `export function createBuilding(data) {
             {at: at(5), kind: 'task.owner', who: 'bot:writer', task: {id: 't1', title: 'Launch post'}, old: 'bot:writer', new: 'bot:editor'},
           ]});
       }
-      return json({});
+      return json(unrouted(p));
     });
-    await page.goto('http://tico-ui.test/');
-    await page.waitForFunction(() => location.hash === '#/updates');
-    await page.evaluate(() => location.hash = '#/overview');
+    // Opened by its address, the campus is drawn once the team has loaded (switching the hash earlier would draw it
+    // before the roster arrives and draw it again after).
+    await page.goto('http://tico-ui.test/#/overview');
     const frame = page.frameLocator('#overview-frame');
     await frame.locator('body[data-scene-ready]').waitFor();
     const scene = page.frames().find(f => f.url().includes('/overview/index.html'));
     const rec = () => scene.evaluate(() => window.__scene);
     const deskOf = (data, id) => data.groups.flatMap(g => g.members).find(m => m.id === id);
+    // The first status answer may land after the campus opens; the desks follow it then, not at the next poll.
+    await scene.waitForFunction(() => window.__scene.data.groups.flatMap(g => g.members).find(m => m.id === 'bot:editor')?.state === 'running',
+      null, {polling: 100, timeout: 10000});
     assert.equal(deskOf((await rec()).data, 'bot:editor').state, 'running', 'live status before the replay');
 
     // The toggle asks for exactly the last 24 hours, ending now.
@@ -83,8 +87,17 @@ const SCENE = `export function createBuilding(data) {
     await frame.locator('#replay-captions li', {hasText: 'WRITER → EDITOR: Can you review the launch post?'}).waitFor();
     await scene.waitForFunction(() => window.__scene.links.some(([, , k]) => k === 'handoff'), null, {polling: 100});
 
-    // At the end, desks show the replayed states: the editor needs a person, the restricted bot stays restricted.
-    await frame.locator('#replay-play[aria-label="Play"]').waitFor();
+    // Played to its end, the replay goes back to live.
+    await frame.locator('#replay').waitFor({state: 'hidden'});
+    assert.equal(deskOf((await rec()).data, 'bot:editor').state, 'running', 'the live status again');
+    assert.equal(await frame.locator('#replay-toggle').getAttribute('aria-pressed'), 'false');
+
+    // Scrubbed to the end, desks show the replayed states: the editor needs a person, the restricted bot stays restricted.
+    // From here playback is held (no animation frames), so a replay can't play out and close before it is scrubbed.
+    await scene.evaluate(() => { window.requestAnimationFrame = () => 0; });
+    await frame.locator('#replay-toggle').click();
+    await frame.locator('#replay-bar').waitFor();
+    await frame.locator('#replay-range').evaluate(el => { el.value = '1000'; el.dispatchEvent(new Event('input')); });
     const ended = (await rec()).data;
     assert.equal(deskOf(ended, 'bot:editor').state, 'needs');
     assert.equal(deskOf(ended, 'bot:writer').state, 'idle');

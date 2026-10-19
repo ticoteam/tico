@@ -11,13 +11,16 @@ import yaml
 from fastapi import Query, Request
 from fastapi.responses import PlainTextResponse, RedirectResponse, Response
 
+from clients import gateway, sessions
+
 from . import access as Access
 from . import bot_access as A
 from . import models as M
 from . import changelog as CL
-from . import providers, runner_versions
-from . import personal_tokens, rooms, team_rules, turns
-from .execution import AWAKE_GAP, AWAKE_SETTLE, Execution, turn_limit, turn_share, turns_here
+from . import app_delivery, providers, runner_versions
+from .harnesses import resolve_harness
+from . import personal_tokens, rooms, team_rules, turns, wake_presets
+from .execution import AWAKE_GAP, AWAKE_SETTLE, Execution, bump_bot_session_epoch, turn_limit, turn_share, turns_here
 from pathlib import Path
 
 from . import read_cache
@@ -105,6 +108,7 @@ def computer_details(c, row, who, auth):
     assigned = {r[0] for r in c.execute(
         "SELECT a.bot FROM assignments a JOIN bots b ON b.slug=a.bot "
         "WHERE a.runner_id=? AND b.state<>'archived'", (row["id"],))}
+    shared = shared_logins(c, row["id"], readiness, assigned, access)
     readiness["bots"] = {bot: {k: v for k, v in report.items() if k != "tools"}
                          for bot, report in readiness.get("bots", {}).items()
                          if bot in assigned and (access.get(bot) or {}).get("read") and isinstance(report, dict)}
@@ -117,7 +121,43 @@ def computer_details(c, row, who, auth):
     return {"repositories": metadata(c, "computer-repositories:" + row["id"]).get("repositories", "unknown"),
             "version": value.get("version") or "", "release": update.get("release") or "", "last_seen": value.get("last_seen"),
             "readiness": readiness, "update": update, "fix": "Open Settings > Computers to retry the update" if update.get("error") else "Open Settings > Computers",
-            "services": [], "services_scope": "team"}
+            "services": [], "services_scope": "team", "shared_logins": shared}
+
+
+def subscription_login(runtime, detail):
+    """Whether a sign-in detail names a subscription login, as the runner bills it (runner-rs/src/execute.rs
+    billing_for): "Signed in ..." naming the harness's `subscription_marker` and no API key."""
+    from .harnesses import harness_caps
+    marker = str(harness_caps(runtime).get("subscription_marker") or "").lower()
+    detail = str(detail or "")
+    return (bool(marker) and detail.lower().startswith("signed in") and marker in detail.lower()
+            and not re.search(r"(?i)api[ _-]?key", detail))
+
+
+def shared_logins(c, runner_id, readiness, assigned, access):
+    """The sign-ins on this computer that several bots run on, for a harness whose subscription login serves one turn
+    at a time (`one_turn_per_login`): those bots take turns (runner-rs/src/login_turns.rs). One row per login: its
+    runtime, its subscription (`profile`, '' for the computer's own sign-in) and `display_name`, how many bots share
+    it and the ones this reader may see. A key login runs its bots side by side and is left out."""
+    from .harnesses import harness_caps
+    runtimes = readiness.get("runtimes") or {}
+    logins = {}
+    for bot, report in (readiness.get("bots") or {}).items():
+        if bot not in assigned or not isinstance(report, dict):
+            continue
+        runtime, profile = str(report.get("runtime") or ""), str(report.get("profile") or "")
+        if not harness_caps(runtime).get("one_turn_per_login"):
+            continue
+        row = runtimes.get(runtime) or {}
+        login = ((row.get("profiles") or {}).get(profile) if profile and row.get("profiles") else row) or {}
+        if not subscription_login(runtime, login.get("detail")):
+            continue
+        logins.setdefault((runtime, profile), []).append(bot)
+    from .subscription_identity import identity
+    return [{"runtime": runtime, "profile": profile,
+             "display_name": identity(c, runner_id, profile)["display_name"] if profile else "",
+             "count": len(bots), "bots": sorted(b for b in bots if (access.get(b) or {}).get("read"))}
+            for (runtime, profile), bots in sorted(logins.items()) if len(bots) > 1]
 
 
 SERVICE_NAMES = {"connector:calendar": "Calendar Tool", "connector:mail": "Mail Tool"}
@@ -190,6 +230,41 @@ def require_chat(c, auth, who, bot):
     if not may_chat(c, auth, who, bot):
         raise Problem("forbidden", auth.settings.assistant_name + " chats only in your own Assistant "
                       "(/api/v2/assistant); message one of your bots here", 403)
+
+
+def direct_chat(c, actor, bot):
+    """The person's open direct chat with `bot`: kind chat, no task, just the two of them. None when there is none."""
+    return next((row for row in H.conversations_for(c, actor) if row["kind"] == "chat"
+                 and not row.get("task_id") and not row["closed_at"]
+                 and set(row["participants"]) == {actor, "bot:" + bot}), None)
+
+
+def chat_running(c, conversation_id):
+    """Whether a turn on this conversation is leased or running now."""
+    return bool(c.execute("SELECT 1 FROM attempts a JOIN jobs j ON j.id=a.job_id JOIN messages m ON m.id=j.message_id "
+                          "WHERE m.conversation_id=? AND a.state IN ('leased','running') AND a.lease_until>?",
+                          (conversation_id, H.now())).fetchone())
+
+
+def clear_chat_session(c, settings, actor, bot, conversation_id, detail=None):
+    """Clear a direct chat's session: a person's Clear (POST /api/employees/{bot}/session/clear) and a topic change
+    (backend/topic_change.py) alike. The conversation's epoch moves, so its history starts after the clear; the next
+    turn starts a fresh provider thread and loads the recovery pack. The caller checks no turn is running."""
+    c.execute("INSERT INTO session_epochs VALUES(?,1,?) ON CONFLICT(conversation_id) DO UPDATE SET "
+              "epoch=epoch+1,updated=excluded.updated", (conversation_id, H.now()))
+    # Drop the provider pointer so the next turn tries a fresh thread and loads the
+    # recovery pack from Hub history instead of resuming the cleared session.
+    config = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    cfg = json.loads(config[0] or "{}") if config else {}
+    if config:
+        c.execute("DELETE FROM bot_sessions WHERE bot=? AND runtime=? AND model=?",
+                  (bot, *providers.bot_choice(c, settings, cfg)))
+    # This chat's turns continue the bot's thread every direct chat shares: the next turn of any of them
+    # starts a new one, while each other chat keeps its own history.
+    from .shared_bots import follow
+    if sessions.session_key(follow(c, bot, cfg), bot, None, conversation_id) == sessions.BOT_THREAD:
+        bump_bot_session_epoch(c, bot)
+    H.event(c, actor, "session.clear", conversation_id, detail)
 
 
 def default_bot(c, settings, botops="botops"):
@@ -359,13 +434,21 @@ def operation_issues(c, who, auth):
                            if queued else " Other work can continue.")
             # A stopped run is held so an automatic retry cannot repeat an outside action. It is
             # useful in Settings, but age alone never turns it into an interruption for a person.
-            from .execution import held_runs
+            from .execution import held_runs, isolation_refused
             named = "; ".join(f"\"{h['title']}\" (owner {h['owner_name']})" for h in held_runs(c, who, auth, slug))
             held_note = f" Held: {named}." if named else ""
-            add("uncertain_work", f"{bot['display_name']} saved {uncertain} stopped {noun} for later",
-                "The bot stopped before returning an answer. Tico paused only that request so it "
-                f"will not repeat a possible outside action.{held_note}{queued_note} Review it whenever useful.",
-                bot=slug, severity="warning", needs_person=False, action="review")
+            if isolation_refused(c, who, auth, slug):
+                # Not a possible outside action: the bot's model can't run on its computer, and its later work waits
+                # behind the held run until a person acts.
+                add("uncertain_work", f"{bot['display_name']} can't run on its computer",
+                    gateway.run_status(gateway.NOT_ISOLATED) + f".{held_note} Its other work waits behind this run.",
+                    bot=slug, action="Pick another model in Settings → Bots, or move the bot to a computer with "
+                    "Tico's Docker runner, then review its stopped run.")
+            else:
+                add("uncertain_work", f"{bot['display_name']} saved {uncertain} stopped {noun} for later",
+                    "The bot stopped before returning an answer. Tico paused only that request so it "
+                    f"will not repeat a possible outside action.{held_note}{queued_note} Review it whenever useful.",
+                    bot=slug, severity="warning", needs_person=False, action="review")
         agent = location.get("agent")
         if agent and bot["state"] == "active" and not agent["credential"]:
             add("agent", bot["display_name"] + " has no agent credential",
@@ -564,6 +647,9 @@ def queued_label(c, bot, location, settings=None, human=False, behind=False):
         config = json.loads(config[0]) if config else {}
         label = ("Saved — steering this turn" if steers(config, config.get("runtime"))
                  else "Saved — queued for the next turn")
+    elif runner_versions.holding_since(c, (location.get("machine") or {}).get("runner_id")):
+        # Its computer takes no new work until its running turns end and it updates (docs/updates.md).
+        label = "Saved — waiting for the computer to update"
     elif (computer := free_turn(c, bot, location, human)):
         label = "Saved — waiting for a free turn on " + computer
     return label, readiness_reason
@@ -604,15 +690,16 @@ def live_parts(parts):
     return cut, len(parts) - len(kept)
 
 
-def conversation_snapshot(c, cid, who=None, settings=None, page_args=None):
+def conversation_snapshot(c, cid, who=None, settings=None, page_args=None, auth=None):
     page = privacy.page(c, who, cid, **(page_args or {})) if who else message_page(c, cid)
     from .chat_goals import current
-    return {**page, "execution": conversation_execution(c, cid, who, settings), "goal": current(c, cid)}
+    return {**page, "execution": conversation_execution(c, cid, who, settings, auth=auth), "goal": current(c, cid)}
 
 
-def conversation_execution(c, cid, who=None, settings=None, bot=None):
+def conversation_execution(c, cid, who=None, settings=None, bot=None, auth=None):
     """The newest run in this conversation as the chat shows it while it works: its state, a label and its reply so
-    far, or None. `bot` keeps to that bot's runs (a task's page follows its owner's session)."""
+    far, or None. `bot` keeps to that bot's runs (a task's page follows its owner's session). A run waiting for its
+    ChatGPT login (backend/login_waits.py) says so in `waiting` and its label; `auth` lets it name the bot holding it."""
     job = c.execute("SELECT j.*,a.state AS attempt_state,a.lease_until,a.stop_requested FROM jobs j JOIN messages m ON m.id=j.message_id "
                     "LEFT JOIN attempts a ON a.id=j.attempt_id WHERE m.conversation_id=? "
                     "AND coalesce(json_extract(m.refs_json,'$.maintenance'),'')!='checkpoint' "
@@ -637,6 +724,12 @@ def conversation_execution(c, cid, who=None, settings=None, bot=None):
             label = "Working — follow-up added"
         if state == "uncertain" and job["attempt_state"] == "failed":
             label = "Reply failed — your message is saved"
+        waiting = None
+        if state in ("leased", "running") and job["attempt_id"]:
+            # Before it starts, or after: a fallback hop takes its own login once the turn has started.
+            from .login_waits import waiting as login_wait
+            waiting = login_wait(c, job["attempt_id"], job["bot"], who, auth)
+            label = waiting or label
         readiness_reason = ""
         if state == "queued":
             message = H.message(c, job["message_id"]) or {}
@@ -655,6 +748,8 @@ def conversation_execution(c, cid, who=None, settings=None, bot=None):
                      "text": "\n\n".join(p["text"] for p in parts if p["kind"] != "tool"), "parts": parts, **location}
         if omitted:
             execution["parts_omitted"] = omitted
+        if waiting:
+            execution["waiting"] = waiting
         if readiness_reason:
             execution["readiness_reason"] = readiness_reason
     return execution
@@ -667,7 +762,7 @@ def conversation_execution(c, cid, who=None, settings=None, bot=None):
 PRESSING_DAYS = 3
 DECISIVE_DAYS = 1
 # A bot's task set waiting on the person blocks that bot just as its question does.
-KIND_RANK = {"approval": 0, "question": 1, "ask": 1, "waiting": 1, "declined": 2, "task": 3, "report": 4}
+KIND_RANK = {"approval": 0, "question": 1, "ask": 1, "waiting": 1, "declined": 2, "stale": 3, "task": 3, "report": 4}
 # A card whose bot has not yet said plainly what it needs (`ask_missing`) waits at the very bottom: there is nothing
 # for the person to do on it until the bot restates it (backend/restate_asks.py asks it to).
 
@@ -808,6 +903,8 @@ def yes_no_ask(text):
 def need_of(item):
     """The group a Needs you card goes in (NEED_GROUPS)."""
     kind = item.get("kind")
+    if kind == "stale":
+        return "decide"         # Accept or Skip, row by row
     if kind == "approval":
         return {"spend": "pay", "send": "review", "publish": "review", "support": "review", "merge": "review"}.get(
             item.get("what"), "decide")
@@ -1180,12 +1277,27 @@ def needs_items(c, auth, who, task_view, older=None):
                 item["title"] = "Send this to Tico support?"
                 item["support"] = {"to": hq_url().split("://", 1)[-1].split("/", 1)[0]}
             items.append(item)
+    from . import stale_review
+    stale = stale_review.card(c, who.actor) if H.is_human(who.actor) else None
+    if stale:
+        # The one card for the person's stale ticket suggestions (backend/stale_review.py): a row per task they may read.
+        stale["rows"] = [r for r in stale["rows"] if _readable(auth, c, who, r["task"])]
+        if stale["rows"]:
+            items.append(stale_review.retitle(stale))
     items = fold_related(items, c, who.actor)
     at = H.now()
     for item in items:
         item["pressing"] = pressing(item, at)
         item["need"] = need_of(item)
     return sorted(items, key=needs_key)
+
+
+def _readable(auth, c, who, task_id):
+    try:
+        auth.task(c, who, task_id)
+    except Problem:
+        return False
+    return True
 
 
 def needs_key(x):
@@ -1332,10 +1444,15 @@ def install_views(app, store, auth, mutate, task_view):
         company = providers.load(c, store.settings)
         rows = []
         access = auth.bot_accesses(c, who)
+        from .report_order import positions
+        places = positions(c)              # its place among its manager's reports on the chart, when someone set one
         # The Material Symbol a bot's avatar wears: its own, else its template's. A bot made from a `kind: helper` card
         # serves a person, and the UI shows it with the built-ins, apart from the org chart.
         from .onboarding import helper_templates, template_icons
         icons, helpers = template_icons(store.settings), helper_templates(store.settings)
+        # Where each bot hangs on the chart; the CEO Bot switch moves it there and nowhere else (backend/ceo_bot.py).
+        from . import ceo_bot
+        chart = ceo_bot.chart_entries(c, store.settings, people, configs, archived)
 
         def icon_of(config):
             return str(config.get("icon") or "") or icons.get(str(config.get("template") or ""), "")
@@ -1371,7 +1488,8 @@ def install_views(app, store, auth, mutate, task_view):
                              "reports_to": reports, "my_access": level, **policy,
                              "private_tasks_default": H.private_tasks_default(c, "bot:" + slug),
                              "team": P.team_of(slug, configs, people),
-                             "org_parent": P.org_parent("bot", slug, people, configs, archived),
+                             "org_parent": P.org_parent("bot", slug, people, chart, archived),
+                             "report_position": places.get("bot:" + slug),
                              "operator": registry["operator"] if registry else None,
                              "is_branch": bool((configs.get(slug) or {}).get("shared_from")),
                              "users": [P.brief(p) for p in P.primary_users(slug, people, configs)],
@@ -1399,7 +1517,8 @@ def install_views(app, store, auth, mutate, task_view):
                          "private_tasks_default": H.private_tasks_default(c, "bot:" + slug),
                          "host": "keeper", "tasks": "hub", "has_repo": location["ready"],
                          "team": P.team_of(slug, configs, people),
-                         "org_parent": P.org_parent("bot", slug, people, configs, archived),
+                         "org_parent": P.org_parent("bot", slug, people, chart, archived),
+                         "report_position": places.get("bot:" + slug),
                          "operator": registry["operator"] if registry else None,
                          "revision": registry["revision"] if registry else None,
                          "goals": (registry["goals"] if registry else "") or "",
@@ -1407,8 +1526,13 @@ def install_views(app, store, auth, mutate, task_view):
                          **location,
                          "users": [P.brief(p) for p in P.primary_users(slug, people, configs)],
                          "icon": icon_of(config), "helper": helper(config),
+                         # What Settings and the branch editor show and pick from (backend/wake_presets.py).
+                         "wake": wake_presets.effective(config),
                          "my_access": level, **policy,
-                         "can_chat": level["write"] and slug != auth.settings.assistant_bot})
+                         "can_chat": level["write"] and slug != auth.settings.assistant_bot,
+                         # Labelled as on the bot list, so its computer is named to one who cannot see it.
+                         "app_delivery": app_delivery.view(c, config),
+                         "app_delivery_app": app_delivery.HARNESS_APP.get(resolve_harness(config, config.get("runtime")))})
         return rows
 
     @app.get("/api/me")
@@ -1467,9 +1591,16 @@ def install_views(app, store, auth, mutate, task_view):
             from . import people_photos
             archived = {row["slug"] for row in H.bots(c) if row.get("state") == "archived"}
             view = P.org_view(r, configs, archived)
+            # The CEO Bot switch hangs the Heads' groups under it on the chart (backend/ceo_bot.py).
+            from . import ceo_bot
+            chart = ceo_bot.chart_entries(c, store.settings, r, configs, archived)
+            view["org_groups"] = ceo_bot.chart_groups(r, configs, chart, view["org_groups"], archived)
             access = auth.bot_accesses(c, who)
+            from .report_order import positions
+            places = positions(c)
             return {**r, "by_team": P.by_team(r), "org_groups": view["org_groups"], "people": [{
                 **p, "org_parent": P.org_parent("person", p["id"], r, configs, archived),
+                "report_position": places.get("human:" + p["id"]),
                 **({"photo_url": "/api/humans/" + p["id"] + "/photo"}
                    if people_photos.may_have(store.settings, p.get("email"), p.get("photo")) else {}),
                 "bots": [b for b in P.bots_of(p["id"], r, configs)
@@ -1517,14 +1648,20 @@ def install_views(app, store, auth, mutate, task_view):
             _, assigned = providers.runtimes_needed(c, store.settings)
             default = {providers.default_runtime(providers.load(c, store.settings))} - {""}
             run_on = providers.runtimes_run_on(c, store.settings)
+            from .computer_keys import shared_all, shared_listing
+            shared_keys = shared_all(c)
+            access = auth.bot_accesses(c, who)
             for row in c.execute("SELECT id,label,operator,last_seen,revoked_at,platform,version,capacity,readiness_json,"
-                                 "accepts_member_bots,screen,performance,capabilities_json FROM runners ORDER BY created"):
+                                 "accepts_member_bots,screen,performance,capabilities_json,restart_since,readiness_at "
+                                 "FROM runners ORDER BY created"):
                 if not auth.bot_admin(who) and who.actor != "human:" + row["operator"]:
                     continue
                 bots = [a[0] for a in c.execute("SELECT bot FROM assignments WHERE runner_id=? ORDER BY bot", (row["id"],))]
                 value = dict(row)
                 value["release"] = runner_versions.view(fleet.get(row["id"])).get("release") or ""
                 value["accepts_member_bots"] = bool(row["accepts_member_bots"])
+                # Since when it says it is restarting after a person pressed Restart; null when it is not.
+                value["restarting"] = value.pop("restart_since")
                 from .screen import listing as screen_listing
                 from .performance import listing as performance_listing
                 value.update(screen_listing(value))
@@ -1547,8 +1684,18 @@ def install_views(app, store, auth, mutate, task_view):
                 from .subscriptions import computer_profiles
                 # Each named subscription on it, with its sign-in, account and usage windows: this list is already
                 # limited to an administrator or the computer's operator, who may read its accounts.
+                from .model_login import cleared_logins
+                from .computer_keys import listing as computer_key_listing
                 machines.append({**value, "bots": bots, "needed_runtimes": sorted(assigned.get(row["id"]) or default),
                                  "profiles": computer_profiles(c, row, True),
+                                 # {runtime: [profile, ...]} a person signed out here; they stay signed out.
+                                 "signed_out": cleared_logins(c, row["id"]),
+                                 # {runtime: {env, preview}}: its own keys stored from here, and the company's shared
+                                 # ones, for the rows a key signs in (backend/computer_keys.py). Never a value.
+                                 "keys": computer_key_listing(c, row["id"]),
+                                 "shared_keys": shared_listing(shared_keys, value["readiness"]),
+                                 # The sign-ins several of its bots share, which they take turns on.
+                                 "shared_logins": shared_logins(c, row["id"], value["readiness"], assigned_here, access),
                                  "bot_runtimes": sorted(run_on.get(row["id"], ())),
                                  "update": runner_versions.view(fleet.get(row["id"])),
                                  "harness_actions": recent(c, row["id"]) if who.role == "owner" else [],
@@ -1882,25 +2029,12 @@ def install_views(app, store, auth, mutate, task_view):
         human_only(who)
         def work(c):
             require_chat(c, auth, who, bot)
-            conv = next((row for row in H.conversations_for(c, who.actor) if row["kind"] == "chat"
-                         and not row.get("task_id") and not row["closed_at"]
-                         and set(row["participants"]) == {who.actor, "bot:" + bot}), None)
+            conv = direct_chat(c, who.actor, bot)
             if not conv:
                 return {"cleared": True}
-            active = c.execute("SELECT 1 FROM attempts a JOIN jobs j ON j.id=a.job_id JOIN messages m ON m.id=j.message_id "
-                               "WHERE m.conversation_id=? AND a.state IN ('leased','running') AND a.lease_until>?", (conv["id"], H.now())).fetchone()
-            if active:
+            if chat_running(c, conv["id"]):
                 raise Problem("busy", "Wait for this conversation's current turn to finish", 409)
-            c.execute("INSERT INTO session_epochs VALUES(?,1,?) ON CONFLICT(conversation_id) DO UPDATE SET "
-                      "epoch=epoch+1,updated=excluded.updated", (conv["id"], H.now()))
-            # Drop the provider pointer so the next turn tries a fresh thread and loads the
-            # recovery pack from Hub history instead of resuming the cleared session.
-            config = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
-            if config:
-                cfg = json.loads(config[0] or "{}")
-                c.execute("DELETE FROM bot_sessions WHERE bot=? AND runtime=? AND model=?",
-                          (bot, *providers.bot_choice(c, auth.settings, cfg)))
-            H.event(c, who.actor, "session.clear", conv["id"])
+            clear_chat_session(c, auth.settings, who.actor, bot, conv["id"])
             return {"cleared": True, "conversation_id": conv["id"]}
         return mutate(request, body, work)
 
@@ -1920,7 +2054,7 @@ def install_views(app, store, auth, mutate, task_view):
     def snapshot(request: Request, cid: str, limit: int | None = None, max_bytes: int | None = None):
         with store.read() as c:
             auth.conversation(c, request.state.identity, cid)
-            snap = conversation_snapshot(c, cid, request.state.identity, auth.settings, page_options(limit, max_bytes))
+            snap = conversation_snapshot(c, cid, request.state.identity, auth.settings, page_options(limit, max_bytes), auth=auth)
             turns.annotate(c, auth, request.state.identity, snap["messages"])
             return snap
 

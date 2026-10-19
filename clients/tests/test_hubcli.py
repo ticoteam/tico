@@ -23,7 +23,7 @@ from clients import hubcli
 
 HUB = Path(__file__).resolve().parents[2] / "scripts" / "hub"
 SUBCOMMANDS = ["whoami", "meeting", "message", "conversation", "question", "note", "file", "doc", "chat", "assistant", "tag", "task", "replay", "goal", "kpi",
-               "proposal", "market", "listening", "tool", "routine", "trigger", "approval", "brief", "mcp", "needs-you", "run", "team", "health",
+               "proposal", "market", "listening", "tool", "routine", "trigger", "approval", "brief", "mcp", "needs-you", "run", "team", "org", "health",
                "changelog", "update", "grokbot", "external", "calendar", "sql", "db", "classify", "decision", "template", "bot", "repo", "skill", "agent", "human", "group", "api", "computer",
                "credential", "slack", "support", "health-monitor", "roadmap", "service-key"]
 
@@ -103,9 +103,35 @@ def test_product_repository_cli_refuses_missing_capability_and_noninteractive_co
     with pytest.raises(remotecli.APIError, match="not available"):
         remotecli.product_repo_create(Api("missing"), "tico-recorder", stdin=StringIO(""), stderr=StringIO())
     available = Api("available")
-    with pytest.raises(remotecli.APIError, match="requires an interactive terminal"):
+    with pytest.raises(remotecli.APIError, match="--confirm Acme/tico-recorder, or type it at an interactive terminal"):
         remotecli.product_repo_create(available, "tico-recorder", stdin=StringIO("Acme/tico-recorder\n"), stderr=StringIO())
     assert available.writes == 0
+
+
+def test_product_repository_cli_confirms_without_a_terminal_only_with_the_exact_target():
+    """A bot's turn has no terminal: `--confirm org/name` stands in for typing it, and must match the preview."""
+    from clients import remotecli
+    from io import StringIO
+    sent = []
+
+    class Api:
+        def get(self, path, **query):
+            return {"org": "Acme", "name": "tico-services", "repository": "Acme/tico-services",
+                    "visibility": "private", "auto_init": False, "capability": "available",
+                    "capability_detail": "Administration: write verified"}
+        def post(self, path, body, key=None):
+            sent.append((path, body))
+            return {"repository": "Acme/tico-services"}
+
+    args = hubcli.parser().parse_args(["repo", "product-create", "tico-services", "--confirm", "Acme/tico-services"])
+    assert args.confirm == "Acme/tico-services"
+    for wrong in ("tico-services", "Acme/other", "acme/tico-services"):
+        with pytest.raises(remotecli.APIError, match="exact preview target Acme/tico-services"):
+            remotecli.product_repo_create(Api(), "tico-services", confirm=wrong, stdin=StringIO(""), stderr=StringIO())
+    assert sent == []
+    remotecli.product_repo_create(Api(), "tico-services", confirm=args.confirm, stdin=StringIO(""), stderr=StringIO())
+    assert sent == [("github/product-repos", {"org": "Acme", "name": "tico-services", "visibility": "private",
+                                              "auto_init": False, "confirmed": True})]
 
 
 class Parser(unittest.TestCase):
@@ -143,6 +169,8 @@ class Stub(BaseHTTPRequestHandler):
             return self.reply(200, {"actor": "bot:coo", "kind": "bot", "id": "coo"})
         if self.path.startswith("/api/v2/roadmap"):
             return self.reply(200, {"ok": True})
+        if self.path.startswith("/api/v2/decisions/readout"):
+            return self.reply(200, {"sets": [], "text": "Decide readout"})
         if self.path.startswith("/api/v2/tasks/T1"):
             return self.reply(200, {"task": {"id": "T1", "version": 3}})
         self.reply(404, {"error": {"code": "not_found", "detail": "no"}})
@@ -208,6 +236,14 @@ class AgainstAStub(unittest.TestCase):
         self.assertEqual(code, 0, out)
         posted = [b for m, p, _, b in Stub.seen if m == "POST" and p == "/api/v2/tasks"][-1]
         self.assertEqual((posted["owner"], posted["check_model"]), ("bot:coo", "auto"))
+
+    def test_decision_readout_reads_the_days_asked(self):
+        code, out = run_hub("decision", "readout", "--days", "14", env=self.env)
+        self.assertEqual((code, out["text"]), (0, "Decide readout"), out)
+        self.assertIn(("GET", "/api/v2/decisions/readout?days=14"), [(m, p) for m, p, _, _ in Stub.seen])
+        code, out = run_hub("decision", "readout", env=self.env)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(Stub.seen[-1][1], "/api/v2/decisions/readout", "the server's default, 7 days")
 
     def test_tool_add_dry_run_is_checked_by_the_server_not_the_task_dry_run(self):
         code, out = run_hub("tool", "add", "writer", "notion", "--can", "read",

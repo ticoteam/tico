@@ -24,7 +24,7 @@ async function refresh(force) {
   await overviewLoadComputers();        // Only while the campus is open; share this refresh clock.
   overviewRefresh();
   if (S.me?.cloud) void updUnreadRefresh();
-  renderTree(); renderHeartbeat(); pausedRender(); botAvatarsSync();
+  renderTree(); renderHeartbeat(); pausedRender(); botAvatarsSync(); goalsFollowRoster();
   if (BOT?.tab === 'chat' && !BOT.split) void loadBotChatTasks(BOT.slug);
   botAlertDraw();
   if (BOT) botScreenRefresh(BOT.slug);   // the Screen row and header button follow the computer (online, screen offered)
@@ -42,7 +42,8 @@ async function refresh(force) {
 // ----------------------------------------------------------------- live events (ui/app/live.js)
 // What the 30 s refresh used to find by reading everything again now arrives as it changes: a task moved (the open
 // board, the bot's columns and ticker, a person's tasks, the open task), a bot's status line (the tree, the
-// heartbeat, the paused notice), and Needs you (the tree's counts). Each surface redraws once per burst.
+// heartbeat, the paused notice, the Overview's desks), and Needs you (the tree's counts). Each surface redraws once
+// per burst.
 function liveTasksApply(events) {
   const state = TASKS_ST;
   // One change to many tasks (a type or tag edit) comes as one `bulk` event: the open list reads in full once (its
@@ -87,8 +88,9 @@ function liveWire() {
   liveOn('bots', d => {
     if (d.status) S.v2.status[d.bot] = d.status; else delete S.v2.status[d.bot];
     liveSoon('bots', () => {
-      renderTree(); renderHeartbeat(); pausedRender(); botAvatarsSync();
+      renderTree(); renderHeartbeat(); pausedRender(); botAvatarsSync(); goalsFollowRoster();
       botAlertDraw();
+      overviewRefresh();                // the campus desks too, not only at the next refresh (no read: the model is local)
     }, 200);
   });
   // Needs you comes as the ids that changed; the list is mended from them (v2NeedsChanged), then `needs-list` says so.
