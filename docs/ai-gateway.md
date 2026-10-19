@@ -11,6 +11,38 @@ The Tico AI Gateway is Tico's own model service. With a gateway key from Tico, y
 | Tico Mid 1.0 | Claude Sonnet 5.5 |
 | Tico Power 1.0 | Claude Opus 5.5 |
 
+## Choose how bots get their models
+
+At the top of **Settings → AI providers**, and in the first step of setup, the owner picks one of four choices:
+
+- **Your Claude and ChatGPT subscriptions, plus Tico Gateway** (recommended). Bots do their main work on your Claude
+  and ChatGPT subscriptions. Personal plans are fine. Sign in with your own Claude and ChatGPT accounts in
+  **Settings → Computers**, and don't share one login across your team. Until you sign in, bots run on Tico Mid 1.0
+  through the Gateway, and they move to your subscriptions on their next turn once you do, with no restart. When a
+  plan runs out, the bot finishes on the Gateway, after any other provider signed in on its computer. Decide and
+  update drafts run on the Gateway.
+- **Your Claude and ChatGPT subscriptions only**. Bots wait until a Claude or ChatGPT account is signed in on their
+  computer, and never spend the gateway key unless you pick a Tico model for them.
+- **Tico Gateway only**. Bots run on the Tico models you pick for them. A bot whose plan runs out finishes on the
+  Gateway too.
+- **Your company's plans or API keys**. Bring your own: tick the providers, then sign in or add API keys in
+  **Credentials**. As with subscriptions only, the gateway key is spent only for a bot you put on a Tico model.
+
+Tico's installer sets the recommended choice (`TICO_MODELS_PRESET=subscriptions-gateway` in the server's environment)
+until the owner saves another one here.
+
+While the recommended choice waits for a sign-in, the owner sees one **Needs you** item, "Sign in to Claude and
+ChatGPT, or add API keys", with **Open Settings → Computers**. It goes away by itself once both are signed in on a
+computer. Gateway work runs only on a computer that runs bots as their own user (Tico's Docker runner, see
+[below](#pick-a-tico-model-for-a-bot)). When no computer here can, the item also says "This computer can't run Gateway
+work without the Docker runner; sign in to Claude and ChatGPT or add API keys", and bots wait for a sign-in instead of
+running on the Gateway. They never fail for it.
+
+When a used-up login has its bots on the Gateway, **Settings → Health** says so in one line, for example "Team box's
+Claude login is used up. Bots are on Tico Gateway until it resets." When the bot's computer can't run Gateway work,
+Health says the bot stopped and what to do: sign in another login, or add a Docker runner. When the gateway key reaches
+its monthly cap, the Gateway work stops and Health says **Gateway cap reached** ([What the card says](#what-the-card-says)).
+
 ## Connect the Gateway
 
 Only the owner can do this.
@@ -47,7 +79,9 @@ model list says what runs underneath, for example "Tico Mid 1.0 (Claude Sonnet 5
 No bot ever holds the gateway key. For a bot on a Tico model, or with a Tico model as its own fallback, the computer
 running it fetches the key and passes the bot's model calls on to the Gateway. The bot gets a pass that works only for
 that run and only for model calls. That is why Tico models need a computer that runs bots as their own user: Tico's
-Docker runner does. On a computer that runs bots as itself (a Mac), a bot on a Tico model stops once with "Tico models
+Docker runner does. On a computer that says it runs bots as itself (a Mac), the model list marks the Tico models
+**not on this computer** and Tico doesn't save one for a bot there: the reason says "<computer> can't run Tico Gateway
+work (it needs Tico's Docker runner)". A bot already on a Tico model there stops once with "Tico models
 need a runner that runs bots as their own user (Tico's Docker runner). This computer can't, so pick another model or
 move the bot", and the run is saved for later rather than tried again. The bot's status and **Needs you** say so,
 and its other work waits until you pick another model or move the bot, then review the stopped run. A Tico fallback

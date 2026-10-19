@@ -8,6 +8,17 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- **How bots get their models**, at the top of Settings > AI providers and the first setup step: **Your Claude and
+  ChatGPT subscriptions, plus Tico Gateway** (recommended, and what Tico's installer sets with
+  `TICO_MODELS_PRESET=subscriptions-gateway`), subscriptions only, Tico Gateway only, or your company's plans or API
+  keys. Under the recommended choice bots do their main work on your Claude and ChatGPT subscriptions; until you sign
+  in they run on Tico Mid 1.0 through the Gateway and move over on their next turn once you do, and a used-up plan
+  finishes on the Gateway, last. Decide and update drafts run on the Gateway. The owner sees one Needs you item, "Sign
+  in to Claude and ChatGPT, or add API keys", until both are signed in; where no computer runs bots as their own user
+  (a Mac), bots wait for the sign-in instead, the item says why, and the model list marks Tico models "not on this
+  computer". Health says plainly when a used-up login has bots on the Gateway. Gateway usage records keep which
+  gateway key and install paid, never the key. The other three choices, and a team that never picks one, keep working
+  as before ([Tico AI Gateway](docs/ai-gateway.md#choose-how-bots-get-their-models)).
 - **Tico AI Gateway** in Settings > AI providers: the owner saves the gateway key Tico gives them (or the server's
   `TICO_GATEWAY_KEY` sets it, and wins), Decide asks the Gateway with that same key, and bots can then pick **Tico Cheap, Mid and Power 1.0** (Claude Haiku, Sonnet and Opus
   5.5 underneath) like any other model, streamed through the Gateway on pi. The key is sealed and never shown after

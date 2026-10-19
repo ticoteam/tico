@@ -225,3 +225,18 @@ def test_a_gateway_segment_records_which_key_and_install_paid_never_the_key(api,
         install = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='usage-count'").fetchone()[0])
     assert row["model"] == "tico-mid-1.0" and row["gateway_key_id"] and row["install_id"] == install["install_id"]
     assert KEY not in json.dumps(row) and KEY[3:-3] not in json.dumps(row)
+
+
+def test_the_owner_saves_the_choice_through_the_api_and_reads_it_back(api):
+    from backend.tests.test_api import get, put
+    view = get(api, "providers")
+    assert view["presets"] == list(models_preset.PRESETS) and view["preset"] == ""
+    saved = put(api, "providers", {"enabled": ["anthropic", "openai"], "model": CLAUDE["model"],
+                                   "preset": models_preset.RECOMMENDED, "expected_revision": view["revision"]})
+    assert saved["preset"] == models_preset.RECOMMENDED
+    # A save about something else keeps it.
+    again = put(api, "providers", {"enabled": ["anthropic", "openai"], "model": CLAUDE["model"],
+                                   "expected_revision": saved["revision"]})
+    assert again["preset"] == models_preset.RECOMMENDED
+    put(api, "providers", {"enabled": ["anthropic"], "preset": "something-else", "expected_revision": again["revision"]},
+        expected=422)
