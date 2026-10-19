@@ -760,11 +760,7 @@ class Flight(threading.Thread):
         self.file.put({"kind": "start", "pid": os.getpid(), "version": releases.version(),
                        "commit": self.settings.release_commit, "python": sys.version.split()[0],
                        "sqlite": sqlite3.sqlite_version, "platform": sys.platform})
-        try:
-            event = start_event(self.settings)
-            self.write_db(lambda c: _event(c, "start", event))
-        except Exception as exc:
-            LOG.warning("Flight recorder start event failed: %s", type(exc).__name__)
+        self.record_start()
         minute = int(time.time() // 60 * 60)
         while not self.halt.wait(self.tick_s):
             try:
@@ -783,6 +779,14 @@ class Flight(threading.Thread):
         except Exception:
             pass
         self.file.close()
+
+    def record_start(self):
+        try:
+            event = start_event(self.settings)
+            at = time.time()                    # a write the lock defers keeps the time it happened
+            self.write_db(lambda c: _event(c, "start", event, at))
+        except Exception as exc:
+            LOG.warning("Flight recorder start event failed: %s", type(exc).__name__)
 
     def step(self):
         self.recorder.drain()
@@ -823,7 +827,8 @@ class Flight(threading.Thread):
         if "threads" in record:
             detail = {"stalled_s": record["seconds"], "class": record["class"], "usage": usage,
                       "threads": record["threads"]}
-            self.write_db(lambda c: _event(c, "stall", detail))
+            at = time.time()
+            self.write_db(lambda c: _event(c, "stall", detail, at))
         return record
 
     def write_db(self, work, minute=None):
