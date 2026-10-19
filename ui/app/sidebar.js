@@ -44,8 +44,19 @@ function orgBossKey(n) {
 }
 function orgHang(key, boss, groupOf) {
   const group = groupOf[key] || '';
+  // With the CEO Bot switch on, the CEO Bot hangs under the owner wherever the owner sits. A bot the server hangs under
+  // the CEO Bot (backend/ceo_bot.py) stays in its group only when that group hangs under the CEO Bot too, else it
+  // leaves the group for the CEO Bot's branch: the owner's own group never moves there, or the chart would loop.
+  if (ceoBotOn() && boss && (key === 'b:goal-manager' || (boss === 'b:goal-manager' && group && !orgGroupUnderCeo(group)))) return boss;
   if (group) return boss && groupOf[boss] === group ? boss : 'g:' + group;
   return boss && !groupOf[boss] ? boss : '';
+}
+// Whether this group, through its top-level group, hangs under the CEO Bot (orgGroupParent).
+function orgGroupUnderCeo(id) {
+  const byId = new Map((S.orgGroups || []).map(g => [g.id, g]));
+  let g = byId.get(id);
+  for (let hops = 0; g?.parent && byId.has(g.parent) && hops < 20; hops++) g = byId.get(g.parent);
+  return g?.org_parent === 'b:goal-manager';
 }
 // Where a group hangs: in its parent group, else at the top. With the CEO Bot switch on, the server hangs the top-level
 // group of a Head it puts under the CEO Bot there too (`org_parent`, backend/ceo_bot.py), when the CEO Bot is on the chart.
