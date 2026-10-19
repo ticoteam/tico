@@ -15,6 +15,8 @@ All notable changes to Tico are recorded here. The format follows
   `TICO_SAMPLE_COMPANY=on`. ([The sample company](docs/sample-company.md))
 
 ### Fixed
+- Opening a card in **Needs you** (an approval, a task, a question) no longer sends a failing request for issue
+  "NaN" in the background. Only an issues inbox card fetches its full request.
 - **Clear** on a bot's chat now really starts the bot over. Before, it only trimmed the history Tico sends, and on
   the computer Claude Code, Codex and the other harnesses kept resuming the old provider thread, so the bot still
   remembered the cleared chat and every turn still paid for it. Each turn now carries its conversation's session
