@@ -1,0 +1,212 @@
+"""Quiet work stays visible and resumes (Dev 257).
+
+Oct 19: Dev 242 was filed for the Builder's next run. A run carried it at 04:28, said in its reply it would do it
+"after Dev 241 review", and finished. The task was then carried and nothing else: no job of its own, no stored time
+to come back, and the board could not tell it from one still waiting. A person pressed Run now seven hours later. Now
+a run that leaves a carried task without working it hands it back to the next run, a run that will not do it now
+stores when to pick it up, and the task says which of delivered, eligible or queued it is.
+"""
+
+import pytest
+
+from backend import health_monitor
+from backend import hubdb as H
+from backend import quiet_work as Q
+from backend.tests.test_api import api, assign, get, post, ready, runner  # noqa: F401
+
+
+def setup(api):
+    r = runner(api)
+    assign(api, r, "ops")
+    ready(api, r, ["ops"])
+    return r
+
+
+def later(api, title="Watch the new refund requests"):
+    return post(api, "tasks", {"owner": "ops", "title": title, "body": "Check the counts on your next run.",
+                               "next_run": True})
+
+
+def wake(api, r, text="How are the numbers today?"):
+    """Something else starts a run of ops; the run is claimed and started. Returns the attempt."""
+    post(api, "chat/ops", {"text": text})
+    attempt = post(api, "jobs/claim", {"next_run": True}, token=r["token"])["attempt"]
+    post(api, f"attempts/{attempt['id']}/started", {"thread_id": "t-" + attempt["id"]}, token=r["token"])
+    return attempt
+
+
+def finish(api, r, attempt, outcome="completed"):
+    post(api, f"attempts/{attempt['id']}/complete", {"outcome": outcome, "text": "ok", "last_seq": 0},
+         token=r["token"])
+
+
+def shown(api, task):
+    return get(api, "tasks/" + task["id"])["task"]
+
+
+def own_jobs(api, task):
+    with api.app.state.store.read() as c:
+        return c.execute("SELECT count(*) FROM jobs j JOIN messages m ON m.id=j.message_id "
+                         "JOIN conversations cv ON cv.id=m.conversation_id "
+                         f"WHERE j.state='queued' AND {H.MESSAGE_TASK_SQL}=?", (task["id"],)).fetchone()[0]
+
+
+def test_a_run_that_leaves_it_hands_it_to_the_next_run(api):
+    r = setup(api)
+    task = later(api)
+    assert shown(api, task)["quiet"]["state"] == "eligible"
+    first = wake(api, r)
+    assert [t["id"] for t in first["next_run"]] == [task["id"]]
+    assert "hub task defer " + task["id"] in first["next_run"][0]["if_not_now"], "the run is told how to say not now"
+    during = shown(api, task)["quiet"]
+    assert during["state"] == "delivered" and during["run"] == first["id"] and during["running"] is True
+    assert during["at"], "and when it was handed over"
+    finish(api, r, first)
+    after = shown(api, task)
+    assert after["next_run_waiting"] is True, "not worked and nothing stored: it is not silently taken"
+    assert after["quiet"]["state"] == "eligible" and after["quiet"]["returned_from"] == first["id"]
+    second = wake(api, r, "Anything else?")
+    assert [t["id"] for t in second["next_run"]] == [task["id"]], "the next run carries it again"
+
+
+def test_a_run_that_worked_it_does_not_carry_it_again(api):
+    r = setup(api)
+    task = later(api)
+    first = wake(api, r)
+    with api.app.state.store.transaction() as c:
+        H.task_comment(c, "bot:ops", task["id"], "Counts look normal; checking again Friday.", wake=False)
+    finish(api, r, first)
+    after = shown(api, task)
+    assert after["next_run_waiting"] is False
+    assert after["quiet"]["state"] == "delivered" and after["quiet"]["worked"] is True
+    assert wake(api, r, "Anything else?")["next_run"] == [], "worked: not re-carried"
+
+
+def test_a_step_move_or_an_explicit_handled_counts_as_worked(api):
+    r = setup(api)
+    task = later(api)
+    first = wake(api, r)
+    with api.app.state.store.transaction() as c:
+        Q.defer(c, "bot:ops", task["id"], handled=True)
+    finish(api, r, first)
+    assert shown(api, task)["quiet"]["worked"] is True
+    assert wake(api, r, "Anything else?")["next_run"] == []
+
+
+def test_deferred_until_a_task_is_done_runs_once_when_it_is(api):
+    r = setup(api)
+    blocker = post(api, "tasks", {"owner": "ops", "title": "Dev 241 review", "body": "Review it."})
+    with api.app.state.store.transaction() as c:
+        c.execute("DELETE FROM jobs")       # ops's own run for the blocker is not what this tests
+    task = later(api, "Dev 242")
+    first = wake(api, r)
+    with api.app.state.store.transaction() as c:
+        Q.defer(c, "bot:ops", task["id"], after=blocker["id"])
+    finish(api, r, first)
+    held = shown(api, task)
+    assert held["next_run_waiting"] is False, "the condition holds it"
+    assert held["quiet"]["state"] == "delivered" and held["quiet"]["run"] == first["id"]
+    assert held["quiet"]["resume"]["kind"] == "task" and held["quiet"]["resume"]["task"] == blocker["id"]
+    assert held["quiet"]["words"] == "Picked up again after Dev 241 review is done."
+    assert wake(api, r, "Anything else?")["next_run"] == [], "not carried while it waits"
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE jobs SET state='completed' WHERE state IN ('queued','leased','running')")
+        c.execute("UPDATE attempts SET state='completed' WHERE state IN ('leased','running')")
+        stalled = [row["id"] for row in H.stalled_tasks(c, at=H.shift(H.now(), hours=3))]
+    assert task["id"] not in stalled, "the stall check leaves a deferred task to its condition"
+    assert own_jobs(api, task) == 0
+    with api.app.state.store.transaction() as c:
+        H.task_update(c, "bot:ops", blocker["id"], status="done", note="Reviewed.")
+    assert own_jobs(api, task) == 1, "one run of its own"
+    resumed = shown(api, task)
+    assert resumed["next_run"] is False and resumed["quiet"]["state"] == "queued"
+    with api.app.state.store.transaction() as c:
+        H.task_close(c, "human:ana", blocker["id"])
+    assert own_jobs(api, task) == 1, "and only one"
+    attempt = post(api, "jobs/claim", {"next_run": True}, token=r["token"])["attempt"]
+    assert attempt["task"]["id"] == task["id"], "the run is the task"
+    assert attempt["message"]["body"].startswith("Resume: Dev 242\nDev 241 review is done.")
+
+
+def test_deferred_to_a_time_runs_once_then(api):
+    r = setup(api)
+    task = later(api)
+    first = wake(api, r)
+    at = H.shift(H.now(), hours=2)
+    with api.app.state.store.transaction() as c:
+        Q.defer(c, "bot:ops", task["id"], at=at)
+    finish(api, r, first)
+    assert shown(api, task)["quiet"]["resume"]["until"] == at
+    with api.app.state.store.transaction() as c:
+        assert Q.due(c, H.now()) == [], "not before its time"
+        assert Q.due(c, H.shift(at, seconds=1)) == [task["id"]]
+        assert Q.due(c, H.shift(at, seconds=60)) == [], "once"
+    assert own_jobs(api, task) == 1
+
+
+def test_next_run_puts_it_back_at_once(api):
+    r = setup(api)
+    task = later(api)
+    first = wake(api, r)
+    with api.app.state.store.transaction() as c:
+        Q.defer(c, "bot:ops", task["id"], next_run=True)
+    assert shown(api, task)["quiet"]["state"] == "eligible"
+    finish(api, r, first)
+    assert [t["id"] for t in wake(api, r, "Anything else?")["next_run"]] == [task["id"]]
+
+
+def test_a_person_defers_through_the_api_and_wrong_asks_are_refused(api):
+    setup(api)
+    blocker = post(api, "tasks", {"owner": "ops", "title": "Dev 241 review", "body": "Review it."})
+    task = later(api)
+    got = post(api, f"tasks/{task['id']}/defer", {"after": blocker["id"]})
+    assert got["quiet"]["resume"]["task"] == blocker["id"] and got["next_run_waiting"] is False
+    post(api, f"tasks/{task['id']}/defer", {"after": blocker["id"], "next_run": True}, expected=422)
+    post(api, f"tasks/{task['id']}/defer", {"at": "2020-01-01T00:00:00Z"}, expected=422)
+    post(api, f"tasks/{blocker['id']}/defer", {"next_run": True}, expected=422)   # not a quiet task
+    with api.app.state.store.transaction() as c:
+        with pytest.raises(H.Refused):
+            Q.defer(c, "bot:cpo", task["id"], next_run=True)     # another bot's task
+        H.task_update(c, "bot:ops", blocker["id"], status="done", note="Reviewed.")
+        other = H.task_create(c, "human:ana", "Later", "Later.", "bot:ops", next_run=True)
+        with pytest.raises(H.Refused):
+            Q.defer(c, "bot:ops", other["id"], after=blocker["id"])   # already finished: work it now
+
+
+def test_run_now_drops_a_stored_condition(api):
+    setup(api)
+    blocker = post(api, "tasks", {"owner": "ops", "title": "Dev 241 review", "body": "Review it."})
+    task = later(api)
+    post(api, f"tasks/{task['id']}/defer", {"after": blocker["id"]})
+    got = post(api, f"tasks/{task['id']}/run-now", {})["task"]
+    assert got["resume_json"] is None and got["quiet"]["state"] == "queued"
+
+
+def test_health_names_a_task_handed_over_two_hours_ago_and_not_worked(api):
+    r = setup(api)
+    task = later(api)
+    first = wake(api, r)
+    finish(api, r, first)
+    with api.app.state.store.transaction() as c:
+        assert health_monitor._quiet_work_checks(c) == [], "not yet two hours"
+        old = H.shift(H.now(), hours=-3)
+        c.execute("UPDATE events SET ts=? WHERE action=?", (old, Q.CARRIED))
+        found = health_monitor._quiet_work_checks(c)
+        assert [f["key"] for f in found] == [f"quiet_unworked:ops:{task['id']}"]
+        assert "ops" in found[0]["title"] and task["id"][:8] in found[0]["detail"]
+        assert "hub task defer " + task["id"] in found[0]["fix"]
+        Q.defer(c, "bot:ops", task["id"], at=H.shift(H.now(), hours=1))
+        assert health_monitor._quiet_work_checks(c) == [], "a stored condition is not a finding"
+
+
+def test_a_carrier_from_before_settling_counts_too(api):
+    """A run that finished before this change left its task carried for good: Health names it."""
+    r = setup(api)
+    task = later(api)
+    first = wake(api, r)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE attempts SET state='completed', finished=? WHERE id=?", (H.now(), first["id"]))
+        c.execute("UPDATE events SET ts=? WHERE action=?", (H.shift(H.now(), hours=-3), Q.CARRIED))
+        view = Q.view(c, H.task(c, task["id"]))
+        assert view["state"] == "delivered" and view["worked"] is False
+        assert [f["key"] for f in health_monitor._quiet_work_checks(c)] == [f"quiet_unworked:ops:{task['id']}"]

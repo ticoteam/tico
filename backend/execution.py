@@ -9,7 +9,7 @@ from datetime import timezone
 
 from clients import gateway, sessions
 
-from . import app_delivery, check_models, gateway_connection, inbox_isolation, login_holds, models_preset, providers, routines, run_triggers, runner_versions, screen, usage_limits, wake_presets
+from . import app_delivery, check_models, gateway_connection, inbox_isolation, login_holds, models_preset, providers, quiet_work, routines, run_triggers, runner_versions, screen, usage_limits, wake_presets
 from . import task_privacy as privacy
 from .auth import Identity
 from .batch_work import isolated
@@ -1583,7 +1583,9 @@ class Execution:
                             trigger="schedule")
                     continue
                 c.execute("UPDATE tasks SET carried_by=? WHERE id=?", (aid, item["id"]))
-                carried.append({k: item.get(k) for k in ("id", "title", "body", "requester", "created")})
+                # How to say "not now" with a time to come back, rather than in the reply's words (quiet_work).
+                carried.append({**{k: item.get(k) for k in ("id", "title", "body", "requester", "created")},
+                                "if_not_now": quiet_work.HINT.format(id=item["id"])})
             if carried:
                 H.event(c, H.KEEPER, "task.next-run.carried", aid,
                         {"bot": row["bot"], "tasks": [item["id"] for item in carried]})
@@ -2204,6 +2206,9 @@ class Execution:
                 c.execute("UPDATE jobs SET state='completed',attempt_id=? WHERE id=?", (aid, extra["id"]))
                 H.mark_delivered(c, H.KEEPER, extra["message_id"])
                 H.event(c, H.KEEPER, "job.coalesce", extra["id"], {"attempt_id": aid, "job_id": row["job_id"]})
+        if body.outcome == "completed":
+            # Each next-run task this run carried and left: back to the next run, unless it was worked or deferred.
+            quiet_work.settle(c, aid, row["bot"], row["started"] or row["created"])
         # The runner's notices (a file left out of the commit) are shown beside the reply, not as the turn's summary.
         H.turn_finish(c, H.KEEPER, aid, exit_code=body.outcome, tokens_in=body.tokens_in,
                       tokens_out=body.tokens_out, summary=split_runner_notices(body.text)[0][:2000],

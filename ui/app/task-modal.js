@@ -655,6 +655,15 @@ function taskPeekPos(id) {
   const keys = tasksVisibleKeys(), i = keys.indexOf('t' + id);
   return i < 0 ? '' : `${i + 1} / ${keys.length}`;
 }
+// Quiet work (a next-run task, backend/quiet_work.py): delivered into a run (deferred until something), eligible for the
+// bot's next run, or queued with a run of its own; which run, and when it was handed over.
+function taskQuietHTML(t) {
+  const q = t.quiet;
+  if (!q || taskFinished(t)) return '';
+  const label = {queued: 'Queued', eligible: 'Eligible', delivered: q.resume ? 'Deferred' : 'Delivered'}[q.state] || q.state;
+  const more = [q.run ? `run ${String(q.run).slice(0, 8)}` : '', q.at ? `handed over ${ago(q.at)}` : ''].filter(Boolean).join(', ');
+  return `<p class="task-wait task-quiet" data-task-quiet="${esc(q.resume ? 'deferred' : q.state)}"><span class="lbl">Quiet work: ${esc(label)}</span> ${esc(q.words || '')}${more ? ` <span class="muted">(${esc(more)})</span>` : ''}</p>`;
+}
 // The task in full or in the peek. The header: its status, its owner, its age, Done and Close task for whoever may use
 // them (the two most common actions) as labelled buttons, then the quiet icon buttons: "…" and, past a rule, ✕ for the window. Then the title, who added it and when, the properties, the
 // details, Code, Subtasks, Comments.
@@ -695,6 +704,7 @@ function hubModalHTML(t, it, opts = {}) {
       <div class="tmodal-main">
       ${waitLabel && waitText ? (askToYou ? `<div class="task-ask"><div class="lbl">${esc(waitLabel)}</div><div class="task-ask-body">${esc(waitText)}</div></div>`
         : `<p class="task-wait"><span class="lbl">${esc(waitLabel)}</span> ${esc(waitText)}</p>`) : ''}
+      ${taskQuietHTML(t)}
       ${original ? (waitText ? `<details class="task-orig"><summary>Original request</summary><div class="tdesc md">${safeMd(original)}</div></details>`
         : `<div class="tdesc md">${safeMd(original)}</div>`) : (waitText ? '' : '<p class="muted tdesc">No details.</p>')}
       ${note && note.replace(/\s+/g, ' ').trim() !== waitText ? `<details class="task-orig"><summary>Progress</summary><div class="tdesc md">${safeMd(note)}</div></details>` : ''}

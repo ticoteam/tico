@@ -25,7 +25,7 @@ from . import go_live as pending_go_lives
 from . import repo_waits
 from . import built_on
 from . import agents, app_delivery, batch, external_sync, inbox_isolation, mcp_oauth, harness_actions, model_login, oidc, personal_tokens, views
-from . import check_models, run_triggers, team_rules, update_feeds, topic_change, usage_limits, wake_presets, visuals, wake_rules
+from . import check_models, run_triggers, team_rules, update_feeds, topic_change, usage_limits, wake_presets, visuals, wake_rules, quiet_work
 from . import task_privacy as privacy
 from . import task_relations as TR
 from . import task_roles as TRo
@@ -938,6 +938,9 @@ def create_app(settings=None):
                  "next_run": bool(row.get("next_run")), "private": H.task_private(c, row), "cover": None}
         if c is not None and row.get("next_run"):
             value["next_run_waiting"] = H.next_run_waiting(c, row)
+        if c is not None:
+            # Quiet work: delivered (into which run, when; deferred until what), eligible or queued (quiet_work.view).
+            value["quiet"] = quiet_work.view(c, row)
         value.pop("labels_json", None)
         if pipelines is None:
             if c is None:
@@ -1068,6 +1071,7 @@ def create_app(settings=None):
             })
             if row.get("next_run"):
                 value["next_run_waiting"] = H.next_run_waiting(c, row)
+                value["quiet"] = quiet_work.view(c, row, history=False)
             if row["id"] in routines_by_task:
                 value["routine_id"] = routines_by_task[row["id"]]
             if row["id"] in origins:
@@ -3142,6 +3146,24 @@ def create_app(settings=None):
             auth.task(c, who, task_id)
             after = TS.snooze(c, who.actor, task_id, body.until, mover=mover(c, who))
             return {"task": task_view(after, c, visible_sql=auth.task_sql(c, who), who=who)}
+        return mutate(request, body, work)
+
+    @app.post("/api/v2/tasks/{tid}/defer")
+    def task_defer(request: Request, tid: str, body: M.TaskDefer):
+        """Say when a quiet task a run carried (or one still waiting for a run) is picked up again: after another task
+        is done, at a time, or with the next run; or that the run handled it (backend/quiet_work.py). The task's own
+        bot, or a person."""
+        def work(c):
+            who = request.state.identity
+            task_id = auth.resolve_task(c, who, tid)
+            auth.task(c, who, task_id)
+            after = None
+            if body.after:
+                after = auth.resolve_task(c, who, body.after)
+                auth.task(c, who, after)
+            row = quiet_work.defer(c, who.actor, task_id, after=after, at=body.at, next_run=body.next_run,
+                                   handled=body.handled)
+            return {"task": task_view(row, c, visible_sql=auth.task_sql(c, who), who=who)}
         return mutate(request, body, work)
 
     @app.post("/api/v2/tasks/{tid}/unsnooze")

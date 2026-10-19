@@ -496,6 +496,26 @@ def _bot_checks(c, settings=None):
                                     f"{bot}: {error[:400]}",
                                     "BotOps: save any unique work in that worktree on a branch, then remove its link so "
                                     "the computer can make it again (docs/worktrees.md)."))
+    out.extend(_quiet_work_checks(c))
+    return out
+
+
+def _quiet_work_checks(c):
+    """A quiet task handed to a bot's run over two hours ago and not worked since, with no time set to pick it up
+    (backend/quiet_work.py stale): one finding per bot and task. It names them; it asks no person anything."""
+    from . import quiet_work
+    out = []
+    for item in quiet_work.stale(c):
+        task, bot = item["task"], item["bot"]
+        # A private task's title stays out of a finding other people read; its number or short id names it.
+        name = quiet_work._task_name(task) if H.task_private(c, task) else f"{quiet_work._task_name(task)} {task['title']}"
+        out.append(_finding(f"quiet_unworked:{bot}:{task['id']}", "quiet_unworked", SETUP,
+                            f"{bot} was handed a quiet task and has not worked it",
+                            f"{bot} was handed the next-run task {name} at {item['since'][:16]} UTC (run "
+                            f"{str(item['run'] or '')[:8]}) and has not worked it since, with no time set to pick it "
+                            "up again.",
+                            f"{bot}: work it, or say when to pick it up (hub task defer {task['id']} --after <task> | "
+                            "--at <time>). Anyone may press Run now on it to give it a run of its own."))
     return out
 
 
