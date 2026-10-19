@@ -809,6 +809,11 @@ def test_reconcile_heals_stale_and_unregistered_prs_on_a_declined_task_nobody_re
     branch = f"tico/{task['id'][:8]}-org-chart-order"
     _worktree(api, task['id'], 'ticoteam/tico', branch)
     _worktree(api, task['id'], 'ticoteam/tico', 'tico/' + task['id'][:8] + '-fix-forward')
+    pushed = 'tico/' + task['id'][:8] + '-first-push'
+    _worktree(api, task['id'], 'ticoteam/tico', pushed)
+    # The first push asks for a draft PR; the push itself (and the checks it starts) is never held back.
+    assert hook(api, 'push', {'ref': 'refs/heads/' + pushed, 'repository': {'full_name': 'ticoteam/tico'},
+                              'after': 'f' * 40, 'head_commit': {'id': 'f' * 40}})['commits'] == 0
     service = api.app.state.github_app
     with service.store.transaction() as c:
         c.execute("INSERT INTO repositories(full_name,reachable,enabled,added_by,updated) VALUES(?,1,1,?,?)",
@@ -817,8 +822,11 @@ def test_reconcile_heals_stale_and_unregistered_prs_on_a_declined_task_nobody_re
     monkeypatch.setattr(service, 'row', lambda c=None: {'slug': 'test-app', 'org': 'ticoteam'})
     monkeypatch.setattr(service, 'mint', lambda *args, **kw: ('test-token', 'later'))
     calls = []
-    def fetch(method, path, headers=None, params=None):
+    def fetch(method, path, headers=None, params=None, json=None):
         calls.append((path, params))
+        if method == 'POST':
+            assert json['head'] == pushed and json['draft'] is True and json['title'] == 'Org chart order'
+            return SimpleNamespace(status_code=201, json=lambda: _branch_pr(991, pushed, draft=True))
         if path.endswith('/pulls/746'):
             return SimpleNamespace(status_code=200, json=lambda: _branch_pr(746, branch, state='closed', merged=True,
                                                                              merge_commit_sha='d' * 40))
@@ -835,7 +843,38 @@ def test_reconcile_heals_stale_and_unregistered_prs_on_a_declined_task_nobody_re
     run()
     prs = {l['number']: l for l in get(api, 'tasks/' + task['id'])['task']['links'] if l['kind'] == 'pr'}
     assert prs[746]['state'] == 'merged' and prs[990]['state'] == 'open' and prs[990]['added_by'] == 'keeper'
+    assert prs[991]['state'] == 'draft' and prs[991]['branch'] == pushed
+    # A branch nobody pushed gets no PR: only the pushed one was opened.
+    assert [p for p, _ in calls if p == '/repos/ticoteam/tico/pulls' and _ is None] == ['/repos/ticoteam/tico/pulls']
     # Bounded: a second pass inside three minutes reads nothing.
     before = len(calls)
     run()
     assert len(calls) == before and not service.worktree_reconcile_running
+
+
+def test_a_hand_off_refuses_a_pushed_worktree_branch_no_pr_carries_until_it_is_linked(api):
+    """Review or done with commits no pull request carries would orphan the worktree; a link, by hand or by the
+    branch's own PR, lets it through, and the push itself is never held back."""
+    _app(api)
+    task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Gateway key per install', 'body': 'x'})
+    branch = f"tico/{task['id'][:8]}-gateway-key-per-install"
+    for repo in ('ticoteam/tico', 'ticoteam/tico-services'):
+        _worktree(api, task['id'], repo, branch)
+
+    def move(status):
+        try:
+            with api.app.state.store.transaction() as c:
+                return H.task_update(c, 'human:ana', task['id'], status=status)['status']
+        except H.Refused as refused:
+            return str(refused)
+    assert move('doing') == 'doing'
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE task_links SET detail_json=json_set(detail_json,'$.expected_head',?,'$.last_commit',?,"
+                  "'$.ahead',0) WHERE task_id=? AND kind='worktree'", ('a' * 40, 'e' * 40, task['id']))
+    refused = move('review')
+    assert 'ticoteam/tico branch ' + branch in refused and 'ticoteam/tico-services branch ' + branch in refused
+    hook(api, 'pull_request', {'action': 'opened', 'pull_request': _branch_pr(984, branch)})
+    still = move('done')
+    assert 'ticoteam/tico-services branch' in still and 'ticoteam/tico branch' not in still
+    post(api, 'tasks/' + task['id'] + '/links', {'url': 'https://github.com/ticoteam/tico-services/pull/16'})
+    assert move('review') == 'review'

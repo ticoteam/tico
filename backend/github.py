@@ -475,6 +475,29 @@ def refresh_task_prs(service, task_id):
     threading.Thread(target=refresh, name="tico-pr-refresh", daemon=True).start()
 
 
+def _open_draft(service, repo, branch, worktree):
+    """A pushed worktree branch with no pull request gets a draft one, so its work is never an orphan. A refusal is
+    recorded on the branch's worktrees with GitHub's reason, which the task and the cap view show, and the next pass
+    tries again."""
+    token = service.mint([repo], {"pull_requests": "write", "contents": "read"})[0]
+    title = (worktree.get("title") or branch)[:200]
+    response = service._call("POST", f"/repos/{quote(repo, safe='/')}/pulls",
+                             headers={"Authorization": "Bearer " + token},
+                             json={"title": title, "head": branch, "base": worktree.get("base") or "main", "draft": True,
+                                   "body": "Opened as a draft by Tico at this task branch's first push. Mark it ready "
+                                           "for review (`gh pr ready`) and edit it (`gh pr edit`) when the work is."})
+    with service.store.transaction() as c:
+        for row in H._rows(c.execute("SELECT id,detail_json FROM task_links WHERE kind='worktree' AND lower(repo)=? "
+                                     "AND branch=?", (repo.lower(), branch))):
+            detail = H._json(row["detail_json"], {}) or {}
+            if response.status_code == 201:
+                detail.pop("pr_error", None)
+            else:
+                detail["pr_error"] = f"Opening a draft pull request for {branch} failed (GitHub {response.status_code})"
+            c.execute("UPDATE task_links SET detail_json=? WHERE id=?", (json.dumps(detail), row["id"]))
+    return response, [response.json()] if response.status_code == 201 else []
+
+
 def reconcile_worktree_prs(service):
     """The background repair for the pull request links a worktree's release reads. Unfinished links on any task that
     holds a worktree (closed, declined and never-read tasks too) are read again, and a worktree branch with no link is
@@ -499,12 +522,16 @@ def reconcile_worktree_prs(service):
                 " AND EXISTS (SELECT 1 FROM task_links w WHERE w.task_id=p.task_id AND w.kind='worktree' "
                 "AND coalesce(w.state,'unknown')<>'removed') ORDER BY coalesce(p.updated,p.created),p.id LIMIT 200", (org,)))
             branches = H._rows(c.execute(
-                "SELECT DISTINCT w.repo,w.branch FROM task_links w WHERE w.kind='worktree' "
+                "SELECT w.repo,w.branch,max(json_extract(w.detail_json,'$.pushed')) AS pushed,"
+                "min(CASE WHEN coalesce(t.private,0)=0 THEN t.title END) AS title,"
+                "(SELECT r.default_branch FROM repositories r WHERE lower(r.full_name)=lower(w.repo)) AS base "
+                "FROM task_links w JOIN tasks t ON t.id=w.task_id WHERE w.kind='worktree' "
                 "AND coalesce(w.state,'unknown')<>'removed' AND w.branch LIKE 'tico/%' AND " + held.format("w") +
                 " AND NOT EXISTS (SELECT 1 FROM task_links p WHERE p.task_id=w.task_id AND p.kind='pr' "
-                "AND lower(p.repo)=lower(w.repo) AND p.branch=w.branch) LIMIT 200", (org,)))
+                "AND lower(p.repo)=lower(w.repo) AND p.branch=w.branch) GROUP BY w.repo,w.branch "
+                "ORDER BY pushed IS NULL LIMIT 200", (org,)))
         due = [("pr", l["repo"], l["number"], l) for l in links]
-        due += [("branch", b["repo"], b["branch"], None) for b in branches if WORKTREE_BRANCH.match(b["branch"])]
+        due += [("branch", b["repo"], b["branch"], b) for b in branches if WORKTREE_BRANCH.match(b["branch"])]
         due = [d for d in due if cache.get(d[:3], 0) <= now][:20]
         if not due:
             return
@@ -527,9 +554,11 @@ def reconcile_worktree_prs(service):
                         response = service._call("GET", path, headers=auth, params={
                             "head": repo.split("/")[0] + ":" + key, "state": "all", "per_page": 10})
                         found = response.json() if response.status_code == 200 else []
+                        if response.status_code == 200 and not found and link["pushed"]:
+                            response, found = _open_draft(service, repo, key, link)
                     with service.store.transaction() as c:
                         for pr in found if isinstance(found, list) else []:
-                            if link is not None:
+                            if kind == "pr":
                                 current = c.execute("SELECT updated FROM task_links WHERE id=?", (link["id"],)).fetchone()
                                 if not current or current[0] != link.get("updated"):
                                     continue    # a webhook wrote newer facts meanwhile
@@ -537,7 +566,7 @@ def reconcile_worktree_prs(service):
                             pull_request(c, {"action": "refresh", "pull_request": pr},
                                          review_role=service.settings.github_review_role,
                                          release_repo=service.settings.release_repo)
-                    retry = 180 if response.status_code == 200 else 900
+                    retry = 180 if response.status_code in (200, 201) else 900
                 except Exception:
                     logging.getLogger("tico.github").exception("Worktree PR reconcile failed for %s %s", repo, key)
                 with service.lock:
@@ -568,6 +597,15 @@ def push(c, payload):
                 detail["head_login"] = login
             else:
                 detail.pop("head_login", None)
+            c.execute("UPDATE task_links SET detail_json=? WHERE id=?", (json.dumps(detail), link["id"]))
+    branch = ref[len("refs/heads/"):] if ref.startswith("refs/heads/") else ""
+    if WORKTREE_BRANCH.match(branch) and not payload.get("deleted") and head_sha:
+        # A worktree branch's first push asks for its draft pull request; the background pass opens or reuses it
+        # (reconcile_worktree_prs), so nothing here calls GitHub inside the write and the push's checks run as usual.
+        for link in H._rows(c.execute("SELECT id,detail_json FROM task_links WHERE kind='worktree' AND lower(repo)=? "
+                                       "AND branch=?", (repo.lower(), branch))):
+            detail = H._json(link["detail_json"], {}) or {}
+            detail.update(pushed=head_sha, pushed_at=detail.get("pushed_at") or H.now())
             c.execute("UPDATE task_links SET detail_json=? WHERE id=?", (json.dumps(detail), link["id"]))
     if ref != "refs/heads/" + default:
         return {"ref": ref, "commits": 0}

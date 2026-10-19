@@ -3314,6 +3314,29 @@ def link_kind(url):
     return "url"
 
 
+def unlinked_pushes(conn, task_id):
+    """The task's worktrees whose branch has commits on top of the commit it was checked out at and no pull request
+    link on that repository (a link whose branch GitHub has not reported yet counts): work a hand-off would leave
+    with nothing to review, merge or release. Each is {link_id, repo, branch}."""
+    out = []
+    for w in _rows(conn.execute("SELECT id,repo,branch,detail_json FROM task_links WHERE task_id=? AND kind='worktree' "
+                                "AND coalesce(state,'unknown')<>'removed' AND repo IS NOT NULL AND branch IS NOT NULL",
+                                (task_id,))):
+        detail = _json(w["detail_json"], {}) or {}
+        head, start = detail.get("last_commit"), detail.get("expected_head")
+        if not head or not start or head == start:
+            continue
+        if not conn.execute("SELECT 1 FROM task_links WHERE task_id=? AND kind='pr' AND lower(repo)=lower(?) "
+                            "AND (branch=? OR branch IS NULL)", (task_id, w["repo"], w["branch"])).fetchone():
+            out.append({"link_id": w["id"], "repo": w["repo"], "branch": w["branch"]})
+    return out
+
+
+def _unlinked_text(missing):
+    return ("has commits with no pull request linked: " + "; ".join(f"{m['repo']} branch {m['branch']}" for m in missing)
+            + ". Open the pull request (Tico links a worktree branch's PR itself) or run `hub task link <PR URL>`")
+
+
 @private_task_write
 def task_link(conn, actor, task_id, url, title=None, kind=None, mover=None, wake_once=None, release_repo=""):
     """Attach a link to a task. A pull request link is what moves a product-lane task.
@@ -4482,6 +4505,11 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
                    f"the owner may set {'|'.join(OWNER_STATUSES)}, not {status}")
         if status == "ready" and is_bot(actor):
             refuse(conn, actor, "close", "ready to ship is set when the pull request merges, not by the bot")
+        # A hand-off to review, or done, with pushed work no pull request carries leaves an orphan worktree.
+        if status == "done" or status == "review" and row["status"] == "doing":
+            missing = unlinked_pushes(conn, task_id)
+            if missing:
+                refuse(conn, actor, "worktree_pr", "This task " + _unlinked_text(missing))
         # A bot parking a task it asked itself for has nobody to answer it unless it has filed
         # something to wait on first. Several stranded tasks were this.
         # Validate the requested dependency, not the old one: callers can park work and
