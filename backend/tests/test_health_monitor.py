@@ -200,6 +200,13 @@ def test_a_finding_back_after_its_task_was_finished_counts_as_new(environment):
     assert scan(api) == [key] and wakes(api) == before + 2
     old, new = monitor_tasks(api)
     assert old["id"] == task["id"] and "Seen: 4 time(s)" in new["body"]
+    with api.app.state.store.transaction() as c:                          # a declined task: a new one too
+        c.execute("UPDATE tasks SET status='declined' WHERE id=?", (new["id"],))
+    runner_errors(api, runner, [])
+    scan(api)
+    runner_errors(api, runner, STREAM)
+    assert scan(api) == [key] and wakes(api) == before + 3
+    assert len(monitor_tasks(api)) == 3 and "Seen: 5 time(s)" in monitor_tasks(api)[-1]["body"]
 
 
 def test_a_finding_whose_severity_rises_wakes_it(environment, monkeypatch):
