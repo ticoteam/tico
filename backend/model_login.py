@@ -307,26 +307,50 @@ def use_shared_key(c, who, rid, runtime, auth=None):
     return view(row)
 
 
-def _share_with(c, who, runner_ids, credential_id, here):
-    """Grant `credential_id` to each computer in `runner_ids` by name ("Shared with: [computers]"). A computer listed
-    is one a person just gave this key, so a Clear key or a Switch to subscription there no longer holds it back. The
-    grant rows themselves tell every runner to fetch its keys again (backend/events.py)."""
-    from .computer_keys import SHARED_WITH
+def _share_with(c, who, runner_ids, credential_id, here, runtime):
+    """Grant `credential_id` to each computer in `runner_ids` by name ("Shared with: [computers]"): on each, the key
+    `runtime` runs on from now. A computer listed is one a person just gave this key, so another key shared with it by
+    name for `runtime` is taken off it (the choice decides, not which key is older), and a Clear key or a Switch to
+    subscription there no longer holds it back (`_resume`). The grant rows themselves tell every runner to fetch its
+    keys again (backend/events.py)."""
+    from .computer_keys import SHARED_WITH, names
     rows = []
     for rid in dict.fromkeys([here, *runner_ids]):
         row = c.execute("SELECT * FROM runners WHERE id=? AND revoked_at IS NULL", (rid,)).fetchone()
         if not row:
             raise Problem("computers", "Share it only with computers that are connected", 422)
         rows.append(row)
+    marked = [row for row in rows if cleared(c, row["id"], runtime) or key_off(c, row["id"], runtime)]
+    for row in marked:
+        if not _online(row):
+            raise Problem("offline", f"{row['label']} is offline, and its key was cleared or switched to a "
+                          "subscription from here, so it cannot take the shared key until it is back", 409)
+        if not _signs_out(row):
+            raise Problem("runner_version", f"Update {row['label']} to use the shared key from here", 409)
     now = H.now()
+    allowed = names(runtime)
     for row in rows:
         subject = SHARED_WITH + row["id"]
+        for other in c.execute("SELECT g.id FROM credential_grants g JOIN credentials cr ON cr.id=g.credential_id "
+                               "WHERE g.subject=? AND g.revoked IS NULL AND g.credential_id<>? AND cr.env IN (%s)"
+                               % ",".join("?" * len(allowed)), (subject, credential_id, *allowed)).fetchall():
+            c.execute("UPDATE credential_grants SET revoked=?, revoked_by=? WHERE id=?", (now, who.actor, other["id"]))
         if not c.execute("SELECT 1 FROM credential_grants WHERE credential_id=? AND subject=? AND revoked IS NULL",
                          (credential_id, subject)).fetchone():
             c.execute("INSERT INTO credential_grants(id,credential_id,subject,granted_by,created) VALUES(?,?,?,?,?)",
                       (H.new_id(), credential_id, subject, who.actor, now))
+    for row in marked:
+        _resume(c, who, row, runtime)
     # In the order every list of computers here uses.
     return sorted(rows, key=lambda row: (row["label"].lower(), row["id"]))
+
+
+def _resume(c, who, runner, runtime):
+    """Lift a Clear key or Switch to subscription on `runner` for `runtime`: here, and on the computer, which keeps a
+    mark of its own and does not fetch a key while it has it, through the Use the shared key job that removes it."""
+    _queue(c, who, runner, runtime, "", "use_shared_key", "use the shared key")
+    for table in ("model_login_cleared", "model_login_key_off"):
+        c.execute(f"DELETE FROM {table} WHERE runner_id=? AND runtime=? AND profile=''", (runner["id"], runtime))
 
 
 def share_key(c, who, rid, runtime, key, env="", share=(), auth=None, vault=None):
@@ -357,18 +381,11 @@ def share_key(c, who, rid, runtime, key, env="", share=(), auth=None, vault=None
               "created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
               (cid, f"{env} shared from {runner['label']}", "api_key", env, preview, ciphertext, nonce,
                "computers:" + rid, now, now, who.actor, who.actor))
-    rows = _share_with(c, who, share, cid, rid)
-    for row in rows:
-        _unmark(c, row["id"], runtime)
+    rows = _share_with(c, who, share, cid, rid, runtime)
     H.event(c, who.actor, "computer_key.shared", rid, {"runtime": runtime, "env": env, "credential": cid,
                                                        "computers": [row["id"] for row in rows]})
     return {"shared": {"id": cid, "env": env, "preview": preview},
             "computers": [{"id": row["id"], "label": row["label"], "online": _online(row)} for row in rows]}
-
-
-def _unmark(c, rid, runtime):
-    for table in ("model_login_cleared", "model_login_key_off"):
-        c.execute(f"DELETE FROM {table} WHERE runner_id=? AND runtime=? AND profile=''", (rid, runtime))
 
 
 def attach_shared_key(c, who, rid, runtime, credential_id, auth=None, vault=None):
@@ -387,8 +404,7 @@ def attach_shared_key(c, who, rid, runtime, credential_id, auth=None, vault=None
                                                                  computer_keys.SHARED_WITH + "%")).fetchone()
     if not shared or row["env"] not in computer_keys.names(runtime):
         raise Problem("credential", f"Choose a shared {runtime} key", 422)
-    _share_with(c, who, (), credential_id, rid)
-    _unmark(c, rid, runtime)
+    _share_with(c, who, (), credential_id, rid, runtime)
     H.event(c, who.actor, "computer_key.attached", rid, {"runtime": runtime, "credential": credential_id})
     return {"shared": {"id": row["id"], "env": row["env"], "preview": row["preview"]},
             "computers": [{"id": r["id"], "label": r["label"]} for r in _shared_users(c, runner, runtime)]}
@@ -656,8 +672,11 @@ def key_info(c, who, rid, runtime, auth=None, vault=None):
     own = computer_keys.active(c, rid, runtime)
     reported = _key_source(runner, runtime)
     shared = None if own else computer_keys.uses_shared(c, runner, runtime)
-    source = "computer" if own else "shared" if shared else reported.get("source") or ""
-    out = {"runtime": runtime, "source": source, "name": own["env"] if own else reported.get("name", ""),
+    # The computer's last report can still say "shared" after the key stopped serving it (cleared here, its grant
+    # revoked, the key deleted) until its next heartbeat: then no shared key is described.
+    source = ("computer" if own else "shared" if shared else
+              "" if reported.get("source") == "shared" else reported.get("source") or "")
+    out = {"runtime": runtime, "source": source, "name": own["env"] if own else reported.get("name", "") if source else "",
            "preview": own["preview"] if own else shared["preview"] if shared and source == "shared" else "",
            "cleared": cleared(c, rid, runtime), "names": list(computer_keys.names(runtime)), "computers": []}
     if source == "shared":

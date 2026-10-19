@@ -14,7 +14,9 @@ All notable changes to Tico are recorded here. The format follows
   A shared key, the "Every computer" key in Credentials included, shows on each computer it serves, its line marked
   Shared and listing those computers, also before the computer has used it. Clear key and Replace key on it ask "This
   computer only" or "All listed computers", naming them, and warn that the second changes every one. A key shared
-  with one computer by name comes before the "Every computer" key there; Credentials names each computer it is
+  with one computer by name comes before the "Every computer" key there, and the key picked or shared last for a tool
+  replaces the one shared with it before. A computer cleared or switched to a subscription from here takes the shared
+  key again when it is given one (refused, naming it, while it is offline). Credentials names each computer it is
   shared with, and revoking one there stops sharing it with that computer.
 - **A usage limit holds the login, once**: a run that hits a subscription's usage limit now holds that provider
   login on that computer, for every bot signed in with it, until the reset the provider names (Claude's "resets

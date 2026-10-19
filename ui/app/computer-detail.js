@@ -32,7 +32,9 @@ function machineConnections(machine) {
       rows.push({key: `profile:${p.name}:${runtime}`, runtime, name: p.display_name || p.name, profile: p, own: false, state: {...state}, bots});
     }
   }
-  for (const [runtime, value] of Object.entries(runtimes)) {
+  // A tool a shared key serves is listed even when the computer has not reported that tool (or anything) yet.
+  for (const runtime of [...new Set([...Object.keys(runtimes), ...Object.keys(machine.shared_with || {})])]) {
+    const value = runtimes[runtime];
     const bots = links.filter(b => !b.profile && b.runtime === runtime).map(b => b.bot);
     const auth = value?.authenticated;
     // A shared key that serves this computer (`shared_with`, backend/computer_keys.py serving) is a connection here
@@ -41,7 +43,7 @@ function machineConnections(machine) {
     // Signed out from Tico (Sign out) stays a line, so it can sign in again or go back to the shared key.
     if (!(auth === 'ready' || auth === 'rejected' || bots.length || machineSignedOut(machine, runtime) || shared)) continue;
     const reading = {signed_in: auth === 'ready' ? true : auth === 'rejected' || (auth === 'missing' && !shared) ? false : null,
-      account: value.account, weekly: value.weekly, five_hour: value.five_hour};
+      account: value?.account, weekly: value?.weekly, five_hour: value?.five_hour};
     // The same provider account as a named subscription here: one line, one reading (the newer one). The server
     // names it in `same_account`, since only an admin or the operator receives the accounts themselves.
     const email = auth === 'ready' && machineEmail(value.account), match = auth === 'ready' && machine.same_account?.[runtime];
@@ -69,6 +71,9 @@ function machineConnections(machine) {
   }
   return rows.sort((a, b) => a.tool.localeCompare(b.tool) || Number(b.own) - Number(a.own) || a.name.localeCompare(b.name));
 }
+// The connections to show: before the computer's first report, only the shared keys that serve it (nothing else is
+// known yet, and a bot's subscription it has not reported is not missing).
+const machineShown = machine => machineReported(machine) ? machineConnections(machine) : machineConnections(machine).filter(conn => conn.shared);
 
 // What is left of the weekly allowance, as a whole percent; null with no current reading.
 function machineLeft(weekly) {
@@ -105,8 +110,8 @@ function machineChipHTML(machine, conn) {
 function machineChipsHTML(machine) {
   if (machine.revoked_at) return '<span class="muted">—</span>';
   const waiting = machineWaiting(machine) ? `<span class="machine-chip waiting" data-machine-waiting>Waiting for ${esc(machine.label)}</span>` : '';
-  if (!machineReported(machine)) return waiting;
-  const conns = machineConnections(machine);
+  const conns = machineShown(machine);
+  if (!machineReported(machine)) return conns.length ? `<div class="machine-chips">${conns.map(conn => machineChipHTML(machine, conn)).join('')}${waiting}</div>` : waiting;
   const chips = conns.map(conn => machineChipHTML(machine, conn)).join('')
     || `<button type="button" class="machine-chip attention" data-computer-open="${esc(machine.id)}" data-no-connection><span class="machine-chip-dot" aria-hidden="true"></span><span>No AI connection</span></button>`;
   return `<div class="machine-chips">${chips}${waiting}</div>`;
@@ -399,7 +404,7 @@ function machineSettingsHTML(machine) {
 }
 function computerDetailHTML(machine) {
   const online = machineOnline(machine), manage = !machine.revoked_at && machineCanSignIn(machine);
-  const conns = machineReported(machine) ? machineConnections(machine) : [];
+  const conns = machineShown(machine);
   const status = machine.revoked_at ? 'revoked' : online ? 'online' : `offline${machine.last_seen ? ` · last seen ${ago(machine.last_seen)}` : ''}`;
   const notes = [!machine.revoked_at && !online ? '<p class="computer-detail-note" role="status" data-computer-offline>Computer is offline. Sign-in, usage refresh, screen and updates wait until it is back.</p>' : '',
     machineWaiting(machine) ? `<p class="computer-detail-note" role="status" data-machine-waiting>Waiting for ${esc(machine.label)} to report.</p>` : ''].join('');

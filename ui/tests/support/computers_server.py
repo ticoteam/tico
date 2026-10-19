@@ -3,8 +3,9 @@
     python3 ui/tests/support/computers_server.py
 
 A loopback install (local owner bearer) with the credential vault on, and three fake computers, "Team box", "Lab box"
-and "Spare box", with Claude Code installed and not signed in. Spare box only sends heartbeats: it never takes a job or
-fetches a key, so it stays a computer a key serves that has not used it yet. Each fake computer does what runner-rs/src/signin.rs does with a key:
+and "Spare box", with Claude Code installed and not signed in. Spare box only sends heartbeats, reporting Codex and not
+Claude Code: it never takes a job or fetches a key, so it stays a computer a key serves that has reported nothing for
+that tool. Each fake computer does what runner-rs/src/signin.rs does with a key:
 it takes a `use_key` job, fetches the staged key from `runner-model-credentials`, reports it working and from then on
 says Claude Code signs in with that key; it also fetches its keys every second, as a credentials change tells it to,
 and signs in with a shared key it is handed. Every key value a computer received is appended to the file named
@@ -54,10 +55,11 @@ def fake_computer(base, admin, label, received, ready, works=True):
     made = call("POST", "runners/enroll", {"code": code, "label": label, "platform": "linux"}, token="none")
     token = made["token"]
     claude = {"installed": True, "authenticated": "missing"}
+    runtimes = {"claude": claude} if works else {"codex": {"installed": True, "authenticated": "missing"}}
 
     def beat():
         call("POST", "runners/heartbeat", {"version": "test", "platform": "linux", "capabilities": CAPABILITIES,
-                                           "readiness": {"schema_version": 1, "runtimes": {"claude": claude}, "bots": {}}},
+                                           "readiness": {"schema_version": 1, "runtimes": runtimes, "bots": {}}},
              token)
 
     def use(credential, source):

@@ -2,7 +2,8 @@
 `attach_shared_key`): a key shared with some computers by name, or with every computer in Credentials, shows on each
 computer it serves with the same computers listed, and "this computer only" takes one computer off it for good."""
 
-from backend.tests.test_computer_keys import SHARED, call, computer, fetch, listed, pending, setup
+from backend.store import H
+from backend.tests.test_computer_keys import SHARED, call, computer, fetch, heartbeat, listed, pending, report, setup
 from backend.tests.test_computer_signin import grant, store
 from backend.tests.test_onboarding import as_person, environment  # noqa: F401
 
@@ -11,6 +12,13 @@ PASTED = "sk-proj-shared-pasted-0123456789"
 
 def labels(machine_or_info):
     return [c["label"] for c in machine_or_info["computers"]]
+
+
+def by_name(api, cid, machine):
+    """Share credential `cid` with `machine` by name, as Add connection does."""
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO credential_grants(id,credential_id,subject,granted_by,created) VALUES(?,?,?,?,?)",
+                  (H.new_id(), cid, "computer:" + machine["runner_id"], "human:ana", H.now()))
 
 
 def test_a_key_shared_with_two_computers_shows_on_both_and_lists_both(environment):
@@ -165,3 +173,74 @@ def test_sharing_or_attaching_a_key_is_an_administrators_change(environment):
     # Only connected computers.
     call(api, "POST", f"computers/{other['runner_id']}/keys",
          {"runtime": "codex", "secret": PASTED, "share": ["no-such-computer"]}, expected=422)
+
+
+def test_a_cleared_computer_given_a_shared_key_is_told_to_take_it_again(environment):
+    """A computer cleared from here keeps a mark of its own and fetches no key while it has it: picking a shared key
+    for it, or sharing a new one with it, sends the Use the shared key job that lifts that mark. One that is offline
+    is refused by name rather than told it has a key it will not fetch."""
+    api = setup(environment)
+    one, two = computer(api, "Alpha", source="shared"), computer(api, "Bravo")
+    made = call(api, "POST", f"computers/{two['runner_id']}/keys",
+                {"runtime": "codex", "secret": PASTED, "share": [two["runner_id"]]})["shared"]
+    job = call(api, "POST", f"computers/{one['runner_id']}/keys/clear", {"runtime": "codex"})["computers"][0]["login"]
+    report(api, one, job["id"], "signed_out")
+    call(api, "POST", f"computers/{one['runner_id']}/shared-key", {"runtime": "codex", "credential": made["id"]})
+    assert [j["kind"] for j in pending(api, one)] == ["use_shared_key"]
+    assert fetch(api, one)["credentials"][0]["value"] == PASTED
+    # Shared from another computer while this one, cleared again, is offline: refused, naming it, and nothing changes.
+    report(api, one, pending(api, one)[0]["id"], "done")
+    job = call(api, "POST", f"computers/{one['runner_id']}/keys/clear", {"runtime": "codex"})["computers"][0]["login"]
+    report(api, one, job["id"], "signed_out")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runners SET last_seen=? WHERE id=?", (H.shift(H.now(), seconds=-3600), one["runner_id"]))
+    refused = call(api, "POST", f"computers/{two['runner_id']}/keys",
+                   {"runtime": "codex", "secret": "sk-proj-second-key-0123456789", "share": [one["runner_id"]]},
+                   expected=409)
+    assert "Alpha is offline" in refused["error"]["detail"]
+    assert fetch(api, one)["credentials"] == [] and fetch(api, two)["credentials"][0]["value"] == PASTED
+
+
+def test_the_shared_key_picked_for_a_computer_is_the_one_it_runs_on(environment):
+    """Two shared keys of the same kind: the one picked in Add connection replaces the other on that computer,
+    whichever is older, in what the dialog says, the computers listed and what the computer fetches."""
+    api = setup(environment)
+    one, two, three = (computer(api, label) for label in ("Alpha", "Bravo", "Charlie"))
+    # The key Charlie has sorts first, so credential order alone would keep it.
+    value = {store(api, "OPENAI_API_KEY", key): key for key in (SHARED, PASTED)}
+    old, picked = sorted(value)
+    by_name(api, old, one)
+    by_name(api, old, three)
+    by_name(api, picked, two)
+    assert fetch(api, three)["credentials"][0]["value"] == value[old]
+    out = call(api, "POST", f"computers/{three['runner_id']}/shared-key", {"runtime": "codex", "credential": picked})
+    assert out["shared"]["id"] == picked and labels(out) == ["Bravo", "Charlie"]
+    assert fetch(api, three)["credentials"] == [{"env": "OPENAI_API_KEY", "value": value[picked], "source": "shared"}]
+    assert call(api, "GET", f"computers/{three['runner_id']}/keys?runtime=codex")["shared"]["id"] == picked
+    assert labels(listed(api, three)["shared_with"]["codex"]) == ["Bravo", "Charlie"]
+    assert labels(listed(api, one)["shared_with"]["codex"]) == ["Alpha"], "the old key still serves Alpha"
+    # Sharing a new pasted key with a computer that has one replaces it there too.
+    new = call(api, "POST", f"computers/{two['runner_id']}/keys",
+               {"runtime": "codex", "secret": "sk-proj-third-key-0123456789", "share": [one["runner_id"]]})["shared"]
+    assert fetch(api, one)["credentials"][0]["value"] == "sk-proj-third-key-0123456789"
+    assert listed(api, one)["shared_with"]["codex"]["id"] == new["id"]
+
+
+def test_a_computer_still_reporting_a_key_that_stopped_serving_it_is_described_as_it_now_is(environment):
+    """Cleared here, or its grant revoked, before the computer's next heartbeat: its last report still says the
+    shared key signs it in, and Add / Replace / Clear key still open, describing no shared key."""
+    api = setup(environment)
+    one, two = computer(api, "Alpha", source="shared"), computer(api, "Bravo", source="shared")
+    cid = call(api, "POST", f"computers/{two['runner_id']}/keys",
+               {"runtime": "codex", "secret": PASTED, "share": [one["runner_id"]]})["shared"]["id"]
+    call(api, "POST", f"computers/{one['runner_id']}/keys/clear", {"runtime": "codex"})
+    info = call(api, "GET", f"computers/{one['runner_id']}/keys?runtime=codex")
+    assert info["source"] == "" and "shared" not in info and info["computers"] == [] and info["cleared"] is True
+    vault = call(api, "GET", "credentials")
+    gid = next(g["id"] for r in vault["credentials"] if r["id"] == cid for g in r["grants"]
+               if g["subject"] == "computer:" + two["runner_id"])
+    call(api, "POST", f"credentials/{cid}/grants/{gid}/revoke", {})
+    info = call(api, "GET", f"computers/{two['runner_id']}/keys?runtime=codex")
+    assert info["source"] == "" and "shared" not in info
+    heartbeat(api, two["token"], "shared")
+    assert call(api, "GET", f"computers/{two['runner_id']}/keys?runtime=codex")["source"] == ""

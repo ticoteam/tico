@@ -3,7 +3,7 @@
 // 16 Add connection > Claude Code > API key > paste > This computer: a Claude Code chip, its line says "API key", the
 //    key reaches the computer and is never shown again in full;
 // 19 a key shared with two computers: a chip on both, its line says Shared and lists both; one that has not used it
-//    yet shows it too, with no reading it has not taken;
+//    yet, and has reported nothing for that tool, shows it too, with no reading it has not taken;
 // 20 editing it from one computer warns that it changes every listed computer, and both take the new key;
 // 36 Clear key from one asks "this computer only" or "all listed computers", naming both; this computer only leaves
 //    the other working.
@@ -145,7 +145,8 @@ function start() {
       assert.match(await row(id).locator('[data-chip="own:claude"]').getAttribute('title'), /Shared with Lab box, Spare box, Team box/);
     }
     assert.ok(received().includes(SHARED), 'the shared key reached the computers');
-    // Spare box has not fetched it: Shared and listed, but no reading, no red dot, and the line says it is unchecked.
+    // Spare box has not fetched it and reports no Claude Code at all: Shared and listed, but no reading, no red dot,
+    // and the line says it is unchecked.
     await lineShows(spare, '[data-shared-with]', 'Shared with Lab box, Spare box, Team box');
     assert.match(await line.locator('[data-shared-waiting]').innerText(), /Not checked on Spare box yet/);
     const spareChip = row(spare).locator('[data-chip="own:claude"]');
