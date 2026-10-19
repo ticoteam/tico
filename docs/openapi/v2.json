@@ -22530,6 +22530,11 @@
               }
             ],
             "title": "Wait S"
+          },
+          "needs_action": {
+            "type": "boolean",
+            "title": "Needs Action",
+            "default": false
           }
         },
         "additionalProperties": false,
@@ -25833,6 +25838,11 @@
           "public": {
             "type": "boolean",
             "title": "Public",
+            "default": false
+          },
+          "needs_action": {
+            "type": "boolean",
+            "title": "Needs Action",
             "default": false
           },
           "approval_id": {

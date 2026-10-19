@@ -54,7 +54,7 @@ All notable changes to Tico are recorded here. The format follows
   or failure changes nothing; then the key is removed from that login as **Clear key** removes it (the company's
   "Every computer" key is not applied to it again, nor put in its turns) until someone adds a key or chooses **Use the
   shared key**. Bots keep the connection. Needs a
-  current runner ([Subscriptions](docs/subscriptions.md#signing-out-and-switching-accounts)).
+  current runner ([Computers](docs/computers.md#signing-out-and-switching-accounts)).
 - A signed-out connection in the computer pop-up reads **Signed out · Sign in** and its chip gets a red dot, and the
   sign-out confirmation names the bots in a line ("Reviewer 1, QA and 2 more will stop running until this is signed in
   again").
@@ -93,6 +93,11 @@ All notable changes to Tico are recorded here. The format follows
   before this keeps today's behaviour ([sessions](docs/sessions.md)).
 
 ### Changed
+- **Bot-to-bot messages wait for the next run** (token saving): a plain message or task comment one bot sends
+  another no longer starts a run. It is kept in its room and handed to that bot's next run, whatever starts it,
+  in the order sent, and marked read then. The sender wakes it at once with `--needs-action`
+  (`hub message send`, `hub task comment`, or `needs_action` in the API and tools). Asks, answers, steers,
+  approvals, gate verdicts, replies the other bot waits on, and anything from a person or Tico still wake at once.
 - **One open question per topic**: a bot that asks a person again on a topic it already has an open question about
   (the same `--topic` key, or the same task) now updates that question instead of filing a second one. The person
   sees one card with the latest wording and the earlier asks listed under it, gets no new Needs you item or Slack

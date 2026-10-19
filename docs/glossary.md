@@ -32,6 +32,7 @@ The words Tico uses, and what each replaces.
 ## Where bots run
 
 - **Computer**: what you register and add (Settings > Computers).
+- **Connection**: a login an AI tool on a computer runs on: a **subscription** (a named plan login), the **Computer's login**, or an API key. See [Computers](computers.md).
 - **Runner**: the software installed on a computer (install docs only).
 - **Health**: what is wrong. Each problem is an **issue**.
 
