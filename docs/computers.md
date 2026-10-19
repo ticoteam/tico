@@ -128,7 +128,8 @@ Choose **Subscription** when you pay for a plan, such as ChatGPT or Claude:
 
 Choose **API key** when you pay the provider for each use:
 
-- There is no weekly allowance to run out. The chip shows "No plan usage (API key)", and the provider bills each run.
+- There is no weekly allowance to run out. The chip shows only the tool's name, with no "% left"; its line in the
+  pop-up reads "No plan usage (API key)". The provider bills each run.
 - Use it for a tool that has no subscription sign-in here (**Subscription** is greyed out), or when a plan's weekly
   limit is too small for your bots.
 - Bots on one OpenAI API key run side by side; bots on one ChatGPT sign-in
