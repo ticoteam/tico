@@ -113,3 +113,19 @@ def test_no_sign_in_is_fine_on_loopback_and_refused_on_a_public_address(monkeypa
     monkeypatch.setenv("TICO_PUBLIC_URL", "https://tico.acme.example")
     with pytest.raises(RuntimeError, match="needs sign-in"):
         Settings.from_env()
+
+
+def test_the_hosted_mark_is_own_or_invited_and_reaches_the_app(monkeypatch, tmp_path):
+    # TICO_HOSTED, set by the recommended preset when our team runs a Tico for a company: the app reads it (ui/model-login.js
+    # keeps the sign-in to the provider's link and code there). Unset is self-hosted; anything else stops the server.
+    monkeypatch.setenv("TICO_DB", str(tmp_path / "hub.db"))
+    for name in ("TICO_AUTH_PROXY", "TICO_ACCESS_ISSUER", "TICO_PUBLIC_URL", "TICO_HOSTED"):
+        monkeypatch.delenv(name, raising=False)
+    assert Settings.from_env().environment()["hosted"] == ""
+    for value in ("own", "invited", " own "):
+        monkeypatch.setenv("TICO_HOSTED", value)
+        assert Settings.from_env().environment()["hosted"] == value.strip()
+    for value in ("team", "1", "Own"):
+        monkeypatch.setenv("TICO_HOSTED", value)
+        with pytest.raises(ValueError, match="TICO_HOSTED is own or invited"):
+            Settings.from_env()

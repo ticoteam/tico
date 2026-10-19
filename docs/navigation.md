@@ -18,6 +18,7 @@ Controls appear when your rights allow the action.
 | Connect or review a Tool | Tools; Slack channels are under Tools → Slack channels |
 | Add or manage Humans and member rules | Settings → Humans |
 | Choose AI providers | Settings → AI providers |
+| Connect the Tico AI Gateway | Settings → AI providers → Tico AI Gateway ([Tico AI Gateway](ai-gateway.md)) |
 | Connect your External agent | Connect an external agent beside your email |
 | Review message work | Message bots → mailbox or channel |
 | Read or write team knowledge | Docs → Internal docs; outside sources are Linked docs |

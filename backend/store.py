@@ -658,6 +658,8 @@ class Store:
             c.executescript(_memory_history.SCHEMA)
             from . import learnings as _learnings
             c.executescript(_learnings.SCHEMA)
+            from . import stale_review as _stale_review
+            c.executescript(_stale_review.SCHEMA)
             from . import docs as _docs
             _docs.ensure_schema(c, self.settings)
             from . import doc_sources as _doc_sources
@@ -1179,6 +1181,10 @@ class Store:
                 # Tasks waiting for room for a worktree (backend/worktree_waits.py). Unversioned like the trash.
                 from .worktree_waits import ensure as ensure_worktree_waits
                 ensure_worktree_waits(c)
+                # The company's Vision, Description and their history, and each goal's Why (backend/company.py).
+                # Unversioned like the trash: an older release never reads the tables or the columns.
+                from .company import ensure as ensure_company
+                ensure_company(c)
                 # Temporary task assignments are retired (#420): their actors are archived and off every computer,
                 # their open tasks back with the role. Unversioned and idempotent like the trash; the tables stay inert.
                 from .shared_bots import retire_assignments

@@ -85,6 +85,8 @@ loyalty
 mail
 manage_accounts
 manage_search
+mark_email_read
+mark_email_unread
 menu
 menu_book
 monitor_heart
@@ -141,6 +143,7 @@ today
 tour
 travel_explore
 troubleshoot
+unarchive
 verified_user
 view_agenda
 view_timeline

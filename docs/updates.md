@@ -15,6 +15,9 @@ Search changes, expand a release's remaining bullets, or open its full release n
 page marks the product entries it shows as read, and **Load older changes** does the same for the ones
 it adds; they stay listed and marked **New** until you leave the page.
 Read status belongs to each person and follows them across sign-ins and devices.
+A new company starts caught up: when the owner completes Finish setup, every release shipped before then is marked
+read for them, so a fresh install shows no count on **What's new**. Later releases count as usual, everyone else keeps
+their own read status, and completing setup a second time changes nothing.
 
 Release entries come directly from the installed `CHANGELOG.md`. They work offline and require
 neither a Git checkout nor manual announcement posting. Unreleased notes and releases newer than
@@ -133,8 +136,10 @@ The runner is a git checkout. When the server's release is newer, the runner:
 1. waits until no run is going, then updates. For the first 20 minutes it keeps taking new work as usual; after
    that it takes no new work until every run that is going has ended, so a busy computer cannot hold the update
    back for ever. It never interrupts a run. Work sent to it after those 20 minutes waits for the longest run
-   still going; Settings > Health shows the computer as Needs update meanwhile, and names each run it waits for:
-   the bot, its task and when the run started (a bot or task you may not read is not named). A run that only waits
+   still going. Meanwhile that work says why in the chat and on its task: **Waiting for the computer to update**
+   instead of Queued, until the computer takes work again (this also shows while the update itself runs).
+   Settings > Health shows the computer as Needs update, says since when it has taken no new work, and names each
+   run it waits for: the bot, its task and when the run started (a bot or task you may not read is not named). A run that only waits
    on something elsewhere (another computer's update, a review) can note the wait on its task and end, and pick it
    up on its next run. Stopping a run is left to a person (Runs); Tico never stops one to update;
 2. starts a separate update process, which fetches the tag `vX.Y.Z` from `origin` (the public repository) and

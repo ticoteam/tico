@@ -156,7 +156,49 @@ going, and no question already waiting on someone) gets one **Still wanted?** qu
 person owns it; a task only bots are on is left alone. It shows in that person's Needs you and
 Decide. **Keep** restarts the clock; **Close** closes the task as theirs with a note. Nothing
 closes without the answer, and the task is asked again only after new activity and another idle
-week (`stale_asked_at`).
+week (`stale_asked_at`). While the team has **Stale ticket review** on, these questions stop: its
+suggestions cover the quiet week.
+
+### Stale ticket review
+
+Stale ticket review finds open tasks that look finished or forgotten and suggests what to do with
+them. It only suggests: nothing changes unless the task's owner accepts.
+
+**Turn it on.** Go to **Settings > Team** and switch on **Stale ticket review**. It is off by
+default, and an owner or an admin can turn it on or off. (A server started with
+`TICO_STALE_REVIEW=1` has it on by default; a choice saved in Settings wins.)
+
+**What it looks for.** Once an hour, Tico checks every open, doing, waiting and review task that is
+not snoozed and has no run going. A task is a candidate when one of these is true:
+
+- every pull request linked to it is merged, closed or shipped;
+- its parent task is done or closed;
+- every task blocking it is done;
+- its snooze ended more than a day ago and nothing has happened since;
+- it has the same title as an older open task with the same owner;
+- nothing has happened on it for 7 days (3 days for a task in progress).
+
+Private tasks are never looked at, so none of their words go to Tico Decide. Tico Decide judges
+only a candidate that is new or has changed since it was last looked at, up to 30 an hour; the
+rest wait for the next hour. An hour with nothing new does nothing: no Decide call, no comment, no card.
+
+**What the owner gets.** At most one suggestion per task a week, and only a suggestion:
+
+- **A bot** gets one comment on the task, for example "Stale check: PR #12 merged Oct 16. Suggest:
+  mark done." The bot decides what to do.
+- **A person** gets one **Stale tickets: N suggestions** card in **Needs you**, with a row per task:
+  the reason and the suggestion (**Mark done**, **Close it** or **Check it is still needed**). Each
+  row has **Accept** and **Skip**; **Accept all** accepts every row on the card that has an
+  **Accept** button. A **Check it is still needed** row has only **Skip**: open the task to decide.
+
+**Accept does what you could do by hand, and nothing more.** The same rules apply: the owner
+can mark a task done, and its requester or another authorized person can close it; anything else
+is refused. If the task changed after the card showed it, that row is refused and stays on the card,
+so open the task to see what changed. **Accept all** applies only the rows you saw: a row that
+arrived since stays on the card.
+
+**Still wanted? questions stop.** While Stale ticket review is on, Tico doesn't send the
+**Still wanted?** questions described above: its suggestions cover the quiet week.
 
 ### When nobody answers a bot's ask
 
@@ -468,7 +510,9 @@ is refused, never run on an author's own. `--role` is `review` or `check` (the d
   "Review done (ran on <model>): <title>" (or "Subtask declined") and the note, so the verdict lands in the parent's
   session. Closing it is a cancellation and wakes nobody.
 - A usage limit on the check's model holds that subtask alone until the provider's reset: the bot's other work
-  goes on, on its own model, and the bot is not marked limited.
+  goes on, on its own model, and the bot is not marked limited. Held 12 hours with every turn stopped on the limit,
+  it is a Health Monitor setup finding (`check_limited`, docs/health-monitor.md). Once the subtask is done, closed or
+  declined, its held turn is let go instead of retrying after each reset; a person's message on it stays queued.
 - When the limit is on the computer's default login (no subscription) and Health already marks that login out of
   quota (`default_login_limited`, docs/health-monitor.md), the check does not wait: its next turn runs at once on
   the next check model in the company's order (Settings > AI providers) that is not from a provider whose work it

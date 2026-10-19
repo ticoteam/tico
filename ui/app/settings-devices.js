@@ -308,6 +308,15 @@ function machineKeyHTML(machine, runtime, key) {
 // Replace key / Clear key, or Add key, from the shared sign-in module (ui/model-login.js).
 const machineKeyActions = (machine, online, runtime, key, signedIn) => window.TicoModelLogin?.keyActionsHTML({
   runnerId: machine.id, runtime, machine: machine.label, key, signedIn, online}) || '';
+// A sign-in several of the computer's bots run on (`shared_logins`, backend/views.py shared_logins), for a harness whose
+// login serves one run at a time (`one_turn_per_login`): those bots take turns, so it says so beside that login.
+function machineSharedLoginHTML(machine, runtime, profile = '') {
+  const row = (machine?.shared_logins || []).find(r => r.runtime === runtime && (r.profile || '') === profile);
+  if (!row) return '';
+  const names = (row.bots || []).map(settingsBotName), more = row.count - names.length;
+  const who = names.length ? ` (${names.join(', ')}${more > 0 ? ` and ${more} more` : ''})` : '';
+  return `<span class="muted machine-shared-login" data-shared-login="${esc(runtime)}:${esc(profile)}">${row.count} bots share this sign-in${esc(who)}. They take turns: one ${esc(harnessWords(runtime))} run at a time.</span>`;
+}
 function machineProfileSignIn(state, runtime) {
   if (state?.signed_in === true) return machineAccountHTML(state.account, runtime);
   if (state?.signed_in === false) return '<span class="pill fail">Signed out</span>';
@@ -362,14 +371,14 @@ function machineToolsHtml(machine, online) {
       return `<div class="machine-tool machine-tool-profile" role="row" data-machine-profile="${esc(p.name)}" data-machine-tool="${esc(name)}">
         <span role="cell" class="machine-tool-name" title="Named subscription ${esc(p.display_name || p.name)}">${esc(p.display_name || p.name)}</span>
         <span role="cell" class="machine-tool-version"></span><span role="cell" class="machine-tool-enabled"></span>
-        <span role="cell" class="machine-tool-signin">${machineProfileSignIn(state, name)}${signIn}</span>
+        <span role="cell" class="machine-tool-signin">${machineProfileSignIn(state, name)}${signIn}${machineSharedLoginHTML(machine, name, p.name)}</span>
         <span role="cell" class="machine-tool-usage">${state.signed_in === false ? '<span class="muted">—</span>' : machineUsageHTML(name, state, `${label} ${p.display_name || p.name}`, 'this subscription')}</span></div>`;
     }).join('') : '';
     return `<div class="machine-tool" role="row" data-machine-tool="${esc(name)}">
       <span role="cell" class="machine-tool-name">${esc(label)}</span>
       <span role="cell" class="machine-tool-version"${version ? ` title="${esc(version)}"` : ''}>${installed ? esc(version || 'Installed') : '<span class="muted">Not installed</span>'}</span>
       <span role="cell" class="machine-tool-enabled"${botRuntimes.has(name) ? ' title="Its bots use it"' : ''}>${enabled ? esc(enabled) : '<span class="muted">—</span>'}</span>
-      <span role="cell" class="machine-tool-signin">${signIn}${action}${rejected}</span>
+      <span role="cell" class="machine-tool-signin">${signIn}${action}${rejected}${installed ? machineSharedLoginHTML(machine, name) : ''}</span>
       <span role="cell" class="machine-tool-usage">${own}</span></div>${lines}`;
   }).join('');
   if (!rows) return '';

@@ -105,6 +105,9 @@ struct Shared {
     alive: AtomicBool,
     child: Mutex<Option<(super::Stopper, Arc<AtomicBool>)>>,
     exited: tokio::sync::Mutex<Option<oneshot::Receiver<std::io::Result<std::process::ExitStatus>>>>,
+    /// True once the app-server process this host last started has been reaped. Never taken by `stop`, so it still
+    /// tells after a stop that was cut off (`running`, `stop_and_reap`).
+    reaped: Mutex<Option<tokio::sync::watch::Receiver<bool>>>,
     active_turn: Mutex<HashMap<String, String>>,
     done_turns: Mutex<HashSet<String>>,
     token_seen: Mutex<HashMap<String, [i64; 3]>>,
@@ -131,6 +134,7 @@ impl CodexHost {
             alive: AtomicBool::new(false),
             child: Mutex::new(None),
             exited: tokio::sync::Mutex::new(None),
+            reaped: Mutex::new(None),
             active_turn: Mutex::new(HashMap::new()),
             done_turns: Mutex::new(HashSet::new()),
             token_seen: Mutex::new(HashMap::new()),
@@ -157,6 +161,10 @@ impl CodexHost {
         if self.alive() {
             return Ok(());
         }
+        // An earlier app-server that stopped answering but still runs is ended first: it may be using this login.
+        if self.running() {
+            self.stop_and_reap().await;
+        }
         let mut command = crate::isolation::command("codex");
         command.arg("app-server").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).env_clear().envs(&self.0.env);
         let mut child = command.spawn().map_err(|e| failed(format!("could not start codex app-server: {e}")))?;
@@ -167,12 +175,15 @@ impl CodexHost {
         // `exited` resolves once; whether it has is kept here for `alive`.
         let gone = Arc::new(AtomicBool::new(false));
         let (relay_tx, relay_rx) = oneshot::channel();
+        let (reaped_tx, reaped_rx) = tokio::sync::watch::channel(false);
         let flag = gone.clone();
         tokio::spawn(async move {
             let status = exited.await.unwrap_or_else(|_| Err(std::io::Error::other("codex app-server reaper ended")));
             flag.store(true, Ordering::SeqCst);
+            let _ = reaped_tx.send(true);
             let _ = relay_tx.send(status);
         });
+        *self.0.reaped.lock().unwrap() = Some(reaped_rx);
         *self.0.child.lock().unwrap() = Some((stopper, gone));
         *self.0.exited.lock().await = Some(relay_rx);
         self.0.alive.store(true, Ordering::SeqCst);
@@ -211,6 +222,22 @@ impl CodexHost {
             }
         }
         self.0.alive.store(false, Ordering::SeqCst);
+    }
+
+    /// Whether the app-server process is still there, answering or not: from its start until it is reaped. `alive`
+    /// is about the protocol and turns false sooner (stdout closed, a stop begun), while the process can live on.
+    pub fn running(&self) -> bool {
+        self.0.reaped.lock().unwrap().as_ref().is_some_and(|r| !*r.borrow())
+    }
+
+    /// `stop`, then wait until the process has been reaped. Safe after a stop that was cut off: that stop's TERM and
+    /// its KILL five seconds later still come from the reaper task (super::own), and this waits for them.
+    pub async fn stop_and_reap(&self) {
+        self.stop().await;
+        let reaped = self.0.reaped.lock().unwrap().clone();
+        if let Some(mut reaped) = reaped {
+            let _ = reaped.wait_for(|gone| *gone).await;
+        }
     }
 
     pub fn alive(&self) -> bool {

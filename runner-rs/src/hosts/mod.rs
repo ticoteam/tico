@@ -395,6 +395,23 @@ impl Host {
         }
     }
 
+    /// Whether the host's process may still be running. Codex, the one CLI that serves one turn per login
+    /// (crate::login_turns), says until its process is reaped; the others say `alive`.
+    pub fn running(&self) -> bool {
+        match self {
+            Host::Codex(h) => h.running(),
+            _ => self.alive(),
+        }
+    }
+
+    /// `stop`, and for Codex wait until its process has been reaped, even after an earlier stop was cut off.
+    pub async fn stop_and_reap(&self) {
+        match self {
+            Host::Codex(h) => h.stop_and_reap().await,
+            _ => self.stop().await,
+        }
+    }
+
     pub fn alive(&self) -> bool {
         match self {
             Host::Claude(h) => h.alive(),

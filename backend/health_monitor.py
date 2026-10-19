@@ -28,7 +28,7 @@ from datetime import timezone
 from fastapi import Request
 from pydantic import Field
 
-from . import diagnostics, providers, team_rules
+from . import diagnostics, providers, runner_versions, team_rules
 from .auth import Identity
 from .models import Contract
 from .store import H, Problem
@@ -52,6 +52,7 @@ SERVER_CPU = 40.0            # the server's average CPU over an hour, in percent
 QUIET_REQUESTS = 600         # requests in that hour below which the server counts as idle
 REPEATED = 3                 # a runner error line seen this often in its last 50 is a pattern, not a blip
 REWAKE_HOURS = 24            # a finding back within this long of its last wake counts but wakes nothing
+CHECK_HELD_HOURS = 12        # a check subtask whose every turn this long stopped on its model's usage limit
 LOGIN_LIMITS = 2             # turns in a row on a computer's default login that stopped on a usage limit: out of quota
 # A server start (a deploy, an update, a restart) ends every runner's event stream: a drop from this long before a start
 # to this long after it is the restart, not the stream. The span allows for the old server stopping first and for clocks.
@@ -182,6 +183,9 @@ def _runner_checks(c, settings):
         rows = held.get(machine["id"], [])
         holds = (f" {health.updating_words(rows[0], advise=False)}; it holds {sum(r['queued'] for r in rows)} queued "
                  "job(s) for " + ", ".join(r["name"] for r in rows) + ".") if rows else ""
+        if rows and (since := runner_versions.holding_since(c, machine["id"])):
+            minutes = max(0, int((H.parse_ts(H.now()) - H.parse_ts(since)).total_seconds() // 60))
+            holds += f" It has taken no new work since {since[11:16]} UTC ({minutes} min), waiting to update."
         if machine["online"] and (update["state"] in ("needs_update", "incompatible") or update["error"] or rows):
             out.append(_finding("runner_outdated:" + machine["id"], "runner_outdated", SETUP,
                                 f"{machine['label']} runs an older Tico release ({update['release'] or 'unknown'})",
@@ -316,6 +320,48 @@ def _login_checks(c, settings):
     return out
 
 
+def _check_hold_checks(c):
+    """A check subtask whose queued turn has stopped on its model's usage limit on every try for CHECK_HELD_HOURS: the
+    claim hands it out again after each reset (check_models.hold) and nothing else tells anyone. A turn on it that
+    ends any other way, the turn completing, or the task leaving the board clears it. One finding per check task."""
+    from . import check_models
+    now = H.now()
+    out = []
+    limited = "(coalesce(json_extract(result_json,'$.limited'),0) AND state<>'completed')"
+    for t in c.execute("SELECT t.id,t.title,t.private,t.owner FROM registry_metadata r "
+                       "JOIN tasks t ON t.id=substr(r.key,15) WHERE r.key>='check-limited:' AND r.key<'check-limited;' "
+                       f"AND t.status IN ({','.join('?' * len(H.ACTIVE_STATUSES))}) AND t.owner LIKE 'bot:%'",
+                       H.ACTIVE_STATUSES).fetchall():
+        bot = H.actor_id(t["owner"])
+        check = check_models.of(c, t["id"], bot)
+        if not check:
+            continue
+        # The limits on its queued jobs since the last turn on any of them that ended another way. One pool, not the
+        # oldest job: the claim hands out a person's message before an older notice, and one turn takes several.
+        queued = ("SELECT j.id FROM jobs j CROSS JOIN messages m JOIN conversations cv ON cv.id=m.conversation_id "
+                  f"WHERE j.bot=? AND j.state='queued' AND m.id=j.message_id AND {H.MESSAGE_TASK_SQL}=?")
+        since, tries = c.execute(
+            f"WITH a AS (SELECT finished,{limited} AS hit FROM attempts WHERE job_id IN ({queued}) "
+            "AND finished IS NOT NULL) SELECT min(finished),count(*) FROM a WHERE hit "
+            "AND finished>coalesce((SELECT max(finished) FROM a WHERE NOT hit),'')", (bot, t["id"])).fetchone()
+        if not tries or since > H.shift(now, hours=-CHECK_HELD_HOURS):
+            continue
+        hours = int((H.parse_ts(now) - H.parse_ts(since)).total_seconds() // 3600)
+        name = (H.bot(c, bot) or {}).get("display_name") or bot
+        model = providers.RUNTIME_LABELS.get(check["runtime"], check["runtime"]) + (
+            f" ({check['model']})" if check.get("model") else "")
+        title = "a private task" if t["private"] else t["title"]
+        out.append(_finding("check_limited:" + t["id"], "check_limited", SETUP,
+                            f"{name}'s check on {model} is held by its usage limit",
+                            f"{name}'s check on {model} has been held by its usage limit for {hours} h (since "
+                            f"{since[:16].replace('T', ' ')} UTC); {title}. Every turn on it since then ({tries}) "
+                            "stopped on the limit, and Tico retries it after every reset.",
+                            f"BotOps: wait for {model}'s limit to reset; or switch the check model: {name} declines "
+                            "this check and files it again on another model (hub task child --check-model); or drop "
+                            f"the check: {name} declines it. A declined check's queued turn is let go."))
+    return out
+
+
 def _brief_drops(lines):
     """Where the "lost" lines are whose next word on the stream, before another drop, is that it was back within
     BRIEF_DROP_S."""
@@ -433,7 +479,8 @@ def _server_checks(c):
 def findings(c, settings):
     """Everything wrong right now, each once by key."""
     out = {}
-    for part in (_runner_checks(c, settings), _login_checks(c, settings), _bot_checks(c, settings), _server_checks(c)):
+    for part in (_runner_checks(c, settings), _login_checks(c, settings), _check_hold_checks(c),
+                 _bot_checks(c, settings), _server_checks(c)):
         for item in part:
             out.setdefault(item["key"], item)
     return list(out.values())

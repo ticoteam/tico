@@ -5,7 +5,8 @@ default**. The owner turns it on or off with one switch in **Settings > Health**
 `/turn-off`). Turning it off pauses it; its history stays.
 
 Settings > Health also lists checks that belong to one feature, documented on that feature's page: public roadmap
-suggestions with no receiving bot are in [Public roadmaps](roadmaps.md).
+suggestions with no receiving bot are in [Public roadmaps](roadmaps.md), and the Tico AI Gateway key (near or at its
+monthly cap, not recognised, or not ready) is in [Tico AI Gateway](ai-gateway.md#what-the-card-says).
 
 ## What it checks
 
@@ -18,6 +19,7 @@ Once an hour, while it is on, the server checks the install in plain code (`back
 | `computer_silent` | setup | A computer has not checked in for 10 minutes or more while work is queued for its bots |
 | `limited_no_fallback` | setup | A bot's turns stopped on a subscription or spend limit in the last day and it has no fallback model: none of its own, and not the company's either (*Fall back when a plan runs out* is off in **Settings > AI providers**, no company provider is on another runtime than the bot's, or the bot turned fallback off or names a fallback tool with no model) |
 | `default_login_limited` | setup | A computer's default login for an AI tool (the one a turn uses with no subscription) is out of quota: in the last day at least two turns on it stopped on a usage limit and none has completed since, and the provider gave no reset time or one still ahead. One finding per computer and tool; it goes away once a turn on that login completes or the reset time passes. Fallback hops and check-model turns count; a turn on a subscription does not, nor one on a tool each bot signs in with its own key (`api_keys = "bot"`: Gemini CLI, pi). While it lasts, a check or review subtask on that login moves to the next check model instead of retrying ([A subtask on a check model](tasks.md#a-subtask-on-a-check-model)) |
+| `check_limited` | setup | A bot's check or review subtask on another model ([A subtask on a check model](tasks.md#a-subtask-on-a-check-model)) has been held by that model's usage limit for 12 hours: its job is still queued and every turn on it since then stopped on the limit, as Tico retries it after each reset. The finding names the bot, the model, since when and the task (a private task is not named). One finding per check task; it goes away once a turn on it ends any other way, it completes, or the task is done, closed or declined |
 | `stuck_setup` | setup | A bot has been in setup over an hour while work waits for it |
 | `worktree_error` | setup | A task worktree failed on its computer |
 | `push_stuck` | setup | A runner reports a checkout with commits it cannot push (diverged) |
