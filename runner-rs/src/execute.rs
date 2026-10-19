@@ -340,6 +340,13 @@ fn same_repository(url: &str, repository: &str) -> bool {
 /// and no upstream gets `origin` set to the bot's repository and `git push -u origin <branch>`, with the turn's own
 /// scoped token. Never forces; a remote holding history this checkout lacks is left alone and reported.
 /// (state, detail): `published`, `current` (nothing to do), `skipped` or `failed`.
+/// The secret scrub of what a turn changed, on the blocking pool: it runs git and reads every changed file, which
+/// on a busy computer takes long enough to stall every turn sharing the two async workers.
+pub(crate) async fn scrub_changes(r: &Arc<Redactor>, root: &Path, since: &str) -> crate::redact::Tree {
+    let (r, root, since) = (r.clone(), root.to_path_buf(), since.to_string());
+    crate::util::off_worker(move || r.scrub_tree(&root, &since)).await
+}
+
 pub async fn publish_history(path: &Path, repository: &str, env: &Env) -> (&'static str, String) {
     if repository.is_empty() || !path.join(".git").exists() {
         return ("skipped", if repository.is_empty() { "no repository link" } else { "not a git checkout" }.into());
@@ -1208,7 +1215,8 @@ impl Runner {
             log(&format!("Tico runner: {bot}: {ran_on} could not renew its sign-in and the turn never started; the cloud will retry it"));
         }
 
-        // The result: settle the host, scrub, save, send.
+        // The result: settle the host, scrub, save, send. Each step's mark lets the flight file name a slow one.
+        mark("model_done", &aid);
         if let Some(h) = &host {
             if let (Some(th), Some(t)) = (&thread, &turn) {
                 if drove.outcome == "interrupted" {
@@ -1237,7 +1245,8 @@ impl Runner {
         if let Some(r) = &redactor {
             reply = r.scrub_text(&reply);
             if host.is_some() {
-                let tree = r.scrub_tree(&execution_path, &started_at);
+                let tree = scrub_changes(r, &execution_path, &started_at).await;
+                mark("scrubbed", &aid);
                 let mut stamps: Vec<(String, String)> = vec![];
                 let mut reasons: BTreeMap<String, &str> = BTreeMap::new();
                 for (why, paths) in [("too large to commit", &tree.too_large), ("contains a secret", &tree.left_out)] {
@@ -1255,7 +1264,8 @@ impl Runner {
                         reasons.insert(name, why);
                     }
                 }
-                for name in self.state.unreported(&bot, &stamps).unwrap_or_default() {
+                let who = bot.clone();
+                for name in self.state.off(move |s| s.unreported(&who, &stamps)).await.unwrap_or_default() {
                     let line = format!("left out of the commit: {name} ({})", reasons[&name]);
                     reply = if reply.is_empty() { line } else { format!("{reply}\n\n{line}") };
                 }
@@ -1345,9 +1355,12 @@ impl Runner {
         }
         mark("finished", &aid);
         let settled: Result<(), String> = async {
-            let completion = self.state.finish(&aid, &completion)?;
+            let id = aid.clone();
+            let completion = self.state.off(move |s| s.finish(&id, &completion)).await?;
+            mark("saved", &aid);
             let sent: Result<(), ApiError> = async {
                 self.flush(&aid).await?;
+                mark("flushed", &aid);
                 if let Some(stream) = capture.take().and_then(|c| c.finish()) {
                     // Before completion, while the attempt is still this runner's; a capture is never worth a turn.
                     if let Err(e) = self.client.post(&format!("attempts/{aid}/capture"), &stream, Some(&format!("capture:{aid}"))).await {
@@ -1363,10 +1376,12 @@ impl Runner {
                     if drove.outcome == "completed" {
                         // The next turn on this thread forwards only what the room said after this.
                         if let Some(th) = &thread {
-                            self.state.cursor(th, Some(&text_of(&attempt["message"]["id"])))?;
+                            let (th, message) = (th.clone(), text_of(&attempt["message"]["id"]));
+                            self.state.off(move |s| s.cursor(&th, Some(&message))).await?;
                         }
                     }
-                    self.state.phase(&aid, "synced")?;
+                    let id = aid.clone();
+                    self.state.off(move |s| s.phase(&id, "synced")).await?;
                     // A bot delivered through an app has no repository here: its work lives in the app.
                     let repository = crate::appdriver::delivery(&config).is_none();
                     if let Some(p) = place.as_ref().filter(|_| drove.outcome == "completed" && host.is_some() && repository) {
@@ -1391,7 +1406,8 @@ impl Runner {
                 Err(e) if !e.retryable => {
                     // This computer holds the only copy of the result until the cloud takes it: say so out loud.
                     log(&format!("Tico runner: {bot}: {} result for {aid} refused ({}); kept on this Mac only", drove.outcome, describe(&e)));
-                    self.state.phase(&aid, "historical")?;
+                    let id = aid.clone();
+                    self.state.off(move |s| s.phase(&id, "historical")).await?;
                     if drove.outcome == "completed" && (e.code == "escape" || e.code == "privacy") {
                         let mut refused = completion.clone();
                         refused["outcome"] = json!("failed");
@@ -1760,5 +1776,112 @@ mod tests {
         for part in [&current, &older, &oldest] {
             assert_eq!((&part["input_tokens"], &part["cached_tokens"], &part["output_tokens"]), (&json!(30), &json!(120), &json!(7)));
         }
+    }
+
+    /// The recording hub on a thread of its own, so blocking the runner's workers cannot stall it.
+    fn hub_apart() -> (String, Arc<Mutex<Vec<(String, String, Value)>>>) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+            rt.block_on(async move {
+                let (url, seen, _server) = recording_server().await;
+                tx.send((url, seen)).unwrap();
+                std::future::pending::<()>().await
+            });
+        });
+        rx.recv().unwrap()
+    }
+
+    fn runner_at(url: &str, name: &str) -> (Arc<Runner>, PathBuf) {
+        let dir = std::env::temp_dir().join(format!("tico-{name}-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(dir.join("projects")).unwrap();
+        let path = dir.join("runner.json");
+        std::fs::write(&path, json!({"url": url, "token": "t", "runner_id": "r1", "projects_dir": dir.join("projects")}).to_string()).unwrap();
+        let config = crate::config::Config::load(&path).unwrap();
+        let client = crate::client::Client::new(&config.url(), &config.token(), 5, 0).unwrap();
+        (Arc::new(Runner::new(config, client, crate::state::State::open(&dir.join("state")).unwrap())), dir)
+    }
+
+    fn posted(seen: &Mutex<Vec<(String, String, Value)>>, end: &str) -> usize {
+        seen.lock().unwrap().iter().filter(|(m, p, _)| m == "POST" && p.ends_with(end)).count()
+    }
+
+    #[test]
+    fn two_slow_scrubs_do_not_hold_up_another_turns_events_and_result() {
+        let (url, seen) = hub_apart();
+        let (runner, dir) = runner_at(&url, "slow-scrub");
+        runner.state.record(&json!({"id": "c"})).unwrap();
+        runner.state.append("c", "delta", &json!({"text": "Acme's summary is ready"})).unwrap();
+        let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap();
+        rt.block_on(async {
+            // Two turns' scrubs stuck for 3 s, as many as the runtime has async workers.
+            let redactor = Arc::new(Redactor::new(&["granted-secret-value".into()]));
+            let r = redactor.clone();
+            let held = std::thread::spawn(move || r.hold_for(Duration::from_millis(3000)));
+            std::thread::sleep(Duration::from_millis(50));
+            let scrubs: Vec<_> = (0..2)
+                .map(|_| {
+                    let (r, root) = (redactor.clone(), dir.clone());
+                    tokio::spawn(async move { scrub_changes(&r, &root, "").await })
+                })
+                .collect();
+            std::thread::sleep(Duration::from_millis(100));
+            // A third turn hands in meanwhile: its events, then its result.
+            let other = runner.clone();
+            let handed = tokio::spawn(async move {
+                other.flush("c").await.unwrap();
+                other.complete("c", &json!({"outcome": "completed", "text": "Acme's summary is ready", "last_seq": 1})).await.unwrap();
+            });
+            std::thread::sleep(Duration::from_millis(1500));
+            let (events, results) = (posted(&seen, "/attempts/c/events"), posted(&seen, "/attempts/c/complete"));
+            assert!(!held.is_finished(), "the scrubs were still held");
+            assert_eq!((events, results), (1, 1), "the other turn's events and result went out while two scrubs were stuck");
+            held.join().unwrap();
+            for s in scrubs {
+                s.await.unwrap();
+            }
+            handed.await.unwrap();
+        });
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn two_turns_waiting_on_a_slow_state_database_do_not_hold_up_another_turns_result() {
+        let (url, seen) = hub_apart();
+        let (runner, dir) = runner_at(&url, "slow-state");
+        for aid in ["a", "b"] {
+            runner.state.record(&json!({"id": aid})).unwrap();
+            runner.state.append(aid, "delta", &json!({"text": "working"})).unwrap();
+        }
+        let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap();
+        rt.block_on(async {
+            // The database busy for 3 s (a long fsync or checkpoint); two turns' flushes wait on it.
+            let state = runner.state.clone();
+            let held = std::thread::spawn(move || state.with(|_| Ok(std::thread::sleep(Duration::from_millis(3000)))).unwrap());
+            std::thread::sleep(Duration::from_millis(50));
+            let flushes: Vec<_> = ["a", "b"]
+                .into_iter()
+                .map(|aid| {
+                    let r = runner.clone();
+                    tokio::spawn(async move { r.flush(aid).await.unwrap() })
+                })
+                .collect();
+            std::thread::sleep(Duration::from_millis(100));
+            let other = runner.clone();
+            let handed = tokio::spawn(async move {
+                other.complete("c", &json!({"outcome": "completed", "text": "done", "last_seq": 0})).await.unwrap();
+            });
+            std::thread::sleep(Duration::from_millis(1500));
+            assert!(!held.is_finished(), "the database was still busy");
+            assert_eq!(posted(&seen, "/attempts/c/complete"), 1, "the other turn's result went out while two flushes waited");
+            assert_eq!(posted(&seen, "/attempts/a/events") + posted(&seen, "/attempts/b/events"), 0);
+            held.join().unwrap();
+            for f in flushes {
+                f.await.unwrap();
+            }
+            handed.await.unwrap();
+            assert_eq!((posted(&seen, "/attempts/a/events"), posted(&seen, "/attempts/b/events")), (1, 1), "the waiting flushes went out after");
+        });
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

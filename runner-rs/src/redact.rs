@@ -103,6 +103,13 @@ impl Redactor {
         Redactor { inner: RwLock::new(build(secrets)) }
     }
 
+    /// Holds the redactor for `d`, the way a scrub stuck in git or in a large file holds its thread.
+    #[cfg(test)]
+    pub fn hold_for(&self, d: std::time::Duration) {
+        let _held = self.inner.write().unwrap();
+        std::thread::sleep(d);
+    }
+
     pub fn is_empty(&self) -> bool {
         self.inner.read().unwrap().matcher.is_none()
     }
@@ -414,14 +421,19 @@ pub fn git_failure(stderr: &str, secrets: &[String], limit: usize) -> String {
 
 /// git with the clean environment `runner/safe_git.py` uses: no global or system config.
 pub fn git(root: &Path, args: &[&str]) -> Option<Vec<u8>> {
-    let out = crate::isolation::std_command("git")
-        .args(crate::safegit::args(root))
-        .args(args)
+    let mut argv: Vec<String> = vec!["git".into()];
+    argv.extend(crate::safegit::args(root));
+    argv.extend(args.iter().map(|a| a.to_string()));
+    let began = std::time::Instant::now();
+    let ran = crate::isolation::std_command("git")
+        .args(&argv[1..])
         .env_clear()
         .envs(crate::safegit::clean_environment(&crate::env::process_environment()))
         .stdin(std::process::Stdio::null())
-        .output()
-        .ok()?;
+        .output();
+    // The scrub's git calls are in the flight file like gitrun's: a slow `status` or `log -p` names itself.
+    crate::flight::git(&argv, began.elapsed().as_millis() as u64, ran.as_ref().ok().and_then(|o| o.status.code()), ran.as_ref().err().map(|_| "io"));
+    let out = ran.ok()?;
     out.status.success().then_some(out.stdout)
 }
 

@@ -37,6 +37,17 @@ fn local_stamp() -> String {
     }
 }
 
+/// Blocking work (git, file reads, the state database's fsyncs) run on tokio's blocking pool, awaited in place so
+/// the caller's order holds. The runtime has two async workers; two turns' blocking calls on them would stall
+/// every other turn's event flushes and result posts. A panic in `f` is the caller's panic, as before.
+pub async fn off_worker<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+    match tokio::task::spawn_blocking(f).await {
+        Ok(v) => v,
+        Err(e) if e.is_panic() => std::panic::resume_unwind(e.into_panic()),
+        Err(e) => panic!("blocking work did not run: {e}"),
+    }
+}
+
 /// One log line on stdout, as `runner/outage.py` log prints it, with every running turn's secrets taken out.
 pub fn log(line: &str) {
     say(line, false);

@@ -29,7 +29,10 @@ pub const HEARTBEAT_SLOW_MS: u64 = 1000;
 /// A git command at least this long is recorded (timeouts and commands that never ran always are).
 pub const GIT_SLOW_MS: u64 = 2000;
 /// The order a turn passes its marks in (`util::mark` names plus the flight-only ones).
-const PHASES: [&str; 9] = ["claimed", "placed", "harness_started", "harness_spawned", "first_output", "first_delta_posted", "finished", "complete_posted", "done"];
+const PHASES: [&str; 13] = [
+    "claimed", "placed", "harness_started", "harness_spawned", "first_output", "first_delta_posted", "model_done", "scrubbed", "finished", "saved",
+    "flushed", "complete_posted", "done",
+];
 
 static SENDER: OnceLock<SyncSender<Map<String, Value>>> = OnceLock::new();
 static DROPPED: AtomicU64 = AtomicU64::new(0);

@@ -88,6 +88,11 @@ All notable changes to Tico are recorded here. The format follows
   ([Computers](docs/computers.md#remove-a-subscription)).
 
 ### Fixed
+- **A finished answer is no longer held up on a busy computer.** After a turn, the runner's secret scrub of the
+  changed files, its git checks and its local database writes now run on threads of their own. Two slow turns can
+  no longer stop every other turn's progress and answers on that computer. The runner's flight file now times each
+  hand-in step (model done, scrubbed, saved, events sent, result posted) and every slow scrub git command, so
+  `tico-runner flight summary` names the slow step.
 - **A bot's finished answer is no longer lost or given twice when its computer stalls before handing it in.** A
   turn's lease now renews on a thread of its own, so busy work on the computer can't stop it. If a finished
   answer still comes in late, after its run was dismissed or cancelled, it is kept: the run ends completed and the
