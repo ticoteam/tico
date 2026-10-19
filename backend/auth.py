@@ -444,7 +444,8 @@ class Auth:
                     email = self.proxy.email(headers) if self.proxy else None
                 if email is None:
                     # The UI's fetch layer follows `sign_in` to the built-in login page.
-                    extra = {"sign_in": "/auth/login"} if self.proxy and self.proxy.name == "oidc" else None
+                    extra = ({"sign_in": "/auth/login"} if self.proxy and self.proxy.name == "oidc"
+                             else {"sign_in": "/auth/owner-link"} if self.proxy and self.proxy.name == "owner-link" else None)
                     raise Problem("identity", "Sign in to " + self.settings.app_name, 401, extra=extra)
                 # A signed assertion without an email (a Cloudflare service token) would otherwise
                 # match a roster entry that has none, and "" is also an unset owner email.

@@ -45,6 +45,8 @@ services:
       TICO_HOSTED:
       TICO_ENVIRONMENT_ID:
       TICO_AUTH_PROXY:
+      # TICO_AUTH_PROXY=owner-link: the hash of the hosted owner's first sign-in link (backend/owner_link.py).
+      TICO_OWNER_LINK_HASH:
       TICO_OIDC_ISSUER:
       TICO_OIDC_CLIENT_ID:
       TICO_OIDC_CLIENT_SECRET:
@@ -166,6 +168,8 @@ services:
       # Sign-in settings: the gateway loads the same settings as the server and refuses to start when the
       # selected proxy (oidc, cloudflare) is missing its own.
       TICO_AUTH_PROXY:
+      # TICO_AUTH_PROXY=owner-link: the hash of the hosted owner's first sign-in link (backend/owner_link.py).
+      TICO_OWNER_LINK_HASH:
       TICO_OIDC_ISSUER:
       TICO_OIDC_CLIENT_ID:
       TICO_OIDC_CLIENT_SECRET:

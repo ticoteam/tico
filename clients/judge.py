@@ -46,6 +46,8 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
+from clients import gateway as G
+
 URL = "https://api.typesafe.ai/v1/systemone"
 MODEL = "jev-latest"
 KEY_ENV = "TYPESAFE_API_KEY"
@@ -297,7 +299,7 @@ def gateway_open(request, timeout):
     handlers = [_HTTPHandler, _HTTPSHandler, _Unredirected]
     if urllib.parse.urlsplit(request.full_url).scheme == "http":
         handlers.append(urllib.request.ProxyHandler({}))
-    return urllib.request.build_opener(*handlers).open(request, timeout=timeout)
+    return G.branded_opener(*handlers).open(request, timeout=timeout)   # Tico's user agent: Cloudflare refuses urllib's
 
 
 def time_left(timeout):

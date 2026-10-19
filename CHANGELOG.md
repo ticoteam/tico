@@ -29,6 +29,12 @@ All notable changes to Tico are recorded here. The format follows
   before. `--support off` turns Support off. The Gateway invite comes from `TICO_GATEWAY_INVITE` in the environment and
   is never printed. The quick start, your own domain and sign-in, and your own keys install as before.
   ([Install](docs/install.md#recommended-setup))
+- **Owner sign-in link for servers Tico hosts**: the setup wizard's `--hosted own|invited` signs the owner in with a
+  link our team sends. It works once and for a week at most, only on an https domain under our zone, and is never
+  printed or logged; `python3 -m setup owner-link` makes a new one and can sign the owner out everywhere. When a
+  session ends, Sign in again shows the link page, not an error. With
+  `--preset recommended` the hosted server gets the recommended setup and its own computer. Every other sign-in is
+  unchanged. ([Install](docs/install.md#sign-in))
 - **How long an approval has waited, and on whom**: every approval now records when its exact payload was ready to
   decide and whose decision it is, and its card in Needs you and Decide says so plainly ("Ready 2 h 10 min, waiting
   on you", or the person's name); the row shows "ready 2 h 10 min". The API adds `ready_since`, `decision_owner`,
@@ -52,8 +58,7 @@ All notable changes to Tico are recorded here. The format follows
   audio clip to a chat reply or task comment (`--visual PATH --title "…"` on `hub message send`, `hub chat send` and
   `hub task comment`; `visuals` over MCP; `attachments: [{ref, title}]` in the API). It is a versioned file there,
   shown only to that conversation's readers. A page's local images and fonts are embedded; remote ones are removed
-  and listed. Self-hosters set `TICO_VISUAL_ORIGIN`, a separate site. Video and audio still show as file chips until part 3
-  ([Visuals in replies](docs/visuals.md)).
+  and listed. Self-hosters set `TICO_VISUAL_ORIGIN`, a separate site ([Visuals in replies](docs/visuals.md)).
 - **Visuals in replies (part 2 of 4): pictures, SVG and visual pages show inline** under a chat message or a task
   comment, a person's attachments too. Each is a card the width of the message, never wider than the screen, with its
   title as the caption and a menu: Expand, Open in file viewer, Download. A visual page shows at its own height up to
@@ -64,6 +69,12 @@ All notable changes to Tico are recorded here. The format follows
   newest), says "This visual was removed" when the file was removed and "Couldn't show this visual" when it can't
   render. Up to 4 per message; the rest stay file chips
   ([Visuals in replies](docs/visuals.md#in-a-chat-or-task-conversation)).
+- **Video and audio in replies (part 3 of 4)**: a video or audio clip attached to a chat reply or task comment plays
+  in its card: a video with its poster, play, seek, volume and full screen; an audio clip as a compact player. Nothing
+  starts by itself, starting one clip pauses any other, and a playing clip keeps going while you scroll or the thread
+  updates. Seeking a long clip loads only that part. A clip the device can't play says why, with Download. Video and
+  audio count toward the 4 cards per message
+  ([Visuals in replies](docs/visuals.md#video-and-audio)).
 - **The company on Goals**: with the CEO Bot switch on, Goals opens with a **Company** section: the Vision (one or
   two sentences) and the Description (a short paragraph). The owner and admins edit it, everyone else reads it, and
   **History** lists every change with who made it and when. Each goal shows a one-line **Why** tying it to the
@@ -121,8 +132,30 @@ All notable changes to Tico are recorded here. The format follows
   ([Computers](docs/computers.md#remove-a-subscription)).
 
 ### Fixed
+- **A finished answer is no longer held up on a busy computer.** After a turn, the runner's secret scrub of the
+  changed files, its git checks and its local database writes now run on threads of their own. Two slow turns can
+  no longer stop every other turn's progress and answers on that computer. The runner's flight file now times each
+  hand-in step (model done, scrubbed, saved, events sent, result posted) and every slow scrub git command, so
+  `tico-runner flight summary` names the slow step.
+- **A task's chat shows your message being answered, whichever bot answers it.** After you send a message on a task,
+  the task's chat shows the same line as a bot's chat: Sent, Queued (and why, when the bot is busy or at a limit),
+  Starting, "<Bot> is working" with its latest step, then the reply, or "Reply failed" when the turn errors. This now
+  follows the bot your message went to, such as the bot that asked you on a task you own, not only the task's owner.
+  Before you send, the message box says when no bot will get the message, or when it waits for the bot's next run on
+  the task.
+- **Tico AI Gateway calls are no longer refused at the edge**: Decide's questions, writing on a Tico model and the key check in
+  Settings > AI providers now send Tico's own user agent (`Tico-Client/<version>`). Without it Python's default one was
+  refused before the call reached the Gateway, so a server on a gateway key got no answers from Decide.
+- **Computers: a cleared key reads "No key · Add key"**, not "Signed out · Sign in", in a computer's pop-up, and its
+  chip's hover says No key. On an offline computer, a connection's **Replace key**, **Clear key**, **Switch to
+  subscription**, **Sign out** and **Switch account** stay on the line, disabled, with "Computer is offline", instead
+  of disappearing ([Computers](docs/computers.md#api-keys-on-a-computer)).
 - A locally managed Cloudflare Tunnel keeps the separate inline-visual hostname after a server restart or update.
   `TICO_VISUAL_ORIGIN` adds a route for `^/visuals/` only; app and runner routes and the 404 catch-all stay in place.
+  A bad value (not https, a path, the runner's host, an IP address, not a URL at all) no longer stops the server from
+  starting: the server logs one warning naming the reason and writes the config without the visuals route, and a value
+  that is not a URL counts as unset (file chips). The app's own address still stops it, as before. A trailing CR from
+  an edited `.env` is ignored ([Cloudflare Tunnel](docs/install.md#cloudflare-tunnel)).
 - **A bot's finished answer is no longer lost or given twice when its computer stalls before handing it in.** A
   turn's lease now renews on a thread of its own, so busy work on the computer can't stop it. If a finished
   answer still comes in late, after its run was dismissed or cancelled, it is kept: the run ends completed and the
@@ -164,7 +197,8 @@ All notable changes to Tico are recorded here. The format follows
   bot's own write caused never wakes that same bot. Nothing is dropped: the notice stays in the task's room and is
   handed to the bot's next run, whatever starts it, in order. A person's message, comment, approval or answer, an
   ask, a needs-action message, a gate verdict, an assignment, a finished subtask and a sweep still wake at once.
-  Each skipped wake is logged as `wake.skipped` in `events` for the weekly audit ([hub sql](docs/hub-sql.md)).
+  Each skipped wake, a bot's own comment on its task included, is logged as `wake.skipped` in `events` for the
+  weekly audit ([hub sql](docs/hub-sql.md)).
 - **Health Monitor: seeing a finding again only counts**: each hourly scan that sees a finding adds one to its count
   and moves its last-seen time, and no bot runs for it. Only a new finding, one whose severity rises (a computer on a
   release the server cannot work with is `bad`, an older one `warn`), or one back after its task was finished wakes

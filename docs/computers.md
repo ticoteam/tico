@@ -101,7 +101,9 @@ Click a row to open its pop-up. Its sections, top to bottom:
    **Performance**, and **Revoke computer** at the bottom.
 
 When the computer is offline, the pop-up says "Computer is offline" and its sign-in, usage refresh, screen and update
-actions are disabled until it is back.
+actions are disabled until it is back. So are a connection's **Sign out**, **Switch account**, **Replace key**,
+**Clear key** and the switches between a subscription and an API key: they stay on the line, greyed, and say "Computer
+is offline" on hover; nothing is queued for later.
 
 ### Who sees and changes what
 
@@ -264,8 +266,8 @@ login with none. The Computer must be online and on a current runner; an older o
   Code, a key added here is used even when the computer also has a browser login.
 - **Clear key** first names the bots that stop, like **Sign out**. The Computer then deletes the key from its key files
   (and, for Codex, logs out a login the key made; a browser or subscription login is not the key's and stays), and
-  Tico deletes this computer's key from the vault. Bots and assignments stay. Afterwards the line reads **Signed out**
-  with **Add key**: like a sign-out, the company's shared key does not sign it back in (the server does not hand it
+  Tico deletes this computer's key from the vault. Bots and assignments stay. Afterwards the line reads **No key ·
+  Add key**, with **Sign in** and **Use the shared key** beside it, and its chip has a red dot: like a sign-out, the company's shared key does not sign it back in (the server does not hand it
   out, and the runner's ten-minute re-apply skips it) until someone adds a key, signs in or chooses **Use the shared
   key**.
 
@@ -288,8 +290,8 @@ them**, listing every Computer it signs in and which of them are offline.
 
 A Computer's own key is also a credential in **Credentials**. Deleting it there: the Computer falls back to the shared
 key at its next key fetch (Codex signs in again with it). With no shared key, the deletion is **Clear key** on that
-Computer: its next key fetch deletes its copies and logs out the login the key made, and the line reads **Signed out**
-with **Add key**. A key a Computer is still checking cannot be deleted there; cancel **Replace key** or let the check
+Computer: its next key fetch deletes its copies and logs out the login the key made, and the line reads **No key ·
+Add key**. A key a Computer is still checking cannot be deleted there; cancel **Replace key** or let the check
 end first.
 
 `GET /api/v2/runners/{runner_id}/keys?runtime=codex` says which key signs it in (`source`, `preview`) and, for the

@@ -20,6 +20,7 @@ import datetime
 import hashlib
 import hmac
 import json
+import os
 import re
 import urllib.error
 import urllib.parse
@@ -157,6 +158,22 @@ class _Unredirected(urllib.request.HTTPRedirectHandler):
         return None
 
 
+def user_agent():
+    """Tico's own user agent, `Tico-Client/<app version>`: Cloudflare in front of Tico HQ answers a library's default
+    one (`Python-urllib/3.12`) with 403 before the request reaches the Gateway. A version that could not be a header
+    value is sent as `dev`."""
+    version = re.sub(r"^v(?=\d)", "", os.environ.get("TICO_VERSION", "").strip())
+    return "Tico-Client/" + (version if re.fullmatch(r"[0-9A-Za-z.+-]{1,64}", version) else "dev")
+
+
+def branded_opener(*handlers):
+    """`urllib.request.build_opener(*handlers)` that sends `user_agent()` in place of urllib's default on every
+    request it opens. Every request to the Gateway or Tico HQ goes through one (backend/tests/test_gateway_user_agent.py)."""
+    opener = urllib.request.build_opener(*handlers)
+    opener.addheaders = [("User-Agent", user_agent())]
+    return opener
+
+
 def _send(request, timeout):
     """`check`'s transport, built for each call so it reads the environment's proxy as it is now. A redirect is
     answered as the HTTP error it is. Plain HTTP (only ever to this computer, `safe_base`) goes straight there: a proxy
@@ -164,7 +181,7 @@ def _send(request, timeout):
     handlers = [_Unredirected]
     if urllib.parse.urlsplit(request.full_url).scheme == "http":
         handlers.append(urllib.request.ProxyHandler({}))
-    return urllib.request.build_opener(*handlers).open(request, timeout=timeout)
+    return branded_opener(*handlers).open(request, timeout=timeout)
 
 
 def state_of_error(status, code):

@@ -3814,9 +3814,7 @@ def task_comment(conn, actor, task_id, text, wake=True, *, ask=None, extra_refs=
         if ask or extra_refs or answer_to:
             refuse(conn, actor, 'kind', 'A public comment is plain text without attachments or asks')
         check_public_comment(conn, actor, row, text, approval_id)
-    others = [a for a in dict.fromkeys([row["owner"], row["requester"], task_origin(conn, row)])
-              if a and a not in (actor, KEEPER) and task_private_readable(conn, a, row)]
-    target = next((a for a in others if is_bot(a)), None) or (others[0] if others else None)
+    target = comment_target(conn, actor, row)
     refs = {"task": task_id, "comment": True, **(extra_refs or {})}
     # A bot's comment flagged needs-action wakes the other side even where its comment alone would not (a snoozed
     # task): the sender said it cannot wait (backend/bot_to_bot.py).
@@ -3842,6 +3840,8 @@ def task_comment(conn, actor, task_id, text, wake=True, *, ask=None, extra_refs=
         msg = _write_message(conn, actor, actor, text, conv, "say", refs, None, None)
     else:
         msg = say(conn, actor, target, text, conversation_id=conv["id"], refs=refs)
+    from . import wake_rules
+    wake_rules.own_comment(conn, msg, row)        # token saving 2/9: a bot's own comment never wakes it; log the skip
     conn.execute("UPDATE tasks SET updated=? WHERE id=?", (now(), task_id))
     if row["status"] == "waiting" and row.get("waiting_on") == actor:
         # The person it waited on has spoken: the next move is the bot's, and it leaves their
@@ -3857,6 +3857,14 @@ def task_comment(conn, actor, task_id, text, wake=True, *, ask=None, extra_refs=
         conn.execute('UPDATE messages SET public=1 WHERE id=?', (msg['id'],))
         msg = message(conn, msg['id'])
     return msg
+
+
+def comment_target(conn, actor, row):
+    """Who `actor`'s plain comment on the task goes to: the first bot among its owner, requester and origin, else the
+    first person among them, else no one."""
+    others = [a for a in dict.fromkeys([row["owner"], row["requester"], task_origin(conn, row)])
+              if a and a not in (actor, KEEPER) and task_private_readable(conn, a, row)]
+    return next((a for a in others if is_bot(a)), None) or (others[0] if others else None)
 
 
 def comment_wakes(conn, actor, row, text, *, mover=False):
@@ -3885,6 +3893,16 @@ def names_a_filer(conn, text, row):
     """`text` @mentions the bot that filed the task (its requester or origin)."""
     filers = [a for a in dict.fromkeys([row["requester"], task_origin(conn, row)]) if is_bot(a)]
     return any(_mentions_bot(conn, text, a) for a in filers)
+
+
+def filer_handles(conn, row):
+    """The @names that reach the bots that filed the task (names_a_filer): each one's slug and name."""
+    handles = []
+    for a in dict.fromkeys([row["requester"], task_origin(conn, row)]):
+        if is_bot(a):
+            name = (bot(conn, actor_id(a)) or {}).get("name")
+            handles += [actor_id(a)] + ([name] if name else [])
+    return handles
 
 
 def _at(text, name):
