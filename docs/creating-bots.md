@@ -593,6 +593,10 @@ Levers set in **Settings → Bots**, not in the repository:
   **Save bot** ([harnesses.md](harnesses.md#choosing-a-harness-model-and-effort)). The hop starts a fresh session. OpenRouter
   is not a bot harness. With none set, a usage limit still moves the turn to another provider signed in on
   the bot's computer unless the owner turned that off in **Settings → AI providers** (docs/how-it-works.md).
+- **Connection**: the login the bot runs on: **Computer's login** (the default) or one of the subscriptions on its
+  computer, listed first, then those on other computers. A line under **Model** says "Runs on *tool* · *connection* on
+  *computer*". The bot's computer operator, owners and admins choose it; groups no longer give their bots one
+  ([Computers](computers.md#which-connection-a-bot-runs-on)).
 - **Compact at**: how full the bot's conversation gets before it is compacted: 150k, 250k tokens (the default),
   400k, 600k or 1M. Claude Code and Codex only. Changing it keeps the session.
 - **Wakes**: how soon news starts a run. **Token saver**, the default for a new bot, holds

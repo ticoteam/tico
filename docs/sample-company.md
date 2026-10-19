@@ -40,7 +40,7 @@ company that is set up is left alone.
   kept, and the first tasks use it; with none, the team is called Sample Co.
 - **Providers.** When no AI provider is chosen yet, Claude (the default) and ChatGPT are turned on. A company that
   already chose keeps its choice, and a bot whose provider is off runs on the company's default model instead. The
-  bots still need the two subscriptions signed in on the computer ([subscriptions](subscriptions.md)).
+  bots still need the two subscriptions signed in on the computer ([Computers](computers.md#add-a-connection)).
 - **Bots.** The four role bots are created as **Create my team** creates them ([what Create does](onboarding.md#what-create-does)),
   then marked set up: the sample's answers stand in for the setup chat, so each one's first task is picked up as soon
   as a computer runs it. The computer makes each bot's repository with its `state.md` already saying setup is done

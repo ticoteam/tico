@@ -436,16 +436,16 @@ A subscription login (a ChatGPT or Claude plan) cannot be copied. If that is how
 "*computer name*: sign in to Codex" (or Claude Code) for each new computer that needs it. Sign it in from Settings > Computers, or ask
 BotOps to start it, then finish the sign-in in your browser.
 
-To change the account a computer uses, choose **Switch account** next to it in Settings > Computers: the new account is
+To change the account a computer uses, open it in Settings > Computers and choose **Switch account** on its connection: the new account is
 signed in on the side, and the old one keeps working until that finishes (or if you cancel). **Sign out** names the bots
 that stop first; they wait until someone signs in again. A computer you signed out is not signed back in by the model key
-given to every computer until you sign in or choose **Use the shared key**. See [subscriptions](subscriptions.md#signing-out-and-switching-accounts).
+given to every computer until you sign in or choose **Use the shared key**. See [Computers](computers.md#signing-out-and-switching-accounts).
 
-A computer can also run on a model API key of its own, with no terminal: **Add key** (or **Replace key**) next to it in
+A computer can also run on a model API key of its own, with no terminal: **Add key** (or **Replace key**) on its connection in
 Settings > Computers keeps the key in Tico's credential vault for that computer alone, and the computer checks it before
 the old one goes. **Clear key** names the bots that stop, then takes the key off the computer. For the key given to every
 computer, both ask whether to change **this computer only** or **all of them**; an offline computer clears its copy when
-it is next online. See [subscriptions](subscriptions.md#api-keys-on-a-computer).
+it is next online. See [Computers](computers.md#api-keys-on-a-computer).
 
 ### Linux or cloud server (Docker)
 
