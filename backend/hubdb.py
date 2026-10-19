@@ -3315,19 +3315,25 @@ def link_kind(url):
 
 
 def unlinked_pushes(conn, task_id):
-    """The task's worktrees whose branch has commits on top of the commit it was checked out at and no pull request
-    link on that repository (a link whose branch GitHub has not reported yet counts): work a hand-off would leave
-    with nothing to review, merge or release. Each is {link_id, repo, branch}."""
+    """The task's worktrees whose branch carries pushed commits of the task's own and no pull request link on that
+    repository (a link whose branch GitHub has not reported yet counts): work a hand-off would leave with nothing to
+    review, merge or release. Pushed is the push webhook's head, or a committed head the computer reports nothing
+    unpushed on; the background pass's look at the branch on GitHub (github.reconcile_worktree_prs) settles both, so a
+    missed webhook still counts and a branch only moved to newer main does not. A head the tree started at, or one on
+    the repository's default branch, is no work of the task's. Each is {link_id, repo, branch}."""
     out = []
     for w in _rows(conn.execute("SELECT id,repo,branch,detail_json FROM task_links WHERE task_id=? AND kind='worktree' "
                                 "AND coalesce(state,'unknown')<>'removed' AND repo IS NOT NULL AND branch IS NOT NULL",
                                 (task_id,))):
         detail = _json(w["detail_json"], {}) or {}
-        head, start = detail.get("last_commit"), detail.get("expected_head")
-        if not head or not start or head == start:
-            continue
-        if not conn.execute("SELECT 1 FROM task_links WHERE task_id=? AND kind='pr' AND lower(repo)=lower(?) "
-                            "AND (branch=? OR branch IS NULL)", (task_id, w["repo"], w["branch"])).fetchone():
+        remote = detail.get("remote") or {}
+        heads = {detail.get("pushed"), detail.get("last_commit") if detail.get("ahead") == 0 else None}
+        heads -= {None, "", detail.get("expected_head"), *(remote.get("heads") or [])}
+        work = remote.get("ahead") or any(
+            not conn.execute("SELECT 1 FROM main_pushes WHERE sha=? AND lower(repo)=lower(?)", (head, w["repo"])).fetchone()
+            for head in heads)
+        if work and not conn.execute("SELECT 1 FROM task_links WHERE task_id=? AND kind='pr' AND lower(repo)=lower(?) "
+                                     "AND (branch=? OR branch IS NULL)", (task_id, w["repo"], w["branch"])).fetchone():
             out.append({"link_id": w["id"], "repo": w["repo"], "branch": w["branch"]})
     return out
 
@@ -4476,9 +4482,16 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
     state_change = status is not None or type is not None or step is not None
     type_id = row.get("type_id") or GENERAL_TYPE
     if state_change:
-        type_id, _, effective = _task_state(conn, actor, row, status, type, step)
+        type_id, step_id, effective = _task_state(conn, actor, row, status, type, step)
         if status is not None or step is not None:
             status = effective
+        # A hand-off to a review step (from another review step too) or to done, with pushed work no pull request
+        # carries, leaves an orphan worktree.
+        if (effective == "done" and row["status"] != "done"
+                or effective == "review" and (row["status"] != "review" or step_id != row.get("step_id"))):
+            missing = unlinked_pushes(conn, task_id)
+            if missing:
+                refuse(conn, actor, "worktree_pr", "This task " + _unlinked_text(missing))
         # A move between steps with the same status changes only the pipeline label.
         if step is not None and effective == row["status"]:
             status = None
@@ -4507,11 +4520,6 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
                    f"the owner may set {'|'.join(OWNER_STATUSES)}, not {status}")
         if status == "ready" and is_bot(actor):
             refuse(conn, actor, "close", "ready to ship is set when the pull request merges, not by the bot")
-        # A hand-off to review, or done, with pushed work no pull request carries leaves an orphan worktree.
-        if status == "done" or status == "review" and row["status"] == "doing":
-            missing = unlinked_pushes(conn, task_id)
-            if missing:
-                refuse(conn, actor, "worktree_pr", "This task " + _unlinked_text(missing))
         # A bot parking a task it asked itself for has nobody to answer it unless it has filed
         # something to wait on first. Several stranded tasks were this.
         # Validate the requested dependency, not the old one: callers can park work and

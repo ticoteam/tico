@@ -122,9 +122,9 @@ All notable changes to Tico are recorded here. The format follows
 - **Finished worktrees free themselves even when nobody linked or reopened the pull request.** A pull request opened
   from a task worktree's branch is linked to the task automatically (both repositories of a two-repository task), and a
   background pass every few minutes refreshes worktree tasks' pull request state, closed and unread tasks included, so a
-  missed GitHub webhook no longer keeps a finished tree counted against the bot's limit. A tree whose own commits no
-  pull request carries is held with the reason shown, and a move to review or done names the unlinked branch
-  ([Task worktrees](docs/worktrees.md)).
+  missed GitHub webhook no longer keeps a finished tree counted against the bot's limit. A tree whose pushed commits no
+  pull request carries is held with the reason shown, gets a draft pull request even when the push webhook was
+  missed, and a move to any review step or to done names the unlinked branch ([Task worktrees](docs/worktrees.md)).
 - **Computers: a cleared key reads "No key · Add key"**, not "Signed out · Sign in", in a computer's pop-up, and its
   chip's hover says No key. On an offline computer, a connection's **Replace key**, **Clear key**, **Switch to
   subscription**, **Sign out** and **Switch account** stay on the line, disabled, with "Computer is offline", instead
