@@ -114,11 +114,39 @@ out, because that stops bots.
 
 ## Add a connection
 
+### Subscription or API key?
+
+Choose **Subscription** when you pay for a plan, such as ChatGPT or Claude:
+
+- You sign in with the plan's account in the browser. There is no key to copy.
+- The plan pays for the runs. The chip shows how much of the week's allowance is left ("N% left"), and use of the same
+  account outside Tico lowers it too ([What "% left" means](#what--left-means)).
+- When the plan runs out, bots move to a fallback model until it resets, or stop if none is ready
+  ([How it works](how-it-works.md)).
+- You can add several to one computer, for example one per team, each with its own name and usage. A bot runs on one
+  when you choose it in **Connection** in the bot's settings.
+
+Choose **API key** when you pay the provider for each use:
+
+- There is no weekly allowance to run out. The chip shows "No plan usage (API key)", and the provider bills each run.
+- Use it for a tool that has no subscription sign-in here (**Subscription** is greyed out), or when a plan's weekly
+  limit is too small for your bots.
+- Bots on one OpenAI API key run side by side; bots on one ChatGPT sign-in
+  [take turns](#bots-sharing-one-chatgpt-sign-in-take-turns).
+- Where the key goes:
+  - **Add key** gives this computer a key of its own, for Codex, Claude Code, Cursor Agent and Muse Code. Only this
+    computer uses it.
+  - **Credentials** holds a key that several computers share (the company's key given to **Every computer**), and the
+    key of a tool whose key belongs to each bot, such as the Gemini CLI. **Add connection** offers **Open Credentials**
+    for those.
+
+### Add one
+
 In a computer's pop-up, **Add connection** (at the end of Connections) opens its own pop-up:
 
 1. **Which AI tool?** The tools installed on that computer. **Install another tool** goes to **Versions and updates**,
    where the owner installs one.
-2. **Subscription** or **API key**. A tool with no subscription sign-in from the browser has Subscription greyed out.
+2. **Subscription** or **API key** ([which to choose](#subscription-or-api-key)). A tool with no subscription sign-in from the browser has Subscription greyed out.
    A tool that signs in only from a terminal (such as Grok Build or Cursor Agent) shows the command to run on the
    computer here, with **Copy**. A tool that signs in from the browser but has no named subscriptions offers
    **Computer's login** instead.
