@@ -24,7 +24,7 @@ Settings > Bots has an **Access** column. **Edit** opens the editor, with three 
 | Preset | See | Read | Write |
 | --- | --- | --- | --- |
 | **Open** | Everyone | Everyone | Everyone |
-| **Visible, requests only** | Everyone | the humans, groups and bots you choose | Everyone |
+| **Requests only** | Everyone | the humans, groups and bots you choose | Everyone |
 | **Private** | the ones you choose | the ones you choose | the ones you choose |
 | **Custom** | each level chosen on its own | | |
 
@@ -461,7 +461,7 @@ The Legal bot reviews contracts. Everyone should be able to send it a request, b
 Legal's business.
 
 1. Settings > Bots, **Edit** in Legal's Access column.
-2. Choose **Visible, requests only**.
+2. Choose **Requests only**.
 3. Under *Who can read its work* tick the **Legal** group. Save.
 
 Now everyone sees the bot and can chat with it or give it a task. Cara, in the Legal group, also reads its

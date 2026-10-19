@@ -362,11 +362,11 @@ registry directory (`TICO_REGISTRY_DIR`) and in bot repositories outside this on
 is the product. `templates/environment-registry/` shows the shape of the registry.
 
 Tasks support [tags with metadata, Markdown checklists and templates](docs/using-tico.md#tags-and-release-checklists).
-Open **Settings > Tags** or use `hub tag list|show|create|update`. Existing `--label` and
+Open **Settings > Tasks** (under **Task tags**) or use `hub tag list|show|create|update`. Existing `--label` and
 `hub_task_label` calls keep using tag keys.
 
 ## Task pipelines
 
-Tasks start on General. Movers can add types and named steps in Settings → Types, then select a
+Tasks start on General. Movers can add types and named steps in Settings → Tasks, then select a
 type on the board to use its steps as columns. Bots and existing scripts keep using task statuses.
 See [Task types and steps](docs/tasks.md) for the UI, CLI, MCP and API.

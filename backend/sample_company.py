@@ -25,6 +25,7 @@ from . import goals as G
 from . import onboarding as O
 from . import providers
 from .company_file import from_yaml
+from .config import DEFAULT_COMPANY_NAME
 from .store import H, Problem
 
 FILE = Path(__file__).resolve().parent / "company_file" / "sample_company.yaml"
@@ -142,7 +143,7 @@ def team_name(settings, record):
     "Company" is the name of none)."""
     saved = str(record["names"].get("company_name") or "").strip()
     configured = (settings.company_name or "").strip()
-    return saved or (configured if configured != "Company" else "")
+    return saved or (configured if configured != DEFAULT_COMPANY_NAME else "")
 
 
 def _providers(c, settings, who):

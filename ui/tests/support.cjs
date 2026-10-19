@@ -72,7 +72,7 @@ const UNREACHABLE = 'Not sent. Could not reach Tico support. Try again in a mome
           if (rest === 'access/sa_1/stop') { hq.access.active = null; return json({}); }
           if (rest === 'access/sa_1/log') return json({log: [{ts: new Date().toISOString(), by: 'support-agent', method: 'GET', path: '/api/v2/health' + HOSTILE, status: 200}]});
           if (rest === 'setup-snapshot') calls.push('asked from ' + new URL(req.url()).searchParams.get('asked_from'));
-          if (rest === 'setup-snapshot') return json({message: "I'd like help setting up Tico.\n\n- Computer online: no", kind: 'setup'});
+          if (rest === 'setup-snapshot') return json({message: "I'd like help setting up Tico.\n\nSetup snapshot (asked from the setup wizard):\n- Steps done: 2 of 5; left: Add a computer, Sign in a model, First bot ready\n- Computer online: no\n- Model signed in: no\n- First bot ready: no\n- Bots in Needs setup: 3", kind: 'setup'});
           if (rest === 'feedback') return json({moment: body.moment, answered: !!body.answer, ticket: null});
           if (rest === 'compose') return json({enabled: true, email: 'ana@acme.example', version: '0.2.17', install_id: INSTALL, to: 'updates.tico.team', max: 4000});
           if (rest === 'diagnostics/capture' && hq.captureGate) await hq.captureGate;
@@ -582,7 +582,7 @@ const UNREACHABLE = 'Not sent. Could not reach Tico support. Try again in a mome
     assert.equal(await v.page.evaluate(() => document.querySelector('meta[name=viewport]').content.includes('user-scalable=no') || /maximum-scale=1(\D|$)/.test(document.querySelector('meta[name=viewport]').content)), false, 'zoom itself stays allowed');
     const sheetAt = () => kpop.evaluate(el => {
       const r = el.getBoundingClientRect(), inside = (sel, all) => { const b = (all ? [...el.querySelectorAll(sel)].at(-1) : el.querySelector(sel)).getBoundingClientRect(); return {top: b.top, bottom: b.bottom}; };
-      const thread = inside('[data-thread]'), newest = inside('.support-msg', true);
+      const thread = inside('[data-thread]'), newest = el.querySelector('.support-msg') ? inside('.support-msg', true) : null;   // a new request has none
       // Every point along the top and bottom edges and down both sides is the sheet, not the page behind it.
       const probes = [];
       for (let x = 2; x < innerWidth; x += 48) probes.push([x, r.top + 1], [x, r.bottom - 1]);
@@ -634,6 +634,28 @@ const UNREACHABLE = 'Not sent. Could not reach Tico support. Try again in a mome
     await v.page.evaluate(() => window.__keys(844, 0));
     k = await sheetIs(844 - SHEET, 844, 'back to the bottom sheet');
     assert.equal(k.pad, 34, 'with the home-bar gap');
+    // A long reply, then the "Want help setting up?" snapshot, with the keyboard up: the box grows only into the room
+    // the short sheet has left, so it and Send stay above the keyboard, and the rest scrolls inside the box.
+    const fitsAbove = async (why) => {
+      await v.page.waitForTimeout(50);
+      const s = await sheetAt();
+      for (const part of ['box', 'send']) assert.ok(s[part].top >= 120 && s[part].bottom <= 578, `${why}: ${part} above the keyboard (${JSON.stringify(s)})`);
+      assert.ok(s.thread.bottom - s.thread.top >= 119, `${why}: the thread keeps its room (${JSON.stringify(s.thread)})`);
+    };
+    await v.page.evaluate(() => window.__keys(458, 120));
+    await sheetIs(120, 578, 'keyboard up again');
+    await kbox.fill(Array.from({length: 30}, (_, i) => `Line ${i + 1} of a long reply about the archived bot.`).join('\n'));
+    await fitsAbove('long reply');
+    const snapshot = "I'd like help setting up Tico.\n\nSetup snapshot (asked from the setup wizard):\n- Steps done: 2 of 5; left: Add a computer, Sign in a model, First bot ready\n- Computer online: no\n- Model signed in: no\n- First bot ready: no\n- Bots in Needs setup: 3";
+    await v.page.evaluate(m => window.supportStart(m, 'setup'), snapshot);
+    await v.page.waitForFunction(m => document.querySelector('#support-pop[open] #support-message')?.value === m, snapshot);
+    await fitsAbove('setup snapshot');
+    if (process.env.TICO_SCREENSHOT_DIR) await v.page.screenshot({path: require('node:path').join(process.env.TICO_SCREENSHOT_DIR, 'phone-help-box-keyboard-light.png')});
+    // Keyboard down: the whole snapshot shows, nothing left to scroll.
+    await v.page.evaluate(() => window.__keys(844, 0));
+    await sheetIs(844 - SHEET, 844, 'keyboard down after the snapshot');
+    await v.page.waitForTimeout(50);
+    assert.ok(await kpop.locator('[data-compose] [name=message]').evaluate(box => box.scrollHeight <= box.clientHeight + 1), 'keyboard down: the snapshot shows whole');
     await v.page.keyboard.press('Escape');
     await kpop.waitFor({state: 'hidden'});
     assert.notEqual(await v.page.evaluate(() => getComputedStyle(document.body).overflowY), 'hidden', 'closing the sheet lets the page scroll again');
@@ -761,6 +783,8 @@ const UNREACHABLE = 'Not sent. Could not reach Tico support. Try again in a mome
     await v.page.locator('#main [data-setup-help]').click();
     await v.page.waitForFunction(() => document.querySelector('#support-pop[open] #support-message')?.value.startsWith("I'd like help setting up Tico."));
     assert.ok(v.calls.includes('asked from health'));
+    // The box grows to the whole snapshot: nothing is cut off or left to scroll.
+    assert.ok(await v.page.locator('#support-message').evaluate(box => box.scrollHeight <= box.clientHeight + 1), 'the snapshot shows whole');
     assert.equal(await v.page.locator('#support-pop [data-title]').innerText(), 'New request');
     assert.match(await v.page.locator('[data-sent]').textContent(), /message marked setup/);
     assert.ok(!v.calls.some(c => c.startsWith('POST tickets {')), 'nothing is sent before the person presses Send');
@@ -775,6 +799,18 @@ const UNREACHABLE = 'Not sent. Could not reach Tico support. Try again in a mome
     await v.page.waitForTimeout(100);
     assert.equal(v.calls.filter(c => c === 'asked from health').length, 2);
     assert.equal((await v.page.locator('#support-message').inputValue()).split("I'd like help setting up Tico.").length, 2);
+    // TICO_SCREENSHOT_DIR=<dir> saves the opened snapshot at desktop and phone width, in both themes.
+    if (process.env.TICO_SCREENSHOT_DIR) for (const [size, viewport] of [['desktop', {width: 1440, height: 900}], ['phone', {width: 390, height: 844}]]) {
+      for (const theme of ['light', 'dark']) {
+        const s = await visit({viewport, theme});
+        await s.page.evaluate(() => document.querySelector('#main').insertAdjacentHTML('beforeend', '<button type="button" data-setup-help="wizard">Want help setting up?</button>'));
+        await s.page.locator('#main [data-setup-help]').click();
+        await s.page.waitForFunction(() => document.querySelector('#support-pop[open] #support-message')?.value.startsWith("I'd like help setting up Tico."));
+        await s.page.waitForTimeout(300);
+        await s.page.screenshot({path: require('node:path').join(process.env.TICO_SCREENSHOT_DIR, `${size}-help-box-${theme}.png`)});
+        await s.ctx.close();
+      }
+    }
     await v.page.locator('[data-compose] [name=message]').press('Enter');
     await v.page.locator('.support-msg.you', {hasText: 'Computer online'}).waitFor();
     assert.equal(JSON.parse(v.calls.find(c => c.startsWith('POST tickets {')).slice('POST tickets '.length)).kind, 'setup');

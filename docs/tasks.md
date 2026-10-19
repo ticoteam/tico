@@ -1,7 +1,7 @@
 # Task types and steps
 
 Every task starts on **General**, with the same statuses and behavior as before. To give work a
-pipeline such as Marketing, a mover makes a type in **Settings → Types**, adds named steps, and
+pipeline such as Marketing, a mover makes a type in **Settings → Tasks**, adds named steps, and
 chooses the status each step means. Types belong to the whole team. General keeps one step for
 each standard status.
 
@@ -81,6 +81,16 @@ question`) is the card too. `hub task question` asked from a run on one of the b
 task when no `--parent` is given. The answer follows the blocker link, so a progress note the bot adds while it waits
 doesn't lose it, and a declined or closed card no longer blocks the task. The note says the person answered only when they
 finished the card; when someone else closed it, it names who did.
+
+One open question per topic. A bot's `hub task question` to a person while its earlier one on the same topic still
+waits on them (unanswered, the task not finished) updates that one instead of filing a second: the same topic is the
+same `--topic` key under any task, or, with no key, the same parent task. The person keeps one card with the latest
+wording and options, its body lists the earlier asks under "Asked before", and nothing new is sent: no second Needs
+you item, no Slack line, no run. The ask's clock restarts, so a default goes ahead only after the team's days from
+the latest wording. The reply says `folded: true`. A different decision on the same task takes its own `--topic`;
+once the question is answered, declined or closed, the next one on the topic opens a new card. An answer picked on
+the earlier wording is refused ("reworded"), so the person answers what the card says now. A key is compared by its
+letters and digits in any script, case folded; one with none is refused.
 
 The note must be a plain ask: one or two sentences, at most 40 words, with no ids, hashes, file paths, `s3://` links
 or tool names. Without one the update is refused, saying what failed. A task with an open structured question to
@@ -272,7 +282,7 @@ duplicates are still refused.
 ## Types bots work on
 
 Every bot can read company-visible tasks subject to existing bot activity restrictions. Types
-control additional permission to comment, file subtasks or change work in **Settings → Types**,
+control additional permission to comment, file subtasks or change work in **Settings → Tasks**,
 with `bots` on the task-types routes or `hub task type update "Dev ticket" --bots work`.
 
 | `bots` | Additional permission for unrelated bots |

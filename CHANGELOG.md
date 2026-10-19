@@ -14,6 +14,18 @@ All notable changes to Tico are recorded here. The format follows
   vision: the CEO Bot proposes it and a person accepts it as it is, edits it or writes their own. A goal with none
   says "Not tied to the vision". No bot can change the Vision or the Description or accept a Why, the CEO Bot
   included. With the switch off none of this shows.
+- **How bots get their models**, at the top of Settings > AI providers and the first setup step: **Your Claude and
+  ChatGPT subscriptions, plus Tico Gateway** (recommended, and what Tico's installer sets with
+  `TICO_MODELS_PRESET=subscriptions-gateway`), subscriptions only, Tico Gateway only, or your company's plans or API
+  keys. Under the recommended choice bots do their main work on your Claude and ChatGPT subscriptions; until you sign
+  in they run on Tico Mid 1.0 through the Gateway and move over on their next turn once you do, and a used-up plan
+  finishes on the Gateway, last. Decide and update drafts run on the Gateway. The owner sees one Needs you item, "Sign
+  in to Claude and ChatGPT, or add API keys", until both are signed in; where no computer runs bots as their own user
+  (a Mac), bots wait for the sign-in instead, the item says why, and the model list marks Tico models "not on this
+  computer". A bot on a Tico model waits there too, with Health saying why, rather than stopping. Health says
+  plainly when a used-up login has bots on the Gateway. Gateway usage records keep which gateway key and install
+  paid, never the key. The other three choices, and a team that never picks one, keep working
+  as before ([Tico AI Gateway](docs/ai-gateway.md#choose-how-bots-get-their-models)).
 - **CEO Bot switch** (off by default; one per install, no release needed): an owner or admin turns it on with
   `POST /api/v2/ceo-bot {"on": true}` (`hub api POST ceo-bot '{"on": true}'`), never a bot. On, the Goal Manager is
   named the CEO Bot in the bot list, the org chart, Goals and its messages, and sits on the org chart under the owner
@@ -81,6 +93,11 @@ All notable changes to Tico are recorded here. The format follows
   before this keeps today's behaviour ([sessions](docs/sessions.md)).
 
 ### Changed
+- **One open question per topic**: a bot that asks a person again on a topic it already has an open question about
+  (the same `--topic` key, or the same task) now updates that question instead of filing a second one. The person
+  sees one card with the latest wording and the earlier asks listed under it, gets no new Needs you item or Slack
+  line, and has the team's days from the latest wording before any default goes ahead. A different topic still opens
+  its own question, and once a question is answered or closed the next one opens normally.
 - **Updates cards use icons**: Reply, Mark unread (or read) and Archive (Restore in the Archive) are icons, named by a
   tooltip, a long press on a phone and screen readers. A card's reports open from **8** and a chevron at the right end
   of its icon row, in place of the **8 reports** row under it and its broken glyph, and open reports hang from the
@@ -100,6 +117,14 @@ All notable changes to Tico are recorded here. The format follows
 - Groups no longer give their bots a subscription: a bot runs on its own choice, or else on its computer's own login.
   The bot editor's **Connection** line says "Runs on <tool> · <connection> on <computer>". Existing group choices
   are not moved to the bots; choose one per bot where it is needed.
+- **First run, the form steps**: the progress row uses short names (Providers, Names, About, Team, Computer, Agent,
+  Review) on one line; on a phone it shows dots and the current step's name. Step titles are larger, and the form
+  cards match the team chart's. A fresh install starts with an empty **Company name** (placeholder *Acme Inc.*), not
+  the server's stand-in "Company", and **Next** asks for one. The external agent step says why you might connect one,
+  with **Connect** as a secondary button and **Next** as the only primary. The Support box opened by **Want help
+  setting up?** grows to show the whole message, never past the room left above a phone keyboard, so **Send** stays
+  on screen.
+- PDF upload and reading use pypdf 6.21.1, the latest patch release of 6.21.
 
 ## [0.3.62] - 2026-10-19
 

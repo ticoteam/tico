@@ -558,6 +558,9 @@ pub fn document(runtimes: &Map<String, Value>, checks: &[Map<String, Value>], st
     // `worktree_waits`: a worktree the server reserves for a waiting task is prepared here while its bot is
     // idle (worktrees.rs prepare), so the server records a wait instead of refusing a task at its limit.
     let mut doc = json!({"schema_version": 1, "runtimes": runtimes, "bots": bots, "worktrees": true, "worktree_waits": true});
+    // Bots run as their own user here, so the server may hand this computer a turn on a Tico model
+    // (backend/models_preset.py); without it the server keeps such turns away (gateway_relay.rs refuses them).
+    doc["isolated"] = json!(crate::isolation::enabled());
     if let Some((total, free)) = disk_usage(state_dir) {
         doc["disk"] = json!({"total_bytes": total, "free_bytes": free});
     }

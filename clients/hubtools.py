@@ -661,7 +661,9 @@ def task_ask(api, args):
 @tool("hub_task_question", "Put one decision to a person as a small task, in one call: a pick between 2 to 6 "
       "options (an option may carry an image or file) or, with no options, Yes / No. The task is yours and waits on "
       "them; asked from a run on one of your tasks it is filed under that task. Their answer wakes you and you mark it "
-      "done. One decision per task; write the question so it makes sense on its own.",
+      "done. One decision per task; write the question so it makes sense on its own. One open question per topic: "
+      "asked again while your earlier one on the same topic (same `topic`, else the same parent task) still waits on "
+      "them, it updates that one (`folded: true`) instead of adding a second; give a different decision its own topic.",
       {"question": _s("The question, readable with no other context", maxLength=300),
        "on": _s("The person who decides: their id"),
        "options": {"type": "array", "minItems": 2, "maxItems": 6, "description": "The choices; omit for Yes / No",
@@ -672,6 +674,8 @@ def task_ask(api, args):
        "title": _s("Task title; defaults to the question"),
        "body": _s("What the decision is for; defaults to the question"),
        "parent": _s("Parent task id, when this decision is part of a bigger task"),
+       "topic": _s("A short key for what this decides, e.g. backup-model: your open question to them with the same key, "
+                   "under any task, is updated rather than a second one opened", maxLength=80),
        "private": {"type": "boolean", "description": "Only you and the person may read it; they must already "
                    "read the private task you are working on, and the parent"},
        "if_no_answer": {"type": "object", "additionalProperties": False, "required": ["do", "kind"],
@@ -701,7 +705,7 @@ def task_question(api, args):
             local, _ = BF.local_file(BF.checkout_root(), path)
             option["file"] = {"name": Path(path).name, "content_base64": base64.b64encode(local.read_bytes()).decode()}
     body = {"question": args["question"], "on": args["on"], "options": options}
-    for field in ("title", "body", "parent", "private"):
+    for field in ("title", "body", "parent", "private", "topic"):
         if args.get(field) is not None:
             body[field] = args[field]
     default = args.get("if_no_answer")

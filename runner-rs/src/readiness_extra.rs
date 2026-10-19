@@ -18,7 +18,7 @@ pub const PUBLISH_WARNING: &str = "GitHub history not published: ";
 const DENIED_WARNING: &str = "Claude Code denies what AGENT.md asks for: ";
 const DENIES_WARNING: &str = "Claude Code settings deny: ";
 /// Readiness fields an older server may refuse; each is left out for ten minutes after a refusal.
-pub const OPTIONAL: &[&str] = &["engine", "worktree_waits", "worktrees", "harnesses", "mail_key", "shared_env", "recent_errors", "container_exec", "github_auth", "browser_launch", "disk", "screen", "appdriver"];
+pub const OPTIONAL: &[&str] = &["engine", "worktree_waits", "worktrees", "harnesses", "mail_key", "shared_env", "recent_errors", "container_exec", "github_auth", "browser_launch", "disk", "screen", "appdriver", "isolated"];
 
 // ------------------------------------------------------------------------------------- credential grants
 
@@ -590,6 +590,26 @@ mod tests {
         assert_eq!(refused("readiness.worktree_waits: Extra inputs are not permitted", &r).as_deref(), Some("readiness.worktree_waits"));
         assert_eq!(refused("readiness.worktrees: Extra inputs are not permitted", &r).as_deref(), Some("readiness.worktrees"));
         assert_eq!(refused("body: extra fields", &r).as_deref(), Some("readiness.worktree_waits"));
+    }
+
+    #[test]
+    fn a_server_from_before_isolation_reports_gets_the_same_check_in_without_it() {
+        // The refusal a server from before `isolated` sends (backend/models.py StructuredReadiness forbids unknown
+        // fields), word for word: that field alone is held back and the check-in is sent again with the rest, so
+        // the computer keeps claiming work.
+        let detail = "body.readiness.StructuredReadiness.isolated: Extra inputs are not permitted; \
+                      body.readiness.dict[constrained-str,bool].runtimes: Input should be a valid boolean; \
+                      body.readiness.dict[constrained-str,bool].bots: Input should be a valid boolean";
+        let mut body = json!({"version": "test", "readiness": {"schema_version": 1, "isolated": true,
+                              "recent_errors": ["x"], "runtimes": {"claude": {"installed": true}}, "bots": {}}});
+        let hold = refused(detail, &body["readiness"]);
+        assert_eq!(hold.as_deref(), Some("readiness.isolated"));
+        crate::lanes::hold_back("readiness.isolated");
+        drop_held(&mut body);
+        crate::lanes::release("readiness.isolated");
+        assert!(body["readiness"].get("isolated").is_none(), "only the refused field goes");
+        assert_eq!(body["readiness"]["recent_errors"], json!(["x"]));
+        assert_eq!(body["readiness"]["runtimes"]["claude"]["installed"], json!(true));
     }
 
     #[test]

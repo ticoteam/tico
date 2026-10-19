@@ -133,7 +133,9 @@ function settingsWireChoiceFields(fields, onChange = () => {}) {
     const models = [...new Set(choices.filter(row => row.harness === picked.harness).map(row => row.model))];
     model.innerHTML = option('', 'Choose model', !picked.model, true)
       + (picked.model && !models.includes(picked.model) ? option(picked.model, `${settingsModelName(picked.model)} (current)`, true, true) : '')
-      + models.map(id => option(id, settingsModelPickName(id), id === picked.model)).join('');
+      // A Tico model on a computer that cannot run Gateway work (backend/views.py `runnable_choices`, under its model id).
+      + models.map(id => { const why = /^tico-/.test(id) ? block(id) : null;
+        return option(id, why ? `${settingsModelName(id)} (${why.short})` : settingsModelPickName(id), id === picked.model, !!why && id !== picked.model); }).join('');
     const efforts = choices.filter(row => row.harness === picked.harness && row.model === picked.model).map(row => row.effort);
     effort.innerHTML = (!picked.effort && efforts.length ? option('', 'Choose effort', true, true) : '')
       + (!efforts.length ? option(picked.effort, settingsEffortName(picked.effort) || 'Choose effort', true, true) : '')
@@ -144,7 +146,7 @@ function settingsWireChoiceFields(fields, onChange = () => {}) {
     effort.disabled = readonly || efforts.length <= 1;
   };
   const value = () => picked.model ? settingsChoiceValue(picked.harness, picked.model, picked.effort) : '';
-  const valid = () => (choices.some(row => row.value === value()) && !block(picked.harness)) || (!picked.harness && fields.hasAttribute('data-allow-none'));
+  const valid = () => (choices.some(row => row.value === value()) && !block(picked.harness) && !(/^tico-/.test(picked.model) && block(picked.model))) || (!picked.harness && fields.hasAttribute('data-allow-none'));
   // Whether the three fields show something other than what the bot has, finished or not.
   const changed = () => { const was = settingsChoiceFromValue(fields.dataset.current);
     return picked.harness !== was.harness || picked.model !== was.model || picked.effort !== was.effort; };

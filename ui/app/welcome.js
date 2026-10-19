@@ -14,6 +14,8 @@ const ONB_STEPS = ['names', 'about', 'org', 'machine', 'agent', 'review'];
 const onbStepList = needsProviders => needsProviders ? ['providers', ...ONB_STEPS] : ONB_STEPS;
 const ONB_TITLES = {providers: 'AI providers', names: 'Names', about: 'About the team',
                     org: 'Your team chart', machine: 'Add the computer that runs your bots', agent: 'Connect an external agent', review: 'Review and create'};
+// The progress row's words: one each, so the row stays on one line (a phone shows the current one only).
+const ONB_SHORT = {providers: 'Providers', names: 'Names', about: 'About', org: 'Team', machine: 'Computer', agent: 'Agent', review: 'Review'};
 // At most one short hint line under a step's title; most steps have none.
 const ONB_BLURB = {providers: 'Bots wait until you add one in Settings > AI providers.', agent: 'Optional.'};
 const ONB_CUSTOMERS = [['businesses', 'Businesses'], ['consumers', 'Consumers'], ['both', 'Both']];
@@ -76,7 +78,8 @@ function onbAdopt(state, record) {
     machine: {...blank.machine, ...(row.machine || {})}};
   delete state.record.answers.never_without_person;
   const names = state.record.names;
-  if (!names.company_name) names.company_name = S.config.company_name || '';
+  // The server's own "Company" (no TICO_TEAM_NAME) is no one's name: the field starts empty, with a placeholder.
+  if (!names.company_name && !S.config.company_name_default) names.company_name = S.config.company_name || '';
   if (!names.app_name) names.app_name = appName();
   if (!names.owner_name) names.owner_name = S.config.owner_name || onbOwnerGuess();
   // Never the team's name: that was an earlier release's default, and it made the Review step list the assistant as the team.
@@ -118,8 +121,8 @@ function onbRender(state) {
   const heading = done ? 'Your team is created' : ONB_TITLES[key];
   host.innerHTML = `<div class="onb-head"><div class="onb-brand">${brandLogo()}</div><h1>${esc(heading)}</h1>${ONB_BLURB[key] ? `<p data-onb-hint>${esc(ONB_BLURB[key])}</p>` : ''}</div>
     ${done ? '' : `<ol class="onb-progress" aria-label="Setup steps">${state.steps.map((step, i) =>
-      `<li class="${i < state.step ? 'done' : i === state.step ? 'cur' : ''}"${i === state.step ? ' aria-current="step"' : ''}>${esc(ONB_TITLES[step])}</li>`).join('')}</ol>
-      <p class="onb-count" id="onb-count">Step ${state.step + 1} of ${state.steps.length}</p>`}
+      `<li class="${i < state.step ? 'done' : i === state.step ? 'cur' : ''}"${i === state.step ? ' aria-current="step"' : ''}><span>${esc(ONB_SHORT[step])}</span></li>`).join('')}</ol>
+      <p class="onb-count sr-only" id="onb-count">Step ${state.step + 1} of ${state.steps.length}</p>`}
     ${onbSampleHTML(state, done)}
     <section class="card${key === 'org' ? ' ob-host' : ''}" id="onb-step" data-onb-step="${key}">${onbStepHTML(state, key)}</section>`;
   onbWire(state, key);
@@ -132,8 +135,8 @@ function onbStepHTML(state, key) {
   if (key === 'providers') return `${providersFormHTML(state.providers, state.models, 'onb-prov')}
     ${actions(state.providers.enabled?.length ? 'Next' : 'Skip for now')}`;
   if (key === 'names') return `
-    <label class="onb-field"><span class="k">Team/Company name</span>
-      <input type="text" id="onb-company" maxlength="120" value="${esc(names.company_name)}" autocomplete="organization"></label>
+    <label class="onb-field"><span class="k">Company name</span>
+      <input type="text" id="onb-company" maxlength="120" value="${esc(names.company_name)}" placeholder="Acme Inc." autocomplete="organization"></label>
     <label class="onb-field"><span class="k">App name</span>
       <input type="text" id="onb-app" maxlength="60" value="${esc(names.app_name)}"></label>
     <label class="onb-field"><span class="k">Your name</span>
@@ -183,8 +186,8 @@ function onbStepHTML(state, key) {
     ${actions('Next')}`;
   }
   if (key === 'agent') return `
-    <p class="onb-field"><span class="k">Your external agent</span>
-      <button class="primary" type="button" id="onb-connect">Connect an external agent</button></p>
+    <p class="onb-lead">Already use Claude, ChatGPT or another MCP agent? Connect it to talk to your team from there. You can also do this later from the top bar.</p>
+    <p><button class="ghost" type="button" id="onb-connect">Connect an external agent</button></p>
     ${actions('Next')}`;
   if (key === 'review') return `${onbSummaryHTML(state)}
     <div class="onb-actions">${back}<button class="primary" type="button" id="onb-finish">Create my team</button>
@@ -398,6 +401,12 @@ async function onbRefreshOwner(state) {
 async function onbAdvance(state, key) {
   if (state.busy) return;
   onbCollect(state, key);
+  // The field starts empty now, and an empty one would quietly name the team "Company".
+  if (key === 'names' && !state.record.names.company_name) {
+    $('#onb-status').innerHTML = `<span class="err">Add your company's name.</span>`;
+    $('#onb-company').focus();
+    return;
+  }
   if (key === 'providers') {
     const chosen = providersCollect($('#onb-prov'));
     // Nothing ticked is fine: the team is created first and its bots run once a provider is added (Settings > AI providers).

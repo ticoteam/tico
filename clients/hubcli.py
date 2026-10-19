@@ -828,6 +828,8 @@ def parser():
     s.add_argument("--title")
     s.add_argument("--body")
     s.add_argument("--parent")
+    s.add_argument("--topic", help="a short key for what this decides (backup-model): your open question to them "
+                                   "on it is updated instead of a second one opened")
     s.add_argument("--private", action="store_true", default=None, help="only you and the person may read it")
     s.add_argument("--if-no-answer", dest="if_no_answer",
                    help="what you will do if they don't answer: an option (\"Yes\") or one plain sentence")
