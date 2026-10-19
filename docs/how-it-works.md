@@ -274,7 +274,10 @@ the job stays queued however often this happens (it is never *Interrupted*) and 
 bot's own subscription connection), saved on the server so it outlasts a restart of the runner or the server. It holds
 until the reset the provider names (Claude's "resets 2:40am (UTC)" included, even days away), or when none is named
 or the named time has passed, 30 minutes, then 60, then two hours for each limit in a row on that login. While it
-holds, no bot on that login starts a run. When it ends, one queued run goes first; the others on the login wait for
+holds, no bot starts a run on that login: a bot whose fallback (its own, or the company's default) is signed in on
+that computer and not held itself runs there at once, and the runner never tries the held login (the run's note says
+*claude login held (usage limit) until 02:40 UTC; running this turn on codex*); only a bot with no such fallback
+waits. When it ends, one queued run goes first; the others on the login wait for
 its result, so a login sees one try per window however many runs wait. **Settings → Health** says whose login it is
 and when it resumes. A person's message to the bot written after the limit lets it try once at once; a run that
 hits the limit again goes back to the hold. **Try now**, beside the warning on the bot's page and in its chat line for anyone who

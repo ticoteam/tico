@@ -613,15 +613,31 @@ def claim_refusal(c, settings, runner, bot, config_json, draining, ready, held_b
         return "sign_in_rejected", None
     if usage_limits.blocked(c, bot, default=usage_limits.company(c) if default is None else default):
         return "limit", None
-    if cooling_off(c, bot) or login_refusal(c, settings, runner["id"], bot, config, ctx=subscription_context):
+    if (cooling_off(c, bot) and not on_login_hold(c, bot)
+            or login_refusal(c, settings, runner["id"], bot, config, ctx=subscription_context)):
         return "cooling_off", None
     return None, config
 
 
+def on_login_hold(c, bot):
+    """Whether the bot's last limit saved a hold on a login that still stands: that hold, not the bot's cooldown,
+    decides when it runs (login_refusal), so it runs on a fallback that is ready and not held itself."""
+    last = last_limit(c, bot)
+    return bool(last and login_holds.for_attempt(c, last["id"]))
+
+
 def login_refusal(c, settings, runner_id, bot, config, job_id=None, ctx=None):
     """Whether a hold on the bot's own login keeps it waiting (backend/login_holds.py): before the hold ends, no bot
-    on the login starts a turn; after it, only the probe job does until its turn ends. Without `job_id` it answers
-    for the bot: a probe of its own still lets it through, for job_refusal's per-job answer."""
+    on the login starts a turn; after it, only the probe job does until its turn ends. A bot with a fallback that is
+    ready here and not held itself does not wait: its turn runs there (primary_hold marks the job so the runner skips
+    the held login). Without `job_id` it answers for the bot: a probe of its own still lets it through, for
+    job_refusal's per-job answer."""
+    why = primary_hold(c, settings, runner_id, bot, config, job_id, ctx)
+    return None if why and fallback_open(c, settings, runner_id, bot, config, ctx) else why
+
+
+def primary_hold(c, settings, runner_id, bot, config, job_id=None, ctx=None):
+    """Why the bot's own login takes no turn now ("held" or "probing"), or None."""
     from .subscriptions import effective
     profile = effective(c, bot, ctx)[0] or ""
     runtime = providers.bot_choice(c, settings, config)[0]
@@ -633,6 +649,41 @@ def login_refusal(c, settings, runner_id, bot, config, job_id=None, ctx=None):
         if c.execute("SELECT 1 FROM jobs WHERE id=? AND bot=?", (probe, bot)).fetchone():
             return None
     return why
+
+
+def fallback_open(c, settings, runner_id, bot, config, ctx=None):
+    """Whether a turn of `bot` held off its own login has somewhere else to run on this computer, by the runner's own
+    choice (runner-rs/src/fallback.rs `configured`, `default_choice`): the fallback it names, else one of the company's
+    providers on another runtime, that the computer reports signed in and no hold keeps off. The Gateway counts when
+    the turn would be handed it (models_preset.with_gateway_fallback). A fallback turned off, or none, is no way out."""
+    from .harnesses import runtime_of
+    from .subscriptions import effective
+    own = config.get("fallback") if isinstance(config.get("fallback"), dict) else {}
+    if own.get("off"):
+        return False
+    row = c.execute("SELECT readiness_json FROM runners WHERE id=?", (runner_id,)).fetchone()
+    ready = readiness_document(row["readiness_json"]) if row else {}
+    profile = effective(c, bot, ctx)[0] or ""
+    if own.get("harness"):
+        if not own.get("model"):
+            return False
+        rows = [{"runtime": runtime_of(own["harness"]), "model": own["model"]}]
+    else:
+        record = providers.load(c, settings)
+        primary = providers.bot_choice(c, settings, config)[0]
+        gateway = "gateway_fallback" in models_preset.with_gateway_fallback(record, ready, providers.fill(record, config))
+        rows = [r for r in providers.default_fallbacks(record) if r["runtime"] != primary
+                and (gateway or not providers.gateway_model(r["model"]))]
+    for choice in rows:
+        if providers.gateway_model(choice["model"]):
+            return True                         # signs in with the turn's relay: no login of its own to hold
+        signed = (ready.get("runtimes") or {}).get(choice["runtime"]) or {}
+        if profile:
+            signed = (signed.get("profiles") or {}).get(profile) or {}
+        if (signed.get("installed") is True and signed.get("authenticated") == "ready"
+                and not login_holds.holding(c, runner_id, profile, choice["runtime"])):
+            return True
+    return False
 
 
 def login_key(c, settings, runner_id, bot, config, ctx=None):
@@ -1390,8 +1441,13 @@ class Execution:
         job = c.execute("SELECT wake_preset,wake_class,hold_until FROM jobs WHERE id=?", (row["id"],)).fetchone()
         c.execute("UPDATE attempts SET wake_json=? WHERE id=?", (json.dumps(wake_presets.record(c, job, msg)), aid))
         c.execute("INSERT OR IGNORE INTO attempt_conversations VALUES(?,?)", (aid, conv["id"]))
+        held = None
         if check:
             check_models.handed(c, aid, task["id"], check)
+        elif primary_hold(c, self.store.settings, who.runner_id, row["bot"], followed, row["id"]):
+            # Its login is held and the claim let it through for its fallback (login_refusal): the runner starts the
+            # turn there and never tries the held login.
+            held = login_holds.get(c, *login_key(c, self.store.settings, who.runner_id, row["bot"], followed))
         else:
             # After a hold on the bot's login ends, the first job to start on it is the window's one probe.
             login_holds.take_probe(c, *login_key(c, self.store.settings, who.runner_id, row["bot"], followed), row["id"])
@@ -1405,6 +1461,8 @@ class Execution:
         config = models_preset.with_gateway_fallback(record, here, models_preset.main_config(record, here, config))
         # A bot delivered through a desktop app: who it is in the app, beside `app_delivery` (backend/app_delivery.py).
         config = app_delivery.job_config(config)
+        if held:
+            config = {**config, "primary_held": held.get("until") or H.now()}
         gateway_connection.hand_out(c, aid, config)
         # The room's recent page. The runner forwards only what arrived since the bot last
         # answered; the bot reads further back itself with `hub conversation show` when it wants to. The

@@ -828,6 +828,9 @@ impl Runner {
         // went to its fallback instead when another bot's turn had it.
         let mut login_held: Option<crate::login_turns::Held> = None;
         let mut busy: Option<(crate::login_turns::Login, String)> = None;
+        // The server holds the bot's own login after a usage limit and let this turn through for its fallback
+        // (backend/execution.py login_refusal): when the hold ends. The held login is never tried.
+        let held = Some(text_of(&config["primary_held"])).filter(|u| !u.is_empty());
         let (mut unavailable, mut prepared) = (false, false);
         let token = text_of(&attempt["token"]);
         let refs = attempt["message"]["refs"].clone();
@@ -843,7 +846,7 @@ impl Runner {
             let p = place.insert(self.enter_lanes(&attempt, &flags.lost).await.map_err(Fail::runtime)?);
             execution_path = p.main_path.clone();
             selected = self.turn_profile(&attempt)?;
-            if let Some(login) = self.serial_login(&runtime, &text_of(&config["harness"]), selected.as_ref()).filter(|_| !persistent) {
+            if let Some(login) = self.serial_login(&runtime, &text_of(&config["harness"]), selected.as_ref()).filter(|_| !persistent && held.is_none()) {
                 // One turn at a time on a ChatGPT login: taken before the checkout is brought up to date, so a turn
                 // that waits starts on a fresh one. Busy: the bot's own fallback takes the turn when it is ready (not
                 // for a command or a native goal, which belong to this harness), else the turn waits its turn.
@@ -945,7 +948,7 @@ impl Runner {
             let minutes = config["max_run_minutes"].as_f64().or_else(|| text_of(&config["max_run_minutes"]).parse().ok()).unwrap_or(60.0);
             let limit = Instant::now() + Duration::from_secs_f64(60.0 * minutes);
             prepared = true;
-            if busy.is_some() {
+            if busy.is_some() || held.is_some() {
                 return Ok(()); // the fallback takes the turn below; this harness never starts
             }
             let (tx, mut rx) = unbounded_channel();
@@ -1036,7 +1039,7 @@ impl Runner {
             Ok(())
         }
         .await;
-        if busy.is_some() && ran.is_ok() {
+        if (busy.is_some() || held.is_some()) && ran.is_ok() {
             unavailable = true;
         }
 
@@ -1053,9 +1056,11 @@ impl Runner {
         let mut pending = if unavailable && !native_control { crate::fallback::configured(&config) } else { None };
         let hit_limit = drove.limited;
         // Out of quota here until its reset (or for a while): no other bot's fallback picks this login meanwhile.
-        crate::fallback::settle_limit(&runtime, &text_of(&config["harness"]), selected.as_ref(), hit_limit, drove.outcome == "completed");
+        if held.is_none() {
+            crate::fallback::settle_limit(&runtime, &text_of(&config["harness"]), selected.as_ref(), hit_limit, drove.outcome == "completed");
+        }
         let turn_env = base_env.clone().unwrap_or_default();
-        if pending.is_none() && hit_limit && !native_control && prepared {
+        if pending.is_none() && (hit_limit || held.is_some()) && !native_control && prepared {
             // Out of quota with no fallback of its own: another provider signed in on this computer runs the turn
             // once (Settings > AI providers can turn this off for the company).
             let choices = self.default_fallbacks().await;
@@ -1063,6 +1068,15 @@ impl Runner {
         }
         // A Tico fallback needs the turn's relay; without one it is left out and the primary's outcome stands.
         pending = crate::gateway_relay::admit(pending, vault.relay.is_some());
+        if let (Some(until), None, true) = (&held, &pending, ran.is_ok()) {
+            // No fallback is ready here after all: the turn ends on the hold, unstarted, and waits for it like any
+            // limited turn; the server keeps the hold as it was (backend/login_holds.py record).
+            let why = crate::fallback::held_note(&runtime, until, None);
+            let _ = self.state.append(&aid, "error", &json!({"error": why, "limit": true}));
+            drove.outcome = "failed".into();
+            drove.reply = why;
+            drove.limited = true;
+        }
         // Only a server that sent `fallback_models` knows the field (an older one refuses unknown fields).
         let primary_limited = pending.as_ref().is_some_and(|h| h.default && hit_limit);
         // Where the turn ran, by slot: the Gateway counts apart from the pi it runs on (fallback.rs `slot`).
@@ -1101,6 +1115,9 @@ impl Runner {
                 let note = match (&left, &busy) {
                     (None, Some((login, holder))) => json!({"text": crate::fallback::busy_diagnostic(&login.busy(holder, &bot), &hop),
                                                              "fallback": hop.harness, "busy": {"login": login.label, "holder": holder}}),
+                    (None, None) if held.is_some() => {
+                        json!({"text": crate::fallback::held_note(&primary, held.as_deref().unwrap_or_default(), Some(&hop)), "fallback": hop.harness})
+                    }
                     _ => {
                         let (from, limited) = left.clone().unwrap_or_else(|| (primary.clone(), hit_limit));
                         json!({"text": crate::fallback::diagnostic(&from, &hop, limited), "fallback": hop.harness})
@@ -1143,7 +1160,7 @@ impl Runner {
                 let replay = crate::fallback::replay(&attempt, crate::fallback::REPLAY_TOKENS);
                 let because = match &busy {
                     Some(_) => format!("{primary}'s ChatGPT login was busy with another turn"),
-                    None if hit_limit => format!("{primary} hit its usage limit"),
+                    None if hit_limit || held.is_some() => format!("{primary} hit its usage limit"),
                     None => format!("{primary} was unavailable"),
                 };
                 let text = format!("{}\n\n{}", crate::prompt::replayed(&attempt, &names, None, false, &replay), crate::fallback::prompt_note(&because, &primary, &hop));

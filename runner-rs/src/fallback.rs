@@ -179,6 +179,16 @@ pub fn diagnostic(primary: &str, hop: &Hop, hit_limit: bool) -> String {
     format!("{primary} {why}; running this turn on {}{auto}", hop.harness)
 }
 
+/// The turn's note when the server held the bot's own login after a usage limit (backend/login_holds.py) until
+/// `until`: where the turn runs instead, or, with no `hop`, why it did not start.
+pub fn held_note(primary: &str, until: &str, hop: Option<&Hop>) -> String {
+    let at = until.get(11..16).map_or_else(String::new, |hm| format!(" until {hm} UTC"));
+    match hop {
+        Some(hop) => format!("{primary} login held (usage limit){at}; running this turn on {}", hop.harness),
+        None => format!("{primary} login held (usage limit){at}, and no fallback is ready on this computer"),
+    }
+}
+
 /// The turn's note when its ChatGPT login was busy with another turn (crate::login_turns) and its own fallback took
 /// it: `why` is the login's line ("ChatGPT login busy with builder").
 pub fn busy_diagnostic(why: &str, hop: &Hop) -> String {
@@ -360,6 +370,13 @@ mod tests {
         assert!(note.starts_with("This turn runs on the fallback codex with model gpt-test because claude hit its usage limit"));
         assert!(note.contains("name gpt-test, not claude"));
         assert_eq!(busy_diagnostic("ChatGPT login busy with builder", &codex), "ChatGPT login busy with builder; running this turn on codex");
+        // A login the server holds is never tried; the note is not a limit met on this turn (backend/login_holds.py
+        // reads "usage limit; running this turn on" as one, and would hold the login longer).
+        let held = held_note("claude", "2026-10-19T02:40:00.000000Z", Some(&codex));
+        assert_eq!(held, "claude login held (usage limit) until 02:40 UTC; running this turn on codex");
+        assert!(!held.contains("usage limit; running this turn on"));
+        assert_eq!(held_note("claude", "2026-10-19T02:40:00.000000Z", None),
+                   "claude login held (usage limit) until 02:40 UTC, and no fallback is ready on this computer");
     }
 
     #[test]

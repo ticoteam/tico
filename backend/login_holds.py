@@ -5,7 +5,8 @@ login's usage limit, a hold is saved here, in the database, so it outlives a res
 - until the reset the provider gave (Claude says it in words: "resets 2:40am (UTC)"), honored even when it is days
   away, as long as it is in the future and within LIMIT_RESET_MAX;
 - otherwise for BACKOFF[n] after the n-th limit in a row on that login (30, 60, then 120 minutes at most).
-While it holds, no bot on that login starts a turn. When it ends, one queued job (the probe) may start on the login and
+While it holds, no bot starts a turn on that login: a bot with a fallback that is ready and not held itself runs
+there instead (Dev 137), and only one with none waits. When it ends, one queued job (the probe) may start on the login and
 every other job on it waits for that turn's result: a success clears the hold, another limit saves a longer one. So a
 login sees at most one turn per hold window, however many jobs and bots wait on it.
 """
@@ -120,10 +121,16 @@ def record(c, runner_id, profile, runtime, hit, reset=None, attempt_id=None, bot
     went on to finish on a fallback login: the hold then keeps the runner's fallback choice off the login but holds
     back no bot, since the bot's work still gets done."""
     old = get(c, runner_id, profile, runtime)
-    streak = int(old.get("streak") or 0) + 1 if old else 1
     at = believable(reset, hit)
     hit_at = H.parse_ts(hit)
-    until = at or hit_at + timedelta(seconds=BACKOFF[min(streak, len(BACKOFF)) - 1])
+    if old and (old.get("until") or "") > _iso(hit_at):
+        # Met while the hold was still in force (a person's one try, or a turn sent to a fallback that was not ready
+        # after all): the same window, so neither the streak nor the end moves earlier.
+        streak = int(old.get("streak") or 1)
+        until = max(at or hit_at, H.parse_ts(old["until"]))
+    else:
+        streak = int(old.get("streak") or 0) + 1 if old else 1
+        until = at or hit_at + timedelta(seconds=BACKOFF[min(streak, len(BACKOFF)) - 1])
     hold = {"runner_id": runner_id, "profile": profile or "", "runtime": runtime, "since": _iso(hit_at),
             "until": _iso(until), "streak": streak, "reset": bool(at), "attempt_id": attempt_id, "bot": bot,
             "full": bool(full), "error": (error or "")[:300], "probe_job": None, "probe_at": None}
@@ -245,7 +252,9 @@ def after_turn(c, runner_id, bot, profile, runtime, body, attempt_id, hit):
     elif not body.limited and body.outcome == "completed" and not fallback:
         clear(c, runner_id, profile, runtime)
     if fallback_spent:
-        said = next((at for at in (reset_from_text(text, hit) for text in limits[1:]) if at), None)
+        # The fallback's own notice follows the primary's, unless the turn never tried the held primary.
+        said = next((at for at in (reset_from_text(text, hit) for text in limits[1 if primary_spent else 0:]) if at),
+                    None)
         hold = record(c, runner_id, fallback[1], fallback[0], hit, said or body.limit_resets_at, attempt_id, bot,
                       error=limits[-1] if limits else "")
         kept = kept or hold
