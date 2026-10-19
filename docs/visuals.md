@@ -51,6 +51,10 @@ audio are cards too (see [Video and audio](#video-and-audio)) and count toward t
 On a task, **Open in file viewer** and **Newer version** open the task's own file panel at that version; see
 [Tasks](tasks.md#files-and-questions-on-the-page). In a chat they open the file viewer.
 
+A visual shows as a file chip instead of a card when its type or size isn't one that shows inline (see
+[Types and limits](#types-and-limits)), and on a self-hosted server without a visual address (see
+[Self-hosting](#self-hosting)).
+
 ### Video and audio
 
 A video (MP4, WebM, MOV, M4V) or an audio clip (MP3, M4A, WAV, OGG, AAC) attached to a chat message or a task comment
@@ -70,10 +74,6 @@ for the other cards; the menu has no **Expand**.
   Check the connection, or download it." with the same two links.
 
 Which formats play, and how full screen looks, depend on the browser or app you use.
-
-A visual shows as a file chip instead of a card when its type or size isn't one that shows inline (see
-[Types and limits](#types-and-limits)), and on a self-hosted server without a visual address (see
-[Self-hosting](#self-hosting)).
 
 ## Attach a visual
 
