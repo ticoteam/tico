@@ -108,17 +108,28 @@ def test_a_visual_origin_with_a_trailing_cr_from_an_edited_env_file_still_gets_i
         "hostname": "visuals.example.net", "path": "^/visuals/", "service": "http://server:8765"}
 
 
-def test_a_server_start_with_a_bad_visual_origin_still_reaches_the_server(tmp_path):
+def test_a_server_start_with_a_bad_visual_origin_still_reaches_the_server(tmp_path, monkeypatch):
+    from backend.config import Settings
     from backend.tests.test_rehearsal import serve
     tunnel = tmp_path / "tunnel"
     tunnel.mkdir()
-    result, seen, log = serve(tmp_path, TICO_BACKUP="off", TICO_TUNNEL_DIR=str(tunnel), TICO_AUTH_PROXY="cloudflare",
-                              TICO_DOMAIN="app.example.com", TICO_VISUAL_ORIGIN="https://visuals.example.net/typo")
-    assert result.returncode == 0, result.stderr
-    assert "python -m backend.server" in log and seen["TICO_VISUAL_ORIGIN"] == "https://visuals.example.net/typo"
-    assert "TICO_VISUAL_ORIGIN has a path" in result.stderr
-    assert yaml.safe_load((tunnel / "cloudflared.yml").read_text())["ingress"] == [
-        {"hostname": "app.example.com", "service": "http://server:8765"}, {"service": "http_status:404"}]
+    for bad, reason in (("https://visuals.example.net/typo", "has a path"), ("https://[visuals.example.net", "is not a valid URL")):
+        (tmp_path / "stub.log").unlink(missing_ok=True)
+        result, seen, log = serve(tmp_path, TICO_BACKUP="off", TICO_TUNNEL_DIR=str(tunnel), TICO_AUTH_PROXY="cloudflare",
+                                  TICO_ACCESS_ISSUER="https://acme.cloudflareaccess.com", TICO_ACCESS_AUDIENCE="aud",
+                                  TICO_LOCAL_OWNER_TOKEN_FILE="",
+                                  TICO_DOMAIN="app.example.com", TICO_VISUAL_ORIGIN=bad)
+        assert result.returncode == 0, result.stderr
+        assert "python -m backend.server" in log and f"TICO_VISUAL_ORIGIN {reason}" in result.stderr, bad
+        assert yaml.safe_load((tunnel / "cloudflared.yml").read_text())["ingress"] == [
+            {"hostname": "app.example.com", "service": "http://server:8765"}, {"service": "http_status:404"}]
+        # The server reads the same unchanged value: its settings load too, with visuals as file chips at worst.
+        for key in [k for k in os.environ if k.startswith("TICO_")]:
+            monkeypatch.delenv(key)
+        for key, value in seen.items():
+            monkeypatch.setenv(key, value)
+        assert seen["TICO_VISUAL_ORIGIN"] == bad
+        Settings.from_env()
 
 
 def test_compose_always_runs_cloudflared_with_that_config_and_the_server_is_what_writes_it():

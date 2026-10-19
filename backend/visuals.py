@@ -10,6 +10,7 @@ import hashlib
 import hmac
 import html
 import json
+import logging
 import os
 import re
 import secrets
@@ -344,8 +345,16 @@ def origin_of(url):
 
 def check_origin(settings):
     """A separate visual origin must really be separate: the app's own origin there would put visuals next to its
-    cookies."""
-    visual = origin_of(getattr(settings, "visual_origin", ""))
+    cookies. A value that is not a URL at all (a stray bracket, a port that is not a number) counts as unset, so
+    visuals show as file chips: like a missing setting, it never stops the server."""
+    value = getattr(settings, "visual_origin", "")
+    try:
+        urlsplit(value or "").port
+        visual = origin_of(value)
+    except ValueError:
+        logging.getLogger("tico.visuals").warning(
+            "TICO_VISUAL_ORIGIN is not a valid URL; visuals show as file chips until it is fixed")
+        return ""
     if visual and visual == origin_of(settings.public_url):
         raise ValueError("TICO_VISUAL_ORIGIN must differ from the app's own address (TICO_PUBLIC_URL)")
     return visual

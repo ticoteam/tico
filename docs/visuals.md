@@ -170,7 +170,7 @@ passes them to the server, and `.env.example` lists them.
 
 | Setting | What it does |
 |---|---|
-| `TICO_VISUAL_ORIGIN` | The address visuals are shown from, for example `https://visuals.example.com`. It must be a separate site of its own: never the app's address (`TICO_PUBLIC_URL`), nor a subdomain that shares its cookies. The server refuses to start if it equals the app's address. With a Cloudflare Tunnel, a value the tunnel config can't use (not https, a path, an IP address, the app's or runner's hostname) leaves out the visuals route with a warning in the server log, and the server still starts ([Cloudflare Tunnel](install.md#cloudflare-tunnel)). |
+| `TICO_VISUAL_ORIGIN` | The address visuals are shown from, for example `https://visuals.example.com`. It must be a separate site of its own: never the app's address (`TICO_PUBLIC_URL`), nor a subdomain that shares its cookies. The server refuses to start if it equals the app's address. Any other bad value never stops it: one that is not a URL at all counts as unset (file chips, with a warning in the server log), and with a Cloudflare Tunnel a value the tunnel config can't use (not https, a path, an IP address, the runner's hostname) leaves out the visuals route with a warning ([Cloudflare Tunnel](install.md#cloudflare-tunnel)). |
 | `TICO_VISUAL_SECRET` | Optional. The key that signs visual addresses, at least 32 characters. Unset, Tico makes one in a file next to the database on first use. |
 | `TICO_VISUAL_SAME_ORIGIN` | `1` serves visuals from the app's own address instead, with the page sandboxed. A local install always does this. |
 

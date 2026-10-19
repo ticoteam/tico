@@ -116,9 +116,10 @@ All notable changes to Tico are recorded here. The format follows
 ### Fixed
 - A locally managed Cloudflare Tunnel keeps the separate inline-visual hostname after a server restart or update.
   `TICO_VISUAL_ORIGIN` adds a route for `^/visuals/` only; app and runner routes and the 404 catch-all stay in place.
-  A bad value (not https, a path, the app's or runner's own host, an IP address) no longer stops the server from
-  starting: the server logs one warning naming the reason and writes the config without the visuals route. A trailing
-  CR from an edited `.env` is ignored ([Cloudflare Tunnel](docs/install.md#cloudflare-tunnel)).
+  A bad value (not https, a path, the runner's host, an IP address, not a URL at all) no longer stops the server from
+  starting: the server logs one warning naming the reason and writes the config without the visuals route, and a value
+  that is not a URL counts as unset (file chips). The app's own address still stops it, as before. A trailing CR from
+  an edited `.env` is ignored ([Cloudflare Tunnel](docs/install.md#cloudflare-tunnel)).
 - **A bot's finished answer is no longer lost or given twice when its computer stalls before handing it in.** A
   turn's lease now renews on a thread of its own, so busy work on the computer can't stop it. If a finished
   answer still comes in late, after its run was dismissed or cancelled, it is kept: the run ends completed and the

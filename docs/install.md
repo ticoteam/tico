@@ -392,8 +392,9 @@ No open ports, and Cloudflare Access can do the sign-in. The wizard creates the 
    hostname to the same server, for `^/visuals/` only, on every start. Add its proxied CNAME to the same tunnel,
    bypass caching for that hostname, and keep it out of Access. A malformed origin, or the app or runner hostname, is
    never written: the server logs a warning naming the reason (`tico: warning: TICO_VISUAL_ORIGIN ...`), writes the
-   config without the visuals route and starts as usual. Dashboard-managed tunnels need this path-limited route added
-   in Cloudflare instead ([Visuals in replies](visuals.md)).
+   config without the visuals route and starts as usual. The one exception is the app's own address (the same origin
+   as `TICO_PUBLIC_URL`): the server refuses to start with that. Dashboard-managed tunnels need this path-limited
+   route added in Cloudflare instead ([Visuals in replies](visuals.md)).
    cloudflared reads this config only when it starts, so after changing `TICO_VISUAL_ORIGIN`, `TICO_DOMAIN` or
    `TICO_RUNNER_URL` in `.env` alone, restart it once the server is healthy: `docker compose restart cloudflared`.
 3. Create an Access application for the hostname with your identity provider and a policy for your humans.
