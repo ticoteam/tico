@@ -39,6 +39,9 @@ keychain = ["darwin"]
 [capabilities]
 terminal_login = ["auth", "login"]
 api_keys = "computer"
+# Switch to API key asks Anthropic about the new key before the subscription is signed out: one short reply, in an
+# empty home so the subscription cannot answer for it.
+api_key_check = ["-p", "--model", "haiku", "--max-turns", "1", "--output-format", "json", "Reply with the word OK"]
 subscription_marker = "signed in"
 subscription_profiles = true
 profile_home = "HOME"

@@ -4348,7 +4348,8 @@ def create_app(settings=None):
         return vault.change(who, request.url.path, request.headers.get("idempotency-key"), body,
                             lambda c, w: None,
                             lambda c: model_login.replace_key(c, who, rid, body.runtime, body.secret.get_secret_value(),
-                                                              body.env, body.scope, auth=auth, vault=vault))
+                                                              body.env, body.scope, auth=auth, vault=vault,
+                                                              switch=body.switch))
 
     @app.get("/api/v2/runners/{rid}/logins/{lid}")
     def read_login(request: Request, rid: str, lid: str):
