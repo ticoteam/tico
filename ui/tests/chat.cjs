@@ -253,8 +253,12 @@ async function outlineJump(browser) {
     if(p==='/api/issues')return json([]);
     if(p.endsWith('/watch'))return route.fulfill({contentType:'text/event-stream',body:'event: snapshot\ndata: '+JSON.stringify(snapshot)+'\n\n'});
     if(p==='/api/v2/conversations'){const b=url.searchParams.get('chat_with');
-      return json({conversations:b?[{id:'c-ops',kind:'chat',scope:'personal',participants:['human:ana','bot:ops']}]:[]});}
+      return json({conversations:b?[{id:'c-ops',kind:'chat',scope:'personal',participants:['human:ana','bot:ops']},
+        {id:'c-slack',kind:'chat',scope:'direct',participants:['human:ana','bot:ops']}]:[]});}
     if(p==='/api/v2/conversations/c-ops/snapshot')return json(snapshot);
+    // A Slack thread's own room beside the usual chat (backend/slack_gateway.py opens one per thread).
+    if(p==='/api/v2/conversations/c-slack/snapshot')return json({messages:[{id:'s1',kind:'say',from_actor:'bot:ops',to_actor:'human:ana',
+      body:'The chart from Slack.',created:'2026-10-06T09:59:00Z',refs:{}}],next_before:null,execution:null});
     if(p==='/api/v2/conversations/c-ops/outline')return json({prompts});
     if(p==='/api/v2/conversations/c-ops/messages'){pages.push(url.searchParams.get('before'));return json({messages:older,next_before:null});}
     return json(unrouted(p));
@@ -289,12 +293,23 @@ async function outlineJump(browser) {
   if(process.env.TICO_SHOTS)await page.screenshot({path:process.env.TICO_SHOTS+'/outline-phone.png'});
   await page.keyboard.press('Escape');
   assert.equal(await page.locator('#chat-outline').evaluate(d=>d.open),false,'Escape closes');
-  // The Slack "1 visual - view in Tico" line from a plain chat: ?bot=&message= opens that bot's chat at the message,
-  // paging back to it like the outline does, and the query goes.
-  await page.goto('https://tico-ui.test/?bot=ops&message=h0');
-  await page.locator('#conv-thread .jump-mark[data-message="h0"]').waitFor();
+  // The Slack "1 visual - view in Tico" line from a plain chat names the room the reply is in: a Slack thread's own
+  // room opens in place of the usual chat, at the message; the query goes.
+  await page.goto('https://tico-ui.test/?bot=ops&conversation=c-slack&message=s1');
+  await page.locator('#conv-thread .jump-mark[data-message="s1"]').waitFor();
   assert.equal(new URL(page.url()).hash,'#/bot/ops');
   assert.equal(new URL(page.url()).search,'');
+  // The next ordinary visit is the usual chat again, not the linked room.
+  await page.evaluate(()=>{location.hash='#/tasks';});
+  await page.evaluate(()=>{location.hash='#/bot/ops/chat';});
+  await page.waitForFunction(()=>V2C?.loaded&&V2C.conv?.id==='c-ops');
+  // In the usual room the link pages back to an older message like the outline does.
+  await page.goto('https://tico-ui.test/?bot=ops&conversation=c-ops&message=h0');
+  await page.locator('#conv-thread .jump-mark[data-message="h0"]').waitFor();
+  // A room the reader is not in is not among their chats: the usual chat opens and says the message is not there.
+  await page.goto('https://tico-ui.test/?bot=ops&conversation=c-theirs&message=x9');
+  await page.locator('.toast',{hasText:'That message is not in this chat'}).waitFor();
+  assert.equal(await page.evaluate(()=>V2C.conv.id),'c-ops');
   assert.deepEqual(errors,[]);
   console.log('chat outline jump: ok');
 }

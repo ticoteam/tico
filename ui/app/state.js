@@ -16,12 +16,13 @@ const entryRoute = () => {
   const tab = (params.get('tab') || '').trim();
   return `#/bot/${encodeURIComponent(bot)}${tab ? '/' + encodeURIComponent(tab) : ''}`;
 };
-// `&message=<id>` with either of them (the "N visuals - view in Tico" line in Slack, backend/visuals.py elsewhere)
+// `&message=<id>` (and, for a bot, `&conversation=<id>`: the chat room it is in) with either of them (the "N visuals - view in Tico" line in Slack, backend/visuals.py elsewhere)
 // also brings that message into view once the task or chat has loaded (ui/app/task-modal.js, ui/app/chat-outline.js).
 const entryJump = () => {
   const params = new URLSearchParams(location.search);
   const id = (params.get('message') || '').trim(), task = (params.get('task') || '').trim(), bot = (params.get('bot') || '').trim();
-  return !id ? null : task ? {task, id} : bot ? {slug: bot, id} : null;
+  const conversation = (params.get('conversation') || '').trim();
+  return !id ? null : task ? {task, id} : bot ? {slug: bot, id, conversation} : null;
 };
 let BOOT_DEFAULT_ROUTE = false;
 const ENTRY_JUMP = entryJump();

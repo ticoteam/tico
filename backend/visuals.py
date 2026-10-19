@@ -477,7 +477,8 @@ def elsewhere(base, message, task=None):
     as {"count", "label", "url"}, or None when it has none. Nothing visual is rendered there (Visual replies, choice 4).
     The link is a query, not a #fragment, because some clients drop fragments (ui/app/state.js turns it into the
     route): a message on a task (`task`, as hubdb.message_task_id finds it) opens the task, a plain chat reply that
-    bot's chat, each at the message. It names ids only; whether the reader may open them is checked when they do."""
+    bot's chat in the room the reply is in, each at the message. It names ids only; whether the reader may open them
+    is checked when they do."""
     refs = (message or {}).get("refs") or {}
     count = sum(1 for a in refs.get("attachments") or [] if isinstance(a, dict) and a.get("kind") in INLINE)
     if not count:
@@ -485,7 +486,8 @@ def elsewhere(base, message, task=None):
     where = {"task": task} if task else {}
     sender = str(message.get("from_actor") or "")
     if not where and sender.startswith("bot:"):
-        where = {"bot": sender[4:]}
+        # A bot has more than one chat with a person (each Slack thread is a room of its own): name the room.
+        where = {"bot": sender[4:], "conversation": message.get("conversation_id") or ""}
     url = (base or "") + "/" + ("?" + urlencode({**where, "message": message["id"]}) if where else "")
     return {"count": count, "label": f"{count} visual{'' if count == 1 else 's'} - view in Tico", "url": url}
 

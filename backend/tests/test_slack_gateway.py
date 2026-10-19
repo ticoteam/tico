@@ -703,10 +703,11 @@ def test_a_reply_with_visuals_reaches_slack_as_its_text_plus_one_line_to_the_mes
                       in_reply_to=first, refs={"attachments": attachments})["id"]
     gateway.tick()
     text = gateway.slack.posts[-1]["text"]
-    # The whole text, then the line linking to the message in that bot's chat (no task here), then the footer. Slack
+    # The whole text, then the line linking to the message in that bot's chat room (no task here), then the footer. Slack
     # wants `&` escaped inside a link too, and opens it as `&`.
     assert text == ("Revenue doubled &lt;fast&gt;.\n\n"
-                    f"<https://tico.example.com/?bot=legal&amp;message={reply}|{line}>\n\n(sent from Legal)")
+                    f"<https://tico.example.com/?bot=legal&amp;conversation={thread['conversation_id']}&amp;message={reply}|{line}>"
+                    "\n\n(sent from Legal)")
     assert "chart" not in text.lower()
 
 
@@ -765,18 +766,59 @@ def test_a_private_task_reply_with_a_visual_never_reaches_slack(gateway, hub):
     assert all(r["state"] == "cancelled" for r in rows(hub, "SELECT * FROM slack_posts WHERE message_id=?", reply))
 
 
-def test_a_task_done_post_with_a_visual_has_the_line_before_open_task(gateway, hub):
-    link_task_requester(hub)
-    made = task_notice(hub)
+def test_a_slack_thread_reply_links_to_its_own_room_not_the_bots_usual_chat(gateway, hub):
+    """Each Slack thread is a chat room of its own beside the person's usual chat with the bot: the link names the
+    reply's room, and only the people in that room find it among their chats with the bot."""
     with hub.transaction() as c:
-        notice = c.execute("SELECT id, refs_json FROM messages WHERE json_extract(refs_json,'$.task_completion.notify')=1"
-                           ).fetchone()
-        refs = json.loads(notice["refs_json"])
-        c.execute("UPDATE messages SET refs_json=? WHERE id=?",
-                  (encode({**refs, "attachments": [visual()]}), notice["id"]))
+        usual = H.say(c, "human:ana", "bot:legal", "Hi Legal.")["conversation_id"]
+    first = routed_reply(gateway, hub)
+    send(gateway, "<@U0BUS6WA4SY> Legal, another thing?", answers(legal=0.9))
+    threads = [r["conversation_id"] for r in rows(hub, "SELECT * FROM slack_threads ORDER BY created")]
+    assert len(set(threads + [usual])) == 3
+    with hub.transaction() as c:
+        reply = H.say(c, "bot:legal", "human:ana", "The chart.", conversation_id=threads[0], in_reply_to=first,
+                      refs={"attachments": [visual()]})["id"]
+    gateway.tick()
+    text = [p["text"] for p in gateway.slack.posts if p["text"].startswith("The chart.")][0]
+    assert f"conversation={threads[0]}&amp;message={reply}|1 visual - view in Tico>" in text
+    with hub.read() as c:
+        assert threads[0] in {r["id"] for r in H.chats_with(c, "human:ana", "bot:legal")}
+        assert threads[0] not in {r["id"] for r in H.chats_with(c, "human:ben", "bot:legal")}
+
+
+def test_a_task_done_post_counts_the_owners_visual_result_and_links_to_that_comment(gateway, hub):
+    """The done notice itself has no visuals: the line is the owner's result comment's, posted the normal way, and it
+    links to the newest such comment, which the task's conversation shows. A visual from before a reopen is not a later
+    result."""
+    link_task_requester(hub)
+    with hub.transaction() as c:
+        made = H.task_create(c, "human:ana", "Q3 numbers", "Chart the quarter.", "bot:legal", lint=False)
+        old = H.task_comment(c, "bot:legal", made["id"], "First cut.", extra_refs={"attachments": [visual(n=7)]})
+        chart = H.task_comment(c, "bot:legal", made["id"], "Here it is.",
+                               extra_refs={"attachments": [visual(), visual("svg", 2)]})
+        H.task_comment(c, "bot:legal", made["id"], "Numbers checked twice.")
+        H.task_update(c, "bot:legal", made["id"], status="done", note="Charted")
     assert gateway.task_completions() == 1
     gateway.deliver()
-    [post] = gateway.slack.posts
-    assert post["text"].endswith(
-        f"\n<https://tico.example.com/?task={made['id']}&amp;message={notice['id']}|1 visual - view in Tico>"
-        f"\n<https://tico.example.com/#/task/{made['id']}|Open task>")
+    text = gateway.slack.posts[0]["text"]
+    with hub.read() as c:
+        shown = [m["id"] for m in H.task_comments(c, made["id"])]
+    assert chart["id"] in shown
+    assert text.endswith(f"\n<https://tico.example.com/?task={made['id']}&amp;message={chart['id']}|2 visuals - view in Tico>"
+                         f"\n<https://tico.example.com/#/task/{made['id']}|Open task>")
+    # Reopened and then declined with no new visual: the first result's visuals are not announced again.
+    with hub.transaction() as c:
+        H.task_update(c, "human:ana", made["id"], status="open")
+        H.task_comment(c, "bot:legal", made["id"], "Not doing the rest.")
+        H.task_update(c, "bot:legal", made["id"], status="declined", note="Out of scope")
+    assert gateway.task_completions() == 1
+    gateway.deliver()
+    assert "visual" not in gateway.slack.posts[1]["text"] and old["id"] not in gateway.slack.posts[1]["text"]
+
+
+def test_a_task_done_post_without_a_visual_result_has_no_line(gateway, hub):
+    link_task_requester(hub)
+    task_notice(hub)
+    assert gateway.task_completions() == 1
+    gateway.deliver()
+    assert "visual" not in gateway.slack.posts[0]["text"]

@@ -51,7 +51,7 @@ async function v2ChatLoad(slug, room = null) {
     Object.assign(state, {conv: room.conv, messages: room.messages || [], nextBefore: room.nextBefore, execution: x,
                           live: S.me?.cloud && v2RunLive(x) ? {text: x.text || ''} : null, listed: true, loaded: true});
     v2ChatRender(state);
-  } else if (seen && seen.mode === mode) {
+  } else if (seen && seen.mode === mode && !chatJumpRoom(slug)) {
     Object.assign(state, {conv: seen.conv, messages: seen.messages, nextBefore: seen.nextBefore, execution: seen.execution,
                           live: seen.live, listed: true, loaded: true});
     v2ChatRender(state);                               // what it showed last time, at once
@@ -100,7 +100,11 @@ async function v2ChatFind(state) {
       if (!list) continue;
       if (!state.listed) {                        // a message sent while this loaded already put its chat in place
         state.listed = true;
-        state.conv = v2ChatRoom(list.conversations, state.slug, state.mode);
+        // A link to a message in another of my rooms with this bot opens that room; its mode keeps it out of the cache
+        // the usual room is read from.
+        const want = chatJumpRoom(state.slug), linked = want && (list.conversations || []).find(c => c.id === want);
+        if (linked) state.mode = 'linked';
+        state.conv = linked || v2ChatRoom(list.conversations, state.slug, state.mode);
       }
     }
     if (!state.conv || await v2ChatMessages(state)) { state.loaded = true; state.failed = false; return; }

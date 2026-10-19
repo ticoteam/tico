@@ -271,6 +271,19 @@ def humanize(text, names=None):
     return s.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&").strip()
 
 
+def completion_result(c, notice):
+    """The result a task-done notice reports: the owner's newest comment on the task that has visuals, written before
+    the notice and after the task's previous done or declined notice (a reopened task's earlier visuals are not this
+    result), or None. A comment is what the task page shows, so the link lands on it."""
+    task_id, owner = notice["refs"]["task"], notice["refs"]["task_completion"]["owner"]
+    since = c.execute("SELECT MAX(created) FROM messages WHERE id<>? AND created<=? AND deleted_at IS NULL "
+                      "AND json_extract(refs_json,'$.task')=? AND json_extract(refs_json,'$.task_completion') IS NOT NULL",
+                      (notice["id"], notice["created"], task_id)).fetchone()[0] or ""
+    found = [m for m in H.task_comments(c, task_id) if m["from_actor"] == owner and since < m["created"] <= notice["created"]
+             and visuals.elsewhere("", m)]
+    return found[-1] if found else None
+
+
 def slack_escape(text):
     """Text as Slack's parser must see it: `&`, `<` and `>` escaped, so a bot's `<!channel>` is
     shown as text rather than paging the channel and "x < y" survives."""
@@ -1277,8 +1290,13 @@ class Gateway:
     def rendered(self, c, post):
         """What Slack shows: the reply, then the footer that names the bot even where customize is not honoured."""
         message = H.message(c, post["message_id"]) or {}
-        conv = H.conversation(c, message["conversation_id"]) if message.get("conversation_id") else None
-        line = visuals.elsewhere(self.settings.public_url, message, H.message_task_id(message, conv))
+        if post["bot"]:
+            conv = H.conversation(c, message["conversation_id"]) if message.get("conversation_id") else None
+            line = visuals.elsewhere(self.settings.public_url, message, H.message_task_id(message, conv))
+        else:
+            # A task-done notice carries no visuals of its own: the line is the result's, linked to that comment.
+            result = completion_result(c, message)
+            line = result and visuals.elsewhere(self.settings.public_url, result, message["refs"]["task"])
         seen = "\n<" + slack_escape(line["url"]) + "|" + line["label"] + ">" if line else ""
         if not post["bot"]:
             task_id = message["refs"]["task"]
