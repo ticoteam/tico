@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from . import aws as awsmod, backup as bk, cloud as cloudmod, cloudinit, contract, dns as dnsmod, envfile, remote, route53, settings as st, signin, state, support, verify
+from . import aws as awsmod, backup as bk, cloud as cloudmod, cloudinit, contract, dns as dnsmod, envfile, hosted, remote, route53, settings as st, signin, state, support, verify
 from .cloudflare import DASHBOARD_STEPS, RUNNER_DASHBOARD_STEP, TOKEN_URL, Cloudflare, CloudflareError
 from .settings import Asker, Settings
 from .ui import IO, USAGE_NOTICE, MissingInput
@@ -102,8 +102,11 @@ def gather(io: IO, args, s: Settings, dry: bool) -> Settings:
 
 def gather_identity(io: IO, args, s: Settings, dry: bool) -> None:
     a = Asker(io, args, s, dry)
-    a.get("auth", "How should people sign in?", flag="--auth", choices=st.AUTHS, default="google")
-    if s.auth == "cloudflare":
+    if s.auth != st.OWNER_LINK:         # set by hosted.gather for a server Tico hosts, never asked
+        a.get("auth", "How should people sign in?", flag="--auth", choices=st.AUTHS, default="google")
+    if s.auth == st.OWNER_LINK:
+        pass                            # the owner's sign-in link: no provider to set up
+    elif s.auth == "cloudflare":
         if s.front_door != "cloudflared":
             raise MissingInput("Cloudflare Access needs --front-door cloudflared")
         a.get("access_issuer", "Access team URL (https://<team>.cloudflareaccess.com)")
@@ -126,7 +129,7 @@ def gather_identity(io: IO, args, s: Settings, dry: bool) -> None:
         a.get("client_secret", f"{p.label} client secret (hidden)", secret=True, env="TICO_OIDC_CLIENT_SECRET")
         a.get("allowed_domain", "Only allow sign-in from this email domain (blank for anyone on the roster)", required=False,
               flag="--allowed-domain")
-    a.get("company", "Team/Company name", default="Acme")
+    a.get("company", "Team/Company name", default="Sample Co" if s.preset else "Acme")
     a.get("owner_email", "Owner email (must be the account you will sign in with)", validate=lambda v: bool(st.EMAIL_RE.match(v)))
     a.get("decisions_provider", "Model key for the server's own decisions (openai, anthropic, gemini; blank to skip)", required=False,
           choices=None, flag="--decisions-provider")
@@ -273,7 +276,10 @@ def plan_lines(s: Settings, zone: dnsmod.Zone | None, records: list[dnsmod.Recor
     for r in records:
         L.append(f"       {r.type} {r.name} -> {r.value}" + (" (proxied)" if r.proxied else ""))
     add("Wait until public resolvers (8.8.8.8, 1.1.1.1, 9.9.9.9) answer with those records, before anything asks for a certificate")
-    if s.auth == "cloudflare":
+    if s.auth == st.OWNER_LINK:
+        for line in hosted.plan_lines(s):
+            add(line)
+    elif s.auth == "cloudflare":
         add("Sign-in: Cloudflare Access (issuer and audience you gave)")
     else:
         add(f"Sign-in: {signin.PROVIDERS[s.auth].label} OIDC; OAuth client redirect URI must be exactly {signin.redirect_uri(s.domain)}")
@@ -379,6 +385,7 @@ def run(args, io: IO, deps: Deps) -> int:
     if saved:
         io.say(f"Resuming from the last run for {domain_hint} (secrets kept in {state.home() / domain_hint}).")
     gather(io, args, s, dry)
+    hosted.gather(args, s, dry)
     gather_identity(io, args, s, dry)
     gather_backup(io, args, s, dry)
     s.updater = not args.no_updater
@@ -438,6 +445,9 @@ def run(args, io: IO, deps: Deps) -> int:
         tunnel_id = _tunnel(io, args, s, deps, zone, cf) or tunnel_id
         records = dnsmod.plan_records(s.domain, s.front_door, tunnel_id=tunnel_id, runner_host=s.runner())
 
+    if s.auth == st.OWNER_LINK and not s.owner_link_hash:
+        # The first link, made here; a re-run keeps it (the server only takes one when it has none).
+        s.owner_link_hash = hosted.new_link(s)
     env_text = envfile.render(s.to_env())
     state.save(s.domain, s.public(), env_text)
     scrub = lambda t: envfile.scrub(t, s.secrets())
@@ -655,11 +665,19 @@ def finish(io: IO, s: Settings, deps: Deps, records, runner: remote.Shell | None
                             wait_https=HTTPS_WAIT_SECONDS, sleep=deps.sleep, say=io.say)
     show(io, checks)
     if all(c.ok for c in checks):
-        io.say(f"\nDone. Open https://{s.domain} and sign in as {s.owner_email}.")
+        computer = s.preset == "recommended" and hosted.add_server_computer(io, s, runner)
+        if s.auth == st.OWNER_LINK:
+            io.say(f"\nDone. The owner's sign-in link is in {hosted.link_file(s.domain)} (0600): send it to {s.owner_email}. "
+                   "It works once, for a week; `python3 -m setup owner-link --domain " + s.domain + "` makes a new one.")
+        else:
+            io.say(f"\nDone. Open https://{s.domain} and sign in as {s.owner_email}.")
         if not s.backup_url:
             io.say(f"\nNote: {bk.LOCAL_WARNING}")
-        io.say("The in-app checklist continues from there. Next, add the computer that runs your bots: your Mac via "
-               "Settings > Computers > Add computer, or a Linux box with `python3 -m setup runner`.")
+        if computer:
+            io.say("The one step left is in the app: Settings > Computers > Server computer > Sign in, to Claude and to ChatGPT.")
+        else:
+            io.say("The in-app checklist continues from there. Next, add the computer that runs your bots: your Mac via "
+                   "Settings > Computers > Add computer, or a Linux box with `python3 -m setup runner`.")
         return 0
     io.say("\nNot everything passed. Fix the hints above and run `python3 -m setup doctor --domain " + s.domain + "`.")
     offer_support(io, args, s, f"tico setup ({s.target})", checks)

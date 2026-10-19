@@ -663,6 +663,8 @@ class Store:
             c.executescript(_learnings.SCHEMA)
             from . import stale_review as _stale_review
             c.executescript(_stale_review.SCHEMA)
+            from . import owner_link as _owner_link
+            c.executescript(_owner_link.SCHEMA)
             from . import docs as _docs
             _docs.ensure_schema(c, self.settings)
             from . import doc_sources as _doc_sources

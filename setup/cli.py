@@ -6,10 +6,10 @@ import sys
 from . import backup as bk, settings as st
 from .ui import IO, MissingInput
 from .runner_setup import run_runner
-from . import aws as awsmod, support
+from . import aws as awsmod, hosted, support
 from .wizard import Deps, destroy, doctor, run
 
-COMMANDS = ("run", "doctor", "destroy", "runner", "backup-storage", "support")
+COMMANDS = ("run", "doctor", "destroy", "runner", "backup-storage", "support", "owner-link")
 
 
 def parser() -> argparse.ArgumentParser:
@@ -20,7 +20,8 @@ def parser() -> argparse.ArgumentParser:
                    help="run (default): set up the server; runner: add a Linux computer that runs bots; doctor: re-run the checks; "
                         "destroy: remove what setup created on AWS; backup-storage: from a laptop with AWS credentials, create the "
                         "backup bucket and its key for a server that has none (then install with --backup existing); support: "
-                        "what scripts/install.sh runs when it fails, to offer sending the error to Tico support")
+                        "what scripts/install.sh runs when it fails, to offer sending the error to Tico support; owner-link: on a "
+                        "server Tico hosts, a new owner sign-in link in place of the old one (--sign-out also ends the owner's sessions)")
     p.add_argument("--dry-run", action="store_true", help="print the plan and change nothing")
     p.add_argument("--non-interactive", action="store_true", help="never prompt; missing values are errors")
     p.add_argument("--yes", "-y", action="store_true", help="do not ask for confirmation")
@@ -45,7 +46,14 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--aws-instance-type", choices=["t4g.small", "t4g.medium", "t4g.large"], help="server default t4g.small; runner default t4g.medium")
     p.add_argument("--aws-os", choices=["ubuntu", "al2023"])
     p.add_argument("--name", help="destroy: the tico-setup-name tag value (default: derived from --domain)")
-    p.add_argument("--auth", choices=list(st.AUTHS))
+    p.add_argument("--auth", choices=[*st.AUTHS, st.OWNER_LINK],
+                   help="owner-link: a single-use sign-in link for the owner, only with --hosted")
+    p.add_argument("--hosted", metavar="own|invited", help="a server Tico hosts: own (our team) or invited (an invited company); "
+                   "writes TICO_HOSTED and signs the owner in with a sign-in link written to a private file, never printed")
+    p.add_argument("--hosted-zone", metavar="ZONE", help="with --hosted: our DNS zone; the domain must be a name under it")
+    p.add_argument("--preset", metavar="recommended", help="with --hosted: the recommended setup (sample company, subscriptions "
+                   "plus Tico Gateway from TICO_GATEWAY_INVITE in the environment, Tico Support, a computer on the server)")
+    p.add_argument("--sign-out", action="store_true", help="owner-link: also sign the owner out everywhere")
     p.add_argument("--tenant", help="Microsoft tenant id or domain")
     p.add_argument("--client-id")
     p.add_argument("--allowed-domain", help="only this email domain may sign in")
@@ -105,7 +113,8 @@ def main(argv: list[str] | None = None, deps: Deps | None = None, io: IO | None 
     deps = deps or Deps()
     try:
         return {"run": run, "doctor": doctor, "destroy": destroy, "runner": run_runner,
-                "backup-storage": backup_storage, "support": lambda a, i, _: support.from_installer(a, i)}[args.command](args, io, deps)
+                "backup-storage": backup_storage, "support": lambda a, i, _: support.from_installer(a, i),
+                "owner-link": hosted.rotate}[args.command](args, io, deps)
     except KeyboardInterrupt:
         io.say("\nInterrupted. Re-run `tico setup`; it resumes.")
         return 130

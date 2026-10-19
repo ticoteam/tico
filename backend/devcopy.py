@@ -43,7 +43,7 @@ EMPTY = (
     "runner_versions",
     # human sign-in and service keys
     "human_tokens", "oidc_sessions", "oidc_codes", "oauth_grants", "oauth_clients", "service_keys",
-    "service_key_tasks",
+    "service_key_tasks", "owner_links",
     # credentials
     "credentials", "credential_keys", "credential_grants", "credential_requests", "credential_imports",
     "directory_credentials", "company_storage",

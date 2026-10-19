@@ -34,7 +34,8 @@ NEEDS_YOU_MINUTES = 30      # this quiet, its owner is asked to bring it back
 BACKUP_STALE_HOURS = 6      # the replica normally trails by seconds
 RECENT_HOURS = 24
 GITHUB_HEALTH = "github:token"
-PROXIES = {"cloudflare": "Cloudflare Access", "aws-alb": "an AWS load balancer", "oidc": "OpenID Connect"}
+PROXIES = {"cloudflare": "Cloudflare Access", "aws-alb": "an AWS load balancer", "oidc": "OpenID Connect",
+           "owner-link": "the owner sign-in link Tico sends"}
 
 
 def _fix(label, href="", tab="", click=""):

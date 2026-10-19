@@ -5,8 +5,7 @@ page, a video or an audio clip, with a title. This page is the reference: when a
 a conversation, how to attach one, what Tico does to a page when it is attached, the types and limits, who can see
 it, and what a reader sees outside Tico.
 
-Pictures, SVG and visual pages show inline as cards. Video and audio still show as file chips; inline players come
-in a later release.
+Pictures, SVG and visual pages show inline as cards. Video and audio play inside their card.
 
 ## When a bot adds a visual
 
@@ -30,7 +29,8 @@ Keep the text answer complete because not every reader sees the visual: Slack sh
 
 A picture (PNG, JPEG, GIF, WebP), an SVG or a visual page (HTML) attached to a chat message or a task comment shows
 under the text as a card. This holds for a person's attachments too. The card is the width of the message and never
-wider than the screen. A message shows up to 4 cards, in the order attached; the rest stay file chips.
+wider than the screen. A message shows up to 4 cards, in the order attached; the rest stay file chips. Video and
+audio are cards too (see [Video and audio](#video-and-audio)) and count toward the 4.
 
 - **Caption.** The visual's title, or its file name when it has none.
 - **Menu** (**⋯**, labelled **More**, next to the caption): **Expand**, **Open in file viewer**, **Download**.
@@ -54,6 +54,26 @@ On a task, **Open in file viewer** and **Newer version** open the task's own fil
 A visual shows as a file chip instead of a card when its type or size isn't one that shows inline (see
 [Types and limits](#types-and-limits)), and on a self-hosted server without a visual address (see
 [Self-hosting](#self-hosting)).
+
+### Video and audio
+
+A video (MP4, WebM, MOV, M4V) or an audio clip (MP3, M4A, WAV, OGG, AAC) attached to a chat message or a task comment
+plays inside its card, a person's attachments too. The caption, menu, versions and "This visual was removed" work as
+for the other cards; the menu has no **Expand**.
+
+- **Video** shows its poster when it has one: a frame Tico takes from the clip, or the poster attached with it. The
+  player has play/pause, a seek bar, volume and the device's full screen. A video keeps its shape: a portrait clip
+  is narrower, not cropped, and no taller than the card's cap.
+- **Audio** is a compact player with play/pause and a seek bar.
+- **Nothing plays by itself.** A clip starts only when you press play.
+- **One clip at a time.** Starting a clip pauses any other clip on the page.
+- **A playing clip keeps going** while you scroll and while the conversation updates with new messages.
+- **Seeking a long file** starts playback at that point without downloading the whole file first.
+- **A format the device can't play** gets no player. The card says why, for example "This device can't play MOV
+  video.", with **Open in file viewer** and **Download**. A clip that can't load says "Couldn't load this video.
+  Check the connection, or download it." with the same two links.
+
+Which formats play, and how full screen looks, depend on the browser or app you use.
 
 ## Attach a visual
 

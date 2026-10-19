@@ -22,6 +22,12 @@ All notable changes to Tico are recorded here. The format follows
   before. `--support off` turns Support off. The Gateway invite comes from `TICO_GATEWAY_INVITE` in the environment and
   is never printed. The quick start, your own domain and sign-in, and your own keys install as before.
   ([Install](docs/install.md#recommended-setup))
+- **Owner sign-in link for servers Tico hosts**: the setup wizard's `--hosted own|invited` signs the owner in with a
+  link our team sends. It works once and for a week at most, only on an https domain under our zone, and is never
+  printed or logged; `python3 -m setup owner-link` makes a new one and can sign the owner out everywhere. When a
+  session ends, Sign in again shows the link page, not an error. With
+  `--preset recommended` the hosted server gets the recommended setup and its own computer. Every other sign-in is
+  unchanged. ([Install](docs/install.md#sign-in))
 - **How long an approval has waited, and on whom**: every approval now records when its exact payload was ready to
   decide and whose decision it is, and its card in Needs you and Decide says so plainly ("Ready 2 h 10 min, waiting
   on you", or the person's name); the row shows "ready 2 h 10 min". The API adds `ready_since`, `decision_owner`,
@@ -45,8 +51,7 @@ All notable changes to Tico are recorded here. The format follows
   audio clip to a chat reply or task comment (`--visual PATH --title "…"` on `hub message send`, `hub chat send` and
   `hub task comment`; `visuals` over MCP; `attachments: [{ref, title}]` in the API). It is a versioned file there,
   shown only to that conversation's readers. A page's local images and fonts are embedded; remote ones are removed
-  and listed. Self-hosters set `TICO_VISUAL_ORIGIN`, a separate site. Video and audio still show as file chips until part 3
-  ([Visuals in replies](docs/visuals.md)).
+  and listed. Self-hosters set `TICO_VISUAL_ORIGIN`, a separate site ([Visuals in replies](docs/visuals.md)).
 - **Visuals in replies (part 2 of 4): pictures, SVG and visual pages show inline** under a chat message or a task
   comment, a person's attachments too. Each is a card the width of the message, never wider than the screen, with its
   title as the caption and a menu: Expand, Open in file viewer, Download. A visual page shows at its own height up to
@@ -58,10 +63,11 @@ All notable changes to Tico are recorded here. The format follows
   render. Up to 4 per message; the rest stay file chips
   ([Visuals in replies](docs/visuals.md#in-a-chat-or-task-conversation)).
 - **Video and audio in replies (part 3 of 4)**: a video or audio clip attached to a chat reply or task comment plays
-  in the conversation: a video with its first frame, play, seek, volume and full screen (also in the desktop app on
-  a Mac), an audio clip as a compact player that keeps playing while you scroll. Nothing starts by itself, starting
-  one clip pauses the other, and seeking a long clip loads only that part. A clip the device can't play shows why,
-  with Download.
+  in its card: a video with its poster, play, seek, volume and full screen; an audio clip as a compact player. Nothing
+  starts by itself, starting one clip pauses any other, and a playing clip keeps going while you scroll or the thread
+  updates. Seeking a long clip loads only that part. A clip the device can't play says why, with Download. Video and
+  audio count toward the 4 cards per message
+  ([Visuals in replies](docs/visuals.md#video-and-audio)).
 - **The company on Goals**: with the CEO Bot switch on, Goals opens with a **Company** section: the Vision (one or
   two sentences) and the Description (a short paragraph). The owner and admins edit it, everyone else reads it, and
   **History** lists every change with who made it and when. Each goal shows a one-line **Why** tying it to the
@@ -125,6 +131,12 @@ All notable changes to Tico are recorded here. The format follows
   missed GitHub webhook no longer keeps a finished tree counted against the bot's limit. A tree whose pushed commits no
   pull request carries is held with the reason shown, gets a draft pull request even when the push webhook was
   missed, and a move to any review step or to done names the unlinked branch ([Task worktrees](docs/worktrees.md)).
+- **A task's chat shows your message being answered, whichever bot answers it.** After you send a message on a task,
+  the task's chat shows the same line as a bot's chat: Sent, Queued (and why, when the bot is busy or at a limit),
+  Starting, "<Bot> is working" with its latest step, then the reply, or "Reply failed" when the turn errors. This now
+  follows the bot your message went to, such as the bot that asked you on a task you own, not only the task's owner.
+  Before you send, the message box says when no bot will get the message, or when it waits for the bot's next run on
+  the task.
 - **Computers: a cleared key reads "No key · Add key"**, not "Signed out · Sign in", in a computer's pop-up, and its
   chip's hover says No key. On an offline computer, a connection's **Replace key**, **Clear key**, **Switch to
   subscription**, **Sign out** and **Switch account** stay on the line, disabled, with "Computer is offline", instead
