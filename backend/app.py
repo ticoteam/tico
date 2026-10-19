@@ -1813,8 +1813,9 @@ def create_app(settings=None):
             archived = {row["slug"] for row in H.bots(c) if row.get("state") == "archived"}
             # The CEO Bot switch moves bots on the chart only; each keeps the `reports_to` it has (backend/ceo_bot.py).
             from . import ceo_bot
-            view = P.org_view(roster, ceo_bot.chart_entries(c, settings, roster, configs, archived), archived,
-                              person_id=person or "", team=team or "")
+            chart = ceo_bot.chart_entries(c, settings, roster, configs, archived)
+            view = P.org_view(roster, chart, archived, person_id=person or "", team=team or "")
+            view["org_groups"] = ceo_bot.chart_groups(roster, configs, chart, view["org_groups"], archived)
             for row in view["bots"]:
                 row["reports_to"] = P._clean((configs.get(row["id"]) or {}).get("reports_to"))
             live = {row["slug"]: row for row in H.bots(c)}

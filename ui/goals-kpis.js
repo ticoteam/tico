@@ -429,7 +429,7 @@ function goalTreeShape() {
   const keys = new Set([...(S.orgGroups || []).map(g => 'g:' + g.id), ...people.map(p => 'p:' + p.id), ...placed.map(e => 'b:' + e.name)]);
   const byParent = {}, groupOf = orgGroupOf(people, placed);
   const put = (parent, node) => (byParent[keys.has(parent) ? parent : ''] ||= []).push(node);
-  for (const g of (S.orgGroups || [])) put(g.parent ? 'g:' + g.parent : '', {kind: 'group', id: g.id, name: g.name, order: g.order || 0});
+  for (const g of (S.orgGroups || [])) put(orgGroupParent(g, keys), {kind: 'group', id: g.id, name: g.name, order: g.order || 0});
   for (const p of people) put(orgHang('p:' + p.id, orgBossKey({kind: 'person', person: p}), groupOf), {kind: 'person', id: p.id, person: p});
   for (const e of placed) {
     // A bot under a built-in or message bot (or a bot that is gone) hangs from the next one up, else its owner.
@@ -603,9 +603,14 @@ function bindGoalWhy(state, root, reload) {
   input.focus();
 }
 
+// What the tree is drawn from in the roster, so a refresh redraws it only when that changed (goalsFollowRoster).
+const goalTreeKey = () => JSON.stringify([ceoBotOn(), goalManagerName(),
+  (S.emps || []).map(e => [e.name, e.display_name, e.org_parent, e.team, e.status]),
+  (S.people || []).map(p => [p.id, p.org_parent, p.team, p.hidden]), (S.orgGroups || []).map(g => [g.id, g.parent, g.org_parent])]);
 function goalsRender(state) {
   const body = $('#goal-body');
   if (!body || !state.loaded) return;
+  state.shape = goalTreeKey();
   const owned = {}, loose = {};
   for (const g of state.goals.filter(goalLive)) (owned[g.owner] ||= []).push(g);
   for (const list of Object.values(owned)) list.sort(goalRank);

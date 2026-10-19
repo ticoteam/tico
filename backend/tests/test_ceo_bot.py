@@ -37,6 +37,12 @@ def company(environment):
                                 "reports_to": boss} for slug, (template, boss) in TEAM.items()})
     done = api.post("/api/v2/onboarding/complete", json={}, headers=signed_in())
     assert done.status_code == 200, done.text
+    # The team builder put the Heads and their reports in the Heads' department (Sales); the owner has a group too.
+    assert {g["id"]: g["bots"] for g in api.get("/api/v2/groups", headers=signed_in()).json()} == \
+        {"sales": ["eng-lead", "sales-lead", "support"]}
+    home = api.post("/api/v2/groups", json={"name": "Home", "add": {"people": ["morgan"], "bots": ["scribe"]}},
+                    headers=signed_in())
+    assert home.status_code == 200, home.text
     return api
 
 
@@ -47,6 +53,10 @@ def switch(api, on, headers=None):
 def chart(api, headers=None):
     view = api.get("/api/v2/org", headers=headers or signed_in()).json()
     return {b["id"]: (b["org_parent"], b["reports_to"], b["display_name"]) for b in view["bots"]}
+
+
+def groups(api, path="/api/v2/org"):
+    return {g["id"]: g["org_parent"] for g in api.get(path, headers=signed_in()).json()["org_groups"]}
 
 
 def employees(api):
@@ -78,16 +88,19 @@ def test_off_by_default_and_off_nothing_changes(environment):
     assert api.get("/api/v2/ceo-bot", headers=signed_in()).json()["on"] is False
     assert api.get("/api/v2/config", headers=signed_in()).json()["ceo_bot"] is False
     before_chart, before_people, before_stored = chart(api), employees(api), stored(api)
+    assert groups(api) == {"sales": "", "home": ""}
     assert before_chart["goal-manager"][2] == "Goal Manager" and before_stored[1]["goal-manager"] == "Goal Manager"
     assert before_chart["sales-lead"][0] == "p:morgan" and before_chart["scribe"][0] == "p:morgan"
     assert switch(api, True).json()["on"] is True
     assert switch(api, False).json() == {**switch(api, False).json(), "on": False, "name": "Goal Manager"}
     assert chart(api) == before_chart and employees(api) == before_people and stored(api) == before_stored
+    assert groups(api) == groups(api, "/api/humans") == {"sales": "", "home": ""}
 
 
 def test_on_it_is_the_ceo_bot_and_heads_the_chart(environment):
-    """Spec tests 5 and 6: the name in the bot list and the chart; the Heads and the bots with no manager under it,
-    it under the owner, the Assistant and message bots not under it. Each stored `reports_to` is untouched."""
+    """Spec tests 5 and 6: the name in the bot list and the chart; the Heads (with their departments) and the bots with
+    no manager under it, it under the owner, the Assistant and message bots not under it. Each stored `reports_to` is
+    untouched."""
     api = company(environment)
     reports_before, _ = stored(api)
     result = switch(api, True)
@@ -99,6 +112,8 @@ def test_on_it_is_the_ceo_bot_and_heads_the_chart(environment):
     under_ceo = {slug for slug, (parent, _, _) in bots.items() if parent == "b:goal-manager"}
     assert under_ceo == {"sales-lead", "eng-lead", "scribe"}
     assert bots["support"][0] == "b:sales-lead"
+    # The Head's department hangs under the CEO Bot with it; the owner's own group stays, or the chart would loop.
+    assert groups(api) == groups(api, "/api/humans") == {"sales": "b:goal-manager", "home": ""}
     assert bots["personal"][0] == "p:morgan" and bots["rileys"][0] == "p:riley"
     assert bots["coo"][0] == "p:morgan" and bots["inbox"][0] != "b:goal-manager"       # the Assistant is not under it
     # The chart moved; who each bot reports to did not, in the API or in the database.

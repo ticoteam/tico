@@ -291,6 +291,20 @@ async function goalsRefresh() {
   headGoalsReload();
 }
 
+// The CEO Bot switch can flip while Goals is open (another admin; `refresh` and `applyConfig` call this): the rail's
+// names follow and the tree is drawn again, keeping the composer's draft, the chat's stream and a field being typed in.
+function goalsFollowRoster() {
+  const state = GOALS_ST, host = $('#goal-manager-panel');
+  if (!state || !host?.isConnected) return;
+  const name = goalManagerName();
+  host.setAttribute('aria-label', name);
+  const title = host.querySelector('.gm-head h2'); if (title) title.textContent = name;
+  host.querySelector('[data-gm-thread]')?.setAttribute('aria-label', name + ' conversation');
+  host.querySelector('.gm-form .p-text')?.setAttribute('aria-label', 'Message to the ' + name);
+  host._gmDraw?.();
+  const body = $('#goal-body'), typing = document.activeElement?.matches?.('input, textarea, select') && body?.contains(document.activeElement);
+  if (state.loaded && !typing && state.shape !== goalTreeKey()) goalsRender(state);
+}
 // The Goal Manager in the right rail of Goals (docs/goals-and-kpis.md): what it does, its routines from the server (when
 // each next runs), its last run, and the viewer's chat with it: the room its bot page shows, loaded with the page. A reply
 // redraws the tree, since the Goal Manager may have just edited a goal. Leaving the page stops its stream.
@@ -345,6 +359,7 @@ async function goalManagerMount(pageState) {
     const noProvider = () => execution?.state === 'queued' && execution.readiness_reason === 'missing_provider';
     const thread = chat.querySelector('[data-gm-thread]');
     let rendered = '';
+    host._gmDraw = () => { if (rendered) draw(); };          // a new name, once the thread is drawn (goalsFollowRoster)
     const draw = () => {
       if (!current()) return;
       // Run inspection stays on the full bot page.

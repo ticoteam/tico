@@ -26,8 +26,8 @@ All notable changes to Tico are recorded here. The format follows
 - **CEO Bot switch** (off by default; one per install, no release needed): an owner or admin turns it on with
   `POST /api/v2/ceo-bot {"on": true}` (`hub api POST ceo-bot '{"on": true}'`), never a bot. On, the Goal Manager is
   named the CEO Bot in the bot list, the org chart, Goals and its messages, and sits on the org chart under the owner
-  with the Heads and the bots that report to no one under it; the Assistant, the other built-ins and message bots stay
-  apart. It keeps its slug, so its KPI readings, goal history and old messages stay its own. Only the chart moves:
+  with the Heads (in their departments) and the bots that report to no one under it; the Assistant, the other
+  built-ins and message bots stay apart. It keeps its slug, so its KPI readings, goal history and old messages stay its own. Only the chart moves:
   nobody's `reports_to` and nobody's access changes. Turning it off gives back the Goal Manager's name and the chart as
   they were.
 - **Start fresh when the topic changes** (Settings > Team; off by default, an owner or an admin turns it on): in a
@@ -37,6 +37,8 @@ All notable changes to Tico are recorded here. The format follows
   failed check (over 1.5 s) sends the message in the same session with no line.
 
 ### Fixed
+- Opening a card in **Needs you** (an approval, a task, a question) no longer sends a failing request for issue
+  "NaN" in the background. Only an issues inbox card fetches its full request.
 - **Clear** on a bot's chat now really starts the bot over. Before, it only trimmed the history Tico sends, and on
   the computer Claude Code, Codex and the other harnesses kept resuming the old provider thread, so the bot still
   remembered the cleared chat and every turn still paid for it. Each turn now carries its conversation's session
