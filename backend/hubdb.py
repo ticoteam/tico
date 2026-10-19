@@ -3234,11 +3234,12 @@ def _unblock(conn, done_task, told=()):
         if not kept:
             TR.remove_blocker(conn, KEEPER, row["id"], done_task["id"], keeper_note=f"unblocked: {done_task['title']}")
         conn.execute("UPDATE tasks SET version=version+1 WHERE id=?", (row["id"],))
-        # A kept ticket that finishes again (reopened, then done) does not wake the item's owner twice.
-        waits = (TR.live_blocker(conn, row["id"], ACTIVE_STATUSES) or _one(
+        # Only a blocker still open holds the wake: a kept, finished ticket blocks nothing. A kept ticket that finishes
+        # again (reopened, then done) does not wake the item's owner twice.
+        waits = TR.live_blocker(conn, row["id"], ACTIVE_STATUSES) or kept and _one(
             conn, "SELECT 1 FROM messages WHERE conversation_id=? AND json_extract(refs_json,'$.task')=? "
                   "AND json_extract(refs_json,'$.trigger_source')=? AND body LIKE 'Unblocked: %' LIMIT 1",
-            (row["conversation_id"], row["id"], done_task["id"]))) if kept else TR.blocker_ids(conn, row["id"])
+            (row["conversation_id"], row["id"], done_task["id"]))
         if row["status"] in ACTIVE_STATUSES and not waits and row["id"] not in told:
             _wake(conn, row, row["owner"], f"Unblocked: {row['title']}\n{done_task['title']} is finished.",
                   source=done_task["id"])

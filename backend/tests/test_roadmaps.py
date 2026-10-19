@@ -174,6 +174,19 @@ def test_an_item_whose_only_engineering_link_is_blocked_by_moves_when_that_ticke
         assert c.execute("SELECT count(*) FROM messages WHERE to_actor='bot:cpo' AND body LIKE 'Unblocked: %' "
                          "AND json_extract(refs_json,'$.task')=?", (spec['id'],)).fetchone()[0] == 1
 
+    # A Dev ticket finished first stays linked but blocks nothing: the item's owner hears once its last open blocker,
+    # a General task, finishes.
+    mixed = _item(api, 'Exports UI', step='Spec')
+    first = _ticket(api, dev, 'Build exports UI')
+    last = post(api, 'tasks', {'owner': 'ops', 'title': 'Check exports UI copy', 'body': 'Read it.'})
+    for blocker in (first, last):
+        relate(api, mixed['id'], blocker['id'], 'blocked_by')
+    _step(api, first, 'Done')
+    post(api, 'tasks/' + last['id'], {'version': get(api, 'tasks/' + last['id'])['task']['version'], 'status': 'done'})
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM messages WHERE to_actor='bot:cpo' AND body LIKE 'Unblocked: %' "
+                         "AND json_extract(refs_json,'$.task')=?", (mixed['id'],)).fetchone()[0] == 1
+
     # A blocker an item gains or loses moves it too: here a second, unstarted ticket.
     later = _ticket(api, dev, 'Build exports, part 2')
     _step(api, ticket, 'Pending Release')
