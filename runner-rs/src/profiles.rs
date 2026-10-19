@@ -75,12 +75,24 @@ impl Profile {
         (!self.share_operator).then(|| self.directory.join(runtime))
     }
 
-    /// `env` with `runtime`'s home pointed at this profile.
+    /// `env` with `runtime`'s home pointed at this profile, and nothing inherited that points it elsewhere.
     pub fn environment(&self, runtime: &str, env: &Env) -> Env {
         let mut env = env.clone();
         if let (Some(home), Some(var)) = (self.home(runtime), home_var(runtime)) {
             env.insert(var, home.display().to_string());
+            // Variables the CLI reads ahead of that home (`profile_home_overrides`) would sign it in and run it on some
+            // other folder's login.
+            for key in crate::harness_tools::caps(runtime, "").profile_home_overrides {
+                env.remove(&key);
+            }
         }
+        env
+    }
+
+    /// What `tico-runner profile login` signs `runtime` in with: `process` on this profile, plus the manifest's [env].
+    pub fn login_environment(&self, runtime: &str, process: &Env) -> Env {
+        let mut env = self.environment(runtime, process);
+        env.extend(crate::harness_tools::env_for(runtime));
         env
     }
 
@@ -413,9 +425,10 @@ pub fn limit_reset(profile: &str, runtime: &str, now: f64) -> Option<String> {
         .map(|at| crate::util::text_of(&crate::util::iso(&json!(at))))
 }
 
-/// A signed-out login's windows go with it: the next sign-in may be someone else's.
+/// A signed-out login's windows go with it, and so does its last usage limit: the next sign-in may be someone else's.
 pub fn forget_windows(profile: &str, runtime: &str) {
     weekly().lock().unwrap().retain(|(p, r, _), _| !(p == profile && r == runtime));
+    crate::fallback::forget_limit(profile, runtime);
 }
 
 struct Cached {
@@ -564,7 +577,7 @@ pub fn sha256_hex(data: &[u8]) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[test]
@@ -583,6 +596,39 @@ mod tests {
         assert_eq!(acme.environment("claude", &Env::new())["HOME"], "/p/acme/claude");
         assert!(select(c, Some("sales"), None).unwrap().environment("claude", &Env::new()).is_empty());
         assert_eq!(missing(c, "gone"), "profile gone not on this computer");
+    }
+
+    /// A stand-in `claude` that signs in where Claude Code would: CLAUDE_CONFIG_DIR when set, else `$HOME/.claude`.
+    pub const FAKE_CLAUDE_LOGIN: &str =
+        "#!/bin/sh\ndir=\"${CLAUDE_CONFIG_DIR:-$HOME/.claude}\"\nmkdir -p \"$dir\" && echo '{}' > \"$dir/.credentials.json\"\n";
+
+    #[test]
+    fn an_inherited_claude_config_dir_never_reaches_a_profiles_claude() {
+        let root = std::env::temp_dir().join(format!("tico-profile-config-dir-{}", uuid::Uuid::new_v4().simple()));
+        let outside = root.join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("sentinel"), "x").unwrap();
+        crate::util::write_script(&root.join("claude"), FAKE_CLAUDE_LOGIN);
+        let process: Env = [("PATH", "/usr/bin:/bin"), ("HOME", &root.display().to_string()), ("CLAUDE_CONFIG_DIR", &outside.display().to_string())]
+            .into_iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+        let acme = Profile::new("acme", &root.join("acme").display().to_string(), false);
+        let home = root.join("acme/claude");
+        for env in [acme.environment("claude", &process), acme.login_environment("claude", &process)] {
+            assert_eq!(env["HOME"], home.display().to_string());
+            assert!(!env.contains_key("CLAUDE_CONFIG_DIR"), "{env:?}");
+        }
+        // `profile login` runs the CLI with exactly this environment: the login lands in the profile and nowhere else.
+        let ran = std::process::Command::new(root.join("claude")).env_clear().envs(acme.login_environment("claude", &process)).status().unwrap();
+        assert!(ran.success());
+        assert!(home.join(".claude/.credentials.json").is_file());
+        let left: Vec<_> = std::fs::read_dir(&outside).unwrap().flatten().map(|e| e.file_name()).collect();
+        assert_eq!(left, vec![std::ffi::OsString::from("sentinel")]);
+        // The operator's own logins and other runtimes are left as they are.
+        let shared = Profile::new("beta", "/p/beta", true);
+        assert_eq!(shared.environment("claude", &process)["CLAUDE_CONFIG_DIR"], outside.display().to_string());
+        assert_eq!(acme.environment("codex", &process)["CLAUDE_CONFIG_DIR"], outside.display().to_string());
+        assert_eq!(acme.environment("codex", &process)["CODEX_HOME"], root.join("acme/codex").display().to_string());
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

@@ -6,6 +6,7 @@ const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs');
 
 const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
 const bots = ['lead', 'qa', 'senior'].map(name => ({name, display_name: {lead: 'Head of Engineering', qa: 'QA Engineer',
@@ -60,7 +61,7 @@ const NEEDS = [{...T.asked, kind: 'question'}, {...T.forAna, kind: 'task'}, {...
       }
       if (p === '/api/v2/conversations') return json({conversations: []});
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
-      return json({});
+      return json(unrouted(p));
     });
     await page.goto('https://tico-ui.test/#/bot/lead/tasks');
     const rail = page.locator('#pane-tasks');

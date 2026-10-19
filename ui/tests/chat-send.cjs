@@ -6,6 +6,7 @@ const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs');
 const launch = () => chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
 
 (async () => {
@@ -39,7 +40,7 @@ const launch = () => chromium.launch({headless: true, channel: process.env.TICO_
         sends.push(text);
         return json({conversation: {id: 'c1'}, message: {id: 'm' + sends.length, from_actor: 'human:ana', body: text, created: new Date().toISOString()}});
       }
-      return json({});
+      return json(unrouted(p));
     });
     await page.goto('https://tico-ui.test/#/bot/botops');
     const box = page.locator('#chat-composer textarea');

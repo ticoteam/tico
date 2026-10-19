@@ -11,6 +11,7 @@ import yaml
 
 from . import goals as G
 from . import hubdb as H
+from . import idempotency_messages
 from . import message_links
 from . import people as P
 from .harnesses import EXTERNAL_HARNESSES
@@ -19,10 +20,14 @@ from .harnesses import EXTERNAL_HARNESSES
 # A person's own spoken Tico turns, spoken decisions and what a live tool did are history,
 # not work: they never queue a job. A live ask does; that is how the text Tico is reached.
 # A bot run by an external agent (a Hermes profile) has no runner to claim a job: the message
-# waits in its inbox until the agent reads it, so no job is queued for it.
+# waits in its inbox until the agent reads it, so no job is queued for it. A synced bot delivered
+# through its platform's desktop app on a computer (backend/app_delivery.py) is the exception while
+# that computer is registered: the computer's runner takes the message as a job.
 EXTERNAL_BOT_SQL = ("EXISTS (SELECT 1 FROM bot_config WHERE bot=substr(NEW.to_actor,5) AND "
                     "json_extract(config_json,'$.harness') IN ("
-                    + ",".join("'" + h + "'" for h in EXTERNAL_HARNESSES) + "))")
+                    + ",".join("'" + h + "'" for h in EXTERNAL_HARNESSES) + ") AND NOT EXISTS ("
+                    "SELECT 1 FROM runners r WHERE r.id=json_extract(config_json,'$.app_delivery.computer') "
+                    "AND r.revoked_at IS NULL))")
 QUEUE_TRIGGER = (
     "CREATE TRIGGER IF NOT EXISTS queue_bot_message AFTER INSERT ON messages "
     "WHEN NEW.to_actor LIKE 'bot:%' AND COALESCE(NEW.from_actor, '') != NEW.to_actor "
@@ -72,6 +77,10 @@ CREATE TABLE IF NOT EXISTS settings_changes(
 CREATE INDEX IF NOT EXISTS settings_changes_created ON settings_changes(created);
 CREATE TABLE IF NOT EXISTS session_epochs(
  conversation_id TEXT PRIMARY KEY REFERENCES conversations(id), epoch INTEGER NOT NULL DEFAULT 0, updated TEXT NOT NULL);
+-- Moved by every clear or reset of one bot: a bot's direct chats share its one `bot` thread
+-- (clients/sessions.py), so one chat's Clear must reach the next turn of any of them.
+CREATE TABLE IF NOT EXISTS bot_session_epochs(
+ bot TEXT PRIMARY KEY REFERENCES bots(slug), epoch INTEGER NOT NULL DEFAULT 0, updated TEXT NOT NULL);
 -- Current provider thread for one bot+runtime+model. Local files hold the real
 -- context; this pointer lets a runner try resume, then fall back to a Hub pack.
 CREATE TABLE IF NOT EXISTS bot_sessions(
@@ -114,7 +123,13 @@ CREATE TABLE IF NOT EXISTS model_logins(
 CREATE INDEX IF NOT EXISTS model_logins_by_runner ON model_logins(runner_id,state);
 CREATE TABLE IF NOT EXISTS model_login_cleared(
  runner_id TEXT NOT NULL REFERENCES runners(id), runtime TEXT NOT NULL, profile TEXT NOT NULL DEFAULT '',
- cleared_at TEXT NOT NULL, cleared_by TEXT NOT NULL, PRIMARY KEY(runner_id,runtime,profile));
+ cleared_at TEXT NOT NULL, cleared_by TEXT NOT NULL, clear_key INTEGER NOT NULL DEFAULT 0,
+ PRIMARY KEY(runner_id,runtime,profile));
+-- A model key stored in the vault for one computer (backend/computer_keys.py): staged until the computer checks it.
+CREATE TABLE IF NOT EXISTS computer_keys(
+ credential_id TEXT PRIMARY KEY REFERENCES credentials(id), runner_id TEXT NOT NULL REFERENCES runners(id),
+ runtime TEXT NOT NULL, state TEXT NOT NULL, login_id TEXT, created TEXT NOT NULL, created_by TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS computer_keys_by_runner ON computer_keys(runner_id,runtime,state);
 CREATE TABLE IF NOT EXISTS model_login_key_off(
  runner_id TEXT NOT NULL REFERENCES runners(id), runtime TEXT NOT NULL, profile TEXT NOT NULL DEFAULT '',
  set_at TEXT NOT NULL, set_by TEXT NOT NULL, PRIMARY KEY(runner_id,runtime,profile));
@@ -646,6 +661,8 @@ class Store:
             c.executescript(_memory_history.SCHEMA)
             from . import learnings as _learnings
             c.executescript(_learnings.SCHEMA)
+            from . import stale_review as _stale_review
+            c.executescript(_stale_review.SCHEMA)
             from . import docs as _docs
             _docs.ensure_schema(c, self.settings)
             from . import doc_sources as _doc_sources
@@ -677,6 +694,8 @@ class Store:
             from . import performance as _performance
             c.executescript(_performance.SCHEMA)
             _updates.purge_rejected(c)
+            # Which stored retry answers quote which message (backend/idempotency_messages.py).
+            idempotency_messages.ensure(c)
             c.execute("BEGIN IMMEDIATE")
             try:
                 # Who may see, read and write to each bot (backend/bot_access.py); NULL is Open.
@@ -690,11 +709,14 @@ class Store:
                 H.add_column(c, "runners", "accepts_member_bots", "INTEGER NOT NULL DEFAULT 0")
                 # Who may open a computer's screen from the app: off, view or control (backend/screen.py).
                 H.add_column(c, "runners", "screen", "TEXT NOT NULL DEFAULT 'off'")
-                # 1 on a computer enrolled since Screen started at View, until its first screen offer or a person's
-                # choice; computers that existed before keep what they had.
+                # 1 on a computer enrolled since Screen got a first-offer default, until its first screen offer or a
+                # person's choice; computers that existed before keep what they had.
                 H.add_column(c, "runners", "screen_default_pending", "INTEGER NOT NULL DEFAULT 0")
                 # Performance diagnostics: on unless a person turns them off (backend/performance.py).
                 H.add_column(c, "runners", "performance", "TEXT NOT NULL DEFAULT 'on'")
+                # When a computer said it is restarting after a person pressed Restart, from its heartbeat; NULL once
+                # a heartbeat no longer says so (backend/health.py `restarting`).
+                H.add_column(c, "runners", "restart_since", "TEXT")
                 # A starter bot is `needs_onboarding` until it says its setup is done, then
                 # `onboarded`; NULL for every other bot (backend/onboarding.py).
                 H.add_column(c, "bot_config", "onboarding_state", "TEXT")
@@ -1129,6 +1151,8 @@ class Store:
                 # When readiness was last reported (last_seen is any contact): the app waits for a report newer than a
                 # sign-out or switch before it stops looking.
                 H.add_column(c, "runners", "readiness_at", "TEXT")
+                # Clear key: a computer that missed its job (offline) clears its key copy at its next key fetch.
+                H.add_column(c, "model_login_cleared", "clear_key", "INTEGER NOT NULL DEFAULT 0")
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=55").fetchone():
                     H._apply(c, H.MEETING_REVIEW_SCHEMA)
                     c.execute("INSERT INTO cloud_migrations VALUES(55,?)", (H.now(),))
@@ -1160,6 +1184,10 @@ class Store:
                 # Tasks waiting for room for a worktree (backend/worktree_waits.py). Unversioned like the trash.
                 from .worktree_waits import ensure as ensure_worktree_waits
                 ensure_worktree_waits(c)
+                # The company's Vision, Description and their history, and each goal's Why (backend/company.py).
+                # Unversioned like the trash: an older release never reads the tables or the columns.
+                from .company import ensure as ensure_company
+                ensure_company(c)
                 # Temporary task assignments are retired (#420): their actors are archived and off every computer,
                 # their open tasks back with the role. Unversioned and idempotent like the trash; the tables stay inert.
                 from .shared_bots import retire_assignments
@@ -1185,6 +1213,10 @@ class Store:
                 c.execute("DROP INDEX IF EXISTS one_active_attempt_per_bot")
                 c.execute("CREATE UNIQUE INDEX IF NOT EXISTS one_active_attempt_per_lane ON attempts(bot,lane) "
                           "WHERE state IN ('leased','running')")
+                # A bot's wake preset holds its nonblocking notices and sweeps at enqueue time (backend/wake_presets.py).
+                # Unversioned like redirect: an older release never reads the columns and claims every queued job.
+                from .wake_presets import ensure as ensure_wake_presets
+                ensure_wake_presets(c)
                 # The change log live events are read from (backend/events.py); idempotent.
                 from .events import ensure as ensure_changes
                 ensure_changes(c)
@@ -1235,12 +1267,12 @@ class Store:
                 from .meetings import retire_capture
                 retire_capture(c)
                 retire_health_rows(c)
-                # The queue trigger names the external harnesses it skips. When one is added
-                # the stored trigger is rebuilt; no migration number, so no
-                # collision with another branch's.
+                # Whenever the queue trigger's SQL changes (an external harness added, a rule changed) the
+                # stored trigger is rebuilt; no migration number, so no collision with another branch's.
+                # SQLite keeps the statement as written, less "IF NOT EXISTS".
                 stored = c.execute("SELECT sql FROM sqlite_master WHERE type='trigger' "
                                    "AND name='queue_bot_message'").fetchone()
-                if not stored or any("'" + h + "'" not in stored[0] for h in EXTERNAL_HARNESSES):
+                if not stored or stored[0] != QUEUE_TRIGGER.replace(" IF NOT EXISTS", "", 1):
                     c.execute("DROP TRIGGER IF EXISTS queue_bot_message")
                     c.execute(QUEUE_TRIGGER)
                 if seed_market and not self.settings.test_identities:

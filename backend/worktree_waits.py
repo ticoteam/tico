@@ -138,7 +138,8 @@ def _ended(c, wait, task):
 
 
 def _wake(c, wait, task, body):
-    H._wake(c, task, wait['owner'], body, refs={'worktree_wait': wait['id'], 'generation': wait['generation']})
+    H._wake(c, task, wait['owner'], body, refs={'worktree_wait': wait['id'], 'generation': wait['generation']},
+            trigger='other', source=wait['id'])
 
 
 def serve(c, owners=None, default_org=''):
@@ -181,7 +182,7 @@ def _broken(c, wait, reason):
         H._wake(c, H.task(c, wait['task_id']), wait['owner'],
                 f"Tico stopped holding a place for this task's {wait['repo']} worktree: {reason}. Run "
                 f"`hub task worktree add {wait['repo']}` again when you work on this task.",
-                refs={'worktree_wait': wait['id'], 'quiet': True})
+                refs={'worktree_wait': wait['id'], 'quiet': True}, trigger='other', source=wait['id'])
 
 
 def _serve_one(c, wait, full, default_org):
@@ -215,7 +216,8 @@ def _serve_one(c, wait, full, default_org):
             # Permission, computer or path: the wait ends and the task hears why the next time it runs.
             if _finish(c, wait, 'cancelled', problem.detail):
                 H._wake(c, task, wait['owner'], f"Tico stopped holding a place for this task's {wait['repo']} "
-                                                f"worktree: {problem.detail}", refs={'worktree_wait': wait['id'], 'quiet': True})
+                                                f"worktree: {problem.detail}", refs={'worktree_wait': wait['id'], 'quiet': True},
+                        trigger='other', source=wait['id'])
             return False
         row = c.execute('SELECT detail_json FROM task_links WHERE id=?', (link['link_id'],)).fetchone()
         detail = json.loads(row['detail_json'] or '{}')

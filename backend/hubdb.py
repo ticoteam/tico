@@ -75,9 +75,11 @@ from urllib.parse import urlsplit
 from pathlib import Path
 
 from .batch_work import isolated
+from . import idempotency_messages
 from . import task_relations as TR
 from . import task_roles as TRo
 from . import task_snooze as TS
+from . import run_triggers as RT
 from clients.manifest import repo_dir
 from backend.chat_goals_schema import SCHEMA as CHAT_GOALS_SCHEMA
 from backend.repositories_schema import SCHEMA as REPOSITORIES_SCHEMA
@@ -671,6 +673,21 @@ CREATE TABLE IF NOT EXISTS goal_asks (
 CREATE INDEX IF NOT EXISTS goal_asks_task ON goal_asks(task_id);
 """
 
+# What woke a run and whether it changed anything (backend/run_triggers.py); append to preserve existing installations.
+# A run from before this has NULLs, which `run_weekly` in hub sql reads as `unknown`.
+RUN_TRIGGERS_SCHEMA = """
+ALTER TABLE turns ADD COLUMN trigger_kind TEXT;
+ALTER TABLE turns ADD COLUMN trigger_source TEXT;
+ALTER TABLE turns ADD COLUMN writes INTEGER;
+ALTER TABLE turns ADD COLUMN outcome TEXT;
+ALTER TABLE turns ADD COLUMN did_nothing INTEGER;
+"""
+
+# The one person a private task with no person on it may reach (hubdb.task_reach): see "a private task's guest".
+TASK_GUEST_SCHEMA = """
+ALTER TABLE tasks ADD COLUMN guest TEXT;
+"""
+
 MIGRATIONS = [SCHEMA, MEETING_SCHEMA, MEETING_ITEMS_SCHEMA,   # index i takes user_version from i
               MEETING_BRAIN_SCHEMA, MEETING_COMMENTS_SCHEMA,  # to i+1; append, never edit
               GOALS_SCHEMA, RECORDING_SOURCES_SCHEMA, MARKET_SCHEMA,
@@ -680,7 +697,8 @@ MIGRATIONS = [SCHEMA, MEETING_SCHEMA, MEETING_ITEMS_SCHEMA,   # index i takes us
               USAGE_SEGMENTS_SCHEMA, KPI_ARCHIVE_SCHEMA, WAITING_ON_SCHEMA,
               LIVE_MEETINGS_SCHEMA, LIVE_MEETINGS_ROUTING_LIMITS_SCHEMA,
               LIVE_MEETINGS_CHAT_ROUTING_SCHEMA, TASK_RELATIONS_SCHEMA, TRIGGERS_SCHEMA,
-              TRIGGER_SIGNING_SCHEMA, CHECK_MODELS_SCHEMA, GOAL_ASKS_SCHEMA]
+              TRIGGER_SIGNING_SCHEMA, CHECK_MODELS_SCHEMA, GOAL_ASKS_SCHEMA, RUN_TRIGGERS_SCHEMA,
+              TASK_GUEST_SCHEMA]
 
 
 class Refused(Exception):
@@ -988,6 +1006,10 @@ def migrate(conn, adopt_legacy=False):
     # 1 when a run segment's estimate may be low: its model's long prompts cost more and the runner did not
     # send every request's tokens (providers.estimate). NULL on segments from before it was recorded.
     add_column(conn, "turn_usage_segments", "est_cost_low", "INTEGER")
+    # The newest of the bot's own model requests' whole prompt (uncached + cached), when its runner marked them from
+    # its subagents': the session's context size (backend/topic_change.py). NULL when it did not; the summed columns
+    # are not a context size.
+    add_column(conn, "turns", "prompt_tokens", "INTEGER")
     conn.execute("CREATE INDEX IF NOT EXISTS tasks_snoozed ON tasks(snoozed_until) WHERE snoozed_until IS NOT NULL")
     # A type whose tasks change status only by moving between its steps (`_task_state`).
     add_column(conn, "task_types", "steps_only", "INTEGER NOT NULL DEFAULT 0")
@@ -1004,6 +1026,9 @@ def migrate(conn, adopt_legacy=False):
                  "WHERE kind='ask' AND answered_by IS NULL AND deleted_at IS NULL")
     conn.execute("CREATE INDEX IF NOT EXISTS messages_pending_conversation ON messages(conversation_id) "
                  "WHERE kind='ask' AND answered_by IS NULL AND deleted_at IS NULL")
+    # The questions a comment answered, reopened when it is deleted (`task_comment_delete`, inside the write
+    # transaction): without it that lookup read every message.
+    conn.execute("CREATE INDEX IF NOT EXISTS messages_answered_by ON messages(answered_by) WHERE answered_by IS NOT NULL")
     # The media check visits blobs often; an unindexed version lookup multiplies both histories.
     conn.execute("CREATE INDEX IF NOT EXISTS bot_file_versions_blob_media ON bot_file_versions(blob_id,media_state)")
     # The media poll's pending rows, a handful even when blobs number in the tens of thousands.
@@ -1070,6 +1095,9 @@ VIA = contextvars.ContextVar("hub_via", default="")
 DELEGATION = contextvars.ContextVar("hub_delegation", default=None)
 
 PRIVATE_WRITE = contextvars.ContextVar("hub_private_write", default=False)
+# The run (attempt id) whose token made this request (backend/app.py request_guard): each write it logs is counted on
+# that run's `turns.writes`, which says whether the run acted (backend/run_triggers.py).
+RUN = contextvars.ContextVar("hub_run", default="")
 
 
 def private_task_write(fn):
@@ -1112,6 +1140,8 @@ def event(conn, actor, action, target="", detail=None):
            "target": str(target or ""), "detail_json": _dump(detail)}
     conn.execute("INSERT INTO events (id, ts, actor, action, target, detail_json) "
                  "VALUES (:id, :ts, :actor, :action, :target, :detail_json)", row)
+    if RUN.get() and RT.counts(action):
+        conn.execute("UPDATE turns SET writes=coalesce(writes,0)+1 WHERE id=?", (RUN.get(),))
     return row
 
 
@@ -2507,6 +2537,7 @@ def task_private(conn, row):
 
 
 def task_private_readable(conn, actor, row):
+    """A private task is read by its requester and owner, and by its guest when it has one (task_reach)."""
     if not row:
         return False
     row = dict(row)
@@ -2514,7 +2545,71 @@ def task_private_readable(conn, actor, row):
         return True
     if "owner" not in row or "requester" not in row:
         row = task(conn, row["id"])
-    return bool(row and actor in (row["owner"], row["requester"]))
+        if not row:
+            return False
+    if actor in (row["owner"], row["requester"]):
+        return True
+    if "guest" not in row:
+        row = _one(conn, "SELECT guest FROM tasks WHERE id=?", (row["id"],)) or {}
+    return bool(row.get("guest")) and actor == row["guest"]
+
+
+# ----------------------------------------------------------------------------- a private task's guest
+# A private task with no person on it (a bot's task for another bot, or for itself) would have no way to reach anyone:
+# every hand-off from its runs is refused because nobody it could go to reads it. Its owning bot may bring in ONE
+# person, its guest, by handing them work: a subtask under it, a question on it, or waiting on them. The guest reads
+# that task as its parties do and nothing else: not its parent, its other subtasks, or anything the run also carries.
+# The first person is kept; a hand-off to anyone else is refused. Changing the owner ends it.
+
+def bot_only(row):
+    """No person on this task: its requester and owner are both bots (the same bot for a bot's task to itself)."""
+    return is_bot(row.get("requester") or "") and is_bot(row.get("owner") or "") and not row.get("guest")
+
+
+def task_reach_refusal(conn, actor, row, person):
+    """Why `actor` may not make `person` the guest of private task `row`, or None when it may (or they already read
+    it). The words are the refusal a create, a question or a wait gives, and a dry-run gives the same."""
+    if not row or not task_private(conn, row) or task_private_readable(conn, person, row):
+        return None
+    row = task(conn, row["id"]) or row
+    who = actor_id(person)
+    if not is_human(person) or not human(conn, who):
+        return f"{person} is not a person on the team"
+    if row.get("guest"):
+        return (f"This private task already reached {actor_id(row['guest'])}, its one guest, and {who} cannot read it: "
+                f"hand this to {actor_id(row['guest'])}, or ask a person on the task to make it company-visible")
+    if not bot_only(row):
+        return "Private task content stays with its requester and current owner"
+    if actor != row["owner"]:
+        return "Only the bot that owns a private task brings a person into it"
+    for parent_id in TR.ancestors(conn, row["id"]):
+        parent = task(conn, parent_id)
+        if parent and task_private(conn, parent) and not bot_only(parent) and not task_private_readable(
+                conn, person, parent):
+            return (f"A private task above this one has a person on it whom {who} cannot read, so its work "
+                    f"cannot reach {who}")
+    return None
+
+
+def subtask_flows_up(conn, row, parent):
+    """Whether private subtask `row`'s words may reach readers of `parent`, its private parent, who cannot read the
+    subtask: every party of the subtask (requester, owner and guest) reads the parent. The person a bot handed a
+    subtask or a question under its task is that task's guest, so their answer comes back to the task it was asked
+    for, and to nobody that task does not already have."""
+    if not row or not parent or not task_private(conn, parent) or TR.parent_of(conn, row["id"]) != parent["id"]:
+        return False
+    row = task(conn, row["id"]) or {}
+    parties = [p for p in (row.get("requester"), row.get("owner"), row.get("guest")) if p]
+    return bool(parties) and all(task_private_readable(conn, p, parent) for p in parties)
+
+
+def task_reach(conn, actor, row, person):
+    """Make `person` the guest of private task `row` (task_reach_refusal said yes); a no-op when they already read it.
+    Recorded in the task's history, so its parties see who it reached."""
+    if task_private_readable(conn, person, row):
+        return
+    conn.execute("UPDATE tasks SET guest=? WHERE id=?", (person, row["id"]))
+    _task_event(conn, row["id"], actor, "guest", None, person, "")
 
 
 def _task_private_writer(conn, actor, row):
@@ -3123,13 +3218,15 @@ def _unblock(conn, done_task, told=()):
     blocks the task. `told` are the tasks already woken about it (_answered)."""
     for blocked_id in TR.blocked_ids(conn, done_task["id"]):
         row = task(conn, blocked_id)
-        if task_private(conn, done_task) and (not task_private(conn, row) or not all(
-                task_private_readable(conn, party, done_task) for party in (row['owner'], row['requester']))):
+        if task_private(conn, done_task) and not subtask_flows_up(conn, done_task, row) and (
+                not task_private(conn, row) or not all(
+                    task_private_readable(conn, party, done_task) for party in (row['owner'], row['requester']))):
             continue                  # do not copy private completion into a wider task
         TR.remove_blocker(conn, KEEPER, row["id"], done_task["id"], keeper_note=f"unblocked: {done_task['title']}")
         conn.execute("UPDATE tasks SET version=version+1 WHERE id=?", (row["id"],))
         if row["status"] in ACTIVE_STATUSES and not TR.blocker_ids(conn, row["id"]) and row["id"] not in told:
-            _wake(conn, row, row["owner"], f"Unblocked: {row['title']}\n{done_task['title']} is finished.")
+            _wake(conn, row, row["owner"], f"Unblocked: {row['title']}\n{done_task['title']} is finished.",
+                  source=done_task["id"])
 
 
 def _answered(conn, actor, task_id, card, told=None):
@@ -3159,7 +3256,8 @@ def _answered(conn, actor, task_id, card, told=None):
     conn.execute("UPDATE tasks SET note=?, version=version+1 WHERE id=?", (note, row["id"]))
     _task_event(conn, row["id"], KEEPER, "note", row.get("note"), note, "")
     if row["owner"] != told or TR.parent_of(conn, card["id"]) != row["id"]:
-        _wake(conn, row, row["owner"], f"{who}: {card['title']}" + (f"\n{said}" if said else ""), refs={"subtask": card["id"]})
+        _wake(conn, row, row["owner"], f"{who}: {card['title']}" + (f"\n{said}" if said else ""), refs={"subtask": card["id"]},
+              source=card["id"])
     return True
 
 
@@ -3531,6 +3629,16 @@ def task_tree(conn, task_id, visible_ids=None):
     return roots
 
 
+def _awaited_by(conn, row, who):
+    """Whether `who` waits on this task: it owns the parent and parked it waiting, or one of its tasks is blocked on
+    this one. Its finishing then wakes `who` at once; otherwise the news is a nonblocking completion a wake
+    preset may batch (backend/wake_presets.py)."""
+    parent = task(conn, TR.parent_of(conn, row["id"]) or "")
+    if parent and parent["owner"] == who and parent["status"] == "waiting":
+        return True
+    return any((task(conn, tid) or {}).get("owner") == who for tid in TR.blocked_ids(conn, row["id"]))
+
+
 def _parent_finished(conn, row, previous, actor=None, parent=None, told=None):
     """Wake each ancestor whose subtasks are now all finished. `parent` names the parent when the
     task has just left it; `told` is a bot `_subtask_wake` already woke on it."""
@@ -3550,7 +3658,7 @@ def _parent_finished(conn, row, previous, actor=None, parent=None, told=None):
             _session_lanes(conn, {**row, "owner": actor})[1] == _session_lanes(conn, parent)[1]
         if parent["status"] not in terminal and (parent["owner"] != actor or is_bot(actor) and not same_session) \
                 and not (parent_id == first and told and parent["owner"] == told):
-            _wake(conn, parent, parent["owner"], "All subtasks done")
+            _wake(conn, parent, parent["owner"], "All subtasks done", source=row["id"])
 
 
 def check_model(conn, task_id, bot=None):
@@ -3585,7 +3693,8 @@ def _subtask_wake(conn, actor, row, previous, note=None, quiet=False):
     if not bot_reads_task(conn, bot, parent) or not task_private_readable(conn, bot, row):
         return None
     if task_private(conn, row) and (not task_private(conn, parent) or not all(
-            task_private_readable(conn, who, row) for who in (parent["owner"], parent["requester"]) if who)):
+            task_private_readable(conn, who, row) for who in (parent["owner"], parent["requester"]) if who)
+    ) and not subtask_flows_up(conn, row, parent):
         return None                         # a private subtask's words stay off a thread more people read
     if _has_table(conn, "jobs") and _one(
             conn, "SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot=? AND j.state='queued' "
@@ -3601,7 +3710,8 @@ def _subtask_wake(conn, actor, row, previous, note=None, quiet=False):
             or _marked_done(conn, actor, row["title"], "this subtask"))
     # The parent's "All subtasks done" (_parent_finished) rides on this one notice, not a second wake.
     last = "" if children_summary(conn, parent["id"])["open"] else "All subtasks done\n"
-    _wake(conn, parent, bot, f"{last}{said}" + (f": {row['title']}" if row["status"] != "done" else "") + (f"\n{note}" if note and not quiet else ""), refs={"subtask": row["id"]})
+    _wake(conn, parent, bot, f"{last}{said}" + (f": {row['title']}" if row["status"] != "done" else "") + (f"\n{note}" if note and not quiet else ""), refs={"subtask": row["id"]},
+                 source=row["id"])
     return bot
 
 
@@ -3882,8 +3992,12 @@ def _refresh_comment_replies(conn, msg):
             return [refresh(v) for v in value if not (msg.get("deleted_at") and isinstance(v, dict)
                     and v.get("id") == msg["id"] and "from_actor" in v)]
         return value
-    for row in conn.execute("SELECT rowid,response_json FROM idempotency WHERE instr(response_json,?)>0",
-                            (msg["id"],)).fetchall():
+    # By index (backend/idempotency_messages.py): reading every stored answer here held the write lock for 35 s.
+    rows = idempotency_messages.quoting(conn, msg["id"]) if _has_table(conn, "idempotency_messages") else None
+    if rows is None:        # not indexed yet: an older file, or before its first start's backfill finished
+        rows = conn.execute("SELECT rowid,response_json FROM idempotency WHERE instr(response_json,?)>0",
+                            (msg["id"],)).fetchall()
+    for row in rows:
         conn.execute("UPDATE idempotency SET response_json=? WHERE rowid=?",
                      (_dump(refresh(_json(row["response_json"], {}))), row["rowid"]))
 
@@ -4032,7 +4146,8 @@ def task_ask_resolve(conn, actor, task_id, message_id, quote=None):
 def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, deduplicate=True,
                 allow_planned=False, conversation_id=None, lane=None, labels=None, top=False, lint=True,
                 goal_id=None, next_run=False, type=None, step=None, number=None, mover=None, private=None,
-                requester_actor=None, own_room=True, visibility=None, public_title=None, public_summary=None):
+                requester_actor=None, own_room=True, visibility=None, public_title=None, public_summary=None,
+                wake_refs=None, trigger="status_or_relation", trigger_source=None):
     """Rule 5. Anyone may open a task for any active owner; a human owner's General task is
     linted (rule 7).
 
@@ -4209,7 +4324,8 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
     if started_in:
         _task_started(conn, task(conn, row["id"]), started_in)
     _wake(conn, task(conn, row["id"]), target, f"New task from {actor}: {title}",
-          {"reconcile": reconcile} if reconcile else None, quiet_bots=next_run, quiet=next_run)
+          {**({"reconcile": reconcile} if reconcile else {}), **(wake_refs or {})} or None,
+          quiet_bots=next_run, quiet=next_run, trigger=trigger, source=trigger_source)
     if parent and is_bot(parent["owner"]) and is_human(target):
         # A bot's task now waits on a person: one line in the bot's main chat.
         task_report(conn, task(conn, parent["id"]), "blocked", f"Waiting on {actor_id(target)}: {title}")
@@ -4440,6 +4556,10 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
         sets.append("owner=:owner")
         args["owner"] = new_owner
         _task_event(conn, task_id, actor, "owner", row["owner"], new_owner, note or "")
+        if new_owner != row["owner"] and row.get("guest"):
+            # The guest was the old owner's to bring in; a new owner starts with the task's two parties.
+            sets.append("guest=NULL")
+            _task_event(conn, task_id, actor, "guest", row["guest"], None, "")
         if new_owner != row["owner"] and is_bot(row["owner"]) and row.get("conversation_id"):
             # The goal Tico set for the old owner ends with its ownership: only the owner's turns end a task goal,
             # and a person owner has none to end it. A new bot owner's first turn sets its own.
@@ -4570,7 +4690,10 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
                and is_bot(after["requester"]) else
                f"{'Finished' if status == 'done' else 'Declined'}: {after['title']}")
               + (f"\n{note}" if note and not quiet else "")
-              + (f"\nStill open: {'; '.join(still_open)}" if still_open else ""), refs=refs, quiet_bots=True)
+              + (f"\nStill open: {'; '.join(still_open)}" if still_open else ""),
+              refs={**(refs or {}), **({"wake_batch": "completion"} if status == "done" and is_bot(actor)
+                                        and not _awaited_by(conn, after, after["requester"]) else {})} or None,
+              quiet_bots=True)
     if finishing:
         # Not only the requester: the owner that parked it waiting on this person, a bot that asked them a
         # question on it, and the parent's owner. Each once, never whoever tapped; tasks-only bots quietly,
@@ -4689,7 +4812,8 @@ def _waiting_person(conn, actor, row, value, status, owner=None, private=None):
 
     It is what makes work that waits on a person show as needing that person: the task is in
     their Needs you and batch, and the bot counts toward `needs_human`. Only a person who can read
-    the task: a private task cannot be put in front of anyone outside its requester and owner."""
+    the task: a private task cannot be put in front of anyone outside its requester and owner, except the one
+    guest its owning bot brings into a private task with no person on it (task_reach)."""
     value = str(value or "").strip()
     if not value:
         return ""
@@ -4706,8 +4830,14 @@ def _waiting_person(conn, actor, row, value, status, owner=None, private=None):
                f"{value} is not a person on the team: a task waits on a person with --on, or on another "
                "task with hub task relate <task> <other> --kind blocked_by")
     if not task_private_readable(conn, person, row if private is None else {**row, "private": int(bool(private))}):
-        refuse(conn, actor, "private",
-               f"This task is private and {actor_id(person)} cannot read it: file a task for them instead")
+        # A private task with no person on it can take one, its guest, when its owning bot waits on them.
+        if private is not None or not bot_only(row) and not row.get("guest"):
+            refuse(conn, actor, "private",
+                   f"This task is private and {actor_id(person)} cannot read it: file a task for them instead")
+        refusal = task_reach_refusal(conn, actor, row, person)
+        if refusal:
+            refuse(conn, actor, "private", refusal)
+        task_reach(conn, actor, row, person)
     return person
 
 
@@ -4770,7 +4900,10 @@ def task_close(conn, actor, task_id, note="", quiet=False, *, type=None, step=No
     for who in told:   # everyone but whoever tapped
         if who == subtask_told or (finished and who == after["owner"] and not new_note):
             continue
-        _wake(conn, after, who, said, quiet_bots=True,
+        # Another bot closing what this one asked for is a nonblocking completion unless it waits on it; an owner
+        # told its work was closed, and anything a person said, wake at once.
+        batch = who == after["requester"] and is_bot(actor) and not _awaited_by(conn, after, who)
+        _wake(conn, after, who, said, {"wake_batch": "completion"} if batch else None, quiet_bots=True,
               quiet=accepted or bool(finished and who == after["owner"]))
     parent = task(conn, TR.parent_of(conn, after["id"]) or "")
     if parent and parent["owner"] != actor and parent["owner"] not in told and parent["owner"] != subtask_told:
@@ -5406,7 +5539,7 @@ def _hold_for_setup(conn, row):
     asker = row["requester"]
     if is_bot(asker) and asker != row["owner"] and actor_id(asker) not in parked_bots(conn):
         _wake(conn, row, asker, f"Your task for {actor_id(row['owner'])} is not starting: {why} "
-                                "Move it to another bot if it can't wait.", {"setup_held": True})
+                                "Move it to another bot if it can't wait.", {"setup_held": True}, trigger="stall_check")
     event(conn, KEEPER, "task.setup_held", row["id"], {"bot": actor_id(row["owner"]), "reminder": reminder["id"]})
     return True
 
@@ -5441,7 +5574,7 @@ def _settle_undiagnosed(conn, row, cause):
         task_close(conn, KEEPER, row["id"], f"Closed by the stall check: {cause}.", quiet=True)
     elif _actor_exists(conn, row["requester"]):
         _wake(conn, row, row["requester"], f"Stuck: {row['title']}. {cause[0].upper()}{cause[1:]}. "
-              "Reassign it, run it, or close it.", {"wake": "stuck_cause"})
+              "Reassign it, run it, or close it.", {"wake": "stuck_cause"}, trigger="stall_check")
     event(conn, KEEPER, "task.stall_escalated", row["id"],
           {"bot": actor_id(row["owner"]), "recovery_task": None, "owner": None, "cause": cause})
 
@@ -5517,7 +5650,7 @@ def wake_stalled(conn, at=None):
                 # A spot check: one status check into the task's session per quiet stretch.
                 if nudged:
                     continue
-                _wake(conn, row, row["owner"], STATUS_CHECK, {"wake": "status_check"})
+                _wake(conn, row, row["owner"], STATUS_CHECK, {"wake": "status_check"}, trigger="stall_check")
                 event(conn, KEEPER, "task.stall_wake", row["id"],
                       {"bot": actor_id(row["owner"]), "quiet_minutes": row["quiet_minutes"], "wake": count + 1,
                        "kind": "status_check"})
@@ -5529,7 +5662,7 @@ def wake_stalled(conn, at=None):
                   f"Stalled {row['quiet_minutes']} min: {row['title']}. Nothing is set to move it. Carry it on now, "
                   f"or, when someone else must act, file a subtask for them (hub task create --parent {row['id']} "
                   "--owner <bot or person>) and set this waiting; finishing the subtask wakes it.",
-                  {"wake": "stalled"})
+                  {"wake": "stalled"}, trigger="stall_check")
             event(conn, KEEPER, "task.stall_wake", row["id"],
                   {"bot": actor_id(row["owner"]), "quiet_minutes": row["quiet_minutes"], "wake": count + 1})
             woke.append(row["id"])
@@ -5565,7 +5698,8 @@ def task_run_now(conn, actor, task_id):
         waiting = None
     after = task(conn, task_id)
     if not waiting:
-        _wake(conn, after, after["owner"], f"Run now: {after['title']}", {"run_now": True})
+        _wake(conn, after, after["owner"], f"Run now: {after['title']}", {"run_now": True},
+              trigger="person_message" if is_human(actor) else "other")
     event(conn, actor, "task.run-now", task_id, {"queued": not waiting})
     return after, not waiting
 
@@ -5656,8 +5790,12 @@ def notes_waiting_counts(conn, bots, limit=500):
     return out
 
 
-def _wake(conn, task_row, target, body, refs=None, quiet_bots=False, quiet=False):
+def _wake(conn, task_row, target, body, refs=None, quiet_bots=False, quiet=False, trigger="status_or_relation",
+          source=None):
     """Tell someone their task moved. Task traffic never counts against rule 4.
+
+    `trigger` is what this wake is, for the run it starts (backend/run_triggers.py): a task's status or
+    relation moved unless the caller says otherwise; `source` names the event behind it where there is one.
 
     `quiet_bots` is for news rather than work: a task finished, declined or closed. A person is
     always told properly, because a message to a person starts nothing. A bot that asked for
@@ -5680,7 +5818,7 @@ def _wake(conn, task_row, target, body, refs=None, quiet_bots=False, quiet=False
         refs = {**(refs or {}), "quiet": True}
     if not target or not _actor_exists(conn, target) or not task_private_readable(conn, target, task_row):
         return None
-    message_refs = {"task": task_row["id"], **(refs or {})}
+    message_refs = RT.stamp({"task": task_row["id"], **(refs or {})}, trigger, source)
     return _write_message(conn, KEEPER, target, body,
                           conversation(conn, task_row["conversation_id"]), "notice",
                           message_refs, None, None)
@@ -6038,20 +6176,22 @@ def rate_limits(conn):
 
 
 def turn_start(conn, actor, bot_slug, thread_id=None, trigger="message", message_id=None,
-               task_id=None):
-    """A turn on a bot's thread. Replaces the legacy dispatcher's `runs.jsonl` record."""
+               task_id=None, trigger_kind=None, trigger_source=None):
+    """A turn on a bot's thread. Replaces the legacy dispatcher's `runs.jsonl` record.
+    `trigger_kind` is what woke it (backend/run_triggers.py TRIGGERS) and `trigger_source` the event that did."""
     _writer(conn, actor)
     slug = actor_id(bot_slug) if actor_kind(bot_slug) else str(bot_slug).strip()
     if is_bot(actor) and actor_id(actor) != slug:
         refuse(conn, actor, "identity", f"{actor_id(actor)} may only record its own turns")
     row = {"id": new_id(), "bot": slug, "thread_id": thread_id, "started": now(),
            "finished": None, "trigger": trigger, "message_id": message_id, "task_id": task_id,
-           "exit": None, "tokens_in": None, "tokens_out": None, "cost": None, "summary": None}
+           "exit": None, "tokens_in": None, "tokens_out": None, "cost": None, "summary": None,
+           "trigger_kind": trigger_kind or "other", "trigger_source": trigger_source}
     conn.execute("INSERT INTO turns (id, bot, thread_id, started, finished, trigger, message_id, "
-                 "task_id, exit, tokens_in, tokens_out, cost, summary) VALUES (:id, :bot, "
-                 ":thread_id, :started, :finished, :trigger, :message_id, :task_id, :exit, "
-                 ":tokens_in, :tokens_out, :cost, :summary)", row)
-    event(conn, actor, "turn.start", row["id"], {"bot": slug, "trigger": trigger})
+                 "task_id, exit, tokens_in, tokens_out, cost, summary, trigger_kind, trigger_source, writes) "
+                 "VALUES (:id, :bot, :thread_id, :started, :finished, :trigger, :message_id, :task_id, :exit, "
+                 ":tokens_in, :tokens_out, :cost, :summary, :trigger_kind, :trigger_source, 0)", row)
+    event(conn, actor, "turn.start", row["id"], {"bot": slug, "trigger": trigger, "trigger_kind": row["trigger_kind"]})
     return _one(conn, "SELECT * FROM turns WHERE id=?", (row["id"],))
 
 
@@ -6059,17 +6199,20 @@ def turn_finish(conn, actor, turn_id, exit_code="ok", tokens_in=None, tokens_out
                 summary=None, usage=None):
     """Close a turn. `exit_code` is the `exit` column (`exit` is a builtin, not a keyword here).
     `usage` is what the run cost in tokens: input_tokens, cached_tokens, output_tokens, model, provider,
-    est_cost_usd and billing (see USAGE_SCHEMA)."""
+    est_cost_usd and billing (see USAGE_SCHEMA), and prompt_tokens, its newest request's prompt when known."""
     _writer(conn, actor)
     ts = now()
     conn.execute("UPDATE turns SET finished=?, exit=?, tokens_in=?, tokens_out=?, cost=?, summary=? "
                  "WHERE id=?", (ts, exit_code, tokens_in, tokens_out, cost, summary, turn_id))
+    # Whether it acted, from what it wrote and its task's state as it ends (backend/run_triggers.py).
+    conn.execute(f"UPDATE turns SET {RT.SETTLE_SQL} WHERE id=?", (turn_id,))
     if usage:
         conn.execute("UPDATE turns SET input_tokens=:input_tokens, cached_tokens=:cached_tokens, "
                      "output_tokens=:output_tokens, model=:model, provider=:provider, est_cost_usd=:est_cost_usd, "
-                     "billing=:billing WHERE id=:id",
+                     "billing=:billing, prompt_tokens=:prompt_tokens WHERE id=:id",
                      {"input_tokens": None, "cached_tokens": None, "output_tokens": None, "model": None,
-                      "provider": None, "est_cost_usd": None, "billing": None, **usage, "id": turn_id})
+                      "provider": None, "est_cost_usd": None, "billing": None, "prompt_tokens": None, **usage,
+                      "id": turn_id})
     if usage and usage.get("segments"):
         conn.execute("DELETE FROM turn_usage_segments WHERE turn_id=?", (turn_id,))
         for position, part in enumerate(usage["segments"]):

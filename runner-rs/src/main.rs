@@ -6,6 +6,7 @@
 #![allow(clippy::result_large_err, clippy::type_complexity)]
 
 mod accounts;
+mod appdriver;
 mod backlog;
 mod capture;
 mod client;
@@ -22,6 +23,7 @@ mod fallback;
 mod flight;
 mod follow;
 mod fetchrepo;
+mod gateway_relay;
 mod gitrun;
 #[cfg(test)]
 mod gittests;
@@ -31,6 +33,7 @@ mod harness_tools;
 mod goals;
 mod hosts;
 mod lanes;
+mod login_turns;
 mod lock;
 mod login;
 mod profiles;
@@ -236,8 +239,8 @@ fn profile_main(action: ProfileAction, config: &mut config::Config) -> i32 {
             let status = std::process::Command::new(&command[0])
                 .args(&command[1..])
                 .env_clear()
-                .envs(profile.environment(&runtime, &std::env::vars().collect()))
-                .envs(harness_tools::env_for(&runtime)) // e.g. MUSE_NO_AUTO_UPDATE: the runner updates its harnesses
+                // The manifest's [env] too, e.g. MUSE_NO_AUTO_UPDATE: the runner updates its harnesses.
+                .envs(profile.login_environment(&runtime, &std::env::vars().collect()))
                 .status();
             return status.ok().and_then(|s| s.code()).unwrap_or(1);
         }

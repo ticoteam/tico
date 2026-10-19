@@ -10,9 +10,8 @@ from fastapi.responses import StreamingResponse
 from pydantic import Field, StrictStr, model_validator
 
 from clients import judge as J
-from . import providers
 from .auth import Identity
-from .judge import daily_cap, fallback_engine, used_today
+from .judge import audit_detail, daily_cap, over_spend_cap, server_engine, used_today
 from .imports import MeetingImport
 from .models import Contract
 from .store import H, Problem, encode
@@ -525,8 +524,12 @@ def _decision(app, decision_input, bots, threshold, owner_actor, *, label="live-
                 return {"outcome": "pass", "targets": [],
                         "trace": {"reason": "daily_decision_budget", "answers": {},
                                   "threshold": threshold, "decision_input": state}}
-            engine = (getattr(app.state, "live_meeting_decider", None) or getattr(app.state, "judge", None)
-                      or fallback_engine(providers.load(c, app.state.store.settings)))
+            if over_spend_cap(c, app.state.store.settings):
+                return {"outcome": "pass", "targets": [],
+                        "trace": {"reason": "monthly_decision_spend_cap", "answers": {},
+                                  "threshold": threshold, "decision_input": state}}
+            engine = (getattr(app.state, "live_meeting_decider", None)
+                      or server_engine(app.state.store, c, getattr(app.state, "judge", None)))
         if engine is None:
             return {"outcome": "pass", "targets": [],
                     "trace": {"reason": "decisions service unconfigured", "answers": {},
@@ -543,7 +546,7 @@ def _decision(app, decision_input, bots, threshold, owner_actor, *, label="live-
             if probability >= threshold:
                 targets.append((probability, row["slug"]))
         targets.sort(key=lambda pair: (-pair[0], pair[1]))
-        trace = {"model": str(result.get("model") or ""), "ms": result.get("ms"),
+        trace = {"model": str(result.get("model") or ""), "ms": result.get("ms"), "audit": audit_detail(result),
                  "answers": scores, "decision_answers": answers,
                  "decision_input": state, "threshold": threshold}
         return {"outcome": "route" if targets else "pass", "targets": [slug for _, slug in targets], "trace": trace}
@@ -638,6 +641,7 @@ def _route_human_chat(app, rid, chat_id):
                 "label": "live-meeting-route@1", "questions": len(decision_input["bots"]),
                 "types": ["noul"], "ms": outcome["trace"].get("ms"),
                 "model": outcome["trace"].get("model"),
+                **(outcome["trace"].get("audit") or {}),
                 "answers": outcome["trace"].get("answers", {})})
         stamp = H.now()
         c.execute("UPDATE live_meeting_chat_routes SET status='complete',outcome=?,trace_json=?,finished=? "
@@ -752,7 +756,8 @@ def _run_windows(app, rid, *, final=False):
                 H.event(c, meeting["owner_actor"], "judge.call", "live-meeting-route@1", {
                     "label": "live-meeting-route@1", "questions": len(bots), "types": ["noul"],
                     "ms": outcome["trace"].get("ms"), "model": outcome["trace"].get("model"),
-                    "answers": outcome["trace"].get("answers", {})})
+                    **(outcome["trace"].get("audit") or {}),
+                "answers": outcome["trace"].get("answers", {})})
             # PASS remains in Router trace only; only selected bot turns enter Chat.
             c.execute("UPDATE live_meeting_windows SET status='complete',outcome=?,trace_json=?,finished=? "
                       "WHERE meeting_id=? AND window_index=?",

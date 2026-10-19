@@ -3,6 +3,7 @@ const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs');
 const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();   // load.cjs arrives with #254
 
 const makeDetail = id => ({id, title: 'Weekly sync', state: 'live', owner_actor: 'human:ana', seq: 2, event_id: 5,
@@ -98,7 +99,7 @@ async function main() {
         if (operation === 'chat') world.detail.chat.push({actor: 'human:ana', role: 'human', text: body.text});
         return json(world.detail);
       }
-      return json({});
+      return json(unrouted(p));
     });
     await page.goto('https://tico-ui.test/#/meetings');
     await page.locator('#meet-live-now').click();

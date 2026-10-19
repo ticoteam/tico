@@ -45,6 +45,8 @@ resume_after_interrupt = false
 # A message for the running turn goes in with turn/steer.
 steer = true
 goal_runs_across_turns = true
+# OpenAI allows a ChatGPT sign-in one auth.json per serialized job stream: one turn at a time on each ChatGPT login.
+one_turn_per_login = true
 compaction = true
 resume_command = "codex resume"
 model_list = "host"

@@ -3,11 +3,13 @@
 // connection that was added, usage as "% left" with the reset and age on hover, a red dot only when bots depend on a
 // broken one; the computer's own login merged with a subscription on the same account; each bot's actual connection,
 // read-only; the Installed and Enabled headers apart at 1024 px; no connection, offline, waiting, revoked, and a
-// member who may change nothing. Every request is intercepted.
+// member who may change nothing; a desktop app's state and a sign-in several bots take turns on. Every request is
+// intercepted.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs');
 (async () => {
   const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
   try {
@@ -77,12 +79,13 @@ const {html, uiFile} = require('./support/page.cjs');
       if (p === '/api/v2/models') return json({models: [], harnesses: [
         {id: 'claude', runtime: 'claude', name: 'Claude Code', capabilities: {account: 'status-json', weekly_usage: 'turns', browser_sign_in: true, subscription_profiles: true}},
         {id: 'codex', runtime: 'codex', name: 'Codex', capabilities: {account: 'app-server', weekly_usage: 'refresh', browser_sign_in: true, subscription_profiles: true}},
-        {id: 'grok', runtime: 'grok', name: 'Grok Build', capabilities: {account: '', weekly_usage: 'manual', terminal_login: ['login']}},
-        {id: 'cursor', runtime: 'cursor', name: 'Cursor Agent', capabilities: {account: '', weekly_usage: ''}},
+        // terminal_login as the server sends it: the executable and its arguments (clients/harness_manifests.py).
+        {id: 'grok', runtime: 'grok', name: 'Grok Build', capabilities: {account: '', weekly_usage: 'manual', terminal_login: 'grok login'}},
+        {id: 'cursor', runtime: 'cursor', name: 'Cursor Agent', capabilities: {account: '', weekly_usage: '', terminal_login: 'cursor-agent login', api_keys: 'computer'}},
         {id: 'musecode', runtime: 'musecode', name: 'Muse Code', capabilities: {account: '', weekly_usage: ''}}]});
       if (p === '/api/v2/subscriptions') return json({profiles_by_computer: [], assignments: []});
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
-      return json({});
+      return json(unrouted(p));
     });
     await page.goto('https://tico-ui.test/#/settings');
     await page.locator('[data-settings-tab=devices]').click();
@@ -137,6 +140,13 @@ const {html, uiFile} = require('./support/page.cjs');
     assert.equal(await beta.locator('[data-model-login][data-profile=beta]').isEnabled(), true);
     assert.match(await dialog.locator('[data-connection="own:musecode"]').innerText(), /Login expired or rejected[\s\S]*The provider refused the login/);
     assert.equal(await dialog.locator('[data-add-connection] [data-subs-add]').count(), 1, 'Add a named subscription at the end');
+    // Installed tools no bot uses, signed in only from a terminal: their command is under Add connection, with no chip.
+    assert.deepEqual(await dialog.locator('[data-add-connection] [data-add-terminal]').evaluateAll(list => list.map(t => [t.dataset.addTerminal,
+      t.querySelector('code').textContent, t.querySelector('[data-machine-copy-login]').dataset.machineCopyLogin])),
+      [['cursor', 'cursor-agent login', 'cursor-agent login'], ['grok', 'grok login', 'grok login']]);
+    assert.match(await dialog.locator('[data-add-terminal=grok]').innerText(), /^Grok Build:\s*grok login\s*Copy$/);
+    assert.equal(await dialog.locator('[data-connection][data-machine-tool=grok], [data-connection][data-machine-tool=cursor]').count(), 0);
+    assert.doesNotMatch(await row('box').locator('.machine-chips').innerText(), /Grok|Cursor/);
     // Usage reads as what is left, everywhere in the pop-up and the list.
     assert.doesNotMatch(await page.locator('#set-machines').innerText(), /% used/);
 
@@ -183,6 +193,35 @@ const {html, uiFile} = require('./support/page.cjs');
     assert.equal(await dialog.locator('[data-model-login]:enabled, [data-subs-add] button:enabled').count(), 0);
     await page.keyboard.press('Escape');
 
+    // Desktop apps (a Mac's app driver), under Versions and updates: only when the computer reports `appdriver`, one row
+    // per app with its state and the driver's detail; still titled on a phone. Bots sharing one ChatGPT sign-in take
+    // turns (backend/views.py shared_logins): each login a line stands for says so, naming the bots this reader may see.
+    box.last_seen = at(-2000);
+    await page.evaluate(() => loadSettings());
+    await row('box').locator('.machine-name').click();
+    await dialog.locator('[data-connection]').first().waitFor();
+    assert.equal(await dialog.locator('.machine-apps').count(), 0, 'no driver, no Desktop apps');
+    assert.equal(await dialog.locator('[data-shared-login]').count(), 0, 'no shared sign-in, no note');
+    box.readiness.appdriver = {trusted: false, macos: '15.1', detail: '', apps: {grok: {installed: true, version: '1.2.0', running: true,
+      signed_in: true, background_ok: false, ready: false, state: 'no_permission', detail: 'Turn on tico-appdriver in System Settings > Privacy & Security > Accessibility'}}};
+    box.shared_logins = [{runtime: 'codex', profile: '', display_name: '', count: 3, bots: ['helper']},
+                         {runtime: 'codex', profile: 'acme', display_name: 'Acme Pro', count: 2, bots: []}];
+    await page.evaluate(() => loadSettings());
+    const apps = dialog.locator('[data-detail-section=versions] [role=table][aria-label="Desktop apps on Team box"]');
+    await apps.waitFor();
+    assert.deepEqual(await apps.locator('[data-machine-app="grok"] [role=cell]').allInnerTexts().then(a => a.map(t => t.replace(/\s+/g, ' ').trim())),
+      ['Grok', '1.2.0', 'Needs Accessibility permission Turn on tico-appdriver in System Settings > Privacy & Security > Accessibility']);
+    const acmeLine = dialog.locator('[data-connection="profile:acme:codex"]');
+    assert.equal(await acmeLine.locator('[data-shared-login="codex:"]').innerText(), '3 bots share this sign-in (Helper and 2 more). They take turns: one Codex run at a time.');
+    assert.equal(await acmeLine.locator('[data-shared-login="codex:acme"]').innerText(), '2 bots share this sign-in. They take turns: one Codex run at a time.',
+      'no names this reader may not see');
+    assert.equal(await dialog.locator('[data-connection="profile:beta:codex"] [data-shared-login], [data-connection="own:claude"] [data-shared-login]').count(), 0);
+    await page.setViewportSize({width: 390, height: 844});
+    assert.ok(await apps.locator('[role=columnheader]', {hasText: 'Desktop apps'}).isVisible(), 'titled on a phone');
+    assert.ok(await apps.evaluate(el => el.scrollWidth <= el.clientWidth + 1), 'fits a phone');
+    await page.setViewportSize({width: 1440, height: 900});
+    await page.keyboard.press('Escape');
+
     // 25. Revoked computers on request; Revoke lives in the pop-up only.
     await page.locator('#set-machines [data-show-revoked-computers]').check();
     await row('old').waitFor();
@@ -202,10 +241,10 @@ const {html, uiFile} = require('./support/page.cjs');
       ['own:claude', 'profile:acme:codex', 'profile:beta:codex', 'own:musecode']);
     assert.match(await dialog.locator('[data-connection="profile:acme:codex"]').innerText(), /Subscription · Acme Pro\s+Computer's login/);
     assert.doesNotMatch(await dialog.innerText(), /@/, 'no account emails');
-    assert.equal(await dialog.locator('[data-model-login], [data-subs-add], [data-subs-rename], [data-subs-weekly], [data-subs-refresh], [data-computer-remove], [data-inbox-only], [data-member-bots], [data-computer-screen], [data-harness-choice], [data-performance-mode]').count(), 0);
+    assert.equal(await dialog.locator('[data-model-login], [data-add-connection], [data-machine-copy-login], [data-subs-add], [data-subs-rename], [data-subs-weekly], [data-subs-refresh], [data-computer-remove], [data-inbox-only], [data-member-bots], [data-computer-screen], [data-harness-choice], [data-performance-mode]').count(), 0);
     await page.keyboard.press('Escape');
 
     assert.deepEqual(errors, []);
-    console.log('PASS: compact computer rows, connection chips, detail pop-up, merged login, bots, header fix, empty/offline/waiting/revoked/member');
+    console.log('PASS: compact computer rows, connection chips, detail pop-up, merged login, bots, header fix, empty/offline/waiting/revoked/member, desktop apps, shared sign-ins');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

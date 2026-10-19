@@ -54,6 +54,11 @@ function subsRenameHTML(c, p) {
     <button class="ghost" type="submit">Save name</button><span class="muted">Login and bots stay the same.</span><span role="status"></span>
   </form>`;
 }
+// A saved form is no longer a draft: its fields take their saved values as their own, so the pop-up redraws it.
+function subsSettle(form) {
+  form.querySelectorAll('input, textarea').forEach(field => { field.defaultValue = field.value; });
+  if (form.contains(document.activeElement)) document.activeElement.blur();
+}
 async function subsRename(form) {
   if (!form.reportValidity()) return;
   const button = form.querySelector('button'); button.disabled = true;
@@ -61,6 +66,7 @@ async function subsRename(form) {
     await put('/v2/subscriptions/name', {runner_id: form.dataset.runner, profile: form.dataset.profile,
       display_name: form.elements.display_name.value});
     BOT_SUB_LINE.clear();
+    subsSettle(form);
     await loadSettings();
     toast('Subscription renamed');
   } catch (e) { form.querySelector('[role=status]').textContent = e.message; }
@@ -124,6 +130,8 @@ async function subsSaveWeekly(form, clear = false) {
       runtime: form.dataset.runtime, used_percent: clear || left === '' ? null : 100 - Number(left),
       resets_at: clear || !reset ? null : new Date(reset).toISOString()});
     toast(clear ? 'Reading cleared' : 'Reading saved');
+    if (clear) form.reset();
+    subsSettle(form);
     await loadSettings();
   } catch (e) { status.textContent = e.message; }
   finally { form.querySelectorAll('button').forEach(b => b.disabled = false); }

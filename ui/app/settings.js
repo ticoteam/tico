@@ -41,7 +41,7 @@ function pageSettings() {
   $('#main').innerHTML = `<div class="meeting-head"><div><h1>Settings</h1>${settingsVersionHTML()}</div>${settingsThemeHTML()}</div>
     <div id="settings-issues"></div>
     <div class="tabs settings-tabs" id="settings-tabs" data-role="${esc(S.me?.role || '')}" role="tablist" aria-label="Settings">
-      ${S.me?.cloud && S.me?.role === 'owner' ? '<button type="button" data-settings-tab="team" role="tab">Team</button>' : ''}
+      ${settingsIsAdmin() ? '<button type="button" data-settings-tab="team" role="tab">Team</button>' : ''}
       <button type="button" data-settings-tab="assistant" role="tab">${esc(assistantName())}</button>
       ${settingsIsAdmin() ? '<button type="button" data-settings-tab="people" role="tab">Humans</button>' : ''}
       <button type="button" data-settings-tab="bots" role="tab">Bots</button>
@@ -58,15 +58,23 @@ function pageSettings() {
         ${S.me?.role === 'owner' ? '<button type="button" data-settings-tab="history" role="tab">History</button><button type="button" data-settings-tab="privacy" role="tab">Privacy</button><button type="button" data-settings-tab="storage" role="tab">Storage</button>' : ''}
       </div></details>
     </div>
-    ${S.me?.cloud && S.me?.role === 'owner' ? `<div class="settings-pane" id="settings-team" role="tabpanel" hidden>
-      <section class="card"><header><h2>Team</h2></header><div class="settings-team-icon">
+    ${settingsIsAdmin() ? `<div class="settings-pane" id="settings-team" role="tabpanel" hidden>
+      <section class="card"><header><h2>Stale ticket review</h2></header>
+        <label class="settings-team-rule">${peopleSwitch('id="settings-stale-review"', false, true, 'Stale ticket review')}
+          <span><strong>Stale ticket review</strong><span class="settings-cell-note">Once an hour, Tico looks for open tasks that seem finished or forgotten and suggests what to do: a comment to a bot that owns one, a Stale tickets card in Needs you for a person. Nothing changes unless the owner accepts.</span></span></label>
+        <p id="settings-stale-review-status" class="settings-cell-note" role="status"></p></section>
+      <section class="card"><header><h2>Chat</h2></header>
+        <label class="settings-team-rule">${peopleSwitch('id="settings-topic-fresh"', false, true, 'Start fresh when the topic changes')}
+          <span><strong>Start fresh when the topic changes</strong><span class="settings-cell-note">In a long or idle direct chat with a bot, Tico checks whether your new message is about something else. If it is, the bot starts a fresh session before answering, the same as Clear, and the chat shows a quiet "Topic changed" line.</span></span></label>
+        <p id="settings-topic-fresh-status" class="settings-cell-note" role="status"></p></section>
+      ${S.me?.cloud && S.me?.role === 'owner' ? `<section class="card"><header><h2>Team</h2></header><div class="settings-team-icon">
         <img id="settings-team-icon" alt="Team icon" hidden><span id="settings-team-icon-empty" class="muted">No icon</span>
         <div><strong>Team icon</strong><p class="settings-cell-note">Public team logo. PNG, JPEG or WebP, up to 1 MB.</p>
           <input id="settings-team-icon-file" type="file" accept="image/png,image/jpeg,image/webp" aria-label="Choose team icon" hidden>
           <button type="button" class="ghost" id="settings-team-icon-change">Choose icon</button>
           <p id="settings-team-icon-status" class="settings-cell-note" role="status"></p>
         </div>
-      </div></section></div>` : ''}
+      </div></section>` : ''}</div>` : ''}
     <div class="settings-pane" id="settings-devices" role="tabpanel">
       <section class="card"><div id="set-machines">${skelRows(3, {card: true, dot: false})}</div></section>
       ${settingsCanMakeTokens() || S.me?.has_tokens ? `<section class="card" id="settings-tokens"><header><h2>API tokens</h2></header><div id="set-tokens">${skelRows(3, {card: true, dot: false})}</div></section>` : ''}
@@ -119,6 +127,7 @@ function pageSettings() {
   $('#settings-app-log')?.addEventListener('click', () => nativeHandler('showLog')?.postMessage(null));
   pageSettingsThemeBind();
   settingsTeamIconBind();
+  void settingsTeamRulesBind();
   $('#settings-tabs').onclick = event => {
     const button = event.target.closest('[data-settings-tab]');
     if (button) settingsShow(button.dataset.settingsTab);
@@ -159,7 +168,7 @@ function settingsShow(tab) {
   const tabs = [...document.querySelectorAll('#settings-tabs [data-settings-tab]')];
   // Tab names come from the navigation; recheck access in case this person's role just changed.
   const owner = S.me?.role === 'owner';
-  const access = {team: !!S.me?.cloud && owner, people: settingsIsAdmin(), history: owner, privacy: owner, storage: owner};
+  const access = {team: settingsIsAdmin(), people: settingsIsAdmin(), history: owner, privacy: owner, storage: owner};
   SETTINGS_TAB = access[tab] !== false && tabs.some(button => button.dataset.settingsTab === tab) ? tab : 'devices';
   try { sessionStorage.setItem(SETTINGS_TAB_KEY, SETTINGS_TAB); } catch { /* private window: the tab is just not remembered */ }
   if (['health', 'history', 'privacy', 'storage', 'recurring', 'triggers'].includes(SETTINGS_TAB)) $('#settings-more').open = true;
@@ -211,6 +220,25 @@ function settingsTabIntoView(target) {
   const box = bar.getBoundingClientRect(), tab = cur.getBoundingClientRect(), pad = 24;
   if (tab.left < box.left) bar.scrollLeft -= box.left - tab.left + pad;
   else if (tab.right > box.right) bar.scrollLeft += tab.right - box.right + pad;
+}
+// Settings > Team: the team rules an owner or an admin turns (backend/team_rules.py ADMIN_RULES): Stale ticket review
+// (backend/stale_review.py) and Start fresh when the topic changes (backend/topic_change.py).
+const SETTINGS_TEAM_RULES = {stale_review: 'settings-stale-review', topic_fresh: 'settings-topic-fresh'};
+async function settingsTeamRulesBind() {
+  const boxes = Object.entries(SETTINGS_TEAM_RULES).map(([rule, id]) => [rule, $('#' + id), $(`#${id}-status`)]).filter(([, box]) => box);
+  if (!boxes.length) return;
+  let rules;
+  try { rules = (await get('/v2/access')).rules || {}; }
+  catch (e) { for (const [, , status] of boxes) { status.textContent = e.message; status.classList.add('err'); } return; }
+  for (const [rule, box, status] of boxes) {
+    box.checked = !!rules[rule]; box.disabled = false;
+    box.onchange = async () => {
+      box.disabled = true; status.classList.remove('err'); status.textContent = 'Saving…';
+      try { box.checked = !!(await put('/v2/access/rules', {[rule]: box.checked}))[rule]; status.textContent = 'Saved'; }
+      catch (e) { box.checked = !box.checked; status.textContent = e.message; status.classList.add('err'); }
+      finally { box.disabled = false; }
+    };
+  }
 }
 function settingsTeamIconBind() {
   const input = $('#settings-team-icon-file'), button = $('#settings-team-icon-change');

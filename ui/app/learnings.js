@@ -28,7 +28,8 @@ async function learnShowNight(n, load) {
   const head = text => `<div class="lrn-head"><h2>${esc(learnNight(n.night))}</h2>${text ? `<p>${esc(text)}</p>` : ''}</div>`;
   if (n.status === 'running') { box.innerHTML = head('Running now.'); return; }
   if (n.status === 'quiet') { box.innerHTML = head('No new activity.'); return; }
-  if (n.status === 'unconfigured') { box.innerHTML = head('Learnings need a decision model: add a TypeSafe key or an AI provider key.'); return; }
+  if (n.status === 'unconfigured') { box.innerHTML = head('Learnings need a decision model: add a Tico AI Gateway key, your own TypeSafe key, or an AI provider key.'); return; }
+  if (n.status === 'capped') { box.innerHTML = head("Skipped: Decide reached this month's spend cap. The same activity is read again once it runs."); return; }
   if (n.status === 'failed') { box.innerHTML = head('The run failed.'); return; }
   let night;
   try { night = await get(`/v2/learnings/${encodeURIComponent(n.id)}`); } catch (e) { box.innerHTML = head('') + `<div class="err">${esc(e.message)}</div>`; return; }

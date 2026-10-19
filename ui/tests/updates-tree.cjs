@@ -7,11 +7,15 @@
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const {html, uiFile} = require('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs');
 const shots = process.env.TICO_SCREENSHOT_DIR;
 const fs = require('node:fs');
 const now = Date.now(), iso = ms => new Date(now + ms).toISOString(), hour = 3600e3;
 const today = new Date(now).toLocaleDateString('en-CA', {timeZone: 'America/Los_Angeles'});
-const bots = [['cmo', 'AI CMO'], ['seo', 'AI SEO']].map(([name, display_name]) =>
+// A manager with eight reports (Chris, Oct 19: "a comment icon, unread icon, archive icon, and a '8 dropdown'").
+const EIGHT = [['seo', 'AI SEO'], ['ads', 'Ads Bot'], ['copy', 'Copywriter'], ['social', 'Social Bot'], ['pr', 'PR Bot'],
+  ['events', 'Events Bot'], ['brand', 'Brand Bot'], ['email', 'Email Bot']];
+const bots = [['cmo', 'AI CMO'], ...EIGHT, ['writer', 'Writer Bot']].map(([name, display_name]) =>
   ({name, display_name, host: 'keeper', status: 'active', can_chat: true, team: 'marketing', operator: 'ana'}));
 const update = (id, bot, body, read, more = {}) => ({id, bot, kind: 'daily', day: today, headline: body.slice(2), body, read,
   created: iso(-hour), updated: iso(-hour), replies: 0, drafted_by: null, edited_by: null, slides: null, inputs: [], ...more});
@@ -23,7 +27,7 @@ const drafted = {goal: 'Open the Northwind office by November', done: ['Signed t
 (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   const asked = [], posted = [];
-  let mine = null, mineWeek = null, unreadCount = 2, allSeen = false;   // one more from a direct report on another day
+  let mine = null, mineWeek = null, unreadCount = 2, allSeen = false, eight = false;   // one more from a direct report on another day
   const tree = (scope, kind) => {
     if (kind === 'weekly') {
       return {kind, day: FRIDAY, scope: 'below', me: 'p:ana', unread: 0,
@@ -32,6 +36,11 @@ const drafted = {goal: 'Open the Northwind office by November', done: ['Signed t
     const seo = {key: 'b:seo', author: 'seo', name: 'AI SEO', direct: false, update: update('u-seo', 'seo', '- Published the checklist page', allSeen), children: []};
     const cmo = {key: 'b:cmo', author: 'cmo', name: 'AI CMO', direct: true,
                  update: update('u-cmo', 'cmo', '- The team shipped the checklist', allSeen, {inputs: [{id: 'u-seo', author: 'seo'}]}), children: [seo]};
+    if (eight) {      // eight reports, one with no update yet and one with a report of its own
+      cmo.children.push(...EIGHT.slice(1).map(([bot, name], i) => ({key: 'b:' + bot, author: bot, name, direct: false, children: [],
+        update: i === 3 ? null : update('u-' + bot, bot, `- ${name} finished its part of the checklist launch`, allSeen)})));
+      seo.children = [{key: 'b:writer', author: 'writer', name: 'Writer Bot', direct: false, update: update('u-writer', 'writer', '- Drafted the checklist page', allSeen), children: []}];
+    }
     const ana = {key: 'p:ana', author: 'human:ana', name: 'Ana', direct: false, update: mine, children: [cmo]};
     return {kind: 'daily', day: today, scope: scope || 'below', me: 'p:ana', unread: 1,
             roots: scope === 'all' ? [{key: 'p:boss', author: 'human:boss', name: 'Bo', direct: false, update: null, children: [ana]}] : [ana]};
@@ -45,6 +54,7 @@ const drafted = {goal: 'Open the Northwind office by November', done: ['Signed t
       const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
       if (url.origin !== 'http://tico-ui.test') return route.abort();
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
+      if (p === '/vendor/fonts/material-symbols-outlined.woff2') return route.fulfill({contentType: 'font/woff2', body: fs.readFileSync(uiFile('vendor/fonts/material-symbols-outlined.woff2'))});
       if (p === '/vendor/marked.min.js') return route.fulfill({contentType: 'application/javascript', body: fs.readFileSync(uiFile('vendor/marked.min.js'), 'utf8')});
       const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
       if (ui) { const file = uiFile(ui[1]); if (fs.existsSync(file)) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(file, 'utf8')}); }
@@ -66,7 +76,7 @@ const drafted = {goal: 'Open the Northwind office by November', done: ['Signed t
         mine = update('u-ana', 'human:ana', body.body, true);
         return json({update: mine});
       }
-      return json({});
+      return json(unrouted(p));
     });
     return {page, errors};
   };
@@ -82,10 +92,13 @@ const drafted = {goal: 'Open the Northwind office by November', done: ['Signed t
     // The manager's card has an icon that opens its reports' cards; a report's report never alerts.
     assert.equal(await page.locator('#upd-feed [data-upd="u-seo"]').count(), 0, 'deeper cards start closed');
     const kids = page.locator('#upd-feed [data-upd-kids="b:cmo"]');
-    assert.match(await kids.innerText(), /1 report/);
+    assert.equal(await kids.getAttribute('aria-label'), 'Show 1 report');
+    assert.equal(await cmo.locator('.upd-actions [data-upd-kids]').count(), 1, 'the toggle is in the card\'s action row');
     await kids.click();
     const seo = page.locator('#upd-feed [data-upd="u-seo"]');
     await seo.waitFor();
+    assert.equal(await seo.locator('[data-upd-kids]').count(), 0, 'a card with no reports has no count');
+    assert.equal(await seo.locator('.upd-actions .upd-act').count(), 3, 'just Reply, Mark read and Archive');
     assert.equal(await seo.locator('.upd-dot').count(), 0, 'one level down only: no dot two levels down');
     // Seen, the deeper card is marked read, and the badge (direct reports only) does not move.
     const read = id => posted.some(x => x.path === '/api/v2/updates/read' && x.body.ids?.includes(id));
@@ -170,15 +183,117 @@ const drafted = {goal: 'Open the Northwind office by November', done: ['Signed t
       slides: {...drafted, blockers: ['Waiting on the landlord for keys']}}, 'an unchanged KPI line keeps its unit and note');
     assert.deepEqual(week.errors, []);
     await week.page.close();
+    // Eight reports: icons and "8" with a chevron at the right of the card, no "8 reports" row and no broken glyph.
+    eight = true;
+    const posted1 = mine; mine = null;   // your own card as "No update yet", with Write your update and its count
+    const icons = new Set(fs.readFileSync(uiFile('vendor/fonts/icons.txt'), 'utf8').split('\n').filter(Boolean));
+    const fitsRow = async (p, label) => {
+      // Each action row, and the "No update yet" row that carries a count too: one line, no word broken over two.
+      const rows = await p.locator('#upd-feed .upd-actions, #upd-feed .upd-none').evaluateAll(els => els.map(row => {
+        const card = row.closest('.upd-card, .upd-none').getBoundingClientRect();
+        const b = [...row.children].filter(c => getComputedStyle(c).display !== 'none').map(c => c.getBoundingClientRect());
+        const texts = [], walk = document.createTreeWalker(row, NodeFilter.SHOW_TEXT);
+        for (let n; (n = walk.nextNode());) if (n.textContent.trim() && !n.parentElement.closest('.nav-icon')) { const r = document.createRange(); r.selectNodeContents(n); texts.push(r.getClientRects().length); }
+        return {line: Math.max(...b.map(r => r.top)) < Math.min(...b.map(r => r.bottom)), overlap: b.some((r, i) => i && r.left < b[i - 1].right - 0.5),
+                inside: b.every(r => r.right <= card.right - 4 && r.left >= card.left), wrapped: texts.some(n => n > 1)};
+      }));
+      assert.ok(rows.length > 0);
+      rows.forEach((r, i) => assert.deepEqual(r, {line: true, overlap: false, inside: true, wrapped: false}, `${label}: row ${i} on one line, nothing overlapping`));
+    };
+    const tree8 = async (viewport, label) => {
+      const {page: p, errors: errs} = await open(viewport);
+      await p.goto('http://tico-ui.test/#/updates');
+      const boss = p.locator('#upd-feed [data-upd="u-cmo"]');
+      await boss.waitFor();
+      const toggle = boss.locator('[data-upd-kids="b:cmo"]');
+      assert.deepEqual(await boss.locator('.upd-actions .upd-act').evaluateAll(els => els.map(b => b.getAttribute('aria-label'))),
+        ['Reply', 'Mark unread', 'Archive', 'Show 8 reports'], `${label}: comment, unread, archive, then the count`);
+      assert.equal(await toggle.evaluate(b => [...b.childNodes].filter(n => !n.classList?.contains('nav-icon')).map(n => n.textContent).join('').trim()), '8');
+      assert.equal(await toggle.locator('.nav-icon').textContent(), 'expand_more');
+      const [row, main] = [await boss.locator('.upd-actions').boundingBox(), await toggle.boundingBox()];
+      assert.ok(Math.abs(row.x + row.width - (main.x + main.width)) < 1 && main.x > row.x + row.width / 2, `${label}: the count sits at the right end of the row`);
+      const words = async () => p.locator('#upd-feed').evaluate(f => [...f.querySelectorAll('*')].filter(e => !e.closest('.nav-icon') && e.childNodes.length)
+        .flatMap(e => [...e.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent)).join(' '));
+      assert.doesNotMatch(await words(), /\breports?\b/, `${label}: no "8 reports" row`);
+      const glyphs = async () => p.locator('#upd-feed .nav-icon').evaluateAll(els => els.map(e => e.textContent.trim()));
+      // With the shipped font loaded, every icon is one glyph that fits its box (a missing name overflows as letters).
+      const drawn = async () => {
+        await p.evaluate(() => document.fonts.ready);
+        const wide = await p.locator('#upd-feed .nav-icon').evaluateAll(els => els.filter(e => e.scrollWidth > e.clientWidth + 1).map(e => e.textContent));
+        assert.deepEqual(wide, [], `${label}: every icon draws as a glyph`);
+      };
+      await drawn();
+      for (const g of await glyphs()) assert.ok(icons.has(g), `${label}: icon "${g}" is in the shipped font (a missing one shows as a stray glyph)`);
+      if (shots) await p.screenshot({path: `${shots}/updates-tree-8-closed-${label}.png`});
+      await toggle.click();
+      await p.locator('#upd-feed [data-upd="u-email"]').waitFor();
+      assert.equal(await toggle.getAttribute('aria-expanded'), 'true');
+      assert.equal(await toggle.getAttribute('aria-label'), 'Hide 8 reports');
+      assert.equal(await p.locator('#upd-feed .upd-node[data-depth="1"] > .upd-sub > .upd-node').count(), 8, `${label}: the eight cards open under it`);
+      // One line from the manager's card down the left of its reports, with an elbow into each card; it stops at the last.
+      const line = await p.locator('#upd-feed .upd-node[data-depth="1"] > .upd-sub').evaluate(sub => {
+        const parent = sub.parentElement.firstElementChild.getBoundingClientRect();
+        return [...sub.children].map((node, i) => {
+          const r = node.getBoundingClientRect(), b = getComputedStyle(node, '::before'), a = getComputedStyle(node, '::after');
+          const x = r.left + parseFloat(b.left), top = r.top + parseFloat(b.top), end = x + parseFloat(b.width);
+          const card = node.firstElementChild.getBoundingClientRect();
+          return {i, x, top, end, cardLeft: card.left, parentBottom: parent.bottom, parentLeft: parent.left, prevBottom: i ? sub.children[i - 1].getBoundingClientRect().bottom : parent.bottom,
+                  vertical: b.borderLeftWidth, elbow: b.borderBottomWidth, on: a.content !== 'none' && a.content !== 'normal'};
+        });
+      });
+      for (const n of line) {
+        assert.equal(n.vertical, '2px'); assert.equal(n.elbow, '2px');
+        assert.ok(Math.abs(n.top - n.prevBottom) < 1, `${label}: report ${n.i}'s line starts at the card above it`);
+        assert.ok(Math.abs(n.end + 2 - n.cardLeft) < 1, `${label}: report ${n.i}'s elbow reaches its card`);
+        assert.ok(Math.abs(n.x - line[0].x) < 1, `${label}: one straight line`);
+        assert.equal(n.on, n.i < line.length - 1, `${label}: the line goes on past report ${n.i} only when another follows`);
+      }
+      assert.ok(line[0].x > line[0].parentLeft + 10, `${label}: the line leaves the manager's card from its bottom edge, not its corner`);
+      // A report's report hangs the same way, one level further in.
+      await p.locator('#upd-feed [data-upd-kids="b:seo"]').click();
+      await p.locator('#upd-feed [data-upd="u-writer"]').waitFor();
+      const indent = await p.locator('#upd-feed .upd-sub').evaluateAll(subs => subs.map(s => s.firstElementChild.firstElementChild.getBoundingClientRect().left - s.parentElement.firstElementChild.getBoundingClientRect().left));
+      assert.ok(indent.length === 3 && indent.every(v => Math.abs(v - indent[0]) < 1), `${label}: nested levels indent the same (${indent})`);
+      for (const g of await glyphs()) assert.ok(icons.has(g), `${label}: icon "${g}" open is in the shipped font`);
+      await drawn();
+      await fitsRow(p, label);
+      assert.ok(await p.evaluate(() => document.documentElement.scrollWidth) <= viewport.width, `${label}: no sideways scroll`);
+      if (shots) await p.screenshot({path: `${shots}/updates-tree-8-open-${label}.png`, fullPage: true});
+      await p.locator('#upd-feed [data-upd-kids="b:seo"]').click();
+      await toggle.click();
+      await p.locator('#upd-feed [data-upd="u-email"]').waitFor({state: 'detached'});
+      assert.equal(await toggle.getAttribute('aria-label'), 'Show 8 reports', `${label}: tapping again closes them`);
+      return {p, errs};
+    };
+    const desk8 = await tree8({width: 1280, height: 900}, 'desktop');
+    assert.deepEqual(desk8.errs, []);
+    await desk8.p.close();
+    const phone8 = await tree8({width: 375, height: 812}, 'phone');
+    // A long press names an icon and does not also act; a tap acts.
+    const reply = phone8.p.locator('#upd-feed [data-upd="u-cmo"] [data-upd-reply]');
+    await reply.dispatchEvent('pointerdown', {pointerType: 'touch', isPrimary: true});
+    await phone8.p.waitForTimeout(600);
+    assert.equal(await reply.evaluate(b => b.hasAttribute('data-tip-on') && getComputedStyle(b, '::after').content), '"Reply"', 'a long press shows the name');
+    await reply.dispatchEvent('pointerup', {pointerType: 'touch', isPrimary: true});
+    await reply.dispatchEvent('click');
+    assert.equal(await phone8.p.locator('#upd-feed [data-upd="u-cmo"] textarea').count(), 0, 'the long press did not open the reply');
+    await reply.tap();
+    await phone8.p.locator('#upd-feed [data-upd="u-cmo"] textarea').waitFor();
+    assert.deepEqual(phone8.errs, []);
+    await phone8.p.close();
+    eight = false; mine = posted1;
     // A phone: the nested cards fit the screen.
     const phone = await open({width: 360, height: 760});
     await phone.page.goto('http://tico-ui.test/#/updates');
     await phone.page.locator('#upd-feed [data-upd="u-cmo"]').waitFor();
     const wide = await phone.page.evaluate(() => document.documentElement.scrollWidth);
     assert.ok(wide <= 360, `no sideways scroll on a phone (${wide}px)`);
+    await phone.page.locator('#upd-feed [data-upd-kids="b:cmo"]').click();
+    await phone.page.locator('#upd-feed [data-upd="u-seo"]').waitFor();
+    await fitsRow(phone.page, 'phone 360');
     if (shots) await phone.page.screenshot({path: `${shots}/updates-tree-phone.png`});
     assert.deepEqual(phone.errors, []);
-    console.log('PASS: Updates nested by the org chart: your card on top, direct reports open and alerting, an icon opens deeper cards that never alert, Whole org from the top of the chart (kept), the badge from direct reports only, writing your own update from your card (as a daily), From links that open the report\'s card, Mark all read for a badge from another day (gone once read), the week in review on Friday (written and edited as slides), and a phone that fits.');
+    console.log('PASS: Updates nested by the org chart: your card on top, direct reports open and alerting, "8" and a chevron at the right of a card open deeper cards that never alert, hung from it on one line with an elbow each, icon-only actions named by label, title and long press, Whole org from the top of the chart (kept), the badge from direct reports only, writing your own update from your card (as a daily), From links that open the report\'s card, Mark all read for a badge from another day (gone once read), the week in review on Friday (written and edited as slides), and a phone that fits.');
   } finally {
     await browser.close();
   }

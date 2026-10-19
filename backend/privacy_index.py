@@ -18,7 +18,7 @@ class ReadIndex:
         # The private rows by their partial index (tasks_private); any other task is looked up by id when a
         # provenance check names it. Reading every task's whole row, and later every id, was a busy server's slowest query.
         self.private = {r["id"]: dict(r) for r in c.execute(
-            "SELECT id,requester,owner,private FROM tasks WHERE private IS NOT 0")}
+            "SELECT id,requester,owner,guest,private FROM tasks WHERE private IS NOT 0")}
         self.denied = {tid for tid, row in self.private.items() if not privacy.task_readable(c, who, row)}
         self._attempts = self._attachments = self._tags = self._intervals = None
         # Each instance belongs to one consistent read transaction.

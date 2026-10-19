@@ -189,11 +189,12 @@ step_turn() {
   retry 120 replied || { say "no reply from the fake harness"; return 1; }
 }
 botops_ready() { get operations | json 'sys.exit(0 if d["machines"][0]["readiness"]["bots"]["botops"]["ready"] else 1)'; }
-replied() { get "conversations/${1:-$(cat "$WORK/conversation")}/messages" | json 'sys.exit(0 if any(m["body"].startswith("journey-reply:") for m in d["messages"]) else 1)'; }
+replied() { replied_in "$(cat "$WORK/conversation")"; }
+replied_in() { get "conversations/$1/messages" | json 'sys.exit(0 if any(m["body"].startswith("journey-reply:") for m in d["messages"]) else 1)'; }
 chat_turn() {  # text: a new conversation with BotOps, answered by the fake harness
   local cid
   cid="$(post chat/botops "{\"text\": \"$1\"}" | json 'd["conversation"]["id"]')" || return 1
-  retry 120 replied "$cid"
+  retry 120 replied_in "$cid"
 }
 conversation_intact() {
   if [ "$FAST" = 1 ]; then [ "$(sql 'SELECT count(*) FROM enrollments')" -ge 1 ] 2>/dev/null; else replied; fi \
@@ -278,7 +279,7 @@ EOF
 }
 
 step_replica() {
-  local data="${PROJECT}_tico-data" rows
+  local data="${PROJECT}_tico-data"
   # The rolled-back server has been replicating for a while; then the volume is lost and the same image restores from
   # the replica. The migrated copy Litestream saw before the rollback must not be the newest thing in it.
   sleep 20

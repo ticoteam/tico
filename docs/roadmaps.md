@@ -91,6 +91,18 @@ per IP per UTC day across every roadmap (default 10, configurable in settings); 
 accepted only through the deployment’s trusted proxy configuration (below). IPv6 visitors share
 a /64 bucket; an IPv4-mapped IPv6 address (`::ffff:a.b.c.d`) counts as its IPv4 address.
 
+**Idea triage** (off unless the server sets `TICO_DECISIONS_IDEA_TRIAGE=1`; `questions/idea-triage.json`,
+`backend/idea_triage.py`). Before a suggestion the form will accept is recorded, Decide reads its title and summary:
+is it a bug or small change, or a feature, and is it the same matter as one of the open, non-private Product roadmap
+items (up to 100, most recently updated first). A bug or small change at 80% or more goes to the active Head of
+Engineering (`engineering-lead` template) instead of the receiving bot. When an open item matches at 70% or more, the
+new task opens with a line naming it and is related to it. Routing only: a feature always goes to the receiving bot,
+which still triages it, and the visitor's reply is the same either way. Decide off or unconfigured, the monthly spend
+cap, the daily call budget, an error, no answer within 12 seconds, an answer under its threshold, or no active Head of
+Engineering leave the suggestion with the receiving bot exactly as without triage. A suggestion the form refuses
+(limit, full queue, no receiver) makes no call: a suggestion in triage has already spent the visitor's action and holds its queue place, so one arriving meanwhile is refused without a call, and a suggestion refused after triage gives both back. Each call is a `judge.call` audit row labelled `idea-triage@1` with
+the answers, route and model, never the visitor's text.
+
 While at least one public label is enabled, **Settings > Health** tells owners and admins when suggestions don't reach
 the bot they expect, from the same rule that routes them:
 - **No bot receives roadmap suggestions**: visitors are being turned away. Choose an active bot, or make a Product

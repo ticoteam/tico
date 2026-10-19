@@ -122,3 +122,65 @@ def test_a_pinned_computer_shows_outdated_but_its_owner_is_not_nudged(api):
     assert ben_notices(api) == []
     machine = next(m for m in get(api, "operations", token="ben-test")["computers"] if m["id"] == r["runner_id"])
     assert machine["update"]["outdated"] is True and machine["update"]["update_state"] == "pinned"
+
+
+
+def test_queued_work_says_it_waits_for_the_computer_to_update_only_once_the_computer_stops_taking_work(api):
+    """A computer due an update keeps claiming for 20 minutes, then takes no new work until its running turns end.
+    Chat and task said only "Queued" for that hold; now they say why, and only while it lasts."""
+    from backend import health, health_monitor
+    from backend.store import H
+    r = runner(api, label="Team box")
+    assign(api, r, "ops")
+    chat = post(api, "chat/ops", {"text": "Are you there?"})
+    task = post(api, "tasks", {"owner": "ops", "title": "Check the invoices", "body": "Today."})
+    store = api.app.state.store
+    queued, held = ("Saved — queued", "Queued"), ("Saved — waiting for the computer to update", "Waiting for the computer to update")
+
+    def shown():
+        label = get(api, f"conversations/{chat['conversation_id']}/snapshot")["execution"]["label"]
+        return label, get(api, f"tasks/{task['id']}")["waiting_for"]
+
+    def update(state, target="0.3.0", release="0.2.5"):
+        report(api, r, release, update={"state": state, "target": target, "error": ""})
+
+    def began(minutes):             # the reported state began this long ago
+        with store.transaction() as c:
+            c.execute("UPDATE runner_versions SET update_since=? WHERE runner_id=?",
+                      (H.shift(H.now(), minutes=-minutes), r["runner_id"]))
+
+    report(api, r, "0.3.0")
+    assert shown() == queued                                            # claiming as usual
+    update("waiting")
+    began(19)
+    update("waiting")
+    assert shown() == queued                                            # due an update, still claiming
+    began(21)
+    update("waiting", target="0.3.1")                                   # a newer target keeps the drain's start
+    assert shown() == held
+    # Health names the hold and how long it has run; it is still not a queue_idle Tico bug (PR 623).
+    with store.transaction() as c:
+        c.execute("UPDATE jobs SET created=? WHERE bot='ops'", (H.shift(H.now(), minutes=-30),))
+        online = {x["id"] for x in health._online_runners(c)}
+        assert {row["reason"] for row in health._waiting(c, online)[2]} == {"updating"}
+        found = {f["check_id"]: f for f in health_monitor.findings(c, store.settings)}
+    assert "queue_idle" not in found
+    assert "UTC (1 min), waiting to update." in found["runner_outdated"]["detail"]
+    update("updating")                                                  # the hold goes on into the update itself
+    with store.read() as c:
+        assert runner_versions.holding_since(c, r["runner_id"]) < H.shift(H.now(), seconds=-50)
+    assert shown() == held
+    # Its update failed: it claims again, and a retry waits a fresh drain time before it holds anything.
+    update("failed")
+    began(25)
+    update("failed")
+    assert shown() == queued
+    update("waiting")
+    assert shown() == queued
+    report(api, r, "0.2.5", update={"state": "pinned", "target": "0.3.0", "error": "pinned"})
+    assert shown() == queued
+    # A Docker update still settling reports `updating` on the server's own release: it claims nothing.
+    update("updating", release="0.3.0")
+    assert shown() == held
+    report(api, r, "0.3.0")                                             # settled: the label goes on its own
+    assert shown() == queued

@@ -26,7 +26,7 @@ reqwest-updater = { package = "reqwest", version = "0.13", default-features = fa
 tokio = { version = "1", features = ["time", "rt-multi-thread", "macros", "sync"] }
 url = "2"
 log = { version = "0.4", features = ["std"] }
-tauri-plugin-updater = "2"
+tauri-plugin-updater = { version = "2", default-features = false, features = ["rustls-tls", "system-proxy"] }
 tauri-plugin-process = "2"
 
 [dev-dependencies]

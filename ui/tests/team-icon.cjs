@@ -1,9 +1,11 @@
-// Offline owner Settings upload: type/size checks, stable retries, refresh preservation and roles.
+// Offline owner Settings upload: type/size checks, stable retries, refresh preservation and roles; the Stale ticket
+// review switch on the same tab, which a local hub's owner gets too.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const {html, uiFile} = require('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs');
 const logo = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a6XcAAAAASUVORK5CYII=', 'base64');
 (async () => {
   const browser = await chromium.launch({headless:true, channel:process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
@@ -11,6 +13,8 @@ const logo = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQV
     const page = await browser.newPage({viewport:{width:1280,height:800}, serviceWorkers:'block'});
     const errors = [], writes = [];
     let role = 'owner', cloud = true, failures = 0, refusal = false;
+    const rules = {stale_review:false, topic_fresh:false};
+    const ruleWrites = [];
     page.on('pageerror', e => errors.push(e.message));
     await page.route('**/*', route => {
       const request = route.request(), p = new URL(request.url()).pathname;
@@ -27,6 +31,10 @@ const logo = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQV
         if (refusal) return json({error:{detail:'Use a valid PNG, JPEG or WebP image'}},422);
         return json({url:'/api/v2/team/icon',content_type:'image/png'});
       }
+      if (p === '/api/v2/access') return json({rules});
+      if (p === '/api/v2/access/rules' && request.method() === 'PUT') {
+        const body = request.postDataJSON(); ruleWrites.push(body); Object.assign(rules, body); return json(rules);
+      }
       if (p === '/api/me') return json({id:'ana',role,name:'Ana',email:'ana@example.com',cloud,registered:true,config:{version:'dev',company_name:'Acme'}});
       if (p === '/api/v2/config') return json({version:'dev',company_name:'Acme'});
       if (p === '/api/employees') return json([]);
@@ -35,7 +43,7 @@ const logo = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQV
       if (p === '/api/issues') return json([]);
       if (p === '/api/v2/operations') return json({machines:[],services:[]});
       if (p.endsWith('/watch')) return route.fulfill({contentType:'text/event-stream',body:': fixture\n\n'});
-      return json({});
+      return json(unrouted(p));
     });
     await page.goto('https://tico-ui.test/#/settings');
     await page.locator('[data-settings-tab=team]').click();
@@ -80,11 +88,27 @@ const logo = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQV
     await page.reload();
     await page.locator('#settings-tabs').waitFor();
     assert.equal(await page.locator('[data-settings-tab=team]').count(),0);
+    // A local hub's owner gets the tab for the Stale ticket review switch, without the team icon.
     role = 'owner'; cloud = false;
     await page.reload();
-    await page.locator('#settings-tabs').waitFor();
-    assert.equal(await page.locator('[data-settings-tab=team]').count(),0);
+    await page.locator('[data-settings-tab=team]').click();
+    assert.equal(await page.locator('#settings-team-icon-change').count(),0);
+    const staleSwitch = page.locator('#settings-stale-review');
+    await page.waitForFunction(() => !document.querySelector('#settings-stale-review').disabled);
+    assert.equal(await staleSwitch.isChecked(),false);
+    await staleSwitch.check();
+    await page.waitForFunction(() => document.querySelector('#settings-stale-review-status').textContent === 'Saved');
+    assert.deepEqual(ruleWrites,[{stale_review:true}]);
+    assert.equal(await staleSwitch.isChecked(),true);
+    // Start fresh when the topic changes (backend/topic_change.py): the same tab, off until turned on, its own write.
+    const topicSwitch = page.locator('#settings-topic-fresh');
+    assert.equal(await topicSwitch.isChecked(),false);
+    await topicSwitch.check();
+    await page.waitForFunction(() => document.querySelector('#settings-topic-fresh-status').textContent === 'Saved');
+    assert.deepEqual(ruleWrites,[{stale_review:true},{topic_fresh:true}]);
+    assert.equal(await topicSwitch.isChecked(),true);
+    assert.equal(await staleSwitch.isChecked(),true, 'turning one rule leaves the other as it was');
     assert.deepEqual(errors,[]);
-    console.log('Team icon: owner-only control, bounded binary uploads, stable retries, refresh preservation and phone layout passed');
+    console.log('Team icon: owner-only control, bounded binary uploads, stable retries, refresh preservation and phone layout passed; Stale ticket review and Start fresh when the topic changes switches save');
   } finally { await browser.close(); }
 })().catch(error => {console.error(error);process.exitCode=1;});

@@ -14,6 +14,7 @@ const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile, harnesses} = require('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs');
 (async () => {
   const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
   try {
@@ -123,7 +124,7 @@ const {html, uiFile, harnesses} = require('./support/page.cjs');
           return json(rows[id]);
         }
         if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
-        return json({});
+        return json(unrouted(p));
       });
       await page.goto('https://tico-ui.test/#/settings');
       await page.locator('[data-settings-tab=devices]').click();
@@ -187,7 +188,8 @@ const {html, uiFile, harnesses} = require('./support/page.cjs');
     assert.deepEqual(writes, [{p: '/api/v2/computers/box/logouts', body: {runtime: 'codex'}}]);
     await confirm.locator('[data-actions] [data-close]').click();
     await own('codex').getByRole('button', {name: 'Use the shared key'}).waitFor({timeout: 15000});
-    assert.deepEqual(await buttons(own('codex')), ['Sign in', 'Use the shared key']);
+    // Add key: a key of its own (Dev 97, ui/tests/model-keys.cjs).
+    assert.deepEqual(await buttons(own('codex')), ['Sign in', 'Use the shared key', 'Add key']);
     // "Signed out · Sign in", and the chip on the computer's row has the red dot.
     assert.match((await own('codex').locator('.computer-conn-signin').textContent()).replace(/\s+/g, ' ').trim(), /^Signed out · Sign in/);
     assert.equal(await own('codex').locator('.computer-conn-head .machine-chip-dot').count(), 1);

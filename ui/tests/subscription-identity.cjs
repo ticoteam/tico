@@ -20,6 +20,7 @@ const {harnesses} = require('./support/page.cjs');
       window.$ = s => document.querySelector(s);
       window.esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[c]));
       window.ago = () => 'just now'; window.toast = () => {};
+      window.formBusy = el => [...el.querySelectorAll('input')].some(f => f === document.activeElement || f.value !== f.defaultValue);
       window.S = {me: {id: 'ana', role: 'owner', cloud: true}, orgGroups: [], emps: [{name: 'builder', machine: {runner_id: 'r1', operator: 'ana'}}]};
       window.fixture = {profiles_by_computer: ['r1','r2'].map((runner_id, i) => ({runner_id, label: ['North', 'South'][i], profiles: [
         {name: 'engineering', id: 'subscription:' + JSON.stringify([runner_id, 'engineering']), display_name: 'Engineering', runtimes: {codex: {signed_in: true}}}]})),
