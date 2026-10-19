@@ -1,7 +1,7 @@
 """One open question per topic: a bot asking a person again on a topic it already has an open question about updates
 that question (hubdb.open_question, hubdb.fold_question) instead of filing a second card."""
 
-from backend import ask_deadlines, hubdb as H, task_relations as TR
+from backend import ask_deadlines, hubdb as H, task_relations as TR, team_rules
 from backend.tests.test_api import api, assign, claim, get, headers, post, ready, runner, setup_attempt  # noqa: F401
 from backend.tests.test_mcp import call
 
@@ -122,19 +122,65 @@ def test_a_private_question_never_joins_a_public_one(api):
 
 
 def test_a_folded_question_gives_the_person_the_teams_days_from_the_latest_wording(api):
-    """The ask's clock restarts on a fold: its default goes ahead only after the team's days from the latest ask."""
+    """The ask's clock restarts on a fold: not expired for its first wording's age, not gone ahead early, gone ahead
+    once at the team's days from the latest wording, and not at all when the person spoke after it."""
     _, _, attempt = setup_attempt(api)
     default = {"do": "Yes", "kind": "reversible"}
     first = _ask(api, attempt["token"], "Archive the September drafts?", topic="drafts", if_no_answer=default)
+    quiet = _ask(api, attempt["token"], "Archive the spring drafts?", topic="spring", if_no_answer=default)
     with api.app.state.store.transaction() as c:
-        old = H.shift(H.now(), days=-5)
-        c.execute("UPDATE messages SET created=? WHERE id=?", (old, first["question"]["id"]))
-        assert [a["id"] for a, _ in ask_deadlines.open_asks(c, H.now())] == [first["question"]["id"]]
+        old = H.shift(H.now(), days=-(ask_deadlines.EXPIRE_DAYS + 1))
+        c.execute("UPDATE messages SET created=? WHERE id IN (?,?)", (old, first["question"]["id"], quiet["question"]["id"]))
     again = _ask(api, attempt["token"], "Archive the September and October drafts?", topic="drafts",
                  if_no_answer=default)
-    assert again["folded"]
+    spring = _ask(api, attempt["token"], "Archive the spring and summer drafts?", topic="spring", if_no_answer=default)
+    assert again["folded"] and spring["folded"]
+    post(api, f"tasks/{spring['task']['id']}/comments", {"text": "Checking with the editor first."})
+    ids = {first["question"]["id"], quiet["question"]["id"]}
     with api.app.state.store.transaction() as c:
-        assert ask_deadlines.sweep(c)["went_ahead"] == [], "5 days after the first wording, 0 after the latest"
+        done = ask_deadlines.sweep(c)
+        assert not ids & set(done["went_ahead"] + done["expired"]), "15 days after the first wording, 0 after the latest"
         asked = H.message(c, first["question"]["id"])
         assert H.ask_clock(asked) == asked["refs"]["asked_again_at"] > asked["created"]
         assert not H.ask_older(asked)
+        later = H.shift(H.now(), days=team_rules.load(c)["go_ahead_days"], hours=1)
+        done = ask_deadlines.sweep(c, at=later)
+        assert first["question"]["id"] in done["went_ahead"], "due at the team's days from the latest wording"
+        assert quiet["question"]["id"] not in done["went_ahead"] + done["expired"], "the person spoke after it"
+
+
+def test_an_answer_picked_on_the_earlier_wording_does_not_settle_the_new_one(api):
+    """Ana loads "Archive the September drafts?" and picks Yes; the bot rewords it first; her Yes is refused, the new
+    wording stays open, and her answer on the new wording (a pick, or Other alone) is taken."""
+    _, _, attempt = setup_attempt(api)
+    first = _ask(api, attempt["token"], "Archive the September drafts?", topic="drafts")
+    seen = first["question"]["ask"]["questions"][0]["id"]
+    again = _ask(api, attempt["token"], "Archive the September and October drafts?", topic="drafts")
+    assert again["folded"]
+    url = f"tasks/{first['task']['id']}/answers"
+    target = {"comment": first["question"]["id"]}
+    for stale in ({"answers": {seen: ["Yes"]}}, {"answers": {}, "other": "Yes, archive them"}):
+        r = api.post(f"/api/v2/{url}", json={"target": target, **stale}, headers=headers())
+        assert r.status_code == 409 and r.json()["error"]["code"] == "changed", r.text
+    with api.app.state.store.read() as c:
+        assert H.message(c, first["question"]["id"])["answers"] == []
+    assert [i["id"] for i in _cards(api)] == [first["task"]["id"]]
+    now_id = again["question"]["ask"]["questions"][0]["id"]
+    assert now_id != seen
+    post(api, url, {"target": target, "answers": {now_id: []}, "other": "Only September"})
+    assert _cards(api) == []
+
+
+def test_a_topic_key_in_any_script_is_kept_and_an_empty_one_is_refused(api):
+    _, _, attempt = setup_attempt(api)
+    work = post(api, "tasks", {"owner": "ops", "title": "Plan the launch", "body": "Budget and date."})
+    budget = _ask(api, attempt["token"], "Raise the launch budget?", parent=work["id"], topic="预算")
+    date = _ask(api, attempt["token"], "Move the launch date?", parent=work["id"], topic="发布")
+    plain = _ask(api, attempt["token"], "Launch at all?", parent=work["id"])
+    again = _ask(api, attempt["token"], "Raise the launch budget by a tenth?", parent=work["id"], topic="预算")
+    assert not any(q["folded"] for q in (budget, date, plain)) and again["folded"]
+    assert again["task"]["id"] == budget["task"]["id"]
+    assert len({q["task"]["id"] for q in (budget, date, plain)}) == 3
+    err, out = call(api, "hub_task_question", {"question": "Launch at all, really?", "on": "ana", "parent": work["id"],
+                                               "topic": "--"}, token=attempt["token"])
+    assert err and out["error"] == "validation", out

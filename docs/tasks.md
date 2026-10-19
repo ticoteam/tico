@@ -88,7 +88,9 @@ same `--topic` key under any task, or, with no key, the same parent task. The pe
 wording and options, its body lists the earlier asks under "Asked before", and nothing new is sent: no second Needs
 you item, no Slack line, no run. The ask's clock restarts, so a default goes ahead only after the team's days from
 the latest wording. The reply says `folded: true`. A different decision on the same task takes its own `--topic`;
-once the question is answered, declined or closed, the next one on the topic opens a new card.
+once the question is answered, declined or closed, the next one on the topic opens a new card. An answer picked on
+the earlier wording is refused ("reworded"), so the person answers what the card says now. A key is compared by its
+letters and digits in any script, case folded; one with none is refused.
 
 The note must be a plain ask: one or two sentences, at most 40 words, with no ids, hashes, file paths, `s3://` links
 or tool names. Without one the update is refused, saying what failed. A task with an open structured question to

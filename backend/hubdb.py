@@ -4801,8 +4801,9 @@ EARLIER_ASKS_KEPT = 10      # earlier wordings a folded question keeps; older on
 
 
 def question_topic(value):
-    """A topic key as compared: lower case, words joined by single hyphens ("Backup model" == "backup-model")."""
-    return "-".join(re.findall(r"[a-z0-9]+", str(value or "").lower()))[:80] or None
+    """A topic key as compared: its letters and digits in any script, case folded, words joined by single hyphens
+    ("Backup model" == "backup-model", "预算" stays "预算"). None only when there is no letter or digit in it."""
+    return "-".join(re.findall(r"[^\W_]+", str(value or "").casefold()))[:80] or None
 
 
 def open_question(conn, actor, person, *, parent=None, topic=None, private=False):
@@ -4820,7 +4821,7 @@ def open_question(conn, actor, person, *, parent=None, topic=None, private=False
         "FROM tasks t JOIN messages m ON m.conversation_id=t.conversation_id JOIN conversations cv ON cv.id=m.conversation_id "
         "WHERE t.owner=? AND t.waiting_on=? AND t.status='waiting' "
         f"AND m.from_actor=? AND m.to_actor=? AND m.kind='ask' AND m.deleted_at IS NULL AND {OPEN_ASK_SQL} "
-        f"AND {MESSAGE_TASK_SQL}=t.id AND json_extract(m.refs_json,'$.questions[0].id')='decision' "
+        f"AND {MESSAGE_TASK_SQL}=t.id AND json_extract(m.refs_json,'$.questions[0].id') LIKE 'decision%' "
         "ORDER BY t.created, t.rowid", (actor, person, actor, person)))
     for row in rows:
         card = task(conn, row["task_id"])
@@ -4845,7 +4846,10 @@ def fold_question(conn, actor, found, question, ask, *, title=None, body=None):
     earlier = [*(old.get("earlier") or []), {"question": was, "at": ask_clock(asked)}][-EARLIER_ASKS_KEPT:]
     at = now()
     refs = {k: v for k, v in old.items() if k not in ("questions", "if_no_answer", "who")}
-    refs.update({**ask, "earlier": earlier, "asked_again_at": at})
+    # Each wording is its own question id ("decision-2"...): an answer the person picked on the wording before is
+    # keyed by the old id and refused (task_review.answer_task), never taken as an answer to this one.
+    questions = [{**q, "id": f"decision-{len(earlier) + 1}"} if not i else q for i, q in enumerate(ask["questions"])]
+    refs.update({**ask, "questions": questions, "earlier": earlier, "asked_again_at": at})
     if not ask.get("if_no_answer"):
         refs.pop("if_no_answer", None)
     conn.execute("UPDATE messages SET body=?, refs_json=?, edited_at=? WHERE id=?",

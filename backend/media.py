@@ -515,6 +515,9 @@ def install_media(app, store, auth, mutate, send_message, task_create):
                 raise Problem("validation", "Option files are at least one byte and at most 10 MB together", 422)
             decoded.append((data, option.file.name, mimetypes.guess_type(option.file.name)[0] or "application/octet-stream"))
         question = body.question.strip()
+        if body.topic is not None and not H.question_topic(body.topic):
+            # A key given but empty once compared would silently mean "no topic" and join the task's unkeyed question.
+            raise Problem("validation", "A question's topic needs at least one letter or digit", 422)
         if not body.parent and who.attempt_id:
             # One question, one card: asked from a run on one of the bot's own tasks, it is filed under that task,
             # which stays the bot's, rather than as a second task of its own.
