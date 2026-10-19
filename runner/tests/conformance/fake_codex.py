@@ -60,7 +60,7 @@ def main():
         if by_file and not os.path.exists(os.path.join(home, "auth.json")):
             print("Not logged in")
             sys.exit(1)
-        print("Logged in using ChatGPT")
+        print("Logged in using an API key - sk-***" if os.environ.get("FAKE_CODEX_LOGIN") == "apikey" else "Logged in using ChatGPT")
         return
     if by_file and sys.argv[1:3] == ["login", "--device-auth"]:
         print("Open this link\n  https://auth.openai.com/codex/device \nEnter this one-time code\n   ABCD-1234", flush=True)

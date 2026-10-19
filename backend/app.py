@@ -46,6 +46,7 @@ from . import names as actor_names
 from .openapi_v2 import STABLE as STABLE_ROUTES
 from .route_renames import old_paths as old_route_paths
 from . import updates
+from . import gateway_connection
 from . import providers as Providers
 from . import access as Access
 from . import releases, runner_versions, ui_bundle
@@ -1312,6 +1313,50 @@ def create_app(settings=None):
             return Providers.view(after)
         return mutate(request, body, work)
 
+    @app.get("/api/v2/providers/gateway")
+    def gateway_view(request: Request):
+        """The Tico AI Gateway connection: whether it is set and where from. Its preview and the Gateway's last word on
+        the key (working, revoked, the month's cap) only to the owner, who manages it. Never the key."""
+        who = request.state.identity
+        auth.domain(who)
+        if who.role == "owner":
+            gateway_connection.check_soon(store, app.state.vault, settings)   # the page's answer is the last check's
+        with store.read() as c:
+            return gateway_connection.view(c, settings, manage=who.role == "owner")
+
+    @app.put("/api/v2/providers/gateway")
+    def gateway_save(request: Request, body: M.GatewayConnectionSave):
+        """Save the gateway key (and URL), then ask the Gateway about it. The owner only; the key is sealed at once and
+        is never in a response, an event or the idempotency table (this route keeps no receipt)."""
+        who = request.state.identity
+        auth.domain(who)
+        vault = app.state.vault
+        with store.transaction() as c:
+            gateway_connection.save(c, vault, who, {"key": body.key.get_secret_value() if body.key else "",
+                                                    "url": body.url, "expected_revision": body.expected_revision},
+                                    H.now(), settings)
+        gateway_connection.check_now(store, vault, settings)
+        with store.read() as c:
+            return gateway_connection.view(c, settings, manage=True)
+
+    @app.delete("/api/v2/providers/gateway")
+    def gateway_clear(request: Request):
+        who = request.state.identity
+        auth.domain(who)
+        with store.transaction() as c:
+            gateway_connection.clear(c, who, H.now(), settings)
+            return gateway_connection.view(c, settings, manage=True)
+
+    @app.post("/api/v2/providers/gateway/check")
+    def gateway_check(request: Request):
+        """Check now: ask the Gateway whether the key works and how much of its cap is used."""
+        who = request.state.identity
+        auth.domain(who)
+        gateway_connection.owner_only(who)
+        gateway_connection.check_now(store, app.state.vault, settings)
+        with store.read() as c:
+            return gateway_connection.view(c, settings, manage=True)
+
     # ------------------------------------------------------------------ people and access
     def owner_only(who, what):
         auth.domain(who)
@@ -1494,11 +1539,29 @@ def create_app(settings=None):
         with store.read() as c:
             return {"cards": onboarding.catalog(c)}
 
+    @app.get("/api/v2/ceo-bot")
+    def ceo_bot_switch(request: Request):
+        """The CEO Bot rollout switch (backend/ceo_bot.py)."""
+        auth.domain(request.state.identity)
+        from . import ceo_bot
+        with store.read() as c:
+            return ceo_bot.view(c)
+
+    @app.post("/api/v2/ceo-bot")
+    def ceo_bot_switch_set(request: Request, body: M.CeoBotSwitch):
+        """Owners and admins flip it at runtime, no release; a bot never does, the Goal Manager included."""
+        who = request.state.identity
+        admin_only(who, "turns the CEO Bot on or off")
+        from . import ceo_bot
+        return mutate(request, body, lambda c: ceo_bot.set_on(c, who.actor, body.on))
+
     @app.post("/api/v2/goal-manager/turn-on")
     def turn_on_goal_manager(request: Request, body: M.Empty):
         who = request.state.identity
         if who.role != "owner":
-            raise Problem("forbidden", "Only the owner turns the Goal Manager on", 403)
+            from . import ceo_bot
+            with store.read() as c:
+                raise Problem("forbidden", "Only the owner turns the " + ceo_bot.name(c) + " on", 403)
         return mutate(request, body, lambda c: onboarding.turn_on_goal_manager(c, who))
 
     @app.get("/api/v2/onboarding")
@@ -1793,7 +1856,13 @@ def create_app(settings=None):
             access = auth.bot_accesses(c, who)
             roster, configs = views.roster(c), views.entries(c)
             archived = {row["slug"] for row in H.bots(c) if row.get("state") == "archived"}
-            view = P.org_view(roster, configs, archived, person_id=person or "", team=team or "")
+            # The CEO Bot switch moves bots on the chart only; each keeps the `reports_to` it has (backend/ceo_bot.py).
+            from . import ceo_bot
+            chart = ceo_bot.chart_entries(c, settings, roster, configs, archived)
+            view = P.org_view(roster, chart, archived, person_id=person or "", team=team or "")
+            view["org_groups"] = ceo_bot.chart_groups(roster, configs, chart, view["org_groups"], archived)
+            for row in view["bots"]:
+                row["reports_to"] = P._clean((configs.get(row["id"]) or {}).get("reports_to"))
             live = {row["slug"]: row for row in H.bots(c)}
             bots = []
             by_id = {row["id"]: row for row in view["bots"]}
@@ -2764,7 +2833,7 @@ def create_app(settings=None):
         if not room or room.get("task_id") != row["id"] or not owner.startswith("bot:"):
             return None
         from .views import conversation_execution
-        return conversation_execution(c, cid, who, settings, bot=owner.removeprefix("bot:"))
+        return conversation_execution(c, cid, who, settings, bot=owner.removeprefix("bot:"), auth=auth)
 
     def task_runs(c, who, tid, limit=200):
         """The runs that worked this task, each with the model that actually ran it (`ran_on`). A review that

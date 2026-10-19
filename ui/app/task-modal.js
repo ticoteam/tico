@@ -484,7 +484,7 @@ function taskLiveHTML(x, stopping = '') {
   if (!x || !['leased', 'running'].includes(x.state)) return '';
   const part = (x.parts || []).at(-1);
   const step = part ? clipLine(part.text.replace(/\s+/g, ' ').trim(), 120) : '';
-  const word = x.state === 'leased' ? 'Starting' : x.label && x.label !== 'Working' ? x.label : 'Working';
+  const word = x.waiting ? x.waiting : x.state === 'leased' ? 'Starting' : x.label && x.label !== 'Working' ? x.label : 'Working';
   const label = `<span class="typing run" aria-hidden="true"><i></i><i></i><i></i></span><span class="thinking-word">${esc(word)}…</span>${step ? `<span class="task-live-step">${esc(step)}</span>` : ''}`;
   const stop = x.attempt_id && settingsCanManageBot(S.emps.find(e => e.name === x.bot))
     ? `<button type="button" class="ghost task-live-stop" data-task-stop="${esc(x.attempt_id)}" data-bot="${esc(x.bot)}" title="Stop this run"${

@@ -234,3 +234,48 @@ def test_the_working_line_is_only_the_owning_bots_run(api):
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET owner='human:ana' WHERE id=?", (tid,))
     assert get(api, f"tasks/{tid}")["execution"] is None, "a person's task has no session to follow"
+
+
+def test_a_run_waiting_for_its_chatgpt_login_says_so_and_names_the_holder_only_to_who_may_see_it(api):
+    from backend.tests.test_api import as_member, restrict
+    as_member(api, "ben@acme.example")
+    with api.app.state.store.transaction() as c:      # finance is Ana's alone: Ben may not even learn it is busy
+        restrict(c, "finance", people=["ana"])
+    machine = runner(api, "ana")
+    assign(api, machine, "ops")
+    ready(api, machine, ["ops"])
+    tid, attempt = task_attempt(api, machine)
+    aid = attempt["id"]
+    line = "Waiting for this computer's ChatGPT login to be free (busy with finance)"
+    events(api, machine, aid, [("status", {"waiting": line, "login": "this computer's ChatGPT login", "holder": "finance"})])
+    [run] = get(api, f"tasks/{tid}/run-view")["attempts"]
+    assert (run["state"], run["waiting"], run["moved"]) == ("running", line, None)
+    [run] = get(api, f"tasks/{tid}/run-view", "ben-test")["attempts"]
+    assert run["waiting"] == "Waiting for this computer's ChatGPT login to be free (busy with another bot)"
+    # Once the login is its own the wait is over; a turn that ran on its fallback instead says where and why.
+    events(api, machine, aid, [("status", {"waiting": ""}),
+                               ("diagnostic", {"text": "ChatGPT login busy with finance; running this turn on claude",
+                                               "fallback": "claude",
+                                               "busy": {"login": "this computer's ChatGPT login", "holder": "finance"}})],
+           first=2)
+    [run] = get(api, f"tasks/{tid}/run-view")["attempts"]
+    assert (run["waiting"], run["moved"]) == (None, "ChatGPT login busy with finance; ran this turn on claude")
+    [run] = get(api, f"tasks/{tid}/run-view", "ben-test")["attempts"]
+    assert run["moved"] == "ChatGPT login busy with another bot; ran this turn on claude"
+
+
+def test_a_chat_turn_waiting_for_its_login_shows_the_wait_as_its_label_not_a_failure(api):
+    machine = runner(api, "ana")
+    assign(api, machine, "ops")
+    ready(api, machine, ["ops"])
+    msg = post(api, "chat/ops", {"text": "Please count."})
+    attempt = claim(api, machine)
+    post(api, f"attempts/{attempt['id']}/started", {"thread_id": "count"}, machine["token"])
+    events(api, machine, attempt["id"], [("status", {"waiting": "Waiting for ChatGPT login \"work\" to be free (busy with ops)",
+                                                     "login": "ChatGPT login \"work\"", "holder": "ops"})])
+    execution = get(api, f"conversations/{msg['conversation_id']}/snapshot")["execution"]
+    line = "Waiting for ChatGPT login \"work\" to be free (busy with another turn of this bot)"
+    assert (execution["state"], execution["label"], execution["waiting"]) == ("running", line, line)
+    events(api, machine, attempt["id"], [("status", {"waiting": ""})], first=2)
+    execution = get(api, f"conversations/{msg['conversation_id']}/snapshot")["execution"]
+    assert "waiting" not in execution and execution["label"] != line
