@@ -22,6 +22,8 @@ SUGGEST = ("default", "common", "niche")
 MAX_BOTS = 8
 WHY_LIMIT = 140
 BRIEFING_LIMIT = 500
+# A tag of up to this many words, said whole, is a why; a longer `pains` phrase only scores.
+REASON_WORDS = 3
 STOP_WORDS = frozenset("""a an and are as at be but by can do does for from get gets had has have how i if in into is it
 its just like more most much my no not of on one or our out over so than that the their them then there these they this
 those to too up us was we were what when where which who why will with without you your really still every again things
@@ -132,34 +134,40 @@ def head_of(catalog, department_id):
     return next((card["template"] for card in catalog["cards"] if card["department"] == department_id and card["lead"]), "")
 
 
-def _match(card, found):
-    """The words of the answer that fit this card, as the person wrote them, strongest first: a tag, then a word of its
-    name, then (two or more) words of its summary. Returns (score, the words)."""
+def _match(card, found, common=frozenset()):
+    """How well the answer fits this card (a tag, then a word of its name, then two or more words of its summary) and the
+    reasons to show for it, as the person wrote them. A reason is a short tag of two or more words the answer says whole
+    ("meetings booked"), unless every word of it is `common` in the department. A single word, a word of the name, or
+    two words picked out of a summary or a long `pains` phrase only score: as a why they read as keyword matching
+    ("Matches “managers”" on four Sales cards). Returns (score, reasons)."""
     stems = {stem for stem, _ in found}
     said = {}
     for stem, word in found:
         said.setdefault(stem, word)
-    score, hits = 0, []
+    score, reasons = 0, []
     for tag in card["tags"]:
         # A short tag ("cold email") matches whole; a longer phrase (a card's `pains` sentence) on any two of its words.
         wanted = list(dict.fromkeys(stem for stem, _ in _words(tag)))
         matched = [stem for stem in wanted if stem in stems]
         if wanted and len(matched) >= min(len(wanted), 2):
             score += 3 * len(matched)
-            hits.append(matched)
-    for stem in sorted(_stems(card["name"]) & stems):
-        score += 2
-        hits.append([stem])
+            if 2 <= len(wanted) <= REASON_WORDS and matched == wanted and not set(wanted) <= common:
+                reasons.append(" ".join(said[stem] for stem in wanted))
+    score += 2 * len(_stems(card["name"]) & stems)
     shared = _stems(card["summary"]) & stems
     if len(shared) >= 2:
         score += len(shared)
-        hits.append(sorted(shared))
-    covered, words = set(), []
-    for group in hits:                      # "campaign emails" and then "emails" is said once
-        if not set(group) <= covered:
-            covered.update(group)
-            words.append(" ".join(said[stem] for stem in group))
-    return score, words
+    return score, list(dict.fromkeys(reasons))
+
+
+def _common(cards):
+    """The words most of a department's cards carry in their tags ("github" on 9 of 11 in Engineering, "b2b" in Sales):
+    an answer that says one fits them all, so it is no reason to pick any one of them."""
+    counts = {}
+    for card in cards:
+        for stem in {stem for tag in card["tags"] for stem, _ in _words(tag)}:
+            counts[stem] = counts.get(stem, 0) + 1
+    return frozenset(stem for stem, n in counts.items() if len(cards) > 1 and 2 * n >= len(cards))
 
 
 def rank(catalog, department_id, briefing="", about=None, limit=MAX_BOTS):
@@ -177,10 +185,12 @@ def rank(catalog, department_id, briefing="", about=None, limit=MAX_BOTS):
     briefing_words = [row for row in _words(_text(briefing, BRIEFING_LIMIT)) if row[0] not in own]
     about_words = [row for row in _words(_text(about.get("what"), BRIEFING_LIMIT)) if row[0] not in own]
     consumers = str(about.get("sells_to") or "") == "consumers"
+    members = [card for card in catalog["cards"] if card["department"] == department_id]
+    common = _common(members)
     scored = []
-    for card in (card for card in catalog["cards"] if card["department"] == department_id):
-        said, hits = _match(card, briefing_words)
-        context, more = _match(card, about_words)
+    for card in members:
+        said, hits = _match(card, briefing_words, common)
+        context, more = _match(card, about_words, common)
         text = 2 * said + context
         if card["template"] != head and card["suggest"] == "niche" and text < 3:
             continue
@@ -194,8 +204,10 @@ def rank(catalog, department_id, briefing="", about=None, limit=MAX_BOTS):
             why = "Matches “" + "”, “".join((hits + [m for m in more if m not in hits])[:2]) + "”"
         elif card["suggest"] == "default":
             why = "A starting point for " + dept["name"]
-        else:
+        elif card["suggest"] == "common":
             why = "Common in " + dept["name"]
+        else:                               # a niche card the answer brought in on single words: no why line
+            why = ""
         scored.append((tier, -score, card["name"].lower(), card["template"], why[:WHY_LIMIT]))
     scored.sort()
     bots = [{"template_id": template, "why": why} for _, _, _, template, why in scored[:limit]]

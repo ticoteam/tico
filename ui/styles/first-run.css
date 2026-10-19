@@ -126,8 +126,9 @@
 .ob-strip{display:none}
 .ob-canvas{margin:0 -4px;padding:20px 18px 24px;border:1px solid var(--line);border-radius:14px;
   background:radial-gradient(circle,color-mix(in srgb,var(--ink) 9%,transparent) 1px,transparent 1.3px) 0 0/18px 18px,color-mix(in srgb,var(--bg) 55%,var(--surface))}
-.oc{--spine:20px;--gut:34px;--rg:6px;--cg:14px;--drop:14px;position:relative}
-.oc-big{--rg:22px;--drop:20px}
+/* beside the conversation the chart is narrow, so a bot hangs closer to its group and its name has room (--arm) */
+.oc{--spine:20px;--gut:28px;--arm:12px;--rg:6px;--cg:14px;--drop:14px;position:relative}
+.oc-big{--rg:22px;--drop:20px;--gut:34px;--arm:18px}
 .oc-node{display:flex;align-items:center;gap:9px;min-width:0;padding:6px 10px 6px 6px;border:1px solid var(--line);border-radius:11px;background:var(--surface);color:var(--ink);
   font:inherit;text-align:left;box-shadow:0 1px 2px rgba(15,23,42,.06);transition:border-color var(--dur) var(--ease),box-shadow var(--dur) var(--ease)}
 button.oc-node{width:100%;cursor:pointer}
@@ -135,6 +136,8 @@ button.oc-node:hover{border-color:color-mix(in srgb,var(--dc,var(--accent)) 50%,
 .oc-text{display:flex;flex-direction:column;min-width:0;line-height:1.2}
 .oc-text strong{overflow:hidden;font-size:var(--t-base);font-weight:600;text-overflow:ellipsis;white-space:nowrap}
 .oc-text small{overflow:hidden;color:var(--muted);font-size:var(--t-xs);text-overflow:ellipsis;white-space:nowrap}
+/* a bot's or group's name wraps at a space rather than cutting off ("Sales Developm…"); only a very long rename stops at three lines */
+.oc-bnode .oc-text strong,.oc-dnode .oc-text strong{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;white-space:normal;overflow-wrap:break-word}
 .oc-top{display:flex;align-items:center;flex-wrap:wrap;gap:8px 12px;margin-bottom:var(--rg)}
 .oc-ceo{display:inline-flex;padding:5px 14px 5px 5px;border-radius:999px;border-color:color-mix(in srgb,var(--ink) 18%,var(--line))}
 .oc-ceo .av,.oc-ceo img{flex:none}
@@ -151,10 +154,10 @@ button.oc-node:hover{border-color:color-mix(in srgb,var(--dc,var(--accent)) 50%,
 .oc-dnode{padding:6px 8px 6px 6px}
 .oc-icon{width:28px;height:28px;border-radius:8px;font-size:18px;background:color-mix(in srgb,var(--dc) 14%,var(--surface));color:var(--dci)}
 .oc-count{margin-left:auto;display:inline-flex;align-items:center;justify-content:center;flex:none;min-width:20px;height:20px;padding:0 6px;border-radius:10px;background:var(--dc);color:#fff;font-size:var(--t-xs);font-weight:700}
-.oc-bots{position:relative;margin:0;padding:0 0 0 38px;list-style:none}
+.oc-bots{position:relative;margin:0;padding:0 0 0 calc(20px + var(--arm));list-style:none}
 .oc-bot{position:relative;padding-top:6px;min-width:0}
-.oc-bot::before{content:"";position:absolute;left:-18px;top:0;width:14px;height:24px;border-left:1.5px solid var(--oc-line);border-bottom:1.5px solid var(--oc-line);border-bottom-left-radius:8px}
-.oc-bot:not(:last-child)::after{content:"";position:absolute;left:-18px;top:0;bottom:0;border-left:1.5px solid var(--oc-line)}
+.oc-bot::before{content:"";position:absolute;left:calc(-1 * var(--arm));top:0;width:calc(var(--arm) - 4px);height:24px;border-left:1.5px solid var(--oc-line);border-bottom:1.5px solid var(--oc-line);border-bottom-left-radius:8px}
+.oc-bot:not(:last-child)::after{content:"";position:absolute;left:calc(-1 * var(--arm));top:0;bottom:0;border-left:1.5px solid var(--oc-line)}
 .oc-bnode{min-height:36px;padding:5px 10px 5px 5px;border-radius:10px}
 .oc-head>.oc-bnode{border-color:color-mix(in srgb,var(--dc) 45%,var(--line))}
 .oc-cur>.oc-dnode{border-color:var(--dc);box-shadow:0 0 0 3px color-mix(in srgb,var(--dc) 18%,transparent)}
@@ -178,9 +181,14 @@ button.oc-node:hover{border-color:color-mix(in srgb,var(--dc,var(--accent)) 50%,
 .oc-edit-actions{display:flex;align-items:center;gap:6px}.oc-edit-actions .spacer{flex:1}
 .oc-edit-actions button{padding:5px 10px;font-size:var(--t-base)}
 .oc-big .oc-node{background:var(--surface)}
-.oc-dept.ob-new>.oc-dnode,.oc-bot.ob-new>.oc-bnode{animation:ocPop .5s cubic-bezier(.2,.9,.3,1.25) both}
-.oc-bot.ob-new::before,.oc-dept.ob-new::before{transform-origin:top;animation:ocGrow .28s ease-out both}
-.oc-bot.ob-new>.oc-bnode{animation-delay:.12s}
+/* a new bot comes in whole, its line with its card: a line drawn ahead of the card read as an empty gap */
+.oc-dept.ob-new>.oc-dnode,.oc-bot.ob-new{animation:ocPop .4s cubic-bezier(.2,.9,.3,1.25) both}
+.oc-dept.ob-new::before{transform-origin:top;animation:ocGrow .28s ease-out both}
+/* the places of the bots being recruited */
+.oc-ph>.oc-bnode{border-style:dashed;background:transparent;box-shadow:none}
+.oc-ph .sk-i{flex:none;width:24px;height:24px;border-radius:50%}
+.oc-ph .sk-l{flex:1;max-width:120px;height:10px;border-radius:5px}
+.oc-ph .sk-i,.oc-ph .sk-l{background:linear-gradient(90deg,var(--surface2) 25%,color-mix(in srgb,var(--surface2) 35%,var(--surface)) 50%,var(--surface2) 75%);background-size:200% 100%;animation:obShimmer 1.1s linear infinite}
 @keyframes ocPop{from{opacity:0;transform:translateY(-6px) scale(.92)}to{opacity:1;transform:none}}
 @keyframes ocGrow{from{transform:scaleY(0)}to{transform:scaleY(1)}}
 @keyframes obRise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}

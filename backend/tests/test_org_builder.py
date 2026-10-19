@@ -5,6 +5,7 @@ install allows it (not demo, TICO_TELEMETRY, DO_NOT_TRACK or the usage-count set
 this install's own template ids.
 """
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -62,12 +63,15 @@ def test_a_department_starts_with_its_head_and_defaults_and_the_answer_brings_in
     assert plain["suggested_default"] == ["sales-manager", "sdr"]
     assert plain["bots"][0]["why"] == "Heads Sales and reports to you"
     assert plain["bots"][2]["why"] == "Common in Sales"
-    # Tags boost: an answer about resellers brings the niche card in, and a match outranks a default, with the words it
-    # matched as the why. The head stays first.
+    # Tags boost: an answer about resellers brings the niche card in, and a match outranks a default. Single words only
+    # rank: the niche card shows no why, the common one its group's. The head stays first.
     asked = R.rank(built, "sales", "We sell through resellers and partners, and renewals matter")
     assert ids(asked) == ["sales-manager", "partner-scout", "account-manager", "sdr"]
     why = {row["template_id"]: row["why"] for row in asked["bots"]}
-    assert why["partner-scout"] == "Matches “partners”, “resellers”" and why["account-manager"] == "Matches “renewals”"
+    assert why["partner-scout"] == "" and why["account-manager"] == "Common in Sales"
+    # A short tag of two words, said whole, is the why.
+    assert R.rank(built, "sales", "Our cold email gets no replies")["bots"][1] == {"template_id": "sdr",
+                                                                                   "why": "Matches “cold email”"}
     assert "deal-desk" not in ids(asked)                                        # still niche, still not named
     # "What you do" counts too, at half the weight of the answer itself; a consumer-only company sinks a business card.
     assert "deal-desk" in ids(R.rank(built, "sales", "pricing", {"what": "enterprise contracts"}))
@@ -77,6 +81,34 @@ def test_a_department_starts_with_its_head_and_defaults_and_the_answer_brings_in
     assert R.rank(built, "sales", "resellers") == R.rank(built, "sales", "resellers")
     assert R.rank(built, "catering", "x") == {"bots": [], "suggested_default": []}
     assert set(ids(R.rank(built, "finance", "invoices sales resellers"))) <= {"controller", "collections"}
+
+
+def test_a_why_is_never_a_single_word_a_word_of_a_name_or_a_phrase_most_of_the_group_carries():
+    """First-run polish (Dev 236): "small property managers" put Matches “managers” on four Sales cards, "booking runs"
+    (two summary words) on the SDR, and Matches “github” on most of Engineering. Each still ranks; none is a why."""
+    built = R.build({"departments": [{"id": "engineering", "name": "Engineering", "head": "eng-lead"}]}, [
+        card("eng-lead", "engineering", lead=True, tags=["github", "github actions", "weekly review"]),
+        card("devops", "engineering", name="DevOps Engineer", tags=["github", "flaky tests", "build times"],
+             summary="Runs the build and keeps the deploys booking green."),
+        card("qa", "engineering", name="QA Engineer", suggest="default", tags=["github", "github actions", "bugs"]),
+        card("architect", "engineering", name="Software Architect", tags=["github actions", "design docs"]),
+        card("release", "engineering", name="Release Manager", tags=["releases"]),
+        card("eng-manager", "engineering", name="Engineering Manager", tags=["github actions", "delivery"],
+             suggest="niche"),
+        card("tech-writer", "engineering", name="Technical Writer", pains=["the docs runs behind every booking release"])])
+    assert R._common([row for row in built["cards"]]) == {"github", "action"}
+    asked = R.rank(built, "engineering", "Release managers fight flaky tests and github actions; booking runs late",
+                   {"what": "Booking software for property managers"})
+    why = {row["template_id"]: row["why"] for row in asked["bots"]}
+    assert why == {"eng-lead": "Heads Engineering and reports to you",
+                   "devops": "Matches “flaky tests”",            # not the summary's "booking runs"
+                   "qa": "A starting point for Engineering",      # "github actions" is on most of the group
+                   "architect": "Common in Engineering",
+                   "release": "Common in Engineering",            # "managers", "release": words of names
+                   "eng-manager": "",                             # niche, brought in by words alone
+                   "tech-writer": "Common in Engineering"}        # two words of a long pains phrase
+    assert ids(asked)[:2] == ["eng-lead", "devops"]               # the words still rank; "eng-manager" is in on them
+    assert not any(re.fullmatch(r"Matches “[^ ”]*”", row["why"]) for row in asked["bots"])
 
 
 def test_the_shipped_catalog_has_a_head_for_every_department_and_the_setup_page_role_list_is_current():
@@ -182,9 +214,18 @@ def test_the_install_sends_an_answer_to_hq_only_when_the_toggle_is_on_and_keeps_
     assert answer == {"bots": [{"template_id": "partner-scout", "why": "Resellers are your channel"}],
                       "suggested_default": ["partner-scout"], "source": "hq", "shared": True, "off_by": ""}
 
+    # An HQ on the older engine says Matches “<word>”: the install's own why replaces it (none for a niche card).
+    hq.reply["json"] = {"bots": [{"template_id": "sales-manager", "why": "Matches “managers”"},
+                                 {"template_id": "account-manager", "why": "Matches “renewals”"},
+                                 {"template_id": "partner-scout", "why": "Matches “resellers”"},
+                                 {"template_id": "sdr", "why": "Books your demos"}]}
+    assert {row["template_id"]: row["why"] for row in ask(api).json()["bots"]} == {
+        "sales-manager": "Heads Sales and reports to you", "account-manager": "Common in Sales", "partner-scout": "",
+        "sdr": "Books your demos"}
+
     # The person's toggle off: nothing leaves, and the local recommender answers.
     local = ask(api, share=False).json()
-    assert len(hq.seen) == 1 and local["source"] == "local" and local["shared"] is False
+    assert len(hq.seen) == 2 and local["source"] == "local" and local["shared"] is False
     assert local["bots"][0]["template_id"] == "sales-manager"
 
     # HQ down, slow or talking nonsense: the local answer, never an error.
