@@ -275,25 +275,36 @@ fn clip(text: &str) -> String {
 /// A way to stop a child process that only one task owns and reaps (`own`). Signals go through that task, so
 /// neither SIGTERM nor the later SIGKILL can reach a pid the system has already handed to another process.
 #[derive(Clone)]
-pub struct Stopper(tokio::sync::mpsc::UnboundedSender<Option<std::time::Duration>>);
+pub struct Stopper(tokio::sync::mpsc::UnboundedSender<Stop>);
+
+enum Stop {
+    Term(std::time::Duration),
+    Kill,
+    Signal(i32),
+}
 
 impl Stopper {
     /// SIGTERM now, SIGKILL after `grace` if the process has not exited by then. A process already reaped is
     /// left alone.
     pub fn terminate(&self, grace: std::time::Duration) {
-        let _ = self.0.send(Some(grace));
+        let _ = self.0.send(Stop::Term(grace));
     }
 
     /// SIGKILL now, so the process runs none of its own cleanup (Claude's ends its background shells).
     pub fn kill(&self) {
-        let _ = self.0.send(None);
+        let _ = self.0.send(Stop::Kill);
+    }
+
+    /// `signal` now, through the task that reaps the process, so never to a pid already handed on.
+    pub fn signal(&self, signal: i32) {
+        let _ = self.0.send(Stop::Signal(signal));
     }
 }
 
 /// Hand `child` to a task of its own that waits for it and carries out `Stopper` requests. The receiver gets the
 /// exit status. Take the child's pipes before calling this.
 pub fn own(mut child: tokio::process::Child) -> (Stopper, tokio::sync::oneshot::Receiver<std::io::Result<std::process::ExitStatus>>) {
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Option<std::time::Duration>>();
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Stop>();
     let (done, exited) = tokio::sync::oneshot::channel();
     tokio::spawn(async move {
         let mut kill_at: Option<tokio::time::Instant> = None;
@@ -309,11 +320,16 @@ pub fn own(mut child: tokio::process::Child) -> (Stopper, tokio::sync::oneshot::
                 status = child.wait() => break status,
                 asked = rx.recv(), if asking => match asked {
                     // Not reaped yet: only this task waits for the child, and its wait has not returned.
-                    Some(None) => {
+                    Some(Stop::Kill) => {
                         let _ = child.start_kill();
                         kill_at = None;
                     }
-                    Some(Some(grace)) => {
+                    Some(Stop::Signal(signal)) => {
+                        if let Some(pid) = child.id() {
+                            unsafe { libc::kill(pid as i32, signal); }
+                        }
+                    }
+                    Some(Stop::Term(grace)) => {
                         if let Some(pid) = child.id() {
                             unsafe { libc::kill(pid as i32, libc::SIGTERM); }
                         }

@@ -91,6 +91,16 @@ pub fn main(args: &[String]) -> i32 {
     };
     let pid = child.id() as i32;
     CHILD.store(pid, Ordering::SeqCst);
+    // Claude's pipes are Claude's: the runner reads its end of the turn from their closing, which must not wait for
+    // this parent.
+    if let Ok(null) = std::fs::OpenOptions::new().read(true).write(true).open("/dev/null") {
+        use std::os::fd::AsRawFd;
+        // SAFETY: dup2 onto this process's own standard input and output.
+        unsafe {
+            libc::dup2(null.as_raw_fd(), 0);
+            libc::dup2(null.as_raw_fd(), 1);
+        }
+    }
     let mut claude: Option<i32> = None;
     loop {
         let mut raw = 0;
@@ -128,12 +138,12 @@ pub fn statuses(path: &std::path::Path) -> std::collections::HashMap<u32, i32> {
         .collect()
 }
 
-#[cfg(all(test, target_os = "linux"))]
-mod tests {
+#[cfg(test)]
+pub mod tests {
     use super::*;
     use std::time::{Duration, Instant};
 
-    const ARGS: &str = "TICO_REAP_TEST_ARGS";
+    pub const ARGS: &str = "TICO_REAP_TEST_ARGS";
 
     /// This test binary run as the parent of `script`: it runs only `as_parent`, which runs `main`.
     fn parent(status: &std::path::Path, dir: &std::path::Path, script: &str) -> std::process::Child {
