@@ -953,6 +953,7 @@ impl Runner {
                 add_dirs: p.add_dirs.clone(),
                 shared: crate::sessions::is_shared(&config),
                 mcp_servers: self.mcp_servers(&aid, &execution_path, &env, &vault.names, &runtime, &config),
+                background_wait: hosts::background_wait(&config),
             };
             let mut resumed = false;
             if let Some(prev) = &previous {
@@ -1122,6 +1123,7 @@ impl Runner {
                     add_dirs: place.as_ref().map(|p| p.add_dirs.clone()).unwrap_or_default(),
                     shared: crate::sessions::is_shared(&config),
                     mcp_servers: self.mcp_servers(&aid, &execution_path, &hop_env, &vault.names, &hop.runtime, &hop_config),
+                    background_wait: hosts::background_wait(&config),
                 };
                 let th = h.start_thread(&bot, &settings).await?;
                 thread = Some(th.clone());

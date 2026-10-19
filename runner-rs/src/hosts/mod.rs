@@ -136,6 +136,18 @@ pub struct Settings {
     pub shared: bool,
     /// The bot's own MCP servers from bot.yaml, this harness's transports only (crate::perbot::mcp_for_run).
     pub mcp_servers: Vec<Value>,
+    /// How long a Claude turn that has answered may wait on nothing but its background shells before it ends and
+    /// leaves them running (`background_wait_s`); None waits for them, as before.
+    pub background_wait: Option<std::time::Duration>,
+}
+
+/// `background_wait_s` in the bot's run config: seconds, 0 for off; five minutes when unset.
+pub const BACKGROUND_WAIT_S: f64 = 300.0;
+
+pub fn background_wait(config: &Value) -> Option<std::time::Duration> {
+    let v = &config["background_wait_s"];
+    let s = v.as_f64().or_else(|| v.as_str().and_then(|t| t.trim().parse().ok())).unwrap_or(BACKGROUND_WAIT_S);
+    (s > 0.0 && s.is_finite()).then(|| std::time::Duration::from_secs_f64(s))
 }
 
 const HUB_MCP_ENV: &[&str] = &["HUB_API_URL", "HUB_TOKEN", "HUB_BOT", "HUB_EMPLOYEE", "HUB_DIR"];
@@ -263,20 +275,25 @@ fn clip(text: &str) -> String {
 /// A way to stop a child process that only one task owns and reaps (`own`). Signals go through that task, so
 /// neither SIGTERM nor the later SIGKILL can reach a pid the system has already handed to another process.
 #[derive(Clone)]
-pub struct Stopper(tokio::sync::mpsc::UnboundedSender<std::time::Duration>);
+pub struct Stopper(tokio::sync::mpsc::UnboundedSender<Option<std::time::Duration>>);
 
 impl Stopper {
     /// SIGTERM now, SIGKILL after `grace` if the process has not exited by then. A process already reaped is
     /// left alone.
     pub fn terminate(&self, grace: std::time::Duration) {
-        let _ = self.0.send(grace);
+        let _ = self.0.send(Some(grace));
+    }
+
+    /// SIGKILL now, so the process runs none of its own cleanup (Claude's ends its background shells).
+    pub fn kill(&self) {
+        let _ = self.0.send(None);
     }
 }
 
 /// Hand `child` to a task of its own that waits for it and carries out `Stopper` requests. The receiver gets the
 /// exit status. Take the child's pipes before calling this.
 pub fn own(mut child: tokio::process::Child) -> (Stopper, tokio::sync::oneshot::Receiver<std::io::Result<std::process::ExitStatus>>) {
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<std::time::Duration>();
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Option<std::time::Duration>>();
     let (done, exited) = tokio::sync::oneshot::channel();
     tokio::spawn(async move {
         let mut kill_at: Option<tokio::time::Instant> = None;
@@ -292,7 +309,11 @@ pub fn own(mut child: tokio::process::Child) -> (Stopper, tokio::sync::oneshot::
                 status = child.wait() => break status,
                 asked = rx.recv(), if asking => match asked {
                     // Not reaped yet: only this task waits for the child, and its wait has not returned.
-                    Some(grace) => {
+                    Some(None) => {
+                        let _ = child.start_kill();
+                        kill_at = None;
+                    }
+                    Some(Some(grace)) => {
                         if let Some(pid) = child.id() {
                             unsafe { libc::kill(pid as i32, libc::SIGTERM); }
                         }
