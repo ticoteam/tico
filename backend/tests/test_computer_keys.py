@@ -531,6 +531,12 @@ def test_switch_to_an_api_key_rights_and_an_old_or_offline_computer(environment)
     refused = call(api, "POST", f"runners/{old['runner_id']}/keys", body, expected=409)
     assert "Update Old box to switch to an API key" in refused["error"]["detail"]
     untouched(api, old)
+    # On a Mac Claude Code keeps its subscription in the keychain, where a logout that half worked could not be undone.
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runners SET platform='darwin' WHERE id=?", (rid,))
+    mac = call(api, "POST", f"runners/{rid}/keys", {**body, "runtime": "claude", "secret": "sk-ant-switched-0123456789"},
+               expected=422)
+    assert "keychain" in mac["error"]["detail"]
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE runners SET last_seen='2026-01-01T00:00:00Z' WHERE id=?", (rid,))
     assert "offline" in call(api, "POST", f"runners/{rid}/keys", body, expected=409)["error"]["detail"]

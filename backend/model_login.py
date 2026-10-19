@@ -659,8 +659,13 @@ def replace_key(c, who, rid, runtime, key, env="", scope="this", auth=None, vaul
     if switch:
         if scope != "this":
             raise Problem("scope", "Switch to API key is for this computer's own login", 422)
-        if runtime not in SIGN_OUT_RUNTIMES:
+        caps = manifests.caps(runtime)
+        # The key is checked before the subscription is signed out, by the CLI's key login or a key check of its own.
+        if runtime not in SIGN_OUT_RUNTIMES or not (caps.get("api_key_login") or caps.get("api_key_check")):
             raise Problem("kind", "You can't switch to an API key from here for " + runtime, 422)
+        if runner["platform"] in caps.get("switch_unavailable_on", []):
+            raise Problem("kind", f"You can't switch {runtime} to an API key on {runner['label']} from here: it keeps "
+                          "the login in the system keychain. Sign out, then add a key", 422)
         row, new = _queue(c, who, runner, runtime, "", "to_key", "switch to an API key")
         if not new:
             raise Problem("state", "A switch to an API key is already running on that computer; wait for it to finish",

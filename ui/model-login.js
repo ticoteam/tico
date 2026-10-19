@@ -378,7 +378,8 @@
   // signed out. Only for a CLI whose manifest has a logout (`sign_out`), on a computer that is online, to whoever may
   // sign it in (the caller checks: an admin or the computer's operator). The computer's login running on an API key
   // (`onKey`) offers Switch to subscription instead of Switch account; on a subscription, a runtime Tico keeps a key for
-  // (`api_keys = "computer"`) also offers Switch to API key.
+  // (`api_keys = "computer"`) and can check one (`api_key_login` or `api_key_check`) also offers Switch to API key, except
+  // where its login is in the system keychain (a logout there could not be undone).
   // No switch where the CLI keeps the login in the system keychain (`switch_unavailable_on`, by the computer's
   // `platform`): there is no side to sign in on, so a cancel could not keep the old login.
   function actionsHTML({runnerId, runtime, machine = '', profile = '', signedIn = false, signedOut = false, online = true, platform = '', onKey = false}) {
@@ -387,9 +388,10 @@
     const data = `data-runner="${text(runnerId)}" data-runtime="${text(runtime)}" data-machine="${text(machine)}"${profile ? ` data-profile="${text(profile)}"` : ''}`;
     if (signedIn) {
       const switches = !(caps.switch_unavailable_on || []).includes(platform);
+      const toKey = switches && !onKey && !profile && caps.api_keys === 'computer' && (caps.api_key_login || caps.api_key_check);
       return (onKey && !profile ? toSubscriptionHTML({runnerId, runtime, machine, online, platform})
         : switches ? ` <button class="ghost machine-signin" type="button" data-model-switch ${data}>Switch account</button>` : '')
-        + (!onKey && !profile && caps.api_keys === 'computer' ? ` <button class="ghost machine-signin" type="button" data-model-to-key ${data}>Switch to API key</button>` : '')
+        + (toKey ? ` <button class="ghost machine-signin" type="button" data-model-to-key ${data}>Switch to API key</button>` : '')
         + ` <button class="ghost machine-signin" type="button" data-model-sign-out ${data}>Sign out</button>`;
     }
     return signedOut && !profile ? ` <button class="ghost machine-signin" type="button" data-model-shared-key ${data}>Use the shared key</button>` : '';
@@ -559,8 +561,17 @@
       dialog.querySelectorAll('[data-actions] button, [data-key-form] input, [data-key-form] select').forEach(el => { el.disabled = true; });
       status.textContent = scope === 'all' ? 'Replacing the shared key…' : `Checking the new key on ${where}…`;
       const close = () => { dialog.querySelector('[data-actions]').innerHTML = '<button class="ghost" type="button" data-close>Close</button>'; };
+      // Switch to API key: closing the dialog cancels the switch, also while it is being asked for (`job` not back yet).
+      let job = null;
+      const cancel = async () => {
+        try { await post(`${keyBase(runnerId)}/logins/${encodeURIComponent(job.id)}/cancel`, {}); }
+        catch (error) { status.textContent = error.message; }
+      };
+      if (toKey) dialog.addEventListener('close', () => { if (job && !dialog.ended) void cancel(); });
       try {
         const out = await post(`${keyBase(runnerId)}/keys`, body);
+        job = out;
+        if (toKey && dialog.closed) { void cancel(); return; }
         if (scope === 'all') {
           const later = (out.computers || []).filter(c => !c.online).map(c => c.label);
           status.textContent = `Replaced. The shared key is now ${out.shared.preview}; every computer it serves uses it from its next check.${later.length ? ` ${later.join(', ')} ${later.length === 1 ? 'gets' : 'get'} it when next online.` : ''}`;
@@ -569,23 +580,21 @@
           return;
         }
         if (toKey) {
-          // Cancel switch while the key is checked; closing the dialog then cancels it too.
-          const cancel = async () => {
-            try { await post(`${keyBase(runnerId)}/logins/${encodeURIComponent(out.id)}/cancel`, {}); }
-            catch (error) { status.textContent = error.message; }
-          };
           dialog.querySelector('[data-actions]').innerHTML = '<button class="ghost" type="button" data-key-cancel>Cancel switch</button>';
           dialog.querySelector('[data-key-cancel]').addEventListener('click', () => void cancel());
-          dialog.addEventListener('close', () => { if (!dialog.ended) void cancel(); });
         }
         followKeyJob(dialog, runnerId, runtime, out, row => {
           dialog.ended = true;
           status.dataset.state = row.state;
+          // A failure says what the computer reported, which says whether the subscription is still in use: when putting
+          // things back did not work either, it says that instead.
+          const said = String(row.message || '').trim();
           status.textContent = toKey
             ? (row.state === 'done' ? `Switched. ${name} on ${where} now uses ${out.key?.preview || 'the API key'}; the subscription is signed out.`
-              : row.state === 'expired' ? 'The computer did not check the key in time. The subscription is still in use.'
+              : row.state === 'expired' ? `${where} did not finish the switch in time. Check this connection once it reports again.`
               : row.state === 'cancelled' ? 'Cancelled. The subscription is still in use.'
-              : `${(row.message || 'The key did not work').replace(/[.;,]? *(so )?the subscription is still in use\.?$/i, '')}. The subscription is still in use.`)
+              : said ? said[0].toUpperCase() + said.slice(1) + (/[.!?]$/.test(said) ? '' : '.')
+              : 'The switch did not finish.')
             : row.state === 'done' ? `${adding ? 'Added' : 'Replaced'}. ${name} on ${where} now uses ${out.key?.preview || 'the new key'}.`
             : row.state === 'expired' ? 'The computer did not check the key in time; nothing changed.'
             : (row.message || 'The new key did not work') + (adding ? '' : '. The old key is still in use.');

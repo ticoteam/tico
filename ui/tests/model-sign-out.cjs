@@ -280,12 +280,12 @@ const {unrouted} = require('./support/routes.cjs');
     await page.evaluate(() => loadSettings());
     await own('claude').getByRole('button', {name: 'Sign out'}).waitFor();
 
-    // A Mac: Claude Code keeps its login in the keychain there, so it offers Sign out but no Switch account. Switch to
-    // API key needs no side login (ui/tests/model-to-key.cjs), so it stays.
+    // A Mac: Claude Code keeps its login in the keychain there, so it offers Sign out but no Switch account, nor Switch
+    // to API key (a logout there could not be undone).
     box.platform = 'darwin';
     await page.evaluate(() => loadSettings());
     await own('claude').getByRole('button', {name: 'Sign out'}).waitFor();
-    assert.deepEqual(await buttons(own('claude')), ['Switch to API key', 'Sign out']);
+    assert.deepEqual(await buttons(own('claude')), ['Sign out']);
     assert.deepEqual(await buttons(acme), ['Switch account', 'Sign out'], 'Codex still switches on a Mac');
     box.platform = 'linux';
     await page.evaluate(() => loadSettings());

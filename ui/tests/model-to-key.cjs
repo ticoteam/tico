@@ -26,6 +26,8 @@ const {unrouted} = require('./support/routes.cjs');
       profiles: []});
     // How each job ends on the computer: on its second check, or (`hold`) not until it is cancelled.
     const ending = {codex: {state: 'done', message: 'Switched to the API key; the subscription is signed out'}, claude: 'hold'};
+    // `held`: the next Switch to API key request waits until it is released, as on a slow connection.
+    let held = null;
 
     async function open(as = 'sam') {
       const box = fixture(), writes = [], rows = {};
@@ -61,6 +63,7 @@ const {unrouted} = require('./support/routes.cjs');
         }
         if (p === '/api/v2/computers/box/keys' && method === 'POST') {
           const body = req.postDataJSON(); writes.push({p, body});
+          if (held) await held.promise;
           const id = 'key' + Object.keys(rows).length;
           rows[id] = {id, kind: body.switch ? 'to_key' : 'use_key', runtime: body.runtime, state: 'requested', polls: 0, created: new Date().toISOString(), lines: []};
           return json({...rows[id], key: {id: 'cred9', env: 'OPENAI_API_KEY', preview: 'sk-…456'}});
@@ -145,14 +148,37 @@ const {unrouted} = require('./support/routes.cjs');
     for (let i = 0; i < 50 && writes.at(-1).p !== '/api/v2/computers/box/logins/key2/cancel'; i++) await page.waitForTimeout(100);
     assert.equal(writes.at(-1).p, '/api/v2/computers/box/logins/key2/cancel');
 
-    // A key that does not work: the computer's message, and the subscription is still in use.
-    ending.claude = {state: 'failed', message: 'The new key did not sign claude in; the subscription is still in use'};
+    // Closed while the request is still on its way: the switch it started is cancelled once it is back.
+    held = {}; held.promise = new Promise(resolve => { held.release = resolve; });
     await own('claude').getByRole('button', {name: 'Switch to API key'}).click();
     await dialog.locator('input[name=secret]').fill(SECRET);
     await dialog.locator('[data-key-go]').click();
-    await dialog.locator('[data-status][data-state=failed]').waitFor();
-    assert.equal(await dialog.locator('[data-status]').innerText(), 'The new key did not sign claude in. The subscription is still in use.');
-    await dialog.locator('[data-actions] [data-close]').click();
+    for (let i = 0; i < 50 && writes.at(-1).p !== '/api/v2/computers/box/keys'; i++) await page.waitForTimeout(100);
+    await dialog.locator('[data-close]').first().click();
+    await dialog.waitFor({state: 'detached'});
+    const release = held.release; held = null; release();
+    for (let i = 0; i < 50 && writes.at(-1).p !== '/api/v2/computers/box/logins/key3/cancel'; i++) await page.waitForTimeout(100);
+    assert.equal(writes.at(-1).p, '/api/v2/computers/box/logins/key3/cancel');
+
+    // A failure says what the computer reported: the subscription still in use when it put everything back, and what
+    // could not be put back when it could not, with no promise that the subscription is in use.
+    const fails = async message => {
+      ending.claude = {state: 'failed', message};
+      await own('claude').getByRole('button', {name: 'Switch to API key'}).click();
+      await dialog.locator('input[name=secret]').fill(SECRET);
+      await dialog.locator('[data-key-go]').click();
+      await dialog.locator('[data-status][data-state=failed]').waitFor();
+      const said = await dialog.locator('[data-status]').innerText();
+      await dialog.locator('[data-actions] [data-close]').click();
+      return said;
+    };
+    assert.equal(await fails('The new key did not work for claude; the subscription is still in use'),
+      'The new key did not work for claude; the subscription is still in use.');
+    const lost = "The subscription could not be signed out on claude, and the subscription's login could not be put back (mv failed); its files are in /home/sam/.tico-switch-1";
+    assert.equal(await fails(lost), lost + '.');
+    const keys = "Could not check that claude signed its subscription out; the subscription is back, but this computer's keys could not all be put back (PermissionDenied)";
+    assert.equal(await fails(keys), keys + '.');
+    for (const said of [lost, keys]) assert.doesNotMatch(said, /still in use/);
 
     // Offline: nothing to offer.
     box.last_seen = at(-3 * 3600000);
@@ -166,6 +192,6 @@ const {unrouted} = require('./support/routes.cjs');
     const other = await open('cara');
     assert.equal(await other.page.locator('#set-machines [data-model-to-key]').count(), 0);
     assert.deepEqual(other.errors, []);
-    console.log('PASS: Switch to API key on a subscription line, the key posted once with switch, done / cancel / close / failed, same connection after, offline and rights');
+    console.log('PASS: Switch to API key on a subscription line, the key posted once with switch, done / cancel / close (also while it is being asked for) / failed with what the computer put back, same connection after, offline and rights');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exit(1); });
