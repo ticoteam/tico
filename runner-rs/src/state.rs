@@ -3,7 +3,7 @@
 
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Map, Value};
@@ -42,9 +42,11 @@ pub const SCHEMA: &str = "
       PRIMARY KEY(resource_type,external_id));
 ";
 
+/// Clones share one connection, so a clone can carry a call to the blocking pool (`State::off`).
+#[derive(Clone)]
 pub struct State {
     pub directory: PathBuf,
-    conn: Mutex<Connection>,
+    conn: Arc<Mutex<Connection>>,
 }
 
 #[derive(Debug, Clone)]
@@ -74,7 +76,14 @@ impl State {
         conn.execute_batch(SCHEMA).map_err(sql)?;
         conn.execute_batch("PRAGMA synchronous=FULL;").map_err(sql)?;
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).map_err(|e| e.to_string())?;
-        Ok(State { directory: directory.to_path_buf(), conn: Mutex::new(conn) })
+        Ok(State { directory: directory.to_path_buf(), conn: Arc::new(Mutex::new(conn)) })
+    }
+
+    /// A call from async code, run on the blocking pool: the connection's lock, a busy database and each commit's
+    /// fsync then hold a blocking thread, not one of the runtime's two async workers.
+    pub async fn off<T: Send + 'static>(&self, f: impl FnOnce(&State) -> T + Send + 'static) -> T {
+        let state = self.clone();
+        crate::util::off_worker(move || f(&state)).await
     }
 
     /// One use of the shared connection (the files outbox and memory reports keep their own tables in it).
