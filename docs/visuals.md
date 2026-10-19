@@ -1,11 +1,40 @@
 # Visuals in replies
 
 A bot or a person attaches a visual to a chat reply or a task comment: a picture, an SVG, a self-contained HTML
-page, a video or an audio clip, with a title. This page is the reference for bot builders: how to attach one, what
-Tico does to a page when it is attached, the types and limits, and who can see it.
+page, a video or an audio clip, with a title. This page is the reference: how a visual shows in a conversation, how
+to attach one, what Tico does to a page when it is attached, the types and limits, and who can see it.
 
-This is part 1 of visual replies. The app still shows every visual as a normal file chip; inline cards come in a
-later release.
+Pictures, SVG and visual pages show inline as cards. Video and audio still show as file chips; inline players come
+in a later release.
+
+## In a chat or task conversation
+
+A picture (PNG, JPEG, GIF, WebP), an SVG or a visual page (HTML) attached to a chat message or a task comment shows
+under the text as a card. This holds for a person's attachments too. The card is the width of the message and never
+wider than the screen. A message shows up to 4 cards, in the order attached; the rest stay file chips.
+
+- **Caption.** The visual's title, or its file name when it has none.
+- **Menu** (**⋯**, labelled **More**, next to the caption): **Expand**, **Open in file viewer**, **Download**.
+- **A visual page** shows at its own height, up to 480 px (60% of the screen on a phone). A taller page is cut
+  there with a fade and an **Expand** button. The page can't run its own scripts, open forms, load anything or
+  reach the app. A link in it opens a new tab, and only when clicked.
+- **Expand** opens the visual full screen; so does a click or tap on a picture, or a tap on a page on a touch
+  screen. Pictures zoom: click or tap for 2×,
+  pinch or Ctrl + scroll up to 6×. Pages scroll. **Close**, Esc, a swipe down or Back returns you to the same place
+  in the conversation.
+- **Dark mode.** An SVG or a page sits on a light card, so one that sets no background stays readable.
+- **While it loads**, the card holds its space, so the conversation doesn't jump.
+- **Versions.** The card keeps the version it was posted with. When the file has a newer version, **Newer version**
+  next to the caption opens the newest.
+- **"This visual was removed"** shows when the file was removed. The card then has no menu.
+- **"Couldn't show this visual"** shows, with **Open in file viewer**, when the visual can't be displayed.
+
+On a task, **Open in file viewer** and **Newer version** open the task's own file panel at that version; see
+[Tasks](tasks.md#files-and-questions-on-the-page). In a chat they open the file viewer.
+
+A visual shows as a file chip instead of a card when its type or size isn't one that shows inline (see
+[Types and limits](#types-and-limits)), and on a self-hosted server without a visual address (see
+[Self-hosting](#self-hosting)).
 
 ## Attach a visual
 
@@ -52,7 +81,7 @@ When the page is attached, Tico removes everything that would load from somewher
   fetched. They are removed, and the result lists each one.
 - **Scripts don't run.** `<script>`, frames, `<object>`, `<embed>`, `<noscript>`, inline event handlers (`onclick`)
   and meta refresh are dropped. The page is static.
-- Links (`<a href>`) stay and open in a new tab.
+- Links (`<a href>`) stay. In the card, a link opens a new tab, and only when clicked.
 
 If anything was removed, Tico saves the cleaned page as a new version of the file, and that version is the one
 posted. The stored visual never loads anything from the network.
@@ -66,6 +95,9 @@ The result tells you what happened:
 
 To keep an image in the page, put the file in the checkout and refer to it by a relative path, or embed it yourself
 as a `data:` URI.
+
+**Size pages by their content, not `100vh`.** The card follows the page's own height. A page sized to the screen
+(`height` or `min-height: 100vh`) fills the card up to the cap and is cut there with **Expand**.
 
 ## Types and limits
 
