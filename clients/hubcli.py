@@ -7,7 +7,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
 `hub_` dropped: `hub message send` is `hub_message_send`, `hub bot go-live` is `hub_bot_go_live`.
 
     hub whoami
-    hub message send <bot|human> "<text>" [--fyi] [--conversation ID] [--ref task:ID ...] [--steer]
+    hub message send <bot|human> "<text>" [--fyi] [--conversation ID] [--ref task:ID ...] [--steer] [--needs-action]
                                            --fyi: expects no reply, takes no conversation or references
     hub message list                       what waits for you
     hub message mark-read <message-id>     an external agent's own delivery
@@ -576,6 +576,7 @@ def parser():
     s.add_argument("--ref", action="append")
     s.add_argument("--steer", action="store_true",
                    help="with --ref task:<id> you requested: write this into its owner's running turn on that task")
+    s.add_argument("--needs-action", dest="needs_action", action="store_true", help="a bot's message to a bot waits for that bot's next run; this wakes it now")
     s.set_defaults(fn="message send")
     message.add_parser("list", help="the messages and fyis waiting for you").set_defaults(fn="message list")
     s = message.add_parser("mark-read", help="mark a message from your inbox as read (an external agent's own delivery)")
@@ -828,6 +829,8 @@ def parser():
     s.add_argument("--title")
     s.add_argument("--body")
     s.add_argument("--parent")
+    s.add_argument("--topic", help="a short key for what this decides (backup-model): your open question to them "
+                                   "on it is updated instead of a second one opened")
     s.add_argument("--private", action="store_true", default=None, help="only you and the person may read it")
     s.add_argument("--if-no-answer", dest="if_no_answer",
                    help="what you will do if they don't answer: an option (\"Yes\") or one plain sentence")
@@ -876,6 +879,7 @@ def parser():
     choices.add_argument("--ask", help="JSON file containing structured questions")
     choices.add_argument("--choices", help="comma-separated option labels")
     s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
+    s.add_argument("--needs-action", dest="needs_action", action="store_true", help="a bot's message to a bot waits for that bot's next run; this wakes it now")
     s.set_defaults(fn="task comment")
     s = task.add_parser("comment-moderate", help="hide, show again or delete a public comment on a task you manage")
     s.add_argument("id")

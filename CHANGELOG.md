@@ -14,6 +14,18 @@ All notable changes to Tico are recorded here. The format follows
   vision: the CEO Bot proposes it and a person accepts it as it is, edits it or writes their own. A goal with none
   says "Not tied to the vision". No bot can change the Vision or the Description or accept a Why, the CEO Bot
   included. With the switch off none of this shows.
+- **How bots get their models**, at the top of Settings > AI providers and the first setup step: **Your Claude and
+  ChatGPT subscriptions, plus Tico Gateway** (recommended, and what Tico's installer sets with
+  `TICO_MODELS_PRESET=subscriptions-gateway`), subscriptions only, Tico Gateway only, or your company's plans or API
+  keys. Under the recommended choice bots do their main work on your Claude and ChatGPT subscriptions; until you sign
+  in they run on Tico Mid 1.0 through the Gateway and move over on their next turn once you do, and a used-up plan
+  finishes on the Gateway, last. Decide and update drafts run on the Gateway. The owner sees one Needs you item, "Sign
+  in to Claude and ChatGPT, or add API keys", until both are signed in; where no computer runs bots as their own user
+  (a Mac), bots wait for the sign-in instead, the item says why, and the model list marks Tico models "not on this
+  computer". A bot on a Tico model waits there too, with Health saying why, rather than stopping. Health says
+  plainly when a used-up login has bots on the Gateway. Gateway usage records keep which gateway key and install
+  paid, never the key. The other three choices, and a team that never picks one, keep working
+  as before ([Tico AI Gateway](docs/ai-gateway.md#choose-how-bots-get-their-models)).
 - **CEO Bot switch** (off by default; one per install, no release needed): an owner or admin turns it on with
   `POST /api/v2/ceo-bot {"on": true}` (`hub api POST ceo-bot '{"on": true}'`), never a bot. On, the Goal Manager is
   named the CEO Bot in the bot list, the org chart, Goals and its messages, and sits on the org chart under the owner
@@ -26,6 +38,17 @@ All notable changes to Tico are recorded here. The format follows
   If it does, the bot's session is cleared the same way Clear does, and the chat shows a quiet **Topic changed** line
   above your message. A chat with an active goal, a running turn or fewer than 3 turns is never checked, and a slow or
   failed check (over 1.5 s) sends the message in the same session with no line.
+- **Settings → Computers** shows one compact row per computer: name, Tico version (with **Update** only when one is
+  waiting), operator, bots, a chip for each AI connection, and status. A chip shows the tool, a thin bar and the share
+  of the weekly allowance that is left; hover for when it resets and how old the reading is. A red dot means bots
+  depend on a connection that is signed out or rejected. Click a row for everything else: its connections (the
+  computer's own login and a named subscription on the same account show as one), Screen, the bots on it and the
+  connection each one actually runs on, versions and updates, and settings, including **Keep for inbox bots only**
+  and **Revoke computer**. Its **Add connection** signs in an installed tool (in the browser, or with the command to
+  copy and run on the computer for a tool such as Grok Build that signs in only from a terminal) or adds a named
+  subscription. Subscriptions moved here from **Settings → AI providers**, and usage reads as "% left"
+  everywhere. Every member now sees every computer; only an admin or the computer's operator sees its signed-in
+  accounts and changes anything on it.
 
 ### Fixed
 - Work waiting while its computer updates now says so: once a computer due an update stops taking new work (20
@@ -66,6 +89,16 @@ All notable changes to Tico are recorded here. The format follows
   release the server cannot work with is `bad`, an older one `warn`), or one back after its task was finished wakes
   the Health Monitor. **Settings > Health** shows each finding as "seen N times, last ...". A finding no longer
   wakes it again just because a day has passed since its last wake.
+- **Bot-to-bot messages wait for the next run** (token saving): a plain message or task comment one bot sends
+  another no longer starts a run. It is kept in its room and handed to that bot's next run, whatever starts it,
+  in the order sent, and marked read then. The sender wakes it at once with `--needs-action`
+  (`hub message send`, `hub task comment`, or `needs_action` in the API and tools). Asks, answers, steers,
+  approvals, gate verdicts, replies the other bot waits on, and anything from a person or Tico still wake at once.
+- **One open question per topic**: a bot that asks a person again on a topic it already has an open question about
+  (the same `--topic` key, or the same task) now updates that question instead of filing a second one. The person
+  sees one card with the latest wording and the earlier asks listed under it, gets no new Needs you item or Slack
+  line, and has the team's days from the latest wording before any default goes ahead. A different topic still opens
+  its own question, and once a question is answered or closed the next one opens normally.
 - **Updates cards use icons**: Reply, Mark unread (or read) and Archive (Restore in the Archive) are icons, named by a
   tooltip, a long press on a phone and screen readers. A card's reports open from **8** and a chevron at the right end
   of its icon row, in place of the **8 reports** row under it and its broken glyph, and open reports hang from the
@@ -77,6 +110,22 @@ All notable changes to Tico are recorded here. The format follows
   button (**Add a computer** while there is none). Bots are listed in the team chart's groups and order with one status
   each, *Waiting for a computer* is said once at the top, and the tour waits for **Show me around** instead of
   covering the screen.
+- **Sign out** and **Switch account** moved into each computer's pop-up on **Settings > Computers**, on each connection
+  line, for the computer's own login and each named subscription (they were on the tool table and in Manage subscription
+  on AI providers). A subscription is now signed in from a computer on **Settings > Computers**. **Replace key**,
+  **Clear key** and **Add key**, the note that several bots share a sign-in, the desktop apps table and the
+  restarting note moved there too; a member sees which kind of key a computer uses but not its preview.
+- Groups no longer give their bots a subscription: a bot runs on its own choice, or else on its computer's own login.
+  The bot editor's **Connection** line says "Runs on <tool> · <connection> on <computer>". Existing group choices
+  are not moved to the bots; choose one per bot where it is needed.
+- **First run, the form steps**: the progress row uses short names (Providers, Names, About, Team, Computer, Agent,
+  Review) on one line; on a phone it shows dots and the current step's name. Step titles are larger, and the form
+  cards match the team chart's. A fresh install starts with an empty **Company name** (placeholder *Acme Inc.*), not
+  the server's stand-in "Company", and **Next** asks for one. The external agent step says why you might connect one,
+  with **Connect** as a secondary button and **Next** as the only primary. The Support box opened by **Want help
+  setting up?** grows to show the whole message, never past the room left above a phone keyboard, so **Send** stays
+  on screen.
+- PDF upload and reading use pypdf 6.21.1, the latest patch release of 6.21.
 
 ## [0.3.62] - 2026-10-19
 

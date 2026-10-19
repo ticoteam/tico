@@ -23,7 +23,7 @@ TAGS = {
     "Team": "This installation's names and settings.",
     "Repositories": "Team repositories, product-repository creation (the Owner, or a bot with Create product repositories), "
                     "and bot repository access.",
-    "Subscriptions": "Named provider logins on Computers and defaults for groups and bots.",
+    "Subscriptions": "Named provider logins on Computers and the one each bot runs on.",
     "Team chart": "Humans and bots, and who reports to whom.",
     "Bots": "The bots a person can see, and their live status.",
     "Conversations": "Chats with bots: send, list, and stream replies.",
@@ -511,9 +511,9 @@ SCHEMAS = {
     "SubscriptionRefreshResult": obj({"id": "s", "profile": "s", "runtime": "s",
         "state": {"enum": ["requested", "succeeded", "unavailable", "failed", "expired"]},
         "requested_at": "s", "updated_at": "s", "expires_at": "s"}),
-    "SubscriptionAssignmentResult": obj({"scope": {"enum": ["group", "bot"]}, "target": "s", "profile": "n"}),
-    "BotSubscription": obj({"profile": "n", "id": "s", "display_name": "s", "source": "s", "computer": {"anyOf": [obj({"runner_id": "s", "label": "s"}), {"type": "null"}]},
-                            "signed_in": {"type": ["boolean", "null"]}, "problem": "s"}),
+    "SubscriptionAssignmentResult": obj({"scope": {"enum": ["bot"]}, "target": "s", "profile": "n"}),
+    "BotSubscription": obj({"profile": "n", "id": "s", "display_name": "s", "source": {"enum": ["bot", "computer"]}, "computer": {"anyOf": [obj({"runner_id": "s", "label": "s"}), {"type": "null"}]},
+                            "runtime": "s", "harness": "s", "signed_in": {"type": ["boolean", "null"]}, "problem": "s"}),
     "ChatGoal": obj({"id": "s", "conversation_id": "s", "bot": "s", "objective": "s", "status": "s",
                      "note": "s", "set_by": "s", "set_at": "s", "updated_at": "s", "ended_at": "n"},
                     required=["id", "conversation_id", "bot", "objective", "status", "note", "set_by", "set_at", "updated_at", "ended_at"]),
@@ -800,10 +800,10 @@ SCHEMAS = {
                          "Bots with queued work that is not starting, or left in setup for over a day (the caller may "
                          "read them): bot, name, queued, oldest, computer, reason (not_ready, computer_offline, no_computer, "
                          "slow, limit, updating, restarting, setup, or a reason the claim holds the work: draining, maintaining, "
-                         "lane_held, uncertain, cooling_off, readiness_unknown, sign_in_rejected, profile, config, "
-                         "check_model, unreadable), why, since (setup only: when the bot was added), and fix (label plus "
-                         "href/tab, login, move or finish; null unless the caller administers bots, or for setup may "
-                         "manage the bot: finish is POST /api/v2/bots/{bot}/onboarded)"},
+                         "lane_held, uncertain, cooling_off, readiness_unknown, sign_in_rejected, not_isolated, "
+                         "isolation_unknown, profile, config, check_model, unreadable), why, since (setup only: when the "
+                         "bot was added), and fix (label plus href/tab, login, move or finish; null unless the caller "
+                         "administers bots, or for setup may manage the bot: finish is POST /api/v2/bots/{bot}/onboarded)"},
                   on_fallback={"type": "array", "items": {"type": "object"}, "description":
                                "Bots whose latest run in the last day ran on a fallback harness (the caller may read "
                                "them): bot, harness, since (when the unbroken run of fallback turns began)"},

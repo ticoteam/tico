@@ -1199,6 +1199,10 @@ class Store:
                 # Who asked a running turn to stop (backend/execution.py stop); the runner reads it on its next
                 # lease renewal. Unversioned like the key scope: an older release never reads the column.
                 H.add_column(c, "attempts", "stop_requested", "TEXT")
+                # Which gateway key the attempt's runner was handed (gateway_connection.run_credentials_for): what its
+                # Gateway segments are recorded under, even if the key is rotated or cleared before the run ends.
+                # NULL with none handed. Unversioned like stop_requested.
+                H.add_column(c, "attempts", "gateway_key_id", "TEXT")
                 # A queued message a person sent with Stop and redirect (backend/execution.py stop): it is claimed
                 # before the bot's other queued work once the stopped turn ends. Unversioned like stop_requested.
                 H.add_column(c, "jobs", "redirect", "INTEGER NOT NULL DEFAULT 0")

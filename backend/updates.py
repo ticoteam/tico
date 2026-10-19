@@ -560,14 +560,26 @@ def draft_instructions(kind):
                                  'one JSON object and nothing else: {"body": "- first bullet\\n- second bullet"}.')
 
 
-def writer_for(c, settings):
-    """The model a person's draft is written with: the company's own provider, or None (no drafts)."""
+def writer_for(c, settings, store=None, vault=None):
+    """The model a person's draft is written with: Tico Mid 1.0 on the Tico AI Gateway under the two Gateway models
+    choices (backend/models_preset.py) while it is connected, else the company's own provider, or None (no drafts).
+    The gateway key is read from `store` at the call, never held by the writer."""
     if settings.rehearsal:
         return None
-    from clients import judge as J
-    from . import providers
+    from clients import gateway as G, judge as J
+    from . import gateway_connection, models_preset, providers
     from .judge import fallback_model
-    found = fallback_model(providers.load(c, settings))
+    record = providers.load(c, settings)
+    if store is not None and models_preset.spends_gateway(record) and gateway_connection.connected(c, settings):
+        base = G.chat_base(gateway_connection.url(c, settings))
+
+        def key_of():
+            from .credentials import Vault
+            keys = vault or Vault(store)
+            with store.read() as c:
+                return gateway_connection.key(c, keys, settings) if keys.configured or gateway_connection.env_key(settings) else ""
+        return J.gateway_writer(key_of, base, models_preset.WAITING_MODEL)
+    found = fallback_model(record)
     return J.llm_writer(*found) if found else None
 
 

@@ -123,7 +123,8 @@ def whoami(api, args):
 
 @tool("hub_message_send", "Send a message to a bot or a human. Bot-to-human messages are linted "
       "(a nonempty first line, under 120 words) and capped at 10 unsolicited a day. `fyi` expects no reply. "
-      "An ordinary bot-to-bot message does not deliver the recipient's final reply. "
+      "An ordinary bot-to-bot message does not deliver the recipient's final reply, and waits for the recipient's "
+      "next run unless needs_action. "
       "Use hub_question_ask when you need an answer. Use in_reply_to or steer for a correction to an active run; "
       "it is queued until the Computer applies it.",
       {"to": _s("Recipient: a bot slug, `bot:<slug>`, or a human id"),
@@ -136,7 +137,10 @@ def whoami(api, args):
        "steer": {"type": "boolean", "description": "Apply a correction to your active request; with refs "
                  "`task:<id>` you requested, it goes into its owner's running turn on that task"},
        "refs": {"type": "array", "items": {"type": "string"},
-                "description": "References like `task:<id>` or `approval:<id>`"}},
+                "description": "References like `task:<id>` or `approval:<id>`"},
+       "needs_action": {"type": "boolean", "default": False,
+                        "description": "To a bot: wake it now. Without this a bot's message to a bot waits for that "
+                        "bot's next run, whatever starts it"}},
       required=("to", "text"), writes=True)
 def message_send(api, args):
     # Free text a person reads: an s3:// URI becomes its view URL first (clients/s3links.py); a command goes verbatim.
@@ -150,12 +154,14 @@ def _message_send(api, args):
         return assistant_send(api, args)
     if args.get("fyi"):
         return api.post("messages", {"to": args["to"], "text": args["text"], "kind": "notice",
-                                     "conversation_id": None, "refs": {}}, key=_key(args))
+                                     "conversation_id": None, "refs": {},
+                                     **({"needs_action": True} if args.get("needs_action") else {})}, key=_key(args))
     return api.post("messages", {"to": args["to"], "text": args["text"], "kind": "steer" if args.get("steer") else "say",
                                  "conversation_id": args.get("conversation_id"),
                                  "in_reply_to": args.get("in_reply_to"),
                                  "refs": _refs(args.get("refs")),
-                                 **({"command": True} if args.get("command") else {})}, key=_key(args))
+                                 **({"command": True} if args.get("command") else {}),
+                                 **({"needs_action": True} if args.get("needs_action") else {})}, key=_key(args))
 
 
 @tool("hub_chat_goal", "Read or change the native goal pinned to a bot conversation. Read also returns its supported commands.",
@@ -661,7 +667,9 @@ def task_ask(api, args):
 @tool("hub_task_question", "Put one decision to a person as a small task, in one call: a pick between 2 to 6 "
       "options (an option may carry an image or file) or, with no options, Yes / No. The task is yours and waits on "
       "them; asked from a run on one of your tasks it is filed under that task. Their answer wakes you and you mark it "
-      "done. One decision per task; write the question so it makes sense on its own.",
+      "done. One decision per task; write the question so it makes sense on its own. One open question per topic: "
+      "asked again while your earlier one on the same topic (same `topic`, else the same parent task) still waits on "
+      "them, it updates that one (`folded: true`) instead of adding a second; give a different decision its own topic.",
       {"question": _s("The question, readable with no other context", maxLength=300),
        "on": _s("The person who decides: their id"),
        "options": {"type": "array", "minItems": 2, "maxItems": 6, "description": "The choices; omit for Yes / No",
@@ -672,6 +680,8 @@ def task_ask(api, args):
        "title": _s("Task title; defaults to the question"),
        "body": _s("What the decision is for; defaults to the question"),
        "parent": _s("Parent task id, when this decision is part of a bigger task"),
+       "topic": _s("A short key for what this decides, e.g. backup-model: your open question to them with the same key, "
+                   "under any task, is updated rather than a second one opened", maxLength=80),
        "private": {"type": "boolean", "description": "Only you and the person may read it; they must already "
                    "read the private task you are working on, and the parent"},
        "if_no_answer": {"type": "object", "additionalProperties": False, "required": ["do", "kind"],
@@ -701,7 +711,7 @@ def task_question(api, args):
             local, _ = BF.local_file(BF.checkout_root(), path)
             option["file"] = {"name": Path(path).name, "content_base64": base64.b64encode(local.read_bytes()).decode()}
     body = {"question": args["question"], "on": args["on"], "options": options}
-    for field in ("title", "body", "parent", "private"):
+    for field in ("title", "body", "parent", "private", "topic"):
         if args.get(field) is not None:
             body[field] = args[field]
     default = args.get("if_no_answer")
@@ -837,10 +847,12 @@ def task_type_delete(api, args):
        "public": {"type": "boolean"}, "approval_id": _s("Exact publish approval for a bot public reply"),
        "attachments": {"type": "array", "items": {"type": "string"}, "description": "File versions as file_id@version: on this task, or (a person) a chat file "
                        "you can open as its id@1, which the comment shares to the task"},
-       "on_behalf_of": ASKED},
+       "on_behalf_of": ASKED, "needs_action": {"type": "boolean", "default": False,
+                        "description": "To a bot: wake it now. Without this a bot's message to a bot waits for that "
+                        "bot's next run, whatever starts it"}},
       required=("id", "text"), writes=True)
 def task_comment(api, args):
-    body = {k: args[k] for k in ("text", "ask", "attachments", "public", "approval_id") if k in args}
+    body = {k: args[k] for k in ("text", "ask", "attachments", "public", "approval_id", "needs_action") if k in args}
     links = s3links.apply(api, body, ("text",))
     return s3links.annotate(_asked(api, args).post(f"tasks/{args['id']}/comments", body, key=_key(args)), links)
 

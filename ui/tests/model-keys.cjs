@@ -1,7 +1,7 @@
 // Replace key / Clear key / Add key from the app (ui/model-login.js, backend/computer_keys.py, backend/model_login.py).
-// On Settings > Computers a login a model key signs in shows whose key it is by its stored preview only (this
+// In a computer's pop-up on Settings > Computers, a login a model key signs in shows whose key it is by its stored preview only (this
 // computer's, or the company's shared one) and offers Replace key and Clear key in place of Sign out; a signed-out key
-// runtime offers Add key. Clear key names the bots that stop before it can go; for the shared key it first asks "this
+// runtime offers Add key under Add connection. Clear key names the bots that stop before it can go; for the shared key it first asks "this
 // computer only" or "all of them", listing the computers, and says an offline one clears its copy when it is next
 // online. Replace key takes the key in a password field, posts it once and empties the field, and follows the
 // computer's check to the end. Replacing the shared key for all of them is a credential administrator's alone. A member
@@ -43,6 +43,8 @@ const {unrouted} = require('./support/routes.cjs');
 
     async function open(as = 'sam') {
       const box = fixture(), writes = [], rows = {};
+      // What /v2/operations sends someone who may not change the computer (backend/views.py): no key previews.
+      if (as !== 'sam') for (const key of [...Object.values(box.keys), ...Object.values(box.shared_keys)]) delete key.preview;
       const page = await browser.newPage({viewport: {width: 1440, height: 900}, serviceWorkers: 'block'});
       const errors = [];
       page.on('pageerror', e => errors.push(e.message));
@@ -96,21 +98,25 @@ const {unrouted} = require('./support/routes.cjs');
       });
       await page.goto('https://tico-ui.test/#/settings');
       await page.locator('[data-settings-tab=devices]').click();
-      await page.locator('#set-machines [role=table][aria-label="AI tools on Team box"]').waitFor();
+      await page.locator('#set-machines .machine-name[data-computer-open=box]').click();
+      await page.locator('#set-machines dialog.computer-detail[open] [data-connection]').first().waitFor();
       return {page, box, writes, errors};
     }
 
     // ---- The operator, on Settings > Computers
     const {page, writes, errors} = await open();
-    const table = page.locator('#set-machines [role=table][aria-label="AI tools on Team box"]');
-    const own = name => table.locator(`[data-machine-tool="${name}"]:not([data-machine-profile])`);
-    const buttons = row => row.locator('.machine-tool-signin button').allInnerTexts();
+    const detail = page.locator('#set-machines dialog.computer-detail[open]');
+    const own = name => detail.locator(`[data-connection="own:${name}"]`);
+    const buttons = row => row.locator('.computer-conn-signin button').allInnerTexts();
+    const addKey = name => detail.locator(`[data-add-connection] [data-add-key="${name}"]`);
     // Whose key, by its preview only; Clear key stands in for Sign out.
     assert.match(await own('codex').locator('.machine-key').innerText(), /the company's shared key sk-…xyz/);
     assert.match(await own('claude').locator('.machine-key').innerText(), /this computer's key sk-…abc/);
     assert.deepEqual(await buttons(own('codex')), ['Replace key', 'Clear key']);
     assert.deepEqual(await buttons(own('claude')), ['Replace key', 'Clear key']);
-    assert.ok((await buttons(own('cursor'))).includes('Add key'), 'a signed-out key runtime offers Add key');
+    assert.equal(await own('cursor').count(), 0, 'no bot uses it: not a connection');
+    assert.deepEqual(await addKey('cursor').locator('button').allInnerTexts(), ['Add key'], 'a signed-out key runtime offers Add key');
+    assert.equal(await detail.locator('[data-add-key="codex"], [data-add-key="claude"]').count(), 0, 'not where a key signs it in');
 
     // Clear key on the shared key: the ask lists the computers and what the offline one does, the bots are named for
     // the choice, and the reply says Far box clears its copy when it is next online.
@@ -164,7 +170,7 @@ const {unrouted} = require('./support/routes.cjs');
     oldBox = false;
 
     // Add key where none signs it in.
-    await own('cursor').getByRole('button', {name: 'Add key'}).click();
+    await addKey('cursor').getByRole('button', {name: 'Add key'}).click();
     await dialog.locator('h2', {hasText: 'Add a Cursor Agent key on Team box'}).waitFor();
     await dialog.locator('[data-close]').first().click();
     assert.deepEqual(errors, []);
@@ -173,6 +179,7 @@ const {unrouted} = require('./support/routes.cjs');
     // ---- A member who does not run the computer: no key to change.
     const other = await open('cara');
     assert.equal(await other.page.locator('#set-machines [data-model-key-replace], #set-machines [data-model-key-clear], #set-machines [data-model-key-add]').count(), 0);
+    assert.doesNotMatch(await other.page.locator('#set-machines dialog.computer-detail[open]').innerText(), /sk-/, 'no key preview');
     assert.deepEqual(other.errors, []);
     console.log('PASS: key previews, clear with the bots named and the this/all ask (offline clears when next online, an older runner waits for its update), replace through a password field, admin-only replace-all, add key, rights');
   } finally { await browser.close(); }

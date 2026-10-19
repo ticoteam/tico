@@ -9,7 +9,7 @@ from datetime import timezone
 
 from clients import gateway, sessions
 
-from . import app_delivery, check_models, gateway_connection, inbox_isolation, providers, routines, run_triggers, runner_versions, screen, usage_limits, wake_presets
+from . import app_delivery, check_models, gateway_connection, inbox_isolation, models_preset, providers, routines, run_triggers, runner_versions, screen, usage_limits, wake_presets
 from . import task_privacy as privacy
 from .auth import Identity
 from .batch_work import isolated
@@ -577,7 +577,25 @@ def claim_refusal(c, settings, runner, bot, config_json, draining, ready, held_b
                            (runner["id"], profile)).fetchone()
         if not report or json.loads(report[0] or "{}").get(runtime, {}).get("signed_in") is False:
             return "profile", None
+    record = providers.load(c, settings)
+    filled = providers.fill(record, config)
+    if gateway_connection.is_tico(filled.get("model")) and not models_preset.isolated(ready):
+        # A Tico model runs only where bots run as their own user (runner-rs/src/gateway_relay.rs): elsewhere the
+        # runner would refuse the turn, so the work waits here instead of failing there.
+        return ("not_isolated" if ready.get("isolated") is False else "isolation_unknown"), None
     check = bot_readiness(ready, bot)
+    if models_preset.waiting(record, ready, filled):
+        # Its subscription is not signed in on this computer yet: the turn runs on the Gateway instead
+        # (backend/models_preset.py), so the missing sign-in is the one problem that doesn't hold it. Its checkout,
+        # its settings and the Gateway's own runtime still have to be ready.
+        if bot not in (ready.get("bots") or {}):
+            return "readiness_unknown", None
+        if (check.get("repository_present") is not True or check.get("configuration_valid") is not True
+                or ((ready.get("runtimes") or {}).get(models_preset.GATEWAY_RUNTIME) or {}).get("installed") is not True):
+            return "not_ready", None
+        if usage_limits.blocked(c, bot, default=usage_limits.company(c) if default is None else default):
+            return "limit", None
+        return ("cooling_off", None) if cooling_off(c, bot) else (None, config)
     if check.get("ready") is not True:
         reported = check.get("ready") is False and bot in (ready.get("bots") or {})
         return ("not_ready" if reported else "readiness_unknown"), None
@@ -1343,7 +1361,12 @@ class Execution:
             check_models.handed(c, aid, task["id"], check)
         # A bot that names no runtime or model runs on the company default, resolved here the way
         # runners/assignments resolves it: the runner starts exactly what this says.
-        config = providers.fill(providers.load(c, self.store.settings), followed)
+        record = providers.load(c, self.store.settings)
+        config = providers.fill(record, followed)
+        # The company's models choice: the Gateway while the bot's subscription is not signed in here, and the
+        # Gateway as its last fallback, on a computer that can run it (backend/models_preset.py).
+        here = readiness_document(runner["readiness_json"])
+        config = models_preset.with_gateway_fallback(record, here, models_preset.main_config(record, here, config))
         # A bot delivered through a desktop app: who it is in the app, beside `app_delivery` (backend/app_delivery.py).
         config = app_delivery.job_config(config)
         gateway_connection.hand_out(c, aid, config)
@@ -1441,10 +1464,15 @@ class Execution:
         # sent, so the run can tell yesterday's from this morning's.
         notes = []
         if getattr(body, "next_run", False) and not check:
-            for item in H.notes_waiting(c, row["bot"]):
+            from . import bot_to_bot
+            waiting = H.notes_waiting(c, row["bot"])
+            for item in waiting:
                 c.execute("UPDATE notes SET carried_by=? WHERE id=?", (aid, item["id"]))
+            # A bot's message that waited for this run is read now; a backlog past one run's notes gets a run of its own.
+            for item in bot_to_bot.carried(c, waiting, H.now()):
                 notes.append({"id": item["id"], "from": item["from_actor"], "sent": item["created"],
-                              "text": item["body"]})
+                              "text": item["body"], **({"message": item["message_id"]} if item.get("message_id") else {})})
+            bot_to_bot.continue_backlog(c, row["bot"])
             if notes:
                 H.event(c, H.KEEPER, "note.carried", aid, {"bot": row["bot"], "notes": [n["id"] for n in notes]})
         from .views import roster
@@ -1573,7 +1601,14 @@ class Execution:
                     "output_tokens": item.output_tokens, "model": model or None, "provider": provider or None,
                     "est_cost_usd": cost, "est_cost_low": int(low),
                     "billing": item.billing, "runtime": runtime or None, "harness": item.harness or None,
-                    "effort": item.effort or None, "profile": item.profile_used or None}
+                    "effort": item.effort or None, "profile": item.profile_used or None,
+                    **(gateway(model) if gateway_connection.is_tico(model) else {})}
+
+        def gateway(model):
+            # Ledger-ready: which gateway key and install a Gateway segment was spent under; never the key itself. The
+            # key is the one its runner was handed (gateway_connection.run_credentials_for), not the one saved now.
+            from .census import install_id_in
+            return {"gateway_key_id": row["gateway_key_id"] or None, "install_id": install_id_in(c)}
         items = [item for item in (used.segments or [used])
                  if item.input_tokens or item.cached_tokens or item.output_tokens]
         segments = [part(item) for item in items]

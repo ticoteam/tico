@@ -301,8 +301,9 @@ the repositories and the enrollment stay, and the runner then follows the server
 
 ## Pinning
 
-Pinning keeps a computer where it is. It then shows "Needs update (pinned)" when the server moves on, and once it
-falls below the minimum it is paused, so pin only while you plan to update by hand.
+Pinning keeps a computer where it is. When the server moves on it shows **Needs update** with an **Outdated** badge and
+"pinned" beside it, and "Last update error: pinned to this release; the server runs X.Y.Z" under it; its owner gets no
+reminder to update. Once it falls below the minimum it is paused, so pin only while you plan to update by hand.
 
 - Mac or Linux checkout: `"pinned": true` in the runner's config (`runner.json`), or `TICO_RUNNER_PINNED=1` in its
   environment. `"self_update": false` and `TICO_RUNNER_SELF_UPDATE=0` also stop it.

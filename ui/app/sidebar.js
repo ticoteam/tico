@@ -400,7 +400,7 @@ async function orgGroupDelete(id) {
   if (!orgCanGroups() || !group || ORG_DELETING.has(id)) return;
   const parent = (S.orgGroups || []).find(g => g.id === group.parent);
   const destination = parent ? parent.name : 'No group';
-  if (!confirm(`Delete ${group.name}? Its teammates and groups move to ${destination}; its subscriptions are unassigned.`)) return;
+  if (!confirm(`Delete ${group.name}? Its teammates and groups move to ${destination}.`)) return;
   ORG_DELETING.add(id);
   renderTree();
   try {

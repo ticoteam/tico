@@ -4,32 +4,27 @@ import json
 from backend.tests.test_api import api, assign, claim, get, post, put, ready, runner  # noqa: F401
 
 
-def group_assignment(api, target, profile):
-    return put(api, 'subscriptions', {'scope': 'group', 'target': target, 'profile': profile})
-
-
-def group_tree(api):
-    parent = post(api, 'groups', {'name': 'Engineering'})
-    child = post(api, 'groups', {'name': 'Product', 'parent': parent['id'], 'add': {'bots': ['ops']}})
-    return parent['id'], child['id']
-
-
-def test_resolution_bot_nearest_group_then_computer(api):
+def test_bot_runs_on_its_own_connection_else_the_computers_and_groups_never_choose(api):
     set_runtime(api, 'codex')
-    parent, child = group_tree(api)
-    assert get(api, 'bots/ops/subscription')['source'] == 'computer'
-    group_assignment(api, parent, 'one')
-    assert get(api, 'bots/ops/subscription')['source'] == 'group:Engineering'
-    group_assignment(api, child, 'two')
-    assert get(api, 'bots/ops/subscription')['profile'] == 'two'
-    put(api, 'subscriptions', {'scope': 'bot', 'target': 'ops', 'profile': 'three'})
+    r = runner(api)
+    assign(api, r, 'ops')
+    group = post(api, 'groups', {'name': 'Engineering', 'add': {'bots': ['ops']}})['id']
+    put(api, 'subscriptions', {'scope': 'group', 'target': group, 'profile': 'one'}, expected=422)
+    # A group default saved before groups stopped choosing is left in place and never read.
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO subscription_assignments VALUES('group',?,'one',NULL,NULL)", (group,))
+    line = get(api, 'bots/ops/subscription')
+    assert (line['profile'], line['source'], line['runtime']) == (None, 'computer', 'codex')
+    assert all(row['scope'] == 'bot' for row in get(api, 'subscriptions')['assignments'])
+    post(api, 'chat/ops', {'text': 'Runs on the computer login'})
+    ready(api, r, ['ops'])
+    assert claim(api, r)['profile'] is None
+    put(api, 'subscriptions', {'target': 'ops', 'profile': 'three'})
     assert get(api, 'bots/ops/subscription')['source'] == 'bot'
-    put(api, 'subscriptions', {'scope': 'bot', 'target': 'ops', 'profile': None})
-    assert get(api, 'bots/ops/subscription')['profile'] == 'two'
-    group_assignment(api, child, None)
-    assert get(api, 'bots/ops/subscription')['profile'] == 'one'
-    group_assignment(api, parent, None)
-    assert get(api, 'bots/ops/subscription')['profile'] is None
+    # The Computers pop-up reads the same answer for every bot on the computer.
+    machine = next(m for m in get(api, 'operations')['machines'] if m['id'] == r['runner_id'])
+    assert [(row['bot'], row['profile'], row['source'], row['runtime'], row['display_name'])
+            for row in machine['bot_connections']] == [('ops', 'three', 'bot', 'codex', 'three')]
 
 
 def test_heartbeat_profiles_claim_and_old_computer(api):
@@ -76,16 +71,29 @@ def test_heartbeat_profiles_claim_and_old_computer(api):
 
 
 def test_assignment_permissions_and_named_login(api):
-    parent, _ = group_tree(api)
-    put(api, 'subscriptions', {'scope': 'group', 'target': parent, 'profile': 'one'}, token='cara-test', expected=403)
     put(api, 'subscriptions', {'scope': 'bot', 'target': 'ops', 'profile': 'one'}, token='cara-test', expected=403)
     put(api, 'subscriptions', {'scope': 'bot', 'target': 'missing', 'profile': 'one'}, expected=404)
     r = runner(api)
     ready(api, r, [])
+    # Neither an administrator nor its operator: sees the computer on Computers, but changes nothing on it.
+    rid = r['runner_id']
+    seen = next(m for m in get(api, 'operations', 'cara-test')['computers'] if m['id'] == rid)
+    assert seen['may_manage'] is False
+    post(api, f"runners/{rid}/logins", {'runtime': 'codex', 'profile': 'x'}, token='cara-test', expected=403)
+    put(api, 'subscriptions/name', {'runner_id': rid, 'profile': 'x', 'display_name': 'X'}, token='cara-test', expected=403)
+    put(api, 'subscriptions/weekly', {'runner_id': rid, 'profile': 'x', 'runtime': 'codex', 'used_percent': 10},
+        token='cara-test', expected=403)
+    post(api, 'subscriptions/refresh', {'runner_id': rid, 'profile': 'x', 'runtime': 'codex'}, token='cara-test', expected=403)
+    for path, body in [('inbox-only', {'enabled': True}), ('screen', {'mode': 'view'}), ('performance', {'mode': 'on'}),
+                       ('harness-choices', {'harness': 'codex', 'enabled': True}), ('restart', {}), ('revoke', {})]:
+        post(api, f"runners/{rid}/{path}", body, token='cara-test', expected=403)
     login = post(api, f"runners/{r['runner_id']}/logins", {'runtime': 'codex', 'profile': 'engineering'})
     assert login['profile'] == 'engineering'
     pending = get(api, 'runner-logins', r['token'])['logins']
     assert pending[0]['profile'] == 'engineering'
+    post(api, f"runners/{rid}/revoke", {})
+    assert all(m['id'] != rid for m in get(api, 'operations', 'cara-test')['computers'])
+    assert any(m['id'] == rid for m in get(api, 'operations')['computers'])
 
 
 def test_botops_assignment_and_signin_use_requester_rights_by_default():

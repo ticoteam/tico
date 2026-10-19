@@ -762,7 +762,7 @@ def conversation_execution(c, cid, who=None, settings=None, bot=None, auth=None)
 PRESSING_DAYS = 3
 DECISIVE_DAYS = 1
 # A bot's task set waiting on the person blocks that bot just as its question does.
-KIND_RANK = {"approval": 0, "question": 1, "ask": 1, "waiting": 1, "declined": 2, "stale": 3, "task": 3, "report": 4}
+KIND_RANK = {"approval": 0, "question": 1, "ask": 1, "waiting": 1, "setup": 1, "declined": 2, "stale": 3, "task": 3, "report": 4}
 # A card whose bot has not yet said plainly what it needs (`ask_missing`) waits at the very bottom: there is nothing
 # for the person to do on it until the bot restates it (backend/restate_asks.py asks it to).
 
@@ -905,6 +905,8 @@ def need_of(item):
     kind = item.get("kind")
     if kind == "stale":
         return "decide"         # Accept or Skip, row by row
+    if kind == "setup":
+        return "connect"        # sign in to a provider (backend/models_preset.py)
     if kind == "approval":
         return {"spend": "pay", "send": "review", "publish": "review", "support": "review", "merge": "review"}.get(
             item.get("what"), "decide")
@@ -1284,6 +1286,12 @@ def needs_items(c, auth, who, task_view, older=None):
         stale["rows"] = [r for r in stale["rows"] if _readable(auth, c, who, r["task"])]
         if stale["rows"]:
             items.append(stale_review.retitle(stale))
+    if who.role == "owner":
+        # The recommended models choice waiting for a Claude or ChatGPT sign-in (backend/models_preset.py).
+        from . import models_preset
+        setup = models_preset.card(c)
+        if setup:
+            items.append(setup)
     items = fold_related(items, c, who.actor)
     at = H.now()
     for item in items:
@@ -1648,15 +1656,26 @@ def install_views(app, store, auth, mutate, task_view):
             _, assigned = providers.runtimes_needed(c, store.settings)
             default = {providers.default_runtime(providers.load(c, store.settings))} - {""}
             run_on = providers.runtimes_run_on(c, store.settings)
+            from . import subscriptions, inbox_isolation
             from .computer_keys import shared_all, shared_listing
+            subscription_context = subscriptions.context(c, store.settings)
+            kept_for_inbox = inbox_isolation.inbox_only(c, roster(c))
             shared_keys = shared_all(c)
             access = auth.bot_accesses(c, who)
+            # The bots a member may not even see (an admin sees them all): left off another person's computer.
+            unseen = set() if auth.bot_admin(who) else {bot for bot, a in access.items() if not a["see"]}
             for row in c.execute("SELECT id,label,operator,last_seen,revoked_at,platform,version,capacity,readiness_json,"
                                  "accepts_member_bots,screen,performance,capabilities_json,restart_since,readiness_at "
                                  "FROM runners ORDER BY created"):
-                if not auth.bot_admin(who) and who.actor != "human:" + row["operator"]:
+                # Every person sees every working computer; only an admin or its operator may change it, and only
+                # they read its signed-in accounts, own login's usage and key previews (#610, as in /v2/computers).
+                # Another member gets the bots they may see on it.
+                manage = auth.bot_admin(who) or who.actor == "human:" + row["operator"]
+                if not manage and row["revoked_at"]:
                     continue
-                bots = [a[0] for a in c.execute("SELECT bot FROM assignments WHERE runner_id=? ORDER BY bot", (row["id"],))]
+                hidden = set() if manage else unseen
+                bots = [a[0] for a in c.execute("SELECT bot FROM assignments WHERE runner_id=? ORDER BY bot", (row["id"],))
+                        if a[0] not in hidden]
                 value = dict(row)
                 value["release"] = runner_versions.view(fleet.get(row["id"])).get("release") or ""
                 value["accepts_member_bots"] = bool(row["accepts_member_bots"])
@@ -1674,28 +1693,43 @@ def install_views(app, store, auth, mutate, task_view):
                     "SELECT a.bot FROM assignments a JOIN bots b ON b.slug=a.bot "
                     "WHERE a.runner_id=? AND b.state<>'archived'", (row["id"],))}
                 value["readiness"]["bots"] = {bot: report for bot, report in value["readiness"].get("bots", {}).items()
-                                             if bot in assigned_here}
+                                             if bot in assigned_here and bot not in hidden}
                 for report in value["readiness"].get("bots", {}).values():
                     report.pop("tools", None)
                 from .harness_actions import choices, recent
                 # A computer installs only what its bots run on, so only those are its business; with no bot yet,
                 # the company's one default, which it installs for its first sign-in (config_view default_runtime).
                 # `bot_runtimes` adds the bots' fallbacks: what it installs for them, so their on/off stays locked.
-                from .subscriptions import computer_profiles
-                # Each named subscription on it, with its sign-in, account and usage windows: this list is already
-                # limited to an administrator or the computer's operator, who may read its accounts.
+                # Each named subscription on it, with its sign-in and usage windows; its account only for whoever
+                # may change the computer (`may_manage`). `same_account`: {runtime: subscription} where the
+                # computer's own login is that subscription's account, so a member's page shows them as one too.
+                # `bot_connections`: the connection each of its bots actually runs on. `signed_out`:
+                # {runtime: [profile, ...]} a person signed out here ('' is its own login); they stay signed out.
                 from .model_login import cleared_logins
                 from .computer_keys import listing as computer_key_listing
+                profiles = subscriptions.computer_profiles(c, row, True)
+                same_account = subscriptions.same_account(value["readiness"].get("runtimes") or {}, profiles)
+                keys, shared = computer_key_listing(c, row["id"]), shared_listing(shared_keys, value["readiness"])
+                if not manage:
+                    for profile in profiles:
+                        subscriptions.without_accounts(profile["runtimes"])
+                    subscriptions.without_accounts(value["readiness"].get("runtimes") or {}, windows=True)
+                    for key in (*keys.values(), *shared.values()):
+                        key.pop("preview", None)
                 machines.append({**value, "bots": bots, "needed_runtimes": sorted(assigned.get(row["id"]) or default),
-                                 "profiles": computer_profiles(c, row, True),
-                                 # {runtime: [profile, ...]} a person signed out here; they stay signed out.
+                                 "may_manage": manage, "profiles": profiles, "same_account": same_account,
+                                 "bot_connections": [link for link in subscriptions.connections(
+                                     c, row["id"], store.settings, subscription_context) if link["bot"] not in hidden],
                                  "signed_out": cleared_logins(c, row["id"]),
+                                 "inbox_only": row["id"] in kept_for_inbox,
                                  # {runtime: {env, preview}}: its own keys stored from here, and the company's shared
-                                 # ones, for the rows a key signs in (backend/computer_keys.py). Never a value.
-                                 "keys": computer_key_listing(c, row["id"]),
-                                 "shared_keys": shared_listing(shared_keys, value["readiness"]),
-                                 # The sign-ins several of its bots share, which they take turns on.
-                                 "shared_logins": shared_logins(c, row["id"], value["readiness"], assigned_here, access),
+                                 # ones, for the rows a key signs in (backend/computer_keys.py). Never a value, and a
+                                 # preview only for whoever may change the computer.
+                                 "keys": keys,
+                                 "shared_keys": shared,
+                                 # The sign-ins several of its bots share, which they take turns on (counting only
+                                 # the bots this reader may see).
+                                 "shared_logins": shared_logins(c, row["id"], value["readiness"], assigned_here - hidden, access),
                                  "bot_runtimes": sorted(run_on.get(row["id"], ())),
                                  "update": runner_versions.view(fleet.get(row["id"])),
                                  "harness_actions": recent(c, row["id"]) if who.role == "owner" else [],
@@ -2070,6 +2104,8 @@ def runnable_choices(c, who, auth, settings):
                         and (not enabled or not model.get("provider") or model["provider"] in enabled)
                         for h in model.get("harnesses") or () if not (HARNESS_BY_ID.get(h) or {}).get("external")})
     computers = _movable(c, who, {r["id"] for r in _online_runners(c)})
+    tico = {model["id"] for model in providers.MODEL_CATALOG if model.get("provider") == "tico"
+            and not model.get("deprecated") and (not enabled or "tico" in enabled)}
     out = {}
     from .harnesses import resolve_harness
     for row in c.execute("SELECT a.bot,b.runtime,bc.config_json FROM assignments a JOIN bots b ON b.slug=a.bot "
@@ -2084,4 +2120,10 @@ def runnable_choices(c, who, auth, settings):
             answer = runtime_choice(c, bot, runtime, who, computers, harness=harness)
             if answer.get("can_run") is False:
                 out.setdefault(bot, {})[harness] = answer
+        # A Tico model on a computer that cannot run Gateway work, under its model id: the picker marks it "not on this
+        # computer" while the harness itself (pi on the bot's own key) stays offered.
+        if tico:
+            answer = runtime_choice(c, bot, "pi", who, computers, harness="pi", model=sorted(tico)[0])
+            if answer.get("can_run") is False:
+                out.setdefault(bot, {}).update({model: answer for model in tico})
     return out

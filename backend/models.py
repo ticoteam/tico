@@ -59,6 +59,8 @@ class MessageCreate(Contract):
     refs: dict = Field(default_factory=dict)
     in_reply_to: ID | None = None
     wait_s: int | None = Field(default=None, ge=0, le=300)
+    # A bot's message to a bot waits for that bot's next run unless it needs action now (backend/bot_to_bot.py).
+    needs_action: bool = False
 
 
 class ChatCreate(Contract):
@@ -289,6 +291,9 @@ class TaskQuestion(Contract):
     parent: ID | None = None
     private: StrictBool | None = None
     if_no_answer: IfNoAnswer | None = None
+    # One open question per topic: a second question to the same person on this topic, while the first is open, is
+    # folded into it (hubdb.open_question). Without one, an earlier question under the same parent task with no topic.
+    topic: Annotated[StrictStr, Field(min_length=1, max_length=80)] | None = None
 
     @model_validator(mode="after")
     def unique_labels(self):
@@ -356,6 +361,8 @@ class FileVersionEdit(Contract):
 
 class TaskComment(Contract):
     public: bool = False
+    # As MessageCreate.needs_action: a bot's comment to a bot wakes it now only when this is set.
+    needs_action: bool = False
     approval_id: ID | None = None
     text: Text
     ask: ReviewAsk | None = None
@@ -1007,6 +1014,8 @@ class StructuredReadiness(Contract):
     worktree_waits: bool | None = None
     schema_version: Literal[1] = 1
     disk: DiskReadiness | None = None
+    # Bots run as their own user here (runner-rs/src/isolation.rs), so a Tico model may run (backend/models_preset.py).
+    isolated: bool | None = None
     runtimes: dict[str, RuntimeReadiness] = Field(default_factory=dict)
     bots: dict[str, BotReadiness] = Field(default_factory=dict)
     harnesses: dict[str, HarnessReadiness] = Field(default_factory=dict, max_length=50)
@@ -1073,7 +1082,8 @@ class ComputerProfile(Contract):
 
 
 class SubscriptionAssignment(Contract):
-    scope: Literal["group", "bot"]
+    # Only a bot chooses a subscription; a group no longer gives its bots one.
+    scope: Literal["bot"] = "bot"
     target: str = Field(min_length=1, max_length=100)
     profile: str | None = Field(default=None, pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$", max_length=80)
 
@@ -1563,6 +1573,8 @@ class ProvidersUpdate(Contract):
     # What review and check subtasks run on, best first (`runtime` or `runtime:model`); None keeps the saved order,
     # [] follows the enabled providers' order.
     check_models: list[Annotated[str, Field(min_length=1, max_length=140)]] | None = Field(default=None, max_length=10)
+    # The models choice (backend/models_preset.py): one of its four, '' for none; None keeps the saved one.
+    preset: str | None = Field(default=None, max_length=40)
 
 
 class SystemUpdate(Contract):

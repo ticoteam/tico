@@ -59,9 +59,12 @@ const {fakeVnc, exposeRoutedSockets} = require('./support/fake-vnc.cjs');
     await page.goto('https://tico-ui.test/#/settings');
     await page.locator('[data-settings-tab=devices]').click();
     // Only the computer that has a screen offers the choice.
-    const more = label => page.locator(`#set-machines [aria-label="More for ${label}"]`);
+    // In each computer's pop-up.
+    await page.locator('#set-machines .machine-name[data-computer-open=c2]').click();
+    await page.locator('#set-machines dialog[open] [data-detail-section=screen]').waitFor();
     assert.equal(await page.locator('[data-computer-screen=c2]').count(), 0);
-    await more('Build server').click();
+    await page.keyboard.press('Escape');
+    await page.locator('#set-machines .machine-name[data-computer-open=c1]').click();
     // All three stay choices here; the bot page's Turn on picks Control only.
     assert.deepEqual(await page.locator('[data-computer-screen=c1] input').evaluateAll(els => els.map(el => el.value)), ['off', 'view', 'control']);
     await page.locator('[data-computer-screen=c1] label:has(input[value=control])').click();
@@ -98,7 +101,7 @@ const {fakeVnc, exposeRoutedSockets} = require('./support/fake-vnc.cjs');
     // At View the viewer opens a view session and offers no switch.
     answer = true;
     await page.locator('[data-settings-tab=devices]').click();
-    await more('Build server').click();
+    await page.locator('#set-machines .machine-name[data-computer-open=c1]').click();
     await page.locator('[data-computer-screen=c1] label:has(input[value=view])').click();
     await page.waitForFunction(() => SETTINGS_DATA.machines[0].screen === 'view');
     await page.locator('#set-machines a.machine-screen').click();

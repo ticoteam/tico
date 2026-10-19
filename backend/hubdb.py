@@ -1006,6 +1006,10 @@ def migrate(conn, adopt_legacy=False):
     # 1 when a run segment's estimate may be low: its model's long prompts cost more and the runner did not
     # send every request's tokens (providers.estimate). NULL on segments from before it was recorded.
     add_column(conn, "turn_usage_segments", "est_cost_low", "INTEGER")
+    # On a Tico AI Gateway segment, which gateway key paid for it (backend/gateway_connection.py `key_id`, never the key)
+    # and this install's id (backend/census.py), so the Gateway's own ledger can be matched. NULL on every other one.
+    add_column(conn, "turn_usage_segments", "gateway_key_id", "TEXT")
+    add_column(conn, "turn_usage_segments", "install_id", "TEXT")
     # The newest of the bot's own model requests' whole prompt (uncached + cached), when its runner marked them from
     # its subagents': the session's context size (backend/topic_change.py). NULL when it did not; the summed columns
     # are not a context size.
@@ -1041,6 +1045,8 @@ def migrate(conn, adopt_legacy=False):
                  "to_actor TEXT NOT NULL, body TEXT NOT NULL, created TEXT NOT NULL, carried_by TEXT, "
                  "cancelled_at TEXT, cancelled_by TEXT)")
     conn.execute("CREATE INDEX IF NOT EXISTS notes_to_created ON notes(to_actor, created)")
+    # A bot-to-bot message that could wait (backend/bot_to_bot.py) rides to the next run as a note linked to it.
+    add_column(conn, "notes", "message_id", "TEXT")
     conn.execute("CREATE INDEX IF NOT EXISTS tasks_owner_rank ON tasks(owner, rank)")
     # Health's waits-on-a-person check (backend/health.py silent_waits) reads only these few rows.
     conn.execute("CREATE INDEX IF NOT EXISTS tasks_waiting_on ON tasks(waiting_on) WHERE waiting_on IS NOT NULL")
@@ -2254,7 +2260,14 @@ def say(conn, actor, to_actor, body, conversation_id=None, kind="say", refs=None
             warnings = style_problems(conn, actor, lint_human_item(body), severity)
             refs["unsolicited"] = True
 
+    # Token saving (Dev 149): a plain bot-to-bot message waits for the target's next run unless flagged.
+    from . import bot_to_bot
+    waits = bot_to_bot.can_wait(conn, actor, target, kind, refs, body, in_reply_to)
+    if waits:
+        refs.update(quiet=True, **{bot_to_bot.MARK: bot_to_bot.RULE})
     msg = _write_message(conn, actor, target, body, conv, kind, refs, in_reply_to, wait_s)
+    if waits:
+        bot_to_bot.hold(conn, msg, task(conn, on_task) if isinstance(on_task, str) and on_task else None)
     _close_open_asks(conn, actor, target, kind, msg)
     if kind == "ask" and is_bot(actor) and is_human(target):
         about = message_task_id({"refs": refs}, conv)
@@ -2904,9 +2917,18 @@ OPEN_ASK_SQL = ("m.answered_by IS NULL AND m.superseded_at IS NULL AND NOT EXIST
                 "(SELECT 1 FROM messages a WHERE a.in_reply_to=m.id AND a.kind='answer')")
 
 
+def ask_clock(message):
+    """When this ask was last put to the person: when it was written, or when the bot last asked it again and it was
+    folded in (fold_question). Its age, its "older" move and its default's days run from here."""
+    refs = (message or {}).get("refs")
+    if not isinstance(refs, dict):
+        refs = _json((message or {}).get("refs_json"), {}) or {}
+    return refs.get("asked_again_at") or (message or {}).get("created")
+
+
 def ask_older(message, at=None):
     """True when this unanswered ask is older than ASK_OLDER_DAYS: it moves to the person's "older" list."""
-    created = parse_ts((message or {}).get("created"))
+    created = parse_ts(ask_clock(message))
     if not created:
         return False
     if created.tzinfo is None:
@@ -3780,7 +3802,9 @@ def task_comment(conn, actor, task_id, text, wake=True, *, ask=None, extra_refs=
               if a and a not in (actor, KEEPER) and task_private_readable(conn, a, row)]
     target = next((a for a in others if is_bot(a)), None) or (others[0] if others else None)
     refs = {"task": task_id, "comment": True, **(extra_refs or {})}
-    if not wake:
+    # A bot's comment flagged needs-action wakes the other side even where its comment alone would not (a snoozed
+    # task): the sender said it cannot wait (backend/bot_to_bot.py).
+    if not wake and not (is_bot(actor) and refs.get("needs_action") is True):
         refs["quiet"] = True
     conv = conversation(conn, row["conversation_id"])
     if not conv:
@@ -4785,6 +4809,73 @@ def own_question(conn, actor, row, person):
                 and any(a["to_actor"] == person for a in open_task_asks(conn, card))):
             return card
     return None
+
+
+QUESTION_FOLDED = "task.question_folded"
+EARLIER_ASKS_KEPT = 10      # earlier wordings a folded question keeps; older ones are still in the task's history
+
+
+def question_topic(value):
+    """A topic key as compared: its letters and digits in any script, case folded, words joined by single hyphens
+    ("Backup model" == "backup-model", "预算" stays "预算"). None only when there is no letter or digit in it."""
+    return "-".join(re.findall(r"[^\W_]+", str(value or "").casefold()))[:80] or None
+
+
+def open_question(conn, actor, person, *, parent=None, topic=None, private=False):
+    """`actor`'s open question to `person` (`hub task question`) that a new one on the same topic joins, or None.
+
+    One open question per topic: with a topic key, the open question with that key, under any task; without one, an
+    open question under the same parent task that has no key either (a bot names a second, different decision on the
+    same task with its own key). Open: the question task is live and waits on them, and its ask is unanswered. Never
+    across privacy: a private question joins only a private one, and only under the same parent."""
+    topic = question_topic(topic)
+    if not topic and not parent:
+        return None
+    rows = _rows(conn.execute(
+        "SELECT t.id AS task_id, m.id AS message_id, json_extract(m.refs_json,'$.topic') AS topic "
+        "FROM tasks t JOIN messages m ON m.conversation_id=t.conversation_id JOIN conversations cv ON cv.id=m.conversation_id "
+        "WHERE t.owner=? AND t.waiting_on=? AND t.status='waiting' "
+        f"AND m.from_actor=? AND m.to_actor=? AND m.kind='ask' AND m.deleted_at IS NULL AND {OPEN_ASK_SQL} "
+        f"AND {MESSAGE_TASK_SQL}=t.id AND json_extract(m.refs_json,'$.questions[0].id') LIKE 'decision%' "
+        "ORDER BY t.created, t.rowid", (actor, person, actor, person)))
+    for row in rows:
+        card = task(conn, row["task_id"])
+        if bool(task_private(conn, card)) != bool(private):
+            continue
+        same_parent = bool(parent) and TR.parent_of(conn, card["id"]) == parent
+        if private and not same_parent:
+            continue
+        if (question_topic(row["topic"]) == topic) and (topic or same_parent):
+            return {"task": card, "ask": message(conn, row["message_id"])}
+    return None
+
+
+def fold_question(conn, actor, found, question, ask, *, title=None, body=None):
+    """Put a new question on a topic into `found`, the open one (open_question): the person keeps one card, with the
+    latest wording and options, and the earlier asks listed under it. The ask is rewritten in place, so nothing new is
+    sent: no second Needs-you item, no Slack or mail line, no run. Its clock restarts (ask_clock), so the person gets
+    the team's days from the latest wording before a default goes ahead. Returns the ask as it now reads."""
+    card, asked = found["task"], found["ask"]
+    old = asked.get("refs") or {}
+    was = ((old.get("questions") or [{}])[0].get("question") or asked.get("body") or "").strip()
+    earlier = [*(old.get("earlier") or []), {"question": was, "at": ask_clock(asked)}][-EARLIER_ASKS_KEPT:]
+    at = now()
+    refs = {k: v for k, v in old.items() if k not in ("questions", "if_no_answer", "who")}
+    # Each wording is its own question id ("decision-2"...): an answer the person picked on the wording before is
+    # keyed by the old id and refused (task_review.answer_task), never taken as an answer to this one.
+    questions = [{**q, "id": f"decision-{len(earlier) + 1}"} if not i else q for i, q in enumerate(ask["questions"])]
+    refs.update({**ask, "questions": questions, "earlier": earlier, "asked_again_at": at})
+    if not ask.get("if_no_answer"):
+        refs.pop("if_no_answer", None)
+    conn.execute("UPDATE messages SET body=?, refs_json=?, edited_at=? WHERE id=?",
+                 (question, json.dumps(refs), at, asked["id"]))
+    before = "\n".join(f"- {e['question']} ({str(e.get('at') or '')[:10]})" for e in reversed(earlier) if e.get("question"))
+    text = (body or question).strip() + (f"\n\nAsked before:\n{before}" if before else "")
+    task_update(conn, actor, card["id"], title=title or question, body=text, note=question,
+                waiting_on=card["waiting_on"], quiet=True)
+    event(conn, actor, QUESTION_FOLDED, card["id"],
+          {"message": asked["id"], "to": card["waiting_on"], "topic": refs.get("topic"), "asks": len(earlier) + 1})
+    return message(conn, asked["id"])
 
 
 def _ask_in_subtask(conn, actor, row, person, ask):
@@ -6217,10 +6308,13 @@ def turn_finish(conn, actor, turn_id, exit_code="ok", tokens_in=None, tokens_out
         conn.execute("DELETE FROM turn_usage_segments WHERE turn_id=?", (turn_id,))
         for position, part in enumerate(usage["segments"]):
             conn.execute("INSERT INTO turn_usage_segments(turn_id,position,input_tokens,cached_tokens,output_tokens,"
-                         "model,provider,est_cost_usd,billing,runtime,harness,effort,profile,est_cost_low) "
+                         "model,provider,est_cost_usd,billing,runtime,harness,effort,profile,est_cost_low,"
+                         "gateway_key_id,install_id) "
                          "VALUES(:turn_id,:position,:input_tokens,:cached_tokens,:output_tokens,:model,:provider,"
-                         ":est_cost_usd,:billing,:runtime,:harness,:effort,:profile,:est_cost_low)",
-                         {"est_cost_low": None, **part, "turn_id": turn_id, "position": position})
+                         ":est_cost_usd,:billing,:runtime,:harness,:effort,:profile,:est_cost_low,"
+                         ":gateway_key_id,:install_id)",
+                         {"est_cost_low": None, "gateway_key_id": None, "install_id": None, **part,
+                          "turn_id": turn_id, "position": position})
     row = _one(conn, "SELECT * FROM turns WHERE id=?", (turn_id,))
     if row:
         conn.execute("UPDATE bots SET last_turn_at=? WHERE slug=?", (ts, row["bot"]))

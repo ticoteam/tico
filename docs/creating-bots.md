@@ -44,8 +44,6 @@ New bots start with their own repository unless the team selected all ticked rep
 
 ## Subscribe to updates
 
-> **Unreleased**: this setting is on `main` and not in a published release yet.
-
 A bot can hear about changes that may matter to it, as information only. In the bot editor (**Settings → Bots →
 Edit**, or **Bot settings** on the bot's Setup card), under **Subscribe to updates**, people who manage the bot tick
 either, both or neither:
@@ -595,9 +593,13 @@ Levers set in **Settings → Bots**, not in the repository:
   **Save bot** ([harnesses.md](harnesses.md#choosing-a-harness-model-and-effort)). The hop starts a fresh session. OpenRouter
   is not a bot harness. With none set, a usage limit still moves the turn to another provider signed in on
   the bot's computer unless the owner turned that off in **Settings → AI providers** (docs/how-it-works.md).
+- **Connection**: the login the bot runs on: **Computer's login** (the default) or one of the subscriptions on its
+  computer, listed first, then those on other computers. A line under **Model** says "Runs on *tool* · *connection* on
+  *computer*". The bot's computer operator, owners and admins choose it; groups no longer give their bots one
+  ([Computers](computers.md#which-connection-a-bot-runs-on)).
 - **Compact at**: how full the bot's conversation gets before it is compacted: 150k, 250k tokens (the default),
   400k, 600k or 1M. Claude Code and Codex only. Changing it keeps the session.
-- **Wakes** (Coming soon): how soon news starts a run. **Token saver**, the default for a new bot, holds
+- **Wakes**: how soon news starts a run. **Token saver**, the default for a new bot, holds
   nonblocking news (a request it asked for finished, review comments, a failing check nobody waits on) and
   sends it as one wake at most every 30 minutes. It also runs an enabled routine, or a stall check on a task,
   at most every 2 hours. **Performance** coalesces the same news for 1 minute and runs those sweeps at most
@@ -754,4 +756,4 @@ See [Tags and release checklists](using-tico.md#tags-and-release-checklists).
 A bot can keep using task statuses with any task type. Tico maps each status change to the type's
 matching step, or shows the plain status when no step matches. `hub task types` lists definitions;
 `hub task update <id> --step "Legal review"` chooses a named step explicitly. Types are optional,
-managed by movers in Settings → Types. See [Task types and steps](tasks.md).
+managed by movers in Settings → Tasks. See [Task types and steps](tasks.md).

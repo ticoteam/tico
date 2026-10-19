@@ -335,6 +335,23 @@
     // The banner itself opens the pop-up on Your requests, where the controls and the log are.
     else if (e.target.closest('#support-access-banner [data-access-left]')) void open({list: true});
   });
+  // The message box grows to what it holds, so a "Want help setting up?" snapshot reads whole, up to the CSS cap and
+  // never past the room the sheet has left: the thread keeps its minimum and Send stays on screen, which matters on a
+  // phone, where the keyboard shortens the sheet. What does not fit scrolls inside the box.
+  function fitBox(box) {
+    if (!box || !box.isConnected) return;
+    box.style.height = 'auto';
+    const want = box.scrollHeight + box.offsetHeight - box.clientHeight;
+    const thread = box.closest('[data-view]')?.querySelector('[data-thread]'), sheet = pop?.querySelector('.support-pop-in');
+    let room = want;
+    if (thread?.getClientRects().length && sheet) {
+      const spare = Math.max(0, thread.offsetHeight - (parseFloat(getComputedStyle(thread).minHeight) || 0));
+      const over = Math.max(0, box.form.getBoundingClientRect().bottom - sheet.getBoundingClientRect().bottom);
+      room = Math.max(parseFloat(getComputedStyle(box).minHeight) || 0, box.offsetHeight + spare - over);
+    }
+    box.style.height = Math.min(want, room) + 'px';
+  }
+  const fitVisibleBox = () => { if (isOpen()) fitBox(pop.querySelector('[data-view]:not([hidden]) [data-compose]:not([hidden]) [name=message]')); };
   function renderComposer() {
     const d = draft(), form = pop.querySelector('[data-compose]');
     form.innerHTML = `<label class="sr-only" for="support-message">Message to Tico support</label>
@@ -347,7 +364,8 @@
       ${!selected ? `<details class="support-options"><summary>Reply email and install details</summary><label>Email for a reply<input name="email" type="email" value="${escape(d.email)}" autocomplete="email"></label><label class="support-check"><input name="ids" type="checkbox" ${d.ids ? 'checked' : ''}> Include ${appVersion() ? 'versions' : 'version'} and install ID</label></details>` : ''}
       ${d.report ? `<p class="support-report" data-report>Attached: <strong>${escape(REPORTED[d.report.kind])}</strong> ${escape(d.report.title)} <button class="linkish" type="button" data-unreport>Remove</button></p>` : ''}
       <p class="support-sent" data-sent></p></details>`;
-    form.querySelector('[data-attach]').ontoggle = e => { if (e.target === form.querySelector('[data-attach]')) d.open = e.target.open; };
+    fitBox(form.elements.message);
+    form.querySelector('[data-attach]').ontoggle = e => { if (e.target === form.querySelector('[data-attach]')) { d.open = e.target.open; fitBox(form.elements.message); } };
     const unreport = form.querySelector('[data-unreport]');
     if (unreport) unreport.onclick = () => {
       // An untouched prefill would say "details attached" with nothing attached.
@@ -357,6 +375,7 @@
     };
     form.oninput = () => {
       d.message = form.elements.message.value;
+      fitBox(form.elements.message);
       if (!selected) { d.email = form.elements.email.value; d.ids = form.elements.ids.checked; }
       d.diag = form.elements.diag.checked;
       const perf = Number(form.elements.perf.value);
@@ -644,8 +663,10 @@
     const vv = window.visualViewport, page = document.documentElement.clientHeight || window.innerHeight;
     const scale = vv?.scale || 1, height = Math.min(page, (vv?.height || window.innerHeight) * scale);
     const bottom = Math.abs(scale - 1) < 0.01 ? (vv?.offsetTop || 0) + height : page;
+    let moved = false;
     for (const [name, px] of [['--support-visible', height], ['--support-bottom', bottom]])
-      if (pop.style.getPropertyValue(name) !== px + 'px') pop.style.setProperty(name, px + 'px');   // only on a change: typing fires these
+      if (pop.style.getPropertyValue(name) !== px + 'px') { pop.style.setProperty(name, px + 'px'); moved = true; }   // only on a change: typing fires these
+    if (moved) fitVisibleBox();   // a shorter sheet leaves the box less room
   }
   window.visualViewport?.addEventListener('resize', fit);
   window.visualViewport?.addEventListener('scroll', fit);

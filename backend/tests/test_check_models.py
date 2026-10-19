@@ -402,7 +402,8 @@ def queue_on(api, sub, sender, to="bot:ops", hours=0):
     """A message to `to` on the check task, its job `hours` old: its id."""
     with api.app.state.store.transaction() as c:
         conv = H.task(c, sub["id"])["conversation_id"]
-        msg = H.say(c, sender, to, "One more thing on this review.", conversation_id=conv, refs={"task": sub["id"]})
+        msg = H.say(c, sender, to, "One more thing on this review.", conversation_id=conv,
+                    refs={"task": sub["id"], **({"needs_action": True} if H.is_bot(sender) else {})})
         c.execute("UPDATE jobs SET created=? WHERE message_id=?", (H.shift(H.now(), hours=-hours), msg["id"]))
         return msg["id"]
 

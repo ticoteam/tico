@@ -32,8 +32,8 @@ def test_a_bots_message_and_comment_to_a_held_bot_wait_and_run_once_it_is_back(a
     else:
         post(api, "bots/finance/control", {"action": "pause", "expected_revision": revision(api, "finance")})
 
-    sent = post(api, "messages", {"to": "finance", "text": "Review 1 is ready"}, token=attempt["token"])
-    comment = post(api, f"tasks/{task['id']}/comments", {"text": "Finding 1"}, token=attempt["token"])
+    sent = post(api, "messages", {"to": "finance", "text": "Review 1 is ready", "needs_action": True}, token=attempt["token"])
+    comment = post(api, f"tasks/{task['id']}/comments", {"text": "Finding 1", "needs_action": True}, token=attempt["token"])
     assert "is kept" in sent["warning"] and "is kept" in comment["warning"], (sent, comment)
     assert ("until about" if held == "quarantined" else "until a person resumes it") in sent["warning"]
     refused = post(api, "tasks", {"owner": "finance", "title": "Check the payroll run", "body": "Read it"},

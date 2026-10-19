@@ -379,39 +379,8 @@ impl Runner {
                 && beat.as_ref().is_some_and(|(p, at)| *p == printed && at.elapsed().as_secs_f64() < HEARTBEAT_LIVE_S)
         };
         if !quiet {
-            let mut tries = 0;
             let began = Instant::now();
-            let beat = loop {
-                tries += 1;
-                let e = match self.client.post("runners/heartbeat", &body, None).await {
-                    Err(e) if e.status == 422 && tries < 12 => e,
-                    other => break other,
-                };
-                // An older server refused something optional: only that goes, for ten minutes.
-                if let Some(field) = crate::lanes::refused_field(&e.detail, &body) {
-                    crate::lanes::hold_back(&field);
-                    crate::lanes::drop_held(&mut body);
-                } else if body.get("commit").is_some() && e.detail.contains("body.commit") {
-                    // A server rolled back since it said it takes the commit: it waits for `runners/desired` to say so again.
-                    body.as_object_mut().unwrap().remove("commit");
-                    crate::follow::shared().inspect(|f| f.drop_commit());
-                } else if capacity_refused(&e.detail) && body["capacity"].as_u64().unwrap_or(0) > 32 {
-                    // A server from before larger capacities accepts at most 32 and never hands out more turns
-                    // than the runner reports, so after a rollback the runner keeps working at 32.
-                    body["capacity"] = json!(32);
-                } else if let Some(hold) = crate::readiness_extra::refused(&e.detail, &body["readiness"]) {
-                    crate::lanes::hold_back(&hold);
-                    crate::readiness_extra::drop_held(&mut body);
-                } else if strip_credential_source(&mut body) {
-                    // A rollback to a server from before credential sources: the heartbeat keeps working.
-                    self.credential_source.store(false, Ordering::SeqCst);
-                } else if strip_accounts(&mut body) {
-                    // A rollback to a server from before accounts: the rest of the report still goes.
-                    self.accounts.store(false, Ordering::SeqCst);
-                } else {
-                    break Err(e);
-                }
-            };
+            let (beat, tries) = self.post_heartbeat(&mut body).await;
             crate::flight::heartbeat(began.elapsed().as_millis() as u64, tries, beat.as_ref().err());
             let beat = beat?;
             *self.beat.lock().unwrap() = Some((printed, Instant::now()));
@@ -460,6 +429,45 @@ impl Runner {
 }
 
 impl Runner {
+    /// Send the heartbeat `body`, and how many posts it took. A server older than this runner refuses what it doesn't
+    /// know (422): only that comes out, held back for ten minutes, and the rest goes again, so a runner updated
+    /// before its server still checks in and claims work (runners and servers update independently).
+    async fn post_heartbeat(&self, body: &mut Value) -> (Result<Value, ApiError>, u32) {
+        let mut tries = 0;
+        let beat = loop {
+            tries += 1;
+            let e = match self.client.post("runners/heartbeat", body, None).await {
+                Err(e) if e.status == 422 && tries < 12 => e,
+                other => break other,
+            };
+            // An older server refused something optional: only that goes, for ten minutes.
+            if let Some(field) = crate::lanes::refused_field(&e.detail, body) {
+                crate::lanes::hold_back(&field);
+                crate::lanes::drop_held(body);
+            } else if body.get("commit").is_some() && e.detail.contains("body.commit") {
+                // A server rolled back since it said it takes the commit: it waits for `runners/desired` to say so again.
+                body.as_object_mut().unwrap().remove("commit");
+                crate::follow::shared().inspect(|f| f.drop_commit());
+            } else if capacity_refused(&e.detail) && body["capacity"].as_u64().unwrap_or(0) > 32 {
+                // A server from before larger capacities accepts at most 32 and never hands out more turns
+                // than the runner reports, so after a rollback the runner keeps working at 32.
+                body["capacity"] = json!(32);
+            } else if let Some(hold) = crate::readiness_extra::refused(&e.detail, &body["readiness"]) {
+                crate::lanes::hold_back(&hold);
+                crate::readiness_extra::drop_held(body);
+            } else if strip_credential_source(body) {
+                // A rollback to a server from before credential sources: the heartbeat keeps working.
+                self.credential_source.store(false, Ordering::SeqCst);
+            } else if strip_accounts(body) {
+                // A rollback to a server from before accounts: the rest of the report still goes.
+                self.accounts.store(false, Ordering::SeqCst);
+            } else {
+                break Err(e);
+            }
+        };
+        (beat, tries)
+    }
+
     /// Lease expiry does not mean this worker has stopped: every live worker's lane stays busy, and a bot whose
     /// worktrees are being maintained gets nothing (service.py _claim_next).
     async fn claim_next(&self) -> Result<Value, ApiError> {
@@ -817,6 +825,38 @@ impl Runner {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // What a server from before `isolated` (main 95cbeb29) answers a check-in that carries it, word for word.
+    const BEFORE_ISOLATED: &str = r#"{"error": {"code": "validation", "retryable": false, "detail": "body.readiness.StructuredReadiness.isolated: Extra inputs are not permitted; body.readiness.dict[constrained-str,bool].runtimes: Input should be a valid boolean; body.readiness.dict[constrained-str,bool].bots: Input should be a valid boolean"}}"#;
+
+    #[tokio::test]
+    async fn a_new_runner_checks_in_with_a_server_from_before_isolation_reports_and_still_claims_work() {
+        let (url, seen) = crate::client::tests::serve(vec![
+            (422, BEFORE_ISOLATED),
+            (200, r#"{"ok": true}"#),
+            (200, r#"{"attempt": {"id": "att-1", "bot": "ops"}}"#),
+        ]).await;
+        let dir = std::env::temp_dir().join(format!("tico-old-server-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(dir.join("projects")).unwrap();
+        let path = dir.join("runner.json");
+        std::fs::write(&path, json!({"url": url, "token": "t", "runner_id": "r1", "projects_dir": dir.join("projects")}).to_string()).unwrap();
+        let config = Config::load(&path).unwrap();
+        let client = Client::new(&config.url(), &config.token(), 5, 0).unwrap();
+        let runner = Runner::new(config, client, State::open(&dir.join("state")).unwrap());
+        let mut body = json!({"version": "test", "platform": "linux", "readiness": {"schema_version": 1, "isolated": true,
+                              "runtimes": {"pi": {"installed": true}}, "bots": {"ops": {"ready": true}}}});
+        let (beat, tries) = runner.post_heartbeat(&mut body).await;
+        crate::lanes::release("readiness.isolated");
+        assert_eq!((beat.map(|b| b["ok"] == true).ok(), tries), (Some(true), 2));
+        let claimed = runner.claim_next().await.unwrap();
+        assert_eq!(claimed["attempt"]["id"], "att-1");
+        let seen = seen.lock().unwrap();
+        assert!(seen[0].contains("\"isolated\":true"), "{}", seen[0]);
+        // The same check-in again, less the one field the older server doesn't know: then the claim.
+        assert!(seen[1].starts_with("POST /api/v2/runners/heartbeat") && !seen[1].contains("isolated"), "{}", seen[1]);
+        assert!(seen[1].contains("\"ops\":{\"ready\":true}") && seen[1].contains("\"pi\":{\"installed\":true}"), "{}", seen[1]);
+        assert!(seen[2].starts_with("POST /api/v2/jobs/claim"), "{}", seen[2]);
+    }
 
     #[test]
     fn a_restart_under_way_rides_on_the_heartbeat_and_an_older_server_gets_it_held_back() {

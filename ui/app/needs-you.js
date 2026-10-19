@@ -54,6 +54,9 @@ function needsV2Item(it, folded, showName = true) {
   if (kind === 'approval') {
     acts.push(`<button class="primary" type="button" data-v2-approval="${esc(it.id)}" data-v2-decision="approved">Approve</button>`);
     acts.push(`<button class="ghost danger" type="button" data-v2-approval="${esc(it.id)}" data-v2-decision="declined">Decline</button>`);
+  } else if (kind === 'setup') {
+    // A setup card is no task: it goes away by itself once the sign-in is done (backend/models_preset.py).
+    acts.push(`<a class="button primary" href="${esc(it.link || '#/settings')}">${esc(it.link_label || 'Open Settings')}</a>`);
   } else {
     if (it.status !== 'done') acts.push(`<button class="${rec ? 'ghost' : 'primary'}" type="button" data-v2-task="${esc(it.id)}" data-v2-status="done">Done</button>`);
     if (['done', 'declined'].includes(String(it.status))) acts.push(`<button class="ghost" type="button" data-v2-task="${esc(it.id)}" data-v2-status="open">Reopen</button>`);
