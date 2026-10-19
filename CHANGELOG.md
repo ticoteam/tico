@@ -64,15 +64,6 @@ All notable changes to Tico are recorded here. The format follows
   starting point for Sales", or nothing for a bot your words brought in. The live chart holds places for the group
   being recruited and draws each bot's line together with its card, so it never shows empty lines, and long bot names
   wrap instead of being cut off ("Sales Developm…"), with the full name as a tooltip.
-- **Clear** on a bot's chat now really starts the bot over. Before, it only trimmed the history Tico sends, and on
-  the computer Claude Code, Codex and the other harnesses kept resuming the old provider thread, so the bot still
-  remembered the cleared chat and every turn still paid for it. Each turn now carries its conversation's session
-  epoch (`session_epoch`) and its bot's (`bot_session_epoch`), moved by Clear and by the session resets after a
-  model, placement or thread-mode change; when the one for its thread moves, the runner starts a new provider thread
-  from Tico's history. The thread a bot's direct chats share starts over on the next turn of any of them, while each
-  other chat keeps its own history. Without a clear the bot resumes its thread as before. After the upgrade, a thread
-  that may have been cleared or reset before its first turn on the new runner starts over once. A runner or Hub from
-  before this keeps today's behaviour ([sessions](docs/sessions.md)).
 
 ### Changed
 - **Updates cards use icons**: Reply, Mark unread (or read) and Archive (Restore in the Archive) are icons, named by a
