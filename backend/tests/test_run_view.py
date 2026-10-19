@@ -242,9 +242,18 @@ def test_the_working_line_follows_whichever_bot_a_persons_message_went_to(api):
     working = get(api, f"tasks/{tid}")["execution"]
     assert (working["attempt_id"], working["state"], working["bot"]) == (turn["id"], "running", "ops")
     assert get(api, f"tasks/{tid}")["comment_to"] == {"bot": "ops", "wakes": True, "mention": []}
-    # Someone who neither owns nor asked it is saved for the bot's next run, unless they @mention it.
-    to = get(api, f"tasks/{tid}", token="cara-test")["comment_to"]
+    # Someone who neither owns, asked nor may move it is saved for the bot's next run, and no @mention changes that:
+    # the composer offers none, and one sent anyway wakes nobody.
+    assert get(api, f"tasks/{tid}", token="cara-test")["comment_to"] == {"bot": "ops", "wakes": False, "mention": []}
+    assert post(api, f"tasks/{tid}/comments", {"text": "@ops is it billing?"}, token="cara-test")["woke"] is False
+    # A mover who does not own it is saved too, unless they @mention the bot that asked: the composer offers it and
+    # it wakes the bot.
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET owner='human:ben' WHERE id=?", (tid,))
+    to = get(api, f"tasks/{tid}")["comment_to"]
     assert (to["bot"], to["wakes"], "ops" in to["mention"]) == ("ops", False, True)
+    assert post(api, f"tasks/{tid}/comments", {"text": "Noted."})["woke"] is False
+    assert post(api, f"tasks/{tid}/comments", {"text": "@ops is it billing?"})["woke"] is True
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET requester='human:ben' WHERE id=?", (tid,))
     assert get(api, f"tasks/{tid}")["comment_to"] == {"bot": None, "wakes": False, "mention": []}, "no bot gets it"

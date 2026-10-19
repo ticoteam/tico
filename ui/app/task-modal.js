@@ -483,8 +483,10 @@ async function taskStepsOpen(el) {
 // Sent, Queued and why, Starting, "<Bot> is working" with its newest step, or Reply failed. `execution` is the owner's
 // run or the run for a person's message, whichever bot that went to (GET /v2/tasks/{id}); a queued run for anything
 // else is `waiting_for`'s. The steps so far are one click away, and Stop is there for whoever manages the bot
-// (POST /v2/bots/{slug}/stop, as in the bot's chat). `sent`: a message just sent that no run has picked up yet.
-function taskLiveHTML(x, stopping = '', sent = false) {
+// (POST /v2/bots/{slug}/stop, as in the bot's chat). `sent`: the id of a message just sent; until its own run is read,
+// it is Sent, never the state of an earlier message's run.
+function taskLiveHTML(x, stopping = '', sent = '') {
+  if (sent && x?.message_id !== sent) x = null;
   const working = !!x && ['leased', 'running'].includes(x.state);
   const run = working || x?.from_person && v2RunLive(x) ? x : null;
   if (!run && !sent) return '';
@@ -571,7 +573,7 @@ function taskCommentsRender(state, data, sent = '') {
   state.count = count;
   const files = tfFiles(state.dialog);
   // The run answering the thread; otherwise the bot's next run on this task, when it is queued: what it waits for.
-  const live = taskLiveHTML(data.execution, state.stopping, !!sent);
+  const live = taskLiveHTML(data.execution, state.stopping, sent);
   const wait = live || !data.waiting_for ? live : `<p class="muted task-wait" role="status">${esc(data.waiting_for)}</p>`;
   const html = (lines.map((x, i, all) => commentLineHTML(x, i, all, files, state.id, can)).join('') || '<p class="muted">Nothing said yet.</p>') + wait;
   const thread = $('.task-comments', host);

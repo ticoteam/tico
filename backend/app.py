@@ -2895,14 +2895,18 @@ def create_app(settings=None):
     def comment_to(c, who, row):
         """Who a plain comment from this reader reaches (H.task_comment, H.comment_wakes): `bot`, the bot it goes to,
         or None when no bot will get it; `wakes`, whether it starts that bot's turn now rather than waiting for its
-        next run on the task; `mention`, the @names that wake it anyway (names_a_filer). None for a bot reader."""
+        next run on the task; `mention`, the @names that would wake it anyway for this reader, each checked against
+        the same rule (names_a_filer counts only for someone who may direct the task). None for a bot reader."""
         if who.role == "bot":
             return None
         target = H.comment_target(c, who.actor, row)
         if not H.is_bot(target):
             return {"bot": None, "wakes": False, "mention": []}
-        wakes = H.comment_wakes(c, who.actor, row, "", mover=mover(c, who))
-        return {"bot": H.actor_id(target), "wakes": wakes, "mention": [] if wakes else H.filer_handles(c, row)}
+        moves = mover(c, who)
+        wakes = H.comment_wakes(c, who.actor, row, "", mover=moves)
+        mention = [] if wakes else [n for n in H.filer_handles(c, row)
+                                    if H.comment_wakes(c, who.actor, row, "@" + n, mover=moves)]
+        return {"bot": H.actor_id(target), "wakes": wakes, "mention": mention}
 
     def task_runs(c, who, tid, limit=200):
         """The runs that worked this task, each with the model that actually ran it (`ran_on`). A review that

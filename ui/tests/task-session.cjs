@@ -153,7 +153,7 @@ async function answered(viewport, shot) {
       failed: {comments: [...said, mine], execution: {...run, state: 'uncertain', label: 'Reply failed — your message is saved'}},
       botToBot: {comments: [...said, mine], execution: {...run, from_person: false, state: 'queued', label: 'Saved — queued'}},
     };
-    let phase = 'idle', to = {bot: 'lead', wakes: true, mention: []}, release = null;
+    let phase = 'idle', to = {bot: 'lead', wakes: true, mention: []}, release = null, sends = 0;
     page.on('pageerror', e => errors.push(e.message));
     await page.route('**/*', async route => {
       const req = route.request(), url = new URL(req.url()), p = url.pathname;
@@ -170,7 +170,8 @@ async function answered(viewport, shot) {
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       if (p === '/api/v2/tasks') return json({tasks: [ask]});
       if (p === '/api/v2/tasks/t-ask/comments' && req.method() === 'POST')
-        return json({comment: mine, comments: [...said, mine], woke: true});
+        { const sent = sends++ ? {...mine, id: 'c4', body: 'Try again please.'} : mine;
+          return json({comment: sent, comments: [...said, mine, ...(sent === mine ? [] : [sent])], woke: true}); }
       if (p === '/api/v2/tasks/t-ask') {
         if (release) await release;           // the read after a send waits until "Sent" has been seen
         return json({task: ask, events: [], can_comment: true, children: [], comment_to: to, ...states[phase]});
@@ -212,6 +213,14 @@ async function answered(viewport, shot) {
     phase = 'failed';
     await page.evaluate(() => taskChatRead(TASK_CHAT));
     await live.filter({hasText: 'Reply failed — your message is saved'}).waitFor();
+    // A new message after a failed one is Sent until its own run is read, not the old "Reply failed".
+    release = new Promise(r => { open = r; });
+    await page.locator('#task-modal textarea').fill('Try again please.');
+    await page.locator('#task-modal .p-send').click();
+    await live.filter({hasText: 'Sent'}).waitFor();
+    assert.doesNotMatch(await live.innerText(), /Reply failed/);
+    release = null; open();
+    await live.filter({hasText: 'Reply failed'}).waitFor();     // the fixture's read still has the failed run
     phase = 'botToBot';
     await page.evaluate(() => taskChatRead(TASK_CHAT));
     await page.waitForFunction(() => !document.querySelector('#task-modal .task-live'));
@@ -234,5 +243,6 @@ async function answered(viewport, shot) {
   await run({width: 1200, height: 800}, shot('task-session-desktop.png'));
   await run({width: 390, height: 844}, shot('task-session-phone.png'));
   await answered({width: 1200, height: 800}, shot('task-session-answered.png'));
+  await answered({width: 390, height: 844}, shot('task-session-answered-phone.png'));
   console.log('ok');
 })().catch(e => { console.error(e); process.exit(1); });
