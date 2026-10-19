@@ -8,7 +8,10 @@
    any page that lists a login: Settings > Computers and Manage subscription today.
    Clear key / Replace key / Add key (backend/computer_keys.py) are here too, for a login a model key signs in: the key
    is pasted once, stored in the vault for that computer and shown only by its preview. A key the company shares with
-   every computer first asks "this computer only" or "all of them", listing them (`scopeHTML`, `chosenScope`). */
+   every computer first asks "this computer only" or "all of them", listing them (`scopeHTML`, `chosenScope`).
+   On a hosted Tico (config `hosted`, TICO_HOSTED) the person has no terminal on the computer, so the sign-in shows only
+   the provider's link and code (never what else the CLI printed; a failure gives its message), never points to a
+   terminal, and closes by itself once it has signed in or its cancel is confirmed. */
 'use strict';
 (function () {
   const RUNTIME_NAMES = {codex: 'Codex (ChatGPT)', claude: 'Claude Code'};
@@ -16,6 +19,7 @@
   const text = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
   // `finishing`: a switch is putting the new account in place, past the point where it can be cancelled.
   const active = state => ['requested', 'starting', 'waiting', 'finishing'].includes(state);
+  const hosted = () => typeof S !== 'undefined' && !!S.config?.hosted;
 
   // The computer shows a sign-in, switch or sign-out only in the readiness it reports next. Look again until it has
   // reported since the change finished (`since`, the server's time on the finished row; `readiness_at` is when the
@@ -64,7 +68,8 @@
     document.body.appendChild(dialog);
     const body = dialog.querySelector('[data-body]'), status = dialog.querySelector('[data-status]'),
           actions = dialog.querySelector('[data-actions]');
-    let login = null, timer = null, closed = false, sending = false;
+    // `note`: why a cancel did not go through, kept on screen while the sign-in it left running goes on.
+    let login = null, timer = null, closed = false, sending = false, note = '';
 
     const stop = () => { closed = true; clearTimeout(timer); };
     const close = async () => {
@@ -85,9 +90,9 @@
       const seconds = (Date.now() - new Date(login.created)) / 1000;
       let head = '', label = '';
       if (state === 'requested' || state === 'starting') {
-        label = seconds > STALLED_S
-          ? 'Still waiting for the computer to start the sign-in. It may need a newer Tico runner; you can also sign in from its terminal.'
-          : `Starting the sign-in on ${machine || 'the computer'}…`;
+        label = seconds <= STALLED_S ? `Starting the sign-in on ${machine || 'the computer'}…`
+          : hosted() ? 'Still waiting for the computer to start the sign-in. Check that it shows as online in Settings > Computers.'
+          : 'Still waiting for the computer to start the sign-in. It may need a newer Tico runner; you can also sign in from its terminal.';
       } else if (state === 'waiting') {
         label = 'Waiting for you to finish signing in…';
       } else if (state === 'finishing') {
@@ -105,6 +110,7 @@
       if (state === 'waiting') {
         head = `<ol class="model-login-steps">
           <li>${login.url ? `Open <a href="${text(login.url)}" target="_blank" rel="noopener noreferrer" data-link>${text(login.url.replace(/^https:\/\//, '').slice(0, 60))}</a> and sign in with the team's account.`
+                          : hosted() ? 'Waiting for the sign-in link from the computer…'
                           : 'Open the sign-in page the computer printed (see below) and sign in with the team\'s account.'}</li>
           ${login.code ? `<li>Enter this one-time code:<div class="model-login-code"><code data-code>${text(login.code)}</code>
               <button class="ghost" type="button" data-copy>Copy</button></div></li>` : ''}
@@ -113,14 +119,14 @@
               <button class="primary" type="submit">Send code</button></form>`}</li>` : ''}
         </ol>`;
       }
-      const lines = (login.lines || []).length && (state === 'waiting' && !login.url && !login.code || state === 'failed')
+      const lines = (login.lines || []).length && !hosted() && (state === 'waiting' && !login.url && !login.code || state === 'failed')
         ? `<details open><summary>What the computer printed</summary><pre data-lines>${text(login.lines.join('\n'))}</pre></details>` : '';
       // Keep what the person is typing when a poll redraws around it.
       const typed = body.querySelector('[name=code]')?.value || '';
       body.innerHTML = head + lines;
       const field = body.querySelector('[name=code]');
       if (field && typed) field.value = typed;
-      status.textContent = label;
+      status.textContent = note && active(state) ? `${label} ${note}` : label;
       status.dataset.state = state;
       actions.innerHTML = state === 'finishing' ? ''
         : active(state) ? '<button class="ghost" type="button" data-cancel>Cancel sign-in</button>'
@@ -146,8 +152,14 @@
     });
     actions.addEventListener('click', async event => {
       if (event.target.closest('[data-cancel]')) {
-        try { login = await post(`${base}/${encodeURIComponent(login.id)}/cancel`, {}); draw(); }
-        catch (error) { status.textContent = error.message; }
+        // On a hosted Tico the pane closes once the computer's sign-in is cancelled. A refused cancel (a switch
+        // already putting the new account in place) or a failed one leaves it open, saying why and following it on.
+        try {
+          login = await post(`${base}/${encodeURIComponent(login.id)}/cancel`, {});
+          note = '';
+          draw();
+          if (hosted() && login.state === 'cancelled') { toast(status.textContent); stop(); if (dialog.open) dialog.close(); }
+        } catch (error) { note = error.message; status.textContent = error.message; }
       } else if (event.target.closest('[data-retry]')) {
         void begin();
       }
@@ -160,13 +172,17 @@
         const changed = next.state !== login.state;
         login = next;
         if (!closed) draw();
-        if (changed && next.state === 'signed_in') refreshUntil(runnerId, runtime, profile, 'ready', next.updated);
+        if (changed && next.state === 'signed_in') {
+          refreshUntil(runnerId, runtime, profile, 'ready', next.updated);
+          if (hosted()) { toast(status.textContent); stop(); if (dialog.open) dialog.close(); }
+        }
       } catch (error) { status.textContent = error.message; }
       if (!closed && active(login.state)) timer = setTimeout(tick, POLL_MS);
     };
     const begin = async () => {
       clearTimeout(timer);
       closed = false;
+      note = '';
       status.textContent = 'Starting…';
       try { login = await post(base, {runtime, ...(profile ? {profile} : {}), ...(switchAccount ? {switch: true} : {})}); }
       catch (error) { status.textContent = error.message; actions.innerHTML = '<button class="ghost" type="button" data-close>Close</button>'; return; }

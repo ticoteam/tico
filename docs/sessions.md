@@ -46,6 +46,12 @@ said after the clear. The main chat is one thread shared by the bot's chats, so 
 that shared thread over too; others' chats then continue from their own history in Tico. A bot's computer must run
 a runner from this release or later; an older runner keeps resuming the old thread.
 
+**Topic changed** in a direct chat with a bot means Tico saw that your message starts a new subject, so it started the
+bot over the same way **Clear** does before sending it; the bot no longer carries the old conversation, which keeps
+long chats cheaper and on topic. It happens only when **Start fresh when the topic changes** is on (**Settings >
+Team**; off by default, an owner or an admin turns it on) and the chat is long or idle. If Tico isn't sure, or the
+check takes over 1.5 seconds, nothing changes and your message goes to the same session.
+
 Nothing closes on its own. A task with no activity for 7 days gets one **Still wanted?** question, with **Keep** and
 **Close**, to the person who asked for it (or the person who owns it). See [Picking work back up](tasks.md#picking-work-back-up).
 

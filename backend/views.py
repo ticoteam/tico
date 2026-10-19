@@ -232,6 +232,41 @@ def require_chat(c, auth, who, bot):
                       "(/api/v2/assistant); message one of your bots here", 403)
 
 
+def direct_chat(c, actor, bot):
+    """The person's open direct chat with `bot`: kind chat, no task, just the two of them. None when there is none."""
+    return next((row for row in H.conversations_for(c, actor) if row["kind"] == "chat"
+                 and not row.get("task_id") and not row["closed_at"]
+                 and set(row["participants"]) == {actor, "bot:" + bot}), None)
+
+
+def chat_running(c, conversation_id):
+    """Whether a turn on this conversation is leased or running now."""
+    return bool(c.execute("SELECT 1 FROM attempts a JOIN jobs j ON j.id=a.job_id JOIN messages m ON m.id=j.message_id "
+                          "WHERE m.conversation_id=? AND a.state IN ('leased','running') AND a.lease_until>?",
+                          (conversation_id, H.now())).fetchone())
+
+
+def clear_chat_session(c, settings, actor, bot, conversation_id, detail=None):
+    """Clear a direct chat's session: a person's Clear (POST /api/employees/{bot}/session/clear) and a topic change
+    (backend/topic_change.py) alike. The conversation's epoch moves, so its history starts after the clear; the next
+    turn starts a fresh provider thread and loads the recovery pack. The caller checks no turn is running."""
+    c.execute("INSERT INTO session_epochs VALUES(?,1,?) ON CONFLICT(conversation_id) DO UPDATE SET "
+              "epoch=epoch+1,updated=excluded.updated", (conversation_id, H.now()))
+    # Drop the provider pointer so the next turn tries a fresh thread and loads the
+    # recovery pack from Hub history instead of resuming the cleared session.
+    config = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    cfg = json.loads(config[0] or "{}") if config else {}
+    if config:
+        c.execute("DELETE FROM bot_sessions WHERE bot=? AND runtime=? AND model=?",
+                  (bot, *providers.bot_choice(c, settings, cfg)))
+    # This chat's turns continue the bot's thread every direct chat shares: the next turn of any of them
+    # starts a new one, while each other chat keeps its own history.
+    from .shared_bots import follow
+    if sessions.session_key(follow(c, bot, cfg), bot, None, conversation_id) == sessions.BOT_THREAD:
+        bump_bot_session_epoch(c, bot)
+    H.event(c, actor, "session.clear", conversation_id, detail)
+
+
 def default_bot(c, settings, botops="botops"):
     """Where work nobody was named for goes: the assistant when the company has set one up,
     else BotOps. The assistant is optional (the wizard's "Pick your bots"), and a planned or
@@ -1404,6 +1439,9 @@ def install_views(app, store, auth, mutate, task_view):
         # serves a person, and the UI shows it with the built-ins, apart from the org chart.
         from .onboarding import helper_templates, template_icons
         icons, helpers = template_icons(store.settings), helper_templates(store.settings)
+        # Where each bot hangs on the chart; the CEO Bot switch moves it there and nowhere else (backend/ceo_bot.py).
+        from . import ceo_bot
+        chart = ceo_bot.chart_entries(c, store.settings, people, configs, archived)
 
         def icon_of(config):
             return str(config.get("icon") or "") or icons.get(str(config.get("template") or ""), "")
@@ -1439,7 +1477,7 @@ def install_views(app, store, auth, mutate, task_view):
                              "reports_to": reports, "my_access": level, **policy,
                              "private_tasks_default": H.private_tasks_default(c, "bot:" + slug),
                              "team": P.team_of(slug, configs, people),
-                             "org_parent": P.org_parent("bot", slug, people, configs, archived),
+                             "org_parent": P.org_parent("bot", slug, people, chart, archived),
                              "report_position": places.get("bot:" + slug),
                              "operator": registry["operator"] if registry else None,
                              "is_branch": bool((configs.get(slug) or {}).get("shared_from")),
@@ -1468,7 +1506,7 @@ def install_views(app, store, auth, mutate, task_view):
                          "private_tasks_default": H.private_tasks_default(c, "bot:" + slug),
                          "host": "keeper", "tasks": "hub", "has_repo": location["ready"],
                          "team": P.team_of(slug, configs, people),
-                         "org_parent": P.org_parent("bot", slug, people, configs, archived),
+                         "org_parent": P.org_parent("bot", slug, people, chart, archived),
                          "report_position": places.get("bot:" + slug),
                          "operator": registry["operator"] if registry else None,
                          "revision": registry["revision"] if registry else None,
@@ -1542,6 +1580,10 @@ def install_views(app, store, auth, mutate, task_view):
             from . import people_photos
             archived = {row["slug"] for row in H.bots(c) if row.get("state") == "archived"}
             view = P.org_view(r, configs, archived)
+            # The CEO Bot switch hangs the Heads' groups under it on the chart (backend/ceo_bot.py).
+            from . import ceo_bot
+            chart = ceo_bot.chart_entries(c, store.settings, r, configs, archived)
+            view["org_groups"] = ceo_bot.chart_groups(r, configs, chart, view["org_groups"], archived)
             access = auth.bot_accesses(c, who)
             from .report_order import positions
             places = positions(c)
@@ -1976,30 +2018,12 @@ def install_views(app, store, auth, mutate, task_view):
         human_only(who)
         def work(c):
             require_chat(c, auth, who, bot)
-            conv = next((row for row in H.conversations_for(c, who.actor) if row["kind"] == "chat"
-                         and not row.get("task_id") and not row["closed_at"]
-                         and set(row["participants"]) == {who.actor, "bot:" + bot}), None)
+            conv = direct_chat(c, who.actor, bot)
             if not conv:
                 return {"cleared": True}
-            active = c.execute("SELECT 1 FROM attempts a JOIN jobs j ON j.id=a.job_id JOIN messages m ON m.id=j.message_id "
-                               "WHERE m.conversation_id=? AND a.state IN ('leased','running') AND a.lease_until>?", (conv["id"], H.now())).fetchone()
-            if active:
+            if chat_running(c, conv["id"]):
                 raise Problem("busy", "Wait for this conversation's current turn to finish", 409)
-            c.execute("INSERT INTO session_epochs VALUES(?,1,?) ON CONFLICT(conversation_id) DO UPDATE SET "
-                      "epoch=epoch+1,updated=excluded.updated", (conv["id"], H.now()))
-            # Drop the provider pointer so the next turn tries a fresh thread and loads the
-            # recovery pack from Hub history instead of resuming the cleared session.
-            config = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
-            cfg = json.loads(config[0] or "{}") if config else {}
-            if config:
-                c.execute("DELETE FROM bot_sessions WHERE bot=? AND runtime=? AND model=?",
-                          (bot, *providers.bot_choice(c, auth.settings, cfg)))
-            # This chat's turns continue the bot's thread every direct chat shares: the next turn of any of them
-            # starts a new one, while each other chat keeps its own history.
-            from .shared_bots import follow
-            if sessions.session_key(follow(c, bot, cfg), bot, None, conv["id"]) == sessions.BOT_THREAD:
-                bump_bot_session_epoch(c, bot)
-            H.event(c, who.actor, "session.clear", conv["id"])
+            clear_chat_session(c, auth.settings, who.actor, bot, conv["id"])
             return {"cleared": True, "conversation_id": conv["id"]}
         return mutate(request, body, work)
 

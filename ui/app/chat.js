@@ -359,7 +359,9 @@ function v2MessageHTML(m) {
   const mine = !!pid;                       // any person's message sits on the right, under their name
   const who = mine ? esc(personHandle(pid)) : esc(actorLabel(m.from_actor));
   const me = m.from_actor === myActor();    // your own lines need no name on a bot's page
-  return `<div class="conv-run chat${me ? ' from-me' : ''}" data-message="${esc(m.id || '')}">
+  // The message a new topic started a fresh session for (backend/topic_change.py): one quiet line above it.
+  const fresh = mine && m.refs?.topic_changed ? '<div class="conv-break chat-topic-break" role="separator">Topic changed</div>' : '';
+  return `${fresh}<div class="conv-run chat${me ? ' from-me' : ''}" data-message="${esc(m.id || '')}">
     <time class="chat-stamp" datetime="${esc(m.created || '')}" title="${esc(fmt(m.created))}">${esc(ago(m.created))}</time>
     <div class="conv-run-head">${mine ? `<span class="mono muted">${who}</span>` : actorChip(m.from_actor)}
       ${m.kind && m.kind !== 'say' ? `<span class="pill">${esc(m.kind)}</span>` : ''}
