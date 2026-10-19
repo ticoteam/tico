@@ -96,7 +96,7 @@ Text attachments preserve indentation, spaces and final newlines. Unsupported bo
 422 error listing the allowed types.
 
 A picture, SVG, HTML page, video or audio clip can also go on a chat reply or task comment as a titled visual
-(`--visual PATH --title "…"`); it is stored as a file there, and pictures, SVG and pages show inline as cards. See
+(`--visual PATH --title "…"`); it is stored as a file there and shows inline as a card; video and audio play in it. See
 [Visuals in replies](visuals.md).
 
 `hub file archive <id>` also accepts a task attachment's ID. A task participant or a human who may move the task can

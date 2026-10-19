@@ -45,8 +45,7 @@ All notable changes to Tico are recorded here. The format follows
   audio clip to a chat reply or task comment (`--visual PATH --title "…"` on `hub message send`, `hub chat send` and
   `hub task comment`; `visuals` over MCP; `attachments: [{ref, title}]` in the API). It is a versioned file there,
   shown only to that conversation's readers. A page's local images and fonts are embedded; remote ones are removed
-  and listed. Self-hosters set `TICO_VISUAL_ORIGIN`, a separate site. Video and audio still show as file chips until part 3
-  ([Visuals in replies](docs/visuals.md)).
+  and listed. Self-hosters set `TICO_VISUAL_ORIGIN`, a separate site ([Visuals in replies](docs/visuals.md)).
 - **Visuals in replies (part 2 of 4): pictures, SVG and visual pages show inline** under a chat message or a task
   comment, a person's attachments too. Each is a card the width of the message, never wider than the screen, with its
   title as the caption and a menu: Expand, Open in file viewer, Download. A visual page shows at its own height up to
@@ -58,10 +57,11 @@ All notable changes to Tico are recorded here. The format follows
   render. Up to 4 per message; the rest stay file chips
   ([Visuals in replies](docs/visuals.md#in-a-chat-or-task-conversation)).
 - **Video and audio in replies (part 3 of 4)**: a video or audio clip attached to a chat reply or task comment plays
-  in the conversation: a video with its first frame, play, seek, volume and full screen (also in the desktop app on
-  a Mac), an audio clip as a compact player that keeps playing while you scroll. Nothing starts by itself, starting
-  one clip pauses the other, and seeking a long clip loads only that part. A clip the device can't play shows why,
-  with Download.
+  in its card: a video with its poster, play, seek, volume and full screen; an audio clip as a compact player. Nothing
+  starts by itself, starting one clip pauses any other, and a playing clip keeps going while you scroll or the thread
+  updates. Seeking a long clip loads only that part. A clip the device can't play says why, with Download. Video and
+  audio count toward the 4 cards per message
+  ([Visuals in replies](docs/visuals.md#video-and-audio)).
 - **The company on Goals**: with the CEO Bot switch on, Goals opens with a **Company** section: the Vision (one or
   two sentences) and the Description (a short paragraph). The owner and admins edit it, everyone else reads it, and
   **History** lists every change with who made it and when. Each goal shows a one-line **Why** tying it to the

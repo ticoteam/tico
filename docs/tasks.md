@@ -742,7 +742,7 @@ tab, and SVG, HTML and other files offer a download. The `v1 · v2 · v3` switch
 **Compare** shows two versions side by side, or a line diff for text. Each version shows who added
 it, when, its note and its question. Esc or the tile again closes it.
 
-A comment's pictures, SVG and visual pages (up to 4) show under its text as cards; see
+A comment's pictures, SVG, visual pages, video and audio (up to 4) show under its text as cards; see
 [Visuals in replies](visuals.md#in-a-chat-or-task-conversation). A visual on a comment is a normal versioned file on
 the task, listed in the **Files** strip. Its card shows the version the comment was posted with; when the file has a
 newer one, **Newer version** opens the newest. **Open in file viewer** in the card's menu opens the file's tile here
