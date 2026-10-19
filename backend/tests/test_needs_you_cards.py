@@ -194,3 +194,30 @@ def test_a_wait_above_another_open_card_stays_after_a_one_tap_answer(api):
     assert get(api, f"tasks/{launch['id']}")["task"]["waiting_on"] == "human:ana"
     items = get(api, "needs-you")["items"]
     assert launch["id"] in {i["id"] for i in items} | {f["id"] for i in items for f in i.get("folded") or []}
+
+
+def test_an_approval_keeps_its_needs_you_mark_while_only_the_clock_moves(api, monkeypatch):
+    from backend import events as E
+    store, auth, view = api.app.state.store, api.app.state.auth, api.app.state.task_view
+    approval = approval_for_ana(api)
+    other = post(api, "tasks", {"title": "Review the plan", "body": "x", "owner": "human:ana"})
+    first = get(api, "needs-you")
+    (card,) = [x for x in first["items"] if x["id"] == approval["id"]]
+    real = H.now
+    monkeypatch.setattr(H, "now", lambda: H.shift(real(), minutes=3))     # three minutes on, nothing else changed
+    later = get(api, f"needs-you?version={first['version']}")
+    assert later["unchanged"] is True
+    (aged,) = [x for x in get(api, "needs-you")["items"] if x["id"] == approval["id"]]
+    assert aged["age_s"] >= card["age_s"] + 180                           # the response still carries the age
+    who = auth.authenticate({"authorization": "Bearer ana-test"})
+    with store.read() as c:
+        held, after = E.needs_baseline(c, auth, who, view), E.latest(c)
+    with store.transaction() as c:
+        c.execute("UPDATE tasks SET title='Review the plan today' WHERE id=?", (other["id"],))
+    monkeypatch.setattr(H, "now", lambda: H.shift(real(), minutes=4))
+    with store.read() as c:
+        event = E.read(c, auth, who, after, topics=("needs",), task_view=view, needs_held=held)[0][-1][2]
+    assert event["changed"] == [other["id"]]                              # the approval is not named
+    current = get(api, "needs-you")["version"]
+    post(api, f"approvals/{approval['id']}", {"decision": "declined"})
+    assert get(api, f"needs-you?version={current}").get("unchanged") is None   # a decision is a change

@@ -27,8 +27,9 @@ const publish = {id: 'ap-pub', kind: 'approval', what: 'publish', title: 'Approv
   requested_by: 'bot:support', created: new Date().toISOString(),
   payload: {content_sha256: '355cf' + 'e'.repeat(59), text: REPLY, url: 'hq-ticket:TK-TGYWKV5A'},
   ready_since: new Date(Date.now() - (130 * 60 + 5) * 1000).toISOString()};
+const PUBLISH_CLOCK = new Date();
 async function phonePublish(browser) {
-  const {page, errors} = await open(browser, {viewport: {width: 390, height: 844}, hash: '#/tasks'});
+  const {page, errors} = await open(browser, {viewport: {width: 390, height: 844}, hash: '#/tasks', clock: PUBLISH_CLOCK});
   publish.decision_owner = 'human:' + await page.evaluate(() => S.me.id);
   await page.route('**/api/v2/needs-you*', route => route.fulfill({contentType: 'application/json', body: JSON.stringify({items: [publish]})}));
   await page.evaluate(async () => { await v2Refresh(); tasksRender(TASKS_ST); });
@@ -38,8 +39,8 @@ async function phonePublish(browser) {
   assert.match(await card.locator('> summary .req-meta').textContent(), /ready 2 h 10 min$/);
   await card.locator('> summary').click();
   // Readable, whole and inside the phone's width, in Needs you and then on Decide's card.
-  const check = async (box, where) => {
-    assert.equal(await box.locator('.approval-ready').textContent(), 'Ready 2 h 10 min, waiting on you', where);
+  const check = async (box, where, minutes = 10) => {
+    assert.equal(await box.locator('.approval-ready').textContent(), `Ready 2 h ${minutes} min, waiting on you`, where);
     const facts = await box.locator('.approval-facts').evaluate(dl => [...dl.children].map(x => x.textContent));
     assert.deepEqual(facts, ['Where', 'Support ticket TK-TGYWKV5A', 'Text', REPLY], where);
     const text = box.locator('.approval-facts dd.approval-text');
@@ -60,11 +61,22 @@ async function phonePublish(browser) {
     assert.ok(pre.wraps && pre.right <= 390, `${where}: the exact payload wraps at 390px`);
   };
   await check(card.locator('.approval-payload'), 'Needs you');
+  // A minute on, the card still open: its row and its line move on where they stand, and an ordinary refresh keeps
+  // them (and the card open) rather than putting back the first age.
+  const ready = () => card.locator('.approval-payload .approval-ready').textContent();
+  await page.clock.runFor(60000);
+  assert.match(await card.locator('> summary .req-meta').textContent(), /ready 2 h 11 min$/);
+  assert.equal(await ready(), 'Ready 2 h 11 min, waiting on you');
+  await page.evaluate(async () => { await v2Refresh(); tasksRender(TASKS_ST); });
+  assert.equal(await ready(), 'Ready 2 h 11 min, waiting on you');
+  assert.equal(await card.evaluate(d => d.open), true, 'the card stays open');
   await page.evaluate(() => { location.hash = '#/decide'; });
   const dc = page.locator('.decide .dc-card');
   await dc.waitFor();
   assert.equal(await dc.locator('.dc-q').textContent(), 'Publish this?');
-  await check(dc.locator('.approval-payload'), 'Decide');
+  await check(dc.locator('.approval-payload'), 'Decide', 11);
+  await page.clock.runFor(60000);                                    // Decide left open: its card moves on too
+  assert.equal(await dc.locator('.approval-ready').textContent(), 'Ready 2 h 12 min, waiting on you');
   if (process.env.APPROVAL_SHOT) await dc.screenshot({path: process.env.APPROVAL_SHOT.replace(/(\.png)?$/, '-publish.png')});
   // A web address is a link only when it is http(s); a spend and a merge show their fields; a field the list does not
   // name gets a row of its own (an object or array as its JSON); a publish without its text (or with only whitespace)

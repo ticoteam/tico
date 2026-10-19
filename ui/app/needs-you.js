@@ -65,11 +65,12 @@ function needsV2Item(it, folded, showName = true) {
   if (it.conversation_id) acts.push(`<button class="ghost" type="button" data-v2-reply="${esc(it.conversation_id)}">Reply</button>`);
   const payload = it.payload && typeof it.payload === 'object' ? approvalPayloadNode(it).outerHTML : '';
   const keep = kind === 'approval' ? ` data-patch-key="approval:${esc(it.id)}"` : '';
+  const ageNode = kind === 'approval' ? approvalAgeNode(it) : null;
   return `<details class="req v2" data-v2-id="${esc(it.id)}" data-task-version="${esc(it.version || '')}"${keep}${folded ? ' hidden data-folded' : ''}>
     <summary>
       ${slug && S.emps.some(e => e.name === slug) ? avatar(slug, 24) : personCircle(actorLabel(from) || 'Tico', 24)}
       <span class="req-text">${showName ? `<span class="req-from">${esc(actorLabel(from) || 'Tico')}:</span> ` : ''}${esc(plainActors(title))}</span>
-      <span class="req-meta">${dueChip({due: it.due, owner: it.owner, status: it.status})}<span class="pill ${kind === 'approval' || kind === 'question' ? 'needs' : kind === 'declined' ? 'blocked' : ''}">${esc(V2_KIND[kind] || kind)}</span>${esc(kind === 'approval' && approvalReadyAge(it) != null ? 'ready ' + waitWords(approvalReadyAge(it)) : ago(it.created))}</span>
+      <span class="req-meta">${dueChip({due: it.due, owner: it.owner, status: it.status})}<span class="pill ${kind === 'approval' || kind === 'question' ? 'needs' : kind === 'declined' ? 'blocked' : ''}">${esc(V2_KIND[kind] || kind)}</span>${ageNode ? 'ready ' + ageNode.outerHTML : esc(ago(it.created))}</span>
       <span class="req-arrow" aria-hidden="true">›</span>
     </summary>
     <div class="req-body">
@@ -102,15 +103,41 @@ function approvalReadyAge(it) {
   const end = it.decided_at ? Date.parse(it.decided_at) : Date.now();
   return Math.max(0, ((Number.isFinite(end) ? end : Date.now()) - at) / 1000);
 }
-function approvalReadyLine(it) {
+// The age as its own element, marked with what it counts from: a card the list keeps across redraws (its patch key)
+// keeps this node too, so approvalAgesTick updates its text where it stands.
+function approvalAgeNode(it) {
   const age = approvalReadyAge(it);
-  if (age == null) return '';
+  if (age == null) return null;
+  const span = document.createElement('span');
+  span.className = 'approval-age';
+  span.dataset.readySince = it.ready_since;
+  if (it.decided_at) span.dataset.decidedAt = it.decided_at;
+  span.textContent = waitWords(age);
+  return span;
+}
+function approvalReadyLine(it) {
+  const age = approvalAgeNode(it);
+  if (!age) return null;
   const owner = it.decision_owner || '';
   const who = !owner ? '' : actorPerson(owner) && actorPerson(owner) === S.me?.id ? 'you'
     : it.decision_owner_name || actorLabel(owner);
-  if (it.decision) return `Decided ${waitWords(age)} after it was ready`;
-  return `Ready ${waitWords(age)}` + (who ? `, waiting on ${who}` : '');
+  const line = document.createElement('p');
+  line.className = 'approval-ready';
+  if (it.decision) line.append('Decided ', age, ' after it was ready');
+  else line.append('Ready ', age, who ? `, waiting on ${who}` : '');
+  return line;
 }
+// Every age on screen (Needs you's rows and cards, an idle Decide card) moves on with the clock, without redrawing
+// the card: open details, a draft and focus stay as they are.
+function approvalAgesTick() {
+  for (const node of document.querySelectorAll('.approval-age[data-ready-since]')) {
+    const age = approvalReadyAge({ready_since: node.dataset.readySince, decided_at: node.dataset.decidedAt || ''});
+    const text = age == null ? '' : waitWords(age);
+    if (node.textContent !== text) node.textContent = text;
+  }
+}
+setInterval(approvalAgesTick, 30000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) approvalAgesTick(); });
 // What an approval asks for, built as elements with every payload value set as text; the markup the list
 // redraws from is this element's serialization, so a value is never parsed as HTML. A send shows its
 // recipients, subject, draft and files readably; a publish where it goes and its full text; a spend or merge
@@ -181,7 +208,7 @@ function approvalPayloadNode(it) {
   const box = el('div', 'req-next approval-payload'), main = el('div', 'md');
   box.append(el('span', '', 'Exactly this'), main);
   const ready = approvalReadyLine(it);
-  if (ready) main.append(el('p', 'approval-ready', ready));
+  if (ready) main.append(ready);
   const raw = el('pre', '', JSON.stringify(p, null, 2));
   if (it.what !== 'send') {
     const rows = approvalFacts(it.what, p, it);
