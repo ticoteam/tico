@@ -7,6 +7,8 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.3.62] - 2026-10-19
+
 ### Added
 - **Tico AI Gateway** in Settings > AI providers: the owner saves the gateway key Tico gives them (or the server's
   `TICO_GATEWAY_KEY` sets it, and wins), Decide asks the Gateway with that same key, and bots can then pick **Tico Cheap, Mid and Power 1.0** (Claude Haiku, Sonnet and Opus
@@ -3521,7 +3523,8 @@ First public release.
 - Hosting: local only on a Mac, or self-hosted, including a reference AWS stack under `infra/ec2/`
   with Litestream backups.
 
-[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.61...HEAD
+[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.62...HEAD
+[0.3.62]: https://github.com/ticoteam/tico/compare/v0.3.61...v0.3.62
 [0.3.61]: https://github.com/ticoteam/tico/compare/v0.3.60...v0.3.61
 [0.3.60]: https://github.com/ticoteam/tico/compare/v0.3.59...v0.3.60
 [0.3.59]: https://github.com/ticoteam/tico/compare/v0.3.58...v0.3.59
