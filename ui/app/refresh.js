@@ -24,7 +24,7 @@ async function refresh(force) {
   await overviewLoadComputers();        // Only while the campus is open; share this refresh clock.
   overviewRefresh();
   if (S.me?.cloud) void updUnreadRefresh();
-  renderTree(); renderHeartbeat(); pausedRender(); botAvatarsSync();
+  renderTree(); renderHeartbeat(); pausedRender(); botAvatarsSync(); goalsFollowRoster();
   if (BOT?.tab === 'chat' && !BOT.split) void loadBotChatTasks(BOT.slug);
   botAlertDraw();
   if (BOT) botScreenRefresh(BOT.slug);   // the Screen row and header button follow the computer (online, screen offered)
@@ -88,7 +88,7 @@ function liveWire() {
   liveOn('bots', d => {
     if (d.status) S.v2.status[d.bot] = d.status; else delete S.v2.status[d.bot];
     liveSoon('bots', () => {
-      renderTree(); renderHeartbeat(); pausedRender(); botAvatarsSync();
+      renderTree(); renderHeartbeat(); pausedRender(); botAvatarsSync(); goalsFollowRoster();
       botAlertDraw();
       overviewRefresh();                // the campus desks too, not only at the next refresh (no read: the model is local)
     }, 200);

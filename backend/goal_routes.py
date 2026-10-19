@@ -12,6 +12,7 @@ person confirms.
 from fastapi import Request
 
 from . import botkpis
+from . import ceo_bot
 from . import goal_asks as GA
 from . import goals as G
 from . import kpis as K
@@ -114,9 +115,9 @@ def install(app, store, auth, mutate, settings):
             raise Problem("not_found", "Unknown KPI", 404)
         return record
 
-    def refuse_manager(who, what):
+    def refuse_manager(c, who, what):
         if is_manager(who):
-            raise Problem("forbidden", f"The Goal Manager proposes {what}; the owner confirms it "
+            raise Problem("forbidden", f"The {ceo_bot.name(c)} proposes {what}; the owner confirms it "
                           "(POST /api/v2/goal-proposals)", 403)
 
     def owner_names(c, rows):
@@ -238,7 +239,7 @@ def install(app, store, auth, mutate, settings):
         def work(c):
             auth.domain(who)
             if not (is_manager(who) or who.role == "owner"):
-                raise Problem("forbidden", "The Goal Manager or the owner runs the status pass", 403)
+                raise Problem("forbidden", f"The {ceo_bot.name(c)} or the owner runs the status pass", 403)
             return G.refresh(c, body.goal_ids)
         return mutate(request, body, work)
 
@@ -276,7 +277,7 @@ def install(app, store, auth, mutate, settings):
         def work(c):
             auth.domain(who)
             row = goal_or_404(c, gid)
-            refuse_manager(who, "a colour with the automatic status pass, and never sets one by hand")
+            refuse_manager(c, who, "a colour with the automatic status pass, and never sets one by hand")
             if not may_colour(c, who, row):
                 raise Problem("forbidden", "The goal's owner, the owner of the goal it serves, or someone "
                               "above them sets the colour", 403)
@@ -309,7 +310,7 @@ def install(app, store, auth, mutate, settings):
         def work(c):
             auth.domain(who)
             row = goal_or_404(c, gid)
-            refuse_manager(who, "clearer wording or a change of goal")
+            refuse_manager(c, who, "clearer wording or a change of goal")
             # Handing a goal to someone else is for whoever sits above; linking it to the goal it
             # supports is also its owner's (the link icon on the Goals page), and the new goal's owner
             # sees it there.
@@ -348,7 +349,7 @@ def install(app, store, auth, mutate, settings):
             row = goal_or_404(c, gid)
             if not (may_colour(c, who, row) or is_manager(who)):
                 raise Problem("forbidden", "The goal's owner, the owner of the goal it serves, someone above them "
-                              "or the Goal Manager records a check-in", 403)
+                              f"or the {ceo_bot.name(c)} records a check-in", 403)
             source = None
             if body.from_actor:
                 source = auth.target(c, who, body.from_actor)
@@ -363,7 +364,7 @@ def install(app, store, auth, mutate, settings):
         def work(c):
             auth.domain(who)
             row = goal_or_404(c, gid)
-            refuse_manager(who, "a KPI for a goal")
+            refuse_manager(c, who, "a KPI for a goal")
             if not may_colour(c, who, row):
                 raise Problem("forbidden", "The goal's owner or someone above them adds a measure", 403)
             target = {k: getattr(body, k) for k in ("kind", "baseline", "baseline_at", "target", "deadline", "min", "max")}
@@ -389,7 +390,7 @@ def install(app, store, auth, mutate, settings):
         def work(c):
             auth.domain(who)
             row = goal_or_404(c, gid)
-            refuse_manager(who, "a target it is judged against")
+            refuse_manager(c, who, "a target it is judged against")
             if not may_colour(c, who, row):
                 raise Problem("forbidden", "The goal's owner or someone above them sets a target", 403)
             kpi_or_404(c, who, kid)
@@ -405,7 +406,7 @@ def install(app, store, auth, mutate, settings):
         def work(c):
             auth.domain(who)
             row = goal_or_404(c, gid)
-            refuse_manager(who, "removing a KPI from a goal")
+            refuse_manager(c, who, "removing a KPI from a goal")
             if not may_colour(c, who, row):
                 raise Problem("forbidden", "The goal's owner or someone above them removes a measure", 403)
             G.kpi_unlink(c, who.actor, gid, kid)
@@ -475,7 +476,7 @@ def install(app, store, auth, mutate, settings):
         who = request.state.identity
         def work(c):
             auth.domain(who)
-            refuse_manager(who, "a new KPI (a proposal of kind goal_kpi)")
+            refuse_manager(c, who, "a new KPI (a proposal of kind goal_kpi)")
             goal = goal_or_404(c, body.goal_id) if body.goal_id else None
             if goal and not may_colour(c, who, goal):
                 raise Problem("forbidden", "The goal's owner or someone above them adds a measure", 403)
@@ -500,7 +501,7 @@ def install(app, store, auth, mutate, settings):
         def work(c):
             auth.domain(who)
             record = kpi_or_404(c, who, kid)
-            refuse_manager(who, "a change to a definition")
+            refuse_manager(c, who, "a change to a definition")
             if K.auto(kid):
                 raise Problem("forbidden", "Tico computes this KPI itself; its definition is fixed", 403)
             if not may_edit_kpi(c, who, record):
@@ -516,7 +517,7 @@ def install(app, store, auth, mutate, settings):
         def work(c):
             auth.domain(who)
             record = kpi_or_404(c, who, kid)
-            refuse_manager(who, "archiving or restoring a KPI definition")
+            refuse_manager(c, who, "archiving or restoring a KPI definition")
             if K.auto(kid) or not may_edit_kpi(c, who, record):
                 raise Problem("forbidden", "The KPI's owner or someone above them archives or restores it", 403)
             updated = K.set_archived(c, who.actor, kid, archived)
@@ -550,7 +551,7 @@ def install(app, store, auth, mutate, settings):
             auth.domain(who)
             record = kpi_or_404(c, who, kid)
             if not may_log(c, who, record):
-                raise Problem("forbidden", "The KPI's owner, the Goal Manager, or the owner of a goal that uses it "
+                raise Problem("forbidden", f"The KPI's owner, the {ceo_bot.name(c)}, or the owner of a goal that uses it "
                               "logs a reading", 403)
             fields = body.model_dump(exclude={"value", "note", "source", "at"})
             return {"reading": G.kpi_log(c, who.actor, kid, body.value, body.note, body.source, body.at, **fields)}
