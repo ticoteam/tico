@@ -307,6 +307,108 @@ def use_shared_key(c, who, rid, runtime, auth=None):
     return view(row)
 
 
+def _share_with(c, who, runner_ids, credential_id, here):
+    """Grant `credential_id` to each computer in `runner_ids` by name ("Shared with: [computers]"). A computer listed
+    is one a person just gave this key, so a Clear key or a Switch to subscription there no longer holds it back. The
+    grant rows themselves tell every runner to fetch its keys again (backend/events.py)."""
+    from .computer_keys import SHARED_WITH
+    rows = []
+    for rid in dict.fromkeys([here, *runner_ids]):
+        row = c.execute("SELECT * FROM runners WHERE id=? AND revoked_at IS NULL", (rid,)).fetchone()
+        if not row:
+            raise Problem("computers", "Share it only with computers that are connected", 422)
+        rows.append(row)
+    now = H.now()
+    for row in rows:
+        subject = SHARED_WITH + row["id"]
+        if not c.execute("SELECT 1 FROM credential_grants WHERE credential_id=? AND subject=? AND revoked IS NULL",
+                         (credential_id, subject)).fetchone():
+            c.execute("INSERT INTO credential_grants(id,credential_id,subject,granted_by,created) VALUES(?,?,?,?,?)",
+                      (H.new_id(), credential_id, subject, who.actor, now))
+    return rows
+
+
+def share_key(c, who, rid, runtime, key, env="", share=(), auth=None, vault=None):
+    """Add connection > API key > "Shared with: [computers]": the pasted key is stored once, as a shared key, and
+    granted to this computer and each one listed. Like an "Every computer" key in Credentials, it widens a company
+    secret to more computers, so it is a credential administrator's change; it is used at each computer's next key
+    fetch, as a new "Every computer" key is (no per-computer check: that queue is one computer's)."""
+    from . import computer_keys
+    from .credentials import require_admin
+    _person_only(who, "share a key")
+    _operator(c, who, rid, auth)
+    _key_runtime(runtime)
+    require_admin(c, who, vault.admins)
+    runner = _runner(c, rid)
+    allowed = computer_keys.names(runtime)
+    env = env or allowed[0]
+    if env not in allowed:
+        raise Problem("env", f"A {runtime} key is stored as " + " or ".join(allowed), 422)
+    value = str(key or "").strip()
+    if not value or len(value) > 4000 or any(ch in value for ch in "\r\n\0"):
+        raise Problem("credential", "Paste the key as one line", 422)
+    if not vault.configured:
+        raise Problem("vault_unavailable", "Credentials are not set up on this server, so a key cannot be stored", 503)
+    cid, now = H.new_id(), H.now()
+    ciphertext, nonce = vault.cipher.encrypt(c, cid, value)
+    preview = value[:3] + "…" + value[-3:] if len(value) >= 12 else "••••••"
+    c.execute("INSERT INTO credentials(id,name,kind,env,preview,ciphertext,nonce,source,created,updated,updated_by,"
+              "created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+              (cid, f"{env} shared from {runner['label']}", "api_key", env, preview, ciphertext, nonce,
+               "computers:" + rid, now, now, who.actor, who.actor))
+    rows = _share_with(c, who, share, cid, rid)
+    for row in rows:
+        _unmark(c, row["id"], runtime)
+    H.event(c, who.actor, "computer_key.shared", rid, {"runtime": runtime, "env": env, "credential": cid,
+                                                       "computers": [row["id"] for row in rows]})
+    return {"shared": {"id": cid, "env": env, "preview": preview},
+            "computers": [{"id": row["id"], "label": row["label"], "online": _online(row)} for row in rows]}
+
+
+def _unmark(c, rid, runtime):
+    for table in ("model_login_cleared", "model_login_key_off"):
+        c.execute(f"DELETE FROM {table} WHERE runner_id=? AND runtime=? AND profile=''", (rid, runtime))
+
+
+def attach_shared_key(c, who, rid, runtime, credential_id, auth=None, vault=None):
+    """Add connection > API key > "Use a shared key": this computer runs `runtime` on a key already shared (with every
+    computer, or with others by name). A credential administrator's change, as sharing it was."""
+    from . import computer_keys
+    from .credentials import COMPUTERS, require_admin
+    _person_only(who, "use a shared key")
+    _operator(c, who, rid, auth)
+    _key_runtime(runtime)
+    require_admin(c, who, vault.admins)
+    runner = _runner(c, rid)
+    row = c.execute("SELECT * FROM credentials WHERE id=? AND ciphertext IS NOT NULL", (credential_id,)).fetchone()
+    shared = row and c.execute("SELECT 1 FROM credential_grants WHERE credential_id=? AND revoked IS NULL AND "
+                               "(subject=? OR subject LIKE ?)", (credential_id, COMPUTERS,
+                                                                 computer_keys.SHARED_WITH + "%")).fetchone()
+    if not shared or row["env"] not in computer_keys.names(runtime):
+        raise Problem("credential", f"Choose a shared {runtime} key", 422)
+    _share_with(c, who, (), credential_id, rid)
+    _unmark(c, rid, runtime)
+    H.event(c, who.actor, "computer_key.attached", rid, {"runtime": runtime, "credential": credential_id})
+    return {"shared": {"id": row["id"], "env": row["env"], "preview": row["preview"]},
+            "computers": [{"id": r["id"], "label": r["label"]} for r in _shared_users(c, runner, runtime)]}
+
+
+def shared_choices(c, runtime):
+    """The shared keys a credential administrator can attach to a computer for `runtime`: [{id, name, env, preview,
+    every}], never a value."""
+    from . import computer_keys
+    from .credentials import COMPUTERS
+    out = []
+    for row in c.execute("SELECT cr.id, cr.name, cr.env, cr.preview, max(g.subject=?) AS every FROM credentials cr "
+                         "JOIN credential_grants g ON g.credential_id=cr.id AND g.revoked IS NULL "
+                         "WHERE cr.ciphertext IS NOT NULL AND (g.subject=? OR g.subject LIKE ?) GROUP BY cr.id "
+                         "ORDER BY lower(cr.name), cr.id", (COMPUTERS, COMPUTERS, computer_keys.SHARED_WITH + "%")):
+        if row["env"] in computer_keys.names(runtime):
+            out.append({"id": row["id"], "name": row["name"], "env": row["env"], "preview": row["preview"],
+                        "every": bool(row["every"])})
+    return out
+
+
 def affected_bots(c, who, rid, runtime, profile, settings, auth=None, every=False):
     """The active bots on this computer that run `runtime` on this login: the ones a sign-out stops. `every` counts
     paused bots too: what a removal would leave with nothing to run on when they start again."""
@@ -526,10 +628,11 @@ def _key_source(runner, runtime):
     return key if isinstance(key, dict) else {}
 
 
-def _shared_users(c, runtime):
-    """The computers the company's shared key signs `runtime` in on, by what each last reported."""
-    return [row for row in c.execute("SELECT * FROM runners WHERE revoked_at IS NULL ORDER BY lower(label), id")
-            if _key_source(row, runtime).get("source") == "shared"]
+def _shared_users(c, runner, runtime):
+    """The computers the shared key `runner` runs `runtime` on serves (`computer_keys.users`), it included; [] when it
+    runs on no shared key."""
+    from . import computer_keys
+    return computer_keys.users(c, runner, runtime)
 
 
 def _may(c, who, row, auth):
@@ -545,22 +648,27 @@ def key_info(c, who, rid, runtime, auth=None, vault=None):
     shared key, every computer it serves (the "this computer only / all of them" ask), each with whether it is online
     and whether this person may change it there. Previews only, never a value."""
     from . import computer_keys
-    from .credentials import administrator
+    from .credentials import COMPUTERS, administrator, granted
     _operator(c, who, rid, auth)
     _key_runtime(runtime)
     runner = _runner(c, rid)
     own = computer_keys.active(c, rid, runtime)
     reported = _key_source(runner, runtime)
-    shared = computer_keys.shared_for(c, runtime, reported.get("name"))
-    source = "computer" if own else reported.get("source") or ""
+    shared = None if own else computer_keys.uses_shared(c, runner, runtime)
+    source = "computer" if own else "shared" if shared else reported.get("source") or ""
     out = {"runtime": runtime, "source": source, "name": own["env"] if own else reported.get("name", ""),
            "preview": own["preview"] if own else shared["preview"] if shared and source == "shared" else "",
            "cleared": cleared(c, rid, runtime), "names": list(computer_keys.names(runtime)), "computers": []}
     if source == "shared":
         out["computers"] = [{"id": row["id"], "label": row["label"], "online": _online(row),
                              "updated": _handles_keys(row), "may": _may(c, who, row, auth)}
-                            for row in _shared_users(c, runtime)]
+                            for row in _shared_users(c, runner, runtime)]
+        out["shared"] = {"id": shared["id"], "name": shared["name"], "env": shared["env"],
+                         "every": shared["id"] in granted(c, COMPUTERS)}
         out["can_replace_all"] = bool(vault and administrator(c, who, vault.admins))
+    # Add connection > API key: the shared keys an administrator may attach here instead of pasting one.
+    if vault and administrator(c, who, vault.admins):
+        out["can_share"], out["shared_choices"] = True, shared_choices(c, runtime)
     return out
 
 
@@ -604,9 +712,9 @@ def clear_key(c, who, rid, runtime, scope="this", auth=None):
     if scope != "all":
         return {"computers": [{"id": rid, "label": runner["label"], "login": view(_clear_here(c, who, runner, runtime, True)),
                                "waiting": False}]}
-    if _key_source(runner, runtime).get("source") != "shared":
-        raise Problem("state", "This computer does not use the company's shared key", 409)
-    rows = _shared_users(c, runtime)
+    rows = _shared_users(c, runner, runtime)
+    if not rows:
+        raise Problem("state", "This computer does not use a shared key", 409)
     refused = [row["label"] for row in rows if not _may(c, who, row, auth)]
     if refused:
         raise Problem("forbidden", "You cannot change the key on " + ", ".join(refused) + "; clear it on this computer "
@@ -636,10 +744,11 @@ def replace_key(c, who, rid, runtime, key, env="", scope="this", auth=None, vaul
     runner = _runner(c, rid)
     if scope == "all":
         require_admin(c, who, vault.admins)
-        shared = computer_keys.shared(c, runtime)
+        shared = computer_keys.shared(c, runtime, rid)
         reported = _key_source(runner, runtime)
-        if not shared or reported.get("source") != "shared":
-            raise Problem("state", "This computer does not use the company's shared key", 409)
+        served = _shared_users(c, runner, runtime)
+        if not shared or not served:
+            raise Problem("state", "This computer does not use a shared key", 409)
         # The kind the person chose (Claude takes an OAuth token or an API key), else the one this computer uses:
         # each kind is its own credential, and only the one that kind names is replaced.
         env = env or (reported.get("name") if reported.get("name") in shared else next(iter(shared)))
@@ -658,8 +767,7 @@ def replace_key(c, who, rid, runtime, key, env="", scope="this", auth=None, vaul
                   "WHERE id=?", (ciphertext, nonce, preview, H.now(), who.actor, row["id"]))
         H.event(c, who.actor, "credential.updated", row["id"], {"secret_changed": True, "via": "computers"})
         return {"shared": {"id": row["id"], "env": row["env"], "preview": preview},
-                "computers": [{"id": r["id"], "label": r["label"], "online": _online(r)}
-                              for r in _shared_users(c, runtime)]}
+                "computers": [{"id": r["id"], "label": r["label"], "online": _online(r)} for r in served]}
     row, new = _queue(c, who, runner, runtime, "", "use_key", "use a new key")
     if not new:
         raise Problem("state", "A new key is already being checked on that computer; wait for it to finish", 409)

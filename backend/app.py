@@ -4319,6 +4319,9 @@ def create_app(settings=None):
     # A signed-out computer login takes the company's shared key again.
     @app.post("/api/v2/runners/{rid}/shared-key")
     def use_shared_key(request: Request, rid: str, body: M.SharedKeyUse):
+        if body.credential:
+            return mutate(request, body, lambda c: model_login.attach_shared_key(
+                c, request.state.identity, rid, body.runtime, body.credential, auth=auth, vault=app.state.vault))
         return mutate(request, body, lambda c: model_login.use_shared_key(
             c, request.state.identity, rid, body.runtime, auth=auth))
 
@@ -4342,8 +4345,11 @@ def create_app(settings=None):
         vault = app.state.vault
         return vault.change(who, request.url.path, request.headers.get("idempotency-key"), body,
                             lambda c, w: None,
-                            lambda c: model_login.replace_key(c, who, rid, body.runtime, body.secret.get_secret_value(),
-                                                              body.env, body.scope, auth=auth, vault=vault))
+                            lambda c: model_login.share_key(c, who, rid, body.runtime, body.secret.get_secret_value(),
+                                                            body.env, body.share, auth=auth, vault=vault)
+                            if body.share else
+                            model_login.replace_key(c, who, rid, body.runtime, body.secret.get_secret_value(),
+                                                    body.env, body.scope, auth=auth, vault=vault))
 
     @app.get("/api/v2/runners/{rid}/logins/{lid}")
     def read_login(request: Request, rid: str, lid: str):
