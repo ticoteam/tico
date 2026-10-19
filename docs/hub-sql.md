@@ -205,7 +205,8 @@ FROM run_weekly WHERE week >= date('now', '-27 days', 'weekday 1') GROUP BY bot 
 ```
 
 Wakes that waited (token saving 2/9, `backend/wake_rules.py`): each is one `wake.skipped` event naming the bot, the
-task, the held message (`target`), its trigger and the rule (`parked` or `own_write`). A sample of 50 from last week
+task, the held message (`target`; for a bot's own comment on its task, that comment), its trigger and the rule
+(`parked` or `own_write`). A sample of 50 from last week
 for the audit:
 
 ```sql

@@ -183,16 +183,25 @@ def test_held_news_reaches_the_run_in_arrival_order_whoever_sent_it_across_the_b
 
 # ----------------------------------------------------------------------------- own writes never wake
 
-def test_t3_a_bots_own_comment_never_wakes_it(api):
+def test_t3_a_bots_own_comment_never_wakes_it_and_the_skip_is_logged(api):
     r = setup(api)
+    with api.app.state.store.transaction() as c:
+        task, _ = parked_task(c)
+        mine = H.task_create(c, "human:ana", "Plan the launch", "Plan it", "bot:cpo")
+        c.execute("DELETE FROM jobs")
     post(api, "chat/cpo", {"text": "Run your check"})
     attempt = claim(api, r, "cpo")
-    with api.app.state.store.transaction() as c:
-        task = H.task_create(c, "human:ana", "Plan the launch", "Plan it", "bot:cpo")
+    with api.app.state.store.read() as c:
         before = jobs(c, "cpo")
-    post(api, f"tasks/{task['id']}/comments", {"text": "Started: outline drafted."}, token=attempt["token"])
+    said = [post(api, f"tasks/{t['id']}/comments", {"text": "Started: outline drafted."}, token=attempt["token"])
+            for t in (task, mine)]
     with api.app.state.store.read() as c:
         assert jobs(c, "cpo") == before
+        logged = skips(c)
+    assert said[0]["woke"] is False
+    assert [(s["target"], {k: s["detail"][k] for k in ("bot", "task", "rule", "trigger")}) for s in logged] == [
+        (said[0]["comment"]["id"], {"bot": "cpo", "task": task["id"], "rule": "own_write", "trigger": "comment"}),
+        (said[1]["comment"]["id"], {"bot": "cpo", "task": mine["id"], "rule": "own_write", "trigger": "comment"})]
 
 
 def test_a_notice_the_bots_own_write_caused_waits_on_any_of_its_tasks(api):

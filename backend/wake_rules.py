@@ -12,7 +12,8 @@ every message about to be written to a bot that would start one (H._write_messag
 A skipped wake is never dropped. The message is written to its task's room as before, quietly, and a quiet note
 linked to it (the one bot_to_bot.hold leaves, carried and marked read by execution.claim) takes it to the bot's
 next run whatever starts it, in the order it came. Every skip leaves one `wake.skipped` event (bot, task, the
-message, its trigger and the rule) for the weekly audit's sample (docs/hub-sql.md).
+message, its trigger and the rule) for the weekly audit's sample (docs/hub-sql.md). A bot's own comment on its
+task leaves one too (`own_comment`): it is written to the other side, so the bot's own wake never exists to gate.
 
 `ALWAYS_WAKE` is the list nothing filters, neither these rules nor any later one (token saving 3/9, 4/9, 9/9 and
 the bot-to-bot rule in backend/bot_to_bot.py ask `always_wakes` first). `AWAITED` is what a waiting task waits for:
@@ -200,6 +201,19 @@ def gate(conn, actor, target, kind, refs, body, conv, in_reply_to=None):
                         in_reply_to)
     except Exception:  # noqa: BLE001 - fail open: a wake this cannot read starts its run as before
         return None
+
+
+def own_comment(conn, msg, task_row):
+    """A bot's own comment on a task it is a party to (owner, requester or the one that filed it). The comment goes
+    to the other side, so no wake for the bot itself is ever written: this is the `own_write` skip the audit counts.
+    Nothing is held (no note): the bot wrote it, so its run already knows."""
+    from . import hubdb as H
+    author = msg["from_actor"]
+    if not H.is_bot(author) or author not in (task_row["owner"], task_row["requester"], H.task_origin(conn, task_row)):
+        return None
+    return H.event(conn, H.KEEPER, SKIPPED, msg["id"], {"bot": H.actor_id(author), "task": task_row["id"],
+                                                         "rule": "own_write", "trigger": "comment", "kind": msg["kind"],
+                                                         "from": author, "cause": CAUSE.get() or None, "note": None})
 
 
 def hold(conn, msg, rule):
