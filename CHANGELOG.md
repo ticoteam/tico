@@ -10,6 +10,7 @@ All notable changes to Tico are recorded here. The format follows
 ### Added
 - **Tico AI Gateway connects by itself**: an install whose install command carries a Tico invite code
   (`TICO_GATEWAY_INVITE`) gets its own gateway key at start, with nothing to paste, and replaces it every 30 days.
+  The invite is only needed for that first sign-up; after it, the install keeps its key without one.
   Settings > AI providers says "Tico AI Gateway: connected automatically"; a pasted or environment key still wins, and
   Clear key / Connect automatically turn it off and on. If Tico turns the install off, Health says so plainly and the
   install stops asking. Decide and Tico-model bot runs name their bot to the Gateway by an opaque id (never its name),

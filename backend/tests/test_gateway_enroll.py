@@ -8,9 +8,12 @@ import json
 import pathlib
 import re
 import secrets
+import sys
 import threading
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+import pytest
 
 from backend.tests.test_api import api, assign, claim, get, post, runner  # noqa: F401
 from backend.tests.test_decide_gateway import answer_all
@@ -334,3 +337,199 @@ def test_a_key_pasted_while_the_install_enrolls_wins(api, monkeypatch):
         monkeypatch.setattr(G, "enroll", meanwhile)
         assert tick(api) is None
         assert plain_key(api) == PASTED and get(api, "providers/gateway")["automatic"] is False
+
+
+def test_an_install_hq_enrolled_whose_answer_was_lost_tries_again_as_itself(api, monkeypatch):
+    """The identity is kept before HQ is asked: the next try is the same install, so HQ counts it once against the
+    invite and the key comes back by the install's secret."""
+    from clients import gateway as G
+    with fake_hq() as fake:
+        setup(api, monkeypatch, fake)
+        enroll = G.enroll
+
+        def lost(*args, **kwargs):
+            enroll(*args, **kwargs)                     # HQ enrolls the install; its answer never arrives
+            return 0, {}, "unreachable"
+
+        def died(*args, **kwargs):
+            enroll(*args, **kwargs)                     # HQ enrolls the install; the server stops before the answer
+            raise SystemExit
+        monkeypatch.setattr(G, "enroll", died)
+        with pytest.raises(SystemExit):
+            tick(api)
+        install = record(api)["install"]
+        assert install in fake.installs and record(api)["install_secret"].startswith("sealed:v1:")
+        assert plain_key(api) == ""
+        monkeypatch.setattr(G, "enroll", lost)
+        assert tick(api) == "unreachable" and plain_key(api) == "" and record(api)["install"] == install
+        monkeypatch.setattr(G, "enroll", enroll)
+        later = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=1, minutes=1)
+        assert tick(api, now=later) == "enrolled"
+        assert record(api)["install"] == install and list(fake.installs) == [install]
+        assert [call[3]["install"] for call in fake.posts("/enroll")] == [install] * 3
+        assert plain_key(api) in fake.keys and check(api)["state"] == "connected"
+
+
+def test_a_refused_automatic_key_is_enrolled_again_hourly_not_on_every_tick(api, monkeypatch):
+    from clients import gateway as G
+    with fake_hq() as fake:
+        setup(api, monkeypatch, fake)
+        tick(api)
+        first = plain_key(api)
+        fake.keys[first]["revoked"] = True
+        assert check(api)["state"] == "revoked"
+        enroll = G.enroll
+        monkeypatch.setattr(G, "enroll", lambda *args, **kwargs: (429, {}, "rate_limited"))
+        assert tick(api) == "rate_limited"
+        now = datetime.datetime.now(datetime.timezone.utc)
+        for minutes in (0, 1, 30, 59):
+            assert tick(api, now=now + datetime.timedelta(minutes=minutes)) is None
+        monkeypatch.setattr(G, "enroll", lambda *args, **kwargs: (0, {}, "unreachable"))
+        assert tick(api, now=now + datetime.timedelta(minutes=61)) == "unreachable"
+        assert tick(api, now=now + datetime.timedelta(minutes=62)) is None
+        monkeypatch.setattr(G, "enroll", enroll)
+        assert tick(api, now=now + datetime.timedelta(minutes=122)) == "enrolled"
+        assert plain_key(api) not in ("", first) and len(fake.posts("/enroll")) == 2
+
+
+def test_a_rotation_that_fails_waits_the_hour(api, monkeypatch):
+    from clients import gateway as G
+    with fake_hq() as fake:
+        setup(api, monkeypatch, fake)
+        tick(api)
+        first = plain_key(api)
+        rotate = G.rotate
+        monkeypatch.setattr(G, "rotate", lambda *args, **kwargs: (0, {}, "unreachable"))
+        later = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=31)
+        assert tick(api, now=later) == "unreachable" and owner_health(api) is None
+        monkeypatch.setattr(G, "rotate", rotate)
+        assert tick(api, now=later + datetime.timedelta(minutes=30)) is None and plain_key(api) == first
+        assert tick(api, now=later + datetime.timedelta(minutes=61)) == "rotated" and plain_key(api) != first
+
+
+def test_a_key_pasted_before_the_identity_is_kept_wins(api, monkeypatch):
+    from clients import gateway as G
+    with fake_hq() as fake:
+        setup(api, monkeypatch, fake)
+        safe_base = G.safe_base
+
+        def meanwhile(base):
+            if sys._getframe(1).f_code.co_name != "_auto_tick":
+                return safe_base(base)                  # only once the install has read the connection
+            fake.keys[PASTED] = {"install": "", "revoked": False, "rotated": False, "key_id": "gk_000000000001",
+                                 "rotate_after": ""}
+            save(api, fake, key=PASTED)                 # the owner saves a key before the install keeps its identity
+            return safe_base(base)
+        monkeypatch.setattr(G, "safe_base", meanwhile)
+        assert tick(api) is None and fake.posts("/enroll") == []
+        assert plain_key(api) == PASTED and get(api, "providers/gateway")["automatic"] is False
+
+
+def test_an_enrolled_install_keeps_its_key_with_no_invite_until_tico_turns_it_off(api, monkeypatch):
+    """The invite is only for the first sign-up: with it gone the install still rotates, enrolls again by its secret,
+    and takes Tico's stop (Health and the card's "connect automatically" too)."""
+    with fake_hq() as fake:
+        setup(api, monkeypatch, fake)
+        assert tick(api) == "enrolled"
+        install = record(api)["install"]
+        monkeypatch.delenv("TICO_GATEWAY_INVITE")
+        from backend import gateway_connection
+        with api.app.state.store.read() as c:
+            assert gateway_connection.maintained(c, api.app.state.store.settings)
+        first = plain_key(api)
+        later = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=31)
+        assert tick(api, now=later) == "rotated"
+        second = plain_key(api)
+        # A lost key: enroll again by the secret, with no invite sent.
+        fake.keys[second]["rotated"] = True
+        assert tick(api, now=later + datetime.timedelta(days=31)) == "enrolled"
+        assert "invite" not in fake.posts("/enroll")[-1][3] and record(api)["install"] == install
+        assert plain_key(api) not in (first, second)
+        # Tico turns the install off: it stops, says so, and is not asked again.
+        fake.revoke_install(install)
+        assert check(api)["state"] == "revoked"
+        assert tick(api) == "stopped"
+        assert owner_health(api) == {"status": "bad", "summary": CONTRACT["app"]["health_stopped"]}
+        enrolls = len(fake.posts("/enroll"))
+        assert tick(api, now=later + datetime.timedelta(days=90)) is None and len(fake.posts("/enroll")) == enrolls
+        assert get(api, "providers/gateway")["auto_off"] is True
+        # Tico turns it back on and the owner connects automatically again, still with no invite.
+        fake.installs[install]["revoked"] = False
+        post(api, "providers/gateway/automatic", {})
+        assert tick(api) == "enrolled" and record(api)["install"] == install
+
+
+def test_a_stop_with_no_invite_is_tried_again_under_a_new_invite(api, monkeypatch):
+    with fake_hq() as fake:
+        setup(api, monkeypatch, fake)
+        tick(api)
+        install = record(api)["install"]
+        monkeypatch.delenv("TICO_GATEWAY_INVITE")
+        fake.revoke_install(install)
+        check(api)
+        assert tick(api) == "stopped" and tick(api) is None
+        fake.installs[install]["revoked"] = False
+        later = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=2)
+        assert tick(api, now=later) is None             # no invite: the stop holds
+        monkeypatch.setenv("TICO_GATEWAY_INVITE", INVITE)
+        assert tick(api, now=later) == "enrolled" and record(api)["install"] == install
+
+
+def test_a_stop_under_an_invite_holds_once_the_invite_is_removed(api, monkeypatch):
+    with fake_hq() as fake:
+        setup(api, monkeypatch, fake)
+        tick(api)
+        fake.revoke_install(record(api)["install"])
+        check(api)
+        assert tick(api) == "stopped"
+        monkeypatch.delenv("TICO_GATEWAY_INVITE")
+        later = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=2)
+        assert tick(api, now=later) is None and len(fake.posts("/enroll")) == 2
+        assert owner_health(api) == {"status": "bad", "summary": CONTRACT["app"]["health_stopped"]}
+
+
+def test_a_member_cannot_turn_automatic_connecting_back_on(api, monkeypatch):
+    with fake_hq() as fake:
+        setup(api, monkeypatch, fake)
+        tick(api)
+        delete(api, "providers/gateway")
+        before = record(api)
+        post(api, "providers/gateway/automatic", {}, "ben-test", expected=403)
+        assert record(api) == before and before["auto"]["off"] is True
+        assert tick(api) is None and len(fake.posts("/enroll")) == 1
+        # Nor after Tico's stop.
+        post(api, "providers/gateway/automatic", {})
+        tick(api)
+        fake.revoke_install(record(api)["install"])
+        check(api)
+        assert tick(api) == "stopped"
+        before = record(api)
+        post(api, "providers/gateway/automatic", {}, "ben-test", expected=403)
+        assert record(api) == before and tick(api) is None and len(fake.posts("/enroll")) == 3
+
+
+def test_the_hourly_sweep_reconnects_an_enrolled_install_with_no_invite(api, monkeypatch):
+    """The scheduler's due check, the page-load check's fingerprint and its auto_tick gate all count the install's
+    identity, not only the invite: turned back on after Tico's stop, the install connects with no invite."""
+    from backend import credentials, gateway_connection
+    from backend.scheduler import Scheduler
+    later_check, soon = gateway_connection.check_later, gateway_connection.check_soon
+    with fake_hq() as fake:
+        setup(api, monkeypatch, fake)
+        tick(api)
+        install = record(api)["install"]
+        monkeypatch.delenv("TICO_GATEWAY_INVITE")
+        fake.revoke_install(install)
+        check(api)
+        assert tick(api) == "stopped"
+        fake.installs[install]["revoked"] = False
+        post(api, "providers/gateway/automatic", {})
+        monkeypatch.setattr(gateway_connection, "check_later", later_check)
+        threads = []
+        monkeypatch.setattr(gateway_connection, "check_soon", lambda *args: threads.append(soon(*args)))
+        monkeypatch.setattr(credentials, "Vault", lambda store: api.app.state.vault)   # the test's fake KMS
+        Scheduler(api.app.state.store, api.app.state.execution).tick()
+        assert threads and threads[0] is not None
+        threads[0].join(10)
+        assert record(api)["install"] == install and plain_key(api) in fake.keys
+        assert "invite" not in fake.posts("/enroll")[-1][3]

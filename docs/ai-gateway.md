@@ -77,7 +77,8 @@ People other than the owner see only whether the Gateway is connected.
 When Tico invites your company, the install command carries an invite code (`TICO_GATEWAY_INVITE`). The server then
 gets its own gateway key from Tico when it starts, with nothing to paste, and the card says **Tico AI Gateway: connected
 automatically**. Nobody types or sees the code or the key. The server replaces the key with a new one every 30 days by
-itself.
+itself. The invite is only needed for this first sign-up: after it, the server keeps its key with no invite in the
+environment.
 
 - A key you paste on the card, or one the server's environment sets, wins over the automatic key.
 - **Clear key** removes the automatic key, and the server does not get a new one by itself. **Connect automatically**

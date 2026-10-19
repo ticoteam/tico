@@ -232,10 +232,11 @@ class Scheduler:
                 from . import gateway_connection
                 from .credentials import Vault
                 with self.store.read() as c:
-                    # An install command's invite also makes it due: the install enrolls for its own key, at start
-                    # and hourly until it has one, and rotates it when the Gateway says.
-                    due = gateway_connection.connected(c, self.store.settings) or gateway_connection.invite(
-                        self.store.settings)
+                    # An install command's invite, or the identity a first sign-up gave the install, also makes it
+                    # due: the install enrolls for its own key, at start and hourly until it has one, and rotates it
+                    # when the Gateway says.
+                    due = gateway_connection.connected(c, self.store.settings) or gateway_connection.maintained(
+                        c, self.store.settings)
                 if due:
                     gateway_connection.check_soon(self.store, Vault(self.store), self.store.settings)
             except Exception as exc:

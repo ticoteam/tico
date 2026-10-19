@@ -437,7 +437,8 @@ mod tests {
         let (gateway, seen) = upstream(SSE.to_vec()).await;
         let answer = serde_json::json!({"credentials": [
             {"id": "gateway-key", "env": KEY_ENV, "kind": "api_key", "value": KEY},
-            {"id": "gateway-url", "env": URL_ENV, "kind": "text", "value": gateway}]}).to_string();
+            {"id": "gateway-url", "env": URL_ENV, "kind": "text", "value": gateway},
+            {"id": "gateway-bot", "env": BOT_ENV, "kind": "text", "value": "gb_00112233aabbccdd"}]}).to_string();
         let (hub, asked) = upstream(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{answer}", answer.len()).into_bytes()).await;
         let hub = hub.trim_end_matches("/v1/gateway").to_string();
         let client = Client::new(&hub, "runner-token", 5, 0).unwrap();
@@ -454,8 +455,12 @@ mod tests {
         let relay = vault.relay.as_ref().unwrap();
         assert_eq!((env[URL_ENV].as_str(), env[KEY_ENV].as_str()), (relay.url.as_str(), relay.token.as_str()));
         assert_eq!(vault.values, vec![KEY.to_string()]);
+        assert!(!env.contains_key(BOT_ENV), "the bot id is the relay's, not the turn's: {env:?}");
         let out = call(relay, &env[KEY_ENV], "/gateway/chat/completions", "{}").await;
         assert!(out.starts_with("HTTP/1.1 200") && seen.lock().unwrap().len() == 1, "{out}");
+        // The bot id the server handed with the key reaches the Gateway; the one the turn sent does not.
+        let sent = seen.lock().unwrap()[0].to_ascii_lowercase();
+        assert!(sent.contains("x-tico-bot: gb_00112233aabbccdd") && !sent.contains("gb_forged"), "{sent}");
     }
 
     #[tokio::test]

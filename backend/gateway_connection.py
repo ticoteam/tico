@@ -133,7 +133,8 @@ def view(c, settings=None, *, manage=False):
         return out
     auto = record.get("auto") if isinstance(record.get("auto"), dict) else {}
     # Cleared by the owner, or turned off by Tico (and since turned back on there): the owner may try again.
-    out["auto_off"] = bool(auto.get("off") or auto.get("stopped")) and not where and bool(invite(settings))
+    out["auto_off"] = bool(auto.get("off") or auto.get("stopped")) and not where and (bool(invite(settings))
+                                                                         or _identity(record))
     check = record.get("check") if isinstance(record.get("check"), dict) else {}
     # A check is about the key it was made with: one made before the key changed (or under the environment's) is none.
     fresh = check if check.get("for") == _fingerprint(c, settings) else {}
@@ -288,7 +289,9 @@ def check_soon(store, vault, settings=None, opener=None):
     """`check_now` on a background thread, unless this key was asked about less than CHECK_EVERY seconds ago. For the
     checks nobody pressed a button for: the page opening and the hourly sweep. Returns the thread, or None."""
     with store.read() as c:
-        fingerprint = _fingerprint(c, settings) or ("invite:" + _invite_mark(invite(settings)) if invite(settings) else "")
+        record = _row(c)
+        fingerprint = _fingerprint(c, settings) or ("invite:" + _invite_mark(invite(settings)) if invite(settings) else
+                                                    "install:" + record["install"] if _identity(record) else "")
     if not fingerprint:
         return None
     now = time.monotonic()
@@ -307,7 +310,9 @@ def check_later(store, vault, settings=None, opener=None):
         except Exception:
             pass                                          # the next check tries again; the last answer stays
         try:
-            if invite(settings):
+            with store.read() as c:
+                due = maintained(c, settings)
+            if due:
                 auto_tick(store, vault, settings, opener)  # a refused automatic key is replaced, or the stop recorded
         except Exception:
             pass
@@ -414,8 +419,8 @@ def health(c, settings=None):
     """The Health row for the people who manage the connection, or None when there is nothing to say."""
     record = _row(c)
     auto = record.get("auto") if isinstance(record.get("auto"), dict) else {}
-    if not env_key(settings) and not record.get("key") and invite(settings) and not auto.get("off"):
-        if auto.get("stopped") == _invite_mark(invite(settings)):
+    if not env_key(settings) and not record.get("key") and maintained(c, settings) and not auto.get("off"):
+        if _stopped(auto, settings):
             return {"status": "bad", "summary": STOPPED}
         if auto.get("code"):
             return {"status": "warn", "summary": AUTO_MESSAGES.get(auto["code"], AUTO_LATER)}
@@ -435,6 +440,23 @@ def invite(settings=None):
 def _invite_mark(code):
     """Which invite a stop was made under, without keeping it: a new invite in the install command tries again."""
     return hashlib.sha256(f"tico-gateway-invite\n{code}".encode()).hexdigest()[:16]
+
+
+def _identity(record):
+    """Whether the install has its own identity (id and sealed secret) from a first enroll."""
+    return bool(record.get("install") and record.get("install_secret"))
+
+
+def maintained(c, settings=None):
+    """Whether the install looks after its own Gateway key: it has an invite to sign up with, or the identity a first
+    sign-up gave it (which keeps rotating and enrolling again by its secret with no invite)."""
+    return bool(invite(settings)) or _identity(_row(c))
+
+
+def _stopped(auto, settings):
+    """Whether Tico's stop holds: with no invite always; with one, only the stop made under that same invite."""
+    mark = auto.get("stopped")
+    return bool(mark) and (not invite(settings) or mark == _invite_mark(invite(settings)))
 
 
 def _utc(value):
@@ -459,15 +481,19 @@ def bot_header(c, vault, slug):
 
 def _due(record, settings, now):
     """What `auto_tick` should do with the connection as it is: "enroll", "rotate" or None."""
-    if not invite(settings) or env_key(settings) or getattr(settings, "rehearsal", False):
+    if env_key(settings) or getattr(settings, "rehearsal", False):
         return None
+    if not invite(settings) and not _identity(record):
+        return None                                       # the invite is only needed to make the identity
     auto = record.get("auto") if isinstance(record.get("auto"), dict) else {}
-    if auto.get("off") or auto.get("stopped") == _invite_mark(invite(settings)):
+    if auto.get("off") or _stopped(auto, settings):
         return None
+    tried = _utc(auto.get("at")) if auto.get("code") else None
+    if tried and now - tried < datetime.timedelta(hours=1):
+        return None                                       # a failed try waits an hour, however often the page is
+                                                          # opened: HQ allows an address 5 enrolls an hour
     if not record.get("key"):
-        tried = _utc(auto.get("at")) if auto.get("code") else None
-        # A refused enroll waits an hour, however often the page is opened: HQ allows an address 5 an hour.
-        return None if tried and now - tried < datetime.timedelta(hours=1) else "enroll"
+        return "enroll"
     if record.get("origin") != AUTOMATIC:
         return None                                       # the owner's pasted key wins
     check = record.get("check") if isinstance(record.get("check"), dict) else {}
@@ -508,9 +534,15 @@ def _auto_tick(store, vault, settings, opener, now):
         if status == 201 and answer.get("key"):
             return _keep(store, vault, record, answer, now, install, secret, "rotated")
         if code not in ENROLL_AGAIN:
-            return _note(store, record, code or "unreachable", now, quiet=True)
+            return _note(store, record, code or "unreachable", now)
     if not install or not secret:
         install, secret = "gi_" + secrets.token_hex(12), "gis_" + secrets.token_urlsafe(32)
+        # Kept before HQ is asked: if HQ enrolls it but the answer is lost, the next try is the same install.
+        with store.transaction() as c:
+            if not _unchanged(c, record):
+                return None
+            record = {**_row(c), "install": install, "install_secret": vault.cipher.seal(c, INSTALL_CONTEXT, secret)}
+            _write(c, record)
     status, answer, code = G.enroll(base, install, secret, invite(settings), opener=opener)
     if status == 201 and answer.get("key"):
         return _keep(store, vault, record, answer, now, install, secret, "enrolled")
@@ -550,9 +582,9 @@ def _keep(store, vault, record, answer, now, install, secret, what):
     return what
 
 
-def _note(store, record, code, now, stopped="", quiet=False):
-    """Keep why the last try did not work, for Health. `stopped`: Tico turned the install off; its key is dropped and
-    nothing is asked again under this invite. `quiet`: a rotation that can wait for the next hour."""
+def _note(store, record, code, now, stopped=""):
+    """Keep why the last try did not work, for Health and the hour's wait. `stopped`: Tico turned the install off; its
+    key is dropped and nothing is asked again under this invite (or, with none, at all)."""
     with store.transaction() as c:
         if not _unchanged(c, record):
             return None
@@ -563,7 +595,7 @@ def _note(store, record, code, now, stopped="", quiet=False):
             after["revision"] = int(record.get("revision") or 0) + 1
             after["auto"] = {"stopped": stopped, "code": code, "at": _stamp(now)}
             H.event(c, SYSTEM, "gateway.connection.stopped", PROVIDER, {"install": record.get("install", "")})
-        elif not quiet:
+        else:
             after["auto"] = {"code": code, "at": _stamp(now)}
         _write(c, after)
     return "stopped" if stopped else code
