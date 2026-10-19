@@ -329,7 +329,8 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
     }
     await page.locator('#vcard-full').waitFor({state: 'hidden'});
     assert.equal(await thread.evaluate(el => el.scrollTop), top, `${label}: back at the same place`);
-    assert(!(await page.evaluate(() => history.state?.vcardFull)), 'its history entry is gone');
+    // closing goes Back, and the browser finishes that step a moment later
+    assert(await page.waitForFunction(() => !history.state?.vcardFull, null, {timeout: 3000}).then(() => true, () => false), `${label}: its history entry is gone`);
     // a page expands into the same sandbox and scrolls there
     await (hasTouch ? tall.locator('.vcard-tap').tap() : tall.locator('.vcard-expand').click());
     await full.locator('iframe.vcard-full-frame').waitFor();
