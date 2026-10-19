@@ -63,6 +63,10 @@ All notable changes to Tico are recorded here. The format follows
   before this keeps today's behaviour ([sessions](docs/sessions.md)).
 
 ### Changed
+- **Updates cards use icons**: Reply, Mark unread (or read) and Archive (Restore in the Archive) are icons, named by a
+  tooltip, a long press on a phone and screen readers. A card's reports open from **8** and a chevron at the right end
+  of its icon row, in place of the **8 reports** row under it and its broken glyph, and open reports hang from the
+  card on one line with an elbow into each card, the same at every level.
 - **First run, after Create**: the screen says **Your team is created** and offers one next step as its only primary
   button (**Add a computer** while there is none). Bots are listed in the team chart's groups and order with one status
   each, *Waiting for a computer* is said once at the top, and the tour waits for **Show me around** instead of

@@ -173,7 +173,15 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
     // No Unread filter. Unread first, then newest; marking one unread (or read)
     // never moves anything while the page is open.
     assert.equal(await page.locator('#upd-unread').count(), 0);
+    // The action row is icons, each named for a screen reader and a tooltip; no words on the card.
+    const acts = page.locator('[data-upd="u-cmo"] .upd-actions .upd-act');
+    assert.deepEqual(await acts.evaluateAll(els => els.map(b => [b.getAttribute('aria-label'), b.title, b.querySelector('.nav-icon')?.textContent])),
+      [['Reply', 'Reply', 'chat_bubble'], ['Mark unread', 'Mark unread', 'mark_email_unread'], ['Archive', 'Archive', 'archive']]);
+    assert.deepEqual(await acts.evaluateAll(els => els.map(b => [...b.childNodes].filter(n => !n.classList?.contains('nav-icon')).map(n => n.textContent).join('').trim())),
+      ['', '', ''], 'no visible words');
+    assert.equal(await page.locator('#upd-feed [data-upd-kids]').count(), 0, 'the List has no reports toggle');
     await page.locator('[data-upd="u-cmo"] [data-upd-toggle]').click();
+    assert.equal(await page.locator('[data-upd="u-cmo"] [data-upd-toggle]').getAttribute('aria-label'), 'Mark read', 'Mark unread marked it unread');
     assert.deepEqual(await page.locator('#upd-feed .upd-card').evaluateAll(els => els.map(e => e.dataset.upd)), ['u-seo', 'u-fin', 'u-cmo'],
       'nothing re-sorts while you are on the page');
     // Archive failure leaves the card and its unsent reply draft in place. A later successful
@@ -210,7 +218,8 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
     await page.waitForFunction(() => location.hash === '#/updates?view=archive' && document.querySelector('[data-upd="u-cmo"]'));
     assert.equal(await page.locator('#upd-allread').isHidden(), true);
     assert.equal(await page.locator('.upd-head h1').innerText(), 'Archive', 'the reader knows they are in the Archive');
-    assert.equal(await page.locator('[data-upd="u-cmo"] [data-upd-archive]').innerText(), 'Restore');
+    assert.equal(await page.locator('[data-upd="u-cmo"] [data-upd-archive]').getAttribute('aria-label'), 'Restore');
+    assert.equal(await page.locator('[data-upd="u-cmo"] [data-upd-archive] .nav-icon').textContent(), 'unarchive');
     await page.locator('[data-upd="u-cmo"] [data-upd-archive]').click();
     await page.locator('[data-upd="u-cmo"]').waitFor({state: 'detached'});
     assert.deepEqual(archiveRequests[2], {ids: ['u-cmo'], archived: false});

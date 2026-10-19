@@ -47,10 +47,15 @@
 .upd-deck-dot{border:0;padding:0;width:22px;height:22px;background:none;cursor:pointer;display:inline-flex;align-items:center;justify-content:center}
 .upd-deck-dot::after{content:"";width:6px;height:6px;border-radius:50%;background:var(--line);transition:background var(--dur-fast) var(--ease),width var(--dur-fast) var(--ease)}
 .upd-deck-dot[aria-current]::after{background:var(--accent);width:16px;border-radius:3px}
-.upd-actions{display:flex;gap:4px;margin:6px 0 0 -8px}
-.upd-act{display:inline-flex;align-items:center;gap:5px;border:0;background:none;border-radius:999px;padding:5px 10px;color:var(--muted);font-size:var(--t-base);cursor:pointer}
+.upd-actions{display:flex;flex-wrap:nowrap;align-items:center;gap:2px;margin:6px 0 0 -8px}
+/* icons only: the name is the title (a long press on a phone shows it, data-tip-on) */
+.upd-act{position:relative;display:inline-flex;align-items:center;justify-content:center;gap:4px;min-width:34px;height:34px;flex:none;border:0;background:none;border-radius:999px;padding:0 8px;color:var(--muted);font-size:var(--t-sm);cursor:pointer;-webkit-touch-callout:none;user-select:none}
 .upd-act:hover{background:var(--surface2);color:var(--ink)}
-.upd-act .nav-icon{font-size:16px;width:16px;height:16px}
+.upd-act:disabled{opacity:.4;cursor:default}
+.upd-act .nav-icon{font-size:18px;width:18px;height:18px}
+.upd-n{font-variant-numeric:tabular-nums;font-weight:600}
+.upd-act[data-tip-on]::after{content:attr(title);position:absolute;bottom:calc(100% + 6px);left:50%;transform:translateX(-50%);white-space:nowrap;padding:4px 8px;border-radius:8px;background:var(--ink);color:var(--bg);font-size:var(--t-xs);font-weight:500;pointer-events:none;z-index:5}
+.upd-kids[data-tip-on]::after{left:auto;right:0;transform:none}
 .upd-thread{border-top:1px solid var(--line);margin-top:8px;padding-top:8px;display:flex;flex-direction:column;gap:6px}
 /* a reply thread reads like the chat column: your words in a bubble, the bot's on the card */
 .upd-msg{font-size:var(--read-size);line-height:var(--read-leading);padding:6px 12px;border-radius:12px;background:var(--bubble)}
@@ -79,15 +84,27 @@
   /* Day, week, unread and my bots are icons on a phone */
   .upd-seg .nav-icon,.upd-chip .nav-icon{display:inline-flex}.upd-lbl{display:none}
   .upd-seg button{padding:6px 12px}.upd-chip{padding:6px 10px}}
-/* Updates nested by the org chart: each report's card sits under its manager's, behind a small toggle. */
-.upd-node{display:flex;flex-direction:column;gap:6px}
-.upd-sub{display:flex;flex-direction:column;gap:10px;margin-left:22px;padding-left:14px;border-left:2px solid var(--line)}
-.upd-kids{align-self:flex-start;display:inline-flex;align-items:center;gap:4px;font-size:var(--t-sm);color:var(--muted);background:none;border:0;padding:2px 6px;border-radius:8px;cursor:pointer}
-.upd-kids:hover{background:var(--hover, color-mix(in srgb,var(--text) 6%,transparent));color:var(--text)}
-.upd-kids .nav-icon{font-size:18px}
+/* Updates nested by the org chart: each report's card hangs under its manager's, opened by the "8 v" toggle at the
+   right of the manager's card. One line runs down from the manager's card with an elbow into each report's card. */
+.upd-node{display:flex;flex-direction:column;gap:10px}
+.upd-kids{margin-left:auto;padding:0 6px 0 10px;gap:0}
+.upd-kids .nav-icon{transition:transform var(--dur-fast) var(--ease)}
+.upd-kids[aria-expanded=true] .nav-icon{transform:rotate(180deg)}
+.upd-kids .upd-dot{position:absolute;top:5px;right:3px;margin:0}
+.upd-sub{--tree-x:34px;--tree-in:14px;--tree-elbow:32px;display:flex;flex-direction:column;gap:10px;margin-left:var(--tree-x);padding-left:var(--tree-in)}
+.upd-sub>.upd-node{position:relative}
+.upd-sub>.upd-node:has(>.upd-none){--tree-elbow:20px}
+/* from the card above (the manager's, or the report's before) down and into this card */
+.upd-sub>.upd-node::before{content:"";position:absolute;left:calc(-1 * var(--tree-in));top:-10px;width:calc(var(--tree-in) - 2px);height:calc(var(--tree-elbow) + 10px);box-sizing:border-box;border:0 solid var(--line);border-left-width:2px;border-bottom-width:2px;border-bottom-left-radius:10px;pointer-events:none}
+/* and on past it to the next report */
+.upd-sub>.upd-node:not(:last-child)::after{content:"";position:absolute;left:calc(-1 * var(--tree-in));top:var(--tree-elbow);bottom:-10px;border-left:2px solid var(--line);pointer-events:none}
 .upd-none{display:flex;align-items:center;gap:10px;padding:8px 16px;border:1px dashed var(--line);border-radius:14px;font-size:var(--t-sm)}
 .upd-none .upd-av{width:24px;height:24px;overflow:hidden;border-radius:50%}
 .upd-none .upd-write{margin-left:auto}
+.upd-none>*{flex:none}
+.upd-none .upd-name,.upd-none>.muted{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.upd-none .upd-write{white-space:nowrap}
+.upd-none .upd-kids{margin-right:-8px}.upd-none .upd-write~.upd-kids{margin-left:0}
 .upd-draft{background:color-mix(in srgb,var(--muted) 15%,transparent);color:var(--muted)}
 .upd-edit{grid-template-columns:minmax(0,1fr)}
 .upd-edit textarea{width:100%;margin-top:8px;font:inherit}
@@ -96,4 +113,6 @@
 .upd-field .muted{font-weight:400}
 .upd-edit .upd-field input,.upd-edit .upd-field textarea{display:block;width:100%;margin-top:4px;font:inherit;font-weight:400}
 .upd-from{font-size:var(--t-sm);margin-top:6px}
-@media (max-width:600px){.upd-sub{margin-left:8px;padding-left:10px}}
+@media (max-width:760px){.upd-sub{--tree-x:14px;--tree-in:10px;--tree-elbow:30px}
+  /* "Write your update" says there is none yet, and leaves the reports' count room on a phone */
+  .upd-none:has(.upd-write)>.muted{display:none}}
