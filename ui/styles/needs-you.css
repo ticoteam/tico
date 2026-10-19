@@ -42,6 +42,7 @@ button.ghost.danger,.linkish.danger{color:var(--fail)}
   .req-body{padding-left:4px;padding-right:4px}.issue-actions .github{margin-left:0}
 }
 /* an approval: a send's recipients and files, a publish's place and text, readable; the exact payload folded */
+.approval-ready{margin:0 0 6px;font-weight:600}
 .approval-facts{display:grid;grid-template-columns:auto minmax(0,1fr);gap:3px 12px;margin:0}
 .approval-facts dt{color:var(--muted)}
 .approval-facts dd{margin:0;overflow-wrap:anywhere}
