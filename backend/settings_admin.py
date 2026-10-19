@@ -800,6 +800,8 @@ class SettingsAdmin:
                 c.execute("UPDATE bot_config SET config_json=?,revision=revision+1 WHERE bot=?", (encode(declared), bot))
                 c.execute("UPDATE bots SET model=?,runtime=?,effort=? WHERE slug=?",
                           (target["model"], target["runtime"], target["effort"], bot))
+                from .model_login import hold_removals
+                hold_removals(c, self.settings)
             else:
                 runner = c.execute("SELECT * FROM runners WHERE id=? AND revoked_at IS NULL", (target["runner_id"],)).fetchone()
                 if not runner:

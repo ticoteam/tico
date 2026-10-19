@@ -59,7 +59,9 @@ function machineConnections(machine) {
       own: false, missing: true, state: {signed_in: false}, bots: [b.bot], problem: b.problem || 'Not signed in on this computer'});
   }
   for (const r of rows) {
-    r.attention = !!((r.bots.length && r.state.signed_in === false) || r.auth === 'rejected' || (r.missing && r.bots.length));
+    // Signed out from Tico is a red dot even with no bots on it yet: nothing signs it back in by itself.
+    const cleared = r.state.signed_in === false && machineSignedOut(machine, r.runtime, r.profile?.name ?? '');
+    r.attention = !!((r.bots.length && r.state.signed_in === false) || cleared || r.auth === 'rejected' || (r.missing && r.bots.length));
     r.tool = machineToolName(machine, r.runtime);
   }
   return rows.sort((a, b) => a.tool.localeCompare(b.tool) || Number(b.own) - Number(a.own) || a.name.localeCompare(b.name));
@@ -81,7 +83,8 @@ function machineLeftWords(weekly) {
 function machineAttentionWords(conn) {
   if (conn.missing) return conn.problem;
   if (conn.auth === 'rejected') return 'Login expired or rejected';
-  return conn.attention ? 'Signed out; bots use it' : '';
+  if (!conn.attention) return '';
+  return conn.bots.length ? 'Signed out; bots use it' : 'Signed out';
 }
 // One chip per connection: the tool, a thin bar and the % left; a red dot only when it needs attention.
 function machineChipHTML(machine, conn) {
@@ -114,7 +117,8 @@ function machineConnectionHTML(machine, conn, online, manage) {
   const offline = online ? '' : ' disabled title="Computer is offline"';
   let action = '';
   if (manage && conn.state.signed_in !== true && !conn.missing) {
-    if (harnessCaps(conn.runtime).browser_sign_in) action = ` <button class="ghost machine-signin" type="button" data-model-login data-runner="${esc(machine.id)}" data-runtime="${esc(conn.runtime)}" data-machine="${esc(machine.label)}"${conn.profile ? ` data-profile="${esc(conn.profile.name)}"` : ''}${offline}>Sign in</button>`;
+    // "Signed out · Sign in": the way back sits next to what is wrong.
+    if (harnessCaps(conn.runtime).browser_sign_in) action = `${conn.state.signed_in === false ? '<span class="computer-conn-sep" aria-hidden="true"> · </span>' : ' '}<button class="ghost machine-signin" type="button" data-model-login data-runner="${esc(machine.id)}" data-runtime="${esc(conn.runtime)}" data-machine="${esc(machine.label)}"${conn.profile ? ` data-profile="${esc(conn.profile.name)}"` : ''}${offline}>Sign in</button>`;
     else if (!conn.profile) action = machineTerminalSignInHTML(machine, conn.runtime);
   }
   // Switch account / Sign out (or Use the shared key) per login, from ui/model-login.js; only while online. On the
@@ -136,8 +140,8 @@ function machineConnectionHTML(machine, conn, online, manage) {
     ? `<span class="err machine-rejected" data-rejected="${esc(conn.runtime)}">${value.rejected_at ? esc(ago(value.rejected_at)) + '. ' : ''}${value.rejected_reason ? esc(value.rejected_reason) + '. ' : ''}${hlCredentialFix(value.credential_source)}. It takes no work that needs ${esc(conn.runtime)} until then.</span>` : '';
   const usage = conn.state.signed_in === false ? '' : machineUsageHTML(conn.runtime, conn.state, `${conn.tool} ${conn.name}`, conn.profile ? 'this subscription' : 'this computer');
   const note = conn.profile && !conn.missing ? subsRefreshNote(conn.state.refresh) : '';
-  const tools = conn.profile && !conn.missing && manage
-    ? subsRefreshHTML(c, conn.profile, conn.runtime, conn.state, online) + subsControlsHTML(c, conn.profile, conn.runtime, conn.state) : '';
+  const tools = machineLineActionsHTML(machine, conn, online, manage) + (conn.profile && !conn.missing && manage
+    ? subsRefreshHTML(c, conn.profile, conn.runtime, conn.state, online) + subsControlsHTML(c, conn.profile, conn.runtime, conn.state) : '');
   const bots = conn.bots.length ? `Bots: ${conn.bots.map(settingsBotName).join(', ')}` : 'No bots run on it';
   // Bots that take turns on one sign-in say so, for each login the line stands for.
   const shared = [conn.profile ? machineSharedLoginHTML(machine, conn.runtime, conn.profile.name) : '',
@@ -157,30 +161,142 @@ function machineTerminalSignInHTML(machine, runtime) {
   if (command) return ` <span class="machine-login-command" title="Run on the computer${command.includes('<container>') ? '; docker ps shows the container name' : ''}"><code>${esc(command)}</code><button class="ghost machine-signin" type="button" data-machine-copy-login="${esc(command)}">Copy</button></span>`;
   return harnessCaps(runtime).api_keys === 'bot' ? ' <a class="machine-signin-link" href="#/credentials">Add key</a>' : '';
 }
-// Add a connection: the computer's own login for an installed tool it is not signed in to (in the browser, or by a
-// command in a terminal), or a named subscription.
-function machineAddHTML(machine, conns, online, manage) {
+// Add connection: one button at the end of Connections, opening its own pop-up (computerAddOpen).
+function machineAddHTML(machine, online, manage) {
   if (!manage || machine.revoked_at) return '';
+  return `<div class="computer-add"><button class="ghost" type="button" data-add-connection="${esc(machine.id)}"${online ? '' : ' disabled title="Computer is offline"'}>Add connection</button></div>`;
+}
+// Rename and Remove, for a named subscription's line; only while the computer is online, like every action here.
+function machineLineActionsHTML(machine, conn, online, manage) {
+  if (!manage || conn.own && !conn.profile || conn.missing || !conn.profile) return '';
   const offline = online ? '' : ' disabled title="Computer is offline"';
+  const rename = conn.profile.id && subsMaySignIn(machine)
+    ? (online ? `<details class="computer-conn-rename" data-profile="rename:${esc(conn.profile.name)}"><summary>Rename</summary>${subsRenameHTML({runner_id: machine.id}, conn.profile)}</details>`
+      : `<button class="ghost" type="button"${offline}>Rename</button>`) : '';
+  // The computer's own login merged into this line is not removed with it: Sign out is for that one.
+  const remove = harnessCaps(conn.runtime).sign_out
+    ? `<button class="ghost danger-text" type="button" data-connection-remove="${esc(conn.key)}" data-runner="${esc(machine.id)}"${offline}>Remove</button>` : '';
+  return rename + remove;
+}
+// The Bots page, showing this computer's bots: where a bot is moved to another connection.
+function computerBotsPage(id) {
+  $('#set-machines dialog.computer-detail')?.close();
+  SETTINGS_BOTS_VIEW.computer = id; settingsBotsRemember(); settingsShow('bots'); renderSettingsBots();
+}
+function computerRemoveOpen(button) {
+  const machine = (SETTINGS_DATA?.machines || []).find(m => m.id === button.dataset.runner);
+  const conn = machine && machineConnections(machine).find(row => row.key === button.dataset.connectionRemove);
+  if (!conn?.profile) return;
+  window.TicoModelLogin?.remove({runnerId: machine.id, runtime: conn.runtime, machine: machine.label, profile: conn.profile.name,
+    name: conn.name, bots: conn.bots.map(settingsBotName), botsPage: () => computerBotsPage(machine.id)});
+}
+
+// ---- the Add connection pop-up: 1 the tool, 2 subscription or API key, 3 a name then the provider's sign-in in this
+// same pop-up (ui/model-login.js open `into`), 4 done, and the chip appears once the computer reports it.
+function computerAddTools(machine) {
   const runtimes = machine.readiness?.runtimes || {};
-  const own = Object.entries(runtimes).filter(([runtime, value]) => value?.installed && harnessCaps(runtime).browser_sign_in
-    && !conns.some(conn => conn.runtime === runtime && conn.own && conn.state.signed_in === true))
-    .map(([runtime]) => `<button class="ghost machine-signin" type="button" data-model-login data-runner="${esc(machine.id)}" data-runtime="${esc(runtime)}" data-machine="${esc(machine.label)}"${offline}>Sign in to ${esc(machineToolName(machine, runtime))}</button>`).join('');
-  // A tool already on a line of its own login carries its command there.
-  const terminal = Object.entries(runtimes).filter(([runtime, value]) => value?.installed && !harnessCaps(runtime).browser_sign_in
-    && !conns.some(conn => conn.runtime === runtime && conn.own))
-    .map(([runtime]) => [runtime, machineTerminalSignInHTML(machine, runtime)]).filter(([, html]) => html)
-    .map(([runtime, html]) => `<span class="computer-add-terminal" data-add-terminal="${esc(runtime)}">${esc(machineToolName(machine, runtime))}:${html}</span>`).join('')
-    // Or a key stored for the computer (ui/model-login.js), for a tool that takes one; a line of its own login offers
-    // that itself.
-    + Object.entries(runtimes).filter(([runtime, value]) => value?.installed && !conns.some(conn => conn.runtime === runtime && conn.own))
-      .map(([runtime]) => [runtime, machineKeyActions(machine, online, runtime, null, false)]).filter(([, html]) => html)
-      .map(([runtime, html]) => `<span class="computer-add-terminal" data-add-key="${esc(runtime)}">${esc(machineToolName(machine, runtime))}:${html}</span>`).join('');
-  const add = subsAddHTML(machine, online);
-  if (!own && !terminal && !add) return '';
-  return `<div class="computer-add" data-add-connection><strong>Add connection</strong>
-    ${own || terminal ? `<div class="computer-add-own"><span class="muted">The computer's login:</span>${own}${terminal}</div>` : ''}
-    ${add ? `<div class="computer-add-sub"><span class="muted">A named subscription:</span>${add}</div>` : ''}</div>`;
+  return Object.entries(runtimes).filter(([, value]) => value?.installed).map(([runtime]) => ({runtime, name: machineToolName(machine, runtime)}))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+function computerAddStepHTML(machine, step) {
+  const head = (title, back) => `<header><h2 id="computer-add-title">${title}</h2>
+      <button class="ghost tmodal-x" type="button" data-add-close aria-label="Close">✕</button></header>
+    <p class="muted computer-add-where">${esc(machine.label)}${back ? ` · <button class="ghost machine-signin" type="button" data-add-back="${back}">Back</button>` : ''}</p>`;
+  if (step.at === 'tool') {
+    const tools = computerAddTools(machine).map(tool => `<button class="ghost computer-add-choice" type="button" data-add-tool="${esc(tool.runtime)}">${esc(tool.name)}</button>`).join('');
+    // Installing is the owner's (Versions and updates > Installation and updates).
+    return `${head('Add connection')}<p class="model-login-body">Which AI tool?</p><div class="computer-add-choices" data-add-step="tool">${tools || '<p class="muted">No AI tools reported on this computer yet.</p>'}
+      <button class="ghost computer-add-choice" type="button" data-add-install>Install another tool</button></div>`;
+  }
+  const tool = machineToolName(machine, step.runtime), caps = harnessCaps(step.runtime);
+  const own = caps.browser_sign_in && machine.readiness?.runtimes?.[step.runtime]?.authenticated !== 'ready';
+  // A tool that signs in only from a terminal: its command, to run on the computer (Tico need not reach it).
+  const terminal = !caps.browser_sign_in && machineLoginCommand(machine, step.runtime) ? machineTerminalSignInHTML(machine, step.runtime) : '';
+  if (step.at === 'kind') {
+    const subscription = caps.browser_sign_in && caps.subscription_profiles;
+    return `${head(`Add ${esc(tool)}`, 'tool')}<p class="model-login-body">How does ${esc(tool)} sign in here?</p><div class="computer-add-choices" data-add-step="kind">
+      <button class="ghost computer-add-choice" type="button" data-add-kind="subscription"${subscription ? '' : ' disabled'}><strong>Subscription</strong><span class="muted">${subscription ? 'Sign in with a ChatGPT, Claude or other plan account' : `${esc(tool)} has no subscription sign-in from here`}</span></button>
+      <button class="ghost computer-add-choice" type="button" data-add-kind="api_key"><strong>API key</strong><span class="muted">Paste a key from the provider</span></button>
+      ${!subscription && own ? '<button class="ghost computer-add-choice" type="button" data-add-own><strong>Computer\'s login</strong><span class="muted">Sign in with the provider as this computer\'s own login</span></button>' : ''}</div>
+      ${terminal ? `<p class="muted computer-add-terminal" data-add-terminal="${esc(step.runtime)}">Or sign the computer's login in from a terminal there:${terminal}</p>` : ''}`;
+  }
+  if (step.at === 'api_key') {
+    // A key of this computer's own (Dev 97, ui/model-login.js replaceKey), for a tool that takes one; a login its key
+    // already signs in keeps Replace key on its line. Any other tool's key goes in Credentials.
+    const line = machineConnections(machine).find(conn => conn.runtime === step.runtime && conn.own && !conn.profile);
+    const keyed = line?.auth === 'ready' && line.value?.key;
+    const add = keyed ? '' : machineKeyActions(machine, true, step.runtime, null, false);
+    const body = keyed ? `${esc(tool)} already signs in with a key on ${esc(machine.label)}: Replace key is on its line.`
+      : add ? `Add a key that ${esc(machine.label)} uses for ${esc(tool)}.`
+      : `${esc(tool)} takes its key from Credentials; it is used on the computers it is shared with.`;
+    const go = add ? `<span class="computer-add-terminal" data-add-key="${esc(step.runtime)}">${add}</span>`
+      : keyed ? '' : '<a class="primary" href="#/credentials" data-add-credentials>Open Credentials</a>';
+    return `${head(`Add ${esc(tool)} with an API key`, 'kind')}<div data-add-step="api_key"><p class="model-login-body">${body}</p>
+      <div class="model-login-actions"><button class="ghost" type="button" data-add-close>Close</button>${go}</div></div>`;
+  }
+  return `${head(`Add a ${esc(tool)} subscription`, 'kind')}<form class="computer-add-name" data-add-step="name" novalidate>
+      <label>Name <input name="profile" type="text" autocomplete="off" spellcheck="false" maxlength="80" required placeholder="e.g. Team ChatGPT" value="${esc(step.name || '')}"></label>
+      <span class="muted" role="status" data-add-msg></span>
+      <p class="muted">Then sign in with the provider here. The chip appears on ${esc(machine.label)} once it reports; no restart needed.</p>
+      <div class="model-login-actions">${own ? '<button class="ghost" type="button" data-add-own>Sign in the computer\'s own login instead</button>' : ''}<button class="primary" type="submit">Sign in</button></div></form>`;
+}
+function computerAddOpen(id) {
+  const machine = () => (SETTINGS_DATA?.machines || []).find(m => m.id === id);
+  if (!machine()) return;
+  const dialog = document.createElement('dialog');
+  dialog.className = 'tmodal model-login computer-add-dialog';
+  dialog.setAttribute('aria-labelledby', 'computer-add-title');
+  document.body.appendChild(dialog);
+  let step = {at: 'tool'}, signingIn = false;
+  const paint = () => { dialog.innerHTML = computerAddStepHTML(machine(), step); dialog.querySelector('button:not([disabled]), input')?.focus(); };
+  const signIn = (profile = '') => {
+    signingIn = true;     // the sign-in owns the pop-up from here (its own Close cancels a sign-in still running)
+    window.TicoModelLogin?.open({runnerId: id, runtime: step.runtime, machine: machine().label, profile, into: dialog});
+  };
+  dialog.addEventListener('close', () => dialog.remove());
+  dialog.addEventListener('cancel', event => { if (signingIn) return; event.preventDefault(); dialog.close(); });
+  dialog.addEventListener('click', event => {
+    if (signingIn) return;
+    if (event.target === dialog || event.target.closest('[data-add-close]')) { dialog.close(); return; }
+    if (event.target.closest('[data-add-credentials]')) { dialog.close(); $('#set-machines dialog.computer-detail')?.close(); return; }
+    // Add key opens its own pop-up (ui/model-login.js listens on the document); this one gives way to it.
+    if (event.target.closest('[data-model-key-add]')) { dialog.close(); return; }
+    const copy = event.target.closest('[data-machine-copy-login]');
+    if (copy) { void copyText(copy.dataset.machineCopyLogin).then(() => toast('Command copied')); return; }
+    const back = event.target.closest('[data-add-back]');
+    if (back) { step = {...step, at: back.dataset.addBack}; paint(); return; }
+    const tool = event.target.closest('[data-add-tool]');
+    if (tool) { step = {at: 'kind', runtime: tool.dataset.addTool}; paint(); return; }
+    if (event.target.closest('[data-add-install]')) {
+      dialog.close();
+      const versions = $('#set-machines dialog.computer-detail [data-detail-section="versions"]');
+      const details = versions?.querySelector('details[data-machine-details]');
+      if (details) details.open = true;
+      versions?.scrollIntoView({block: 'start'});
+      if (S.me?.role !== 'owner') toast('The owner installs AI tools, under Versions and updates', false);
+      return;
+    }
+    const kind = event.target.closest('[data-add-kind]');
+    if (kind && !kind.disabled) { step = {...step, at: kind.dataset.addKind === 'api_key' ? 'api_key' : 'name'}; paint(); return; }
+    if (event.target.closest('[data-add-own]')) signIn('');
+  });
+  dialog.addEventListener('input', event => {
+    const field = event.target.closest('[name=profile]'); if (!field || signingIn) return;
+    step.name = field.value;
+    const slug = subsSlug(field.value);
+    dialog.querySelector('[data-add-msg]').textContent = field.value.trim() && slug !== field.value.trim() ? `Saved as ${slug}` : '';
+  });
+  dialog.addEventListener('submit', event => {
+    event.preventDefault();
+    if (signingIn) return;
+    const form = event.target.closest('[data-add-step="name"]'); if (!form) return;
+    const name = subsSlug(form.elements.profile.value), msg = form.querySelector('[data-add-msg]');
+    if (!name) { msg.textContent = 'Use letters or numbers'; form.elements.profile.focus(); return; }
+    signIn(name);
+  });
+  paint();
+  dialog.showModal();
+  return dialog;
 }
 function machineBotsHTML(machine) {
   const links = new Map((machine.bot_connections || []).map(line => [line.bot, line]));
@@ -280,7 +396,7 @@ function computerDetailHTML(machine) {
   return `<header class="computer-detail-head"><div><h2 id="computer-detail-title">${esc(machine.label)}</h2><span class="muted">${esc(settingsPersonName(machine.operator))} · ${esc(status)}</span></div>
       <button class="ghost tmodal-x" type="button" data-detail-close aria-label="Close">✕</button></header>
     <div class="computer-detail-body">${notes}
-      ${section('connections', 'Connections', empty + conns.map(conn => machineConnectionHTML(machine, conn, online, manage)).join('') + machineAddHTML(machine, conns, online, manage))}
+      ${section('connections', 'Connections', empty + conns.map(conn => machineConnectionHTML(machine, conn, online, manage)).join('') + machineAddHTML(machine, online, manage))}
       ${section('screen', 'Screen', machineScreenSectionHTML(machine, online))}
       ${section('bots', 'Bots on this computer', machineBotsHTML(machine))}
       ${section('versions', 'Versions and updates', machineVersionsHTML(machine, online))}

@@ -90,7 +90,8 @@ Click a row to open its pop-up. Its sections, top to bottom:
    account and plan, sign-in state, usage (weekly and, where the tool reports one, the 5-hour window) and the bots using
    it. Each line has its actions: **Sign in**, **Switch account** and **Sign out** for a plan login; **Add key**,
    **Replace key** and **Clear key** for a key; for a subscription, **Refresh usage** (Codex) and **Manage** (rename,
-   manual weekly reading). **Add connection** at the end signs in an installed tool or adds a named subscription.
+   manual weekly reading), **Rename** and **Remove**. **Add connection** at the end opens its own pop-up to sign in an
+   installed tool, add a named subscription or add a key.
 2. **Screen**: **Off**, **View** or **Control** (Beta), as described in [Install](install.md#screen).
 3. **Bots on this computer**: each bot with the connection it actually runs on, read-only. **Assign on the Bots page**
    opens Settings → Bots, where a bot's computer and connection are chosen.
@@ -107,23 +108,33 @@ actions are disabled until it is back.
 Every member sees every working computer, its connections, their sign-in state, its named subscriptions' usage, and the
 bots on it they may see. Only an admin or the computer's operator also sees the signed-in accounts, the usage of the
 computer's own login and key previews (others see which kind of key it is, not the preview), sees revoked computers, and
-gets the change controls: sign in and out, Add connection, rename, usage readings, screen, tools, performance,
+gets the change controls: sign in and out, Add connection, rename, remove, usage readings, screen, tools, performance,
 inbox-only and Revoke computer. The API refuses anyone else ([Permissions](permissions.md)). BotOps cannot sign a login
 out, because that stops bots.
 
 ## Add a connection
 
-In a computer's pop-up, **Add connection** offers:
+In a computer's pop-up, **Add connection** (at the end of Connections) opens its own pop-up:
 
-- **The computer's login**: **Sign in to *tool*** for each installed tool that signs in from the browser and isn't
-  signed in yet. For a tool that signs in only from a terminal (such as Grok Build or Cursor Agent), it shows the
-  command to run on the computer, with **Copy**. For a tool that takes a key, **Add key**.
-- **A named subscription**: type a name, pick the tool, and choose **Sign in**. The provider's sign-in opens in a
-  pop-up: the browser relays the provider's link and code, and the provider writes the login on the computer. Names are
-  saved in a short form (Tico shows "Saved as *name*" when it changes what you typed).
+1. **Which AI tool?** The tools installed on that computer. **Install another tool** goes to **Versions and updates**,
+   where the owner installs one.
+2. **Subscription** or **API key**. A tool with no subscription sign-in from the browser has Subscription greyed out.
+   A tool that signs in only from a terminal (such as Grok Build or Cursor Agent) shows the command to run on the
+   computer here, with **Copy**. A tool that signs in from the browser but has no named subscriptions offers
+   **Computer's login** instead.
+3. - **Subscription**: type a name, then choose **Sign in**. The provider's sign-in follows in the same pop-up: the
+     browser relays the provider's link and code, and the provider writes the login on the computer. Names are saved in
+     a short form, lowercase words joined by hyphens (Tico shows "Saved as *name*" when it changes what you typed).
+     **Sign in the computer's own login instead** signs the tool in as the computer's login rather than a named
+     subscription.
+   - **API key**: for a tool that takes a key of the computer's own, **Add key** opens the key pop-up (see
+     [API keys on a Computer](#api-keys-on-a-computer)). If a key already signs the tool in here, **Replace key** is on
+     its line instead. For any other tool, **Open Credentials**, where model keys are added and shared with computers.
+4. The new connection's chip appears on the computer's row once the computer reports it; the computer does not need a
+   restart.
 
-The computer must be online. Adding a subscription does not change the computer's default or move any bot: choose it for
-a bot in **Connection** in the bot's settings.
+The computer must be online ("Computer is offline" otherwise). Adding a subscription does not change the computer's
+default or move any bot: choose it for a bot in **Connection** in the bot's settings.
 
 A new computer whose team signs in with a plan needs its own sign-in: a plan login cannot be copied between computers.
 Settings > Health shows "*computer name*: sign in to Codex" (or Claude Code) until it is done.
@@ -160,10 +171,24 @@ and on a current runner; an older one answers `Update <computer> to sign out fro
   computer** does not sign it back in: the server does not hand it out for that runtime, the runner neither applies it
   again (its ten-minute retry included) nor puts it in turns, and Claude Code no longer reads "ready" because of it.
   Signing in again, or **Use the shared key** next to it, ends that. A named subscription never takes the shared key.
+  A signed-out login reads **Signed out · Sign in** and its chip has a red dot, with or without bots on it. The
+  confirmation names the bots in a line: "Reviewer 1, QA and 2 more will stop running until this is signed in again"
+  (every name on hover).
+- **Switch to subscription** sits on a Computer's own login that runs on an API key (the shared key, the Computer's
+  own key or one set in its terminal): in place of **Switch account**, or next to **Replace key** and **Clear key**. It
+  is the same sign-in on the side: until the subscription is signed in and in place the key stays in use, and
+  cancelling, failing or running out of time leaves it so. Once the subscription is in place the key is removed as
+  **Clear key** removes it (the Computer's copies, and its own key in the vault), and no key reaches that login again:
+  not readiness, not the ten-minute key login and not a turn's environment, so the next turn runs on the subscription.
+  The server stops handing it the **Every computer** key too. Unlike a sign-out, a later sign-in or Switch account does
+  not bring a key back; **Add key** or **Use the shared key** does. Bots keep the connection. Not offered for Claude
+  Code on a Mac (Keychain), and it needs a runner that knows it (`Update <computer> to switch to a subscription from
+  here` otherwise).
 
 None of this restarts the runner. `POST /api/v2/runners/{runner_id}/logouts` with `{"runtime":"codex"}` (and
 `"profile"` for a named subscription) signs out; `GET /api/v2/runners/{runner_id}/logouts/bots?runtime=codex` lists the
-bots it stops; `POST /api/v2/runners/{runner_id}/logins` with `"switch": true` switches; `POST
+bots it stops; `POST /api/v2/runners/{runner_id}/logins` with `"switch": true` switches (with `"to": "subscription"`,
+switches the Computer's own login off its API key); `POST
 /api/v2/runners/{runner_id}/shared-key` with `{"runtime":"codex"}` lets the shared key back. Each is followed like a
 sign-in, with `GET /api/v2/runners/{runner_id}/logins/{id}` (`kind` says which; a sign-out ends `signed_out`). BotOps
 cannot sign a login out, because it stops bots. A turn already running when the account changes is not stopped and
@@ -232,7 +257,7 @@ for one that is offline. A named subscription holds no key, so its line has none
 
 ## Name a subscription
 
-In the computer's pop-up, open **Manage** on the subscription's line, edit **Name**, and choose **Save name**. Only the
+In the computer's pop-up, choose **Rename** on the subscription's line, edit **Name**, and choose **Save name**. Only the
 computer's operator or an admin can rename it. Renaming does not move the login, change which bots use it, or rewrite run
 history.
 
@@ -244,6 +269,24 @@ computer are labelled **computer not recorded** rather than guessed from today's
 A connection ID identifies a login slot on a computer, not a verified provider account. Signing a different provider
 account in to the same slot does not create a new identity; add a new subscription when you need separate history.
 Matching names on different computers are never combined, because they might be different accounts.
+
+## Remove a subscription
+
+**Remove** on a subscription's line takes that tool's login off the computer: the computer signs it out and, once every
+other tool is surely signed out of that subscription, deletes the subscription folder Tico made for it (a folder outside
+`profiles/`, or one on the operator's own logins, is only unlisted). A tool the computer cannot check (not installed
+there now, or its status check fails) counts as still signed in, so the subscription stays for it.
+
+Removing is refused while any bot on that computer runs on it, paused bots included: the pop-up names them and offers
+the Bots page, where they are moved to another connection first. The check holds until the removal ends. While it runs,
+no other tool signs in on that subscription, and no change that would make a bot run on it goes through (giving a bot
+that subscription, placing a bot on that computer, a model or tool change, the company's default model); each is
+refused, naming the bots, until it is removed.
+
+Remove is not offered for the computer's own login (**Sign out** is its way off). Only the computer's operator or an
+admin can remove one, and only while the computer is online. A computer whose runner is too old to remove one is told to
+update (`model_remove_v1`). The API is `POST /api/v2/runners/{runner_id}/removals` with
+`{"runtime":"codex","profile":"team-chatgpt"}`; a refusal for bots answers 409 `in_use` with their names in `bots`.
 
 ## Usage readings
 

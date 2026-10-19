@@ -1,0 +1,1 @@
+(function(){var d=document.documentElement;function s(){if(!d.clientWidth)return;parent.postMessage({ticoVisualHeight:Math.ceil(d.scrollHeight)},'*')}addEventListener('load',s);addEventListener('resize',s);if(window.ResizeObserver)new ResizeObserver(s).observe(d)})();

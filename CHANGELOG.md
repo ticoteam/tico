@@ -14,6 +14,17 @@ All notable changes to Tico are recorded here. The format follows
   a restart does not lift it, and when it ends one queued run tries first while the others wait for its result,
   instead of every waiting run starting at once. A bot with a ready fallback that is not held itself runs there
   meanwhile instead of waiting. Health names the provider whose limit it is.
+- **Visuals in replies (API, part 1 of 4)**: a bot or a person attaches a picture, SVG, self-contained HTML page,
+  video or audio clip to a chat reply or a task comment with a title (`--visual PATH --title "…"` on `hub message
+  send`, `hub chat send` and `hub task comment`; `visuals` on the same MCP tools; `attachments: [{ref, title}]` in the
+  API). It is a normal versioned file on that conversation or task, and the message keeps the version it was posted
+  with. A page's local images and fonts are embedded when it is attached; remote images and styles are never loaded,
+  and the result lists each one. Too big or another type, it is attached as a normal file. Visuals are shown from a
+  signed address apart from the app's sign-in, with a policy that blocks scripts and network loads, and only to
+  people who can read that conversation, checked again on every request. They need `TICO_VISUAL_ORIGIN`, a separate
+  site of their own (never the app's address); without it a server stays up and visuals are file chips. A local
+  install, or a self-hoster who sets `TICO_VISUAL_SAME_ORIGIN=1`, serves them from the app's address with the page
+  sandboxed. Until part 2 they still show as file chips.
 - **The company on Goals**: with the CEO Bot switch on, Goals opens with a **Company** section: the Vision (one or
   two sentences) and the Description (a short paragraph). The owner and admins edit it, everyone else reads it, and
   **History** lists every change with who made it and when. Each goal shows a one-line **Why** tying it to the
@@ -55,8 +66,28 @@ All notable changes to Tico are recorded here. The format follows
   subscription. Subscriptions moved here from **Settings → AI providers**, and usage reads as "% left"
   everywhere. Every member now sees every computer; only an admin or the computer's operator sees its signed-in
   accounts and changes anything on it.
+- **Switch to subscription** on a computer's own Codex or Claude Code login that runs on an API key, in the computer's
+  pop-up on Settings > Computers. The key stays in use until the subscription has signed in and is in place, so a cancel
+  or failure changes nothing; then the key is removed from that login as **Clear key** removes it (the company's
+  "Every computer" key is not applied to it again, nor put in its turns) until someone adds a key or chooses **Use the
+  shared key**. Bots keep the connection. Needs a
+  current runner ([Computers](docs/computers.md#signing-out-and-switching-accounts)).
+- A signed-out connection in the computer pop-up reads **Signed out · Sign in** and its chip gets a red dot, and the
+  sign-out confirmation names the bots in a line ("Reviewer 1, QA and 2 more will stop running until this is signed in
+  again").
+- **Add connection** in each computer's pop-up on Settings > Computers: pick an AI tool installed there, then Subscription
+  or API key; a subscription is named and signed in with the provider in the same pop-up, and its chip appears on the
+  computer's row without a restart. API key opens **Add key** for a tool that takes a key of the computer's own, and
+  points to Credentials for the others. Each subscription line gets **Rename** and **Remove**; Remove is refused while
+  bots run on it, naming them and offering the Bots page. Remove needs a current runner
+  ([Computers](docs/computers.md#remove-a-subscription)).
 
 ### Fixed
+- **Updates tree keeps archived cards out after a reload**: a card you archive on Updates no longer comes back in
+  the tree when the page reloads, and Restore brings it back for good. Archive stays yours alone: others still see the
+  card. A manager whose own card you archived stays in the tree with "No update yet" and their reports below. The
+  tree endpoint (`GET /api/v2/updates/tree`) now applies the same archive rule as the Inbox, so an explicit past `day`
+  leaves out that day's cards a newer day has replaced, unless you restored them.
 - A computer's performance report no longer holds the database's write lock while it reads every turn that computer
   ever ran. During an open overload each report did, and on Oct 19 on a slow disk that held the lock about 100 s, so
   heartbeats, claims and lease renewals waited and got "storage unavailable". It now reads only the turns of the

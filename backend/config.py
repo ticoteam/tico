@@ -134,6 +134,12 @@ class Settings:
     local_owner_email: str = ""
     local_owner_token: str = field(default="", repr=False)
     public_url: str = "http://127.0.0.1:8765"
+    # Where visuals in replies are shown from (backend/visuals.py): a host of their own, never the app's, so a
+    # visual page sits apart from the app's cookies. Empty: inline display is off and visuals show as file chips,
+    # except on a loopback install or with TICO_VISUAL_SAME_ORIGIN=1, where the app's own address serves them with
+    # the page sandboxed (backend/visuals.py inline_on).
+    visual_origin: str = ""
+    visual_same_origin: bool = False
     runner_url: str = ""
     screen_relay_url: str = ""
     screen_relay_key: str = field(default="", repr=False)
@@ -293,6 +299,8 @@ class Settings:
         from clients import s3links
         self.s3_view_urls = s3links.parse(self.s3_view_urls, private_bucket=self.blob_bucket)
         self.public_url = self.public_url.rstrip("/")
+        from .visuals import check_origin
+        self.visual_origin = check_origin(self)
         self.auth_proxy = self.auth_proxy.strip().lower()
         from . import cors
         self.cors_origins = cors.parse(self.cors_origins)
@@ -398,6 +406,8 @@ class Settings:
             local_owner_token=os.environ.get("TICO_LOCAL_OWNER_TOKEN", "").strip(),
             public_url=(os.environ.get("TICO_PUBLIC_URL") or
                         "http://127.0.0.1:" + os.environ.get("TICO_PORT", "8765")).rstrip("/"),
+            visual_origin=os.environ.get("TICO_VISUAL_ORIGIN", "").strip(),
+            visual_same_origin=os.environ.get("TICO_VISUAL_SAME_ORIGIN", "0").strip() == "1",
             owner_name=os.environ.get("TICO_OWNER_NAME", "").strip(),
             compose_project=os.environ.get("TICO_COMPOSE_PROJECT", "tico"),
             server_network=os.environ.get("TICO_SERVER_NETWORK", "tico_default"),

@@ -1128,6 +1128,9 @@ class Execution:
                   "runner_id=excluded.runner_id,generation=excluded.generation,updated=excluded.updated,"
                   "updated_by=excluded.updated_by",
                   (bot, body.runner_id, generation + 1, H.now(), who.actor))
+        if not old or old["runner_id"] != body.runner_id:
+            from .model_login import hold_removals
+            hold_removals(c, self.store.settings, {bot})
         H.event(c, who.actor, "bot.assigned", bot, {"runner": body.runner_id, "generation": generation + 1})
         from . import built_on
         built_on.forget(c, bot)                   # placed: its computer reports the checkout from now on

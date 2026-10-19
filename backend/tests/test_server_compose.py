@@ -111,3 +111,12 @@ def test_the_server_gets_every_setting_that_turns_a_team_rule_default_on():
     environment = yaml.safe_load((ROOT / "compose.yaml").read_text())["services"]["server"]["environment"]
     assert set(team_rules.ENV_DEFAULTS.values()) <= set(environment)
     assert all(environment[key] is None for key in team_rules.ENV_DEFAULTS.values())
+
+
+def test_the_server_gets_the_visual_settings():
+    # Without them forwarded, setting the visual origin in .env or SSM does nothing and production keeps visuals as
+    # file chips (Dev 245).
+    import yaml
+    environment = yaml.safe_load((ROOT / "compose.yaml").read_text())["services"]["server"]["environment"]
+    for key in ("TICO_VISUAL_ORIGIN", "TICO_VISUAL_SECRET", "TICO_VISUAL_SAME_ORIGIN"):
+        assert key in environment and environment[key] is None, key

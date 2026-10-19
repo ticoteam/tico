@@ -1,5 +1,5 @@
 /* ui/app/subscriptions.js — Subscriptions: the named AI logins on each computer, the controls each one keeps in the
-   computer's pop-up on Settings > Computers (rename, refresh and record weekly usage, add one), a bot's own choice, and
+   computer's pop-up on Settings > Computers (rename, refresh and record weekly usage; Add connection names a new one), a bot's own choice, and
    the line under a bot's model saying which connection it runs on.
    The server stores stable connection IDs and display names; the logins stay on the computers (runner-rs/src/profiles.rs).
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
@@ -98,7 +98,8 @@ function subsWeeklyFormHTML(c, p, runtime, state) {
   </form>`;
 }
 function subsControlsHTML(c, p, runtime, state) {
-  const forms = subsRenameHTML(c, p) + subsWeeklyFormHTML(c, p, runtime, state);
+  // Rename is its own action on the line (ui/app/computer-detail.js machineLineActionsHTML).
+  const forms = subsWeeklyFormHTML(c, p, runtime, state);
   return forms ? `<details class="subs-controls" data-runner="${esc(c.runner_id)}" data-profile="${esc(p.name)}" data-runtime="${esc(runtime)}">
     <summary>Manage</summary>${forms}</details>` : '';
 }
@@ -136,14 +137,6 @@ async function subsSaveWeekly(form, clear = false) {
   } catch (e) { status.textContent = e.message; }
   finally { form.querySelectorAll('button').forEach(b => b.disabled = false); }
 }
-// Add a subscription on this computer: a name, the tool, then the provider's sign-in in its own pop-up.
-function subsAddHTML(machine, online) {
-  if (!subsMaySignIn(machine) || machine.revoked_at || !subsRuntimes().length) return '';
-  return `<form class="subs-add" data-subs-add data-runner="${esc(machine.id)}" data-machine="${esc(machine.label)}" novalidate>
-    <input name="profile" type="text" autocomplete="off" spellcheck="false" maxlength="80" required placeholder="New subscription" aria-label="New subscription name"${online ? '' : ' disabled'}>
-    <select name="runtime" aria-label="Sign in to"${online ? '' : ' disabled'}>${subsRuntimes().map(([id, label]) => `<option value="${esc(id)}">${esc(label)}</option>`).join('')}</select>
-    <button class="ghost" type="submit"${online ? '' : ' disabled'}>Sign in</button><span class="muted subs-add-msg" role="status" data-subs-add-msg></span></form>`;
-}
 // The pop-up's events for these controls; true when one was handled.
 function subsHandleClick(ev) {
   const refresh = ev.target.closest('[data-subs-refresh]');
@@ -152,24 +145,12 @@ function subsHandleClick(ev) {
   if (clear) { void subsSaveWeekly(clear.closest('form'), true); return true; }
   return false;
 }
-function subsHandleInput(ev) {
-  const field = ev.target.closest('[data-subs-add] [name=profile]'); if (!field) return;
-  const slug = subsSlug(field.value), msg = field.form.querySelector('[data-subs-add-msg]');
-  msg.textContent = field.value.trim() && slug !== field.value.trim() ? `Saved as ${slug}` : '';
-}
 function subsHandleSubmit(ev) {
   const rename = ev.target.closest('[data-subs-rename]');
   if (rename) { ev.preventDefault(); void subsRename(rename); return true; }
   const weekly = ev.target.closest('[data-subs-weekly]');
   if (weekly) { ev.preventDefault(); void subsSaveWeekly(weekly); return true; }
-  const form = ev.target.closest('[data-subs-add]'); if (!form) return false;
-  ev.preventDefault();
-  const name = subsSlug(form.elements.profile.value), msg = form.querySelector('[data-subs-add-msg]');
-  if (!name) { msg.textContent = 'Use letters or numbers'; form.elements.profile.focus(); return true; }
-  msg.textContent = '';
-  window.TicoModelLogin?.open({runnerId: form.dataset.runner, runtime: form.elements.runtime.value, profile: name, machine: form.dataset.machine});
-  form.elements.profile.value = '';                     // handed to the sign-in; the pop-up redraws once it reports
-  return true;
+  return false;
 }
 
 // ---- the bot editor: its connection (the computer's login, or a subscription of its own) and the line under Model

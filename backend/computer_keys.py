@@ -8,7 +8,8 @@ with that job's id, checks it, and reports. `confirm` then puts it in use and de
 `discard` deletes a key that failed, so the old one stays (runner-rs/src/signin.rs).
 
 `keys_for` is the one place that decides which key a computer gets: its own active key, else the company's shared
-"Every computer" key, else none; and none while a person cleared its key or signed it out (`model_login_cleared`).
+"Every computer" key, else none; and none while a person cleared its key or signed it out (`model_login_cleared`), or
+switched it to a subscription (`model_login_key_off`).
 """
 
 from . import providers
@@ -69,9 +70,10 @@ def confirm(c, runner_id, login_id):
                          (runner_id, row["runtime"], ACTIVE)).fetchall():
         _remove(c, old["credential_id"])
     c.execute("UPDATE computer_keys SET state=?, login_id=NULL WHERE credential_id=?", (ACTIVE, row["credential_id"]))
-    # In use again: a key added after a clear signs it in (the shared key stays behind it).
-    c.execute("DELETE FROM model_login_cleared WHERE runner_id=? AND runtime=? AND profile=''",
-              (runner_id, row["runtime"]))
+    # In use again: a key added after a clear, or after a switch to a subscription, signs it in (the shared key stays
+    # behind it).
+    for table in ("model_login_cleared", "model_login_key_off"):
+        c.execute(f"DELETE FROM {table} WHERE runner_id=? AND runtime=? AND profile=''", (runner_id, row["runtime"]))
     H.event(c, "runner:" + runner_id, "computer_key.active", runner_id,
             {"runtime": row["runtime"], "credential": row["credential_id"]})
     return row["credential_id"]
@@ -159,6 +161,10 @@ def keys_for(c, vault, runner_id, runtime, login_id=""):
                      (runner_id, runtime)).fetchone()
     if mark:
         return {"credentials": [], "signed_out": True, **({"clear_key": True} if mark["clear_key"] else {})}, []
+    # Switched to a subscription: no key reaches that login until a person adds one or picks Use the shared key.
+    if c.execute("SELECT 1 FROM model_login_key_off WHERE runner_id=? AND runtime=? AND profile=''",
+                 (runner_id, runtime)).fetchone():
+        return {"credentials": [], "key_off": True}, []
     own = active(c, runner_id, runtime)
     if own:
         return {"credentials": [{"env": own["env"], "value": vault.cipher.decrypt(c, own), "source": "computer"}]}, [own["id"]]

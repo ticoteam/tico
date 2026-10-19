@@ -217,3 +217,238 @@ def test_only_a_heartbeat_moves_readiness_at_so_the_page_can_tell_a_report_from_
     assert machine()["readiness_at"] == "2000-01-01T00:00:00+00:00"
     beat(api, r["token"])
     assert machine()["readiness_at"] > "2000-01-01T00:00:00+00:00"
+
+
+SWITCHES_TYPE = CAPABLE + ["model_switch_type_v1"]
+
+
+def key_off(api, rid):
+    with api.app.state.store.read() as c:
+        return [tuple(row) for row in c.execute("SELECT runtime, profile FROM model_login_key_off WHERE runner_id=?",
+                                                (rid,))]
+
+
+def test_switch_to_subscription_keeps_the_key_until_the_subscription_works_then_keeps_the_shared_key_off(environment):
+    """Switch to subscription (Computers part 2): the computer's login moves from the API key to a subscription only once
+    the sign-in has worked; until then, and after a cancel or a failure, the key stays in use. Once switched, the
+    company's "Every computer" key is not handed to it again, not even after a later sign-in, until a person picks
+    Use the shared key."""
+    api = environment()
+    vault(api)
+    grant(api, store(api, "OPENAI_API_KEY", "sk-team-key-0123456789"), "computers")
+    machine = new_computer(api)
+    rid, token = machine["runner_id"], machine["token"]
+    auth = {"Authorization": "Bearer " + token}
+    beat(api, token, SWITCHES_TYPE, auth=auth)
+    start = lambda body, who=None: api.post(f"/api/v2/runners/{rid}/logins", json=body, headers=who or signed_in())
+    has_key = lambda: computer_asks(api, token).json()["credentials"][0]["value"] == "sk-team-key-0123456789"
+    assert has_key()
+
+    # Cancelled: nothing changes, the key is still what it runs on.
+    first = start({"runtime": "codex", "to": "subscription"})
+    assert first.status_code == 200, first.text
+    assert first.json()["kind"] == "to_subscription"
+    assert [p.get("kind") for p in get(api, "runner-logins", token=token)["logins"]] == ["to_subscription"]
+    as_computer(api, token, f"runner-logins/{first.json()['id']}/report", {"state": "waiting", "url": "https://auth.openai.com/codex/device"})
+    assert has_key(), "until the subscription works the key stays in use"
+    api.post(f"/api/v2/runners/{rid}/logins/{first.json()['id']}/cancel", json={}, headers=signed_in())
+    assert has_key() and key_off(api, rid) == []
+
+    # Failed after the commit point (the new login did not work in place): the key stays too.
+    failed = start({"runtime": "codex", "to": "subscription"}).json()
+    assert as_computer(api, token, f"runner-logins/{failed['id']}/report", {"state": "finishing"}) == {"state": "finishing"}
+    as_computer(api, token, f"runner-logins/{failed['id']}/report", {"state": "failed", "message": "did not work"})
+    assert has_key() and key_off(api, rid) == []
+
+    # Worked: the shared key is kept off this login from then on.
+    done = start({"runtime": "codex", "to": "subscription"}).json()
+    as_computer(api, token, f"runner-logins/{done['id']}/report", {"state": "finishing"})
+    assert has_key(), "finishing is not yet switched"
+    assert as_computer(api, token, f"runner-logins/{done['id']}/report", {"state": "signed_in"}) == {"state": "signed_in"}
+    assert key_off(api, rid) == [("codex", "")]
+    assert computer_asks(api, token).json() == {"credentials": [], "key_off": True}
+    assert "key_off" not in computer_asks(api, token, "claude").json(), "only that tool's login"
+    # A later Switch account signs in to another subscription; the key stays off.
+    later = start({"runtime": "codex", "switch": True}).json()
+    as_computer(api, token, f"runner-logins/{later['id']}/report", {"state": "finishing"})
+    as_computer(api, token, f"runner-logins/{later['id']}/report", {"state": "signed_in"})
+    assert computer_asks(api, token).json()["credentials"] == []
+    # Use the shared key is the person saying so.
+    used = api.post(f"/api/v2/runners/{rid}/shared-key", json={"runtime": "codex"}, headers=signed_in())
+    assert used.status_code == 200, used.text
+    assert key_off(api, rid) == [] and has_key()
+
+
+def test_switch_to_subscription_is_for_the_operator_or_an_admin_on_a_runner_that_knows_it(api):
+    r = online(api, SWITCHES_TYPE)
+    rid = r["runner_id"]
+    post(api, f"runners/{rid}/logins", {"runtime": "codex", "to": "subscription"}, token="cara-test", expected=403)
+    post(api, f"runners/{rid}/logins", {"runtime": "codex", "to": "subscription"}, token=r["token"], expected=403)
+    # The computer's own login only, and not both a switch of account and of type at once.
+    post(api, f"runners/{rid}/logins", {"runtime": "codex", "profile": "work", "to": "subscription"}, expected=422)
+    post(api, f"runners/{rid}/logins", {"runtime": "codex", "switch": True, "to": "subscription"}, expected=422)
+    post(api, f"runners/{rid}/logins", {"runtime": "codex", "to": "api_key"}, expected=422)
+    assert pending(api, r) == []
+    # A runner that does not know it would run a plain sign-in and leave the key on: it is told to update.
+    old = online(api)
+    refused = post(api, f"runners/{old['runner_id']}/logins", {"runtime": "codex", "to": "subscription"}, expected=409)
+    assert "Update" in refused["error"]["detail"]
+    assert pending(api, old) == []
+    # Claude Code on a Mac keeps its login in the keychain: no side to sign in on, as for Switch account.
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runners SET platform='darwin' WHERE id=?", (rid,))
+    refused = post(api, f"runners/{rid}/logins", {"runtime": "claude", "to": "subscription"}, expected=422)
+    assert "keychain" in refused["error"]["detail"]
+
+
+REMOVES = CAPABLE + ["model_remove_v1"]
+
+
+def with_profile(api, r, profile="work", runtimes=None):
+    import uuid
+    body = {"version": "test", "platform": "test", "readiness": {}, "capabilities": REMOVES,
+            "profiles": [{"name": profile, "runtimes": runtimes or {"codex": {"signed_in": True}}}]}
+    out = api.post("/api/v2/runners/heartbeat", json=body, headers={**headers(r["token"]), "Idempotency-Key": uuid.uuid4().hex})
+    assert out.status_code == 200, out.text
+
+
+def test_remove_takes_a_subscription_off_the_computer_and_is_refused_naming_the_bots_that_run_on_it(api):
+    """Remove (Computers part 3): a named subscription's line comes off the computer, but never while a bot runs on it,
+    paused bots too; the refusal names them so the person moves them on the Bots page first."""
+    r = online(api, REMOVES)
+    rid = r["runner_id"]
+    with_profile(api, r)
+    for bot, state in (("writer", "active"), ("sleeper", "paused")):
+        add_bot(api, bot, state=state)
+        put_config(api, bot, "codex")
+        post(api, f"bots/{bot}/assignment", {"runner_id": rid, "expected_generation": 0})
+        with api.app.state.store.transaction() as c:
+            c.execute("INSERT INTO subscription_assignments VALUES('bot',?,'work',NULL,NULL)", (bot,))
+    refused = post(api, f"runners/{rid}/removals", {"runtime": "codex", "profile": "work"}, expected=409)
+    assert refused["error"]["code"] == "in_use"
+    assert "sleeper and writer run on it" in refused["error"]["detail"] and "Bots page" in refused["error"]["detail"]
+    assert [b["bot"] for b in refused["error"]["bots"]] == ["sleeper", "writer"], "the page names them from this"
+    assert pending(api, r) == []
+    with api.app.state.store.transaction() as c:
+        c.execute("DELETE FROM subscription_assignments WHERE target='writer'")
+    post(api, f"runners/{rid}/removals", {"runtime": "codex", "profile": "work"}, expected=409)  # sleeper still
+    with api.app.state.store.transaction() as c:
+        c.execute("DELETE FROM subscription_assignments WHERE target='sleeper'")
+        c.execute("INSERT INTO model_login_cleared(runner_id,runtime,profile,cleared_at,cleared_by) VALUES(?, 'codex', 'work', '2026-10-17T00:00:00+00:00', 'human:ana')", (rid,))
+    put = api.put("/api/v2/subscriptions/weekly", json={"runner_id": rid, "profile": "work", "runtime": "codex",
+                  "used_percent": 40, "resets_at": None}, headers={**headers("ana-test"), "Idempotency-Key": "w1"})
+    assert put.status_code == 200, put.text
+    out = post(api, f"computers/{rid}/removals", {"runtime": "codex", "profile": "work"})   # the page's own path
+    assert out["kind"] == "remove" and out["state"] == "requested"
+    assert pending(api, r) == [{"id": out["id"], "runtime": "codex", "profile": "work", "kind": "remove",
+                                "expires_at": out["expires_at"]}]
+    # A remove ends done or failed, never signed in.
+    post(api, f"runner-logins/{out['id']}/report", {"state": "signed_in"}, token=r["token"], expected=422)
+    assert report(api, r, out["id"], state="done", message="Removed work") == {"state": "done"}
+    # Nothing of it is left to fill a line again: no sign-out mark, no manual reading.
+    assert cleared(api, rid) == []
+    from backend.subscriptions import weekly_key
+    with api.app.state.store.read() as c:
+        assert not c.execute("SELECT 1 FROM registry_metadata WHERE key=?", (weekly_key(rid, "work", "codex"),)).fetchone()
+
+
+def test_a_bot_that_comes_onto_a_subscription_being_removed_stops_it_and_nothing_else_runs_on_it_meanwhile(api):
+    """The bots check holds from the ask to the deletion: no bot chooses the subscription while it is being removed,
+    and one that came onto it another way (moved here, or onto this tool) stops the removal at its commit point,
+    before the computer signs anything out. A removal runs alone on the subscription, every tool's sign-in included."""
+    import uuid
+    r = online(api, REMOVES)
+    rid = r["runner_id"]
+    with_profile(api, r, runtimes={"codex": {"signed_in": True}, "claude": {"signed_in": True}})
+    add_bot(api, "writer")
+    put_config(api, "writer", "codex")
+    post(api, "bots/writer/assignment", {"runner_id": rid, "expected_generation": 0})
+    out = post(api, f"runners/{rid}/removals", {"runtime": "codex", "profile": "work"})
+    choose = api.put("/api/v2/subscriptions", json={"target": "writer", "profile": "work"},
+                     headers={**headers("ana-test"), "Idempotency-Key": uuid.uuid4().hex})
+    assert choose.status_code == 409 and "work is being removed from" in choose.json()["error"]["detail"], choose.text
+    # Another tool on the same subscription waits for the removal, and a removal waits for its sign-in.
+    busy = post(api, f"runners/{rid}/logins", {"runtime": "claude", "profile": "work"}, expected=409)
+    assert "Something else is running on work" in busy["error"]["detail"]
+    # The bot comes onto it some other way before the computer gets to it: the commit point refuses, naming it.
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO subscription_assignments VALUES('bot','writer','work',NULL,NULL)")
+    assert report(api, r, out["id"], state="finishing") == {"state": "failed"}
+    row = get(api, f"runners/{rid}/logins/{out['id']}")
+    assert row["state"] == "failed" and "writer run on it" in row["message"] and "Bots page" in row["message"]
+    assert pending(api, r) == []
+    # Moved off it, the next removal goes ahead from its commit point, which can't be cancelled.
+    with api.app.state.store.transaction() as c:
+        c.execute("DELETE FROM subscription_assignments WHERE target='writer'")
+    sign_in = post(api, f"runners/{rid}/logins", {"runtime": "claude", "profile": "work"})
+    post(api, f"runners/{rid}/removals", {"runtime": "codex", "profile": "work"}, expected=409)
+    post(api, f"runners/{rid}/logins/{sign_in['id']}/cancel", {})
+    again = post(api, f"runners/{rid}/removals", {"runtime": "codex", "profile": "work"})
+    assert report(api, r, again["id"], state="finishing") == {"state": "finishing"}
+    refused = post(api, f"runners/{rid}/logins/{again['id']}/cancel", {}, expected=409)
+    assert "already being removed" in refused["error"]["detail"]
+    assert report(api, r, again["id"], state="done", message="Removed work") == {"state": "done"}
+
+
+def test_while_a_removal_runs_no_bot_is_placed_or_switched_onto_it(api):
+    """Past the commit point the computer signs out and deletes with no further check, so until the removal ends no
+    bot comes onto the subscription there: not placed on that computer, not switched onto that tool."""
+    r, elsewhere = online(api, REMOVES), online(api, REMOVES)
+    rid = r["runner_id"]
+    with_profile(api, r)
+    for bot, runtime, runner_id in (("mover", "codex", elsewhere["runner_id"]), ("switcher", "claude", rid)):
+        add_bot(api, bot)
+        put_config(api, bot, runtime)
+        post(api, f"bots/{bot}/assignment", {"runner_id": runner_id, "expected_generation": 0})
+        with api.app.state.store.transaction() as c:
+            c.execute("INSERT INTO subscription_assignments VALUES('bot',?,'work',NULL,NULL)", (bot,))
+    out = post(api, f"runners/{rid}/removals", {"runtime": "codex", "profile": "work"})
+    assert report(api, r, out["id"], state="finishing") == {"state": "finishing"}
+    placed = post(api, "bots/mover/assignment", {"runner_id": rid, "expected_generation": 1}, expected=409)
+    assert placed["error"]["code"] == "removing" and "mover would run on it" in placed["error"]["detail"]
+    with api.app.state.store.read() as c:
+        revision = c.execute("SELECT revision FROM bot_config WHERE bot='switcher'").fetchone()[0]
+    switched = post(api, "bots/switcher/model", {"model": "gpt-6.1-sol", "expected_revision": revision}, expected=409)
+    assert switched["error"]["code"] == "removing" and "switcher would run on it" in switched["error"]["detail"]
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT runner_id FROM assignments WHERE bot='mover'").fetchone()[0] == elsewhere["runner_id"]
+        assert c.execute("SELECT runtime FROM bots WHERE slug='switcher'").fetchone()[0] != "codex"
+    # Once it has ended, both go ahead.
+    assert report(api, r, out["id"], state="done", message="Removed work") == {"state": "done"}
+    post(api, "bots/mover/assignment", {"runner_id": rid, "expected_generation": 1})
+    post(api, "bots/switcher/model", {"model": "gpt-6.1-sol", "expected_revision": revision})
+
+
+def test_remove_is_for_a_named_subscription_on_this_computer_by_its_operator_or_an_admin_on_a_runner_that_knows_it(api):
+    r = online(api, REMOVES)
+    rid = r["runner_id"]
+    with_profile(api, r)
+    post(api, f"runners/{rid}/removals", {"runtime": "codex", "profile": "work"}, token="cara-test", expected=403)
+    post(api, f"runners/{rid}/removals", {"runtime": "codex", "profile": "work"}, token=r["token"], expected=403)
+    post(api, f"runners/{rid}/removals", {"runtime": "codex", "profile": ""}, expected=422)
+    post(api, f"runners/{rid}/removals", {"runtime": "codex", "profile": "other"}, expected=404)
+    post(api, f"runners/{rid}/removals", {"runtime": "claude", "profile": "work"}, expected=404)
+    assert pending(api, r) == []
+    # A runner that does not know Remove would start a sign-in instead: it is told to update.
+    old = online(api)
+    with_profile(api, old)
+    beat(api, old["token"], CAPABLE)
+    refused = post(api, f"runners/{old['runner_id']}/removals", {"runtime": "codex", "profile": "work"}, expected=409)
+    assert "Update" in refused["error"]["detail"]
+    assert pending(api, old) == []
+
+
+def test_botops_never_removes_a_subscription_even_with_a_persons_rights(api):
+    """Remove takes a login off a computer, so like Sign out it is a person's, checked before anything else; BotOps'
+    allow-list does not reach the route either."""
+    import pytest
+    from backend.auth import Identity
+    from backend.model_login import remove
+    from backend.store import Problem
+    r = online(api, REMOVES)
+    with_profile(api, r)
+    with api.app.state.store.transaction() as c:
+        with pytest.raises(Problem) as no:
+            remove(c, Identity("human:ana", "owner", via="botops", confirmed=True), r["runner_id"], "codex", "work", {})
+    assert no.value.status == 403 and "BotOps cannot remove a subscription" in str(no.value)
+    assert pending(api, r) == []

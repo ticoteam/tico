@@ -460,8 +460,9 @@ time.sleep(60)
                 continue; // test-only (hosts/mod.rs: #[cfg(test)] mod replay), and this guard itself
             }
             let text = std::fs::read_to_string(&path).unwrap();
-            // Production code only: everything before the file's own test module.
-            let code = text.split("#[cfg(test)]\nmod ").next().unwrap_or_default();
+            // Production code only: everything before the file's own test module (`mod` or `pub(crate) mod`).
+            let code = ["#[cfg(test)]\nmod ", "#[cfg(test)]\npub(crate) mod "].iter().filter_map(|m| text.find(m)).min()
+                .map_or(text.as_str(), |at| &text[..at]);
             for (n, line) in code.lines().enumerate() {
                 if line.contains("auth.json") && copying.is_match(line) {
                     found.push(format!("{rel}:{}: {}", n + 1, line.trim()));
