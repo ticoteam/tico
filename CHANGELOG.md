@@ -66,6 +66,11 @@ All notable changes to Tico are recorded here. The format follows
   "Every computer" key is not applied to it again, nor put in its turns) until someone adds a key or chooses **Use the
   shared key**. Bots keep the connection. Needs a
   current runner ([Computers](docs/computers.md#signing-out-and-switching-accounts)).
+- **Switch to API key** on a computer's own Codex or Claude Code login that runs on a subscription, in the computer's
+  pop-up on Settings > Computers. The subscription stays signed in and in use while the computer checks the key, so a
+  cancel, a key that doesn't work or a step that fails changes nothing; once the key is in place the next turn uses it
+  and the subscription is signed out (Codex's key login replaces it in the same file). Bots keep the connection. Needs
+  a current runner ([Computers](docs/computers.md#signing-out-and-switching-accounts)).
 - A signed-out connection in the computer pop-up reads **Signed out · Sign in** and its chip gets a red dot, and the
   sign-out confirmation names the bots in a line ("Reviewer 1, QA and 2 more will stop running until this is signed in
   again").

@@ -431,3 +431,109 @@ def test_switch_to_subscription_deletes_the_computers_own_key_and_a_key_added_la
     report(api, box, added["id"], "done")
     assert fetch(api, box)["credentials"] == [{"env": "OPENAI_API_KEY", "value": "sk-proj-added-0123456789",
                                                "source": "computer"}]
+
+
+TO_KEY = CAPABLE + ["model_switch_type_v1", "model_switch_to_key_v1"]
+
+
+def on_subscription(api, label="Team box", capabilities=TO_KEY):
+    """A computer whose Codex was switched from its own key to a subscription (Computers part 2): marked key-off."""
+    box = computer(api, label, source="computer", capabilities=capabilities)
+    rid = box["runner_id"]
+    own = call(api, "POST", f"runners/{rid}/keys", {"runtime": "codex", "secret": "sk-proj-old-key-0123456789"})
+    report(api, box, own["id"], "done")
+    switch = call(api, "POST", f"runners/{rid}/logins", {"runtime": "codex", "to": "subscription"})
+    report(api, box, switch["id"], "finishing")
+    report(api, box, switch["id"], "signed_in")
+    assert fetch(api, box) == {"credentials": [], "key_off": True}
+    return box
+
+
+def untouched(api, box):
+    """Still on its subscription: the switch's mark is kept and no key of its own is in the vault."""
+    rid = box["runner_id"]
+    assert fetch(api, box) == {"credentials": [], "key_off": True}
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM credentials WHERE source=?", ("computer:" + rid,)).fetchone()[0] == 0
+        assert c.execute("SELECT count(*) FROM computer_keys WHERE runner_id=?", (rid,)).fetchone()[0] == 0
+    assert listed(api, box)["keys"] == {}
+
+
+def test_switch_to_subscription_then_to_an_api_key_and_the_next_turn_has_the_key(environment):
+    """Switch to API key checks the key while the subscription stays in use; only once the computer says it is in
+    place is it this computer's key and Switch to subscription's mark lifted, so the next fetch hands it out."""
+    api = setup(environment)
+    box = on_subscription(api)
+    rid = box["runner_id"]
+    new = "sk-proj-switched-0123456789"
+    job = call(api, "POST", f"runners/{rid}/keys", {"runtime": "codex", "secret": new, "switch": True})
+    assert job["kind"] == "to_key" and job["key"]["preview"] == "sk-…789"
+    assert pending(api, box) == [{"id": job["id"], "runtime": "codex", "profile": "", "kind": "to_key",
+                                  "expires_at": job["expires_at"]}], "the job carries no key"
+    call(api, "POST", f"runners/{rid}/keys", {"runtime": "codex", "secret": new, "switch": True}, expected=409)
+    # Only the job's own fetch gets the key; a regular one meanwhile is told a switch is running and changes nothing.
+    assert fetch(api, box) == {"credentials": [], "switching": True}
+    assert fetch(api, box, job["id"])["credentials"] == [{"env": "OPENAI_API_KEY", "value": new, "source": "computer"}]
+    report(api, box, job["id"], "finishing")
+    assert fetch(api, box) == {"credentials": [], "switching": True}, "not in use before the computer says so"
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM model_login_key_off WHERE runner_id=?", (rid,)).fetchone()[0] == 1
+    report(api, box, job["id"], "done", "Switched to the API key; the subscription is signed out")
+    assert fetch(api, box) == {"credentials": [{"env": "OPENAI_API_KEY", "value": new, "source": "computer"}]}
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM model_login_key_off WHERE runner_id=?", (rid,)).fetchone()[0] == 0
+        assert c.execute("SELECT count(*) FROM model_login_cleared WHERE runner_id=?", (rid,)).fetchone()[0] == 0
+    assert listed(api, box)["keys"]["codex"]["preview"] == "sk-…789"
+
+
+def test_a_switch_to_an_api_key_that_is_cancelled_fails_or_runs_out_leaves_the_subscription(environment):
+    from backend.store import H
+    api = setup(environment)
+    box = on_subscription(api)
+    rid = box["runner_id"]
+    body = {"runtime": "codex", "secret": "sk-proj-switched-0123456789", "switch": True}
+    cancelled = call(api, "POST", f"runners/{rid}/keys", body)
+    call(api, "POST", f"runners/{rid}/logins/{cancelled['id']}/cancel", {})
+    untouched(api, box)
+    # Failed, after its commit point too: the computer undid what it changed, and Tico has nothing to undo.
+    refused = call(api, "POST", f"runners/{rid}/keys", body)
+    report(api, box, refused["id"], "failed", "The new key did not sign codex in; the subscription is still in use")
+    untouched(api, box)
+    late = call(api, "POST", f"runners/{rid}/keys", body)
+    report(api, box, late["id"], "finishing")
+    refused = call(api, "POST", f"runners/{rid}/logins/{late['id']}/cancel", {}, expected=409)
+    assert "The new key is already being put in place" in refused["error"]["detail"]
+    report(api, box, late["id"], "failed", "The subscription could not be signed out on codex")
+    untouched(api, box)
+    expired = call(api, "POST", f"runners/{rid}/keys", body)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE model_logins SET expires_at=? WHERE id=?", (H.shift(H.now(), seconds=-5), expired["id"]))
+    assert call(api, "GET", f"runners/{rid}/logins/{expired['id']}")["state"] == "expired"
+    untouched(api, box)
+
+
+def test_switch_to_an_api_key_rights_and_an_old_or_offline_computer(environment):
+    from backend.auth import Identity
+    api = setup(environment)
+    box = on_subscription(api)
+    rid = box["runner_id"]
+    body = {"runtime": "codex", "secret": "sk-proj-switched-0123456789", "switch": True}
+    call(api, "POST", f"runners/{rid}/keys", body, who=as_person(api, "quinn"), expected=403)
+    api.app.state.store.settings.test_identities["morgan-via-botops"] = Identity(
+        "human:morgan", "human", via="botops", confirmed=True)
+    call(api, "POST", f"runners/{rid}/keys", body, who=signed_in("morgan-via-botops"), expected=403)
+    as_runner = {"Authorization": "Bearer " + box["token"], "Idempotency-Key": "runner-try"}
+    call(api, "POST", f"runners/{rid}/keys", body, who=as_runner, expected=403)
+    assert "own login" in call(api, "POST", f"runners/{rid}/keys", {**body, "scope": "all"},
+                               expected=422)["error"]["detail"]
+    # A runner that cannot switch to a key would use it next to the subscription: it is asked to update.
+    old = on_subscription(api, "Old box", capabilities=CAPABLE + ["model_switch_type_v1"])
+    refused = call(api, "POST", f"runners/{old['runner_id']}/keys", body, expected=409)
+    assert "Update Old box to switch to an API key" in refused["error"]["detail"]
+    untouched(api, old)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runners SET last_seen='2026-01-01T00:00:00Z' WHERE id=?", (rid,))
+    assert "offline" in call(api, "POST", f"runners/{rid}/keys", body, expected=409)["error"]["detail"]
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM model_logins WHERE kind='to_key'").fetchone()[0] == 0
+        assert c.execute("SELECT count(*) FROM credentials WHERE source LIKE 'computer:%'").fetchone()[0] == 0
