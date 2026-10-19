@@ -2,8 +2,8 @@
 //! background shell the turn leaves running when it ends on its wait (hosts::claude) comes here when Claude dies, and
 //! its exit status is known. It passes SIGTERM and SIGINT on to Claude and exits with Claude's status, unless the
 //! runner sent KEEP: then it kills Claude outright, which runs none of its cleanup, and stays to reap its shells.
-//! Each status it reaps goes to the status file as one line, `<pid> <code>` (minus the signal for a killed one), the
-//! first line Claude's.
+//! The status file's first line is `claude <pid>`; then each status it reaps is one line, `<pid> <code>` (minus the
+//! signal for a killed one).
 
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
@@ -91,6 +91,9 @@ pub fn main(args: &[String]) -> i32 {
     };
     let pid = child.id() as i32;
     CHILD.store(pid, Ordering::SeqCst);
+    // Who Claude is among this parent's children, which come to include what it leaves behind.
+    let _ = writeln!(status, "claude {pid}");
+    let _ = status.flush();
     // Claude's pipes are Claude's: the runner reads its end of the turn from their closing, which must not wait for
     // this parent.
     if let Ok(null) = std::fs::OpenOptions::new().read(true).write(true).open("/dev/null") {
@@ -127,6 +130,11 @@ pub fn main(args: &[String]) -> i32 {
         Some(c) => 128 - c,
         None => 1,
     }
+}
+
+/// Claude's pid, from its parent's status file.
+pub fn claude(path: &std::path::Path) -> Option<u32> {
+    std::fs::read_to_string(path).ok()?.lines().find_map(|l| l.strip_prefix("claude ")?.trim().parse().ok())
 }
 
 /// The exit codes in a status file, by pid.

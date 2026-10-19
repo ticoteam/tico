@@ -252,6 +252,41 @@ pub fn stdout_of(pid: u32) -> Option<String> {
     }
 }
 
+/// What Claude (`claude`) still runs besides the shells it keeps (`kept`) and what they run: its MCP servers and any
+/// other helper of its own, stopped with it so an ended turn leaves nothing behind. A job the bot detached itself
+/// (`setsid`, `nohup ... &` from a command that has ended) has already left Claude's tree for the reaping parent's, and
+/// is not here.
+fn strays_of(claude: u32, kept: &[u32]) -> Vec<u32> {
+    let parent = parents();
+    // Whatever a kept shell runs under stays too: killing it would only orphan the shell.
+    let mut over_kept = HashSet::new();
+    for &k in kept {
+        let mut at = k;
+        while let Some(&p) = parent.get(&at).filter(|&&p| p != claude && p > 1) {
+            over_kept.insert(p);
+            at = p;
+        }
+    }
+    let mut strays = vec![];
+    for &pid in parent.keys().filter(|p| !over_kept.contains(*p)) {
+        let mut at = pid;
+        while let Some(&p) = parent.get(&at) {
+            if kept.contains(&at) {
+                break;
+            }
+            if p == claude {
+                strays.push(pid);
+                break;
+            }
+            if p <= 1 {
+                break;
+            }
+            at = p;
+        }
+    }
+    strays
+}
+
 /// The pid of each shell Claude (`claude`) runs for one of `tasks`, by the output file Claude points its stdout at
 /// (`.../tasks/<task_id>.output`).
 fn shells_of(claude: u32, tasks: &[Value]) -> Vec<Value> {
@@ -857,9 +892,20 @@ impl ClaudeHost {
                     t["command"] = json!(c);
                 }
             }
-            (p.pid, held, p.wait.unwrap_or_default())
+            // Under a reaping parent, the pid the runner holds is the parent's; Claude is its child.
+            let claude = match &p.reaping {
+                Some(path) => crate::reap::claude(path),
+                None => p.pid,
+            };
+            (claude, held, p.wait.unwrap_or_default())
         };
         let kept = pid.map(|pid| shells_of(pid, &held)).unwrap_or_default();
+        let kept_pids: Vec<u32> = kept.iter().filter_map(|k| k["pid"].as_u64()).map(|p| p as u32).collect();
+        let strays = pid.map(|pid| strays_of(pid, &kept_pids)).unwrap_or_default();
+        for stray in &strays {
+            // SAFETY: a process under the Claude this turn started, found a moment ago; Claude has not exited.
+            unsafe { libc::kill(*stray as i32, libc::SIGKILL) };
+        }
         let ((tid, turn), reaping) = {
             let mut inner = self.inner();
             let ids = inner.turn.clone().unwrap_or_default();
@@ -888,7 +934,7 @@ impl ClaudeHost {
                    "background_wait": {"waited_s": waited.as_secs(), "commands": held.len(), "kept": kept.len()}}),
         ));
         // This computer's side of it: pids, files and commands stay off the run's events.
-        self.emit(event("background_kept", Some(&tid), Some(&turn), json!({"kept": kept, "status_file": reaping})));
+        self.emit(event("background_kept", Some(&tid), Some(&turn), json!({"kept": kept, "status_file": reaping, "stopped": strays})));
         true
     }
 
@@ -1681,6 +1727,36 @@ mod tests {
         assert!(survived, "the shell was killed with the turn");
         assert_eq!(ended["background_wait"]["kept"], 1, "{ended}");
         assert_eq!(got.iter().find(|e| e["kind"] == "background_kept").unwrap()["kept"][0]["pid"], pid);
+    }
+
+    #[tokio::test]
+    async fn a_turn_ended_on_its_wait_leaves_no_helper_of_claudes_running_but_the_bots_own_detached_job() {
+        let pids = std::env::temp_dir().join(format!("claude-strays-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&pids).unwrap();
+        let first = format!("{SHELL_STARTED}\n{}\n", result_line("Suite running."));
+        // An MCP server that ignores its stdin closing, and a job the bot detached in a command that has ended.
+        let p = pids.display();
+        let rest = format!("sleep 30 </dev/null >/dev/null 2>&1 &\necho $! > {p}/mcp.pid\n( sh -c 'echo $$ > {p}/own.pid; exec sleep 30' </dev/null >/dev/null 2>&1 & )\nsleep 0.05");
+        let (got, _, shell) = wait_turn(&first, &rest, Duration::from_millis(300)).await;
+        let read = |name: &str| -> i32 { std::fs::read_to_string(pids.join(name)).unwrap().trim().parse().unwrap() };
+        let (mcp, own) = (read("mcp.pid"), read("own.pid"));
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while alive(mcp) && Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let (mcp_gone, own_alive, shell_alive) = (!alive(mcp), alive(own), alive(shell));
+        // SAFETY: processes this test's fake started.
+        unsafe {
+            libc::kill(own, libc::SIGKILL);
+            libc::kill(shell, libc::SIGKILL);
+        }
+        std::fs::remove_dir_all(&pids).unwrap();
+        assert!(got.iter().any(|e| e["background_wait"].is_object()), "{got:?}");
+        assert!(mcp_gone, "Claude's own helper outlived the turn");
+        assert!(own_alive, "the bot's detached job was killed");
+        assert!(shell_alive, "the kept shell was killed");
+        let stopped = &got.iter().find(|e| e["kind"] == "background_kept").unwrap()["stopped"];
+        assert!(stopped.as_array().unwrap().contains(&json!(mcp)), "{stopped}");
     }
 
     #[tokio::test]
