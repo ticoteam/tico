@@ -66,6 +66,9 @@ The three question types, and what comes back:
 | `score` | how much | `["level 0", "level 1", ...]`, two to ten ordered levels | `{"score", "confidence", "probabilities", "legend"}`; `score` is fractional |
 | `noul` | is it true | optional `{"true": "...", "false": "..."}` | `{"noul"}`: the probability the statement is true |
 
+An answer has exactly these fields, whichever provider gave it: anything else a provider sends is dropped, and a
+score's `legend` is always the question's own levels.
+
 `instructions`, an option's description, a level and a noul's `true`/`false` are each a string
 or JSON structure; use an object when the question has several parts (`{"question": ...,
 "focus": ..., "examples": [...]}`) or a list when it is a list of things to check. An option
@@ -209,8 +212,11 @@ the cookbook nearest your shape (`cookbooks/rerank_typesafe.md`, `hierarchical_c
   question set, calls, cost, how many Jev answered (a Tico Decide answer counts as Jev), fell back or failed, the spread of answers, and the month's spend
   against the cap (`--days N` for another window, up to 31).
 - A 422 is the request's shape, not its content: an unknown key on a question, a criteria map with
-  one option, levels outside two to ten. `clients/judge.py` refuses these before sending.
-- A 429 or 529 is retried twice with backoff by the client, then `judge_unavailable`.
+  one option, levels outside two to ten. `clients/judge.py` refuses these before sending. A provider that refuses
+  a request the contract accepts is not passed on to you: the next provider is asked.
+- Through Tico (`hub decision ask`, `POST /api/v2/decisions`) each provider is asked once, and a 429, 529, timeout
+  or outage moves on to the next. All of them together answer within 25 seconds; `hub decision ask` waits 30.
+  Calling TypeSafe directly with `clients/judge.py` retries a 429 or 529 twice with backoff, then `judge_unavailable`.
 - Context is 64k tokens a call, 32k for the state plus the longest question; the client refuses a
   state over about 120k characters. Accuracy falls with unrelated material well before that.
 - The answer's `model` field names the version that answered, and the audit keeps it. A threshold

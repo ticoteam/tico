@@ -3,7 +3,7 @@
 Tico's recommended way to build software with a team of bots. It covers how an idea, a bug or a small change becomes a
 reviewed, tested, documented and released change. Each step has a named role, and a person is involved only where
 one has to be. Tico Team builds Tico this way. This page is a recommendation, not a rule the server enforces: rename
-the roles, drop the ones you don't need, and change the steps in Settings → Types.
+the roles, drop the ones you don't need, and change the steps in Settings → Tasks.
 
 ## The roles, in order
 
@@ -59,7 +59,7 @@ for example. Edit each bot's instructions to match its role here, or ask BotOps 
 
 ## Dev tickets: the steps
 
-In Settings → Types, rename the default **Engineering** type to **Dev tickets** and replace its steps with these.
+In Settings → Tasks, rename the default **Engineering** type to **Dev tickets** and replace its steps with these.
 Renaming keeps the type with Head of Engineering, so a roadmap item follows its Dev tickets (below), and so does a type
 you create named Dev tickets. Move any tasks off a step before you delete it or change its status.
 
@@ -93,7 +93,7 @@ Feature ideas live in the **Product roadmap** type: Suggested → Exploring → 
 ship → Shipped (or Declined). Head of Product moves them. A roadmap item's Dev tickets are its children or the
 tickets it is blocked by, and the item moves to Building when the first one is In Progress, Ready to ship when every
 one is at Pending Release or later, and Shipped when every one is Done ([Public roadmaps](roadmaps.md) has the
-rule). In Settings → Types, give Spec and Approved the public step name "Planned", and Building and Ready to ship
+rule). In Settings → Tasks, give Spec and Approved the public step name "Planned", and Building and Ready to ship
 "In progress"; otherwise each step shows publicly under its own name. Shipped goes out with the release notes, after
 post-release QA. Publishing a roadmap is covered in [Public roadmaps](roadmaps.md).
 

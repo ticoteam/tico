@@ -665,6 +665,43 @@ def llm(provider, api_key, model, timeout=TIMEOUT, opener=None):
     return engine
 
 
+def gateway_writer(key_of, url, model, timeout=TIMEOUT, opener=None):
+    """Writing on the Tico AI Gateway (`<base>/chat/completions`, OpenAI chat shape) with the company's gateway key:
+    `write(system, user)` as `llm_writer`. `key_of()` reads the key at the call, so no writer holds it; it goes only to
+    an https or exact-loopback `url` (`safe_gateway_url`), never through a redirect."""
+    opener = opener or gateway_open
+
+    def write(system, user):
+        api_key = key_of()
+        if not api_key or not url or not model:
+            raise JudgeError("unconfigured", "no Tico AI Gateway key or model to write with")
+        if not safe_gateway_url(url):
+            raise JudgeError("unconfigured", "the Tico AI Gateway URL is neither https nor this computer")
+        body = {"model": model, "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]}
+        request = urllib.request.Request(url.rstrip("/") + "/chat/completions", data=json.dumps(body).encode(),
+                                         method="POST", headers={"Authorization": "Bearer " + api_key,
+                                                                 "Content-Type": "application/json"})
+        try:
+            with opener(request, timeout=timeout) as response:
+                text = llm_text("openai", json.load(response)).strip()
+        except urllib.error.HTTPError as exc:
+            raise JudgeError("unavailable", f"the Tico AI Gateway answered {exc.code}", exc.code, retryable=True)
+        except (urllib.error.URLError, http.client.HTTPException, TimeoutError, OSError, ValueError, KeyError,
+                IndexError, TypeError) as exc:
+            raise JudgeError("unavailable", f"the Tico AI Gateway did not answer: {type(exc).__name__}", retryable=True)
+        if text.startswith("```"):
+            text = text.strip("`").removeprefix("json").strip()
+        try:
+            parsed = json.loads(text)
+        except ValueError:
+            raise JudgeError("shape", "the model did not answer with JSON")
+        if not isinstance(parsed, dict):
+            raise JudgeError("shape", "the model did not answer with an object")
+        return parsed
+    write.model = model
+    return write
+
+
 def llm_writer(provider, api_key, model, timeout=TIMEOUT, opener=None):
     """Writing on the company's own provider: `write(system, user)` sends those two texts and nothing
     else (no tools, no memory, no history) and returns the JSON object the model answered with."""

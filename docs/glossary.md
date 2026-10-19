@@ -23,7 +23,7 @@ The words Tico uses, and what each replaces.
 
 - **Instructions**: what a bot is told it does (`AGENT.md` in developer docs).
 - **Tools**: everything a bot uses: its model and harness, GitHub, Slack, Google, AWS.
-- **Model** and **Harness**: kinds of tool. The model (GPT-5.5, Opus) and the harness it runs in (Codex, Claude Code).
+- **Model** and **Harness**: kinds of tool. The model (GPT 6.1 Sol, Claude Opus 5.5) and the harness it runs in (Codex, Claude Code).
 - **AI provider**: the account a model comes from.
 - **Credential**: a stored secret a bot is granted. "API key" or "token" only names what a service gives you, or sign-in.
 - **Template**: what you create a bot from.
