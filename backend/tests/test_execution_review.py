@@ -649,14 +649,25 @@ def test_a_claim_that_lapsed_before_its_run_started_does_not_count_as_stopping_p
 # A finished turn whose runner stalled before handing it in (Dev 242; Oct 17-18, results 15 to 76 minutes after the
 # lease lapsed). Each shape: the model finished, the lease lapsed, something decided the job, then the result came.
 
-def finished_then_lapsed(api, machine=None, bot='ops', text='Please summarize the current work.'):
-    """A run that read, wrote its answer and went idle; then its lease lapsed before the result reached the hub."""
+def finished_then_lapsed(api, machine=None, bot='ops', text='Please summarize the current work.', task=False):
+    """A run that read, wrote its answer and went idle; then its lease lapsed before the result reached the hub.
+    With `task`, a person filed the request as a task in its own room, and the run starts from the hub's notice."""
     from backend.tests.test_api import runner
     if machine is None:
         machine = runner(api, 'ana')
         assign(api, machine, bot)
     ready(api, machine, [bot])
-    message = post(api, 'chat/' + bot, {'text': text})
+    if task:
+        from backend.store import H
+        with api.app.state.store.transaction() as c:      # filed outside any chat, as a bot files a ticket
+            filed = H.task_create(c, 'human:ana', 'Summarize the work', text, 'bot:' + bot)
+            assert not H.task_from_chat(c, filed['id'])
+        with api.app.state.store.read() as c:
+            message = dict(c.execute("SELECT m.id,m.conversation_id FROM jobs j JOIN messages m ON m.id=j.message_id "
+                                     "WHERE j.state='queued' AND j.bot=?", (bot,)).fetchone())
+        message['task'] = filed
+    else:
+        message = post(api, 'chat/' + bot, {'text': text})
     attempt = claim(api, machine)
     post(api, f"attempts/{attempt['id']}/started", {'thread_id': 'stalled-' + attempt['id']}, machine['token'])
     post(api, f"attempts/{attempt['id']}/events", {'events': [
@@ -684,20 +695,22 @@ def bot_replies(api, message, bot='ops'):
             if m['from_actor'] == 'bot:' + bot]
 
 
-def test_a_finished_turn_dismissed_because_its_task_closed_still_ends_completed_and_the_task_stays_closed(api):
-    """bffaef5b, 4db2021c, 1c166f6f, 059f35ce, 14419cd1: the bot closed its task in the turn, the sweep dismissed the
-    lapsed job (nothing left to deliver), then the finished result came in."""
+def test_a_finished_turn_dismissed_because_its_task_closed_still_ends_completed_and_answers_in_the_task(api):
+    """bffaef5b, 4db2021c, 1c166f6f, 059f35ce, 14419cd1: the task was closed while its finished result was stuck on
+    the computer, the sweep dismissed the lapsed job, then the result came in. The person sees the answer in the
+    task's own room, and the task stays closed."""
     from backend.store import H
-    machine, message, attempt = finished_then_lapsed(api)
-    with api.app.state.store.transaction() as c:
-        task = H.task_create(c, 'human:ana', 'Summarize the work', 'x', 'bot:ops')
-        c.execute("UPDATE messages SET refs_json=? WHERE id=?", (json.dumps({'task': task['id']}), message['id']))
-        c.execute("UPDATE tasks SET status='closed' WHERE id=?", (task['id'],))
+    machine, message, attempt = finished_then_lapsed(api, task=True)
+    task = message['task']
+    assert task['conversation_id'] == message['conversation_id']             # the task's own room, not the chat
+    post(api, 'tasks/' + task['id'], {'version': task['version'], 'close': True, 'quiet': True})
     aged(api, attempt['id'])
     assert [d['state'] for d in sweep(api)] == ['cancelled']
     done = hand_in(api, machine, attempt)
     assert done['outcome'] == 'completed' and not done.get('filed')
     assert settled(api, attempt) == ('completed', 'completed')
+    assert bot_replies(api, message) == ['Done: the summary is in the room.']
+    assert done['message']['to_actor'] == 'human:ana'
     with api.app.state.store.read() as c:
         assert H.task(c, task['id'])['status'] == 'closed'
         assert c.execute("SELECT exit FROM turns WHERE id=?", (attempt['id'],)).fetchone()[0] == 'completed'
@@ -763,6 +776,33 @@ def test_a_finished_turn_that_comes_back_after_the_resume_but_before_the_rerun_c
     ready(api, machine, ['ops'])
     assert claim(api, machine) is None
     assert bot_replies(api, message) == ['Done: the summary is in the room.']
+
+
+@pytest.mark.parametrize('decision', ['dismiss', 'resume'])
+def test_a_finished_turn_never_settles_a_job_a_later_run_took_even_once_that_run_was_let_go(api, decision):
+    """The job is the later run's from the moment it claimed it: when that run lapses too and is dismissed or
+    resumed, the first run's late result is only filed. Same computer, so only the job's attempt fences it."""
+    machine, message, first = finished_then_lapsed(api)
+    aged(api, first['id'], grace=True)
+    assert [d['state'] for d in sweep(api)] == ['queued']
+    ready(api, machine, ['ops'])
+    second = claim(api, machine)
+    assert second['job_id'] == first['job_id'] and second['id'] != first['id']
+    post(api, f"attempts/{second['id']}/started", {'thread_id': 'second'}, machine['token'])
+    expire(api, second['id'])
+    assert claim(api, machine) is None and job_state(api, second['job_id']) == 'uncertain'
+    aged(api, second['id'])
+    post(api, f"jobs/{second['job_id']}/reconcile", {'attempt_id': second['id'], 'decision': decision,
+         'note': 'The second run stopped.', 'acknowledge_uncertain_effects': True})
+    with api.app.state.store.read() as c:
+        before = tuple(c.execute("SELECT state,attempt_id FROM jobs WHERE id=?", (first['job_id'],)).fetchone())
+    assert before == ('cancelled' if decision == 'dismiss' else 'queued', second['id'])
+    filed = hand_in(api, machine, first, text="The first run's old answer.")
+    assert filed['filed'] is True
+    with api.app.state.store.read() as c:
+        assert tuple(c.execute("SELECT state,attempt_id FROM jobs WHERE id=?", (first['job_id'],)).fetchone()) == before
+        assert c.execute("SELECT state FROM attempts WHERE id=?", (first['id'],)).fetchone()[0] == 'expired'
+    assert bot_replies(api, message) == []
 
 
 def test_a_late_result_that_did_not_finish_after_a_dismissal_is_only_filed(api):

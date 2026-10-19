@@ -1593,8 +1593,9 @@ class Execution:
         """Whether a finished turn whose job the sweep or a person let go meanwhile still settles it. A completed
         result is the answer the dismissal assumed would never come: the job was cancelled (the task was closed, or
         nothing was left to deliver) or queued to run again, and no later attempt has taken it. It settles the job
-        completed, exactly as if it had come in time, and the queued rerun never happens. Any other outcome, or a job
-        another attempt or another computer now owns, is only filed (`file_result`)."""
+        completed and its answer is posted where the request was made, a closed task's own room included, and the
+        queued rerun never happens. Any other outcome, or a job another attempt (`attempt_id`) or another computer now
+        owns, is only filed (`file_result`)."""
         if body.outcome != "completed" or not self.current_owner(c, who, row):
             return False
         job = c.execute("SELECT state FROM jobs WHERE id=? AND attempt_id=?", (row["job_id"], row["id"])).fetchone()
@@ -1939,11 +1940,13 @@ class Execution:
                               or (humans[0] if humans else None) or task["requester"])
                     # A task in the bot's chat room always delivers, and so does one filed from a chat into
                     # its own room (H.task_from_chat). Any other dedicated task thread waits until the owner
-                    # has marked the work done.
+                    # has marked the work done, or, for a finished turn that came in after its lease lapsed,
+                    # until the task was closed under it: no later turn will answer that room.
                     if conv.get("kind") == "chat" or (conv.get("task_id") == task["id"] and H.task_from_chat(c, task["id"])):
                         replyable = target not in (H.KEEPER, actor)
                     else:
-                        replyable = actor == task["owner"] and task["status"] == "done"
+                        replyable = actor == task["owner"] and (
+                            task["status"] == "done" or (late and task["status"] == "closed"))
                 if target not in (H.KEEPER, actor) and replyable:
                     refs = {"turn_id": aid, **({"task": task["id"]} if task else {}),
                             **({"warnings": notices} if notices and msg["kind"] != "ask" else {})}
