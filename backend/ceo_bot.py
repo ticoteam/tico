@@ -7,7 +7,8 @@ Off, nothing changes: the bot is the Goal Manager, built in and off the chart. O
 - its display name is "CEO Bot" (`bots.display_name`); the name it had before is kept here and given back when the
   switch goes off, unless someone renamed it since;
 - the org chart (`chart_entries`) shows it under the owner, and under it the bots that would hang straight under the
-  owner and are a Head or have no manager. Built-in bots, helpers and message bots stay where they are.
+  owner and are a Head or have no manager, and (`chart_groups`) the top-level groups those Heads are in. Built-in
+  bots, helpers and message bots stay where they are.
 
 The chart is the only thing that moves: `bot_config.reports_to` is never written, so who manages whom (the access
 chain in backend/auth.py, goal rights in backend/goals.py, `bot_contact`) is exactly what it was. Turning the switch off
@@ -127,3 +128,23 @@ def chart_entries(c, settings, roster, entries, archived=()):
         out[slug] = {**entry, "reports_to": SLUG}
     out[SLUG] = {**(entries[SLUG] or {}), "reports_to": "human:" + owner["id"]}
     return out
+
+
+def chart_groups(roster, entries, chart, groups, archived=()):
+    """`groups` (`org_view` rows) as the chart draws them. A Head is usually in a group of its own department, which
+    sits at the top of the chart: with the switch on, a top-level group that holds a bot the CEO Bot heads on the
+    chart (`chart`, from `chart_entries`) hangs under the CEO Bot, so the department sits in its subtree. Never the
+    group the owner is in, since the CEO Bot hangs under the owner. With the switch off, `groups` itself."""
+    if chart is entries:
+        return groups
+    archived = set(archived or ())
+    owner = P.person((roster or {}).get("default_user"), roster) or {}
+    mine = set(P.group_chain(owner.get("team"), roster))
+    led = set()
+    for slug, entry in chart.items():
+        if slug != SLUG and slug not in archived and P._clean((entry or {}).get("reports_to")) == SLUG:
+            chain = P.group_chain(P.team_of(slug, entries, roster), roster)
+            if chain:
+                led.add(chain[-1])
+    return [{**g, "org_parent": "b:" + SLUG} if g["id"] in led and not g.get("parent") and g["id"] not in mine else g
+            for g in groups]

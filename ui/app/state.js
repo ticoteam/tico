@@ -51,7 +51,10 @@ const brandLogo = () => appName() === CONFIG_DEFAULTS.app_name
 const publicUrl = () => S.config.public_url || location.origin;
 const runnerUrl = () => S.config.runner_url || location.origin;
 function applyConfig(config) {
+  const ceoBotWas = ceoBotOn();
   S.config = {...CONFIG_DEFAULTS, ...(config && typeof config === 'object' ? config : {})};
+  // The CEO Bot switch flipped since the page opened: the roster has the new name and chart; read it and redraw.
+  if (S.me && ceoBotWas !== ceoBotOn()) void refresh(true);
   document.title = (S.config.demo ? 'Demo · ' : S.config.rehearsal ? 'Rehearsal · ' : '') + appName();
   // The strip is shown by the server's say-so alone: only a demo's config carries `demo`, a rehearsal's `rehearsal`.
   const strip = !!(S.config.demo || S.config.rehearsal);

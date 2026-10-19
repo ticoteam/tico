@@ -1499,6 +1499,10 @@ def install_views(app, store, auth, mutate, task_view):
             from . import people_photos
             archived = {row["slug"] for row in H.bots(c) if row.get("state") == "archived"}
             view = P.org_view(r, configs, archived)
+            # The CEO Bot switch hangs the Heads' groups under it on the chart (backend/ceo_bot.py).
+            from . import ceo_bot
+            chart = ceo_bot.chart_entries(c, store.settings, r, configs, archived)
+            view["org_groups"] = ceo_bot.chart_groups(r, configs, chart, view["org_groups"], archived)
             access = auth.bot_accesses(c, who)
             from .report_order import positions
             places = positions(c)
