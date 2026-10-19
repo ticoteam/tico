@@ -314,7 +314,8 @@ fn sign_in_status(runtime: &str, exe: &str, env: &Env) -> Option<(bool, String)>
         "json" => {
             let (_, out) = run(&args, timeout)?;
             let s = serde_json::from_str::<Value>(out.lines().next().unwrap_or("")).ok().or_else(|| serde_json::from_str(out.trim()).ok())?;
-            if s[&status.field] != true {
+            // Only a true or false is an answer: an error report, or a field that is missing or null, says nothing.
+            if !s[&status.field].as_bool()? {
                 return Some((false, String::new()));
             }
             let method = text_of(&s[&status.method_field]);
@@ -1145,9 +1146,16 @@ fn keep_aside(files: &[String], home: &std::path::Path, dir: &std::path::Path, e
     let mut kept = vec![];
     for rel in files {
         let to = home.join(rel);
-        if !std::fs::symlink_metadata(&to).is_ok_and(|m| m.is_file()) {
-            kept.push(Moved { to, kept: None });
-            continue;
+        // Only a file that is not there may be left out; a link, a folder or one that cannot be looked at stops
+        // the switch before anything is signed out.
+        match std::fs::symlink_metadata(&to) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                kept.push(Moved { to, kept: None });
+                continue;
+            }
+            Ok(m) if m.is_file() => {}
+            Ok(_) => return Err(format!("{rel} is not a plain file")),
+            Err(e) => return Err(format!("{rel} could not be read ({})", e.kind())),
         }
         let copy = dir.join(".tico-old").join(rel);
         if let Some(parent) = copy.parent() {
@@ -2148,8 +2156,10 @@ if [ "$1" = "-p" ]; then
 fi
 case "$1 $2" in
   "auth status") if [ -f "$root/broken" ]; then echo 'Something went wrong'; exit 1; fi
+    if [ -f "$root/status" ]; then cat "$root/status"; exit 0; fi
     if [ -f "$creds" ]; then echo '{"loggedIn": true, "authMethod": "claude.ai"}'; else echo '{"loggedIn": false}'; fi; exit 0 ;;
   "auth logout") [ -f "$root/break-after" ] && touch "$root/broken"
+    [ -f "$root/status-after" ] && cp "$root/status-after" "$root/status"
     if [ -f "$root/partial" ]; then echo changed > "$HOME/.claude.json"; exit 0; fi
     [ -f "$root/stuck" ] || rm -f "$creds"; exit 0 ;;
 esac
@@ -2280,6 +2290,39 @@ exit 2
         flag("break-after", false);
         flag("broken", false);
         still_subscription("status check failed after the logout");
+        // JSON that does not say true or false (an error report, a field missing, null or of another type) is no answer
+        // either, before the logout ...
+        let before = logouts();
+        for said in [r#"{"type":"error","error":"Something went wrong"}"#, r#"{"loggedIn": null}"#, r#"{"loggedIn": "false"}"#] {
+            std::fs::write(root.join("status"), said).unwrap();
+            let unknown = to_key("claude", claude_key, Some(true));
+            assert_eq!(unknown, ("failed".into(), "Could not check whether claude is signed in to its subscription, so the subscription is still in use".into()), "{said}");
+            assert_eq!(logouts(), before, "logged out when the status check said {said}");
+            flag("status", false);
+            still_subscription(said);
+        }
+        // ... and after it.
+        std::fs::write(root.join("status-after"), r#"{"loggedIn": null, "authMethod": "claude.ai"}"#).unwrap();
+        let unchecked = to_key("claude", claude_key, Some(true));
+        assert_eq!(unchecked, ("failed".into(), "Could not check that claude signed its subscription out, so the subscription is still in use".into()));
+        flag("status-after", false);
+        flag("status", false);
+        still_subscription("status check said null after the logout");
+        // A login file that is a link (or anything but a plain file) cannot be kept aside as it is: the switch stops
+        // before the logout, and the link and the file it points at are left as they were.
+        let (link, target) = (root.join(".claude.json"), root.join("settings-target.json"));
+        std::fs::write(&target, settings).unwrap();
+        std::fs::remove_file(&link).unwrap();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let before = logouts();
+        let linked = to_key("claude", claude_key, Some(true));
+        assert_eq!(linked, ("failed".into(), "The subscription's login could not be kept aside (.claude.json is not a plain file), so the subscription is still in use".into()));
+        assert_eq!(logouts(), before, "logged out with a login file that could not be kept aside");
+        assert_eq!(std::fs::read_link(&link).unwrap(), target, "the link was changed");
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), settings, "the file the link points at was changed");
+        still_subscription("linked settings file");
+        std::fs::remove_file(&link).unwrap();
+        std::fs::rename(&target, &link).unwrap();
         // A logout that does not take, or takes half (changes the settings file, leaves the login): all put back.
         flag("stuck", true);
         let stuck = to_key("claude", claude_key, Some(true));
