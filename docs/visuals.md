@@ -77,8 +77,10 @@ as a `data:` URI.
 | Video | MP4, WebM, MOV, M4V | 2 GB |
 | Audio | MP3, M4A, WAV, OGG, AAC | 2 GB |
 
-Today's upload paths cap a file well below the video and audio limit: a bot's `--visual` file is at most 25 MB, and
-a person's upload is at most 10 MB.
+Today's upload paths cap a file well below the video and audio limit. A bot's `--visual` file (or MCP `path`) goes
+up inside a JSON request, and a picture, video or audio clip is base64-encoded there, a third bigger on the way. So
+from your checkout it can be at most about 19 MB on a chat message and 10 MB on a task comment. A page or SVG goes up as plain
+text, without that growth. A person's upload is at most 10 MB.
 
 Any other type, or a file over its limit, posts as a normal file chip, never as an inline card. So does a picture
 whose bytes don't match its type (a `.png` that isn't a PNG).
@@ -90,7 +92,7 @@ a visual checks again that the reader still has access, so someone taken off a p
 Visuals from a private task never show to guests or on the public roadmap.
 
 A visual is shown from a signed address made for one reader. It works only for that reader and expires after at
-most 2 hours; each read of the message returns a fresh one.
+most 2 hours. Each read of the message returns a current one, which stays the same for up to an hour.
 
 ## Self-hosting
 
