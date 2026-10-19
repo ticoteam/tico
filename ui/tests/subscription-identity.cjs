@@ -41,7 +41,9 @@ const {harnesses} = require('./support/page.cjs');
         SETTINGS_DATA = {machines: fixture.profiles_by_computer.map(c => ({id: c.runner_id, label: c.label, operator: 'ana', profiles: structuredClone(c.profiles)}))};
         const host = $('#host'), c = {runner_id: 'r1', label: 'North'}, p = SETTINGS_DATA.machines[0].profiles[0], state = p.runtimes.codex;
         host.innerHTML = `<strong class="name">${esc(p.display_name)}</strong> <span class="left">${state.weekly ? `${100 - state.weekly.used_percent}% left` : 'No reading'}</span>`
-          + subsRefreshHTML(c, p, 'codex', state, true) + subsControlsHTML(c, p, 'codex', state);
+          + subsRefreshHTML(c, p, 'codex', state, true) + subsControlsHTML(c, p, 'codex', state)
+          // Rename is its own action on the line, as ui/app/computer-detail.js machineLineActionsHTML draws it.
+          + (subsRenameHTML(c, p) && `<details class="computer-conn-rename"><summary>Rename</summary>${subsRenameHTML(c, p)}</details>`);
         window.drawn = (window.drawn || 0) + 1;
       };
     }, harnesses);
@@ -51,7 +53,7 @@ const {harnesses} = require('./support/page.cjs');
       $('#host').onclick = ev => { subsHandleClick(ev); }; $('#host').onsubmit = ev => { subsHandleSubmit(ev); };
     });
     const host = page.locator('#host');
-    assert.equal(await host.locator('details').count(), 1, 'one disclosure for secondary controls');
+    assert.equal(await host.locator('details').count(), 2, 'Manage (the weekly reading) and Rename');
     assert.equal(await host.locator('[data-subs-rename]').isVisible(), false);
     assert.equal(await host.locator('[data-subs-refresh]').isVisible(), true);
     // Refresh from the keyboard, with its routing contract.
@@ -60,7 +62,7 @@ const {harnesses} = require('./support/page.cjs');
     await page.waitForFunction(() => window.drawn === 2);
     assert.deepEqual(await page.evaluate(() => writes.shift()), {url: '/v2/subscriptions/refresh', body: {
       runner_id: 'r1', profile: 'engineering', runtime: 'codex'}});
-    await host.getByText('Manage', {exact: true}).click();
+    await host.getByText('Rename', {exact: true}).click();
     await host.locator('[name=display_name]').fill('Research <img src=x onerror=alert(1)>');
     await host.locator('button').filter({hasText: /^Save name$/}).click();
     await page.waitForFunction(() => document.querySelector('#host .name')?.textContent.startsWith('Research <img'));
@@ -83,7 +85,7 @@ const {harnesses} = require('./support/page.cjs');
       runner_id: 'r1', profile: 'engineering', runtime: 'codex', used_percent: 58, resets_at: null}});
     assert.doesNotMatch(await host.innerText(), /used/i);
     await page.evaluate(() => { S.me.role = 'member'; S.me.id = 'viewer'; return loadSettings(); });
-    assert.equal(await host.locator('[data-subs-rename], [data-subs-weekly], [data-subs-refresh], .subs-controls').count(), 0, 'nonoperators get no controls');
+    assert.equal(await host.locator('[data-subs-rename], [data-subs-weekly], [data-subs-refresh], .subs-controls, .computer-conn-rename').count(), 0, 'nonoperators get no controls');
     assert.equal(await host.locator('.left').innerText(), '42% left', 'usage remains visible');
     assert.deepEqual(errors, []);
     console.log('subscription identity and rename: ok');

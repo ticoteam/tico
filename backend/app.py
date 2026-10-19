@@ -25,7 +25,7 @@ from . import go_live as pending_go_lives
 from . import repo_waits
 from . import built_on
 from . import agents, app_delivery, batch, external_sync, inbox_isolation, mcp_oauth, harness_actions, model_login, oidc, personal_tokens, views
-from . import check_models, run_triggers, team_rules, update_feeds, topic_change, usage_limits, wake_presets, visuals
+from . import check_models, run_triggers, team_rules, update_feeds, topic_change, usage_limits, wake_presets, visuals, wake_rules
 from . import task_privacy as privacy
 from . import task_relations as TR
 from . import task_roles as TRo
@@ -402,7 +402,7 @@ def create_app(settings=None):
 
     @app.middleware("http")
     async def request_guard(request, call_next):
-        via_reset = delegation_reset = run_reset = None
+        via_reset = delegation_reset = run_reset = cause_reset = None
         try:
             # The sign-in exemptions below match on prefixes; a dot segment would carry one of
             # them onto the static files ("/download/../index.html").
@@ -486,6 +486,9 @@ def create_app(settings=None):
                 if who.attempt_id and who.role != "runner" and not request.url.path.startswith(run_triggers.RUNNER_PATHS):
                     # A run's own tool call: what it writes counts toward whether the run acted.
                     run_reset = H.RUN.set(who.attempt_id)
+                if who.role != "runner":
+                    # Whose request this is: a bot's own writes never wake that bot (backend/wake_rules.py).
+                    cause_reset = wake_rules.CAUSE.set(who.actor)
             if request.method not in ("GET", "HEAD", "OPTIONS"):
                 origin = request.headers.get("origin")
                 if origin and not settings.allows_origin(origin):
@@ -681,6 +684,8 @@ def create_app(settings=None):
                 H.DELEGATION.reset(delegation_reset)
             if run_reset is not None:
                 H.RUN.reset(run_reset)
+            if cause_reset is not None:
+                wake_rules.CAUSE.reset(cause_reset)
 
     from . import routines
 
@@ -1340,6 +1345,7 @@ def create_app(settings=None):
 
         def work(c):
             before, after = Providers.save(c, who.actor, body.model_dump(), H.now())
+            model_login.hold_removals(c, settings)   # bots on the company's default may now run another tool
             H.event(c, who.actor, "providers.updated", "",
                     {"before": {k: before[k] for k in ("enabled", "runtime", "model", "revision", "auto_fallback", "check_models", "preset")},
                      "after": {k: after[k] for k in ("enabled", "runtime", "model", "revision", "auto_fallback", "check_models", "preset")}})
@@ -3198,8 +3204,8 @@ def create_app(settings=None):
             msg = next(m for m in comments if m["id"] == msg["id"])
             held = H.held_note(c, msg.get("to_actor"))
             return {"comment": msg, "comments": comments,
-                    "woke": bool(wake) and not (msg.get("refs") or {}).get("can_wait"), **({"warning": held} if held else {}),
-                    **({"visuals": report} if report else {})}
+                    "woke": bool(wake) and not ({"can_wait", wake_rules.MARK} & set(msg.get("refs") or {})),
+                    **({"warning": held} if held else {}), **({"visuals": report} if report else {})}
         result = mutate(request, body, work)
         if body.attachments:
             app.state.file_metadata.wake.set()   # a chat file shared here is a new task copy: preview it now
@@ -4309,6 +4315,12 @@ def create_app(settings=None):
             return model_login.affected_bots(c, request.state.identity, rid, runtime, profile, store.settings,
                                              auth=auth)
 
+    # Take a named subscription off a computer (refused, naming them, while bots run on it); read back like a sign-in.
+    @app.post("/api/v2/runners/{rid}/removals")
+    def start_removal(request: Request, rid: str, body: M.RemovalStart):
+        return mutate(request, body, lambda c: model_login.remove(
+            c, request.state.identity, rid, body.runtime, body.profile, store.settings, auth=auth))
+
     # A signed-out computer login takes the company's shared key again.
     @app.post("/api/v2/runners/{rid}/shared-key")
     def use_shared_key(request: Request, rid: str, body: M.SharedKeyUse):
@@ -4365,7 +4377,8 @@ def create_app(settings=None):
     def report_login(request: Request, lid: str, body: M.LoginReport):
         who = request.state.identity
         return mutate(request, body, lambda c: (execution.runner(c, who),
-                                                model_login.report(c, who.runner_id, lid, body))[1])
+                                                model_login.report(c, who.runner_id, lid, body,
+                                                                   store.settings))[1])
 
     @app.post("/api/v2/runners/{rid}/harness-actions")
     def harness_action(request: Request, rid: str, body: M.HarnessAction):
@@ -5057,6 +5070,8 @@ def create_app(settings=None):
                       (encode(config), bot))
             c.execute("UPDATE bots SET model=?,runtime=?,effort=? WHERE slug=?",
                       (choice["id"], runtime, effort, bot))
+            # Its shared copies follow it, so any bot may have moved onto another tool.
+            model_login.hold_removals(c, settings)
             reset = reset_bot_sessions(c, bot)
             settings_admin.record(c, who.actor, bot, "model", before,
                                   settings_admin.snapshot(c, bot, "model"))

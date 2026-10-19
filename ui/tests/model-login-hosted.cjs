@@ -81,7 +81,15 @@ const {unrouted} = require('./support/routes.cjs');
       await page.locator('#set-machines .machine-name[data-computer-open=box]').click();
       const add = page.locator('#set-machines dialog[open] [data-add-connection]');
       await add.waitFor();
-      const signIn = name => add.locator(`[data-model-login][data-runtime="${name}"]`);
+      // Its own login, through the Add connection pop-up: the tool, then the computer's login (on the name step where
+      // the tool also takes a subscription).
+      const signIn = name => ({click: async () => {
+        await add.click();
+        const step = page.locator('dialog.computer-add-dialog[open]');
+        await step.locator(`[data-add-tool="${name}"]`).click();
+        if (!await step.locator('[data-add-own]').count()) await step.locator('[data-add-kind=subscription]').click();
+        await step.locator('[data-add-own]').click();
+      }});
       return {page, box, writes, errors, rows, signIn, last: () => rows[`in${seq}`], refuse: r => { refusal = {times: 1, ...r}; }};
     }
     const login = page => page.locator('dialog.model-login:not(.model-logout)');

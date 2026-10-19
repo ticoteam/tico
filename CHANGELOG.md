@@ -64,6 +64,12 @@ All notable changes to Tico are recorded here. The format follows
 - A signed-out connection in the computer pop-up reads **Signed out · Sign in** and its chip gets a red dot, and the
   sign-out confirmation names the bots in a line ("Reviewer 1, QA and 2 more will stop running until this is signed in
   again").
+- **Add connection** in each computer's pop-up on Settings > Computers: pick an AI tool installed there, then Subscription
+  or API key; a subscription is named and signed in with the provider in the same pop-up, and its chip appears on the
+  computer's row without a restart. API key opens **Add key** for a tool that takes a key of the computer's own, and
+  points to Credentials for the others. Each subscription line gets **Rename** and **Remove**; Remove is refused while
+  bots run on it, naming them and offering the Bots page. Remove needs a current runner
+  ([Computers](docs/computers.md#remove-a-subscription)).
 
 ### Fixed
 - **Updates tree keeps archived cards out after a reload**: a card you archive on Updates no longer comes back in
@@ -110,6 +116,13 @@ All notable changes to Tico are recorded here. The format follows
   before this keeps today's behaviour ([sessions](docs/sessions.md)).
 
 ### Changed
+- **A waiting task sleeps, and a bot's own writes never wake it** (token saving): news about a task that waits on
+  another task (blocked by) or on a pull request's checks (wake once), such as a step move, a relation change or a
+  comment, no longer starts a run; the task wakes when its blocker finishes or its checks come back. A notice that a
+  bot's own write caused never wakes that same bot. Nothing is dropped: the notice stays in the task's room and is
+  handed to the bot's next run, whatever starts it, in order. A person's message, comment, approval or answer, an
+  ask, a needs-action message, a gate verdict, an assignment, a finished subtask and a sweep still wake at once.
+  Each skipped wake is logged as `wake.skipped` in `events` for the weekly audit ([hub sql](docs/hub-sql.md)).
 - **Health Monitor: seeing a finding again only counts**: each hourly scan that sees a finding adds one to its count
   and moves its last-seen time, and no bot runs for it. Only a new finding, one whose severity rises (a computer on a
   release the server cannot work with is `bad`, an older one `warn`), or one back after its task was finished wakes
