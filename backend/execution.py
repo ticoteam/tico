@@ -9,7 +9,7 @@ from datetime import timezone
 
 from clients import gateway, sessions
 
-from . import app_delivery, check_models, gateway_connection, inbox_isolation, providers, routines, run_triggers, runner_versions, screen, usage_limits, wake_presets
+from . import app_delivery, check_models, gateway_connection, inbox_isolation, models_preset, providers, routines, run_triggers, runner_versions, screen, usage_limits, wake_presets
 from . import task_privacy as privacy
 from .auth import Identity
 from .batch_work import isolated
@@ -577,6 +577,13 @@ def claim_refusal(c, settings, runner, bot, config_json, draining, ready, held_b
                            (runner["id"], profile)).fetchone()
         if not report or json.loads(report[0] or "{}").get(runtime, {}).get("signed_in") is False:
             return "profile", None
+    record = providers.load(c, settings)
+    if models_preset.waiting(record, ready, providers.fill(record, config)):
+        # Its subscription is not signed in on this computer yet: the turn runs on the Gateway instead
+        # (backend/models_preset.py), so the bot's own sign-in is not what holds it.
+        if usage_limits.blocked(c, bot, default=usage_limits.company(c) if default is None else default):
+            return "limit", None
+        return ("cooling_off", None) if cooling_off(c, bot) else (None, config)
     check = bot_readiness(ready, bot)
     if check.get("ready") is not True:
         reported = check.get("ready") is False and bot in (ready.get("bots") or {})
@@ -1343,7 +1350,12 @@ class Execution:
             check_models.handed(c, aid, task["id"], check)
         # A bot that names no runtime or model runs on the company default, resolved here the way
         # runners/assignments resolves it: the runner starts exactly what this says.
-        config = providers.fill(providers.load(c, self.store.settings), followed)
+        record = providers.load(c, self.store.settings)
+        config = providers.fill(record, followed)
+        # The company's models choice: the Gateway while the bot's subscription is not signed in here, and the
+        # Gateway as its last fallback, on a computer that can run it (backend/models_preset.py).
+        here = readiness_document(runner["readiness_json"])
+        config = models_preset.with_gateway_fallback(record, here, models_preset.main_config(record, here, config))
         # A bot delivered through a desktop app: who it is in the app, beside `app_delivery` (backend/app_delivery.py).
         config = app_delivery.job_config(config)
         gateway_connection.hand_out(c, aid, config)

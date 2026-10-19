@@ -243,6 +243,9 @@ class Settings:
     enabled_providers: tuple[str, ...] = ()
     default_runtime: str = ""
     default_model: str = ""
+    # The models choice the installer asks for (backend/models_preset.py; scripts/install.sh writes
+    # TICO_MODELS_PRESET=subscriptions-gateway for the recommended setup). First boot only, like the three above.
+    models_preset: str = ""
     credential_kms_key: str = ""
     # The Slack gateway (backend/slack_gateway.py): off unless the server configuration says so.
     # The thresholds are the routing rules in docs/slack-gateway.md; the tokens are read by
@@ -462,6 +465,7 @@ class Settings:
                                     os.environ.get("TICO_ENABLED_PROVIDERS", "").split(",") if part.strip()),
             default_runtime=os.environ.get("TICO_DEFAULT_RUNTIME", "").strip().lower(),
             default_model=os.environ.get("TICO_DEFAULT_MODEL", "").strip(),
+            models_preset=os.environ.get("TICO_MODELS_PRESET", "").strip().lower(),
             credential_kms_key=os.environ.get("TICO_CREDENTIAL_KMS_KEY", ""),
             slack_gateway_enabled=not rehearsal and os.environ.get("TICO_SLACK_GATEWAY_ENABLED", "0") == "1",
             slack_team_id=os.environ.get("SLACK_TEAM_ID", "").strip(),

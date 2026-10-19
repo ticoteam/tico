@@ -15,6 +15,7 @@ import json
 
 from clients import harness_manifests as manifests
 
+from . import models_preset
 from .harnesses import attach_harnesses, normalize_fallback
 from .store import Problem
 
@@ -381,21 +382,27 @@ def _record(value):
             "updated_by": str(stored.get("updated_by") or ""), "source": str(stored.get("source") or ""),
             # On unless the owner turned it off: a bot out of quota runs on another provider (default_fallbacks).
             "auto_fallback": stored.get("auto_fallback") is not False,
-            "check_models": [str(entry) for entry in stored.get("check_models") or [] if isinstance(entry, str)]}
+            "check_models": [str(entry) for entry in stored.get("check_models") or [] if isinstance(entry, str)],
+            # The models choice (backend/models_preset.py); '' is the choice as it was before presets.
+            "preset": models_preset.normalize(stored.get("preset"))}
 
 
 def env_seed(settings):
     """What the environment asks for on first boot; empty when it asks for nothing."""
     enabled = normalize_enabled(getattr(settings, "enabled_providers", ()))
     runtime, model = getattr(settings, "default_runtime", ""), getattr(settings, "default_model", "")
+    preset = models_preset.normalize(getattr(settings, "models_preset", ""))
+    if not enabled and not (runtime or model) and preset in (models_preset.RECOMMENDED, "subscriptions"):
+        # The installer's subscription choices mean Claude and ChatGPT (scripts/install.sh --recommended).
+        enabled = ["anthropic", "openai"]
     if not enabled and (runtime or model):
         # A default without providers still means its own provider.
         row = MODEL_BY_ID.get(model) or PROVIDER_BY_RUNTIME.get(runtime) and {"provider": runtime_provider(runtime)}
         enabled = [row["provider"]] if row and row.get("provider") else []
     if not enabled:
-        return None
+        return {"enabled": [], "runtime": "", "model": "", "preset": preset} if preset else None
     runtime, model = complete_choice(enabled, runtime, model)
-    return {"enabled": enabled, "runtime": runtime, "model": model}
+    return {"enabled": enabled, "runtime": runtime, "model": model, **({"preset": preset} if preset else {})}
 
 
 def with_gateway(record, connected):
@@ -447,12 +454,16 @@ def save(c, actor, body, now):
     enabled = with_gateway({"enabled": normalize_enabled(body.get("enabled"))}, bool(gateway))["enabled"]
     runtime, model = complete_choice(enabled, body.get("runtime"), body.get("model"))
     auto, checks = body.get("auto_fallback"), body.get("check_models")
+    preset = before["preset"] if body.get("preset") is None else models_preset.normalize(body.get("preset"))
+    if body.get("preset") not in (None, "") and not preset:
+        raise ProviderError("preset", "Choose one of the four models choices", 422)
     after = {"enabled": enabled, "runtime": runtime, "model": model, "revision": before["revision"] + 1,
              "updated": now, "updated_by": actor, "source": "owner",
              "auto_fallback": before["auto_fallback"] if auto is None else bool(auto),
              "check_models": (before["check_models"] if checks is None
                               else normalize_check_models(checks, {"enabled": enabled, "runtime": runtime,
-                                                                   "model": model}, before["check_models"]))}
+                                                                   "model": model}, before["check_models"])),
+             "preset": preset}
     # The Gateway's provider is never stored: it follows the connection (`with_gateway`).
     stored = {**after, "enabled": [name for name in enabled if name not in gateway]}
     c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
@@ -468,6 +479,7 @@ def view(record):
             "updated": record["updated"], "updated_by": record["updated_by"],
             "auto_fallback": record["auto_fallback"],
             "check_models": record["check_models"], "check_order": check_order(record),
+            "preset": record.get("preset", ""), "presets": list(models_preset.PRESETS),
             "providers": [{**row, "enabled": row["id"] in record["enabled"],
                            "recommended": (recommended(row["id"]) or {}).get("id", "")}
                           for row in PROVIDERS]}
@@ -498,6 +510,11 @@ def default_fallbacks(record):
             continue
         seen.add(runtime)
         rows.append({"runtime": runtime, "harness": runtime, "model": model})
+    # Except under the two choices that include the Gateway: it goes last, after every signed-in provider
+    # (backend/models_preset.py). A runner without a relay for the turn leaves it out (gateway_relay.rs admit).
+    gateway = models_preset.fallback_row(record)
+    if gateway:
+        rows.append(gateway)
     return rows
 
 

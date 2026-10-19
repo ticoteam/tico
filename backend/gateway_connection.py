@@ -248,10 +248,11 @@ def check_later(store, vault, settings=None, opener=None):
 
 def wanted(config):
     """Whether a run on `config` (a bot's config with its runtime and model filled in) may call the Gateway: its model,
-    or the fallback it names itself, is a Tico model."""
+    or the fallback it names itself, is a Tico model, or the company's choice gave it the Gateway as its last fallback
+    (`gateway_fallback`, backend/models_preset.py)."""
     config = config if isinstance(config, dict) else {}
     fallback = config.get("fallback") if isinstance(config.get("fallback"), dict) else {}
-    return is_tico(config.get("model")) or is_tico(fallback.get("model"))
+    return is_tico(config.get("model")) or is_tico(fallback.get("model")) or is_tico(config.get("gateway_fallback"))
 
 
 HANDED = "gateway-attempt:"
@@ -265,7 +266,8 @@ def hand_out(c, attempt_id, config):
         return
     fallback = config.get("fallback") if isinstance(config.get("fallback"), dict) else {}
     save_metadata(c, HANDED + attempt_id, {"model": str(config.get("model") or ""), "fallback": {
-        "harness": str(fallback.get("harness") or ""), "model": str(fallback.get("model") or "")}})
+        "harness": str(fallback.get("harness") or ""), "model": str(fallback.get("model") or "")},
+        "gateway_fallback": str(config.get("gateway_fallback") or "")})
 
 
 def handed(c, attempt_id):
@@ -280,15 +282,18 @@ def forget(c, attempt_id):
 
 def ran_tico(config, body):
     """Whether the part of a run that ended it (`body`, its completion) ran on a Tico model: the model the runner
-    counted last; else, when a fallback harness ran the turn, the fallback the bot names itself (an automatic one is
-    never a Tico model, providers.default_fallbacks); else the run's own model."""
+    counted last; else, when a fallback harness ran the turn, the fallback the bot names itself, or the Gateway the
+    company's choice put last (`gateway_fallback`; any other automatic one is never a Tico model,
+    providers.default_fallbacks); else the run's own model."""
     usage = getattr(body, "usage", None)
     segments = (usage.segments or [usage]) if usage else []
     if segments and segments[-1].model:
         return is_tico(segments[-1].model)
     if getattr(body, "fallback", None):
         fallback = config.get("fallback") if isinstance(config.get("fallback"), dict) else {}
-        return fallback.get("harness") == body.fallback and is_tico(fallback.get("model"))
+        if fallback.get("harness"):
+            return fallback.get("harness") == body.fallback and is_tico(fallback.get("model"))
+        return body.fallback == "pi" and is_tico(config.get("gateway_fallback"))
     return is_tico(config.get("model"))
 
 
@@ -302,7 +307,8 @@ def run_credentials_for(c, vault, settings, who, attempt_id):
         return []
     fallback = config.get("fallback") if isinstance(config.get("fallback"), dict) else {}
     items = run_credentials(c, vault, settings, config.get("model") if is_tico(config.get("model"))
-                            else fallback.get("model"))
+                            else fallback.get("model") if is_tico(fallback.get("model"))
+                            else config.get("gateway_fallback"))
     if items:
         H.event(c, who.actor, "gateway.key_sent", PROVIDER,
                 {"bot": row["bot"], "attempt": attempt_id, "runner": who.runner_id})
