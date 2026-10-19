@@ -108,8 +108,11 @@ follow. What is sent and kept is in [PRIVACY.md](../PRIVACY.md).
 Otherwise, or on any failure, the **local recommender** (`backend/recruit_rank.py`) answers, with no network: the head first, then the
 cards the answer matches (a tag, or two words of a longer tag phrase; a word of the name; two or more words of the summary; the answer
 counts double "What you do", and the group's own name counts for nothing), then `default` and `common` cards; a `niche` card only when the answer names it; a business-only card last for a team that sells
-only to consumers. The why is the words that matched ("Matches “resellers”"), else "Heads Sales and reports to you", "A starting point for
-Sales" or "Common in Sales". The same answer always gives the same list.
+only to consumers. The why is "Heads Sales and reports to you" for the head; a short tag of two or more words the answer writes as a
+phrase, in order and side by side ("Matches “flaky tests”"; not for "flaky deploys but reliable tests"), unless most of the group's cards carry those words; else "A starting point for Sales" or "Common in Sales",
+and no why for a `niche` card the answer brought in on single words. A single word, a word of a name or two words of a summary only
+rank: shown as a why they read as keyword matching. When Tico HQ's answer still says "Matches “<word>”", the install's own why replaces
+it. The same answer always gives the same list.
 
 ### What Create does
 

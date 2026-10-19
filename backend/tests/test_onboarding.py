@@ -152,6 +152,32 @@ def test_completing_twice_duplicates_neither_a_bot_nor_a_task(environment):
     assert len(tasks) == 1
 
 
+def test_a_new_company_starts_with_nothing_new_in_whats_new(environment, monkeypatch, tmp_path):
+    from backend import releases
+    monkeypatch.setenv("TICO_VERSION", "0.2.0")
+    monkeypatch.setattr(releases, "ROOT", tmp_path)
+    (tmp_path / "CHANGELOG.md").write_text("# Changelog\n## [0.2.0] - 2026-10-02\n- Search your tasks.\n"
+                                           "## [0.1.0] - 2026-10-01\n- Browse the team.\n")
+    api = environment()
+
+    def unread(headers):
+        return api.get("/api/v2/changelog", headers=headers).json()["unread_count"]
+    riley = as_person(api, "riley")
+    assert unread(signed_in()) == 2 and unread(riley) == 2
+    draft(api)
+    assert api.post("/api/v2/onboarding/complete", json={}, headers=signed_in()).status_code == 200
+    assert unread(signed_in()) == 0
+    assert api.get("/api/v2/config", headers=signed_in()).json()["changelog"] == {"unread_count": 0}
+    # Only the owner who set it up was caught up, and a later update is still news to them.
+    assert unread(riley) == 2
+    assert api.post("/api/changelog", json={"title": "Pipelines", "bullets": ["Pin a pipeline."]},
+                    headers=signed_in()).status_code == 200
+    assert unread(signed_in()) == 1
+    # Completing again catches up nothing more.
+    assert api.post("/api/v2/onboarding/complete", json={}, headers=signed_in()).status_code == 200
+    assert unread(signed_in()) == 1
+
+
 def test_only_the_owner_sets_the_company_up(environment):
     api = environment()
     riley = as_person(api, "riley")                # a bot administrator, not the owner

@@ -46,6 +46,13 @@ All notable changes to Tico are recorded here. The format follows
   failed check (over 1.5 s) sends the message in the same session with no line.
 
 ### Fixed
+- **The sidebar around first-run setup**: while the setup wizard is open, the sidebar shows only **Finish setup** and
+  the team, not the app's pages or **What's new** (on a phone the bottom bar drops Tasks and Updates). A new company's
+  owner starts with nothing unread in What's new. In the team list, words a bot's name shares with another bot's (the
+  "Head of" in "Head of Product") drop out first when the row is narrow, so each row keeps the part that tells it
+  apart; hovering a bot shows its whole name, and **Needs setup** is a small gear beside the name. The anonymous
+  usage-count notice no longer sits over the wizard or the screen after **Create**: it appears on the first other page,
+  and nothing is counted until it has.
 - **First-run wizard**: **Next** on **Your team chart** works again when the team includes BotOps. Its instructions
   (24,048 characters) were over the setup save's 20,000-character limit, so the wizard stopped with a raw field error.
   Bot instructions now have one limit of 50,000 characters wherever they are sent (the wizard, **Add from catalog**
@@ -58,6 +65,12 @@ All notable changes to Tico are recorded here. The format follows
   `CLAUDE_CONFIG_DIR` is a reserved variable name, so a credential can no longer be granted under it.
 - Opening a card in **Needs you** (an approval, a task, a question) no longer sends a failing request for issue
   "NaN" in the background. Only an issues inbox card fetches its full request.
+- **Team chart reasons and chart while picking** (first run): a suggested bot's reason is no longer a single word of
+  your answer ("Matches “managers”" on four Sales cards, "Matches “github”" across Engineering). Only a short phrase
+  you wrote whole that fits that bot is shown ("Matches “flaky tests”"); otherwise it says "Common in Sales" or "A
+  starting point for Sales", or nothing for a bot your words brought in. The live chart holds places for the group
+  being recruited and draws each bot's line together with its card, so it never shows empty lines, and long bot names
+  wrap instead of being cut off ("Sales Developm…"), with the full name as a tooltip.
 - **Clear** on a bot's chat now really starts the bot over. Before, it only trimmed the history Tico sends, and on
   the computer Claude Code, Codex and the other harnesses kept resuming the old provider thread, so the bot still
   remembered the cleared chat and every turn still paid for it. Each turn now carries its conversation's session
