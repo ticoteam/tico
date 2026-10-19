@@ -1963,6 +1963,10 @@ class Execution:
         c.execute("UPDATE jobs SET state=? WHERE id=?",
                   ("completed" if body.outcome == "completed" else "cancelled" if stopped
                    else "queued" if requeue else "uncertain", row["job_id"]))
+        if tico_code == gateway.NOT_ISOLATED and not requeue:
+            # Held as it is: never started, so `auto_reconcile` would resume it onto the same runner each sweep. It
+            # waits for a person to move the bot or change its model, then retry or dismiss it.
+            H.event(c, H.KEEPER, "job.held", aid, {"job_id": row["job_id"], "tools": [], "reason": tico_code})
         live_ref = (msg.get("refs") or {}).get("live_meeting")
         if (isinstance(live_ref, dict) and msg.get("from_actor") == H.KEEPER
                 and msg.get("to_actor") == "bot:" + row["bot"]):

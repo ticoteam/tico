@@ -683,6 +683,18 @@ def test_a_tico_model_on_a_runner_that_runs_bots_as_itself_says_so_once_and_is_n
     status, job = ended(api, attempt)
     assert status["focus"] == error.removesuffix(" (not_isolated)") + ". This run is saved for later", status["focus"]
     assert job == "uncertain" and claim(api, machine, "ops") is None
+    # Nor does the review of stopped runs send it back to the same runner, sweep after sweep: it never started and
+    # called no tool, so on a harness that reports its tool calls it would count as safe to resume. It waits for a
+    # person to move the bot or change its model.
+    from backend import execution
+    from backend.execution import STALL_MAX
+    monkeypatch.setattr(execution, "reports_tools", lambda *_: True)
+    for _ in range(2):
+        with api.app.state.store.transaction() as c:
+            c.execute("UPDATE attempts SET finished=? WHERE id=?", (H.shift(H.now(), seconds=-STALL_MAX - 1),
+                                                                     attempt["id"]))
+            assert api.app.state.execution.auto_reconcile(c) == []
+        assert ended(api, attempt)[1] == "uncertain" and claim(api, machine, "ops") is None
 
 
 @pytest.mark.parametrize("acted", [False, True])
