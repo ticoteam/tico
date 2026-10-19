@@ -57,7 +57,7 @@ class FakeSlack:
 
     def __init__(self, team=TEAM, app=APP, scopes=SCOPES):
         self.team, self.app, self.scopes = team, app, scopes
-        self.posts, self.failures, self.calls = [], [], []
+        self.posts, self.failures, self.calls, self.unfurls = [], [], [], []
         self.pages, self.threads, self.unreadable = {}, {}, set()      # what history and replies return
 
     def auth_test(self):
@@ -94,6 +94,13 @@ class FakeSlack:
     def conversations_open(self, user_id):
         self.calls.append(("conversations.open", user_id))
         return {"id": "D0" + user_id}
+
+    def unfurl(self, event, unfurls):
+        self.calls.append(("chat.unfurl", event.get("channel")))
+        if self.failures:
+            raise self.failures.pop(0)
+        self.unfurls.append(unfurls)
+        return {"ok": True}
 
     def post_message(self, channel, thread_ts, text, username=None, icon_emoji=None, icon_url=None):
         self.calls.append(("chat.postMessage", channel))
@@ -217,7 +224,8 @@ def test_startup_refuses_another_workspace_or_app_and_reports_missing_scopes(hub
                                                "users:read", "users:read.email")))
     verified = limited.verify_app()
     assert verified == {"team_id": TEAM, "app_id": APP, "bot_user_id": BOT_USER,
-                        "missing_scopes": ["app_mentions:read", "chat:write.customize", "files:read"]}
+                        "missing_scopes": ["app_mentions:read", "chat:write.customize", "files:read", "links:read",
+                                           "links:write"]}
     assert limited.customize is False
 
 
@@ -822,3 +830,41 @@ def test_a_task_done_post_without_a_visual_result_has_no_line(gateway, hub):
     assert gateway.task_completions() == 1
     gateway.deliver()
     assert "visual" not in gateway.slack.posts[0]["text"]
+
+
+# ----------------------------------------------------------------------------- link previews
+def shared(urls, user="U1", channel=MARKETING):
+    COUNTER["n"] += 1
+    return {"type": "event_callback", "team_id": TEAM, "api_app_id": APP, "event_id": f"Ev{COUNTER['n']:08d}",
+            "event": {"type": "link_shared", "user": user, "channel": channel, "message_ts": "1690000000.000100",
+                      "links": [{"url": u, "domain": "tico.example.com"} for u in urls]}}
+
+
+def test_a_pasted_task_link_gets_a_preview_only_for_a_verified_reader_and_never_for_a_private_task(gateway, hub):
+    hub.settings.public_url = "https://tico.example.com"
+    hub.settings.slack_open_label, hub.settings.slack_open_url = "Open in Desk", "desk://task/{id}"
+    with hub.transaction() as c:
+        team = H.task_create(c, "human:ana", "Fix the login page", "## Why\nPeople **cannot** sign in.", "human:ana",
+                             lint=False, private=False)["id"]
+        c.execute("UPDATE tasks SET number=42 WHERE id=?", (team,))
+        secret = H.task_create(c, "human:ana", "Salary review", "Private.", "human:ana", lint=False, private=True)["id"]
+    slack = gateway.slack
+    ticket = "https://tico.example.com/ticket/42/fix-the-login-page"
+    assert gateway.receive(shared([ticket, f"https://tico.example.com/task/{secret}",
+                                   f"https://elsewhere.example/task/{team}"])) == "unfurled"
+    [unfurl] = slack.unfurls
+    assert list(unfurl) == [ticket]
+    section, context, actions = unfurl[ticket]["blocks"]
+    assert section["text"]["text"] == f"*<{ticket}|#42 Fix the login page>*\nWhy People cannot sign in."
+    assert actions["elements"][0]["url"] == f"desk://task/{team}" and actions["elements"][0]["text"]["text"] == "Open in Desk"
+    # A guest, a private task alone, or a link to no task: nothing is shown.
+    assert gateway.receive(shared([ticket], user="U5")) == "unfurl_denied"
+    assert gateway.receive(shared([f"https://tico.example.com/open/task/{secret}/salary"])) == "unfurl_unreadable"
+    assert gateway.receive(shared(["https://tico.example.com/ticket/999"])) == "unfurl_unreadable"
+    assert gateway.receive(shared([ticket], channel="C0EXT")) == "unfurl_external"
+    # Slack refusing the button's scheme gets the same preview with the open link as text.
+    slack.failures.append(G.SlackError("chat.unfurl", "invalid_blocks"))
+    assert gateway.receive(shared([f"https://tico.example.com/#/task/{team}"])) == "unfurled"
+    blocks = slack.unfurls[-1][f"https://tico.example.com/#/task/{team}"]["blocks"]
+    assert len(blocks) == 2 and blocks[1]["elements"][-1]["text"] == f"<desk://task/{team}|Open in Desk>"
+    assert len(rows(hub, "SELECT * FROM events WHERE action='slack.unfurl'")) == 2

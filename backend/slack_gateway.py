@@ -76,6 +76,7 @@ from . import task_privacy as privacy
 from . import visuals
 from . import slack_app
 from . import slack_channels as SC
+from . import slack_unfurl as SU
 from .config import Settings, slack_credentials
 from clients import judge as J
 from .store import Store
@@ -110,7 +111,7 @@ MAX_BOTS = 60
 # Scopes and events the manifest carries for the gateway. Missing ones are reported at start-up,
 # never guessed around: the reinstall is a person's step (connectors/README.md).
 NEEDED_SCOPES = ("app_mentions:read", "im:history", "channels:history", "groups:history", "chat:write",
-                 "chat:write.customize", "users:read", "users:read.email", "files:read")
+                 "chat:write.customize", "users:read", "users:read.email", "files:read", "links:read", "links:write")
 CUSTOMIZE_SCOPE = "chat:write.customize"
 MENTION_RE = re.compile(r"<@([A-Z0-9]+)(?:\|[^>]*)?>")
 USER_RE = MENTION_RE
@@ -221,6 +222,13 @@ class SlackAPI:
     def conversations_open(self, user_id):
         """The IM with this Slack user, created if needed. Needs `im:write`."""
         return self.call("conversations.open", {"users": user_id}, post=True).get("channel") or {}
+
+    def unfurl(self, event, unfurls):
+        """Previews for the links of one `link_shared` event. Needs `links:write`. A link still in the
+        composer has an `unfurl_id` and `source` and no message yet; a sent one has its channel and ts."""
+        where = ({"unfurl_id": event.get("unfurl_id"), "source": event.get("source")} if event.get("unfurl_id")
+                 else {"channel": event.get("channel"), "ts": event.get("message_ts")})
+        return self.call("chat.unfurl", {**where, "unfurls": unfurls}, post=True)
 
     def connect(self, on_envelope):
         """Open Socket Mode. `on_envelope(payload)` is called for every events_api envelope after
@@ -525,7 +533,8 @@ class Gateway:
         if missing:
             LOG.warning("Slack app %s lacks scopes %s; reinstall it from connectors/slack-app-manifest.yaml "
                         "(mentions need app_mentions:read; replies show as Tico without %s; "
-                        "bots cannot open shared files without files:read)",
+                        "bots cannot open shared files without files:read; task links get no preview "
+                        "without links:read and links:write)",
                         app, ",".join(missing), CUSTOMIZE_SCOPE)
         if self.judge is None:
             LOG.warning("No decision model (TypeSafe key or a provider API key): every message routes to %s until one is configured",
@@ -550,6 +559,8 @@ class Gateway:
             LOG.warning("Envelope from another workspace or app (%s/%s) ignored",
                         payload.get("team_id"), payload.get("api_app_id"))
             return "foreign"
+        if str(((payload or {}).get("event") or {}).get("type") or "") == "link_shared":
+            return self.unfurl(payload["event"])
         event, why = event_from(payload, self.bot_user_id)
         if not event:
             return why
@@ -607,6 +618,62 @@ class Gateway:
                 changed = c.execute("UPDATE slack_events SET deleted=?,updated=? WHERE channel=? AND ts=? AND deleted IS NULL",
                                     (now, now, event["channel"], event["ts"])).rowcount
         return ("edited" if event["op"] == "edit" else "deleted") if changed else "unknown"
+
+    def unfurl(self, event):
+        """Previews for the task links in a `link_shared` event (backend/slack_unfurl.py), answered at
+        once on the socket's thread: a preview is wanted while the message is being read, and a lost
+        one costs nothing, so nothing is persisted and the envelope is always acknowledged."""
+        found = SU.links(event, SU.hosts(self.settings))
+        if not found:
+            return "unfurl_none"
+        try:
+            with self.store.read() as c:
+                person, _user, why = self.verify_sender(c, {"user_id": str(event.get("user") or "")})
+            if not person:
+                LOG.info("No preview for a link shared in %s: %s", event.get("channel"), why)
+                return "unfurl_denied"
+            channel = str(event.get("channel") or "")
+            if channel and channel != "COMPOSER":
+                try:
+                    if is_external(self.slack.conversations_info(channel)):
+                        return "unfurl_external"
+                except (SlackError, SlackUnreachable):
+                    pass                            # a DM or a private channel Tico is not in: the sender is verified
+            from .auth import Auth, Problem
+            if self._auth is None:
+                self._auth = Auth(self.store)
+            unfurls, shown = {}, []
+            with self.store.read() as c:
+                self._auth.sync_access(c)
+                who = self._auth.identity_for_actor(c, "human:" + person["id"])
+                for url, ref in found:
+                    row = SU.find(c, ref)
+                    try:
+                        row = self._auth.task_row(c, who, row)
+                    except Problem:
+                        continue                    # missing, or not the sender's to show
+                    if H.task_private(c, row):
+                        continue                    # nothing of a private task goes to Slack, as with replies
+                    unfurls[url] = SU.preview(c, self.settings, url, row)
+                    shown.append(row["id"])
+            if not unfurls:
+                return "unfurl_unreadable"
+            try:
+                self.slack.unfurl(event, unfurls)
+            except SlackError as exc:
+                if exc.code not in SU.BLOCK_ERRORS:
+                    raise
+                with self.store.read() as c:        # the open button refused: the same link, as text
+                    unfurls = {url: SU.preview(c, self.settings, url, SU.find(c, ref), button=False)
+                               for url, ref in found if url in unfurls}
+                self.slack.unfurl(event, unfurls)
+            with self.store.transaction() as c:
+                for task_id in shown:
+                    H.event(c, "human:" + person["id"], "slack.unfurl", task_id, {"channel": channel})
+            return "unfurled"
+        except Exception as exc:                    # a preview never takes the socket down or blocks the ack
+            LOG.error("Link preview failed: %s: %s", type(exc).__name__, exc)
+            return "unfurl_failed"
 
     def pending(self):
         """Events not yet handled; one the decision model could not answer waits RETRY_SECONDS before another try."""
@@ -1763,8 +1830,9 @@ def main(argv=None, make_slack=None):
             if _sleep(stopping, 60):
                 continue
             return 0
-        LOG.info("Socket Mode connected; listening for app_mention, message.im, message.channels and message.groups; "
-                 "readers' pass every %d minute(s)", settings.slack_digest_minutes)
+        LOG.info("Socket Mode connected; listening for app_mention, message.im, message.channels, message.groups and "
+                 "link_shared (previews for %s); readers' pass every %d minute(s)",
+                 ", ".join(sorted(SU.hosts(settings))) or "no host", settings.slack_digest_minutes)
         state = {"connected": None, "stamp": slack_app.stamp(store) if stored else None}
 
         def heartbeat():

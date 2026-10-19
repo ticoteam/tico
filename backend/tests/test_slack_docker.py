@@ -35,7 +35,7 @@ def test_manifest_matches_the_code_and_the_yaml():
     scopes = set(manifest["oauth_config"]["scopes"]["bot"])
     assert set(G.NEEDED_SCOPES) <= scopes
     events = set(manifest["settings"]["event_subscriptions"]["bot_events"])
-    assert events == {"app_mention", "message.im", "message.channels", "message.groups"}
+    assert events == {"app_mention", "message.im", "message.channels", "message.groups", "link_shared"}
     assert manifest["settings"]["socket_mode_enabled"] is True
     # Every scope the connector CLI names in its own source is requested.
     import re

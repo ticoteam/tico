@@ -273,6 +273,11 @@ class Settings:
     # messages per channel per pass.
     slack_digest_minutes: int = 60
     slack_digest_cap: int = 200
+    # Link previews (backend/slack_unfurl.py): task links on these hosts, besides the server's own, get a preview in
+    # Slack, whose button opens `slack_open_url` ("{id}" is the task id; default the task in the web app).
+    slack_unfurl_hosts: tuple = ()
+    slack_open_label: str = "Open in Tico"
+    slack_open_url: str = ""
     # Test-only identities are injected in memory, never enabled through HTTP or an env flag.
     test_identities: dict = field(default_factory=dict, repr=False)
     # `python -m backend.demo`: sample data, no bots, no outbound calls (backend/demo.py). A public
@@ -494,6 +499,9 @@ class Settings:
             slack_max_recipients=max(1, int(os.environ.get("TICO_SLACK_MAX_RECIPIENTS", "3") or "3")),
             slack_digest_minutes=max(0, int(os.environ.get("TICO_SLACK_DIGEST_MINUTES", "60") or "60")),
             slack_digest_cap=max(1, int(os.environ.get("TICO_SLACK_DIGEST_CAP", "200") or "200")),
+            slack_unfurl_hosts=tuple(h.strip() for h in os.environ.get("TICO_SLACK_UNFURL_HOSTS", "").split(",") if h.strip()),
+            slack_open_label=os.environ.get("TICO_SLACK_OPEN_LABEL", "").strip() or "Open in Tico",
+            slack_open_url=os.environ.get("TICO_SLACK_OPEN_URL", "").strip(),
         )
         # Local by default, public only with sign-in: no domain and no sign-in setup runs on loopback, but a server
         # that others can reach never starts without a way to sign in.

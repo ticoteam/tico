@@ -199,6 +199,31 @@ record is `uncertain` and waits for a human.
 Thread replies are solicited: turning bot posting off for a channel does not stop them, and they
 grant no bot any posting right there; `connectors/slack.py` and its gates are unchanged.
 
+## Link previews
+
+A link to a task pasted in Slack gets a preview under the message, the way Slack's own links do:
+the task's number and title linked to the pasted URL, the start of its description, its column (or
+status), owner and due date, and an open button. The links that get one, on the server's own host
+and any in `TICO_SLACK_UNFURL_HOSTS`:
+
+- `/task/<id>` and `/ticket/<number>`, each optionally with a readable slug after it
+  (`/ticket/42/fix-the-login-page`) and optionally under `/open/`; the slug is never read, so a
+  renamed task keeps its old links;
+- `/#/task/<id>`, the web app's task page.
+
+The host must be in the app's `unfurl_domains` (the manifest Settings > Slack hands out lists them).
+Slack sends `link_shared` over the same socket; the gateway answers with `chat.unfurl` at once and
+stores nothing. A preview is shown only when the person who pasted the link passes the same sender
+checks as a message (workspace member, not a guest, admitted, on the roster) and may read the task,
+and only for a task that is not private: nothing of a private task goes to Slack. A channel shared
+outside the workspace gets none. Everyone in the conversation then sees the preview; each one is
+recorded as a `slack.unfurl` event with the task and the person.
+
+The button opens `TICO_SLACK_OPEN_URL` (`{id}` is the task id; default the task in the web app) and
+reads `TICO_SLACK_OPEN_LABEL` (default "Open in Tico"), so a team with its own desktop client can
+open the task there. Slack does not take every URL scheme on a button; when it refuses the blocks,
+the preview is sent again with the same link as text.
+
 ## Tables
 
 | Table | One row per | States |
@@ -220,6 +245,7 @@ Settings: `TICO_SLACK_GATEWAY_ENABLED` (the kill switch), `SLACK_TEAM_ID`
 must name), `TICO_SLACK_SECRET_ARN` (the JSON credential `{"bot_token","app_token","team_id","app_id"}`;
 `SLACK_BOT_TOKEN`/`SLACK_APP_TOKEN` in the environment or `/etc/tico/slack` also work), and the
 three thresholds above, `TICO_SLACK_DIGEST_MINUTES` and `TICO_SLACK_DIGEST_CAP` (Channels,
+above), and `TICO_SLACK_UNFURL_HOSTS`, `TICO_SLACK_OPEN_LABEL` and `TICO_SLACK_OPEN_URL` (Link previews,
 above). Only the gateway process reads it; the API never holds a Slack token. Change them in `.env` and run `docker compose up -d`, which restarts only the gateway.
 
 Start-up verifies `auth.test` (the workspace) and `bots.info` (the app) and refuses to run on a
@@ -230,14 +256,15 @@ only that verification and prints it. A post that was mid-flight at the last sto
 Kill switch: `TICO_SLACK_GATEWAY_ENABLED=0` (through `configure`) stops ingress, egress and
 the readers' pass; the tables stay for audit. `TICO_SLACK_DIGEST_MINUTES=0` pauses only the
 readers' pass. Rollback beyond that is removing the `app_mention`, `message.im`,
-`message.channels` and `message.groups` subscriptions from the app manifest; nothing in
+`message.channels`, `message.groups` and `link_shared` subscriptions from the app manifest; nothing in
 Tico needs undoing.
 
 ## Installing or reinstalling the app
 
 `connectors/slack-app-manifest.yaml` is the app: the scopes `connectors/slack.py` uses, plus
-`app_mentions:read` and `chat:write.customize`, Socket Mode on, and the `app_mention`,
-`message.im`, `message.channels` and `message.groups` events. When the installed app lacks any of these (the gateway log says which):
+`app_mentions:read`, `chat:write.customize`, `links:read` and `links:write`, Socket Mode and
+interactivity on, the `app_mention`, `message.im`, `message.channels`, `message.groups` and
+`link_shared` events, and the link-preview hosts in `unfurl_domains`. When the installed app lacks any of these (the gateway log says which):
 
 1. On <https://api.slack.com/apps>, open the Tico app, **App Manifest**, paste the manifest over
    the old one, save.
