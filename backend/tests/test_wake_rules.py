@@ -158,6 +158,29 @@ def test_lead_case_a_held_bot_comment_then_a_persons_comment_the_run_shows_both_
     assert [n["message"] for n in notes] == [bot_comment["id"]] and notes[0]["sent"] <= person["created"]
 
 
+def test_held_news_reaches_the_run_in_arrival_order_whoever_sent_it_across_the_batch_boundary(api):
+    r = setup(api)
+    with api.app.state.store.transaction() as c:
+        task, _ = parked_task(c)
+        bot_comment = H.task_comment(c, "bot:ops", task["id"], "Scope add: log every skip.")
+        with as_cause("bot:ops"):
+            notices = [news(c, task, f"Relation added: Docs {i}") for i in range(50)]
+        # Tico's own urgent note (a lifted quarantine's) still comes first, though it is the newest.
+        urgent = H.new_id()
+        c.execute("INSERT INTO notes(id,from_actor,to_actor,body,created) VALUES(?,?,?,?,?)",
+                  (urgent, H.KEEPER, "bot:cpo", "Back from quarantine", H.now()))
+        assert jobs(c, "cpo") == 0
+        H.task_comment(c, "human:ana", task["id"], "Please start this today.")
+    first = claim(api, r, "cpo")
+    assert first["notes"][0]["id"] == urgent
+    carried = [n["message"] for n in first["notes"] if n.get("message")]
+    held = [bot_comment["id"], *(m["id"] for m in notices)]
+    assert carried == held[:len(carried)] and len(first["notes"]) == 50
+    finish(api, r, first)
+    second = claim(api, r, "cpo")
+    assert [n["message"] for n in second["notes"] if n.get("message")] == held[len(carried):]
+
+
 # ----------------------------------------------------------------------------- own writes never wake
 
 def test_t3_a_bots_own_comment_never_wakes_it(api):
@@ -251,11 +274,41 @@ def test_each_always_wake_case_is_never_filtered_even_on_a_parked_task_by_its_ow
         assert W.rule_for(c, actor, "bot:cpo", kind, {**refs, "task": task["id"]}, body, task, cause) is None
 
 
+@pytest.mark.parametrize("parked_on", ["blocked_by", "wake_once"])
+def test_a_reply_the_parked_bot_waits_on_wakes_it(api, parked_on):
+    # A plain reply passes bot_to_bot.can_wait as urgent; the parked rule must not then hold it.
+    setup(api)
+    with api.app.state.store.transaction() as c:
+        if parked_on == "blocked_by":
+            task, _ = parked_task(c)
+        else:
+            task = H.task_create(c, "bot:ops", "Ship the export", "Build it", "bot:cpo")
+            c.execute("INSERT INTO task_links(id,task_id,kind,url,title,state,added_by,created,detail_json) "
+                      "VALUES('l1',?,'pr','https://github.com/o/r/pull/1','PR','open','bot:cpo',?,?)",
+                      (task["id"], H.now(), json.dumps({"wake_once": {"by": "bot:cpo", "at": H.now()}})))
+            task = H.task(c, task["id"])
+        assert W.parked(c, task) == parked_on
+        room = task["conversation_id"]
+        asked = [H.say(c, "bot:cpo", "bot:ops", "Which release has the fix?", room, kind="ask", refs={"task": task["id"]}),
+                 H.say(c, "bot:cpo", "bot:ops", "Need the build now", room, refs={"task": task["id"], "needs_action": True}),
+                 H.say(c, "bot:cpo", "bot:ops", "Send me the log", room, refs={"task": task["id"]}, wait_s=600)]
+        c.execute("DELETE FROM jobs")
+        for parent in asked:
+            before = jobs(c, "cpo")
+            reply = H.say(c, "bot:ops", "bot:cpo", "Here you go", room, refs={"task": task["id"]},
+                          in_reply_to=parent["id"])
+            assert jobs(c, "cpo") == before + 1 and not reply["refs"].get(W.MARK), parent["body"]
+        # So does anything the rules cannot read as plain news: a malformed flag, a reference they do not know.
+        for refs in ({"needs_action": "yes"}, {"something_new": 1}):
+            assert not news(c, task, "Moved", refs=refs)["refs"].get(W.MARK), refs
+        assert skips(c) == [] and not c.execute("SELECT 1 FROM notes WHERE to_actor='bot:cpo'").fetchone()
+
+
 def test_the_always_wake_list_is_one_list_the_bot_to_bot_rule_reads_first(api):
     from backend import bot_to_bot as B
     setup(api)
     with api.app.state.store.transaction() as c:
-        assert [key for key, _ in W.ALWAYS_WAKE] == ["person", "ask", "approval", "needs_action", "gate"]
+        assert [key for key, _ in W.ALWAYS_WAKE] == ["person", "ask", "approval", "needs_action", "reply", "gate"]
         # A bot's plain fyi to a bot waits (Dev 149); the same words with an always-wake reference do not.
         assert B.can_wait(c, "bot:ops", "bot:cpo", "say", {}, "fyi") is True
         assert B.can_wait(c, "bot:ops", "bot:cpo", "say", {"run_now": True}, "fyi") is False

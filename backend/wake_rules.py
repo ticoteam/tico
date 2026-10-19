@@ -34,12 +34,14 @@ ALWAYS_WAKE = (
     ("person", "a person's message or comment, or a notice of a person's own act (an approval, a step move)"),
     ("ask", "an ask, answer or steer: a question to the bot, or the answer it waits on"),
     ("approval", "an approval decided, withdrawn or asked about, or a structured question"),
-    ("needs_action", "a message its sender flagged needs-action"),
+    ("needs_action", "a message its sender flagged needs-action (or a flag that is not plainly true or false)"),
+    ("reply", "a reply to the bot's own ask, to a message it flagged needs-action, or to one it waits on (wait_s)"),
     ("gate", "a factory gate verdict on the bot's ticket: Review 1, Review 2, QA or Security"),
 )
 ALWAYS_KINDS = frozenset({"ask", "answer", "steer"})
 # References that make a message more than news: a decision, a question, an instruction.
 ALWAYS_REFS = frozenset({"approval", "questions", "command", "run_now"})
+FLAG = "needs_action"
 VERDICT = re.compile(r"^\s*VERDICT:\s*(approve|changes)\s+PR\s+#\d+\s+head\s+[0-9a-f]{7,40}\b", re.I | re.M)
 
 # What a parked task waits for, by the refs its wake carries. These wake even when the bot's own write caused them.
@@ -56,6 +58,10 @@ HOLDABLE_TRIGGERS = ("comment", "status_or_relation")
 # wake_presets.classify classes that are news. An assignment, a blocker, a review request, an awaited result, a
 # question or a person's message is not, whatever its trigger says.
 HOLDABLE_CLASSES = ("notice", "message")
+# The references news carries: a plain message's, the trigger stamp, a finished task's summary. Anything else (a
+# wake kind, a batch, an answer) is more than news, and so is a reference no rule here knows yet.
+NEWS_REFS = frozenset({"task", "comment", "attachments", "files", "unsolicited", "turn_id", "warnings", "via",
+                       FLAG, "trigger", "trigger_source", "task_completion"})
 
 RULES = ("own_write", "parked")
 SKIPPED = "wake.skipped"
@@ -63,8 +69,9 @@ SKIPPED = "wake.skipped"
 UNFINISHED = ("open", "doing", "waiting", "review", "ready", "blocked")
 
 
-def always_wakes(conn, actor, target, kind, refs, body, cause=None):
-    """The ALWAYS_WAKE key this message matches, or None. Rules never filter a match."""
+def always_wakes(conn, actor, target, kind, refs, body, cause=None, in_reply_to=None):
+    """The ALWAYS_WAKE key this message matches, or None. Rules never filter a match. A reply whose parent this
+    cannot read matches "reply": fail open."""
     refs = refs if isinstance(refs, dict) else {}
     cause = CAUSE.get() if cause is None else cause
     if str(actor).startswith("human:") or str(cause).startswith("human:"):
@@ -73,11 +80,27 @@ def always_wakes(conn, actor, target, kind, refs, body, cause=None):
         return "ask"
     if set(refs) & ALWAYS_REFS:
         return "approval"
-    if refs.get("needs_action") is True:
+    if refs.get(FLAG, False) is not False:
         return "needs_action"
     if VERDICT.search(str(body or "")):
         return "gate"
+    if in_reply_to and _awaited_reply(conn, target, in_reply_to):
+        return "reply"
     return None
+
+
+def _awaited_reply(conn, target, in_reply_to):
+    """Whether a reply answers something `target` waits on: its own ask, a message it flagged needs-action, or one
+    it sent with wait_s. True when the parent cannot be read."""
+    try:
+        parent = conn.execute("SELECT from_actor,kind,refs_json,wait_s FROM messages WHERE id=?",
+                              (in_reply_to,)).fetchone()
+    except Exception:  # noqa: BLE001 - fail open
+        return True
+    if not parent:
+        return True
+    return parent["from_actor"] == target and bool(parent["kind"] == "ask" or parent["wait_s"]
+                                                   or '"' + FLAG + '": true' in str(parent["refs_json"] or ""))
 
 
 def awaited(refs):
@@ -112,22 +135,26 @@ def parked(conn, task_row):
     return None
 
 
-def _news(actor, target, kind, refs, body, cause):
-    """Whether this wake is news a rule may hold: nothing on ALWAYS_WAKE or AWAITED, a comment or a task's status,
-    step or relation moving, and in wake_presets' words a notice or a message. Reads no table."""
+def _news(conn, actor, target, kind, refs, body, cause, in_reply_to=None):
+    """Whether this wake is news a rule may hold: nothing on ALWAYS_WAKE or AWAITED, only NEWS_REFS, a comment or a
+    task's status, step or relation moving, and in wake_presets' words a notice or a message. wake_presets' labels
+    alone are no permission (it calls any bot's message a message), so the refs are checked here first. Reads a
+    table only for a reply's parent."""
     from . import run_triggers, wake_presets
-    if always_wakes(None, actor, target, kind, refs, body, cause) or awaited(refs):
+    if set(refs) - NEWS_REFS or awaited(refs):
+        return False
+    if always_wakes(conn, actor, target, kind, refs, body, cause, in_reply_to):
         return False
     if run_triggers.of_message({"refs": refs, "from_actor": actor})[0] not in HOLDABLE_TRIGGERS:
         return False
     return wake_presets.classify({"refs": refs, "from_actor": actor, "body": body, "kind": kind})[0] in HOLDABLE_CLASSES
 
 
-def rule_for(conn, actor, target, kind, refs, body, task_row, cause=None):
+def rule_for(conn, actor, target, kind, refs, body, task_row, cause=None, in_reply_to=None):
     """The rule that lets this wake wait, or None (it wakes). `task_row` is the task it is about, or None."""
     cause = CAUSE.get() if cause is None else cause
     refs = refs if isinstance(refs, dict) else {}
-    if not _news(actor, target, kind, refs, body, cause):
+    if not _news(conn, actor, target, kind, refs, body, cause, in_reply_to):
         return None
     if cause and cause == target:
         return "own_write"
@@ -153,19 +180,21 @@ def _would_queue(conn, actor, target, refs):
     return not (row and row[0] in EXTERNAL_HARNESSES)
 
 
-def gate(conn, actor, target, kind, refs, body, conv):
+def gate(conn, actor, target, kind, refs, body, conv, in_reply_to=None):
     """The rule a message about to be written to `target` waits under, or None when it wakes as before. Most
-    messages are not news (_news) and cost no query. Fail open."""
+    messages are not news (_news) and cost no query beyond a reply's parent. Fail open."""
     from . import hubdb as H
     try:
         refs = refs or {}
         if not isinstance(refs, dict) or not str(target).startswith("bot:"):
             return None
         cause = CAUSE.get()
-        if not _news(actor, target, kind, refs, body, cause) or not _would_queue(conn, actor, target, refs):
+        if not _news(conn, actor, target, kind, refs, body, cause, in_reply_to) \
+                or not _would_queue(conn, actor, target, refs):
             return None
         task_id = H.message_task_id({"refs": refs}, conv)
-        return rule_for(conn, actor, target, kind, refs, body, H.task(conn, task_id) if task_id else None, cause)
+        return rule_for(conn, actor, target, kind, refs, body, H.task(conn, task_id) if task_id else None, cause,
+                        in_reply_to)
     except Exception:  # noqa: BLE001 - fail open: a wake this cannot read starts its run as before
         return None
 
