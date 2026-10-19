@@ -20,12 +20,31 @@ const providersGatewayIds = view => (view.providers || []).filter(row => row.gat
 // One line per provider: box, name, a few muted words. The vendors that run through OpenRouter share one line.
 const PROVIDER_LINE = {openai: 'Codex, ChatGPT or API key', anthropic: 'Claude Code, Claude or API key', google: 'Gemini CLI, API key',
   xai: 'Grok Build, Grok or API key', cursor: 'Cursor agent, Cursor or API key', meta: 'Muse Code, Meta account or API key'};
+// The company's models choice (backend/models_preset.py), first in the form. Plain words only: no provider logos, and
+// nothing that says Tico partners with, or is approved by, a model provider.
+const PROVIDER_PRESETS = [
+  {id: 'subscriptions-gateway', label: 'Your Claude and ChatGPT subscriptions, plus Tico Gateway', recommended: true,
+   line: "Sign in with your own Claude and ChatGPT accounts. Don't share one login across your team. Until you sign in, and when a plan runs out, bots run on Tico Gateway."},
+  {id: 'subscriptions', label: 'Your Claude and ChatGPT subscriptions only',
+   line: 'Bots wait until a Claude or ChatGPT account is signed in on their computer.'},
+  {id: 'gateway', label: 'Tico Gateway only', line: 'Bots run on Tico models with the company\'s gateway key below.'},
+  {id: 'own-keys', label: "Your company's plans or API keys", line: 'Bring your own: tick the providers below and sign in, or add API keys in Credentials.'},
+];
+// The two choices that run main work on Claude and ChatGPT tick them when nothing is ticked yet.
+const PRESET_PROVIDERS = {'subscriptions-gateway': ['anthropic', 'openai'], subscriptions: ['anthropic', 'openai']};
+function providersPresetHTML(view, dis) {
+  const known = view.presets || PROVIDER_PRESETS.map(row => row.id);
+  return `<div class="prov-list" role="radiogroup" aria-label="Models" data-provider-presets>${PROVIDER_PRESETS.filter(row => known.includes(row.id)).map(row =>
+    `<label class="prov prov-preset"><input type="radio" name="provider-preset" data-provider-preset value="${esc(row.id)}" ${view.preset === row.id ? 'checked' : ''}${dis}>
+      <strong>${esc(row.label)}</strong>${row.recommended ? ' <span class="pill">Recommended</span>' : ''}<span class="muted">${esc(row.line)}</span></label>`).join('')}</div>`;
+}
 function providersFormHTML(view, models, id, editable = true) {
   const enabled = view.enabled || [], dis = editable ? '' : ' disabled';
   const box = row => `<input type="checkbox" data-provider value="${esc(row.id)}" ${enabled.includes(row.id) ? 'checked' : ''}${dis}>`;
   const rows = (view.providers || []).filter(row => !row.gateway);
   const direct = rows.filter(row => PROVIDER_LINE[row.id]), routed = rows.filter(row => !PROVIDER_LINE[row.id]);
   return `<div id="${id}" data-providers-form>
+    ${providersPresetHTML(view, dis)}
     <div class="prov-list" role="group" aria-label="Providers">${direct.map(row =>
       `<label class="prov">${box(row)}<strong>${esc(row.label)}</strong><span class="muted">${esc(PROVIDER_LINE[row.id])}</span></label>`).join('')}
       ${routed.length ? `<div class="prov prov-routed"><span class="muted">Via OpenRouter</span>${routed.map(row =>
@@ -54,10 +73,18 @@ function providersWire(root, view, models) {
   providersFillModels(root, view, models, view.default?.model || '');
   root.querySelectorAll('[data-provider]').forEach(input => input.onchange = () =>
     providersFillModels(root, view, models, root.querySelector('[data-provider-model]').value));
+  root.querySelectorAll('[data-provider-preset]').forEach(input => input.onchange = () => {
+    const boxes = [...root.querySelectorAll('[data-provider]')];
+    if (boxes.some(box => box.checked)) return;
+    boxes.filter(box => (PRESET_PROVIDERS[input.value] || []).includes(box.value)).forEach(box => { box.checked = true; });
+    providersFillModels(root, view, models, root.querySelector('[data-provider-model]').value);
+  });
 }
 const providersCollect = root => {
   const fallback = root.querySelector('[data-provider-fallback]'), check = root.querySelector('[data-provider-check]');
+  const preset = root.querySelector('[data-provider-preset]:checked');
   return {enabled: [...root.querySelectorAll('[data-provider]:checked')].map(input => input.value),
+    ...(preset ? {preset: preset.value} : {}),
     model: root.querySelector('[data-provider-model]').value, ...(fallback ? {auto_fallback: fallback.checked} : {}),
     // Sent only when edited, so a save about something else never re-checks a saved entry.
     ...(check && check.value !== check.defaultValue ? {check_models: check.value.split(',').map(item => item.trim()).filter(Boolean)} : {})};
@@ -65,7 +92,8 @@ const providersCollect = root => {
 async function providersSave(view, chosen) {
   return put('/v2/providers', {enabled: chosen.enabled, model: chosen.model, expected_revision: view.revision || 0,
     ...('auto_fallback' in chosen ? {auto_fallback: chosen.auto_fallback} : {}),
-    ...('check_models' in chosen ? {check_models: chosen.check_models} : {})});
+    ...('check_models' in chosen ? {check_models: chosen.check_models} : {}),
+    ...('preset' in chosen ? {preset: chosen.preset} : {})});
 }
 async function renderSettingsProviders() {
   const el = $('#set-providers'); if (!el) return;

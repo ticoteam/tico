@@ -7,15 +7,20 @@
 :root[data-theme="light"] .brand-logo.on-light{display:block}
 :root[data-theme="light"] .brand-logo.on-dark{display:none}
 @media (prefers-color-scheme:light){:root[data-theme="system"] .brand-logo.on-light{display:block}:root[data-theme="system"] .brand-logo.on-dark{display:none}}
-.onb-head h1{font-size:var(--t-lg);line-height:1.2;margin:2px 0 4px}
+.onb-head h1{font-size:var(--t-2xl);line-height:1.2;letter-spacing:-.015em;margin:6px 0 4px}
 .onb-head p{margin:0;color:var(--muted);font-size:var(--t-base)}
-.onb-progress{display:flex;align-items:center;gap:var(--s2) var(--s3);flex-wrap:wrap;margin:0 0 var(--s4);padding:0;list-style:none}
-.onb-progress li{display:flex;align-items:center;gap:6px;font-size:var(--t-sm);color:var(--muted)}
+.onb-progress{display:flex;align-items:center;gap:var(--s2) var(--s3);flex-wrap:nowrap;margin:0 0 var(--s4);padding:0;list-style:none}
+.onb-progress li{display:flex;align-items:center;gap:6px;font-size:var(--t-sm);color:var(--muted);white-space:nowrap}
 .onb-progress li::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--idle-bg);border:1px solid var(--line)}
 .onb-progress li.done::before{background:var(--ok);border-color:var(--ok)}
 .onb-progress li.cur{color:var(--ink);font-weight:600}
 .onb-progress li.cur::before{background:var(--accent);border-color:var(--accent)}
-.onb-count{font-size:var(--t-sm);color:var(--muted);margin:calc(var(--s3) * -1) 0 var(--s4)}
+/* "Step 4 of 7" is for screen readers: the row already shows where you are */
+.onb-count{margin:0}
+/* the form steps wear the team chart's card (ui/styles/first-run.css .ob-card), so the flow reads as one product */
+#onb-step:not(.ob-host){border-radius:16px;padding:26px 28px;
+  box-shadow:0 1px 2px rgba(15,23,42,.04),0 12px 32px -20px rgba(15,23,42,.28)}
+.onb-lead{margin:0 0 var(--s3);font-size:var(--t-base);max-width:60ch}
 .catalog-picker{width:min(920px,94vw);padding:0;border:0;background:var(--surface);color:var(--ink)}
 .catalog-picker .bot-editor-body{max-height:min(74vh,720px);overflow:auto}
 .onb-field{display:block;margin-bottom:var(--s4)}
@@ -85,4 +90,9 @@
 .onb-group:last-child .onb-bot:last-child{border-bottom:0}
 .onb-bot-name{flex:1;min-width:0;overflow-wrap:anywhere}
 .onb-bot-actions{display:flex;gap:var(--s2);align-items:center;flex:none}
-@media (max-width:760px){.cat-grid{grid-template-columns:minmax(0,1fr)}.onb-summary .k{flex-basis:100%}.onb{max-width:none}.onb-code-value{font-size:20px}}
+@media (max-width:760px){.cat-grid{grid-template-columns:minmax(0,1fr)}.onb-summary .k{flex-basis:100%}.onb{max-width:none}.onb-code-value{font-size:20px}
+  /* a phone: the dots, and the current step's name only */
+  .onb-head h1{font-size:var(--t-xl)}
+  .onb-progress{gap:var(--s2)}
+  .onb-progress li:not(.cur) span{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+  #onb-step:not(.ob-host){padding:20px 16px;border-radius:14px}}

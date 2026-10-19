@@ -800,10 +800,10 @@ SCHEMAS = {
                          "Bots with queued work that is not starting, or left in setup for over a day (the caller may "
                          "read them): bot, name, queued, oldest, computer, reason (not_ready, computer_offline, no_computer, "
                          "slow, limit, updating, restarting, setup, or a reason the claim holds the work: draining, maintaining, "
-                         "lane_held, uncertain, cooling_off, readiness_unknown, sign_in_rejected, profile, config, "
-                         "check_model, unreadable), why, since (setup only: when the bot was added), and fix (label plus "
-                         "href/tab, login, move or finish; null unless the caller administers bots, or for setup may "
-                         "manage the bot: finish is POST /api/v2/bots/{bot}/onboarded)"},
+                         "lane_held, uncertain, cooling_off, readiness_unknown, sign_in_rejected, not_isolated, "
+                         "isolation_unknown, profile, config, check_model, unreadable), why, since (setup only: when the "
+                         "bot was added), and fix (label plus href/tab, login, move or finish; null unless the caller "
+                         "administers bots, or for setup may manage the bot: finish is POST /api/v2/bots/{bot}/onboarded)"},
                   on_fallback={"type": "array", "items": {"type": "object"}, "description":
                                "Bots whose latest run in the last day ran on a fallback harness (the caller may read "
                                "them): bot, harness, since (when the unbroken run of fallback turns began)"},
