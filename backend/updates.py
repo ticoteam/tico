@@ -1131,7 +1131,8 @@ def tree(c, actor, readable, kind, day=None, scope=None):
     """One day's updates nested by the org chart, for the Updates page: each person and bot the
     caller may read, its update or none, and the ones below it. `scope` below starts at the caller
     (the default when someone reports to them), all at the top of the chart. Only direct reports
-    are `direct`, the one level that alerts; `unread` counts just those."""
+    are `direct`, the one level that alerts; `unread` counts just those. Archived updates are left out as
+    in the Inbox, so an explicit past `day` shows only that day's cards a newer day has not replaced."""
     from . import people as P
     from . import report_order
     roster, entries, archived = _chart(c)
@@ -1153,9 +1154,13 @@ def tree(c, actor, readable, kind, day=None, scope=None):
     marks = ",".join("?" * len(authors)) or "''"
     if not day:
         day = c.execute(f"SELECT max(day) FROM updates WHERE kind=? AND bot IN ({marks})", (kind, *authors)).fetchone()[0] or today()
+    # The same per-reader archive filter as the feed: a card this person archived stays off its node,
+    # and the node keeps its reports below it.
     rows = {r["bot"]: r for r in c.execute(
         f"SELECT u.*, r.read_at FROM updates u LEFT JOIN update_reads r ON r.update_id=u.id AND r.actor=? "
-        f"WHERE u.kind=? AND u.day=? AND u.bot IN ({marks})", (actor, kind, day, *authors))}
+        "LEFT JOIN update_archive_overrides ao ON ao.update_id=u.id AND ao.actor=? "
+        f"WHERE u.kind=? AND u.day=? AND u.bot IN ({marks}) AND NOT {_is_archived_sql()}",
+        (actor, actor, kind, day, *authors))}
     direct = set(direct_reports(c, author_of(actor))) & set(authors)
     children = {}
     for key, node in nodes.items():

@@ -4294,7 +4294,7 @@ def create_app(settings=None):
     @app.post("/api/v2/runners/{rid}/logins")
     def start_login(request: Request, rid: str, body: M.LoginStart):
         return mutate(request, body, lambda c: model_login.start(
-            c, request.state.identity, rid, body.runtime, body.profile, auth=auth, switch=body.switch))
+            c, request.state.identity, rid, body.runtime, body.profile, auth=auth, switch=body.switch, to=body.to))
 
     # Sign a login out (the computer's own, or a named subscription's); it is read back like a sign-in.
     @app.post("/api/v2/runners/{rid}/logouts")

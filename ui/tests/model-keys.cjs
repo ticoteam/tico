@@ -112,8 +112,9 @@ const {unrouted} = require('./support/routes.cjs');
     // Whose key, by its preview only; Clear key stands in for Sign out.
     assert.match(await own('codex').locator('.machine-key').innerText(), /the company's shared key sk-…xyz/);
     assert.match(await own('claude').locator('.machine-key').innerText(), /this computer's key sk-…abc/);
-    assert.deepEqual(await buttons(own('codex')), ['Replace key', 'Clear key']);
-    assert.deepEqual(await buttons(own('claude')), ['Replace key', 'Clear key']);
+    // Switch to subscription moves a login off its key (ui/tests/model-sign-out.cjs covers the switch itself).
+    assert.deepEqual(await buttons(own('codex')), ['Replace key', 'Clear key', 'Switch to subscription']);
+    assert.deepEqual(await buttons(own('claude')), ['Replace key', 'Clear key', 'Switch to subscription']);
     assert.equal(await own('cursor').count(), 0, 'no bot uses it: not a connection');
     assert.deepEqual(await addKey('cursor').locator('button').allInnerTexts(), ['Add key'], 'a signed-out key runtime offers Add key');
     assert.equal(await detail.locator('[data-add-key="codex"], [data-add-key="claude"]').count(), 0, 'not where a key signs it in');

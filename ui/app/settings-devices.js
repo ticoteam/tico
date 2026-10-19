@@ -291,10 +291,11 @@ function machineSignInHTML(machine, online, name, auth, value) {
 }
 // A login someone signed out from Tico (backend/model_login.py model_login_cleared); '' is the computer's own login.
 const machineSignedOut = (machine, runtime, profile = '') => (machine.signed_out?.[runtime] || []).includes(profile);
-// Sign out / Switch account (or Use the shared key) for one login, from the shared sign-in module (ui/model-login.js).
+// Sign out / Switch account (or Use the shared key, or Switch to subscription for the computer's login on an API key)
+// for one login, from the shared sign-in module (ui/model-login.js).
 const machineLoginActions = (machine, online, runtime, profile, signedIn) => window.TicoModelLogin?.actionsHTML({
   runnerId: machine.id, runtime, machine: machine.label, profile, signedIn, signedOut: machineSignedOut(machine, runtime, profile), online,
-  platform: machine.platform || ''}) || '';
+  platform: machine.platform || '', onKey: !profile && machine.readiness?.runtimes?.[runtime]?.account?.kind === 'api_key'}) || '';
 // The key a login runs on (its readiness `key`: {name, source}), by its stored preview only: this computer's own key or
 // the company's shared one (backend/computer_keys.py), or one set on the computer itself.
 function machineKeyHTML(machine, runtime, key) {
@@ -304,8 +305,10 @@ function machineKeyHTML(machine, runtime, key) {
   return ` <span class="muted machine-key" data-machine-key="${esc(key.source)}">· ${esc(whose)}${stored?.preview ? ` <code>${esc(stored.preview)}</code>` : ''}</span>`;
 }
 // Replace key / Clear key, or Add key, from the shared sign-in module (ui/model-login.js).
-const machineKeyActions = (machine, online, runtime, key, signedIn) => window.TicoModelLogin?.keyActionsHTML({
-  runnerId: machine.id, runtime, machine: machine.label, key, signedIn, online}) || '';
+const machineKeyActions = (machine, online, runtime, key, signedIn) => (window.TicoModelLogin?.keyActionsHTML({
+  runnerId: machine.id, runtime, machine: machine.label, key, signedIn, online}) || '')
+  + (signedIn && key ? window.TicoModelLogin?.toSubscriptionHTML({runnerId: machine.id, runtime, machine: machine.label, online,
+    platform: machine.platform || ''}) || '' : '');
 // A sign-in several of the computer's bots run on (`shared_logins`, backend/views.py shared_logins), for a harness whose
 // login serves one run at a time (`one_turn_per_login`): those bots take turns, so it says so beside that login.
 function machineSharedLoginHTML(machine, runtime, profile = '') {

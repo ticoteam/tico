@@ -59,7 +59,9 @@ function machineConnections(machine) {
       own: false, missing: true, state: {signed_in: false}, bots: [b.bot], problem: b.problem || 'Not signed in on this computer'});
   }
   for (const r of rows) {
-    r.attention = !!((r.bots.length && r.state.signed_in === false) || r.auth === 'rejected' || (r.missing && r.bots.length));
+    // Signed out from Tico is a red dot even with no bots on it yet: nothing signs it back in by itself.
+    const cleared = r.state.signed_in === false && machineSignedOut(machine, r.runtime, r.profile?.name ?? '');
+    r.attention = !!((r.bots.length && r.state.signed_in === false) || cleared || r.auth === 'rejected' || (r.missing && r.bots.length));
     r.tool = machineToolName(machine, r.runtime);
   }
   return rows.sort((a, b) => a.tool.localeCompare(b.tool) || Number(b.own) - Number(a.own) || a.name.localeCompare(b.name));
@@ -81,7 +83,8 @@ function machineLeftWords(weekly) {
 function machineAttentionWords(conn) {
   if (conn.missing) return conn.problem;
   if (conn.auth === 'rejected') return 'Login expired or rejected';
-  return conn.attention ? 'Signed out; bots use it' : '';
+  if (!conn.attention) return '';
+  return conn.bots.length ? 'Signed out; bots use it' : 'Signed out';
 }
 // One chip per connection: the tool, a thin bar and the % left; a red dot only when it needs attention.
 function machineChipHTML(machine, conn) {
@@ -114,7 +117,8 @@ function machineConnectionHTML(machine, conn, online, manage) {
   const offline = online ? '' : ' disabled title="Computer is offline"';
   let action = '';
   if (manage && conn.state.signed_in !== true && !conn.missing) {
-    if (harnessCaps(conn.runtime).browser_sign_in) action = ` <button class="ghost machine-signin" type="button" data-model-login data-runner="${esc(machine.id)}" data-runtime="${esc(conn.runtime)}" data-machine="${esc(machine.label)}"${conn.profile ? ` data-profile="${esc(conn.profile.name)}"` : ''}${offline}>Sign in</button>`;
+    // "Signed out · Sign in": the way back sits next to what is wrong.
+    if (harnessCaps(conn.runtime).browser_sign_in) action = `${conn.state.signed_in === false ? '<span class="computer-conn-sep" aria-hidden="true"> · </span>' : ' '}<button class="ghost machine-signin" type="button" data-model-login data-runner="${esc(machine.id)}" data-runtime="${esc(conn.runtime)}" data-machine="${esc(machine.label)}"${conn.profile ? ` data-profile="${esc(conn.profile.name)}"` : ''}${offline}>Sign in</button>`;
     else if (!conn.profile) action = machineTerminalSignInHTML(machine, conn.runtime);
   }
   // Switch account / Sign out (or Use the shared key) per login, from ui/model-login.js; only while online. On the

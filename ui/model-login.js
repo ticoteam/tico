@@ -54,15 +54,19 @@
   }
 
   // `profile` signs in one of the computer's subscriptions (runner-rs/src/profiles.rs) instead of its default login.
-  // `switchAccount` signs in to another account in place of the one signed in now.
-  function open({runnerId, runtime, machine, profile = '', switchAccount = false}) {
+  // `switchAccount` signs in to another account in place of the one signed in now. `toSubscription` does the same for
+  // the computer's login running on an API key: the key stays in use until the subscription works, then goes.
+  function open({runnerId, runtime, machine, profile = '', switchAccount = false, toSubscription = false}) {
     const base = `/v2/computers/${encodeURIComponent(runnerId)}/logins`;
     const name = (RUNTIME_NAMES[runtime] || runtime) + (profile ? ` · ${profile}` : '');
-    const kept = switchAccount ? ' The account signed in before still works.' : '';
+    const kept = toSubscription ? ' The API key is still in use.' : switchAccount ? ' The account signed in before still works.' : '';
+    const where = machine || 'the computer';
     const dialog = document.createElement('dialog');
     dialog.className = 'tmodal model-login';
     dialog.setAttribute('aria-labelledby', 'model-login-title');
-    dialog.innerHTML = `<header><h2 id="model-login-title">${switchAccount ? 'Switch account for' : 'Sign in to'} ${text(name)}${machine ? ` on ${text(machine)}` : ''}</h2>
+    const title = toSubscription ? `Switch ${text(name)}${machine ? ` on ${text(machine)}` : ''} to a subscription`
+      : `${switchAccount ? 'Switch account for' : 'Sign in to'} ${text(name)}${machine ? ` on ${text(machine)}` : ''}`;
+    dialog.innerHTML = `<header><h2 id="model-login-title">${title}</h2>
         <button class="ghost tmodal-x" type="button" data-close aria-label="Close">✕</button></header>
       <div class="model-login-body" data-body></div>
       <p class="model-login-status" role="status" aria-live="polite" data-status></p>
@@ -100,7 +104,8 @@
       } else if (state === 'finishing') {
         label = `Putting the new account in place on ${machine || 'the computer'}…`;
       } else if (state === 'signed_in') {
-        label = switchAccount ? `Switched. ${name} on ${machine || 'the computer'} now uses the new account; its bots keep it.`
+        label = toSubscription ? `Switched. ${name} on ${where} now runs on the subscription; its bots keep it, and the API key is off.`
+          : switchAccount ? `Switched. ${name} on ${where} now uses the new account; its bots keep it.`
           : `Signed in. ${name} is ready on ${machine || 'the computer'}.`;
       } else if (state === 'failed') {
         label = (login.message || 'The sign-in failed.') + kept;
@@ -186,7 +191,7 @@
       closed = false;
       note = '';
       status.textContent = 'Starting…';
-      try { login = await post(base, {runtime, ...(profile ? {profile} : {}), ...(switchAccount ? {switch: true} : {})}); }
+      try { login = await post(base, {runtime, ...(profile ? {profile} : {}), ...(toSubscription ? {to: 'subscription'} : switchAccount ? {switch: true} : {})}); }
       catch (error) { status.textContent = error.message; actions.innerHTML = '<button class="ghost" type="button" data-close>Close</button>'; return; }
       draw();
       if (active(login.state)) timer = setTimeout(tick, POLL_MS);
@@ -194,6 +199,13 @@
     dialog.showModal();
     void begin();
     return dialog;
+  }
+
+  // "Reviewer 1", "Reviewer 1 and QA", "Reviewer 1, QA and Scout", "Reviewer 1, QA and 2 more".
+  function botsWords(names) {
+    if (names.length <= 1) return names.join('');
+    if (names.length <= 3) return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+    return `${names.slice(0, 2).join(', ')} and ${names.length - 2} more`;
   }
 
   // Sign a login out, after a confirmation naming the bots on it that stop. Bots and assignments stay; the login reads
@@ -226,9 +238,9 @@
       said.textContent = 'Checking which bots use it…';
       get(`${computer}/logouts/bots?${query}`).then(found => {
         const bots = (found.bots || []).map(bot => bot.name || bot.bot);
-        said.textContent = bots.length
-          ? `${bots.length === 1 ? 'This bot stops' : `These ${bots.length} bots stop`} until someone signs in again: ${bots.join(', ')}.`
+        said.textContent = bots.length ? `${botsWords(bots)} will stop running until this is signed in again.`
           : 'No bot uses this login right now.';
+        if (bots.length > 3) said.title = bots.join(', ');
         const button = actions.querySelector('[data-sign-out]');
         if (button) button.disabled = false;
       }, error => {
@@ -285,19 +297,30 @@
 
   // The Sign out / Switch account buttons for a signed-in login, and Use the shared key for a computer login a person
   // signed out. Only for a CLI whose manifest has a logout (`sign_out`), on a computer that is online, to whoever may
-  // sign it in (the caller checks: an admin or the computer's operator).
-  // No Switch account where the CLI keeps the login in the system keychain (`switch_unavailable_on`, by the computer's
-  // `platform`): there is no side to sign in on, so a cancel could not keep the old account.
-  function actionsHTML({runnerId, runtime, machine = '', profile = '', signedIn = false, signedOut = false, online = true, platform = ''}) {
+  // sign it in (the caller checks: an admin or the computer's operator). The computer's login running on an API key
+  // (`onKey`) offers Switch to subscription instead of Switch account.
+  // No switch where the CLI keeps the login in the system keychain (`switch_unavailable_on`, by the computer's
+  // `platform`): there is no side to sign in on, so a cancel could not keep the old login.
+  function actionsHTML({runnerId, runtime, machine = '', profile = '', signedIn = false, signedOut = false, online = true, platform = '', onKey = false}) {
     const caps = typeof harnessCaps === 'function' ? harnessCaps(runtime) : {};
     if (!online || !caps.sign_out) return '';
     const data = `data-runner="${text(runnerId)}" data-runtime="${text(runtime)}" data-machine="${text(machine)}"${profile ? ` data-profile="${text(profile)}"` : ''}`;
     if (signedIn) {
       const switches = !(caps.switch_unavailable_on || []).includes(platform);
-      return (switches ? ` <button class="ghost machine-signin" type="button" data-model-switch ${data}>Switch account</button>` : '')
+      return (onKey && !profile ? toSubscriptionHTML({runnerId, runtime, machine, online, platform})
+        : switches ? ` <button class="ghost machine-signin" type="button" data-model-switch ${data}>Switch account</button>` : '')
         + ` <button class="ghost machine-signin" type="button" data-model-sign-out ${data}>Sign out</button>`;
     }
     return signedOut && !profile ? ` <button class="ghost machine-signin" type="button" data-model-shared-key ${data}>Use the shared key</button>` : '';
+  }
+
+  // Switch to subscription for the computer's own login while an API key signs it in: next to Sign out, or to Replace
+  // key / Clear key where the key is one Tico keeps. Same rights and conditions as actionsHTML, and none where the
+  // login lives in the system keychain.
+  function toSubscriptionHTML({runnerId, runtime, machine = '', online = true, platform = ''}) {
+    const caps = typeof harnessCaps === 'function' ? harnessCaps(runtime) : {};
+    if (!online || !caps.sign_out || !caps.browser_sign_in || (caps.switch_unavailable_on || []).includes(platform)) return '';
+    return ` <button class="ghost machine-signin" type="button" data-model-to-subscription data-runner="${text(runnerId)}" data-runtime="${text(runtime)}" data-machine="${text(machine)}">Switch to subscription</button>`;
   }
 
   const KEY_SOURCES = {computer: 'added from Tico', terminal: 'set on the computer', shared: 'the company\'s shared key'};
@@ -485,9 +508,9 @@
     return signedIn ? '' : ` <button class="ghost machine-signin" type="button" data-model-key-add ${data}>Add key</button>`;
   }
 
-  window.TicoModelLogin = {open, signOut, useSharedKey, actionsHTML, keyActionsHTML, clearKey, replaceKey, scopeHTML, chosenScope};
+  window.TicoModelLogin = {open, signOut, useSharedKey, actionsHTML, toSubscriptionHTML, keyActionsHTML, clearKey, replaceKey, scopeHTML, chosenScope};
   document.addEventListener('click', event => {
-    const button = event.target.closest('[data-model-login], [data-model-switch], [data-model-sign-out], [data-model-shared-key], [data-model-key-replace], [data-model-key-clear], [data-model-key-add]');
+    const button = event.target.closest('[data-model-login], [data-model-switch], [data-model-to-subscription], [data-model-sign-out], [data-model-shared-key], [data-model-key-replace], [data-model-key-clear], [data-model-key-add]');
     if (!button) return;
     event.preventDefault();
     const target = {runnerId: button.dataset.runner, runtime: button.dataset.runtime, machine: button.dataset.machine || '', profile: button.dataset.profile || ''};
@@ -495,6 +518,6 @@
     else if (button.hasAttribute('data-model-key-replace') || button.hasAttribute('data-model-key-add')) void replaceKey({...target, adding: button.hasAttribute('data-model-key-add')});
     else if (button.hasAttribute('data-model-sign-out')) signOut(target);
     else if (button.hasAttribute('data-model-shared-key')) void useSharedKey(target);
-    else open({...target, switchAccount: button.hasAttribute('data-model-switch')});
+    else open({...target, switchAccount: button.hasAttribute('data-model-switch'), toSubscription: button.hasAttribute('data-model-to-subscription')});
   });
 })();
