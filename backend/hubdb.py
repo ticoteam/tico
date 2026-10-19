@@ -976,6 +976,8 @@ def migrate(conn, adopt_legacy=False):
     if "carried_by" not in columns:
         conn.execute("ALTER TABLE tasks ADD COLUMN carried_by TEXT")
     conn.execute("CREATE INDEX IF NOT EXISTS tasks_carried_by ON tasks(carried_by) WHERE carried_by IS NOT NULL")
+    # When a run that carried a next-run task without doing it picks it up again (backend/quiet_work.py).
+    add_column(conn, "tasks", "resume_json", "TEXT")
     if "private" in {r[1] for r in conn.execute("PRAGMA table_info(tasks)")}:
         # The few private tasks, which every privacy-checked read loads (backend/privacy_index.py).
         conn.execute("CREATE INDEX IF NOT EXISTS tasks_private ON tasks(id) WHERE private IS NOT 0")
@@ -1003,6 +1005,10 @@ def migrate(conn, adopt_legacy=False):
     # An approval a person's own Assistant decided for them: whose assistant, and the person's words it acted on.
     add_column(conn, "approvals", "decided_via", "TEXT")
     add_column(conn, "approvals", "decided_for_json", "TEXT")
+    # When an approval's exact payload passed its checks and could be decided, and whose decision it is (the person it
+    # was sent to). Older rows read their request time and their message's recipient (approval_wait).
+    add_column(conn, "approvals", "ready_since", "TEXT")
+    add_column(conn, "approvals", "decision_owner", "TEXT")
     # 1 when a run segment's estimate may be low: its model's long prompts cost more and the runner did not
     # send every request's tokens (providers.estimate). NULL on segments from before it was recorded.
     add_column(conn, "turn_usage_segments", "est_cost_low", "INTEGER")
@@ -3245,6 +3251,9 @@ def _queue_end(conn, owner, top=False):
 def _unblock(conn, done_task, told=()):
     """A finished task frees whatever waited on it; a bot owner hears about it once nothing else
     blocks the task. `told` are the tasks already woken about it (_answered)."""
+    # A quiet task a run deferred until this one is done gets its run (backend/quiet_work.py).
+    from . import quiet_work
+    quiet_work.finished(conn, done_task)
     for blocked_id in TR.blocked_ids(conn, done_task["id"]):
         row = task(conn, blocked_id)
         if task_private(conn, done_task) and not subtask_flows_up(conn, done_task, row) and (
@@ -5331,17 +5340,20 @@ def tasks_only(conn, actor):
     return (_json(row["config_json"], {}) or {}).get("bot_contact") == "tasks"
 
 
-# A next-run task still waiting for its owner's next run: open, and not taken by a run that is
-# under way or finished. A run that failed or was interrupted gives it back, so the next one
-# carries it again; a task the bot already moved on (doing, done) is its own business by then.
+# A next-run task still waiting for its owner's next run: open, with no resume condition holding it, and not taken
+# by a run that is under way or finished. A run that failed or was interrupted gives it back, so the next one
+# carries it again, and so does one that finished without working it or saying when to (backend/quiet_work.py
+# settle); a task the bot already moved on (doing, done) is its own business by then.
 NEXT_RUN_WAITING_SQL = (
-    "t.next_run=1 AND t.status='open' AND t.snoozed_until IS NULL AND (t.carried_by IS NULL OR NOT EXISTS("
+    "t.next_run=1 AND t.status='open' AND t.snoozed_until IS NULL AND t.resume_json IS NULL "
+    "AND (t.carried_by IS NULL OR NOT EXISTS("
     "SELECT 1 FROM attempts a WHERE a.id=t.carried_by AND a.state IN ('leased','running','completed')))")
 
 
 def next_run_waiting(conn, row):
     """Whether this task (a row) is a next-run task still waiting to be carried."""
-    if not row or not row.get("next_run") or row.get("status") != "open" or row.get("snoozed_until"):
+    if not row or not row.get("next_run") or row.get("status") != "open" or row.get("snoozed_until") \
+            or row.get("resume_json"):
         return False
     if not row.get("carried_by"):
         return True
@@ -5493,6 +5505,8 @@ def stalled_tasks(conn, at=None):
             continue
         if row.get("next_run") and row["updated"] > shift(at, seconds=-STALL_NEXT_RUN_MINUTES * 60):
             continue
+        if row.get("resume_json"):
+            continue        # a run said when to pick it up (backend/quiet_work.py): that brings it back
         if TR.live_blocker(conn, row["id"], ACTIVE_STATUSES):
             continue
         quiet = int((base - parse_ts(row["updated"])).total_seconds() // 60)
@@ -5785,7 +5799,7 @@ def task_run_now(conn, actor, task_id):
     if why := setup_hold(conn, row["owner"]):
         raise Refused("run-now", why)       # not a refused write: nothing to count against the caller
     if row.get("next_run"):
-        conn.execute("UPDATE tasks SET next_run=0, updated=? WHERE id=?", (now(), task_id))
+        conn.execute("UPDATE tasks SET next_run=0, resume_json=NULL, updated=? WHERE id=?", (now(), task_id))
         _task_event(conn, task_id, actor, "next_run", "1", "0", "run now")
     waiting = None
     try:
@@ -6022,11 +6036,12 @@ def approval_request(conn, actor, kind, payload, task_id=None, supersedes=None):
     row = {"id": new_id(), "kind": kind, "task_id": task_id, "message_id": msg["id"],
            "payload_json": _dump(payload), "payload_hash": digest, "requested_by": actor,
            "decided_by": None, "decision": None, "decided_at": None, "consumed_at": None,
-           "created": ts}
+           "created": ts, "ready_since": ts, "decision_owner": owner}
+    # Ready now: a payload that fails its checks is refused above, so this is when it became a decision for `owner`.
     conn.execute("INSERT INTO approvals (id, kind, task_id, message_id, payload_json, payload_hash, "
-                 "requested_by, decided_by, decision, decided_at, consumed_at, created) VALUES "
-                 "(:id, :kind, :task_id, :message_id, :payload_json, :payload_hash, :requested_by, "
-                 ":decided_by, :decision, :decided_at, :consumed_at, :created)", row)
+                 "requested_by, decided_by, decision, decided_at, consumed_at, created, ready_since, decision_owner) "
+                 "VALUES (:id, :kind, :task_id, :message_id, :payload_json, :payload_hash, :requested_by, "
+                 ":decided_by, :decision, :decided_at, :consumed_at, :created, :ready_since, :decision_owner)", row)
     conn.execute("UPDATE messages SET refs_json=? WHERE id=?",
                  (_dump({"approval": row["id"], "task": task_id}), msg["id"]))
     event(conn, actor, "approval.request", row["id"], {"kind": kind, "to": owner})
@@ -6739,8 +6754,10 @@ def needs_you(conn, who):
     requester's list."""
     actor = who if actor_kind(who) else human_actor(who)
     pending = _rows(conn.execute("SELECT * FROM approvals WHERE decision IS NULL ORDER BY created"))
+    at = now()
     for row in pending:
         row["payload"] = _json(row.get("payload_json"), {}) or {}
+        approval_wait(conn, row, at)
     # The person's queue: asks first (each blocks a bot), then their own tasks in rank order.
     # Product-lane work is a backlog a developer works through on the Product board, not a
     # decision owed today: it counts here only when it carries a question for the person.
@@ -6766,7 +6783,45 @@ def approval(conn, approval_id):
     if row:
         row["payload"] = _json(row.get("payload_json"), {}) or {}
         row["decided_for"] = _json(row.pop("decided_for_json", None), None)
+        approval_wait(conn, row)
     return row
+
+
+def is_release_approval(kind, payload):
+    """A release's publish approval: asked by its release page with the exact `version` and `commit` it would ship."""
+    payload = payload if isinstance(payload, dict) else {}
+    return kind == "publish" and all(payload.get(k) not in (None, "") for k in ("version", "commit"))
+
+
+def approval_wait(conn, row, at=None):
+    """Adds to an approval row how long it has waited and on whom: `ready_since`, `decision_owner` and its
+    `decision_owner_name`, and `age_s`, the seconds from ready until its decision (until now while undecided). A row from
+    before these were recorded reads its request time and the person its request was sent to."""
+    row["ready_since"] = row.get("ready_since") or row.get("created")
+    if not row.get("decision_owner") and row.get("message_id"):
+        row["decision_owner"] = (message(conn, row["message_id"]) or {}).get("to_actor")
+    owner = row.get("decision_owner")
+    row["decision_owner_name"] = person_name(conn, actor_id(owner)) if owner and is_human(owner) else ""
+    start, end = parse_ts(row["ready_since"]), parse_ts(row.get("decided_at") or at or now())
+    row["age_s"] = max(0, int((end - start).total_seconds())) if start and end else None
+    return row
+
+
+def wait_words(seconds):
+    """'2 h 10 min' for a wait; under a minute is '0 min'."""
+    minutes = max(0, int(seconds or 0)) // 60
+    days, hours, mins = minutes // 1440, minutes % 1440 // 60, minutes % 60
+    if days:
+        return f"{days} d {hours} h" if hours else f"{days} d"
+    if hours:
+        return f"{hours} h {mins} min" if mins else f"{hours} h"
+    return f"{mins} min"
+
+
+def approval_wait_line(row):
+    """'Ready 2 h 10 min, waiting on Chris': what Needs you says of an undecided approval (approval_wait's fields)."""
+    who = row.get("decision_owner_name") or "a person"
+    return f"Ready {wait_words(row.get('age_s'))}, waiting on {who}"
 
 
 def approval_undo(conn, actor, approval_id):
@@ -6810,9 +6865,11 @@ def approvals(conn, requested_by=None, decision=None, pending=False):
     if where:
         sql += " WHERE " + " AND ".join(where)
     out = _rows(conn.execute(sql + " ORDER BY created", args))
+    at = now()
     for row in out:
         row["payload"] = _json(row.get("payload_json"), {}) or {}
         row["decided_for"] = _json(row.pop("decided_for_json", None), None)
+        approval_wait(conn, row, at)
     return out
 
 

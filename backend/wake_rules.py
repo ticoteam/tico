@@ -51,6 +51,7 @@ AWAITED = (
     ("subtask", "a subtask moved or finished"),
     ("worktree", "the worktree it waited for is ready"),
     ("watcher", "something the bot watches moved or ended"),
+    ("resume", "a quiet task's stored resume condition came true (backend/quiet_work.py)"),
 )
 # Only news may wait: a comment, or a task's status, step or relation moving (run_triggers.TRIGGERS). A stall or
 # status check, a schedule, a pull request's checks and anything else keep their own rules (wake presets).
@@ -116,6 +117,8 @@ def awaited(refs):
         return "worktree"
     if wake in ("watcher", "watcher-done"):
         return "watcher"
+    if wake == "resume":
+        return "resume"
     return None
 
 

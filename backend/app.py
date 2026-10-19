@@ -25,7 +25,7 @@ from . import go_live as pending_go_lives
 from . import repo_waits
 from . import built_on
 from . import agents, app_delivery, batch, external_sync, inbox_isolation, mcp_oauth, harness_actions, model_login, oidc, personal_tokens, views
-from . import check_models, run_triggers, team_rules, update_feeds, topic_change, usage_limits, wake_presets, visuals, wake_rules
+from . import check_models, run_triggers, team_rules, update_feeds, topic_change, usage_limits, wake_presets, visuals, wake_rules, quiet_work
 from . import task_privacy as privacy
 from . import task_relations as TR
 from . import task_roles as TRo
@@ -938,6 +938,11 @@ def create_app(settings=None):
                  "next_run": bool(row.get("next_run")), "private": H.task_private(c, row), "cover": None}
         if c is not None and row.get("next_run"):
             value["next_run_waiting"] = H.next_run_waiting(c, row)
+        if c is not None and (quiet := quiet_work.view(c, row)):
+            # Quiet work: delivered (into which run, when; deferred until what), eligible or queued (quiet_work.view).
+            value["quiet"] = quiet
+        # The stored condition is in `quiet.resume`; a board of 500 tasks does not carry the column besides.
+        value.pop("resume_json", None)
         value.pop("labels_json", None)
         if pipelines is None:
             if c is None:
@@ -1068,6 +1073,8 @@ def create_app(settings=None):
             })
             if row.get("next_run"):
                 value["next_run_waiting"] = H.next_run_waiting(c, row)
+                if quiet := quiet_work.view(c, row, history=False):
+                    value["quiet"] = quiet
             if row["id"] in routines_by_task:
                 value["routine_id"] = routines_by_task[row["id"]]
             if row["id"] in origins:
@@ -2201,9 +2208,10 @@ def create_app(settings=None):
         return mutate(request, body, work)
 
     def topic_check(request, who, bot, body):
-        """The topic check's outcome for a person's chat message, or None: not a person, a command, a retried request
-        (its first try already decided), or a bot whose chat is another's (a shared or the Assistant's)."""
-        if who.role not in ("owner", "human") or who.via or body.command or (body.refs or {}).get("task"):
+        """The topic check's outcome for a person's chat message, or None: not a person, a retried request (its first
+        try already decided), a bot whose chat is another's (a shared or the Assistant's), or a send the check never
+        looks at (`topic_change.considered`: a command, a task chat's, or one carrying files)."""
+        if who.role not in ("owner", "human") or who.via:
             return None
         key, path = request.headers.get("idempotency-key"), request.url.path
         if not key:
@@ -2216,7 +2224,7 @@ def create_app(settings=None):
                 return False
             target = H.actor_id(route(c, who.actor, "bot:" + bot))
             return target == bot and bot != settings.assistant_bot and views.may_chat(c, auth, who, bot)
-        return topic_change.check(store, app.state.judge, who, bot, body.text, admit)
+        return topic_change.check(store, app.state.judge, who, bot, body, admit, uploads=())
 
     # ------------------------------------------------------------------ updates (backend/updates.py)
     def update_visible(c, who, mine=False, scope=None):
@@ -3142,6 +3150,24 @@ def create_app(settings=None):
             auth.task(c, who, task_id)
             after = TS.snooze(c, who.actor, task_id, body.until, mover=mover(c, who))
             return {"task": task_view(after, c, visible_sql=auth.task_sql(c, who), who=who)}
+        return mutate(request, body, work)
+
+    @app.post("/api/v2/tasks/{tid}/defer")
+    def task_defer(request: Request, tid: str, body: M.TaskDefer):
+        """Say when a quiet task a run carried (or one still waiting for a run) is picked up again: after another task
+        is done, at a time, or with the next run; or that the run handled it (backend/quiet_work.py). The task's own
+        bot, or a person."""
+        def work(c):
+            who = request.state.identity
+            task_id = auth.resolve_task(c, who, tid)
+            auth.task(c, who, task_id)
+            after = None
+            if body.after:
+                after = auth.resolve_task(c, who, body.after)
+                auth.task(c, who, after)
+            row = quiet_work.defer(c, who.actor, task_id, after=after, at=body.at, next_run=body.next_run,
+                                   handled=body.handled)
+            return {"task": task_view(row, c, visible_sql=auth.task_sql(c, who), who=who)}
         return mutate(request, body, work)
 
     @app.post("/api/v2/tasks/{tid}/unsnooze")
