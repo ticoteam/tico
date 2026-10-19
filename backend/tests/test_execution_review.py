@@ -149,21 +149,6 @@ def test_an_api_key_quota_refusal_holds_the_bot_and_says_billing_not_subscriptio
     assert 'billing' in issue['detail'] and 'subscription' not in issue['detail']
 
 
-def age_limit(api, seconds):
-    """Move the bot's limit and every login hold `seconds` into the past, as if that much time went by."""
-    import json as _json
-    from backend.store import H
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_status SET since=? WHERE bot='ops'", (H.shift(H.status(c, 'ops')['since'], seconds=-seconds),))
-        for table, column in (("attempts", "finished"), ("messages", "created")):
-            for rowid, at in c.execute(f"SELECT rowid,{column} FROM {table} WHERE {column} IS NOT NULL").fetchall():
-                c.execute(f"UPDATE {table} SET {column}=? WHERE rowid=?", (H.shift(at, seconds=-seconds), rowid))
-        for key, value in c.execute("SELECT key,value_json FROM registry_metadata WHERE key LIKE 'login-hold:%'").fetchall():
-            hold = _json.loads(value)
-            hold.update(since=H.shift(hold['since'], seconds=-seconds), until=H.shift(hold['until'], seconds=-seconds))
-            c.execute("UPDATE registry_metadata SET value_json=? WHERE key=?", (_json.dumps(hold), key))
-
-
 def test_usage_limited_turn_requeues_and_cools_off_longer_after_a_third_strike(api):
     from backend.store import H
     machine, message, attempt = setup_attempt(api)
@@ -177,25 +162,23 @@ def test_usage_limited_turn_requeues_and_cools_off_longer_after_a_third_strike(a
     issue = next(i for i in issues if i['kind'] == 'bot' and i['bot'] == 'ops')
     assert issue['detail'].startswith('fake usage limit; resumes at ')
     assert get(api, 'bots/ops/execution-review')['jobs'] == []
-    # Inside the hold nothing is handed out; after it the same job comes back. Each limit in a row on the login
-    # holds longer: 30, then 60, then 120 minutes (backend/login_holds.py BACKOFF).
+    # Inside the cooldown nothing is handed out; after it the same job comes back.
     assert claim(api, machine) is None
-    age_limit(api, 1801)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_status SET since=? WHERE bot='ops'", (H.shift(H.now(), seconds=-1801),))
     second = claim(api, machine)
     assert second and second['job_id'] == attempt['job_id'] and second['id'] != attempt['id']
     limited_turn(api, machine, second)
     with api.app.state.store.transaction() as c:
         assert c.execute('SELECT state FROM jobs WHERE id=?', (attempt['job_id'],)).fetchone()[0] == 'queued'
-        # The second limit restarted the hold even though the state did not change.
+        # The second limit restarted the 30-minute cooldown even though the state did not change.
         assert H.status(c, 'ops')['since'] > H.shift(H.now(), seconds=-5)
-    age_limit(api, 1801)
-    assert claim(api, machine) is None                      # the second limit in a row holds an hour
-    age_limit(api, 1800)
+        c.execute("UPDATE bot_status SET since=? WHERE bot='ops'", (H.shift(H.now(), seconds=-1801),))
     third = claim(api, machine)
     assert third and third['job_id'] == attempt['job_id']
     limited_turn(api, machine, third)
     # A third limit in a row never becomes uncertain: the job stays queued behind a longer
-    # hold, and Needs attention says when it retries instead of asking for a review.
+    # cooldown, and Needs attention says when it retries instead of asking for a review.
     with api.app.state.store.read() as c:
         assert c.execute('SELECT state FROM jobs WHERE id=?', (attempt['job_id'],)).fetchone()[0] == 'queued'
         status = H.status(c, 'ops')
@@ -204,9 +187,11 @@ def test_usage_limited_turn_requeues_and_cools_off_longer_after_a_third_strike(a
     issue = next(i for i in api.get('/api/status', headers=headers()).json()['health_issues'] if i['kind'] == 'bot' and i['bot'] == 'ops')
     assert issue['detail'].startswith('fake usage limit three times in a row; queued work waits until ')
     assert claim(api, machine) is None
-    age_limit(api, 3601)
-    assert claim(api, machine) is None                      # an hour is not enough this time
-    age_limit(api, 3600)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_status SET since=? WHERE bot='ops'", (H.shift(H.now(), seconds=-1801),))
+    assert claim(api, machine) is None                      # 30 minutes is not enough this time
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_status SET since=? WHERE bot='ops'", (H.shift(H.now(), seconds=-7201),))
     fourth = claim(api, machine)
     assert fourth and fourth['job_id'] == attempt['job_id']
     # A turn that ran on the API-key fallback completes normally and is counted.

@@ -28,12 +28,6 @@ All notable changes to Tico are recorded here. The format follows
   conversation, nothing from a private task is sent to Slack, and no visual is shown in Slack. Every bot's
   instructions now say when to add a visual; brand assets, designed graphics and edited video still go to Design and
   Video Producer ([Visuals in replies](docs/visuals.md#when-a-bot-adds-a-visual)).
-- **A usage limit holds the login, once**: a run that hits a subscription's usage limit now holds that provider
-  login on that computer, for every bot signed in with it, until the reset the provider names (Claude's "resets
-  2:40am (UTC)" is read too), or 30, 60 and then 120 minutes when it names none. The hold is saved on the server, so
-  a restart does not lift it, and when it ends one queued run tries first while the others wait for its result,
-  instead of every waiting run starting at once. A bot with a ready fallback that is not held itself runs there
-  meanwhile instead of waiting. Health names the provider whose limit it is.
 - **Visuals in replies (API, part 1 of 4)**: a bot or a person attaches a titled picture, SVG, HTML page, video or
   audio clip to a chat reply or task comment (`--visual PATH --title "…"` on `hub message send`, `hub chat send` and
   `hub task comment`; `visuals` over MCP; `attachments: [{ref, title}]` in the API). It is a versioned file there,
