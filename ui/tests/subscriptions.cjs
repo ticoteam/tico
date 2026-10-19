@@ -24,7 +24,8 @@ function fixtures() {
   const machine = (id, label, operator, bots = []) => ({id, label, operator, last_seen: now, version: '0.3.2', platform: 'linux', bots,
     accepts_member_bots: true, readiness: {runtimes: {codex: {installed: true, authenticated: 'ready'}, claude: {installed: true, authenticated: 'ready'}}}});
   return {
-    machines: [machine('r1', 'Acme box', 'ana'), machine('r2', "Sam's Mac", 'sam', ['builder']), {...machine('r3', 'Old laptop', 'ana', ['scout']),
+    // Two of Acme box's bots run Codex on acme-eng and take turns on it (backend/views.py shared_logins).
+    machines: [{...machine('r1', 'Acme box', 'ana'), shared_logins: [{runtime: 'codex', profile: 'acme-eng', display_name: 'acme-eng', count: 2, bots: []}]}, machine('r2', "Sam's Mac", 'sam', ['builder']), {...machine('r3', 'Old laptop', 'ana', ['scout']),
       update: {state: 'needs_update', label: 'Needs update', release: '0.2.0', commit: 'c0ffee'.padEnd(40, '0'), outdated: true, server_release: '0.3.0', error: ''}}],
     subs: {
       profiles_by_computer: [
@@ -193,6 +194,9 @@ async function computers(browser) {
   assert.deepEqual(await detail.locator('[data-connection]').evaluateAll(list => list.map(c => c.dataset.connection)),
     ['own:claude', 'profile:acme-ops:claude', 'own:codex', 'profile:acme-eng:codex']);
   assert.match(await detail.locator('[data-connection="profile:acme-eng:codex"]').innerText(), /Codex\s+Subscription · acme-eng\s+Signed in/);
+  // Two bots take turns on acme-eng's Codex sign-in; a sign-in one bot uses says nothing.
+  assert.equal(await detail.locator('[data-connection="profile:acme-eng:codex"] [data-shared-login]').innerText(), '2 bots share this sign-in. They take turns: one Codex run at a time.');
+  assert.equal(await detail.locator('[data-connection="profile:acme-ops:claude"] [data-shared-login]').count(), 0);
   assert.doesNotMatch(await detail.innerText(), /acme-new|not signed in/i, 'nothing for a slot that was never signed in');
   if (SHOTS) { fs.mkdirSync(SHOTS, {recursive: true}); await detail.screenshot({path: path.join(SHOTS, 'computer-detail-dark.png')}); }
   // A new subscription: the typed name becomes a slug the server takes, and the sign-in starts on this computer.

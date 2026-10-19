@@ -142,7 +142,7 @@ do not enforce file isolation between groups.
 | Runtime | How the profile moves its login |
 |---|---|
 | `codex` | `CODEX_HOME` points at `<profile>/codex` |
-| `claude` | `HOME` points at `<profile>/claude`, keeping the existing login layout |
+| `claude` | `HOME` points at `<profile>/claude`, keeping the existing login layout; an inherited `CLAUDE_CONFIG_DIR` is dropped, since Claude Code would read it ahead of `HOME` |
 | `grok` | `HOME` points at `<profile>/grok`. Grok Build 1.0.30 also honours `GROK_HOME` (probed 2026-09-15), but one rule for both keeps a profile a single directory |
 | `gemini` | No variable in the run's environment: the Gemini host is handed `<profile>/gemini` and sets `GEMINI_CLI_HOME` and `GEMINI_CLI_SYSTEM_SETTINGS_PATH` itself |
 
@@ -306,8 +306,8 @@ user, and each model CLI's first unattended login under a fresh account should b
    that reboots unattended.
 3. Give that user the code. Either clone this repository into its home, or share one read-only
    checkout (`chmod -R a+rX <checkout>`) and let the user keep its own venv:
-   `python3.12 -m venv ~/tico-venv && ~/tico-venv/bin/python -m pip install -r
-   <checkout>/backend/requirements.txt`, then export `TICO_RUNNER_PYTHON=~/tico-venv/bin/python`.
+   `python3.15 -m venv ~/tico-venv && ~/tico-venv/bin/python -m pip install -r
+   <checkout>/backend/requirements.txt` (any Python from 3.12 works; 3.15 is what the images run), then export `TICO_RUNNER_PYTHON=~/tico-venv/bin/python`.
    A shared checkout cannot be updated by `scripts/tico update` from the unprivileged account.
 4. As that user, run the same commands as the quick start: `env create`, `server install`,
    `enroll`, `profile add` and `profile login`, `install bot`, `doctor`.

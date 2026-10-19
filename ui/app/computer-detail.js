@@ -109,21 +109,28 @@ function machineConnectionHTML(machine, conn, online, manage) {
   let signIn;
   if (conn.missing) signIn = `<span class="pill fail">${esc(conn.problem)}</span>`;
   else if (conn.profile) signIn = machineProfileSignIn(conn.state, conn.runtime);
-  else signIn = machineSignInHTML(machine, online, conn.runtime, conn.auth, conn.value);
+  else signIn = machineSignInHTML(machine, online, conn.runtime, conn.auth, conn.value)
+    + (conn.auth === 'ready' ? machineKeyHTML(machine, conn.runtime, conn.value?.key) : '');
   const offline = online ? '' : ' disabled title="Computer is offline"';
   let action = '';
   if (manage && conn.state.signed_in !== true && !conn.missing) {
     if (harnessCaps(conn.runtime).browser_sign_in) action = ` <button class="ghost machine-signin" type="button" data-model-login data-runner="${esc(machine.id)}" data-runtime="${esc(conn.runtime)}" data-machine="${esc(machine.label)}"${conn.profile ? ` data-profile="${esc(conn.profile.name)}"` : ''}${offline}>Sign in</button>`;
     else if (!conn.profile) action = machineTerminalSignInHTML(machine, conn.runtime);
   }
-  // Switch account / Sign out (or Use the shared key) per login, from ui/model-login.js; only while online. A line
-  // that is both the computer's login and a subscription names which login each pair acts on.
-  const login = (profile, signedIn) => manage && !conn.missing ? machineLoginActions(machine, online, conn.runtime, profile, signedIn) : '';
+  // Switch account / Sign out (or Use the shared key) per login, from ui/model-login.js; only while online. On the
+  // computer's own login a key signs in, Replace key / Clear key stand in for them. A line that is both the computer's
+  // login and a subscription names which login each pair acts on.
+  const key = conn.value?.key && harnessCaps(conn.runtime).api_keys === 'computer';
+  const login = (profile, signedIn) => !manage || conn.missing ? ''
+    : !profile && signedIn && key ? machineKeyActions(machine, online, conn.runtime, conn.value.key, true)
+    : machineLoginActions(machine, online, conn.runtime, profile, signedIn);
   if (conn.own && conn.profile) {
     const sub = login(conn.profile.name, conn.state.signed_in === true), own = login('', conn.auth === 'ready');
     action += [sub && `<span class="computer-conn-login" data-login="${esc(conn.profile.name)}">Subscription${sub}</span>`,
       own && '<span class="computer-conn-login" data-login="">Computer\'s login' + own + '</span>'].filter(Boolean).join('');
   } else action += login(conn.profile ? conn.profile.name : '', conn.profile ? conn.state.signed_in === true : conn.auth === 'ready');
+  // Add key: a key of the computer's own, for a tool that takes one (Dev 97).
+  if (manage && !conn.missing && !conn.profile && conn.state.signed_in !== true) action += machineKeyActions(machine, online, conn.runtime, null, false);
   const value = conn.value || {};
   const rejected = conn.auth === 'rejected'
     ? `<span class="err machine-rejected" data-rejected="${esc(conn.runtime)}">${value.rejected_at ? esc(ago(value.rejected_at)) + '. ' : ''}${value.rejected_reason ? esc(value.rejected_reason) + '. ' : ''}${hlCredentialFix(value.credential_source)}. It takes no work that needs ${esc(conn.runtime)} until then.</span>` : '';
@@ -132,11 +139,14 @@ function machineConnectionHTML(machine, conn, online, manage) {
   const tools = conn.profile && !conn.missing && manage
     ? subsRefreshHTML(c, conn.profile, conn.runtime, conn.state, online) + subsControlsHTML(c, conn.profile, conn.runtime, conn.state) : '';
   const bots = conn.bots.length ? `Bots: ${conn.bots.map(settingsBotName).join(', ')}` : 'No bots run on it';
+  // Bots that take turns on one sign-in say so, for each login the line stands for.
+  const shared = [conn.profile ? machineSharedLoginHTML(machine, conn.runtime, conn.profile.name) : '',
+    conn.own || !conn.profile ? machineSharedLoginHTML(machine, conn.runtime) : ''].join('');
   return `<div class="computer-conn${conn.attention ? ' attention' : ''}" data-connection="${esc(conn.key)}" data-machine-tool="${esc(conn.runtime)}">
     <div class="computer-conn-head">${conn.attention ? '<span class="machine-chip-dot" aria-hidden="true"></span>' : ''}<strong>${esc(conn.tool)}</strong><span>${esc(kind)}</span>${tags}</div>
     <div class="computer-conn-signin">${signIn}${action}${rejected}</div>
     ${usage ? `<div class="computer-conn-usage">${usage}</div>` : ''}
-    <div class="computer-conn-bots muted">${esc(bots)}</div>
+    <div class="computer-conn-bots muted">${esc(bots)}</div>${shared}
     ${tools || note ? `<div class="computer-conn-tools">${tools}${note ? `<span class="muted" role="status">${esc(note)}</span>` : ''}</div>` : ''}
   </div>`;
 }
@@ -160,7 +170,12 @@ function machineAddHTML(machine, conns, online, manage) {
   const terminal = Object.entries(runtimes).filter(([runtime, value]) => value?.installed && !harnessCaps(runtime).browser_sign_in
     && !conns.some(conn => conn.runtime === runtime && conn.own))
     .map(([runtime]) => [runtime, machineTerminalSignInHTML(machine, runtime)]).filter(([, html]) => html)
-    .map(([runtime, html]) => `<span class="computer-add-terminal" data-add-terminal="${esc(runtime)}">${esc(machineToolName(machine, runtime))}:${html}</span>`).join('');
+    .map(([runtime, html]) => `<span class="computer-add-terminal" data-add-terminal="${esc(runtime)}">${esc(machineToolName(machine, runtime))}:${html}</span>`).join('')
+    // Or a key stored for the computer (ui/model-login.js), for a tool that takes one; a line of its own login offers
+    // that itself.
+    + Object.entries(runtimes).filter(([runtime, value]) => value?.installed && !conns.some(conn => conn.runtime === runtime && conn.own))
+      .map(([runtime]) => [runtime, machineKeyActions(machine, online, runtime, null, false)]).filter(([, html]) => html)
+      .map(([runtime, html]) => `<span class="computer-add-terminal" data-add-key="${esc(runtime)}">${esc(machineToolName(machine, runtime))}:${html}</span>`).join('');
   const add = subsAddHTML(machine, online);
   if (!own && !terminal && !add) return '';
   return `<div class="computer-add" data-add-connection><strong>Add connection</strong>
@@ -229,7 +244,7 @@ function machineVersionsHTML(machine, online) {
   const facts = [`Tico ${machine.version || 'version not reported'}`, machine.platform || '',
     engine?.name ? `<span title="${esc(engine.note || engine.build || '')}">${engine.name === 'rust' ? 'Rust' : 'Python'} runner</span>` : ''].filter(Boolean);
   return `<p class="computer-detail-facts">${facts.map((fact, i) => i === 2 ? fact : esc(fact)).join(' · ')}</p>${window.runnerUpdateHtml?.(machine.update, machine.version) || ''}
-    ${table}${harnesses ? `<details data-machine-details="${esc(machine.id)}:tools"><summary>Installation and updates</summary><p class="settings-cell-note">Enabled tools stay installed.</p><div class="machine-harnesses">${harnesses}</div></details>` : ''}`;
+    ${table}${machineAppsHtml(machine)}${harnesses ? `<details data-machine-details="${esc(machine.id)}:tools"><summary>Installation and updates</summary><p class="settings-cell-note">Enabled tools stay installed.</p><div class="machine-harnesses">${harnesses}</div></details>` : ''}`;
 }
 function machineScreenSectionHTML(machine, online) {
   // Screen (Off / View / Control): offered once the computer itself has a screen turned on (`screen_available`),

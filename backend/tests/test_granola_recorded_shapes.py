@@ -3,6 +3,7 @@ transcripts after a line of provider text, and throttling in each of its three f
 backend/tests/fixtures/granola/ are rebuilt from the two Granola incidents and Granola's docs, not yet a live
 recording; scripts/granola_live_check.py checks Granola still answers this way, and its --record output replays here."""
 import gzip
+import html
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -202,6 +203,82 @@ def test_a_recorded_json_answer_keeps_its_shape_and_nothing_granola_wrote(as_tex
     assert all(GranolaMCP.item(r).notes for r in parsed["meetings"])
 
 
+MIXED_XML = (
+    f'{S % 1}\n<meetings_data count="3"><meeting id="{S % 2}" date="2026-09-01T10:00:00Z"><title>{S % 3}</title>'
+    f'<attendees><attendee name="{S % 4}" email="{S % 5}@x.example"/><attendee><name>{S % 6}</name>'
+    f'<email>{S % 7}@x.example</email></attendee><attendee>{S % 8}</attendee></attendees>'
+    f'<enhanced_notes>{S % 9}</enhanced_notes><private_notes><summary>{S % 10}</summary></private_notes>'
+    f'<raw_notes>{S % 11}</raw_notes><{S % 12}>{S % 13}</{S % 12}></meeting>'
+    f"<meeting id='{S % 14}' title='{S % 15}' date='{S % 16}'><ai_summary>{S % 17}</ai_summary>"
+    f"<note_taker_notes>{S % 18}</note_taker_notes></meeting>"
+    f'<note meeting_id="{S % 19}" title="{S % 20}" summary_text="{S % 21} &lt; 1"><known_participants>\n'
+    f'{S % 22} (note creator) from {S % 23} <{S % 24}@x.example>\n<{S % 25}@x.example>\n</known_participants></note>'
+    f'<next_cursor>{S % 26}</next_cursor></meetings_data>')
+MIXED_XML_REBUILT = granola_live_check.INTRO + "\n".join([
+    '<meetings_data count="3">',
+    '<meeting id="00000000-0000-4000-8000-000000000001" date="2026-10-01T16:00:00Z">',
+    "  <title>Meeting 1</title>",
+    '  <attendees><attendee name="Person 1" email="person1@example.com"/><attendee><name>Person 2</name>'
+    "<email>person2@example.com</email></attendee><attendee>Person 3</attendee></attendees>",
+    f"  <enhanced_notes>{granola_live_check.NOTE % 1}</enhanced_notes>",
+    "  <private_notes><summary>Synthetic private note</summary></private_notes>",
+    "  <raw_notes>Synthetic private note</raw_notes>",
+    "</meeting>",
+    "<meeting id='00000000-0000-4000-8000-000000000002' title='Meeting 2' date='Oct 1, 2026 4:00 PM'>",
+    f"  <ai_summary>{granola_live_check.NOTE % 2}</ai_summary>",
+    "  <note_taker_notes>Synthetic private note</note_taker_notes>",
+    "</meeting>",
+    '<note meeting_id="00000000-0000-4000-8000-000000000003" title="Meeting 3" summary_text="'
+    + html.escape(granola_live_check.NOTE % 3) + '">',
+    "  <known_participants>",
+    "  Person 1 (note creator) from Company <person1@example.com>",
+    "  <person2@example.com>",
+    "  </known_participants>",
+    "</note>",
+    "<next_cursor>cursor-placeholder</next_cursor>",
+    "</meetings_data>"])
+MIXED_JSON = {"meetings": [
+    {"id": S % 16, "note_id": S % 1, "title": S % 2, "summary": {"markdown": S % 3}, "participants": [S % 4, {"name": S % 5}],
+     "web_url": "https://x.example/" + S % 6, S % 7: S % 8},
+    {"meeting_id": S % 9, "id": S % 17, "created_at": "2026-09-01", "ai_summary": S % 10,
+     "attendees": [{"name": S % 11, "email": S % 12}]},
+    {"id": S % 13, "notes": {"summary": S % 14}, "summary_text": ""}], "next_cursor": S % 15}
+MIXED_JSON_REBUILT = {"meetings": [
+    {"id": IDS[0], "note_id": IDS[1], "title": "Meeting 1", "summary": {"markdown": granola_live_check.NOTE % 1},
+     "participants": ["Person 1", {"name": "Person 2"}], "web_url": "https://notes.granola.ai/d/synthetic"},
+    {"meeting_id": "00000000-0000-4000-8000-000000000003", "id": "00000000-0000-4000-8000-000000000004",
+     "created_at": "2026-10-01T16:00:00Z", "ai_summary": granola_live_check.NOTE % 2,
+     "attendees": [{"name": "Person 1", "email": "person1@example.com"}]},
+    {"id": "00000000-0000-4000-8000-000000000005", "notes": {"summary": granola_live_check.NOTE % 3},
+     "summary_text": ""}], "next_cursor": "cursor-placeholder"}
+
+
+def test_each_xml_row_keeps_its_own_form():
+    """Title tag or attribute and its quote, summary alias as tag or attribute, attendee and participant-line forms and
+    private sections are kept row by row; the unknown tag and every value are not."""
+    made = granola_live_check.scrub({"get_meetings": meetings_answer(MIXED_XML)})["get_meetings"]["json"]["result"]
+    assert made == {"content": [{"type": "text", "text": MIXED_XML_REBUILT}]}
+    rows = GranolaMCP.content(made)["meetings"]
+    assert [r.get("enhanced_notes") or r.get("ai_summary") or r.get("summary_text") for r in rows] == [
+        granola_live_check.NOTE % i for i in (1, 2, 3)]
+    assert [len(r["attendees"]) for r in rows] == [3, 0, 2]
+
+
+def test_each_json_row_keeps_its_own_form():
+    """Summary object or string, its alias, nested notes, people key and entry form, and id key are kept row by row."""
+    for answer in (meetings_answer(json.dumps(MIXED_JSON)), meetings_answer(structured=MIXED_JSON)):
+        made = granola_live_check.scrub({"get_meetings": answer})["get_meetings"]["json"]["result"]
+        body = made.get("structuredContent") or json.loads(made["content"][0]["text"])
+        assert body == MIXED_JSON_REBUILT
+        assert ("structuredContent" in made) is ("structuredContent" in answer["json"]["result"])
+
+
+def test_a_json_transcript_stays_serialized_json():
+    answer = meetings_answer(json.dumps({"transcript": S % 1}))
+    made = granola_live_check.scrub({"transcript": answer})["transcript"]["json"]["result"]
+    assert made == {"content": [{"type": "text", "text": '{"transcript": "Person 1: Synthetic line"}'}]}
+
+
 def test_tool_descriptions_unknown_fields_and_errors_are_made_up_but_still_classified():
     tools = {"status": 200, "headers": {"mcp-session-id": S % 1, "retry-after": S % 2}, "json": {"jsonrpc": "2.0", "id": 1,
              "result": {"tools": [{"name": "get_meetings", "description": S % 3, "inputSchema": {"type": "object",
@@ -225,7 +302,8 @@ def test_tool_descriptions_unknown_fields_and_errors_are_made_up_but_still_class
     {"status": 200, "headers": {}, "text": S % 2},
     {"status": 200, "headers": {}, "json": {"jsonrpc": "2.0", "id": 1, "result": {"tools": [{"name": "x",
      "inputSchema": json.loads('{"items":' * 12 + "{}" + "}" * 12)}]}}},
-], ids=["unparseable notes", "not JSON", "schema too deep"])
+    meetings_answer(f'<meetings><meeting id="{S % 3}"><title>{S % 4}</title></meetings>'),
+], ids=["unparseable notes", "not JSON", "schema too deep", "meeting never closed"])
 def test_a_shape_it_cannot_rebuild_writes_nothing_and_names_only_the_category(tmp_path, monkeypatch, capsys, answer):
     name = "tools_list" if "tools" in json.dumps(answer) else "get_meetings"
     (tmp_path / "mcp_shapes.json").write_text("kept")
@@ -236,6 +314,74 @@ def test_a_shape_it_cannot_rebuild_writes_nothing_and_names_only_the_category(tm
     out = capsys.readouterr().out
     assert "CANNOT RECORD" in out and "zq" not in out
     assert [p.name for p in tmp_path.iterdir()] == ["mcp_shapes.json"] and (tmp_path / "mcp_shapes.json").read_text() == "kept"
+
+
+def recording_run(monkeypatch, notes):
+    exchanges = {name: EXCHANGES[name] for name in ("initialize", "initialized", "tools_list")}
+    monkeypatch.setattr(granola_live_check, "live_mcp", lambda token: (
+        {**exchanges, "list_meetings": notes, "get_meetings": notes}, []))
+    monkeypatch.setenv("GRANOLA_MCP_TOKEN", "fake-access-sensitive")
+    monkeypatch.delenv("GRANOLA_API_KEY", raising=False)
+
+
+@pytest.mark.parametrize("notes,rebuilt", [
+    (meetings_answer(MIXED_XML), {"content": [{"type": "text", "text": MIXED_XML_REBUILT}]}),
+    (meetings_answer(json.dumps(MIXED_JSON)), {"content": [{"type": "text", "text": json.dumps(MIXED_JSON_REBUILT)}]}),
+], ids=["XML-like", "JSON as text"])
+def test_a_successful_recording_saves_the_rebuilt_form_and_nothing_granola_wrote(tmp_path, monkeypatch, capsys, caplog,
+                                                                                notes, rebuilt):
+    caplog.set_level("DEBUG")
+    recording_run(monkeypatch, notes)
+    assert granola_live_check.main(["--record", str(tmp_path)]) == 0
+    saved = (tmp_path / "mcp_shapes.json").read_bytes()
+    out, err = capsys.readouterr()
+    for text in (saved.decode(), out, err, caplog.text):
+        assert "zq" not in text and "fake-access-sensitive" not in text
+    assert [p.name for p in tmp_path.iterdir()] == ["mcp_shapes.json"]
+    recording = json.loads(saved)["exchanges"]
+    assert recording["list_meetings"]["json"]["result"] == recording["get_meetings"]["json"]["result"] == rebuilt
+    assert out.strip().endswith("OK: Granola's answers match the fixtures' shapes")
+
+
+def test_a_meeting_list_the_rebuild_would_read_differently_is_refused(tmp_path, monkeypatch, capsys):
+    # Tico reads an attendee that is neither text nor an object (str(a)); the JSON rebuild drops it.
+    notes = {"meetings": [{"id": S % 1, "title": S % 2, "summary_text": S % 3, "attendees": [S % 4, 7]}]}
+    (tmp_path / "mcp_shapes.json").write_text("kept")
+    recording_run(monkeypatch, meetings_answer(json.dumps(notes)))
+    assert granola_live_check.main(["--record", str(tmp_path)]) == 2
+    out = capsys.readouterr().out
+    assert "CANNOT RECORD: meetings answer the rebuild would change; nothing was written" in out and "zq" not in out
+    assert [p.name for p in tmp_path.iterdir()] == ["mcp_shapes.json"]
+    assert (tmp_path / "mcp_shapes.json").read_text() == "kept"
+
+
+def fail_halfway(self, data, *args, **kwargs):
+    with open(self, "w") as file:
+        file.write(data[:len(data) // 2])
+    raise OSError(S % 98 + " disk full")
+
+
+def fail_replace(*args):
+    raise OSError(S % 97 + " cannot replace")
+
+
+@pytest.mark.parametrize("fault", ["write", "replace"])
+def test_a_recording_that_cannot_be_saved_leaves_the_old_file_and_no_partial_one(tmp_path, monkeypatch, capsys, caplog,
+                                                                                fault):
+    caplog.set_level("DEBUG")
+    (tmp_path / "mcp_shapes.json").write_text("kept")
+    recording_run(monkeypatch, meetings_answer(MIXED_XML))
+    if fault == "write":
+        monkeypatch.setattr(Path, "write_text", fail_halfway)
+    else:
+        monkeypatch.setattr(granola_live_check.os, "replace", fail_replace)
+    assert granola_live_check.main(["--record", str(tmp_path)]) == 2
+    out, err = capsys.readouterr()
+    assert "CANNOT RECORD: could not save the file (OSError); nothing was written" in out
+    for text in (out, err, caplog.text):
+        assert "zq" not in text and "fake-access-sensitive" not in text
+    assert [p.name for p in tmp_path.iterdir()] == ["mcp_shapes.json"]
+    assert (tmp_path / "mcp_shapes.json").read_text() == "kept"
 
 
 def live_granola(notes="get_meetings", throttle=None, public=None):

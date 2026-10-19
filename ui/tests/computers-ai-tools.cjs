@@ -3,7 +3,8 @@
 // connection that was added, usage as "% left" with the reset and age on hover, a red dot only when bots depend on a
 // broken one; the computer's own login merged with a subscription on the same account; each bot's actual connection,
 // read-only; the Installed and Enabled headers apart at 1024 px; no connection, offline, waiting, revoked, and a
-// member who may change nothing. Every request is intercepted.
+// member who may change nothing; a desktop app's state and a sign-in several bots take turns on. Every request is
+// intercepted.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -192,6 +193,35 @@ const {unrouted} = require('./support/routes.cjs');
     assert.equal(await dialog.locator('[data-model-login]:enabled, [data-subs-add] button:enabled').count(), 0);
     await page.keyboard.press('Escape');
 
+    // Desktop apps (a Mac's app driver), under Versions and updates: only when the computer reports `appdriver`, one row
+    // per app with its state and the driver's detail; still titled on a phone. Bots sharing one ChatGPT sign-in take
+    // turns (backend/views.py shared_logins): each login a line stands for says so, naming the bots this reader may see.
+    box.last_seen = at(-2000);
+    await page.evaluate(() => loadSettings());
+    await row('box').locator('.machine-name').click();
+    await dialog.locator('[data-connection]').first().waitFor();
+    assert.equal(await dialog.locator('.machine-apps').count(), 0, 'no driver, no Desktop apps');
+    assert.equal(await dialog.locator('[data-shared-login]').count(), 0, 'no shared sign-in, no note');
+    box.readiness.appdriver = {trusted: false, macos: '15.1', detail: '', apps: {grok: {installed: true, version: '1.2.0', running: true,
+      signed_in: true, background_ok: false, ready: false, state: 'no_permission', detail: 'Turn on tico-appdriver in System Settings > Privacy & Security > Accessibility'}}};
+    box.shared_logins = [{runtime: 'codex', profile: '', display_name: '', count: 3, bots: ['helper']},
+                         {runtime: 'codex', profile: 'acme', display_name: 'Acme Pro', count: 2, bots: []}];
+    await page.evaluate(() => loadSettings());
+    const apps = dialog.locator('[data-detail-section=versions] [role=table][aria-label="Desktop apps on Team box"]');
+    await apps.waitFor();
+    assert.deepEqual(await apps.locator('[data-machine-app="grok"] [role=cell]').allInnerTexts().then(a => a.map(t => t.replace(/\s+/g, ' ').trim())),
+      ['Grok', '1.2.0', 'Needs Accessibility permission Turn on tico-appdriver in System Settings > Privacy & Security > Accessibility']);
+    const acmeLine = dialog.locator('[data-connection="profile:acme:codex"]');
+    assert.equal(await acmeLine.locator('[data-shared-login="codex:"]').innerText(), '3 bots share this sign-in (Helper and 2 more). They take turns: one Codex run at a time.');
+    assert.equal(await acmeLine.locator('[data-shared-login="codex:acme"]').innerText(), '2 bots share this sign-in. They take turns: one Codex run at a time.',
+      'no names this reader may not see');
+    assert.equal(await dialog.locator('[data-connection="profile:beta:codex"] [data-shared-login], [data-connection="own:claude"] [data-shared-login]').count(), 0);
+    await page.setViewportSize({width: 390, height: 844});
+    assert.ok(await apps.locator('[role=columnheader]', {hasText: 'Desktop apps'}).isVisible(), 'titled on a phone');
+    assert.ok(await apps.evaluate(el => el.scrollWidth <= el.clientWidth + 1), 'fits a phone');
+    await page.setViewportSize({width: 1440, height: 900});
+    await page.keyboard.press('Escape');
+
     // 25. Revoked computers on request; Revoke lives in the pop-up only.
     await page.locator('#set-machines [data-show-revoked-computers]').check();
     await row('old').waitFor();
@@ -215,6 +245,6 @@ const {unrouted} = require('./support/routes.cjs');
     await page.keyboard.press('Escape');
 
     assert.deepEqual(errors, []);
-    console.log('PASS: compact computer rows, connection chips, detail pop-up, merged login, bots, header fix, empty/offline/waiting/revoked/member');
+    console.log('PASS: compact computer rows, connection chips, detail pop-up, merged login, bots, header fix, empty/offline/waiting/revoked/member, desktop apps, shared sign-ins');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

@@ -19,7 +19,7 @@ from pathlib import Path
 import pytest
 
 from backend.store import encode
-from backend.tests.test_api import api, assign, get, post, put, runner, settled  # noqa: F401
+from backend.tests.test_api import api, assign, get, headers, post, put, runner, settled  # noqa: F401
 from backend.tests.live import live  # noqa: F401
 
 pytestmark = pytest.mark.slow
@@ -209,9 +209,36 @@ def computer(api, live, tmp_path, harness, setup, rust_binary):
     machine.stop()
 
 
-def reply_to(api, conversation, token="ana-test"):
+def reply_to(api, conversation, token="ana-test", bot="ops"):
     messages = get(api, f"conversations/{conversation}/messages", token)
-    return next((m for m in reversed(messages) if m["from_actor"] == "bot:ops"), None)
+    return next((m for m in reversed(messages) if m["from_actor"] == "bot:" + bot), None)
+
+
+def add_bot(api, computer, tmp_path, slug, bot=None):
+    """Another bot on this computer, on the same harness and the computer's own logins (call before start)."""
+    assign(api, computer.registration, slug)
+    config = {"name": slug, "runtime": computer.runtime, "harness": computer.harness, "model": MODELS[computer.harness],
+              "status": "active", **(bot or {})}
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET config_json=? WHERE bot=?", (encode(config), slug))
+    repo = tmp_path / "projects" / f"bot-{slug}"
+    repo.mkdir(parents=True)
+    (repo / "AGENT.md").write_text(f"# {slug.title()}\n\nAnswer the Acme team.\n")
+    (repo / "bot.yaml").write_text(f"name: {slug}\nruntime: {config['runtime']}\nmodel: {config['model']}\n")
+
+
+def codex_turns(computer):
+    """Each Codex turn's (start, end) from the fake's log, earliest start first."""
+    calls = computer.calls()
+    ends = {c["turn"]: c["at"] for c in calls if c.get("method") == "turn/completed"}
+    return sorted((c["at"], ends.get(c["turn"])) for c in calls if c.get("method") == "turn/start")
+
+
+def bot_attempts(api, computer, bot):
+    with api.app.state.store.read() as c:
+        rows = c.execute("SELECT id, result_json FROM attempts WHERE runner_id=? AND bot=? ORDER BY created",
+                         (computer.registration["runner_id"], bot)).fetchall()
+    return [{"id": r[0], "result": json.loads(r[1] or "null")} for r in rows]
 
 
 def test_a_chat_turn_streams_completes_and_resumes_the_bot_thread(api, computer):
@@ -263,6 +290,112 @@ def test_a_chat_turn_streams_completes_and_resumes_the_bot_thread(api, computer)
         starts = [c for c in calls if c.get("method") in ("thread/start", "thread/resume")]
         assert starts[-1] == {"harness": "codex", "method": "thread/resume", "thread": starts[0]["thread"]}
     assert "Please answer locally" not in computer.prompts()[-1]["prompt"]
+
+
+def started_threads(api, computer):
+    """The provider thread each of this computer's turns reported when it started, oldest first."""
+    with api.app.state.store.read() as c:
+        return [r[0] for r in c.execute("SELECT thread_id FROM attempts WHERE runner_id=? ORDER BY created",
+                                        (computer.registration["runner_id"],))]
+
+
+def from_an_old_hub(monkeypatch):
+    """Claims as a Hub from before `session_epoch` and `bot_session_epoch` hands them out. Returns the real claim."""
+    from backend.execution import Execution
+    claim = Execution.claim
+
+    def without_epochs(self, *args, **kwargs):
+        out = claim(self, *args, **kwargs)
+        if isinstance(out, dict) and isinstance(out.get("attempt"), dict):
+            out["attempt"].pop("session_epoch", None)
+            out["attempt"].pop("bot_session_epoch", None)
+        return out
+    monkeypatch.setattr(Execution, "claim", without_epochs)
+    return claim
+
+
+@pytest.mark.parametrize("old_hub", [False, True])
+def test_a_person_clearing_the_chat_starts_a_new_provider_thread_and_without_one_it_resumes(api, computer, old_hub,
+                                                                                            monkeypatch):
+    if old_hub:
+        # A Hub from before the epochs: the runner keeps resuming, as before, and nothing breaks.
+        from_an_old_hub(monkeypatch)
+    computer.start()
+    conversation = None
+    for n, text in enumerate(["Remember the Acme code word", "What was it?"], start=1):
+        conversation = post(api, "chat/ops", {"text": text})["conversation_id"]
+        until(lambda: len([a for a in computer.attempts() if a["result"]]) == n, f"reply {n}")
+    cleared = computer.api.post("/api/employees/ops/session/clear", json={}, headers=headers())
+    assert cleared.status_code == 200 and cleared.json()["conversation_id"] == conversation, cleared.text
+    post(api, "chat/ops", {"text": "Start over: a new question"})
+    until(lambda: len([a for a in computer.attempts() if a["result"]]) == 3, "the reply after the clear")
+    assert [a["result"]["outcome"] for a in computer.attempts()] == ["completed"] * 3
+    first, second, third = started_threads(api, computer)
+    # No clear: the same thread, warm. After the clear: a new one, not a resume of the old.
+    assert first and second == first, (first, second)
+    if old_hub:
+        assert third == first, "with no epoch from the Hub the runner resumes as it always did"
+        return
+    assert third and third != first, (first, third)
+    calls = computer.prompts()
+    assert "Remember the Acme code word" not in calls[-1]["prompt"], "the cleared history stays out of the new thread"
+    if computer.harness in ("claude", "gemini"):
+        argv = calls[-1]["argv"]
+        assert "--resume" not in argv and argv[argv.index("--session-id") + 1] == third
+    elif computer.harness == "codex":
+        starts = [c for c in computer.calls() if c.get("harness") == "codex" and c.get("method") in ("thread/start", "thread/resume")]
+        assert [c["method"] for c in starts] == ["thread/start", "thread/resume", "thread/start"]
+    elif computer.harness == "antigravity":
+        # A new epoch is a new warm scope: its own process, so a provider conversation of its own.
+        assert calls[-1]["pid"] != calls[0]["pid"] == calls[1]["pid"]
+
+
+@pytest.mark.parametrize("harness", ["claude", "codex"])
+def test_a_clear_made_after_an_upgrade_before_the_chats_next_turn_still_starts_a_new_thread(api, computer, monkeypatch):
+    from backend.execution import Execution
+    # Before the upgrade: a thread saved with no epoch recorded beside it.
+    claim = from_an_old_hub(monkeypatch)
+    computer.start()
+    post(api, "chat/ops", {"text": "Remember the Acme code word"})
+    until(lambda: len([a for a in computer.attempts() if a["result"]]) == 1, "the first reply")
+    assert computer.api.post("/api/employees/ops/session/clear", json={}, headers=headers()).status_code == 200
+    # Upgraded: the next turn carries the moved epoch, seen here for the first time.
+    monkeypatch.setattr(Execution, "claim", claim)
+    post(api, "chat/ops", {"text": "Start over: a new question"})
+    until(lambda: len([a for a in computer.attempts() if a["result"]]) == 2, "the reply after the clear")
+    assert [a["result"]["outcome"] for a in computer.attempts()] == ["completed"] * 2
+    first, second = started_threads(api, computer)
+    assert first and second and second != first, (first, second)
+    assert "Remember the Acme code word" not in computer.prompts()[-1]["prompt"]
+    if computer.harness == "claude":
+        assert "--resume" not in computer.prompts()[-1]["argv"]
+    else:
+        starts = [c for c in computer.calls() if c.get("harness") == "codex" and c.get("method") in ("thread/start", "thread/resume")]
+        assert [c["method"] for c in starts] == ["thread/start", "thread/start"]
+
+
+@pytest.mark.parametrize("harness", ["claude", "codex"])
+def test_after_one_persons_clear_another_persons_chat_on_the_shared_thread_starts_a_new_one_too(api, computer):
+    computer.start()
+    done = lambda n: len([a for a in computer.attempts() if a["result"]]) == n  # noqa: E731
+    ana = post(api, "chat/ops", {"text": "Remember the Acme code word"})["conversation_id"]
+    until(lambda: done(1), "Ana's reply")
+    ben = post(api, "chat/ops", {"text": "Ben's question"}, token="ben-test")["conversation_id"]
+    until(lambda: done(2), "Ben's reply")
+    assert computer.api.post("/api/employees/ops/session/clear", json={}, headers=headers()).status_code == 200
+    # Ben's chat runs first after Ana's Clear: the thread they shared is not resumed, and his own history stays.
+    post(api, "chat/ops", {"text": "Ben again"}, token="ben-test")
+    until(lambda: done(3), "Ben's reply after Ana's clear")
+    # Ana's next turn continues that new thread, not a third.
+    post(api, "chat/ops", {"text": "Ana starts over"})
+    until(lambda: done(4), "Ana's reply after her clear")
+    assert [a["result"]["outcome"] for a in computer.attempts()] == ["completed"] * 4
+    first, second, third, fourth = started_threads(api, computer)
+    assert second == first and third and third != first and fourth == third, (first, second, third, fourth)
+    assert ana != ben
+    if computer.harness == "codex":
+        starts = [c for c in computer.calls() if c.get("harness") == "codex" and c.get("method") in ("thread/start", "thread/resume")]
+        assert [c["method"] for c in starts] == ["thread/start", "thread/resume", "thread/start", "thread/resume"]
 
 
 @pytest.mark.parametrize("harness", ["gemini", "antigravity"])
@@ -412,6 +545,63 @@ def test_a_usage_limit_with_no_fallback_set_runs_on_another_signed_in_provider(a
     assert [p["harness"] for p in computer.prompts()] == ["codex", "claude"]
     assert any(d.startswith("codex hit its usage limit; running this turn on claude (no fallback set; another provider signed in here)")
                for d in diagnostics), diagnostics
+
+
+# TK-EKWAFWPD: the first of the company's providers is out of quota on this computer too. The hop that hits its limit
+# moves the turn on to the next provider in the same turn, and the next turn skips that login altogether.
+@pytest.mark.parametrize("harness", ["claude"])
+@pytest.mark.parametrize("setup", [{"env": {"FAKE_CLAUDE_LIMIT": "1"}}])
+def test_a_fallback_out_of_quota_too_moves_the_turn_on_and_is_skipped_next_time(api, computer):
+    from backend.store import H
+    view = get(api, "providers")
+    saved = api.put("/api/v2/providers", json={"enabled": ["anthropic", "openai", "meta"], "model": view["default"]["model"] or "",
+                                                "expected_revision": view["revision"], "auto_fallback": True},
+                    headers={"Authorization": "Bearer ana-test", "Idempotency-Key": H.new_id()})
+    assert saved.status_code == 200, saved.text
+    computer.start()
+    msg = post(api, "chat/ops", {"text": "Please LIMIT yourself"})       # Codex fails this on its usage limit
+    assert until(lambda: reply_to(api, msg["conversation_id"]), "the second fallback's reply")["body"] == "Acme reply."
+    first = until(lambda: (computer.attempts() or [{}])[-1].get("result"), "the completion")
+    assert first["outcome"] == "completed" and first["fallback"] == "musecode" and first["primary_limited"] is True
+    assert not first.get("limited")
+    assert [p["harness"] for p in computer.prompts()] == ["claude", "codex", "musecode"]
+    diagnostics = [e["payload"].get("text", "") for e in computer.events(computer.attempts()[-1]["id"]) if e["kind"] == "diagnostic"]
+    assert any(d.startswith("claude hit its usage limit; running this turn on codex") for d in diagnostics), diagnostics
+    assert any(d.startswith("codex hit its usage limit; running this turn on musecode") for d in diagnostics), diagnostics
+    # The next turn: Claude is still out of quota, and so is this computer's Codex login, so Muse Code takes it at once.
+    post(api, "chat/ops", {"text": "Please LIMIT yourself again"})
+    second = until(lambda: (lambda rows: rows[-1]["result"] if len(rows) == 2 and rows[-1]["result"] else None)(computer.attempts()),
+                   "the second completion")
+    assert second["outcome"] == "completed" and second["fallback"] == "musecode"
+    assert [p["harness"] for p in computer.prompts()] == ["claude", "codex", "musecode", "claude", "musecode"]
+
+
+# A completion reports at most two usage segments (backend/models.py RunUsage): once the primary and one fallback have
+# both spent tokens, a further hop would make a third, so the turn ends limited there. Spent-nothing hops do not count.
+@pytest.mark.parametrize("harness", ["claude"])
+@pytest.mark.parametrize("setup", [{"env": {"FAKE_CLAUDE_LIMIT": "1", "FAKE_LIMIT_SPENDS": spends}} for spends in ("claude", "claude,codex")])
+def test_a_fallback_chain_stops_before_a_third_usage_segment(api, computer):
+    from backend.store import H
+    spends = computer.env["FAKE_LIMIT_SPENDS"]
+    view = get(api, "providers")
+    saved = api.put("/api/v2/providers", json={"enabled": ["anthropic", "openai", "meta"], "model": view["default"]["model"] or "",
+                                                "expected_revision": view["revision"], "auto_fallback": True},
+                    headers={"Authorization": "Bearer ana-test", "Idempotency-Key": H.new_id()})
+    assert saved.status_code == 200, saved.text
+    computer.start()
+    post(api, "chat/ops", {"text": "Please LIMIT yourself"})
+    result = until(lambda: (computer.attempts() or [{}])[-1].get("result"), "the completion")
+    segments = [s["runtime"] for s in result["usage"]["segments"]]
+    if spends == "claude":      # Codex refused with nothing spent: Muse Code still takes the turn
+        assert result["outcome"] == "completed" and result["fallback"] == "musecode" and not result.get("limited")
+        assert [p["harness"] for p in computer.prompts()] == ["claude", "codex", "musecode"]
+        assert segments == ["claude", "musecode"]
+    else:                       # both spent tokens: Muse Code never starts, and the server takes the two segments
+        assert result.get("limited") and result["fallback"] == "codex"
+        assert [p["harness"] for p in computer.prompts()] == ["claude", "codex"]
+        assert segments == ["claude", "codex"]
+    made = next(r["ran_on"] for r in get(api, "bots/ops/turns") if r["id"] == computer.attempts()[-1]["id"])
+    assert [s["runtime"] for s in made["segments"]] == segments
 
 
 # Steering and subscription profiles are Claude Code and Codex features (runner-rs/src/profiles.rs, steer in drive).
@@ -569,17 +759,157 @@ def test_an_api_key_codex_login_is_never_asked_for_plan_usage(api, computer):
     assert not any(c.get("method") == "account/rateLimits/read" for c in computer.calls())
 
 
+# On an API-key Codex login the lanes run at once; on a ChatGPT login they run in turn, the second shown as waiting
+# (a status, not a failure), because OpenAI's rule is one job per login, not per bot.
 @pytest.mark.parametrize("harness", ["codex"])
 @pytest.mark.parametrize("setup", [{"bot": {"session": "task"}, "git": True, "registration": {"capacity": 4},
-                                    "env": {"FAKE_SLOW": "4"}}])
-def test_two_tasks_of_one_bot_run_side_by_side_in_their_own_lanes(api, computer):
+                                    "env": {"FAKE_SLOW": "4", "FAKE_CODEX_LOGIN": login}} for login in ("apikey", "chatgpt")],
+                         ids=["api-key", "chatgpt"])
+def test_two_tasks_of_one_bot_run_side_by_side_in_their_own_lanes(api, computer, setup):
     computer.start()
     for title in ("SLOW first", "SLOW second"):
         post(api, "tasks", {"owner": "ops", "title": title, "body": "Please do " + title + "."})
     until(lambda: len([c for c in computer.calls() if c.get("method") == "turn/completed"]) == 2, "both task turns", timeout=60)
-    starts = sorted(c["at"] for c in computer.calls() if c.get("method") == "turn/start")
-    ends = sorted(c["at"] for c in computer.calls() if c.get("method") == "turn/completed")
-    assert len(starts) == 2 and starts[1] < ends[0], (starts, ends)
+    turns = codex_turns(computer)
+    waits = [e for a in computer.attempts() for e in computer.events(a["id"]) if e["kind"] == "status" and e["payload"].get("waiting")]
+    if setup["env"]["FAKE_CODEX_LOGIN"] == "apikey":
+        assert len(turns) == 2 and turns[1][0] < turns[0][1] and not waits, (turns, waits)
+    else:
+        assert len(turns) == 2 and turns[1][0] >= turns[0][1], turns
+        assert [e["payload"]["waiting"] for e in waits] == [
+            "Waiting for this computer's ChatGPT login to be free (busy with another turn of this bot)"]
+        done = until(lambda: (lambda rows: rows if len(rows) == 2 and all(a["result"] for a in rows) else None)(computer.attempts()),
+                     "both results")
+        assert [a["result"]["outcome"] for a in done] == ["completed", "completed"]
+
+
+# Brief test 16 (Dev 215): OpenAI's Codex terms allow a ChatGPT sign-in one auth.json per serialized job stream. Two bots
+# on this computer's one ChatGPT login start at once: one Codex turn runs, the other shows it is waiting (not failed),
+# then runs once the first is done.
+@pytest.mark.parametrize("harness", ["codex"])
+@pytest.mark.parametrize("setup", [{"registration": {"capacity": 4}, "env": {"FAKE_SLOW": "3"}}])
+def test_two_bots_on_one_chatgpt_login_take_turns_and_the_one_waiting_says_so(api, computer, tmp_path):
+    add_bot(api, computer, tmp_path, "finance")
+    computer.start()
+    until(lambda: computer.readiness().get("finance", {}).get("ready"), "the second bot's readiness")
+    chats = {bot: post(api, f"chat/{bot}", {"text": "Please be SLOW"})["conversation_id"] for bot in ("ops", "finance")}
+
+    def waiting():
+        for bot, cid in chats.items():
+            line = (get(api, f"conversations/{cid}/snapshot")["execution"] or {}).get("waiting")
+            if line:
+                return bot, line
+    bot, line = until(waiting, "a turn waiting for the login")
+    other = next(b for b in chats if b != bot)
+    assert line == f"Waiting for this computer's ChatGPT login to be free (busy with {other})"
+    for b, cid in chats.items():
+        until(lambda b=b, cid=cid: reply_to(api, cid, bot=b), f"{b}'s reply", timeout=40)
+    turns = codex_turns(computer)
+    assert len(turns) == 2 and turns[1][0] >= turns[0][1], turns
+    for b in chats:
+        result = until(lambda b=b: bot_attempts(api, computer, b)[-1]["result"], f"{b}'s completion")
+        assert result["outcome"] == "completed" and not result.get("fallback")
+    # The wait is a status, set while it waited and cleared once the login was its own; the first turn never waited.
+    said = lambda b: [e["payload"]["waiting"] for e in computer.events(bot_attempts(api, computer, b)[-1]["id"])
+                      if e["kind"] == "status" and "waiting" in e["payload"]]
+    assert said(bot)[0].startswith("Waiting for this computer's ChatGPT login") and said(bot)[-1] == "" and said(other) == []
+    assert (get(api, f"conversations/{chats[bot]}/snapshot")["execution"] or {}).get("waiting") is None
+
+
+# The second bot has its own fallback ready: it does not wait, it runs there, and the run says which and why.
+@pytest.mark.parametrize("harness", ["codex"])
+@pytest.mark.parametrize("setup", [{"registration": {"capacity": 4}, "env": {"FAKE_SLOW": "3"}}])
+def test_a_bot_whose_chatgpt_login_is_busy_runs_on_its_own_fallback_and_says_why(api, computer, tmp_path):
+    add_bot(api, computer, tmp_path, "finance", bot={"fallback": {"harness": "claude", "model": "claude-sonnet-5"}})
+    computer.start()
+    until(lambda: computer.readiness().get("finance", {}).get("ready"), "the second bot's readiness")
+    ops = post(api, "chat/ops", {"text": "Please be SLOW"})
+    until(lambda: codex_turns(computer), "ops's Codex turn")
+    finance = post(api, "chat/finance", {"text": "Please answer locally"})
+    assert until(lambda: reply_to(api, finance["conversation_id"], bot="finance"), "the fallback's reply")["body"] == "Acme reply."
+    attempt = until(lambda: (lambda rows: rows[-1] if rows and rows[-1]["result"] else None)(bot_attempts(api, computer, "finance")),
+                    "finance's completion")
+    assert attempt["result"]["outcome"] == "completed" and attempt["result"]["fallback"] == "claude"
+    notes = [e["payload"] for e in computer.events(attempt["id"]) if e["kind"] == "diagnostic"]
+    assert {"text": "ChatGPT login busy with ops; running this turn on claude", "fallback": "claude",
+            "busy": {"login": "this computer's ChatGPT login", "holder": "ops"}} in notes, notes
+    assert not any(e["kind"] == "status" and "waiting" in e["payload"] for e in computer.events(attempt["id"]))
+    prompt = next(p for p in computer.prompts() if p["harness"] == "claude")["prompt"]
+    assert "because codex's ChatGPT login was busy with another turn" in prompt
+    until(lambda: reply_to(api, ops["conversation_id"]), "ops's reply", timeout=40)
+    assert len(codex_turns(computer)) == 1 and bot_attempts(api, computer, "ops")[-1]["result"].get("fallback") is None
+
+
+def waits_of(computer, aid):
+    return [e["payload"]["waiting"] for e in computer.events(aid) if e["kind"] == "status" and "waiting" in e["payload"]]
+
+
+# A fallback onto a ChatGPT login takes that login too: a Claude bot out of quota hops to Codex while another bot's
+# Codex turn holds the login, so its already-running turn waits (and says so), then runs, never beside the other.
+@pytest.mark.parametrize("harness", ["codex"])
+@pytest.mark.parametrize("setup", [{"registration": {"capacity": 4}, "env": {"FAKE_SLOW": "3", "FAKE_CLAUDE_LIMIT": "1"}}])
+def test_a_fallback_onto_a_busy_chatgpt_login_waits_for_it(api, computer, tmp_path):
+    add_bot(api, computer, tmp_path, "finance", bot={"runtime": "claude", "harness": "claude", "model": MODELS["claude"],
+                                                     "fallback": {"harness": "codex", "model": MODELS["codex"]}})
+    computer.start()
+    until(lambda: computer.readiness().get("finance", {}).get("ready"), "the second bot's readiness")
+    ops = post(api, "chat/ops", {"text": "Please be SLOW"})
+    until(lambda: codex_turns(computer), "ops's Codex turn")
+    finance = post(api, "chat/finance", {"text": "Please answer"})
+    line = "Waiting for this computer's ChatGPT login to be free (busy with ops)"
+    # Waiting after the run has started: the chat shows it, not a failure.
+    until(lambda: (get(api, f"conversations/{finance['conversation_id']}/snapshot")["execution"] or {}).get("waiting") == line,
+          "the hop's waiting line")
+    until(lambda: reply_to(api, finance["conversation_id"], bot="finance"), "the fallback's reply", timeout=40)
+    until(lambda: reply_to(api, ops["conversation_id"]), "ops's reply", timeout=40)
+    turns = codex_turns(computer)
+    assert len(turns) == 2 and turns[1][0] >= turns[0][1], turns
+    attempt = until(lambda: (lambda rows: rows[-1] if rows and rows[-1]["result"] else None)(bot_attempts(api, computer, "finance")),
+                    "finance's completion")
+    assert attempt["result"]["outcome"] == "completed" and attempt["result"]["fallback"] == "codex"
+    assert waits_of(computer, attempt["id"]) == [line, ""]
+
+
+# A command belongs to the bot's own harness: with the login busy, setting a native goal (a command that carries the
+# active goal) waits for the login even with a fallback ready, then drives the goal there.
+@pytest.mark.parametrize("harness", ["codex"])
+@pytest.mark.parametrize("setup", [{"registration": {"capacity": 4}, "env": {"FAKE_SLOW": "3"}}])
+def test_a_goal_command_waits_for_a_busy_chatgpt_login_even_with_a_fallback_ready(api, computer, tmp_path):
+    add_bot(api, computer, tmp_path, "finance", bot={"fallback": {"harness": "claude", "model": MODELS["claude"]}})
+    computer.start()
+    until(lambda: computer.readiness().get("finance", {}).get("goals") is True, "the second bot's readiness")
+    room = post(api, "conversations", {"participants": ["bot:finance"]})["id"]
+    post(api, "chat/ops", {"text": "Please be SLOW"})
+    until(lambda: codex_turns(computer), "ops's Codex turn")
+    post(api, f"conversations/{room}/goal", {"action": "set", "objective": "Keep the Acme summary current"})
+    until(lambda: len(codex_turns(computer)) == 2, "the goal's turn", timeout=40)
+    command = bot_attempts(api, computer, "finance")[0]
+    assert waits_of(computer, command["id"]) == ["Waiting for this computer's ChatGPT login to be free (busy with ops)", ""]
+    assert not [p for p in computer.prompts() if p.get("harness") == "claude"]
+    turns = codex_turns(computer)
+    assert turns[0][1] is not None and turns[1][0] >= turns[0][1], turns
+    post(api, f"conversations/{room}/goal", {"action": "clear"})
+    rows = until(lambda: (lambda rows: rows if len(rows) == 2 and all(r["result"] for r in rows) else None)(
+        bot_attempts(api, computer, "finance")), "the goal's attempts settled")
+    assert [r["result"]["outcome"] for r in rows] == ["completed", "completed"]
+    assert not any(r["result"].get("fallback") for r in rows)
+
+
+# An API-key Codex login is not limited: two bots on it run at once, and neither waits.
+@pytest.mark.parametrize("harness", ["codex"])
+@pytest.mark.parametrize("setup", [{"registration": {"capacity": 4}, "env": {"FAKE_SLOW": "3", "FAKE_CODEX_LOGIN": "apikey"}}])
+def test_two_bots_on_an_api_key_codex_login_run_at_once(api, computer, tmp_path):
+    add_bot(api, computer, tmp_path, "finance")
+    computer.start()
+    until(lambda: computer.readiness().get("finance", {}).get("ready"), "the second bot's readiness")
+    chats = {bot: post(api, f"chat/{bot}", {"text": "Please be SLOW"})["conversation_id"] for bot in ("ops", "finance")}
+    for b, cid in chats.items():
+        until(lambda b=b, cid=cid: reply_to(api, cid, bot=b), f"{b}'s reply", timeout=40)
+    turns = codex_turns(computer)
+    assert len(turns) == 2 and turns[1][0] < turns[0][1], turns
+    for b in chats:
+        events = computer.events(bot_attempts(api, computer, b)[-1]["id"])
+        assert not any(e["kind"] == "status" and "waiting" in e["payload"] for e in events)
 
 
 @pytest.mark.parametrize("harness", ["claude"])

@@ -9,7 +9,7 @@
 //  - a task with no code links and no children has no rail at all; on a phone the rail sits under the details;
 //  - the bot page's Active rows carry one small PR badge each, from the task's pr_state, and none without PRs;
 //  - Runs (GET /tasks/{id}/run-view): the checkpoint with its author, background work still running, each try with what
-//    followed it, and the subagent tree with a nested subagent under its parent; a task with no runs has no section.
+//    woke it and what followed it, and the subagent tree with a nested subagent under its parent; a task with no runs has no section.
 // TASK_CODE_SHOTS=<dir> saves the screenshots for the owner.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
@@ -68,6 +68,7 @@ function fixtures() {
     attempts: [
       {run: 'a2', bot: 'eng', job: 'j1', try: 2, tries: 2, state: 'running', outcome: null, created: ago(120), started: ago(118), finished: null,
        took_s: null, ran_on: {segments: [{model: 'claude-opus-5-5'}]}, lease: [], reason: null, next: null,
+       wake: {class: 'batched', reason: 'Review comments', preset: 'token_saver', preset_label: 'Token saver', held_until: ago(125)},
        subagents: [{id: 'g1', parent_id: null, type: 'general-purpose', model: null, status: 'completed', background: true, tool_uses: 3, duration_ms: 42000, running: false},
          {id: 'g2', parent_id: 'g1', type: 'Explore', model: 'claude-haiku-5-5', status: null, background: false, tool_uses: null, duration_ms: null, running: true}],
        background: [{id: 'b1', tool: 'Bash', summary: 'npm', status: null, started: ago(60), ended: null, running: true},
@@ -278,6 +279,8 @@ async function desktop(browser) {
   assert.equal(await tries.count(), 2);
   assert.match(await tries.first().locator('summary').innerText(), /^Try 2 of 2 · running · for 2m · claude-opus-5-5/);
   assert.equal(await tries.first().evaluate(x => x.open), true);
+  assert.match(await tries.first().locator('.truns-wake').innerText(), /^Woke for: Review comments · Token saver · held until /);
+  assert.equal(await tries.nth(1).locator('.truns-wake').count(), 0, 'a run from before presets says nothing about its wake');
   assert.equal(await tries.nth(1).evaluate(x => x.open), false);
   assert.match(await tries.first().locator('.truns-sub > .truns-tree > li').innerText(),
     /^general-purpose\s*claude-opus-5-5 \(the run’s model\) · completed · 42s · 3 tool calls · in the background\s*Explore\s*claude-haiku-5-5 · running$/);

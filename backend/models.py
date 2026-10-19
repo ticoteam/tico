@@ -4,7 +4,7 @@ from typing import Annotated, Any, Literal
 
 import re
 
-from pydantic import AfterValidator, BeforeValidator, BaseModel, ConfigDict, Field, StrictBool, StrictStr, ValidationError, WrapValidator, model_serializer, model_validator
+from pydantic import AfterValidator, BeforeValidator, BaseModel, ConfigDict, Field, SecretStr, StrictBool, StrictStr, ValidationError, WrapValidator, model_serializer, model_validator
 
 Text = Annotated[str, Field(min_length=1, max_length=200_000)]
 ID = Annotated[str, Field(min_length=1, max_length=200)]
@@ -110,6 +110,24 @@ class Answer(Contract):
 class TakeRecommendation(Contract):
     ask: Annotated[StrictStr, Field(min_length=1, max_length=100)]     # the bot's ask the person says yes to
     version: Annotated[int, Field(strict=True, ge=1)] | None = None     # the card's task version: a changed task is refused
+
+
+class StaleDecision(Contract):
+    """A person's answer to one row of their Stale tickets card (backend/stale_review.py): accept or skip. Accept names
+    the task version the row showed (409 version_conflict once the task changed), as a change by hand does."""
+    decision: Literal["accept", "skip"] = "accept"
+    version: int | None = None
+
+
+class StaleShown(Contract):
+    id: ID
+    version: int
+
+
+class StaleAcceptAll(Contract):
+    """Accept all on a Stale tickets card: the rows the card showed, each with its task's version then. A row added
+    since is not in the list and stays; a row whose task changed is refused on its own."""
+    rows: list[StaleShown] = Field(min_length=1, max_length=500)
 
 
 class ClarifyAsk(Contract):
@@ -478,7 +496,7 @@ class KpiReading(Contract):
 
 
 class GoalProposalCreate(Contract):
-    kind: Literal["goal_wording", "goal_kpi", "kpi_definition", "kpi_target", "flag"]
+    kind: Literal["goal_wording", "goal_kpi", "kpi_definition", "kpi_target", "flag", "goal_why"]
     goal_id: str | None = Field(default=None, max_length=200)
     kpi_id: str | None = Field(default=None, max_length=200)
     payload: dict = Field(default_factory=dict)
@@ -491,6 +509,17 @@ GoalProposal = GoalProposalCreate
 class GoalProposalDecision(Contract):
     decision: Literal["confirm", "reject"]
     note: str = Field(default="", max_length=1000)
+    why: str | None = Field(default=None, max_length=1000)    # a Why proposal confirmed as edited
+
+
+# The company at the top of Goals (backend/company.py): only the fields sent change.
+class CompanyUpdate(Contract):
+    vision: str | None = Field(default=None, max_length=4000)
+    description: str | None = Field(default=None, max_length=10_000)
+
+
+class GoalWhy(Contract):
+    why: str = Field(default="", max_length=1000)     # "" clears it: the goal is not tied to the vision
 
 
 # Market (backend/market.py). Reporters send prose. The Librarian (the curator) and the owner write the graph.
@@ -780,6 +809,11 @@ class HarnessReadiness(GoalReadiness):
     detail: str = Field(default="", max_length=500)
 
 
+class RuntimeKey(Contract):
+    name: str = Field(max_length=100, pattern=r"^[A-Z_][A-Z0-9_]*$")
+    source: Literal["computer", "terminal", "shared"]
+
+
 class RuntimeReadiness(GoalReadiness):
     installed: bool
     # "rejected": the provider refused the key or sign-in on a real turn (rejected_at, rejected_reason).
@@ -787,6 +821,9 @@ class RuntimeReadiness(GoalReadiness):
     rejected_at: str = Field(default="", max_length=40)
     rejected_reason: str = Field(default="", max_length=300)
     credential_source: Literal["", "credentials", "computer"] = ""
+    # Which key signs it in, when one does: the computer's own from the app ("computer"), one set on the computer
+    # ("terminal"), or the company's shared key ("shared"). A name, never a value (runner-rs/src/signin.rs key_source).
+    key: RuntimeKey | None = None
     version: str = Field(default="", max_length=100)
     models: list[ID] = Field(default_factory=list, max_length=50)
     controls: list[Literal["interrupt", "new-session"]] = Field(default_factory=list)
@@ -928,6 +965,42 @@ class ScreenReadiness(Contract):
     reason: Annotated[str, BeforeValidator(lambda v: v[:200] if isinstance(v, str) else v), Field(max_length=200)] = ""
 
 
+def _cut(limit):
+    """A reported string longer than `limit` is cut, never refused: a refused report would hide the computer."""
+    return BeforeValidator(lambda v: v[:limit] if isinstance(v, str) else v)
+
+
+AppState = Literal["ready", "no_permission", "not_installed", "not_signed_in", "needs_foreground", "ui_changed",
+                   "no_driver", "error"]
+APP_STATES = AppState.__args__
+
+
+class AppDriverApp(Contract):
+    """One desktop app the computer's app driver can operate for a synced bot (backend/app_delivery.py)."""
+    installed: StrictBool = False
+    version: Annotated[str, _cut(100), Field(max_length=100)] = ""
+    running: StrictBool = False
+    signed_in: StrictBool = False
+    background_ok: StrictBool = False
+    ready: StrictBool = False
+    # A state a newer driver names that this server does not know yet reads as `error`, not as a refused report.
+    state: Annotated[AppState, BeforeValidator(lambda v: v if v in APP_STATES else "error")] = "error"
+    detail: Annotated[str, _cut(300), Field(max_length=300)] = ""
+
+
+APP_DRIVER_APPS = 10
+
+
+class AppDriverReadiness(Contract):
+    """The computer's desktop-app driver: whether macOS trusts it, and each app's state by app id (`grok`)."""
+    trusted: StrictBool = False
+    macos: Annotated[str, _cut(50), Field(max_length=50)] = ""
+    detail: Annotated[str, _cut(300), Field(max_length=300)] = ""
+    apps: Annotated[dict[Annotated[str, Field(pattern=r"^[a-z0-9_-]{1,40}$")], AppDriverApp],
+                    BeforeValidator(lambda v: dict(list(v.items())[:APP_DRIVER_APPS]) if isinstance(v, dict) else v)
+                    ] = Field(default_factory=dict)
+
+
 class StructuredReadiness(Contract):
     worktrees: bool | None = None
     # Prepares a worktree reserved for a waiting task while its bot is idle (backend/worktree_waits.py).
@@ -945,6 +1018,7 @@ class StructuredReadiness(Contract):
     browser_launch: ContainerExecReadiness | None = None
     engine: EngineReadiness | None = None
     screen: ScreenReadiness | None = None
+    appdriver: AppDriverReadiness | None = None
     # The runner's last WARN/ERROR-like log lines, for a support bundle a person chooses to send (backend/diagnostics.py).
     # Long lines are cut, never refused: a refused report would hide the computer (0.3.2 runners sent 301 characters).
     recent_errors: list[Annotated[str, BeforeValidator(lambda v: v[:300] if isinstance(v, str) else v),
@@ -955,7 +1029,7 @@ class StructuredReadiness(Contract):
         data = handler(self)
         if data.get("disk") is None:
             data.pop("disk", None)
-        for field in ("container_exec", "github_auth", "browser_launch", "engine", "screen"):
+        for field in ("container_exec", "github_auth", "browser_launch", "engine", "screen", "appdriver"):
             if data.get(field) is None:
                 data.pop(field, None)
         if not data.get("recent_errors"):
@@ -1033,7 +1107,7 @@ class Heartbeat(Contract):
     platform: str = Field(max_length=100)
     capacity: int = Field(default=4, ge=1, le=256)
     # The assignment_* values name the retired temporary assignments (#420); an older runner still sends them.
-    capabilities: list[Literal["assignment_instances_v1", "assignment_cleanup_v1", "task_lanes_v1", "task_lanes_v2", "session_roots_v1", "task_goals_v1", "screen_v1", "model_sign_out_v1"]] = Field(default_factory=list, max_length=20)
+    capabilities: list[Literal["assignment_instances_v1", "assignment_cleanup_v1", "task_lanes_v1", "task_lanes_v2", "session_roots_v1", "task_goals_v1", "screen_v1", "model_sign_out_v1", "model_keys_v1"]] = Field(default_factory=list, max_length=20)
     # The bool map remains accepted during runner rollout. The server normalizes both
     # shapes before storing them, so every read path sees one structured document.
     readiness: StructuredReadiness | dict[str, bool] = Field(default_factory=dict)
@@ -1050,6 +1124,12 @@ class Heartbeat(Contract):
     commit: str | None = Field(default=None, pattern=r"^([0-9a-f]{40}|[0-9a-f]{64})?$")
     kind: Literal["mac", "linux", "docker"] | None = None
     update: "RunnerUpdate | None" = None
+    # A restart a person asked for that has not happened yet (runner-rs runner.rs): sent until the runner restarts.
+    restart: "RunnerRestart | None" = None
+
+
+class RunnerRestart(Contract):
+    since: str = Field(max_length=40)
 
 
 class RunnerUpdate(Contract):
@@ -1134,6 +1214,12 @@ class BotAccess(Contract):
     on_behalf_of: ID | None = None
 
 
+# A bot's instructions (its AGENT.md) as a person reviewed them, one limit wherever they are sent: registering a bot,
+# adding one from the catalog and the first-run wizard. The longest shipped template is about half of it, and
+# backend/tests/test_onboarding.py checks every one against it.
+INSTRUCTIONS_MAX = 50_000
+
+
 class BotRegister(Contract):
     """Register a bot with the server, planned, before BotOps builds its repository. Left out, the slug is
     picked from the name (or the template's name)."""
@@ -1142,7 +1228,7 @@ class BotRegister(Contract):
     description: str = Field(default="", max_length=2000)
     reports_to: ID | None = None
     template: str = Field(default="", max_length=80)
-    instructions: str = Field(default="", max_length=50000)
+    instructions: str = Field(default="", max_length=INSTRUCTIONS_MAX)
     title_prefix: str = Field(default="", max_length=100)
     model: ID | None = None
     build: bool = False
@@ -1252,7 +1338,7 @@ class BotDefinitionCreate(Contract):
     # "Add from catalog": the template this bot is built from and the instructions a person
     # reviewed for it. Both are empty for a bot typed in by hand.
     template: str = Field(default="", max_length=80)
-    instructions: str = Field(default="", max_length=20_000)
+    instructions: str = Field(default="", max_length=INSTRUCTIONS_MAX)
 
 
 class BotBranch(Contract):
@@ -1267,6 +1353,35 @@ class BotArchive(Contract):
     revoke_agent: bool = True
     # BotOps applying a person's own request, as for a definition change (backend/app.py).
     on_behalf_of: ID | None = None
+
+
+class AppDelivery(Contract):
+    """Where a synced bot's messages are delivered: through `app` on the computer (runner) `computer`."""
+    computer: ID
+    app: Literal["grok"] = "grok"
+
+
+class AppDeliveryMessage(Contract):
+    """One message the app shows in the bot's conversation. `key` is the driver's own stable id for it."""
+    key: Annotated[str, Field(min_length=1, max_length=200)]
+    role: Literal["bot", "user"]
+    text: Annotated[str, Field(min_length=1, max_length=40_000)]
+    at: Annotated[str, Field(max_length=50)] | None = None
+    needs_human: StrictBool = False
+
+
+class AppDeliveryError(Contract):
+    code: Literal["needs_human", "no_permission", "not_signed_in", "needs_foreground", "ui_changed", "not_installed",
+                  "not_running", "bot_not_found", "timeout", "send_failed", "busy"]
+    detail: Annotated[str, _cut(300), Field(max_length=300)] = ""
+    text: Annotated[str, Field(max_length=40_000)] = ""
+
+
+class AppDeliveryReport(Contract):
+    """What a computer read from a bot's conversation in the app, newest last (POST /api/v2/runners/me/app-delivery)."""
+    app: Literal["grok"] = "grok"
+    messages: list[AppDeliveryMessage] = Field(default_factory=list, max_length=50)
+    error: AppDeliveryError | None = None
 
 
 class BotDefinitionUpdate(Contract):
@@ -1292,6 +1407,9 @@ class BotDefinitionUpdate(Contract):
     review_model: Literal["check", "own"] | None = None
     # `on`: each run's raw provider stream is kept a week for replay fixtures (backend/stream_capture.py); owner only.
     capture_stream: Literal["on", "off"] | None = None
+    # A Grok Bot answered through the Grok app on one of its person's computers; null turns it off
+    # (backend/app_delivery.py). Unset leaves it as it is.
+    app_delivery: AppDelivery | None = None
     # Subscribe to updates: which feeds it hears about as quiet notes (backend/update_feeds.py); empty is none.
     update_subscriptions: list[Literal["templates", "tico"]] | None = Field(default=None, max_length=2)
     expected_revision: int = Field(ge=1)
@@ -1394,6 +1512,11 @@ class BotCompactAt(Contract):
     expected_revision: int = Field(ge=1)
 
 
+class BotWakePreset(Contract):
+    wake_preset: Literal["current", "token_saver", "performance"]
+    expected_revision: int = Field(ge=1)
+
+
 class BotTransitionCreate(Contract):
     kind: Literal["model", "machine"]
     model: ID | None = None
@@ -1422,6 +1545,14 @@ class SettingsUndo(Contract):
     expected_revision: int = Field(ge=1)
 
 
+class GatewayConnectionSave(Contract):
+    """The Tico AI Gateway connection (backend/gateway_connection.py): a new key, or none to keep the saved one, and
+    the Gateway's URL ('' for Tico's). `expected_revision` is the revision the editor read."""
+    key: SecretStr | None = None
+    url: str = Field(default="", max_length=300)
+    expected_revision: int = Field(default=0, ge=0)
+
+
 class ProvidersUpdate(Contract):
     """The owner's AI provider choice. `expected_revision` is the revision the editor read."""
     enabled: list[Annotated[str, Field(min_length=1, max_length=40)]] = Field(max_length=10)
@@ -1441,6 +1572,10 @@ class SystemUpdate(Contract):
 
 class UsageCount(Contract):
     enabled: bool
+
+
+class CeoBotSwitch(Contract):
+    on: bool
 
 
 class UsageCountNotice(Contract):
@@ -1499,6 +1634,8 @@ class AccessRules(Contract):
     health_monitor_reports: bool | None = None
     bots_go_ahead: bool | None = None
     support_access: bool | None = None
+    stale_review: bool | None = None
+    topic_fresh: bool | None = None
     go_ahead_days: Annotated[int, Field(strict=True, ge=1, le=14)] | None = None
 
 
@@ -1566,7 +1703,7 @@ class OnboardingSelection(Contract):
     """One bot the person chose: which template builds it, and what they named and told it."""
     template: str = Field(min_length=1, max_length=80)
     display_name: str = Field(min_length=1, max_length=100)
-    instructions: str = Field(default="", max_length=20_000)
+    instructions: str = Field(default="", max_length=INSTRUCTIONS_MAX)
     # Who it reports to: `human:<id>` or a bot slug. Empty is the company owner.
     reports_to: str = Field(default="", max_length=120)
 
@@ -1624,16 +1761,21 @@ class AuthRejected(Contract):
 
 
 RequestTokens = Annotated[int, Field(ge=0, le=10**9)]
+# A request's three counts, and from a runner that can tell, whether it was the bot's own request (1) or a subagent's (0).
+RequestUsage = tuple[RequestTokens, RequestTokens, RequestTokens] | tuple[RequestTokens, RequestTokens, RequestTokens,
+                                                                          Literal[0, 1]]
 
 
 class RunUsagePart(Contract):
     """What a run spent, as its runner counted it: uncached input, cached input and output tokens.
     `requests` is the same three per model request, sent when the runner saw every request, so a model whose
-    long prompts cost more (providers.LONG_PROMPT) is priced request by request."""
+    long prompts cost more (providers.LONG_PROMPT) is priced request by request. A fourth count, when the runner
+    sends one, marks the bot's own requests (1) from its subagents' (0): the newest of its own is the session's
+    context size (`turns.prompt_tokens`)."""
     input_tokens: int = Field(default=0, ge=0, le=10**12)
     cached_tokens: int = Field(default=0, ge=0, le=10**12)
     output_tokens: int = Field(default=0, ge=0, le=10**12)
-    requests: list[tuple[RequestTokens, RequestTokens, RequestTokens]] | None = Field(default=None, max_length=2000)
+    requests: list[RequestUsage] | None = Field(default=None, max_length=2000)
     model: str = Field(default="", max_length=120)
     runtime: str = Field(default="", max_length=60)
     profile_used: str | None = Field(default=None, max_length=80)
@@ -1851,6 +1993,21 @@ class LogoutStart(Contract):
 
 class SharedKeyUse(Contract):
     runtime: Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]*$", max_length=40)]
+
+
+class KeyClear(Contract):
+    """Clear key on a computer; "all" clears the company's shared key on every computer it serves."""
+    runtime: Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]*$", max_length=40)]
+    scope: Literal["this", "all"] = "this"
+
+
+class KeyReplace(Contract):
+    """Replace key (or Add key) on a computer. The key is sealed in the vault; nothing sends it back (backend/computer_keys.py)."""
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=False)
+    runtime: Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]*$", max_length=40)]
+    secret: SecretStr = Field(max_length=4000)
+    env: str = Field(default="", max_length=100, pattern=r"^$|^[A-Z_][A-Z0-9_]*$")
+    scope: Literal["this", "all"] = "this"
 
 
 class LoginCode(Contract):

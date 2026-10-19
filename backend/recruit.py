@@ -102,6 +102,17 @@ def _from_hq(answer, cards):
     return {"bots": bots, "suggested_default": [str(t) for t in defaults if str(t) in seen]}
 
 
+def _plain_reasons(answer, value, department, briefing, about):
+    """An HQ still on an older engine says "Matches “managers”" for any word the answer shares with a card. Each such why
+    becomes the one this install's own recommender gives that bot (backend/recruit_rank.py), or none."""
+    if not any(row["why"].startswith("Matches “") for row in answer["bots"]):
+        return
+    ours = {row["template_id"]: row["why"] for row in R.rank(value, department, briefing, about, limit=len(value["cards"]))["bots"]}
+    for row in answer["bots"]:
+        if row["why"].startswith("Matches “"):
+            row["why"] = ours.get(row["template_id"], "")
+
+
 class Recruiter:
     def __init__(self, store, auth, settings):
         self.store, self.auth, self.settings = store, auth, settings
@@ -148,4 +159,5 @@ class Recruiter:
             answer = None
         if answer is None:
             return {**local, "source": "local", "shared": True, "off_by": ""}
+        _plain_reasons(answer, value, body.department, body.briefing, about)
         return {**answer, "source": "hq", "shared": True, "off_by": ""}

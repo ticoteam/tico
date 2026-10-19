@@ -4,8 +4,7 @@
 name: Granola live check
 on:
   schedule:
-    - cron: '30 3 * * *'    # 03:30 Pacific, after the 03:00 nightly gate in ci.yml
-      timezone: America/Los_Angeles
+    - cron: '47 10 * * *'    # 10:47 UTC (03:47 PDT / 02:47 PST), after the nightly gate in ci.yml; UTC like ci.yml
   workflow_dispatch:
 permissions:
   contents: read
@@ -28,7 +27,7 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         if: env.HAS_KEY == 'true'
         with:
-          python-version: '3.12'
+          python-version: '3.15'
       - name: Install
         if: env.HAS_KEY == 'true'
         run: |

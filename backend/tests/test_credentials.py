@@ -221,6 +221,9 @@ def test_a_reserved_variable_name_is_refused_and_an_old_one_is_named_in_health(a
     setup(api)
     refused=post(api,'credentials',{'name':'Acme update key','secret':'k-synthetic-123456','env':'TICO_UPDATE_KEY_ACME'},expected=422)
     assert refused['error']['code']=='env' and 'TICO_UPDATE_KEY_ACME' in refused['error']['detail']
+    # Claude Code reads CLAUDE_CONFIG_DIR ahead of HOME: a grant under it would move a bot's Claude login (runner-rs env.rs).
+    for env in ('CLAUDE_CONFIG_DIR','CODEX_HOME'):
+        assert post(api,'credentials',{'name':'Config folder','secret':'/synthetic/elsewhere','env':env},expected=422)['error']['code']=='env'
     row=create(api,name='Acme update key',env='UPDATE_KEY_ACME')
     # A credential stored before the rule keeps its name, cannot be given to another bot, and Health names it.
     with api.app.state.store.transaction() as c:

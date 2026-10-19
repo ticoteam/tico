@@ -3,7 +3,7 @@
 What a Tico install sends outside your own server, and what the receiving side keeps: the anonymous usage count, the
 suggestions while you build your team chart, and, only when you press Send, a support ticket. Each has its own switch.
 The setup page on tico.team, which you use before installing, has its own section ([below](#the-setup-page-on-ticoteam)).
-Separately, the server calls AI model providers with your own keys for a few features ([below](#the-servers-own-model-calls)). Tico's source is available, so you can read the code that
+Separately, the server calls AI model providers with your own keys for a few features ([below](#the-servers-own-model-calls)). Bots you set to use Tico Cheap, Mid or Power send their model calls through Tico HQ to OpenRouter ([below](#tico-cheap-mid-and-power-through-tico-hq)). Tico's source is available, so you can read the code that
 sends them (`backend/census.py`, `backend/releases.py`, `backend/recruit.py`, `backend/support.py`). The service that receives them,
 Tico HQ, is run by the Tico team from a separate, private repository; its code is not published. What it is sent and what it keeps is described in [docs/tico-hq.md](docs/tico-hq.md).
 
@@ -35,8 +35,8 @@ IP address is unavoidably seen by any server you connect to (GitHub sees it toda
 ### When
 
 Only while counting is on, only from a real install (never in demo mode, never from a source checkout that reports
-`dev`), and only after the owner has been shown the notice. A new install shows it in the installer, in the setup
-wizard and once in the web app; an existing install shows it in the web app when it updates to 0.2.15, and nothing is
+`dev`), and only after the owner has been shown the notice. A new install shows it in the installer and once in the web app, on the
+first page after the setup wizard (never over the wizard or the screen after **Create**); an existing install shows it in the web app when it updates to 0.2.15, and nothing is
 sent before the owner has seen it.
 
 ### What HQ stores
@@ -57,6 +57,9 @@ For the usage count, one row per install ID, and nothing else:
 - **No IP addresses are stored or logged.** HQ uses the address in memory only, as a salted hash forgotten when the
   process restarts, to limit each address to 60 requests an hour. Its access log is switched off, so no address and no
   query string reaches a log. There is no ping history, user agent or other column.
+- **Request counts, in memory only.** HQ counts how many requests it answered per route group (support, support
+  access, recruit, everything else) and result class (2xx to 5xx): 16 numbers and nothing else, with no install ID,
+  address, path or time. They are never logged or written, and they are gone when HQ restarts.
 - Every field is checked strictly (a UUID, a version number, the words `true` or `false`); a request with anything
   else is refused and stores nothing. Extra fields are ignored and never stored.
 - **Retention:** an install row not heard from in 13 months is deleted, by a job that runs daily. This rule is for these rows only;
@@ -211,14 +214,48 @@ you set on the server, and never in rehearsal mode. Each provider keeps what it 
 
 | What | What is sent | To whom |
 |---|---|---|
-| **Decisions** (`POST /api/v2/decisions`, `hub_decision_ask`, scoring saved listening posts, live-meeting routing, the nightly learning run) | The JSON state and the typed questions the caller sends: whatever it puts there, which can be a mail's subject and body or a stretch of a transcript. The nightly learning run sends each of the day's items (chat and task text, Slack channel messages, mail and meeting excerpts) with the profiles of the bots it may reach | TypeSafe (api.typesafe.ai, the Jev model) when `TYPESAFE_API_KEY` is set. Without it, or when TypeSafe is slow or down, the team's own provider from Settings > AI providers whose key the server holds: Anthropic, OpenAI, Google (Gemini), xAI or OpenRouter (which also serves the DeepSeek, Kimi, Llama and Mistral models) |
+| **Decisions** (`POST /api/v2/decisions`, `hub_decision_ask`, scoring saved listening posts, live-meeting routing, the nightly learning run) | The JSON state and the typed questions the caller sends: whatever it puts there, which can be a mail's subject and body or a stretch of a transcript. The nightly learning run sends each of the day's items (chat and task text, Slack channel messages, mail and meeting excerpts) with the profiles of the bots it may reach | In this order, each one only when the one before is not set up or fails: the Tico AI Gateway on Tico HQ (Tico Decide 1.0, which asks TypeSafe's Jev; HQ keeps the label, counts, tokens, latency and cost per gateway key, never the state or the questions) when the server holds a gateway key (`TICO_GATEWAY_KEY`); TypeSafe (api.typesafe.ai, the Jev model) directly when you set your own `TYPESAFE_API_KEY`; the team's own provider from Settings > AI providers whose key the server holds: Anthropic, OpenAI, Google (Gemini), xAI or OpenRouter (which also serves the DeepSeek, Kimi, Llama and Mistral models). With none of them nothing is sent |
 | **Slack routing** (`backend/slack_gateway.py`, when the Slack gateway is on) | The message's text; the sender's name, roster id, team and the bots they are primary for; the channel's name and registry purpose; the last twelve exchanges in the thread and their previous routing; and the active roster (each bot's name, team, description and manager) | The same decision model as above |
+| **Topic changed** (`backend/topic_change.py`, when Settings > Team > **Start fresh when the topic changes** is on) | Before a message in a person's direct chat with a bot is sent, and only when the chat is long or idle: the chat's last 3 turns since its last clear (what the person said and what the bot answered, each cut to about 1,500 characters) and the new message. Task lines, task chats, group chats and shared bots' rooms are never sent. The audit keeps the answer, never the text | The same decision model as above |
 | **Market ask** (`POST /api/v2/market/ask`) | The question, and up to about seventeen excerpts from the market graph that match it: entity names, aliases and summaries, evidence quotes and our reads, and the start of matching market pages | Google's Gemini API (generativelanguage.googleapis.com, `gemini-3.7-flash`) with the server's `GEMINI_API_KEY`, whatever Settings > AI providers says. Without a key nothing is sent and the pulled excerpts are the answer |
 
 What the server keeps of each call is an audit event, never the text that was sent: `judge.call` (the label, the number of
 questions, the value and confidence per answer, the model, token usage and latency; Slack routing adds the Slack event id)
 and `market.ask` (the model, the latency, how many excerpts and how long the question was). Each actor has a daily cap on
 these calls (`TICO_DECISIONS_DAILY_CALLS_OWNER`, `_HUMAN`, `_BOT`; README.md).
+
+## Tico Cheap, Mid and Power through Tico HQ
+
+Only when your team has a Tico AI Gateway key (Settings > AI providers, or `TICO_GATEWAY_KEY`) and a bot is set to
+Tico Cheap, Mid or Power 1.0. That bot's computer then sends each of its model calls, with the gateway key, to Tico HQ
+(`https://updates.tico.team/v1/gateway/chat/completions`), and HQ sends it on to **OpenRouter** (openrouter.ai) with
+HQ's own OpenRouter key. OpenRouter passes it to a provider that serves the Claude model behind that Tico model (Haiku,
+Sonnet or Opus). Without a gateway key, or with the bot on another model, nothing goes this way.
+
+**What OpenRouter is sent:** the call's messages (the system, user, assistant and tool text the bot sends, which can be
+anything it has read: a task, a chat, a mail, a file's text) and its tools, with the tool calls, tool choice, output
+limit, stop words, reasoning effort and answer format. That is all. Not your gateway key, its label or your install ID,
+and not a caller's own id or metadata (`user`, `metadata` and fields like them are dropped at HQ). Images, audio and
+files are refused before anything is sent.
+
+**What HQ keeps:** none of the call's content. No message, tool or answer is stored or logged, and an error from
+OpenRouter is answered with a fixed code, never its words. Separately, HQ keeps your gateway key's record: a hash of the
+key and the label the Tico team gave it, which the team sees in its key list and usage reports. Per call, HQ writes
+the Tico model, its token counts, cost and price (added up per key and month, kept 13 months, for the monthly cap) and
+one route-log row: the time, the route, the outcome code and how long it took (kept 13 weeks). Your address is used in memory only, as a salted hash, to slow down an address that keeps
+sending unknown keys; it is never stored or logged.
+
+**What OpenRouter and the provider keep** is under their own terms. Zero retention is enforced only when a call asks
+for it (`"filters": {"zero_retention": true}` in the request): then HQ sends OpenRouter's zero-retention preference, so
+only an endpoint OpenRouter classes as zero data retention may serve the call, with data collection denied; if none can,
+the call fails rather than going to one that keeps data. OpenRouter's policy does not count a provider's in-memory
+prompt caching as retention, so such an endpoint may still cache the prompt in memory
+([OpenRouter: zero data retention](https://openrouter.ai/docs/guides/features/zdr#caching)). A call that does not ask
+gets OpenRouter's and the provider's normal retention, and Tico's bots do not ask for it today.
+
+**Where it runs:** HQ's route through OpenRouter has no confirmed region, so these calls may be handled outside the
+US. A call that asks for the US (`"filters": {"region": "us"}`) is refused with `no_route` and sent nowhere, until
+a route confirmed to stay in the US exists.
 
 ## The AI accounts your computers are signed in to
 

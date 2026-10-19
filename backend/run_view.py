@@ -12,7 +12,7 @@ import json
 from fastapi import Request
 
 from .store import H, Problem
-from . import task_privacy as privacy
+from . import login_waits, task_privacy as privacy
 from .turns import TOOL_START, TOOL_BACKGROUNDED, clip, seconds
 
 ATTEMPT_LIMIT, NODE_LIMIT, SUMMARY_CHARS = 20, 50, 120
@@ -143,7 +143,7 @@ def run_view(c, auth, who, tid):
     # The page limit counts only runs this reader can open: hidden newer runs must not push theirs off the page.
     turns = []
     for row in c.execute(
-            "SELECT t.id,t.bot,t.exit,a.job_id,a.state,a.created,a.started,a.finished,a.lease_until,a.result_json,"
+            "SELECT t.id,t.bot,t.exit,a.job_id,a.state,a.created,a.started,a.finished,a.lease_until,a.result_json,a.wake_json,"
             "m.conversation_id FROM turns t JOIN attempts a ON a.id=t.id JOIN jobs j ON j.id=a.job_id "
             "JOIN messages m ON m.id=j.message_id WHERE t.task_id=? ORDER BY a.created DESC LIMIT ?",
             (tid, SCAN_LIMIT)):
@@ -200,9 +200,14 @@ def run_view(c, auth, who, tid):
             "finished": r["finished"], "took_s": seconds(r["started"], r["finished"]), "ran_on": made.get(r["id"]),
             "lease_until": r["lease_until"] if live else None, "lease": lease.get(r["id"], []),
             "reason": failure_reason(r["state"], r["result_json"]),
+            # Waiting for its ChatGPT login, or where it ran instead of its own harness and why (backend/login_waits.py).
+            "waiting": login_waits.waiting(c, r["id"], r["bot"], who, auth) if live else None,
+            "moved": login_waits.moved(c, r["id"], r["bot"], who, auth),
             "next": next_step(r, job_tries, job_rows.get(r["job_id"]) or {"state": None}, decisions,
                               retries.get(r["job_id"], [])),
-            "subagents": subagents, "background": background})
+            "subagents": subagents, "background": background,
+            # What woke the turn and the wake preset in force (backend/wake_presets.py record); None before presets.
+            "wake": H._json(r["wake_json"])})
     return {"task_id": tid, "checkpoint": checkpoint, "attempts": out}
 
 

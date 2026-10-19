@@ -26,10 +26,9 @@ from fastapi import Request
 
 from clients import judge as J
 from . import models as M
-from . import providers
 from . import task_privacy as privacy
 from .harnesses import is_external
-from .judge import fallback_engine
+from .judge import over_spend_cap, primary_engine, server_engine
 from .statuses import PARKED_SQL
 from .store import H, Problem
 from .updates import ZONE
@@ -266,13 +265,36 @@ def collect(c, settings, now, team):
 
 
 # ----------------------------------------------------------------------------- route
-def engine_for(c, settings):
-    """The decision model: TypeSafe when the server holds the key, else the company's own provider, else None."""
-    if settings.rehearsal:
-        return None
-    if settings.typesafe_api_key:
-        return J.direct(settings.typesafe_api_key)
-    return fallback_engine(providers.load(c, settings))
+def engine_for(store, c):
+    """The server's decision model (backend/judge.py `server_engine`): the Tico AI Gateway, then an own TypeSafe key,
+    each in one short try, with the company's own provider behind them; None when there is none, or the month's
+    decision spend is at its cap."""
+    return server_engine(store, c, primary_engine(store.settings, store))
+
+
+class Tally:
+    """An engine that adds up what its calls cost, for the run's one audit row. Calls run on several threads."""
+
+    def __init__(self, engine):
+        self.engine, self.lock = engine, threading.Lock()
+        self.calls, self.fallbacks, self.models = 0, 0, Counter()
+        self.usage, self.cost = Counter(), 0.0
+
+    def __call__(self, state, questions, label=None):
+        result = self.engine(state, questions, label)
+        with self.lock:
+            self.calls += 1
+            self.fallbacks += bool(result.get("fallback"))
+            self.models[str(result.get("model") or "")] += 1
+            self.usage.update({k: v for k, v in (result.get("usage") or {}).items()
+                               if isinstance(v, int) and not isinstance(v, bool)})
+            self.cost += result.get("cost_usd") or 0.0
+        return result
+
+    def detail(self):
+        return {"calls": self.calls, "fallbacks": self.fallbacks, "models": dict(self.models),
+                "model": self.models.most_common(1)[0][0] if self.models else "", "usage": dict(self.usage),
+                "cost_usd": round(self.cost, 6)}
 
 
 def question_set(settings):
@@ -437,36 +459,47 @@ def run(store, run_id):
             if not row or row["status"] != "running":
                 return
             night, now = row["night"], H.now()
-            engine = engine_for(c, settings)
+            engine = engine_for(store, c)
+            capped = engine is None and over_spend_cap(c, settings) is not None
             team = roster(c, settings, now)
             if engine is not None:
                 items, dropped = collect(c, settings, now, team)
             c.execute("COMMIT")
         if engine is None:
-            finish(store, run_id, "unconfigured", {"reason": "no decision model"})
+            finish(store, run_id, *(("capped", {"reason": "monthly decision spend cap"}) if capped else
+                                    ("unconfigured", {"reason": "no decision model"})))
             return
         detail = {"read": dict(Counter(i["source"] for i in items)), "dropped": dropped, "recipients": len(team)}
         chosen, failed = {}, {}
         if items:
             qset = question_set(settings)
             routed_at = time.monotonic()
+            engine = Tally(engine)
             failed = route(engine, qset, items, team)
             chosen = packets(items, qset)
             detail.update({"failed": failed, "route_ms": round((time.monotonic() - routed_at) * 1000)})
+        capped = bool(failed.get("spend_cap"))
         with store.transaction() as c:
             if c.execute("SELECT status FROM learning_runs WHERE id=?", (run_id,)).fetchone()["status"] != "running":
                 return
+            if capped:
+                # The month's spend reached the cap during the night: carry on as if Decide were off. Nothing is
+                # sent and the cursors stay, so the same items are read again once calls are allowed.
+                chosen, detail["reason"] = {}, "monthly decision spend cap"
             delivered, routed = dispatch(c, run_id, night, items, chosen, team, detail) if chosen else (0, 0)
-            advance(c, items, now)
+            if not capped:
+                advance(c, items, now)
             if items:
                 # One audit row for the night's calls, as POST /api/v2/decisions keeps one per call: counts, never text.
                 H.event(c, H.KEEPER, "judge.call", f"{QUESTION_SET}@run", {
                     "label": f"{QUESTION_SET}@run", "run": run_id, "items": len(items), "failed": failed,
-                    "routed": routed, "deliveries": delivered, "ms": detail.get("route_ms", 0)})
+                    "routed": routed, "deliveries": delivered, "ms": detail.get("route_ms", 0),
+                    **(engine.detail() if isinstance(engine, Tally) else {})})
             detail["deliveries"] = delivered
             detail["ms"] = round((time.monotonic() - started) * 1000)
             c.execute("UPDATE learning_runs SET status=?,finished=?,read_count=?,routed_count=?,detail_json=? WHERE id=?",
-                      ("done" if delivered else "quiet", H.now(), len(items), routed, json.dumps(detail), run_id))
+                      ("capped" if capped else "done" if delivered else "quiet", H.now(), len(items), routed,
+                       json.dumps(detail), run_id))
     except Exception as exc:
         LOG.exception("Nightly learning run %s failed", run_id)
         finish(store, run_id, "failed", {**detail, "error": type(exc).__name__})
@@ -655,9 +688,9 @@ def install(app, store, auth, mutate):
             found = c.execute("SELECT id,status FROM learning_runs WHERE night=?", (night,)).fetchone()
             if found and found["status"] == "running":
                 raise Problem("conflict", "Tonight's learning run is still running", 409)
-            if found and found["status"] not in ("unconfigured", "failed"):
+            if found and found["status"] not in ("unconfigured", "capped", "failed"):
                 raise Problem("conflict", "Tonight's learning run already ran", 409)
-            if found:          # an unconfigured or failed night is tried again under the same key
+            if found:          # an unconfigured, capped or failed night is tried again under the same key
                 c.execute("UPDATE learning_runs SET status='running',started=?,finished=NULL,detail_json='{}' WHERE id=?",
                           (H.now(), found["id"]))
                 return {"id": found["id"], "night": night}

@@ -37,6 +37,8 @@ services:
       TICO_RUNNER_URL:
       TICO_COMPOSE_PROJECT: ${COMPOSE_PROJECT_NAME:-tico}
       TICO_SERVER_NETWORK: ${TICO_SERVER_NETWORK:-${COMPOSE_PROJECT_NAME:-tico}_default}
+      # A Tico our team runs for a company (own or invited); unset is self-hosted (backend/config.py).
+      TICO_HOSTED:
       TICO_ENVIRONMENT_ID:
       TICO_AUTH_PROXY:
       TICO_OIDC_ISSUER:
@@ -78,11 +80,20 @@ services:
       GEMINI_API_KEY:
       XAI_API_KEY:
       OPENROUTER_API_KEY:
+      TICO_GATEWAY_KEY:
+      TICO_GATEWAY_SECRET_ARN:
+      TICO_GATEWAY_URL:
       TYPESAFE_API_KEY:
       TICO_TYPESAFE_SECRET_ARN:
       TICO_DECISIONS_DAILY_CALLS_OWNER:
       TICO_DECISIONS_DAILY_CALLS_HUMAN:
       TICO_DECISIONS_DAILY_CALLS_BOT:
+      TICO_DECISIONS_MONTHLY_USD:
+      TICO_DECISIONS_JEV_USD_PER_MTOK_INPUT:
+      TICO_DECISIONS_JEV_USD_PER_MTOK_OUTPUT:
+      TICO_DECISIONS_IDEA_TRIAGE:
+      TICO_STALE_REVIEW:
+      TICO_TOPIC_FRESH:
       TICO_UPDATER_URL:
       TICO_UPDATE_CHECK:
       TICO_SUPPORT:
@@ -141,6 +152,8 @@ services:
       TICO_RUNNER_URL:
       TICO_COMPOSE_PROJECT: ${COMPOSE_PROJECT_NAME:-tico}
       TICO_SERVER_NETWORK: ${TICO_SERVER_NETWORK:-${COMPOSE_PROJECT_NAME:-tico}_default}
+      # A Tico our team runs for a company (own or invited); unset is self-hosted (backend/config.py).
+      TICO_HOSTED:
       # Sign-in settings: the gateway loads the same settings as the server and refuses to start when the
       # selected proxy (oidc, cloudflare) is missing its own.
       TICO_AUTH_PROXY:
@@ -159,11 +172,17 @@ services:
       GEMINI_API_KEY:
       XAI_API_KEY:
       OPENROUTER_API_KEY:
+      TICO_GATEWAY_KEY:
+      TICO_GATEWAY_SECRET_ARN:
+      TICO_GATEWAY_URL:
       TYPESAFE_API_KEY:
       TICO_TYPESAFE_SECRET_ARN:
       TICO_DECISIONS_DAILY_CALLS_OWNER:
       TICO_DECISIONS_DAILY_CALLS_HUMAN:
       TICO_DECISIONS_DAILY_CALLS_BOT:
+      TICO_DECISIONS_MONTHLY_USD:
+      TICO_DECISIONS_JEV_USD_PER_MTOK_INPUT:
+      TICO_DECISIONS_JEV_USD_PER_MTOK_OUTPUT:
       SLACK_TEAM_ID:
       SLACK_APP_ID:
       TICO_SLACK_ROUTE_THRESHOLD:

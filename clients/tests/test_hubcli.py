@@ -169,6 +169,8 @@ class Stub(BaseHTTPRequestHandler):
             return self.reply(200, {"actor": "bot:coo", "kind": "bot", "id": "coo"})
         if self.path.startswith("/api/v2/roadmap"):
             return self.reply(200, {"ok": True})
+        if self.path.startswith("/api/v2/decisions/readout"):
+            return self.reply(200, {"sets": [], "text": "Decide readout"})
         if self.path.startswith("/api/v2/tasks/T1"):
             return self.reply(200, {"task": {"id": "T1", "version": 3}})
         self.reply(404, {"error": {"code": "not_found", "detail": "no"}})
@@ -234,6 +236,14 @@ class AgainstAStub(unittest.TestCase):
         self.assertEqual(code, 0, out)
         posted = [b for m, p, _, b in Stub.seen if m == "POST" and p == "/api/v2/tasks"][-1]
         self.assertEqual((posted["owner"], posted["check_model"]), ("bot:coo", "auto"))
+
+    def test_decision_readout_reads_the_days_asked(self):
+        code, out = run_hub("decision", "readout", "--days", "14", env=self.env)
+        self.assertEqual((code, out["text"]), (0, "Decide readout"), out)
+        self.assertIn(("GET", "/api/v2/decisions/readout?days=14"), [(m, p) for m, p, _, _ in Stub.seen])
+        code, out = run_hub("decision", "readout", env=self.env)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(Stub.seen[-1][1], "/api/v2/decisions/readout", "the server's default, 7 days")
 
     def test_tool_add_dry_run_is_checked_by_the_server_not_the_task_dry_run(self):
         code, out = run_hub("tool", "add", "writer", "notion", "--can", "read",

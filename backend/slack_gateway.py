@@ -465,22 +465,23 @@ class Gateway:
         self.heartbeat = None               # called every loop turn; the process uses it for health
         self._auth = None                   # who may write to which bot (backend/bot_access.py)
         self.last_model, self.last_usage = "", []   # the last `ask`'s model and usage per call, for the audit
+        self.last_cost = 0.0                        # and what its calls cost, in USD (backend/judge.py cost_usd)
+        self.last_provider = ""                     # and who answered (the Tico AI Gateway, TypeSafe, the team's LLM)
 
     # ------------------------------------------------------------------ start-up
     @property
     def judge(self):
-        if self._judge is None and self.settings.typesafe_api_key:
-            # One short try per pass: the gateway's own retry (RETRY_SECONDS, up to ROUTE_GIVE_UP_SECONDS) is the
-            # only retry, so an outage costs one HTTP attempt a minute, not three, and never blocks the loop long.
-            from .judge import JEV_TIMEOUT
-            self._judge = J.direct(self.settings.typesafe_api_key, timeout=JEV_TIMEOUT, retries=0)
-        if self._judge is not None:
-            return self._judge
-        # No TypeSafe key: the company's own provider answers, when the server holds its API key.
-        # Looked up each time, because the owner can change the provider choice while this runs.
-        from .judge import fallback_engine
+        """The Tico AI Gateway, then an own TypeSafe key (backend/judge.py `primary_engine`), then the company's own
+        provider, each failure falling through to the next; None with none of them. One short try each per pass: the
+        gateway's own retry (RETRY_SECONDS, up to ROUTE_GIVE_UP_SECONDS) is the only retry, so an outage costs one HTTP
+        attempt a minute per provider, not three, and never blocks the loop long."""
+        from .judge import fallback_engine, live, ordered, primary_engine
+        if self._judge is None:
+            self._judge = primary_engine(self.settings, self.store)
+        # The saved Gateway key and the company's provider are looked up each time: the owner can change either while
+        # this runs.
         with self.store.read() as c:
-            return fallback_engine(providers.load(c, self.settings))
+            return ordered(live(self._judge, c, self.settings) + [fallback_engine(providers.load(c, self.settings))])
 
     def verify_app(self):
         """Refuse to start unless the token is the configured workspace's and app's."""
@@ -730,17 +731,44 @@ class Gateway:
         """The decision model's answers to every question, in calls of at most `J.MAX_QUESTIONS`.
 
         The questions are independent and their ids unique, so the calls' answers merge into one
-        map. A call that fails fails the whole ask; nothing is routed from half the answers."""
+        map. A call that fails fails the whole ask; nothing is routed from half the answers. Each call goes through
+        the team's monthly spend cap (backend/judge.py `metered`), which writes down its cost as it returns and
+        refuses `spend_cap` before a call that would not fit under the cap, so a big fleet stops there too."""
         questions = self.questions(fleet)
         ids = list(questions)
-        answers, self.last_model, self.last_usage = {}, "", []
+        from .judge import metered, step_models
+        judge = self.judge
+        asks_as = step_models(getattr(judge, "steps", None) or [judge])
+        answers, self.last_model, self.last_usage, self.last_cost, self.last_provider = {}, "", [], 0.0, ""
         for start in range(0, len(ids), J.MAX_QUESTIONS):
             batch = {qid: questions[qid] for qid in ids[start:start + J.MAX_QUESTIONS]}
-            result = self.judge(state, batch, JUDGE_LABEL)
+            try:
+                result = metered(self.store, asks_as, state, batch, JUDGE_LABEL,
+                                 lambda batch=batch: judge(state, batch, JUDGE_LABEL))
+            except J.JudgeError as exc:     # unusable answers before the failure were paid for too
+                self.last_cost += getattr(exc, "cost_usd", 0.0)
+                raise
             answers.update(result["answers"])
             self.last_model = str(result.get("model") or "")
+            self.last_provider = str(result.get("provider") or "")
             self.last_usage.append(result.get("usage") or {})
+            self.last_cost += result["cost_usd"]
         return answers
+
+    def paid(self):
+        """What the last `ask`'s answered batches cost before one failed, or None when none answered. For reading:
+        the cap already counted each batch as it returned."""
+        if not self.last_usage and not self.last_cost:
+            return None
+        return {"model": self.last_model, "usage": self.last_usage, "cost_usd": round(self.last_cost, 6),
+                **({"provider": self.last_provider} if self.last_provider else {})}
+
+    def spend_capped(self):
+        """Whether the team's decision spend this month is at its cap (backend/judge.py): then every message routes
+        as it does with no decision model, to the assistant."""
+        from .judge import over_spend_cap
+        with self.store.read() as c:
+            return over_spend_cap(c, self.settings) is not None
 
     # ------------------------------------------------------------------ budget and audit
     def over_budget(self, actor, person):
@@ -776,7 +804,7 @@ class Gateway:
             except (TypeError, ValueError):
                 return 0.0
         scores = {bot["slug"]: noul("bot:" + bot["slug"]) for bot in fleet}
-        decision = {"routed_by": "judge", "model": JUDGE_MODEL, "label": JUDGE_LABEL, "scores": scores, "asks": noul("asks"),
+        decision = {"routed_by": "judge", "model": self.last_model or JUDGE_MODEL, "label": JUDGE_LABEL, "scores": scores, "asks": noul("asks"),
                     "reply_to_last": noul("reply_to_last"), "names_bot": noul("names_bot"),
                     "thresholds": {"route": self.settings.slack_route_threshold, "ask": self.settings.slack_ask_threshold,
                                    "max": self.settings.slack_max_recipients},
@@ -784,7 +812,16 @@ class Gateway:
         ranked = sorted(scores.items(), key=lambda kv: (-kv[1], kv[0]))
         decision["candidates"] = [{"bot": slug, "confidence": p} for slug, p in ranked[:3]]
         if decision["asks"] < self.settings.slack_ask_threshold:
-            decision["reason"] = "asks for nothing; recorded, nobody woken"
+            # Decide picks who gets a person's message, never whether anyone does: one it reads as asking for
+            # nothing goes to the assistant (or BotOps), and is only recorded when neither is running.
+            asker = self.fallback_bot([bot["slug"] for bot in fleet])
+            decision["fallback"] = bool(asker)
+            if asker:
+                decision["reason"] = "asks for nothing by the decision model's reading; " + (
+                    "the assistant" if asker == self.settings.assistant_bot else asker) + " gets it so it is not unheard"
+                decision["recipients"] = [{"bot": asker, "confidence": scores.get(asker, 0.0)}]
+            else:
+                decision["reason"] = "asks for nothing, and no assistant or BotOps to hand it to; recorded, nobody woken"
             return decision
         chosen = [(slug, p) for slug, p in ranked if p >= self.settings.slack_route_threshold]
         if len(chosen) > self.settings.slack_max_recipients:
@@ -810,11 +847,13 @@ class Gateway:
             return self.settings.assistant_bot
         return "botops" if "botops" in active else None
 
-    def default_decision(self, fleet, budget=False):
-        """No decision model, or the sender's daily cap is used: everything goes to the fallback bot and says so."""
+    def default_decision(self, fleet, budget=False, spend=False):
+        """No decision model, the sender's daily cap is used, or the team's monthly decision spend is at its cap:
+        everything goes to the fallback bot and says so."""
         asker = self.fallback_bot([bot["slug"] for bot in fleet])
-        why = "the sender's daily decision budget is used" if budget else "no decisions key configured"
-        return {"routed_by": "budget" if budget else "default", "model": None, "scores": {}, "asks": None,
+        why = ("the sender's daily decision budget is used" if budget else
+               "the team's monthly decision spend cap is reached" if spend else "no decisions key configured")
+        return {"routed_by": "budget" if budget else "spend_cap" if spend else "default", "model": None, "scores": {}, "asks": None,
                 "reply_to_last": None, "names_bot": None,
                 "recipients": [{"bot": asker, "confidence": None}] if asker else [],
                 "candidates": [], "fallback": True, "dropped": [],
@@ -901,7 +940,8 @@ class Gateway:
         return decision
 
     def record_only(self, c, event, person, decision):
-        """A message that asks for nothing: kept on the thread's conversations, no job queued."""
+        """A message nobody can be woken for (no bot chosen, no assistant or BotOps running): kept on the thread's
+        conversations, no job queued."""
         actor = "human:" + person["id"]
         kept = []
         for row in c.execute("SELECT bot,conversation_id FROM slack_threads WHERE channel=? AND thread_ts=? "
@@ -924,21 +964,24 @@ class Gateway:
                 {"state": state, "channel": event["channel"], "thread_ts": event["thread_ts"], "reason": reason,
                  "recipients": [r["bot"] for r in (decision or {}).get("recipients") or []]})
 
-    def routing_error(self, event, person, exc, fleet=()):
+    def routing_error(self, event, person, exc, fleet=(), paid=None):
         """The decision model could not answer. A refusal, or an outage that outlasted
         `ROUTE_GIVE_UP_SECONDS`, ends the message as `failed` and tells the human; a short outage
-        leaves it `received` for the next try. Never an endless loop."""
+        leaves it `received` for the next try. Never an endless loop. `paid` is what the batches that did
+        answer cost; the monthly cap counted each as it returned (`judge.spend`), and a final failure repeats it
+        on its `judge.call` for reading."""
         actor = "human:" + person["id"]
+        code = J.error_code(exc)        # never the error's text: an upstream error can echo the message back
         expired = H.shift(event["received"], seconds=ROUTE_GIVE_UP_SECONDS) <= self.clock()
         if exc.retryable and not expired:
             with self.store.transaction() as c:
-                self.finish(c, event, "received", actor=actor, reason=f"decisions: {exc}")
-            LOG.error("Event %s waits: %s", event["event_id"], exc)
-            return {"event_id": event["event_id"], "state": "received", "reason": str(exc)}
-        reason = f"decisions: {exc}" + (f" (still failing after {ROUTE_GIVE_UP_SECONDS // 60} minutes)" if exc.retryable else "")
+                self.finish(c, event, "received", actor=actor, reason=f"decisions: {code}")
+            LOG.error("Event %s waits: decisions %s", event["event_id"], code)
+            return {"event_id": event["event_id"], "state": "received", "reason": f"decisions: {code}"}
+        reason = f"decisions: {code}" + (f" (still failing after {ROUTE_GIVE_UP_SECONDS // 60} minutes)" if exc.retryable else "")
         with self.store.transaction() as c:
             self.finish(c, event, "failed", actor=actor, reason=reason)
-            self.audit(c, actor, event, fleet, {"error": exc.code, "detail": str(exc.detail)[:300]})
+            self.audit(c, actor, event, fleet, {**(paid or {}), "error": code})
         LOG.error("Event %s failed: %s", event["event_id"], reason)
         try:
             self.slack.post_message(event["channel"], event["reply_ts"] or None,
@@ -966,6 +1009,8 @@ class Gateway:
         called = None
         if self.judge is None:
             decision = self.default_decision(fleet)
+        elif self.spend_capped():
+            decision = self.default_decision(fleet, spend=True)
         elif self.over_budget(actor, person):
             decision = self.default_decision(fleet, budget=True)
         else:
@@ -973,9 +1018,18 @@ class Gateway:
             try:
                 answers = self.ask(state, fleet)
             except J.JudgeError as exc:
-                return self.routing_error(event, person, exc, fleet)
-            decision = self.decide(answers, fleet)
-            called = {"model": self.last_model, "usage": self.last_usage, "ms": round((time.monotonic() - started) * 1000)}
+                if exc.code != "spend_cap":
+                    return self.routing_error(event, person, exc, fleet, paid=self.paid())
+                # The cap was reached partway through: route as if Decide were off, and audit what was paid.
+                answers = None
+                called = {**(self.paid() or {"model": None, "usage": [], "cost_usd": 0.0}), "error": "spend_cap",
+                          "ms": round((time.monotonic() - started) * 1000)}
+                decision = self.default_decision(fleet, spend=True)
+            if answers is not None:
+                decision = self.decide(answers, fleet)
+                called = {"model": self.last_model, "usage": self.last_usage, "cost_usd": round(self.last_cost, 6),
+                          "ms": round((time.monotonic() - started) * 1000),
+                          **({"provider": self.last_provider} if self.last_provider else {})}
         with self.store.transaction() as c:
             if called:
                 self.audit(c, actor, event, fleet, called)

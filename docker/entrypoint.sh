@@ -306,6 +306,7 @@ restore() {
   python -m backend.replication restore-blobs
   # With --force the database above was kept aside; the key files that go with it are put back too (a different one
   # already here is kept aside as <name>.before-restore.*).
+  # shellcheck disable=SC2046  # unquoted on purpose: no --force passes no argument at all
   python -m backend.replication restore-credential-key $([ "$force" = 1 ] && echo --replace) \
     || log "could not restore every key file; see docs/install.md#backups-and-restore"
   python - <<'PY'

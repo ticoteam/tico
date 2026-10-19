@@ -177,7 +177,8 @@ const {unrouted} = require('./support/routes.cjs');
     assert.deepEqual(writes, [{p: '/api/v2/computers/box/logouts', body: {runtime: 'codex'}}]);
     await confirm.locator('[data-actions] [data-close]').click();
     await own('codex').getByRole('button', {name: 'Use the shared key'}).waitFor({timeout: 15000});
-    assert.deepEqual(await buttons(own('codex')), ['Sign in', 'Use the shared key']);
+    // Add key: a key of its own (Dev 97, ui/tests/model-keys.cjs).
+    assert.deepEqual(await buttons(own('codex')), ['Sign in', 'Use the shared key', 'Add key']);
     assert.match(await own('codex').locator('.computer-conn-signin .pill').getAttribute('title'), /shared key does not sign it back in/);
     await own('codex').getByRole('button', {name: 'Use the shared key'}).click();
     await page.locator('.toast', {hasText: 'shared key signs it in'}).waitFor();

@@ -436,7 +436,8 @@ def restore_snapshot(source, destination):
         c.execute("UPDATE jobs SET state='uncertain' WHERE state IN ('running','input')")
         c.execute("UPDATE jobs SET state='queued' WHERE state='leased'")
         c.execute("UPDATE attempts SET state='expired',finished=?,lease_until=? WHERE state IN ('leased','running')", (now, now))
-        c.execute("UPDATE turns SET finished=?,exit='interrupted' WHERE finished IS NULL", (now,))
+        from .run_triggers import SETTLE_SQL
+        c.execute(f"UPDATE turns SET finished=?,exit='interrupted',{SETTLE_SQL} WHERE finished IS NULL", (now,))
         c.execute("UPDATE assignments SET generation=generation+1,updated=?,updated_by='keeper'", (now,))
         c.execute("UPDATE runners SET revoked_at=coalesce(revoked_at,?)", (now,))
         c.execute("UPDATE enrollments SET expires=?", (now,))

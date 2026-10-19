@@ -55,25 +55,35 @@ The decision model reading the previous routing and the open ask in its state, n
 
 | the decision model says | The gateway does |
 |---|---|
-| asks-for-anything below `TICO_SLACK_ASK_THRESHOLD` (0.5) | records the message on the thread's conversations, wakes nobody |
+| asks-for-anything below `TICO_SLACK_ASK_THRESHOLD` (0.5) | routes to the assistant (or BotOps): the decision model picks who gets a person's message, never whether anyone does. With neither active, the message is recorded on the thread's conversations and nobody is woken |
 | one or more bots at or above `TICO_SLACK_ROUTE_THRESHOLD` (0.6) | routes to each, best `TICO_SLACK_MAX_RECIPIENTS` (3) by confidence, ties by slug |
 | no bot at threshold | routes to the assistant (`TICO_ASSISTANT_BOT`) with the top three candidates on the message, so it can ask the one clarifying question the write layer allows. A team that chose no assistant (it is optional) gets BotOps instead; with neither active, the message is recorded and nobody is woken |
 | a chosen bot paused or quarantined since the roster was read | keeps the message for it (it runs when the bot is back) and tells the person in the thread that it waits |
 | a chosen bot the write layer refuses (archived, planned or gone since the roster was read) | drops it with the reason; the assistant (or BotOps) if that empties the set |
 
-Without a decisions key every message goes to the assistant (or BotOps) and the message says so
+Without a decision model (no gateway key, no TypeSafe key of your own and no AI provider key on the server) every message goes to the assistant (or BotOps) and the message says so
 (`routed_by: default`). When the decision model is unreachable, the message stays pending and retries after a minute, for up to
 ten minutes. A refused call, or one still failing after that, ends the message as `failed` with the
-reason on it, and Tico tells the human in the thread; nothing retries a failed message. Each try is one short HTTP
-attempt to TypeSafe (no client-side retries on top of the gateway's own), so an outage costs at most eleven attempts per
-question batch for a message.
+reason on it, and Tico tells the human in the thread; nothing retries a failed message. Each try asks the providers in
+order, one short HTTP attempt each with no client-side retries on top of the gateway's own: the Tico AI Gateway
+(`tico-decide-1.0`), then your own TypeSafe key if you set one, then the team's own AI provider. Any failure moves on to
+the next, so an outage costs at most eleven attempts per provider per question batch for a message.
 
 Routing a message is a decision call on the server's key, so it counts against the sender's daily decision cap
 (`TICO_DECISIONS_DAILY_CALLS_OWNER` / `_HUMAN`, the same cap as `POST /api/v2/decisions`) and is audited as one
-`judge.call` event by the sender (`via: slack`, the label, the question count, the model, usage and latency; never the
-text). A message counts once, when it is routed or finally fails, however many tries it took. Over the cap the decision
+`judge.call` event by the sender (`via: slack`, the label, the question count, the provider and model that answered, usage and latency; never the
+text, and a failed call keeps only its error code, never the provider's error text). A message counts once, when it is routed or finally fails, however many tries it took. Over the cap the decision
 model is not asked: the message goes to the assistant (or BotOps) with `routed_by: budget` and the reason on it, and when
 neither is running it is recorded and Tico tells the human in the thread.
+
+When the team's decision spend for the month has reached its cap (`TICO_DECISIONS_MONTHLY_USD`, backend/judge.py), the
+decision model is not asked either: the message goes to the assistant (or BotOps) with `routed_by: spend_cap`, as it would
+with no decisions key. A big fleet is asked in several calls, and the cap is checked before each: one whose most (its
+input and the longest answer, at the price of the model that answers) would not fit under the cap stops the message
+there and it goes to the assistant the same way. Each call's cost is written down as it returns
+(a `judge.spend` event, which the monthly cap sums and the sender's daily calls do not count), so a later call failing,
+its retries and the final failure lose none and add none; each `judge.call` the gateway audits repeats the message's
+`cost_usd` for reading.
 
 Every score and answer is stored: on the event (`slack_events.routing_json`) and on the message
 (`refs.routing`), where the conversation view shows it as a chip (`routed by decisions to Legal 92%`).
