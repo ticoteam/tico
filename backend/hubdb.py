@@ -1041,6 +1041,8 @@ def migrate(conn, adopt_legacy=False):
                  "to_actor TEXT NOT NULL, body TEXT NOT NULL, created TEXT NOT NULL, carried_by TEXT, "
                  "cancelled_at TEXT, cancelled_by TEXT)")
     conn.execute("CREATE INDEX IF NOT EXISTS notes_to_created ON notes(to_actor, created)")
+    # A bot-to-bot message that could wait (backend/bot_to_bot.py) rides to the next run as a note linked to it.
+    add_column(conn, "notes", "message_id", "TEXT")
     conn.execute("CREATE INDEX IF NOT EXISTS tasks_owner_rank ON tasks(owner, rank)")
     # Health's waits-on-a-person check (backend/health.py silent_waits) reads only these few rows.
     conn.execute("CREATE INDEX IF NOT EXISTS tasks_waiting_on ON tasks(waiting_on) WHERE waiting_on IS NOT NULL")
@@ -2254,7 +2256,14 @@ def say(conn, actor, to_actor, body, conversation_id=None, kind="say", refs=None
             warnings = style_problems(conn, actor, lint_human_item(body), severity)
             refs["unsolicited"] = True
 
+    # Token saving (Dev 149): a plain bot-to-bot message waits for the target's next run unless flagged.
+    from . import bot_to_bot
+    waits = bot_to_bot.can_wait(conn, actor, target, kind, refs, body, in_reply_to)
+    if waits:
+        refs.update(quiet=True, **{bot_to_bot.MARK: bot_to_bot.RULE})
     msg = _write_message(conn, actor, target, body, conv, kind, refs, in_reply_to, wait_s)
+    if waits:
+        bot_to_bot.hold(conn, msg, task(conn, on_task) if on_task else None)
     _close_open_asks(conn, actor, target, kind, msg)
     if kind == "ask" and is_bot(actor) and is_human(target):
         about = message_task_id({"refs": refs}, conv)

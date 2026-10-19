@@ -86,6 +86,11 @@ All notable changes to Tico are recorded here. The format follows
   before this keeps today's behaviour ([sessions](docs/sessions.md)).
 
 ### Changed
+- **Bot-to-bot messages wait for the next run** (token saving): a plain message or task comment one bot sends
+  another no longer starts a run. It is kept in its room and handed to that bot's next run, whatever starts it,
+  in the order sent, and marked read then. The sender wakes it at once with `--needs-action`
+  (`hub message send`, `hub task comment`, or `needs_action` in the API and tools). Asks, answers, steers,
+  approvals, gate verdicts, replies the other bot waits on, and anything from a person or Tico still wake at once.
 - **Updates cards use icons**: Reply, Mark unread (or read) and Archive (Restore in the Archive) are icons, named by a
   tooltip, a long press on a phone and screen readers. A card's reports open from **8** and a chevron at the right end
   of its icon row, in place of the **8 reports** row under it and its broken glyph, and open reports hang from the

@@ -1158,6 +1158,8 @@ def create_app(settings=None):
         refs = dict(body.refs or {})
         if body.command:
             refs["command"] = True
+        if body.needs_action:
+            refs["needs_action"] = True
         if in_assistant_room:
             refs["assistant"] = True           # the server's mark: this turn acts for the person
         conversation_id = body.conversation_id
@@ -3151,8 +3153,11 @@ def create_app(settings=None):
                 wake = who.role == "bot" or who.actor in (row["owner"], row["requester"]) or moves
             else:
                 wake = H.comment_wakes(c, who.actor, row, body.text, mover=moves)
+            extra = {"attachments": attached, "files": [a["ref"] for a in attached]} if attached else {}
+            if body.needs_action:
+                extra["needs_action"] = True
             msg = H.task_comment(c, who.actor, task_id, body.text, wake=wake, ask=ask, public=body.public, approval_id=body.approval_id,
-                                 extra_refs={"attachments": attached, "files": [a["ref"] for a in attached]} if attached else None)
+                                 extra_refs=extra or None)
             for person in people:
                 H.task_comment(c, who.actor, task_id, body.text, wake=False, ask=H.mention_ask(body.text, person))
             for item in attached:

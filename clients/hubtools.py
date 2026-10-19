@@ -123,7 +123,8 @@ def whoami(api, args):
 
 @tool("hub_message_send", "Send a message to a bot or a human. Bot-to-human messages are linted "
       "(a nonempty first line, under 120 words) and capped at 10 unsolicited a day. `fyi` expects no reply. "
-      "An ordinary bot-to-bot message does not deliver the recipient's final reply. "
+      "An ordinary bot-to-bot message does not deliver the recipient's final reply, and waits for the recipient's "
+      "next run unless needs_action. "
       "Use hub_question_ask when you need an answer. Use in_reply_to or steer for a correction to an active run; "
       "it is queued until the Computer applies it.",
       {"to": _s("Recipient: a bot slug, `bot:<slug>`, or a human id"),
@@ -136,7 +137,10 @@ def whoami(api, args):
        "steer": {"type": "boolean", "description": "Apply a correction to your active request; with refs "
                  "`task:<id>` you requested, it goes into its owner's running turn on that task"},
        "refs": {"type": "array", "items": {"type": "string"},
-                "description": "References like `task:<id>` or `approval:<id>`"}},
+                "description": "References like `task:<id>` or `approval:<id>`"},
+       "needs_action": {"type": "boolean", "default": False,
+                        "description": "To a bot: wake it now. Without this a bot's message to a bot waits for that "
+                        "bot's next run, whatever starts it"}},
       required=("to", "text"), writes=True)
 def message_send(api, args):
     # Free text a person reads: an s3:// URI becomes its view URL first (clients/s3links.py); a command goes verbatim.
@@ -150,12 +154,14 @@ def _message_send(api, args):
         return assistant_send(api, args)
     if args.get("fyi"):
         return api.post("messages", {"to": args["to"], "text": args["text"], "kind": "notice",
-                                     "conversation_id": None, "refs": {}}, key=_key(args))
+                                     "conversation_id": None, "refs": {},
+                                     **({"needs_action": True} if args.get("needs_action") else {})}, key=_key(args))
     return api.post("messages", {"to": args["to"], "text": args["text"], "kind": "steer" if args.get("steer") else "say",
                                  "conversation_id": args.get("conversation_id"),
                                  "in_reply_to": args.get("in_reply_to"),
                                  "refs": _refs(args.get("refs")),
-                                 **({"command": True} if args.get("command") else {})}, key=_key(args))
+                                 **({"command": True} if args.get("command") else {}),
+                                 **({"needs_action": True} if args.get("needs_action") else {})}, key=_key(args))
 
 
 @tool("hub_chat_goal", "Read or change the native goal pinned to a bot conversation. Read also returns its supported commands.",
@@ -837,10 +843,12 @@ def task_type_delete(api, args):
        "public": {"type": "boolean"}, "approval_id": _s("Exact publish approval for a bot public reply"),
        "attachments": {"type": "array", "items": {"type": "string"}, "description": "File versions as file_id@version: on this task, or (a person) a chat file "
                        "you can open as its id@1, which the comment shares to the task"},
-       "on_behalf_of": ASKED},
+       "on_behalf_of": ASKED, "needs_action": {"type": "boolean", "default": False,
+                        "description": "To a bot: wake it now. Without this a bot's message to a bot waits for that "
+                        "bot's next run, whatever starts it"}},
       required=("id", "text"), writes=True)
 def task_comment(api, args):
-    body = {k: args[k] for k in ("text", "ask", "attachments", "public", "approval_id") if k in args}
+    body = {k: args[k] for k in ("text", "ask", "attachments", "public", "approval_id", "needs_action") if k in args}
     links = s3links.apply(api, body, ("text",))
     return s3links.annotate(_asked(api, args).post(f"tasks/{args['id']}/comments", body, key=_key(args)), links)
 
