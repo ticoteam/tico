@@ -1,4 +1,5 @@
 """One shipped-history flow, the per-person acknowledgement/privacy boundary and shipped notes staying as tagged."""
+import os
 import re
 import shutil
 import subprocess
@@ -138,3 +139,136 @@ def test_released_changelog_sections_match_their_tags():
         pytest.skip("no release tags in this checkout (shallow clone or tags not fetched)")
     assert not edited, "your CHANGELOG line landed in the released %s section; merge main and move it under ## [Unreleased]" % (
         ", ".join("[%s]" % v for v in edited))
+
+
+# A Release Manager's notes merge-back or an erratum names each released section it may change in a commit trailer.
+RELEASE_TRAILER = re.compile(r"^Changelog-Release:[ \t]*v?(\d+\.\d+\.\d+)[ \t]*$", re.M)
+CONFLICT = "conflict"
+
+
+def regions(text):
+    """Each line's place in CHANGELOG.md: its `## ` heading's version, "Unreleased", "links" or "preamble"."""
+    out, here = [], "preamble"
+    for line in text.splitlines():
+        if line.startswith("## "):
+            match = re.match(r"## \[?(Unreleased|\d+\.\d+\.\d+)\b", line)
+            here = match.group(1) if match else line[3:]
+        out.append("links" if re.match(r"\[[^\]]+\]: ", line) else here)
+    return out
+
+
+def changes_outside_unreleased(root, main="origin/main"):
+    """Places outside ## [Unreleased] whose lines this branch adds or changes once merged into main, or None.
+
+    The branch is merged with main the way GitHub squashes it (git merge-tree), so a line the branch wrote under
+    Unreleased before a release's notes landed, and that the merge would put in the released section, counts too.
+    None when there is no git or no `main` ref to compare with.
+    """
+    git = lambda *args: subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True)
+    if git("rev-parse", "--verify", "--quiet", main + "^{commit}").returncode:
+        return None
+    merge = git("merge-tree", "--write-tree", "--name-only", main, "HEAD")
+    tree, _, conflicted = merge.stdout.partition("\n")
+    if merge.returncode not in (0, 1) or not tree:
+        return None
+    if merge.returncode and "CHANGELOG.md" in conflicted.splitlines():
+        return [CONFLICT]
+    old = git("show", main + ":CHANGELOG.md").stdout
+    new = git("show", tree + ":CHANGELOG.md").stdout
+    diff = git("diff", "--no-color", "--no-ext-diff", "-U0", main, tree, "--", "CHANGELOG.md").stdout
+    before, after, places = regions(old), regions(new), []
+    for hunk in re.finditer(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@", diff, re.M):
+        start, count, start2, count2 = (int(n) if n is not None else 1 for n in hunk.groups())
+        # A side with count 0 (a pure addition or removal) reads no lines.
+        places += before[start - 1:start - 1 + count] + after[start2 - 1:start2 - 1 + count2]
+    allowed = set(RELEASE_TRAILER.findall(git("log", "--format=%B", main + "..HEAD").stdout))
+    allowed |= {"links", "preamble"} if allowed else set()  # a merge-back also moves the compare links
+    return sorted(set(places) - allowed - {"Unreleased"})
+
+
+def outside_unreleased_message(places):
+    names = {"links": "the link references", "preamble": "the preamble above ## [Unreleased]"}
+    where = "conflicts with main" if places == [CONFLICT] else "adds or changes lines in " + ", ".join(
+        names.get(p, "the released [%s] section" % p) for p in places)
+    return ("CHANGELOG.md: this branch %s; merge main and move your line under ## [Unreleased] (a release notes "
+            "merge-back or erratum names each section it changes in a `Changelog-Release: vX.Y.Z` commit trailer)" % where)
+
+
+def test_pr_changelog_lines_stay_under_unreleased():
+    # Release validation runs this suite on a candidate from its release branch: an empty Unreleased and its own
+    # new section, which test_released_changelog_sections_match_their_tags checks. A pull request is never one.
+    if os.environ.get("GITHUB_EVENT_NAME") != "pull_request" and not section((ROOT / "CHANGELOG.md").read_text(), "Unreleased"):
+        pytest.skip("a release candidate (empty Unreleased); its notes are checked against its tag")
+    outside = changes_outside_unreleased(ROOT) if shutil.which("git") else None
+    if outside is None:
+        pytest.skip("no origin/main in this checkout to merge CHANGELOG.md with")
+    assert not outside, outside_unreleased_message(outside)
+
+
+def test_changelog_guard_refuses_lines_outside_unreleased(tmp_path):
+    def git(*args):
+        return subprocess.run(["git", "-C", str(tmp_path), "-c", "user.name=t", "-c", "user.email=t@acme.example", *args],
+                              capture_output=True, text=True, check=True).stdout
+
+    def commit(text, message="Change"):
+        (tmp_path / "CHANGELOG.md").write_text(text)
+        git("commit", "-qam", message)
+        return git("rev-parse", "HEAD").strip()
+
+    shipped = "# Changelog\n\n## [Unreleased]\n\n### Added\n- Search tasks.\n- Restore tasks.\n\n## [0.1.0] - 2026-10-01\n- Browse.\n"
+    links = "\n[Unreleased]: https://github.com/acme/app/compare/v0.1.0...HEAD\n"
+    git("init", "-q", "-b", "main")
+    (tmp_path / "CHANGELOG.md").write_text(shipped + links)
+    git("add", "CHANGELOG.md")
+    git("commit", "-qm", "Start")
+    fork = git("rev-parse", "HEAD").strip()
+    git("update-ref", "refs/remotes/origin/main", fork)
+    assert changes_outside_unreleased(tmp_path) == []
+    assert changes_outside_unreleased(tmp_path, main="origin/nothing") is None
+
+    # A line under Unreleased passes; one inside the released section fails with the one-line instruction.
+    commit(shipped.replace("- Restore tasks.\n", "- Restore tasks.\n- Archive tasks.\n") + links)
+    assert changes_outside_unreleased(tmp_path) == []
+    commit(shipped.replace("- Browse.\n", "- Browse.\n- Archive tasks.\n") + links)
+    assert changes_outside_unreleased(tmp_path) == ["0.1.0"]
+    message = outside_unreleased_message(["0.1.0"])
+    assert "the released [0.1.0] section" in message and "merge main and move your line under ## [Unreleased]" in message
+    assert "\n" not in message
+    commit(shipped.replace("- Browse.", "- Browse the team.") + links)  # changing a shipped line counts too
+    assert changes_outside_unreleased(tmp_path) == ["0.1.0"]
+    commit(shipped.replace("- Browse.\n", "") + links)  # and so does removing one
+    assert changes_outside_unreleased(tmp_path) == ["0.1.0"]
+
+    # The Release Manager's notes merge-back passes only with its trailer, and only for the section it names.
+    git("checkout", "-q", "-b", "notes", fork)
+    released = shipped.replace("## [Unreleased]\n\n", "## [Unreleased]\n\n## [0.2.0] - 2026-10-02\n\n")
+    moved = released + links.replace("v0.1.0...HEAD", "v0.2.0...HEAD") + "[0.2.0]: https://github.com/acme/app/compare/v0.1.0...v0.2.0\n"
+    commit(moved, "Release notes: merge back v0.2.0")
+    assert changes_outside_unreleased(tmp_path) == ["0.2.0", "links"]
+    git("commit", "-q", "--amend", "-m", "Release notes: merge back v0.2.0\n\nChangelog-Release: v0.2.0")
+    assert changes_outside_unreleased(tmp_path) == []
+    merge_back = git("rev-parse", "HEAD").strip()
+
+    # An erratum to an older section needs that section's own trailer.
+    git("checkout", "-q", "-b", "erratum", fork)
+    commit(shipped.replace("- Browse.", "- Browse the team.") + links, "Erratum\n\nChangelog-Release: v0.2.0")
+    assert changes_outside_unreleased(tmp_path) == ["0.1.0"]
+    git("commit", "-q", "--amend", "-m", "Erratum\n\nChangelog-Release: v0.1.0")
+    assert changes_outside_unreleased(tmp_path) == []
+
+    # A branch cut before the notes landed wrote its line under Unreleased, but merging it now puts it in [0.2.0].
+    git("checkout", "-q", "-b", "old-branch", fork)
+    commit(shipped.replace("- Restore tasks.\n", "- Restore tasks.\n- Archive tasks.\n") + links)
+    git("update-ref", "refs/remotes/origin/main", merge_back)
+    assert changes_outside_unreleased(tmp_path) == ["0.2.0"]
+    git("merge", "-q", "--no-edit", "origin/main")
+    assert changes_outside_unreleased(tmp_path) == ["0.2.0"]  # a clean main merge is not proof
+    text = (tmp_path / "CHANGELOG.md").read_text().replace("- Archive tasks.\n", "")
+    commit(text.replace("## [Unreleased]\n\n", "## [Unreleased]\n\n### Added\n- Archive tasks.\n\n"), "Move the line")
+    assert changes_outside_unreleased(tmp_path) == []
+
+    # A CHANGELOG conflict with main is named rather than read as a diff.
+    git("checkout", "-q", "-b", "conflict", fork)
+    commit(shipped.replace("## [Unreleased]\n\n", "## [Unreleased]\n\n## [9.9.9]\n\n") + links)
+    assert changes_outside_unreleased(tmp_path) == [CONFLICT]
+    assert outside_unreleased_message([CONFLICT]).startswith("CHANGELOG.md: this branch conflicts with main; merge main")

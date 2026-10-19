@@ -7,6 +7,9 @@ The installed `CHANGELOG.md` also supplies the in-app, API and MCP product chang
 release's versioned notes automatically reach its users. No separate product announcement is required.
 Keep those versioned sections on `main` after publishing a tag; move only new work into Unreleased,
 so later builds retain the complete history and do not announce already shipped work again.
+PR checks refuse a pull request that adds or changes CHANGELOG lines outside `## [Unreleased]` once merged with main.
+The pull request that merges a release's notes back to `main`, or corrects a shipped section, passes by naming each
+released section it changes in a commit trailer: `Changelog-Release: vX.Y.Z`.
 
 **One release path.** On a team that runs Tico with a Release Manager bot, only the Release Manager publishes
 releases. A Claude Code session or any other outside session that finishes work hands it to the Release Manager on a
