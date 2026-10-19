@@ -656,6 +656,9 @@ def _payload_error(conn, kind, goal_id, kpi_id, payload):
     return None
 
 
+WHY_REPLACED = "Replaced by a newer Why"
+
+
 def propose(conn, actor, kind, goal_id=None, kpi_id=None, payload=None, reason=""):
     """A change somebody may not make themselves (the Goal Manager, above all, may not change a target it
     is judged against): stored for the goal's or KPI's owner to confirm. The same proposal twice is one."""
@@ -672,15 +675,11 @@ def propose(conn, actor, kind, goal_id=None, kpi_id=None, payload=None, reason="
     if same:
         return proposal(conn, same["id"])
     if kind == "goal_why":
-        # One open Why per goal: a new line replaces the one still waiting, so the owner is never asked twice.
-        open_why = H._one(conn, "SELECT id FROM goal_proposals WHERE status='pending' AND kind='goal_why' AND goal_id=?",
-                          (goal_id,))
-        if open_why:
-            conn.execute("UPDATE goal_proposals SET payload_json=?, reason=?, proposed_by=?, proposed_at=? WHERE id=?",
-                         (body, str(reason or "").strip()[:1000], actor, H.now(), open_why["id"]))
-            _event(conn, goal_id, actor, "proposal", None, kind, str(reason or "").strip()[:1000])
-            H.event(conn, actor, "goal.propose", open_why["id"], {"kind": kind, "goal_id": goal_id, "kpi_id": None})
-            return proposal(conn, open_why["id"])
+        # One open Why per goal: a new line replaces the one still waiting, so the owner is never asked twice. It is
+        # a new proposal, not the old one rewritten, so an Accept clicked on the words a person saw never confirms
+        # words they did not (decide refuses the replaced one).
+        conn.execute("UPDATE goal_proposals SET status='rejected', decided_by=?, decided_at=?, decision_note=? "
+                     "WHERE status='pending' AND kind='goal_why' AND goal_id=?", (actor, H.now(), WHY_REPLACED, goal_id))
     row = {"id": H.new_id(), "kind": kind, "goal_id": goal_id or None, "kpi_id": kpi_id or None, "payload_json": body,
            "reason": str(reason or "").strip()[:1000], "proposed_by": actor, "proposed_at": H.now()}
     conn.execute("INSERT INTO goal_proposals (id, kind, goal_id, kpi_id, payload_json, reason, proposed_by, proposed_at) "
@@ -703,6 +702,8 @@ def decide(conn, actor, proposal_id, decision, note="", why=None):
     if not row:
         H.refuse(conn, actor, "not-found", f"no proposal {proposal_id}")
     if row["status"] != "pending":
+        if row["kind"] == "goal_why" and row.get("decision_note") == WHY_REPLACED:
+            H.refuse(conn, actor, "duplicate", "That Why was replaced by a newer one; read the new one before you decide")
         H.refuse(conn, actor, "duplicate", f"{proposal_id} was already {row['status']}")
     if decision not in ("confirm", "reject"):
         H.refuse(conn, actor, "kind", f"a decision is confirm|reject, not {decision}")

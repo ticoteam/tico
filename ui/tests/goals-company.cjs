@@ -1,7 +1,9 @@
 // The Company section at the top of Goals and each goal's Why line (ui/goals-kpis.js goalCompanyHtml, goalWhyHtml), where
 // the CEO Bot switch is on (backend/company.py): empty, it asks the owner what the company is for with the two fields;
 // the owner saves them; a member reads them with no Edit; History lists who changed what and when. A goal with no Why says
-// "Not tied to the vision"; the CEO Bot's proposal is accepted as it is or edited. Off, none of it shows. Fixtures only.
+// "Not tied to the vision"; the CEO Bot's proposal is accepted as it is or edited, and an Accept on a line the CEO Bot has
+// since replaced is refused and shows the new one. Off, none of it shows; flipped with the page open, it comes and goes
+// at once, an open panel and a focused Company draft included. Fixtures only.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -14,6 +16,7 @@ const bots = [bot('coo', 'Assistant', ''), bot('botops', 'BotOps', ''), bot('lib
   bot('goal-manager', 'CEO Bot', 'p:ana', {reports_to: ''}), bot('cmo', 'Head of Marketing', 'b:goal-manager', {reports_to: ''})];
 
 async function open(browser, {on = true, role = 'owner', company = {vision: '', description: ''}, history = []} = {}) {
+  const server = {on};
   const page = await browser.newPage({viewport: {width: 1440, height: 900}, serviceWorkers: 'block'});
   const errors = [], posted = [];
   page.on('pageerror', e => errors.push(e.message));
@@ -30,7 +33,7 @@ async function open(browser, {on = true, role = 'owner', company = {vision: '', 
       may_decide: role === 'owner'}],
   };
   await page.route('**/*', async route => {
-    const req = route.request(), url = new URL(req.url()), p = url.pathname;
+    const req = route.request(), url = new URL(req.url()), p = url.pathname, on = server.on;
     const json = body => route.fulfill({status: 200, contentType: 'application/json', body: JSON.stringify(body)});
     if (url.origin !== 'http://tico-ui.test') return route.abort();
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
@@ -44,7 +47,7 @@ async function open(browser, {on = true, role = 'owner', company = {vision: '', 
     if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana Silva', org_parent: ''}, {id: 'cara', name: 'Cara Diaz', org_parent: 'p:ana'}]});
     if (p === '/api/status') return json({active: [], employees: []});
     if (p === '/api/v2/status') return json({bots: []});
-    if (p === '/api/v2/goals/tree') return json({goals: state.goals, owners: {}, other_kpis: [], proposals: state.proposals.filter(x => x.status === 'pending')});
+    if (p === '/api/v2/goals/tree') return json({goals: state.goals, owners: {}, other_kpis: [], proposals: state.proposals.filter(x => x.status === 'pending' && (on || x.kind !== 'goal_why'))});
     if (p === '/api/v2/goals/needs-you') return json({actor: 'human:ana', items: []});
     if (p === '/api/v2/bots/goal-manager/routines') return json({routines: []});
     if (p === '/api/v2/company' && req.method() === 'GET') {
@@ -65,6 +68,8 @@ async function open(browser, {on = true, role = 'owner', company = {vision: '', 
     if (decide) {
       const body = req.postDataJSON(), prop = state.proposals.find(x => x.id === decide[1]);
       posted.push(['decide', decide[1], body]);
+      if (prop.status !== 'pending') return route.fulfill({status: 422, contentType: 'application/json',
+        body: JSON.stringify({error: {code: 'duplicate', detail: 'That Why was replaced by a newer one; read the new one before you decide'}})});
       prop.status = body.decision === 'confirm' ? 'confirmed' : 'rejected';
       if (body.decision === 'confirm') state.goals.find(g => g.id === prop.goal_id).why = body.why ?? prop.payload.why;
       return json({proposal: prop});
@@ -80,7 +85,20 @@ async function open(browser, {on = true, role = 'owner', company = {vision: '', 
   });
   await page.goto('http://tico-ui.test/#/goals');
   await page.locator('#goal-tree .gt-row').first().waitFor();
-  return {page, errors, posted, state};
+  return {page, errors, posted, state, server};
+}
+// The CEO Bot proposes a new line for a goal: a new proposal, and the one waiting is closed (backend/goals.py propose).
+function replaceWhy(state, goalId, why) {
+  for (const p of state.proposals) if (p.goal_id === goalId && p.kind === 'goal_why' && p.status === 'pending') p.status = 'rejected';
+  const p = {...state.proposals.find(x => x.goal_id === goalId), id: 'p-why-' + state.proposals.length, payload: {why}, status: 'pending'};
+  state.proposals.push(p);
+  return p;
+}
+// Another admin flips the switch; the page learns it from its config poll (ui/tests/ceo-bot.cjs flip).
+async function flip(page, server, on) {
+  server.on = on;
+  await page.evaluate(() => refreshConfig());
+  await page.waitForFunction(want => document.querySelector('#goal-manager-panel h2')?.textContent === want, on ? 'CEO Bot' : 'Goal Manager');
 }
 
 const panelFor = async (page, owner) => {
@@ -193,6 +211,71 @@ const panelFor = async (page, owner) => {
       await panel.locator('[data-why="g-top"] [data-why-text]').waitFor();
       assert.deepEqual(posted.at(-1), ['decide', 'p-why', {decision: 'confirm'}]);
       assert.equal(await panel.locator('[data-why="g-top"] [data-why-text]').innerText(), "More rentals is the vision's first step.");
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+    // The owner reads one line; the CEO Bot replaces it before they click. Accept on the first is refused (nothing
+    // is saved as them) and the panel shows the line now waiting, which they accept; an edit typed against the old
+    // line keeps their words when it is refused.
+    {
+      const {page, errors, posted, state} = await open(browser, {company: {vision: 'Every landlord on Tico.', description: ''}});
+      const panel = await panelFor(page, 'company');
+      await panel.locator('[data-why-prop="p-why"] [data-why-accept]').waitFor();
+      const newer = replaceWhy(state, 'g-top', 'Landlords who rent more stay on Tico.');
+      await panel.locator('[data-why-prop="p-why"] [data-why-accept]').click();
+      await panel.locator(`[data-why-prop="${newer.id}"]`).waitFor();
+      assert.deepEqual(posted.at(-1), ['decide', 'p-why', {decision: 'confirm'}]);
+      assert.equal(state.goals[0].why, '', 'the replaced line is never saved');
+      assert.equal(await panel.locator('[data-why="g-top"] [data-why-none]').count(), 1);
+      assert.match(await page.locator('.toast.err').last().innerText(), /replaced by a newer one/);
+      // Edited against the newer line, which is replaced again meanwhile: refused, and the typed words stay.
+      await panel.locator(`[data-why-prop="${newer.id}"] [data-why-edit]`).click();
+      await panel.locator('[data-why-form="g-top"] input[name="why"]').fill('Our own line.');
+      const newest = replaceWhy(state, 'g-top', 'A third line.');
+      await panel.locator('[data-why-form="g-top"] button[type="submit"]').click();
+      await page.waitForFunction(id => !!document.querySelector(`#goal-panel [data-why-form="g-top"][data-why-prop="${id}"]`), newest.id);
+      assert.equal(await panel.locator('[data-why-form="g-top"] input[name="why"]').inputValue(), 'Our own line.');
+      await panel.locator('[data-why-form="g-top"] button[type="submit"]').click();
+      await panel.locator('[data-why="g-top"] [data-why-text]').waitFor();
+      assert.deepEqual(posted.at(-1), ['decide', newest.id, {decision: 'confirm', why: 'Our own line.'}]);
+      assert.equal(state.goals[0].why, 'Our own line.');
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+    // Off, on, off in one open page: the Company section and the open panel's Why lines come and go with the
+    // switch, a focused Company draft included, and a goal being edited in the panel keeps its words.
+    {
+      const {page, errors, server} = await open(browser, {on: false, company: {vision: 'Every landlord on Tico.', description: ''}});
+      const panel = await panelFor(page, 'company');
+      await panel.locator('[data-goal-form="g-top"] input[name="title"]').fill('Grow rentals 40%');
+      assert.equal(await panel.locator('[data-why]').count(), 0);
+      await flip(page, server, true);
+      await page.locator('#goal-company [data-gco-vision]').waitFor();
+      await panel.locator('[data-why="g-top"] [data-why-none]').waitFor();
+      await panel.locator('[data-why-prop="p-why"] [data-why-accept]').waitFor();
+      assert.equal(await panel.locator('[data-goal-form="g-top"] input[name="title"]').inputValue(), 'Grow rentals 40%', 'the goal edit is kept');
+      // Off with the panel still open: its Why line and the proposal's buttons go; the goal edit stays.
+      await flip(page, server, false);
+      await page.locator('#goal-company').waitFor({state: 'detached'});
+      await page.waitForFunction(() => !document.querySelector('#goal-panel [data-why]'));
+      assert.equal(await panel.locator('[data-why-accept]').count(), 0);
+      assert.equal(await panel.locator('[data-goal-form="g-top"] input[name="title"]').inputValue(), 'Grow rentals 40%');
+      await panel.locator('[data-goal-cancel]').click();
+      await panel.locator('[data-gp-close]').click();
+      await page.locator('#goal-panel[open]').waitFor({state: 'detached'});
+      // A Company draft has focus when the switch goes off: the section goes all the same, and the tree's Why with it.
+      await flip(page, server, true);
+      await page.locator('#goal-company [data-gco-edit]').click();
+      const vision = page.locator('#goal-company textarea[name="vision"]');
+      await vision.fill('A draft not saved yet.');
+      await vision.focus();
+      await flip(page, server, false);
+      await page.locator('#goal-company').waitFor({state: 'detached'});
+      assert.doesNotMatch(await page.locator('#goal-tree .gt-row[data-goal="g-top"] .gt-goal').getAttribute('title'), /Why/);
+      // On again: the draft is where it was.
+      await flip(page, server, true);
+      await page.locator('#goal-company textarea[name="vision"]').waitFor();
+      assert.equal(await page.locator('#goal-company textarea[name="vision"]').inputValue(), 'A draft not saved yet.');
       assert.deepEqual(errors, []);
       await page.close();
     }

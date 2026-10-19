@@ -89,15 +89,25 @@ def test_no_bot_writes_the_company_or_accepts_a_why_the_ceo_bot_included(api):
     ops = bot(api, "ops")
     for token in (ceo, ops):
         post(api, "company", {"vision": "Bots rule."}, token=token, expected=403)
-    # Not the Assistant acting for the owner either: the owner's own click.
+    # Not the Assistant acting for the owner either, even on a card she confirmed (which gets past the Assistant's own
+    # gate in backend/app.py): only her own click here. The CEO Bot's proposal is the one way words reach it.
     api.app.state.store.settings.test_identities["ana-via"] = Identity("human:ana", "owner", "ana@acme.example",
-                                                                       via="assistant")
+                                                                       via="assistant", confirmed=True)
     post(api, "company", {"vision": "Said for her."}, token="ana-via", expected=403)
     assert get(api, "company")["company"]["vision"] == ""
     # A bot's own goal: still no Why written by the bot, and no accept.
     gid = post(api, "goals", {"title": "Answer every ticket in an hour", "owner": "ops"})["goal"]["id"]
     post(api, f"goals/{gid}/why", {"why": "Support is the vision."}, token=ops, expected=403)
     post(api, f"goals/{gid}/why", {"why": "Support is the vision."}, token=ceo, expected=403)
+    # Nor the Assistant writing it straight onto the owner's goal for her, with a Why waiting there: nothing changes.
+    company_goal = post(api, "goals", {"title": "Grow rentals 30%", "owner": "company"})["goal"]["id"]
+    waiting = propose_why(api, company_goal, "More rentals is the vision.", ceo)
+    post(api, f"goals/{company_goal}/why", {"why": "Said for her."}, token="ana-via", expected=403)
+    unchanged = goal(api, company_goal)
+    assert unchanged["why"] == "" and not [e for e in unchanged["events"] if e["field"] == "why"]
+    assert [x["status"] for x in get(api, "goal-proposals?status=all")["proposals"] if x["id"] == waiting["id"]] == ["pending"]
+    # Her own click does it.
+    assert post(api, f"goals/{company_goal}/why", {"why": "Her own line."})["goal"]["why"] == "Her own line."
     proposal = propose_why(api, gid, "Fast answers keep landlords on Tico.", ceo)
     assert proposal["status"] == "pending" and proposal["proposed_by"] == CEO
     for token in (ceo, ops, "ana-via"):
@@ -113,12 +123,18 @@ def test_the_ceo_bot_proposes_a_why_and_the_owner_accepts_or_edits_it(api):
     b = post(api, "goals", {"title": "Ship the stats page", "owner": "ben"})["goal"]["id"]
     c = post(api, "goals", {"title": "Hire a support lead", "owner": "cara"})["goal"]["id"]
     assert goal(api, a)["why"] == "" and goal(api, a)["why_by"] is None                    # "Not tied to the vision"
-    first = propose_why(api, a, "More rentals is the vision's first step.", ceo)
-    again = propose_why(api, a, "More landlords on Tico is the vision.", ceo)
-    assert again["id"] == first["id"] and again["payload"] == {"why": "More landlords on Tico is the vision."}
+    seen = propose_why(api, a, "More rentals is the vision's first step.", ceo)
+    # The owner has the first line on screen; the CEO Bot replaces it before they click. Accept on what they saw
+    # never confirms the newer words: it is refused, nothing is written, and the newer line waits for them.
+    first = propose_why(api, a, "More landlords on Tico is the vision.", ceo)
+    assert first["id"] != seen["id"] and first["payload"] == {"why": "More landlords on Tico is the vision."}
+    for body in ({"decision": "confirm"}, {"decision": "confirm", "why": "My own line."}):
+        refused = post(api, f"goal-proposals/{seen['id']}/decide", body, expected=422)
+        assert "replaced by a newer one" in str(refused)
+    assert goal(api, a)["why"] == "" and not [e for e in goal(api, a)["events"] if e["field"] == "why"]
     tree = get(api, "goals/tree")
     whys = [p for p in tree["proposals"] if p["kind"] == "goal_why"]
-    assert [(p["goal_id"], p["may_decide"]) for p in whys] == [(a, True)]
+    assert [(p["id"], p["goal_id"], p["may_decide"]) for p in whys] == [(first["id"], a, True)]
     assert [p["may_decide"] for p in get(api, "goals/tree", token="cara-test")["proposals"] if p["kind"] == "goal_why"] == [False]
     # Never one Needs you item (or Goal Manager task) per goal: the CEO Bot bundles them (Dev 220).
     assert not [i for i in get(api, "goals/needs-you")["items"] if i["kind"] == "proposal"]
