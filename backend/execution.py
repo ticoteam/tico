@@ -692,7 +692,11 @@ def fallback_choice(c, settings, runner_id, bot, config, job_id=None, ctx=None):
                 and (gateway or not providers.gateway_model(r["model"]))]
     for choice in rows:
         if providers.gateway_model(choice["model"]):
-            return "", choice["runtime"]        # signs in with the turn's relay: no login of its own to hold
+            # Signs in with the turn's relay: no login of its own to hold, but only where bots run as their own user
+            # (a company row is listed only then; one the bot names is checked here).
+            if not models_preset.isolated(ready):
+                continue
+            return "", choice["runtime"]
         signed = (ready.get("runtimes") or {}).get(choice["runtime"]) or {}
         if profile:
             signed = (signed.get("profiles") or {}).get(profile) or {}

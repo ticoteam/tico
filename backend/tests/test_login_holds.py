@@ -1,4 +1,5 @@
 """A usage limit holds the provider login, survives restarts, and lets one probe turn through per hold window."""
+import json
 from datetime import datetime, timezone
 
 from backend import login_holds
@@ -430,3 +431,31 @@ def test_profiles_sharing_the_computers_own_login_share_its_hold_and_probe(api, 
             key = execution.login_key(c, api.app.state.store.settings, rid, "ops", {"runtime": "fake"})
             assert login_holds.holding(c, *key) == held, profile
     assert get(api, "config", machine["token"])["login_holds"][0]["profile"] == ""
+
+
+def test_a_named_fallback_that_is_not_ready_here_leaves_the_job_waiting_not_leased(api, monkeypatch):
+    from backend import models_preset
+    machine = two_bots(api, monkeypatch, runtimes=())
+    for n in range(3):
+        post(api, "tasks", {"owner": "ops", "title": f"Work {n}", "body": "Please do it."})
+    limit(api, machine, claim(api, machine))
+
+    def names(fallback):
+        with api.app.state.store.transaction() as c:
+            c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.fallback',json(?)) WHERE bot='ops'",
+                      (json.dumps(fallback),))
+    names({"harness": "codex", "model": "gpt-5.5"})
+    for minute in ("01:50", "01:55", "02:00"):                      # Codex is not signed in here: no lease, ever
+        at(monkeypatch, f"2026-10-19T{minute}:00.000000Z", api)
+        signed_in(api, machine, ["ops", "finance"], ())
+        assert claim(api, machine) is None
+    # A Tico model named as the fallback needs a computer where bots run as their own user; this one is not.
+    names({"harness": "pi", "model": models_preset.WAITING_MODEL})
+    signed_in(api, machine, ["ops", "finance"], ())
+    assert claim(api, machine) is None
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM attempts WHERE bot='ops'").fetchone()[0] == 1
+    # Once Codex signs in, the named fallback takes the next job.
+    names({"harness": "codex", "model": "gpt-5.5"})
+    signed_in(api, machine, ["ops", "finance"], ["codex"])
+    assert claim(api, machine)["config"]["primary_held"]

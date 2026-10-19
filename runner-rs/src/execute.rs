@@ -1083,6 +1083,8 @@ impl Runner {
         let mut tried: Vec<String> = vec![crate::fallback::slot(&runtime, &text_of(&config["model"]))];
         // Why the turn left the harness before the hop, for its diagnostic: the primary, then each spent hop.
         let mut left = None;
+        // Whether a fallback host acknowledged the turn of a held login (below): until it does, nothing has run.
+        let mut acked = false;
         while let (Some(hop), true, Some(base)) = (pending.take(), prepared, base_env.clone()) {
             tried.push(crate::fallback::slot(&hop.runtime, &hop.model));
             uses.push(hop.runtime.clone());
@@ -1156,6 +1158,7 @@ impl Runner {
                     // acknowledges the turn instead, before it acts.
                     self.client.post(&format!("attempts/{aid}/started"), &json!({"thread_id": th}), Some(&format!("started:{aid}"))).await?;
                     self.state.phase(&aid, "running")?;
+                    acked = true;
                 }
                 let names = self.names().await;
                 let replay = crate::fallback::replay(&attempt, crate::fallback::REPLAY_TOKENS);
@@ -1208,6 +1211,18 @@ impl Runner {
                 let next = crate::fallback::next_choice(&config, &choices, &turn_env, &tried, |rt| self.fallback_ready(rt, selected.as_ref()));
                 pending = crate::gateway_relay::admit(next, vault.relay.is_some());
             }
+        }
+        if let (Some(_), false, Some(f)) = (&held, acked, fallback.clone()) {
+            // Sent away from a held login, its fallback failed before it acknowledged the turn: nothing ran. It ends
+            // like a turn with no fallback ready, so the server settles it unstarted and the bot waits out the hold
+            // instead of the job being leased to the same fallback again and again.
+            let why = format!("{runtime} login held (usage limit); its fallback {f} did not start on this computer");
+            let _ = self.state.append(&aid, "error", &json!({"error": why, "limit": true}));
+            drove.outcome = "failed".into();
+            drove.reply = why;
+            drove.limited = true;
+            fallback = None;
+            subscription_unavailable = None;
         }
         let ran_on = fallback.clone().unwrap_or_else(|| runtime.clone());
         if let Some((rt, reason)) = auth_rejected.as_ref().filter(|_| drove.outcome == "failed") {
