@@ -119,7 +119,9 @@ All notable changes to Tico are recorded here. The format follows
   people who can see it ([how it works](docs/how-it-works.md#one-turn-per-chatgpt-login)).
 - **Sign out** and **Switch account** moved into each computer's pop-up on **Settings > Computers**, on each connection
   line, for the computer's own login and each named subscription (they were on the tool table and in Manage subscription
-  on AI providers). A subscription is now signed in from a computer on **Settings > Computers**.
+  on AI providers). A subscription is now signed in from a computer on **Settings > Computers**. **Replace key**,
+  **Clear key** and **Add key**, the note that several bots share a sign-in, the desktop apps table and the
+  restarting note moved there too; a member sees which kind of key a computer uses but not its preview.
 - Groups no longer give their bots a subscription: a bot runs on its own choice, or else on its computer's own login.
   The bot editor's **Connection** line says "Runs on <tool> · <connection> on <computer>". Existing group choices
   are not moved to the bots; choose one per bot where it is needed.
