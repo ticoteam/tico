@@ -8,13 +8,6 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
-- **Recommended setup** in the installer: `sh install.sh --recommended` is the quick start with the sample company,
-  your Claude and ChatGPT subscriptions plus Tico Gateway, Tico Support on and a computer on the server, so the only
-  setup left is signing in to Claude and ChatGPT in Settings > Computers. Run on a terminal with no options, the
-  installer asks which setup to use and offers this one first; with any option, or without a terminal, it does what it did
-  before. `--support off` turns Support off. The Gateway invite comes from `TICO_GATEWAY_INVITE` in the environment and
-  is never printed. The quick start, your own domain and sign-in, and your own keys install as before.
-  ([Install](docs/install.md#recommended-setup))
 - **How long an approval has waited, and on whom**: every approval now records when its exact payload was ready to
   decide and whose decision it is, and its card in Needs you and Decide says so plainly ("Ready 2 h 10 min, waiting
   on you", or the person's name); the row shows "ready 2 h 10 min". The API adds `ready_since`, `decision_owner`,
