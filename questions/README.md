@@ -77,7 +77,6 @@ version bump when it changes what a bot does with the answer.
 | `reply-intent` | an ambiguous inbound SMS or email reply's explicit intent | Response Rate's read-only scorecards |
 | `stale-review` | one task the hourly plain-code pass found stale (PR merged or shipped, parent finished, blockers done, snooze over, twin title, quiet week): update (mark done), close, ask the owner, or leave; a suggestion to its owner, never an action | the server's hourly stale ticket review (`backend/stale_review.py`), when the team's `stale_review` rule is on |
 | `idea-triage` | a new idea from the public roadmap's suggestion form: a bug or small change (Head of Engineering) or a feature (product), and is it one of the open roadmap items (dynamic `covered`); routing only, anything short of a confident answer goes to product as before | the suggestion form (`backend/idea_triage.py`), when `TICO_DECISIONS_IDEA_TRIAGE=1` |
-| `topic-change` | a person's new message in their direct chat with a bot, against the chat's last 3 turns: a new topic, the same topic, or not sure; only a confident `new_topic` clears the session (as the person's own Clear does) before the message is sent | the server's direct-chat send (`backend/topic_change.py`), when the team's `topic_fresh` rule is on and the chat's latest prompt is 100k tokens or more or its cache is cold; never in a shared bot's room |
 
 Adding a set is a pull request here: the file, a line in this table, and the change in the
 caller that reads it. Read a month of one set's calls back with

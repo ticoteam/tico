@@ -252,7 +252,7 @@ def estimate(model, input_tokens, cached_tokens, output_tokens, requests=None):
     limit, high = long
     cost, rest = 0.0, totals
     for request in requests or ():
-        counts = [int(n or 0) for n in request[:3]]      # a fourth, whose request it was, is not a count
+        counts = [int(n or 0) for n in request]
         cost += sum(n * rate for n, rate in zip(counts, high if counts[0] + counts[1] > limit else price))
         rest = [r - n for r, n in zip(rest, counts)]
     rest = [max(r, 0) for r in rest]

@@ -63,10 +63,6 @@ function pageSettings() {
         <label class="settings-team-rule">${peopleSwitch('id="settings-stale-review"', false, true, 'Stale ticket review')}
           <span><strong>Stale ticket review</strong><span class="settings-cell-note">Once an hour, Tico looks for open tasks that seem finished or forgotten and suggests what to do: a comment to a bot that owns one, a Stale tickets card in Needs you for a person. Nothing changes unless the owner accepts.</span></span></label>
         <p id="settings-stale-review-status" class="settings-cell-note" role="status"></p></section>
-      <section class="card"><header><h2>Chat</h2></header>
-        <label class="settings-team-rule">${peopleSwitch('id="settings-topic-fresh"', false, true, 'Start fresh when the topic changes')}
-          <span><strong>Start fresh when the topic changes</strong><span class="settings-cell-note">In a long or idle direct chat with a bot, Tico checks whether your new message is about something else. If it is, the bot starts a fresh session before answering, the same as Clear, and the chat shows a quiet "Topic changed" line.</span></span></label>
-        <p id="settings-topic-fresh-status" class="settings-cell-note" role="status"></p></section>
       ${S.me?.cloud && S.me?.role === 'owner' ? `<section class="card"><header><h2>Team</h2></header><div class="settings-team-icon">
         <img id="settings-team-icon" alt="Team icon" hidden><span id="settings-team-icon-empty" class="muted">No icon</span>
         <div><strong>Team icon</strong><p class="settings-cell-note">Public team logo. PNG, JPEG or WebP, up to 1 MB.</p>
@@ -127,7 +123,7 @@ function pageSettings() {
   $('#settings-app-log')?.addEventListener('click', () => nativeHandler('showLog')?.postMessage(null));
   pageSettingsThemeBind();
   settingsTeamIconBind();
-  void settingsTeamRulesBind();
+  void settingsStaleReviewBind();
   $('#settings-tabs').onclick = event => {
     const button = event.target.closest('[data-settings-tab]');
     if (button) settingsShow(button.dataset.settingsTab);
@@ -221,24 +217,18 @@ function settingsTabIntoView(target) {
   if (tab.left < box.left) bar.scrollLeft -= box.left - tab.left + pad;
   else if (tab.right > box.right) bar.scrollLeft += tab.right - box.right + pad;
 }
-// Settings > Team: the team rules an owner or an admin turns (backend/team_rules.py ADMIN_RULES): Stale ticket review
-// (backend/stale_review.py) and Start fresh when the topic changes (backend/topic_change.py).
-const SETTINGS_TEAM_RULES = {stale_review: 'settings-stale-review', topic_fresh: 'settings-topic-fresh'};
-async function settingsTeamRulesBind() {
-  const boxes = Object.entries(SETTINGS_TEAM_RULES).map(([rule, id]) => [rule, $('#' + id), $(`#${id}-status`)]).filter(([, box]) => box);
-  if (!boxes.length) return;
-  let rules;
-  try { rules = (await get('/v2/access')).rules || {}; }
-  catch (e) { for (const [, , status] of boxes) { status.textContent = e.message; status.classList.add('err'); } return; }
-  for (const [rule, box, status] of boxes) {
-    box.checked = !!rules[rule]; box.disabled = false;
-    box.onchange = async () => {
-      box.disabled = true; status.classList.remove('err'); status.textContent = 'Saving…';
-      try { box.checked = !!(await put('/v2/access/rules', {[rule]: box.checked}))[rule]; status.textContent = 'Saved'; }
-      catch (e) { box.checked = !box.checked; status.textContent = e.message; status.classList.add('err'); }
-      finally { box.disabled = false; }
-    };
-  }
+// Settings > Team: the Stale ticket review switch (backend/stale_review.py), an owner's or an admin's to turn.
+async function settingsStaleReviewBind() {
+  const box = $('#settings-stale-review'), status = $('#settings-stale-review-status');
+  if (!box) return;
+  try { box.checked = !!(await get('/v2/access')).rules?.stale_review; box.disabled = false; }
+  catch (e) { status.textContent = e.message; status.classList.add('err'); return; }
+  box.onchange = async () => {
+    box.disabled = true; status.classList.remove('err'); status.textContent = 'Saving…';
+    try { box.checked = !!(await put('/v2/access/rules', {stale_review: box.checked})).stale_review; status.textContent = 'Saved'; }
+    catch (e) { box.checked = !box.checked; status.textContent = e.message; status.classList.add('err'); }
+    finally { box.disabled = false; }
+  };
 }
 function settingsTeamIconBind() {
   const input = $('#settings-team-icon-file'), button = $('#settings-team-icon-change');
