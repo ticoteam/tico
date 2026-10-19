@@ -478,7 +478,10 @@ async function onbSample(state) {
 }
 async function onbCompleted(state, record) {
   onbAdopt(state, record);
-  applyConfig({...S.config, onboarding_needed: !!state.record.needed});
+  // Completing setup marks What's new read for the owner: take the server's count before the full nav comes back.
+  const config = await get('/v2/config').catch(() => null);
+  if (ONB !== state) return;
+  applyConfig({...(config || S.config), onboarding_needed: !!state.record.needed});
   state.step = state.steps.length;
   await onbRevisions(state);
   if (ONB !== state) return;
