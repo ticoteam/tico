@@ -94,12 +94,15 @@ window.ticoAppUpdate = ({state, detail} = {}) => {
     appUpdateFailed('the update feed does not have it yet');
   }
 };
-// The anonymous usage count (PRIVACY.md): the owner sees this once, and nothing is counted before they have.
+// The anonymous usage count (PRIVACY.md): the owner sees this once, and nothing is counted before they have. It
+// would sit over the first-run wizard and its after-Create screen, so it waits for the first other page. Before the
+// first route() (LAST_ROUTE, ui/app/router.js) there is no page yet: a new install's boot sends it to the wizard after
+// its config is read.
 let usageNoticeShown = false;
 function renderUsageNotice() {
   const bar = $('#usage-notice');
   if (!bar) return;
-  bar.hidden = !S.config.usage_count_notice;
+  bar.hidden = !S.config.usage_count_notice || !LAST_ROUTE || S.route === WELCOME;
   if (!bar.hidden && !usageNoticeShown) { usageNoticeShown = true; post('/v2/system/usage-count/notice', {state: 'shown'}).catch(() => {}); }
 }
 document.addEventListener('click', ev => {
@@ -157,10 +160,13 @@ function renderFeedbackAsk() {
   };
 }
 // "Finish setup" tops the nav while the owner has not finished setup, and disappears the
-// moment the server stops asking for one. Everyone else never sees it.
+// moment the server stops asking for one. Everyone else never sees it. On the wizard itself the rest of the app's
+// pages and What's new are not shown until setup is done: a new install has nothing there yet (ui/styles/sidebar.css).
 function renderOnboardingNav() {
   const link = $('#nav-welcome');
   if (link) link.hidden = !S.config.onboarding_needed;
+  document.body.classList.toggle('in-setup', !!S.config.onboarding_needed && S.route === WELCOME);
+  renderUsageNotice();
 }
 // "New version" in the sidebar: quiet, only when the server says a newer release exists. Anyone
 // may read the changelog; only the owner may start an update. Dismissal is per person and version.

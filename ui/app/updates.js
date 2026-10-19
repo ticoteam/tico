@@ -194,7 +194,23 @@ function updDraftPill(u) {
   if (!u.drafted_by) return '';
   return `<span class="upd-pill upd-draft">${u.edited_by ? 'Drafted by ' + esc(botDisplayName(u.drafted_by)) + ', edited' : 'Drafted by ' + esc(botDisplayName(u.drafted_by))}</span>`;
 }
-function updCard(u, i, state) {
+// The action row is icons; each one's name is its accessible label and its tooltip (title with a mouse, a long press
+// on a phone). Mark read and Archive are swapped in place, so they have their own builders.
+const updReadBtn = read => read
+  ? '<button type="button" class="upd-act" data-upd-toggle aria-label="Mark unread" title="Mark unread"><span class="nav-icon" aria-hidden="true">mark_email_unread</span></button>'
+  : '<button type="button" class="upd-act" data-upd-toggle aria-label="Mark read" title="Mark read"><span class="nav-icon" aria-hidden="true">mark_email_read</span></button>';
+const updArchiveBtn = (restore, busy) => `<button type="button" class="upd-act" data-upd-archive aria-label="${restore ? 'Restore' : 'Archive'}" title="${restore ? 'Restore to Inbox' : 'Archive'}"${busy ? ' disabled' : ''}>${
+  restore ? '<span class="nav-icon" aria-hidden="true">unarchive</span>' : '<span class="nav-icon" aria-hidden="true">archive</span>'}</button>`;
+function updReplyBtn(u) {
+  const n = u.replies || 0, label = n ? `Reply, ${n} repl${n === 1 ? 'y' : 'ies'}` : 'Reply';
+  return `<button type="button" class="upd-act" data-upd-reply aria-label="${label}" title="${label}"><span class="nav-icon" aria-hidden="true">chat_bubble</span>${n ? `<span class="upd-n">${n}</span>` : ''}</button>`;
+}
+function updWriteBtn(u) {
+  const label = u.day === updToday() ? 'Edit your update' : 'Write today\'s update';
+  return `<button type="button" class="upd-act" data-upd-write aria-label="${label}" title="${label}"><span class="nav-icon" aria-hidden="true">edit</span></button>`;
+}
+// `kids` is the tree's toggle for the cards of this card's reports, at the right end of the action row.
+function updCard(u, i, state, kids = '') {
   const who = updAuthor(u.bot);
   const open = state.open.has(u.id);
   const thread = state.threads[u.id];
@@ -209,10 +225,7 @@ function updCard(u, i, state) {
       ${u.slides ? updDeck(u, state) : body ? `<div class="upd-body md">${safeMd(body, {shortLinks: true})}</div>` : ''}
       ${updFrom(u)}
       <div class="upd-actions">
-        ${who.person ? '' : `<button type="button" class="upd-act" data-upd-reply><span class="nav-icon" aria-hidden="true">chat_bubble</span>${u.replies ? u.replies : 'Reply'}</button>`}
-        ${u.own && updCanWrite(state) ? `<button type="button" class="upd-act" data-upd-write><span class="nav-icon" aria-hidden="true">edit</span>${u.day === updToday() ? 'Edit' : 'Write today\'s'}</button>` : ''}
-        <button type="button" class="upd-act" data-upd-toggle>${u.read ? 'Mark unread' : 'Mark read'}</button>
-        <button type="button" class="upd-act" data-upd-archive aria-label="${state.view === 'archive' ? 'Restore update' : 'Archive update'}"${state.archivePending.has(u.id) ? ' disabled' : ''}>${state.view === 'archive' ? 'Restore' : 'Archive'}</button>
+        ${who.person ? '' : updReplyBtn(u)}${u.own && updCanWrite(state) ? updWriteBtn(u) : ''}${updReadBtn(u.read)}${updArchiveBtn(state.view === 'archive', state.archivePending.has(u.id))}${kids}
       </div>
       ${open ? `<div class="upd-thread">${thread ? thread.map(m => `<div class="upd-msg${String(m.from_actor).startsWith('bot:') ? ' bot' : ''}${m.pending ? ' pending' : ''}">
           <b>${esc(actorLabel(m.from_actor))}</b> ${String(m.from_actor).startsWith('bot:') ? `<div class="md">${safeMd(m.body || '', {shortLinks: true})}</div>` : esc(String(m.body || '').replace(/^Re your update "[^"]*": /, ''))}
@@ -310,18 +323,20 @@ function updTreeHTML(state) {
     const kids = updKids(n), open = state.expanded.has(n.key);
     const u = n.update ? state.data.updates.find(x => x.id === n.update.id) : null;
     const own = n.key === tree.me;
+    // "8" and a chevron at the right of the card open its reports' cards (the chevron turns when they are open).
+    const label = `${open ? 'Hide' : 'Show'} ${kids.count} report${kids.count === 1 ? '' : 's'}${kids.unread ? ', unread' : ''}`;
+    const toggle = kids.count ? `<button type="button" class="upd-act upd-kids" data-upd-kids="${esc(n.key)}" aria-expanded="${open}" aria-label="${label}" title="${label}">
+        <span class="upd-n">${kids.count}</span><span class="nav-icon" aria-hidden="true">expand_more</span>${kids.unread ? '<span class="upd-dot" aria-hidden="true"></span>' : ''}</button>` : '';
     let card;
-    if (own && state.editing) card = updEditor(u?.day === updToday() ? u : null, n, state);
-    else if (u) { card = updCard(u, items.length, state); items.push(u); }
+    if (own && state.editing) card = updEditor(u?.day === updToday() ? u : null, n, state, toggle);
+    else if (u) { card = updCard(u, items.length, state, toggle); items.push(u); }
     else {
       const who = updAuthor(n.author);
       card = `<div class="upd-none" data-upd-node="${esc(n.key)}"><span class="upd-av">${who.avatar}</span><a href="${who.href}" class="upd-name">${who.name}</a>
-        <span class="muted">No update yet</span>${own && updCanWrite(state) ? '<button type="button" class="ghost upd-write" data-upd-write>Write your update</button>' : ''}</div>`;
+        <span class="muted">No update yet</span>${own && updCanWrite(state) ? '<button type="button" class="ghost upd-write" data-upd-write>Write your update</button>' : ''}${toggle}</div>`;
     }
-    const toggle = kids.count ? `<button type="button" class="upd-kids" data-upd-kids="${esc(n.key)}" aria-expanded="${open}" title="${open ? 'Hide' : 'Show'} the cards of ${esc(n.name)}'s reports">
-        <span class="nav-icon" aria-hidden="true">${open ? 'expand_less' : 'expand_more'}</span>${kids.count} report${kids.count === 1 ? '' : 's'}${kids.unread ? '<span class="upd-dot" aria-label="Unread"></span>' : ''}</button>` : '';
     const below = kids.count && open ? `<div class="upd-sub">${n.children.map(k => node(k, depth + 1)).join('')}</div>` : '';
-    return `<div class="upd-node" data-depth="${depth}">${card}${toggle}${below}</div>`;
+    return `<div class="upd-node" data-depth="${depth}">${card}${below}</div>`;
   };
   const html = tree.roots.map(n => node(n, 0)).join('');
   state.list = items;
@@ -332,7 +347,7 @@ function updTreeHTML(state) {
 // review's slides (the same shape a bot posts), one bullet per line.
 const UPD_WEEK = [['done', 'Done last week', 'one to five'], ['focus', 'Focus next week', 'one to three'], ['blockers', 'Biggest blockers', 'up to three, or none']];
 const updKpiLine = k => `${k.name}: ${[k.value, k.unit].filter(Boolean).join(' ')}`;
-function updEditor(u, n, state) {
+function updEditor(u, n, state, kids = '') {
   const week = state.kind === 'weekly', s = u?.slides || {};
   const fields = week
     ? `<label class="upd-field">Goal <span class="muted">one sentence: what you work toward and where it stands</span>
@@ -346,7 +361,7 @@ function updEditor(u, n, state) {
     <div class="upd-main"><div class="upd-meta"><b>${updAuthor(n.author).name}</b><span class="muted">· ${week ? 'this week in review' : "today's update"}</span></div>
       ${fields}
       ${u?.drafted_by ? '<label class="upd-own"><input type="checkbox" data-upd-own> These are my own words (drop the Drafted by Assistant label)</label>' : ''}
-      <div class="upd-actions"><button class="primary" type="submit">Post</button><button type="button" class="ghost" data-upd-cancel>Cancel</button></div>
+      <div class="upd-actions"><button class="primary" type="submit">Post</button><button type="button" class="ghost" data-upd-cancel>Cancel</button>${kids}</div>
       <div class="err" role="status" data-upd-edit-err></div></div></form>`;
 }
 // The editor's slides: bullets one per line, and KPIs as "Name: value", keeping a KPI's chart and note when
@@ -475,8 +490,8 @@ function updSeen(state, id) {
   if (!u || u.read || state.manualUnread.has(id) || UPD !== state) return;
   u.read = true; state.pending.add(id);
   const el = document.querySelector(`#upd-feed [data-upd="${CSS.escape(id)}"]`);
-  el?.classList.remove('unread', 'upd-quiet'); el?.querySelector('.upd-dot')?.remove();
-  const t = el?.querySelector('[data-upd-toggle]'); if (t) t.textContent = 'Mark unread';
+  el?.classList.remove('unread', 'upd-quiet'); el?.querySelector('.upd-meta .upd-dot')?.remove();
+  const t = el?.querySelector('[data-upd-toggle]'); if (t) t.outerHTML = updReadBtn(true);
   if (!u.quiet) updBadge(Math.max(0, (S.updUnread || 1) - 1));
   clearTimeout(state.flush);
   state.flush = setTimeout(() => updFlush(state), 900);
@@ -575,9 +590,28 @@ function updSelect(state, i) {
   if (el) { el.classList.add('sel'); el.scrollIntoView({block: 'nearest'}); el.focus({preventScroll: true}); }
   updSeen(state, list[state.sel].id);
 }
+// A phone has no hover: a long press on an icon shows its name, and that press does not also act.
+function updTipBind(state, feed) {
+  const clear = () => { clearTimeout(state.tipTimer); state.tipTimer = null; };
+  feed.addEventListener('pointerdown', ev => {
+    clear(); state.tipBtn = null;
+    const b = ev.target.closest('.upd-act[title]');
+    if (!b || (ev.pointerType !== 'touch' && !matchMedia('(pointer:coarse)').matches)) return;
+    state.tipTimer = setTimeout(() => {
+      state.tipTimer = null; state.tipBtn = b;
+      for (const on of feed.querySelectorAll('[data-tip-on]')) on.removeAttribute('data-tip-on');
+      b.setAttribute('data-tip-on', '');
+      setTimeout(() => b.removeAttribute('data-tip-on'), 1500);
+    }, 450);
+  }, {passive: true});
+  for (const type of ['pointerup', 'pointercancel']) feed.addEventListener(type, clear, {passive: true});
+  feed.addEventListener('contextmenu', ev => { if (ev.target.closest('.upd-act') && matchMedia('(pointer:coarse)').matches) ev.preventDefault(); });
+}
 function updBind(state) {
   const feed = $('#upd-feed');
+  updTipBind(state, feed);
   feed.addEventListener('click', ev => {
+    if (state.tipBtn && ev.target.closest('.upd-act') === state.tipBtn) { state.tipBtn = null; return; }   // the long press named it
     const card = ev.target.closest('[data-upd]');
     if (state.ignoreClick && Date.now() < state.ignoreClick.until && card?.dataset.upd === state.ignoreClick.id) {
       state.ignoreClick = null; return;                 // consume only this swipe's synthetic click

@@ -12,7 +12,7 @@ import os
 import shlex
 from datetime import datetime, timezone
 
-from . import (access, blob_s3, inbox_isolation, model_login, providers, releases, roadmaps, runner_versions,
+from . import (access, blob_s3, gateway_connection, inbox_isolation, model_login, providers, releases, roadmaps, runner_versions,
                setup_stuck, watchers)
 from .getting_started import _online_runners, _signed_in_runtime, _wanted_runtimes, _person
 
@@ -539,7 +539,7 @@ HELD = {
     "lane_held": ("{computer} still runs an earlier turn of this bot whose lease lapsed: the next starts when it ends",
                   RUNS),
     "uncertain": ("An interrupted run on the same task or chat waits for review in Runs", RUNS),
-    "cooling_off": ("Waiting out a usage limit before it tries again", RUNS),
+    "cooling_off": ("Waiting out a usage limit, or a Tico AI Gateway outage, before it tries again", RUNS),
     "readiness_unknown": ("{computer} has not said whether it can run this bot", COMPUTERS),
     "sign_in_rejected": ("Its model sign-in was rejected on {computer}", COMPUTERS),
     "profile": ("Its subscription profile is not signed in or not reported on {computer}", COMPUTERS),
@@ -1391,6 +1391,11 @@ def view(c, who, settings, auth, github, config):
                              + " Sign in from Settings > Computers (BotOps can start it). To have new computers sign in by "
                              "themselves, store the company's model key in Credentials and give it to every computer.",
                              [_fix("Open Computers", "#/settings", "devices"), _fix("Open Credentials", "#/credentials")]))
+    # The Tico AI Gateway's word on the company's key, for the owner who manages the connection: 80% of the month's cap
+    # used, the cap reached, or the key revoked (backend/gateway_connection.py).
+    if kind == "owner" and (gateway := gateway_connection.health(c, settings)):
+        checks.append(_check("gateway", "Tico AI Gateway", gateway["status"], gateway["summary"],
+                             [_fix("Open AI providers", "#/settings", "providers")]))
     if full and (versions := runner_versions.health_check(computers)):
         checks.append(versions)
     silent = silent_computers(c) if waiting else []

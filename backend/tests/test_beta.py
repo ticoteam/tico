@@ -43,7 +43,7 @@ UI = Path(__file__).resolve().parents[2] / "ui"
 SPOT = re.compile(r"""betaPill\(['"]([a-z_]+)['"]\)|data-beta="([a-z_]+)\"""")
 
 
-def test_every_pill_in_the_app_is_a_listed_feature_and_every_feature_has_one():
+def _spots():
     used = {}
     for path in sorted(UI.rglob("*")):
         rel = path.relative_to(UI)
@@ -51,6 +51,11 @@ def test_every_pill_in_the_app_is_a_listed_feature_and_every_feature_has_one():
             continue
         for match in SPOT.finditer(path.read_text()):
             used.setdefault(match.group(1) or match.group(2), []).append(rel.as_posix())
+    return used
+
+
+def test_every_pill_in_the_app_is_a_listed_feature_and_every_feature_has_one():
+    used = _spots()
     # A pill for an id off the list draws nothing, so a typo would hide it silently and a new id would label an
     # unapproved feature once listed.
     assert set(used) <= set(beta.IDS), {k: v for k, v in used.items() if k not in beta.IDS}
@@ -58,7 +63,16 @@ def test_every_pill_in_the_app_is_a_listed_feature_and_every_feature_has_one():
     assert {f.id for f in beta.FEATURES if not f.bots} <= set(used)
 
 
+def test_market_is_not_beta_while_message_bots_still_is():
+    # Chris, Oct 18: Market is not Beta. No pill in the nav, on its page title or its pages, no Help row, no manual note.
+    used, names = _spots(), [f["name"] for f in beta.listing()]
+    assert "market" not in beta.IDS and "market" not in used and "Market" not in names
+    assert beta.MARKER not in (DOCS / "librarian.md").read_text()
+    # Message bots, also in the nav, keeps its pill there.
+    assert "message_bots" in beta.IDS and "index.html" in used["message_bots"]
+
+
 def test_diagnostics_keep_beta_only_as_a_list():
     from backend import diagnostics
-    assert diagnostics.allowed({"beta": ["market"]}) == {"beta": ["market"]}
-    assert diagnostics.allowed({"beta": {"market": "x"}}) == {"beta": []}
+    assert diagnostics.allowed({"beta": ["listening"]}) == {"beta": ["listening"]}
+    assert diagnostics.allowed({"beta": {"listening": "x"}}) == {"beta": []}

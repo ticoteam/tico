@@ -102,6 +102,13 @@ def can_run(c, bot, runtime, runner=None, harness="", model=""):
             return verdict(None, (tool.get("name") or str(runtime)) + " is installing on " + label)
         return verdict(False, str(runtime) + " is not installed on " + label,
                        "Install " + str(runtime) + " on " + label + ", or choose a model it already runs")
+    # A Tico model is signed in by the company's Tico AI Gateway connection, which its run is handed; no grant of its own.
+    from . import gateway_connection
+    if gateway_connection.is_tico(model or config.get("model")):
+        if not gateway_connection.connected(c):
+            return verdict(False, "The Tico AI Gateway is not connected", "Save the gateway key in Settings > AI providers",
+                           "#/settings")
+        return verdict(True)
     # A harness whose key each bot holds (`api_keys = "bot"`): the bot's own grant is its sign-in.
     own = harness or config.get("harness") or runtime
     name = bot_key({**config, "harness": own if runtime_of(own) == runtime else runtime}, runtime)

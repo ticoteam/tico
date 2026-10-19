@@ -1149,6 +1149,47 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_profiles_claude_sign_in_drops_an_inherited_claude_config_dir() {
+        const CHILD: &str = "TICO_TEST_LOGIN_CONFIG_DIR";
+        let Some(root) = std::env::var_os(CHILD).map(std::path::PathBuf::from) else {
+            // A process of its own: the runner's environment points Claude at a folder outside every profile.
+            let root = std::env::temp_dir().join(format!("tico-login-config-dir-{}", uuid::Uuid::new_v4().simple()));
+            std::fs::create_dir_all(root.join("bin")).unwrap();
+            crate::util::write_script(&root.join("bin/claude"), crate::profiles::tests::FAKE_CLAUDE_LOGIN);
+            let out = Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "login::tests::a_profiles_claude_sign_in_drops_an_inherited_claude_config_dir", "--nocapture"])
+                .env(CHILD, &root).env("PATH", format!("{}:/usr/bin:/bin", root.join("bin").display())).env("HOME", &root)
+                .env("CLAUDE_CONFIG_DIR", root.join("outside"))
+                .env_remove(crate::isolation::UID_ENV).env_remove(crate::isolation::GID_ENV).output().unwrap();
+            std::fs::remove_dir_all(&root).ok();
+            let said = String::from_utf8_lossy(&out.stdout);
+            assert!(out.status.success() && said.contains("1 passed"), "{said}{}", String::from_utf8_lossy(&out.stderr));
+            return;
+        };
+        let outside = root.join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::create_dir_all(root.join("projects")).unwrap();
+        std::fs::write(outside.join("sentinel"), "x").unwrap();
+        let path = root.join("runner.json");
+        std::fs::write(&path, json!({"url": "http://127.0.0.1:9", "token": "t", "runner_id": "r1", "projects_dir": root.join("projects"),
+                                      "profiles": {"acme": {"dir": root.join("acme")}}, "default_profile": "acme"}).to_string()).unwrap();
+        let config = Config::load(&path).unwrap();
+        // Named (Settings > Computers on a profile) and the default profile alike.
+        for name in ["acme", ""] {
+            let (exe, env, profile) = login_env("claude", &config, name).unwrap();
+            assert_eq!(profile.unwrap().name, "acme");
+            assert_eq!(env["HOME"], root.join("acme/claude").display().to_string());
+            assert!(!env.contains_key("CLAUDE_CONFIG_DIR"), "{env:?}");
+            // The sign-in runs with exactly this environment (spawn: model_command), so it writes in the profile only.
+            assert!(model_command(&exe, &["auth", "login", "--claudeai"], &env).status().unwrap().success());
+            assert!(root.join("acme/claude/.claude/.credentials.json").is_file());
+            std::fs::remove_dir_all(root.join("acme")).unwrap();
+        }
+        let left: Vec<_> = std::fs::read_dir(&outside).unwrap().flatten().map(|e| e.file_name()).collect();
+        assert_eq!(left, vec![std::ffi::OsString::from("sentinel")]);
+    }
+
     /// A stand-in `codex`, each run recorded in $HOME/runs: `login status` reads $CODEX_HOME/auth.json (on a switch's
     /// side home it first waits for $HOME/release while $HOME/hold-probe is there; in the real home it says signed
     /// out while $HOME/refuse is there), `logout` removes it (unless $HOME/stuck), `login --device-auth` shows a

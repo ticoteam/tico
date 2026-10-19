@@ -112,6 +112,24 @@ class TakeRecommendation(Contract):
     version: Annotated[int, Field(strict=True, ge=1)] | None = None     # the card's task version: a changed task is refused
 
 
+class StaleDecision(Contract):
+    """A person's answer to one row of their Stale tickets card (backend/stale_review.py): accept or skip. Accept names
+    the task version the row showed (409 version_conflict once the task changed), as a change by hand does."""
+    decision: Literal["accept", "skip"] = "accept"
+    version: int | None = None
+
+
+class StaleShown(Contract):
+    id: ID
+    version: int
+
+
+class StaleAcceptAll(Contract):
+    """Accept all on a Stale tickets card: the rows the card showed, each with its task's version then. A row added
+    since is not in the list and stays; a row whose task changed is refused on its own."""
+    rows: list[StaleShown] = Field(min_length=1, max_length=500)
+
+
 class ClarifyAsk(Contract):
     ask: Annotated[StrictStr, Field(min_length=1, max_length=100)]     # the stale bot ask to send the clarify prompt to
 
@@ -478,7 +496,7 @@ class KpiReading(Contract):
 
 
 class GoalProposalCreate(Contract):
-    kind: Literal["goal_wording", "goal_kpi", "kpi_definition", "kpi_target", "flag"]
+    kind: Literal["goal_wording", "goal_kpi", "kpi_definition", "kpi_target", "flag", "goal_why"]
     goal_id: str | None = Field(default=None, max_length=200)
     kpi_id: str | None = Field(default=None, max_length=200)
     payload: dict = Field(default_factory=dict)
@@ -491,6 +509,17 @@ GoalProposal = GoalProposalCreate
 class GoalProposalDecision(Contract):
     decision: Literal["confirm", "reject"]
     note: str = Field(default="", max_length=1000)
+    why: str | None = Field(default=None, max_length=1000)    # a Why proposal confirmed as edited
+
+
+# The company at the top of Goals (backend/company.py): only the fields sent change.
+class CompanyUpdate(Contract):
+    vision: str | None = Field(default=None, max_length=4000)
+    description: str | None = Field(default=None, max_length=10_000)
+
+
+class GoalWhy(Contract):
+    why: str = Field(default="", max_length=1000)     # "" clears it: the goal is not tied to the vision
 
 
 # Market (backend/market.py). Reporters send prose. The Librarian (the curator) and the owner write the graph.
@@ -1184,6 +1213,12 @@ class BotAccess(Contract):
     on_behalf_of: ID | None = None
 
 
+# A bot's instructions (its AGENT.md) as a person reviewed them, one limit wherever they are sent: registering a bot,
+# adding one from the catalog and the first-run wizard. The longest shipped template is about half of it, and
+# backend/tests/test_onboarding.py checks every one against it.
+INSTRUCTIONS_MAX = 50_000
+
+
 class BotRegister(Contract):
     """Register a bot with the server, planned, before BotOps builds its repository. Left out, the slug is
     picked from the name (or the template's name)."""
@@ -1192,7 +1227,7 @@ class BotRegister(Contract):
     description: str = Field(default="", max_length=2000)
     reports_to: ID | None = None
     template: str = Field(default="", max_length=80)
-    instructions: str = Field(default="", max_length=50000)
+    instructions: str = Field(default="", max_length=INSTRUCTIONS_MAX)
     title_prefix: str = Field(default="", max_length=100)
     model: ID | None = None
     build: bool = False
@@ -1302,7 +1337,7 @@ class BotDefinitionCreate(Contract):
     # "Add from catalog": the template this bot is built from and the instructions a person
     # reviewed for it. Both are empty for a bot typed in by hand.
     template: str = Field(default="", max_length=80)
-    instructions: str = Field(default="", max_length=20_000)
+    instructions: str = Field(default="", max_length=INSTRUCTIONS_MAX)
 
 
 class BotBranch(Contract):
@@ -1509,6 +1544,14 @@ class SettingsUndo(Contract):
     expected_revision: int = Field(ge=1)
 
 
+class GatewayConnectionSave(Contract):
+    """The Tico AI Gateway connection (backend/gateway_connection.py): a new key, or none to keep the saved one, and
+    the Gateway's URL ('' for Tico's). `expected_revision` is the revision the editor read."""
+    key: SecretStr | None = None
+    url: str = Field(default="", max_length=300)
+    expected_revision: int = Field(default=0, ge=0)
+
+
 class ProvidersUpdate(Contract):
     """The owner's AI provider choice. `expected_revision` is the revision the editor read."""
     enabled: list[Annotated[str, Field(min_length=1, max_length=40)]] = Field(max_length=10)
@@ -1528,6 +1571,10 @@ class SystemUpdate(Contract):
 
 class UsageCount(Contract):
     enabled: bool
+
+
+class CeoBotSwitch(Contract):
+    on: bool
 
 
 class UsageCountNotice(Contract):
@@ -1586,6 +1633,8 @@ class AccessRules(Contract):
     health_monitor_reports: bool | None = None
     bots_go_ahead: bool | None = None
     support_access: bool | None = None
+    stale_review: bool | None = None
+    topic_fresh: bool | None = None
     go_ahead_days: Annotated[int, Field(strict=True, ge=1, le=14)] | None = None
 
 
@@ -1653,7 +1702,7 @@ class OnboardingSelection(Contract):
     """One bot the person chose: which template builds it, and what they named and told it."""
     template: str = Field(min_length=1, max_length=80)
     display_name: str = Field(min_length=1, max_length=100)
-    instructions: str = Field(default="", max_length=20_000)
+    instructions: str = Field(default="", max_length=INSTRUCTIONS_MAX)
     # Who it reports to: `human:<id>` or a bot slug. Empty is the company owner.
     reports_to: str = Field(default="", max_length=120)
 
@@ -1711,16 +1760,21 @@ class AuthRejected(Contract):
 
 
 RequestTokens = Annotated[int, Field(ge=0, le=10**9)]
+# A request's three counts, and from a runner that can tell, whether it was the bot's own request (1) or a subagent's (0).
+RequestUsage = tuple[RequestTokens, RequestTokens, RequestTokens] | tuple[RequestTokens, RequestTokens, RequestTokens,
+                                                                          Literal[0, 1]]
 
 
 class RunUsagePart(Contract):
     """What a run spent, as its runner counted it: uncached input, cached input and output tokens.
     `requests` is the same three per model request, sent when the runner saw every request, so a model whose
-    long prompts cost more (providers.LONG_PROMPT) is priced request by request."""
+    long prompts cost more (providers.LONG_PROMPT) is priced request by request. A fourth count, when the runner
+    sends one, marks the bot's own requests (1) from its subagents' (0): the newest of its own is the session's
+    context size (`turns.prompt_tokens`)."""
     input_tokens: int = Field(default=0, ge=0, le=10**12)
     cached_tokens: int = Field(default=0, ge=0, le=10**12)
     output_tokens: int = Field(default=0, ge=0, le=10**12)
-    requests: list[tuple[RequestTokens, RequestTokens, RequestTokens]] | None = Field(default=None, max_length=2000)
+    requests: list[RequestUsage] | None = Field(default=None, max_length=2000)
     model: str = Field(default="", max_length=120)
     runtime: str = Field(default="", max_length=60)
     profile_used: str | None = Field(default=None, max_length=80)

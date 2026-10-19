@@ -82,11 +82,13 @@ def environment(tmp_path):
         token = tmp_path / ("token-%d" % index)
         token.write_text(TOKEN)
         token.chmod(0o600)
-        catalog = tmp_path / ("catalog-%d" % index)
-        if cards is None:
-            cards = [(ASSISTANT_CARD, ASSISTANT_AGENT), (BOTOPS_CARD, ""),
-                     (SUPPORT_CARD, SUPPORT_AGENT), (SALES_CARD, "")]
-        write_catalog(catalog, cards)
+        catalog = overrides.pop("catalog_dir", None)          # a test of the shipped catalog names it
+        if catalog is None:
+            catalog = tmp_path / ("catalog-%d" % index)
+            if cards is None:
+                cards = [(ASSISTANT_CARD, ASSISTANT_AGENT), (BOTOPS_CARD, ""),
+                         (SUPPORT_CARD, SUPPORT_AGENT), (SALES_CARD, "")]
+            write_catalog(catalog, cards)
         settings = Settings(db_path=tmp_path / ("hub-%d.db" % index), registry_dir=registry,
                             catalog_dir=catalog, local_owner_token_file=token,
                             **{"owner_email": OWNER_EMAIL, "enabled_providers": ("openai",), **COMPANY, **overrides})
@@ -150,6 +152,32 @@ def test_completing_twice_duplicates_neither_a_bot_nor_a_task(environment):
     assert len(tasks) == 1
 
 
+def test_a_new_company_starts_with_nothing_new_in_whats_new(environment, monkeypatch, tmp_path):
+    from backend import releases
+    monkeypatch.setenv("TICO_VERSION", "0.2.0")
+    monkeypatch.setattr(releases, "ROOT", tmp_path)
+    (tmp_path / "CHANGELOG.md").write_text("# Changelog\n## [0.2.0] - 2026-10-02\n- Search your tasks.\n"
+                                           "## [0.1.0] - 2026-10-01\n- Browse the team.\n")
+    api = environment()
+
+    def unread(headers):
+        return api.get("/api/v2/changelog", headers=headers).json()["unread_count"]
+    riley = as_person(api, "riley")
+    assert unread(signed_in()) == 2 and unread(riley) == 2
+    draft(api)
+    assert api.post("/api/v2/onboarding/complete", json={}, headers=signed_in()).status_code == 200
+    assert unread(signed_in()) == 0
+    assert api.get("/api/v2/config", headers=signed_in()).json()["changelog"] == {"unread_count": 0}
+    # Only the owner who set it up was caught up, and a later update is still news to them.
+    assert unread(riley) == 2
+    assert api.post("/api/changelog", json={"title": "Pipelines", "bullets": ["Pin a pipeline."]},
+                    headers=signed_in()).status_code == 200
+    assert unread(signed_in()) == 1
+    # Completing again catches up nothing more.
+    assert api.post("/api/v2/onboarding/complete", json={}, headers=signed_in()).status_code == 200
+    assert unread(signed_in()) == 1
+
+
 def test_only_the_owner_sets_the_company_up(environment):
     api = environment()
     riley = as_person(api, "riley")                # a bot administrator, not the owner
@@ -184,6 +212,24 @@ def test_the_owner_saves_a_revisioned_choice_and_a_stale_editor_is_refused(envir
     assert models["default"]["model"] == "claude-opus-5-5"
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM events WHERE action='providers.updated'").fetchone()[0] == 1
+
+
+def test_every_shipped_template_saves_as_the_wizard_sends_it(environment):
+    """The wizard sends each picked bot's instructions back as the catalog rendered them (ui/app/welcome.js). A shipped
+    AGENT.md longer than the setup save accepts stopped every owner on the team chart (BotOps, 24,048 characters,
+    against 20,000). The limit is the API's own: the save itself, and the model "Add from catalog" posts."""
+    from backend.models import BotDefinitionCreate
+    api = environment(catalog_dir=Settings.catalog_dir)
+    cards = api.get("/api/v2/templates", headers=signed_in()).json()["cards"]
+    assert any(card["template"] == "botops" for card in cards)
+    saved = api.put("/api/v2/setup", headers=signed_in(), json={
+        "names": {"company_name": "Acme", "app_name": "Atlas", "assistant_name": "Morgan"}, "answers": {},
+        "selected": {card["slug"]: {"template": card["template"], "display_name": card["name"],
+                                    "instructions": card["instructions"]} for card in cards}})
+    assert saved.status_code == 200, saved.text[:500]
+    assert len(saved.json()["selected"]) == len(cards)
+    for card in cards:
+        BotDefinitionCreate(display_name=card["name"], template=card["template"], instructions=card["instructions"])
 
 
 def test_the_team_is_created_with_no_provider_and_no_computer_and_starts_once_they_exist(environment):

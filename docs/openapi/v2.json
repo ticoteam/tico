@@ -2130,6 +2130,103 @@
         ]
       }
     },
+    "/api/v2/ceo-bot": {
+      "get": {
+        "summary": "Whether this install has the CEO Bot switch on (the Goal Manager shown as the CEO Bot, at the top of the chart)",
+        "operationId": "getCeoBotSwitch",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Goals"
+        ]
+      },
+      "post": {
+        "summary": "Owners and admins: turn the CEO Bot switch on or off for this install; no bot may. Only names and the chart change",
+        "operationId": "setCeoBotSwitch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CeoBotSwitch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Goals"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ]
+      }
+    },
     "/api/v2/changelog": {
       "get": {
         "summary": "Shipped changes with your read state; kind=product|activity|all (default all), unread=true, q search, since_version for releases newer than a version, and limit/offset paging. Only installed releases or earlier appear. unread_count counts all unread product entries, independently of filters; reading does not acknowledge them.",
@@ -2446,6 +2543,148 @@
         },
         "tags": [
           "Conversations"
+        ]
+      }
+    },
+    "/api/v2/company": {
+      "get": {
+        "summary": "The company's Vision and Description (the Company section at the top of Goals where the CEO Bot switch is on), and whether the caller may edit them",
+        "operationId": "getCompany",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanyResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Goals"
+        ]
+      },
+      "post": {
+        "summary": "The owner or an admin, on their own click: change the Vision and/or the Description; never a bot, the CEO Bot included. Each change is kept with who and when",
+        "operationId": "updateCompany",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompanyUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanyResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Goals"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ]
+      }
+    },
+    "/api/v2/company/history": {
+      "get": {
+        "summary": "Every change to the Vision and the Description, newest first, with who made it and when",
+        "operationId": "getCompanyHistory",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanyHistory"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Goals"
         ]
       }
     },
@@ -5990,6 +6229,77 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/Empty"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoalResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Goals"
+        ]
+      }
+    },
+    "/api/v2/goals/{gid}/why": {
+      "post": {
+        "summary": "A person who may edit the goal writes its Why (one line tying it to the vision) or clears it; a bot proposes one instead (kind goal_why)",
+        "operationId": "setGoalWhy",
+        "parameters": [
+          {
+            "name": "gid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Gid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GoalWhy"
               }
             }
           }
@@ -10651,6 +10961,135 @@
         },
         "tags": [
           "Session"
+        ]
+      }
+    },
+    "/api/v2/stale-review/accept-all": {
+      "post": {
+        "summary": "Accept the suggestions your Stale tickets card showed (their ids and task versions), each as your own change; a row whose task changed since is refused on its own and a row added since is left",
+        "operationId": "acceptAllStaleSuggestions",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StaleAcceptAll"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Needs you"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ]
+      }
+    },
+    "/api/v2/stale-review/{suggestion_id}": {
+      "post": {
+        "summary": "Accept or skip one suggestion on your Stale tickets card; accept sends the task version it showed (409 version_conflict otherwise)",
+        "operationId": "decideStaleSuggestion",
+        "parameters": [
+          {
+            "name": "suggestion_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Suggestion Id"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StaleDecision"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Needs you"
         ]
       }
     },
@@ -16646,6 +17085,20 @@
         ],
         "additionalProperties": true
       },
+      "CeoBotSwitch": {
+        "properties": {
+          "on": {
+            "type": "boolean",
+            "title": "On"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "on"
+        ],
+        "title": "CeoBotSwitch"
+      },
       "ChangelogEntry": {
         "type": "object",
         "properties": {
@@ -16936,6 +17389,141 @@
           "woke"
         ],
         "additionalProperties": true
+      },
+      "CompanyHistory": {
+        "type": "object",
+        "properties": {
+          "events": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "ts": {
+                  "type": "string"
+                },
+                "actor": {
+                  "type": "string"
+                },
+                "actor_name": {
+                  "type": "string"
+                },
+                "field": {
+                  "enum": [
+                    "vision",
+                    "description"
+                  ]
+                },
+                "old": {
+                  "type": "string"
+                },
+                "new": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "actor",
+                "actor_name",
+                "field",
+                "id",
+                "new",
+                "old",
+                "ts"
+              ],
+              "additionalProperties": true
+            }
+          }
+        },
+        "required": [
+          "events"
+        ],
+        "additionalProperties": true
+      },
+      "CompanyResult": {
+        "type": "object",
+        "properties": {
+          "company": {
+            "type": "object",
+            "properties": {
+              "vision": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              },
+              "updated": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "updated_by": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "updated_by_name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "description",
+              "updated",
+              "updated_by",
+              "updated_by_name",
+              "vision"
+            ],
+            "additionalProperties": true
+          },
+          "on": {
+            "type": "boolean",
+            "description": "Whether the CEO Bot switch is on: the section shows only then"
+          },
+          "may_edit": {
+            "type": "boolean",
+            "description": "The owner or an admin, never a bot"
+          }
+        },
+        "required": [
+          "company",
+          "may_edit",
+          "on"
+        ],
+        "additionalProperties": true
+      },
+      "CompanyUpdate": {
+        "properties": {
+          "vision": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 4000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vision"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 10000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "CompanyUpdate"
       },
       "Config": {
         "type": "object",
@@ -18092,6 +18680,22 @@
           },
           "status_by_name": {
             "type": "string"
+          },
+          "why": {
+            "type": "string",
+            "description": "One line tying it to the company's vision; empty: not tied to the vision"
+          },
+          "why_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "why_at": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -18554,7 +19158,8 @@
               "goal_kpi",
               "kpi_definition",
               "kpi_target",
-              "flag"
+              "flag",
+              "goal_why"
             ],
             "title": "Kind"
           },
@@ -18616,6 +19221,18 @@
             "maxLength": 1000,
             "title": "Note",
             "default": ""
+          },
+          "why": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 1000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Why"
           }
         },
         "additionalProperties": false,
@@ -18664,7 +19281,8 @@
               "goal_kpi",
               "kpi_definition",
               "kpi_target",
-              "flag"
+              "flag",
+              "goal_why"
             ]
           },
           "goal_id": {
@@ -18886,6 +19504,22 @@
               "status_by_name": {
                 "type": "string"
               },
+              "why": {
+                "type": "string",
+                "description": "One line tying it to the company's vision; empty: not tied to the vision"
+              },
+              "why_by": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "why_at": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "kpis": {
                 "type": "array",
                 "items": {
@@ -19082,6 +19716,22 @@
                 "status_by_name": {
                   "type": "string"
                 },
+                "why": {
+                  "type": "string",
+                  "description": "One line tying it to the company's vision; empty: not tied to the vision"
+                },
+                "why_by": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "why_at": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
                 "kpis": {
                   "type": "array",
                   "items": {
@@ -19226,6 +19876,19 @@
         "additionalProperties": false,
         "type": "object",
         "title": "GoalUpdate"
+      },
+      "GoalWhy": {
+        "properties": {
+          "why": {
+            "type": "string",
+            "maxLength": 1000,
+            "title": "Why",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "GoalWhy"
       },
       "GoalsNeedsYou": {
         "type": "object",
@@ -23967,6 +24630,75 @@
         "additionalProperties": false,
         "type": "object",
         "title": "SourceEdit"
+      },
+      "StaleAcceptAll": {
+        "properties": {
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/StaleShown"
+            },
+            "type": "array",
+            "maxItems": 500,
+            "minItems": 1,
+            "title": "Rows"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "rows"
+        ],
+        "title": "StaleAcceptAll",
+        "description": "Accept all on a Stale tickets card: the rows the card showed, each with its task's version then. A row added\nsince is not in the list and stays; a row whose task changed is refused on its own."
+      },
+      "StaleDecision": {
+        "properties": {
+          "decision": {
+            "type": "string",
+            "enum": [
+              "accept",
+              "skip"
+            ],
+            "title": "Decision",
+            "default": "accept"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "StaleDecision",
+        "description": "A person's answer to one row of their Stale tickets card (backend/stale_review.py): accept or skip. Accept names\nthe task version the row showed (409 version_conflict once the task changed), as a change by hand does."
+      },
+      "StaleShown": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Id"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "version"
+        ],
+        "title": "StaleShown"
       },
       "Storage": {
         "type": "object",

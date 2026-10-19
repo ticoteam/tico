@@ -193,6 +193,16 @@ def held(c, task_id):
     return bool(task_id) and str(metadata(c, "check-limited:" + task_id).get("until") or "") > H.now()
 
 
+def dropped(c, task_id):
+    """Whether a check a usage limit has held has left the board (done, closed or declined): its queued turn is let go
+    (Execution.hold_unrunnable) instead of retrying after every reset and running once on a finished task."""
+    from .repositories import metadata
+    if not task_id or not metadata(c, "check-limited:" + task_id):
+        return False
+    row = c.execute("SELECT status FROM tasks WHERE id=?", (task_id,)).fetchone()
+    return bool(row) and row[0] not in H.ACTIVE_STATUSES
+
+
 def apply(config, check):
     """The bot's config for a turn on its check subtask: the check's runtime and model, no fallback to another
     provider (a check that ran elsewhere would not be the check asked for), and a session of the subtask's own."""

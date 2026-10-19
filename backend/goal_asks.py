@@ -15,6 +15,7 @@ person above the bot on the org chart, as only a person decides one.
 import logging
 
 from .batch_work import isolated
+from . import ceo_bot
 from . import goals as G
 from . import kpis as K
 from . import views
@@ -76,6 +77,8 @@ def wanted(conn, owner_id, at=None):
             items.append({"kind": "kpi_stale", "ref": record["id"], "owner": who, "kpi_id": record["id"],
                           "kpi_name": record["name"], "freshness": state["freshness"], "reason": state["reason"]})
     for p in G.proposals(conn, "pending"):
+        if p["kind"] == "goal_why":
+            continue        # never one task per goal: Why lines are asked for as one bundled item
         goal = G.goal(conn, p["goal_id"]) if p["goal_id"] else None
         record = K.kpi(conn, p["kpi_id"]) if p["kpi_id"] else None
         if p["kind"] == "kpi_definition":
@@ -115,15 +118,15 @@ def _change(p, kpi_name):
     return p["kind"]
 
 
-def _ask(item):
-    """The task's title and body: the ask first, in plain words."""
+def _ask(item, manager="Goal Manager"):
+    """The task's title and body: the ask first, in plain words. `manager` is the bot's name (backend/ceo_bot.py)."""
     name, goal = item.get("kpi_name") or "", item.get("goal_title") or ""
     closes = "This closes by itself once "
     if item["kind"] == "kpi_stale":
         first = item["reason"].endswith("has no reading yet")
         title = f"Log the first {name} reading" if first else f"Log a new {name} reading"
         body = (f"{title}: {item['reason']}. Open {name} on the Goals page and add the latest number, or tell the "
-                f"Goal Manager on this task where it comes from. {closes}a fresh reading is logged.")
+                f"{manager} on this task where it comes from. {closes}a fresh reading is logged.")
         return title, body
     if item["kind"] == "kpi_red":
         title = f"Check why {name} is off track on {goal}"
@@ -204,7 +207,7 @@ def sync(conn, owner_id, at=None):
         if key in have:
             continue
         with isolated(conn, "goal_ask_file", ":".join(key)):
-            title, body = _ask(item)
+            title, body = _ask(item, ceo_bot.name(conn))
             if H.TITLE_LINT == "refuse" and H.lint_title(title):
                 # A KPI name the title lint refuses would be refused, and counted against the Goal Manager, every hour.
                 log.warning("Not asking %s: the title lint refuses its KPI's name", item["owner"])

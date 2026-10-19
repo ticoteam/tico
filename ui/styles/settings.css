@@ -193,6 +193,9 @@ p:empty{display:none}
 .prov .muted{font-size:var(--t-base);min-width:0}
 .prov-routed{gap:6px 14px;padding-top:10px}
 .prov-chip{display:inline-flex;align-items:center;gap:4px;font-size:var(--t-base)}
+/* The Tico AI Gateway connection, below the providers: its own key and Save (ui/app/settings-providers.js). */
+.prov-gateway{margin-top:var(--s5);padding-top:var(--s4);border-top:1px solid var(--line)}
+.prov-gateway-title{display:flex;align-items:center;gap:8px;margin:0 0 4px}
 .settings-bots-filters{display:flex;align-items:center;gap:8px;margin-bottom:10px;min-width:0}
 .settings-bots-filters .settings-inline-select{flex:0 1 auto;min-width:0;max-width:170px}
 .settings-filter-search{flex:1 1 160px;min-width:120px;max-width:280px;padding:7px 10px 7px 32px;font-size:var(--t-sm);border-radius:6px;background-position:10px center}
@@ -285,7 +288,7 @@ p:empty{display:none}
 .machine-bots .settings-cell-note{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .settings-machines td:nth-child(3){max-width:220px}
 .people-menu-check{display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:5px;font-size:var(--t-base);white-space:nowrap;cursor:pointer}.people-menu-check:hover{background:var(--surface2)}
-.machine-runtime-item{display:inline-flex;flex-wrap:wrap;align-items:center;gap:4px}.machine-rejected{flex-basis:100%;font-size:var(--t-sm)}
+.machine-runtime-item{display:inline-flex;flex-wrap:wrap;align-items:center;gap:4px}.machine-rejected{flex-basis:100%;font-size:var(--t-sm)}.machine-shared-login{display:block;flex-basis:100%;font-size:var(--t-sm)}
 .machine-signin{padding:1px 8px;font-size:var(--t-sm)}
 .machine-harnesses{display:flex;gap:5px 10px;flex-wrap:wrap;margin-top:6px}
 .machine-harness-item{display:inline-flex;align-items:center;gap:4px;flex-wrap:wrap}
@@ -540,3 +543,6 @@ fieldset.brepo>.repo-name+p{margin:-4px 0 4px 24px;font-size:var(--t-xs);line-he
 .trigger-deliveries{list-style:none;margin:0;padding:0;font-size:var(--t-sm)}
 .trigger-deliveries li{display:flex;flex-wrap:wrap;gap:6px;align-items:baseline;padding:3px 0}.trigger-deliveries code{overflow-wrap:anywhere}
 @media (max-width:640px){.trigger-list li{grid-template-columns:1fr}.trigger-actions{justify-content:flex-start}}
+/* Settings > Team: a team switch with its explanation beside it (Stale ticket review). */
+.settings-team-rule{display:flex;align-items:flex-start;gap:12px;cursor:pointer}
+.settings-team-rule > span{display:flex;flex-direction:column;gap:2px}
