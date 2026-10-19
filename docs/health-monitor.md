@@ -42,9 +42,11 @@ bad for the same thing (a computer on a release this server cannot work with, wh
 Only something the Health Monitor has not been told of starts a run:
 
 - **A new finding** opens a task for it.
-- **A finding whose severity rises** (from `warn` to `bad`) wakes it on its open task, or opens a task if that one is
-  finished.
-- **A finding back after its task was finished** (done, closed or declined) counts as new and opens a task again.
+- **A finding whose severity rises** (from `warn` to `bad`) wakes it on its task ("Worse now"), or opens a new task
+  if that one is closed or declined.
+- **A finding back after its task was finished** (done, closed or declined) counts as new: it wakes the Health Monitor
+  on that task while it is only done ("Back after its task was finished"), or opens a new task once it is closed or
+  declined.
 
 Seeing a finding again only counts: each hourly scan that sees it adds one to its count and moves its last-seen time,
 and nobody is woken. That holds while it stays there and when it goes away and comes back while its task is still

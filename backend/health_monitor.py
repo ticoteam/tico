@@ -10,8 +10,8 @@ one task for the Health Monitor through the same path as a watcher's events (bac
 counts: its count and last-seen time move on the finding, and nothing runs, whether it was still there an hour later
 or went away and came back while the Health Monitor's task for it is still open (that task gets a quiet note it reads
 on its next turn). Only a finding the bot has not been told of wakes it: a new one, one whose severity rises (it is
-woken on its open task), or one back after its task was finished (done, closed or declined), which counts as new and
-opens a task again. The bot's own watcher, `software/health-scan`, looks at the computer it runs on (processes using
+woken on its open task), or one back after its task was finished (done, closed or declined), which counts as new: it
+is woken on that task while it is only done, or gets a new one. The bot's own watcher, `software/health-scan`, looks at the computer it runs on (processes using
 CPU or memory while idle) the same way.
 
 A Tico bug goes to HQ as a support ticket with `report`: one ticket per signature, a message written here from the
