@@ -142,6 +142,8 @@ struct Pipe {
     stopper: super::Stopper,
     /// The held background tasks as Claude last listed them.
     held: Vec<Value>,
+    /// The tool call that started each background task, by task id (`task_started`).
+    task_calls: HashMap<String, String>,
     /// Since when the answered turn has waited on nothing but background shells, with no model work.
     idle_since: Option<Instant>,
     /// How long it may (Settings::background_wait).
@@ -176,6 +178,27 @@ impl Pipe {
     /// When the turn stops waiting on its shells, if it only waits on them.
     fn wait_deadline(&self) -> Option<Instant> {
         self.idle_since.zip(self.wait).map(|(since, wait)| since + wait)
+    }
+}
+
+/// How much of a background command a kept shell carries.
+const COMMAND_CHARS: usize = 300;
+
+/// What a command that only watches CI waits for: `gh pr checks <n> --watch` a pull request's checks, `gh run watch
+/// <id>` one workflow run. The hub's own check watch does the first without a process.
+pub fn ci_watch(command: &str) -> Option<Value> {
+    let words: Vec<&str> = command.split_whitespace().collect();
+    let at = words.windows(2).position(|w| w[0] == "gh" && (w[1] == "pr" || w[1] == "run"))?;
+    let rest = &words[at + 1..];
+    // One command, not a watch followed by more work.
+    if rest.iter().any(|w| ["&&", ";", "||", "|"].iter().any(|op| w.contains(op))) {
+        return None;
+    }
+    let number = |from: &[&str]| from.iter().find(|w| !w.is_empty() && w.chars().all(|c| c.is_ascii_digit())).map(|w| w.parse::<u64>().ok()).flatten();
+    match rest {
+        ["pr", "checks", args @ ..] if args.contains(&"--watch") => number(args).map(|n| json!({"pr": n})),
+        ["run", "watch", args @ ..] => number(args).map(|n| json!({"run": n})),
+        _ => None,
     }
 }
 
@@ -218,7 +241,13 @@ fn shells_of(claude: u32, tasks: &[Value]) -> Vec<Value> {
                 let id = t["task_id"].as_str().unwrap_or_default();
                 // The task's own shell, not a command inside it writing to the same file.
                 if !id.is_empty() && out.ends_with(&format!("/tasks/{id}.output")) && parent.get(&pid).is_none_or(|p| *p == claude) {
-                    found.push(json!({"task_id": id, "description": t["description"], "pid": pid, "output_file": out}));
+                    let mut kept = json!({"task_id": id, "description": t["description"], "pid": pid, "output_file": out});
+                    for key in ["command", "ci_watch"] {
+                        if !t[key].is_null() {
+                            kept[key] = t[key].clone();
+                        }
+                    }
+                    found.push(kept);
                 }
             }
         }
@@ -272,6 +301,8 @@ struct ToolCall {
     /// A backgrounded call (a subagent, a shell or a monitor) returns at once; it ends with its `task_notification`.
     background: bool,
     ended: bool,
+    /// A shell's or a monitor's command, clipped.
+    command: Option<String>,
 }
 
 struct Shared {
@@ -525,6 +556,7 @@ impl ClaudeHost {
             answered: false,
             stopper,
             held: vec![],
+            task_calls: HashMap::new(),
             idle_since: None,
             wait: None,
             pid: None,
@@ -728,6 +760,7 @@ impl ClaudeHost {
     fn end_waiting(&self) -> bool {
         let (pid, held, waited) = {
             let mut inner = self.inner();
+            let inner = &mut *inner;
             let Some(p) = inner.pipe.as_mut() else { return false };
             if !p.wait_deadline().is_some_and(|at| at <= Instant::now()) || p.kept.is_some() {
                 return false;
@@ -736,7 +769,15 @@ impl ClaudeHost {
                 p.idle_since = None;
                 return false;
             }
-            (p.pid, p.held.clone(), p.wait.unwrap_or_default())
+            let mut held = p.held.clone();
+            for t in held.iter_mut() {
+                let call = p.task_calls.get(t["task_id"].as_str().unwrap_or_default());
+                if let Some(c) = call.and_then(|c| inner.tools.get(c)).and_then(|c| c.command.clone()) {
+                    t["ci_watch"] = ci_watch(&c).unwrap_or(Value::Null);
+                    t["command"] = json!(c);
+                }
+            }
+            (p.pid, held, p.wait.unwrap_or_default())
         };
         let kept = pid.map(|pid| shells_of(pid, &held)).unwrap_or_default();
         let (tid, turn) = {
@@ -923,6 +964,11 @@ impl ClaudeHost {
     fn on_tools(&self, msg: &Value, tid: &str, turn: &str) {
         let parent = msg["parent_tool_use_id"].as_str().filter(|p| !p.is_empty());
         let blocks = || msg["message"]["content"].as_array().into_iter().flatten();
+        if msg["subtype"] == "task_started" {
+            if let (Some(task), Some(call), Some(p)) = (msg["task_id"].as_str(), msg["tool_use_id"].as_str(), self.inner().pipe.as_mut()) {
+                p.task_calls.insert(task.into(), call.into());
+            }
+        }
         match (msg["type"].as_str().unwrap_or_default(), msg["subtype"].as_str().unwrap_or_default()) {
             ("assistant", _) => {
                 for b in blocks().filter(|b| b["type"] == "tool_use") {
@@ -977,7 +1023,8 @@ impl ClaudeHost {
             if id.is_empty() || inner.tools.contains_key(id) {
                 return; // Claude repeats an assistant message as it grows; a call starts once
             }
-            let call = ToolCall { name: name.into(), parent: parent.map(String::from), subagent: subagent.clone(), background, ended: false };
+            let command = input["command"].as_str().map(|c| c.chars().take(COMMAND_CHARS).collect());
+            let call = ToolCall { name: name.into(), parent: parent.map(String::from), subagent: subagent.clone(), background, ended: false, command };
             inner.tools.insert(id.into(), call);
         }
         // A tool server's arguments are its own: a `path` or `command` there can carry anything.
@@ -1551,6 +1598,16 @@ mod tests {
         unsafe { libc::kill(pid, libc::SIGKILL) };
         assert!(!got.iter().any(|e| e["background_wait"].is_object()), "{got:?}");
         assert!(took >= Duration::from_secs(1), "{took:?}");
+    }
+
+    #[test]
+    fn only_a_bare_ci_watch_is_one() {
+        assert_eq!(ci_watch("gh pr checks 958 --watch --interval 30"), Some(json!({"pr": 958})));
+        assert_eq!(ci_watch("cd /w && gh pr checks --watch 958"), Some(json!({"pr": 958})));
+        assert_eq!(ci_watch("gh run watch 39278780247 --exit-status"), Some(json!({"run": 39278780247_u64})));
+        assert_eq!(ci_watch("gh pr checks 958"), None);
+        assert_eq!(ci_watch("gh pr checks 958 --watch && gh pr merge 958 --squash"), None);
+        assert_eq!(ci_watch("python3 -m pytest -q"), None);
     }
 
     #[tokio::test]
