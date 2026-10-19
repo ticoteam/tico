@@ -1,7 +1,7 @@
 """The Health Monitor (backend/health_monitor.py, docs/health-monitor.md): off until the owner turns it on, a scan that
-wakes it only for a finding the last scan did not have, a day of quiet when a finding comes straight back, and one
-Tico bug report per signature that carries the finding and the redacted diagnostics, never task text, with a message
-on the same ticket when it comes back."""
+wakes it only for a new finding, one whose severity rose or one back after its task was finished (seeing a finding
+again counts and starts no run), and one Tico bug report per signature that carries the finding and the redacted
+diagnostics, never task text, with a message on the same ticket when it comes back."""
 
 import calendar
 import json
@@ -63,10 +63,21 @@ def monitor_tasks(api):
                                            ("bot:" + health_monitor.SLUG,))]
 
 
-def notices(api, task_id):
+def notices(api, task_id, start="Seen again"):
     with api.app.state.store.read() as c:
         return c.execute("SELECT count(*) FROM messages m JOIN tasks t ON t.conversation_id=m.conversation_id "
-                         "WHERE t.id=? AND m.body LIKE 'Seen again%'", (task_id,)).fetchone()[0]
+                         "WHERE t.id=? AND m.body LIKE ?", (task_id, start + "%")).fetchone()[0]
+
+
+def wakes(api):
+    """Runs queued for the Health Monitor: the jobs its messages started (the runs token saving 1/9 records)."""
+    with api.app.state.store.read() as c:
+        return c.execute("SELECT count(*) FROM jobs WHERE bot=?", (health_monitor.SLUG,)).fetchone()[0]
+
+
+def finding(api, key):
+    with api.app.state.store.read() as c:
+        return dict(c.execute("SELECT * FROM health_findings WHERE key=?", (key,)).fetchone())
 
 
 def runner_errors(api, runner, lines):
@@ -119,22 +130,113 @@ def test_a_finding_wakes_it_once_is_filed_once_without_task_text_and_a_repeat_go
     runner_errors(api, runner, [])
     scan(api)                                                             # gone
     runner_errors(api, runner, STREAM)
-    assert scan(api) == []                                                # back within a day: counted, wakes nothing
-    assert len(monitor_tasks(api)) == 1 and notices(api, task["id"]) == 0
-    with api.app.state.store.read() as c:
-        assert c.execute("SELECT occurrences FROM health_findings WHERE key=?", (key,)).fetchone()[0] == 2
+    assert scan(api) == []                                    # back while its task is open: counted, wakes nothing
+    assert len(monitor_tasks(api)) == 1 and notices(api, task["id"]) == 1
+    assert finding(api, key)["occurrences"] == 3                          # seen by three scans
     repeat = api.post(f"/api/v2/health-monitor/findings/{key}/report", json={}, headers=bot).json()
     assert repeat["comment"] and len(hq.tickets) == 1
     (ticket,) = hq.tickets.values()
-    assert [m["body"][:37] for m in ticket["messages"]] == ["[Health Monitor] Seen again (2 times)"]
-    with api.app.state.store.transaction() as c:                          # a day after its last wake it wakes again
-        c.execute("UPDATE health_findings SET last_woke=?, present=0 WHERE key=?",
-                  (H.shift(H.now(), hours=-25), key))
+    assert [m["body"][:37] for m in ticket["messages"]] == ["[Health Monitor] Seen again (3 times)"]
+    with api.app.state.store.transaction() as c:          # a day since its last wake no longer wakes it again
+        c.execute("UPDATE health_findings SET last_woke=? WHERE key=?", (H.shift(H.now(), hours=-25), key))
     runner_errors(api, runner, [])
     scan(api)
     runner_errors(api, runner, STREAM)
+    assert scan(api) == [] and len(monitor_tasks(api)) == 1 and notices(api, task["id"]) == 2
+
+
+def test_a_finding_seen_again_counts_and_starts_no_run(environment):
+    api, runner = built(environment)
+    api.post("/api/v2/health-monitor/turn-on", json={}, headers=signed_in())
+    runner_errors(api, runner, STREAM)
+    key = "event_stream:" + runner["runner_id"]
+    before = wakes(api)
+    assert scan(api) == [key] and wakes(api) == before + 1                # new: one run
+    (task,) = monitor_tasks(api)
+    first = finding(api, key)
+    assert first["occurrences"] == 1 and first["severity"] == "warn"
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE health_findings SET last_seen=? WHERE key=?", (H.shift(H.now(), hours=-1), key))
+    assert scan(api) == []                                                # still there an hour later
+    again = finding(api, key)
+    assert again["occurrences"] == 2 and again["last_seen"] > H.shift(H.now(), minutes=-1)
+    runner_errors(api, runner, [])
+    scan(api)                                                             # gone, its task still open
+    assert finding(api, key)["present"] == 0
+    runner_errors(api, runner, STREAM)
+    assert scan(api) == [] and wakes(api) == before + 1                   # back: counted, no run for anyone
+    assert finding(api, key)["occurrences"] == 3 and len(monitor_tasks(api)) == 1
+    with api.app.state.store.read() as c:                                 # a quiet note the bot reads next turn
+        (note,) = c.execute("SELECT m.body,m.refs_json FROM messages m JOIN tasks t ON t.conversation_id=m.conversation_id "
+                            "WHERE t.id=? AND m.body LIKE 'Seen again%'", (task["id"],)).fetchall()
+    assert note["body"].startswith("Seen again (3 times, last ") and json.loads(note["refs_json"])["quiet"]
+    shown = api.get("/api/v2/health-monitor", headers=signed_in()).json()["findings"]
+    assert [(f["key"], f["occurrences"], f["severity"]) for f in shown] == [(key, 3, "warn")]
+    assert shown[0]["last_seen"] == finding(api, key)["last_seen"]
+
+
+def test_a_finding_back_after_its_task_was_finished_counts_as_new(environment):
+    api, runner = built(environment)
+    api.post("/api/v2/health-monitor/turn-on", json={}, headers=signed_in())
+    runner_errors(api, runner, STREAM)
+    key = "event_stream:" + runner["runner_id"]
     assert scan(api) == [key]
-    assert len(monitor_tasks(api)) == 1 and notices(api, task["id"]) == 1
+    (task,) = monitor_tasks(api)
+    with api.app.state.store.transaction() as c:                          # the bot finished it ("Cleared on its own")
+        c.execute("UPDATE tasks SET status='done' WHERE id=?", (task["id"],))
+    assert scan(api) == []                                                # still there: its task being done says nothing
+    runner_errors(api, runner, [])
+    scan(api)
+    runner_errors(api, runner, STREAM)
+    before = wakes(api)
+    assert scan(api) == [key] and wakes(api) == before + 1                # back after it was cleared: new, it runs
+    assert notices(api, task["id"], "Back after its task was finished (seen 3 times)") == 1
+    assert notices(api, task["id"]) == 0
+    with api.app.state.store.transaction() as c:                          # a closed task: a new one
+        c.execute("UPDATE tasks SET status='closed' WHERE id=?", (task["id"],))
+    runner_errors(api, runner, [])
+    scan(api)
+    runner_errors(api, runner, STREAM)
+    assert scan(api) == [key] and wakes(api) == before + 2
+    old, new = monitor_tasks(api)
+    assert old["id"] == task["id"] and "Seen: 4 time(s)" in new["body"]
+
+
+def test_a_finding_whose_severity_rises_wakes_it(environment, monkeypatch):
+    api, _ = built(environment)
+    api.post("/api/v2/health-monitor/turn-on", json={}, headers=signed_in())
+    level = {"now": "warn"}
+    item = lambda: health_monitor._finding("runner_outdated:r1", "runner_outdated", health_monitor.SETUP,
+                                           "Studio Mac runs an older Tico release", "Release 0.0.9.", "Update it.",
+                                           severity=level["now"])
+    monkeypatch.setattr(health_monitor, "findings", lambda c, settings: [item()])
+    key = "runner_outdated:r1"
+    assert scan(api) == [key]
+    (task,) = monitor_tasks(api)
+    assert "Severity: warn" in task["body"]
+    before = wakes(api)
+    level["now"] = "bad"
+    assert scan(api) == [key] and wakes(api) == before + 1                # worse: woken on its open task
+    assert notices(api, task["id"], "Worse now (bad, was warn") == 1 and len(monitor_tasks(api)) == 1
+    assert scan(api) == [] and wakes(api) == before + 1                   # still bad: counted only
+    level["now"] = "warn"
+    assert scan(api) == [] and finding(api, key)["severity"] == "warn"    # better: counted, nobody woken
+    level["now"] = "bad"
+    assert scan(api) == [key] and wakes(api) == before + 2                # worse again
+    assert finding(api, key)["occurrences"] == 5
+
+
+@pytest.mark.parametrize("release,severity", [("0.0.9", "bad"), ("0.3.40", "warn")])
+def test_a_computer_on_a_release_the_server_cannot_work_with_is_bad(environment, monkeypatch, release, severity):
+    monkeypatch.setenv("TICO_VERSION", "0.3.45")
+    api, runner = built(environment)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runners SET last_seen=? WHERE id=?", (H.now(), runner["runner_id"]))
+        c.execute("INSERT INTO runner_versions(runner_id,release,reported) VALUES(?,?,?) ON CONFLICT(runner_id) "
+                  "DO UPDATE SET release=excluded.release,update_state='',update_error=''",
+                  (runner["runner_id"], release, H.now()))
+        found = {f["check_id"]: f for f in health_monitor.findings(c, api.app.state.store.settings)}
+    assert found["runner_outdated"]["severity"] == severity
 
 
 def test_event_stream_counts_drops_and_not_the_ones_a_server_restart_caused(environment, monkeypatch):

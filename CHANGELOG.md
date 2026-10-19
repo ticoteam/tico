@@ -86,6 +86,11 @@ All notable changes to Tico are recorded here. The format follows
   before this keeps today's behaviour ([sessions](docs/sessions.md)).
 
 ### Changed
+- **Health Monitor: seeing a finding again only counts**: each hourly scan that sees a finding adds one to its count
+  and moves its last-seen time, and no bot runs for it. Only a new finding, one whose severity rises (a computer on a
+  release the server cannot work with is `bad`, an older one `warn`), or one back after its task was finished wakes
+  the Health Monitor. **Settings > Health** shows each finding as "seen N times, last ...". A finding no longer
+  wakes it again just because a day has passed since its last wake.
 - **Updates cards use icons**: Reply, Mark unread (or read) and Archive (Restore in the Archive) are icons, named by a
   tooltip, a long press on a phone and screen readers. A card's reports open from **8** and a chevron at the right end
   of its icon row, in place of the **8 reports** row under it and its broken glyph, and open reports hang from the

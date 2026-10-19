@@ -36,9 +36,21 @@ container using 50% CPU or 2 GB of memory in two runs in a row (`HEALTH_BUSY_CPU
 model CLIs that run turns.
 
 Each finding has a **key** (what and where, on this install) and a **signature** (`hm-` and 12 hex digits: what, without
-where, the same on every install). A finding the last scan did not have opens a task for the Health Monitor, or wakes it on
-the task it has; a finding still there an hour later says nothing; one that goes away and comes back wakes it again,
-unless it is back within a day of its last wake, in which case it only counts.
+where, the same on every install). Each finding also has a **severity**, `warn` or `bad`: `bad` where the Health page says
+bad for the same thing (a computer on a release this server cannot work with, whose bots are paused), `warn` otherwise.
+
+Only something the Health Monitor has not been told of starts a run:
+
+- **A new finding** opens a task for it.
+- **A finding whose severity rises** (from `warn` to `bad`) wakes it on its open task, or opens a task if that one is
+  finished.
+- **A finding back after its task was finished** (done, closed or declined) counts as new and opens a task again.
+
+Seeing a finding again only counts: each hourly scan that sees it adds one to its count and moves its last-seen time,
+and nobody is woken. That holds while it stays there and when it goes away and comes back while its task is still
+open; then the task gets a quiet note ("Seen again (N times, last ...)") the Health Monitor reads on its next turn
+there. **Settings > Health** shows each finding as "seen N times, last ..." (`occurrences` and `last_seen` in
+`GET /api/v2/health-monitor`, with its `severity`).
 
 ## What it does with a finding
 
