@@ -139,6 +139,10 @@ class Settings:
     owner_name: str = ""
     compose_project: str = "tico"
     server_network: str = "tico_default"
+    # TICO_HOSTED: a Tico our team runs for a company ("own" for our own team, "invited" for an invited company), set
+    # by the recommended preset; empty is self-hosted. Both behave the same for now: the person has no terminal on the
+    # server, so Settings > Computers signs models in with the provider's link and code only (ui/model-login.js).
+    hosted: str = ""
     access_issuer: str = ""
     access_audience: str = ""
     # Empty means Cloudflare Access's default JWKS path under the issuer.
@@ -268,6 +272,9 @@ class Settings:
     rehearsal: bool = False
 
     def __post_init__(self):
+        self.hosted = self.hosted.strip()
+        if self.hosted not in ("", "own", "invited"):
+            raise ValueError("TICO_HOSTED is own or invited, or unset for a self-hosted Tico")
         if self.screen_relay_url:
             relay = urlparse(self.screen_relay_url)
             if (len(self.screen_relay_key) < 32 or relay.scheme != "http" or not relay.hostname
@@ -334,7 +341,7 @@ class Settings:
                 "assistant_bot": self.assistant_bot, "public_url": self.public_url,
                 "runner_url": self.runner_url, "github_owner": self.github_owner,
                 "compose_project": self.compose_project, "server_network": self.server_network,
-                "local": self.local_signin, "release": self.release_id,
+                "local": self.local_signin, "hosted": self.hosted, "release": self.release_id,
                 "owner_email": self.owner_email, "owner_name": self.owner_name, "demo": self.demo, "rehearsal": self.rehearsal}
 
     def allows_origin(self, origin):
@@ -388,6 +395,7 @@ class Settings:
             owner_name=os.environ.get("TICO_OWNER_NAME", "").strip(),
             compose_project=os.environ.get("TICO_COMPOSE_PROJECT", "tico"),
             server_network=os.environ.get("TICO_SERVER_NETWORK", "tico_default"),
+            hosted=os.environ.get("TICO_HOSTED", ""),
             runner_url=os.environ.get("TICO_RUNNER_URL", "").rstrip("/"),
             screen_relay_url=os.environ.get("TICO_SCREEN_RELAY_URL", ""),
             screen_relay_key=os.environ.get("TICO_SCREEN_RELAY_KEY", ""),
