@@ -382,6 +382,49 @@ def test_a_ticket_with_no_roadmap_item_tells_its_requester_on_the_ticket(api):
         assert [to for _, to, _, _ in _notices(c, secret['id'])] == ['human:ben']
 
 
+def test_a_blocked_notice_is_read_only_by_who_may_read_the_blocker_it_names(api):
+    """A private Dev ticket between two bots has a person as its guest. The notice that names its blocker goes to
+    the requester, who reads the blocker; the guest reads the ticket but not that notice, and a blocker made
+    private after its notice takes the notice with it."""
+    from backend import task_relations as TR
+    dev = _dev_tickets(api)
+    with api.app.state.store.transaction() as c:
+        ticket = H.task_create(c, 'bot:cpo', 'Zip triage', 'Build it.', 'bot:ops', type=dev['id'], private=True,
+                               lint=False)
+        H.task_reach(c, 'bot:ops', ticket, 'human:ben')
+        secret = H.task_create(c, 'bot:cpo', 'Vendor breach review', 'Between the bots.', 'bot:ops', private=True,
+                               lint=False)
+        TR.add_blocker(c, 'bot:ops', ticket['id'], secret['id'])
+        later = H.task_create(c, 'human:ana', 'Zip vendor contract', 'Shared for now.', 'bot:cpo', private=False,
+                              lint=False)
+        TR.add_blocker(c, 'bot:ops', ticket['id'], later['id'])
+        number = H.task(c, ticket['id'])['number']
+
+    def comments(token):
+        r = api.get(f"/api/v2/tasks/{ticket['id']}/comments", headers=headers(token))
+        assert r.status_code == 200, r.text
+        return r.text
+
+    assert api.get('/api/v2/tasks/' + ticket['id'], headers=headers('ben-test')).status_code == 200
+    assert api.get('/api/v2/tasks/' + secret['id'], headers=headers('ben-test')).status_code in (403, 404)
+    assert 'Vendor breach' not in comments('ben-test') and 'Zip vendor contract' in comments('ben-test')
+    with api.app.state.store.read() as c:
+        sent = _notices(c, ticket['id'])
+        assert [(to, body) for _, to, body, _ in sent] == [
+            ('bot:cpo', f'Blocked: #{number} Zip triage. Step: On Deck. Waits on Vendor breach review (Open). PR: none.'),
+            ('bot:cpo', f'Blocked: #{number} Zip triage. Step: On Deck. Waits on Zip vendor contract (Open). PR: none.')]
+        assert [refs['blocker'] for _, _, _, refs in sent] == [secret['id'], later['id']]
+        assert [m['body'] for m in H.task_comments(c, ticket['id'], actor='bot:cpo')] == [body for _, _, body, _ in sent]
+    assert 'Vendor breach' not in api.get('/api/v2/tasks/' + ticket['id'], headers=headers('ben-test')).text
+
+    # The blocker's audience narrows after its notice: the guest no longer reads it; the requester still does.
+    with api.app.state.store.transaction() as c:
+        H.task_update(c, 'bot:cpo', later['id'], private=True)
+    assert 'Zip vendor contract' not in comments('ben-test')
+    with api.app.state.store.read() as c:
+        assert len(H.task_comments(c, ticket['id'], actor='bot:cpo')) == 2
+
+
 def test_visibility_defaults_do_not_rewrite_tasks_and_private_never_publishes(api):
     draft = post(api, 'tasks', {'owner': 'cpo', 'title': 'Research search', 'body': 'Internal draft',
                                'type': 'Product roadmap'})

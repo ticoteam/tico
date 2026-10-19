@@ -39,13 +39,16 @@ def _pr(conn, row):
     return found[0] if found else 'none'
 
 
+def _names_blocker(conn, kind, blocker, reader):
+    return kind == 'blocked' and bool(blocker) and (reader is None or _H().task_private_readable(conn, reader, blocker))
+
+
 def text(conn, kind, row, blocker=None, reader=None):
     """The notice for `row`. A blocker the reader may not read is named only as a private task."""
-    H = _H()
     fields = {'ticket': _name(row), 'step': _step(conn, row), 'pr': _pr(conn, row)}
     if kind == 'blocked':
-        fields['blocker'] = (f'{_name(blocker)} ({_step(conn, blocker)})'
-                             if reader is None or H.task_private_readable(conn, reader, blocker) else 'a private task')
+        fields['blocker'] = (f'{_name(blocker)} ({_step(conn, blocker)})' if _names_blocker(conn, kind, blocker, reader)
+                             else 'a private task')
     return TEMPLATES[kind].format(**fields)
 
 
@@ -82,6 +85,10 @@ def post(conn, kind, row, actor=None, blocker=None):
         if not conv:
             continue
         refs = {'task': where['id'], 'comment': True, 'quiet': True, 'task_notice': kind, 'ticket': row['id']}
+        if _names_blocker(conn, kind, blocker, to):
+            # Its name and step are in the text, so the comment is read only by who may read the blocker too, then
+            # and later (task_privacy.message_tasks): not a guest of the ticket, nor anyone after the blocker narrows.
+            refs['blocker'] = blocker['id']
         msg = H._write_message(conn, H.KEEPER, to, text(conn, kind, row, blocker, reader=to), conv, 'say', refs,
                                None, None)
         sent.append(msg['id'])
