@@ -1661,6 +1661,98 @@ mod tests {
         std::fs::remove_dir_all(dir).ok();
     }
 
+    /// A server that answers `{}` to every request (events: acknowledged) and keeps each one: (method, path, JSON body).
+    async fn recording_server() -> (String, Arc<Mutex<Vec<(String, String, Value)>>>, tokio::task::JoinHandle<()>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let seen = Arc::new(Mutex::new(vec![]));
+        let kept = seen.clone();
+        let server = tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else { return };
+                let kept = kept.clone();
+                tokio::spawn(async move {
+                    let mut request = Vec::new();
+                    let mut buffer = [0u8; 8192];
+                    let head = loop {
+                        if let Some(at) = request.windows(4).position(|part| part == b"\r\n\r\n") {
+                            break at;
+                        }
+                        let n = socket.read(&mut buffer).await.unwrap_or(0);
+                        if n == 0 {
+                            return;
+                        }
+                        request.extend_from_slice(&buffer[..n]);
+                    };
+                    let text = String::from_utf8_lossy(&request[..head]).to_string();
+                    let length = text.lines().find_map(|l| l.to_ascii_lowercase().strip_prefix("content-length:").map(|v| v.trim().parse::<usize>().unwrap_or(0))).unwrap_or(0);
+                    while request.len() < head + 4 + length {
+                        let n = socket.read(&mut buffer).await.unwrap_or(0);
+                        if n == 0 {
+                            break;
+                        }
+                        request.extend_from_slice(&buffer[..n]);
+                    }
+                    let mut first = text.lines().next().unwrap_or_default().split_whitespace();
+                    let (method, path) = (first.next().unwrap_or_default().to_string(), first.next().unwrap_or_default().to_string());
+                    let body = serde_json::from_slice(&request[head + 4..]).unwrap_or(Value::Null);
+                    // Events are acknowledged up to the last one sent, as the server does.
+                    let answer = match body["events"].as_array().and_then(|e| e.last()) {
+                        Some(last) => json!({"ack_seq": last["seq"]}),
+                        None => json!({}),
+                    }
+                    .to_string();
+                    kept.lock().unwrap().push((method, path, body));
+                    let response = format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{answer}", answer.len());
+                    let _ = socket.write_all(response.as_bytes()).await;
+                    let _ = socket.shutdown().await;
+                });
+            }
+        });
+        (url, seen, server)
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_held_logins_fallback_that_fails_before_it_starts_ends_the_turn_unstarted_on_the_hold() {
+        // The server held the bot's own Claude login and sent the turn to its fallback, which cannot start on this
+        // computer (no such harness here): the turn is never acknowledged, and its completion is the one the server
+        // settles unstarted and requeues (backend/tests/test_login_holds.py replays it from the shared fixture).
+        let dir = std::env::temp_dir().join(format!("tico-held-unacked-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(dir.join("projects")).unwrap();
+        let (url, seen, server) = recording_server().await;
+        let path = dir.join("runner.json");
+        std::fs::write(&path, json!({"url": url, "token": "t", "runner_id": "r1", "projects_dir": dir.join("projects")}).to_string()).unwrap();
+        let config = crate::config::Config::load(&path).unwrap();
+        let client = crate::client::Client::new(&config.url(), &config.token(), 5, 0).unwrap();
+        let runner = Arc::new(Runner::new(config, client, crate::state::State::open(&dir.join("state")).unwrap()));
+        let fixture: Value = serde_json::from_str(include_str!("../tests/fixtures/held_fallback_unstarted.json")).unwrap();
+        let attempt = json!({"id": "a-held", "job_id": "j1", "bot": "ops", "token": "turn-token", "lease_seconds": 120,
+                             "conversation": {"id": "c1"}, "message": {"refs": {}}, "config": fixture["config"]});
+        let ran = tokio::time::timeout(Duration::from_secs(60), runner.clone().execute(attempt)).await;
+        let seen = seen.lock().unwrap().clone();
+        assert!(ran.is_ok(), "the turn did not end: {:?}", seen.iter().map(|(m, p, _)| format!("{m} {p}")).collect::<Vec<_>>());
+        ran.unwrap().unwrap();
+        server.abort();
+        std::fs::remove_dir_all(&dir).ok();
+
+        let posted = |end: &str| seen.iter().filter(|(m, p, _)| m == "POST" && p.ends_with(end)).map(|(_, _, b)| b.clone()).collect::<Vec<_>>();
+        assert!(posted("/attempts/a-held/started").is_empty(), "the fallback never acknowledged the turn: {seen:?}");
+        let completions = posted("/attempts/a-held/complete");
+        assert_eq!(completions.len(), 1, "{seen:?}");
+        let sent = &completions[0];
+        for (k, v) in fixture["completion"].as_object().unwrap() {
+            assert_eq!(&sent[k], v, "completion field {k}: {sent}");
+        }
+        assert!(sent.get("fallback").is_none(), "no fallback ran the turn: {sent}");
+        // The diagnostic and the limit error, in order, as the server's login_holds.chain reads them.
+        let events: Vec<Value> = seen.iter().filter(|(_, p, _)| p.ends_with("/attempts/a-held/events"))
+            .flat_map(|(_, _, b)| b["events"].as_array().cloned().unwrap_or_default()).collect();
+        let replayed: Vec<Value> = events.iter().filter(|e| ["diagnostic", "error"].contains(&e["kind"].as_str().unwrap_or_default()))
+            .map(|e| json!({"kind": e["kind"], "payload": e["payload"]})).collect();
+        assert_eq!(json!(replayed), fixture["events"], "{events:?}");
+    }
+
     #[test]
     fn meter_reports_uncached_input() {
         let mut m = Meter::default();

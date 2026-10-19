@@ -277,7 +277,9 @@ or the named time has passed, 30 minutes, then 60, then two hours for each limit
 holds, no bot starts a run on that login: a bot whose fallback (its own, or the company's default) is signed in on
 that computer and not held itself runs there at once, and the runner never tries the held login (the run's note says
 *claude login held (usage limit) until 02:40 UTC; running this turn on codex*); only a bot with no such fallback
-waits. Every login a turn ran out on is held, an intermediate fallback's too, even when a later one finished the
+waits. A fallback that turns out not to be ready, or fails before it starts, ends the run unstarted: the run goes back
+to the queue, the bot waits out the hold instead of being sent there again, and that fallback is not held, since it
+never ran. Every login a turn ran out on is held, an intermediate fallback's too, even when a later one finished the
 turn; a subscription profile that shares the computer's own sign-in counts as that one login; and only a run claimed
 after a hold began can end it by working, so a run that started earlier and finishes later does not. When it ends, one queued run goes first; the others on the login wait for
 its result, so a login sees one try per window however many runs wait. **Settings → Health** says whose login it is

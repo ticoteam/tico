@@ -271,7 +271,10 @@ def after_turn(c, runner_id, bot, profile, runtime, body, attempt_id, hit):
     its own notice names, whatever the turn's outcome: an intermediate fallback that ran out stays held after a later
     one finishes the turn. A login the turn completed on is cleared, but only by a turn claimed after its hold began:
     a lane leased before the limit says nothing about the login now."""
-    steps = chain(limit_texts(c, attempt_id), runtime, body.fallback)
+    # Sent away from its held login, no fallback ran it (none was ready, or it failed before it acknowledged the
+    # turn): the turn ran nowhere, so no login met a limit; the hop its notes name only failed to start.
+    unstarted = body.primary_held and body.limited and not body.fallback
+    steps = [[runtime, None, False]] if unstarted else chain(limit_texts(c, attempt_id), runtime, body.fallback)
     if body.primary_limited:
         steps[0][2] = True
     if body.limited:
@@ -293,9 +296,8 @@ def after_turn(c, runner_id, bot, profile, runtime, body, attempt_id, hit):
             old = get(c, runner_id, login, rt)
             if old and claimed >= (old.get("since") or ""):
                 clear(c, runner_id, login, rt)
-    if body.primary_held and not body.fallback and body.limited:
-        # Sent away from its held login, it found no fallback ready here after all: the bot waits out this hold
-        # rather than being sent to that fallback again (fallback_choice).
+    if unstarted:
+        # The bot waits out this hold rather than being sent to that fallback again (fallback_choice).
         own = canonical(c, runner_id, profile, runtime)
         hold = get(c, runner_id, own, runtime)
         if hold:

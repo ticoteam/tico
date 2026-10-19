@@ -1,6 +1,7 @@
 """A usage limit holds the provider login, survives restarts, and lets one probe turn through per hold window."""
 import json
 from datetime import datetime, timezone
+from pathlib import Path
 
 from backend import login_holds
 from backend.store import H
@@ -404,6 +405,34 @@ def test_a_turn_with_no_fallback_ready_after_all_settles_unstarted_and_the_bot_w
     assert (after["until"], after["streak"], after["stuck"]) == (hold["until"], 1, ["ops"])
     signed_in(api, machine, ["ops", "finance"], ["codex"])
     assert claim(api, machine) is None                          # not sent to that fallback again this window
+
+
+def test_the_runners_report_of_a_fallback_that_never_started_requeues_the_job_and_holds_no_other_login(api, monkeypatch):
+    # Exactly what the runner sends when a held login's fallback fails before it acknowledges the turn: its own test
+    # drives that turn and checks it against the same fixture (runner-rs/src/execute.rs).
+    sent = json.loads((Path(__file__).resolve().parents[2] / "runner-rs/tests/fixtures/held_fallback_unstarted.json").read_text())
+    machine = two_bots(api, monkeypatch)
+    for n in range(2):
+        post(api, "tasks", {"owner": "ops", "title": f"Started nowhere {n}", "body": "Please do it."})
+    limit(api, machine, claim(api, machine))
+    with api.app.state.store.read() as c:
+        hold = login_holds.get(c, machine["runner_id"], "", "fake")
+    at(monkeypatch, "2026-10-19T01:50:00.000000Z", api)
+    signed_in(api, machine, ["ops", "finance"], ["codex"])
+    moved = claim(api, machine)
+    assert moved["config"]["primary_held"]
+    post(api, f"attempts/{moved['id']}/events", {"events": [{"seq": n, **e} for n, e in enumerate(sent["events"], 1)]},
+         machine["token"])
+    post(api, f"attempts/{moved['id']}/complete", {**sent["completion"], "last_seq": len(sent["events"])}, machine["token"])
+    with api.app.state.store.read() as c:
+        after = login_holds.get(c, machine["runner_id"], "", "fake")
+        assert c.execute("SELECT state FROM jobs WHERE id=?", (moved["job_id"],)).fetchone()[0] == "queued"
+        # The fallback never ran, so it met no limit: only the bot's own login is held, as it was.
+        assert [r[0] for r in c.execute("SELECT key FROM registry_metadata WHERE key LIKE 'login-hold:%'")] == \
+            [f"login-hold:{machine['runner_id']}||fake"]
+    assert (after["until"], after["streak"], after["stuck"]) == (hold["until"], 1, ["ops"])
+    signed_in(api, machine, ["ops", "finance"], ["codex"])
+    assert claim(api, machine) is None                          # waits out the hold, not leased again and again
 
 
 def test_profiles_sharing_the_computers_own_login_share_its_hold_and_probe(api, monkeypatch):
