@@ -51,6 +51,11 @@ All notable changes to Tico are recorded here. The format follows
   accounts and changes anything on it.
 
 ### Fixed
+- **Updates tree keeps archived cards out after a reload**: a card you archive on Updates no longer comes back in
+  the tree when the page reloads, and Restore brings it back for good. Archive stays yours alone: others still see the
+  card. A manager whose own card you archived stays in the tree with "No update yet" and their reports below. The
+  tree endpoint (`GET /api/v2/updates/tree`) now applies the same archive rule as the Inbox, so an explicit past `day`
+  leaves out that day's cards a newer day has replaced, unless you restored them.
 - A computer's performance report no longer holds the database's write lock while it reads every turn that computer
   ever ran. During an open overload each report did, and on Oct 19 on a slow disk that held the lock about 100 s, so
   heartbeats, claims and lease renewals waited and got "storage unavailable". It now reads only the turns of the
