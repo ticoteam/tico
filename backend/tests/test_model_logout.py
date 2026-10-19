@@ -217,3 +217,85 @@ def test_only_a_heartbeat_moves_readiness_at_so_the_page_can_tell_a_report_from_
     assert machine()["readiness_at"] == "2000-01-01T00:00:00+00:00"
     beat(api, r["token"])
     assert machine()["readiness_at"] > "2000-01-01T00:00:00+00:00"
+
+
+SWITCHES_TYPE = CAPABLE + ["model_switch_type_v1"]
+
+
+def key_off(api, rid):
+    with api.app.state.store.read() as c:
+        return [tuple(row) for row in c.execute("SELECT runtime, profile FROM model_login_key_off WHERE runner_id=?",
+                                                (rid,))]
+
+
+def test_switch_to_subscription_keeps_the_key_until_the_subscription_works_then_keeps_the_shared_key_off(environment):
+    """Switch to subscription (Computers part 2): the computer's login moves from the API key to a subscription only once
+    the sign-in has worked; until then, and after a cancel or a failure, the key stays in use. Once switched, the
+    company's "Every computer" key is not handed to it again, not even after a later sign-in, until a person picks
+    Use the shared key."""
+    api = environment()
+    vault(api)
+    grant(api, store(api, "OPENAI_API_KEY", "sk-team-key-0123456789"), "computers")
+    machine = new_computer(api)
+    rid, token = machine["runner_id"], machine["token"]
+    auth = {"Authorization": "Bearer " + token}
+    beat(api, token, SWITCHES_TYPE, auth=auth)
+    start = lambda body, who=None: api.post(f"/api/v2/runners/{rid}/logins", json=body, headers=who or signed_in())
+    has_key = lambda: computer_asks(api, token).json()["credentials"][0]["value"] == "sk-team-key-0123456789"
+    assert has_key()
+
+    # Cancelled: nothing changes, the key is still what it runs on.
+    first = start({"runtime": "codex", "to": "subscription"})
+    assert first.status_code == 200, first.text
+    assert first.json()["kind"] == "to_subscription"
+    assert [p.get("kind") for p in get(api, "runner-logins", token=token)["logins"]] == ["to_subscription"]
+    as_computer(api, token, f"runner-logins/{first.json()['id']}/report", {"state": "waiting", "url": "https://auth.openai.com/codex/device"})
+    assert has_key(), "until the subscription works the key stays in use"
+    api.post(f"/api/v2/runners/{rid}/logins/{first.json()['id']}/cancel", json={}, headers=signed_in())
+    assert has_key() and key_off(api, rid) == []
+
+    # Failed after the commit point (the new login did not work in place): the key stays too.
+    failed = start({"runtime": "codex", "to": "subscription"}).json()
+    assert as_computer(api, token, f"runner-logins/{failed['id']}/report", {"state": "finishing"}) == {"state": "finishing"}
+    as_computer(api, token, f"runner-logins/{failed['id']}/report", {"state": "failed", "message": "did not work"})
+    assert has_key() and key_off(api, rid) == []
+
+    # Worked: the shared key is kept off this login from then on.
+    done = start({"runtime": "codex", "to": "subscription"}).json()
+    as_computer(api, token, f"runner-logins/{done['id']}/report", {"state": "finishing"})
+    assert has_key(), "finishing is not yet switched"
+    assert as_computer(api, token, f"runner-logins/{done['id']}/report", {"state": "signed_in"}) == {"state": "signed_in"}
+    assert key_off(api, rid) == [("codex", "")]
+    assert computer_asks(api, token).json() == {"credentials": [], "key_off": True}
+    assert "key_off" not in computer_asks(api, token, "claude").json(), "only that tool's login"
+    # A later Switch account signs in to another subscription; the key stays off.
+    later = start({"runtime": "codex", "switch": True}).json()
+    as_computer(api, token, f"runner-logins/{later['id']}/report", {"state": "finishing"})
+    as_computer(api, token, f"runner-logins/{later['id']}/report", {"state": "signed_in"})
+    assert computer_asks(api, token).json()["credentials"] == []
+    # Use the shared key is the person saying so.
+    used = api.post(f"/api/v2/runners/{rid}/shared-key", json={"runtime": "codex"}, headers=signed_in())
+    assert used.status_code == 200, used.text
+    assert key_off(api, rid) == [] and has_key()
+
+
+def test_switch_to_subscription_is_for_the_operator_or_an_admin_on_a_runner_that_knows_it(api):
+    r = online(api, SWITCHES_TYPE)
+    rid = r["runner_id"]
+    post(api, f"runners/{rid}/logins", {"runtime": "codex", "to": "subscription"}, token="cara-test", expected=403)
+    post(api, f"runners/{rid}/logins", {"runtime": "codex", "to": "subscription"}, token=r["token"], expected=403)
+    # The computer's own login only, and not both a switch of account and of type at once.
+    post(api, f"runners/{rid}/logins", {"runtime": "codex", "profile": "work", "to": "subscription"}, expected=422)
+    post(api, f"runners/{rid}/logins", {"runtime": "codex", "switch": True, "to": "subscription"}, expected=422)
+    post(api, f"runners/{rid}/logins", {"runtime": "codex", "to": "api_key"}, expected=422)
+    assert pending(api, r) == []
+    # A runner that does not know it would run a plain sign-in and leave the key on: it is told to update.
+    old = online(api)
+    refused = post(api, f"runners/{old['runner_id']}/logins", {"runtime": "codex", "to": "subscription"}, expected=409)
+    assert "Update" in refused["error"]["detail"]
+    assert pending(api, old) == []
+    # Claude Code on a Mac keeps its login in the keychain: no side to sign in on, as for Switch account.
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runners SET platform='darwin' WHERE id=?", (rid,))
+    refused = post(api, f"runners/{rid}/logins", {"runtime": "claude", "to": "subscription"}, expected=422)
+    assert "keychain" in refused["error"]["detail"]

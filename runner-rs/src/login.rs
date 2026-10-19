@@ -35,6 +35,8 @@ pub const LIFETIME_S: u64 = 15 * 60;
 pub const SIGN_OUT_CAPABILITY: &str = "model_sign_out_v1";
 /// Told to the server in every heartbeat: this runner clears and replaces its own model key (`clear_key`, `use_key`).
 pub const KEYS_CAPABILITY: &str = "model_keys_v1";
+/// Switch to subscription (`to_subscription`): a switch for the computer's own login that also takes its API key off.
+pub const SWITCH_TYPE_CAPABILITY: &str = "model_switch_type_v1";
 const LOGOUT_TIMEOUT: Duration = Duration::from_secs(60);
 /// How long a finished switch waits for the server to agree it goes ahead (`finishing`) before giving up.
 const CONFIRM_TIMEOUT: Duration = Duration::from_secs(30);
@@ -536,6 +538,19 @@ fn confirm_switch(s: &Session, late: &str) -> Result<(), (String, String)> {
     }
 }
 
+/// Switch to subscription, past its commit point: before the new login goes in, key logins are held and one already
+/// running is let finish, so none writes the key's login over the subscription. The key itself stays in use, and the
+/// company's copy stays on this computer, until the subscription works in place (then `mark_key_off`).
+fn hold_key_logins<'a>(s: &Session, runner: &'a Runner) -> Result<crate::signin::KeyChange<'a>, (String, String)> {
+    let Some(held) = runner.sign_in.begin_key_change(&s.runtime, crate::signin::KEY_LOGIN_DRAIN) else {
+        return Err(("failed".into(), format!("{} key is changing on this computer; try again in a minute", s.runtime)));
+    };
+    if !runner.sign_in.wait_for_key_logins(&s.runtime, crate::signin::KEY_LOGIN_DRAIN) {
+        return Err(("failed".into(), format!("{} is still signing in with its key; try again in a minute", s.runtime)));
+    }
+    Ok(held)
+}
+
 fn run_session(s: Arc<Session>, runner: Arc<Runner>, config: Config, lifetime: Duration) {
     let default = profile_for(&config, "").map(|p| p.name).unwrap_or_default();
     let fail = |state: &str, msg: &str| s.finish(state, msg, &runner, &default);
@@ -544,9 +559,11 @@ fn run_session(s: Arc<Session>, runner: Arc<Runner>, config: Config, lifetime: D
         Ok(found) => found,
         Err(e) => return fail("failed", &e),
     };
-    // A switch signs in on the side: the old login keeps working until the new one is in place.
+    // A switch signs in on the side: the old login keeps working until the new one is in place. So does a switch to
+    // a subscription, whose old login is the API key.
     let real_env = env.clone();
-    let switch = if s.kind == "switch" {
+    let to_subscription = s.kind == "to_subscription";
+    let switch = if s.kind == "switch" || to_subscription {
         match begin_switch(&s.runtime, &s.id, &env) {
             Ok((home, side)) => {
                 let var = crate::harness_tools::caps(&s.runtime, "").profile_home;
@@ -653,11 +670,30 @@ fn run_session(s: Arc<Session>, runner: Arc<Runner>, config: Config, lifetime: D
             let (home, side) = switch.as_ref().unwrap();
             let files = login.files.clone();
             match signed_in(&s.runtime, &exe, &env, false) {
-                (true, _) => match confirm_switch(&s, "Tico did not confirm the switch in time, so the old account stays") {
+                (true, _) => match confirm_switch(&s, "Tico did not confirm the switch in time, so the old account stays")
+                    .and_then(|()| if to_subscription { hold_key_logins(&s, &runner).map(Some) } else { Ok(None) })
+                {
                     Err(verdict) => verdict,
-                    Ok(()) => match adopt_files(&files, home, side, &real_env) {
+                    Ok(_held) => match adopt_files(&files, home, side, &real_env) {
                         Ok(moved) => match signed_in(&s.runtime, &exe, &real_env, false) {
-                            (true, detail) => ("signed_in".into(), if detail.is_empty() { "Switched account".into() } else { detail }),
+                            // Only now, with the subscription working in place, does the key come off: marked first,
+                            // then its copies deleted (both in `mark_key_off`, which puts every file back if one fails).
+                            (true, detail) => match if to_subscription { runner.sign_in.mark_key_off(&s.runtime) } else { Ok(()) } {
+                                Ok(()) => ("signed_in".into(), if detail.is_empty() { "Switched account".into() } else { detail }),
+                                Err(failed) => {
+                                    let keys = match &failed.undo {
+                                        None => "so it stays in use".to_string(),
+                                        Some(e) => format!("and its key files could not all be put back ({e}); add the key again"),
+                                    };
+                                    match restore(&moved, &real_env) {
+                                        Ok(()) => ("failed".into(), format!("Could not take the API key off on this computer ({}), {keys}", failed.error)),
+                                        Err(e) => {
+                                            keep_side = true;
+                                            ("failed".into(), format!("Could not take the API key off ({}), {keys}, and the old login could not be put back ({e}); its files are in {}", failed.error, side.display()))
+                                        }
+                                    }
+                                }
+                            },
                             _ => match restore(&moved, &real_env) {
                                 Ok(()) => ("failed".into(), format!("The new account did not work in place of the old one, so the old one is back on {}", s.runtime)),
                                 Err(e) => {
@@ -908,7 +944,7 @@ fn run_use_key(s: Arc<Session>, runner: Arc<Runner>, config: Config, handle: tok
         };
     }
     discard_side(&s.runtime, side.as_ref());
-    let saved = sign.set_computer_keys(&s.runtime, &new).and_then(|_| sign.unmark_signed_out(&s.runtime));
+    let saved = sign.set_computer_keys(&s.runtime, &new).and_then(|_| sign.unmark_signed_out(&s.runtime)).and_then(|_| sign.unmark_key_off(&s.runtime));
     if let Err(e) = sign.forget_hand_keys(&s.runtime) {
         log(&format!("Tico runner: {} old key could not be deleted from _shared.env ({:?})", s.runtime, e.kind()));
     }
@@ -981,7 +1017,7 @@ impl Logins {
             }
         } else if crate::harness_tools::login_command(&s.runtime).is_none() {
             s.finish("failed", &format!("Browser sign-in is not available for {}", s.runtime), runner, &default);
-        } else if !["sign_in", "switch", "sign_out", "use_shared_key"].contains(&s.kind.as_str()) {
+        } else if !["sign_in", "switch", "sign_out", "use_shared_key", "to_subscription"].contains(&s.kind.as_str()) {
             // Never a sign-in in place of something this runner does not know.
             s.finish("failed", &format!("Update this computer's runner to {}", s.kind.replace('_', " ")), runner, &default);
         } else if self.sessions.values().any(|o| o.live() && o.runtime == s.runtime && o.profile == s.profile) {
@@ -989,14 +1025,16 @@ impl Logins {
         } else if named.as_ref().is_some_and(|p| p.share_operator) && !crate::harness_tools::caps(&s.runtime, "").own_config_home {
             // A host with its own config folder never uses the operator's login, so a shared profile still signs in to Tico's own.
             s.finish("failed", &format!("Profile {} shares the operator's own logins; sign in normally", s.profile), runner, &default);
-        } else if s.kind == "switch"
+        } else if s.kind == "to_subscription" && !s.profile.is_empty() {
+            s.finish("failed", "Switch to subscription is for the computer's own login", runner, &default);
+        } else if (s.kind == "switch" || s.kind == "to_subscription")
             && crate::harness_tools::login_command(&s.runtime).is_some_and(|l| l.keychain.iter().any(|p| p == crate::runner::platform()))
         {
             // The login is in the system keychain here, not in files: there is no side to sign in on.
             let msg = format!("Switching accounts isn't available for {} on this computer: sign out, then sign in", s.runtime);
             s.finish("failed", &msg, runner, &default);
         } else if s.kind == "use_shared_key" {
-            let state = match runner.sign_in.unmark_signed_out(&s.runtime) {
+            let state = match runner.sign_in.unmark_signed_out(&s.runtime).and_then(|()| runner.sign_in.unmark_key_off(&s.runtime)) {
                 Ok(()) => ("done", "The shared key signs it in again".to_string()),
                 Err(e) => ("failed", format!("Could not change this computer's sign-out ({:?})", e.kind())),
             };
@@ -1194,7 +1232,8 @@ mod tests {
     /// side home it first waits for $HOME/release while $HOME/hold-probe is there; in the real home it says signed
     /// out while $HOME/refuse is there), `logout` removes it (unless $HOME/stuck), `login --device-auth` shows a
     /// code and writes a new login (or hangs while $HOME/slow is there), and `login --with-api-key` writes a key login
-    /// (a key with "bad" in it is refused, and the old login is gone).
+    /// (a key with "bad" in it is refused, and the old login is gone; while $HOME/hold-key is there it first marks
+    /// $HOME/key-started and waits for $HOME/key-release).
     const FAKE_CODEX: &str = r#"#!/bin/sh
 home="${CODEX_HOME:-$HOME/.codex}"
 echo "$@" >> "$HOME/runs"
@@ -1209,6 +1248,7 @@ case "$1 $2" in
   "logout ") [ -f "$HOME/stuck" ] || rm -f "$home/auth.json"; exit 0 ;;
   "login --with-api-key")
     read key
+    if [ -f "$HOME/hold-key" ]; then : > "$HOME/key-started"; n=0; while [ ! -f "$HOME/key-release" ] && [ $n -lt 200 ]; do sleep 0.05; n=$((n+1)); done; fi
     case "$key" in *bad*) rm -f "$home/auth.json"; exit 1 ;; esac
     mkdir -p "$home"; echo "apikey $key" > "$home/auth.json"; exit 0 ;;
   "login --device-auth")
@@ -1239,7 +1279,11 @@ exit 2
     /// Run a switch on its own thread, the way the relay does, with `server` standing in for Tico's answer once the
     /// runner says it is finishing (true: confirmed; false: it had been cancelled).
     fn switch_with(runner: &Arc<Runner>, config: &Config, server: Option<bool>) -> (Arc<Session>, std::thread::JoinHandle<()>) {
-        let s = session("switch");
+        switch_kind(runner, config, server, "switch")
+    }
+
+    fn switch_kind(runner: &Arc<Runner>, config: &Config, server: Option<bool>, kind: &str) -> (Arc<Session>, std::thread::JoinHandle<()>) {
+        let s = session(kind);
         let (s2, r2, c2) = (s.clone(), runner.clone(), config.clone());
         let running = std::thread::spawn(move || run_session(s2, r2, c2, Duration::from_secs(20)));
         if let Some(confirm) = server {
@@ -1260,6 +1304,83 @@ exit 2
                 if confirm { s3.confirmed.store(true, Ordering::SeqCst) } else { s3.cancelled.store(true, Ordering::SeqCst) }
             }
         });
+    }
+
+    #[test]
+    fn a_switch_to_a_subscription_waits_for_a_key_login_already_running_and_a_fetch_already_out() {
+        const CHILD: &str = "TICO_TEST_SWITCH_DRAIN";
+        let Some(root) = std::env::var_os(CHILD).map(std::path::PathBuf::from) else {
+            // A process of its own: PATH, HOME and CODEX_HOME point at a stand-in CLI and a scratch home.
+            let root = std::env::temp_dir().join(format!("tico-switch-drain-{}", uuid::Uuid::new_v4().simple()));
+            std::fs::create_dir_all(root.join("bin")).unwrap();
+            std::fs::write(root.join("bin/codex"), FAKE_CODEX).unwrap();
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(root.join("bin/codex"), std::fs::Permissions::from_mode(0o755)).unwrap();
+            let path = format!("{}:/usr/bin:/bin", root.join("bin").display());
+            let out = Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "login::tests::a_switch_to_a_subscription_waits_for_a_key_login_already_running_and_a_fetch_already_out", "--nocapture"])
+                .env(CHILD, &root).env("PATH", path).env("HOME", &root).env("CODEX_HOME", root.join("codex"))
+                .env_remove(crate::isolation::UID_ENV).env_remove(crate::isolation::GID_ENV)
+                .env_remove("OPENAI_API_KEY").output().unwrap();
+            std::fs::remove_dir_all(&root).ok();
+            let said = String::from_utf8_lossy(&out.stdout);
+            assert!(out.status.success() && said.contains("1 passed"), "{said}{}", String::from_utf8_lossy(&out.stderr));
+            return;
+        };
+        // Tico answers the regular key fetch only once let go, so it is still out when the switch begins.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (asked_tx, asked_rx) = std::sync::mpsc::channel::<()>();
+        let (go_tx, go_rx) = std::sync::mpsc::channel::<()>();
+        std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            let (mut sock, _) = listener.accept().unwrap();
+            let _ = sock.read(&mut [0u8; 8192]);
+            let _ = asked_tx.send(());
+            let _ = go_rx.recv();
+            let body = r#"{"credentials":[{"env":"OPENAI_API_KEY","value":"sk-stale-0123456789","source":"shared"}]}"#;
+            let reply = format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+            let _ = sock.write_all(reply.as_bytes());
+        });
+        std::fs::create_dir_all(root.join("projects/secrets")).unwrap();
+        std::fs::create_dir_all(root.join("codex")).unwrap();
+        let path = root.join("runner.json");
+        std::fs::write(&path, json!({"url": format!("http://127.0.0.1:{port}"), "token": "t", "runner_id": "r1", "projects_dir": root.join("projects")}).to_string()).unwrap();
+        let config = Config::load(&path).unwrap();
+        let client = crate::client::Client::new(&config.url(), &config.token(), 30, 0).unwrap();
+        let runner = Arc::new(Runner::new(config.clone(), client, crate::state::State::open(&root.join("state")).unwrap()));
+        let auth = root.join("codex/auth.json");
+        let team = root.join("projects/secrets").join(crate::signin::TEAM_KEYS_FILE);
+        std::fs::write(&auth, "apikey sk-team-0123456789\n").unwrap();
+        std::fs::write(&team, "OPENAI_API_KEY=sk-team-0123456789\n").unwrap();
+        let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap();
+        let r = runner.clone();
+        let fetch = rt.spawn(async move { r.sign_in.team_model_keys(&r.client, "codex").await });
+        asked_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        // A key login already running, which writes the key's login only once let go.
+        std::fs::write(root.join("hold-key"), "").unwrap();
+        let (r, exe) = (runner.clone(), root.join("bin/codex"));
+        let login = rt.spawn(async move { r.sign_in.key_login("codex", &exe).await });
+        wait_for(|| root.join("key-started").exists());
+
+        // The switch, signed in on the side and confirmed, holds key changes and waits for that login to end: the
+        // subscription is not in place yet, and the fetch that comes back meanwhile saves nothing.
+        let (switch, running) = switch_kind(&runner, &config, Some(true), "to_subscription");
+        wait_for(|| switch.confirmed.load(Ordering::SeqCst));
+        std::thread::sleep(Duration::from_millis(500));
+        assert_eq!(std::fs::read_to_string(&auth).unwrap(), "apikey sk-team-0123456789\n", "the subscription went in while a key login was running");
+        go_tx.send(()).unwrap();
+        assert!(!rt.block_on(fetch).unwrap(), "a fetch older than the switch changed a key");
+        assert_eq!(crate::signin::read_env(&team)["OPENAI_API_KEY"], "sk-team-0123456789");
+
+        // The key login ends, writing the key's login; only then does the subscription go in, and it stays.
+        std::fs::write(root.join("key-release"), "").unwrap();
+        assert!(rt.block_on(login).unwrap(), "the key login finished");
+        running.join().unwrap();
+        assert_eq!(state(&switch).0, "signed_in", "{:?}", state(&switch));
+        assert_eq!(std::fs::read_to_string(&auth).unwrap(), "new\n", "the key login wrote over the subscription");
+        assert!(runner.sign_in.key_off("codex") && runner.sign_in.headless_secret("codex").is_none());
+        assert!(!crate::signin::read_env(&team).contains_key("OPENAI_API_KEY"));
     }
 
     #[test]
@@ -1356,6 +1477,67 @@ exit 2
         assert_eq!(std::fs::read_to_string(&auth).unwrap(), "old\n");
         assert_eq!(sides(), 0);
         std::fs::remove_file(root.join("refuse")).unwrap();
+
+        // Switch to subscription (Computers part 2): the login runs on the company's key until the subscription is in
+        // place. Cancelled before the commit point, or not working once in place, the key stays in use.
+        let key_in_use = || runner.sign_in.headless_secret("codex").map(|(_, v)| v) == Some("sk-team-0123456789".into());
+        std::fs::write(&team, "OPENAI_API_KEY=sk-team-0123456789\n").unwrap();
+        std::fs::write(&auth, "old\n").unwrap();
+        let (kept, running) = switch_kind(&runner, &config, Some(false), "to_subscription");
+        running.join().unwrap();
+        assert_eq!(state(&kept).0, "cancelled", "{:?}", state(&kept));
+        assert!(key_in_use() && !runner.sign_in.key_off("codex"));
+        std::fs::write(root.join("refuse"), "").unwrap();
+        let (broken, running) = switch_kind(&runner, &config, Some(true), "to_subscription");
+        running.join().unwrap();
+        assert_eq!(state(&broken).0, "failed", "{:?}", state(&broken));
+        assert!(!runner.sign_in.key_off("codex"), "the key is the login again");
+        assert_eq!(std::fs::read_to_string(&auth).unwrap(), "old\n");
+        // Nothing was taken off before the subscription worked: the company's copy is still here, so the next turn
+        // has the key at once, with no fetch in between.
+        assert!(std::fs::read_to_string(&team).unwrap().contains("OPENAI_API_KEY=sk-team-0123456789"), "the company key was deleted by a switch that failed");
+        assert!(key_in_use(), "the next turn would start with no key");
+        std::fs::remove_file(root.join("refuse")).unwrap();
+        // In place: the subscription is the login, the company's copy of the key is deleted and no key reaches it.
+        std::fs::write(&team, "OPENAI_API_KEY=sk-team-0123456789\n").unwrap();
+        let (moved, running) = switch_kind(&runner, &config, Some(true), "to_subscription");
+        running.join().unwrap();
+        assert_eq!(state(&moved).0, "signed_in", "{:?}", state(&moved));
+        assert_eq!(std::fs::read_to_string(&auth).unwrap(), "new\n");
+        assert!(runner.sign_in.key_off("codex") && runner.sign_in.headless_secret("codex").is_none());
+        assert!(!std::fs::read_to_string(&team).unwrap().contains("OPENAI_API_KEY"));
+        assert_eq!(sides(), 0);
+        // Use the shared key lifts it.
+        let shared = session("use_shared_key");
+        Logins::default().begin(&runner, &json!({"id": shared.id, "runtime": "codex", "kind": "use_shared_key"}));
+        wait_for(|| !runner.sign_in.key_off("codex"));
+        // In place and working, but a key file cannot be changed (the terminal's, after the company's and the
+        // computer's own were rewritten): every key file goes back as it was, and the old login with it, so the next
+        // turn has the computer's own key at once, with nothing to fetch.
+        let secrets = root.join("projects/secrets");
+        let (computer, hand) = (secrets.join(crate::signin::COMPUTER_KEYS_FILE), secrets.join(crate::signin::HAND_KEYS_FILE));
+        let unwritable = secrets.join(format!("{}.tmp", crate::signin::HAND_KEYS_FILE));
+        std::fs::write(&team, "OPENAI_API_KEY=sk-team-0123456789\n").unwrap();
+        std::fs::write(&computer, "OPENAI_API_KEY=sk-mine-0123456789\nOTHER=kept\n").unwrap();
+        std::fs::write(&hand, "OPENAI_API_KEY=sk-hand-0123456789\n").unwrap();
+        std::fs::create_dir(&unwritable).unwrap();
+        let key_files = || [&team, &computer, &hand].map(|f| std::fs::read_to_string(f).unwrap());
+        let before = key_files();
+        std::fs::write(&auth, "old\n").unwrap();
+        let (late, running) = switch_kind(&runner, &config, Some(true), "to_subscription");
+        running.join().unwrap();
+        assert_eq!(state(&late).0, "failed", "{:?}", state(&late));
+        assert!(state(&late).1.ends_with("so it stays in use"), "{:?}", state(&late));
+        assert_eq!(std::fs::read_to_string(&auth).unwrap(), "old\n");
+        assert_eq!(key_files(), before, "a key file was left changed by a switch that failed");
+        assert!(!runner.sign_in.key_off("codex"));
+        assert_eq!(runner.sign_in.headless_secret("codex").map(|(_, v)| v), Some("sk-mine-0123456789".into()), "the next turn's key");
+        assert_eq!(sides(), 0);
+        std::fs::remove_dir(&unwritable).unwrap();
+        for f in [&computer, &hand] {
+            std::fs::remove_file(f).unwrap();
+        }
+        std::fs::write(&auth, "old\n").unwrap();
 
         // Two login files, and the second cannot be moved in: the first is put back, so the old login is whole.
         let (home, side) = (root.join("multi/home"), root.join("multi/side"));
@@ -1522,6 +1704,9 @@ exit 2
         assert!(sign.signed_out("codex") && !read_env(&computer).contains_key("OPENAI_API_KEY"));
 
         // Replace: the new key is fetched for this job, logged in with and checked; the old terminal key is deleted.
+        // The login was switched to a subscription before: a key added now is the person choosing a key again, so the
+        // next turn has it.
+        sign.mark_key_off("codex").unwrap();
         std::fs::write(&hand, "OPENAI_API_KEY=sk-hand-0123456789\nKEEP=me\n").unwrap();
         std::fs::remove_file(&auth).unwrap();
         let done = use_key(r#"{"credentials":[{"env":"OPENAI_API_KEY","value":"sk-new-0123456789","source":"computer"}]}"#);
@@ -1530,8 +1715,9 @@ exit 2
         assert_eq!(read_env(&computer)["OPENAI_API_KEY"], "sk-new-0123456789");
         assert_eq!(std::fs::read_to_string(&auth).unwrap(), "apikey sk-new-0123456789\n");
         assert_eq!(std::fs::read_to_string(&hand).unwrap(), "KEEP=me\n");
-        assert!(!sign.signed_out("codex"));
+        assert!(!sign.signed_out("codex") && !sign.key_off("codex"));
         assert_eq!(sign.key_source("codex"), Some(("OPENAI_API_KEY".into(), "computer")));
+        assert_eq!(sign.headless_secret("codex").map(|(_, v)| v), Some("sk-new-0123456789".into()), "the next turn's key");
 
         // While the next key is checked nothing here changes: the regular fetch and key login wait, runs and the CLI
         // keep the old key. A cancel that reaches Tico first leaves all of it, the terminal's key too.

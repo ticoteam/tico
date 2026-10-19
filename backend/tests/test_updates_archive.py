@@ -115,6 +115,30 @@ def test_logical_days_restore_and_archive_are_personal_and_kind_scoped(api):
     assert restore_old["id"] in ids(get(api, "updates?bot=ops&kind=daily"))
 
 
+def test_the_tree_leaves_out_what_this_reader_archived_and_keeps_the_reports_below(api, monkeypatch):
+    from backend.tests.test_bot_contact import bot
+    monkeypatch.setattr(updates, "today", lambda at=None: "2026-09-29")
+    bot(api, "boss", "Manager", reports_to="human:ana")
+    bot(api, "analyst", "Analyst", reports_to="boss")
+    with api.app.state.store.transaction() as c:
+        mine = updates.post(c, "boss", "- Planned the launch", day="2026-09-29")
+        updates.post(c, "analyst", "- Sized the market", day="2026-09-29")
+    find = lambda nodes, key: next((n for n in nodes if n["key"] == key), None) or next(
+        (hit for n in nodes if (hit := find(n["children"], key))), None)
+    boss = lambda token="ana-test": find(get(api, "updates/tree?scope=all", token=token)["roots"], "b:boss")
+
+    post(api, "updates/archive", {"ids": [mine["id"]], "archived": True}, key="tree-archive")
+    archived = boss()
+    assert archived["update"] is None, "an archived card stays out of the tree on the next load"
+    assert [k["update"]["body"] for k in archived["children"]] == ["- Sized the market"], \
+        "the manager stays in the tree with its reports below it"
+    assert boss("ben-test")["update"]["id"] == mine["id"], "the archive is this reader's only"
+    assert mine["id"] not in ids(get(api, "updates")) and mine["id"] in ids(get(api, "updates?archive=true"))
+
+    post(api, "updates/archive", {"ids": [mine["id"]], "archived": False}, key="tree-restore")
+    assert boss()["update"]["id"] == mine["id"], "restore brings it back into the tree"
+
+
 def test_archive_batches_are_human_only_permission_checked_and_atomic(api):
     as_member(api, "ben@acme.example")
     _, _, attempt = setup_attempt(api, "ops")
