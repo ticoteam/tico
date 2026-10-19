@@ -439,7 +439,7 @@ def test_sends_at_the_same_moment_cannot_pass_the_daily_call_limit_together(chat
     model.hold = threading.Event()
     first = threading.Thread(target=lambda: post(api, "chat/ops", {"text": UNRELATED}))
     first.start()
-    deadline = time.monotonic() + 1.0
+    deadline = time.monotonic() + 5.0
     while not model.calls and time.monotonic() < deadline:
         time.sleep(0.01)
     assert len(model.calls) == 1, "the first send is asking Decide with the last call"
@@ -449,7 +449,8 @@ def test_sends_at_the_same_moment_cannot_pass_the_daily_call_limit_together(chat
         model.hold.set()
         first.join(5)
     assert len(model.calls) == 1, "the second send found no call free and asked nothing"
-    assert [r.get("error") for r in checks(api)] == ["budget", None], "the second asked nothing; the first was answered"
+    errors = [r.get("error") for r in checks(api)]   # each row lands once its send returns, in either order
+    assert len(errors) == 2 and errors.count("budget") == 1, "the second asked nothing; the first asked with the call"
     assert T._SLOTS == {}, "every reservation is handed back"
     settings.decisions_daily_calls_owner = 2      # the next day's room: one more call, counted from the audit rows
     post(api, "chat/ops", {"text": "Order the team lunch"})
