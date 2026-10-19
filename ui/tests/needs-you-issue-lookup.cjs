@@ -1,6 +1,7 @@
 // Needs you: opening an approval, a task for the person, a question, a done task or a loose question asks for no issue.
 // Those cards are details.req like the issues inbox's but carry no issue number, and each asked for /api/issues/NaN
-// (bot-needs, needs-you-approvals, needs-you-done). An issues inbox card still fetches its full request by number.
+// (bot-needs, needs-you-approvals, needs-you-done). An inbox card whose number is not a positive whole number asks
+// for nothing either; a valid inbox card still fetches its full request by number.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const {open} = require('./tasks-page.cjs');
@@ -23,6 +24,12 @@ const loose = {kind: 'ask', id: 'm-loose', message_id: 'm-loose', title: 'Is Fri
     const {page, errors} = await open(browser, {hash: '#/tasks'});
     const issueGets = [];
     page.on('request', r => { const m = new URL(r.url()).pathname.match(/^\/api\/issues\/([^/]+)$/); if (m) issueGets.push(m[1]); });
+    // Every card opened, in the order its toggle event ran.
+    await page.evaluate(() => {
+      window.TOGGLED = [];
+      document.addEventListener('toggle', ev => { const d = ev.target.dataset || {};
+        if (ev.target.matches?.('details.req') && ev.target.open) TOGGLED.push(d.v2Id || d.ask || 'n:' + d.n); }, true);
+    });
     // The approval as the person opens it, in Needs you.
     await page.route('**/api/v2/needs-you*', route => route.fulfill({contentType: 'application/json', body: JSON.stringify({items: [approval]})}));
     await page.evaluate(async () => { await v2Refresh(); tasksRender(TASKS_ST); });
@@ -38,17 +45,21 @@ const loose = {kind: 'ask', id: 'm-loose', message_id: 'm-loose', title: 'Is Fri
     const drawn = page.locator('#needs-you-cards > details.req');
     assert.equal(await drawn.count(), cards.length + 1, 'every card is drawn');
     for (const card of await drawn.all()) await card.locator('> summary').click();
-    // Toggle events run in order: once the inbox card's own fetch is seen, every Needs you card's toggle has run.
+    // Inbox cards whose number is not a positive whole number, then a valid one. Toggle events run in order, so once
+    // the valid card's fetch is seen every earlier card's toggle has run.
+    const BAD = ['abc', '1.5', '0', '-3'];
     const inbox = page.waitForRequest(r => new URL(r.url()).pathname === '/api/issues/7');
-    await page.evaluate(() => {
+    await page.evaluate(numbers => {
       const host = document.createElement('div');
-      host.innerHTML = needsYouItem({number: 7, title: 'Pick a plan', owner: 'human:ana', body: 'Monthly or annual?'}, false);
+      host.innerHTML = numbers.map(number => needsYouItem({number, title: 'Pick a plan', owner: 'human:ana', body: 'Monthly or annual?'}, false)).join('');
       document.querySelector('#main').append(host);
-      host.querySelector('details').open = true;
-    });
+      host.querySelectorAll('details').forEach(d => { d.open = true; });
+    }, [...BAD, 7]);
     await inbox;
-    assert.deepEqual(issueGets, ['7'], 'only the inbox card asks for its issue, by number');
+    assert.deepEqual(await page.evaluate(() => TOGGLED),
+      ['ap-1', ...cards.map(c => c.id), loose.id, ...BAD.map(n => 'n:' + n), 'n:7'], 'every card opened, before the valid inbox card');
+    assert.deepEqual(issueGets, ['7'], 'only the valid inbox card asks for its issue, by number');
     assert.deepEqual(errors, []);
-    console.log('Needs you: opening approval, task, question, done and loose-question cards asks for no issue; an inbox card still does');
+    console.log('Needs you: opening approval, task, question, done and loose-question cards asks for no issue, nor does a malformed inbox number; a valid inbox card still does');
   } finally { await browser.close(); }
 })().catch(e => {console.error(e); process.exit(1);});
