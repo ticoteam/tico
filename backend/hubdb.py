@@ -3840,6 +3840,8 @@ def task_comment(conn, actor, task_id, text, wake=True, *, ask=None, extra_refs=
         msg = _write_message(conn, actor, actor, text, conv, "say", refs, None, None)
     else:
         msg = say(conn, actor, target, text, conversation_id=conv["id"], refs=refs)
+    from . import wake_rules
+    wake_rules.own_comment(conn, msg, row)        # token saving 2/9: a bot's own comment never wakes it; log the skip
     conn.execute("UPDATE tasks SET updated=? WHERE id=?", (now(), task_id))
     if row["status"] == "waiting" and row.get("waiting_on") == actor:
         # The person it waited on has spoken: the next move is the bot's, and it leaves their

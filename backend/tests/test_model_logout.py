@@ -80,6 +80,7 @@ def test_a_sign_out_marks_the_login_signed_out_until_a_person_signs_in_again(api
     assert report(api, r, out["id"], state="signed_out", message="Signed out") == {"state": "signed_out"}
     assert get(api, f"runners/{rid}/logins/{out['id']}")["state"] == "signed_out"
     assert get(api, "operations")["computers"][0]["signed_out"] == {"codex": [""]}
+    assert get(api, "operations")["computers"][0]["key_cleared"] == [], "a sign-out is not a cleared key"
     # A switch is a sign-in on the side; when it finishes, the login is no longer signed out.
     switch = post(api, f"runners/{rid}/logins", {"runtime": "codex", "switch": True})
     assert switch["kind"] == "switch" and pending(api, r)[0]["kind"] == "switch"
