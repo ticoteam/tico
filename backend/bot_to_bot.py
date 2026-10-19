@@ -18,13 +18,10 @@ wakes. A person's message, the keeper's notices (assignments, gate requests, app
 everything on token saving 2/9's always-wake list never reach this rule: only bot-to-bot messages do.
 """
 
-import re
-
 # Plain says and a bot's own notices can wait; every other kind wakes.
 KINDS = ("say", "notice")
 # The references a plain message carries. Anything else marks a message that is more than words.
 PLAIN_REFS = frozenset({"task", "comment", "attachments", "files", "unsolicited", "turn_id", "warnings", "via"})
-VERDICT = re.compile(r"^\s*VERDICT:\s*(approve|changes)\s+PR\s+#\d+\s+head\s+[0-9a-f]{40}\s*$", re.I | re.M)
 WAKES = ("flagged needs-action", "an ask, answer or steer", "references beyond a plain message",
          "a reply the recipient waits on", "a gate verdict")
 FLAG = "needs_action"
@@ -41,22 +38,11 @@ def can_wait(conn, actor, target, kind, refs, body, in_reply_to=None):
             return False
         if not isinstance(refs, dict) or refs.get("quiet"):
             return False
-        flag = refs.get(FLAG, False)
-        if flag is not False:
+        from . import wake_rules
+        # The flag, the reply the recipient waits on and the verdict lines are on the always-wake list.
+        if wake_rules.always_wakes(conn, actor, target, kind, refs, body, in_reply_to=in_reply_to):
             return False
-        if set(refs) - PLAIN_REFS - {FLAG}:
-            return False
-        if VERDICT.search(str(body or "")):
-            return False
-        if in_reply_to:
-            parent = conn.execute("SELECT from_actor,kind,refs_json,wait_s FROM messages WHERE id=?",
-                                  (in_reply_to,)).fetchone()
-            if not parent:
-                return False
-            if parent["from_actor"] == target and (parent["kind"] == "ask" or parent["wait_s"]
-                                                   or '"' + FLAG + '": true' in str(parent["refs_json"] or "")):
-                return False
-        return True
+        return not set(refs) - PLAIN_REFS - {FLAG}
     except Exception:  # noqa: BLE001 - fail open: a message this cannot read wakes its bot
         return False
 

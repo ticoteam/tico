@@ -40,6 +40,8 @@ def test_a_claude_bot_that_fell_back_to_codex_shows_codex_and_unknown_stays_unkn
                            (aid,)).fetchone()[0]
     assert '"model": "gpt-6.1-sol"' in detail and '"primary_runtime"' in detail
     assert [r["ran_on"]["family"] for r in get(api, "bots/ops/turns") if r["id"] == aid] == ["openai"]
+    # Claude's login is held after its limit (backend/login_holds.py); Try now, as after the plan renews, lifts it.
+    post(api, "bots/ops/limit/retry", {})
 
     # A genuine Claude run is Claude's.
     own = ran_on(api, work(api, machine, "own", [(CLAUDE, 40)])[0])
