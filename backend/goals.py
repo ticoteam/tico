@@ -19,6 +19,7 @@ proposals (`goal_proposals`) that the goal's or KPI's owner confirms.
 from datetime import datetime, timedelta, timezone
 
 from .batch_work import isolated
+from . import ceo_bot
 from . import hubdb as H
 from . import kpis as K
 from . import people as P
@@ -578,7 +579,7 @@ def hand_back(conn, actor, goal_id):
                  if row["status_source"] != "person" else "a done or dropped goal is not handed back: set a colour first")
     conn.execute("UPDATE goals SET status_source='auto', suggest_status=NULL, suggest_note=NULL, suggest_at=NULL, "
                  "updated=? WHERE id=?", (H.now(), goal_id))
-    _event(conn, goal_id, actor, "status_source", "person", "auto", "Let Goal Manager set it",
+    _event(conn, goal_id, actor, "status_source", "person", "auto", "Let " + ceo_bot.name(conn) + " set it",
            status_by=actor, status_source="auto")
     H.event(conn, actor, "goal.hand_back", goal_id, {})
     apply_auto(conn, goal_id)

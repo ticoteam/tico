@@ -1548,6 +1548,10 @@ class UsageCount(Contract):
     enabled: bool
 
 
+class CeoBotSwitch(Contract):
+    on: bool
+
+
 class UsageCountNotice(Contract):
     state: Literal["shown", "dismissed"]
 
