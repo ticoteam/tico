@@ -757,3 +757,85 @@ def test_change_kept_reads_a_merge_commit_against_main_and_ignores_cut_tests():
     # Reverting the merge commit (against main, its first parent) undoes it; the other side's change stays.
     revert = h.commit('revert', [cut], {**h.commits[cut][1], 'app/price.py': code})
     assert G.change_kept(get, 'ticoteam/tico', merge, revert) is False
+
+
+def _worktree(api, task_id, repo, branch, state='present'):
+    with api.app.state.store.transaction() as c:
+        link = uuid.uuid4().hex
+        c.execute("INSERT INTO task_links(id,task_id,kind,url,title,state,added_by,created,repo,branch,path,updated,"
+                  "detail_json) VALUES(?,?,'worktree',?,?,?,'bot:cpo',?,?,?,?,?,?)",
+                  (link, task_id, 'worktree:' + link, repo, state, H.now(), repo, branch,
+                   f'tasks/{task_id[:8]}/{repo.replace("/", "__")}', H.now(), json.dumps({'owner': 'bot:cpo'})))
+
+
+def _branch_pr(number, branch, repo='ticoteam/tico', head_repo=None, **over):
+    return {'html_url': f'https://github.com/{repo}/pull/{number}', 'number': number, 'state': 'open', 'draft': False,
+            'merged': False, 'merge_commit_sha': None, 'merged_at': None,
+            'head': {'ref': branch, 'sha': 'b' * 40, 'repo': {'full_name': head_repo or repo}}, **over}
+
+
+def test_a_pr_from_a_worktree_branch_registers_itself_on_both_repos_and_never_from_a_fork(api):
+    """A bot that opens a PR and never links it still gets the link its worktree's release waits on."""
+    _app(api)
+    task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Gateway key per install', 'body': 'x'})
+    branch = f"tico/{task['id'][:8]}-gateway-key-per-install"
+    _worktree(api, task['id'], 'ticoteam/tico', branch)
+    _worktree(api, task['id'], 'ticoteam/tico-services', branch)
+    other = post(api, 'tasks', {'owner': 'cpo', 'title': 'Unrelated', 'body': 'x'})
+    _worktree(api, other['id'], 'ticoteam/tico', f"tico/{other['id'][:8]}-unrelated")
+
+    hook(api, 'pull_request', {'action': 'opened', 'pull_request': _branch_pr(984, branch, head_repo='someone/tico')})
+    assert not [
+        l for l in get(api, 'tasks/' + task['id'])['task']['links'] if l['kind'] == 'pr']
+    hook(api, 'pull_request', {'action': 'opened', 'pull_request': _branch_pr(984, branch)})
+    hook(api, 'pull_request', {'action': 'closed', 'pull_request': _branch_pr(
+        16, branch, 'ticoteam/tico-services', state='closed', merged=True, merge_commit_sha='c' * 40)})
+    prs = {(l['repo'], l['number']): l for l in get(api, 'tasks/' + task['id'])['task']['links'] if l['kind'] == 'pr'}
+    assert set(prs) == {('ticoteam/tico', 984), ('ticoteam/tico-services', 16)}
+    assert prs[('ticoteam/tico', 984)]['state'] == 'open' and prs[('ticoteam/tico-services', 16)]['state'] == 'merged'
+    assert all(l['added_by'] == 'keeper' and l['branch'] == branch for l in prs.values())
+    assert not [l for l in get(api, 'tasks/' + other['id'])['task']['links'] if l['kind'] == 'pr']
+    # Registered once: later events on the same PR update that link, and registering wakes nobody.
+    hook(api, 'pull_request', {'action': 'synchronize', 'pull_request': _branch_pr(984, branch)})
+    assert len([l for l in get(api, 'tasks/' + task['id'])['task']['links'] if l['kind'] == 'pr']) == 2
+    assert _burst(api, task['id']) == []
+
+
+def test_reconcile_heals_stale_and_unregistered_prs_on_a_declined_task_nobody_reads(api, monkeypatch):
+    import threading
+    _app(api)
+    task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Org chart order', 'body': 'x',
+                               'links': ['https://github.com/ticoteam/tico/pull/746']})
+    branch = f"tico/{task['id'][:8]}-org-chart-order"
+    _worktree(api, task['id'], 'ticoteam/tico', branch)
+    _worktree(api, task['id'], 'ticoteam/tico', 'tico/' + task['id'][:8] + '-fix-forward')
+    service = api.app.state.github_app
+    with service.store.transaction() as c:
+        c.execute("INSERT INTO repositories(full_name,reachable,enabled,added_by,updated) VALUES(?,1,1,?,?)",
+                  ('ticoteam/tico', 'human:ana', H.now()))
+        c.execute("UPDATE tasks SET status='declined' WHERE id=?", (task['id'],))
+    monkeypatch.setattr(service, 'row', lambda c=None: {'slug': 'test-app', 'org': 'ticoteam'})
+    monkeypatch.setattr(service, 'mint', lambda *args, **kw: ('test-token', 'later'))
+    calls = []
+    def fetch(method, path, headers=None, params=None):
+        calls.append((path, params))
+        if path.endswith('/pulls/746'):
+            return SimpleNamespace(status_code=200, json=lambda: _branch_pr(746, branch, state='closed', merged=True,
+                                                                             merge_commit_sha='d' * 40))
+        if params and params['head'] == 'ticoteam:tico/' + task['id'][:8] + '-fix-forward':
+            return SimpleNamespace(status_code=200, json=lambda: [_branch_pr(990, params['head'].split(':')[1])])
+        return SimpleNamespace(status_code=200, json=lambda: [])
+    monkeypatch.setattr(service, '_call', fetch)
+
+    def run():
+        G.reconcile_worktree_prs(service)
+        for worker in threading.enumerate():
+            if worker.name == 'tico-worktree-pr-reconcile':
+                worker.join(2)
+    run()
+    prs = {l['number']: l for l in get(api, 'tasks/' + task['id'])['task']['links'] if l['kind'] == 'pr'}
+    assert prs[746]['state'] == 'merged' and prs[990]['state'] == 'open' and prs[990]['added_by'] == 'keeper'
+    # Bounded: a second pass inside three minutes reads nothing.
+    before = len(calls)
+    run()
+    assert len(calls) == before and not service.worktree_reconcile_running

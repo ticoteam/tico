@@ -150,10 +150,44 @@ def _review_role(c, task, payload, role):
                          note="GitHub review " + ("request withdrawn" if action == "review_request_removed" else "requested"))
 
 
+# The branch `hub task worktree add` names: tico/<the task's first 8 id characters>-<title slug>.
+WORKTREE_BRANCH = re.compile(r"^tico/[0-9a-f]{8}-")
+
+
+def register_worktree_pr(c, pr):
+    """A pull request whose head is a task worktree's branch in the same repository belongs to that task: its link is
+    registered here, so a worktree whose bot never ran `hub task link` still gets the link its release waits on.
+    Returns the ids of the links it made; a fork's branch, another organization's repository or a branch no
+    worktree holds registers nothing."""
+    url = str(pr.get("html_url") or "").split("?")[0].rstrip("/")
+    match = PR_LINK.match(url)
+    head = pr.get("head") or {}
+    branch = str(head.get("ref") or "")
+    if not match or not WORKTREE_BRANCH.match(branch):
+        return set()
+    repo = f"{match.group(1)}/{match.group(2)}"
+    if str((head.get("repo") or {}).get("full_name") or repo).lower() != repo.lower():
+        return set()
+    app = c.execute("SELECT org FROM github_app WHERE id='app'").fetchone()
+    if not app or str(app["org"] or "").lower() != match.group(1).lower():
+        return set()
+    made = set()
+    for row in c.execute("SELECT DISTINCT task_id FROM task_links WHERE kind='worktree' AND lower(repo)=? AND branch=?",
+                         (repo.lower(), branch)).fetchall():
+        if c.execute("SELECT 1 FROM task_links WHERE task_id=? AND kind='pr' AND lower(repo)=? AND number=?",
+                     (row["task_id"], repo.lower(), int(match.group(3)))).fetchone():
+            continue
+        link = H.task_link(c, H.KEEPER, row["task_id"], url)
+        made.add(link["id"])
+        H.event(c, H.KEEPER, "worktree.pr_registered", row["task_id"], {"url": url, "branch": branch})
+    return made
+
+
 def pull_request(c, payload, review_role="", release_repo=""):
     pr = payload.get("pull_request") or {}
     url = str(pr.get("html_url") or "").split("?")[0].rstrip("/")
     action = str(payload.get("action") or "")
+    registered = register_worktree_pr(c, pr)
     links = _links_for(c, url)
     for link in links:
         task = H.task(c, link["task_id"])
@@ -219,7 +253,7 @@ def pull_request(c, payload, review_role="", release_repo=""):
             item += ": Merge conflict"
         if wake_once:
             queue_wake(c, task, detail["wake_once_fired"]["item"])
-        if (state == "closed" and link["state"] != state
+        if (state == "closed" and link["state"] != state and link["id"] not in registered
                 or conflict_wake):
             # Closed without merging is news; a conflict is a blocker on the bot's own work.
             queue_wake(c, task, item, "completion" if not conflict_wake and not wake_once else None)
@@ -439,6 +473,81 @@ def refresh_task_prs(service, task_id):
             with service.lock:
                 service.pr_refresh_running = False
     threading.Thread(target=refresh, name="tico-pr-refresh", daemon=True).start()
+
+
+def reconcile_worktree_prs(service):
+    """The background repair for the pull request links a worktree's release reads. Unfinished links on any task that
+    holds a worktree (closed, declined and never-read tasks too) are read again, and a worktree branch with no link is
+    looked up on GitHub, so a missed webhook heals without anyone opening the task. At most one pass every three
+    minutes and 20 GitHub reads a pass; a branch with no pull request is asked again after 15 minutes."""
+    with service.lock:
+        now = time.monotonic()
+        if getattr(service, "worktree_reconcile_running", False) or getattr(service, "worktree_reconcile_next", 0) > now:
+            return
+        service.worktree_reconcile_next = now + 180
+        cache = service.__dict__.setdefault("worktree_reconcile_cache", {})
+        with service.store.read() as c:
+            app = service.row(c)
+            if not app:
+                return
+            org = str(app["org"] or "").lower() + "/%"
+            held = ("EXISTS (SELECT 1 FROM repositories r WHERE lower(r.full_name)=lower({0}.repo) AND r.reachable=1) "
+                    "AND lower({0}.repo) LIKE ?")
+            links = H._rows(c.execute(
+                "SELECT p.* FROM task_links p WHERE p.kind='pr' AND p.number IS NOT NULL "
+                "AND coalesce(p.state,'open') NOT IN ('merged','closed','shipped') AND " + held.format("p") +
+                " AND EXISTS (SELECT 1 FROM task_links w WHERE w.task_id=p.task_id AND w.kind='worktree' "
+                "AND coalesce(w.state,'unknown')<>'removed') ORDER BY coalesce(p.updated,p.created),p.id LIMIT 200", (org,)))
+            branches = H._rows(c.execute(
+                "SELECT DISTINCT w.repo,w.branch FROM task_links w WHERE w.kind='worktree' "
+                "AND coalesce(w.state,'unknown')<>'removed' AND w.branch LIKE 'tico/%' AND " + held.format("w") +
+                " AND NOT EXISTS (SELECT 1 FROM task_links p WHERE p.task_id=w.task_id AND p.kind='pr' "
+                "AND lower(p.repo)=lower(w.repo) AND p.branch=w.branch) LIMIT 200", (org,)))
+        due = [("pr", l["repo"], l["number"], l) for l in links]
+        due += [("branch", b["repo"], b["branch"], None) for b in branches if WORKTREE_BRANCH.match(b["branch"])]
+        due = [d for d in due if cache.get(d[:3], 0) <= now][:20]
+        if not due:
+            return
+        service.worktree_reconcile_running = True
+
+    def reconcile():
+        tokens = {}
+        try:
+            for kind, repo, key, link in due:
+                retry = 900
+                try:
+                    if repo.lower() not in tokens:
+                        tokens[repo.lower()] = service.mint([repo], {"pull_requests": "read", "contents": "read"})[0]
+                    auth = {"Authorization": "Bearer " + tokens[repo.lower()]}
+                    path = f"/repos/{quote(repo, safe='/')}/pulls"
+                    if kind == "pr":
+                        response = service._call("GET", f"{path}/{key}", headers=auth)
+                        found = [response.json()] if response.status_code == 200 else []
+                    else:
+                        response = service._call("GET", path, headers=auth, params={
+                            "head": repo.split("/")[0] + ":" + key, "state": "all", "per_page": 10})
+                        found = response.json() if response.status_code == 200 else []
+                    with service.store.transaction() as c:
+                        for pr in found if isinstance(found, list) else []:
+                            if link is not None:
+                                current = c.execute("SELECT updated FROM task_links WHERE id=?", (link["id"],)).fetchone()
+                                if not current or current[0] != link.get("updated"):
+                                    continue    # a webhook wrote newer facts meanwhile
+                                pr["html_url"] = link["url"]
+                            pull_request(c, {"action": "refresh", "pull_request": pr},
+                                         review_role=service.settings.github_review_role,
+                                         release_repo=service.settings.release_repo)
+                    retry = 180 if response.status_code == 200 else 900
+                except Exception:
+                    logging.getLogger("tico.github").exception("Worktree PR reconcile failed for %s %s", repo, key)
+                with service.lock:
+                    if (kind, repo, key) not in cache and len(cache) >= 512:
+                        cache.pop(next(iter(cache)))
+                    cache[(kind, repo, key)] = time.monotonic() + retry
+        finally:
+            with service.lock:
+                service.worktree_reconcile_running = False
+    threading.Thread(target=reconcile, name="tico-worktree-pr-reconcile", daemon=True).start()
 
 
 def push(c, payload):
