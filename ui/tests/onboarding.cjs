@@ -163,6 +163,7 @@ function recruitFor({department, briefing, share}) {
       machine: {runners: [], enrolled: false}, needed: true,
     };
     let machine = {runners: [], enrolled: false};
+    let enrollCode = 'enroll-code';
     const me = {id: 'ana', name: 'Ana Rivera', role: 'owner', cloud: true,
                 email: 'ana@acme.example', credential_access: false, config: CONFIG};
     const v2bots = () => BOTS_AFTER.map((bot, i) => ({slug: bot.slug, display_name: bot.display_name, state: bot.status,
@@ -221,7 +222,7 @@ function recruitFor({department, briefing, share}) {
         return json({...record, home: 'human:ana'});
       }
       if (p === '/api/v2/setup/getting-started/state') { tourPosts.push(request.postDataJSON()); return json({tour: true, checklist: false, cards: [], skipped: []}); }
-      if (p === '/api/v2/enrollments') { enrollments.push(request.postDataJSON()); return json({code: 'enroll-code', expires: '2026-09-16T10:15:00Z'}); }
+      if (p === '/api/v2/enrollments') { enrollments.push(request.postDataJSON()); return json({code: enrollCode, expires: '2026-09-16T10:15:00Z'}); }
       if (p === '/api/v2/bots' && request.method() === 'POST') { created.push(request.postDataJSON()); return json({bot: {slug: request.postDataJSON().slug}}); }
       if (p === '/api/v2/bots') return json(v2bots());
       // A person's chat with a bot: the first message opens it, and the bot page's Chat tab lists it from then on.
@@ -621,6 +622,33 @@ function recruitFor({department, briefing, share}) {
     assert.equal(await overflow(), 0);
     await shot(page, 'phone-5b-machine-code');
     await page.setViewportSize(desk);
+    // Each Copy takes exactly what its box shows: the installer line, the line under Other ways and the code, and
+    // after New code the new code everywhere.
+    await page.evaluate(() => { window.copied = [];
+      Object.defineProperty(navigator, 'clipboard', {configurable: true, value: {writeText: async value => { window.copied.push(value); }}}); });
+    const copies = async () => {
+      await page.evaluate(() => { window.copied = []; });
+      for (const button of ['.onb-steps [data-onb-copy]', '#onb-other [data-onb-copy]', '#onb-code-copy']) await page.locator(button).click();
+      await page.waitForFunction(() => window.copied.length === 3);
+      return page.evaluate(() => window.copied);
+    };
+    const shown = async () => [...await page.locator('.onb-cmd code').allTextContents(), await page.locator('#onb-code-value').textContent()];
+    let [installer, other, code] = await copies();
+    assert.deepEqual([installer, other, code], await shown());
+    assert.match(installer, /^curl -fsSL .* --code 'enroll-code' /);
+    assert.match(other, /^docker run -d .* --code 'enroll-code' /);
+    assert.equal(code, 'enroll-code');
+    enrollCode = 'enroll-code-2';
+    await page.locator('#onb-enroll').click();
+    await page.locator('#onb-code-value', {hasText: 'enroll-code-2'}).waitFor();
+    [installer, other, code] = await copies();
+    assert.deepEqual([installer, other, code], await shown());
+    assert.match(installer, /--code 'enroll-code-2' /);
+    assert.match(other, /--code 'enroll-code-2' /);
+    assert.equal(code, 'enroll-code-2');
+    enrollCode = 'enroll-code';
+    await page.locator('#onb-enroll').click();
+    await page.locator('#onb-code-value', {hasText: /^enroll-code$/}).waitFor();
     assert.doesNotMatch(await page.locator('#onb-step').textContent(), /docker exec -it tico-runner/);
     await page.locator('[data-onb-kind][value=mac]').check();
     // The Mac comes online; the next save carries the live machine through to the review.
