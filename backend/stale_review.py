@@ -335,7 +335,7 @@ def run_pass(store, at=None, engine=None, clock=time.monotonic):
     label = qset["label"] if qset else QUESTION_SET
     if engine is None and qset:
         with store.read() as c:
-            engine = server_engine(store, c, primary_engine(settings))
+            engine = server_engine(store, c, primary_engine(settings, store))
     summary = {"candidates": len(found), "new": len(found), "calls": 0, "suggested": 0, "left": 0,
                "deferred": 0, "errors": 0, "changed": 0, "routes": {}, "cost_usd": 0.0}
     if engine is None or qset is None:

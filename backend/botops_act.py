@@ -228,7 +228,7 @@ ADMIN_ONLY = _routes(
 
 # Read as the person, except what hands back a secret or is a computer's own channel.
 NO_READ = re.compile(API + r"(credential-runtime|runner-credential-(migration|grants)|me/tokens.*|mcp|agents/setup-script|jobs.*|attempts.*"
-                     r"|runner-logins.*|runner-model-credentials|runners/desired|runners/assignments|runners/eligible|runners/me/events|directory/scim-token)")
+                     r"|runner-logins.*|runner-(model|gateway)-credentials|runners/desired|runners/assignments|runners/eligible|runners/me/events|directory/scim-token)")
 
 # Named like a secret: refused whatever route it is on.
 SECRET_KEYS = re.compile(r"^(secret|password|passwd|passphrase|token|access_token|refresh_token|api_key|apikey|"

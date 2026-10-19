@@ -26,7 +26,8 @@ function fixtures() {
   const machine = (id, label, operator, bots = []) => ({id, label, operator, last_seen: now, version: '0.3.2', platform: 'linux', bots,
     accepts_member_bots: true, readiness: {runtimes: {codex: {installed: true, authenticated: 'ready'}, claude: {installed: true, authenticated: 'ready'}}}});
   return {
-    machines: [machine('r1', 'Acme box', 'ana'), machine('r2', "Sam's Mac", 'sam', ['builder']), {...machine('r3', 'Old laptop', 'ana', ['scout']),
+    // Two of Acme box's bots run Codex on acme-eng and take turns on it (backend/views.py shared_logins).
+    machines: [{...machine('r1', 'Acme box', 'ana'), shared_logins: [{runtime: 'codex', profile: 'acme-eng', display_name: 'acme-eng', count: 2, bots: []}]}, machine('r2', "Sam's Mac", 'sam', ['builder']), {...machine('r3', 'Old laptop', 'ana', ['scout']),
       update: {state: 'needs_update', label: 'Needs update', release: '0.2.0', commit: 'c0ffee'.padEnd(40, '0'), outdated: true, server_release: '0.3.0', error: ''}}],
     subs: {
       profiles_by_computer: [
@@ -171,9 +172,11 @@ async function computers(browser) {
   assert.equal(await eng.locator('.subs-name').innerText(), 'acme-eng');
   assert.deepEqual(await eng.locator('.subs-rt .pill').allInnerTexts(), ['Codex · signed in', 'Claude Code · not signed in']);
   assert.equal(await eng.locator('.subs-signin').count(), 1, 'Sign in only where it is not signed in');
+  assert.equal(await eng.locator('[data-shared-login]').innerText(), '2 bots share this sign-in. They take turns: one Codex run at a time.');
   const ops = box.locator('[data-subs-profile="acme-ops"]');
   assert.equal(await ops.locator('.subs-name').innerText(), 'acme-ops');
   assert.deepEqual(await ops.locator('.subs-rt .pill').allInnerTexts(), ['Claude Code · signed in'], 'unknown sign-in adds no authentication pill');
+  assert.equal(await ops.locator('[data-shared-login]').count(), 0, 'a sign-in one bot uses says nothing');
   assert.deepEqual(await ops.locator('.subs-weekly > span:first-child').allInnerTexts(), ['Claude Code weekly: usage unknown', 'Codex weekly: usage unknown'], 'weekly allowance stays separate from sign-in state');
   // Unknown for every runtime: no state, but the owner can still sign it in.
   assert.deepEqual(await box.locator('[data-subs-profile="acme-new"] .subs-signin').allInnerTexts(), ['Sign in to Codex', 'Sign in to Claude Code']);

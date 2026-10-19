@@ -1,0 +1,87 @@
+# Tico AI Gateway
+
+The Tico AI Gateway is Tico's own model service. With a gateway key from Tico, your bots can run on **Tico Cheap 1.0**,
+**Tico Mid 1.0** and **Tico Power 1.0**, and Decide asks the Gateway with the same key. You connect it once, in
+**Settings → AI providers**. How runs reach the Gateway, for developers, is in
+[Harnesses](harnesses.md#the-tico-ai-gateway).
+
+| Model | What runs underneath |
+|---|---|
+| Tico Cheap 1.0 | Claude Haiku 5.5 |
+| Tico Mid 1.0 | Claude Sonnet 5.5 |
+| Tico Power 1.0 | Claude Opus 5.5 |
+
+## Connect the Gateway
+
+Only the owner can do this.
+
+1. Open **Settings → AI providers**. The **Tico AI Gateway** card is under the providers.
+2. Paste the key Tico gave you in **Gateway key**.
+3. Leave **Gateway URL** empty to use the default, `https://updates.tico.team/v1/gateway`. Enter another only if Tico gave
+   you one; it starts with `https://` (plain `http://` only for `localhost`). A URL set in the server's environment
+   (`TICO_GATEWAY_URL`) follows the same rule, or the key is not sent and the card says **Not working**.
+4. Press **Connect**.
+
+The card shows **Connected**, and Tico Cheap, Mid and Power 1.0 appear in the bot model list. The key field empties as
+soon as you press **Connect**, and the key is never shown again: the field shows only a short preview, its first and
+last three characters. If the card says **Not working** or **Not ready**, see [What the card says](#what-the-card-says).
+
+Once connected, the card has three buttons:
+
+- **Save**: saves a new key or URL. Leave the key field empty to keep the saved key.
+- **Check now**: asks the Gateway about the key again.
+- **Clear key**: removes the key. Bots on Tico models stop until a key is saved again, and the Tico models leave the
+  model list.
+
+If the server's environment sets the key (`TICO_GATEWAY_KEY`), that key wins: the card shows **Connected**, says the
+key is set by the server's environment, and has only **Check now**. Change it where the server is configured.
+
+People other than the owner see only whether the Gateway is connected.
+
+## Pick a Tico model for a bot
+
+While the Gateway is connected, pick **Tico Cheap 1.0**, **Tico Mid 1.0** or **Tico Power 1.0** in **Settings → Bots**
+like any other model ([Harness, model, effort and fallback](creating-bots.md#7-harness-model-effort-and-fallback)). The
+model list says what runs underneath, for example "Tico Mid 1.0 (Claude Sonnet 5.5 underneath)".
+
+No bot ever holds the gateway key. For a bot on a Tico model, or with a Tico model as its own fallback, the computer
+running it fetches the key and passes the bot's model calls on to the Gateway. The bot gets a pass that works only for
+that run and only for model calls. That is why Tico models need a computer that runs bots as their own user: Tico's
+Docker runner does. On a computer that runs bots as itself (a Mac), a bot on a Tico model stops once with "Tico models
+need a runner that runs bots as their own user (Tico's Docker runner). This computer can't, so pick another model or
+move the bot", and the run is saved for later rather than tried again. The bot's status and **Needs you** say so,
+and its other work waits until you pick another model or move the bot, then review the stopped run. A Tico fallback
+is left out there: the bot's own model's outcome stands.
+
+## What the card says
+
+Tico asks the Gateway about the key when you save it, when you press **Check now**, when the owner opens the page
+(at most once a minute) and every hour. The card shows the Gateway's last answer, and **Settings → Health** shows the
+same warnings to the owner, with **Open AI providers**.
+
+| The card says | What it means | What to do |
+|---|---|---|
+| **Connected** | The key works. | Nothing. |
+| "This key has used 80% of its monthly Gateway cap. Bots stop at 100% until next month." | The key is near its monthly cap. The number is the share used. | Nothing yet, or ask Tico for a higher cap. |
+| **Gateway cap reached** | The key has used its monthly cap. Bots on Tico models stop until next month, or until Tico raises the cap. | Wait for the next month (UTC), or ask Tico to raise the cap. |
+| **Not working**: key not recognised | The Gateway doesn't accept the key: it was revoked, or it was mistyped. | Check you pasted the whole key, or ask Tico for a new one and save it. |
+| **Not ready** | The Gateway at that URL doesn't serve Tico models yet. | Check the **Gateway URL**, or wait until Tico turns the models on. |
+| "Not checked: the Gateway did not answer." | The Gateway was unreachable. This says nothing about the key. | Nothing. Bots keep trying; check again later. |
+
+## When the Gateway refuses a bot's run
+
+The bot's status says why, in plain words, and the run waits or is saved for later. The same holds when a Tico model ran as the bot's own fallback:
+
+| The bot's status says | What happens to the run |
+|---|---|
+| **Gateway cap reached** | Waits until the next month (UTC). |
+| The Tico AI Gateway key is not working; save a new one in Settings > AI providers | Waits for a new key. |
+| Tico AI Gateway rate limited | Waits at least an hour. The Gateway limits an address that sent too many refused keys. |
+| The Tico AI Gateway doesn't offer this model | Saved for later, not retried. Pick Tico Cheap, Mid or Power 1.0. |
+| The Tico AI Gateway refused the request as sent, with the Gateway's reason | Saved for later, not retried. |
+| No Tico route for this request | Saved for later, not retried. |
+| The Tico AI Gateway doesn't serve Tico models at its URL yet | Saved for later, not retried. Check the **Gateway URL**. |
+| Tico AI Gateway is unavailable, try again | Back in the queue if nothing ran yet: tried up to three times, waiting a minute, then two. After the third try, or if the run had already acted, saved for later. |
+
+If the Gateway cuts a reply off after the bot started answering, the bot posts what it had written, with a note
+saying the Tico AI Gateway cut the reply off.
