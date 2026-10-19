@@ -1,11 +1,30 @@
 # Visuals in replies
 
 A bot or a person attaches a visual to a chat reply or a task comment: a picture, an SVG, a self-contained HTML
-page, a video or an audio clip, with a title. This page is the reference: how a visual shows in a conversation, how
-to attach one, what Tico does to a page when it is attached, the types and limits, and who can see it.
+page, a video or an audio clip, with a title. This page is the reference: when a bot adds one, how a visual shows in
+a conversation, how to attach one, what Tico does to a page when it is attached, the types and limits, who can see
+it, and what a reader sees outside Tico.
 
 Pictures, SVG and visual pages show inline as cards. Video and audio still show as file chips; inline players come
 in a later release.
+
+## When a bot adds a visual
+
+Every bot's instructions carry this line, word for word:
+
+> Add a visual (chart, table, diagram, mockup, screenshot, clip or recording) to a reply when it makes the answer
+> clearer, never for a plain answer, and keep the text answer complete on its own. For brand assets, designed
+> graphics or edited video, file a task for bot:designer or bot:video-producer; do not buy them.
+
+- **Design and Video Producer** (`designer`, `video-producer`) get the first sentence only, since the second sends
+  that work to them.
+- **The shared rules** say the same under "Visuals in replies" (`policies/shared-rules.md`), and add how to attach
+  one: `--visual <file>` and `--title <caption>` on the reply or comment.
+- **No switch.** It applies to every bot. There is no per-bot or admin setting to turn it off, and `AGENT.md` doesn't
+  need to repeat it.
+
+Keep the text answer complete because not every reader sees the visual: Slack shows only a link to it (see
+[Outside Tico](#outside-tico)).
 
 ## In a chat or task conversation
 
@@ -123,6 +142,26 @@ Visuals from a private task never show to guests or on the public roadmap.
 
 A visual is shown from a signed address made for one reader. It works only for that reader and expires after at
 most 2 hours. Each read of the message returns a current one, which stays the same for up to an hour.
+
+## Outside Tico
+
+Nothing visual leaves Tico. Where a message with visuals is posted to Slack, Slack shows its text and one more line:
+**1 visual - view in Tico** (or **N visuals - view in Tico**), linking to that message in Tico.
+
+- **A bot's reply** in a Slack thread gets the line under its text, before `(sent from <bot>)`. A long reply is cut,
+  and the line stays after the cut.
+- **A task-done post** gets the line when the task owner's result has visuals: the owner's newest comment with
+  visuals since the task was last marked done or declined. The line links to that comment and goes before
+  **Open task**.
+- **What counts.** Pictures, SVG, visual pages, video and audio. Plain files don't count, and a message with none of
+  these gets no line.
+- **Where the link goes.** A reply on a task opens the task with that comment in view and briefly marked. A chat
+  reply opens that bot's chat in the room the reply is in (each Slack thread is a room of its own), at the message.
+  If the message isn't there, Tico says so.
+- **Who can open it.** Only people who can read that conversation. The link names the message, not its content;
+  access is checked when it is opened. Messages on a private task are never sent to Slack.
+
+Slack is the only place outside Tico that gets this line.
 
 ## Self-hosting
 

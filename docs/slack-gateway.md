@@ -184,6 +184,11 @@ bot's registry entry when set, and the last line is `(sent from <display name>)`
 shows the APP badge. Without the `chat:write.customize` scope the post goes out as Tico with the
 footer alone, and the log says so once.
 
+A reply with visuals (pictures, SVG, visual pages, video, audio) keeps its text and adds one line,
+**1 visual - view in Tico** (or **N visuals**), linking to the message in Tico; no visual is posted to Slack. A
+task-done post adds the same line for the owner's result comment, before **Open task**. See
+[Visuals in replies](visuals.md#outside-tico).
+
 The reply text is escaped as Slack requires (`&`, `<`, `>`), so a bot writing `<!channel>` shows
 those characters and pages nobody, and "x < y" survives the parser.
 
