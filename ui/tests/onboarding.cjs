@@ -138,15 +138,16 @@ const DEPARTMENTS = [
   head: CATALOG.find(card => card.department === id && card.lead)?.template || '', software_only: ['product', 'engineering'].includes(id)}));
 const deptCards = id => CATALOG.filter(card => card.department === id);
 // POST /api/v2/setup/recruit, as the server's local recommender would answer (backend/recruit_rank.py, tested there):
-// the head, then the defaults and commons, and a niche card only when the answer names one of its tags.
+// the head, then the defaults and commons, and a niche card only when the answer names one of its tags. Only a tag of
+// two or more words is a why; a niche card brought in by one word has none.
 function recruitFor({department, briefing, share}) {
   const dept = DEPARTMENTS.find(row => row.id === department), words = String(briefing || '').toLowerCase();
   const rows = [];
   for (const card of deptCards(department).sort((a, b) => (b.lead ? 1 : 0) - (a.lead ? 1 : 0))) {
     const tag = (card.tags || []).find(word => words.includes(word));
     if (card.suggest === 'niche' && !tag) continue;
-    rows.push({template_id: card.template, why: tag ? `Matches “${tag}”` : card.lead ? `Heads ${dept.name} and reports to you`
-      : card.suggest === 'default' ? `A starting point for ${dept.name}` : `Common in ${dept.name}`});
+    rows.push({template_id: card.template, why: card.lead ? `Heads ${dept.name} and reports to you` : tag?.includes(' ') ? `Matches “${tag}”`
+      : card.suggest === 'default' ? `A starting point for ${dept.name}` : card.suggest === 'common' ? `Common in ${dept.name}` : ''});
   }
   return {bots: rows, suggested_default: deptCards(department).filter(card => card.lead).map(card => card.template),
           source: share ? 'hq' : 'local', shared: !!share, off_by: ''};
@@ -393,6 +394,8 @@ function recruitFor({department, briefing, share}) {
     assert.equal((await page.locator('#ob-recruiting').textContent()).trim(), 'Recruiting bots…');
     assert.equal(await page.locator('[data-ob-said]').textContent(), 'Inbound demos, and a few resellers');
     assert.match(await page.locator('#ob-chart [data-oc-dept=sales]').textContent(), /Recruiting…/);
+    // The group being recruited holds three places on the chart, so its lines never hang there empty.
+    assert.equal(await page.locator('#ob-chart [data-oc-dept=sales] .oc-ph').count(), 3);
     await shot(page, 'desktop-5-recruiting');
     releaseRecruit(); recruitHeld = null;
     await page.locator('#ob-suggested').waitFor();
@@ -406,17 +409,38 @@ function recruitFor({department, briefing, share}) {
     assert.deepEqual(await picked(), ['sales-lead', 'sdr-research']);
     assert.match(await page.locator('[data-ob-bot=sales-lead] .ob-bot-name').textContent(), /Sales Manager\s*Head/);
     assert.equal(await plain(page.locator('[data-ob-why=sales-lead]')), 'Heads Sales and reports to you');
-    assert.equal(await plain(page.locator('[data-ob-why=partnerships]')), 'Matches “resellers”');
+    // One word of the answer ("resellers") brings the niche bot in but is no reason to show: no why line on it.
+    assert.equal(await page.locator('[data-ob-why=partnerships]').count(), 0);
+    assert.equal(await plain(page.locator('[data-ob-why=sdr-research]')), 'A starting point for Sales');
+    assert.equal(await page.locator('#ob-chart .oc-ph').count(), 0);
     assert.equal(await page.locator('[data-ob-bot=sdr-research] .ob-bot-sum').textContent(), 'Researches accounts and writes first-touch emails.');
     // Every bot wears the avatar it will have: its blob with its template's icon, the same on its card and on the chart.
     assert.equal(await page.locator('[data-ob-bot=sdr-research] .av.blob .av-glyph').textContent(), 'person_search');
     assert.equal(await page.locator('#ob-chart [data-oc-bot=sdr-research] .av.blob .av-glyph').textContent(), 'person_search');
     assert.deepEqual(await chartBots('sales'), ['sales-lead', 'sdr-research']);
-    // Checking one grows the chart at once; the new node is the one that animates in.
+    // A long name wraps to two whole lines on the chart, never cut off, and the full name is its tooltip.
+    const sdrName = await page.locator('#ob-chart [data-oc-label=sdr-research]').evaluate(el => ({
+      cut: el.scrollHeight > el.clientHeight + 1 || el.scrollWidth > el.clientWidth + 1, lines: Math.round(el.clientHeight / parseFloat(getComputedStyle(el).lineHeight))}));
+    assert.ok(!sdrName.cut && sdrName.lines >= 2, JSON.stringify(sdrName));
+    assert.equal(await page.locator('#ob-chart [data-oc-bot=sdr-research] .oc-bnode').getAttribute('title'), 'Sales Development Representative');
     await page.locator('[data-ob-bot=partnerships]').click();
     assert.deepEqual(await chartBots('sales'), ['sales-lead', 'sdr-research', 'partnerships']);
     assert.match(await page.locator('#ob-chart [data-oc-bot=partnerships]').getAttribute('class'), /ob-new/);
     assert.doesNotMatch(await page.locator('#ob-chart [data-oc-bot=sdr-research]').getAttribute('class'), /ob-new/);
+    // Frame by frame through its entrance, the new bot's line is never drawn ahead of its card (that read as an empty gap).
+    const entrance = await page.evaluate(() => {
+      const li = document.querySelector('#ob-chart [data-oc-bot=partnerships]'), node = li.querySelector('.oc-bnode');
+      const animations = document.getAnimations().filter(a => li.contains(a.effect?.target));
+      const out = [];
+      for (const ms of [0, 100, 200, 300, 400, 600]) {
+        for (const a of animations) { a.pause(); a.currentTime = ms; }
+        const line = getComputedStyle(li, '::before').transform, scale = line === 'none' ? 1 : new DOMMatrix(line).d;
+        out.push({ms, line: +scale.toFixed(2), card: +getComputedStyle(node).opacity});
+      }
+      for (const a of animations) a.finish();
+      return out;
+    });
+    assert.ok(entrance.every(f => f.card >= f.line), 'line ahead of the card: ' + JSON.stringify(entrance));
     assert.equal(await page.locator('#ob-chart-stats').textContent(), '6 groups · 3 bots');
     assert.equal(await page.locator('#ob-more').count(), 0);                       // nothing left in Sales to show under More
     // The page scrolls (the org builder lets the document scroll); the sidebar and its bottom bar stay put, full height.

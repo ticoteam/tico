@@ -52,6 +52,12 @@ All notable changes to Tico are recorded here. The format follows
   `CLAUDE_CONFIG_DIR` is a reserved variable name, so a credential can no longer be granted under it.
 - Opening a card in **Needs you** (an approval, a task, a question) no longer sends a failing request for issue
   "NaN" in the background. Only an issues inbox card fetches its full request.
+- **Team chart reasons and chart while picking** (first run): a suggested bot's reason is no longer a single word of
+  your answer ("Matches “managers”" on four Sales cards, "Matches “github”" across Engineering). Only a short phrase
+  you wrote whole that fits that bot is shown ("Matches “flaky tests”"); otherwise it says "Common in Sales" or "A
+  starting point for Sales", or nothing for a bot your words brought in. The live chart holds places for the group
+  being recruited and draws each bot's line together with its card, so it never shows empty lines, and long bot names
+  wrap instead of being cut off ("Sales Developm…"), with the full name as a tooltip.
 - **Clear** on a bot's chat now really starts the bot over. Before, it only trimmed the history Tico sends, and on
   the computer Claude Code, Codex and the other harnesses kept resuming the old provider thread, so the bot still
   remembered the cleared chat and every turn still paid for it. Each turn now carries its conversation's session
