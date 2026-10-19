@@ -11,7 +11,7 @@ import yaml
 from fastapi import Query, Request
 from fastapi.responses import PlainTextResponse, RedirectResponse, Response
 
-from clients import gateway, sessions
+from clients import gateway
 
 from . import access as Access
 from . import bot_access as A
@@ -20,7 +20,7 @@ from . import changelog as CL
 from . import app_delivery, providers, runner_versions
 from .harnesses import resolve_harness
 from . import personal_tokens, rooms, team_rules, turns, wake_presets
-from .execution import AWAKE_GAP, AWAKE_SETTLE, Execution, bump_bot_session_epoch, turn_limit, turn_share, turns_here
+from .execution import AWAKE_GAP, AWAKE_SETTLE, Execution, turn_limit, turn_share, turns_here
 from pathlib import Path
 
 from . import read_cache
@@ -2005,15 +2005,10 @@ def install_views(app, store, auth, mutate, task_view):
             # Drop the provider pointer so the next turn tries a fresh thread and loads the
             # recovery pack from Hub history instead of resuming the cleared session.
             config = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
-            cfg = json.loads(config[0] or "{}") if config else {}
             if config:
+                cfg = json.loads(config[0] or "{}")
                 c.execute("DELETE FROM bot_sessions WHERE bot=? AND runtime=? AND model=?",
                           (bot, *providers.bot_choice(c, auth.settings, cfg)))
-            # This chat's turns continue the bot's thread every direct chat shares: the next turn of any of them
-            # starts a new one, while each other chat keeps its own history.
-            from .shared_bots import follow
-            if sessions.session_key(follow(c, bot, cfg), bot, None, conv["id"]) == sessions.BOT_THREAD:
-                bump_bot_session_epoch(c, bot)
             H.event(c, who.actor, "session.clear", conv["id"])
             return {"cleared": True, "conversation_id": conv["id"]}
         return mutate(request, body, work)
