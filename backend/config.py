@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 # and TICO_ASSISTANT_NAME; nothing below carries a company's name, domain or people.
 PRODUCT_NAME = "Tico"
 ASSISTANT_NAME = "Assistant"        # what the assistant is called until a company names it
+DEFAULT_COMPANY_NAME = "Company"   # the team name when TICO_TEAM_NAME is unset: no one's real name
 
 
 def _release_origin():
@@ -121,7 +122,7 @@ class Settings:
     # <registry_dir>/integrations.
     company_integrations_dir: Path | None = None
     environment_id: str = ""
-    company_name: str = "Company"
+    company_name: str = DEFAULT_COMPANY_NAME
     app_name: str = PRODUCT_NAME
     assistant_name: str = ASSISTANT_NAME
     assistant_bot: str = "coo"
@@ -337,6 +338,8 @@ class Settings:
     def environment(self):
         """What a client needs to render this environment: names, links and sign-in mode."""
         return {"environment_id": self.environment_id, "company_name": self.company_name,
+                # No TICO_TEAM_NAME: "Company" is a stand-in, so the first-run wizard leaves its name field empty.
+                "company_name_default": self.company_name == DEFAULT_COMPANY_NAME,
                 "app_name": self.app_name, "assistant_name": self.assistant_name,
                 "assistant_bot": self.assistant_bot, "public_url": self.public_url,
                 "runner_url": self.runner_url, "github_owner": self.github_owner,
@@ -378,7 +381,7 @@ class Settings:
             company_integrations_dir=Path(os.environ["TICO_INTEGRATIONS_DIR"]) if os.environ.get("TICO_INTEGRATIONS_DIR") else None,
             catalog_dir=Path(os.environ["TICO_CATALOG_DIR"]) if os.environ.get("TICO_CATALOG_DIR") else ROOT / "templates" / "catalog",
             environment_id=environment_id,
-            company_name=company or "Company",
+            company_name=company or DEFAULT_COMPANY_NAME,
             app_name=os.environ.get("TICO_APP_NAME", "").strip() or PRODUCT_NAME,
             assistant_name=os.environ.get("TICO_ASSISTANT_NAME", "").strip() or ASSISTANT_NAME,
             assistant_bot=os.environ.get("TICO_ASSISTANT_BOT", "").strip() or "coo",

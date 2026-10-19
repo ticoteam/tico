@@ -20,6 +20,15 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
 // TICO_SHOT_SCHEME=dark takes them in the dark theme.
 const shots = process.env.TICO_SCREENSHOT_DIR, scheme = process.env.TICO_SHOT_SCHEME === 'dark' ? 'dark' : 'light';
 // Every finite animation ended first, so a screen that animates in is photographed at rest.
+// The progress row is one line (every step on the same row, nothing cut off) and the step's title is well above body text.
+const oneLine = page => page.evaluate(() => {
+  // A wrapped row starts a step below the bottom of another one.
+  const row = document.querySelector('.onb-progress'), boxes = [...row.children].map(li => li.getBoundingClientRect());
+  const bottom = Math.min(...boxes.map(box => box.bottom));
+  return boxes.every(box => box.top < bottom) && row.scrollWidth <= row.clientWidth;
+});
+const bigTitle = page => page.evaluate(() => parseFloat(getComputedStyle(document.querySelector('.onb-head h1')).fontSize)
+  >= 1.5 * parseFloat(getComputedStyle(document.querySelector('#onb-step')).fontSize));
 const shot = async (page, name) => { if (!shots) return; await page.waitForFunction(() => document.getAnimations().every(a => a.playState !== 'running' || a.effect?.getTiming().iterations === Infinity), null, {timeout: t(5000)}); await page.screenshot({path: path.join(shots, `${name}-${scheme}.png`)}); };
 
 const CONFIG = {environment_id: 'initech', company_name: 'Initech', app_name: 'Initech Hub',
@@ -299,6 +308,11 @@ function recruitFor({department, briefing, share}) {
     assert.equal(await page.locator('#nav-welcome').evaluate(el => el.hidden), false);
     assert.match(await page.locator('#nav-welcome').textContent(), /Finish setup/);
     assert.equal(await page.locator('#onb-count').textContent(), 'Step 1 of 6');
+    // Short names in the row, the long one as the title; "Step 1 of 6" is for screen readers only.
+    assert.equal(await page.locator('.onb-progress').innerText().then(text => text.replace(/\s+/g, ' ').trim()), 'Names About Team Computer Agent Review');
+    assert.ok(await page.locator('#onb-count').evaluate(el => el.getBoundingClientRect().width <= 1), 'the count is screen-reader text');
+    assert.equal(await oneLine(page), true);
+    assert.equal(await bigTitle(page), true);
     // Until setup is done the wizard has the sidebar to itself: no app pages beside Finish setup.
     assert.equal(await page.locator('#side .side-scroll > [data-nav="tasks"]').isVisible(), false);
 
@@ -719,6 +733,11 @@ function recruitFor({department, briefing, share}) {
 
     // ---- e: connect your agent. Optional: the button opens the same modal as the sidebar's plug.
     assert.equal(await page.locator('#onb-count').textContent(), 'Step 5 of 6');
+    // One sentence on why, Connect as the secondary button: Next is the step's only primary.
+    assert.deepEqual(await page.locator('#onb-step button.primary').evaluateAll(els => els.map(el => el.id)), ['onb-next']);
+    assert.match(await page.locator('#onb-step .onb-lead').textContent(), /later from the top bar/);
+    assert.equal(await oneLine(page), true);
+    assert.equal(await bigTitle(page), true);
     await shot(page, 'desktop-5c-agent');
     await page.locator('#onb-connect').click();
     await page.locator('dialog.connect-agent[open]').waitFor();
@@ -730,6 +749,7 @@ function recruitFor({department, briefing, share}) {
 
     // ---- g: review, then create exactly once.
     assert.equal(await page.locator('#onb-count').textContent(), 'Step 6 of 6');
+    assert.equal(await bigTitle(page), true);
     await shot(page, 'desktop-5d-review');
     const review = await page.locator('#onb-step').textContent();
     assert.match(review, /Initech Hub/);
@@ -924,6 +944,11 @@ function recruitFor({department, briefing, share}) {
     const fits = () => phone.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth
       && document.querySelector('#main').scrollWidth <= document.querySelector('#main').clientWidth);
     assert.equal(await fits(), true);
+    // A phone shows the dots and the current step's name, on one line.
+    assert.deepEqual(await phone.locator('.onb-progress li span').evaluateAll(els =>
+      els.filter(el => el.getBoundingClientRect().width > 1).map(el => el.textContent)), ['Names']);
+    assert.equal(await oneLine(phone), true);
+    assert.equal(await bigTitle(phone), true);
     await phone.locator('#onb-next').click();
     await phone.locator('#onb-what').waitFor();
     assert.equal(await fits(), true);
@@ -1060,6 +1085,31 @@ function recruitFor({department, briefing, share}) {
     assert.equal(await waiting.locator('#fr-admin h2').textContent(), 'Add an admin');
     CONFIG.local = false;
     delete CONFIG.providers_configured;
+
+    // A fresh install (no TICO_TEAM_NAME: the server's stand-in "Company") starts with an empty name and a placeholder,
+    // and Next asks for the name instead of quietly naming the team "Company".
+    const before = {names: record.names, completed: record.completed, needed: record.needed}, mark2 = puts.length;
+    Object.assign(CONFIG, {company_name: 'Company', company_name_default: true});
+    record = {...record, names: {company_name: '', app_name: '', assistant_name: ''}, completed: null, needed: true};
+    const fresh = await context.newPage();
+    fresh.on('pageerror', e => errors.push(e.message));
+    await fresh.goto('https://tico-ui.test/#/welcome');
+    await fresh.locator('#onb-company').waitFor();
+    assert.equal(await fresh.locator('#onb-company').inputValue(), '');
+    assert.equal(await fresh.locator('#onb-company').getAttribute('placeholder'), 'Acme Inc.');
+    assert.equal(await fresh.locator('label.onb-field:has(#onb-company) .k').textContent(), 'Company name');
+    await shot(fresh, 'desktop-1-names-fresh');
+    await fresh.locator('#onb-next').click();
+    await fresh.locator('#onb-status .err', {hasText: "Add your company's name."}).waitFor();
+    assert.equal(await fresh.evaluate(() => document.activeElement.id), 'onb-company');
+    assert.equal(puts.length, mark2);
+    await fresh.locator('#onb-company').fill('Globex');
+    await fresh.locator('#onb-next').click();
+    await fresh.locator('#onb-what').waitFor();
+    assert.equal(puts.at(-1).names.company_name, 'Globex');
+    await fresh.close();
+    Object.assign(CONFIG, {company_name: 'Initech'}); delete CONFIG.company_name_default;
+    record = {...record, ...before};
 
     // A viewer has no setup entry and lands on Tasks if they type the address.
     me.role = 'human';

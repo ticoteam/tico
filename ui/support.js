@@ -335,6 +335,12 @@
     // The banner itself opens the pop-up on Your requests, where the controls and the log are.
     else if (e.target.closest('#support-access-banner [data-access-left]')) void open({list: true});
   });
+  // The message box grows to what it holds, so a "Want help setting up?" snapshot reads whole, up to the CSS cap.
+  function fitBox(box) {
+    if (!box || !box.isConnected) return;
+    box.style.height = 'auto';
+    box.style.height = box.scrollHeight + box.offsetHeight - box.clientHeight + 'px';
+  }
   function renderComposer() {
     const d = draft(), form = pop.querySelector('[data-compose]');
     form.innerHTML = `<label class="sr-only" for="support-message">Message to Tico support</label>
@@ -347,6 +353,7 @@
       ${!selected ? `<details class="support-options"><summary>Reply email and install details</summary><label>Email for a reply<input name="email" type="email" value="${escape(d.email)}" autocomplete="email"></label><label class="support-check"><input name="ids" type="checkbox" ${d.ids ? 'checked' : ''}> Include ${appVersion() ? 'versions' : 'version'} and install ID</label></details>` : ''}
       ${d.report ? `<p class="support-report" data-report>Attached: <strong>${escape(REPORTED[d.report.kind])}</strong> ${escape(d.report.title)} <button class="linkish" type="button" data-unreport>Remove</button></p>` : ''}
       <p class="support-sent" data-sent></p></details>`;
+    fitBox(form.elements.message);
     form.querySelector('[data-attach]').ontoggle = e => { if (e.target === form.querySelector('[data-attach]')) d.open = e.target.open; };
     const unreport = form.querySelector('[data-unreport]');
     if (unreport) unreport.onclick = () => {
@@ -357,6 +364,7 @@
     };
     form.oninput = () => {
       d.message = form.elements.message.value;
+      fitBox(form.elements.message);
       if (!selected) { d.email = form.elements.email.value; d.ids = form.elements.ids.checked; }
       d.diag = form.elements.diag.checked;
       const perf = Number(form.elements.perf.value);
