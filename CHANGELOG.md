@@ -23,6 +23,11 @@ All notable changes to Tico are recorded here. The format follows
   above your message. A chat with an active goal, a running turn or fewer than 3 turns is never checked, and a slow or
   failed check (over 1.5 s) sends the message in the same session with no line.
 
+### Changed
+- **First run, computer step**: one numbered path (make the code, then the line that uses it), with the plain
+  `docker run` alternative behind **Other ways**, closed. After **Add computer** the one-time code shows in large type
+  on the screen, not only in a toast. Commands wrap inside their box on a phone and on a desktop, with **Copy** in the box.
+
 ### Fixed
 - **Clear** on a bot's chat now really starts the bot over. Before, it only trimmed the history Tico sends, and on
   the computer Claude Code, Codex and the other harnesses kept resuming the old provider thread, so the bot still

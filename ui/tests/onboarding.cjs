@@ -558,12 +558,19 @@ function recruitFor({department, briefing, share}) {
     assert.doesNotMatch(blurb, /Mac you own/);
     // No AI provider is chosen yet, so there is no model to sign in to: that step is left out and the rest renumber.
     assert.doesNotMatch(await page.locator('#onb-step').textContent(), /profile add default|profile login|codex login/);
-    assert.match(await page.locator('#onb-step').textContent(), /3 · Start the bot service/);
-    // Once a provider is chosen the sign-in step is there, in order, on a Mac and on a Linux server.
+    // One numbered path: make the setup file, then the lines that use it. A Mac has no other way, so no Other ways.
+    assert.deepEqual(await page.locator('.onb-steps > li > .k').allTextContents(),
+      ["Download this computer's setup file", 'Register this Mac for the team', 'Start the bot service']);
+    assert.equal(await page.locator('#onb-other').count(), 0);
+    // Copy sits inside each command's box, not on a row of its own under it.
+    assert.equal(await page.locator('.onb-cmd').count(), await page.locator('.onb-cmd > [data-onb-copy]').count());
+    // Once a provider is chosen the sign-in step is there, in order, on a Mac and on a Linux server; on Linux the
+    // plain-Docker line is the other way, after the path.
     assert.deepEqual(await page.evaluate(() => {
       const state = {...ONB, providers: {default: {runtime: 'codex'}}};
-      return [onbCommands(state).map(([label]) => label.slice(0, 3)).join(''), onbCommands({...state, kind: 'linux'}).map(([label]) => label.slice(0, 3)).join('')];
-    }), ['2 ·3 ·4 ·', '2 ·3 ·4 ·']);
+      const shape = list => list.map(([label, , other]) => (other ? 'other:' : '') + label.split(/[ ,(]/)[0]).join(' ');
+      return [shape(onbCommands(state)), shape(onbCommands({...state, kind: 'linux'}))];
+    }), ['Register Add Start', 'Set Sign other:With']);
     assert.match(await page.evaluate(() => onbCommands({...ONB, providers: {default: {runtime: 'codex'}}})[1][1]), /profile login default codex/);
     assert.match(await page.evaluate(() => onbCommands({...ONB, kind: 'linux', providers: {default: {runtime: 'claude'}}})[1][1]), /docker exec -it -u bot tico-runner-tico-[a-z0-9]+ claude auth login/);
     assert.match(await page.locator('#onb-step').textContent(), /scripts\/tico -e <slug> install bot/);
@@ -581,11 +588,39 @@ function recruitFor({department, briefing, share}) {
       return [run[1], plain[1]].join('\n'); }),
       'curl -fsSL https://github.com/ticoteam/tico/releases/download/v0.2.0/install.sh -o install.sh && sh install.sh --runner --name acme-c0de --url http://server:8765 --server-network acme_default --code \'c0de\' --label "This computer"\n'
       + 'docker run -d --name tico-runner-acme-c0de --restart unless-stopped --network acme_default -v tico-runner-acme-c0de_runner-home:/home/runner ghcr.io/ticoteam/tico-runner:v0.2.0 join --url http://server:8765 --code \'c0de\' --label "This computer"');
-    // The bare docker run stays as an alternative, pinned to the server's release and said not to update itself.
-    assert.match(await page.locator('#onb-step').textContent(), /no updater, so it will not follow the server's releases/);
-    assert.match(await page.locator('#onb-step').textContent(), /docker run -d --name tico-runner-tico-code --restart unless-stopped -v tico-runner-tico-code_runner-home:\/home\/runner ghcr\.io\/ticoteam\/tico-runner:v0\.2\.0 join --url https:\/\/initech\.test --code '<code>'/);
+    // One path is on the screen: the code, then the installer line. A label's parenthetical is a small hint under it.
+    assert.deepEqual(await page.locator('.onb-steps > li > .k').allTextContents(),
+      ['Create a one-time code for this computer', 'Set up the runner on the server']);
+    assert.match(await page.locator('.onb-steps .onb-hint').first().textContent(), /^installs Docker if it is missing; keeps itself on this server's release$/);
+    // The bare docker run stays as an alternative under Other ways, closed, pinned to the server's release and said not to update itself.
+    assert.equal(await page.locator('#onb-other').evaluate(el => el.open), false);
+    assert.equal(await page.locator('#onb-other .onb-cmd').isVisible(), false);
+    assert.match(await page.locator('#onb-other').textContent(), /no updater, so it will not follow the server's releases/);
+    assert.match(await page.locator('#onb-other').textContent(), /docker run -d --name tico-runner-tico-code --restart unless-stopped -v tico-runner-tico-code_runner-home:\/home\/runner ghcr\.io\/ticoteam\/tico-runner:v0\.2\.0 join --url https:\/\/initech\.test --code '<code>'/);
+    await page.locator('#onb-other > summary').click();
+    assert.equal(await page.locator('#onb-other .onb-cmd').isVisible(), true);
+    // Before Add computer there is no code to show.
+    assert.equal(await page.locator('#onb-code').count(), 0);
     await page.locator('#onb-enroll').click();
     await page.waitForFunction(() => /--code 'enroll-code' --label "Ana's server"/.test(document.querySelector('#onb-step').textContent));
+    // The one-time code is on the screen in large type, not only in a toast; Other ways stays as it was left.
+    assert.equal(await page.locator('#onb-code-value').textContent(), 'enroll-code');
+    assert.ok(await page.locator('#onb-code-value').evaluate(el => parseFloat(getComputedStyle(el).fontSize)) >= 20);
+    assert.equal(await page.locator('#onb-enroll').textContent(), 'New code');
+    assert.equal(await page.locator('#onb-other').evaluate(el => el.open), true);
+    // No command, and not the code, runs past the card: each wraps inside its box, on a laptop and on a phone.
+    const overflow = () => page.evaluate(() => {
+      const card = document.querySelector('#onb-step').getBoundingClientRect();
+      return [...document.querySelectorAll('#onb-step .onb-cmd, #onb-step .onb-cmd code, #onb-code-value')]
+        .filter(el => el.scrollWidth > el.clientWidth + 1 || el.getBoundingClientRect().right > card.right + 1).length;
+    });
+    assert.equal(await overflow(), 0);
+    await shot(page, 'desktop-5b-machine-code');
+    const desk = page.viewportSize();
+    await page.setViewportSize({width: 390, height: 844});
+    assert.equal(await overflow(), 0);
+    await shot(page, 'phone-5b-machine-code');
+    await page.setViewportSize(desk);
     assert.doesNotMatch(await page.locator('#onb-step').textContent(), /docker exec -it tico-runner/);
     await page.locator('[data-onb-kind][value=mac]').check();
     // The Mac comes online; the next save carries the live machine through to the review.
