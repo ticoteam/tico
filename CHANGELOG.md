@@ -8,6 +8,20 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Quiet work stays visible and comes back**: a task filed for a bot's next run now says where it stands, on the task
+  and in `hub task show` (`quiet`): eligible (the next run carries it), delivered (which run took it and when, and
+  until what it was deferred) or queued (a run of its own). A run that will not do a carried task now says when to
+  pick it up with `hub task defer <id> --after <task> | --at <time> | --next-run`, and the task gets one run of its own
+  then. A run that ends without working a carried task or saying when hands it back to the next run instead of
+  keeping it. The Health Monitor names a quiet task handed to a run over two hours ago and not worked since
+  ([Leave work for the next run](docs/using-tico.md#leave-work-for-the-next-run)).
+- **Recommended setup** in the installer: `sh install.sh --recommended` is the quick start with the sample company,
+  your Claude and ChatGPT subscriptions plus Tico Gateway, Tico Support on and a computer on the server, so the only
+  setup left is signing in to Claude and ChatGPT in Settings > Computers. Run on a terminal with no options, the
+  installer asks which setup to use and offers this one first; with any option, or without a terminal, it does what it did
+  before. `--support off` turns Support off. The Gateway invite comes from `TICO_GATEWAY_INVITE` in the environment and
+  is never printed. The quick start, your own domain and sign-in, and your own keys install as before.
+  ([Install](docs/install.md#recommended-setup))
 - **How long an approval has waited, and on whom**: every approval now records when its exact payload was ready to
   decide and whose decision it is, and its card in Needs you and Decide says so plainly ("Ready 2 h 10 min, waiting
   on you", or the person's name); the row shows "ready 2 h 10 min". The API adds `ready_since`, `decision_owner`,
@@ -64,8 +78,9 @@ All notable changes to Tico are recorded here. The format follows
 - **Start fresh when the topic changes** (Settings > Team; off by default, an owner or an admin turns it on): in a
   long or idle direct chat with a bot, Tico asks Decide whether your new message starts a new topic before it is sent.
   If it does, the bot's session is cleared the same way Clear does, and the chat shows a quiet **Topic changed** line
-  above your message. A chat with an active goal, a running turn or fewer than 3 turns is never checked, and a slow or
-  failed check (over 1.5 s) sends the message in the same session with no line.
+  above your message. A chat with an active goal, a running turn or fewer than 3 turns, and a message with files
+  attached, are never checked, and a slow or failed check (over 1.5 s) sends the message in the same session with no
+  line.
 - **Settings → Computers** shows one compact row per computer: name, Tico version (with **Update** only when one is
   waiting), operator, bots, a chip for each AI connection, and status. A chip shows the tool, a thin bar and the share
   of the weekly allowance that is left; hover for when it resets and how old the reading is. A red dot means bots
@@ -105,6 +120,8 @@ All notable changes to Tico are recorded here. The format follows
   follows the bot your message went to, such as the bot that asked you on a task you own, not only the task's owner.
   Before you send, the message box says when no bot will get the message, or when it waits for the bot's next run on
   the task.
+- A locally managed Cloudflare Tunnel keeps the separate inline-visual hostname after a server restart or update.
+  `TICO_VISUAL_ORIGIN` adds a route for `^/visuals/` only; app and runner routes and the 404 catch-all stay in place.
 - **A bot's finished answer is no longer lost or given twice when its computer stalls before handing it in.** A
   turn's lease now renews on a thread of its own, so busy work on the computer can't stop it. If a finished
   answer still comes in late, after its run was dismissed or cancelled, it is kept: the run ends completed and the
@@ -139,6 +156,7 @@ All notable changes to Tico are recorded here. The format follows
   before this keeps today's behaviour ([sessions](docs/sessions.md)).
 
 ### Changed
+- **A bot can hold 50 task worktrees, up from 30.** The computer's 5 GB free-disk floor and normal cleanup rules still apply.
 - **A waiting task sleeps, and a bot's own writes never wake it** (token saving): news about a task that waits on
   another task (blocked by) or on a pull request's checks (wake once), such as a step move, a relation change or a
   comment, no longer starts a run; the task wakes when its blocker finishes or its checks come back. A notice that a
