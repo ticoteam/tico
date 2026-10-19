@@ -5,13 +5,18 @@
 //! API key) is never held, and neither is any other CLI's.
 //!
 //! In memory: this runner starts every turn on this computer, and a turn that ends, fails, runs out of time or
-//! panics drops what it holds, which frees the login at once. A restarted runner holds nothing.
+//! panics drops what it holds. That frees the login at once, unless the host the turn started is still running (a
+//! panic or a cancelled turn skips its stop): then the login is kept until that host has stopped. A restarted runner
+//! holds nothing.
 //!
 //! A login is never copied into another bot's home to get round this: a copy of a ChatGPT auth.json rotates apart
 //! from the original, and two bots on two copies would slip past the lock (the guard test below).
 
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Duration;
 
 use tokio::sync::OwnedMutexGuard;
 
@@ -66,16 +71,58 @@ fn set_holder(key: &str, bot: Option<&str>) {
     }
 }
 
+/// What a held login waits for before it is free again: the host its turn started on the login.
+pub trait Lingering: Send + 'static {
+    fn alive(&self) -> bool;
+    fn stop(self: Box<Self>) -> Pin<Box<dyn Future<Output = ()> + Send>>;
+}
+
+impl Lingering for crate::hosts::Host {
+    fn alive(&self) -> bool {
+        crate::hosts::Host::alive(self)
+    }
+
+    fn stop(self: Box<Self>) -> Pin<Box<dyn Future<Output = ()> + Send>> {
+        Box::pin(async move { crate::hosts::Host::stop(&self).await })
+    }
+}
+
 /// A login held by one turn; dropping it (the turn's host stopped, or the turn ended any other way) frees it.
 pub struct Held {
     key: String,
-    _guard: OwnedMutexGuard<()>,
+    guard: Option<OwnedMutexGuard<()>>,
+    host: Option<Box<dyn Lingering>>,
+}
+
+impl Held {
+    fn new(key: &str, guard: OwnedMutexGuard<()>) -> Held {
+        Held { key: key.into(), guard: Some(guard), host: None }
+    }
+
+    /// The host this turn runs on the login: if it is still running when the turn lets go, the login stays held
+    /// until it has stopped, so no other turn's host ever runs beside it.
+    pub fn bind(&mut self, host: impl Lingering) {
+        self.host = Some(Box::new(host));
+    }
 }
 
 impl Drop for Held {
     fn drop(&mut self) {
-        // Cleared before the guard goes, so the next turn's own name is the one left.
-        set_holder(&self.key, None);
+        let (key, guard) = (std::mem::take(&mut self.key), self.guard.take());
+        match (self.host.take().filter(|h| h.alive()), tokio::runtime::Handle::try_current()) {
+            (Some(host), Ok(runtime)) => {
+                runtime.spawn(async move {
+                    host.stop().await;
+                    set_holder(&key, None);
+                    drop(guard);
+                });
+            }
+            _ => {
+                // Cleared before the guard goes, so the next turn's own name is the one left.
+                set_holder(&key, None);
+                drop(guard);
+            }
+        }
     }
 }
 
@@ -84,7 +131,7 @@ pub fn try_take(key: &str, bot: &str) -> Result<Held, String> {
     match lock_for(key).try_lock_owned() {
         Ok(guard) => {
             set_holder(key, Some(bot));
-            Ok(Held { key: key.into(), _guard: guard })
+            Ok(Held::new(key, guard))
         }
         Err(_) => Err(holder(key).unwrap_or_default()),
     }
@@ -94,7 +141,43 @@ pub fn try_take(key: &str, bot: &str) -> Result<Held, String> {
 pub async fn take(key: &str, bot: &str) -> Held {
     let guard = lock_for(key).lock_owned().await;
     set_holder(key, Some(bot));
-    Held { key: key.into(), _guard: guard }
+    Held::new(key, guard)
+}
+
+/// The login for a turn that may wait for it: at once when it is free, else in its place in the queue. `over` says
+/// why the turn should not run any more (its lease, a Stop, the computer stopping); it is asked before taking the
+/// login, every `tick` while waiting and once more when the login is granted, so a cancelled turn never starts on it
+/// (dropping it passes the login to the next turn in the queue). `waiting` hears the holder when the turn starts
+/// to wait and whenever the holder changes.
+pub async fn wait_for(key: &str, bot: &str, over: impl Fn() -> Option<String>, mut waiting: impl FnMut(&str), tick: Duration) -> Result<Held, String> {
+    if let Some(why) = over() {
+        return Err(why);
+    }
+    let mut by = match try_take(key, bot) {
+        Ok(held) => return Ok(held),
+        Err(by) => by,
+    };
+    waiting(&by);
+    let queued = take(key, bot);
+    tokio::pin!(queued);
+    let held = loop {
+        tokio::select! {
+            held = &mut queued => break held,
+            _ = tokio::time::sleep(tick) => {
+                if let Some(why) = over() {
+                    return Err(why);
+                }
+                if let Some(now) = holder(key).filter(|h| *h != by) {
+                    by = now;
+                    waiting(&by);
+                }
+            }
+        }
+    };
+    if let Some(why) = over() {
+        return Err(why);
+    }
+    Ok(held)
 }
 
 /// The bot whose turn holds the login, if one does.
@@ -192,6 +275,122 @@ mod tests {
         assert!(tokio::time::timeout(Duration::from_millis(20), take(key, "gave-up")).await.is_err());
         drop(held);
         assert_eq!(try_take(key, "b").map(|_| ()).err(), None);
+    }
+
+    /// A stand-in host: a real child process (`sleep`), stopped as a host stops it and reaped by its own task.
+    struct Child {
+        stopper: crate::hosts::Stopper,
+        gone: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl Child {
+        fn start() -> (Child, Arc<std::sync::atomic::AtomicBool>) {
+            let child = tokio::process::Command::new("sleep").arg("30").spawn().expect("sleep runs");
+            let (stopper, exited) = crate::hosts::own(child);
+            let gone = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let g = gone.clone();
+            tokio::spawn(async move {
+                let _ = exited.await;
+                g.store(true, Ordering::SeqCst);
+            });
+            (Child { stopper, gone: gone.clone() }, gone)
+        }
+    }
+
+    impl Lingering for Child {
+        fn alive(&self) -> bool {
+            !self.gone.load(Ordering::SeqCst)
+        }
+
+        fn stop(self: Box<Self>) -> Pin<Box<dyn Future<Output = ()> + Send>> {
+            Box::pin(async move {
+                self.stopper.terminate(Duration::from_millis(500));
+                while !self.gone.load(Ordering::SeqCst) {
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_turn_that_panics_or_is_cancelled_with_its_host_running_keeps_the_login_until_the_host_has_exited() {
+        let key = "codex:test-host";
+        let (host, gone) = Child::start();
+        let crashed = tokio::spawn(async move {
+            let mut held = take(key, "ops").await;
+            held.bind(host);
+            panic!("the worker crashed mid-turn");
+        });
+        assert!(crashed.await.unwrap_err().is_panic());
+        let next = tokio::time::timeout(Duration::from_secs(10), take(key, "next")).await.expect("free once the host stopped");
+        assert!(gone.load(Ordering::SeqCst), "the next turn got the login while the crashed turn's host still ran");
+        drop(next);
+        // A turn cut off mid-run (its future dropped) is the same.
+        let (host, gone) = Child::start();
+        let cut = tokio::time::timeout(Duration::from_millis(50), async move {
+            let mut held = take(key, "ops").await;
+            held.bind(host);
+            std::future::pending::<()>().await;
+        });
+        assert!(cut.await.is_err());
+        let next = tokio::time::timeout(Duration::from_secs(10), take(key, "next")).await.expect("free once the host stopped");
+        assert!(gone.load(Ordering::SeqCst));
+        drop(next);
+        // A host already stopped (the turn's own cleanup) frees the login at once.
+        let (host, gone) = Child::start();
+        host.stopper.terminate(Duration::ZERO);
+        while !gone.load(Ordering::SeqCst) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let mut held = try_take(key, "ops").unwrap();
+        held.bind(host);
+        drop(held);
+        drop(try_take(key, "next").expect("free at once"));
+    }
+
+    #[tokio::test]
+    async fn a_waiting_turn_that_is_over_never_takes_the_login_and_the_next_one_does() {
+        let over = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let why = |over: &Arc<std::sync::atomic::AtomicBool>| {
+            let over = over.clone();
+            move || over.load(Ordering::SeqCst).then(|| "Execution interrupted after stop".to_string())
+        };
+        // Already stopped, login free: refused, and the login stays free.
+        let key = "codex:test-over-free";
+        over.store(true, Ordering::SeqCst);
+        assert!(wait_for(key, "ops", why(&over), |_| {}, Duration::from_secs(60)).await.is_err());
+        assert!(try_take(key, "next").is_ok());
+
+        // Stopped just before the holder lets go, with no tick in between: the grant is checked too, and the turn
+        // queued behind it gets the login.
+        let key = "codex:test-over-grant";
+        over.store(false, Ordering::SeqCst);
+        let first = try_take(key, "builder").unwrap();
+        let said = Arc::new(Mutex::new(vec![]));
+        let heard = said.clone();
+        let stopped = tokio::spawn(wait_for(key, "ops", why(&over), move |h| heard.lock().unwrap().push(h.to_string()), Duration::from_secs(60)));
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let behind = tokio::spawn(wait_for(key, "support", || None, |_| {}, Duration::from_secs(60)));
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        over.store(true, Ordering::SeqCst);
+        drop(first);
+        assert!(stopped.await.unwrap().is_err(), "a stopped turn started on the login");
+        let next = tokio::time::timeout(Duration::from_secs(5), behind).await.expect("the next waiter proceeds").unwrap().unwrap();
+        assert_eq!(holder(key).as_deref(), Some("support"));
+        assert_eq!(*said.lock().unwrap(), ["builder"]);
+        drop(next);
+
+        // A lease lost while the holder still runs ends the wait at the next tick.
+        let key = "codex:test-over-lost";
+        over.store(false, Ordering::SeqCst);
+        let first = try_take(key, "builder").unwrap();
+        let lost = tokio::spawn(wait_for(key, "ops", why(&over), |_| {}, Duration::from_millis(10)));
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        over.store(true, Ordering::SeqCst);
+        assert!(tokio::time::timeout(Duration::from_secs(5), lost).await.expect("the wait ends").unwrap().is_err());
+        assert_eq!(holder(key).as_deref(), Some("builder"));
+        drop(first);
+        assert!(try_take(key, "next").is_ok(), "the given-up waiter left the queue");
     }
 
     /// No code path copies a login file into another home. Switch account signs in inside the login's own home

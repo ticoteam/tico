@@ -699,45 +699,42 @@ impl Runner {
             && self.serial_login(&hop.runtime, &hop.harness, profile.as_ref()).is_none_or(|l| crate::login_turns::holder(&l.key).is_none())
     }
 
+    /// Why a turn that wants `login` must not run any more: its lease is lost or past its deadline (a renewal that
+    /// keeps failing never sets `lost`), a person stopped it, or this computer is stopping at once. A graceful stop or
+    /// an update drain is not one: the turns already taken still run, in their turn.
+    fn login_wait_over(&self, flags: &Flags, login: &crate::login_turns::Login) -> Option<String> {
+        if flags.lost.load(Ordering::SeqCst) || Instant::now() >= *flags.deadline.lock().unwrap() {
+            Some(format!("Lease expired while waiting for {} to be free", login.label))
+        } else if flags.stopped.load(Ordering::SeqCst) {
+            Some(format!("Execution interrupted after stop while waiting for {} to be free", login.label))
+        } else if self.stopping() {
+            Some(format!("Execution interrupted after stop: this computer stopped while waiting for {} to be free", login.label))
+        } else {
+            None
+        }
+    }
+
     /// `login` for this turn: at once when it is free, else once the turns that asked first are done with it. While
     /// it waits the turn says so, "Waiting for <login> to be free (busy with <bot>)", in a `status` event the chat and
-    /// the task's Runs show (a wait, not a failure), renamed when the holder changes and cleared once the login is
-    /// this turn's. A person's Stop or a lost lease ends the wait as it ends any turn.
+    /// the task's Runs show (a wait, not a failure), renamed when the holder changes and cleared once the wait is
+    /// over. A lost lease, a person's Stop or the computer stopping ends the wait, and a turn cancelled just as the
+    /// login came free never starts on it (crate::login_turns::wait_for).
     async fn take_login(&self, aid: &str, bot: &str, login: &crate::login_turns::Login, flags: &Flags, wake: &Notify) -> Result<crate::login_turns::Held, Fail> {
-        let mut holder = match crate::login_turns::try_take(&login.key, bot) {
-            Ok(held) => return Ok(held),
-            Err(holder) => holder,
-        };
+        let mut waited = false;
         let say = |holder: &str| {
+            waited = true;
             let line = login.waiting(holder, bot);
             log(&format!("Tico runner: {bot}: {line}"));
             // The server words it for each reader: the holder is named only to whoever may see that bot.
             let _ = self.state.append(aid, "status", &json!({"waiting": line, "login": login.label, "holder": holder}));
             wake.notify_one();
         };
-        say(&holder);
-        let take = crate::login_turns::take(&login.key, bot);
-        tokio::pin!(take);
-        let held = loop {
-            tokio::select! {
-                held = &mut take => break held,
-                _ = tokio::time::sleep(Duration::from_secs(1)) => {
-                    if flags.lost.load(Ordering::SeqCst) {
-                        return Err(Fail::runtime(format!("Lease expired while waiting for {} to be free", login.label)));
-                    }
-                    if flags.stopped.load(Ordering::SeqCst) {
-                        return Err(Fail::runtime(format!("Execution interrupted after stop while waiting for {} to be free", login.label)));
-                    }
-                    if let Some(now) = crate::login_turns::holder(&login.key).filter(|h| *h != holder) {
-                        holder = now;
-                        say(&holder);
-                    }
-                }
-            }
-        };
-        let _ = self.state.append(aid, "status", &json!({"waiting": ""}));
-        wake.notify_one();
-        Ok(held)
+        let got = crate::login_turns::wait_for(&login.key, bot, || self.login_wait_over(flags, login), say, Duration::from_secs(1)).await;
+        if waited {
+            let _ = self.state.append(aid, "status", &json!({"waiting": ""}));
+            wake.notify_one();
+        }
+        got.map_err(Fail::runtime)
     }
 
     /// One turn, start to result. Err only when the result could not be settled; the loop then saves an
@@ -820,6 +817,9 @@ impl Runner {
                 // that waits starts on a fresh one. Busy: the bot's own fallback takes the turn when it is ready (not
                 // for a command or a native goal, which belong to this harness), else the turn waits its turn.
                 let control = truthy(refs.get("command")) || goal.chat_goal.as_ref().is_some_and(|g| g["status"] == "active");
+                if let Some(why) = self.login_wait_over(&flags, &login) {
+                    return Err(Fail::runtime(why));
+                }
                 match crate::login_turns::try_take(&login.key, &bot) {
                     Ok(held) => login_held = Some(held),
                     Err(holder) if !control && self.busy_fallback(&attempt, &config) => busy = Some((login, holder)),
@@ -920,6 +920,9 @@ impl Runner {
                 self.make_host(&bot, &runtime, &config, &env, selected.as_ref(), tx)?
             };
             let h = host.insert(made);
+            if let Some(held) = login_held.as_mut() {
+                held.bind(h.clone()); // kept until this host stops, however the turn ends
+            }
             if let Some(c) = &capture {
                 h.set_capture(c);
             }
@@ -1068,6 +1071,9 @@ impl Runner {
                 let _ = self.state.append(&aid, "status", &json!({"tool_events": false}));
                 let (tx, mut rx) = unbounded_channel();
                 let h = host.insert(self.make_host(&bot, &hop.runtime, &hop_config, &hop_env, selected.as_ref(), tx)?);
+                if let Some(held) = login_held.as_mut() {
+                    held.bind(h.clone());
+                }
                 if let Some(c) = &capture {
                     h.set_capture(c);
                 }
@@ -1473,6 +1479,49 @@ mod tests {
         assert_eq!(billing_for("codex", "Signed in with an API key"), "api");
         assert_eq!(billing_for("musecode", "Signed in with a Meta account"), "subscription");
         assert_eq!(billing_for("musecode", "Signed in with META_API_KEY"), "api");
+    }
+
+    #[test]
+    fn a_turn_waiting_for_its_chatgpt_login_ends_on_a_lost_lease_a_stop_or_a_hard_stop_not_an_update_drain() {
+        let dir = std::env::temp_dir().join(format!("tico-login-wait-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(dir.join("projects")).unwrap();
+        let path = dir.join("runner.json");
+        std::fs::write(&path, json!({"url": "http://127.0.0.1:9", "token": "t", "runner_id": "r1", "projects_dir": dir.join("projects")}).to_string()).unwrap();
+        let config = crate::config::Config::load(&path).unwrap();
+        let client = crate::client::Client::new(&config.url(), &config.token(), 1, 0).unwrap();
+        let runner = Runner::new(config, client, crate::state::State::open(&dir.join("state")).unwrap());
+        // Only a ChatGPT sign-in is held; an API key or an unknown sign-in runs side by side.
+        let signed_in = |detail: &str| {
+            *runner.runtime_rows.lock().unwrap() = [("codex".to_string(), json!({"status": "ready", "detail": detail}))].into_iter().collect();
+            runner.serial_login("codex", "codex", None)
+        };
+        assert_eq!(signed_in("Signed in with ChatGPT").map(|l| l.key), Some("codex:".into()));
+        assert_eq!(signed_in("Signed in with an API key"), None);
+        assert_eq!(signed_in(""), None);
+        assert_eq!(runner.serial_login("claude", "claude", None), None);
+
+        let login = crate::login_turns::Login::new("codex", "");
+        let flags = || Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), done: AtomicBool::new(false),
+                               done_notify: Notify::new(), deadline: Mutex::new(Instant::now() + Duration::from_secs(60)) };
+        let over = |f: &Flags| runner.login_wait_over(f, &login).unwrap_or_default();
+        assert_eq!(over(&flags()), "");
+        let f = flags();
+        f.lost.store(true, Ordering::SeqCst);
+        assert!(over(&f).starts_with("Lease expired"));
+        // A renewal that keeps failing never sets `lost`: the deadline ends the wait.
+        let f = flags();
+        *f.deadline.lock().unwrap() = Instant::now();
+        assert!(over(&f).starts_with("Lease expired"));
+        let f = flags();
+        f.stopped.store(true, Ordering::SeqCst);
+        assert!(over(&f).starts_with("Execution interrupted after stop"));
+        // A graceful stop (an update drain, a container's first SIGTERM) lets the waiting turns run in their turn;
+        // the second stop is at once.
+        runner.shut_down();
+        assert_eq!(over(&flags()), "");
+        runner.shut_down();
+        let hard = over(&flags());
+        assert!(OWN_INTERRUPT.iter().any(|p| hard.contains(p)), "{hard}");
     }
 
     #[test]

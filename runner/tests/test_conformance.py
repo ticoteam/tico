@@ -217,14 +217,14 @@ def reply_to(api, conversation, token="ana-test", bot="ops"):
 def add_bot(api, computer, tmp_path, slug, bot=None):
     """Another bot on this computer, on the same harness and the computer's own logins (call before start)."""
     assign(api, computer.registration, slug)
+    config = {"name": slug, "runtime": computer.runtime, "harness": computer.harness, "model": MODELS[computer.harness],
+              "status": "active", **(bot or {})}
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot=?",
-                  (encode({"name": slug, "runtime": computer.runtime, "harness": computer.harness,
-                           "model": MODELS[computer.harness], "status": "active", **(bot or {})}), slug))
+        c.execute("UPDATE bot_config SET config_json=? WHERE bot=?", (encode(config), slug))
     repo = tmp_path / "projects" / f"bot-{slug}"
     repo.mkdir(parents=True)
     (repo / "AGENT.md").write_text(f"# {slug.title()}\n\nAnswer the Acme team.\n")
-    (repo / "bot.yaml").write_text(f"name: {slug}\nruntime: {computer.runtime}\nmodel: {MODELS[computer.harness]}\n")
+    (repo / "bot.yaml").write_text(f"name: {slug}\nruntime: {config['runtime']}\nmodel: {config['model']}\n")
 
 
 def codex_turns(computer):
@@ -838,6 +838,61 @@ def test_a_bot_whose_chatgpt_login_is_busy_runs_on_its_own_fallback_and_says_why
     assert "because codex's ChatGPT login was busy with another turn" in prompt
     until(lambda: reply_to(api, ops["conversation_id"]), "ops's reply", timeout=40)
     assert len(codex_turns(computer)) == 1 and bot_attempts(api, computer, "ops")[-1]["result"].get("fallback") is None
+
+
+def waits_of(computer, aid):
+    return [e["payload"]["waiting"] for e in computer.events(aid) if e["kind"] == "status" and "waiting" in e["payload"]]
+
+
+# A fallback onto a ChatGPT login takes that login too: a Claude bot out of quota hops to Codex while another bot's
+# Codex turn holds the login, so its already-running turn waits (and says so), then runs, never beside the other.
+@pytest.mark.parametrize("harness", ["codex"])
+@pytest.mark.parametrize("setup", [{"registration": {"capacity": 4}, "env": {"FAKE_SLOW": "3", "FAKE_CLAUDE_LIMIT": "1"}}])
+def test_a_fallback_onto_a_busy_chatgpt_login_waits_for_it(api, computer, tmp_path):
+    add_bot(api, computer, tmp_path, "finance", bot={"runtime": "claude", "harness": "claude", "model": MODELS["claude"],
+                                                     "fallback": {"harness": "codex", "model": MODELS["codex"]}})
+    computer.start()
+    until(lambda: computer.readiness().get("finance", {}).get("ready"), "the second bot's readiness")
+    ops = post(api, "chat/ops", {"text": "Please be SLOW"})
+    until(lambda: codex_turns(computer), "ops's Codex turn")
+    finance = post(api, "chat/finance", {"text": "Please answer"})
+    line = "Waiting for this computer's ChatGPT login to be free (busy with ops)"
+    # Waiting after the run has started: the chat shows it, not a failure.
+    until(lambda: (get(api, f"conversations/{finance['conversation_id']}/snapshot")["execution"] or {}).get("waiting") == line,
+          "the hop's waiting line")
+    until(lambda: reply_to(api, finance["conversation_id"], bot="finance"), "the fallback's reply", timeout=40)
+    until(lambda: reply_to(api, ops["conversation_id"]), "ops's reply", timeout=40)
+    turns = codex_turns(computer)
+    assert len(turns) == 2 and turns[1][0] >= turns[0][1], turns
+    attempt = until(lambda: (lambda rows: rows[-1] if rows and rows[-1]["result"] else None)(bot_attempts(api, computer, "finance")),
+                    "finance's completion")
+    assert attempt["result"]["outcome"] == "completed" and attempt["result"]["fallback"] == "codex"
+    assert waits_of(computer, attempt["id"]) == [line, ""]
+
+
+# A command belongs to the bot's own harness: with the login busy, setting a native goal (a command that carries the
+# active goal) waits for the login even with a fallback ready, then drives the goal there.
+@pytest.mark.parametrize("harness", ["codex"])
+@pytest.mark.parametrize("setup", [{"registration": {"capacity": 4}, "env": {"FAKE_SLOW": "3"}}])
+def test_a_goal_command_waits_for_a_busy_chatgpt_login_even_with_a_fallback_ready(api, computer, tmp_path):
+    add_bot(api, computer, tmp_path, "finance", bot={"fallback": {"harness": "claude", "model": MODELS["claude"]}})
+    computer.start()
+    until(lambda: computer.readiness().get("finance", {}).get("goals") is True, "the second bot's readiness")
+    room = post(api, "conversations", {"participants": ["bot:finance"]})["id"]
+    post(api, "chat/ops", {"text": "Please be SLOW"})
+    until(lambda: codex_turns(computer), "ops's Codex turn")
+    post(api, f"conversations/{room}/goal", {"action": "set", "objective": "Keep the Acme summary current"})
+    until(lambda: len(codex_turns(computer)) == 2, "the goal's turn", timeout=40)
+    command = bot_attempts(api, computer, "finance")[0]
+    assert waits_of(computer, command["id"]) == ["Waiting for this computer's ChatGPT login to be free (busy with ops)", ""]
+    assert not [p for p in computer.prompts() if p.get("harness") == "claude"]
+    turns = codex_turns(computer)
+    assert turns[0][1] is not None and turns[1][0] >= turns[0][1], turns
+    post(api, f"conversations/{room}/goal", {"action": "clear"})
+    rows = until(lambda: (lambda rows: rows if len(rows) == 2 and all(r["result"] for r in rows) else None)(
+        bot_attempts(api, computer, "finance")), "the goal's attempts settled")
+    assert [r["result"]["outcome"] for r in rows] == ["completed", "completed"]
+    assert not any(r["result"].get("fallback") for r in rows)
 
 
 # An API-key Codex login is not limited: two bots on it run at once, and neither waits.

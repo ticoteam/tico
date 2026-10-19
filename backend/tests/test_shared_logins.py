@@ -42,3 +42,15 @@ def test_computers_list_the_sign_ins_several_codex_bots_share_but_not_an_api_key
     theirs = next((m for m in get(api, "computers", "ben-test")["computers"] if m["id"] == r["runner_id"]), None)
     assert theirs["shared_logins"] == [
         {"runtime": "codex", "profile": "", "display_name": "", "count": 2, "bots": ["finance"]}]
+
+
+def test_a_key_login_or_one_whose_kind_is_unknown_is_not_listed_as_shared(api):
+    # Bots on a key run side by side; a login that does not say it is ChatGPT is not claimed to take turns.
+    r = runner(api)
+    for bot in ("ops", "finance"):
+        assign(api, r, bot)
+    for detail in ("Signed in with an API key", "Signed in with ChatGPT using API key", "Signed in", "Ready", ""):
+        beat(api, r, {"ops": "", "finance": ""}, detail=detail)
+        assert shared(api, r) == [], detail
+    beat(api, r, {"ops": "", "finance": ""})
+    assert shared(api, r)[0]["count"] == 2
