@@ -8,6 +8,11 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- **A usage limit holds the login, once**: a run that hits a subscription's usage limit now holds that provider
+  login on that computer, for every bot signed in with it, until the reset the provider names (Claude's "resets
+  2:40am (UTC)" is read too), or 30, 60 and then 120 minutes when it names none. The hold is saved on the server, so
+  a restart does not lift it, and when it ends one queued run tries first while the others wait for its result,
+  instead of every waiting run starting at once. Health names the provider whose limit it is.
 - **The company on Goals**: with the CEO Bot switch on, Goals opens with a **Company** section: the Vision (one or
   two sentences) and the Description (a short paragraph). The owner and admins edit it, everyone else reads it, and
   **History** lists every change with who made it and when. Each goal shows a one-line **Why** tying it to the

@@ -262,6 +262,19 @@ static CHOICES: Mutex<Option<(Instant, Vec<Value>)>> = Mutex::new(None);
 pub fn remember(config: &Value) {
     let rows = config["fallback_models"].as_array().map(|r| r.iter().filter(|v| v.is_object()).cloned().collect()).unwrap_or_default();
     *CHOICES.lock().unwrap() = Some((Instant::now(), rows));
+    // The server's saved holds on this computer's logins (backend/login_holds.py): after a restart this runner has
+    // forgotten the limits it met, and still skips a held login in the fallback choice until the hold ends.
+    if let Some(holds) = config["login_holds"].as_array() {
+        let now = crate::util::epoch_s();
+        let mut limits = limits().lock().unwrap();
+        for hold in holds {
+            let (Some(runtime), Some(until)) = (hold["runtime"].as_str(), hold["until"].as_str()) else { continue };
+            let profile = hold["profile"].as_str().unwrap_or_default();
+            if !limits.out_of_quota(profile, runtime, now) {
+                limits.remember(profile, runtime, now, Some(crate::util::parse_iso(until)));
+            }
+        }
+    }
 }
 
 impl Runner {
@@ -490,6 +503,18 @@ mod tests {
         assert!(out_of_quota("limit-test-key", "codex", now + 1.0));
         settle_limit("codex", "codex", Some(&profile), false, true);
         assert!(!out_of_quota("limit-test-key", "codex", now + 1.0));
+    }
+
+    #[test]
+    fn a_restarted_runner_skips_the_logins_the_server_still_holds() {
+        let until = |s: f64| crate::util::iso(&json!(crate::util::epoch_s() + s));
+        remember(&json!({"fallback_models": [], "login_holds": [
+            {"profile": "", "runtime": "restart-test", "until": until(600.0)},
+            {"profile": "", "runtime": "restart-test-over", "until": until(-60.0)}]}));
+        let now = crate::util::epoch_s();
+        assert!(out_of_quota("", "restart-test", now) && !out_of_quota("", "restart-test", now + 601.0));
+        assert!(!out_of_quota("", "restart-test-over", now));
+        forget_limit("", "restart-test");
     }
 
     #[test]

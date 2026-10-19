@@ -9,7 +9,7 @@ from datetime import timezone
 
 from clients import gateway, sessions
 
-from . import app_delivery, check_models, gateway_connection, inbox_isolation, models_preset, providers, routines, run_triggers, runner_versions, screen, usage_limits, wake_presets
+from . import app_delivery, check_models, gateway_connection, inbox_isolation, login_holds, models_preset, providers, routines, run_triggers, runner_versions, screen, usage_limits, wake_presets
 from . import task_privacy as privacy
 from .auth import Identity
 from .batch_work import isolated
@@ -370,6 +370,10 @@ def limit_cooldown(c, bot):
     last = last_limit(c, bot)
     if not last:
         return cooldown
+    hold = login_holds.for_attempt(c, last["id"])
+    if hold and (finished := H.parse_ts(last["finished"])) and (until := H.parse_ts(hold.get("until"))):
+        # The login's hold (backend/login_holds.py) already chose the wait: the provider's reset, or its backoff.
+        return max(int((until - finished).total_seconds()), 1)
     return reset_cooldown(c, last["id"], last["finished"], cooldown, last["resets_at"])
 
 
@@ -449,6 +453,11 @@ def clear_limits(c, settings, actor, bot):
                                          "WHERE s.state='limited' AND a.runner_id=? AND s.bot<>? ORDER BY s.bot",
                                          (place["runner_id"], bot)) if runtime(r[0]) == mine]
     for slug in bots:
+        row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (slug,)).fetchone()
+        if place and place["runner_id"]:
+            # The plan behind the login was just renewed: its hold goes too, for every bot on it.
+            login_holds.clear(c, *login_key(c, settings, place["runner_id"], slug,
+                                            json.loads(row[0]) if row and row[0] else {}))
         H.status_set(c, actor, slug, state="idle", focus="", reason="Try now")
         H.event(c, actor, "limit.cleared", slug, {"from": bot, "runtime": mine})
     return len(bots)
@@ -604,9 +613,31 @@ def claim_refusal(c, settings, runner, bot, config_json, draining, ready, held_b
         return "sign_in_rejected", None
     if usage_limits.blocked(c, bot, default=usage_limits.company(c) if default is None else default):
         return "limit", None
-    if cooling_off(c, bot):
+    if cooling_off(c, bot) or login_refusal(c, settings, runner["id"], bot, config, ctx=subscription_context):
         return "cooling_off", None
     return None, config
+
+
+def login_refusal(c, settings, runner_id, bot, config, job_id=None, ctx=None):
+    """Whether a hold on the bot's own login keeps it waiting (backend/login_holds.py): before the hold ends, no bot
+    on the login starts a turn; after it, only the probe job does until its turn ends. Without `job_id` it answers
+    for the bot: a probe of its own still lets it through, for job_refusal's per-job answer."""
+    from .subscriptions import effective
+    profile = effective(c, bot, ctx)[0] or ""
+    runtime = providers.bot_choice(c, settings, config)[0]
+    why = login_holds.holding(c, runner_id, profile, runtime, job_id)
+    if why == "held" and person_wrote_since(c, bot, login_holds.get(c, runner_id, profile, runtime).get("since") or ""):
+        return None         # a person who writes has often just renewed the plan: one try (cooling_off)
+    if why == "probing" and job_id is None:
+        probe = login_holds.get(c, runner_id, profile, runtime).get("probe_job")
+        if c.execute("SELECT 1 FROM jobs WHERE id=? AND bot=?", (probe, bot)).fetchone():
+            return None
+    return why
+
+
+def login_key(c, settings, runner_id, bot, config, ctx=None):
+    from .subscriptions import effective
+    return runner_id, effective(c, bot, ctx)[0] or "", providers.bot_choice(c, settings, config)[0]
 
 
 def unfenced_sql():
@@ -696,7 +727,8 @@ def bot_claimable(c, settings, runner_id, bot):
         elif at_share and not person:
             why = "lane_held"
         else:
-            why = job_refusal(c, job, followed, ready, busy, lanes, roots)
+            why = job_refusal(c, job, followed, ready, busy, lanes, roots) or (
+                "cooling_off" if login_refusal(c, settings, runner_id, bot, followed, job["id"]) else None)
         if why is None:
             return None, job["created"], person
         if refused is None or job["created"] < refused[0]:
@@ -1193,7 +1225,8 @@ class Execution:
             f"CASE j.bot {' '.join('WHEN ? THEN ?' for _ in bots)} ELSE 0 END,j.created,j.id",
             (*bots, who.runner_id, *full, *(v for bot in bots for v in (bot, held.get(bot, 0)))))
         for row in candidates:
-            if job_refusal(c, row, followed[row["bot"]], ready, busy, lanes, roots, live) is None:
+            if job_refusal(c, row, followed[row["bot"]], ready, busy, lanes, roots, live) is None and not login_refusal(
+                    c, self.store.settings, runner["id"], row["bot"], followed[row["bot"]], row["id"], subscription_context):
                 return row
         return None
 
@@ -1359,6 +1392,9 @@ class Execution:
         c.execute("INSERT OR IGNORE INTO attempt_conversations VALUES(?,?)", (aid, conv["id"]))
         if check:
             check_models.handed(c, aid, task["id"], check)
+        else:
+            # After a hold on the bot's login ends, the first job to start on it is the window's one probe.
+            login_holds.take_probe(c, *login_key(c, self.store.settings, who.runner_id, row["bot"], followed), row["id"])
         # A bot that names no runtime or model runs on the company default, resolved here the way
         # runners/assignments resolves it: the runner starts exactly what this says.
         record = providers.load(c, self.store.settings)
@@ -2115,6 +2151,14 @@ class Execution:
         if row["thread_id"] and body.tokens_in is not None:
             c.execute("UPDATE bot_sessions SET tokens_in=?,updated=? WHERE bot=? AND runtime=? AND model=? AND thread_id=?",
                       (int(body.tokens_in), H.now(), row["bot"], runtime, model, row["thread_id"]))
+        login_hold = {}
+        # The Tico AI Gateway's cap and address block are the company key's, not a provider login's: they keep their
+        # own waits (reset_cooldown).
+        gateway_wait = tico_code == gateway.RATE_LIMITED or any(gateway.cap_reached(e) for e in limit_errors(c, aid))
+        if not check and not stopped and not gateway_wait and (limited or body.outcome == "completed"):
+            from .subscriptions import effective
+            login_hold = login_holds.after_turn(c, row["runner_id"], row["bot"], effective(c, row["bot"])[0] or "",
+                                                runtime, body, aid, H.now())
         if rejected:
             self.mark_rejected(c, row["runner_id"], body.auth_rejected.runtime, body.auth_rejected.reason, body.profile_used)
             H.event(c, H.KEEPER, "attempt.auth_rejected", aid,
@@ -2165,7 +2209,7 @@ class Execution:
         elif limited:
             streak = limit_streak(c, row["bot"])
             hit = H.now()
-            retry = H.shift(hit, seconds=limit_cooldown(c, row["bot"]))
+            retry = login_hold.get("until") or H.shift(hit, seconds=limit_cooldown(c, row["bot"]))
             kind = "API quota or billing limit" if billing_limit(c, attempt_id=aid) else "usage limit"
             if any(gateway.cap_reached(error) for error in limit_errors(c, aid)):
                 # The Tico AI Gateway's monthly cap for the company's key (clients/gateway.py): said as it is.
@@ -2174,6 +2218,19 @@ class Execution:
             elif tico_code == gateway.RATE_LIMITED:
                 focus = (f"Tico AI Gateway rate limited at {hit[11:16]} after too many refused keys from this "
                          f"address; retrying after {retry[:10]} {retry[11:16]} UTC")
+            elif login_hold:
+                # The hold on the login (backend/login_holds.py): that login's provider, its own words and its streak,
+                # so a fallback's quota is not reported as the bot's own runtime's.
+                said = (f"{login_hold['runtime']} " + ("API quota or billing limit"
+                        if BILLING_LIMIT_RE.search(login_hold.get("error") or "") else "usage limit")
+                        + (f" on the {login_hold['profile']} login" if login_hold.get("profile") else "")
+                        + f" at {hit[11:16]}")
+                if login_hold.get("reset"):
+                    focus = (f"{said}; resumes at {retry[11:16]} UTC"
+                             + ("" if retry[:10] == hit[:10] else f" on {retry[:10]}") + " when it resets")
+                else:
+                    focus = (said + (", third in a row" if login_hold["streak"] >= LIMIT_STRIKES else "")
+                             + f"; retrying after {retry[:10]} {retry[11:16]} UTC")
             elif body.limit_resets_at and provider_reset(last_limit(c, row["bot"]), H.parse_ts(hit)):
                 focus = (f"{runtime} {kind} at {hit[11:16]}; resumes at {retry[11:16]} UTC"
                          + ("" if retry[:10] == hit[:10] else f" on {retry[:10]}") + " when it resets")

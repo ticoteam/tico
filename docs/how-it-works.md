@@ -269,13 +269,17 @@ bot, wherever it runs, sees Resume bot beside the warning by its name and a Paus
 refused text (credential values masked) and its task; one click releases that pause and the checks stay on.
 
 **A subscription usage limit.** A run that hits one fails with `limited` set; it did nothing, so
-the job stays queued however often this happens (it is never *Interrupted*), the bot shows
-*limited* and the cloud claims it again after 30 minutes. A third limit in a row waits two hours
-and says so in **Settings → Health**, with the retry time. A person's message to the bot written
-after the limit lets it try once at once; a run that hits the limit again goes back to the
-cooldown. **Try now**, beside the warning on the bot's page and in its chat line for anyone who
+the job stays queued however often this happens (it is never *Interrupted*) and the bot shows
+*limited*. The limit holds the provider login, not just the bot: that runtime's sign-in on that computer (or the
+bot's own subscription connection), saved on the server so it outlasts a restart of the runner or the server. It holds
+until the reset the provider names (Claude's "resets 2:40am (UTC)" included, even days away), or when none is named
+or the named time has passed, 30 minutes, then 60, then two hours for each limit in a row on that login. While it
+holds, no bot on that login starts a run. When it ends, one queued run goes first; the others on the login wait for
+its result, so a login sees one try per window however many runs wait. **Settings → Health** says whose login it is
+and when it resumes. A person's message to the bot written after the limit lets it try once at once; a run that
+hits the limit again goes back to the hold. **Try now**, beside the warning on the bot's page and in its chat line for anyone who
 manages the bot (`POST /api/v2/bots/{bot}/limit/retry`, BotOps as the person who asked), ends the
-cooldown for that bot and every bot limited on the same runtime on the same computer, which share
+hold for that bot and every bot limited on the same runtime on the same computer, which share
 the subscription (`limit.cleared` in the event log). If the bot has a fallback
 harness in **Settings → Bots**, the runner reruns that run at once on the fallback (fresh
 session, given the conversation's latest messages, up to about 16,000 tokens, marked as history; never a

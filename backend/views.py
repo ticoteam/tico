@@ -393,12 +393,23 @@ def operation_issues(c, who, auth):
             if since and since > H.parse_ts(H.shift(H.now(), seconds=-max(3600, cooldown))):
                 config = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (slug,)).fetchone()
                 runtime = providers.bot_choice(c, auth.settings, json.loads(config[0]) if config else {})[0] or "your"
-                if billing_limit(c, slug):
+                # The login the limit held (backend/login_holds.py) says whose limit it was: a fallback's quota text
+                # is not the bot's own provider's billing.
+                from . import login_holds
+                from .execution import BILLING_LIMIT_RE
+                last = last_limit(c, slug)
+                hold = login_holds.for_attempt(c, last["id"]) if last else {}
+                billing = bool(BILLING_LIMIT_RE.search(hold.get("error") or "")) if hold else billing_limit(c, slug)
+                if hold:
+                    runtime = hold["runtime"] + (f" (the {hold['profile']} login)" if hold.get("profile") else "")
+                streak = hold.get("streak", 0) if hold else limit_streak(c, slug)
+                reset = hold.get("reset") if hold else bool(last and provider_reset(last, H.parse_ts(last["finished"])))
+                if billing:
                     retry = H.shift(status["since"], seconds=cooldown)
                     add("bot", bot["display_name"] + " needs attention",
                         f"{runtime} API quota or billing limit; queued work waits until {retry[:10]} {retry[11:16]} UTC, "
                         "check the API key's plan and billing", bot=slug, needs_person=False,
-                        **({} if limit_streak(c, slug) >= LIMIT_STRIKES else {"severity": "warning"}),
+                        **({} if streak >= LIMIT_STRIKES else {"severity": "warning"}),
                         action="Check the API key's plan and billing, or set a fallback harness in Settings → Bots.")
                 elif cooldown > LIMIT_COOLDOWN_LONG:
                     retry = H.shift(status["since"], seconds=cooldown)
@@ -407,8 +418,7 @@ def operation_issues(c, who, auth):
                         f"{retry[11:16]} UTC", bot=slug, severity="warning", needs_person=False,
                         action="Wait for the subscription reset, or set a fallback harness in Settings → Bots.")
                 # A reported reset says when the limit lifts, so a streak is no reason to check the subscription.
-                elif limit_streak(c, slug) >= LIMIT_STRIKES and not (
-                        (last := last_limit(c, slug)) and provider_reset(last, H.parse_ts(last["finished"]))):
+                elif streak >= LIMIT_STRIKES and not reset:
                     retry = H.shift(status["since"], seconds=cooldown)
                     add("bot", bot["display_name"] + " needs attention",
                         f"{runtime} usage limit three times in a row; queued work waits until {retry[11:16]} UTC, "
