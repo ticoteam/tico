@@ -6,9 +6,9 @@ direct writes (backend/assistant.py), what BotOps does without a card (backend/b
 manages in its own runs and who is a credential administrator (backend/auth.py), who stores a credential for their
 own bot (backend/credentials.py), the SQL page and personal tokens, whether a bot goes ahead on its own default when
 a person leaves its ask unanswered (backend/ask_deadlines.py), whether Tico support may be let in
-(backend/support_access.py), whether the hourly stale ticket review runs (backend/stale_review.py), and whether a direct
-chat starts fresh when the topic changes (backend/topic_change.py). Those last two are off by default, an admin may turn
-them too (ADMIN_RULES), and the server's environment may set their default (ENV_DEFAULTS).
+(backend/support_access.py), and whether the hourly stale ticket review runs (backend/stale_review.py). That last one is
+off by default, an admin may turn it too (ADMIN_RULES), and the server's environment may set its default
+(ENV_DEFAULTS).
 """
 import json
 import os
@@ -29,13 +29,12 @@ DEFAULTS = {
     "health_monitor_reports": True,  # the Health Monitor, once turned on, files Tico bug reports without a card
     "support_access": True,         # an owner or admin may let Tico support in from a ticket (backend/support_access.py)
     "stale_review": False,          # the hourly stale ticket review suggests updates to owners (backend/stale_review.py)
-    "topic_fresh": False,           # a direct chat starts fresh when the topic changes (backend/topic_change.py)
 }
 # Rules an admin may change too, not only the owner (Settings > Team).
-ADMIN_RULES = ("stale_review", "topic_fresh")
-# A rule whose default the server's environment sets (`TICO_STALE_REVIEW=1`, `TICO_TOPIC_FRESH=1` on Tico Team's own
-# server). A saved choice wins; until someone sets the rule it is not stored, so it keeps following the environment.
-ENV_DEFAULTS = {"stale_review": "TICO_STALE_REVIEW", "topic_fresh": "TICO_TOPIC_FRESH"}
+ADMIN_RULES = ("stale_review",)
+# A rule whose default the server's environment sets (`TICO_STALE_REVIEW=1` on Tico Team's own server). A saved choice
+# wins; until someone sets the rule it is not stored, so it keeps following the environment.
+ENV_DEFAULTS = {"stale_review": "TICO_STALE_REVIEW"}
 # Numbers the owner sets, with their default and bounds.
 NUMBERS = {
     "go_ahead_days": (3, 1, 14),    # days an ask with a default waits for a person before the bot goes ahead

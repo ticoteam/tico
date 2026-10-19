@@ -33,11 +33,6 @@ All notable changes to Tico are recorded here. The format follows
   built-ins and message bots stay apart. It keeps its slug, so its KPI readings, goal history and old messages stay its own. Only the chart moves:
   nobody's `reports_to` and nobody's access changes. Turning it off gives back the Goal Manager's name and the chart as
   they were.
-- **Start fresh when the topic changes** (Settings > Team; off by default, an owner or an admin turns it on): in a
-  long or idle direct chat with a bot, Tico asks Decide whether your new message starts a new topic before it is sent.
-  If it does, the bot's session is cleared the same way Clear does, and the chat shows a quiet **Topic changed** line
-  above your message. A chat with an active goal, a running turn or fewer than 3 turns is never checked, and a slow or
-  failed check (over 1.5 s) sends the message in the same session with no line.
 
 ### Fixed
 - **Claude sign-in on a subscription profile stays in that profile.** A runner whose own environment set
