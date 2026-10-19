@@ -14,24 +14,6 @@ All notable changes to Tico are recorded here. The format follows
   vision: the CEO Bot proposes it and a person accepts it as it is, edits it or writes their own. A goal with none
   says "Not tied to the vision". No bot can change the Vision or the Description or accept a Why, the CEO Bot
   included. With the switch off none of this shows.
-- **Tico AI Gateway** in Settings > AI providers: the owner saves the gateway key Tico gives them (or the server's
-  `TICO_GATEWAY_KEY` sets it, and wins), Decide asks the Gateway with that same key, and bots can then pick **Tico Cheap, Mid and Power 1.0** (Claude Haiku, Sonnet and Opus
-  5.5 underneath) like any other model, streamed through the Gateway on pi. The key is sealed and never shown after
-  save. No bot holds it: the computer running a bot on a Tico model passes its model calls on with the key, so Tico
-  models run only on a computer that runs bots as their own user (Tico's Docker runner); elsewhere a bot on one says
-  so once. The owner sees the 80% monthly cap warning and a key the Gateway doesn't
-  recognise. A bot stopped by the cap says "Gateway cap reached" and waits for next month; every other Gateway
-  refusal reads plainly and is retried only when retrying can help, and a reply cut off mid-stream is posted with a
-  note ([Tico AI Gateway](docs/ai-gateway.md)).
-- **Sign in on a Tico we host**: with `TICO_HOSTED` set (`own` or `invited`), **Sign in** for Claude Code and
-  Codex (ChatGPT) in Settings > Computers shows only the provider's link and code, never what else the computer
-  printed and never a terminal, and closes by itself once signed in or cancelled. Any other value of `TICO_HOSTED`
-  stops the server with a one-line error. A self-hosted Tico signs in as before.
-- **Sample company**: a new Tico can start as Sample Co, a made-up team of five bots (Assistant, Head of Product,
-  Builder, Support Agent and Content Marketer) spread over the Claude and ChatGPT subscriptions. Each has a goal and a
-  first task that takes minutes and ends by asking the owner a Yes/No approval in Needs you; nothing is sent outside
-  the company. Start it from the first-run welcome's **Start with a sample company**, or at install with
-  `TICO_SAMPLE_COMPANY=on`. ([The sample company](docs/sample-company.md))
 - **CEO Bot switch** (off by default; one per install, no release needed): an owner or admin turns it on with
   `POST /api/v2/ceo-bot {"on": true}` (`hub api POST ceo-bot '{"on": true}'`), never a bot. On, the Goal Manager is
   named the CEO Bot in the bot list, the org chart, Goals and its messages, and sits on the org chart under the owner
@@ -62,13 +44,6 @@ All notable changes to Tico are recorded here. The format follows
   Bot instructions now have one limit of 50,000 characters wherever they are sent (the wizard, **Add from catalog**
   and registering a bot), and a test checks every shipped template against it. If the wizard cannot save a step it
   now says so in plain words and what to do, never the field the server named.
-- **Claude sign-in on a subscription profile stays in that profile.** A runner whose own environment set
-  `CLAUDE_CONFIG_DIR` signed Claude Code in there (Settings > Computers and `tico-runner profile login`) and checked
-  it there, while turns read the profile's `HOME`: sign-in looked done but turns were signed out or ran on another
-  login. A profile's Claude now never gets an inherited `CLAUDE_CONFIG_DIR`, no Claude turn runs with one, and
-  `CLAUDE_CONFIG_DIR` is a reserved variable name, so a credential can no longer be granted under it.
-- Opening a card in **Needs you** (an approval, a task, a question) no longer sends a failing request for issue
-  "NaN" in the background. Only an issues inbox card fetches its full request.
 - **Team chart reasons and chart while picking** (first run): a suggested bot's reason is no longer a single word of
   your answer ("Matches “managers”" on four Sales cards, "Matches “github”" across Engineering). Only a short phrase
   you wrote whole that fits that bot is shown ("Matches “flaky tests”"); otherwise it says "Common in Sales" or "A
@@ -97,6 +72,39 @@ All notable changes to Tico are recorded here. The format follows
   button (**Add a computer** while there is none). Bots are listed in the team chart's groups and order with one status
   each, *Waiting for a computer* is said once at the top, and the tour waits for **Show me around** instead of
   covering the screen.
+
+## [0.3.62] - 2026-10-19
+
+### Added
+- **Tico AI Gateway** in Settings > AI providers: the owner saves the gateway key Tico gives them (or the server's
+  `TICO_GATEWAY_KEY` sets it, and wins), Decide asks the Gateway with that same key, and bots can then pick **Tico Cheap, Mid and Power 1.0** (Claude Haiku, Sonnet and Opus
+  5.5 underneath) like any other model, streamed through the Gateway on pi. The key is sealed and never shown after
+  save. No bot holds it: the computer running a bot on a Tico model passes its model calls on with the key, so Tico
+  models run only on a computer that runs bots as their own user (Tico's Docker runner); elsewhere a bot on one says
+  so once. The owner sees the 80% monthly cap warning and a key the Gateway doesn't
+  recognise. A bot stopped by the cap says "Gateway cap reached" and waits for next month; every other Gateway
+  refusal reads plainly and is retried only when retrying can help, and a reply cut off mid-stream is posted with a
+  note ([Tico AI Gateway](docs/ai-gateway.md)).
+- **Sign in on a Tico we host**: with `TICO_HOSTED` set (`own` or `invited`), **Sign in** for Claude Code and
+  Codex (ChatGPT) in Settings > Computers shows only the provider's link and code, never what else the computer
+  printed and never a terminal, and closes by itself once signed in or cancelled. Any other value of `TICO_HOSTED`
+  stops the server with a one-line error. A self-hosted Tico signs in as before.
+- **Sample company**: a new Tico can start as Sample Co, a made-up team of five bots (Assistant, Head of Product,
+  Builder, Support Agent and Content Marketer) spread over the Claude and ChatGPT subscriptions. Each has a goal and a
+  first task that takes minutes and ends by asking the owner a Yes/No approval in Needs you; nothing is sent outside
+  the company. Start it from the first-run welcome's **Start with a sample company**, or at install with
+  `TICO_SAMPLE_COMPANY=on`. ([The sample company](docs/sample-company.md))
+
+### Fixed
+- **Claude sign-in on a subscription profile stays in that profile.** A runner whose own environment set
+  `CLAUDE_CONFIG_DIR` signed Claude Code in there (Settings > Computers and `tico-runner profile login`) and checked
+  it there, while turns read the profile's `HOME`: sign-in looked done but turns were signed out or ran on another
+  login. A profile's Claude now never gets an inherited `CLAUDE_CONFIG_DIR`, no Claude turn runs with one, and
+  `CLAUDE_CONFIG_DIR` is a reserved variable name, so a credential can no longer be granted under it.
+- Opening a card in **Needs you** (an approval, a task, a question) no longer sends a failing request for issue
+  "NaN" in the background. Only an issues inbox card fetches its full request.
+
+### Changed
 - **Codex signed in with ChatGPT runs one turn at a time per login**, as OpenAI's terms for a ChatGPT sign-in
   require. When two bots on one computer share its ChatGPT login, one Codex turn runs and the other shows
   *Waiting for this computer's ChatGPT login to be free (busy with <bot>)* in the chat, the task and **Runs**, then
@@ -3575,7 +3583,8 @@ First public release.
 - Hosting: local only on a Mac, or self-hosted, including a reference AWS stack under `infra/ec2/`
   with Litestream backups.
 
-[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.61...HEAD
+[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.62...HEAD
+[0.3.62]: https://github.com/ticoteam/tico/compare/v0.3.61...v0.3.62
 [0.3.61]: https://github.com/ticoteam/tico/compare/v0.3.60...v0.3.61
 [0.3.60]: https://github.com/ticoteam/tico/compare/v0.3.59...v0.3.60
 [0.3.59]: https://github.com/ticoteam/tico/compare/v0.3.58...v0.3.59
