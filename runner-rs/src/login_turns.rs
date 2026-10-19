@@ -5,9 +5,9 @@
 //! API key) is never held, and neither is any other CLI's.
 //!
 //! In memory: this runner starts every turn on this computer, and a turn that ends, fails, runs out of time or
-//! panics drops what it holds. That frees the login at once, unless the host the turn started is still running (a
-//! panic or a cancelled turn skips its stop): then the login is kept until that host has stopped. A restarted runner
-//! holds nothing.
+//! panics drops what it holds. That frees the login at once, unless the process of the host the turn started is still
+//! running (a panic or a cancelled turn skips or cuts off its stop, or the host stopped answering but lives on): then
+//! the login is kept until that process has been stopped and reaped. A restarted runner holds nothing.
 //!
 //! A login is never copied into another bot's home to get round this: a copy of a ChatGPT auth.json rotates apart
 //! from the original, and two bots on two copies would slip past the lock (the guard test below).
@@ -71,19 +71,21 @@ fn set_holder(key: &str, bot: Option<&str>) {
     }
 }
 
-/// What a held login waits for before it is free again: the host its turn started on the login.
+/// What a held login waits for before it is free again: the host its turn started on the login. `running` is about
+/// the process, not the protocol: a host that stopped answering, or whose stop was begun and cut off, may still run.
 pub trait Lingering: Send + 'static {
-    fn alive(&self) -> bool;
+    fn running(&self) -> bool;
+    /// Stop the host if it still runs, and return once its process is gone.
     fn stop(self: Box<Self>) -> Pin<Box<dyn Future<Output = ()> + Send>>;
 }
 
 impl Lingering for crate::hosts::Host {
-    fn alive(&self) -> bool {
-        crate::hosts::Host::alive(self)
+    fn running(&self) -> bool {
+        crate::hosts::Host::running(self)
     }
 
     fn stop(self: Box<Self>) -> Pin<Box<dyn Future<Output = ()> + Send>> {
-        Box::pin(async move { crate::hosts::Host::stop(&self).await })
+        Box::pin(async move { crate::hosts::Host::stop_and_reap(&self).await })
     }
 }
 
@@ -109,7 +111,7 @@ impl Held {
 impl Drop for Held {
     fn drop(&mut self) {
         let (key, guard) = (std::mem::take(&mut self.key), self.guard.take());
-        match (self.host.take().filter(|h| h.alive()), tokio::runtime::Handle::try_current()) {
+        match (self.host.take().filter(|h| h.running()), tokio::runtime::Handle::try_current()) {
             (Some(host), Ok(runtime)) => {
                 runtime.spawn(async move {
                     host.stop().await;
@@ -277,71 +279,110 @@ mod tests {
         assert_eq!(try_take(key, "b").map(|_| ()).err(), None);
     }
 
-    /// A stand-in host: a real child process (`sleep`), stopped as a host stops it and reaped by its own task.
-    struct Child {
-        stopper: crate::hosts::Stopper,
-        gone: Arc<std::sync::atomic::AtomicBool>,
+    /// A real Codex host on a stand-in app-server: it answers `initialize`, writes its pid to $FAKE_PID, and then
+    /// runs until it is stopped. With FAKE_MODE=deaf it ignores TERM (only the KILL five seconds later ends it); with
+    /// FAKE_MODE=silent it closes its output once started and runs on; otherwise a TERM ends it half a second later.
+    async fn codex_host(mode: &str) -> (crate::hosts::Host, i32, std::path::PathBuf) {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("tico-login-host-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let program = dir.join("codex");
+        std::fs::write(&program, r#"#!/usr/bin/env python3
+import json, os, signal, sys, time
+mode = os.environ.get("FAKE_MODE", "")
+with open(os.environ["FAKE_PID"], "w") as f:
+    f.write(str(os.getpid()))
+if mode == "deaf":
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+else:
+    signal.signal(signal.SIGTERM, lambda *_: (time.sleep(0.5), os._exit(0)))
+for line in sys.stdin:
+    msg = json.loads(line)
+    if msg.get("method") == "initialize":
+        print(json.dumps({"id": msg["id"], "result": {}}), flush=True)
+    if msg.get("method") == "initialized" and mode == "silent":
+        sys.stdout = open(os.devnull, "w")
+        os.close(1)
+time.sleep(60)
+"#).unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let pid_file = dir.join("pid");
+        let path = format!("{}:{}", dir.display(), std::env::var("PATH").unwrap_or_default());
+        let env: crate::env::Env = [("PATH".to_string(), path),
+                                    ("FAKE_MODE".to_string(), mode.to_string()),
+                                    ("FAKE_PID".to_string(), pid_file.display().to_string())].into_iter().collect();
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let host = crate::hosts::Host::Codex(crate::hosts::codex::CodexHost::on_home(env, tx, None));
+        host.start().await.expect("the stand-in app-server starts");
+        let pid = std::fs::read_to_string(&pid_file).unwrap().trim().parse().unwrap();
+        (host, pid, dir)
     }
 
-    impl Child {
-        fn start() -> (Child, Arc<std::sync::atomic::AtomicBool>) {
-            let child = tokio::process::Command::new("sleep").arg("30").spawn().expect("sleep runs");
-            let (stopper, exited) = crate::hosts::own(child);
-            let gone = Arc::new(std::sync::atomic::AtomicBool::new(false));
-            let g = gone.clone();
-            tokio::spawn(async move {
-                let _ = exited.await;
-                g.store(true, Ordering::SeqCst);
-            });
-            (Child { stopper, gone: gone.clone() }, gone)
-        }
-    }
-
-    impl Lingering for Child {
-        fn alive(&self) -> bool {
-            !self.gone.load(Ordering::SeqCst)
-        }
-
-        fn stop(self: Box<Self>) -> Pin<Box<dyn Future<Output = ()> + Send>> {
-            Box::pin(async move {
-                self.stopper.terminate(Duration::from_millis(500));
-                while !self.gone.load(Ordering::SeqCst) {
-                    tokio::time::sleep(Duration::from_millis(20)).await;
-                }
-            })
-        }
+    /// Whether `pid` is still a process (a zombie not yet reaped counts).
+    fn exists(pid: i32) -> bool {
+        unsafe { libc::kill(pid, 0) == 0 }
     }
 
     #[tokio::test]
-    async fn a_turn_that_panics_or_is_cancelled_with_its_host_running_keeps_the_login_until_the_host_has_exited() {
-        let key = "codex:test-host";
-        let (host, gone) = Child::start();
+    async fn a_codex_turn_cut_off_while_its_host_is_stopping_keeps_the_login_until_the_app_server_is_reaped() {
+        let key = "codex:test-cut-stop";
+        let (host, pid, _dir) = codex_host("deaf").await;
+        let mut held = take(key, "ops").await;
+        held.bind(host.clone());
+        // The turn's own cleanup begins the stop and is cut off while the app-server, deaf to TERM, still runs: the
+        // protocol says not alive already, the process lives on until the KILL five seconds later.
+        let started = std::time::Instant::now();
+        assert!(tokio::time::timeout(Duration::from_millis(300), host.stop()).await.is_err());
+        assert!(!host.alive() && host.running() && exists(pid));
+        drop(held);
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        assert_eq!(try_take(key, "next").map(|_| ()).err().as_deref(), Some("ops"), "free while the app-server still ran");
+        let next = tokio::time::timeout(Duration::from_secs(15), take(key, "next")).await.expect("free once reaped");
+        assert!(!exists(pid), "the next turn got the login before the app-server was reaped");
+        assert!(started.elapsed() >= Duration::from_secs(4), "{:?}", started.elapsed());
+        drop(next);
+    }
+
+    #[tokio::test]
+    async fn a_turn_that_panics_with_its_codex_host_running_keeps_the_login_until_the_app_server_is_reaped() {
+        let key = "codex:test-panic";
+        // An app-server that closed its output but still runs: the protocol says not alive, the process is there.
+        let (host, pid, _dir) = codex_host("silent").await;
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while host.alive() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the closed output is seen");
+        assert!(host.running() && exists(pid));
         let crashed = tokio::spawn(async move {
             let mut held = take(key, "ops").await;
             held.bind(host);
             panic!("the worker crashed mid-turn");
         });
         assert!(crashed.await.unwrap_err().is_panic());
-        let next = tokio::time::timeout(Duration::from_secs(10), take(key, "next")).await.expect("free once the host stopped");
-        assert!(gone.load(Ordering::SeqCst), "the next turn got the login while the crashed turn's host still ran");
+        assert_eq!(try_take(key, "next").map(|_| ()).err().as_deref(), Some("ops"));
+        let next = tokio::time::timeout(Duration::from_secs(15), take(key, "next")).await.expect("free once reaped");
+        assert!(!exists(pid), "the next turn got the login while the crashed turn's app-server still ran");
         drop(next);
+
         // A turn cut off mid-run (its future dropped) is the same.
-        let (host, gone) = Child::start();
+        let (host, pid, _dir) = codex_host("").await;
+        let h = host.clone();
         let cut = tokio::time::timeout(Duration::from_millis(50), async move {
             let mut held = take(key, "ops").await;
-            held.bind(host);
+            held.bind(h);
             std::future::pending::<()>().await;
         });
         assert!(cut.await.is_err());
-        let next = tokio::time::timeout(Duration::from_secs(10), take(key, "next")).await.expect("free once the host stopped");
-        assert!(gone.load(Ordering::SeqCst));
+        let next = tokio::time::timeout(Duration::from_secs(15), take(key, "next")).await.expect("free once reaped");
+        assert!(!exists(pid) && !host.running());
         drop(next);
-        // A host already stopped (the turn's own cleanup) frees the login at once.
-        let (host, gone) = Child::start();
-        host.stopper.terminate(Duration::ZERO);
-        while !gone.load(Ordering::SeqCst) {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
+
+        // A host the turn already stopped frees the login at once.
+        let (host, _pid, _dir) = codex_host("").await;
+        host.stop_and_reap().await;
         let mut held = try_take(key, "ops").unwrap();
         held.bind(host);
         drop(held);

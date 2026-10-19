@@ -714,6 +714,13 @@ impl Runner {
         }
     }
 
+    /// Whether a turn whose login another turn holds runs on the bot's own fallback instead of waiting. Never for a
+    /// command, nor for a turn under an active native goal: those belong to this harness, so they wait their turn.
+    fn moves_off_busy_login(&self, attempt: &Value, config: &Value, chat_goal: Option<&Value>) -> bool {
+        let control = truthy(attempt["message"]["refs"].get("command")) || chat_goal.is_some_and(|g| g["status"] == "active");
+        !control && self.busy_fallback(attempt, config)
+    }
+
     /// `login` for this turn: at once when it is free, else once the turns that asked first are done with it. While
     /// it waits the turn says so, "Waiting for <login> to be free (busy with <bot>)", in a `status` event the chat and
     /// the task's Runs show (a wait, not a failure), renamed when the holder changes and cleared once the wait is
@@ -816,13 +823,12 @@ impl Runner {
                 // One turn at a time on a ChatGPT login: taken before the checkout is brought up to date, so a turn
                 // that waits starts on a fresh one. Busy: the bot's own fallback takes the turn when it is ready (not
                 // for a command or a native goal, which belong to this harness), else the turn waits its turn.
-                let control = truthy(refs.get("command")) || goal.chat_goal.as_ref().is_some_and(|g| g["status"] == "active");
                 if let Some(why) = self.login_wait_over(&flags, &login) {
                     return Err(Fail::runtime(why));
                 }
                 match crate::login_turns::try_take(&login.key, &bot) {
                     Ok(held) => login_held = Some(held),
-                    Err(holder) if !control && self.busy_fallback(&attempt, &config) => busy = Some((login, holder)),
+                    Err(holder) if self.moves_off_busy_login(&attempt, &config, goal.chat_goal.as_ref()) => busy = Some((login, holder)),
                     Err(_) => login_held = Some(self.take_login(&aid, &bot, &login, &flags, &wake).await?),
                 }
             }
@@ -1482,7 +1488,7 @@ mod tests {
     }
 
     #[test]
-    fn a_turn_waiting_for_its_chatgpt_login_ends_on_a_lost_lease_a_stop_or_a_hard_stop_not_an_update_drain() {
+    fn a_turn_on_a_busy_chatgpt_login_moves_to_its_fallback_or_waits_and_a_wait_ends_on_a_lost_lease_a_stop_or_a_hard_stop() {
         let dir = std::env::temp_dir().join(format!("tico-login-wait-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(dir.join("projects")).unwrap();
         let path = dir.join("runner.json");
@@ -1499,6 +1505,23 @@ mod tests {
         assert_eq!(signed_in("Signed in with an API key"), None);
         assert_eq!(signed_in(""), None);
         assert_eq!(runner.serial_login("claude", "claude", None), None);
+
+        // Busy login, ready fallback: an ordinary turn moves; a command, or a turn under an active native goal, waits.
+        *runner.runtime_rows.lock().unwrap() = [("codex".to_string(), json!({"status": "ready", "installed": true, "authenticated": "ready", "detail": "Signed in with ChatGPT"})),
+                                                ("claude".to_string(), json!({"status": "ready", "installed": true, "authenticated": "ready", "detail": "Signed in"}))].into_iter().collect();
+        let config = json!({"runtime": "codex", "harness": "codex", "model": "gpt-5.5", "fallback": {"harness": "claude", "model": "claude-sonnet-5"}});
+        let turn = |command: bool| json!({"id": "a1", "bot": "finance", "config": config, "message": {"refs": if command { json!({"command": true}) } else { json!({}) }}});
+        let active = json!({"id": "g1", "status": "active", "objective": "Keep the Acme summary current"});
+        let paused = json!({"id": "g1", "status": "paused", "objective": "Keep the Acme summary current"});
+        let ops = crate::login_turns::try_take("codex:", "ops").expect("the computer's ChatGPT login is free");
+        assert_eq!(crate::login_turns::try_take("codex:", "finance").map(|_| ()).err().as_deref(), Some("ops"));
+        assert!(runner.moves_off_busy_login(&turn(false), &config, None), "an ordinary turn takes the ready fallback");
+        assert!(runner.moves_off_busy_login(&turn(false), &config, Some(&paused)), "a goal that is not active does not hold it");
+        assert!(!runner.moves_off_busy_login(&turn(true), &config, None), "a command waits");
+        assert!(!runner.moves_off_busy_login(&turn(false), &config, Some(&active)), "a turn under an active goal waits");
+        assert!(!runner.moves_off_busy_login(&turn(false), &json!({"runtime": "codex", "harness": "codex"}), None), "no fallback: it waits");
+        drop(ops);
+        *runner.runtime_rows.lock().unwrap() = Default::default();
 
         let login = crate::login_turns::Login::new("codex", "");
         let flags = || Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), done: AtomicBool::new(false),
