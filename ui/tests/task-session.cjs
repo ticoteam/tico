@@ -1,7 +1,9 @@
 // Offline browser regression: a task's page shows its session as a chat. People's lines are bubbles under their names
 // (yours without one), the bot's reply opens to the steps behind it, a status change is a one-line marker, and while
 // the owner's run works a "Working" line shows its newest step with Stop, which stops that run. Redraws keep an open
-// fold's steps and "Stopping…"; someone who may not read the bot's runs is told why its steps are hidden.
+// fold's steps and "Stopping…"; someone who may not read the bot's runs is told why its steps are hidden. On a person's
+// task the bot that asked it answers: your message shows the bot chat's pending line (Sent, Queued, "<Bot> is working",
+// then the reply, or Reply failed), and the composer says before sending when no bot will get it.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -94,7 +96,7 @@ async function run(viewport, shot) {
     // The live run: "Working" and its newest step, opening to the steps so far.
     const live = thread.locator('.task-live');
     if (shot) await page.screenshot({path: shot});
-    assert.match(await live.innerText(), /Working…\s*Ran hub task create/);
+    assert.match(await live.innerText(), /BotOps is working…\s*Ran hub task create/);
     await live.locator('summary').click();
     await live.locator('.steps-list .step', {hasText: 'api page'}).waitFor();
     // Stop stops that run. Until it has ended the run moves on: the redraw shows its new step, keeps the steps read so
@@ -131,9 +133,106 @@ async function run(viewport, shot) {
   } finally { await browser.close(); }
 }
 
+// Ana owns a task Head of Engineering asked her; her reply goes to that bot, which is not the task's owner.
+async function answered(viewport, shot) {
+  const browser = await launch();
+  try {
+    const page = await browser.newPage({viewport, serviceWorkers: 'block'});
+    const errors = [];
+    const ask = {id: 't-ask', title: 'Which app is still open?', owner: 'human:ana', requester: 'bot:lead', status: 'open',
+      lane: 'company', version: 1, created: at(30), updated: at(5), conversation_id: 'r-ask'};
+    const said = [{id: 'q1', conversation_id: 'r-ask', from_actor: 'bot:lead', kind: 'say', body: 'Which app is still open?', created: at(20)}];
+    const mine = {id: 'c2', conversation_id: 'r-ask', from_actor: 'human:ana', to_actor: 'bot:lead', kind: 'say', body: 'The billing one.', created: at(0)};
+    const reply = {id: 'r3', conversation_id: 'r-ask', from_actor: 'bot:lead', kind: 'say', body: 'Thanks, closing it.', created: at(0)};
+    const run = {job_id: 'c2', message_id: 'c2', bot: 'lead', attempt_id: 'a9', from_person: true, text: '', parts: []};
+    const states = {
+      idle: {comments: said, execution: null},
+      queued: {comments: [...said, mine], execution: {...run, attempt_id: null, state: 'queued', label: 'Saved — queued'}},
+      running: {comments: [...said, mine], execution: {...run, state: 'running', label: 'Working', parts: [{kind: 'tool', text: 'Ran hub task show', at: at(0)}]}},
+      replied: {comments: [...said, mine, reply], execution: {...run, state: 'completed', label: 'Complete'}},
+      failed: {comments: [...said, mine], execution: {...run, state: 'uncertain', label: 'Reply failed — your message is saved'}},
+      botToBot: {comments: [...said, mine], execution: {...run, from_person: false, state: 'queued', label: 'Saved — queued'}},
+    };
+    let phase = 'idle', to = {bot: 'lead', wakes: true, mention: []}, release = null;
+    page.on('pageerror', e => errors.push(e.message));
+    await page.route('**/*', async route => {
+      const req = route.request(), url = new URL(req.url()), p = url.pathname;
+      const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+      const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+      if (ui && fs.existsSync(uiFile(ui[1])))
+        return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+      if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
+      if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
+      if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true});
+      if (p === '/api/employees') return json([{name: 'lead', display_name: 'Head of Engineering', host: 'keeper', status: 'active', can_chat: true, schedules: [], users: [{id: 'ana'}]}]);
+      if (p === '/api/issues') return json([]);
+      if (p === '/api/v2/conversations') return json({conversations: []});
+      if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
+      if (p === '/api/v2/tasks') return json({tasks: [ask]});
+      if (p === '/api/v2/tasks/t-ask/comments' && req.method() === 'POST')
+        return json({comment: mine, comments: [...said, mine], woke: true});
+      if (p === '/api/v2/tasks/t-ask') {
+        if (release) await release;           // the read after a send waits until "Sent" has been seen
+        return json({task: ask, events: [], can_comment: true, children: [], comment_to: to, ...states[phase]});
+      }
+      if (p.endsWith('/files')) return json({files: []});
+      return json(unrouted(p));
+    });
+    await page.goto('https://tico-ui.test/#/tasks');
+    await page.waitForFunction(() => typeof taskModalShow === 'function' && S.emps?.length);
+    await page.evaluate(t => taskModalShow(t), ask);
+    const thread = page.locator('#task-modal .task-comments'), live = thread.locator('.task-live');
+    const hint = page.locator('#task-modal [data-task-chat-to]');
+    await thread.locator('.tcomment', {hasText: 'Which app is still open?'}).waitFor();
+    assert.equal(await hint.innerText(), '', 'a message that reaches the bot needs no warning');
+    assert.equal(await live.count(), 0);
+
+    // Sent, then queued, then working, then the reply: the bot that asked, not the owner.
+    let open;
+    release = new Promise(r => { open = r; });
+    await page.locator('#task-modal textarea').fill('The billing one.');
+    await page.locator('#task-modal .p-send').click();
+    await live.filter({hasText: 'Sent'}).waitFor();
+    phase = 'queued'; release = null; open();
+    await live.filter({hasText: 'Queued'}).waitFor();
+    assert.equal(await live.locator('.typing.wait').count(), 1, 'a queued run breathes, as in the bot chat');
+    phase = 'running';
+    await page.evaluate(() => taskChatRead(TASK_CHAT));
+    await live.filter({hasText: 'Head of Engineering is working…'}).waitFor();
+    assert.match(await live.innerText(), /Ran hub task show/);
+    assert.equal(await live.getAttribute('aria-label'), 'Head of Engineering is working: Ran hub task show');
+    if (shot) await page.screenshot({path: shot});
+    phase = 'replied';
+    await page.evaluate(() => taskChatRead(TASK_CHAT));
+    await thread.locator('.tcomment.bot', {hasText: 'Thanks, closing it.'}).waitFor();
+    assert.equal(await live.count(), 0, 'the reply replaces the line');
+    assert.equal(await page.locator('#task-modal [data-task-chat-status]').innerText(), '');
+
+    // A turn that errored says so; a bot's message to another bot does not take the line.
+    phase = 'failed';
+    await page.evaluate(() => taskChatRead(TASK_CHAT));
+    await live.filter({hasText: 'Reply failed — your message is saved'}).waitFor();
+    phase = 'botToBot';
+    await page.evaluate(() => taskChatRead(TASK_CHAT));
+    await page.waitForFunction(() => !document.querySelector('#task-modal .task-live'));
+
+    // Before sending: no bot at all, or saved for the bot's next run unless the draft @mentions it.
+    to = {bot: null, wakes: false, mention: []};
+    await page.evaluate(() => taskChatRead(TASK_CHAT));
+    await hint.filter({hasText: 'No bot gets this message'}).waitFor();
+    to = {bot: 'lead', wakes: false, mention: ['lead', 'Head of Engineering']};
+    await page.evaluate(() => taskChatRead(TASK_CHAT));
+    await hint.filter({hasText: "Saved for Head of Engineering's next run on this task. Write @lead to ask now."}).waitFor();
+    await page.locator('#task-modal textarea').fill('@Head of Engineering is it the billing app?');
+    assert.equal(await hint.innerText(), '', 'an @mention of the bot that asked wakes it');
+    assert.deepEqual(errors, []);
+  } finally { await browser.close(); }
+}
+
 (async () => {
   const shot = name => SHOTS ? require('node:path').join(SHOTS, name) : '';
   await run({width: 1200, height: 800}, shot('task-session-desktop.png'));
   await run({width: 390, height: 844}, shot('task-session-phone.png'));
+  await answered({width: 1200, height: 800}, shot('task-session-answered.png'));
   console.log('ok');
 })().catch(e => { console.error(e); process.exit(1); });

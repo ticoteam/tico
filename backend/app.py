@@ -2856,10 +2856,13 @@ def create_app(settings=None):
                     "can_comment": can_comment,
                     "children": children,
                     # The task page reads as its session's chat: each bot reply carries the run behind it (`run`,
-                    # the steps one click away) and `execution` is the owner's run while it works.
+                    # the steps one click away) and `execution` is the run it follows while it works: the owner's,
+                    # or the one for a person's message, whichever bot that went to. `comment_to` is who the reader's
+                    # next comment reaches, so the composer says before sending when no bot will hear it.
                     "comments": visual_view(c, who, turn_work.annotate(c, auth, who,
                                                                           H.task_comments(c, tid, actor=privacy.actor(who)))),
                     "execution": task_execution(c, who, row),
+                    "comment_to": comment_to(c, who, row) if can_comment else None,
                     "mover": mover(c, request.state.identity),
                     "waiting_for": task_wait(c, tid, settings),
                     "runs": task_runs(c, who, tid),
@@ -2868,15 +2871,30 @@ def create_app(settings=None):
                     **privacy.page(c, who, row["conversation_id"], task_id=tid)}
 
     def task_execution(c, who, row):
-        """The owning bot's newest run in the task's own room, as a conversation snapshot shows it, or None. A task
-        still in a chat room (a person's task, or one filed into a chat before task rooms) shows none: that room's
-        runs are the chat's, and reading the task does not let one read the chat."""
+        """The run the task's page follows in its own room, as a conversation snapshot shows it, or None: the owning
+        bot's newest run, or a newer one for a message a person sent there, whichever bot it was routed to (the bot
+        that asked a person's task, say). Another bot's run for a bot's comment is not it. A task still in a chat
+        room (filed into a chat before task rooms) shows none: that room's runs are the chat's, and reading the task
+        does not let one read the chat."""
         cid, owner = row["conversation_id"], str(row["owner"] or "")
         room = H.conversation(c, cid) if cid else None
-        if not room or room.get("task_id") != row["id"] or not owner.startswith("bot:"):
+        if not room or room.get("task_id") != row["id"]:
             return None
         from .views import conversation_execution
-        return conversation_execution(c, cid, who, settings, bot=owner.removeprefix("bot:"), auth=auth)
+        return conversation_execution(c, cid, who, settings, bot=owner.removeprefix("bot:") if H.is_bot(owner) else None,
+                                      auth=auth, people=True)
+
+    def comment_to(c, who, row):
+        """Who a plain comment from this reader reaches (H.task_comment, H.comment_wakes): `bot`, the bot it goes to,
+        or None when no bot will get it; `wakes`, whether it starts that bot's turn now rather than waiting for its
+        next run on the task; `mention`, the @names that wake it anyway (names_a_filer). None for a bot reader."""
+        if who.role == "bot":
+            return None
+        target = H.comment_target(c, who.actor, row)
+        if not H.is_bot(target):
+            return {"bot": None, "wakes": False, "mention": []}
+        wakes = H.comment_wakes(c, who.actor, row, "", mover=mover(c, who))
+        return {"bot": H.actor_id(target), "wakes": wakes, "mention": [] if wakes else H.filer_handles(c, row)}
 
     def task_runs(c, who, tid, limit=200):
         """The runs that worked this task, each with the model that actually ran it (`ran_on`). A review that
