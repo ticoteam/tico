@@ -111,10 +111,11 @@ function obBotNodeHTML(state, card, head, big) {
   if (!row) return '';
   const slug = row.slug, editing = big && state.org.editing === slug, reports = frReports(state, slug);
   const moved = reports !== obDefaultReports(state, slug);
-  const sub = moved ? `→ ${esc(frParentName(state, reports))}` : head ? 'Head' : '';
+  const sub = moved ? `→ ${esc(frParentName(state, reports))}` : head ? 'Head' : '', name = catalogName(cat, row);
+  // A long name wraps to two lines (ui/styles/first-run.css); the whole of it is the tooltip.
   return `<li class="oc-bot${head ? ' oc-head' : ''}${obFresh(state, 'b:' + slug)}" data-oc-bot="${esc(slug)}">
-      <button type="button" class="oc-node oc-bnode" data-oc-edit="${esc(slug)}"${big ? ` aria-expanded="${editing}"` : ' tabindex="-1"'}>
-        ${obAvatar(slug, card, 24)}<span class="oc-text"><strong data-oc-label="${esc(slug)}">${esc(catalogName(cat, row))}</strong>${sub ? `<small>${sub}</small>` : ''}</span></button>
+      <button type="button" class="oc-node oc-bnode" data-oc-edit="${esc(slug)}" title="${esc(name)}"${big ? ` aria-expanded="${editing}"` : ' tabindex="-1"'}>
+        ${obAvatar(slug, card, 24)}<span class="oc-text"><strong data-oc-label="${esc(slug)}">${esc(name)}</strong>${sub ? `<small>${sub}</small>` : ''}</span></button>
       ${editing ? obEditHTML(state, slug) : ''}</li>`;
 }
 function obDeptNodeHTML(state, id, big) {
@@ -125,11 +126,13 @@ function obDeptNodeHTML(state, id, big) {
   const head = obHead(org, id);
   const sub = status === 'skipped' ? 'Skipped' : cur && org.step === 'recruiting' ? 'Recruiting…' : status === 'done' && !bots.length ? 'No bots' : '';
   const live = cur && org.step === 'recruiting' ? ' oc-recruiting' : '';
+  // While its bots are being found, the group holds their places, so the chart never shows lines with nothing on them.
+  const waiting = live && !bots.length ? `<ul class="oc-bots oc-wait" aria-hidden="true">${'<li class="oc-bot oc-ph"><span class="oc-node oc-bnode"><span class="sk-i"></span><span class="sk-l"></span></span></li>'.repeat(3)}</ul>` : '';
   return `<section class="oc-dept oc-${status}${live}${obFresh(state, 'd:' + id)}" data-oc-dept="${esc(id)}" style="--dc:${obColor(id)}">
       <button type="button" class="oc-node oc-dnode" data-oc-open="${esc(id)}">
         ${obIcon(dept.icon, 'oc-icon')}<span class="oc-text"><strong>${esc(dept.name)}</strong>${sub ? `<small${cur ? ' class="oc-live"' : ''}>${sub}</small>` : ''}</span>
         ${bots.length ? `<span class="oc-count">${bots.length}</span>` : ''}</button>
-      ${bots.length ? `<ul class="oc-bots">${bots.map(card => obBotNodeHTML(state, card, card.template === head, big)).join('')}</ul>` : ''}
+      ${bots.length ? `<ul class="oc-bots">${bots.map(card => obBotNodeHTML(state, card, card.template === head, big)).join('')}</ul>` : waiting}
     </section>`;
 }
 function obCols(state, count) {
@@ -470,7 +473,7 @@ function obWire(state) {
     (state.catalog.edits[slug] ||= {}).display_name = name.value;
     state.catalog.touched.add(slug);
     const label = document.querySelector(`[data-oc-label="${cssSelectorValue(slug)}"]`);
-    if (label) label.textContent = name.value;
+    if (label) { label.textContent = name.value; label.closest('[data-oc-edit]')?.setAttribute('title', name.value); }
   };
   if (!window.obResizeWired) {
     window.obResizeWired = true;
