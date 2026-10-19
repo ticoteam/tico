@@ -35,6 +35,14 @@ const KEY_REFRESH: Duration = Duration::from_secs(600);
 const KEY_LOGIN_RETRY: Duration = Duration::from_secs(600);
 /// How long a sign-out waits for a key login already running (its own limit is 30 seconds) to end.
 pub const KEY_LOGIN_DRAIN: Duration = Duration::from_secs(40);
+
+/// `mark_key_off` could not take the key off: why, and the error putting back what it had changed (None: all of it
+/// is back as it was, the key in use as before).
+#[derive(Debug)]
+pub struct KeyOffFailed {
+    pub error: std::io::Error,
+    pub undo: Option<std::io::Error>,
+}
 /// How long a refused key or sign-in is trusted before one turn tries again (service.py REJECT_RECHECK_S).
 pub const REJECT_RECHECK: Duration = Duration::from_secs(300);
 
@@ -260,21 +268,58 @@ impl SignIn {
 
     /// A switch to a subscription is in place and works: from now no key on this computer reaches `runtime`, and the
     /// keys it had are deleted (the company's copy, the computer's own and one from the terminal), as Clear key does.
-    /// Marked first, then deleted. A person signing in again, or switching account, does not lift it.
-    pub fn mark_key_off(&self, runtime: &str) -> std::io::Result<()> {
+    /// Marked first, then deleted. A person signing in again, or switching account, does not lift it. All or nothing:
+    /// when a file cannot be changed, every file changed before it is put back as it was, so the key stays in use with
+    /// nothing to fetch.
+    pub fn mark_key_off(&self, runtime: &str) -> Result<(), KeyOffFailed> {
         let _keys = self.keys.lock().unwrap_or_else(|e| e.into_inner());
-        let mut list = self.list(KEY_OFF_FILE);
-        if !list.iter().any(|r| r == runtime) {
-            list.push(runtime.into());
-            list.sort();
-            self.write_file(KEY_OFF_FILE, serde_json::to_string(&list).unwrap_or_default().as_bytes())?;
+        let files = [KEY_OFF_FILE, TEAM_KEYS_FILE, COMPUTER_KEYS_FILE, HAND_KEYS_FILE];
+        let mut before = Vec::new();
+        for file in files {
+            match std::fs::read(self.secrets.join(file)) {
+                Ok(bytes) => before.push((file, Some(bytes))),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => before.push((file, None)),
+                Err(error) => return Err(KeyOffFailed { error, undo: None }),
+            }
         }
         let names = headless_names(runtime);
-        for file in [TEAM_KEYS_FILE, COMPUTER_KEYS_FILE, HAND_KEYS_FILE] {
-            self.drop_names(file, &names)?;
-        }
+        let changed = (|| {
+            let mut list = self.list(KEY_OFF_FILE);
+            if !list.iter().any(|r| r == runtime) {
+                list.push(runtime.into());
+                list.sort();
+                self.write_file(KEY_OFF_FILE, serde_json::to_string(&list).unwrap_or_default().as_bytes())?;
+            }
+            for file in [TEAM_KEYS_FILE, COMPUTER_KEYS_FILE, HAND_KEYS_FILE] {
+                self.drop_names(file, &names)?;
+            }
+            Ok(())
+        })();
         self.dirty.store(true, std::sync::atomic::Ordering::SeqCst);
-        Ok(())
+        let Err(error) = changed else { return Ok(()) };
+        // The key files first, the mark last: nothing reads them meanwhile (the `keys` lock).
+        let mut undo = None;
+        for (file, was) in before.into_iter().rev() {
+            if let Err(e) = self.put_back(file, was) {
+                undo.get_or_insert(e);
+            }
+        }
+        Err(KeyOffFailed { error, undo })
+    }
+
+    /// Put `file` back as it `was` (None: it was not there), unless it still is.
+    fn put_back(&self, file: &str, was: Option<Vec<u8>>) -> std::io::Result<()> {
+        let path = self.secrets.join(file);
+        let now = match std::fs::read(&path) {
+            Ok(bytes) => Some(bytes),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => return Err(e),
+        };
+        match was {
+            _ if was == now => Ok(()),
+            Some(bytes) => self.write_file(file, &bytes),
+            None => std::fs::remove_file(&path),
+        }
     }
 
     /// A person added a key, or chose the shared key, for a login switched to a subscription: keys reach it again.
