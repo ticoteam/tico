@@ -21,6 +21,9 @@ def test_a_key_shared_with_two_computers_shows_on_both_and_lists_both(environmen
     out = call(api, "POST", f"computers/{one['runner_id']}/keys",
                {"runtime": "codex", "secret": PASTED, "share": [two["runner_id"]]})
     assert out["shared"]["preview"] == "sk-…789" and labels(out) == ["Alpha", "Bravo"]
+    # The ask on either computer names both.
+    info = call(api, "GET", f"computers/{two['runner_id']}/keys?runtime=codex")
+    assert info["source"] == "shared" and labels(info) == ["Alpha", "Bravo"] and info["shared"]["every"] is False
     assert "value" not in str(out) and PASTED not in str(out)
     for machine in (one, two):
         assert fetch(api, machine)["credentials"] == [{"env": "OPENAI_API_KEY", "value": PASTED, "source": "shared"}]
@@ -28,10 +31,14 @@ def test_a_key_shared_with_two_computers_shows_on_both_and_lists_both(environmen
         assert row["every"] is False and labels(row) == ["Alpha", "Bravo"] and row["id"] == out["shared"]["id"]
         assert listed(api, machine)["shared_keys"]["codex"] == {"env": "OPENAI_API_KEY", "preview": "sk-…789"}
     assert fetch(api, three)["credentials"] == [] and listed(api, three)["shared_with"] == {}
-    # The ask on either computer names both.
-    info = call(api, "GET", f"computers/{two['runner_id']}/keys?runtime=codex")
-    assert info["source"] == "shared" and labels(info) == ["Alpha", "Bravo"]
-    assert info["shared"]["every"] is False
+    # Credentials lists it with a grant per computer, named; revoking one there stops sharing it with that computer.
+    vault = call(api, "GET", "credentials")
+    row = next(r for r in vault["credentials"] if r["id"] == out["shared"]["id"])
+    assert sorted(g["subject"] for g in row["grants"]) == sorted("computer:" + m["runner_id"] for m in (one, two))
+    assert {m["id"]: m["label"] for m in vault["computers"]}[two["runner_id"]] == "Bravo"
+    gid = next(g["id"] for g in row["grants"] if g["subject"] == "computer:" + two["runner_id"])
+    call(api, "POST", f"credentials/{out['shared']['id']}/grants/{gid}/revoke", {})
+    assert fetch(api, two)["credentials"] == [] and labels(listed(api, one)["shared_with"]["codex"]) == ["Alpha"]
 
 
 def test_the_every_computer_key_is_a_shared_connection_on_every_computer(environment):
@@ -42,10 +49,16 @@ def test_the_every_computer_key_is_a_shared_connection_on_every_computer(environ
     ready = computer(api, "Alpha", source="shared")
     fresh = computer(api, "Bravo")          # reports codex installed, not signed in yet
     own = computer(api, "Charlie", source="terminal")
+    account = computer(api, "Delta", source="")   # signed in, but with no key: an account login
+    with api.app.state.store.transaction() as c:
+        row = c.execute("SELECT readiness_json FROM runners WHERE id=?", (account["runner_id"],)).fetchone()
+        assert '"authenticated": "missing"' in row[0] or '"authenticated":"missing"' in row[0]
+        c.execute("UPDATE runners SET readiness_json=replace(readiness_json, 'missing', 'ready') WHERE id=?",
+                  (account["runner_id"],))
     for machine in (ready, fresh):
         row = listed(api, machine)["shared_with"]["codex"]
         assert row["every"] is True and labels(row) == ["Alpha", "Bravo"]
-    assert listed(api, own)["shared_with"] == {}
+    assert listed(api, own)["shared_with"] == {} and listed(api, account)["shared_with"] == {}
     # Bravo's own report still says what its tool did: the page shows the key, not a reading it has not taken.
     assert listed(api, fresh)["readiness"]["runtimes"]["codex"]["authenticated"] == "missing"
 

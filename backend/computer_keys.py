@@ -195,20 +195,26 @@ def listing(c, runner_id):
     return out
 
 
-def _reported(runner, runtime):
+def _readiness(runner, runtime):
+    """What `runner` last reported for `runtime`: its readiness row, or {}."""
+    import json
     try:
-        import json
-        key = ((json.loads(runner["readiness_json"] or "{}").get("runtimes") or {}).get(runtime) or {}).get("key")
+        row = (json.loads(runner["readiness_json"] or "{}").get("runtimes") or {}).get(runtime)
     except (ValueError, AttributeError):
         return {}
+    return row if isinstance(row, dict) else {}
+
+
+def _reported(runner, runtime):
+    key = _readiness(runner, runtime).get("key")
     return key if isinstance(key, dict) else {}
 
 
 def uses_shared(c, runner, runtime):
     """The shared credential row `runner` runs `runtime` on, or None: one is shared with it, nothing a person did there
     stops it (Clear key, Sign out, Switch to subscription, its own key), and the computer has not said it signs in
-    another way (a key set in its terminal). One that has not reported yet counts, so a computer shows the key it
-    is about to use."""
+    another way (a key set in its terminal, or an account login). One whose tool is not signed in yet counts, so a
+    computer shows the key it is about to use."""
     rid = runner["id"]
     found = shared(c, runtime, rid)
     if not found or active(c, rid, runtime):
@@ -218,6 +224,8 @@ def uses_shared(c, runner, runtime):
             return None
     reported = _reported(runner, runtime)
     if reported.get("source") not in (None, "", "shared"):
+        return None
+    if not reported and _readiness(runner, runtime).get("authenticated") == "ready":
         return None
     return shared_for(c, runtime, reported.get("name"), found)
 

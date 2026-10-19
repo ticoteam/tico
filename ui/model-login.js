@@ -404,8 +404,8 @@
   const keyName = runtime => RUNTIME_NAMES[runtime] || (typeof harnessRow === 'function' && harnessRow(runtime)?.name) || runtime;
   const keyBase = runnerId => `/v2/computers/${encodeURIComponent(runnerId)}`;
 
-  // The "this computer only / all of them" ask for a key the company shares with every computer (`info` is
-  // GET /v2/computers/{id}/keys). `verb` is what happens to it ('clear', 'replace'). Reused by every page that changes
+  // The "this computer only / all listed computers" ask for a shared key: the company's "Every computer" one, or one
+  // shared with some computers by name (`info` is GET /v2/computers/{id}/keys, `computers` every one it serves). `verb` is what happens to it ('clear', 'replace'). Reused by every page that changes
   // a shared key; `chosenScope` reads the answer back.
   function scopeHTML(info, verb, here) {
     if (info.source !== 'shared') return '';
@@ -420,8 +420,14 @@
     return `<fieldset class="model-key-scope" data-key-scope><legend>This key is shared with ${(info.computers || []).length} computers:</legend>
       <ul>${rows}</ul>
       <label><input type="radio" name="key-scope" value="this" checked> This computer only${here ? ` (${text(here)})` : ''}: ${verb === 'clear' ? 'it stops using the shared key; the others keep it' : 'it gets its own key; the others keep the shared one'}</label>
-      <label><input type="radio" name="key-scope" value="all"${all}> All of them: ${verb === 'clear' ? 'every computer listed stops using it' : 'the shared key is replaced for every computer, in Credentials too'}${why}</label></fieldset>`;
+      <label><input type="radio" name="key-scope" value="all"${all}> All listed computers: ${verb === 'clear' ? 'every computer listed stops using it' : 'the shared key is replaced for every computer, in Credentials too'}${why}</label>
+      <p class="muted" data-key-scope-warn hidden>This changes every listed computer: ${text((info.computers || []).map(c => c.label).join(', '))}.</p></fieldset>`;
   }
+  // The warning under the ask shows while "All listed computers" is chosen.
+  const scopeWarn = root => {
+    const warn = root.querySelector('[data-key-scope-warn]');
+    if (warn) warn.hidden = chosenScope(root) !== 'all';
+  };
   const chosenScope = root => root.querySelector('[name=key-scope]:checked')?.value || 'this';
 
   // A small dialog shell shared by Clear key and Replace key.
@@ -494,7 +500,7 @@
       ${scopeHTML(info, 'clear', where)}
       <p data-key-bots></p>
       <p class="muted">The key is deleted from the computer. Bots keep this login, so nothing needs reassigning; the company's shared key won't sign it back in by itself. Add a key or choose Use the shared key to bring it back.</p>`;
-    form.addEventListener('change', () => void say());
+    form.addEventListener('change', () => { scopeWarn(form); void say(); });
     void say();
     go.addEventListener('click', async () => {
       if (go.disabled) return;
@@ -523,7 +529,10 @@
 
   // Replace key, or Add key where none signs it in: the key is pasted once and goes to the vault; the computer checks
   // it before the old one is deleted, so a key that doesn't work leaves the old one in use.
-  async function replaceKey({runnerId, runtime, machine, adding = false}) {
+  async function replaceKey({runnerId, runtime, machine, adding = false, others = null}) {
+    // The other computers it can be shared with: the connected ones Settings > Computers lists.
+    others = others || (typeof SETTINGS_DATA !== 'undefined' ? SETTINGS_DATA.machines || [] : [])
+      .filter(m => !m.revoked_at && m.id !== runnerId).map(m => ({id: m.id, label: m.label}));
     const name = keyName(runtime), where = machine || 'the computer';
     const dialog = keyDialog(`${adding ? 'Add a' : 'Replace the'} ${name} key on ${where}`, '<p>Checking which key it uses…</p>', adding ? 'Add key' : 'Replace key');
     const status = dialog.querySelector('[data-status]'), form = dialog.querySelector('[data-key-form]');
@@ -532,26 +541,65 @@
     try { info = await get(`${keyBase(runnerId)}/keys?runtime=${encodeURIComponent(runtime)}`); }
     catch (error) { status.textContent = error.message; return dialog; }
     const names = info.names || [];
+    // Add connection > API key, for a credential administrator: share the pasted key with other computers by name, or
+    // use a key already shared ("Every computer" in Credentials, or one shared from another computer).
+    const share = adding && info.can_share;
+    const choices = share ? info.shared_choices || [] : [];
+    const shareHTML = !share ? '' : `<fieldset class="model-key-share" data-key-share><legend>Use it on</legend>
+        <label><input type="radio" name="key-share" value="this" checked> This computer</label>
+        ${others.length ? `<label><input type="radio" name="key-share" value="shared"> Shared with:</label>
+        <div class="model-key-share-list">${others.map(c => `<label><input type="checkbox" name="key-share-computer" value="${text(c.id)}" disabled> ${text(c.label)}</label>`).join('')}</div>` : ''}
+        ${choices.length ? `<label><input type="radio" name="key-share" value="existing"> A shared key: <select name="key-existing" disabled aria-label="Shared key">${choices.map(k => `<option value="${text(k.id)}">${text(k.name)} · ${text(k.preview)}${k.every ? ' · every computer' : ''}</option>`).join('')}</select></label>` : ''}
+      </fieldset>`;
     form.innerHTML = `${info.preview && !adding ? `<p>Now: key <code>${text(info.preview)}</code>, ${text(KEY_SOURCES[info.source] || '')}.</p>` : ''}
-      ${adding ? '' : scopeHTML(info, 'replace', where)}
+      ${adding ? shareHTML : scopeHTML(info, 'replace', where)}
       <label>New key <input name="secret" type="password" autocomplete="off" spellcheck="false" required maxlength="4000" aria-label="New ${text(name)} key"></label>
       ${names.length > 1 ? `<label>Kind <select name="env">${names.map(n => `<option value="${text(n)}"${n === info.name ? ' selected' : ''}>${text(n)}</option>`).join('')}</select></label>` : ''}
       <p class="muted">It is kept in Tico's credential vault and never shown again in full. The next turn uses it once the computer has checked it; the old key is then deleted.</p>`;
     const field = form.querySelector('[name=secret]');
-    field.addEventListener('input', () => { go.disabled = !field.value.trim(); });
+    const shareMode = () => form.querySelector('[name=key-share]:checked')?.value || 'this';
+    const picked = () => [...form.querySelectorAll('[name=key-share-computer]:checked')].map(box => box.value);
+    const ready = () => {
+      const mode = shareMode();
+      field.closest('label').hidden = mode === 'existing';
+      form.querySelectorAll('[name=key-share-computer]').forEach(box => { box.disabled = mode !== 'shared'; });
+      const existing = form.querySelector('[name=key-existing]');
+      if (existing) existing.disabled = mode !== 'existing';
+      go.disabled = mode === 'existing' ? false : !field.value.trim() || (mode === 'shared' && !picked().length);
+    };
+    field.addEventListener('input', ready);
+    form.addEventListener('change', () => { scopeWarn(form); ready(); });
     field.focus();
     form.addEventListener('submit', event => { event.preventDefault(); go.click(); });
     go.addEventListener('click', async () => {
-      if (go.disabled || !field.value.trim()) return;
+      if (go.disabled) return;
+      const mode = shareMode();
+      const close = () => { dialog.querySelector('[data-actions]').innerHTML = '<button class="ghost" type="button" data-close>Close</button>'; };
+      const sharedDone = out => {
+        const listed = (out.computers || []).map(c => c.label);
+        status.dataset.state = 'done';
+        status.textContent = `Added. ${name} on ${listed.join(', ')} uses the shared key ${out.shared.preview} from each computer's next key check.`;
+        close();
+        for (const c of out.computers || []) refreshUntil(c.id, runtime, '', 'ready', new Date().toISOString());
+      };
+      if (mode === 'existing') {
+        dialog.querySelectorAll('[data-actions] button, [data-key-form] input, [data-key-form] select').forEach(el => { el.disabled = true; });
+        status.textContent = 'Adding the shared key…';
+        try { sharedDone(await post(`${keyBase(runnerId)}/shared-key`, {runtime, credential: form.querySelector('[name=key-existing]').value})); }
+        catch (error) { status.textContent = error.message; close(); }
+        return;
+      }
+      if (!field.value.trim()) return;
       const scope = adding ? 'this' : chosenScope(form);
-      const body = {runtime, secret: field.value.trim(), scope, ...(form.querySelector('[name=env]') ? {env: form.querySelector('[name=env]').value} : {})};
+      const body = {runtime, secret: field.value.trim(), scope, ...(form.querySelector('[name=env]') ? {env: form.querySelector('[name=env]').value} : {}),
+        ...(mode === 'shared' ? {share: picked()} : {})};
       // The key leaves the page with this request and is not kept in it.
       field.value = '';
       dialog.querySelectorAll('[data-actions] button, [data-key-form] input, [data-key-form] select').forEach(el => { el.disabled = true; });
-      status.textContent = scope === 'all' ? 'Replacing the shared key…' : `Checking the new key on ${where}…`;
-      const close = () => { dialog.querySelector('[data-actions]').innerHTML = '<button class="ghost" type="button" data-close>Close</button>'; };
+      status.textContent = scope === 'all' ? 'Replacing the shared key…' : body.share ? 'Sharing the key…' : `Checking the new key on ${where}…`;
       try {
         const out = await post(`${keyBase(runnerId)}/keys`, body);
+        if (body.share) { sharedDone(out); return; }
         if (scope === 'all') {
           const later = (out.computers || []).filter(c => !c.online).map(c => c.label);
           status.textContent = `Replaced. The shared key is now ${out.shared.preview}; every computer it serves uses it from its next check.${later.length ? ` ${later.join(', ')} ${later.length === 1 ? 'gets' : 'get'} it when next online.` : ''}`;

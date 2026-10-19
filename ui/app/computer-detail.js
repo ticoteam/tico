@@ -35,9 +35,12 @@ function machineConnections(machine) {
   for (const [runtime, value] of Object.entries(runtimes)) {
     const bots = links.filter(b => !b.profile && b.runtime === runtime).map(b => b.bot);
     const auth = value?.authenticated;
+    // A shared key that serves this computer (`shared_with`, backend/computer_keys.py serving) is a connection here
+    // even before the tool reports it signed in; until it does, the line says so and claims no reading.
+    const shared = machine.shared_with?.[runtime] || null;
     // Signed out from Tico (Sign out) stays a line, so it can sign in again or go back to the shared key.
-    if (!(auth === 'ready' || auth === 'rejected' || bots.length || machineSignedOut(machine, runtime))) continue;
-    const reading = {signed_in: auth === 'ready' ? true : ['missing', 'rejected'].includes(auth) ? false : null,
+    if (!(auth === 'ready' || auth === 'rejected' || bots.length || machineSignedOut(machine, runtime) || shared)) continue;
+    const reading = {signed_in: auth === 'ready' ? true : auth === 'rejected' || (auth === 'missing' && !shared) ? false : null,
       account: value.account, weekly: value.weekly, five_hour: value.five_hour};
     // The same provider account as a named subscription here: one line, one reading (the newer one). The server
     // names it in `same_account`, since only an admin or the operator receives the accounts themselves.
@@ -48,7 +51,7 @@ function machineConnections(machine) {
       if (machineNewer(value.weekly, same.state.weekly)) Object.assign(same.state, {weekly: value.weekly, five_hour: value.five_hour});
       continue;
     }
-    rows.push({key: `own:${runtime}`, runtime, name: "Computer's login", profile: null, own: true, auth, value, state: reading, bots});
+    rows.push({key: `own:${runtime}`, runtime, name: shared ? 'Shared key' : "Computer's login", profile: null, own: true, auth, value, state: reading, bots, shared});
   }
   // Bots on a subscription this computer does not have (or that does not cover their tool).
   for (const b of links) {
@@ -86,10 +89,15 @@ function machineAttentionWords(conn) {
   if (!conn.attention) return '';
   return conn.bots.length ? 'Signed out; bots use it' : 'Signed out';
 }
+// "Shared with Alpha, Bravo", or "Shared with every computer (…)" for the "Every computer" key in Credentials.
+function machineSharedWords(shared) {
+  const names = (shared.computers || []).map(c => c.label).join(', ');
+  return shared.every ? `Shared with every computer${names ? ` (${names})` : ''}` : `Shared with ${names}`;
+}
 // One chip per connection: the tool, a thin bar and the % left; a red dot only when it needs attention.
 function machineChipHTML(machine, conn) {
   const left = machineLeft(conn.state.weekly), warn = machineAttentionWords(conn);
-  const title = [`${conn.tool} · ${conn.name}${conn.own && conn.profile ? " (Computer's login)" : ''}`, warn, machineLeftWords(conn.state.weekly)].filter(Boolean).join(' · ');
+  const title = [`${conn.tool} · ${conn.name}${conn.own && conn.profile ? " (Computer's login)" : ''}`, conn.shared ? machineSharedWords(conn.shared) : '', warn, machineLeftWords(conn.state.weekly)].filter(Boolean).join(' · ');
   return `<button type="button" class="machine-chip${conn.attention ? ' attention' : ''}" data-computer-open="${esc(machine.id)}" data-chip="${esc(conn.key)}" title="${esc(title)}" aria-label="${esc(title)}">`
     + `${conn.attention ? '<span class="machine-chip-dot" aria-hidden="true"></span>' : ''}<span>${esc(conn.tool)}</span>`
     + `${left !== null ? `<meter class="machine-chip-bar" min="0" max="100" low="20" optimum="100" value="${left}" aria-hidden="true"></meter><span class="machine-chip-pct">${left}%</span>` : ''}</button>`;
@@ -107,11 +115,14 @@ function machineChipsHTML(machine) {
 // ---- the pop-up
 function machineConnectionHTML(machine, conn, online, manage) {
   const c = {runner_id: machine.id, label: machine.label};
-  const kind = conn.profile ? `Subscription · ${conn.name}` : "Computer's login";
-  const tags = [conn.own && conn.profile ? '<span class="pill computer-conn-own">Computer\'s login</span>' : ''].join('');
+  const kind = conn.profile ? `Subscription · ${conn.name}` : conn.shared ? `API key${conn.shared.name ? ` · ${conn.shared.name}` : ''}` : "Computer's login";
+  const tags = [conn.own && conn.profile ? '<span class="pill computer-conn-own">Computer\'s login</span>' : '',
+    conn.shared ? '<span class="pill computer-conn-shared" data-shared>Shared</span>' : ''].join('');
   let signIn;
   if (conn.missing) signIn = `<span class="pill fail">${esc(conn.problem)}</span>`;
   else if (conn.profile) signIn = machineProfileSignIn(conn.state, conn.runtime);
+  // A shared key the tool has not reported signing in with yet: nothing is claimed until it has.
+  else if (conn.shared && conn.auth !== 'ready' && conn.auth !== 'rejected') signIn = `<span class="muted" data-shared-waiting>Not checked on ${esc(machine.label)} yet; it is used from the computer's next key check</span>`;
   else signIn = machineSignInHTML(machine, online, conn.runtime, conn.auth, conn.value)
     + (conn.auth === 'ready' ? machineKeyHTML(machine, conn.runtime, conn.value?.key) : '');
   const offline = online ? '' : ' disabled title="Computer is offline"';
@@ -124,8 +135,9 @@ function machineConnectionHTML(machine, conn, online, manage) {
   // Switch account / Sign out (or Use the shared key) per login, from ui/model-login.js; only while online. On the
   // computer's own login a key signs in, Replace key / Clear key stand in for them. A line that is both the computer's
   // login and a subscription names which login each pair acts on.
-  const key = conn.value?.key && harnessCaps(conn.runtime).api_keys === 'computer';
+  const key = (conn.value?.key || conn.shared) && harnessCaps(conn.runtime).api_keys === 'computer';
   const login = (profile, signedIn) => !manage || conn.missing ? ''
+    : !profile && conn.shared && key ? machineKeyActions(machine, online, conn.runtime, conn.value?.key || {name: '', source: 'shared'}, true)
     : !profile && signedIn && key ? machineKeyActions(machine, online, conn.runtime, conn.value.key, true)
     : machineLoginActions(machine, online, conn.runtime, profile, signedIn);
   if (conn.own && conn.profile) {
@@ -134,7 +146,7 @@ function machineConnectionHTML(machine, conn, online, manage) {
       own && '<span class="computer-conn-login" data-login="">Computer\'s login' + own + '</span>'].filter(Boolean).join('');
   } else action += login(conn.profile ? conn.profile.name : '', conn.profile ? conn.state.signed_in === true : conn.auth === 'ready');
   // Add key: a key of the computer's own, for a tool that takes one (Dev 97).
-  if (manage && !conn.missing && !conn.profile && conn.state.signed_in !== true) action += machineKeyActions(machine, online, conn.runtime, null, false);
+  if (manage && !conn.missing && !conn.profile && !conn.shared && conn.state.signed_in !== true) action += machineKeyActions(machine, online, conn.runtime, null, false);
   const value = conn.value || {};
   const rejected = conn.auth === 'rejected'
     ? `<span class="err machine-rejected" data-rejected="${esc(conn.runtime)}">${value.rejected_at ? esc(ago(value.rejected_at)) + '. ' : ''}${value.rejected_reason ? esc(value.rejected_reason) + '. ' : ''}${hlCredentialFix(value.credential_source)}. It takes no work that needs ${esc(conn.runtime)} until then.</span>` : '';
@@ -150,6 +162,7 @@ function machineConnectionHTML(machine, conn, online, manage) {
     <div class="computer-conn-head">${conn.attention ? '<span class="machine-chip-dot" aria-hidden="true"></span>' : ''}<strong>${esc(conn.tool)}</strong><span>${esc(kind)}</span>${tags}</div>
     <div class="computer-conn-signin">${signIn}${action}${rejected}</div>
     ${usage ? `<div class="computer-conn-usage">${usage}</div>` : ''}
+    ${conn.shared ? `<div class="computer-conn-shared-with muted" data-shared-with>${esc(machineSharedWords(conn.shared))}</div>` : ''}
     <div class="computer-conn-bots muted">${esc(bots)}</div>${shared}
     ${tools || note ? `<div class="computer-conn-tools">${tools}${note ? `<span class="muted" role="status">${esc(note)}</span>` : ''}</div>` : ''}
   </div>`;

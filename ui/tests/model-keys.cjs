@@ -167,7 +167,7 @@ const {unrouted} = require('./support/routes.cjs');
     assert.ok(!(await page.content()).includes(SECRET), 'the key is not kept in the page');
     await dialog.locator('[data-actions] [data-close]').click();
 
-    // Replace key on the shared key: "All of them" is a credential administrator's alone.
+    // Replace key on the shared key: "All listed computers" is a credential administrator's alone.
     await own('codex').getByRole('button', {name: 'Replace key'}).click();
     await dialog.locator('[data-key-scope]').waitFor();
     assert.ok(await dialog.locator('input[name=key-scope][value=all]').isDisabled());
@@ -175,7 +175,7 @@ const {unrouted} = require('./support/routes.cjs');
     assert.match(await dialog.locator('[data-key-scope]').innerText(), /Far box \(offline: gets the new key when it is next online\)/);
     await dialog.locator('[data-close]').first().click();
 
-    // An older runner, offline or not, cannot clear its copy: All of them waits for its update.
+    // An older runner, offline or not, cannot clear its copy: All listed computers waits for its update.
     oldBox = true;
     await own('codex').getByRole('button', {name: 'Clear key'}).click();
     await dialog.locator('[data-key-scope]').waitFor();

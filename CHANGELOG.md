@@ -8,6 +8,14 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Shared connections on the Computers page (part 4 of 4)**: an API key added from a computer's Add connection can be
+  shared with other computers by name ("Shared with: [computers]"), or a key already shared can be picked instead of
+  pasting one; both are a credential administrator's change, and an operator still adds a key for this computer only.
+  A shared key, the "Every computer" key in Credentials included, shows on each computer it serves, its line marked
+  Shared and listing those computers, also before the computer has used it. Clear key and Replace key on it ask "This
+  computer only" or "All listed computers", naming them, and warn that the second changes every one. A key shared
+  with one computer by name comes before the "Every computer" key there; Credentials names each computer it is
+  shared with, and revoking one there stops sharing it with that computer.
 - **Visuals in replies (API, part 1 of 4)**: a bot or a person attaches a picture, SVG, self-contained HTML page,
   video or audio clip to a chat reply or a task comment with a title (`--visual PATH --title "…"` on `hub message
   send`, `hub chat send` and `hub task comment`; `visuals` on the same MCP tools; `attachments: [{ref, title}]` in the
