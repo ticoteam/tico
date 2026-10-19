@@ -714,7 +714,8 @@ def create_app(settings=None):
         request.state.auth_ms = 0.0
         app.state.timing.begin()
         # This request's SQL time and write-lock wait, added to by the threads it runs on (backend/flight.py).
-        cost, cost_token = flight.request_started() if recorder is not None else (None, None)
+        cost, cost_token = (flight.request_started(request.method, request.scope) if recorder is not None
+                            else (None, None))
         route = request.url.path
         response = None
         try:

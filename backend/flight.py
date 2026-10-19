@@ -62,6 +62,9 @@ STALL_S = 2.0                   # the event loop late by this much is a stall
 STACK_GAP = 60                  # every thread's stack with a stall, at most this often
 TICK = 0.25
 DB_WAIT = 2.0                   # seconds the recorder's own database writes wait for the write lock; the file has it all
+PENDING_MAX = 120               # table writes kept for the next try while the lock is busy (about two hours of minutes)
+LONG_HOLD_MS = 5000             # a write transaction holding the lock this long is logged with its route and code site
+LONG_HOLD_PER_MINUTE = 20
 MINUTE_DAYS = 2                 # request minutes older than this become hours
 SHORT_DAYS = 14                 # requests, slow requests, process minutes
 LONG_DAYS = 90                  # SQL hours, database sizes, events
@@ -112,17 +115,43 @@ def _merge(into, hist):
 # Per request: SQL milliseconds, write-lock wait milliseconds and statements, added to by the request's own threads. The
 # middleware sets a fresh list; threads the request runs on copy the context, so they add to the same list.
 _COST = contextvars.ContextVar("tico_flight_cost", default=None)
+# The request's method and ASGI scope, so a write transaction that holds the lock too long can name its route.
+_ROUTE = contextvars.ContextVar("tico_flight_route", default=None)
 _TOKENS = itertools.count()
 ACTIVE = None                   # the server's recorder, for write transactions on connections it did not open
 
 
-def request_started():
+def request_started(method=None, scope=None):
     cost = [0.0, 0.0, 0]
-    return cost, _COST.set(cost)
+    return cost, (_COST.set(cost), _ROUTE.set((method, scope) if scope is not None else None))
 
 
 def request_finished(token):
-    _COST.reset(token)
+    cost, route = token
+    _COST.reset(cost)
+    _ROUTE.reset(route)
+
+
+def _route_now():
+    """`POST /api/v2/runners/performance` when called on a request's threads, else None (a background job)."""
+    held = _ROUTE.get()
+    if not held:
+        return None
+    method, scope = held
+    found = scope.get("route")
+    return f"{method} {getattr(found, 'path', None) or 'unmatched'}"
+
+
+_PLUMBING = {"flight.py", "store.py", "contextlib.py", "threading.py"}
+
+
+def _site(frames):
+    """The innermost frame of this code base outside the transaction plumbing: `backend/performance.py:477 report`."""
+    for f in reversed(frames):
+        if (f.filename.startswith(ROOT) and "site-packages" not in f.filename
+                and os.path.basename(f.filename) not in _PLUMBING):
+            return f"{_where(f.filename)}:{f.lineno} {f.name}"
+    return None
 
 
 def begin(conn, recorder=None):
@@ -144,9 +173,15 @@ def begin(conn, recorder=None):
     finally:
         rec.waiting.pop(token, None)
     held = time.monotonic()
+    route = _route_now()
+    rec.holding[token] = (held, route, threading.get_ident())
 
     def done():
-        rec.transaction((held - started) * 1000, (time.monotonic() - held) * 1000)
+        rec.holding.pop(token, None)
+        hold_ms = (time.monotonic() - held) * 1000
+        rec.transaction((held - started) * 1000, hold_ms)
+        if hold_ms >= LONG_HOLD_MS:             # who held it: the call site is read only for a long hold
+            rec.long_hold(route, _site(traceback.extract_stack()), hold_ms, (held - started) * 1000)
     return done
 
 
@@ -173,6 +208,7 @@ class Recorder:
         self.cpu = (time.monotonic(), time.process_time())
         self.dropped = 0
         self.waiting = {}           # write-lock waits still going: token -> monotonic start
+        self.holding = {}           # write locks held now: token -> (monotonic start, route, thread id)
         self.wait_total = 0.0       # write-lock wait finished since the start, ms
         self.slow_file = []         # slow requests not yet in the file
 
@@ -188,6 +224,7 @@ class Recorder:
         self.wait_max = self.hold_max = 0.0
         self.hold = {}
         self.locked = 0
+        self.long_holds = []
 
     # The hot paths: one append each, safe from any thread. A full buffer (the background thread is not keeping up)
     # discards the oldest sample; `dropped` counts them, approximately, so the gap shows in the minute's row.
@@ -214,6 +251,10 @@ class Recorder:
         cost = _COST.get()
         if cost is not None:
             cost[1] += wait_ms
+
+    def long_hold(self, route, site, hold_ms, wait_ms):
+        """A write transaction that held the lock for LONG_HOLD_MS or more, from the thread that held it."""
+        self.samples.append(("h", int(time.time()), route, site, hold_ms, wait_ms))
 
     def tick(self, lag_ms):
         """The event loop woke `lag_ms` late (backend/timing.py watch_loop)."""
@@ -285,6 +326,11 @@ class Recorder:
                     self.hold_max = max(self.hold_max, hold)
                     _add(self.hold, hold)
                     self.locked += bool(locked)
+                elif kind == "h":
+                    _, ts, route, site, hold, wait = s
+                    if len(self.long_holds) < LONG_HOLD_PER_MINUTE:
+                        self.long_holds.append({"ts": ts, "route": route, "site": site, "hold_s": round(hold / 1000, 1),
+                                                "wait_s": round(wait / 1000, 1)})
                 elif kind == "l":
                     _add(self.lag, s[1])
                     self.lag_max = max(self.lag_max, s[1])
@@ -294,10 +340,25 @@ class Recorder:
             out, self.slow_file = self.slow_file, []
         return out
 
+    def open_holds(self, now=None):
+        """Write locks held LONG_HOLD_MS or more and still held, each with its route and where its thread is now."""
+        now = time.monotonic() if now is None else now
+        frames = None
+        out = []
+        for since, route, ident in list(self.holding.values()):
+            if (now - since) * 1000 < LONG_HOLD_MS:
+                continue
+            frames = sys._current_frames() if frames is None else frames
+            frame = frames.get(ident)
+            out.append({"ts": int(time.time()), "route": route, "open": True, "hold_s": round(now - since, 1),
+                        "site": _site(traceback.extract_stack(frame)) if frame is not None else None})
+        return out[:LONG_HOLD_PER_MINUTE]
+
     def take(self, minute):
         """The minute's rows, and the SQL hours, ready to write; the minute's counters start again."""
         with self.lock:
             requests, slow, lag, lag_max = self.requests, self.slow, self.lag, self.lag_max
+            long_holds = self.long_holds + self.open_holds()
             totals = (self.queries, self.sql_ms, self.txns, self.wait_max, self.hold_max, self.hold, self.locked)
             wait_sum = self.wait_sum
             self._reset()
@@ -338,8 +399,9 @@ class Recorder:
             kept = ranked[:SQL_TOP] + ([("(other)", other)] if other[0] else [])
             sql_rows += [(hour, fp, n, round(total, 1), quantile(hist, .95), round(peak, 2),
                           json.dumps(hist, separators=(",", ":"))) for fp, (n, total, peak, hist) in kept]
-        return {"requests": rows, "slow": slow, "process": proc, "sql": sql_rows,
-                "file": [minute_record, routes_record] if requests else [minute_record]}
+        holds = [{"kind": "long_hold", **h} for h in long_holds]
+        return {"requests": rows, "slow": slow, "process": proc, "sql": sql_rows, "long_holds": long_holds,
+                "file": ([minute_record, routes_record] if requests else [minute_record]) + holds}
 
 
 def write(c, taken):
@@ -347,6 +409,8 @@ def write(c, taken):
     c.executemany("INSERT INTO flight_slow(ts,route,caller,actor,ms,bytes,status) VALUES(?,?,?,?,?,?,?)", taken["slow"])
     c.execute("INSERT OR REPLACE INTO flight_process VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", taken["process"])
     c.executemany("INSERT OR REPLACE INTO flight_sql VALUES(?,?,?,?,?,?,?)", taken["sql"])
+    for hold in taken.get("long_holds") or []:
+        _event(c, "long_hold", {k: v for k, v in hold.items() if k != "ts"}, hold["ts"])
 
 
 def process_stats():
@@ -687,6 +751,8 @@ class Flight(threading.Thread):
         self.last_stacks = float("-inf")
         self.stalls = 0
         self.db_failed = 0
+        self.pending = []           # table writes the lock kept out, oldest first: (minute or None, work)
+        self.lost = []              # minutes whose rows went before a write got through, for the next `recorder_gap`
 
     def run(self):
         from . import releases
@@ -760,37 +826,64 @@ class Flight(threading.Thread):
             self.write_db(lambda c: _event(c, "stall", detail))
         return record
 
-    def write_db(self, work):
-        """One short write transaction on a connection of the recorder's own, waiting at most `db_wait` for the lock.
-        False (and counted in the next minute's `db_failed`) when it could not."""
+    def write_db(self, work, minute=None):
+        """One short write transaction on a connection of the recorder's own, waiting at most `db_wait` for the lock,
+        that also writes whatever an earlier busy lock kept out, oldest first. False (and counted in the next minute's
+        `db_failed`) when it could not: the work waits for the next try, up to PENDING_MAX of them, and a minute that
+        goes unwritten is named in a `recorder_gap` event, so the tables never lose a minute silently."""
+        self.pending.append((minute, work))
         try:
             c = sqlite3.connect(str(self.settings.db_path), timeout=self.db_wait, isolation_level=None)
         except sqlite3.Error:
             self.db_failed += 1
+            self._trim()
             return False
+        failing = None
         try:
             c.execute("BEGIN IMMEDIATE")
             try:
-                work(c)
+                for failing, (_, queued) in enumerate(self.pending):
+                    queued(c)
+                failing = None
+                if self.lost:
+                    _event(c, "recorder_gap", {"minutes": self.lost[-PENDING_MAX:], "count": len(self.lost)})
                 c.execute("COMMIT")
             except Exception:
                 c.execute("ROLLBACK")
                 raise
+            self.pending, self.lost = [], []
             return True
-        except sqlite3.Error as exc:
+        except Exception as exc:
             self.db_failed += 1
-            LOG.warning("Flight recorder table write skipped: %s", type(exc).__name__)
+            busy = isinstance(exc, sqlite3.OperationalError) and any(w in str(exc) for w in ("locked", "busy"))
+            if not busy and failing is not None:
+                # Not the lock: that work would fail every time, so it goes now (named) rather than block the rest.
+                gone, _ = self.pending.pop(failing)
+                if gone is not None:
+                    self.lost.append(gone)
+            self._trim()
+            LOG.warning("Flight recorder table write deferred (%d waiting): %s", len(self.pending), type(exc).__name__)
             return False
         finally:
             c.close()
+
+    def _trim(self):
+        while len(self.pending) > PENDING_MAX:
+            gone, _ = self.pending.pop(0)
+            if gone is not None:
+                self.lost.append(gone)
 
     def flush(self, minute):
         taken = self.recorder.take(minute)
         for record in taken["file"]:
             if record["kind"] == "minute":
-                record.update(file_dropped=self.file.dropped, db_failed=self.db_failed)
+                record.update(file_dropped=self.file.dropped, db_failed=self.db_failed, db_pending=len(self.pending))
             self.file.put(record)
-        self.write_db(lambda c: write(c, taken))
+        for hold in taken["long_holds"]:
+            LOG.warning("Write lock held %.1fs%s by %s at %s", hold["hold_s"],
+                        " (still held)" if hold.get("open") else "", hold["route"] or "a background job",
+                        hold["site"] or "an unknown site")
+        self.write_db(lambda c: write(c, taken), minute)
 
     def size_db(self, now):
         started = time.monotonic()

@@ -1243,6 +1243,9 @@ class Store:
                                    ("attempts_bot_finished", "attempts(bot, finished)"),
                                    ("attempts_job", "attempts(job_id)"),
                                    ("attempts_runner_state", "attempts(runner_id, state)"),
+                                   # The turns a computer ran in a window, read under the write lock by an
+                                   # open overload (backend/performance.py `_runs`).
+                                   ("attempts_runner_finished", "attempts(runner_id, finished)"),
                                    # A computer asking after the tasks its session checkouts are kept for.
                                    ("attempts_bot_lane", "attempts(bot, lane)"),
                                    ("events_action_target", "events(action, target, ts)"),

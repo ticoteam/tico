@@ -345,7 +345,7 @@ def summary(folder, since_s=1800, now=None, stall_limit=10, stack_frames=12):
     """What the files say about the last `since_s` seconds."""
     now = now or time.time()
     since = now - since_s
-    routes, slow, stalls, ends, minutes, starts, memory = {}, [], [], {}, [], [], []
+    routes, slow, stalls, ends, minutes, starts, memory, holds = {}, [], [], {}, [], [], [], []
     drops = 0
     for r in records(folder, since):
         kind = r.get("kind")
@@ -365,6 +365,8 @@ def summary(folder, since_s=1800, now=None, stall_limit=10, stack_frames=12):
                 m["wait_ms"] += x.get("wait_ms") or 0
         elif kind == "slow":
             slow.append(r)
+        elif kind == "long_hold":
+            holds.append(r)
         elif kind == "stall":
             stalls.append(r)
         elif kind == "stall_end":
@@ -417,9 +419,11 @@ def summary(folder, since_s=1800, now=None, stall_limit=10, stack_frames=12):
     return {"folder": str(folder), "since": round(since), "now": round(now), "starts": starts,
             "routes": sorted(routes.values(), key=lambda x: -x["total_ms"])[:15],
             "slow": sorted(slow, key=lambda x: -(x.get("ms") or 0))[:15],
+            "long_holds": sorted(holds, key=lambda x: -(x.get("hold_s") or 0))[:15],
             "stalls": out_stalls, "stalls_total": len(stalls),
             "minutes": [{k: m.get(k) for k in ("ts", "cpu", "rss", "lag_max", "requests", "wait_max", "wait_ms",
-                                                "hold_max", "locked", "dropped", "db_failed")} for m in minutes],
+                                                "hold_max", "locked", "dropped", "db_failed", "db_pending")}
+                        for m in minutes],
             "peaks": {"cpu": peak("cpu"), "rss": peak("rss"), "lag_max": peak("lag_max"), "wait_max": peak("wait_max"),
                       "hold_max": peak("hold_max")},
             "lock_waits": {"minutes": len(waits), "wait_ms": round(sum(m.get("wait_ms") or 0 for m in minutes)),
@@ -462,6 +466,11 @@ def render(s):
             out.append(f"  {_clock(r.get('ts'))} {r.get('route')} {r.get('ms')}ms status {r.get('status')} "
                        f"sql {r.get('sql_ms')}ms lock wait {r.get('wait_ms')}ms queries {r.get('queries')} "
                        f"bytes {r.get('bytes')}")
+    if s.get("long_holds"):
+        out.append("\nWrite lock held longest (who held it):")
+        for h in s["long_holds"]:
+            out.append(f"  {_clock(h.get('ts'))} {h.get('hold_s')}s{' (still held)' if h.get('open') else ''} "
+                       f"{h.get('route') or 'background job'} at {h.get('site') or '?'}")
     p = s["peaks"]
     out.append(f"\nPer minute (peaks: cpu {p['cpu']}%, rss {_mb(p['rss'])}, loop lag {p['lag_max']}ms, "
                f"lock wait {p['wait_max']}ms, hold {p['hold_max']}ms):")

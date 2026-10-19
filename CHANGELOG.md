@@ -40,6 +40,12 @@ All notable changes to Tico are recorded here. The format follows
   failed check (over 1.5 s) sends the message in the same session with no line.
 
 ### Fixed
+- A computer's performance report no longer holds the database's write lock while it reads every turn that computer
+  ever ran. During an open overload each report did, and on Oct 19 on a slow disk that held the lock about 100 s, so
+  heartbeats, claims and lease renewals waited and got "storage unavailable". It now reads only the turns of the
+  overload's window. A write that holds the lock 5 s or more is logged with its route and code line (server log,
+  flight file, and a `long_hold` event in the server metrics), and the metrics keep a minute's rows when the lock is
+  busy instead of skipping them, or name the minutes they lost in a `recorder_gap` event.
 - Work waiting while its computer updates now says so: once a computer due an update stops taking new work (20
   minutes after the update fell due, until its running turns end), a message or task for its bots shows **Waiting for
   the computer to update** in the chat and on the task instead of Queued, and Health says since when the computer has
