@@ -18,9 +18,9 @@ def test_a_key_shared_with_two_computers_shows_on_both_and_lists_both(environmen
     list both computers; a computer it was not shared with gets nothing."""
     api = setup(environment)
     one, two, three = (computer(api, label) for label in ("Alpha", "Bravo", "Charlie"))
-    out = call(api, "POST", f"computers/{one['runner_id']}/keys",
-               {"runtime": "codex", "secret": PASTED, "share": [two["runner_id"]]})
-    assert out["shared"]["preview"] == "sk-…789" and labels(out) == ["Alpha", "Bravo"]
+    out = call(api, "POST", f"computers/{two['runner_id']}/keys",
+               {"runtime": "codex", "secret": PASTED, "share": [one["runner_id"]]})
+    assert out["shared"]["preview"] == "sk-…789" and labels(out) == ["Alpha", "Bravo"], "by name, not as listed"
     # The ask on either computer names both.
     info = call(api, "GET", f"computers/{two['runner_id']}/keys?runtime=codex")
     assert info["source"] == "shared" and labels(info) == ["Alpha", "Bravo"] and info["shared"]["every"] is False

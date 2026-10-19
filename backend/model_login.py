@@ -325,7 +325,8 @@ def _share_with(c, who, runner_ids, credential_id, here):
                          (credential_id, subject)).fetchone():
             c.execute("INSERT INTO credential_grants(id,credential_id,subject,granted_by,created) VALUES(?,?,?,?,?)",
                       (H.new_id(), credential_id, subject, who.actor, now))
-    return rows
+    # In the order every list of computers here uses.
+    return sorted(rows, key=lambda row: (row["label"].lower(), row["id"]))
 
 
 def share_key(c, who, rid, runtime, key, env="", share=(), auth=None, vault=None):
