@@ -2368,6 +2368,11 @@ def _write_message(conn, actor, target, body, conv, kind, refs, in_reply_to, wai
         body = librarian_text(body)
     if VIA.get() and is_human(actor):
         refs = {**(refs or {}), "via": VIA.get()}         # the Assistant wrote this for the person
+    # Token saving 2/9: a wake its bot's own write caused, or news about a parked task, waits for the next run.
+    from . import wake_rules
+    held = wake_rules.gate(conn, actor, target, kind, refs, body, conv)
+    if held:
+        refs = {**(refs or {}), "quiet": True, wake_rules.MARK: held}
     row = {"id": new_id(), "conversation_id": conv["id"], "from_actor": actor, "to_actor": target,
            "kind": kind, "body": str(body or ""), "refs_json": _dump(refs or {}),
            "in_reply_to": in_reply_to, "created": now(), "delivered_at": delivered_at,
@@ -2379,6 +2384,8 @@ def _write_message(conn, actor, target, body, conv, kind, refs, in_reply_to, wai
         ":created, :delivered_at, :read_at, :expires_at, :wait_s)", row)
     conn.execute("UPDATE conversations SET last_message_at=? WHERE id=?", (row["created"], conv["id"]))
     event(conn, actor, f"message.{kind}", row["id"], {"to": target, "conversation": conv["id"]})
+    if held:
+        wake_rules.hold(conn, message(conn, row["id"]), held)
     return message(conn, row["id"])
 
 
@@ -3248,7 +3255,7 @@ def _unblock(conn, done_task, told=()):
         conn.execute("UPDATE tasks SET version=version+1 WHERE id=?", (row["id"],))
         if row["status"] in ACTIVE_STATUSES and not TR.blocker_ids(conn, row["id"]) and row["id"] not in told:
             _wake(conn, row, row["owner"], f"Unblocked: {row['title']}\n{done_task['title']} is finished.",
-                  source=done_task["id"])
+                  refs={"blocker_done": done_task["id"]}, source=done_task["id"])
 
 
 def _answered(conn, actor, task_id, card, told=None):

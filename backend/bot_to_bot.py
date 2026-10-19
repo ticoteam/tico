@@ -41,6 +41,9 @@ def can_wait(conn, actor, target, kind, refs, body, in_reply_to=None):
             return False
         if not isinstance(refs, dict) or refs.get("quiet"):
             return False
+        from . import wake_rules
+        if wake_rules.always_wakes(conn, actor, target, kind, refs, body):
+            return False
         flag = refs.get(FLAG, False)
         if flag is not False:
             return False
