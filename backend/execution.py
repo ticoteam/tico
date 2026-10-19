@@ -274,12 +274,10 @@ def owner_name(c, actor):
     return row.get("display_name") or row.get("name") or H.actor_id(actor)
 
 
-def held_runs(c, who, auth, bot, limit=3):
-    """The tasks of a bot's stopped runs held for review that `who` may read, oldest first: title and owner.
-    A task counts only under the same rule as reading it (`auth.task_sql`), so a company task involving a bot
-    the reader may not read stays unnamed."""
+def _readable_held(c, who, auth, bot):
+    """The bot's runs saved for later that `who` may read, oldest first, each with its task when `who` may read that
+    under the same rule as reading it (`auth.task_sql`), else None. A run on a task `who` may not read is left out."""
     fence = auth.task_sql(c, who)
-    held = []
     for row in c.execute("SELECT m.*,j.attempt_id FROM jobs j JOIN messages m ON m.id=j.message_id "
                          "WHERE j.bot=? AND j.state='uncertain' ORDER BY j.created", (bot,)):
         if not (privacy.message_readable(c, privacy.actor(who), row)
@@ -288,20 +286,34 @@ def held_runs(c, who, auth, bot, limit=3):
         message = H.message(c, row["id"])  # parsed refs: a comment or notice names its task there
         task_id = H.message_task_id(message, H.conversation(c, message["conversation_id"]))
         task = H.task(c, task_id) if task_id else None
-        if (task and H.task_private_readable(c, privacy.actor(who), task)
-                and c.execute(f"SELECT 1 FROM tasks WHERE id=? AND {fence}", (task["id"],)).fetchone()):
+        readable = bool(task and H.task_private_readable(c, privacy.actor(who), task)
+                        and c.execute(f"SELECT 1 FROM tasks WHERE id=? AND {fence}", (task["id"],)).fetchone())
+        if task and not readable:
+            yield row, None, False
+        else:
+            yield row, task, True
+
+
+def held_runs(c, who, auth, bot, limit=3):
+    """The tasks of a bot's stopped runs held for review that `who` may read, oldest first: title and owner.
+    A task counts only under the same rule as reading it (`auth.task_sql`), so a company task involving a bot
+    the reader may not read stays unnamed."""
+    held = []
+    for _, task, _ in _readable_held(c, who, auth, bot):
+        if task:
             held.append({"title": task["title"], "owner": task["owner"], "owner_name": owner_name(c, task["owner"])})
         if len(held) >= limit:
             break
     return held
 
 
-def isolation_refused(c, bot):
-    """Whether one of the bot's runs saved for later is a Tico turn its runner refused for want of isolation
-    (clients/gateway.py NOT_ISOLATED): held until a person moves the bot or changes its model."""
-    return any(any(gateway.run_code(error) == gateway.NOT_ISOLATED for error in limit_errors(c, row[0]))
-               for row in c.execute("SELECT attempt_id FROM jobs WHERE bot=? AND state='uncertain' "
-                                    "AND attempt_id IS NOT NULL", (bot,)))
+def isolation_refused(c, who, auth, bot):
+    """Whether one of the bot's runs saved for later that `who` may read, task and all, is a Tico turn its runner
+    refused for want of isolation (clients/gateway.py NOT_ISOLATED): held until a person moves the bot or changes
+    its model."""
+    return any(seen and row["attempt_id"]
+               and any(gateway.run_code(error) == gateway.NOT_ISOLATED for error in limit_errors(c, row["attempt_id"]))
+               for row, _, seen in _readable_held(c, who, auth, bot))
 
 
 def limit_streak(c, bot):

@@ -702,6 +702,39 @@ def test_a_tico_model_on_a_runner_that_runs_bots_as_itself_says_so_once_and_is_n
     assert issue["detail"].startswith(error.removesuffix(" (not_isolated)") + "."), issue
 
 
+def test_a_refusal_for_want_of_isolation_is_shown_only_to_who_may_read_its_run(api, monkeypatch):
+    """Ben reads the bot and its company task, not Ana's private one: an ordinary held run of the first doesn't let
+    the refusal of the second show him its words."""
+    setup(api, monkeypatch)
+    put_bot_on(api, "ops", "tico-mid-1.0")
+    machine = runner(api)
+    assign(api, machine, "ops")
+    ready(api, machine, ["ops"])
+    post(api, "tasks", {"owner": "ops", "title": "Company work", "body": "Use only the synthetic fixture"})
+    ordinary = claim(api, machine, "ops")
+    post(api, f"attempts/{ordinary['id']}/started", {"thread_id": "company"}, machine["token"])
+    post(api, f"attempts/{ordinary['id']}/events", {"events": [
+        {"seq": 1, "kind": "tool", "payload": {"tool": "Bash", "status": "started", "item_id": "b1"}},
+        {"seq": 2, "kind": "error", "payload": {"error": "the harness stopped"}}]}, machine["token"])
+    post(api, f"attempts/{ordinary['id']}/complete", {"outcome": "failed", "last_seq": 2, "text": ""}, machine["token"])
+    post(api, "tasks", {"owner": "ops", "title": "Ana only", "body": "Private work.", "private": True})
+    ready(api, machine, ["ops"])
+    refused = claim(api, machine, "ops")
+    assert refused and refused["id"] != ordinary["id"]
+    error = ("Tico models need a runner that runs bots as their own user (Tico's Docker runner). This computer can't, "
+             "so pick another model or move the bot (not_isolated)")
+    post(api, f"attempts/{refused['id']}/events", {"events": [{"seq": 1, "kind": "error", "payload": {"error": error}}]},
+         machine["token"])
+    post(api, f"attempts/{refused['id']}/complete", {"outcome": "failed", "last_seq": 1, "text": ""}, machine["token"])
+    with api.app.state.store.read() as c:
+        assert {r[0] for r in c.execute("SELECT state FROM jobs WHERE attempt_id IN (?,?)",
+                                        (ordinary["id"], refused["id"]))} == {"uncertain"}
+    held = lambda token: [i for i in get(api, "operations", token=token)["issues"] if i["kind"] == "uncertain_work"]
+    assert [i["title"] for i in held("ana-test")] == ["ops can't run on its computer"], held("ana-test")
+    seen = held("ben-test")
+    assert seen and all("Docker" not in i["detail"] + str(i["action"]) for i in seen), seen
+
+
 @pytest.mark.parametrize("acted", [False, True])
 def test_an_unavailable_gateway_says_try_again(api, monkeypatch, acted):
     machine, attempt = tico_run(api, monkeypatch)

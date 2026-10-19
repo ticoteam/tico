@@ -365,7 +365,7 @@ def operation_issues(c, who, auth):
             from .execution import held_runs, isolation_refused
             named = "; ".join(f"\"{h['title']}\" (owner {h['owner_name']})" for h in held_runs(c, who, auth, slug))
             held_note = f" Held: {named}." if named else ""
-            if isolation_refused(c, slug):
+            if isolation_refused(c, who, auth, slug):
                 # Not a possible outside action: the bot's model can't run on its computer, and its later work waits
                 # behind the held run until a person acts.
                 add("uncertain_work", f"{bot['display_name']} can't run on its computer",
