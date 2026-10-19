@@ -1030,6 +1030,15 @@ def parser():
     s.add_argument("--until", required=True,
                    help="ISO-8601 date (the start of that day, Pacific) or date-time with a zone")
     s.set_defaults(fn="task snooze")
+    s = task.add_parser("defer", help="a quiet task carried into this run that you will not do now: say when it is "
+                        "picked up again (it gets one run of its own then); with none, your next run is handed it again")
+    s.add_argument("id")
+    when = s.add_mutually_exclusive_group(required=True)
+    when.add_argument("--after", help="when this task is done or closed (an id or number)")
+    when.add_argument("--at", help="at this time: ISO-8601 date-time with a zone, or a date (start of day, Pacific)")
+    when.add_argument("--next-run", action="store_true", help="with your next run, whatever starts it")
+    when.add_argument("--handled", action="store_true", help="this run is done with it for now (nothing to resume)")
+    s.set_defaults(fn="task defer")
     s = task.add_parser("unsnooze", help="bring a snoozed task back now; its owner bot is woken once")
     s.add_argument("id")
     s.set_defaults(fn="task unsnooze")

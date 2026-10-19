@@ -25,7 +25,8 @@ from . import go_live as pending_go_lives
 from . import repo_waits
 from . import built_on
 from . import agents, app_delivery, batch, external_sync, inbox_isolation, mcp_oauth, harness_actions, model_login, oidc, personal_tokens, views
-from . import check_models, run_triggers, team_rules, update_feeds, topic_change, usage_limits, wake_presets, visuals, wake_rules
+from . import owner_link
+from . import check_models, run_triggers, team_rules, update_feeds, topic_change, usage_limits, wake_presets, visuals, wake_rules, quiet_work
 from . import task_privacy as privacy
 from . import task_relations as TR
 from . import task_roles as TRo
@@ -433,6 +434,11 @@ def create_app(settings=None):
             # secret and is refused outright unless local sign-in is configured.
             if request.url.path in (LOCAL_SIGNIN_PATH, LOGOUT_PATH, *oidc.AUTH_PATHS) and request.method == "GET":
                 return await call_next(request)
+            # The hosted owner's sign-in link: the page with its button, and the press that spends it (backend/owner_link.py).
+            if request.url.path == owner_link.LINK_PATH and request.method in ("GET", "POST"):
+                return await call_next(request)
+            if request.url.path == owner_link.SCRIPT_PATH and request.method == "GET":
+                return await call_next(request)
             # A frontend's one-time sign-in code, exchanged with its PKCE verifier (backend/oidc.py).
             if request.url.path == oidc.TOKEN_PATH and request.method == "POST":
                 return await call_next(request)
@@ -660,6 +666,11 @@ def create_app(settings=None):
                 back = path + ("?" + request.url.query if request.url.query else "")
                 return RedirectResponse(oidc.LOGIN_PATH + "?" + urlencode({"next": oidc.safe_next(back)}),
                                         status_code=302)
+            if (exc.status == 401 and auth.proxy and auth.proxy.name == owner_link.KIND
+                    and request.method in ("GET", "HEAD") and not hasattr(request.state, "identity")
+                    and not path.startswith(("/api", "/mcp")) and "authorization" not in request.headers
+                    and "text/html" in request.headers.get("accept", "")):
+                return RedirectResponse(owner_link.LINK_PATH, status_code=302)
             response = await problem_handler(request, exc)
             if exc.status == 401 and path == mcp_oauth.MCP_PATH:
                 # Where an agent with no token can sign in (backend/mcp_oauth.py, RFC 9728).
@@ -938,6 +949,11 @@ def create_app(settings=None):
                  "next_run": bool(row.get("next_run")), "private": H.task_private(c, row), "cover": None}
         if c is not None and row.get("next_run"):
             value["next_run_waiting"] = H.next_run_waiting(c, row)
+        if c is not None and (quiet := quiet_work.view(c, row)):
+            # Quiet work: delivered (into which run, when; deferred until what), eligible or queued (quiet_work.view).
+            value["quiet"] = quiet
+        # The stored condition is in `quiet.resume`; a board of 500 tasks does not carry the column besides.
+        value.pop("resume_json", None)
         value.pop("labels_json", None)
         if pipelines is None:
             if c is None:
@@ -1068,6 +1084,8 @@ def create_app(settings=None):
             })
             if row.get("next_run"):
                 value["next_run_waiting"] = H.next_run_waiting(c, row)
+                if quiet := quiet_work.view(c, row, history=False):
+                    value["quiet"] = quiet
             if row["id"] in routines_by_task:
                 value["routine_id"] = routines_by_task[row["id"]]
             if row["id"] in origins:
@@ -1657,6 +1675,7 @@ def create_app(settings=None):
         return response
 
     oidc.register(app, auth)
+    owner_link.register(app, auth)
     mcp_oauth.register(app, auth, store)
 
     @app.get(LOGOUT_PATH)
@@ -2201,9 +2220,10 @@ def create_app(settings=None):
         return mutate(request, body, work)
 
     def topic_check(request, who, bot, body):
-        """The topic check's outcome for a person's chat message, or None: not a person, a command, a retried request
-        (its first try already decided), or a bot whose chat is another's (a shared or the Assistant's)."""
-        if who.role not in ("owner", "human") or who.via or body.command or (body.refs or {}).get("task"):
+        """The topic check's outcome for a person's chat message, or None: not a person, a retried request (its first
+        try already decided), a bot whose chat is another's (a shared or the Assistant's), or a send the check never
+        looks at (`topic_change.considered`: a command, a task chat's, or one carrying files)."""
+        if who.role not in ("owner", "human") or who.via:
             return None
         key, path = request.headers.get("idempotency-key"), request.url.path
         if not key:
@@ -2216,7 +2236,7 @@ def create_app(settings=None):
                 return False
             target = H.actor_id(route(c, who.actor, "bot:" + bot))
             return target == bot and bot != settings.assistant_bot and views.may_chat(c, auth, who, bot)
-        return topic_change.check(store, app.state.judge, who, bot, body.text, admit)
+        return topic_change.check(store, app.state.judge, who, bot, body, admit, uploads=())
 
     # ------------------------------------------------------------------ updates (backend/updates.py)
     def update_visible(c, who, mine=False, scope=None):
@@ -2856,10 +2876,13 @@ def create_app(settings=None):
                     "can_comment": can_comment,
                     "children": children,
                     # The task page reads as its session's chat: each bot reply carries the run behind it (`run`,
-                    # the steps one click away) and `execution` is the owner's run while it works.
+                    # the steps one click away) and `execution` is the run it follows while it works: the owner's,
+                    # or the one for a person's message, whichever bot that went to. `comment_to` is who the reader's
+                    # next comment reaches, so the composer says before sending when no bot will hear it.
                     "comments": visual_view(c, who, turn_work.annotate(c, auth, who,
                                                                           H.task_comments(c, tid, actor=privacy.actor(who)))),
                     "execution": task_execution(c, who, row),
+                    "comment_to": comment_to(c, who, row) if can_comment else None,
                     "mover": mover(c, request.state.identity),
                     "waiting_for": task_wait(c, tid, settings),
                     "runs": task_runs(c, who, tid),
@@ -2868,15 +2891,34 @@ def create_app(settings=None):
                     **privacy.page(c, who, row["conversation_id"], task_id=tid)}
 
     def task_execution(c, who, row):
-        """The owning bot's newest run in the task's own room, as a conversation snapshot shows it, or None. A task
-        still in a chat room (a person's task, or one filed into a chat before task rooms) shows none: that room's
-        runs are the chat's, and reading the task does not let one read the chat."""
+        """The run the task's page follows in its own room, as a conversation snapshot shows it, or None: the owning
+        bot's newest run, or a newer one for a message a person sent there, whichever bot it was routed to (the bot
+        that asked a person's task, say). Another bot's run for a bot's comment is not it. A task still in a chat
+        room (filed into a chat before task rooms) shows none: that room's runs are the chat's, and reading the task
+        does not let one read the chat."""
         cid, owner = row["conversation_id"], str(row["owner"] or "")
         room = H.conversation(c, cid) if cid else None
-        if not room or room.get("task_id") != row["id"] or not owner.startswith("bot:"):
+        if not room or room.get("task_id") != row["id"]:
             return None
         from .views import conversation_execution
-        return conversation_execution(c, cid, who, settings, bot=owner.removeprefix("bot:"), auth=auth)
+        return conversation_execution(c, cid, who, settings, bot=owner.removeprefix("bot:") if H.is_bot(owner) else None,
+                                      auth=auth, people=True)
+
+    def comment_to(c, who, row):
+        """Who a plain comment from this reader reaches (H.task_comment, H.comment_wakes): `bot`, the bot it goes to,
+        or None when no bot will get it; `wakes`, whether it starts that bot's turn now rather than waiting for its
+        next run on the task; `mention`, the @names that would wake it anyway for this reader, each checked against
+        the same rule (names_a_filer counts only for someone who may direct the task). None for a bot reader."""
+        if who.role == "bot":
+            return None
+        target = H.comment_target(c, who.actor, row)
+        if not H.is_bot(target):
+            return {"bot": None, "wakes": False, "mention": []}
+        moves = mover(c, who)
+        wakes = H.comment_wakes(c, who.actor, row, "", mover=moves)
+        mention = [] if wakes else [n for n in H.filer_handles(c, row)
+                                    if H.comment_wakes(c, who.actor, row, "@" + n, mover=moves)]
+        return {"bot": H.actor_id(target), "wakes": wakes, "mention": mention}
 
     def task_runs(c, who, tid, limit=200):
         """The runs that worked this task, each with the model that actually ran it (`ran_on`). A review that
@@ -3142,6 +3184,24 @@ def create_app(settings=None):
             auth.task(c, who, task_id)
             after = TS.snooze(c, who.actor, task_id, body.until, mover=mover(c, who))
             return {"task": task_view(after, c, visible_sql=auth.task_sql(c, who), who=who)}
+        return mutate(request, body, work)
+
+    @app.post("/api/v2/tasks/{tid}/defer")
+    def task_defer(request: Request, tid: str, body: M.TaskDefer):
+        """Say when a quiet task a run carried (or one still waiting for a run) is picked up again: after another task
+        is done, at a time, or with the next run; or that the run handled it (backend/quiet_work.py). The task's own
+        bot, or a person."""
+        def work(c):
+            who = request.state.identity
+            task_id = auth.resolve_task(c, who, tid)
+            auth.task(c, who, task_id)
+            after = None
+            if body.after:
+                after = auth.resolve_task(c, who, body.after)
+                auth.task(c, who, after)
+            row = quiet_work.defer(c, who.actor, task_id, after=after, at=body.at, next_run=body.next_run,
+                                   handled=body.handled)
+            return {"task": task_view(row, c, visible_sql=auth.task_sql(c, who), who=who)}
         return mutate(request, body, work)
 
     @app.post("/api/v2/tasks/{tid}/unsnooze")

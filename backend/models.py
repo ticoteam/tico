@@ -1909,6 +1909,14 @@ class TaskSnooze(Contract):
     until: str = Field(min_length=10, max_length=40)
 
 
+class TaskDefer(Contract):
+    # Exactly one (backend/quiet_work.py defer): a task to wait for, a time, the next run, or "handled".
+    after: str | None = Field(default=None, min_length=1, max_length=80)
+    at: str | None = Field(default=None, min_length=10, max_length=40)
+    next_run: bool = False
+    handled: bool = False
+
+
 class Empty(Contract):
     pass
 

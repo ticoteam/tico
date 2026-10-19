@@ -479,19 +479,44 @@ async function taskStepsOpen(el) {
   const list = $(`.task-comments details.run-steps[data-turn="${CSS.escape(turn)}"] .steps-list`, document);
   if (list) list.innerHTML = html;
 }
-// The owner's run while it works: "Working" and its newest step, the steps so far one click away, and Stop for whoever
-// manages the bot (POST /v2/bots/{slug}/stop, as in the bot's chat).
-function taskLiveHTML(x, stopping = '') {
-  if (!x || !['leased', 'running'].includes(x.state)) return '';
-  const part = (x.parts || []).at(-1);
+// The line under the thread while a run answers it: the bot chat's pending line (pendingRunText, ui/app/chat.js), so
+// Sent, Queued and why, Starting, "<Bot> is working" with its newest step, or Reply failed. `execution` is the owner's
+// run or the run for a person's message, whichever bot that went to (GET /v2/tasks/{id}); a queued run for anything
+// else is `waiting_for`'s. The steps so far are one click away, and Stop is there for whoever manages the bot
+// (POST /v2/bots/{slug}/stop, as in the bot's chat). `sent`: the id of a message just sent; until its own run is read,
+// it is Sent, never the state of an earlier message's run.
+function taskLiveHTML(x, stopping = '', sent = '') {
+  if (sent && x?.message_id !== sent) x = null;
+  const working = !!x && ['leased', 'running'].includes(x.state);
+  const run = working || x?.from_person && v2RunLive(x) ? x : null;
+  if (!run && !sent) return '';
+  const t = pendingRunText(run, run?.bot);
+  // Several bots may answer on a task, so the line names the one at work.
+  const word = t.word || t.tip;
+  const part = working ? (x.parts || []).at(-1) : null;
   const step = part ? clipLine(part.text.replace(/\s+/g, ' ').trim(), 120) : '';
-  const word = x.waiting ? x.waiting : x.state === 'leased' ? 'Starting' : x.label && x.label !== 'Working' ? x.label : 'Working';
-  const label = `<span class="typing run" aria-hidden="true"><i></i><i></i><i></i></span><span class="thinking-word">${esc(word)}…</span>${step ? `<span class="task-live-step">${esc(step)}</span>` : ''}`;
-  const stop = x.attempt_id && settingsCanManageBot(S.emps.find(e => e.name === x.bot))
+  const label = `<span class="typing ${t.mode}" aria-hidden="true"><i></i><i></i><i></i></span><span class="thinking-word">${esc(word)}${
+    working ? '…' : ''}</span>${step ? `<span class="task-live-step">${esc(step)}</span>` : ''}`;
+  const stop = working && x.attempt_id && settingsCanManageBot(S.emps.find(e => e.name === x.bot))
     ? `<button type="button" class="ghost task-live-stop" data-task-stop="${esc(x.attempt_id)}" data-bot="${esc(x.bot)}" title="Stop this run"${
       stopping === x.attempt_id ? ' disabled>Stopping…' : '>Stop'}</button>` : '';
-  return `<div class="thinking task-live" role="status" aria-label="${esc(actorLabel('bot:' + x.bot))} is ${esc(word.toLowerCase())}${step ? ': ' + esc(step) : ''}">${
-    x.attempt_id ? taskStepsFold(x.attempt_id, label, true) : label}${stop}</div>`;
+  return `<div class="thinking task-live" role="status" aria-label="${esc(t.tip)}${step ? ': ' + esc(step) : ''}">${
+    working && x.attempt_id ? taskStepsFold(x.attempt_id, label, true) : label}${pendingHintHTML(run)}${stop}</div>`;
+}
+// Who the comment being written will reach (GET /v2/tasks/{id} `comment_to`), said before it is sent: no bot at all,
+// or a bot that reads it on its next run on the task unless the draft @mentions it.
+function taskComposerTo(to, draft) {
+  if (!to) return '';
+  if (!to.bot) return 'No bot gets this message: it is saved on the task for the people on it.';
+  // As the server reads an @mention (backend/hubdb.py _at): the name, not inside a word or another @name.
+  const at = n => new RegExp('(?<![\\w@])@' + n.replace(/[.*+?^$()|[\]\\{}]/g, '\\$&') + '(?![\\w-])', 'i');
+  const named = (to.mention || []).some(n => at(n).test(draft || ''));
+  if (to.wakes || named) return '';
+  return `Saved for ${botDisplayName(to.bot)}'s next run on this task.${to.mention?.length ? ` Write @${to.mention[0]} to ask now.` : ''}`;
+}
+function taskComposerToPaint(state) {
+  const hint = $('[data-task-chat-to]', state.host), box = $('textarea', state.host);
+  if (hint) hint.textContent = taskComposerTo(state.data?.comment_to, box?.value);
 }
 async function taskRunStop(state, button) {
   button.disabled = true;
@@ -502,7 +527,7 @@ async function taskRunStop(state, button) {
     taskChatLive(state);
   } catch (e) { button.disabled = false; toast(`Not stopped: ${e.message}`, true); }
 }
-function taskCommentsRender(state, data) {
+function taskCommentsRender(state, data, sent = '') {
   const host = state.host;
   const lines = [
     ...(data.comments || data.messages || []).filter(m => ['say', 'ask', 'answer'].includes(m.kind)).map(m => ({kind: 'comment', ts: m.created, message: m})),
@@ -512,14 +537,17 @@ function taskCommentsRender(state, data) {
     // The box is the main chat's composer: a pill, one line that grows, the send arrow, Return sends.
     host.innerHTML = `<h3>Conversation</h3>
       <div class="task-comments" role="log" aria-live="polite"></div>
-      <form class="task-pill"><div class="p-pill"><textarea class="p-text" rows="1" maxlength="4000" required aria-label="Message" placeholder="Message…"></textarea>
+      <form class="task-pill"><span class="muted" data-task-chat-to role="note"></span><div class="p-pill"><textarea class="p-text" rows="1" maxlength="4000" required aria-label="Message" placeholder="Message…"></textarea>
           <button class="p-send p-send-icon" type="submit" aria-label="Send" title="Send">${ICON_SEND}</button></div>
           <span class="muted" data-task-chat-status role="status"></span></form>`;
     $('form', host).onsubmit = ev => { ev.preventDefault(); void taskCommentSend(state); };
     const box = $('textarea', host);
     box.value = TASK_DRAFTS.get(String(state.id)) || '';
     const grow = () => { box.style.height = 'auto'; box.style.height = box.scrollHeight + 'px'; };
-    box.oninput = () => { grow(); if (box.value) TASK_DRAFTS.set(String(state.id), box.value); else TASK_DRAFTS.delete(String(state.id)); };
+    box.oninput = () => {
+      grow(); taskComposerToPaint(state);
+      if (box.value) TASK_DRAFTS.set(String(state.id), box.value); else TASK_DRAFTS.delete(String(state.id));
+    };
     if (box.value) requestAnimationFrame(grow);
     // As in the main chat: on a computer Return sends and Shift+Return is a new line; on a phone Return is a line.
     box.onkeydown = ev => {
@@ -534,6 +562,7 @@ function taskCommentsRender(state, data) {
     });
   }
   state.data = data;
+  taskComposerToPaint(state);
   // `can_comment`: false for someone who may read the task but not comment on it; they get no box and no answer controls
   const can = data.can_comment !== false, d = state.dialog;
   $('form', host).hidden = !can;
@@ -543,8 +572,8 @@ function taskCommentsRender(state, data) {
   if (state.count != null && count !== state.count) void tfLoad(state.dialog, state.id);
   state.count = count;
   const files = tfFiles(state.dialog);
-  // The bot's next run on this task, when it is queued: what it waits for, where its reply will appear.
-  const live = taskLiveHTML(data.execution, state.stopping);
+  // The run answering the thread; otherwise the bot's next run on this task, when it is queued: what it waits for.
+  const live = taskLiveHTML(data.execution, state.stopping, sent);
   const wait = live || !data.waiting_for ? live : `<p class="muted task-wait" role="status">${esc(data.waiting_for)}</p>`;
   const html = (lines.map((x, i, all) => commentLineHTML(x, i, all, files, state.id, can)).join('') || '<p class="muted">Nothing said yet.</p>') + wait;
   const thread = $('.task-comments', host);
@@ -636,8 +665,11 @@ async function taskCommentSend(state) {
     box.value = ''; box.style.height = ''; TASK_DRAFTS.delete(String(state.id)); state.sending = false;
     const thread = $('.task-comments', state.host);
     if (thread) stickScroll(thread).toBottom();      // your comment is where you look
+    // Your comment and "Sent" at once, as in the bot's chat; the read that follows has its run.
+    if (data.comments && state.data) taskCommentsRender(state, {...state.data, comments: data.comments}, data.woke ? data.comment?.id : '');
     await taskChatRead(state);
-    status.textContent = data.woke ? '' : 'Saved. The bot reads it on its next run on this task.';
+    // The composer said so before sending when no bot would get it; the server has the last word.
+    status.textContent = data.woke || taskComposerTo(state.data?.comment_to, text) ? '' : 'Saved. The bot reads it on its next run on this task.';
   } catch (e) {
     if (taskChatCurrent(state)) status.textContent = `Not saved: ${e.message}`;
   } finally {
@@ -668,6 +700,15 @@ function taskPeekPos(id) {
   if (!TASKS_ST || typeof tasksVisibleKeys !== 'function') return '';
   const keys = tasksVisibleKeys(), i = keys.indexOf('t' + id);
   return i < 0 ? '' : `${i + 1} / ${keys.length}`;
+}
+// Quiet work (a next-run task, backend/quiet_work.py): delivered into a run (deferred until something), eligible for the
+// bot's next run, or queued with a run of its own; which run, and when it was handed over.
+function taskQuietHTML(t) {
+  const q = t.quiet;
+  if (!q || taskFinished(t)) return '';
+  const label = {queued: 'Queued', eligible: 'Eligible', delivered: q.resume ? 'Deferred' : 'Delivered'}[q.state] || q.state;
+  const more = [q.run ? `run ${String(q.run).slice(0, 8)}` : '', q.at ? `handed over ${ago(q.at)}` : ''].filter(Boolean).join(', ');
+  return `<p class="task-wait task-quiet" data-task-quiet="${esc(q.resume ? 'deferred' : q.state)}"><span class="lbl">Quiet work: ${esc(label)}</span> ${esc(q.words || '')}${more ? ` <span class="muted">(${esc(more)})</span>` : ''}</p>`;
 }
 // The task in full or in the peek. The header: its status, its owner, its age, Done and Close task for whoever may use
 // them (the two most common actions) as labelled buttons, then the quiet icon buttons: "…" and, past a rule, ✕ for the window. Then the title, who added it and when, the properties, the
@@ -709,6 +750,7 @@ function hubModalHTML(t, it, opts = {}) {
       <div class="tmodal-main">
       ${waitLabel && waitText ? (askToYou ? `<div class="task-ask"><div class="lbl">${esc(waitLabel)}</div><div class="task-ask-body">${esc(waitText)}</div></div>`
         : `<p class="task-wait"><span class="lbl">${esc(waitLabel)}</span> ${esc(waitText)}</p>`) : ''}
+      ${taskQuietHTML(t)}
       ${original ? (waitText ? `<details class="task-orig"><summary>Original request</summary><div class="tdesc md">${safeMd(original)}</div></details>`
         : `<div class="tdesc md">${safeMd(original)}</div>`) : (waitText ? '' : '<p class="muted tdesc">No details.</p>')}
       ${note && note.replace(/\s+/g, ' ').trim() !== waitText ? `<details class="task-orig"><summary>Progress</summary><div class="tdesc md">${safeMd(note)}</div></details>` : ''}

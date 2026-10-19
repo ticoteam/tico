@@ -374,9 +374,12 @@
     } catch (error) { toast(error.message, true); }
   }
 
+  // Every action here waits for the computer: offline, its button stays, disabled, and says why (nothing queues).
+  const offline = online => online ? '' : ' disabled title="Computer is offline"';
+
   // The Sign out / Switch account buttons for a signed-in login, and Use the shared key for a computer login a person
-  // signed out. Only for a CLI whose manifest has a logout (`sign_out`), on a computer that is online, to whoever may
-  // sign it in (the caller checks: an admin or the computer's operator). The computer's login running on an API key
+  // signed out. Only for a CLI whose manifest has a logout (`sign_out`), to whoever may sign it in (the caller checks:
+  // an admin or the computer's operator), disabled while the computer is offline. The computer's login running on an API key
   // (`onKey`) offers Switch to subscription instead of Switch account; on a subscription, a runtime Tico keeps a key for
   // (`api_keys = "computer"`) and can check one (`api_key_login` or `api_key_check`) also offers Switch to API key, except
   // where its login is in the system keychain (a logout there could not be undone).
@@ -384,8 +387,8 @@
   // `platform`): there is no side to sign in on, so a cancel could not keep the old login.
   function actionsHTML({runnerId, runtime, machine = '', profile = '', signedIn = false, signedOut = false, online = true, platform = '', onKey = false}) {
     const caps = typeof harnessCaps === 'function' ? harnessCaps(runtime) : {};
-    if (!online || !caps.sign_out) return '';
-    const data = `data-runner="${text(runnerId)}" data-runtime="${text(runtime)}" data-machine="${text(machine)}"${profile ? ` data-profile="${text(profile)}"` : ''}`;
+    if (!caps.sign_out) return '';
+    const data = `data-runner="${text(runnerId)}" data-runtime="${text(runtime)}" data-machine="${text(machine)}"${profile ? ` data-profile="${text(profile)}"` : ''}${offline(online)}`;
     if (signedIn) {
       const switches = !(caps.switch_unavailable_on || []).includes(platform);
       const toKey = switches && !onKey && !profile && caps.api_keys === 'computer' && (caps.api_key_login || caps.api_key_check);
@@ -402,8 +405,8 @@
   // login lives in the system keychain.
   function toSubscriptionHTML({runnerId, runtime, machine = '', online = true, platform = ''}) {
     const caps = typeof harnessCaps === 'function' ? harnessCaps(runtime) : {};
-    if (!online || !caps.sign_out || !caps.browser_sign_in || (caps.switch_unavailable_on || []).includes(platform)) return '';
-    return ` <button class="ghost machine-signin" type="button" data-model-to-subscription data-runner="${text(runnerId)}" data-runtime="${text(runtime)}" data-machine="${text(machine)}">Switch to subscription</button>`;
+    if (!caps.sign_out || !caps.browser_sign_in || (caps.switch_unavailable_on || []).includes(platform)) return '';
+    return ` <button class="ghost machine-signin" type="button" data-model-to-subscription data-runner="${text(runnerId)}" data-runtime="${text(runtime)}" data-machine="${text(machine)}"${offline(online)}>Switch to subscription</button>`;
   }
 
   const KEY_SOURCES = {computer: 'added from Tico', terminal: 'set on the computer', shared: 'the company\'s shared key'};
@@ -656,11 +659,11 @@
 
   // Replace key / Clear key for a login a key signs in (`key`: its readiness `key`, {name, source}), and Add key where
   // none does: a key runtime (`api_keys = "computer"`) signed out, cleared or never signed in. Same rights and
-  // conditions as actionsHTML: an admin or the computer's operator (the caller checks), the computer online.
+  // conditions as actionsHTML: an admin or the computer's operator (the caller checks), disabled while it is offline.
   function keyActionsHTML({runnerId, runtime, machine = '', key = null, signedIn = false, online = true}) {
     const caps = typeof harnessCaps === 'function' ? harnessCaps(runtime) : {};
-    if (!online || caps.api_keys !== 'computer') return '';
-    const data = `data-runner="${text(runnerId)}" data-runtime="${text(runtime)}" data-machine="${text(machine)}"`;
+    if (caps.api_keys !== 'computer') return '';
+    const data = `data-runner="${text(runnerId)}" data-runtime="${text(runtime)}" data-machine="${text(machine)}"${offline(online)}`;
     if (signedIn && key) {
       return ` <button class="ghost machine-signin" type="button" data-model-key-replace ${data}>Replace key</button>`
         + ` <button class="ghost machine-signin" type="button" data-model-key-clear ${data}>Clear key</button>`;

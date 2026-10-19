@@ -82,11 +82,68 @@ runner_host() {
   [ "$host" = "$(printf '%s' "$TICO_DOMAIN" | tr '[:upper:]' '[:lower:]')" ] || printf '%s' "$host"
 }
 
+# A visual origin must not turn its cookie-free hostname into another way to reach the whole app.
+# Parse it before writing YAML: only a host that passes every check reaches the file. A bad value prints one warning
+# naming the reason (never the value) and the config leaves out the visuals route; the server still starts, as the
+# backend does without the setting (backend/visuals.py inline_on). Outer whitespace, such as a CR from an edited .env,
+# is ignored like backend/config.py does.
+visual_host() {
+  [ -n "${TICO_VISUAL_ORIGIN:-}" ] || return 0
+  python3 - "$1" <<'PY'
+import ipaddress
+import os
+import re
+import sys
+from urllib.parse import urlsplit
+
+
+def refuse(reason):
+    print("tico: warning: TICO_VISUAL_ORIGIN " + reason + "; the tunnel config leaves out the visuals route",
+          file=sys.stderr)
+    sys.exit(1)
+
+
+value = os.environ["TICO_VISUAL_ORIGIN"].strip()
+if not value:
+    sys.exit(0)
+if any(ch.isspace() or ord(ch) < 32 or ord(ch) == 127 for ch in value):
+    refuse("has spaces or control characters")
+try:
+    origin = urlsplit(value)
+    host, port = origin.hostname or "", origin.port
+except ValueError:
+    refuse("is not a valid URL")
+if origin.scheme != "https":
+    refuse("is not an https:// address")
+if origin.path not in ("", "/") or origin.query or origin.fragment:
+    refuse("has a path, query or fragment; give only https://<host>")
+if origin.username is not None or origin.password is not None:
+    refuse("has a user name or password")
+if port == 0:
+    refuse("has port 0")
+try:
+    ipaddress.ip_address(host)
+except ValueError:
+    pass
+else:
+    refuse("is an IP address, not a hostname")
+if not (len(host) <= 253 and "." in host
+        and all(re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label) for label in host.split("."))):
+    refuse("is not a plain DNS hostname")
+if host == os.environ["TICO_DOMAIN"].lower():
+    refuse("is the app's own host (TICO_DOMAIN); visuals need a separate site")
+if host == sys.argv[1]:
+    refuse("is the runner's host (TICO_RUNNER_URL); visuals need a separate site")
+print(host)
+PY
+}
+
 tunnel_config() {
   [ -n "${TICO_DOMAIN:-}" ] && [ -d "$TUNNEL_DIR" ] && [ -w "$TUNNEL_DIR" ] || return 0
   case "$TICO_DOMAIN" in *[!A-Za-z0-9.-]*|.*|*.|'') die "TICO_DOMAIN is not a plain hostname: $TICO_DOMAIN" ;; esac
-  local runner origin=http://server:8765
+  local runner visual origin=http://server:8765
   runner=$(runner_host)
+  visual=$(visual_host "$runner") || visual=  # visual_host printed the warning
   {
     echo "ingress:"
     echo "  - hostname: $TICO_DOMAIN"
@@ -96,6 +153,11 @@ tunnel_config() {
       # external agents call: the API (which checks their tokens) and the runner download.
       echo "  - hostname: $runner"
       echo "    path: '^/(?:api/v2|download)(?:/.*)?\$'"
+      echo "    service: $origin"
+    fi
+    if [ -n "$visual" ]; then
+      echo "  - hostname: $visual"
+      echo "    path: '^/visuals/'"
       echo "    service: $origin"
     fi
     echo "  - service: http_status:404"

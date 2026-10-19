@@ -163,6 +163,8 @@ class Settings:
     # Where the identity provider ends its own session (a Cognito /logout URL with its
     # client_id and logout_uri); without it, logout returns to the app's root.
     cognito_logout_url: str = ""
+    # TICO_AUTH_PROXY=owner-link: the sha256 of the owner's first sign-in link, from the installer (backend/owner_link.py).
+    owner_link_hash: str = ""
     # Built-in sign-in (TICO_AUTH_PROXY=oidc, backend/oidc.py). The secret is read from its file
     # when one is named; the session secret defaults to a generated file beside the database.
     oidc_issuer: str = ""
@@ -415,6 +417,7 @@ class Settings:
             compose_project=os.environ.get("TICO_COMPOSE_PROJECT", "tico"),
             server_network=os.environ.get("TICO_SERVER_NETWORK", "tico_default"),
             hosted=os.environ.get("TICO_HOSTED", ""),
+            owner_link_hash=os.environ.get("TICO_OWNER_LINK_HASH", "").strip().lower(),
             runner_url=os.environ.get("TICO_RUNNER_URL", "").rstrip("/"),
             screen_relay_url=os.environ.get("TICO_SCREEN_RELAY_URL", ""),
             screen_relay_key=os.environ.get("TICO_SCREEN_RELAY_KEY", ""),

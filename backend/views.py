@@ -707,14 +707,20 @@ def conversation_snapshot(c, cid, who=None, settings=None, page_args=None, auth=
     return {**page, "execution": conversation_execution(c, cid, who, settings, auth=auth), "goal": current(c, cid)}
 
 
-def conversation_execution(c, cid, who=None, settings=None, bot=None, auth=None):
+def conversation_execution(c, cid, who=None, settings=None, bot=None, auth=None, people=False):
     """The newest run in this conversation as the chat shows it while it works: its state, a label and its reply so
-    far, or None. `bot` keeps to that bot's runs (a task's page follows its owner's session). A run waiting for its
-    ChatGPT login (backend/login_waits.py) says so in `waiting` and its label; `auth` lets it name the bot holding it."""
-    job = c.execute("SELECT j.*,a.state AS attempt_state,a.lease_until,a.stop_requested FROM jobs j JOIN messages m ON m.id=j.message_id "
+    far, or None. `bot` keeps to that bot's runs (a task's page follows its owner's session); `people` also takes the
+    run for a message a person sent, whichever bot it went to (a person's task answered by the bot that asked it).
+    A run waiting for its ChatGPT login (backend/login_waits.py) says so in `waiting` and its label; `auth` lets it
+    name the bot holding it."""
+    person = "m.from_actor LIKE 'human:%'"
+    which = (f"AND (j.bot=? OR {person}) " if bot and people else "AND j.bot=? " if bot
+             else f"AND {person} " if people else "")
+    job = c.execute("SELECT j.*,m.from_actor AS sender,a.state AS attempt_state,a.lease_until,a.stop_requested "
+                    "FROM jobs j JOIN messages m ON m.id=j.message_id "
                     "LEFT JOIN attempts a ON a.id=j.attempt_id WHERE m.conversation_id=? "
                     "AND coalesce(json_extract(m.refs_json,'$.maintenance'),'')!='checkpoint' "
-                    + ("AND j.bot=? " if bot else "") + "ORDER BY m.rowid DESC LIMIT 1", (cid, bot) if bot else (cid,)).fetchone()
+                    + which + "ORDER BY m.rowid DESC LIMIT 1", (cid, bot) if bot else (cid,)).fetchone()
     execution = None
     if job and who and (not privacy.message_readable(c, privacy.actor(who), H.message(c, job["message_id"]))
                         or job["attempt_id"] and not privacy.attempt_readable(c, privacy.actor(who), job["attempt_id"])):
@@ -756,7 +762,8 @@ def conversation_execution(c, cid, who=None, settings=None, bot=None, auth=None)
         parts, omitted = live_parts(parts)
         execution = {"job_id": job["id"], "message_id": job["message_id"], "bot": job["bot"],
                      "attempt_id": job["attempt_id"], "state": state, "label": label,
-                     "text": "\n\n".join(p["text"] for p in parts if p["kind"] != "tool"), "parts": parts, **location}
+                     "text": "\n\n".join(p["text"] for p in parts if p["kind"] != "tool"), "parts": parts,
+                     "from_person": H.is_human(job["sender"]), **location}
         if omitted:
             execution["parts_omitted"] = omitted
         if waiting:
@@ -1726,7 +1733,8 @@ def install_views(app, store, auth, mutate, task_view):
                 # computer's own login is that subscription's account, so a member's page shows them as one too.
                 # `bot_connections`: the connection each of its bots actually runs on. `signed_out`:
                 # {runtime: [profile, ...]} a person signed out here ('' is its own login); they stay signed out.
-                from .model_login import cleared_logins
+                # `key_cleared`: [runtime, ...] of those, the computer's own login whose key a person cleared.
+                from .model_login import cleared_logins, key_cleared_logins
                 from .computer_keys import listing as computer_key_listing
                 profiles = subscriptions.computer_profiles(c, row, True)
                 same_account = subscriptions.same_account(value["readiness"].get("runtimes") or {}, profiles)
@@ -1755,6 +1763,7 @@ def install_views(app, store, auth, mutate, task_view):
                                  "bot_connections": [link for link in subscriptions.connections(
                                      c, row["id"], store.settings, subscription_context) if link["bot"] not in hidden],
                                  "signed_out": cleared_logins(c, row["id"]),
+                                 "key_cleared": key_cleared_logins(c, row["id"]),
                                  "inbox_only": row["id"] in kept_for_inbox,
                                  # {runtime: {env, preview}}: its own keys stored from here, and the company's shared
                                  # ones, for the rows a key signs in (backend/computer_keys.py). Never a value, and a

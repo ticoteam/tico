@@ -22,9 +22,16 @@ FRONT_DOORS = {"caddy": "Caddy: automatic HTTPS, opens ports 80/443, DNS points 
                "cloudflared": "Cloudflare Tunnel: no open ports, needs the domain on Cloudflare"}
 AUTHS = {"google": "Google sign-in (OIDC)", "microsoft": "Microsoft sign-in (OIDC)",
          "cloudflare": "Cloudflare Access (needs the tunnel)"}
+# Only for a server Tico hosts (--hosted), so never offered in the question above: the owner signs in with a single-use
+# link our team sends (backend/owner_link.py).
+OWNER_LINK = "owner-link"
+HOSTED = ("own", "invited")
+PRESETS = ("recommended",)
+# The Gateway invite our operator gives the preset (Dev 210 enrolls with it); checked whole, never shown.
+INVITE_RE = re.compile(r"[A-Za-z0-9_-]{8,200}")
 
 # Not persisted to state.json: they live in the private .env copy or come from the environment.
-SECRET_FIELDS = ("client_secret", "decisions_key", "cf_token", "tunnel_token", "backup_secret")
+SECRET_FIELDS = ("client_secret", "decisions_key", "cf_token", "tunnel_token", "backup_secret", "gateway_invite")
 # This run's only, never saved: a re-run without the flag must not inherit permission to repoint a record.
 TRANSIENT_FIELDS = ("runner_given",)
 
@@ -76,6 +83,13 @@ class Settings:
     runner_tag: str = "latest"
     tag: str = "latest"
     compose_ref: str = "main"
+    # A server Tico hosts: own (our team) or invited (an invited company), set from our operator's --hosted, never asked.
+    hosted: str = ""
+    hosted_zone: str = ""          # our DNS zone; the domain must be under it
+    owner_link_hash: str = ""      # sha256 of the owner's first sign-in link; the link itself is only in a 0600 file here
+    preset: str = ""               # recommended: the sample company, subscriptions plus Gateway, Support
+    support: str = ""              # with the preset: on, or off with --no-support
+    gateway_invite: str = ""
 
     def public(self) -> dict:
         return {k: v for k, v in asdict(self).items() if k not in SECRET_FIELDS + TRANSIENT_FIELDS}
@@ -93,12 +107,20 @@ class Settings:
             e["CLOUDFLARE_TUNNEL_TOKEN"] = self.tunnel_token
             if self.runner():
                 e["TICO_RUNNER_URL"] = f"https://{self.runner()}"
-        if self.auth == "cloudflare":
+        if self.hosted:
+            e["TICO_HOSTED"] = self.hosted
+        if self.auth == OWNER_LINK:
+            e.update(TICO_AUTH_PROXY=OWNER_LINK, TICO_OWNER_LINK_HASH=self.owner_link_hash)
+        elif self.auth == "cloudflare":
             e.update(TICO_AUTH_PROXY="cloudflare", TICO_ACCESS_ISSUER=self.access_issuer, TICO_ACCESS_AUDIENCE=self.access_audience)
         else:
             e.update(TICO_AUTH_PROXY="oidc", TICO_OIDC_ISSUER=contract.issuer(self.auth, self.tenant),
                      TICO_OIDC_CLIENT_ID=self.client_id, TICO_OIDC_CLIENT_SECRET=self.client_secret,
                      **{contract.KEY_ALLOWED_DOMAIN: self.allowed_domain})
+        if self.preset == "recommended":
+            # The same choices as scripts/install.sh --recommended, read on the server's first start.
+            e.update(TICO_INSTALL_PRESET="recommended", TICO_SAMPLE_COMPANY="on", TICO_MODELS_PRESET="subscriptions-gateway",
+                     TICO_SUPPORT=self.support or "on", TICO_GATEWAY_INVITE=self.gateway_invite)
         if self.decisions_key and self.decisions_provider:
             e[contract.DECISIONS_KEYS[self.decisions_provider]] = self.decisions_key
         if self.backup_url:
@@ -107,7 +129,8 @@ class Settings:
         return e
 
     def secrets(self) -> list[str]:
-        return [v for v in (self.client_secret, self.decisions_key, self.cf_token, self.tunnel_token, self.backup_secret) if v]
+        return [v for v in (self.client_secret, self.decisions_key, self.cf_token, self.tunnel_token, self.backup_secret,
+                            self.gateway_invite) if v]
 
 
 def default_runner_host(domain: str, zone: str = "") -> str:
@@ -126,6 +149,7 @@ def from_saved(saved: dict, env_text: str) -> Settings:
     e = envfile.parse(env_text)
     s.client_secret = e.get("TICO_OIDC_CLIENT_SECRET", "")
     s.tunnel_token = e.get("CLOUDFLARE_TUNNEL_TOKEN", "")
+    s.gateway_invite = e.get("TICO_GATEWAY_INVITE", "")
     runner = urllib.parse.urlsplit(e.get("TICO_RUNNER_URL", "")).hostname or ""
     if not s.runner_host and runner and runner != s.domain:
         s.runner_host = runner

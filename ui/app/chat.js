@@ -502,10 +502,16 @@ function v2PendingText(state) {
   if (!S.me?.cloud) return {word: '', tip: `${name} is thinking`, mode: 'run'};
   if (state.live?.interrupted) return SESSION.out ? {word: 'Signed out', tip: "You've been signed out", mode: 'wait'}
     : {word: 'Reconnecting', tip: 'Connection interrupted — reconnecting', mode: 'wait'};
+  return pendingRunText(x, state.slug);
+}
+// The words for one run, wherever a message waits on it (this chat, a task's chat): Sent, Queued and why, Starting,
+// "<Bot> is working", or how it ended (Reply failed).
+function pendingRunText(x, slug) {
+  const name = botDisplayName(slug);
   if (!x) return {word: 'Sent', tip: 'Sent', mode: 'wait'};
   if (x.state === 'queued') {
     if (x.label && x.label !== 'Saved — queued') return {word: x.label, tip: x.label, mode: 'wait'};   // the server's reason
-    const s = v2StatusOf(state.slug);
+    const s = v2StatusOf(slug);
     return {word: 'Queued', mode: 'wait', tip: s?.state === 'running' && s.focus
       ? `${name} is on another run: ${s.focus}` : 'Starts when its computer picks it up'};
   }
@@ -516,6 +522,14 @@ function v2PendingText(state) {
     ? {word: x.label, tip: x.label, mode: 'run'} : {word: '', tip: `${name} is working`, mode: 'run'};
   return {word: x.label || x.state, tip: x.label || x.state, mode: 'wait'};
 }
+// The hint a queued run carries when its bot cannot start: no AI provider, or its computer not signed in to its model.
+function pendingHintHTML(x) {
+  if (x?.state !== 'queued') return '';
+  if (x.readiness_reason === 'missing_provider') return ' <a href="#/settings" data-gs-tab="providers">Add an AI provider</a>';
+  return x.readiness_reason === 'model_sign_in'
+    ? ' <span>Its computer is not signed in to its model: <a href="#/settings" data-gs-tab="devices">Sign in on Settings &gt; Computers</a> · <a href="#/settings" data-gs-tab="health">Health</a></span>'
+    : '';
+}
 function v2PendingHTML(state) {
   const x = state.execution, key = x?.message_id || 'sent';
   if (state.dismissed === key) return '';
@@ -523,12 +537,7 @@ function v2PendingHTML(state) {
   clearTimeout(state.waitTimer);
   const late = S.me?.cloud && sent && Date.now() - sent >= REPLY_WAIT_MS;
   if (S.me?.cloud && sent && !late) state.waitTimer = setTimeout(() => v2ChatRender(state), sent + REPLY_WAIT_MS - Date.now() + 50);
-  const providerMissing = x?.state === 'queued' && x?.readiness_reason === 'missing_provider';
-  // A provider is chosen but this bot's computer is not signed in to its model.
-  const signInMissing = x?.state === 'queued' && x?.readiness_reason === 'model_sign_in';
-  const hint = providerMissing ? ' <a href="#/settings" data-gs-tab="providers">Add an AI provider</a>'
-    : signInMissing ? ' <span>Its computer is not signed in to its model: <a href="#/settings" data-gs-tab="devices">Sign in on Settings &gt; Computers</a> · <a href="#/settings" data-gs-tab="health">Health</a></span>'
-    : '';
+  const hint = pendingHintHTML(x);
   if (late && !hint) return `<div class="thinking late" data-pending="${esc(key)}"><span class="dot"></span>
     <span>No reply after 20 minutes · <button type="button" class="dismiss" data-pending-dismiss>dismiss</button></span></div>`;
   const t = v2PendingText(state);

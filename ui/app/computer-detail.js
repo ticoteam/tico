@@ -66,6 +66,7 @@ function machineConnections(machine) {
   for (const r of rows) {
     // Signed out from Tico is a red dot even with no bots on it yet: nothing signs it back in by itself.
     const cleared = r.state.signed_in === false && machineSignedOut(machine, r.runtime, r.profile?.name ?? '');
+    r.keyCleared = cleared && !r.profile && machineKeyCleared(machine, r.runtime);
     r.attention = !!((r.bots.length && r.state.signed_in === false) || cleared || r.auth === 'rejected' || (r.missing && r.bots.length));
     r.tool = machineToolName(machine, r.runtime);
   }
@@ -92,7 +93,8 @@ function machineAttentionWords(conn) {
   if (conn.missing) return conn.problem;
   if (conn.auth === 'rejected') return 'Login expired or rejected';
   if (!conn.attention) return '';
-  return conn.bots.length ? 'Signed out; bots use it' : 'Signed out';
+  const what = conn.keyCleared ? 'No key' : 'Signed out';
+  return conn.bots.length ? `${what}; bots use it` : what;
 }
 // "Shared with Alpha, Bravo", or "Shared with every computer (…)" for the "Every computer" key in Credentials.
 function machineSharedWords(shared) {
@@ -131,13 +133,17 @@ function machineConnectionHTML(machine, conn, online, manage) {
   else signIn = machineSignInHTML(machine, online, conn.runtime, conn.auth, conn.value)
     + (conn.auth === 'ready' ? machineKeyHTML(machine, conn.runtime, conn.value?.key) : '');
   const offline = online ? '' : ' disabled title="Computer is offline"';
-  let action = '';
+  const sep = '<span class="computer-conn-sep" aria-hidden="true"> · </span>';
+  // "No key · Add key" for a key cleared from here: adding one is the way back (a sign-in or the shared key also are).
+  // Not on a shared key's line: Replace key / Clear key act on it there.
+  const addKey = manage && !conn.missing && !conn.profile && !conn.shared && conn.state.signed_in !== true;
+  let action = addKey && conn.keyCleared ? sep + machineKeyActions(machine, online, conn.runtime, null, false).trimStart() : '';
   if (manage && conn.state.signed_in !== true && !conn.missing) {
     // "Signed out · Sign in": the way back sits next to what is wrong.
-    if (harnessCaps(conn.runtime).browser_sign_in) action = `${conn.state.signed_in === false ? '<span class="computer-conn-sep" aria-hidden="true"> · </span>' : ' '}<button class="ghost machine-signin" type="button" data-model-login data-runner="${esc(machine.id)}" data-runtime="${esc(conn.runtime)}" data-machine="${esc(machine.label)}"${conn.profile ? ` data-profile="${esc(conn.profile.name)}"` : ''}${offline}>Sign in</button>`;
-    else if (!conn.profile) action = machineTerminalSignInHTML(machine, conn.runtime);
+    if (harnessCaps(conn.runtime).browser_sign_in) action += `${conn.state.signed_in === false && !conn.keyCleared ? sep : ' '}<button class="ghost machine-signin" type="button" data-model-login data-runner="${esc(machine.id)}" data-runtime="${esc(conn.runtime)}" data-machine="${esc(machine.label)}"${conn.profile ? ` data-profile="${esc(conn.profile.name)}"` : ''}${offline}>Sign in</button>`;
+    else if (!conn.profile) action += machineTerminalSignInHTML(machine, conn.runtime);
   }
-  // Switch account / Sign out (or Use the shared key) per login, from ui/model-login.js; only while online. On the
+  // Switch account / Sign out (or Use the shared key) per login, from ui/model-login.js; disabled offline. On the
   // computer's own login a key signs in, Replace key / Clear key stand in for them. A line that is both the computer's
   // login and a subscription names which login each pair acts on.
   const key = (conn.value?.key || conn.shared) && harnessCaps(conn.runtime).api_keys === 'computer';
@@ -151,7 +157,7 @@ function machineConnectionHTML(machine, conn, online, manage) {
       own && '<span class="computer-conn-login" data-login="">Computer\'s login' + own + '</span>'].filter(Boolean).join('');
   } else action += login(conn.profile ? conn.profile.name : '', conn.profile ? conn.state.signed_in === true : conn.auth === 'ready');
   // Add key: a key of the computer's own, for a tool that takes one (Dev 97).
-  if (manage && !conn.missing && !conn.profile && !conn.shared && conn.state.signed_in !== true) action += machineKeyActions(machine, online, conn.runtime, null, false);
+  if (addKey && !conn.keyCleared) action += machineKeyActions(machine, online, conn.runtime, null, false);
   const value = conn.value || {};
   const rejected = conn.auth === 'rejected'
     ? `<span class="err machine-rejected" data-rejected="${esc(conn.runtime)}">${value.rejected_at ? esc(ago(value.rejected_at)) + '. ' : ''}${value.rejected_reason ? esc(value.rejected_reason) + '. ' : ''}${hlCredentialFix(value.credential_source)}. It takes no work that needs ${esc(conn.runtime)} until then.</span>` : '';
