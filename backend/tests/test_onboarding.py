@@ -82,11 +82,13 @@ def environment(tmp_path):
         token = tmp_path / ("token-%d" % index)
         token.write_text(TOKEN)
         token.chmod(0o600)
-        catalog = tmp_path / ("catalog-%d" % index)
-        if cards is None:
-            cards = [(ASSISTANT_CARD, ASSISTANT_AGENT), (BOTOPS_CARD, ""),
-                     (SUPPORT_CARD, SUPPORT_AGENT), (SALES_CARD, "")]
-        write_catalog(catalog, cards)
+        catalog = overrides.pop("catalog_dir", None)          # a test of the shipped catalog names it
+        if catalog is None:
+            catalog = tmp_path / ("catalog-%d" % index)
+            if cards is None:
+                cards = [(ASSISTANT_CARD, ASSISTANT_AGENT), (BOTOPS_CARD, ""),
+                         (SUPPORT_CARD, SUPPORT_AGENT), (SALES_CARD, "")]
+            write_catalog(catalog, cards)
         settings = Settings(db_path=tmp_path / ("hub-%d.db" % index), registry_dir=registry,
                             catalog_dir=catalog, local_owner_token_file=token,
                             **{"owner_email": OWNER_EMAIL, "enabled_providers": ("openai",), **COMPANY, **overrides})
@@ -184,6 +186,24 @@ def test_the_owner_saves_a_revisioned_choice_and_a_stale_editor_is_refused(envir
     assert models["default"]["model"] == "claude-opus-5-5"
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM events WHERE action='providers.updated'").fetchone()[0] == 1
+
+
+def test_every_shipped_template_saves_as_the_wizard_sends_it(environment):
+    """The wizard sends each picked bot's instructions back as the catalog rendered them (ui/app/welcome.js). A shipped
+    AGENT.md longer than the setup save accepts stopped every owner on the team chart (BotOps, 24,048 characters,
+    against 20,000). The limit is the API's own: the save itself, and the model "Add from catalog" posts."""
+    from backend.models import BotDefinitionCreate
+    api = environment(catalog_dir=Settings.catalog_dir)
+    cards = api.get("/api/v2/templates", headers=signed_in()).json()["cards"]
+    assert any(card["template"] == "botops" for card in cards)
+    saved = api.put("/api/v2/setup", headers=signed_in(), json={
+        "names": {"company_name": "Acme", "app_name": "Atlas", "assistant_name": "Morgan"}, "answers": {},
+        "selected": {card["slug"]: {"template": card["template"], "display_name": card["name"],
+                                    "instructions": card["instructions"]} for card in cards}})
+    assert saved.status_code == 200, saved.text[:500]
+    assert len(saved.json()["selected"]) == len(cards)
+    for card in cards:
+        BotDefinitionCreate(display_name=card["name"], template=card["template"], instructions=card["instructions"])
 
 
 def test_the_team_is_created_with_no_provider_and_no_computer_and_starts_once_they_exist(environment):

@@ -153,6 +153,7 @@ function recruitFor({department, briefing, share}) {
   try {
     const context = await browser.newContext({viewport: {width: 1100, height: 800}, serviceWorkers: 'block', acceptDownloads: true, colorScheme: scheme});
     const puts = [], tourPosts = [], completes = [], definitions = [], created = [], enrollments = [], chats = [], invites = [], owners = [];
+    let refuseSetup = false;   // the next PUT /api/v2/setup is refused once (set on the team chart)
     const recruits = [], opened = {};
     let hq = {available: true, off_by: ''}, recruitHeld = null, releaseRecruit = () => {};   // a recruit answer the test holds
     let record = {
@@ -200,6 +201,12 @@ function recruitFor({department, briefing, share}) {
       if (p === '/api/v2/templates') return json({cards: CATALOG});
       if (p === '/api/v2/setup') {
         if (request.method() === 'PUT') {
+          // The server refuses a save for its shape once, as it refused BotOps's 24,048-character instructions.
+          if (refuseSetup) {
+            refuseSetup = false;
+            return json({error: {code: 'validation', retryable: false,
+                                 detail: 'body.selected.botops.instructions: String should have at most 20000 characters'}}, 422);
+          }
           const body = request.postDataJSON();
           puts.push(body);
           record = {...record, ...body, machine};
@@ -524,6 +531,15 @@ function recruitFor({department, briefing, share}) {
     await page.locator('#ob-chart-big [data-oc-edit=content]').click();
     await page.locator('[data-oc-reports=content]').selectOption('human:ben');
     await page.locator('[data-oc-done]').click();
+    // A refused save says in plain words what happened and what to do, never the field the API names, and the chart stays.
+    refuseSetup = true;
+    await page.locator('#onb-next').click();
+    await page.locator('#onb-status .err').waitFor();
+    const refused = await page.locator('#onb-status').textContent();
+    assert.match(refused, /Tico could not save this step, so it has not moved on\. Your choices are still here/);
+    assert.doesNotMatch(refused, /body\.|instructions|String should|20000/);
+    assert.equal(await page.locator('#onb-enroll').count(), 0);
+    assert.equal(await page.locator('#onb-next').isDisabled(), false);
     await page.locator('#onb-next').click();
     await page.locator('#onb-enroll').waitFor();
     // The team goes to the server in the order to set it up: the built-ins, each department's head and its team, then message bots.

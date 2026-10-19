@@ -326,6 +326,10 @@ function onbBusy(state, busy, message) {
   const status = $('#onb-status');
   if (status) status.innerHTML = message === undefined ? '' : message;
 }
+// A save the server refuses for its shape (a field over its limit, a value it does not know) is never the owner's
+// to fix, so they read what happened and what to do, not the field path the API names for developers.
+const ONB_REFUSED = 'Tico could not save this step, so it has not moved on. Your choices are still here: press the button again to retry. If it keeps happening, reload the page and tell Tico support what you picked.';
+const onbSaveError = error => `<span class="err">${esc(error?.body?.error?.code === 'validation' ? ONB_REFUSED : error.message)}</span>`;
 async function onbSave(state) {
   const saved = await put('/v2/setup', {names: state.record.names, answers: state.record.answers,
                                              selected: state.record.selected});
@@ -372,7 +376,7 @@ async function onbAdvance(state, key) {
       onbRender(state);
     } catch (error) {
       if (ONB !== state) return;
-      onbBusy(state, false, `<span class="err">${esc(error.message)}</span>`);
+      onbBusy(state, false, onbSaveError(error));
     }
     return;
   }
@@ -387,7 +391,7 @@ async function onbAdvance(state, key) {
     onbRender(state);
   } catch (error) {
     if (ONB !== state) return;
-    onbBusy(state, false, `<span class="err">${esc(error.message)}</span>`);
+    onbBusy(state, false, onbSaveError(error));
   }
 }
 async function onbFinish(state) {
@@ -404,7 +408,7 @@ async function onbFinish(state) {
   } catch (error) {
     state.completing = false;
     if (ONB !== state) return;
-    onbBusy(state, false, `<span class="err">${esc(error.message)}</span>`);
+    onbBusy(state, false, onbSaveError(error));
   }
 }
 // The sample company is the whole first run done at once: its names, providers and bots come back from the server.
@@ -422,7 +426,7 @@ async function onbSample(state) {
   } catch (error) {
     state.completing = false;
     if (ONB !== state) return;
-    onbBusy(state, false, `<span class="err">${esc(error.message)}</span>`);
+    onbBusy(state, false, onbSaveError(error));
   }
 }
 async function onbCompleted(state, record) {
