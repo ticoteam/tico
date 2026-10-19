@@ -25,7 +25,7 @@ from . import go_live as pending_go_lives
 from . import repo_waits
 from . import built_on
 from . import agents, app_delivery, batch, external_sync, inbox_isolation, mcp_oauth, harness_actions, model_login, oidc, personal_tokens, views
-from . import check_models, run_triggers, team_rules, update_feeds, topic_change, usage_limits, wake_presets, visuals
+from . import check_models, run_triggers, team_rules, update_feeds, topic_change, usage_limits, wake_presets, visuals, wake_rules
 from . import task_privacy as privacy
 from . import task_relations as TR
 from . import task_roles as TRo
@@ -402,7 +402,7 @@ def create_app(settings=None):
 
     @app.middleware("http")
     async def request_guard(request, call_next):
-        via_reset = delegation_reset = run_reset = None
+        via_reset = delegation_reset = run_reset = cause_reset = None
         try:
             # The sign-in exemptions below match on prefixes; a dot segment would carry one of
             # them onto the static files ("/download/../index.html").
@@ -486,6 +486,9 @@ def create_app(settings=None):
                 if who.attempt_id and who.role != "runner" and not request.url.path.startswith(run_triggers.RUNNER_PATHS):
                     # A run's own tool call: what it writes counts toward whether the run acted.
                     run_reset = H.RUN.set(who.attempt_id)
+                if who.role != "runner":
+                    # Whose request this is: a bot's own writes never wake that bot (backend/wake_rules.py).
+                    cause_reset = wake_rules.CAUSE.set(who.actor)
             if request.method not in ("GET", "HEAD", "OPTIONS"):
                 origin = request.headers.get("origin")
                 if origin and not settings.allows_origin(origin):
@@ -681,6 +684,8 @@ def create_app(settings=None):
                 H.DELEGATION.reset(delegation_reset)
             if run_reset is not None:
                 H.RUN.reset(run_reset)
+            if cause_reset is not None:
+                wake_rules.CAUSE.reset(cause_reset)
 
     from . import routines
 
@@ -3199,8 +3204,8 @@ def create_app(settings=None):
             msg = next(m for m in comments if m["id"] == msg["id"])
             held = H.held_note(c, msg.get("to_actor"))
             return {"comment": msg, "comments": comments,
-                    "woke": bool(wake) and not (msg.get("refs") or {}).get("can_wait"), **({"warning": held} if held else {}),
-                    **({"visuals": report} if report else {})}
+                    "woke": bool(wake) and not ({"can_wait", wake_rules.MARK} & set(msg.get("refs") or {})),
+                    **({"warning": held} if held else {}), **({"visuals": report} if report else {})}
         result = mutate(request, body, work)
         if body.attachments:
             app.state.file_metadata.wake.set()   # a chat file shared here is a new task copy: preview it now

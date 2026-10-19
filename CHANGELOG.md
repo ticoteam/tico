@@ -14,17 +14,12 @@ All notable changes to Tico are recorded here. The format follows
   a restart does not lift it, and when it ends one queued run tries first while the others wait for its result,
   instead of every waiting run starting at once. A bot with a ready fallback that is not held itself runs there
   meanwhile instead of waiting. Health names the provider whose limit it is.
-- **Visuals in replies (API, part 1 of 4)**: a bot or a person attaches a picture, SVG, self-contained HTML page,
-  video or audio clip to a chat reply or a task comment with a title (`--visual PATH --title "…"` on `hub message
-  send`, `hub chat send` and `hub task comment`; `visuals` on the same MCP tools; `attachments: [{ref, title}]` in the
-  API). It is a normal versioned file on that conversation or task, and the message keeps the version it was posted
-  with. A page's local images and fonts are embedded when it is attached; remote images and styles are never loaded,
-  and the result lists each one. Too big or another type, it is attached as a normal file. Visuals are shown from a
-  signed address apart from the app's sign-in, with a policy that blocks scripts and network loads, and only to
-  people who can read that conversation, checked again on every request. They need `TICO_VISUAL_ORIGIN`, a separate
-  site of their own (never the app's address); without it a server stays up and visuals are file chips. A local
-  install, or a self-hoster who sets `TICO_VISUAL_SAME_ORIGIN=1`, serves them from the app's address with the page
-  sandboxed. Until part 2 they still show as file chips.
+- **Visuals in replies (API, part 1 of 4)**: a bot or a person attaches a titled picture, SVG, HTML page, video or
+  audio clip to a chat reply or task comment (`--visual PATH --title "…"` on `hub message send`, `hub chat send` and
+  `hub task comment`; `visuals` over MCP; `attachments: [{ref, title}]` in the API). It is a versioned file there,
+  shown only to that conversation's readers. A page's local images and fonts are embedded; remote ones are removed
+  and listed. Self-hosters set `TICO_VISUAL_ORIGIN`, a separate site. Visuals still show as file chips until part 2
+  ([Visuals in replies](docs/visuals.md)).
 - **The company on Goals**: with the CEO Bot switch on, Goals opens with a **Company** section: the Vision (one or
   two sentences) and the Description (a short paragraph). The owner and admins edit it, everyone else reads it, and
   **History** lists every change with who made it and when. Each goal shows a one-line **Why** tying it to the
@@ -127,6 +122,13 @@ All notable changes to Tico are recorded here. The format follows
   before this keeps today's behaviour ([sessions](docs/sessions.md)).
 
 ### Changed
+- **A waiting task sleeps, and a bot's own writes never wake it** (token saving): news about a task that waits on
+  another task (blocked by) or on a pull request's checks (wake once), such as a step move, a relation change or a
+  comment, no longer starts a run; the task wakes when its blocker finishes or its checks come back. A notice that a
+  bot's own write caused never wakes that same bot. Nothing is dropped: the notice stays in the task's room and is
+  handed to the bot's next run, whatever starts it, in order. A person's message, comment, approval or answer, an
+  ask, a needs-action message, a gate verdict, an assignment, a finished subtask and a sweep still wake at once.
+  Each skipped wake is logged as `wake.skipped` in `events` for the weekly audit ([hub sql](docs/hub-sql.md)).
 - **Health Monitor: seeing a finding again only counts**: each hourly scan that sees a finding adds one to its count
   and moves its last-seen time, and no bot runs for it. Only a new finding, one whose severity rises (a computer on a
   release the server cannot work with is `bad`, an older one `warn`), or one back after its task was finished wakes
