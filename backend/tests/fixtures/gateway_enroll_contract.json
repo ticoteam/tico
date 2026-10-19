@@ -1,0 +1,61 @@
+{
+  "about": "Dev 210: how a Tico install gets and rotates its own AI Gateway key. tico-services tests/fixtures/gateway_enroll_contract.json and tico backend/tests/fixtures/gateway_enroll_contract.json are the same file, byte for byte: HQ's tests check HQ answers this way, the app's tests run a fake HQ that does.",
+  "version": 1,
+  "patterns": {
+    "install": "gi_[0-9a-f]{24}",
+    "secret": "gis_[A-Za-z0-9_-]{43}",
+    "invite": "tgi_[A-Za-z0-9_-]{43}",
+    "key": "tgw_[A-Za-z0-9_-]{43}",
+    "key_id": "gk_[0-9a-f]{12}",
+    "bot": "gb_[0-9a-f]{16}",
+    "time": "[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z"
+  },
+  "bot_id": "gb_ + the first 16 hex of HMAC-SHA256(key = the install secret, message = the bot's slug, UTF-8)",
+  "bot_header": "X-Tico-Bot",
+  "invite_env": "TICO_GATEWAY_INVITE",
+  "rotate_days": 30,
+  "grace_seconds": 600,
+  "error_body": {"error": "<code>"},
+  "enroll": {
+    "method": "POST",
+    "path": "/v1/gateway/enroll",
+    "request": {"required": ["install", "secret"], "optional": ["invite", "version"]},
+    "created": {"status": 201, "fields": ["key", "key_id", "rotate_after"]},
+    "refusals": {
+      "invalid": 422,
+      "invalid_invite": 403,
+      "invite_expired": 403,
+      "invite_used_up": 403,
+      "invite_revoked": 403,
+      "install_revoked": 403,
+      "already_enrolled": 409,
+      "rate_limited": 429
+    }
+  },
+  "rotate": {
+    "method": "POST",
+    "path": "/v1/gateway/rotate",
+    "auth": "Authorization: Bearer <key>",
+    "created": {"status": 201, "fields": ["key", "key_id", "rotate_after", "old_valid_until"]},
+    "refusals": {
+      "unknown_key": 401,
+      "revoked_key": 401,
+      "already_rotated": 409,
+      "not_enrolled": 409,
+      "rate_limited": 429
+    }
+  },
+  "key": {
+    "method": "GET",
+    "path": "/v1/gateway/key",
+    "fields": ["status", "month", "cap_usd", "spent_usd", "used", "warning", "cap_reached", "rpm", "tpm", "source", "rotate_after"],
+    "sources": ["enrolled", "issued"],
+    "refused": {"unknown_key": 401, "revoked_key": 401}
+  },
+  "app": {
+    "stop": ["install_revoked"],
+    "enroll_again": ["revoked_key", "unknown_key"],
+    "health_stopped": "Tico AI Gateway was turned off for this install by Tico. Contact support.",
+    "settings_line": "Tico AI Gateway: connected automatically"
+  }
+}

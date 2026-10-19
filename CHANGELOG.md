@@ -8,6 +8,12 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Tico AI Gateway connects by itself**: an install whose install command carries a Tico invite code
+  (`TICO_GATEWAY_INVITE`) gets its own gateway key at start, with nothing to paste, and replaces it every 30 days.
+  Settings > AI providers says "Tico AI Gateway: connected automatically"; a pasted or environment key still wins, and
+  Clear key / Connect automatically turn it off and on. If Tico turns the install off, Health says so plainly and the
+  install stops asking. Decide and Tico-model bot runs name their bot to the Gateway by an opaque id (never its name),
+  so each call is counted per install, key and bot. Needs the matching Tico HQ release.
 - **How long an approval has waited, and on whom**: every approval now records when its exact payload was ready to
   decide and whose decision it is, and its card in Needs you and Decide says so plainly ("Ready 2 h 10 min, waiting
   on you", or the person's name); the row shows "ready 2 h 10 min". The API adds `ready_since`, `decision_owner`,

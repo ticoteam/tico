@@ -4,6 +4,9 @@
     <base>/chat/completions   Tico Cheap / Mid / Power 1.0, OpenAI chat shape with streaming (bots, through pi)
     <base>/key                the key's own state this month: active or revoked, and how much of its cap is used
 
+`enroll` and `rotate` are how an install gets and renews its own key (backend/gateway_connection.py `auto_tick`), by the
+contract in backend/tests/fixtures/gateway_enroll_contract.json, byte for byte the one Tico HQ is tested against.
+
 `check(key, base)` reads `<base>/key` and says, in words a person reads, whether the connection works. It never
 returns or logs the key, and it keeps only the Gateway's code, never its text.
 
@@ -14,6 +17,8 @@ minute per key, so the server asks it gently (backend/gateway_connection.py `che
 """
 
 import datetime
+import hashlib
+import hmac
 import json
 import re
 import urllib.error
@@ -67,6 +72,10 @@ FINAL = ("unknown_model", "unsupported_field", "bad_request", "upstream_refused"
 CODES = (CAP_REACHED, REVOKED_KEY, UNKNOWN_KEY, RATE_LIMITED, "unknown_model", "unsupported_field", "bad_request",
          "upstream_refused", "no_route", UNAVAILABLE, NOT_ISOLATED)
 TICO_MODELS = "Tico Cheap 1.0, Tico Mid 1.0, Tico Power 1.0"
+# How an install gets its own key (the contract's "enroll" and "rotate"), and how it names a bot to the Gateway.
+ENROLL, ROTATE = "/enroll", "/rotate"
+BOT_HEADER = "X-Tico-Bot"
+INSTALL_REVOKED = "install_revoked"
 # The only hosts the key goes to over plain HTTP: this computer, named exactly (a fake Gateway, a local proxy).
 LOOPBACK = ("localhost", "127.0.0.1", "::1")
 
@@ -264,3 +273,43 @@ def key_refused(text):
     """Whether a model error a bot's turn ended with is the Gateway refusing the key (revoked or unknown)."""
     text = str(text or "")
     return REVOKED_KEY in text or UNKNOWN_KEY in text
+
+
+def bot_id(secret, slug):
+    """The opaque id the Gateway's ledger keeps for a bot: never its name, and only this install can make it."""
+    if not secret or not slug:
+        return ""
+    return "gb_" + hmac.new(secret.encode(), str(slug).encode(), hashlib.sha256).hexdigest()[:16]
+
+
+def _post(url, body, headers, timeout, opener):
+    """(status, payload, code) for a POST to the Gateway: payload is the 2xx answer, code the error's. An unreachable
+    Gateway is status 0."""
+    request = urllib.request.Request(url, data=json.dumps(body).encode(), method="POST", headers={
+        **headers, "Content-Type": "application/json", "Accept": "application/json"})
+    try:
+        with (opener or _send)(request, timeout=timeout) as response:
+            payload = json.load(response)
+        return getattr(response, "status", 200), payload if isinstance(payload, dict) else {}, ""
+    except urllib.error.HTTPError as exc:
+        try:
+            code = _code(exc.read())
+        except Exception:
+            code = ""
+        return exc.code, {}, code or str(exc.code)
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError):
+        return 0, {}, "unreachable"
+
+
+def enroll(url, install, secret, invite="", version="", timeout=TIMEOUT, opener=None):
+    """Ask the Gateway for this install's key: (status, {key, key_id, rotate_after} or {}, error code). With `invite`
+    the first time; without it an install that lost its key gets a new one by its secret."""
+    base = safe_base(url)
+    body = {"install": install, "secret": secret, **({"invite": invite} if invite else {}),
+            **({"version": version} if version else {})}
+    return _post(base + ENROLL, body, {}, timeout, opener)
+
+
+def rotate(url, key, timeout=TIMEOUT, opener=None):
+    """Swap `key` for a new one: (status, {key, key_id, rotate_after, old_valid_until} or {}, error code)."""
+    return _post(safe_base(url) + ROTATE, {}, {"Authorization": "Bearer " + key}, timeout, opener)
