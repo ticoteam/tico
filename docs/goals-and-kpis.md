@@ -128,27 +128,6 @@ It does five things:
 Its routines start paused, like a starter bot's first routine. Because it is built in, Tico starts its daily KPI pass once
 the first KPI exists, once: a human who pauses it afterwards is not overruled.
 
-### The CEO Bot switch
-
-Each install has a CEO Bot switch, off by default. With it on, the Goal Manager is named **CEO Bot** in Settings > Bots,
-on the team chart, on Goals (its panel, **Let CEO Bot set it**) and in its messages. On the chart and in the Goals tree
-it sits under the owner, with the Heads (in their departments' groups) and the bots that report to no one under it
-([Team chart](org-chart.md)). It keeps its slug, `goal-manager`, so its KPI readings, goal history and old messages stay
-its own.
-
-Only the picture moves. Nobody's `reports_to` changes and the CEO Bot gets no new access: it does the five things above
-and nothing more.
-
-An owner or admin turns it on or off; a bot cannot, the Goal Manager included:
-
-```
-hub api POST ceo-bot '{"on": true}'
-```
-
-or `POST /api/v2/ceo-bot` with `{"on": true}` or `{"on": false}`. `GET /api/v2/ceo-bot` shows whether it is on, and who
-changed it last and when. Turning it off gives back the name **Goal Manager** and the chart as they were. A name someone
-gave the bot while the switch was on stays.
-
 ### Proposals
 
 A proposal is what a caller makes when they may not make the change themselves. The owner confirms it (and only a human, on
@@ -215,8 +194,7 @@ One tree, built like the team chart: the team on top, then every human and every
 under whoever they report to, whether or not they have a goal. Each is one line: the avatar and name, then the goal's
 colour dot and its title (cut short; the whole title is in the tooltip) and its KPIs as small chips, a dot and the latest
 value each (a count when there is no room). More goals follow on lines of their own under the first. The built-in bots (the
-Assistant, BotOps, the Librarian and the Goal Manager) stay out of this tree and its goal owner choices; with the
-[CEO Bot switch](#the-ceo-bot-switch) on, the Goal Manager is in the tree as the CEO Bot.
+Assistant, BotOps, the Librarian and the Goal Manager) stay out of this tree and its goal owner choices.
 New teams get no default goals for built-in bots. Existing built-in goals are hidden here and kept in storage.
 Message bots such as Inbox Manager follow separately under **Message bots**.
 
