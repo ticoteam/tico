@@ -13,6 +13,12 @@ owner asks for market research. To choose a first team and get the most from it,
 Nobody else sees the wizard. Only the owner may write it, and the sidebar entry
 **Finish setup** appears only while it is unfinished.
 
+While the wizard is open, the sidebar shows only **Finish setup** and the team: the app's pages, pins, Message bots,
+**What's new** and the Changelog count in the account menu are hidden. They come back once **Create my team** finishes
+(the screen after Create has the full sidebar) and on any other page. On a phone the bottom bar drops Tasks and Updates
+during setup. The anonymous usage-count notice is not shown over the wizard or the screen after Create; it appears on the
+first other page you open (for example Tasks), and counting starts only once it has been shown ([PRIVACY.md](../PRIVACY.md)).
+
 The first screen also offers **Start with a sample company**, which skips the wizard and starts a made-up five-bot
 team instead ([The sample company](sample-company.md)).
 
@@ -148,7 +154,7 @@ second). It reaches no computer.
 
 ### Needs setup
 
-A parked starter shows **Needs setup** on the team chart (a small *Setup* mark), on its page and after Create. **Set up** sends it
+A parked starter shows **Needs setup** on the team chart (a small amber gear; hover it for *Needs setup*), on its page and after Create. **Set up** sends it
 the message "Let's set you up." as the human, in the human's own chat with the bot: the conversation the bot page's **Chat** tab shows,
 open or not when the button is pressed. It starts the setup conversation its `AGENT.md` describes; any first message from a human
 does the same. While the bot is parked, the runner gives its chat runs one Setup instruction in place of the generic chat rules: follow
