@@ -15,7 +15,7 @@
 //! only, a model call (`POST /chat/completions`): the key opens nothing else at the Gateway for a turn.
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::Value;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -37,10 +37,16 @@ pub const NOT_ISOLATED: &str = "Tico models need a runner that runs bots as thei
 computer can't, so pick another model or move the bot (not_isolated)";
 const MAX_HEAD: usize = 64 * 1024;
 const MAX_BODY: usize = 32 * 1024 * 1024;
-/// Request headers never passed on: the turn's token, what belongs to this connection only, and the harness's user
-/// agent (the relay sends Tico's own, `user_agent`).
+/// HQ keeps a rotated key for 24 hours. End this attempt before then, leaving one model call's 90-second budget.
+const MAX_RUN_SECONDS: u64 = 24 * 60 * 60 - 90;
+/// The bot's opaque id for the Gateway's ledger (clients/gateway.py BOT_HEADER): the relay's, never the turn's.
+const BOT_HEADER: &str = "x-tico-bot";
+/// The server hands the bot id under this name, beside the key and URL (backend/gateway_connection.py RUN_BOT_ENV).
+const BOT_ENV: &str = "TICOAI_GATEWAY_BOT";
+/// Request headers never passed on: the turn's token, the bot id it could name itself, and what belongs to this
+/// connection only, and the harness's user agent (the relay sends Tico's own).
 const DROP_REQUEST: &[&str] = &[
-    "authorization", "host", "connection", "content-length", "transfer-encoding", "proxy-authorization",
+    "authorization", BOT_HEADER, "host", "connection", "content-length", "transfer-encoding", "proxy-authorization",
     "proxy-connection", "keep-alive", "te", "upgrade", "expect", "trailer", "user-agent",
 ];
 /// Response headers never passed back: the relay's answer ends when it closes the connection.
@@ -53,7 +59,15 @@ pub struct Relay {
     pub url: String,
     pub token: String,
     pub dir: Option<std::path::PathBuf>,
+    deadline: Instant,
     task: tokio::task::JoinHandle<()>,
+}
+
+impl Relay {
+    /// Every harness in this attempt shares the deadline from when its key was pinned. A fallback never resets it.
+    pub fn limit(&self, requested: Instant) -> Instant {
+        requested.min(self.deadline)
+    }
 }
 
 impl Drop for Relay {
@@ -85,6 +99,7 @@ struct Shared {
     base: String,
     key: String,
     token: String,
+    bot: Option<String>,
 }
 
 /// `url` without a trailing slash, when the key may go there: https, or plain http only to this computer named
@@ -107,16 +122,18 @@ pub fn safe_upstream(url: &str) -> Option<String> {
     allowed.then(|| base.to_string())
 }
 
-/// The Gateway's key and URL for attempt `aid`, from the server with the runner's token, or None when the run gets none.
-pub async fn credentials(client: &Client, aid: &str) -> Result<Option<(String, String)>, String> {
+/// The Gateway's key, URL and the bot's opaque id (when the server has one) for attempt `aid`, from the server with the
+/// runner's token, or None when the run gets none.
+pub async fn credentials(client: &Client, aid: &str) -> Result<Option<(String, String, Option<String>)>, String> {
     let got = client
         .get_query("runner-gateway-credentials", &[("attempt", aid.to_string())])
         .await
         .map_err(|e| format!("runner-gateway-credentials: {}", e.detail))?;
     let items = got["credentials"].as_array().cloned().unwrap_or_default();
     let of = |env: &str| items.iter().find(|i| i["env"].as_str() == Some(env)).map(|i| text_of(&i["value"]));
+    let bot = of(BOT_ENV).filter(|b| b.starts_with("gb_") && b.len() <= 64 && b.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'));
     Ok(match (of(KEY_ENV), of(URL_ENV)) {
-        (Some(key), Some(url)) if !key.is_empty() && !url.is_empty() => Some((key, url)),
+        (Some(key), Some(url)) if !key.is_empty() && !url.is_empty() => Some((key, url, bot)),
         _ => None,
     })
 }
@@ -150,9 +167,9 @@ pub async fn hand_to_turn(
         crate::util::log(&format!("{}: no Tico fallback here: {NOT_ISOLATED}", text_of(&attempt["id"])));
         return Ok(());
     }
-    if let Some((key, url)) = credentials(client, &text_of(&attempt["id"])).await? {
+    if let Some((key, url, bot)) = credentials(client, &text_of(&attempt["id"])).await? {
         vault.values.push(key.clone());
-        let mut relay = start(&url, key).await?;
+        let mut relay = start(&url, key, bot).await?;
         let dir = turn_dir(env, &text_of(&attempt["id"]));
         env.insert(URL_ENV.into(), relay.url.clone());
         env.insert(KEY_ENV.into(), relay.token.clone());
@@ -169,8 +186,9 @@ pub fn user_agent() -> String {
     format!("Tico-Client/{}", crate::runner::RUNNER_VERSION)
 }
 
-/// Start a relay to the Gateway at `upstream` with `key`.
-pub async fn start(upstream: &str, key: String) -> Result<Relay, String> {
+/// Start a relay to the Gateway at `upstream` with `key`, naming the turn's bot by `bot` on every call.
+pub async fn start(upstream: &str, key: String, bot: Option<String>) -> Result<Relay, String> {
+    let deadline = Instant::now() + Duration::from_secs(MAX_RUN_SECONDS);
     let base = safe_upstream(upstream).ok_or("the Gateway URL is neither https nor this computer")?;
     let local = base.starts_with("http://");
     let mut builder = reqwest::Client::builder()
@@ -184,7 +202,7 @@ pub async fn start(upstream: &str, key: String) -> Result<Relay, String> {
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.map_err(|e| e.to_string())?;
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
     let token = format!("tico-relay-{}{}", uuid::Uuid::new_v4().simple(), uuid::Uuid::new_v4().simple());
-    let shared = Arc::new(Shared { client, base, key, token: token.clone() });
+    let shared = Arc::new(Shared { client, base, key, token: token.clone(), bot });
     let task = tokio::spawn(async move {
         let mut calls = tokio::task::JoinSet::new();
         loop {
@@ -200,7 +218,7 @@ pub async fn start(upstream: &str, key: String) -> Result<Relay, String> {
             }
         }
     });
-    Ok(Relay { url: format!("http://127.0.0.1:{port}{PREFIX}"), token, dir: None, task })
+    Ok(Relay { url: format!("http://127.0.0.1:{port}{PREFIX}"), token, dir: None, deadline, task })
 }
 
 fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
@@ -283,6 +301,9 @@ async fn serve(mut socket: TcpStream, s: &Shared) -> std::io::Result<()> {
             request = request.header(k.as_str(), v.as_str());
         }
     }
+    if let Some(bot) = &s.bot {
+        request = request.header(BOT_HEADER, bot.as_str());
+    }
     let mut response = match request.send().await {
         Ok(r) => r,
         Err(_) => return answer(&mut socket, 502, "The Tico AI Gateway did not answer").await,
@@ -313,6 +334,23 @@ async fn serve(mut socket: TcpStream, s: &Shared) -> std::io::Result<()> {
 mod tests {
     use super::*;
     use std::sync::Mutex;
+
+    #[tokio::test]
+    async fn primary_and_fallback_share_one_deadline_inside_the_rotation_grace() {
+        let before = Instant::now();
+        let relay = start("http://127.0.0.1:9/v1/gateway", "synthetic-key".into(), None).await.unwrap();
+        let contract: Value = serde_json::from_str(include_str!("../../backend/tests/fixtures/gateway_enroll_contract.json")).unwrap();
+        let grace = contract["grace_seconds"].as_u64().unwrap();
+        assert_eq!(grace, 24 * 60 * 60);
+        let ordinary = before + Duration::from_secs(3600);
+        assert_eq!(relay.limit(ordinary), ordinary, "a normal turn keeps its own shorter limit");
+        let requested = before + Duration::from_secs(2 * grace);
+        let primary = relay.limit(requested);
+        assert!(primary < before + Duration::from_secs(grace));
+        assert!(primary >= before + Duration::from_secs(grace - 90));
+        // A later harness asks for a fresh run limit; it still cannot move the key's original deadline.
+        assert_eq!(relay.limit(requested + Duration::from_secs(3600)), primary);
+    }
 
     /// A fake Gateway on 127.0.0.1: keeps each request's head and body, answers with `reply` (raw bytes).
     async fn upstream(reply: Vec<u8>) -> (String, Arc<Mutex<Vec<String>>>) {
@@ -368,7 +406,7 @@ mod tests {
     async fn send(relay: &Relay, method: &str, token: &str, path: &str, body: &str) -> String {
         let mut socket = TcpStream::connect(relay.url.trim_start_matches("http://").split('/').next().unwrap()).await.unwrap();
         let request = format!(
-            "{method} {path} HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nUser-Agent: OpenAI/JS 5.8.2\r\nX-Kept: yes\r\nContent-Length: {}\r\n\r\n{body}",
+            "{method} {path} HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nUser-Agent: OpenAI/JS 5.8.2\r\nX-Kept: yes\r\nX-Tico-Bot: gb_forged\r\nContent-Length: {}\r\n\r\n{body}",
             body.len()
         );
         socket.write_all(request.as_bytes()).await.unwrap();
@@ -383,7 +421,7 @@ mod tests {
     #[tokio::test]
     async fn a_turn_reaches_the_gateway_with_the_key_it_never_holds() {
         let (url, seen) = upstream(SSE.to_vec()).await;
-        let relay = start(&url, KEY.into()).await.unwrap();
+        let relay = start(&url, KEY.into(), Some("gb_0123456789abcdef".into())).await.unwrap();
         assert!(relay.url.starts_with("http://127.0.0.1:") && relay.url.ends_with("/gateway"));
         assert!(!relay.token.contains(KEY));
         let big = format!("{{\"pad\": \"{}\"}}", "x".repeat(200_000));            // more than one read
@@ -395,12 +433,14 @@ mod tests {
         let lower = request.to_ascii_lowercase();
         assert!(lower.contains(&format!("authorization: bearer {}", KEY.to_ascii_lowercase())));
         assert!(!request.contains(&relay.token) && lower.contains("x-kept: yes") && request.ends_with(&big));
+        // The bot id is the server's, never one the turn names itself.
+        assert!(lower.contains("x-tico-bot: gb_0123456789abcdef") && !lower.contains("gb_forged"), "{request}");
     }
 
     #[tokio::test]
     async fn a_turn_gets_past_an_edge_that_refuses_any_agent_but_ticos() {
         let (url, seen) = behind_the_edge(SSE.to_vec()).await;
-        let relay = start(&url, KEY.into()).await.unwrap();
+        let relay = start(&url, KEY.into(), None).await.unwrap();
         let out = call(&relay, &relay.token, "/gateway/chat/completions", "{}").await;
         assert!(out.starts_with("HTTP/1.1 200 OK\r\n"), "{out}");
         let request = seen.lock().unwrap()[0].to_ascii_lowercase();
@@ -411,7 +451,7 @@ mod tests {
     #[tokio::test]
     async fn another_token_or_path_gets_nothing_sent() {
         let (url, seen) = upstream(SSE.to_vec()).await;
-        let relay = start(&url, KEY.into()).await.unwrap();
+        let relay = start(&url, KEY.into(), None).await.unwrap();
         for (token, path, status) in [
             ("", "/gateway/chat/completions", "401"),
             ("tico-relay-wrong", "/gateway/chat/completions", "401"),
@@ -439,7 +479,7 @@ mod tests {
         let (elsewhere, other) = upstream(SSE.to_vec()).await;
         let reply = format!("HTTP/1.1 307 Temporary Redirect\r\nLocation: {elsewhere}/chat/completions\r\nContent-Length: 0\r\n\r\n");
         let (url, seen) = upstream(reply.into_bytes()).await;
-        let relay = start(&url, KEY.into()).await.unwrap();
+        let relay = start(&url, KEY.into(), None).await.unwrap();
         let out = call(&relay, &relay.token, "/gateway/chat/completions", "{}").await;
         assert!(out.starts_with("HTTP/1.1 502") && !out.to_ascii_lowercase().contains("location:"), "{out}");
         assert_eq!(seen.lock().unwrap().len(), 1);
@@ -449,7 +489,7 @@ mod tests {
     #[tokio::test]
     async fn a_stopped_relay_takes_no_more_calls() {
         let (url, _) = upstream(SSE.to_vec()).await;
-        let relay = start(&url, KEY.into()).await.unwrap();
+        let relay = start(&url, KEY.into(), None).await.unwrap();
         let address = relay.url.trim_start_matches("http://").split('/').next().unwrap().to_string();
         drop(relay);
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -461,7 +501,8 @@ mod tests {
         let (gateway, seen) = upstream(SSE.to_vec()).await;
         let answer = serde_json::json!({"credentials": [
             {"id": "gateway-key", "env": KEY_ENV, "kind": "api_key", "value": KEY},
-            {"id": "gateway-url", "env": URL_ENV, "kind": "text", "value": gateway}]}).to_string();
+            {"id": "gateway-url", "env": URL_ENV, "kind": "text", "value": gateway},
+            {"id": "gateway-bot", "env": BOT_ENV, "kind": "text", "value": "gb_00112233aabbccdd"}]}).to_string();
         let (hub, asked) = upstream(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{answer}", answer.len()).into_bytes()).await;
         let hub = hub.trim_end_matches("/v1/gateway").to_string();
         let client = Client::new(&hub, "runner-token", 5, 0).unwrap();
@@ -478,8 +519,12 @@ mod tests {
         let relay = vault.relay.as_ref().unwrap();
         assert_eq!((env[URL_ENV].as_str(), env[KEY_ENV].as_str()), (relay.url.as_str(), relay.token.as_str()));
         assert_eq!(vault.values, vec![KEY.to_string()]);
+        assert!(!env.contains_key(BOT_ENV), "the bot id is the relay's, not the turn's: {env:?}");
         let out = call(relay, &env[KEY_ENV], "/gateway/chat/completions", "{}").await;
         assert!(out.starts_with("HTTP/1.1 200") && seen.lock().unwrap().len() == 1, "{out}");
+        // The bot id the server handed with the key reaches the Gateway; the one the turn sent does not.
+        let sent = seen.lock().unwrap()[0].to_ascii_lowercase();
+        assert!(sent.contains("x-tico-bot: gb_00112233aabbccdd") && !sent.contains("gb_forged"), "{sent}");
     }
 
     #[tokio::test]

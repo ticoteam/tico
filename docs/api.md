@@ -210,15 +210,27 @@ Public roadmap publication, requesters and anonymous endpoints are described in 
 
 ## Company inbound email and SMS
 
-Settings > More > Email & Phone shows a shared company message table. All current people, native
+Settings > More > Email & Phone opens Inbox's shared company message table (`#/settings/company-inbox`; existing
+`#/settings/email-phone` links still work). All current people, native
 bot runs and registered external agents can read it. Runner/service credentials and support
 sessions cannot. No read hides a message from another agent. Your connected Google inbox is separate.
 
 `GET /api/v2/inbound/inboxes` lists inboxes and sync status (pages of `limit` ≤ 100; follow `next` with `after`); `POST` with `{kind:"email",name}`
-creates a free inbound address under the company quota, with an `Idempotency-Key`. Phone creation
-(`kind:"sms"`, `max_price_micros`) and release are owner/admin actions. `PATCH inboxes/{id}` saves
-`{name,used_for}`. Releasing an inbox with dependencies requires its exact address in `confirm`.
+creates a free inbound address under the company quota, with an `Idempotency-Key`.
+`PATCH inboxes/{id}` saves `{name,used_for}`: the name is shared with the company's customer portal;
+`used_for` remains a local dependency note and is preserved when omitted or when HQ syncs a name change.
+Updating only dependency notes works even while HQ is unavailable.
+Phone edits and releases are owner/admin actions. Releasing an inbox with dependencies requires its exact address in `confirm`.
 Phone cancellation keeps receiving until the paid period ends; email retirement is permanent.
+
+Phone provisioning requires TICO approval until billing is available. Owners and admins can
+`GET phone-requests` (pages of `limit` ≤ 100; follow `next` with `after`) and `POST phone-requests`
+with `{name}` to request a non-VoIP US mobile rental for 30 days. A quoted request includes its exact
+`price_micros` and `quoted_until`; `POST phone-requests/{id}/accept` with `{price_micros}` records
+acceptance of that price, and `POST phone-requests/{id}/cancel` cancels a pending request.
+Requests, acceptance and cancellation never buy a number. Direct `POST inboxes` with `kind:"sms"`
+returns `409 phone_approval_required`, including for an owner or admin. These controls are absent
+from agent tools; the server binds the actor to the signed-in owner/admin, not a supplied identity.
 
 `GET /api/v2/inbound/messages` returns previews, up to 100 rows and 96 KB, newest first. Filters:
 `inbox_ids` (comma-separated; absent means all, one unknown id fails the request), `kind`, `from`,

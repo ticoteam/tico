@@ -13,6 +13,11 @@ All notable changes to Tico are recorded here. The format follows
   in the CEO Bot's name; what can't be done says why and comes back as a new recovery. Several bots asking one person
   the same thing become one item, and the one answer reaches each of them. After 10 approvals in a row unchanged, the
   Monday note offers level 3, at most once a month; the CEO Bot never raises its own level.
+- **Inbox across connected interfaces**: Settings > More > Email & Phone shares email and phone inbox names with
+  the customer portal while preserving local dependency notes. Owners and admins can request monthly US
+  mobile numbers, accept an exact quote and cancel a request. These actions record a request for TICO
+  approval and never buy a number; direct SMS creation remains disabled. Every company agent can still
+  create a free email inbox and read shared messages and verification codes.
 - **How much your CEO Bot does**: where the CEO Bot switch is on, Settings > CEO Bot has three levels (1 Goals and
   tracking, 2 Suggests actions, 3 Acts on its own), each with one sentence on what it will and won't do, confirmed
   before it changes. Every company starts at 1; level 3 does what level 2 does until it arrives. Only the owner
@@ -51,6 +56,15 @@ All notable changes to Tico are recorded here. The format follows
   the owner sign-in link stays as break-glass beside it: it works while the issuer is down, and people already
   signed in stay signed in. Google, Microsoft, Cloudflare Access and the other sign-in options work as before.
   ([Install](docs/install.md#sign-in))
+- **Tico AI Gateway connects by itself**: an install whose install command carries a Tico invite code
+  (`TICO_GATEWAY_INVITE`) gets its own gateway key at start, with nothing to paste, and replaces it every 30 days.
+  The invite is only needed for that first sign-up; after it, the install keeps its key without one.
+  Settings > AI providers says "Tico AI Gateway: connected automatically"; a pasted or environment key still wins, and
+  Clear key / Connect automatically turn it off and on. If Tico turns the install off, Health says so plainly and the
+  install stops asking. Decide and Tico-model bot runs name their bot to the Gateway by an opaque id (never its name),
+  so each call is counted per install, key and bot. A running attempt keeps working across key rotation for up to
+  24 hours; longer runs are limited just below that grace, including fallback, with the reason in their run details.
+  Install revocation still stops every key immediately. Needs the matching Tico HQ release.
 - **Quiet work stays visible and comes back**: a task filed for a bot's next run now says where it stands, on the task
   and in `hub task show` (`quiet`): eligible (the next run carries it), delivered (which run took it and when, and
   until what it was deferred) or queued (a run of its own). A run that will not do a carried task now says when to
@@ -168,6 +182,10 @@ All notable changes to Tico are recorded here. The format follows
   ([Computers](docs/computers.md#remove-a-subscription)).
 
 ### Fixed
+- **Subtask results resume the parent task**: completed reviews and other delegated work return to the
+  immediate parent's working session, without a separate session to relay the result. Review verdicts posted
+  as a comment, completion note and final reply are delivered once; managers hear when their own child task
+  finishes. Private-task boundaries and independent reviewer sessions are preserved.
 - **Tasks: a subtask saved from its parent's peek stays open**: opening a parent from a filtered list, then one of
   its subtasks, and saving a change that takes the subtask out of the list (Done, a new status or owner) moved the peek
   on to the list's next row, often a sibling, so the next edit landed on the wrong task. The peek now stays on the
@@ -252,6 +270,12 @@ All notable changes to Tico are recorded here. The format follows
   before this keeps today's behaviour ([sessions](docs/sessions.md)).
 
 ### Changed
+- **A bot creating a task meets the same label gate as when it edits one**: a bot that is not a mover can no longer
+  create a task already carrying `goal:on` or `goal:off` (which Tico acts on) or a public roadmap label. The create is
+  refused as a `label` refusal, nothing is written, and the refusal says the way through: create the task without the
+  roadmap label, then add it on the task with an approved publish approval, or ask a person on the leadership, product
+  or engineering teams. Classification labels such as `qa` still go on at creation; people, movers and Tico's own
+  tasks are unchanged. ([Permissions](docs/permissions.md#tags))
 - **A bot can hold 50 task worktrees, up from 30.** The computer's 5 GB free-disk floor and normal cleanup rules still apply.
 - **A waiting task sleeps, and a bot's own writes never wake it** (token saving): news about a task that waits on
   another task (blocked by) or on a pull request's checks (wake once), such as a step move, a relation change or a
