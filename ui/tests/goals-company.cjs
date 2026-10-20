@@ -3,7 +3,8 @@
 // the owner saves them; a member reads them with no Edit; History lists who changed what and when. A goal with no Why says
 // "Not tied to the vision"; the CEO Bot's proposal is accepted as it is or edited, and an Accept on a line the CEO Bot has
 // since replaced is refused and shows the new one. Off, none of it shows; flipped with the page open, it comes and goes
-// at once, an open panel and a focused Company draft included. Fixtures only.
+// at once, an open panel and a focused Company draft included. At level 2 a recovery in Needs you is approved one option
+// at a time. Fixtures only.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -296,6 +297,30 @@ const panelFor = async (page, owner) => {
       await rows.nth(1).locator('[data-need-why-goal="g-cmo"]').click();
       await page.locator('#goal-panel[open] .gp-body').waitFor();
       assert.match(await page.locator('#goal-panel').innerText(), /Double organic signups/);
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+    // Level 2 (spec test 8): the CEO Bot's recovery for a red goal shows its evidence, each option in plain words with
+    // its pick marked and what can't happen now; Approve on an option sends exactly that option.
+    {
+      const recovery = {id: 'p-rec', kind: 'recovery', goal_id: 'g-cmo', kpi_id: null, status: 'pending', reason: 'Red two weeks running.',
+        proposed_by: 'bot:goal-manager', proposed_at: new Date().toISOString(),
+        payload: {evidence: 'Signups 40 against 120.', pick: 1, options: [{label: 'Pause the newsletter', actions: []}, {label: 'Push SEO first', actions: []}]}};
+      const needs = [{kind: 'recovery', ref: 'p-rec', owner: 'human:ana', proposal: recovery, goal_id: 'g-cmo', goal_title: 'Double organic signups',
+        task: {id: 't-rec'}, options: [
+          {label: 'Pause the newsletter', pick: false, actions: [{text: 'Move "Weekly newsletter" to the bottom', note: 'Head of Marketing is paused right now'}]},
+          {label: 'Push SEO first', pick: true, actions: [{text: 'New task for Head of Marketing: "Fix the pricing page SEO"', note: ''}]}]}];
+      const {page, errors, posted, state} = await open(browser, {needs});
+      state.proposals.push(recovery);
+      const row = page.locator('#goal-needs li.rec');
+      const text = await row.innerText();
+      assert.match(text, /A recovery · Double organic signups/);
+      assert.match(text, /Signups 40 against 120\./);
+      assert.match(text, /Push SEO first · the CEO Bot's pick/);
+      assert.match(text, /Head of Marketing is paused right now; this part would come back to you/);
+      assert.equal(await row.locator('[data-option="1"]').getAttribute('class'), 'primary');
+      await Promise.all([page.waitForResponse(r => r.url().endsWith('/proposals/p-rec/decide')), row.locator('[data-option="0"]').click()]);
+      assert.deepEqual(posted.find(x => x[0] === 'decide'), ['decide', 'p-rec', {decision: 'confirm', option: 0}]);
       assert.deepEqual(errors, []);
       await page.close();
     }

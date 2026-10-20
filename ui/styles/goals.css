@@ -111,6 +111,7 @@ input.goal-ed-text:hover:not([readonly]){border-color:var(--line)}input.goal-ed-
 .kpi-prop{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:9px 0;border-top:1px solid var(--line);font-size:var(--t-md)}
 .kpi-prop:first-child{border-top:0}
 .kpi-prop-main{display:flex;flex-direction:column;gap:2px;min-width:0}.kpi-prop-detail{overflow-wrap:anywhere}.kpi-prop-why{font-size:var(--t-sm)}
+.gt-needs .rec-opts{margin:4px 0 0;padding-left:20px;list-style:decimal;display:flex;flex-direction:column;gap:6px}.gt-needs .rec-acts{margin:2px 0 4px;padding-left:16px;list-style:disc;font-size:var(--t-sm)}.gt-needs .rec-opts button{height:28px}
 .kpi-prop-do{display:flex;gap:8px;flex:none}.kpi-prop-do button{height:34px;padding-top:0;padding-bottom:0}
 .kpi-props{list-style:none;margin:0;padding:0}
 .kpi-panel{width:min(600px,calc(100vw - 24px))}

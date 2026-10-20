@@ -116,6 +116,9 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub goal needs-you                     red KPIs on your goals, stale KPIs you own, proposals to confirm
     hub goal company                       the company's Vision and Description (read-only)
     hub goal ceo-bot                       the CEO Bot switch, how much it does (level 1-3) and today's Needs you count
+    hub goal ceo-bot-merge <person> "<title>" "<question>" <task-id> <task-id>...
+                                           the CEO Bot at level 2+: one item for several bots' same ask of a person
+    hub goal ceo-bot-level3-offer          the CEO Bot: record the level-3 offer its Monday note made (when it is due)
     hub goal update <id> [--title ...] [--body ...|--body-file f] [--parent ID|--parent ""] [--owner X]
                     [--rank N|--top]
     hub kpi list [--goal ID] [--owner me|X] [--unlinked] [--bot SLUG] [--archived]
@@ -136,11 +139,12 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                 [--evidence "url or note"] [--quality measured|estimate|partial|--estimate] [--source posthog]
                 [--definition-version N] [--supersedes READING-ID]
                                            a reading: a fact with its period; to correct one, supersede it
-    hub proposal create --kind goal_wording|goal_kpi|kpi_definition|kpi_target|flag|goal_why [--goal ID] [--kpi ID]
+    hub proposal create --kind goal_wording|goal_kpi|kpi_definition|kpi_target|flag|goal_why|recovery [--goal ID] [--kpi ID]
                         (--payload '{json}'|--payload-file f.json) [--reason "..."]
                                            a change you may not make yourself, for the owner to confirm
     hub proposal list [--status pending|confirmed|rejected|all] [--goal ID] [--kpi ID]
-    hub proposal decide <id> confirm|reject [--note "..."]   a person's own decision; a bot is refused
+    hub proposal decide <id> confirm|reject [--note "..."] [--option N]
+                                           a person's own decision; a bot is refused. --option: a recovery's other option
     hub approval request --kind send|spend|publish|merge|support --payload-file f.json [--task ID] [--supersedes ID]
                                            if the owner already said send in Tico, skip this and
                                            `mail send --approve <their-message-id>`
@@ -1132,6 +1136,14 @@ def parser():
     s.set_defaults(fn="goal company")
     s = goal.add_parser("ceo-bot", help="the CEO Bot switch, its level and today's Needs you count per person")
     s.set_defaults(fn="goal ceo-bot")
+    s = goal.add_parser("ceo-bot-merge", help="the CEO Bot at level 2+: one item for several bots' same ask of a person")
+    s.add_argument("person", help="the person they all wait on (a person id)")
+    s.add_argument("title")
+    s.add_argument("question", help="the one question that answers them all")
+    s.add_argument("tasks", nargs="+", help="2 to 10 task ids waiting on that person")
+    s.set_defaults(fn="goal ceo-bot-merge")
+    s = goal.add_parser("ceo-bot-level3-offer", help="the CEO Bot: record the level-3 offer its Monday note made")
+    s.set_defaults(fn="goal ceo-bot-level3-offer")
     def target_flags(s):
         s.add_argument("--baseline", type=float, help="improvement: where it starts (default the latest reading)")
         s.add_argument("--target", type=float, help="improvement: the value to reach; needs --deadline")
@@ -1203,7 +1215,8 @@ def parser():
 
     proposal = sub.add_parser("proposal", help="a change you may not make yourself, for the owner to confirm").add_subparsers(dest="sub")
     s = proposal.add_parser("create")
-    s.add_argument("--kind", required=True, choices=["goal_wording", "goal_kpi", "kpi_definition", "kpi_target", "flag", "goal_why"])
+    s.add_argument("--kind", required=True, choices=["goal_wording", "goal_kpi", "kpi_definition", "kpi_target", "flag", "goal_why",
+                                                     "recovery"])
     s.add_argument("--goal", dest="goal_id")
     s.add_argument("--kpi", dest="kpi_id")
     s.add_argument("--payload", help="the proposed change, as JSON")
@@ -1219,6 +1232,7 @@ def parser():
     s.add_argument("id")
     s.add_argument("decision", choices=["confirm", "reject"])
     s.add_argument("--note", default="")
+    s.add_argument("--option", type=int, help="a recovery: approve this option (0 is the first) instead of the pick")
     s.set_defaults(fn="proposal decide")
 
     market = sub.add_parser("market", help="the shared market graph: read it, report into it, curate it").add_subparsers(dest="sub")

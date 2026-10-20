@@ -103,6 +103,7 @@ def wanted(conn, owner_id, at=None):
                     recovering.add((goal["id"], who))
                     items.append({"kind": "recovery", "ref": p["id"], "owner": who, "proposal": p,
                                   "goal_id": goal["id"], "goal_title": goal["title"],
+                                  "options": ceo_suggest.options_view(conn, p),
                                   "ask": ceo_suggest.ask_text(conn, p, goal["title"])})
             continue
         if p["kind"] == "goal_why":

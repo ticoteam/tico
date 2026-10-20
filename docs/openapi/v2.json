@@ -2297,6 +2297,130 @@
         ]
       }
     },
+    "/api/v2/ceo-bot/level3-offer": {
+      "post": {
+        "summary": "The CEO Bot only: record that its Monday note offered level 3. Refused (422) unless level3_offer.due: 10 recoveries approved in a row with its pick unchanged, and no offer in 30 days. It never raises its own level",
+        "operationId": "recordCeoBotLevel3Offer",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Empty"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CeoBotLevel3OfferResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Goals"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ]
+      }
+    },
+    "/api/v2/ceo-bot/merge": {
+      "post": {
+        "summary": "The CEO Bot only, at level 2 or 3: one item in a person's Needs you for 2 to 10 tasks where bots ask them the same thing. The originals leave their Needs you while it is open; their one answer goes to each bot that asked, and an item that ends unanswered puts the originals back. Counts toward its 5 a day",
+        "operationId": "mergeCeoBotAsks",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CeoBotMerge"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CeoBotMergeResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Goals"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ]
+      }
+    },
     "/api/v2/changelog": {
       "get": {
         "summary": "Shipped changes with your read state; kind=product|activity|all (default all), unread=true, q search, since_version for releases newer than a version, and limit/offset paging. Only installed releases or earlier appear. unread_count counts all unread product entries, independently of filters; reading does not acknowledge them.",
@@ -11050,7 +11174,7 @@
         ]
       },
       "post": {
-        "summary": "Propose a change the caller may not make: goal wording, a KPI for a goal, a definition, a target, or a flag",
+        "summary": "Propose a change the caller may not make: goal wording, a KPI for a goal, a definition, a target, or a flag; the CEO Bot at level 2 or 3, a recovery for a red or stalled goal (evidence, options of bot-task changes, its pick)",
         "operationId": "createGoalProposal",
         "requestBody": {
           "required": true,
@@ -11112,7 +11236,7 @@
     },
     "/api/v2/proposals/{pid}/decide": {
       "post": {
-        "summary": "A person's own decision, made by whoever owns the goal or KPI: confirm makes the change as them, reject drops it",
+        "summary": "A person's own decision, made by whoever owns the goal or KPI: confirm makes the change as them, reject drops it. A recovery applies exactly the chosen option (`option`, else the CEO Bot's pick) in the CEO Bot's name; what can't be done comes back as a new recovery saying why",
         "operationId": "decideGoalProposal",
         "parameters": [
           {
@@ -17887,6 +18011,127 @@
         ],
         "title": "CeoBotLevel"
       },
+      "CeoBotLevel3Offer": {
+        "type": "object",
+        "properties": {
+          "streak": {
+            "type": "integer"
+          },
+          "needed": {
+            "type": "integer"
+          },
+          "due": {
+            "type": "boolean"
+          },
+          "last_offered_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "due",
+          "needed",
+          "streak"
+        ],
+        "additionalProperties": true
+      },
+      "CeoBotLevel3OfferResult": {
+        "type": "object",
+        "properties": {
+          "level3_offer": {
+            "$ref": "#/components/schemas/CeoBotLevel3Offer"
+          }
+        },
+        "required": [
+          "level3_offer"
+        ],
+        "additionalProperties": true
+      },
+      "CeoBotMerge": {
+        "properties": {
+          "person": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Person"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 300,
+            "minLength": 1,
+            "title": "Title"
+          },
+          "question": {
+            "type": "string",
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Question"
+          },
+          "tasks": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 10,
+            "minItems": 2,
+            "title": "Tasks"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "person",
+          "title",
+          "question",
+          "tasks"
+        ],
+        "title": "CeoBotMerge"
+      },
+      "CeoBotMergeResult": {
+        "type": "object",
+        "properties": {
+          "task": {
+            "type": "object",
+            "description": "The merged item: the CEO Bot's task, waiting on the person"
+          },
+          "originals": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "task_id": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "asker": {
+                  "type": "string"
+                },
+                "asker_name": {
+                  "type": "string"
+                },
+                "state": {
+                  "type": "string"
+                },
+                "note": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "asker",
+                "state",
+                "task_id"
+              ],
+              "additionalProperties": true
+            }
+          }
+        },
+        "required": [
+          "originals",
+          "task"
+        ],
+        "additionalProperties": true
+      },
       "CeoBotSwitch": {
         "properties": {
           "on": {
@@ -17999,6 +18244,9 @@
               "type": "integer"
             },
             "description": "{person actor: items the CEO Bot put in their Needs you today (UTC)}"
+          },
+          "level3_offer": {
+            "$ref": "#/components/schemas/CeoBotLevel3Offer"
           }
         },
         "required": [
@@ -20095,7 +20343,8 @@
               "kpi_definition",
               "kpi_target",
               "flag",
-              "goal_why"
+              "goal_why",
+              "recovery"
             ],
             "title": "Kind"
           },
@@ -20169,6 +20418,19 @@
               }
             ],
             "title": "Why"
+          },
+          "option": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 9.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Option"
           }
         },
         "additionalProperties": false,

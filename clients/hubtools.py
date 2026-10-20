@@ -49,7 +49,7 @@ TASK_STATUSES = ("open", "doing", "waiting", "review", "ready", "done", "closed"
 APPROVAL_KINDS = ("send", "spend", "publish", "merge", "support")
 GOAL_STATUSES = ("red", "yellow", "green", "done", "dropped")     # what a person or bot sets by hand
 GOAL_FILTERS = GOAL_STATUSES + ("gray",)                        # gray is the automatic "no data"
-PROPOSAL_KINDS = ("goal_wording", "goal_kpi", "kpi_definition", "kpi_target", "flag", "goal_why")
+PROPOSAL_KINDS = ("goal_wording", "goal_kpi", "kpi_definition", "kpi_target", "flag", "goal_why", "recovery")
 
 # What an agent reads on connect: the hub in one line, then the skill a person's own agent
 # follows to work their bots (clients/agent_skill.py). Bots ignore the skill; it is for people.
@@ -1151,6 +1151,25 @@ def goal_ceo_bot(api, args):
     return api.get("ceo-bot")
 
 
+@tool("hub_goal_ceo_bot_merge", "The CEO Bot only, at level 2 or 3: when several bots ask a person the same thing, "
+      "make them one item in that person's Needs you. The originals leave their Needs you while it is open; their one "
+      "answer goes to every bot that asked. Counts toward the 5 a day.",
+      {"person": _s("The person they all wait on: a person id"), "title": _s("The merged item's title"),
+       "question": _s("The one question that answers them all"),
+       "tasks": {"type": "array", "items": {"type": "string"}, "description": "2 to 10 task ids waiting on that person"}},
+      required=("person", "title", "question", "tasks"), writes=True)
+def goal_ceo_bot_merge(api, args):
+    return api.post("ceo-bot/merge", {"person": _target(api, args["person"]), "title": args["title"],
+                    "question": args["question"], "tasks": list(args["tasks"])}, key=_key(args))
+
+
+@tool("hub_goal_ceo_bot_level3_offer", "The CEO Bot only: record that its Monday note offered level 3, once "
+      "`level3_offer.due` in hub_goal_ceo_bot is true (10 recoveries approved in a row unchanged, none offered in 30 "
+      "days). Only a person raises the level.", {}, writes=True)
+def goal_ceo_bot_level3_offer(api, args):
+    return api.post("ceo-bot/level3-offer", {}, key=_key(args))
+
+
 @tool("hub_goal_update", "Edit a goal: title, body, the goal it serves, its owner, or its place in "
       "the owner's order. Moving it is for the parent's owner or someone above.",
       {"id": _s("Goal id"), "title": _s("New title"), "body": _s("New body"),
@@ -1300,8 +1319,9 @@ def kpi_log(api, args):
       "goal wording (goal_wording: payload title/body), a KPI for a goal (goal_kpi: payload kpi or kpi_id, and "
       "target), a new definition (kpi_definition), a target (kpi_target: payload is the target fields), or a "
       "flag (flag: payload issue vague|duplicate|unmeasured), or, where the CEO Bot is on, a goal's Why (goal_why: "
-      "payload why, one line tying the goal to the company's vision). The Goal Manager cannot change a definition "
-      "or a target it is judged against without one.",
+      "payload why, one line tying the goal to the company's vision), or, from the CEO Bot at level 2 or 3, a red or "
+      "stalled goal's recovery (recovery: payload evidence, options [{label, actions}], pick; actions create, "
+      "reorder or settle). The Goal Manager cannot change a definition or a target it is judged against without one.",
       {"kind": {"type": "string", "enum": list(PROPOSAL_KINDS)}, "goal_id": _s("The goal it is about"),
        "kpi_id": _s("The KPI it is about"), "payload": {"type": "object", "description": "The proposed change"},
        "reason": _s("One sentence: why")},
@@ -1323,11 +1343,14 @@ def proposal_list(api, args):
 @tool("hub_proposal_decide", "Confirm or reject a proposal. A person's own decision, made by whoever owns "
       "the goal or the KPI: a bot is refused. Confirming makes the change as that person.",
       {"id": _s("Proposal id"), "decision": {"type": "string", "enum": ["confirm", "reject"]},
-       "note": _s("Why, optionally")},
+       "note": _s("Why, optionally"),
+       "option": {"type": "integer", "description": "A recovery: approve this option (0 is the first), not the pick"}},
       required=("id", "decision"), writes=True)
 def proposal_decide(api, args):
-    return api.post(f"proposals/{args['id']}/decide", {"decision": args["decision"], "note": args.get("note") or ""},
-                    key=_key(args))["proposal"]
+    body = {"decision": args["decision"], "note": args.get("note") or ""}
+    if args.get("option") is not None:
+        body["option"] = int(args["option"])
+    return api.post(f"proposals/{args['id']}/decide", body, key=_key(args))["proposal"]
 
 
 # ----------------------------------------------------------------------------- market

@@ -8,9 +8,14 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- **CEO Bot level 2, Suggests actions**: a red or stalled goal gets a recovery in its owner's Needs you, with the
+  evidence, up to 4 options of bot-task changes and the CEO Bot's pick. Approving an option applies exactly that one,
+  in the CEO Bot's name; what can't be done says why and comes back as a new recovery. Several bots asking one person
+  the same thing become one item, and the one answer reaches each of them. After 10 approvals in a row unchanged, the
+  Monday note offers level 3, at most once a month; the CEO Bot never raises its own level.
 - **How much your CEO Bot does**: where the CEO Bot switch is on, Settings > CEO Bot has three levels (1 Goals and
   tracking, 2 Suggests actions, 3 Acts on its own), each with one sentence on what it will and won't do, confirmed
-  before it changes. Every company starts at 1; levels 2 and 3 do what level 1 does until they arrive. Only the owner
+  before it changes. Every company starts at 1; level 3 does what level 2 does until it arrives. Only the owner
   or an admin changes it, each change logged with who and when; no bot can. At level 1 the CEO Bot asks for the vision
   first while it is empty, proposes a Why for each goal with none as one Needs you item, sends a Monday note (started
   when the switch goes on), asks a red or stalled goal's owner what is happening, and changes no tasks. It puts at most

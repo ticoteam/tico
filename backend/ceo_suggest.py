@@ -155,23 +155,32 @@ def offline(c, action):
     return None
 
 
+def options_view(c, proposal):
+    """[{label, pick, actions: [{text, note}]}]: each option in plain words, `note` saying why a part can't happen now."""
+    payload = proposal["payload"]
+    return [{"label": option["label"], "pick": n == payload["pick"],
+             "actions": [{"text": describe(c, action), "note": offline(c, action) or ""} for action in option["actions"]]}
+            for n, option in enumerate(payload["options"])]
+
+
 def ask_text(c, proposal, goal_title):
     """The Needs you task's title and body for a recovery: the evidence, each option, the pick, and anything that
     can't happen right now, in plain words."""
     payload = proposal["payload"]
     title = f"Approve a recovery for {goal_title}" if goal_title else "Approve a recovery"
     lines = []
-    for n, option in enumerate(payload["options"]):
-        mark = " (the CEO Bot's pick)" if n == payload["pick"] else ""
+    for n, option in enumerate(options_view(c, proposal)):
+        mark = f" (the {ceo_bot.name(c)}'s pick)" if option["pick"] else ""
         lines.append(f"Option {n + 1}: {option['label']}{mark}")
         for action in option["actions"]:
-            note = offline(c, action)
-            lines.append(f"  - {describe(c, action)}" + (f". Note: {note}; this part would come back to you." if note else ""))
+            note = action["note"]
+            lines.append(f"  - {action['text']}" + (f". Note: {note}; this part would come back to you." if note else ""))
     said = f"\nWhy now: {proposal['reason']}" if proposal.get("reason") else ""
     body = (f"{title}. The {ceo_bot.name(c)} suggests how the bots could get this goal back on track.\n"
             f"Evidence: {payload['evidence']}{said}\n" + "\n".join(lines) +
             "\nApprove one option or reject them all under Needs you on the Goals page. Approving applies exactly that "
-            "option, in the CEO Bot's name; nothing changes until you do. This closes by itself once it is decided.")
+            f"option, in the {ceo_bot.name(c)}'s name; nothing changes until you do. This closes by itself once it is "
+            "decided.")
     return title, body
 
 
@@ -307,8 +316,8 @@ def _offered(c):
 def offer_view(c):
     """{streak, needed, due, last_offered_at}: `due` when the Monday note may offer level 3 now."""
     last = (_offered(c) or [""])[-1]
-    recent = bool(last) and (H.parse_ts(last) or 0) and \
-        H.parse_ts(last) > H.parse_ts(H.now()) - timedelta(days=OFFER_EVERY_DAYS)
+    stamp = H.parse_ts(last) if last else None
+    recent = bool(stamp) and stamp > H.parse_ts(H.now()) - timedelta(days=OFFER_EVERY_DAYS)
     n = streak(c) if ceo_bot.on(c) and ceo_bot.level(c) == 2 else 0
     return {"streak": n, "needed": STREAK_FOR_OFFER, "due": n >= STREAK_FOR_OFFER and not recent,
             "last_offered_at": last or ""}

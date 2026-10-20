@@ -13,6 +13,10 @@ interpretation, labelled:
 4. **What owners said**: check-ins from the last 7 days, in their words, marked as their words.
 5. **Needs a decision**: `hub proposal list` pending, one line each.
 6. Where the CEO Bot is on: first, one line on the vision (or that it is still empty), and how many goals still have
-   no Why line.
+   no Why line. At level 2, one line on the recoveries waiting and what the approved ones changed.
+7. The level-3 offer, at level 2 only when `level3_offer.due` in `hub goal ceo-bot` is true (10 recoveries approved in
+   a row with your pick unchanged, and none offered in the last 30 days): one sentence saying so, and that the owner
+   can raise the level in Settings > CEO Bot if they want. Then record it with `hub goal ceo-bot-level3-offer`, so it
+   is offered once. Never raise the level yourself, never ask again before it is due, and never press.
 Say plainly when nothing needs attention. Send it with `hub message send <person> "<text>"`, and to the Chief of Staff
 the same text. Nothing goes outside the team.

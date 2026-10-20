@@ -377,6 +377,14 @@ STABLE = [
      "Settings > CEO Bot, \"How much your CEO Bot does\": the owner or an admin picks level 1, 2 or 3 on their own "
      "click, logged with who and when. No bot may, the CEO Bot included. 409 while the switch is off",
      "CeoBotView"),
+    ("/api/v2/ceo-bot/merge", "post", "Goals", "mergeCeoBotAsks",
+     "The CEO Bot only, at level 2 or 3: one item in a person's Needs you for 2 to 10 tasks where bots ask them the "
+     "same thing. The originals leave their Needs you while it is open; their one answer goes to each bot that asked, "
+     "and an item that ends unanswered puts the originals back. Counts toward its 5 a day", "CeoBotMergeResult"),
+    ("/api/v2/ceo-bot/level3-offer", "post", "Goals", "recordCeoBotLevel3Offer",
+     "The CEO Bot only: record that its Monday note offered level 3. Refused (422) unless level3_offer.due: 10 "
+     "recoveries approved in a row with its pick unchanged, and no offer in 30 days. It never raises its own level",
+     "CeoBotLevel3OfferResult"),
     ("/api/v2/company", "get", "Goals", "getCompany",
      "The company's Vision and Description (the Company section at the top of Goals where the CEO Bot switch is on), "
      "and whether the caller may edit them", "CompanyResult"),
@@ -425,9 +433,13 @@ STABLE = [
     ("/api/v2/proposals", "get", "Goals", "listGoalProposals",
      "Proposals (pending by default; status=confirmed|rejected|all), each saying whether the caller may decide it", "GoalProposalList"),
     ("/api/v2/proposals", "post", "Goals", "createGoalProposal",
-     "Propose a change the caller may not make: goal wording, a KPI for a goal, a definition, a target, or a flag", "GoalProposalResult"),
+     "Propose a change the caller may not make: goal wording, a KPI for a goal, a definition, a target, or a flag; "
+     "the CEO Bot at level 2 or 3, a recovery for a red or stalled goal (evidence, options of bot-task changes, its pick)",
+     "GoalProposalResult"),
     ("/api/v2/proposals/{pid}/decide", "post", "Goals", "decideGoalProposal",
-     "A person's own decision, made by whoever owns the goal or KPI: confirm makes the change as them, reject drops it", "GoalProposalResult"),
+     "A person's own decision, made by whoever owns the goal or KPI: confirm makes the change as them, reject drops it. "
+     "A recovery applies exactly the chosen option (`option`, else the CEO Bot's pick) in the CEO Bot's name; what "
+     "can't be done comes back as a new recovery saying why", "GoalProposalResult"),
     ("/api/v2/kpis", "get", "KPIs", "listKpis",
      "The KPIs the caller may see; archived KPIs are omitted unless include_archived=true; goal_id, owner, unlinked=true narrow it; auto_for=<bot> is that bot's five automatic KPIs", "KpiList"),
     ("/api/v2/kpis", "post", "KPIs", "createKpi",
@@ -931,8 +943,15 @@ SCHEMAS = {
                        "level_history": items(obj({"level": "i", "was": "i", "by": "s", "by_name": "s", "at": "s"},
                                                   required=["level", "was", "by", "at"])),
                        "daily_cap": "i", "asked_today": {"type": "object", "additionalProperties": {"type": "integer"},
-                                                         "description": "{person actor: items the CEO Bot put in their Needs you today (UTC)}"}},
+                                                         "description": "{person actor: items the CEO Bot put in their Needs you today (UTC)}"},
+                       "level3_offer": ref("CeoBotLevel3Offer")},
                       required=["on", "name", "level", "levels", "daily_cap"]),
+    "CeoBotLevel3Offer": obj({"streak": "i", "needed": "i", "due": "b", "last_offered_at": "s"},
+                             required=["streak", "needed", "due"]),
+    "CeoBotLevel3OfferResult": obj({"level3_offer": ref("CeoBotLevel3Offer")}),
+    "CeoBotMergeResult": obj({"task": {"type": "object", "description": "The merged item: the CEO Bot's task, waiting on the person"},
+                              "originals": items(obj({"task_id": "s", "title": "s", "asker": "s", "asker_name": "s",
+                                                      "state": "s", "note": "s"}, required=["task_id", "asker", "state"]))}),
     "GoalsNeedsYou": obj({"actor": "s", "items": items({
         "type": "object", "required": ["kind"], "additionalProperties": True,
         "properties": {"kind": {"enum": ["vision", "kpi_red", "why", "proposal", "kpi_stale"]}, "goal_id": {"type": "string"},
