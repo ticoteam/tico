@@ -564,3 +564,5 @@ fieldset.brepo>.repo-name+p{margin:-4px 0 4px 24px;font-size:var(--t-xs);line-he
 /* Settings > General: a team switch with its explanation beside it (Stale ticket review). */
 .settings-team-rule{display:flex;align-items:flex-start;gap:12px;cursor:pointer}
 .settings-team-rule > span{display:flex;flex-direction:column;gap:2px}
+/* The rules share one card on General: room between them. */
+.settings-team-rule ~ .settings-team-rule{margin-top:14px}
