@@ -215,3 +215,36 @@ class FakeSSM:
 def aws_clients(ec2=None, iam=None, ssm=None):
     ec2, iam, ssm = ec2 or FakeEC2(), iam or FakeIAM(), ssm or FakeSSM()
     return ec2, iam, ssm, (lambda region, profile: (ec2, iam, ssm, "123456789012"))
+
+
+R53_NS = ["ns-1.awsdns-01.org", "ns-2.awsdns-02.com"]
+
+
+class FakeRoute53:
+    """One public hosted zone, authoritative with R53_NS; record sets as Route 53 lists them (sorted by name, then type)."""
+
+    def __init__(self, zone: str, records=(), fail: bool = False):
+        self.zone, self.records, self.fail, self.calls = zone, list(records), fail, []
+
+    def called(self, name):
+        return [kw for n, kw in self.calls if n == name]
+
+    def list_hosted_zones_by_name(self, DNSName, MaxItems):
+        if self.fail:
+            raise ConnectionError("route53 down")
+        return {"HostedZones": [{"Id": "/hostedzone/Z1", "Name": self.zone + "."}]}
+
+    def get_hosted_zone(self, Id):
+        return {"DelegationSet": {"NameServers": R53_NS}}
+
+    def list_resource_record_sets(self, HostedZoneId, StartRecordName, StartRecordType, MaxItems):
+        rows = sorted(self.records, key=lambda r: (r["Name"].rstrip("."), r["Type"]))
+        return {"ResourceRecordSets": [r for r in rows if (r["Name"].rstrip("."), r["Type"]) >= (StartRecordName, StartRecordType)]}
+
+    def change_resource_record_sets(self, HostedZoneId, ChangeBatch):
+        self.calls.append(("change_resource_record_sets", {"HostedZoneId": HostedZoneId, "ChangeBatch": ChangeBatch}))
+        for c in ChangeBatch["Changes"]:
+            rs = c["ResourceRecordSet"]
+            self.records = [r for r in self.records if (r["Name"], r["Type"]) != (rs["Name"], rs["Type"])]
+            if c["Action"] == "UPSERT":
+                self.records.append(rs)

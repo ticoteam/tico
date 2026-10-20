@@ -133,6 +133,7 @@ SENDS = re.compile(r"urllib\.request|httpx|\brequests\.|aiohttp|http\.client")
 # Each module that sends to HQ or the Gateway, and how it names its user agent.
 HQ_CLIENTS = {
     "backend/recruit.py": '"User-Agent": "tico"',
+    "backend/billing_check.py": '"User-Agent": "tico-billing-check"',
     "backend/releases.py": '"User-Agent": "tico-update-check"',
     "backend/support.py": '"User-Agent": "tico-support"',
     "backend/support_access.py": '"User-Agent": "tico-support-access"',
