@@ -28,7 +28,8 @@ All notable changes to Tico are recorded here. The format follows
   automatic goal colours) and otherwise acts only when you talk to it: no vision or Why asks, no asks to goal owners,
   no Monday note. **Suggests actions** and **Acts on its own** work as before. Settings > CEO Bot, its level, its
   regular checks (which the owner can now turn off), its name and the Company section are the owner's only; an admin
-  no longer changes them. An install at level 1 lands on Passive at upgrade.
+  no longer changes them. An install at level 1 lands on Passive at upgrade
+  ([Your CEO Bot](docs/ceo-bot.md)).
 
 ## [0.3.68] - 2026-10-20
 
