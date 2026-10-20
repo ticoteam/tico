@@ -2402,7 +2402,7 @@ class Execution:
                      "retry_after": retry, "provider_reset": bool(body.limit_resets_at)})
         elif rejected and any(gateway.key_refused(error) for error in limit_errors(c, aid)):
             settle_status(c, row["bot"], "idle" if requeue else "crashed",
-                          "The Tico AI Gateway key is not working; save a new one in Settings > AI providers",
+                          "The Tico AI Gateway key is not working; save a new one in Settings > Computers",
                           claimed=row["created"])
         elif rejected:
             settle_status(c, row["bot"], "idle" if requeue else "crashed",

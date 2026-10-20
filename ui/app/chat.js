@@ -531,7 +531,7 @@ function pendingRunText(x, slug) {
 // The hint a queued run carries when its bot cannot start: no AI provider, or its computer not signed in to its model.
 function pendingHintHTML(x) {
   if (x?.state !== 'queued') return '';
-  if (x.readiness_reason === 'missing_provider') return ' <a href="#/settings" data-gs-tab="providers">Add an AI provider</a>';
+  if (x.readiness_reason === 'missing_provider') return ' <a href="#/settings" data-gs-tab="models">Add an AI provider</a>';
   return x.readiness_reason === 'model_sign_in'
     ? ' <span>Its computer is not signed in to its model: <a href="#/settings" data-gs-tab="devices">Sign in on Settings &gt; Computers</a> · <a href="#/settings" data-gs-tab="health">Health</a></span>'
     : '';

@@ -577,7 +577,7 @@ run_local() {
     say "One step is left: in the app, Settings > Computers > Server computer > Sign in, to Claude and to ChatGPT."
   else
     say "In the app, follow Finish setup: name the team, pick its groups, and use Add computer to join this computer."
-    say "Bots need an AI provider to run: Settings > AI providers, any time."
+    say "Bots need an AI provider to run: Settings > Computers > Models, any time."
   fi
   say "Add a domain and sign-in for your humans later: docs/install.md, \"Add a domain and sign-in later\"."
 }

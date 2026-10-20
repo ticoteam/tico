@@ -94,7 +94,7 @@ def write(base):
 
 
 def check(base):
-    """Settings > AI providers checking the key (backend/gateway_connection.py)."""
+    """Settings > Computers checking the key (backend/gateway_connection.py)."""
     assert G.check(KEY, base)["state"] == "connected"
     return "GET", "/v1/gateway/key"
 

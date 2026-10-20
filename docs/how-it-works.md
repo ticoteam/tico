@@ -310,7 +310,7 @@ A login on that computer that failed a turn on its usage limit is skipped until 
 that shares the computer's own logins counts as that login; a bot's own key is never shared with another bot). When the fallback itself
 hits its limit, the same turn moves on to the next signed-in provider instead of ending. With no ready provider
 the run is limited as above. Every turn tries the bot's own provider first, so the
-bot moves back on its own once the limit resets. The owner turns this off in **Settings → AI providers**
+bot moves back on its own once the limit resets. The owner turns this off in **Settings → Computers → Models**
 (*Fall back when a plan runs out*, `auto_fallback`). Overview lists how many bots are on a fallback and
 since when, and how many are limited.
 
@@ -332,7 +332,7 @@ model" finding. When a computer's default login (no subscription) keeps stopping
 says so once per computer and tool, e.g. "Team box's default Codex login is out of quota", until a turn on
 it completes or the reset time passes ([Health Monitor](health-monitor.md), `default_login_limited`).
 
-The company's **check model** (*Check model* in **Settings → AI providers**, `check_models` on
+The company's **check model** (*Check model* in **Settings → Computers → Models**, `check_models` on
 `/api/v2/providers`) is what review and check subtasks run on when they name no model: an ordered list such as
 `grok, codex`, each entry a runtime or `runtime:model`. The other enabled providers follow it, in their order. The
 pick is the first from a provider other than the one the work was written on; with none, it is refused rather than

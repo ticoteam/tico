@@ -299,7 +299,6 @@ p:empty{display:none}
 .machine-chip-pct{color:var(--muted);font-variant-numeric:tabular-nums}
 .machine-chip-dot{flex:none;width:7px;height:7px;border-radius:50%;background:var(--fail)}
 .machine-chip-add{color:var(--muted);border-style:dashed}.machine-chip-add:hover:not(:disabled){color:var(--accent);border-color:var(--accent)}.machine-chip-add:disabled{cursor:default;opacity:.5}
-.settings-moved{margin:0 0 var(--s3);color:var(--muted)}
 /* The computer's pop-up: Connections, Screen, Bots on this computer, Versions and updates, Settings. */
 .computer-detail{width:min(760px,calc(100vw - 32px))}
 .computer-detail-head{display:flex;align-items:flex-start;justify-content:space-between;gap:8px;padding:14px 16px 6px;border-bottom:1px solid var(--line)}

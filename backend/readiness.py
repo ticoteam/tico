@@ -106,7 +106,7 @@ def can_run(c, bot, runtime, runner=None, harness="", model=""):
     from . import gateway_connection
     if gateway_connection.is_tico(model or config.get("model")):
         if not gateway_connection.connected(c):
-            return verdict(False, "The Tico AI Gateway is not connected", "Save the gateway key in Settings > AI providers",
+            return verdict(False, "The Tico AI Gateway is not connected", "Save the gateway key in Settings > Computers",
                            "#/settings")
         # Only a computer that says it runs bots as their own user runs a Tico turn (runner-rs/src/gateway_relay.rs);
         # the claim holds the work anywhere else (execution.claim_refusal). One that says it does not (a Mac, a server

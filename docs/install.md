@@ -68,7 +68,7 @@ Recover the token any time with `docker compose exec server cat /data/local-owne
 Open the link in your browser: the app opens on **Finish setup**. Then:
 
 1. **Choose AI providers** (optional): leave them all unticked to do it later. Bots need one to run; until then each bot says
-   "Add an AI provider", and Settings > AI providers adds it. With a gateway key from Tico, the
+   "Add an AI provider", and Settings > Computers > Models adds it. With a gateway key from Tico, the
    [Tico AI Gateway](ai-gateway.md) card there adds Tico Cheap, Mid and Power 1.0. The step starts with how bots get
    their models; **Your Claude and ChatGPT subscriptions, plus Tico Gateway** is recommended
    ([the four choices](ai-gateway.md#choose-how-bots-get-their-models)).
@@ -81,7 +81,7 @@ Open the link in your browser: the app opens on **Finish setup**. Then:
 5. **Sign in to a model.** In **Settings > Computers**, wait for the selected harness to be installed, then press **Sign in**
    beside Codex or Claude Code. Open the provider link and enter its device code, or paste the returned code into Tico when asked.
    Wait for the computer's model sign-in to show **ready**. Other harnesses use their own terminal sign-in; API credentials and
-   profiles are explained in [Harnesses](harnesses.md). Pick a provider in **Settings > AI providers** if you skipped it,
+   profiles are explained in [Harnesses](harnesses.md). Pick a provider in **Settings > Computers > Models** if you skipped it,
    then choose the starter's model in **Settings > Bots**.
 
 ### Your first result
@@ -132,7 +132,7 @@ Paste this into its Setup chat (or replace it with your own facts):
 ### First-result recovery
 
 - **Add an AI provider**: when chat says "Saved — no AI provider is chosen", use its **Add an AI provider** link
-  to open **Settings > AI providers**, then select the bot's model in **Settings > Bots**. Your message stays saved.
+  to open **Settings > Computers > Models**, then select the bot's model in **Settings > Bots**. Your message stays saved.
 - **Offline** or **Missing bot repository or AGENT.md**: check **Settings > Computers** and keep the joined computer running;
   [Setup troubleshooting](onboarding.md#troubleshooting) explains repository and placement failures.
 - **Sign-in rejected**: Health names the credential source when the computer reports it. Replace a shared model key in
@@ -576,7 +576,7 @@ image still starts on the migrated volume and reads its own files; the bots then
 the next update. Use `docker exec -u bot` for what a bot should
 own (model logins). Legacy secret files stay with the runner supervisor; bots receive granted Credentials.
 
-The image holds no model CLI. Once your team has enabled a provider (Settings > AI providers), the runner installs
+The image holds no model CLI. Once your team has enabled a provider (Settings > Computers > Models), the runner installs
 that provider's CLI into `/home/runner/tools` in the volume (a minute or two; Settings > Computers shows the progress),
 keeps it current between runs, and lets the owner pin a version. See [harnesses](harnesses.md).
 

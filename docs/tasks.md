@@ -501,7 +501,7 @@ hub task child <parent-id> --check-model codex:gpt-6.1-sol --title "Check the mi
 ```
 
 `--check-model` takes a runtime (its provider's recommended model) or `runtime:model`. With no value (`auto` in the
-API) it takes the company's check model (Settings > AI providers, [How it works](how-it-works.md)): the first in its
+API) it takes the company's check model (Settings > Computers > Models, [How it works](how-it-works.md)): the first in its
 order from a provider other than the parent's authors and runnable on the bot's computer. The authors are every
 maker on the parent's finished runs (a fallback counts) and the provider its owner runs on; with no other provider it
 is refused, never run on an author's own. `--role` is `review` or `check` (the default). The API takes `check_model` and `check_role` on task create; the MCP tool is
@@ -512,7 +512,7 @@ is refused, never run on an author's own. `--role` is `review` or `check` (the d
   or files in its body. Its turns carry none of the bot's next-run tasks or notes.
 - Only the runtime, model, harness and effort change. The bot's repository, tools, credentials and isolation are
   its own, so a check never runs with more than the bot has.
-- Only a provider the company has enabled (Settings > AI providers) and a current model can be named, and the
+- Only a provider the company has enabled (Settings > Computers > Models) and a current model can be named, and the
   bot's computer must not report that runtime missing or signed out. A computer that reports it signed out is not
   handed the subtask's turns.
 - Task detail shows the subtask's `check_model`, and the run's provenance (`ran_on` on the task's runs) names the
@@ -525,7 +525,7 @@ is refused, never run on an author's own. `--role` is `review` or `check` (the d
   declined, its held turn is let go instead of retrying after each reset; a person's message on it stays queued.
 - When the limit is on the computer's default login (no subscription) and Health already marks that login out of
   quota (`default_login_limited`, docs/health-monitor.md), the check does not wait: its next turn runs at once on
-  the next check model in the company's order (Settings > AI providers) that is not from a provider whose work it
+  the next check model in the company's order (Settings > Computers > Models) that is not from a provider whose work it
   checks, not on another login out of quota there, and that the bot's computer can run. The task's history and the
   bot's status say where it moved. It goes back to the model it asked for once a turn on that login completes or
   the provider's reset passes, or once the bot moves to another computer or gets a subscription for that tool. With

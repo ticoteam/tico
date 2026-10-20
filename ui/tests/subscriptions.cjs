@@ -1,7 +1,7 @@
 // Offline regression for subscriptions (docs: PLAN section 7). Fixtures follow backend/subscriptions.py (r2-subs):
 // names are lowercase-hyphen slugs, PUT answers the assignment it saved, a computer is {runner_id, label} or null,
 // signed_in is true, false or null (unknown) and the bot line may carry a `problem`; members list only their own computers.
-//  - Settings > AI providers has no Subscriptions section, only a line to Computers; old links open Computers;
+//  - Computers holds Models and no Subscriptions section; old links (AI providers, Subscriptions) open Computers;
 //  - a computer's pop-up lists its subscriptions as connections (only the tools each is signed in to) next to the
 //    computer's own login; its one-line add turns a typed name into a slug and starts the browser-code login there;
 //  - groups no longer choose one: the bot editor offers "Computer's login" or its own (PUT {scope: 'bot'}), its
@@ -146,7 +146,7 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
     return json(unrouted(p));
   });
   await page.goto('https://tico-ui.test/#/settings');
-  await page.locator('#settings-providers').waitFor();
+  await page.locator('#settings-models').waitFor();   // the saved tab is the old AI providers one
   await page.waitForFunction(() => { const el = document.querySelector('#set-machines'); return el && !/Loading/.test(el.textContent); });
   return {page, errors, writes, data};
 }
@@ -169,6 +169,12 @@ async function navigation(browser) {
     assert.equal(await page.locator('#settings-devices').isVisible(), true, `${restricted} safely falls back`);
     assert.equal(await page.evaluate(() => SETTINGS_TAB), 'devices');
   }
+  // AI providers is now Models on Computers; the Chat tab is gone.
+  for (const alias of ['providers', 'models', 'chat']) {
+    await page.evaluate(alias => settingsShow(alias), alias);
+    assert.equal(await page.locator('#settings-models').isVisible(), true, `${alias} opens Computers`);
+    assert.equal(await page.evaluate(() => sessionStorage.getItem('tico.settings.tab')), 'devices');
+  }
   for (const alias of ['credentials', 'cloud']) {
     assert.equal(await page.evaluate(alias => { settingsShow(alias); return location.hash; }, alias), '#/integrations');
   }
@@ -179,13 +185,9 @@ async function navigation(browser) {
 
 async function computers(browser) {
   const {page, errors, writes} = await open(browser);
-  // AI providers keeps no Subscriptions section; a line points to Computers.
   assert.equal(await page.locator('#settings-subs').count(), 0);
-  assert.equal(await page.locator('#settings-providers [data-logins-moved]').innerText(), 'Logins and keys are now on each computer · Computers');
-  await page.locator('#settings-providers [data-logins-moved] a').click();
-  await page.locator('#settings-devices').waitFor({state: 'visible'});
-  // An old link to Subscriptions opens Computers too.
-  await page.evaluate(() => settingsShow('providers'));
+  // An old link to Subscriptions opens Computers.
+  await page.evaluate(() => settingsShow('bots'));
   await page.evaluate(() => { location.hash = '#/settings/subscriptions'; });
   await page.waitForFunction(() => location.hash === '#/settings' && SETTINGS_TAB === 'devices');
   await page.locator('#set-machines .machine-name[data-computer-open=r1]').click();

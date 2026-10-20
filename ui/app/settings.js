@@ -46,9 +46,7 @@ function pageSettings() {
       ${settingsIsAdmin() ? '<button type="button" data-settings-tab="people" role="tab">Humans</button>' : ''}
       <button type="button" data-settings-tab="bots" role="tab">Bots</button>
       <button type="button" data-settings-tab="devices" role="tab">Computers</button>
-      <button type="button" data-settings-tab="providers" role="tab">AI providers</button>
       <button type="button" data-settings-tab="repos" role="tab">Repositories</button>
-      <button type="button" data-settings-tab="chat" role="tab">Chat</button>
       <button type="button" data-settings-tab="tasks" role="tab">Tasks</button>
       <button type="button" data-settings-tab="inbox" role="tab">Inbox</button>
       <details class="settings-more" id="settings-more"><summary>More</summary><div>
@@ -77,6 +75,7 @@ function pageSettings() {
       </div></section>` : ''}</div>` : ''}
     <div class="settings-pane" id="settings-devices" role="tabpanel">
       <section class="card"><div id="set-machines">${skelRows(3, {card: true, dot: false})}</div></section>
+      <section class="card" id="settings-models"><header><h2>Models</h2></header><div id="set-providers">${skelRows(3, {card: true, dot: false})}</div></section>
       ${settingsCanMakeTokens() || S.me?.has_tokens ? `<section class="card" id="settings-tokens"><header><h2>API tokens</h2></header><div id="set-tokens">${skelRows(3, {card: true, dot: false})}</div></section>` : ''}
     </div>
     <div class="settings-pane" id="settings-bots" role="tabpanel" hidden>
@@ -87,10 +86,6 @@ function pageSettings() {
       ${hlSetupCheckHTML()}
       <section class="card"><header><h2>Services</h2></header><div id="set-services">${skelRows(3, {card: true, dot: false})}</div></section></div>
     ${settingsIsAdmin() ? `<div class="settings-pane" id="settings-people" role="tabpanel" hidden><div id="set-people">${skelRows(3, {card: true, dot: false})}</div></div>` : ''}
-    <div class="settings-pane" id="settings-providers" role="tabpanel" hidden>
-      <p class="settings-moved" data-logins-moved>Logins and keys are now on each computer · <a href="#/settings/computers">Computers</a></p>
-      <section class="card"><header><h2>AI providers</h2></header><div id="set-providers">${skelRows(3, {card: true, dot: false})}</div></section>
-    </div>
     <div class="settings-pane" id="settings-recurring" role="tabpanel" hidden>
       <section class="card"><header><h2>Routines</h2></header><div id="set-recurring">${skelRows(3, {card: true, dot: false})}</div></section>
     </div>
@@ -105,11 +100,6 @@ function pageSettings() {
       </section><div id="settings-assistant"></div>
       <section class="card" id="settings-assistant-approvals" aria-labelledby="settings-assistant-approvals-h"></section>
     </div>
-    <div class="settings-pane" id="settings-chat" role="tabpanel" hidden><section class="card"><header><h2>Chat</h2></header>
-      <p>Each bot has its own chat. Open a bot to choose a conversation or start a new one.</p>
-      <button type="button" class="ghost" id="settings-chat-bots">Choose a bot</button>
-      <a class="ghost" href="${ASSISTANT}">Chat with ${esc(assistantName())}</a>
-    </section></div>
     <div class="settings-pane" id="settings-tasks" role="tabpanel" hidden>
       <div id="settings-types"></div>
       <section class="card" id="settings-roadmaps"></section>
@@ -132,7 +122,6 @@ function pageSettings() {
     const button = event.target.closest('[data-settings-tab]');
     if (button) settingsShow(button.dataset.settingsTab);
   };
-  $('#settings-chat-bots').onclick = () => settingsShow('bots');
   // Opening More on a phone shows its tabs at the end of the scrolling row.
   $('#settings-more').addEventListener('toggle', event => { if (event.target.open) settingsTabIntoView(event.target.lastElementChild); });
   settingsShow(SETTINGS_TAB);
@@ -165,6 +154,8 @@ function pageSettingsThemeBind() {
 function settingsShow(tab) {
   if (tab === 'credentials' || tab === 'cloud') { location.hash = INTEGRATIONS; return; }
   if (tab === 'tags' || tab === 'types') tab = 'tasks'; // Saved links keep working.
+  // The company's models choice is a section of Computers; a link to it (or to the old AI providers tab) scrolls there.
+  if (tab === 'models' || tab === 'providers') { tab = 'devices'; SETTINGS_MODELS_REVEAL = true; }
   const tabs = [...document.querySelectorAll('#settings-tabs [data-settings-tab]')];
   // Tab names come from the navigation; recheck access in case this person's role just changed.
   const owner = S.me?.role === 'owner';
@@ -172,7 +163,7 @@ function settingsShow(tab) {
   SETTINGS_TAB = access[tab] !== false && tabs.some(button => button.dataset.settingsTab === tab) ? tab : 'devices';
   try { sessionStorage.setItem(SETTINGS_TAB_KEY, SETTINGS_TAB); } catch { /* private window: the tab is just not remembered */ }
   if (['health', 'history', 'privacy', 'storage', 'recurring', 'triggers'].includes(SETTINGS_TAB)) $('#settings-more').open = true;
-  for (const name of ['assistant', 'chat', 'tasks']) {
+  for (const name of ['assistant', 'tasks']) {
     const pane = $(name === 'assistant' ? '#settings-assistant-pane' : '#settings-' + name);
     if (pane) pane.hidden = SETTINGS_TAB !== name;
   }
@@ -190,6 +181,8 @@ function settingsShow(tab) {
   if (SETTINGS_TAB === 'assistant') void renderSettingsAssistantApprovals();
   if (SETTINGS_TAB === 'assistant' && S.me?.role === 'owner') window.assistantChat?.settingsStrip($('#settings-assistant'), {get, post, esc, toast, after: async () => { await refresh(true); renderSettingsBots(); }});
   if (devices) devices.hidden = SETTINGS_TAB !== 'devices';
+  // Before the first load the form has no models or computers to show; loadSettings draws it then.
+  if (SETTINGS_TAB === 'devices' && SETTINGS_DATA.loaded) void renderSettingsProviders();
   if (history) history.hidden = SETTINGS_TAB !== 'history';
   const team = $('#settings-team');
   if (team) team.hidden = SETTINGS_TAB !== 'team';
@@ -203,8 +196,6 @@ function settingsShow(tab) {
   if (healthPane) { healthPane.hidden = SETTINGS_TAB !== 'health'; if (SETTINGS_TAB === 'health') window.hlMount?.(); }
   const inboxPane = $('#settings-inbox');
   if (inboxPane) { inboxPane.hidden = SETTINGS_TAB !== 'inbox'; if (SETTINGS_TAB === 'inbox') void window.mountGoogleConnect?.($('#set-google')); }
-  const providersPane = $('#settings-providers');
-  if (providersPane) { providersPane.hidden = SETTINGS_TAB !== 'providers'; if (SETTINGS_TAB === 'providers') void renderSettingsProviders(); }
   const reposPane = $('#settings-repos');
   if (reposPane) { reposPane.hidden = SETTINGS_TAB !== 'repos'; if (SETTINGS_TAB === 'repos' && !formBusy(reposPane)) void renderSettingsRepos(); }
   const recurring = $('#settings-recurring');
@@ -342,13 +333,14 @@ async function loadSettings() {
       harnesses: catalog.harnesses || [],
       enabledProviders: catalog.enabled_providers || [], defaultModel: catalog.default?.model || '',
       issues: operations.issues || [], history, limits,
-      schedulerEnabled: operations.scheduler_enabled};
+      schedulerEnabled: operations.scheduler_enabled, loaded: true};
     document.dispatchEvent(new Event('tico:settings-loaded'));
     renderTree();
     if (S.route !== SETTINGS) return;
     renderSettingsIssues(); renderSettingsBots(); renderSettingsMachines(); renderSettingsServices(); renderSettingsHistory();
     if (!formBusy($('#set-recurring'))) renderSettingsRecurring();   // not while its search box has the cursor
     void renderSettingsTokens();
+    if (SETTINGS_TAB === 'devices' && !$('#set-prov')) void renderSettingsProviders();
     const add = $('#settings-add-bot');
     if (add) { add.onclick = () => void settingsRecruitFlow(); add.disabled = false; }
     const fromCatalog = $('#settings-add-catalog');

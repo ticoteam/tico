@@ -46,7 +46,7 @@ API key); no GitHub account or outside Tool. [Demo mode](docs/demo.md) does not 
 Success is a draft file on the task, read by a person, and a task you closed. The steps, and what to try next (meeting notes
 with Project Coordinator), are in [Your first result](docs/install.md#your-first-result).
 
-You can choose providers later in **Settings > AI providers**; bots wait with “Add an AI provider” until you do.
+You can choose providers later in **Settings > Computers > Models**; bots wait with “Add an AI provider” until you do.
 Add a domain and sign-in later ([Install](docs/install.md#add-a-domain-and-sign-in-later)).
 
 For a team, on a Linux server (about 2 GB, with a domain pointed at it), run the installer with no flags:

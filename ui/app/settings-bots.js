@@ -58,11 +58,11 @@ function settingsOffHarnesses(choices) {
       !model.deprecated && model.provider && !enabled.includes(model.provider) &&
       (model.harnesses || [model.runtime]).includes(row.id)));
 }
-// One line naming what is off and where to turn it on; the AI providers page itself says only the owner can.
+// One line naming what is off and where to turn it on; the Models section itself says only the owner can.
 function settingsOffNote(off) {
   if (!off.length) return '';
   const names = off.map(row => harnessWords(row.id)).join(', ');
-  return `<p class="settings-choice-block" data-choice-off><span>${esc(names)} ${off.length === 1 ? 'is' : 'are'} off — turn on ${off.length === 1 ? 'its' : 'their'} provider in AI providers</span> <a href="#/settings" data-off-providers>Open AI providers</a></p>`;
+  return `<p class="settings-choice-block" data-choice-off><span>${esc(names)} ${off.length === 1 ? 'is' : 'are'} off — turn on ${off.length === 1 ? 'its' : 'their'} provider in Models</span> <a href="#/settings" data-off-providers>Open Models</a></p>`;
 }
 // What the bot's computer cannot run, as the server judges it (backend/readiness.py `can_run`, sent with
 // /v2/operations as `runnable`): {can_run: false, problem, short, computer, sign_in, move}. Not listed: not refused.
@@ -91,7 +91,7 @@ async function settingsMoveForModel(button) {
 document.addEventListener('click', event => {
   const move = event.target.closest('[data-choice-move]');
   if (move) void settingsMoveForModel(move);
-  if (event.target.closest('[data-off-providers]')) settingsShow('providers');
+  if (event.target.closest('[data-off-providers]')) settingsShow('models');
 });
 // Keep the three choices local until Apply, so selecting a harness cannot start a transition.
 function settingsChoiceFields(current = '', disabled = false, none = false, label = 'Model settings') {
@@ -713,11 +713,11 @@ async function settingsCatalogPicker() {
     } catch (error) {
       status.innerHTML = `<span class="err">${esc(error.message)}</span>`;
       if (String(error.message).includes('Team default')) {
-        const link = document.createElement('button'); link.type = 'button'; link.className = 'linkish'; link.textContent = 'AI providers';
+        const link = document.createElement('button'); link.type = 'button'; link.className = 'linkish'; link.textContent = 'Models';
         link.onclick = () => {
           dialog.close();
-          if (S.route === SETTINGS) settingsShow('providers');
-          else { SETTINGS_TAB = 'providers'; location.hash = SETTINGS; }
+          if (S.route === SETTINGS) settingsShow('models');
+          else { SETTINGS_TAB = 'models'; location.hash = SETTINGS; }
         };
         status.append(' ', link);
       }

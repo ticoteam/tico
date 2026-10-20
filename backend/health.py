@@ -1376,7 +1376,7 @@ def view(c, who, settings, auth, github, config):
         rejected = _rejected(computers)
         if not wanted:
             checks.append(_check("models", "Models", "warn", "No AI provider is chosen yet.",
-                                 [_fix("Choose providers", "#/settings", "providers")]))
+                                 [_fix("Choose providers", "#/settings", "models")]))
         elif online and not signed and rejected:
             checks.append(_check("models", "Models", "bad", _rejected_summary(rejected),
                                  [_fix("Open Credentials", "#/credentials"), _fix("Open Computers", "#/settings", "devices")]))
@@ -1401,7 +1401,7 @@ def view(c, who, settings, auth, github, config):
     # used, the cap reached, or the key revoked (backend/gateway_connection.py).
     if kind == "owner" and (gateway := gateway_connection.health(c, settings)):
         checks.append(_check("gateway", "Tico AI Gateway", gateway["status"], gateway["summary"],
-                             [_fix("Open AI providers", "#/settings", "providers")]))
+                             [_fix("Open Models", "#/settings", "models")]))
     if full and (versions := runner_versions.health_check(computers)):
         checks.append(versions)
     silent = silent_computers(c) if waiting else []

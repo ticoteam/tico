@@ -34,7 +34,7 @@ Every **Next** saves the whole draft with `PUT /api/v2/setup`, so a closed tab l
 
 | Screen | What it asks | What it stores |
 |---|---|---|
-| AI providers | Only while no provider is chosen yet; otherwise the wizard starts at Names. Which AI providers the bots may use. Optional: leave none ticked and Skip for now moves on | The team's providers, as Settings > AI providers saves them |
+| AI providers | Only while no provider is chosen yet; otherwise the wizard starts at Names. Which AI providers the bots may use. Optional: leave none ticked and Skip for now moves on | The team's providers, as Settings > Computers > Models saves them |
 | Names | **Team/Company name**, app name, and optionally your own name | `names`. From the moment they are saved they override `TICO_TEAM_NAME` (the old `TICO_COMPANY_NAME` remains an alias) and `TICO_APP_NAME` everywhere, including in the template cards. **Your name** (`names.owner_name`) is saved on the owner's roster entry, so the team chart and the sidebar show it instead of the address; it is prefilled from the roster, or from the display name the sign-in proxy vouches for (a `name` claim from Cloudflare Access or the AWS load balancer), and left blank it changes nothing. **Team email domain** (`names.team_domain`) is asked only when the owner signs in with public email such as gmail.com and no team address is on the roster; it is optional, and lets members add teammates at that domain (it does not let anyone sign in). The wizard does not ask for an assistant name: the tab is always called Assistant, and `names.assistant_name` is `TICO_ASSISTANT_NAME`, which is `Assistant` unless set (a name equal to the team's reads as `Assistant`) |
 | About the team | What you do, who you sell to, whether software is your product, and team size | `answers`. Whether software is the product decides which groups start picked, and the description helps the suggestions. It is also written into every bot's `knowledge/company.md` |
 | Your team chart | The groups, then one question per group and the bots to recruit into it, with the chart growing beside it, and the message bot switch under the finished chart ([The team builder](#the-team-builder)) | `answers.departments`, `answers.briefings` and `selected`: for each chosen slug, its template, display name, the `AGENT.md` text and `reports_to` (a human `human:<id>` or a bot slug). Nothing is created yet |
@@ -129,7 +129,7 @@ second). It reaches no computer.
   with the card's summary as its description, `bot-<slug>` as its repository, the card's runtime, model and reasoning effort, the human
   it reports to, and the owner as its owner. A model a deployment does not offer falls back to the product default.
 - **No AI provider and no computer are needed.** The team is created first. With no provider chosen a bot names no runtime or model and
-  follows the team default, so it runs once a provider is added in Settings > AI providers. With no computer enrolled the bots stay
+  follows the team default, so it runs once a provider is added in Settings > Computers > Models. With no computer enrolled the bots stay
   `planned`; when the owner's computer enrolls, the bots are placed on it and activated. Until then the after-Create screen says
   "Waiting for a computer" or "Add an AI provider".
 - Each bot goes in the **group** its template belongs to (Marketing, Product, Engineering ...); the group is made if the team has none yet,
@@ -172,7 +172,7 @@ lets its routines run and counts it toward a member's limit. Until then it stays
 - Each bot, in the team chart's groups and order (bots outside any group first, the built-ins last), with one status:
   *Waiting* while the team waits on a computer or provider, *Setting up* until a starter's repository exists, then its
   **Set up** button; *Active*; or a link to the setup task BotOps is working.
-- **AI providers**: the first link opens Settings > AI providers so bots can start working.
+- **AI providers**: the first link opens Settings > Computers > Models so bots can start working.
 - **Add an admin**: a name and an email. The human joins the roster and the sign-in list and is made an admin (`POST /api/v2/access/humans`,
   then `POST /api/v2/access/humans/{id}` with `role: admin`). Tico sends no email. On a local install, only you can sign in
   until you add a domain and sign-in; adding an admin still saves their roster entry.
@@ -425,7 +425,7 @@ questions. When its setup is done it calls `hub bot setup-done`. If it cannot (a
 also call `POST /api/v2/bots/{bot}/onboarded` to release a bot whose conversation went wrong.
 
 In **AI providers**, **Skip for now** continues without a provider; bots wait until one is added.
-Settings > AI providers can also save with no providers enabled. After choosing providers, sign in on each computer
+Settings > Computers > Models can also save with no providers enabled. After choosing providers, sign in on each computer
 from that page, or store the model key in **Tools > Credentials** and grant **Every computer**. For a model API key or token
 named `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN` or `CURSOR_API_KEY`, a blank **Bot variable name** is
 inferred automatically; otherwise set the model's variable explicitly. Bot access still needs its own grant.
