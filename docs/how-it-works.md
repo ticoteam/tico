@@ -309,7 +309,11 @@ A login on that computer that failed a turn on its usage limit is skipped until 
 30 minutes when the provider gives none, and the next provider in the list takes the turn (a subscription profile
 that shares the computer's own logins counts as that login; a bot's own key is never shared with another bot). When the fallback itself
 hits its limit, the same turn moves on to the next signed-in provider instead of ending. With no ready provider
-the run is limited as above. Every turn tries the bot's own provider first, so the
+the run is limited as above. A limit is named by the login that returned it: the bot's status, its run log and
+Health say *Primary* or *Fallback*, the provider and login, and whether it was an API key's quota or billing refusal
+or the plan's usage limit (with its 5-hour or weekly window when the provider says so), for example *Fallback codex
+API quota or billing limit; primary claude not limited*. Each login keeps its own hold and retry time: a fallback's
+quota never holds or extends the bot's own login, nor the reverse. Every turn tries the bot's own provider first, so the
 bot moves back on its own once the limit resets. The owner turns this off in **Settings → AI providers**
 (*Fall back when a plan runs out*, `auto_fallback`). Overview lists how many bots are on a fallback and
 since when, and how many are limited.

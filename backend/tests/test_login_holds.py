@@ -119,7 +119,7 @@ def test_a_hold_survives_a_runner_restart_and_a_lost_probe_is_retried_as_the_sam
         assert "API quota or billing limit" in H.status(c, "ops")["focus"]
     # Health names the provider whose login is held, not just the bot's own.
     issue = next(i for i in api.get("/api/status", headers=headers()).json()["health_issues"] if i.get("bot") == "ops")
-    assert issue["detail"].startswith("fake API quota or billing limit; queued work waits until 2026-10-19 03:17 UTC")
+    assert issue["detail"].startswith("Primary fake API quota or billing limit; queued work waits until 2026-10-19 03:17 UTC")
 
 
 def test_one_hold_covers_every_bot_on_the_login_and_a_persons_message_still_gets_one_try(api, monkeypatch):
@@ -488,3 +488,88 @@ def test_a_named_fallback_that_is_not_ready_here_leaves_the_job_waiting_not_leas
     names({"harness": "codex", "model": "gpt-5.5"})
     signed_in(api, machine, ["ops", "finance"], ["codex"])
     assert claim(api, machine)["config"]["primary_held"]
+
+
+QUOTA = "Quota exceeded. Check your plan and billing details."
+
+
+def fallback_turn(api, machine, rows, **result):
+    attempt = claim(api, machine)
+    post(api, f"attempts/{attempt['id']}/started", {"thread_id": "t-" + attempt["id"]}, machine["token"])
+    seq = events(api, machine, attempt, rows)
+    post(api, f"attempts/{attempt['id']}/complete", {"outcome": "failed", "last_seq": seq, "limited": True,
+                                                     "fallback": "codex", "text": "", **result}, machine["token"])
+    return attempt
+
+
+def health_detail(api, bot):
+    return next(i for i in api.get("/api/status", headers=headers()).json()["health_issues"] if i.get("bot") == bot)["detail"]
+
+
+def test_a_fallbacks_quota_names_the_fallback_and_never_holds_the_primary(api, monkeypatch):
+    # Oct 19 20:05Z: the Codex fallback said "Quota exceeded" while Claude was not limited, and the bot read
+    # "claude API quota or billing limit" (Dev 279).
+    machine = two_bots(api, monkeypatch)
+    post(api, "tasks", {"owner": "ops", "title": "Work", "body": "Please do it."})
+    first = fallback_turn(api, machine, [("diagnostic", "fake unavailable; running this turn on codex"),
+                                         ("error", QUOTA)])
+    with api.app.state.store.read() as c:
+        assert not login_holds.get(c, machine["runner_id"], "", "fake")
+        assert login_holds.get(c, machine["runner_id"], "", "codex")["until"].startswith("2026-10-19T02:16:47")
+        focus = H.status(c, "ops")["focus"]
+    assert focus == ("Fallback codex API quota or billing limit at 01:46; primary fake not limited; "
+                     "retrying after 2026-10-19 02:16 UTC")
+    assert health_detail(api, "ops").startswith("Fallback codex API quota or billing limit; primary fake not limited; "
+                                                "queued work waits until 2026-10-19 02:16 UTC")
+    log = api.get(f"/api/runs/{first['id']}/log", headers=headers()).text
+    assert "Limit: Fallback codex API quota or billing limit; primary fake not limited" in log
+    # Another bot's turn on the same Codex login replaces its hold: Health still names the fallback, not the bot's
+    # own runtime.
+    with api.app.state.store.transaction() as c:
+        login_holds.record(c, machine["runner_id"], "", "codex", "2026-10-19T01:47:00.000000Z", attempt_id="other",
+                           bot="finance", error=QUOTA)
+        assert not login_holds.for_attempt(c, first["id"])
+    assert health_detail(api, "ops").startswith("Fallback codex API quota or billing limit; primary fake not limited")
+
+
+def test_an_older_runners_fallback_quota_with_no_hop_note_is_still_the_fallbacks(api, monkeypatch):
+    monkeypatch.setattr(login_holds, "limit_texts", lambda c, aid: TURNS[aid])
+    with api.app.state.store.transaction() as c:
+        aid = attempt_with(c, [("error", QUOTA)])
+        login_holds.after_turn(c, "r1", "ops", "", "fake", Body(limited=True, fallback="codex"), aid, HIT)
+        assert not login_holds.get(c, "r1", "", "fake")
+        assert login_holds.get(c, "r1", "", "codex")["error"] == QUOTA
+        # Unless the runner says the primary was limited: then its notice is the primary's, as before.
+        aid = attempt_with(c, [("error", CLAUDE)])
+        login_holds.after_turn(c, "r2", "ops", "", "fake", Body(limited=True, fallback="codex", primary_limited=True),
+                               aid, HIT)
+        assert login_holds.get(c, "r2", "", "fake")["reset"] and login_holds.get(c, "r2", "", "codex")
+
+
+def test_a_primary_usage_limit_names_the_primary_and_its_window(api, monkeypatch):
+    at(monkeypatch, "2026-10-19T01:46:47.000000Z")
+    machine = runner(api)
+    assign(api, machine, "ops")
+    ready(api, machine, ["ops"])
+    post(api, "tasks", {"owner": "ops", "title": "Work", "body": "Please do it."})
+    limit(api, machine, claim(api, machine))
+    with api.app.state.store.read() as c:
+        assert H.status(c, "ops")["focus"] == ("Primary fake plan usage limit (5-hour window) at 01:46; resumes at "
+                                               "02:40 UTC when it resets")
+        assert not login_holds.get(c, machine["runner_id"], "", "codex")
+    assert health_detail(api, "ops").startswith("Primary fake plan usage limit (5-hour window); resumes at 02:40 UTC")
+
+
+def test_both_limits_in_one_window_keep_two_holds_each_with_its_own_retry(api, monkeypatch):
+    machine = two_bots(api, monkeypatch)
+    post(api, "tasks", {"owner": "ops", "title": "Work", "body": "Please do it."})
+    first = fallback_turn(api, machine, [("error", CLAUDE), ("diagnostic", "fake hit its usage limit; running this "
+                                                                          "turn on codex"), ("error", QUOTA)])
+    with api.app.state.store.read() as c:
+        assert login_holds.get(c, machine["runner_id"], "", "fake")["until"].startswith("2026-10-19T02:40:00")
+        assert login_holds.get(c, machine["runner_id"], "", "codex")["until"].startswith("2026-10-19T02:16:47")
+        # The bot waits on the login its turn ended on, whichever hold row is read first.
+        assert login_holds.for_attempt(c, first["id"])["runtime"] == "codex"
+        focus = H.status(c, "ops")["focus"]
+    assert focus == ("Fallback codex API quota or billing limit at 01:46; primary fake also limited (plan usage limit "
+                     "(5-hour window)) until 02:40 UTC; retrying after 2026-10-19 02:16 UTC")
