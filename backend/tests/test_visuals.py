@@ -472,3 +472,43 @@ def test_a_file_from_one_chat_cannot_be_posted_into_another_by_someone_who_can_r
     moved = api.post("/api/v2/chat/cpo", json={"text": "Look", "attachments": [f"{fid}@1"]},
                      headers=headers("ben-test", "k-visual-3"))
     assert moved.status_code == 404, moved.text
+
+
+def wav():
+    import io
+    import wave
+    out = io.BytesIO()
+    with wave.open(out, "wb") as w:
+        w.setnchannels(1), w.setsampwidth(2), w.setframerate(8000), w.writeframes(b"\x00\x01" * 800)
+    return out.getvalue()
+
+
+def test_a_wav_on_a_task_is_an_audio_player_whatever_python_calls_its_type(api):
+    """QA d1c1857a: Python 3.15 guesses .wav as audio/vnd.wave, which was a file chip. JSON and multipart uploads
+    store it as audio/wav, the comment shows an audio card, and the visual route serves it by range."""
+    data = wav()
+    task = post(api, "tasks", {"owner": "ops", "title": "Voice note", "body": "x", "private": True}, "ben-test")
+    tid = task["id"]
+    by_json = api.post(f"/api/v2/tasks/{tid}/files", json={"name": "private.wav",
+                       "content_base64": base64.b64encode(data).decode()}, headers=headers("ben-test"))
+    by_form = api.post(f"/api/v2/tasks/{tid}/files", data={"name": "second.wav"},
+                       files={"file": ("second.wav", data, "application/octet-stream")}, headers=headers("ben-test"))
+    for made in (by_json, by_form):
+        assert made.status_code == 200, made.text
+        r = api.post(f"/api/v2/tasks/{tid}/comments", json={"text": "Listen",
+                     "attachments": [f"{made.json()['file_id']}@{made.json()['version']}"]}, headers=headers("ben-test"))
+        assert r.status_code == 200, r.text
+        [item] = r.json()["comment"]["refs"]["attachments"]
+        assert (item["kind"], item["content_type"]) == ("audio", "audio/wav"), item
+        part = api.get(item["src"], headers={"Range": "bytes=0-3"})
+        assert part.status_code == 206 and part.content == b"RIFF" and part.headers["content-type"] == "audio/wav"
+
+
+def test_a_wav_already_stored_or_sent_as_audio_vnd_wave_still_plays_inline(api):
+    """Versions stored before the fix, and a browser that sends audio/vnd.wave, keep the audio card."""
+    assert V.kind_of("audio/vnd.wave", 1000) == "audio" and V.stored_type("audio/vnd.wave") == "audio/wav"
+    r = api.post("/api/v2/uploads/chat/ops", data={"text": "My voice note"},
+                 files={"files": ("note.wav", wav(), "audio/vnd.wave")}, headers=headers("ben-test", "k-visual-wav"))
+    assert r.status_code == 200, r.text
+    [item] = r.json()["message"]["refs"]["attachments"]
+    assert item["kind"] == "audio" and item["src"].startswith("/visuals/")

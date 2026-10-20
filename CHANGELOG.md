@@ -35,6 +35,9 @@ All notable changes to Tico are recorded here. The format follows
   as before ([Tico AI Gateway](docs/ai-gateway.md#choose-how-bots-get-their-models)).
 
 ### Fixed
+- **A WAV file attached to a task plays inline again**: on servers running Python 3.15 a WAV uploaded to a task
+  showed as a plain file instead of an audio player. Tico now stores it as `audio/wav`, and WAV files already stored
+  under the other name show the player too.
 - Inbox waits over MCP honor the full requested wait, up to 120 seconds, through both the local and HTTP transports.
   An internal request that exceeds its deadline is cancelled and returns a retryable tool error.
 
