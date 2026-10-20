@@ -3332,7 +3332,9 @@ def unlinked_pushes(conn, task_id):
     not read since its last known head counts too, `unchecked`: a push whose webhook was missed and that no computer
     has reported is on GitHub only. A head the tree started at, or one on the repository's default branch, is no work
     of the task's. Each is {link_id, repo, branch, unchecked}."""
-    app = conn.execute("SELECT org FROM github_app WHERE id='app'").fetchone()
+    # The GitHub App's table exists only once its module has set up the store; without it no branch is readable.
+    app = conn.execute("SELECT org FROM github_app WHERE id='app'").fetchone() if conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='github_app'").fetchone() else None
     out = []
     for w in _rows(conn.execute("SELECT id,repo,branch,detail_json FROM task_links WHERE task_id=? AND kind='worktree' "
                                 "AND coalesce(state,'unknown')<>'removed' AND repo IS NOT NULL AND branch IS NOT NULL",
