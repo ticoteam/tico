@@ -28,6 +28,9 @@ url = "2"
 log = { version = "0.4", features = ["std"] }
 tauri-plugin-updater = { version = "2", default-features = false, features = ["rustls-tls", "system-proxy"] }
 tauri-plugin-process = "2"
+# Element full screen in the macOS webview (a video's full-screen button): wry leaves WKWebView's fullScreenEnabled off
+# unless its "fullscreen" feature is on, and Tauri does not turn it on. Same wry Tauri already uses.
+wry = { version = "0.55", default-features = false, features = ["fullscreen"] }
 
 [dev-dependencies]
 base64 = "0.22"

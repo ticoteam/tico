@@ -195,7 +195,7 @@ COPY docker/entrypoint.sh /usr/local/bin/tico-entrypoint
 # A named volume copies the ownership of the directory it first covers.
 RUN chmod 0755 /usr/local/bin/tico-entrypoint \
     && install -d -m 0700 -o tico -g tico /data /control /backups \
-    && install -d -m 0755 -o tico -g tico /tunnel
+    && install -d -m 0755 -o tico -g tico /tunnel /caddy-generated
 COPY --from=venv /opt/tico/.venv /opt/tico/.venv
 COPY --from=source /opt/tico /opt/tico
 ARG TICO_VERSION=dev

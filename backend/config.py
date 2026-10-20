@@ -1,8 +1,10 @@
 """Explicit service configuration; importing the backend never opens the live Hub DB."""
 
+import ipaddress
 import json
 import logging
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlparse
@@ -28,6 +30,35 @@ def _release_origin():
         return {}
     return {"release_commit": str(manifest.get("commit") or ""), "release_repo": str(manifest.get("repository") or "")}
 LOOPBACK = ("127.0.0.1", "localhost", "::1")
+
+
+def _client_visual_origin(value):
+    """Public metadata only; keep credentials and malformed legacy values private.
+
+    The visual runtime keeps its existing normalization/validation. HTTP/local
+    origins remain representable here; a desktop navigation policy independently
+    requires HTTPS and does not acquire IPC authority from this field.
+    """
+    if not isinstance(value, str) or not value.isascii() or any(ch.isspace() or ord(ch) < 32 or ord(ch) == 127 for ch in value):
+        return ""
+    try:
+        origin = urlparse(value)
+        host, port = origin.hostname or "", origin.port
+        if origin.scheme not in ("http", "https") or not host or origin.username is not None or origin.password is not None \
+                or origin.path or origin.params or origin.query or origin.fragment or port == 0 or "%" in host:
+            return ""
+        authority = ("[" + host + "]" if ":" in host else host) + (":" + str(port) if port is not None else "")
+        if origin.netloc.lower() != authority:
+            return ""
+        try:
+            ipaddress.ip_address(host)
+        except ValueError:
+            if len(host) > 253 or not any(ch in "abcdefghijklmnopqrstuvwxyz" for ch in host) \
+                    or not all(re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label) for label in host.split(".")):
+                return ""
+        return value
+    except ValueError:
+        return ""
 
 
 def _secret(env, arn_env, path):
@@ -163,6 +194,8 @@ class Settings:
     # Where the identity provider ends its own session (a Cognito /logout URL with its
     # client_id and logout_uri); without it, logout returns to the app's root.
     cognito_logout_url: str = ""
+    # TICO_AUTH_PROXY=owner-link: the sha256 of the owner's first sign-in link, from the installer (backend/owner_link.py).
+    owner_link_hash: str = ""
     # Built-in sign-in (TICO_AUTH_PROXY=oidc, backend/oidc.py). The secret is read from its file
     # when one is named; the session secret defaults to a generated file beside the database.
     oidc_issuer: str = ""
@@ -173,6 +206,8 @@ class Settings:
     google_oauth_client_id: str = ""
     google_oauth_client_secret: str = field(default="", repr=False)
     oidc_allowed_domains: tuple[str, ...] = ()
+    # The provider's name on the sign-in button (TICO_OIDC_LABEL, "Sign in with <label>"); empty goes straight to it.
+    oidc_label: str = ""
     session_secret: str = field(default="", repr=False)
     # Off: a bot may invite anyone to a calendar event. On: only people on the roster (403 external_attendee).
     block_external_invites: bool = False
@@ -350,13 +385,14 @@ class Settings:
         return bool(self.local_owner_token_file)
 
     def environment(self):
-        """What a client needs to render this environment: names, links and sign-in mode."""
+        """Non-secret rendering metadata; HTTP callers enforce their own authentication boundary."""
         return {"environment_id": self.environment_id, "company_name": self.company_name,
                 # No TICO_TEAM_NAME: "Company" is a stand-in, so the first-run wizard leaves its name field empty.
                 "company_name_default": self.company_name == DEFAULT_COMPANY_NAME,
                 "app_name": self.app_name, "assistant_name": self.assistant_name,
                 "assistant_bot": self.assistant_bot, "public_url": self.public_url,
-                "runner_url": self.runner_url, "github_owner": self.github_owner,
+                "runner_url": self.runner_url, "visual_origin": _client_visual_origin(self.visual_origin),
+                "github_owner": self.github_owner,
                 "compose_project": self.compose_project, "server_network": self.server_network,
                 "local": self.local_signin, "hosted": self.hosted, "release": self.release_id,
                 "owner_email": self.owner_email, "owner_name": self.owner_name, "demo": self.demo, "rehearsal": self.rehearsal}
@@ -415,6 +451,7 @@ class Settings:
             compose_project=os.environ.get("TICO_COMPOSE_PROJECT", "tico"),
             server_network=os.environ.get("TICO_SERVER_NETWORK", "tico_default"),
             hosted=os.environ.get("TICO_HOSTED", ""),
+            owner_link_hash=os.environ.get("TICO_OWNER_LINK_HASH", "").strip().lower(),
             runner_url=os.environ.get("TICO_RUNNER_URL", "").rstrip("/"),
             screen_relay_url=os.environ.get("TICO_SCREEN_RELAY_URL", ""),
             screen_relay_key=os.environ.get("TICO_SCREEN_RELAY_KEY", ""),
@@ -434,6 +471,7 @@ class Settings:
             oidc_client_secret_file=(Path(os.environ["TICO_OIDC_CLIENT_SECRET_FILE"])
                                      if os.environ.get("TICO_OIDC_CLIENT_SECRET_FILE") else None),
             oidc_allowed_domains=_emails(os.environ.get("TICO_OIDC_ALLOWED_DOMAINS", "")),
+            oidc_label=os.environ.get("TICO_OIDC_LABEL", "").strip(),
             session_secret=os.environ.get("TICO_SESSION_SECRET", "").strip(),
             block_external_invites=os.environ.get("TICO_BLOCK_EXTERNAL_INVITES", "0") == "1",
             token_alert_input=int(os.environ.get("TICO_TOKEN_ALERT_INPUT", "").strip() or 100_000_000),

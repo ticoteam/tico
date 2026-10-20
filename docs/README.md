@@ -33,7 +33,7 @@ Use `releases/download/vX.Y.Z/install.sh` to pin a release. For a shared server,
 - [Sessions](sessions.md): each task a bot owns is its own session, apart from its main chat.
 - [Desktop app](desktop.md), [Your Assistant](assistant.md) and [External agents](connect-an-agent.md).
 - Knowledge and results: [Docs](docs.md), [Librarian](librarian.md), [Files](files.md), [Meetings](meetings.md), [Listening](listening.md).
-- [Goals and KPIs](goals-and-kpis.md), [Humans](people.md), [Groups](org-chart.md) and [Access](permissions.md).
+- [Goals and KPIs](goals-and-kpis.md), [Your CEO Bot](ceo-bot.md), [Humans](people.md), [Groups](org-chart.md) and [Access](permissions.md).
 - [Glossary](glossary.md) and [Help](support.md).
 
 ## Developer or computer operator

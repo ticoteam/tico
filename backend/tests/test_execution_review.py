@@ -173,11 +173,11 @@ def test_usage_limited_turn_requeues_and_cools_off_longer_after_a_third_strike(a
     with api.app.state.store.read() as c:
         assert c.execute('SELECT state FROM jobs WHERE id=?', (attempt['job_id'],)).fetchone()[0] == 'queued'
         status = H.status(c, 'ops')
-        assert status['state'] == 'limited' and status['focus'].startswith('fake usage limit at ')
+        assert status['state'] == 'limited' and status['focus'].startswith('Primary fake plan usage limit at ')
         assert c.execute("SELECT count(*) FROM events WHERE action='attempt.limited' AND target=?", (attempt['id'],)).fetchone()[0] == 1
     issues = api.get('/api/status', headers=headers()).json()['health_issues']
     issue = next(i for i in issues if i['kind'] == 'bot' and i['bot'] == 'ops')
-    assert issue['detail'].startswith('fake usage limit; resumes at ')
+    assert issue['detail'].startswith('Primary fake plan usage limit; resumes at ')
     assert get(api, 'bots/ops/execution-review')['jobs'] == []
     # Inside the hold nothing is handed out; after it the same job comes back. Each limit in a row on the login
     # holds longer: 30, then 60, then 120 minutes (backend/login_holds.py BACKOFF).
@@ -204,7 +204,7 @@ def test_usage_limited_turn_requeues_and_cools_off_longer_after_a_third_strike(a
         assert status['state'] == 'limited' and 'third in a row' in status['focus']
     assert get(api, 'bots/ops/execution-review')['jobs'] == []
     issue = next(i for i in api.get('/api/status', headers=headers()).json()['health_issues'] if i['kind'] == 'bot' and i['bot'] == 'ops')
-    assert issue['detail'].startswith('fake usage limit three times in a row; queued work waits until ')
+    assert issue['detail'].startswith('Primary fake plan usage limit, three times in a row; queued work waits until ')
     assert claim(api, machine) is None
     age_limit(api, 3601)
     assert claim(api, machine) is None                      # an hour is not enough this time
@@ -553,9 +553,11 @@ def test_a_held_company_task_involving_a_bot_the_reader_cannot_read_stays_unname
         {'seq': 1, 'kind': 'tool', 'payload': {'tool': 'Bash', 'status': 'started', 'item_id': 'b1'}}]}, machine['token'])
     expire(api, attempt['id'])
     assert claim(api, machine) is None
+    post(api, f"tasks/{task_id}/comments", {'text': 'Cite the new clause.'})         # waits behind the stopped run
     def held_for(token):
         return ' '.join(i['detail'] for i in get(api, 'operations', token=token)['issues'] if i['kind'] == 'uncertain_work')
     assert 'Counsel memo for Acme' in held_for('ben-test')          # control: Ben may read it
+    assert stopped_issue(api, 'ben-test')['held_tasks'] == ['Counsel memo for Acme']
     real = Auth.bot_accesses
     def without_legal(self, c, who, slugs=None):
         levels = real(self, c, who, slugs)
@@ -564,6 +566,7 @@ def test_a_held_company_task_involving_a_bot_the_reader_cannot_read_stays_unname
         return levels
     monkeypatch.setattr(Auth, 'bot_accesses', without_legal)
     assert 'Counsel memo for Acme' not in held_for('ben-test')
+    assert stopped_issue(api, 'ben-test')['held_tasks'] == []
     assert 'Counsel memo for Acme' in held_for('ana-test')
 
 
@@ -828,3 +831,124 @@ def test_a_late_result_that_did_not_finish_after_a_dismissal_is_only_filed(api):
          'note': 'Looks stuck; nothing left to send here.', 'acknowledge_uncertain_effects': True})
     filed = hand_in(api, machine, attempt, text='Runner restarted during execution', outcome='interrupted')
     assert filed['filed'] is True and settled(api, attempt) == ('expired', 'cancelled')
+
+
+def stopped_issue(api, token='ana-test'):
+    return next(i for i in get(api, 'operations', token=token)['issues'] if i['kind'] == 'uncertain_work')
+
+
+def test_a_stopped_run_that_holds_queued_work_needs_a_person_and_says_what_waits(api):
+    """Oct 19, launch: five unreviewed stopped runs fenced 14 queued Builder wakes, but each was 'review later' and the
+    Review stopped runs button rendered nowhere. A run that holds nothing may still wait for a later look."""
+    machine = runner(api, 'ana')
+    assign(api, machine, 'ops')
+    ready(api, machine, ['ops'])
+    task = post(api, 'tasks', {'owner': 'ops', 'title': 'Archive the old bots', 'body': 'Archive them and tell Priya.'})
+    task_id = task.get('task', task).get('id') or task['refs']['task']
+    attempt = claim(api, machine)
+    post(api, f"attempts/{attempt['id']}/started", {'thread_id': 'held'}, machine['token'])
+    post(api, f"attempts/{attempt['id']}/events", {'events': [
+        {'seq': 1, 'kind': 'tool', 'payload': {'tool': 'Bash', 'status': 'started', 'item_id': 'b1'}}]}, machine['token'])
+    expire(api, attempt['id'])
+    assert claim(api, machine) is None
+    issue = stopped_issue(api)
+    assert issue['needs_person'] is False and 'saved 1 stopped run for later' in issue['title']
+    for text in ('Priya says the old bots can go.', 'Also archive the test bot.'):
+        post(api, f"tasks/{task_id}/comments", {'text': text})
+    ready(api, machine, ['ops'])
+    assert claim(api, machine) is None                     # the claim's fence holds both behind the stopped run
+    issue = stopped_issue(api)
+    assert issue['needs_person'] is True and issue['action'] == 'review' and issue['severity'] == 'error'
+    assert issue['title'].endswith('has 1 stopped run holding up work')
+    assert issue['held_back'] == 2 and issue['held_tasks'] == ['Archive the old bots']
+    assert '2 queued requests wait on "Archive the old bots" until it is reviewed.' in issue['detail']
+    post(api, f"jobs/{attempt['job_id']}/reconcile", {'attempt_id': attempt['id'], 'decision': 'dismiss',
+         'note': 'The archive already ran; do not repeat it.', 'acknowledge_uncertain_effects': True})
+    assert not [i for i in get(api, 'operations')['issues'] if i['kind'] == 'uncertain_work']
+    assert claim(api, machine)                             # reviewed: the waiting work runs
+
+
+def stop_partway(api, machine, attempt, thread):
+    post(api, f"attempts/{attempt['id']}/started", {'thread_id': thread}, machine['token'])
+    post(api, f"attempts/{attempt['id']}/events", {'events': [
+        {'seq': 1, 'kind': 'tool', 'payload': {'tool': 'Bash', 'status': 'started', 'item_id': 'b1'}}]}, machine['token'])
+    expire(api, attempt['id'])
+    assert claim(api, machine) is None
+
+
+def test_held_work_is_counted_and_named_only_for_who_may_read_it(api):
+    """Ben reads one of ops' stopped runs, so his issue is drawn; what the keeper left on Ana's private run, and what
+    waits behind it, counts toward neither its numbers, its names nor its urgency."""
+    machine = runner(api, 'ana')
+    assign(api, machine, 'ops')
+    ready(api, machine, ['ops'])
+    post(api, 'tasks', {'owner': 'ops', 'title': 'Weekly digest', 'body': 'Send it.'})
+    stop_partway(api, machine, claim(api, machine), 'company')
+    private = post(api, 'tasks', {'owner': 'ops', 'title': 'Ana only', 'body': 'Private work.', 'private': True})
+    private_id = private.get('task', private).get('id') or private['refs']['task']
+    # The keeper settles the request Ana's private run was for and leaves the comment carried on that run.
+    ready(api, machine, ['ops'])
+    first = claim(api, machine)
+    stop_partway(api, machine, first, 'twice')
+    aged(api, first['id'])
+    assert sweep(api) == []
+    post(api, f"jobs/{first['job_id']}/reconcile", {'attempt_id': first['id'], 'decision': 'resume',
+         'note': 'Nothing happened yet; run it again.', 'acknowledge_uncertain_effects': True})
+    ready(api, machine, ['ops'])
+    again = claim(api, machine)
+    post(api, f"attempts/{again['id']}/started", {'thread_id': 'twice-again'}, machine['token'])
+    post(api, f"tasks/{private_id}/comments", {'text': 'Also include the weekly numbers.'})
+    carried = post(api, f"attempts/{again['id']}/inputs", {}, machine['token'])['messages']
+    assert len(carried) == 1
+    post(api, f"attempts/{again['id']}/inputs/{carried[0]['id']}/ack", {}, machine['token'])
+    post(api, f"attempts/{again['id']}/events", {'events': [{'seq': 1, 'kind': 'tool', 'payload': {'name': 'shell'}}]},
+         machine['token'])
+    expire(api, again['id'])
+    assert claim(api, machine) is None
+    aged(api, again['id'])
+    assert [d['state'] for d in sweep(api)] == ['cancelled']
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT state FROM jobs WHERE message_id=?", (carried[0]['id'],)).fetchone()[0] == 'uncertain'
+    post(api, f"tasks/{private_id}/comments", {'text': 'One more thing for you.'})     # waits behind it
+    ready(api, machine, ['ops'])
+    assert claim(api, machine) is None
+    ana = stopped_issue(api)
+    assert ana['needs_person'] is True and ana['held_back'] == 1 and ana['held_tasks'] == ['Ana only']
+    ben = stopped_issue(api, 'ben-test')
+    assert 'saved 1 stopped run for later' in ben['title'] and ben['needs_person'] is False
+    assert not ben.get('held_back') and 'Ana only' not in ben['detail']
+
+
+def test_a_run_carried_on_a_stopped_run_the_keeper_settled_is_left_for_a_person(api):
+    """The keeper dismissed only the request a stopped run was for ('stopped partway twice'); the message folded into
+    the same run stayed held with nobody asked. It is a person's now, whether or not anything waits behind it."""
+    from backend.store import H
+    machine, message, first = setup_attempt(api)
+    post(api, f"attempts/{first['id']}/started", {'thread_id': 'twice'}, machine['token'])
+    post(api, f"attempts/{first['id']}/events", {'events': [{'seq': 1, 'kind': 'tool', 'payload': {'name': 'shell'}}]},
+         machine['token'])
+    expire(api, first['id'])
+    assert claim(api, machine) is None
+    aged(api, first['id'])
+    assert sweep(api) == []
+    post(api, f"jobs/{first['job_id']}/reconcile", {'attempt_id': first['id'], 'decision': 'resume',
+         'note': 'Nothing was archived yet; run it again.', 'acknowledge_uncertain_effects': True})
+    ready(api, machine, ['ops'])
+    again = claim(api, machine)
+    post(api, f"attempts/{again['id']}/started", {'thread_id': 'twice-again'}, machine['token'])
+    follow = post(api, 'chat/ops', {'text': 'Also include the weekly numbers'})
+    assert [m['id'] for m in post(api, f"attempts/{again['id']}/inputs", {}, machine['token'])['messages']] == [follow['id']]
+    post(api, f"attempts/{again['id']}/inputs/{follow['id']}/ack", {}, machine['token'])
+    post(api, f"attempts/{again['id']}/events", {'events': [{'seq': 1, 'kind': 'tool', 'payload': {'name': 'shell'}}]},
+         machine['token'])
+    expire(api, again['id'])
+    assert claim(api, machine) is None
+    aged(api, again['id'])
+    assert [d['state'] for d in sweep(api)] == ['cancelled']           # the request it was for: stopped twice
+    with api.app.state.store.read() as c:
+        carried = c.execute("SELECT state FROM jobs WHERE message_id=?", (follow['id'],)).fetchone()[0]
+    assert carried == 'uncertain'                                       # the carried one: held, not safe to repeat
+    issue = stopped_issue(api)
+    assert issue['needs_person'] is True and issue['action'] == 'review' and not issue['held_back']
+    assert 'Tico settled the rest of that run but could not decide this safely.' in issue['detail']
+    assert [j['id'] for j in get(api, 'bots/ops/execution-review')['jobs']]

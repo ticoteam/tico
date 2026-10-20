@@ -228,6 +228,15 @@ class Rule5Tasks(HubCase):
         self.assertEqual(len(told), 1)
         self.assertIn("all changed scripts pass", told[0]["body"])
 
+    def test_a_task_with_a_worktree_moves_to_review_and_done_where_no_github_app_is_set_up(self):
+        """No App table, so no branch Tico could check: the hand-off is not held waiting for one."""
+        row = H.task_create(self.conn, CMO, "Trim the overview", "x", SEO)
+        self.conn.execute("INSERT INTO task_links(id,task_id,kind,url,title,state,added_by,created,repo,branch,updated,"
+                          "detail_json) VALUES('w1',?,'worktree','worktree:w1','acme/site','present','bot:seo',?,"
+                          "'acme/site',?,?,'{}')", (row["id"], H.now(), f"tico/{row['id'][:8]}-trim", H.now()))
+        self.assertEqual(H.task_update(self.conn, SEO, row["id"], status="review")["status"], "review")
+        self.assertEqual(H.task_update(self.conn, SEO, row["id"], status="done")["status"], "done")
+
     def finished(self, row, to):
         return [m for m in H.messages(self.conn, row["conversation_id"])
                 if m["to_actor"] == to and m["body"].startswith("Ana Rivera marked this done:")]

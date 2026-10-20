@@ -12,7 +12,7 @@ import os
 import shlex
 from datetime import datetime, timezone
 
-from . import (access, blob_s3, gateway_connection, inbox_isolation, model_login, providers, releases, roadmaps, runner_versions,
+from . import (access, billing_check, blob_s3, gateway_connection, inbox_isolation, model_login, providers, releases, roadmaps, runner_versions,
                setup_stuck, watchers)
 from .getting_started import _online_runners, _signed_in_runtime, _wanted_runtimes, _person
 
@@ -34,7 +34,8 @@ NEEDS_YOU_MINUTES = 30      # this quiet, its owner is asked to bring it back
 BACKUP_STALE_HOURS = 6      # the replica normally trails by seconds
 RECENT_HOURS = 24
 GITHUB_HEALTH = "github:token"
-PROXIES = {"cloudflare": "Cloudflare Access", "aws-alb": "an AWS load balancer", "oidc": "OpenID Connect"}
+PROXIES = {"cloudflare": "Cloudflare Access", "aws-alb": "an AWS load balancer", "oidc": "OpenID Connect",
+           "owner-link": "the owner sign-in link Tico sends"}
 
 
 def _fix(label, href="", tab="", click=""):
@@ -530,7 +531,7 @@ def runtime_choice(c, bot, runtime, who, computers, harness="", model=""):
 
 # Why the claim holds an idle bot's queued work on purpose (execution.claim_refusal, job_refusal): what Health says, and
 # where the fix is. A reason not here is "Not started": a Tico bug (Health Monitor queue_idle).
-RUNS, COMPUTERS, BOT_SETTINGS = ("Open Runs", "#/runs"), ("Open Computers", "#/settings", "devices"), \
+RUNS, COMPUTERS, BOT_SETTINGS = ("Open Runs", "#/settings", "runs"), ("Open Computers", "#/settings", "devices"), \
     ("Open bot settings", "#/settings", "bots")
 HELD = {
     "draining": ("Paused, or held while Tico updates: its work starts when it is resumed", BOT_SETTINGS),
@@ -614,7 +615,7 @@ def _stuck(c, rows, online_ids, who, full, auth=None):
             fix = _fix(*where)
         else:
             text = f"Not started after {QUEUE_MINUTES} min"
-            fix = _fix("Open Runs", "#/runs")
+            fix = _fix("Open Runs", "#/settings", "runs")
         if move:
             fix = {**_fix(f"Move to {move['label']}"), "move": {"bot": row["bot"], "runner_id": move["id"], "computer": move["label"]}}
         out.append({key: row[key] for key in ("bot", "name", "queued", "oldest", "computer", "reason")}
@@ -1375,7 +1376,7 @@ def view(c, who, settings, auth, github, config):
         rejected = _rejected(computers)
         if not wanted:
             checks.append(_check("models", "Models", "warn", "No AI provider is chosen yet.",
-                                 [_fix("Choose providers", "#/settings", "providers")]))
+                                 [_fix("Choose providers", "#/settings", "models")]))
         elif online and not signed and rejected:
             checks.append(_check("models", "Models", "bad", _rejected_summary(rejected),
                                  [_fix("Open Credentials", "#/credentials"), _fix("Open Computers", "#/settings", "devices")]))
@@ -1400,7 +1401,11 @@ def view(c, who, settings, auth, github, config):
     # used, the cap reached, or the key revoked (backend/gateway_connection.py).
     if kind == "owner" and (gateway := gateway_connection.health(c, settings)):
         checks.append(_check("gateway", "Tico AI Gateway", gateway["status"], gateway["summary"],
-                             [_fix("Open AI providers", "#/settings", "providers")]))
+                             [_fix("Open Models", "#/settings", "models")]))
+    # Tico HQ's nightly billing check, on the Tico team's own install only (the one server holding HQ's read-only staff
+    # key): each mismatch, and a check that missed a night or cannot be read, red (backend/billing_check.py).
+    if kind == "owner":
+        checks.extend(billing_check.health(c, settings))
     if full and (versions := runner_versions.health_check(computers)):
         checks.append(versions)
     silent = silent_computers(c) if waiting else []
@@ -1432,7 +1437,7 @@ def view(c, who, settings, auth, github, config):
         checks.append(_check("queue", "Work queueing", "warn",
                              f"{_plural(len(slow), 'bot')} with work waiting more than {QUEUE_MINUTES} minutes"
                              + (": " + ", ".join(s["name"] for s in slow[:5]) + "." if full else "."),
-                             [_fix("Open Runs", "#/runs")] if full else []))
+                             [_fix("Open Runs", "#/settings", "runs")] if full else []))
     else:
         checks.append(_check("queue", "Work queueing", "ok", "No work is waiting long."))
     for slug, name, count, what, oldest in unfinished_setup(c) if full else ():
@@ -1464,7 +1469,7 @@ def view(c, who, settings, auth, github, config):
         checks.append(_check("watchers", "Watchers", "warn",
                              "; ".join(f"{bot}/{name} {why}" for bot, name, why in stuck[:3])
                              + ("." if len(stuck) <= 3 else f"; and {len(stuck) - 3} more."),
-                             [_fix("Open Runs", "#/runs")]))
+                             [_fix("Open Runs", "#/settings", "runs")]))
     if full and (mixed := inbox_isolation.violations(c, roster(c))):
         checks.append(_check("inbox", "Inbox bots", "warn",
                              "A computer kept for inbox bots also runs " + "; ".join(
@@ -1508,7 +1513,7 @@ def view(c, who, settings, auth, github, config):
         checks.extend(_server_settings(c, settings))
     checks.append(_check("failed", "Failed runs", "warn" if failed else "ok",
                          f"{_plural(failed, 'run')} failed in the last day." if failed else "No failed runs in the last day.",
-                         [_fix("Open Runs", "#/runs")] if failed and full else []))
+                         [_fix("Open Runs", "#/settings", "runs")] if failed and full else []))
     return {**({"storage": storage_view(c, settings)} if kind == "owner" else {}), "audience": kind, "checks": checks, "attention": sum(1 for x in checks if x["status"] in ("warn", "bad")),
             "computers": computers if full else _bot_computers(computers) if kind == "bot" else [],
             "waiting": waiting if full else [], "slow": slow if full else [], "stuck": blocked,

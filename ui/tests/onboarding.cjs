@@ -1091,11 +1091,11 @@ function recruitFor({department, briefing, share}) {
     await waiting.reload();
     await waiting.locator('[data-onb-bot=coo]').waitFor();
     assert.equal(await waiting.locator('#onb-next-status').textContent(), "Ana's Mac, Cloud box online. Waiting for an AI provider.");
-    assert.deepEqual(await waiting.locator('#onb button.primary').evaluateAll(els => els.map(el => el.dataset.onbGo)), ['providers']);
+    assert.deepEqual(await waiting.locator('#onb button.primary').evaluateAll(els => els.map(el => el.dataset.onbGo)), ['models']);
     assert.equal(await waiting.locator('[data-onb-bot=coo] .onb-bot-actions').textContent().then(text => text.trim()), 'Waiting');
     assert.equal(await waiting.locator('#onb-after > section').first().getAttribute('id'), 'fr-providers');
-    await waiting.locator('#fr-providers [data-gs-tab=providers]').click();
-    await waiting.locator('#settings-tabs [data-settings-tab=providers][aria-selected=true]').waitFor();   // lands on that tab
+    await waiting.locator('#fr-providers [data-gs-tab=models]').click();
+    await waiting.locator('#settings-tabs [data-settings-tab=devices][aria-selected=true]').waitFor();   // lands on Computers, where Models is
     CONFIG.local = true;
     await waiting.reload();
     await waiting.goto('https://tico-ui.test/#/welcome');

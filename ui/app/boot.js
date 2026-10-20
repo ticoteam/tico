@@ -16,6 +16,7 @@ if ('serviceWorker' in navigator) window.addEventListener('load', () => {
   navigator.serviceWorker.register('/sw.js?v=40', {updateViaCache: 'none'}).then(reg => reg.update()).catch(() => {});
 });
 (async () => {
+  let configVersion = nativeVisualVersion();
   // What the first page needs goes out first: a browser opens only a few connections to one server, so the
   // roster and the opening page's own read are not queued behind the sidebar's counts.
   const roster = Promise.all([get('/employees'), get('/me'), get('/humans').catch(() => ({people: []}))]);
@@ -26,10 +27,28 @@ if ('serviceWorker' in navigator) window.addEventListener('load', () => {
   const counts = v2Refresh();
   try {
     const [emps, me, people] = await roster;
-    applyConfig(me?.config);           // team-facing names before the first render
+    if (authenticatedConfigPerson(me)) {
+      const applied = applyAuthenticatedConfig(me.config, configVersion);
+      configVersion = nativeVisualVersion();
+      const accepted = await applied;
+      if (!accepted || SESSION.out || accepted.version !== nativeVisualVersion()) return;
+      configVersion = accepted.version;  // the helper may have queued its own timeout clear
+    } else {
+      if (SESSION.out || configVersion !== nativeVisualVersion()) return;
+      const cleared = clearNativeVisualOrigin();
+      configVersion = nativeVisualVersion();
+      await cleared;
+      if (SESSION.out || configVersion !== nativeVisualVersion()) return;
+      applyConfig(me?.config);          // an older response may name the page, but cannot grant native navigation
+    }
     S.emps = namedRoster(emps); S.me = me; setPeople(people);
     renderVersionMessage();            // once per person, so it waits for who is signed in
   } catch (e) {
+    if (SESSION.out || configVersion !== nativeVisualVersion()) return;
+    const cleared = clearNativeVisualOrigin();
+    configVersion = nativeVisualVersion();
+    await cleared;
+    if (SESSION.out || configVersion !== nativeVisualVersion()) return;
     $('#main').innerHTML = `<section class="card"><h2>Tico server not running</h2><p>Start it with <code>scripts/tico server start</code> in the Tico repo, or install it with <code>scripts/tico server install</code> so it runs at login.</p><p class="err">${esc(e.message)}</p></section>`;
     return;
   }

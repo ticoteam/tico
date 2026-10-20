@@ -96,7 +96,7 @@ Text attachments preserve indentation, spaces and final newlines. Unsupported bo
 422 error listing the allowed types.
 
 A picture, SVG, HTML page, video or audio clip can also go on a chat reply or task comment as a titled visual
-(`--visual PATH --title "…"`); it is stored as a file there, and pictures, SVG and pages show inline as cards. See
+(`--visual PATH --title "…"`); it is stored as a file there and shows inline as a card; video and audio play in it. See
 [Visuals in replies](visuals.md).
 
 `hub file archive <id>` also accepts a task attachment's ID. A task participant or a human who may move the task can
@@ -139,7 +139,7 @@ and keeps the bytes; the file returns when the bot publishes a changed version. 
 
 ## Storage
 
-Local disk is the default. The owner can put the company's files in its own bucket from Settings › Storage
+Local disk is the default. The owner can put the company's files in its own bucket from Settings › General
 ([A company's own bucket](#a-companys-own-bucket)); the server's operator can set one with the steps below.
 To use S3:
 
@@ -182,7 +182,7 @@ Keys are passed directly to S3 clients, never exported into the server's environ
 
 ### A company's own bucket
 
-In **Settings › More › Storage** the owner enters a bucket, its region, an optional folder in it, and an access key ID
+In **Settings › General › Storage** the owner enters a bucket, its region, an optional folder in it, and an access key ID
 and secret access key. Only the owner, signed in as themselves, can see or change it; a bot, BotOps and the Assistant
 cannot. Before saving, Tico uses those keys to start and cancel a multipart upload, then writes a small check object
 (`<folder>/blobs/…`, about 80 bytes) and reads it back; when any step fails it saves nothing and says which S3 error it

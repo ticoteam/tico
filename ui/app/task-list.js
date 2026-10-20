@@ -28,6 +28,7 @@ const TL_ICON = {
   note: '<svg viewBox="0 0 14 14" width="13" height="13" aria-hidden="true" focusable="false"><path d="M3 2.5h8v6.5l-2.5 2.5H3z M8.5 11.5V9h2.5" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>',
   group: '<svg viewBox="0 0 14 14" width="13" height="13" aria-hidden="true" focusable="false"><path d="M2.5 3.5h9M4.5 7h7M4.5 10.5h7M2.5 7h.01M2.5 10.5h.01" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>',
   chart: '<svg viewBox="0 0 14 14" width="13" height="13" aria-hidden="true" focusable="false"><path d="M2 12h10M4 10V7M7 10V3.5M10 10V5.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>',
+  pin: '<svg viewBox="0 0 14 14" width="13" height="13" aria-hidden="true" focusable="false"><path d="M5 1.8h4M5.6 1.8v3.6L3.6 8h6.8L8.4 5.4V1.8M7 8v4.2" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   caret: '<svg viewBox="0 0 12 12" width="10" height="10" aria-hidden="true" focusable="false"><path d="M3 4.5l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>',
 };
 function tasksFiltersFromURL(state) {
@@ -336,9 +337,8 @@ function taskListRowHTML(it, ctx, depth = 0) {
   const pid = taskParentId(t);
   const parent = pid && depth === 0 ? (tasksById(state).get(pid) || t.parent) : null;
   const when = ctx.done ? (it.closed || it.updated) : it.updated;
-  // Finished rows keep their single short age; open rows read open and quiet durations.
-  const ageText = ctx.done ? ageShort(when) : taskOpenQuiet(t);
-  const ageTitle = ctx.done ? `Done ${fmt(when)}` : taskOpenQuietTitle(t);
+  const ageText = ctx.done ? ageShort(when) : taskAge(t);
+  const ageTitle = ctx.done ? `Done ${fmt(when)}` : taskAgeTitle(t);
   const need = state.view === 'foryou' ? needsItem(t.id) : null;
   // What a row shows is drawn here; its selection, cursor and peek are painted on afterwards (tasksSelectionPaint,
   // tasksCursorPaint), so an unchanged row keeps the same signature and the poll leaves it alone.
@@ -468,8 +468,8 @@ function tasksTools(state) {
   if (pin) {
     const on = TASK_PINS.some(p => p.hash === tasksPinHash(state));
     pin.setAttribute('aria-pressed', String(on));
-    pin.textContent = on ? 'Pinned' : 'Pin';
     pin.title = on ? 'Unpin from the sidebar' : 'Pin to the sidebar';
+    pin.setAttribute('aria-label', pin.title);
   }
   const mode = $('#task-select-mode');
   if (mode) {
@@ -829,6 +829,7 @@ function taskPeekOpen(state, key, opts = {}) {
   if (!task) return;
   const d = taskPeek();
   state.peek = key;
+  state.peekVia = opts.via || 'list';      // 'link': a parent, subtask or related task opened from inside the peek
   $('.tasks-page')?.classList.add('peek-open');
   document.body.classList.add('task-peek-open');
   for (const el of document.querySelectorAll('#task-body .peeked')) { el.classList.remove('peeked'); el.querySelector('[aria-current]')?.removeAttribute('aria-current'); }

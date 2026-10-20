@@ -156,7 +156,7 @@ def test_the_ceo_bot_proposes_a_why_and_the_owner_accepts_or_edits_it(api):
     assert not [i for i in get(api, "goals/needs-you")["items"] if i["kind"] == "proposal"]
     with api.app.state.store.transaction() as conn:
         GA.sync(conn, api.app.state.auth.owner_id(conn))
-        assert conn.execute("SELECT count(*) FROM goal_asks").fetchone()[0] == 0
+        assert [r[0] for r in conn.execute("SELECT kind FROM goal_asks ORDER BY kind")] == ["vision", "why"]
     # Accepted as it is.
     decided = post(api, f"goal-proposals/{first['id']}/decide", {"decision": "confirm"})["proposal"]
     assert decided["status"] == "confirmed" and decided["result"] == {"why": "More landlords on Tico is the vision.",

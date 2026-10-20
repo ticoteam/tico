@@ -184,18 +184,24 @@ function chatImageURL(f) {
 function chatAttachmentsHTML(files, key = '') {
   return visualCardsHTML(files, {key, chips: rest => chatChipsHTML(rest)});
 }
+// A chip or thumbnail shows the title the sender gave the file (refs.attachments[].title), else its name; data-name
+// keeps the file's own name for the viewer and the download.
+const chatFileLabel = f => String(f?.title || '').trim() || f?.name || 'file';
 function chatChipsHTML(files) {
   if (!files.length) return '';
-  return `<div class="chat-files">${files.map(f => isChatImage(f)
-    ? `<button type="button" class="chat-thumb" data-chat-image="${esc(f.id)}" data-type="${esc(f.content_type || '')}" data-name="${esc(f.name || 'image')}" aria-label="View ${esc(f.name || 'image')}" title="${esc(f.name || 'image')}"><img alt="${esc(f.name || 'image')}" hidden></button>`
-    : `<a class="pill" href="${API}/v2/files/${encodeURIComponent(f.id)}">${esc(f.name)}</a>`).join('')}</div>`;   // opens in the viewer, or downloads
+  return `<div class="chat-files">${files.map(f => {
+    const label = chatFileLabel(f), titled = label !== (f.name || 'file');
+    if (!isChatImage(f)) return `<a class="pill" href="${API}/v2/files/${encodeURIComponent(f.id)}" data-name="${esc(f.name || 'file')}"${titled ? ` title="${esc(f.name || '')}"` : ''}>${esc(label)}</a>`;   // opens in the viewer, or downloads
+    const thumb = `<button type="button" class="chat-thumb" data-chat-image="${esc(f.id)}" data-type="${esc(f.content_type || '')}" data-name="${esc(f.name || 'image')}" data-title="${esc(label)}" aria-label="View ${esc(label)}" title="${esc(label)}"><img alt="${esc(label)}" hidden></button>`;
+    return titled ? `<span class="chat-titled">${thumb}<span class="chat-file-title" aria-hidden="true">${esc(label)}</span></span>` : thumb;
+  }).join('')}</div>`;
 }
 function chatThumbsLoad(root = document) {
   for (const button of root.querySelectorAll('.chat-thumb:not([data-loading])')) {
     button.dataset.loading = '1';
     const f = {id: button.dataset.chatImage, content_type: button.dataset.type, name: button.dataset.name};
     chatImageURL(f).then(url => { const img = button.querySelector('img'); img.src = url; img.hidden = false; button.classList.add('ready'); })
-      .catch(() => { button.replaceWith(Object.assign(document.createElement('a'), {className: 'pill', href: `${API}/v2/files/${encodeURIComponent(f.id)}`, download: f.name, textContent: f.name})); });
+      .catch(() => { (button.closest('.chat-titled') || button).replaceWith(Object.assign(document.createElement('a'), {className: 'pill', href: `${API}/v2/files/${encodeURIComponent(f.id)}`, download: f.name, textContent: button.dataset.title || f.name})); });
   }
 }
 new MutationObserver(() => { if (document.querySelector('.chat-thumb:not([data-loading])')) chatThumbsLoad(); })
@@ -209,7 +215,7 @@ function chatImageOpen(button) {
   }
   const src = button.querySelector('img')?.src; if (!src) return;
   const download = button.dataset.chatImage ? `<a href="${API}/v2/files/${encodeURIComponent(button.dataset.chatImage)}" download>Download</a>` : '';
-  d.innerHTML = `<img src="${esc(src)}" alt="${esc(button.dataset.name)}"><div class="img-lightbox-bar"><span>${esc(button.dataset.name)}</span>${download}</div>`;
+  d.innerHTML = `<img src="${esc(src)}" alt="${esc(button.dataset.name)}"><div class="img-lightbox-bar"><span>${esc(button.dataset.title || button.dataset.name)}</span>${download}</div>`;
   d.showModal();
 }
 // Attached chat images open in the one viewer (see viewerOpenFrom), with the message's other files.
@@ -502,10 +508,16 @@ function v2PendingText(state) {
   if (!S.me?.cloud) return {word: '', tip: `${name} is thinking`, mode: 'run'};
   if (state.live?.interrupted) return SESSION.out ? {word: 'Signed out', tip: "You've been signed out", mode: 'wait'}
     : {word: 'Reconnecting', tip: 'Connection interrupted — reconnecting', mode: 'wait'};
+  return pendingRunText(x, state.slug);
+}
+// The words for one run, wherever a message waits on it (this chat, a task's chat): Sent, Queued and why, Starting,
+// "<Bot> is working", or how it ended (Reply failed).
+function pendingRunText(x, slug) {
+  const name = botDisplayName(slug);
   if (!x) return {word: 'Sent', tip: 'Sent', mode: 'wait'};
   if (x.state === 'queued') {
     if (x.label && x.label !== 'Saved — queued') return {word: x.label, tip: x.label, mode: 'wait'};   // the server's reason
-    const s = v2StatusOf(state.slug);
+    const s = v2StatusOf(slug);
     return {word: 'Queued', mode: 'wait', tip: s?.state === 'running' && s.focus
       ? `${name} is on another run: ${s.focus}` : 'Starts when its computer picks it up'};
   }
@@ -516,6 +528,14 @@ function v2PendingText(state) {
     ? {word: x.label, tip: x.label, mode: 'run'} : {word: '', tip: `${name} is working`, mode: 'run'};
   return {word: x.label || x.state, tip: x.label || x.state, mode: 'wait'};
 }
+// The hint a queued run carries when its bot cannot start: no AI provider, or its computer not signed in to its model.
+function pendingHintHTML(x) {
+  if (x?.state !== 'queued') return '';
+  if (x.readiness_reason === 'missing_provider') return ' <a href="#/settings" data-gs-tab="models">Add an AI provider</a>';
+  return x.readiness_reason === 'model_sign_in'
+    ? ' <span>Its computer is not signed in to its model: <a href="#/settings" data-gs-tab="devices">Sign in on Settings &gt; Computers</a> · <a href="#/settings" data-gs-tab="health">Health</a></span>'
+    : '';
+}
 function v2PendingHTML(state) {
   const x = state.execution, key = x?.message_id || 'sent';
   if (state.dismissed === key) return '';
@@ -523,12 +543,7 @@ function v2PendingHTML(state) {
   clearTimeout(state.waitTimer);
   const late = S.me?.cloud && sent && Date.now() - sent >= REPLY_WAIT_MS;
   if (S.me?.cloud && sent && !late) state.waitTimer = setTimeout(() => v2ChatRender(state), sent + REPLY_WAIT_MS - Date.now() + 50);
-  const providerMissing = x?.state === 'queued' && x?.readiness_reason === 'missing_provider';
-  // A provider is chosen but this bot's computer is not signed in to its model.
-  const signInMissing = x?.state === 'queued' && x?.readiness_reason === 'model_sign_in';
-  const hint = providerMissing ? ' <a href="#/settings" data-gs-tab="providers">Add an AI provider</a>'
-    : signInMissing ? ' <span>Its computer is not signed in to its model: <a href="#/settings" data-gs-tab="devices">Sign in on Settings &gt; Computers</a> · <a href="#/settings" data-gs-tab="health">Health</a></span>'
-    : '';
+  const hint = pendingHintHTML(x);
   if (late && !hint) return `<div class="thinking late" data-pending="${esc(key)}"><span class="dot"></span>
     <span>No reply after 20 minutes · <button type="button" class="dismiss" data-pending-dismiss>dismiss</button></span></div>`;
   const t = v2PendingText(state);

@@ -2,10 +2,10 @@
 
 A computer runs your bots. Each one signs in to the AI tools its bots use (Codex, Claude Code and others), and
 **Settings → Computers** shows every computer, the logins and keys it runs on, and how much of each plan is left.
-To add a computer, see [Install](install.md#add-computers-to-run-your-bots). Team-wide model settings (which providers
-are on, the default model, **Fall back when a plan runs out**, **Check model**) stay on **Settings → AI providers**,
-which says "Logins and keys are now on each computer · Computers". Subscriptions used to be on AI providers; old links
-to them open Computers.
+To add a computer, see [Install](install.md#add-computers-to-run-your-bots). Below the computers, **Models** holds the
+team-wide model settings: the models choice, which providers are on, the default model, **Fall back when a plan runs
+out**, **Check model** and the [Tico AI Gateway](ai-gateway.md) key. The owner changes them; everyone else sees them.
+These used to be a separate AI providers tab, and Subscriptions before that; old links to either open Computers.
 
 ## Connections
 
@@ -17,7 +17,7 @@ A **connection** is one login an AI tool on a computer runs on. It is one of:
 - **The computer's login**: the tool's own sign-in on that computer, the one its bots use when they have no
   subscription of their own. It is a plan login or an API key.
 - **An API key**: the computer's login can run on a model API key instead of a plan (Codex, Claude Code, Cursor Agent
-  and Muse Code take one). The key is the computer's own (added from Tico), the company's shared key, or a key set on
+  and Muse Code take one). The key is the computer's own (added from Tico), a shared key, or a key set on
   the computer itself. See [API keys on a Computer](#api-keys-on-a-computer).
 
 Plan logins stay on the computer that holds them. Tico stores each connection's name, sign-in state, the account it
@@ -28,10 +28,12 @@ for that computer alone.
 account, the pop-up shows one line marked **Computer's login** with one usage reading, not two. Its sign-in buttons
 say which login each pair acts on.
 
-**Shared connections.** The company's model key, stored once under Credentials and given to **Every computer**, signs
-in every computer that has no login of its own for that tool ([Install](install.md#add-computers-to-run-your-bots)).
-Each computer shows it as its own login, by its preview only. Replacing or clearing it from one computer asks whether
-to change **This computer only** or **All of them** ([The company's shared key](#api-keys-on-a-computer)).
+**Shared connections.** A model key stored under Credentials can be shared with **Every computer** or with computers
+by name. It signs in each computer that has no login of its own for that tool ([Install](install.md#add-computers-to-run-your-bots)).
+Each computer it serves shows it as a chip, its pop-up line marked **Shared** and listing those computers, even before
+the computer has used it. Only credential administrators see the key's name and preview; an operator sees which
+computers it serves. Replacing or clearing it from one computer asks whether to change **This computer only** or **All
+listed computers** ([Shared keys](#api-keys-on-a-computer)).
 
 ### Which connection a bot runs on
 
@@ -42,8 +44,8 @@ to change **This computer only** or **All of them** ([The company's shared key](
    profile, if one is set there).
 
 Groups no longer choose a subscription. The bot editor shows the result as "Runs on *tool* · *connection* on
-*computer*", using the names on this page. When a plan runs out, a bot can move to its fallback model; that is set on
-AI providers and per bot ([How it works](how-it-works.md)), not here.
+*computer*", using the names on this page. When a plan runs out, a bot can move to its fallback model; that is set in
+Models and per bot ([How it works](how-it-works.md)), not here.
 
 ### Bots sharing one ChatGPT sign-in take turns
 
@@ -101,7 +103,9 @@ Click a row to open its pop-up. Its sections, top to bottom:
    **Performance**, and **Revoke computer** at the bottom.
 
 When the computer is offline, the pop-up says "Computer is offline" and its sign-in, usage refresh, screen and update
-actions are disabled until it is back.
+actions are disabled until it is back. So are a connection's **Sign out**, **Switch account**, **Replace key**,
+**Clear key** and the switches between a subscription and an API key: they stay on the line, greyed, and say "Computer
+is offline" on hover; nothing is queued for later.
 
 ### Who sees and changes what
 
@@ -157,7 +161,9 @@ In a computer's pop-up, **Add connection** (at the end of Connections) opens its
      **Sign in the computer's own login instead** signs the tool in as the computer's login rather than a named
      subscription.
    - **API key**: for a tool that takes a key of the computer's own, **Add key** opens the key pop-up (see
-     [API keys on a Computer](#api-keys-on-a-computer)). If a key already signs the tool in here, **Replace key** is on
+     [API keys on a Computer](#api-keys-on-a-computer)). A credential administrator can set **Shared with:** to other
+     computers, or pick a key that is already shared instead of pasting one. An operator adds a key for this computer
+     only. If a key already signs the tool in here, **Replace key** is on
      its line instead. For any other tool, **Open Credentials**, where model keys are added and shared with computers.
 4. The new connection's chip appears on the computer's row once the computer reports it; the computer does not need a
    restart.
@@ -248,7 +254,7 @@ the change, redrawing **Settings → Computers**, for about a minute.
 
 A Computer's own login can run on a model API key instead of a subscription (Codex, Claude Code, Cursor Agent and
 Muse Code take one). Its line in the computer's pop-up says whose key it is, by its preview only (`sk-…xyz`): **this
-computer's key** (added from Tico), **the company's shared key** (the credential given to **Every computer**), or **a
+computer's key** (added from Tico), **a shared key** (a credential shared with this computer by name or with **Every computer**), or **a
 key set on the computer** (its environment or `secrets/_shared.env`). The same people who may sign it in (the Computer's
 operator, owners and admins) see **Replace key** and **Clear key** in place of **Sign out**, and **Add key** next to a
 login with none. The Computer must be online and on a current runner; an older one answers `Update <computer> to …`.
@@ -264,32 +270,41 @@ login with none. The Computer must be online and on a current runner; an older o
   Code, a key added here is used even when the computer also has a browser login.
 - **Clear key** first names the bots that stop, like **Sign out**. The Computer then deletes the key from its key files
   (and, for Codex, logs out a login the key made; a browser or subscription login is not the key's and stays), and
-  Tico deletes this computer's key from the vault. Bots and assignments stay. Afterwards the line reads **Signed out**
-  with **Add key**: like a sign-out, the company's shared key does not sign it back in (the server does not hand it
+  Tico deletes this computer's key from the vault. Bots and assignments stay. Afterwards the line reads **No key ·
+  Add key**, with **Sign in** and **Use the shared key** beside it, and its chip has a red dot: like a sign-out, a shared key does not sign it back in (the server does not hand it
   out, and the runner's ten-minute re-apply skips it) until someone adds a key, signs in or chooses **Use the shared
   key**.
 
-**The company's shared key.** Replacing or clearing it from one Computer first asks **This computer only** or **All of
-them**, listing every Computer it signs in and which of them are offline.
+**Shared keys.** A key in **Credentials** can be shared with **Every computer** or with computers by name; only a
+credential administrator can do either, in Credentials or from **Add connection**. Several rules decide which key a
+computer uses:
+
+- A key shared by name comes before the **Every computer** key.
+- Picking or sharing a key for a tool on a computer replaces the key shared with it before.
+- A computer that was cleared, or switched to a subscription, from here takes the shared key again when it is given one.
+  That is refused, naming the computer, while it is offline.
+
+Replacing or clearing a shared key from one Computer first asks **This computer only** or **All listed computers**,
+naming every Computer it signs in and which of them are offline. The second choice warns that it changes every one.
 
 - *This computer only*: Replace gives this Computer a key of its own, which signs it in before the shared one; Clear
   stops this Computer using the shared key. The others keep it.
-- *All of them*, Replace: the shared credential's value is replaced, in **Credentials** too. Only someone who may manage
+- *All listed computers*, Replace: the shared credential's value is replaced, in **Credentials** too. Only someone who may manage
   credentials can do this. Online Computers fetch it at once; an offline one gets it when it is next online. Claude
   Code takes an OAuth token or an API key, each its own credential: the **Kind** chosen is the one replaced (by default
   the one this Computer runs on), and a kind that is not shared is refused rather than written into the other.
-- *All of them*, Clear: offered only to someone who may change every Computer listed (otherwise Tico names the ones they
+- *All listed computers*, Clear: offered only to someone who may change every Computer listed (otherwise Tico names the ones they
   may not). Each online Computer clears its copy as above. **An offline Computer keeps its copy only until it is next
   online**: Tico marks it cleared at once, so its first key fetch when it comes back (at start-up, then every ten
   minutes) tells it to clear the key, and it does, with no one needing to act. That needs a current runner: while any
-  Computer listed, online or offline, runs one too old to clear its key, **All of them** is not offered and Tico answers
+  Computer listed, online or offline, runs one too old to clear its key, **All listed computers** is not offered and Tico answers
   `Update <computer> to clear its key from here, or delete the shared key in Credentials`. A computer that
   joins later still gets the shared key, which stays in **Credentials**.
 
 A Computer's own key is also a credential in **Credentials**. Deleting it there: the Computer falls back to the shared
 key at its next key fetch (Codex signs in again with it). With no shared key, the deletion is **Clear key** on that
-Computer: its next key fetch deletes its copies and logs out the login the key made, and the line reads **Signed out**
-with **Add key**. A key a Computer is still checking cannot be deleted there; cancel **Replace key** or let the check
+Computer: its next key fetch deletes its copies and logs out the login the key made, and the line reads **No key ·
+Add key**. A key a Computer is still checking cannot be deleted there; cancel **Replace key** or let the check
 end first.
 
 `GET /api/v2/runners/{runner_id}/keys?runtime=codex` says which key signs it in (`source`, `preview`) and, for the

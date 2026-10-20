@@ -26,6 +26,12 @@ MEMORY_GIB = {"t4g.small": 2, "t4g.medium": 4, "t4g.large": 8}
 EBS_GB_MONTH, PUBLIC_IPV4_HOUR, HOURS = 0.08, 0.005, 730
 
 
+# --name: what slug() makes, so tico-<name> fits every AWS name limit (IAM roles allow 64).
+NAME_RE = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?")
+POLICY_ARN_RE = re.compile(r"arn:aws[a-z-]*:iam::\d{12}:policy/[A-Za-z0-9+=,.@/_-]{1,512}")
+SSM_CORE = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+
+
 def slug(domain: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", domain.lower()).strip("-")[:40]
 
@@ -42,6 +48,7 @@ class AwsPlan:
     elastic_ip: bool = False
     role: str = "server"
     warnings: list[str] = field(default_factory=list)
+    boundary: str = ""      # the permissions boundary the IAM role is created under, when the account requires one
 
     @property
     def marker(self) -> str:
@@ -61,6 +68,7 @@ class AwsPlan:
             f"Security group tico-{self.name}: {sg}",
             "Instance metadata: IMDSv2 required, hop limit 1 (containers and bots cannot reach the instance role)",
             "Shell access through SSM (IAM role tico-%s with AmazonSSMManagedInstanceCore); no SSH key, no port 22" % self.name,
+            *([f"The IAM role is created under the permissions boundary {self.boundary}"] if self.boundary else []),
             f"SSM SecureString /tico/{self.name}/env holds the " + ("one-time join code" if self.role == "runner" else ".env") + " for the instance to fetch at boot",
             ("Elastic IP so the DNS record survives a stop/start" if self.elastic_ip else "No Elastic IP: nothing connects in"),
             f"Tags on everything: {MANAGED_TAG[0]}={MANAGED_TAG[1]}, {NAME_TAG}={self.name}",
@@ -69,13 +77,13 @@ class AwsPlan:
 
 
 def plan_aws(*, domain: str, front_door: str, region: str, instance_type: str = "t4g.small",
-             os_family: str = "ubuntu", name: str = "", role: str = "server") -> AwsPlan:
+             os_family: str = "ubuntu", name: str = "", role: str = "server", boundary: str = "") -> AwsPlan:
     if instance_type not in HOURLY:
         raise ValueError(f"instance type must be one of {', '.join(HOURLY)}")
     if os_family not in AMI_PARAMS:
         raise ValueError("os must be ubuntu or al2023")
     p = AwsPlan(name or slug(domain), region, instance_type, os_family, front_door, domain,
-                ports=[80, 443] if front_door == "caddy" else [], elastic_ip=front_door == "caddy", role=role)
+                ports=[80, 443] if front_door == "caddy" else [], elastic_ip=front_door == "caddy", role=role, boundary=boundary)
     if role == "runner":
         p.warnings.append(f"Plan on about 0.5-1 GiB of RAM per bot working at the same time: {instance_type} "
                           f"({MEMORY_GIB[instance_type]} GiB) suits roughly {max(1, MEMORY_GIB[instance_type] - 1)} at once.")
@@ -135,12 +143,15 @@ class Deployer:
         n = f"tico-{self.p.name}"
         trust = {"Version": "2012-10-17", "Statement": [{"Effect": "Allow", "Principal": {"Service": "ec2.amazonaws.com"},
                                                          "Action": "sts:AssumeRole"}]}
+        # The tags and the boundary go in the CreateRole call itself: an account that only lets setup create roles under a
+        # boundary, tagged ManagedBy=tico-setup, refuses a role that would get them afterwards.
+        boundary = {"PermissionsBoundary": self.p.boundary} if self.p.boundary else {}
         try:
-            self.iam.create_role(RoleName=n, AssumeRolePolicyDocument=json.dumps(trust), Tags=tags(self.p.name))
+            self.iam.create_role(RoleName=n, AssumeRolePolicyDocument=json.dumps(trust), Tags=tags(self.p.name), **boundary)
         except self.iam.exceptions.EntityAlreadyExistsException:
             if not is_ours(self.iam.list_role_tags(RoleName=n)["Tags"], self.p.name):
                 raise SystemExit(f"IAM role {n} exists but was not created by tico setup; refusing to reuse it.") from None
-        self.iam.attach_role_policy(RoleName=n, PolicyArn="arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore")
+        self.iam.attach_role_policy(RoleName=n, PolicyArn=SSM_CORE)
         arn = self.ssm_param_arn()
         pol = {"Version": "2012-10-17", "Statement": [{"Effect": "Allow", "Action": "ssm:GetParameter", "Resource": arn}]}
         self.iam.put_role_policy(RoleName=n, PolicyName="tico-env", PolicyDocument=json.dumps(pol))
@@ -216,7 +227,7 @@ class Deployer:
             MetadataOptions={"HttpTokens": "required", "HttpPutResponseHopLimit": 1, "HttpEndpoint": "enabled"},
             BlockDeviceMappings=[{"DeviceName": "/dev/sda1" if self.p.os_family == "ubuntu" else "/dev/xvda",
                                   "Ebs": {"VolumeSize": VOLUME_GIB, "VolumeType": "gp3", "Encrypted": True, "DeleteOnTermination": True}}],
-            TagSpecifications=[{"ResourceType": rt, "Tags": tags(self.p.name, n)} for rt in ("instance", "volume")])
+            TagSpecifications=[{"ResourceType": rt, "Tags": tags(self.p.name, n)} for rt in ("instance", "volume", "network-interface")])
         if subnet:
             args["SubnetId"] = subnet
         for attempt in range(8):  # a new instance profile takes a few seconds to be usable
@@ -286,8 +297,20 @@ def discover(ec2, iam, ssm, name: str) -> dict[str, list[str]]:
     return {k: v for k, v in out.items() if v}
 
 
+def addresses(ec2, name: str) -> set[str]:
+    """The public addresses of what is tagged for `name`: its Elastic IPs and its instance's IPv4 and IPv6 addresses. A DNS
+    record pointing anywhere else is not this server's."""
+    out = {a["PublicIp"] for a in ec2.describe_addresses(Filters=_filters(name))["Addresses"]
+           if is_ours(a.get("Tags"), name) and a.get("PublicIp")}
+    r = ec2.describe_instances(Filters=_filters(name) + [{"Name": "instance-state-name", "Values": ["pending", "running", "stopping", "stopped"]}])
+    for i in (i for res in r["Reservations"] for i in res["Instances"] if is_ours(i.get("Tags"), name)):
+        out |= {i[k] for k in ("PublicIpAddress", "Ipv6Address") if i.get(k)}
+        out |= {v["Ipv6Address"] for n in i.get("NetworkInterfaces", []) for v in n.get("Ipv6Addresses", [])}
+    return out
+
+
 def destroy(ec2, iam, ssm, found: dict[str, list[str]], say: Callable[[str], None] = print,
-            sleep: Callable[[float], None] = time.sleep) -> None:
+            sleep: Callable[[float], None] = time.sleep, dns_done: bool = False) -> None:
     if found.get("instance"):
         ec2.terminate_instances(InstanceIds=found["instance"])
         say("  waiting for the instance to terminate ...")
@@ -309,9 +332,9 @@ def destroy(ec2, iam, ssm, found: dict[str, list[str]], say: Callable[[str], Non
             iam.delete_instance_profile(InstanceProfileName=n)
         except iam.exceptions.NoSuchEntityException:
             pass
-        iam.detach_role_policy(RoleName=n, PolicyArn="arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore")
+        iam.detach_role_policy(RoleName=n, PolicyArn=SSM_CORE)
         iam.delete_role_policy(RoleName=n, PolicyName="tico-env")
         iam.delete_role(RoleName=n)
     for p in found.get("ssm-parameter", []):
         ssm.delete_parameter(Name=p)
-    say("  done. DNS records were not touched; remove them at your DNS provider.")
+    say("  done." if dns_done else "  done. DNS records were not touched; remove them at your DNS provider.")

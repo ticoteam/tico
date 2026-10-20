@@ -1,4 +1,4 @@
-"""The company's models choice (Settings > AI providers, the first-run step, TICO_MODELS_PRESET from the installer).
+"""The company's models choice (Settings > Computers, the first-run step, TICO_MODELS_PRESET from the installer).
 
 Four choices, kept on the providers record (backend/providers.py) as `preset`:
 - `subscriptions-gateway` (recommended): bots' main work runs on the person's Claude and ChatGPT subscriptions; until

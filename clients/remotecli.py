@@ -92,8 +92,10 @@ def run(args, who=None):
     if who:
         raise APIError("identity", "Remote identity comes from authentication; --human is unavailable")
     # A query may run for 20 s on the server before it is stopped, a decision's providers 25 s; leave room for that.
-    client = Client(os.environ["HUB_API_URL"], os.environ.get("HUB_TOKEN", ""), timeout=30 if args.cmd in ("sql", "decision") else 120 if args.cmd == "listening" or args.fn == "market import" else 15)
+    client = Client(os.environ["HUB_API_URL"], os.environ.get("HUB_TOKEN", ""), timeout=30 if args.cmd in ("sql", "decision") else 120 if args.cmd == "listening" or args.fn == "market import" else 130 if args.cmd == "inbound" else 15)
     fn = args.fn
+    if args.cmd == "inbound":
+        return via_tool(client,args)
     if fn == "team icon":
         with Path(args.file).open("rb") as source:
             return client.post_bytes("team/icon", source)
@@ -403,6 +405,9 @@ def run(args, who=None):
             return client.get("tasks/" + ids[0])
         if sub == "run":
             return post(f"tasks/{args.id}/run-now", {})
+        if sub == "defer":
+            return post(f"tasks/{args.id}/defer", {"after": args.after, "at": args.at,
+                                                   "next_run": bool(args.next_run), "handled": bool(args.handled)})
         if sub in ("list", "snooze", "unsnooze"):
             return via_tool(client, args)
         if sub == "ask":

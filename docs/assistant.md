@@ -92,7 +92,7 @@ is asked to update its Tico. Later messages can start new jobs.
 
 ## Letting it decide your approvals
 
-Off by default. Turn on **My assistant can decide approvals for me** in **Settings > Assistant** (only you can, signed in
+Off by default. Turn on **My assistant can decide approvals for me** in **Settings > General** (only you can, signed in
 to the app: not the Assistant, a bot, BotOps or a personal API token). Then your own Assistant approves or declines
 approvals addressed to you (send, spend, publish, merge) when you ask in your Assistant chat, one or many at once
 ("approve all the old Google review batches"), with no card and no click per item. It reads back what it is about to
@@ -119,7 +119,7 @@ What stays on:
   whatever the setting. A Tico support report is still sent only on your own tap.
 - **Recorded and undoable.** Each decision is recorded as decided by the Assistant for you: the approval carries
   `decided_via: "assistant"` and `decided_for` (`{"for", "assistant", "cited", "words", "read_back", "approves"}`),
-  and its `history` (`GET /api/v2/approvals/{id}`) lists it. **Settings > Assistant** lists what it decided for you in the
+  and its `history` (`GET /api/v2/approvals/{id}`) lists it. **Settings > General** lists what it decided for you in the
   last 30 days with your words; **Undo** puts one back to waiting for you, as long as nothing has acted on it yet (an
   approval already spent stays, `422 consumed`). The requesting bot is told it was undone.
 - **The team can turn it off.** The owner's rule **People may let their Assistant decide their approvals** (Settings >
@@ -127,7 +127,7 @@ What stays on:
   **Assistant acts without asking** off, approving is a card again too.
 
 With the setting off, an approve the Assistant tries is refused with `403 approve_setting_off`, and it tells you in one
-sentence that you can turn it on in Settings > Assistant, then puts it on a card.
+sentence that you can turn it on in Settings > General, then puts it on a card.
 
 **Every proposal is shown for what it is.** The card's title is the server's own plain sentence (what changes and for
 whom, never the bot's words), e.g. "Security Engineer: read-only on tico (was write). Loses access to tico-marketing-site

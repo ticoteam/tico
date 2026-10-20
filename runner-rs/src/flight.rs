@@ -29,7 +29,10 @@ pub const HEARTBEAT_SLOW_MS: u64 = 1000;
 /// A git command at least this long is recorded (timeouts and commands that never ran always are).
 pub const GIT_SLOW_MS: u64 = 2000;
 /// The order a turn passes its marks in (`util::mark` names plus the flight-only ones).
-const PHASES: [&str; 9] = ["claimed", "placed", "harness_started", "harness_spawned", "first_output", "first_delta_posted", "finished", "complete_posted", "done"];
+const PHASES: [&str; 13] = [
+    "claimed", "placed", "harness_started", "harness_spawned", "first_output", "first_delta_posted", "model_done", "scrubbed", "finished", "saved",
+    "flushed", "complete_posted", "done",
+];
 
 static SENDER: OnceLock<SyncSender<Map<String, Value>>> = OnceLock::new();
 static DROPPED: AtomicU64 = AtomicU64::new(0);
@@ -479,6 +482,7 @@ mod tests {
         let lines = [
             r#"{"v":1,"ts":1791968400.25,"kind":"runner.turn","bot":"stale-bot","runtime":"codex","outcome":"completed","total_ms":1,"phases":{"claimed":0}}"#,
             r#"{"v":1,"ts":1791977400.25,"kind":"runner.turn","attempt":"a1","bot":"acme-seo","runtime":"claude","outcome":"completed","total_ms":84000,"phases":{"claimed":0,"placed":1200,"harness_started":1500,"first_output":6000,"finished":80000,"complete_posted":81000,"done":84000}}"#,
+            r#"{"v":1,"ts":1791977430.25,"kind":"runner.turn","attempt":"a2","bot":"acme-ops","runtime":"codex","outcome":"completed","total_ms":76100,"phases":{"claimed":0,"first_output":2000,"model_done":30000,"scrubbed":75000,"finished":75100,"saved":75100,"flushed":75200,"complete_posted":76000,"done":76100}}"#,
             r#"{"v":1,"ts":1791977460.25,"kind":"runner.heartbeat","ms":4200,"tries":1,"ok":true}"#,
             r#"{"v":1,"ts":1791977520.25,"kind":"runner.git","verb":"fetch","repo":"acme-seo","ms":9000,"code":0}"#,
             r#"{"v":1,"ts":1791977580.25,"kind":"runner.process","rss_bytes":52428800,"turns":1,"dropped":3}"#,
@@ -488,13 +492,24 @@ mod tests {
         std::fs::write(dir.join(FILE), lines.join("\n")).unwrap();
         let now = crate::util::parse_iso("2026-10-14T12:00:00Z");
         let text = summary(&dir, parse_since("1h").unwrap(), now);
-        assert!(text.contains("Turns: 1"), "{text}");
+        assert!(text.contains("Turns: 2"), "{text}");
         assert!(text.contains("acme-seo claude completed 84.0s placed+1.2s"), "{text}");
         assert!(text.contains("first_output -> finished: 74.0s max"), "{text}");
+        // The hand-in's own steps name a slow scrub; marks in the same millisecond keep the order turns pass them.
+        assert!(text.contains("model_done -> scrubbed: 45.0s max"), "{text}");
+        assert!(text.contains("model_done+30.0s scrubbed+75.0s finished+75.1s saved+75.1s flushed+75.2s"), "{text}");
         assert!(text.contains("4.2s tries 1"), "{text}");
         assert!(text.contains("git fetch acme-seo 9.0s"), "{text}");
         assert!(text.contains("Dropped records: 3"), "{text}");
         assert!(!text.contains("stale-bot"), "{text}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_scrub_git_call_records_its_verb_and_folder_never_its_arguments() {
+        let mut argv = vec!["git".to_string()];
+        argv.extend(crate::safegit::args(Path::new("/home/acme/projects/acme-seo")));
+        argv.extend(["log", "-p", "--since=acme-private-arg"].map(String::from));
+        assert_eq!(git_verb(&argv), ("log".to_string(), Some("acme-seo".to_string())));
     }
 }

@@ -17,7 +17,7 @@ const ONB_TITLES = {providers: 'AI providers', names: 'Names', about: 'About the
 // The progress row's words: one each, so the row stays on one line (a phone shows the current one only).
 const ONB_SHORT = {providers: 'Providers', names: 'Names', about: 'About', org: 'Team', machine: 'Computer', agent: 'Agent', review: 'Review'};
 // At most one short hint line under a step's title; most steps have none.
-const ONB_BLURB = {providers: 'Bots wait until you add one in Settings > AI providers.', agent: 'Optional.'};
+const ONB_BLURB = {providers: 'Bots wait until you add one in Settings > Computers.', agent: 'Optional.'};
 const ONB_CUSTOMERS = [['businesses', 'Businesses'], ['consumers', 'Consumers'], ['both', 'Both']];
 // The four the server accepts (models.WorkArrival). Adding one here needs the same word there.
 const ONB_ARRIVES = [['email', 'Email'], ['slack', 'Slack'], ['crm', 'CRM'], ['tickets', 'Tickets']];
@@ -409,7 +409,7 @@ async function onbAdvance(state, key) {
   }
   if (key === 'providers') {
     const chosen = providersCollect($('#onb-prov'));
-    // Nothing ticked is fine: the team is created first and its bots run once a provider is added (Settings > AI providers).
+    // Nothing ticked is fine: the team is created first and its bots run once a provider is added (Settings > Computers).
     if (!chosen.enabled.length && !state.providers.enabled?.length) {
       state.providers = {...state.providers, enabled: [], default: {runtime: '', model: ''}};
       state.step += 1; onbRender(state); return;

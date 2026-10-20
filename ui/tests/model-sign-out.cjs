@@ -137,7 +137,8 @@ const {unrouted} = require('./support/routes.cjs');
     const {page, box, writes, errors, rows, finish, hold, last} = await open();
     const table = page.locator('#set-machines dialog.computer-detail[open]');
     const own = name => table.locator(`[data-connection="own:${name}"]`);
-    const buttons = row => row.locator('.computer-conn-signin button').allInnerTexts();
+    // Switch account and Sign out are icons: their name is the aria-label.
+    const buttons = row => row.locator('.computer-conn-signin button').evaluateAll(all => all.map(b => b.getAttribute('aria-label') || b.innerText));
     assert.deepEqual(await buttons(own('codex')), ['Switch account', 'Switch to API key', 'Sign out']);
     assert.deepEqual(await buttons(own('claude')), ['Switch account', 'Switch to API key', 'Sign out']);
     assert.deepEqual(await buttons(table.locator('[data-connection="profile:acme:codex"]')), ['Switch account', 'Sign out']);
@@ -271,11 +272,15 @@ const {unrouted} = require('./support/routes.cjs');
     await login.getByRole('button', {name: 'Done'}).click();
     await own('claude').locator('.computer-conn-signin', {hasText: 'new@acme.example'}).waitFor({timeout: 15000});
 
-    // Offline: no sign-out or switch to offer.
+    // Offline: Switch account and Sign out stay, disabled, saying why; nothing can be started.
+    const online = await buttons(own('claude'));
     box.last_seen = at(-3 * 3600000);
     await page.evaluate(() => loadSettings());
     await own('claude').locator('.computer-conn-signin', {hasText: 'last checked'}).waitFor();
-    assert.deepEqual(await buttons(own('claude')), []);
+    assert.deepEqual(await buttons(own('claude')), online);
+    assert.ok(online.includes('Sign out') && online.includes('Switch account'), online.join());
+    assert.deepEqual(await own('claude').locator('.computer-conn-signin button').evaluateAll(all => all.map(b => b.disabled && b.title)),
+      online.map(() => 'Computer is offline'));
     box.last_seen = at(-3000);
     await page.evaluate(() => loadSettings());
     await own('claude').getByRole('button', {name: 'Sign out'}).waitFor();
@@ -297,7 +302,7 @@ const {unrouted} = require('./support/routes.cjs');
     const both = table.locator('[data-connection="profile:acme:codex"]');
     await both.locator('.computer-conn-login').first().waitFor();
     assert.equal(await own('codex').count(), 0);
-    assert.deepEqual(await both.locator('.computer-conn-login').evaluateAll(groups => groups.map(g => g.innerText.replace(/\s+/g, ' ').trim())),
+    assert.deepEqual(await both.locator('.computer-conn-login').evaluateAll(groups => groups.map(g => [g.firstChild.textContent.trim(), ...[...g.querySelectorAll('button')].map(b => b.getAttribute('aria-label') || b.innerText)].join(' '))),
       ['Subscription Switch account Sign out', "Computer's login Switch account Switch to API key Sign out"]);
     await both.locator('[data-login=""]').getByRole('button', {name: 'Switch account'}).click();
     await login.locator('h2', {hasText: 'Switch account for Codex (ChatGPT) on Team box'}).waitFor();

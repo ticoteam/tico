@@ -121,7 +121,7 @@ const {unrouted} = require('./support/routes.cjs');
     await page.locator('#set-recurring [data-new-routine]').click();
     assert.equal(await page.locator('#routine-editor select[name=bot]').inputValue(), 'helper');
     await page.locator('#routine-editor [data-routine-close]').first().click();
-    await page.locator('[data-settings-tab=providers]').click();
+    await page.locator('[data-settings-tab=devices]').click();
     await page.locator('#set-prov-save').waitFor();
     assert.equal(await page.locator('#set-providers [data-model-login]').isVisible(), true);
     assert.equal(await page.locator('#set-providers a[href="#/credentials"]').isVisible(), true);

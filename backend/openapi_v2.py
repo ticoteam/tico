@@ -366,10 +366,25 @@ STABLE = [
      "be approved on your yes", None),
     # Goals and KPIs (docs/goals-and-kpis.md)
     ("/api/v2/ceo-bot", "get", "Goals", "getCeoBotSwitch",
-     "Whether this install has the CEO Bot switch on (the Goal Manager shown as the CEO Bot, at the top of the chart)", None),
+     "Whether this install has the CEO Bot switch on (the Goal Manager shown as the CEO Bot, at the top of the chart), "
+     "how much it does (its level, with each level's sentence and who changed it when), and how many items it put in "
+     "each person's Needs you today against its cap of 5 (everyone's for the owner, admins and the CEO Bot; your own "
+     "for anyone else)", "CeoBotView"),
     ("/api/v2/ceo-bot", "post", "Goals", "setCeoBotSwitch",
      "Owners and admins: turn the CEO Bot switch on or off for this install; no bot may. Only names and the chart change",
-     None),
+     "CeoBotView"),
+    ("/api/v2/ceo-bot/level", "post", "Goals", "setCeoBotLevel",
+     "Settings > CEO Bot, \"How much your CEO Bot does\": the owner or an admin picks level 1, 2 or 3 on their own "
+     "click, logged with who and when. No bot may, the CEO Bot included. 409 while the switch is off",
+     "CeoBotView"),
+    ("/api/v2/ceo-bot/merge", "post", "Goals", "mergeCeoBotAsks",
+     "The CEO Bot only, at level 2 or 3: one item in a person's Needs you for 2 to 10 tasks where bots ask them the "
+     "same thing. The originals leave their Needs you while it is open; their one answer goes to each bot that asked, "
+     "and an item that ends unanswered puts the originals back. Counts toward its 5 a day", "CeoBotMergeResult"),
+    ("/api/v2/ceo-bot/level3-offer", "post", "Goals", "recordCeoBotLevel3Offer",
+     "The CEO Bot only: record that its Monday note offered level 3. Refused (422) unless level3_offer.due: 10 "
+     "recoveries approved in a row with its pick unchanged, and no offer in 30 days. It never raises its own level",
+     "CeoBotLevel3OfferResult"),
     ("/api/v2/company", "get", "Goals", "getCompany",
      "The company's Vision and Description (the Company section at the top of Goals where the CEO Bot switch is on), "
      "and whether the caller may edit them", "CompanyResult"),
@@ -418,9 +433,13 @@ STABLE = [
     ("/api/v2/proposals", "get", "Goals", "listGoalProposals",
      "Proposals (pending by default; status=confirmed|rejected|all), each saying whether the caller may decide it", "GoalProposalList"),
     ("/api/v2/proposals", "post", "Goals", "createGoalProposal",
-     "Propose a change the caller may not make: goal wording, a KPI for a goal, a definition, a target, or a flag", "GoalProposalResult"),
+     "Propose a change the caller may not make: goal wording, a KPI for a goal, a definition, a target, or a flag; "
+     "the CEO Bot at level 2 or 3, a recovery for a red or stalled goal (evidence, options of bot-task changes, its pick)",
+     "GoalProposalResult"),
     ("/api/v2/proposals/{pid}/decide", "post", "Goals", "decideGoalProposal",
-     "A person's own decision, made by whoever owns the goal or KPI: confirm makes the change as them, reject drops it", "GoalProposalResult"),
+     "A person's own decision, made by whoever owns the goal or KPI: confirm makes the change as them, reject drops it. "
+     "A recovery applies exactly the chosen option (`option`, else the CEO Bot's pick) in the CEO Bot's name; what "
+     "can't be done comes back as a new recovery saying why", "GoalProposalResult"),
     ("/api/v2/kpis", "get", "KPIs", "listKpis",
      "The KPIs the caller may see; archived KPIs are omitted unless include_archived=true; goal_id, owner, unlinked=true narrow it; auto_for=<bot> is that bot's five automatic KPIs", "KpiList"),
     ("/api/v2/kpis", "post", "KPIs", "createKpi",
@@ -624,6 +643,8 @@ SCHEMAS = {
     "Me": obj({"actor": "s", "role": "s", "email": "s"}),
     "Config": obj({"company_name": "s", "app_name": "s", "assistant_name": "s", "assistant_bot": "s",
                    "public_url": "s", "owner_email": "s", "version": "s",
+                   "visual_origin": {"type": "string", "description": "Configured non-secret visual origin, or empty "
+                                     "when absent or invalid; grants no native IPC permission."},
                    "s3_view_urls": {"type": "object", "additionalProperties": {"type": "string"},
                                     "description": "Signed-in callers: bucket -> https base an s3://bucket/key opens at "
                                                    "(base + '/' + key, each segment URL-encoded; TICO_S3_VIEW_URLS)"}},
@@ -916,9 +937,31 @@ SCHEMAS = {
                      "unaligned": {"type": "object", "description": "{actor: open tasks that serve no goal}"},
                      "other_kpis": items(ref("Kpi")), "proposals": items(ref("GoalProposalView"))},
                     required=["goals", "owners", "unaligned", "other_kpis", "proposals"]),
+    "CeoBotView": obj({"on": "b", "name": "s", "changed_by": "s", "changed_at": "s",
+                       "level": {"type": "integer", "enum": [1, 2, 3]},
+                       "levels": items(obj({"level": "i", "name": "s", "sentence": "s", "ready": "b"},
+                                           required=["level", "name", "sentence", "ready"])),
+                       "level_changed_by": "s", "level_changed_by_name": "s", "level_changed_at": "s",
+                       "level_history": items(obj({"level": "i", "was": "i", "by": "s", "by_name": "s", "at": "s"},
+                                                  required=["level", "was", "by", "at"])),
+                       "daily_cap": "i", "asked_today": {"type": "object", "additionalProperties": {"type": "integer"},
+                                                         "description": "{person actor: items the CEO Bot put in their Needs you today (UTC)}"},
+                       "level3_offer": ref("CeoBotLevel3Offer")},
+                      required=["on", "name", "level", "levels", "daily_cap"]),
+    "CeoBotLevel3Offer": obj({"streak": "i", "needed": "i", "due": "b", "last_offered_at": "s"},
+                             required=["streak", "needed", "due"]),
+    "CeoBotLevel3OfferResult": obj({"level3_offer": ref("CeoBotLevel3Offer")}),
+    "CeoBotMergeResult": obj({"task": {"type": "object", "description": "The merged item: the CEO Bot's task, waiting on the person"},
+                              "originals": items(obj({"task_id": "s", "title": "s", "asker": "s", "asker_name": "s",
+                                                      "state": "s", "note": "s"}, required=["task_id", "asker", "state"]))}),
     "GoalsNeedsYou": obj({"actor": "s", "items": items({
         "type": "object", "required": ["kind"], "additionalProperties": True,
-        "properties": {"kind": {"enum": ["kpi_red", "kpi_stale", "proposal"]}, "goal_id": {"type": "string"},
+        "properties": {"kind": {"enum": ["vision", "kpi_red", "recovery", "why", "proposal", "kpi_stale"]},
+                       "goal_id": {"type": "string"},
+                       "options": {"type": "array", "description": "kind recovery: each option in plain words, "
+                                   "{label, pick, actions: [{text, note}]}", "items": {"type": "object"}},
+                       "goals": {"type": "array", "description": "kind why: the goals whose proposed Why lines wait on you",
+                                 "items": {"type": "object"}},
                        "goal_title": {"type": ["string", "null"]}, "kpi_id": {"type": "string"}, "kpi_name": {"type": ["string", "null"]},
                        "reason": {"type": "string"}, "freshness": {"type": "string"}, "proposal": {"type": "object"},
                        "task": {"type": "object", "required": ["id"], "properties": {
@@ -1062,6 +1105,30 @@ SCHEMAS['TaskType']['properties'].update({'default_visibility': {'enum': ['publi
                                          'manager': {'type': ['string', 'null']},
                                          'role': {'type': ['string', 'null'], 'enum': ['product-roadmap', 'engineering', None],
                                                   'description': 'The Product roadmap or Dev tickets type, whoever manages it'}})
+
+TAGS['Inbound'] = 'Shared company inbound email and SMS for people and agents; reads never consume messages.'
+STABLE.extend([
+    ('/api/v2/inbound/inboxes','get','Inbound','listInboundInboxes','Company email and phone inboxes','InboundInboxes'),
+    ('/api/v2/inbound/inboxes','post','Inbound','createInboundInbox','Create a free email inbox; SMS creation requires a phone approval request',None),
+    ('/api/v2/inbound/inboxes/{ident}','patch','Inbound','editInboundInbox','Rename an inbox across connected interfaces and save local dependencies',None),
+    ('/api/v2/inbound/inboxes/{ident}/release','post','Inbound','releaseInboundInbox','An admin retires email or cancels phone renewal',None),
+    ('/api/v2/inbound/phone-quote','get','Inbound','quoteInboundPhone','A current monthly US mobile rental quote',None),
+    ('/api/v2/inbound/phone-requests','get','Inbound','listInboundPhoneRequests','An owner or admin lists phone approval requests','InboundPhoneRequests'),
+    ('/api/v2/inbound/phone-requests','post','Inbound','requestInboundPhone','An owner or admin requests a monthly mobile rental; no purchase',None),
+    ('/api/v2/inbound/phone-requests/{ident}/accept','post','Inbound','acceptInboundPhoneQuote','An owner or admin accepts an exact quote for TICO review; no purchase',None),
+    ('/api/v2/inbound/phone-requests/{ident}/cancel','post','Inbound','cancelInboundPhoneRequest','An owner or admin cancels a phone approval request',None),
+    ('/api/v2/inbound/cursor','get','Inbound','getInboundCursor','Capture a cursor before requesting a code','InboundCursor'),
+    ('/api/v2/inbound/messages','get','Inbound','listInboundMessages','Search one, many or all company inboxes','InboundMessages'),
+    ('/api/v2/inbound/messages/{ident}','get','Inbound','readInboundMessage','Untrusted message text, up to 32 KB per page',None),
+    ('/api/v2/inbound/messages/{ident}/code','get','Inbound','readInboundCode','Extracted code for a specific message',None),
+    ('/api/v2/inbound/wait','post','Inbound','waitInboundMessages','Non-consuming wait after a cursor','InboundMessages'),
+])
+SCHEMAS.update({
+    'InboundCursor': obj({'cursor':'i'}),
+    'InboundInboxes': obj({'inboxes':items({'type':'object'}),'configured':'b','last_sync':NUM_N,'error':'s','gaps':items({'type':'object'})}),
+    'InboundMessages': obj({'messages':items({'type':'object'}),'next':{'type':['integer','null']},'cursor':'i'}),
+    'InboundPhoneRequests': obj({'phone_requests':items({'type':'object'}),'next':{'type':['string','null']}}),
+})
 
 ANSWERS = SCHEMAS
 

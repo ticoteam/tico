@@ -152,6 +152,30 @@ gave the bot while the switch was on stays.
 With the switch on, Goals also opens with the [Company section](#the-company-section) and each goal gets a
 [Why line](#a-goals-why).
 
+### How much your CEO Bot does
+
+With the switch on, **Settings > CEO Bot** has three levels: 1 Goals and tracking (where every company starts), 2 Suggests
+actions and 3 Acts on its own. Level 3 does what level 2 does until it arrives in a later release. Only the owner
+or an admin changes the level, and the CEO Bot puts at most 5 items a day in one person's **Needs you**. The levels, who
+changes them and what stays yours are on [Your CEO Bot](ceo-bot.md).
+
+#### Recoveries and merged asks
+
+At level 2 or 3, a red or stalled goal gets a **recovery** in its owner's Needs you, in place of "check why it is off
+track": the evidence, up to 4 options and the CEO Bot's pick. Each option is a few changes to bots' tasks only: a new
+task for a bot, a bot's task moved to the top of its queue, or a clash between two bots' tasks settled. **Approve** on
+an option applies exactly that option, in the CEO Bot's name; **Reject** drops them all. Where part of an option
+can't be done (a bot is paused, a task finished meanwhile, or you may not reorder bots' queues), it says why in plain
+words, and what wasn't done comes back as a new recovery. Nothing is dropped. Lowering the level below 2 withdraws
+the recoveries waiting.
+
+When several bots ask you the same thing, the CEO Bot can make them **one item** (`POST /api/v2/ceo-bot/merge`).
+Their tasks leave your Needs you while it is open, and your one answer goes to every bot that asked. If the item ends
+without an answer, they come back as they were. A merged item counts toward the 5 a day.
+
+After 10 recoveries in a row approved with its pick unchanged, the Monday note offers level 3 once, and at most once
+a month (`level3_offer` in `GET /api/v2/ceo-bot`). The CEO Bot never raises its own level.
+
 ### The Company section
 
 Only with the [CEO Bot switch](#the-ceo-bot-switch) on, the top of Goals is a **Company** section with two fields:
@@ -191,7 +215,8 @@ other Why still waiting on that goal.
 A goal with no accepted Why shows "Not tied to the vision". That is a note, not an error.
 
 Bots, the CEO Bot included, only propose a Why. They can never accept one or write one directly. A waiting Why
-shows on its goal, not under **Needs you**, and files no task of its own.
+shows on its goal, and all the Why lines waiting on one person are one item in their **Needs you**, "These goals need
+a Why line", never one per goal. It closes by itself once every one is settled.
 
 With the switch off, the Company section and the Why lines are hidden, and every write to them answers `409`.
 What was saved is kept and shows again when the switch is turned back on.
@@ -209,6 +234,7 @@ their own click) or rejects it; confirming makes the change as that human.
 | `kpi_target` | the target fields, with `goal_id` | the goal's owner or the KPI's |
 | `flag` | `issue`: `vague`, `duplicate` or `unmeasured`, and a `note` | the goal's owner |
 | `goal_why` | `why`: one line, up to 200 characters ([A goal's Why](#a-goals-why)); only with the CEO Bot switch on | whoever may change the goal |
+| `recovery` | `evidence`, 1 to 4 `options` (`label`, 1 to 6 `actions`: `create`, `reorder` or `settle` on bots' tasks), `pick`; only the CEO Bot at level 2 or 3 ([Recoveries](#recoveries-and-merged-asks)) | the goal's owner; `{"decision": "confirm", "option": n}` approves another option than the pick |
 
 Pending proposals appear under **Needs you** on the Goals page for the human who decides them, except a Why, which
 waits on its goal. To confirm a Why with your own words, send `why` with the decision:

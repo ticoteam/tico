@@ -16,6 +16,34 @@ browser -> caddy (HTTPS) or cloudflared --> server :8765 (data volume)
                     Mac (native) and Linux runners join from anywhere over https://<your domain>
 ```
 
+## Recommended setup
+
+The quick start below with the recommended choices already made: a **sample company** (Sample Co: the Assistant and
+four role bots with short starter tasks), models on **your Claude and ChatGPT subscriptions, plus Tico Gateway**, **Tico
+Support on**, and a computer on this server that runs the bots (a Docker runner on the server's network, named *Server
+computer*). There is no domain, DNS or sign-in provider to set up:
+
+```
+curl -fsSL https://github.com/ticoteam/tico/releases/latest/download/install.sh -o install.sh && sh install.sh --recommended --owner-email you@example.com
+```
+
+Run on a terminal with no options, the installer asks which setup you want and offers this one first (press Enter); with
+any option, or piped without a terminal, it asks nothing and installs as before. It
+prints the owner sign-in link, as the quick start does. What is left is one step: open the link, then **Settings >
+Computers > Server computer > Sign in**, to Claude and to ChatGPT.
+
+- `--support off` turns Tico Support off (`TICO_SUPPORT=off`: the **?** chat sends nothing; [PRIVACY.md](../PRIVACY.md)).
+  With Support on, its tickets are tied to this install. On an installed Tico, `sh install.sh --local --support off`
+  (or `on`) saves the switch and restarts; every other setting stays as it is.
+- The Gateway is enrolled from an invite whoever runs the install puts in the environment, `TICO_GATEWAY_INVITE`; you
+  never type it, and the installer never prints it. With one, the Gateway connects on Tico's first start; without one
+  the install still runs, on your subscriptions, and says the Gateway is not set up.
+- If the server computer cannot start, Tico keeps running and the installer says how to add it from **Settings >
+  Computers > Add computer**.
+- It writes `TICO_INSTALL_PRESET=recommended`, `TICO_SAMPLE_COMPANY=on`, `TICO_MODELS_PRESET=subscriptions-gateway` and
+  `TICO_SUPPORT` into `.env`; the server reads them on its first start. Every other choice below (the quick start, your own
+  domain with Google, Microsoft or Cloudflare Access, your own API keys) installs as before.
+
 ## Quick start on your own computer
 
 Nothing to set up first: no domain, no DNS, no sign-in provider. Tico runs on this computer only, at
@@ -40,7 +68,7 @@ Recover the token any time with `docker compose exec server cat /data/local-owne
 Open the link in your browser: the app opens on **Finish setup**. Then:
 
 1. **Choose AI providers** (optional): leave them all unticked to do it later. Bots need one to run; until then each bot says
-   "Add an AI provider", and Settings > AI providers adds it. With a gateway key from Tico, the
+   "Add an AI provider", and Settings > Computers > Models adds it. With a gateway key from Tico, the
    [Tico AI Gateway](ai-gateway.md) card there adds Tico Cheap 1.1, Mid 1.0 and Power 1.0. The step starts with how bots get
    their models; **Your Claude and ChatGPT subscriptions, plus Tico Gateway** is recommended
    ([the four choices](ai-gateway.md#choose-how-bots-get-their-models)).
@@ -53,7 +81,7 @@ Open the link in your browser: the app opens on **Finish setup**. Then:
 5. **Sign in to a model.** In **Settings > Computers**, wait for the selected harness to be installed, then press **Sign in**
    beside Codex or Claude Code. Open the provider link and enter its device code, or paste the returned code into Tico when asked.
    Wait for the computer's model sign-in to show **ready**. Other harnesses use their own terminal sign-in; API credentials and
-   profiles are explained in [Harnesses](harnesses.md). Pick a provider in **Settings > AI providers** if you skipped it,
+   profiles are explained in [Harnesses](harnesses.md). Pick a provider in **Settings > Computers > Models** if you skipped it,
    then choose the starter's model in **Settings > Bots**.
 
 ### Your first result
@@ -104,7 +132,7 @@ Paste this into its Setup chat (or replace it with your own facts):
 ### First-result recovery
 
 - **Add an AI provider**: when chat says "Saved — no AI provider is chosen", use its **Add an AI provider** link
-  to open **Settings > AI providers**, then select the bot's model in **Settings > Bots**. Your message stays saved.
+  to open **Settings > Computers > Models**, then select the bot's model in **Settings > Bots**. Your message stays saved.
 - **Offline** or **Missing bot repository or AGENT.md**: check **Settings > Computers** and keep the joined computer running;
   [Setup troubleshooting](onboarding.md#troubleshooting) explains repository and placement failures.
 - **Sign-in rejected**: Health names the credential source when the computer reports it. Replace a shared model key in
@@ -313,6 +341,12 @@ Flags: `--domain`, `--front-door caddy|cloudflared`, `--server-ip`, `--tico-vers
 Credentials: `TICO_OIDC_CLIENT_SECRET`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_TUNNEL_TOKEN`, `OPENAI_API_KEY` (or
 `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`). `python3 -m setup --help` lists all of them.
 
+To connect an already enrolled company Inbox, set `TICO_INBOUND_KEY` in the installer's environment; setup does not issue
+or rotate keys. Optional `TICO_INBOUND_URL` keeps the server's existing HTTPS or loopback endpoint rules; omit it to use
+the server's HQ default. Both settings go through the private server `.env` (SSM SecureString on AWS), are masked in
+plans and diagnostics, and stay in setup's 0600 private environment copy for retries without fresh values. They are
+excluded from public setup state and runner settings. An explicit nonempty environment value replaces its saved value.
+
 **cloud-init.** `infra/cloud-init/tico-server.yaml` and `tico-runner.yaml` are paste-ready user data for any Ubuntu 24.04
 cloud that accepts it (Hetzner, DigitalOcean, AWS, Vultr, Linode, OCI). Edit the block between the two `inputs` markers
 (release, domain, owner email, team name, sign-in). They write `/opt/tico/.env` from it, turn on `ufw`, keep containers away
@@ -325,12 +359,22 @@ life of the server: use a client secret you can rotate. Progress is in `/var/log
 
 | `TICO_AUTH_PROXY` | Also set | Use |
 |---|---|---|
-| `oidc` | `TICO_OIDC_ISSUER`, `TICO_OIDC_CLIENT_ID`, `TICO_OIDC_CLIENT_SECRET`; optionally `TICO_OIDC_ALLOWED_DOMAINS` (comma-separated, such as `acme.com`) | Google, Okta, Microsoft Entra or any OpenID Connect provider. Register `https://<TICO_DOMAIN>/auth/callback` as the redirect URI with the provider. |
+| `oidc` | `TICO_OIDC_ISSUER`, `TICO_OIDC_CLIENT_ID`, `TICO_OIDC_CLIENT_SECRET`; optionally `TICO_OIDC_ALLOWED_DOMAINS` (comma-separated, such as `acme.com`) and `TICO_OIDC_LABEL` (the provider's name: a signed-out browser then gets a page with one "Sign in with <label>" button instead of going straight to the provider) | Google, Okta, Microsoft Entra or any OpenID Connect provider. Register `https://<TICO_DOMAIN>/auth/callback` as the redirect URI with the provider. The setup wizard's `--auth oidc --issuer <url> --client-id <id>` takes any issuer, with the secret from `TICO_OIDC_CLIENT_SECRET` in the environment and `--signin-label` for the button. On a server Tico hosts (`--hosted`), the owner sign-in link below stays as break-glass beside it (`TICO_OWNER_LINK_HASH`): it never calls the issuer, so the owner gets in while the issuer is down, and people already signed in stay signed in. |
 | `cloudflare` | `TICO_ACCESS_ISSUER`, `TICO_ACCESS_AUDIENCE` | Cloudflare Access in front of the tunnel |
+| `owner-link` | `TICO_HOSTED` (`own` or `invited`), `TICO_OWNER_EMAIL`; `TICO_OWNER_LINK_HASH` for the first link | Only for a server Tico hosts, on an https domain name (the server refuses to start on an IP address). The owner signs in once with a link our team sends (`/auth/owner-link#<secret>`): it works once, and for a week at most. The setup wizard writes it with `--hosted own|invited --hosted-zone <zone>` (the domain must be under that zone) to a 0600 file and never prints it; `python3 -m setup owner-link --domain <domain> [--sign-out]` makes a new one, the old unused one stops working, and `--sign-out` also ends the owner's sessions. `--preset recommended` adds the [recommended setup](#recommended-setup)'s choices and the server's own computer; the Gateway invite comes from `TICO_GATEWAY_INVITE` on each run and goes only to the server, never into setup's saved copy of the `.env`. |
 | unset (or `none`) | nothing; leave `TICO_DOMAIN` unset | The quick start. The server answers on `http://127.0.0.1:8765` and the owner signs in with the token from `docker compose exec server cat /data/local-owner.token` (`Authorization: Bearer <token>`, or `GET /api/v2/local-signin?token=...`). With `TICO_DOMAIN` set, the server refuses to start. |
 
 The owner is the first human on the roster; add the others in the app. The wizard writes these settings; to change
 one later, edit `/opt/tico/.env` and run `docker compose up -d` there. `.env.example` in the bundle lists every setting.
+
+For a hosted AWS/Caddy workspace whose public name is a DNS-only alias, keep `--domain acme.tico.dev
+--hosted-zone tico.dev` for the application, HTTPS certificate and exact OIDC callback. Give the separate operational
+record with `--dns-name pv-abcdefgh.preview.tico.team --dns-zone preview.tico.team --name pv-abcdefgh`. Both DNS flags
+are exact hostnames and the detected authoritative zone must match the named Route53 zone. The domain owner publishes
+the public CNAME; setup writes only the operational A/AAAA record and verifies both addresses before success. Without
+these flags, setup keeps its existing single-domain behavior. The DNS settings are saved for `destroy --dns`, which
+deletes only records still pointing at that server, before releasing its address; they can also be passed explicitly
+when recovering without saved state. Keep each attempt's `TICO_SETUP_HOME` separate when retrying the same public name.
 
 Attachment storage settings also go in `.env` next to `compose.yaml`:
 
@@ -348,6 +392,33 @@ exported in a shell would change on the next update. Empty storage settings are 
 
 See [File storage](files.md#storage) for bucket permissions and Health warnings.
 
+### Caddy and a separate visual site
+
+With `COMPOSE_PROFILES=caddy,updater`, Caddy serves the app on `TICO_DOMAIN` with automatic HTTPS.
+An external visual CDN still works with `TICO_VISUAL_ORIGIN` alone. To serve signed visuals from this Caddy
+instead, set `TICO_CADDY_VISUALS=1` and an HTTPS `TICO_VISUAL_ORIGIN`, for example
+`https://assets.acme.example`, whose hostname differs from the app and runner. Point both DNS names at this
+server and allow ports 80 and 443. This setting creates no DNS records and configures no CDN or Access policy.
+
+The visual site accepts only GET and HEAD for an exact signed `/visuals/<token>` path; queries, encoded path
+variants and other routes get 404. It removes browser credentials before proxying and removes response cookies.
+The backend still checks the token, its expiry and the reader's permission, including range requests. App routes
+keep their ordinary authentication and proxy behavior. Caddy does not add full-app aliases or a runner site.
+
+The server writes an atomic configuration generation into the `tico-caddy` volume before becoming healthy.
+Caddy reads that volume read-only; its supervisor stops the previous listener, validates a private snapshot and
+starts the replacement. Health requires that exact generation to answer on a container-private loopback endpoint.
+Removing the opt-in, an invalid optional visual origin or runner URL, or an invalid/missing generated file retires
+the old visual listener; an invalid required app name refuses server startup. Certificates stay in the existing
+`caddy-data` and `caddy-config` volumes.
+
+After editing these settings in `.env`, run `docker compose up -d server`, wait for the server to become healthy,
+then run `docker compose up -d --no-deps --force-recreate --wait caddy`. Install the feature-aware updater before
+enabling the visual site. It recreates an existing Caddy service after server health on updates and rollback,
+using that bundle's Compose file. A manual rollback with an older updater must also recreate Caddy from the
+restored Compose file: `docker compose up -d --no-deps --force-recreate caddy`. A pre-feature bundle restores its
+ordinary app-only proxy; its running state does not prove visual-site readiness.
+
 ### Cloudflare Tunnel
 
 No open ports, and Cloudflare Access can do the sign-in. The wizard creates the tunnel when you give it a token; by hand:
@@ -360,6 +431,36 @@ No open ports, and Cloudflare Access can do the sign-in. The wizard creates the 
    `runner.<domain>`, or `tico-runner.example.com` for `tico.example.com`, which Cloudflare's universal certificate covers;
    `none` to skip): its route for `/api/v2` and `/download` only, its DNS record, and `TICO_RUNNER_URL`, so computers and
    external agents connect without a bypass. Keep that hostname out of the Access application; `setup doctor` checks it.
+   When `TICO_VISUAL_ORIGIN` names a separate HTTPS site for inline visuals, the generated config also routes that
+   hostname to the same server, for `^/visuals/` only, on every start. Add its proxied CNAME to the same tunnel,
+   bypass caching for that hostname, and keep it out of Access. A malformed origin, or the app or runner hostname, is
+   never written: the server logs a warning naming the reason (`tico: warning: TICO_VISUAL_ORIGIN ...`), writes the
+   config without the visuals route and starts as usual. The one exception is the app's own address (the same origin
+   as `TICO_PUBLIC_URL`): the server refuses to start with that. Dashboard-managed tunnels need this path-limited
+   route added in Cloudflare instead ([Visuals in replies](visuals.md)).
+   A locally managed tunnel can retain old app hostnames with `TICO_DOMAIN_ALIASES`, for example
+   `old.acme.example,legacy.acme.example`. These are full-app routes, after `TICO_DOMAIN` and before the restricted
+   runner and visual routes. Names are normalized to lowercase and duplicates are removed; malformed names,
+   wildcards, empty comma-separated entries, and runner/visual host collisions reject the new config. With aliases
+   set, an invalid runner URL or visual origin also rejects the config so its host cannot accidentally become an app route.
+   The runner URL must be a plain DNS HTTP(S) address without credentials, a path, query or fragment. A runner URL
+   on `TICO_DOMAIN` is still allowed and adds no separate route.
+   The previous config stays intact on validation failure. Removing an alias removes only its route at the next start.
+   Each alias needs its own proxied DNS record and equivalent sign-in protection. With Access, keep the existing
+   application's issuer, audience and policy on every app hostname. Configure the exact old HTTPS Origins in
+   `TICO_CORS_ORIGINS` if their pages still need to write; aliases grant no CORS permission and change no cookie scope.
+   With built-in OIDC and nonempty `TICO_DOMAIN_ALIASES`, fresh sign-in from an alias first moves to
+   `TICO_PUBLIC_URL` before creating a login cookie. In this opt-in mode every proxy must preserve the external
+   Host authority, including a nondefault port (for nginx, `proxy_set_header Host $http_host;`, not `$host` alone).
+   With aliases unset or empty, existing single-host proxy behavior is unchanged.
+   Register this installation's canonical callback with the provider; aliases need no extra callbacks,
+   and pending and session cookies remain host-only.
+   Existing alias sessions can keep working. This does not change a desktop app's selected server: update that
+   address separately when moving its native connection to the canonical host.
+   Never put an unprotected runner or cookie-free visual hostname in this list.
+   cloudflared reads this config only when it starts. After changing `TICO_VISUAL_ORIGIN`, `TICO_DOMAIN`,
+   `TICO_DOMAIN_ALIASES` or `TICO_RUNNER_URL` in `.env`, recreate the server with `docker compose up -d server`,
+   then restart the connector once the server is healthy: `docker compose restart cloudflared`.
 3. Create an Access application for the hostname with your identity provider and a policy for your humans.
    Note the team URL (`https://<team>.cloudflareaccess.com`) and the application's Audience tag. Any identity
    provider Access offers works with the desktop app too (Google, Microsoft Entra, Okta, GitHub, a one-time PIN): the
@@ -386,6 +487,10 @@ there: the config the server writes is ignored, so keep that route at `HTTP` `se
 it. Before this was shipped such a tunnel logged `No ingress rules ... cloudflared will return 503` and answered every
 request with a 503 while its container showed as running. `python3 -m setup doctor` now fails on that 503 and on that log
 line, and says what to run: `docker compose pull && docker compose up -d` in `/opt/tico`.
+
+`TICO_DOMAIN_ALIASES` changes only the locally generated tunnel config; add explicit app and restricted visual
+routes in Cloudflare for a remotely managed tunnel. Caddy app aliases are unchanged; its optional restricted visual
+site is configured separately above.
 
 **A runner hostname without Access.** To keep Access on the team hostname and let computers and external agents in
 without a bypass, add a second proxied CNAME, `runner.<domain>`, to the same tunnel (`<tunnel id>.cfargotunnel.com`),
@@ -538,7 +643,7 @@ image still starts on the migrated volume and reads its own files; the bots then
 the next update. Use `docker exec -u bot` for what a bot should
 own (model logins). Legacy secret files stay with the runner supervisor; bots receive granted Credentials.
 
-The image holds no model CLI. Once your team has enabled a provider (Settings > AI providers), the runner installs
+The image holds no model CLI. Once your team has enabled a provider (Settings > Computers > Models), the runner installs
 that provider's CLI into `/home/runner/tools` in the volume (a minute or two; Settings > Computers shows the progress),
 keeps it current between runs, and lets the owner pin a version. See [harnesses](harnesses.md).
 

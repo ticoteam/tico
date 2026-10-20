@@ -32,7 +32,7 @@ VISUAL_SPACE.page = f => {
 
 // Once: a broken address gets the newest one the thread read (data-fresh-src, visualKeep), then the card says so.
 function visualRetry(card, el, attr = 'src') {
-  const fresh = card.dataset.freshSrc;
+  const fresh = visualSrc({src: card.dataset.freshSrc});
   if (fresh && !card.dataset.retried && fresh !== el.getAttribute(attr)) { card.dataset.retried = '1'; el.setAttribute(attr, fresh); return true; }
   visualFail(card);
   return false;
@@ -70,7 +70,11 @@ function visualPageWire(card) {
 // before the frame has its size, at 0x0 (a frame off screen, or put back by a redraw), where the page measures
 // taller (its lines wrap), and the frame taking that height then pins it there: a page measures at least its frame.
 function visualPageLoad(frame, src) {
-  requestAnimationFrame(() => requestAnimationFrame(() => { if (src && !frame.hasAttribute('src')) frame.setAttribute('src', src); }));
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    const approved = visualSrc({src});
+    if (!approved) { const card = frame.closest('figure.vcard'); if (card) visualFail(card); return; }
+    if (!frame.hasAttribute('src')) frame.setAttribute('src', approved);
+  }));
 }
 VISUAL_WIRE.page = visualPageWire;
 function visualPageSize(card, frame, h, fill = false) {
@@ -160,8 +164,9 @@ function visualScrollers(el) {
   return out;
 }
 function visualExpand(card) {
-  const d = visualFullDialog(), src = card.dataset.freshSrc, kind = card.dataset.kind;
-  if (!src) return;
+  const src = visualSrc({src: card.dataset.freshSrc}), kind = card.dataset.kind;
+  if (!src) { visualFail(card); return; }
+  const d = visualFullDialog();
   const title = card.querySelector('.vcard-title')?.textContent || 'Visual';
   d.querySelector('.vcard-full-title').textContent = title;
   d.setAttribute('aria-label', title);

@@ -1,5 +1,5 @@
 // Offline browser regression: the one-time usage-count notice reaches the owner alone and is dismissible, and
-// Settings > Privacy has the one toggle and "Reset install ID" (PRIVACY.md).
+// Settings > General has the one toggle and "Reset install ID" (PRIVACY.md).
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -29,6 +29,7 @@ const {unrouted} = require('./support/routes.cjs');
           calls.push(req.method() + ' ' + p + (req.method() === 'GET' ? '' : ' ' + (req.postData() || '')));
           return json({enabled: true, off_by: '', install_id: '6f1c2a9e-3b7d-4c58-9a10-2d4e8b7f5a63', notice: 'shown', doc: 'https://example.test/PRIVACY.md'});
         }
+        if (p === '/api/v2/system/storage') return json({active: null, earlier: [], server: {mode: 'local', location: ''}, copy: {done: 0, total: 0, failed: 0, running: false}, doc: 'https://example.test/docs/files.md'});   // Storage shares General with Privacy
         if (p === '/api/employees' || p === '/api/issues') return json([]);
         if (p === '/api/humans') return json({people: [], teams: {}});
         if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: []});
@@ -57,8 +58,7 @@ const {unrouted} = require('./support/routes.cjs');
     await v.ctx.close();
 
     v = await visit({notice: false, hash: '#/settings'});
-    await v.page.locator('#settings-more > summary').click();
-    await v.page.locator('[data-settings-tab="privacy"]').click();
+    await v.page.locator('[data-settings-tab="general"]').click();
     await v.page.locator('#privacy-count').waitFor();
     assert.equal(await v.page.locator('#privacy-count').isChecked(), true);
     await v.page.locator('#privacy-count').uncheck();

@@ -23,6 +23,7 @@ asked whether the pull request's own lines are still there at the release commit
 import base64
 import hashlib
 import hmac
+import itertools
 import json
 import logging
 import re
@@ -150,10 +151,48 @@ def _review_role(c, task, payload, role):
                          note="GitHub review " + ("request withdrawn" if action == "review_request_removed" else "requested"))
 
 
+# The branch `hub task worktree add` names: tico/<the task's first 8 id characters>-<title slug>.
+WORKTREE_BRANCH = re.compile(r"^tico/[0-9a-f]{8}-")
+
+
+def register_worktree_pr(c, pr):
+    """A pull request whose head is a task worktree's branch in the same repository belongs to that task: its link is
+    registered here, so a worktree whose bot never ran `hub task link` still gets the link its release waits on.
+    Returns the ids of the links it made; a fork's branch, another organization's repository or a branch no
+    worktree holds registers nothing."""
+    url = str(pr.get("html_url") or "").split("?")[0].rstrip("/")
+    match = PR_LINK.match(url)
+    head = pr.get("head") or {}
+    branch = str(head.get("ref") or "")
+    if not match or not WORKTREE_BRANCH.match(branch):
+        return set()
+    repo = f"{match.group(1)}/{match.group(2)}"
+    # Only a head GitHub names as this same repository: a missing head repository is a deleted fork, not ours.
+    if str((head.get("repo") or {}).get("full_name") or "").lower() != repo.lower():
+        return set()
+    app = c.execute("SELECT org FROM github_app WHERE id='app'").fetchone()
+    if not app or str(app["org"] or "").lower() != match.group(1).lower():
+        return set()
+    made = set()
+    for row in H._rows(c.execute("SELECT id,task_id,detail_json FROM task_links WHERE kind='worktree' AND lower(repo)=? "
+                                 "AND branch=?", (repo.lower(), branch))):
+        if not c.execute("SELECT 1 FROM task_links WHERE task_id=? AND kind='pr' AND lower(repo)=? AND number=?",
+                         (row["task_id"], repo.lower(), int(match.group(3)))).fetchone():
+            link = H.task_link(c, H.KEEPER, row["task_id"], url)
+            made.add(link["id"])
+            H.event(c, H.KEEPER, "worktree.pr_registered", row["task_id"], {"url": url, "branch": branch})
+        # The branch has its pull request now, however it was found, so an earlier failure to open one is over.
+        detail = H._json(row["detail_json"], {}) or {}
+        if detail.pop("pr_error", None):
+            c.execute("UPDATE task_links SET detail_json=? WHERE id=?", (json.dumps(detail), row["id"]))
+    return made
+
+
 def pull_request(c, payload, review_role="", release_repo=""):
     pr = payload.get("pull_request") or {}
     url = str(pr.get("html_url") or "").split("?")[0].rstrip("/")
     action = str(payload.get("action") or "")
+    registered = register_worktree_pr(c, pr)
     links = _links_for(c, url)
     for link in links:
         task = H.task(c, link["task_id"])
@@ -219,7 +258,7 @@ def pull_request(c, payload, review_role="", release_repo=""):
             item += ": Merge conflict"
         if wake_once:
             queue_wake(c, task, detail["wake_once_fired"]["item"])
-        if (state == "closed" and link["state"] != state
+        if (state == "closed" and link["state"] != state and link["id"] not in registered
                 or conflict_wake):
             # Closed without merging is news; a conflict is a blocker on the bot's own work.
             queue_wake(c, task, item, "completion" if not conflict_wake and not wake_once else None)
@@ -441,6 +480,184 @@ def refresh_task_prs(service, task_id):
     threading.Thread(target=refresh, name="tico-pr-refresh", daemon=True).start()
 
 
+def _worktree_detail(service, repo, branch, change):
+    """Apply `change(detail)` to every worktree link on this repository branch, in its own write."""
+    with service.store.transaction() as c:
+        for row in H._rows(c.execute("SELECT id,detail_json FROM task_links WHERE kind='worktree' AND lower(repo)=? "
+                                     "AND branch=?", (repo.lower(), branch))):
+            detail = H._json(row["detail_json"], {}) or {}
+            change(detail)
+            c.execute("UPDATE task_links SET detail_json=? WHERE id=?", (json.dumps(detail), row["id"]))
+
+
+def _pr_error(service, repo, branch, text):
+    """A failure the task and the cap view show on the branch's worktrees until its pull request is registered
+    (register_worktree_pr clears it); the next pass tries again."""
+    _worktree_detail(service, repo, branch, lambda detail: detail.update(pr_error=text))
+
+
+def _open_draft(service, repo, branch, worktree):
+    """A pushed worktree branch with no pull request gets a draft one, so its work is never an orphan. Any failure,
+    before GitHub answers too, is recorded with a reason that carries no GitHub text, and the next pass tries again.
+    Returns the created pull request as a one-item list, or an empty one."""
+    failed = f"Opening a draft pull request for {branch} failed"
+    try:
+        token = service.mint([repo], {"pull_requests": "write", "contents": "read"})[0]
+    except Exception:
+        _pr_error(service, repo, branch, failed + " (no GitHub token for it)")
+        return []
+    try:
+        response = service._call("POST", f"/repos/{quote(repo, safe='/')}/pulls",
+                                 headers={"Authorization": "Bearer " + token},
+                                 json={"title": (worktree.get("title") or branch)[:200], "head": branch,
+                                       "base": worktree.get("base") or "main", "draft": True,
+                                       "body": "Opened as a draft by Tico at this task branch's first push. Mark it "
+                                               "ready for review (`gh pr ready`) and edit it (`gh pr edit`) when the "
+                                               "work is."})
+    except Exception:
+        _pr_error(service, repo, branch, failed + " (GitHub did not answer)")
+        return []
+    if response.status_code != 201:
+        _pr_error(service, repo, branch, failed + f" (GitHub {response.status_code})")
+        return []
+    return [response.json()]
+
+
+def _remote_work(service, repo, branch, base, auth):
+    """How many commits the branch has on GitHub that its base does not: None when GitHub has no such branch, the
+    evidence a missed push webhook leaves behind and the line between a task's own work and a branch only moved to
+    newer main."""
+    response = service._call("GET", f"/repos/{quote(repo, safe='/')}/compare/{quote(base, safe='')}...{quote(branch, safe='')}",
+                             headers=auth, params={"per_page": 1})
+    if response.status_code == 404:
+        return None
+    if response.status_code != 200:
+        raise RuntimeError(f"GitHub {response.status_code}")
+    return int(response.json().get("ahead_by") or 0)
+
+
+def reconcile_worktree_prs(service):
+    """The background repair for the pull request links a worktree's release reads. Unfinished links on any task that
+    holds a worktree (closed, declined and never-read tasks too) are read again, and a worktree branch with no link is
+    looked up on GitHub, so a missed webhook heals without anyone opening the task; a branch with commits of its own
+    and no pull request gets its draft. At most one pass every three minutes and 20 items a pass, shared between
+    links and branches with the least recently read first, so neither kind can starve the other. A branch is asked
+    again after 15 minutes when it has no pull request, or as soon as a new head is pushed or reported."""
+    with service.lock:
+        now = time.monotonic()
+        if getattr(service, "worktree_reconcile_running", False) or getattr(service, "worktree_reconcile_next", 0) > now:
+            return
+        service.worktree_reconcile_next = now + 180
+        cache = service.__dict__.setdefault("worktree_reconcile_cache", {})
+        with service.store.read() as c:
+            app = service.row(c)
+            if not app:
+                return
+            org = str(app["org"] or "").lower() + "/%"
+            held = ("EXISTS (SELECT 1 FROM repositories r WHERE lower(r.full_name)=lower({0}.repo) AND r.reachable=1) "
+                    "AND lower({0}.repo) LIKE ?")
+            # Both lists are as long as the worktrees the cap allows, so no row limit can leave one unread.
+            links = H._rows(c.execute(
+                "SELECT p.* FROM task_links p WHERE p.kind='pr' AND p.number IS NOT NULL "
+                "AND coalesce(p.state,'open') NOT IN ('merged','closed','shipped') AND " + held.format("p") +
+                " AND EXISTS (SELECT 1 FROM task_links w WHERE w.task_id=p.task_id AND w.kind='worktree' "
+                "AND coalesce(w.state,'unknown')<>'removed')", (org,)))
+            branches = {}
+            for w in H._rows(c.execute(
+                "SELECT w.repo,w.branch,w.detail_json,CASE WHEN coalesce(t.private,0)=0 THEN t.title END AS title,"
+                "(SELECT r.default_branch FROM repositories r WHERE lower(r.full_name)=lower(w.repo)) AS base "
+                "FROM task_links w JOIN tasks t ON t.id=w.task_id WHERE w.kind='worktree' "
+                "AND coalesce(w.state,'unknown')<>'removed' AND w.branch LIKE 'tico/%' AND " + held.format("w") +
+                " AND NOT EXISTS (SELECT 1 FROM task_links p WHERE p.task_id=w.task_id AND p.kind='pr' "
+                "AND lower(p.repo)=lower(w.repo) AND p.branch=w.branch)", (org,))):
+                b = branches.setdefault((w["repo"], w["branch"]), {**w, "title": None, "heads": set()})
+                b["title"] = min(filter(None, (b["title"], w["title"])), default=None)
+                b["heads"].update(H.worktree_heads(H._json(w["detail_json"], {}) or {}))
+            branches = list(branches.values())
+        def ready(kind, repo, key, heads=None):
+            seen = cache.get((kind, repo, key))
+            return not seen or seen["next"] <= now or heads is not None and seen.get("heads") != heads
+        def last(item):
+            return (cache.get(item[:3]) or {}).get("last", 0)
+        prs = sorted((("pr", l["repo"], l["number"], l) for l in links if ready("pr", l["repo"], l["number"])), key=last)
+        heads = {(b["repo"], b["branch"]): sorted(b["heads"]) for b in branches}
+        found = sorted((("branch", b["repo"], b["branch"], b) for b in branches if WORKTREE_BRANCH.match(b["branch"])
+                        and ready("branch", b["repo"], b["branch"], heads[(b["repo"], b["branch"])])), key=last)
+        due = [item for pair in itertools.zip_longest(prs, found) for item in pair if item][:20]
+        if not due:
+            return
+        service.worktree_reconcile_running = True
+
+    def reconcile():
+        tokens = {}
+        try:
+            for kind, repo, key, link in due:
+                retry = 900
+                started = H.now()
+                try:
+                    if repo.lower() not in tokens:
+                        tokens[repo.lower()] = service.mint([repo], {"pull_requests": "read", "contents": "read"})[0]
+                    auth = {"Authorization": "Bearer " + tokens[repo.lower()]}
+                    path = f"/repos/{quote(repo, safe='/')}/pulls"
+                    if kind == "pr":
+                        response = service._call("GET", f"{path}/{key}", headers=auth)
+                        found = [response.json()] if response.status_code == 200 else []
+                        retry = 180 if response.status_code == 200 else 900
+                    else:
+                        response = service._call("GET", path, headers=auth, params={
+                            "head": repo.split("/")[0] + ":" + key, "state": "all", "per_page": 10})
+                        if response.status_code != 200:
+                            raise RuntimeError(f"GitHub {response.status_code}")
+                        found = response.json() if isinstance(response.json(), list) else []
+                        retry = 180 if found else 900
+                        if not found:
+                            known = heads[(repo, key)]
+                            ahead = _remote_work(service, repo, key, link["base"] or "main", auth)
+                            # What GitHub held when asked covers every head known before asking.
+                            _worktree_detail(service, repo, key, lambda detail: detail.update(
+                                remote={"ahead": ahead or 0, "absent": ahead is None, "heads": known, "at": H.now()}))
+                            if ahead:
+                                found = _open_draft(service, repo, key, link)
+                                retry = 180 if found else 900
+                    registering = kind == "branch" and found
+                    try:
+                        with service.store.transaction() as c:
+                            for pr in found:
+                                if kind == "pr":
+                                    current = c.execute("SELECT updated FROM task_links WHERE id=?", (link["id"],)).fetchone()
+                                    if not current or current[0] != link.get("updated"):
+                                        continue
+                                    pr["html_url"] = link["url"]
+                                match = PR_LINK.match(str(pr.get("html_url") or "").split("?")[0].rstrip("/"))
+                                # A webhook that wrote or registered this pull request while it was being read holds
+                                # newer facts, for every task it is linked to.
+                                if match and c.execute(
+                                        "SELECT 1 FROM task_links WHERE kind='pr' AND lower(repo)=? AND number=? "
+                                        "AND updated>=?", (f"{match.group(1)}/{match.group(2)}".lower(),
+                                                           int(match.group(3)), started)).fetchone():
+                                    continue
+                                pull_request(c, {"action": "refresh", "pull_request": pr},
+                                             review_role=service.settings.github_review_role,
+                                             release_repo=service.settings.release_repo)
+                    except Exception:
+                        if registering:
+                            _pr_error(service, repo, key, f"The pull request for {key} was found but linking it to "
+                                                          "the task failed; the next pass links it")
+                        raise
+                except Exception:
+                    logging.getLogger("tico.github").exception("Worktree PR reconcile failed for %s %s", repo, key)
+                    retry = 900
+                with service.lock:
+                    if (kind, repo, key) not in cache and len(cache) >= 512:
+                        cache.pop(next(iter(cache)))
+                    cache[(kind, repo, key)] = {"next": time.monotonic() + retry, "last": time.monotonic(),
+                                                "heads": heads.get((repo, key)) if kind == "branch" else None}
+        finally:
+            with service.lock:
+                service.worktree_reconcile_running = False
+    threading.Thread(target=reconcile, name="tico-worktree-pr-reconcile", daemon=True).start()
+
+
 def push(c, payload):
     """A push to the default branch: every commit, in order, so a deploy can be placed on main."""
     ref = str(payload.get("ref") or "")
@@ -459,6 +676,15 @@ def push(c, payload):
                 detail["head_login"] = login
             else:
                 detail.pop("head_login", None)
+            c.execute("UPDATE task_links SET detail_json=? WHERE id=?", (json.dumps(detail), link["id"]))
+    branch = ref[len("refs/heads/"):] if ref.startswith("refs/heads/") else ""
+    if WORKTREE_BRANCH.match(branch) and not payload.get("deleted") and head_sha:
+        # A worktree branch's first push asks for its draft pull request; the background pass opens or reuses it
+        # (reconcile_worktree_prs), so nothing here calls GitHub inside the write and the push's checks run as usual.
+        for link in H._rows(c.execute("SELECT id,detail_json FROM task_links WHERE kind='worktree' AND lower(repo)=? "
+                                       "AND branch=?", (repo.lower(), branch))):
+            detail = H._json(link["detail_json"], {}) or {}
+            detail.update(pushed=head_sha, pushed_at=detail.get("pushed_at") or H.now())
             c.execute("UPDATE task_links SET detail_json=? WHERE id=?", (json.dumps(detail), link["id"]))
     if ref != "refs/heads/" + default:
         return {"ref": ref, "commits": 0}
