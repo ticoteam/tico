@@ -150,6 +150,10 @@ All notable changes to Tico are recorded here. The format follows
   ([Computers](docs/computers.md#remove-a-subscription)).
 
 ### Fixed
+- **Tasks: a subtask saved from its parent's peek stays open**: opening a parent from a filtered list, then one of
+  its subtasks, and saving a change that takes the subtask out of the list (Done, a new status or owner) moved the peek
+  on to the list's next row, often a sibling, so the next edit landed on the wrong task. The peek now stays on the
+  task that was saved; a task opened from its own row still moves on to the next row as before.
 - **Finished worktrees free themselves even when nobody linked or reopened the pull request.** A pull request opened
   from a task worktree's branch is linked to the task automatically (both repositories of a two-repository task), and a
   background pass every few minutes refreshes worktree tasks' pull request state, closed and unread tasks included, so a

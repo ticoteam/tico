@@ -108,7 +108,7 @@ async function taskModalShow(task, d = taskModal(), opts = {}) {
   const seq = d.drawSeq = (d.drawSeq || 0) + 1;
   const typing = d.contains(document.activeElement) && document.activeElement.matches('.task-chat textarea');
   if (peek && TASKS_ST && TASKS_ST.peek !== 't' + task.id && tasksById(TASKS_ST).has(String(task.id))) {
-    taskPeekOpen(TASKS_ST, 't' + task.id); return;           // a parent or subtask opened from the peek: the list follows it
+    taskPeekOpen(TASKS_ST, 't' + task.id, {via: 'link'}); return;   // a parent or subtask opened from the peek: the list follows it
   }
   d.dataset.task = task.id;
   // a property that has the focus now keeps it through the redraw (over the one a save asked for)
@@ -353,8 +353,10 @@ async function taskSave(d, id, body, then, field) {
     }
     void personTasksReload();
     // The list reloads behind it. If the task left the view (done, closed, handed on, declined), the list and the
-    // peek move on to the next row: checked by whichever load lands last (a poll may overtake this one).
-    if (state) state.pendingFinish = {key, at, after: state.loadSeq};
+    // peek move on to the next row: checked by whichever load lands last (a poll may overtake this one). Not for a
+    // task reached from inside the peek (a parent's subtask): its row's neighbour is some other task, and edits made
+    // after the save would land on it, so the peek stays on the task that was saved.
+    if (state && state.peekVia !== 'link') state.pendingFinish = {key, at, after: state.loadSeq};
     if (TASKS_ST) void tasksLoad(TASKS_ST);
     roadmapRankingRefresh();
     return true;

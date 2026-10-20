@@ -829,6 +829,7 @@ function taskPeekOpen(state, key, opts = {}) {
   if (!task) return;
   const d = taskPeek();
   state.peek = key;
+  state.peekVia = opts.via || 'list';      // 'link': a parent, subtask or related task opened from inside the peek
   $('.tasks-page')?.classList.add('peek-open');
   document.body.classList.add('task-peek-open');
   for (const el of document.querySelectorAll('#task-body .peeked')) { el.classList.remove('peeked'); el.querySelector('[aria-current]')?.removeAttribute('aria-current'); }
