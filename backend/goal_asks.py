@@ -10,7 +10,9 @@ while the cause stands is left alone, and asked again only once the cause has cl
 Where the CEO Bot switch is on (backend/ceo_bot.py) two more wait on a person: the company's vision, while it is empty
 (one ask to the environment owner, first in their list), and the Why lines the CEO Bot proposed (one bundled ask per
 person who decides them, never one per goal). There it also puts at most 5 asks a day in one person's list
-(`ceo_bot.room_today`), most important first (`ORDER`); the rest wait for the next day's room.
+(`ceo_bot.room_today`), most important first (`ORDER`); the rest wait for the next day's room. At level 2 and 3 a
+recovery the CEO Bot proposes for a goal (backend/ceo_suggest.py) is its own item, with its options, and takes the place
+of asking that goal's owner why a KPI is off track.
 
 A company goal or KPI is the environment owner's to act on. A bot's red or stale KPI is the bot's own work (the
 Goal Manager's pass asks it), so no task is filed for it; a proposal about a bot's goal or KPI goes to the nearest
@@ -29,7 +31,7 @@ from .store import H
 
 log = logging.getLogger("tico.goal_asks")
 
-KINDS = ("vision", "kpi_red", "why", "proposal", "kpi_stale")
+KINDS = ("vision", "kpi_red", "recovery", "why", "proposal", "kpi_stale")
 ORDER = {kind: n for n, kind in enumerate(KINDS)}     # the vision first, then a goal off track, then the rest
 WHY_REF = "goals"                                     # one bundled Why ask per person
 
@@ -87,8 +89,22 @@ def wanted(conn, owner_id, at=None):
         if who and state["freshness"] != "fresh":
             items.append({"kind": "kpi_stale", "ref": record["id"], "owner": who, "kpi_id": record["id"],
                           "kpi_name": record["name"], "freshness": state["freshness"], "reason": state["reason"]})
-    whys = {}
+    whys, recovering = {}, set()
+    from . import ceo_suggest
+    suggests = ceo and ceo_suggest.suggests(conn)
     for p in G.proposals(conn, "pending"):
+        if p["kind"] == "recovery":
+            # Only while it suggests (level 2 or 3, switch on); lowering the level withdraws them.
+            goal = G.goal(conn, p["goal_id"]) if suggests and p["goal_id"] else None
+            if goal:
+                org = org or _org(conn)
+                who = _person(conn, goal["owner"], owner_id, org)
+                if who:
+                    recovering.add((goal["id"], who))
+                    items.append({"kind": "recovery", "ref": p["id"], "owner": who, "proposal": p,
+                                  "goal_id": goal["id"], "goal_title": goal["title"],
+                                  "ask": ceo_suggest.ask_text(conn, p, goal["title"])})
+            continue
         if p["kind"] == "goal_why":
             # Never one task per goal: each person who decides Why lines is asked once for all of theirs.
             goal = G.goal(conn, p["goal_id"]) if ceo and p["goal_id"] else None
@@ -112,6 +128,8 @@ def wanted(conn, owner_id, at=None):
                           "goal_title": goal and goal["title"], "kpi_name": record and record["name"]})
     for who, goals in whys.items():
         items.append({"kind": "why", "ref": WHY_REF, "owner": who, "goals": list(goals.values())})
+    # A goal with a recovery waiting is one item for its owner: the recovery, not also "check why it is off track".
+    items = [i for i in items if not (i["kind"] == "kpi_red" and (i["goal_id"], i["owner"]) in recovering)]
     # A red KPI used by two of one person's goals is one ask.
     seen, out = set(), []
     for item in sorted(items, key=lambda i: ORDER[i["kind"]]):
@@ -150,6 +168,8 @@ def _ask(item, manager="Goal Manager"):
                 f"it does, for whom) in the Company section at the top of Goals. The {manager} ties every goal to the "
                 f"vision. {closes}a vision is saved.")
         return title, body
+    if item["kind"] == "recovery":
+        return item["ask"]
     if item["kind"] == "why":
         lines = "\n".join(f"- {g['goal_title']}: \"{g['why']}\"" for g in item.get("goals") or [])
         title = "These goals need a Why line"
@@ -197,6 +217,13 @@ def _resolved(conn, kind, ref):
     if kind == "kpi_red":
         return "Resolved: the KPI is no longer off track on your goal."
     row = G.proposal(conn, ref)
+    if kind == "recovery" and row:
+        from . import ceo_suggest
+        done = ceo_suggest.result_text(conn, row)
+        if done:
+            return done
+        if row["status"] == "rejected":
+            return f"Resolved: {row['decision_note'] or 'rejected; nothing changed'}."
     if row and row["status"] != "pending":
         return f"Resolved: the proposal was {row['status']} by {H.actor_id(row['decided_by'] or '')}.".replace(" by .", ".")
     return "Resolved: nothing is waiting on you here any more."

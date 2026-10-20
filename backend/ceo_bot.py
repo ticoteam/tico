@@ -58,7 +58,13 @@ def view(c):
             "level": level(c), "levels": levels(),
             "level_changed_by": history[0]["by"] if history else "",
             "level_changed_at": history[0]["at"] if history else "",
-            "level_history": history, "daily_cap": DAILY_CAP, "asked_today": asked_today_all(c)}
+            "level_history": history, "daily_cap": DAILY_CAP, "asked_today": asked_today_all(c),
+            "level3_offer": _offer(c)}
+
+
+def _offer(c):
+    from . import ceo_suggest
+    return ceo_suggest.offer_view(c)
 
 
 def _rename(c, actor, display_name):
@@ -205,21 +211,22 @@ def chart_groups(roster, entries, chart, groups, archived=()):
 # ----------------------------------------------------------------------------- how much it does
 # "How much your CEO Bot does" (Settings > CEO Bot): three levels, chosen by the owner or an admin on their own click,
 # never by a bot, the CEO Bot included (backend/goal_routes.py). Every install starts at level 1. Each change is kept in
-# the switch's record with who and when. Levels 2 and 3 can be chosen now but add nothing to level 1 yet: their
-# behaviour arrives in later releases, and each sentence says so until then (`READY`).
+# the switch's record with who and when. Level 2 suggests (backend/ceo_suggest.py, backend/ceo_merge.py). Level 3 can
+# be chosen now but adds nothing to level 2 yet: its behaviour arrives in a later release, and its sentence says so
+# until then (`READY`).
 LEVELS = {
     1: ("Goals and tracking",
         "It keeps your goals clear and tracked: KPI readings, red and stale flags, Why lines and target changes to "
         "propose, a Monday note, and asking a goal's owner what's happening. It never changes anyone's tasks."),
     2: ("Suggests actions",
         "It also suggests how your bots could recover a goal that falls behind, as items in Needs you that you approve "
-        "one by one; nothing changes without your yes."),
+        "one by one, and makes the same question from several bots one item; nothing changes without your yes."),
     3: ("Acts on its own",
         "It also makes, reorders and closes bot tasks itself to recover a goal, each logged with an Undo; spending, "
         "publishing, people and changes to goals or the vision stay yours."),
 }
-READY = {1}
-NOT_YET = " Not yet: until this level arrives in a later release, it does what level 1 does."
+READY = {1, 2}
+NOT_YET = " Not yet: until this level arrives in a later release, it does what level 2 does."
 DEFAULT_LEVEL = 1
 HISTORY_KEEP = 50
 
@@ -266,6 +273,9 @@ def set_level(c, actor, value):
     history.append({"level": value, "was": was, "by": actor, "at": at})
     record.update(level=value, level_history=history[-HISTORY_KEEP:])
     _save(c, record)
+    if value < 2:
+        from . import ceo_suggest
+        ceo_suggest.withdraw(c, actor)          # level 1 suggests no task changes: what still waits is withdrawn
     H.event(c, actor, "ceo_bot.level", SLUG, {"level": value, "was": was})
 
 
@@ -277,7 +287,8 @@ def _save(c, record):
 # ----------------------------------------------------------------------------- at most 5 a day in Needs you
 # At every level the CEO Bot puts at most 5 items a day in a person's Needs you (spec test 14). The server counts the
 # tasks it filed for that person since midnight UTC, whoever filed them for it: its own `hub task create` and the asks
-# backend/goal_asks.py files in its name. Only while the switch is on: off, the Goal Manager works as before.
+# backend/goal_asks.py files in its name, and the items it merged several bots' asks into (backend/ceo_merge.py). Only
+# while the switch is on: off, the Goal Manager works as before.
 DAILY_CAP = 5
 
 
@@ -288,16 +299,22 @@ def day_start(at=None):
 
 
 def asked_today(c, person, at=None):
-    """How many tasks the CEO Bot filed for this person today (UTC), closed ones included."""
+    """How many tasks the CEO Bot filed for this person today (UTC), closed ones included, and merged items."""
+    since = day_start(at)
     return c.execute("SELECT COUNT(*) FROM tasks WHERE requester=? AND owner=? AND created>=?",
-                     ("bot:" + SLUG, person, day_start(at))).fetchone()[0]
+                     ("bot:" + SLUG, person, since)).fetchone()[0] + c.execute(
+        "SELECT COUNT(DISTINCT merged_into) FROM ceo_merges WHERE person=? AND created>=?", (person, since)).fetchone()[0]
 
 
 def asked_today_all(c, at=None):
     """{person actor: tasks the CEO Bot filed for them today}, for the people it filed any for."""
-    return {r[0]: r[1] for r in c.execute(
-        "SELECT owner, COUNT(*) FROM tasks WHERE requester=? AND owner LIKE 'human:%' AND created>=? GROUP BY owner",
-        ("bot:" + SLUG, day_start(at)))}
+    since, out = day_start(at), {}
+    for who, n in c.execute(
+            "SELECT owner, COUNT(*) FROM tasks WHERE requester=? AND owner LIKE 'human:%' AND created>=? GROUP BY owner "
+            "UNION ALL SELECT person, COUNT(DISTINCT merged_into) FROM ceo_merges WHERE created>=? GROUP BY person",
+            ("bot:" + SLUG, since, since)):
+        out[who] = out.get(who, 0) + n
+    return out
 
 
 def room_today(c, person, at=None):

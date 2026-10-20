@@ -26,14 +26,14 @@ def via_assistant(api):
 
 def test_every_install_starts_at_level_1_and_says_what_each_level_does(api):
     """Spec test 16: after the upgrade, an install with the switch on is at level 1. Each level has its one sentence;
-    the two that have not arrived yet say they do what level 1 does until then."""
+    level 3, not arrived yet, says it does what level 2 does until then."""
     switched_on(api)
     shown = get(api, "ceo-bot")
     assert shown["on"] is True and shown["level"] == 1 and shown["level_history"] == []
     assert [(lv["level"], lv["name"], lv["ready"]) for lv in shown["levels"]] == \
-        [(1, "Goals and tracking", True), (2, "Suggests actions", False), (3, "Acts on its own", False)]
+        [(1, "Goals and tracking", True), (2, "Suggests actions", True), (3, "Acts on its own", False)]
     assert "never changes anyone's tasks" in shown["levels"][0]["sentence"]
-    assert all(lv["sentence"].endswith(ceo_bot.NOT_YET) for lv in shown["levels"][1:])
+    assert shown["levels"][2]["sentence"].endswith(ceo_bot.NOT_YET)
     assert shown["daily_cap"] == 5 and get(api, "ceo-bot", token="cara-test")["level"] == 1    # everyone reads it
 
 

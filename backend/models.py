@@ -517,7 +517,7 @@ class KpiReading(Contract):
 
 
 class GoalProposalCreate(Contract):
-    kind: Literal["goal_wording", "goal_kpi", "kpi_definition", "kpi_target", "flag", "goal_why"]
+    kind: Literal["goal_wording", "goal_kpi", "kpi_definition", "kpi_target", "flag", "goal_why", "recovery"]
     goal_id: str | None = Field(default=None, max_length=200)
     kpi_id: str | None = Field(default=None, max_length=200)
     payload: dict = Field(default_factory=dict)
@@ -531,6 +531,7 @@ class GoalProposalDecision(Contract):
     decision: Literal["confirm", "reject"]
     note: str = Field(default="", max_length=1000)
     why: str | None = Field(default=None, max_length=1000)    # a Why proposal confirmed as edited
+    option: int | None = Field(default=None, ge=0, le=9)     # the option a recovery is confirmed with (its pick if none)
 
 
 # The company at the top of Goals (backend/company.py): only the fields sent change.
@@ -1609,6 +1610,14 @@ class CeoBotSwitch(Contract):
 
 class CeoBotLevel(Contract):
     level: Literal[1, 2, 3]
+
+
+# Several bots' asks waiting on one person, made one CEO Bot item (backend/ceo_merge.py).
+class CeoBotMerge(Contract):
+    person: str = Field(min_length=1, max_length=200)
+    title: str = Field(min_length=1, max_length=300)
+    question: str = Field(min_length=1, max_length=4000)
+    tasks: list[str] = Field(min_length=2, max_length=10)
 
 
 class UsageCountNotice(Contract):

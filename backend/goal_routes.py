@@ -13,6 +13,8 @@ from fastapi import Request
 
 from . import botkpis
 from . import ceo_bot
+from . import ceo_merge as CM
+from . import ceo_suggest as CS
 from . import company as C
 from . import goal_asks as GA
 from . import goals as G
@@ -215,6 +217,33 @@ def install(app, store, auth, mutate, settings):
             return ceo_bot.named(c, ceo_bot.view(c))
         return mutate(request, body, work)
 
+    def ceo_itself(c, who, what):
+        if who.actor != "bot:" + ceo_bot.SLUG or who.via:
+            raise Problem("forbidden", f"Only the {ceo_bot.name(c)} {what}", 403)
+
+    @app.post("/api/v2/ceo-bot/merge")
+    def ceo_bot_merge(request: Request, body: M.CeoBotMerge):
+        """At level 2 or 3, the CEO Bot makes several bots' asks waiting on one person a single item of its own; the
+        person's answer to it goes to each bot that asked (backend/ceo_merge.py)."""
+        who = request.state.identity
+        def work(c):
+            auth.domain(who)
+            ceo_itself(c, who, "merges the asks waiting on a person")
+            person = H.resolve_actor(c, body.person) or body.person
+            return CM.merge(c, who.actor, person, body.title, body.question, body.tasks)
+        return mutate(request, body, work)
+
+    @app.post("/api/v2/ceo-bot/level3-offer")
+    def ceo_bot_level3_offer(request: Request, body: M.Empty):
+        """The CEO Bot records that its Monday note offered level 3: refused unless 10 approvals in a row at level 2
+        make it due, and never more often than every 30 days. Offering never changes the level."""
+        who = request.state.identity
+        def work(c):
+            auth.domain(who)
+            ceo_itself(c, who, "offers level 3, in its Monday note")
+            return {"level3_offer": CS.offer_made(c, who.actor)}
+        return mutate(request, body, work)
+
     @app.get("/api/v2/company/history")
     def company_history(request: Request):
         """Every change to the Vision and the Description, newest first, with who made it."""
@@ -300,7 +329,7 @@ def install(app, store, auth, mutate, settings):
             asked = {i["ref"]: i for i in wanted if i["kind"] == "proposal"}
             for p in G.proposals(c, "pending"):
                 # A Why waits on its goal, not here: the CEO Bot asks for them as one item (spec, level 1).
-                if p["kind"] != "goal_why" and decider(c, who, p):
+                if p["kind"] not in ("goal_why", "recovery") and decider(c, who, p):
                     goal = G.goal(c, p["goal_id"]) if p["goal_id"] else None
                     record = K.kpi(c, p["kpi_id"]) if p["kpi_id"] else None
                     items.append(asked.get(p["id"]) or {"kind": "proposal", "ref": p["id"], "proposal": p,
@@ -686,8 +715,8 @@ def install(app, store, auth, mutate, settings):
         who = request.state.identity
         def work(c):
             auth.domain(who)
-            if body.kind == "goal_why":
-                needs_switch(c, "Why line")
+            if body.kind in ("goal_why", "recovery"):
+                needs_switch(c, "Why line" if body.kind == "goal_why" else "recovery")
             goal = goal_or_404(c, body.goal_id) if body.goal_id else None
             record = kpi_or_404(c, who, body.kpi_id) if body.kpi_id else None
             if goal and not readable_goals(c, who, [goal]):
@@ -704,9 +733,9 @@ def install(app, store, auth, mutate, settings):
             item = G.proposal(c, pid)
             if not item:
                 raise Problem("not_found", "Unknown proposal", 404)
-            if item["kind"] == "goal_why":
-                needs_switch(c, "Why line")
+            if item["kind"] in ("goal_why", "recovery"):
+                needs_switch(c, "Why line" if item["kind"] == "goal_why" else "recovery")
             if not decider(c, who, item):
                 raise Problem("forbidden", "Whoever owns the goal or the KPI decides, and only a person, on their own click", 403)
-            return {"proposal": G.decide(c, who.actor, pid, body.decision, body.note, why=body.why)}
+            return {"proposal": G.decide(c, who.actor, pid, body.decision, body.note, why=body.why, option=body.option)}
         return mutate(request, body, work)

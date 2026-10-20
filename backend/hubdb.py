@@ -688,6 +688,17 @@ TASK_GUEST_SCHEMA = """
 ALTER TABLE tasks ADD COLUMN guest TEXT;
 """
 
+# The CEO Bot's merged asks (backend/ceo_merge.py): each original item in a person's Needs you that one CEO Bot item
+# stands for, and what became of it; append to preserve existing installations.
+CEO_MERGES_SCHEMA = """
+CREATE TABLE IF NOT EXISTS ceo_merges (
+  merged_into TEXT NOT NULL, original TEXT NOT NULL, person TEXT NOT NULL, asker TEXT NOT NULL,
+  state TEXT NOT NULL DEFAULT 'merged', created TEXT NOT NULL, settled_at TEXT, note TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (merged_into, original));
+CREATE INDEX IF NOT EXISTS ceo_merges_original ON ceo_merges(original, state);
+CREATE INDEX IF NOT EXISTS ceo_merges_person ON ceo_merges(person, created);
+"""
+
 MIGRATIONS = [SCHEMA, MEETING_SCHEMA, MEETING_ITEMS_SCHEMA,   # index i takes user_version from i
               MEETING_BRAIN_SCHEMA, MEETING_COMMENTS_SCHEMA,  # to i+1; append, never edit
               GOALS_SCHEMA, RECORDING_SOURCES_SCHEMA, MARKET_SCHEMA,
@@ -698,7 +709,7 @@ MIGRATIONS = [SCHEMA, MEETING_SCHEMA, MEETING_ITEMS_SCHEMA,   # index i takes us
               LIVE_MEETINGS_SCHEMA, LIVE_MEETINGS_ROUTING_LIMITS_SCHEMA,
               LIVE_MEETINGS_CHAT_ROUTING_SCHEMA, TASK_RELATIONS_SCHEMA, TRIGGERS_SCHEMA,
               TRIGGER_SIGNING_SCHEMA, CHECK_MODELS_SCHEMA, GOAL_ASKS_SCHEMA, RUN_TRIGGERS_SCHEMA,
-              TASK_GUEST_SCHEMA]
+              TASK_GUEST_SCHEMA, CEO_MERGES_SCHEMA]
 
 
 class Refused(Exception):
@@ -2460,6 +2471,9 @@ def answer(conn, actor, message_id, body, unknown=False, *, comment_refs=None, c
     if about:                               # an answered question on a task changes the task
         conn.execute("UPDATE tasks SET updated=? WHERE id=?", (now(), about))
     _recount(conn, asked["from_actor"])     # it no longer waits on whoever answered
+    if about and asked["from_actor"] == "bot:goal-manager" and is_human(actor):
+        from . import ceo_merge
+        ceo_merge.on_reply(conn, actor, task(conn, about), body)     # answered in Needs you: on to each asker
     return msg
 
 
@@ -3911,6 +3925,9 @@ def task_comment(conn, actor, task_id, text, wake=True, *, ask=None, extra_refs=
     if public:
         conn.execute('UPDATE messages SET public=1 WHERE id=?', (msg['id'],))
         msg = message(conn, msg['id'])
+    if is_human(actor) and row["owner"] == "bot:goal-manager":
+        from . import ceo_merge
+        ceo_merge.on_reply(conn, actor, row, text)     # a person's answer to the CEO Bot's merged item goes to each asker
     return msg
 
 
@@ -4192,13 +4209,16 @@ ASK_QUOTE_MAX = 4000        # a quoted answer is what the person said, not a doc
 
 
 @private_task_write
-def task_ask_resolve(conn, actor, task_id, message_id, quote=None):
+def task_ask_resolve(conn, actor, task_id, message_id, quote=None, *, relay=False):
     """Settle an open question on a task that was answered somewhere else, or is no longer wanted.
 
     With `quote`, the person's words from where they answered (a chat, a call): the question's asker, or the
     task's owner bot, records them as the answer, marked as quoted by whoever recorded it. Without, the asker
     withdraws the question: it stays in the thread, superseded. Either way it leaves every Needs you list and
-    count. Nothing is sent and nobody wakes: the answer is filed quietly for the asker's next turn on the task."""
+    count. Nothing is sent and nobody wakes: the answer is filed quietly for the asker's next turn on the task.
+
+    `relay` is the CEO Bot passing on the answer a person gave once for several bots (backend/ceo_merge.py), never a
+    route: the CEO Bot records it on a task that is not its own, and the asker wakes to it."""
     _writer(conn, actor)
     row = task(conn, task_id)
     if not row:
@@ -4210,7 +4230,7 @@ def task_ask_resolve(conn, actor, task_id, message_id, quote=None):
     asker, person = asked["from_actor"], asked["to_actor"]
     if quote is None and actor != asker:
         refuse(conn, actor, "identity", f"{actor_id(asker)} asked this question; only they withdraw it")
-    if quote is not None and actor != asker and not (is_bot(actor) and actor == row["owner"]):
+    if quote is not None and actor != asker and not (is_bot(actor) and actor == row["owner"]) and not relay:
         refuse(conn, actor, "identity", "only the question's asker or the task's owner bot records an answer given elsewhere")
     if not _one(conn, f"SELECT 1 FROM messages m WHERE m.id=? AND {OPEN_ASK_SQL}", (message_id,)):
         refuse(conn, actor, "kind", "this question was already answered or withdrawn")
@@ -4231,6 +4251,8 @@ def task_ask_resolve(conn, actor, task_id, message_id, quote=None):
             return (found or {}).get("name") or actor_id(who)
         refs = {"depth": asked["refs"].get("depth", 1), "task": task_id, "comment": True, "quiet": True,
                 "quoted": True, "for": person}
+        if relay:
+            del refs["quiet"]
         if asked["refs"].get("questions"):
             # Read as any other structured answer (`task_answers`): the person's words are its free text.
             refs["answer"] = {"target": {"comment": message_id}, "other": quote, "dismiss": False,
@@ -6853,9 +6875,12 @@ def needs_you(conn, who):
     # A bot's task set waiting on this person: one concrete ask, its title and waiting note.
     waited = [t for t in _rows(conn.execute("SELECT * FROM tasks WHERE status='waiting' AND waiting_on=? "
                                             "ORDER BY created", (actor,))) if t["id"] not in seen and not TS.snoozed(t)]
+    # What the CEO Bot merged into one item of its own is that item here, not each original (backend/ceo_merge.py).
+    from . import ceo_merge
+    merged = ceo_merge.hidden(conn, actor)
     return {"actor": actor,
-            "tasks": asked + owned,
-            "waiting": waited,
+            "tasks": [t for t in asked + owned if t["id"] not in merged],
+            "waiting": [t for t in waited if t["id"] not in merged],
             "approvals": pending,
             "declined": tasks(conn, requester=actor, status="declined", tickets=False, snoozed="hide")}
 
