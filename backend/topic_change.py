@@ -50,21 +50,29 @@ BUDGET = 1.5
 # The default prompt-cache lifetime: a session whose last turn read the cache this recently is warm.
 WARM_SECONDS = 300
 # Each harness's prompt-cache lifetime in seconds, by the runtime its sessions are kept under (`bot_sessions.runtime`;
-# antigravity runs as gemini), from its provider's docs. A provider that gives a range counts its shortest: a cold
-# reading only asks Decide, a warm one skips it.
+# antigravity runs as gemini). A row is either a lifetime its provider documents (the shortest, when it gives a range:
+# a cold reading only asks Decide, a warm one skips it) or, where no provider page gives one, the WARM_SECONDS fallback.
 CACHE_LIFETIME = {
-    # Anthropic, docs.claude.com prompt caching: "By default, the cache has a 5-minute lifetime" (1 hour is opt-in).
+    # Documented: "By default, the cache has a 5-minute lifetime" (1 hour is opt-in).
+    # https://platform.claude.com/docs/en/build-with-claude/prompt-caching
     "claude": 300,
-    # OpenAI, developers.openai.com prompt caching: in-memory entries "typically remain active for around 5 to 10
-    # minutes of inactivity, up to one hour"; extended retention keeps them "around 30 minutes" and up to 24 hours.
+    # Documented: in-memory entries "typically remain active for around 5 to 10 minutes of inactivity, up to one
+    # hour"; extended retention is longer. https://developers.openai.com/api/docs/guides/prompt-caching
     "codex": 300,
-    # Google, ai.google.dev Gemini caching: implicit caching documents no lifetime, so the default.
+    # Fallback: Google's caching page gives no lifetime for implicit caching
+    # (https://ai.google.dev/gemini-api/docs/caching); OpenRouter's guide reports Gemini's implicit cache lives "on average 3-5 minutes, but will vary".
     "gemini": WARM_SECONDS,
-    # xAI: Grok Build reports no cached tokens, so its sessions are always cold whatever this says.
+    # Fallback: xAI's models page prices cached input but gives no lifetime (https://docs.x.ai/docs/models). The value
+    # does not matter today: the runner's Grok host reports no cached tokens, so its sessions always read cold.
     "grok": WARM_SECONDS,
-    # OpenRouter (pi), Cursor and Muse Code pass through to an upstream provider and document no lifetime of their own.
+    # Fallback: OpenRouter documents each upstream's own expiry, not one of its own (Anthropic 5 minutes by default,
+    # Gemini explicit writes 5 minutes, several upstreams none).
+    # https://openrouter.ai/docs/guides/best-practices/prompt-caching
     "pi": WARM_SECONDS,
+    # Fallback: Cursor's docs price cache reads per model but give no lifetime (https://cursor.com/docs).
     "cursor": WARM_SECONDS,
+    # Fallback: no lifetime found for Muse Code; Cursor's model table prices Muse Spark cached input with no lifetime
+    # (https://cursor.com/docs).
     "musecode": WARM_SECONDS,
 }
 # The least share of the last turn's input read from the cache for the session to count as warm.
