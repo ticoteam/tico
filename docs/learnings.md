@@ -65,7 +65,7 @@ reached, even partway through, the night sends nothing, shows "Skipped", and the
 night) answers, per item, whether it is
 learnable and, per recipient, whether it is relevant (`questions/learnings-route.json`). An item goes
 to every recipient scoring 0.6 or more, unless its learnable score is under 0.2; at most 40 items each,
-highest first. Recipients are the active bots other than BotOps, the Assistant and the Goal Manager,
+highest first. Recipients are the active bots other than BotOps, the Assistant and the CEO Bot,
 plus the Librarian for how the company works and the market, that had a run in the last 24 hours. A bot
 synced in from another platform (Grok, Dots, Muse) never gets a run here, so it gets no packet.
 

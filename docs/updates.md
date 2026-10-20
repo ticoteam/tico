@@ -336,7 +336,7 @@ Automatic rollback covers a release that does not come up. To go back by choice:
 
 ## The built-in bots' instructions
 
-The Assistant, BotOps, the Librarian and the Goal Manager keep their instructions and playbooks in a repository on the computer that
+The Assistant, BotOps, the Librarian and the CEO Bot keep their instructions and playbooks in a repository on the computer that
 runs them. When a release changes one of those files in its template (`AGENT.md`, `playbooks/`, `skills/`), the computer brings that file up
 before the bot's next run, once per start of the runner; a file the release did not change keeps whatever the bot improved since. What the
 bot had before is kept in the repository's history. The bot's own notes, knowledge, state and playbooks it wrote are never touched

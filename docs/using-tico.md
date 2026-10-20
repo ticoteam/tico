@@ -13,7 +13,7 @@ On **Tasks**, press **New task** and pick who it is for — any human or bot. On
 it through Tico's MCP. Each task shows who added it: you, another human, or a bot.
 
 **Where are the built-in bots?**
-**Assistant** and **BotOps** are in the main left rail; **Assistant** opens your private chat with it. The Goal Manager is at the top of **Goals**: its routines, its last
+**Assistant** and **BotOps** are in the main left rail; **Assistant** opens your private chat with it. The CEO Bot is at the top of **Goals**: its routines, its last
 run and a box to ask it to change a goal. **Docs** and **Market** have **Ask the Librarian** on the right (a button on a
 phone). All four are managed in **Settings > Bots**; they stay out of the team chart and the goal owner list.
 
