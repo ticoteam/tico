@@ -273,7 +273,7 @@ class SettingsAdmin:
         default = providers.load(c, self.settings) if not body.model else {}
         choice = self.models.get(body.model or default.get("model"))
         if not choice:
-            raise Problem("model", "Choose a Team default in Settings > AI providers" if not body.model
+            raise Problem("model", "Choose a Team default in Settings > Computers" if not body.model
                           else "Choose one of the supported models", 422)
         self.refuse_retired(choice)
         effort = self._effort(choice, body.effort or default.get("effort") or None)

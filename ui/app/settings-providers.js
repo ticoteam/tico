@@ -1,8 +1,8 @@
-/* ui/app/settings-providers.js — Settings > AI providers
+/* ui/app/settings-providers.js — Settings > Computers > Models
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
-// ----------------------------------------------------------------- AI providers
+// ----------------------------------------------------------------- Models
 // Which model vendors this team uses and the default model (backend/providers.py). One form
 // serves the first-run step and Settings; the server derives the runtime from the model.
 function providersModels(view, models, enabled) {
@@ -110,6 +110,7 @@ async function renderSettingsProviders() {
       ${gateway ? gatewayHTML(gateway, owner) : ''}`;
     providersWire($('#set-prov'), view, SETTINGS_DATA.models);
     if (gateway) gatewayWire(gateway);
+    settingsReveal('#settings-models');
     const save = $('#set-prov-save');
     if (save) save.onclick = async () => {
       const chosen = providersCollect($('#set-prov')), status = $('#set-prov-status');
@@ -118,7 +119,7 @@ async function renderSettingsProviders() {
         const saved = await providersSave(view, chosen);
         applyConfig({...S.config, providers_configured: !!saved.enabled?.length, default_runtime: saved.default?.runtime || ''});
         SETTINGS_DATA.enabledProviders = saved.enabled; SETTINGS_DATA.defaultModel = saved.default?.model || '';
-        toast('AI providers saved');
+        toast('Models saved');
         await renderSettingsProviders();
       } catch (error) { status.innerHTML = `<span class="err">${esc(error.message)}</span>`; save.disabled = false; }
     };
@@ -189,11 +190,13 @@ function providersNextHTML(view, owner) {
     const ready = machine.readiness?.runtimes?.[runtime]?.installed;
     return `<li>${esc(machine.label)} · ${esc(runtime)}${owner && online && ready && harnessCaps(runtime).browser_sign_in
       ? ` <button class="ghost" type="button" data-model-login data-runner="${esc(machine.id)}" data-runtime="${esc(runtime)}" data-machine="${esc(machine.label)}">Sign in</button>`
-      : ' · <a href="#/settings" data-provider-computers>Open computer</a>'}</li>`;
+      : ' · <button class="linkish" type="button" data-provider-computer="${esc(machine.id)}">Open computer</button>'}</li>`;
   }));
   return `<div class="provider-next"><p>Sign in on each computer, or <a href="${CREDENTIALS}">use an API key</a> in Credentials and share it with every computer.</p>
-    ${machines.length ? (rows.length ? `<ul>${rows.join('')}</ul>` : '<p class="muted">Computers are signed in.</p>') : '<p><a href="#/settings" data-provider-computers>Add computer</a></p>'}</div>`;
+    ${machines.length ? (rows.length ? `<ul>${rows.join('')}</ul>` : '<p class="muted">Computers are signed in.</p>') : ''}</div>`;
 }
+// The computers list is just above: open that computer's pop-up.
 document.addEventListener('click', event => {
-  if (event.target.closest('[data-provider-computers]')) settingsShow('devices');
+  const link = event.target.closest('[data-provider-computer]');
+  if (link) $(`#set-machines [data-computer-open="${CSS.escape(link.dataset.providerComputer)}"]`)?.click();
 });

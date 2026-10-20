@@ -34,7 +34,8 @@ your email) gives it a token and Tico's MCP ([Connect an external agent](connect
 **How do I know my bot ran?**
 The conversation goes *Saved — queued* → *Starting* → *Working* → the reply. When the bot marks
 a task done, the task shows under **Tasks → Done** with the bot's note.
-Every run is under your email → **Runs**, and on the bot's **More** tab with its files and routines.
+Every run is under **Settings → History → Runs** (the owner also sees **Changes**, the bot settings history), and
+on the bot's **More** tab with its files and routines.
 
 **What does *waiting* mean, and the other states?**
 *Waiting*: the bot is parked on something — a bot, a child task, or an answer from you.

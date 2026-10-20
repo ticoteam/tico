@@ -290,7 +290,7 @@ function taskSessionsHTML(t) {
       ? `<span class="tlink session"><a href="${esc(l.url)}" target="_blank" rel="noopener">${label}</a>${drop(l)}</span>`
       : `<span class="tlink session"><span title="${esc(l.value)}">${label}</span>${copy(l.value, 'session')}${drop(l)}</span>`;
   });
-  return `<section class="tsec task-sessions"><h3 class="rail-h">Sessions<button type="button" class="prop-add" data-session-add aria-label="Add a session" title="Add a session">${TL_ICON.plus}</button></h3>
+  return `<section class="tsec task-sessions${rows.length ? '' : ' tsec-empty'}"><h3 class="rail-h">Sessions<button type="button" class="prop-add" data-session-add aria-label="Add a session" title="Add a session">${TL_ICON.plus}</button></h3>
     ${rows.length ? `<div class="tlinks">${rows.join('')}</div>` : ''}
     <form class="inline task-link-add" data-modal-session hidden><input type="text" autocomplete="off" spellcheck="false" placeholder="URL or resume command" aria-label="Add a session"></form></section>`;
 }
@@ -310,7 +310,7 @@ async function taskRelate(d, task, body, on = task.id) {
 }
 function taskRelHTML(t) {
   const groups = TASK_REL_GROUPS.map(([kind, dir, label]) => [kind, dir, label, taskRels(t, kind, dir)]).filter(g => g[3].length);
-  return `<section class="tsec task-related"><h3 class="rail-h">Related<button type="button" class="prop-add" data-related-add aria-haspopup="menu" aria-label="Relate a task" title="Relate a task">${TL_ICON.plus}</button></h3>
+  return `<section class="tsec task-related${groups.length ? '' : ' tsec-empty'}"><h3 class="rail-h">Related<button type="button" class="prop-add" data-related-add aria-haspopup="menu" aria-label="Relate a task" title="Relate a task">${TL_ICON.plus}</button></h3>
     ${groups.map(([kind, dir, label, rows]) => `<div class="trel"><span class="trel-k">${esc(label)}</span><div class="tlinks">${rows.map(k => `<span class="tlink task"><button type="button" class="linkish" data-open-task="t${esc(k.id)}" aria-label="Open ${esc(k.title)}">${taskStatusText(k)} ${esc(clipLine(k.title, 70))}</button><button type="button" class="x" data-drop-rel="${esc(kind)} ${esc(dir)} ${esc(k.id)}" aria-label="Remove ${esc(label.toLowerCase())}: ${esc(k.title)}">×</button></span>`).join('')}</div></div>`).join('')}</section>`;
 }
 // ---- saving a task's properties. One save at a time per dialog, each with the version the last one returned, so a
@@ -710,9 +710,10 @@ function taskQuietHTML(t) {
   const more = [q.run ? `run ${String(q.run).slice(0, 8)}` : '', q.at ? `handed over ${ago(q.at)}` : ''].filter(Boolean).join(', ');
   return `<p class="task-wait task-quiet" data-task-quiet="${esc(q.resume ? 'deferred' : q.state)}"><span class="lbl">Quiet work: ${esc(label)}</span> ${esc(q.words || '')}${more ? ` <span class="muted">(${esc(more)})</span>` : ''}</p>`;
 }
-// The task in full or in the peek. The header: its status, its owner, its age, Done and Close task for whoever may use
-// them (the two most common actions) as labelled buttons, then the quiet icon buttons: "…" and, past a rule, ✕ for the window. Then the title, who added it and when, the properties, the
-// details, Code, Subtasks, Comments.
+// The task in full or in the peek. The header: its status, its age, Done and Close task for whoever may use them (the
+// two most common actions) as labelled buttons, then the quiet icon buttons: "…" and, past a rule, ✕ for the window.
+// The owner and who asked are properties, so the header does not repeat them; who added it and when is the age's
+// tooltip. Then the title, the properties, the details, Code, Subtasks, Comments.
 function hubModalHTML(t, it, opts = {}) {
   const askToYou = taskAskToPerson(t);
   const finished = taskFinished(t);
@@ -736,16 +737,16 @@ function hubModalHTML(t, it, opts = {}) {
       <span class="tthread-only tthread-title" tabindex="-1">${esc(t.title)}</span>` : ''}<span class="pill tstatus">${esc(statusWord)}</span>${blockers.length && !finished
       ? `<span class="tchip-blocked" title="Blocked by ${esc(blockers.map(b => b.title).join(', '))}">blocked</span>` : ''}${taskSnoozed(t)
       ? `<button type="button" class="tl-due wake tchip-snoozed" data-task-unsnooze title="Snoozed until ${esc(fmt(t.snoozed_until))} by ${esc(actorLabel(t.snoozed_by))}${rights.snooze ? '. Click to bring it back now' : ''}"${rights.snooze ? '' : ' disabled'}>Snoozed to ${esc(snoozeDay(t))}</button>` : ''}
-      <span class="tmodal-owner">${actorFace(t.owner, 18)}<span class="who">${esc(actorLabel(t.owner))}</span></span>${finished ? '' : taskScreenLinkHTML(t.owner)}
+      ${finished ? '' : taskScreenLinkHTML(t.owner)}
       <span class="spacer"></span>${pos ? `<span class="peek-pos tnum" title="J / K or ↑ / ↓ move to the next or previous task">${esc(pos)}</span>` : ''}
-      <span class="muted tnum tmodal-age" title="Updated ${esc(fmt(it.updated))}">${esc(ago(it.updated))}</span>
+      <span class="muted tnum tmodal-age" title="${esc(`${taskSourceLine(t)}${t.created ? ' ' + fmt(t.created) : ''} · Updated ${fmt(it.updated)}`)}">${esc(ago(it.updated))}</span>
       ${canDone ? `<button class="ghost tmodal-act" type="button" data-task-finish="done" title="Mark this task done">${PROP_ICON.check}<span>Done</span></button>` : ''}
       ${canClose ? `<button class="ghost tmodal-act" type="button" data-task-finish="close" title="Close this task">Close task</button>` : ''}
       <button class="ghost peek-btn" type="button" data-task-more aria-haspopup="menu" aria-label="More actions" title="More actions">${PROP_ICON.more}</button>
       ${thread ? '<button class="ghost tmodal-act tthread-only" type="button" data-thread-details>Details</button>' : ''}
       <span class="tmodal-sep" aria-hidden="true"></span><button class="ghost peek-btn tmodal-x" type="button" data-modal-close aria-label="Close window" title="Close window (Esc)">${TL_ICON.x}</button></div>
     <h2 class="tmodal-title" tabindex="-1">${esc(t.title)}</h2>
-    <div class="muted tmeta">${esc(taskSourceLine(t))} · ${esc(ago(t.created))}${t.goal_id ? ` · <a href="#/goals/${encodeURIComponent(t.goal_id)}" class="task-goal" data-goal-title="${esc(t.goal_id)}">serves a goal</a>` : ''}</div>
+    ${t.goal_id ? `<div class="muted tmeta"><a href="#/goals/${encodeURIComponent(t.goal_id)}" class="task-goal" data-goal-title="${esc(t.goal_id)}">serves a goal</a></div>` : ''}
     <div class="tmodal-body task-layout">
       <div class="tmodal-main">
       ${waitLabel && waitText ? (askToYou ? `<div class="task-ask"><div class="lbl">${esc(waitLabel)}</div><div class="task-ask-body">${esc(waitText)}</div></div>`
@@ -755,7 +756,8 @@ function hubModalHTML(t, it, opts = {}) {
         : `<div class="tdesc md">${safeMd(original)}</div>`) : (waitText ? '' : '<p class="muted tdesc">No details.</p>')}
       ${note && note.replace(/\s+/g, ' ').trim() !== waitText ? `<details class="task-orig"><summary>Progress</summary><div class="tdesc md">${safeMd(note)}</div></details>` : ''}
       ${(t.acceptance_criteria || []).length ? `<section class="tsec"><h3 class="rail-h">Done looks like</h3><ul class="tcriteria">${t.acceptance_criteria.map(a => `<li>${esc(a)}</li>`).join('')}</ul></section>` : ''}
-      <section class="tsec task-links"><h3 class="rail-h">Links<button type="button" class="prop-add" data-link-add aria-label="Add a link" title="Add a link">${TL_ICON.plus}</button></h3>
+      <div class="tsecs">
+      <section class="tsec task-links${links.length ? '' : ' tsec-empty'}"><h3 class="rail-h">Links<button type="button" class="prop-add" data-link-add aria-label="Add a link" title="Add a link">${TL_ICON.plus}</button></h3>
         ${links.length ? `<div class="tlinks">${links.map(l => `<span class="tlink ${esc(l.kind)} ${esc(l.state || '')}"><a href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.title || l.url)}</a>${l.state && l.state !== 'open' ? ` · ${esc(l.state)}` : ''}${mover ? `<button type="button" class="x" data-drop-link="${esc(l.id)}" aria-label="Remove link">×</button>` : ''}</span>`).join('')}</div>` : ''}
         <form class="inline task-link-add" data-modal-link hidden><input type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://…" aria-label="Add a link"></form></section>
       ${roadmapTaskHTML(t)}
@@ -763,6 +765,7 @@ function hubModalHTML(t, it, opts = {}) {
       <section class="tsec task-runs" data-task-runs aria-label="Runs" hidden></section>
       ${t.relations ? taskRelHTML(t) : ''}
       <section class="tsec task-files" data-task-files aria-label="Files" hidden></section>
+      </div>
       </div>
       <aside class="task-side" aria-label="Details">
         <section class="task-props" data-task-props aria-label="Properties">${taskPropsHTML(t, opts)}</section>

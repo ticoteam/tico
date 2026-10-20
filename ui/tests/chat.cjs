@@ -177,7 +177,7 @@ async function liveReply(browser) {
   assert.match(pending.text,/no AI provider is chosen/);
   assert.match(pending.text,/Add an AI provider/);
   assert.equal(pending.href,'#/settings');
-  assert.equal(pending.tab,'providers');
+  assert.equal(pending.tab,'models');
   assert.match(pending.legacy,/No reply after 20 minutes/);
   // A provider is chosen but the bot's computer is not signed in to its model: the same place says so, with Sign in and Health.
   const signIn = await page.evaluate(() => {
@@ -666,7 +666,7 @@ async function settingsLinks(browser) {
     if(p==='/api/v2/support/tickets')return json({enabled:false});
     return json(unrouted(p));
   });
-  for (const [why, name, tab] of [['missing_provider', 'Add an AI provider', 'providers'],
+  for (const [why, name, tab] of [['missing_provider', 'Add an AI provider', 'devices'],   // Models is on Computers
     ['model_sign_in', 'Sign in on Settings > Computers', 'devices']]) {
     reason=why;
     // Settings was last left on another tab, which a plain link to #/settings would reopen.

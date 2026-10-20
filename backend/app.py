@@ -161,6 +161,8 @@ def create_app(settings=None):
             telemetry.capture("support_access", exc)
         telemetry.start()
         stop = asyncio.Event()
+        # Always runs: local 90-day retention must not depend on the inbound key or HQ (sync itself stays off).
+        inbound_task = asyncio.create_task(app.state.inbound.loop(stop))
         screen_relay_task = None
         if settings.screen_relay_url:
             await asyncio.to_thread(screen_sessions.start)
@@ -177,10 +179,12 @@ def create_app(settings=None):
             from .scheduler import Scheduler
             scheduler = Scheduler(store, execution)
             def github_wakes():
-                from .github import flush_wakes, refresh_deployed_tasks
+                from .github import flush_wakes, reconcile_worktree_prs, refresh_deployed_tasks
                 with store.transaction() as c:
                     flush_wakes(c)
                 refresh_deployed_tasks(app.state.github_app)
+                # A worktree is released by its pull requests' state, so a missed webhook must heal unread.
+                reconcile_worktree_prs(app.state.github_app)
             while not stop.is_set():
                 try:
                     await asyncio.to_thread(github_wakes)
@@ -245,6 +249,8 @@ def create_app(settings=None):
             yield
         finally:
             stop.set()
+            if inbound_task:
+                await inbound_task
             if screen_relay_task:
                 await screen_relay_task
             else:
@@ -3496,7 +3502,7 @@ def create_app(settings=None):
         who = request.state.identity
         auth.domain(who)
         if key.startswith("assistant."):
-            raise Problem("forbidden", "Your Assistant's settings are set in Settings > " + settings.assistant_name, 403)
+            raise Problem("forbidden", "Your Assistant's settings are set in Settings > General", 403)
         if key == "meetings.auto_share":
             views.human_only(who)
             if not isinstance(body.value, bool):
@@ -3558,7 +3564,7 @@ def create_app(settings=None):
         """The person takes back what their Assistant decided for them, before anything acted on it. Their own click."""
         who = request.state.identity
         if who.via:
-            raise Problem("forbidden", "Only the person undoes this, in Settings > " + settings.assistant_name, 403)
+            raise Problem("forbidden", "Only the person undoes this, in Settings > General", 403)
         def work(c):
             auth.approval(c, who, aid, decide=True)
             return H.approval_undo(c, who.actor, aid)
@@ -5477,6 +5483,8 @@ def create_app(settings=None):
     install_report_order(app, store, auth, mutate)
     from .support import install as install_support
     install_support(app, store, settings, census)
+    from .inbound import install as install_inbound
+    install_inbound(app, store, settings, auth)
     from .support_access import install as install_support_access
     install_support_access(app, store, settings, auth)
     from .watchers import install as install_watchers

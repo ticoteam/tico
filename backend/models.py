@@ -688,7 +688,7 @@ class ApprovalDecision(Contract):
 
 
 class AssistantSettings(Contract):
-    """A person's own Assistant settings (Settings > Assistant)."""
+    """A person's own Assistant settings (Settings > General)."""
     decides_approvals: StrictBool
 
 

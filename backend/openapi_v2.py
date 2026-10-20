@@ -1082,6 +1082,25 @@ SCHEMAS['TaskType']['properties'].update({'default_visibility': {'enum': ['publi
                                          'role': {'type': ['string', 'null'], 'enum': ['product-roadmap', 'engineering', None],
                                                   'description': 'The Product roadmap or Dev tickets type, whoever manages it'}})
 
+TAGS['Inbound'] = 'Shared company inbound email and SMS for people and agents; reads never consume messages.'
+STABLE.extend([
+    ('/api/v2/inbound/inboxes','get','Inbound','listInboundInboxes','Company email and phone inboxes','InboundInboxes'),
+    ('/api/v2/inbound/inboxes','post','Inbound','createInboundInbox','Create an email inbox, or an admin-approved monthly mobile rental',None),
+    ('/api/v2/inbound/inboxes/{ident}','patch','Inbound','editInboundInbox','Rename an inbox and record its dependencies',None),
+    ('/api/v2/inbound/inboxes/{ident}/release','post','Inbound','releaseInboundInbox','An admin retires email or cancels phone renewal',None),
+    ('/api/v2/inbound/phone-quote','get','Inbound','quoteInboundPhone','A current monthly US mobile rental quote',None),
+    ('/api/v2/inbound/cursor','get','Inbound','getInboundCursor','Capture a cursor before requesting a code','InboundCursor'),
+    ('/api/v2/inbound/messages','get','Inbound','listInboundMessages','Search one, many or all company inboxes','InboundMessages'),
+    ('/api/v2/inbound/messages/{ident}','get','Inbound','readInboundMessage','Untrusted message text, up to 32 KB per page',None),
+    ('/api/v2/inbound/messages/{ident}/code','get','Inbound','readInboundCode','Extracted code for a specific message',None),
+    ('/api/v2/inbound/wait','post','Inbound','waitInboundMessages','Non-consuming wait after a cursor','InboundMessages'),
+])
+SCHEMAS.update({
+    'InboundCursor': obj({'cursor':'i'}),
+    'InboundInboxes': obj({'inboxes':items({'type':'object'}),'configured':'b','last_sync':NUM_N,'error':'s','gaps':items({'type':'object'})}),
+    'InboundMessages': obj({'messages':items({'type':'object'}),'next':{'type':['integer','null']},'cursor':'i'}),
+})
+
 ANSWERS = SCHEMAS
 
 # Documentation for the two sign-in routes whose bodies the handlers read by hand.

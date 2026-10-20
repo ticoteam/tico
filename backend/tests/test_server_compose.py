@@ -6,9 +6,10 @@ ROOT = Path(__file__).resolve().parents[2]
 
 STORAGE_KEYS = {"TICO_BLOB_BUCKET", "TICO_BLOB_REGION", "TICO_BLOB_ENDPOINT", "TICO_UPLOAD_MAX_BYTES",
                 "TICO_BLOB_ACCESS_KEY_ID", "TICO_BLOB_SECRET_ACCESS_KEY"}
+SERVER_ONLY_KEYS = STORAGE_KEYS | {"TICO_INBOUND_KEY", "TICO_INBOUND_URL"}
 
 
-def test_server_forwards_storage_without_operator_aws_settings_in_checkout_and_release_bundle():
+def test_server_forwards_private_settings_only_to_server_in_checkout_and_release_bundle():
     import io
     import tarfile
     import yaml
@@ -21,14 +22,16 @@ def test_server_forwards_storage_without_operator_aws_settings_in_checkout_and_r
     for content in ((ROOT / "compose.yaml").read_text(), bundled_compose):
         services = yaml.safe_load(content)["services"]
         environment = services["server"]["environment"]
-        assert STORAGE_KEYS <= set(environment)
-        assert all(environment[key] is None for key in STORAGE_KEYS)
+        assert SERVER_ONLY_KEYS <= set(environment)
+        assert all(environment[key] is None for key in SERVER_ONLY_KEYS)
         assert {"LITESTREAM_ACCESS_KEY_ID", "LITESTREAM_SECRET_ACCESS_KEY"} <= set(environment)
         assert not {"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"}.intersection(environment)
         assert "CLOUDFLARE_TUNNEL_TOKEN" not in environment
         for name, service in services.items():
             if name != "server":
-                assert not STORAGE_KEYS.intersection(service.get("environment", {}))
+                assert not SERVER_ONLY_KEYS.intersection(service.get("environment", {}))
+    for service in yaml.safe_load((ROOT / "docker/runner.compose.yaml").read_text())["services"].values():
+        assert not SERVER_ONLY_KEYS.intersection(service.get("environment", {}))
 
 
 def test_a_server_update_recreates_only_the_server_never_the_updater(monkeypatch, tmp_path):

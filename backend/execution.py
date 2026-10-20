@@ -321,6 +321,42 @@ def isolation_refused(c, who, auth, bot):
                for row, _, seen in _readable_held(c, who, auth, bot))
 
 
+def held_back(c, who, auth, bot, limit=3):
+    """The bot's queued work the claim's interrupted-work fence (unfenced_sql) passes over, as `who` may read it:
+    (count, titles of up to `limit` tasks it is on). Each job waits behind a stopped run on its task or chat until
+    someone reviews that run, so a stopped run with work behind it needs a person, not a later look."""
+    fence, count, titles = auth.task_sql(c, who), 0, []
+    for row in c.execute(f"SELECT m.*,j.attempt_id FROM jobs j JOIN messages m ON m.id=j.message_id "
+                         "JOIN conversations cv ON cv.id=m.conversation_id "
+                         f"WHERE j.bot=? AND j.state='queued' AND j.held=0 AND NOT {unfenced_sql()} "
+                         "ORDER BY j.created", (bot,)).fetchall():
+        if not (privacy.message_readable(c, privacy.actor(who), row)
+                and (not row["attempt_id"] or privacy.attempt_readable(c, privacy.actor(who), row["attempt_id"]))):
+            continue
+        count += 1
+        message = H.message(c, row["id"])
+        task_id = H.message_task_id(message, H.conversation(c, message["conversation_id"]))
+        task = H.task(c, task_id) if task_id else None
+        if (task and task["title"] not in titles and len(titles) < limit
+                and H.task_private_readable(c, privacy.actor(who), task)
+                and c.execute(f"SELECT 1 FROM tasks WHERE id=? AND {fence}", (task["id"],)).fetchone()):
+            titles.append(task["title"])
+    return count, titles
+
+
+def left_by_keeper(c, who, bot):
+    """How many of the bot's runs saved for later that `who` may read rode on a stopped run whose own request the
+    keeper already settled (auto_reconcile): it decided that one and could not decide these safely, so nobody else
+    was going to look at them."""
+    return sum(privacy.message_readable(c, privacy.actor(who), row)
+               and privacy.attempt_readable(c, privacy.actor(who), row["attempt_id"])
+               for row in c.execute("SELECT m.*,j.attempt_id FROM jobs j JOIN messages m ON m.id=j.message_id "
+                                    "JOIN attempts a ON a.id=j.attempt_id "
+                                    "JOIN job_recovery r ON r.job_id=a.job_id AND r.attempt_id=a.id "
+                                    "WHERE j.bot=? AND j.state='uncertain' AND j.id<>a.job_id AND r.actor=?",
+                                    (bot, H.KEEPER)).fetchall())
+
+
 def limit_streak(c, bot):
     """How many of the bot's latest finished attempts in a row ended on a usage limit (capped
     at LIMIT_STRIKES; a lapsed lease or any other outcome ends the run)."""
@@ -2366,7 +2402,7 @@ class Execution:
                      "retry_after": retry, "provider_reset": bool(body.limit_resets_at)})
         elif rejected and any(gateway.key_refused(error) for error in limit_errors(c, aid)):
             settle_status(c, row["bot"], "idle" if requeue else "crashed",
-                          "The Tico AI Gateway key is not working; save a new one in Settings > AI providers",
+                          "The Tico AI Gateway key is not working; save a new one in Settings > Computers",
                           claimed=row["created"])
         elif rejected:
             settle_status(c, row["bot"], "idle" if requeue else "crashed",

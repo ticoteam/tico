@@ -212,9 +212,9 @@ function fixture() {
     await page.locator('[data-turn-on]').waitFor();
     assert.match(await page.locator('.asst-off').innerText(), /is off/);
     assert.equal(await page.locator('#chat-composer .p-text').count(), 0, 'no chat while it is off');
-    // The owner is offered the same switch in the Assistant settings tab, and one click turns it on.
+    // The owner is offered the same switch in Settings > General, and one click turns it on.
     await page.goto('https://tico-ui.test/#/settings');
-    await page.locator('[data-settings-tab="assistant"]').click();
+    await page.locator('[data-settings-tab="general"]').click();
     const strip = page.locator('[data-assistant-off]');
     await strip.waitFor();
     state.view = () => ({available: true, state: 'active', bot: 'coo', name: 'Tico', can_turn_on: false, room_id: 'room1',

@@ -619,7 +619,7 @@ async function properties(browser) {
   await peek.locator('.task-subs .sub-bar').waitFor();
   const rows = await props.locator('.prop').evaluateAll(rs => rs.map(r => [r.querySelector('.prop-k').textContent,
     [...r.querySelectorAll('.prop-txt, .tlabel > [data-tag-key]')].map(x => x.textContent.trim()).join(' ')]));
-  assert.deepEqual(rows, [['Status', 'Waiting'], ['Owner', 'Engineer'], ['Asked by', 'You'], ['Private', ''], ['Due', 'Add due date'], ['Tags', 'checkout'],
+  assert.deepEqual(rows, [['Status', 'Waiting'], ['Owner', 'Engineer'], ['Asked by', 'You'], ['Private', 'Everyone'], ['Due', 'Add due date'], ['Tags', 'checkout'],
     ['Part of', 'Add parent']]);
   assert.match(await props.locator('[data-prop="status"]').innerText(), /Waiting/);
   // Detail names the status; the status-grouped list uses its heading. "blocked" is a small chip.
@@ -633,7 +633,9 @@ async function properties(browser) {
   assert.equal(await peek.locator('.tmodal-head button:not([data-task-finish])').count(), 2);
   assert.deepEqual(await peek.locator('.tmodal-head [data-task-finish]').evaluateAll(bs => bs.map(b => b.dataset.taskFinish)), ['close']);
   assert.match(await peek.locator('.tmodal-head .peek-pos').innerText(), /^\d+ \/ \d+$/);
-  assert.match(await peek.locator('.tmeta').innerText(), /^Added by you · /);
+  // Who added it and when is the age's tooltip, not a line under the title; the owner is a property, not in the header.
+  assert.match(await peek.locator('.tmodal-age').getAttribute('title'), /^Added by you .* · Updated /);
+  assert.equal(await peek.locator('.tmeta, .tmodal-head .tmodal-owner').count(), 0);
   const top = await props.boundingBox(), main = await peek.locator('.tmodal-main').boundingBox();
   assert.ok(top.y < main.y, 'properties first in the peek');
   assert.equal(await peek.locator('.tmodal-main select, [data-task-props] select, [data-modal-task], .tcontrols').count(), 0, 'no boxed form, no Done/Close links');
@@ -961,9 +963,7 @@ async function donePagination(browser) {
 }
 
 async function ages(browser) {
-  // Every open row reads how long its task has been open (since created) and, when it has
-  // sat untouched, how long it has been quiet (since updated). A task that just moved
-  // reads only its open age, so it never looks stale.
+  // Every open row reads one short age, since it last moved; the tooltip has when it was opened and updated.
   const base = {...fixtures().find(x => x.id === 't-copy')};
   const extraTasks = [
     {...base, id: 't-stale', title: 'Stale vendor contract', created: at(60 * 30), updated: at(65)},
@@ -972,13 +972,13 @@ async function ages(browser) {
   ];
   const {page, errors} = await open(browser, {hash: '#/tasks', extraTasks});
   const age = key => page.locator(`[data-task-key="${key}"] .tl-age`);
-  assert.equal(await age('tt-stale').innerText(), 'open 1d · quiet 1h', 'a long-quiet item reads as stale');
+  assert.equal(await age('tt-stale').innerText(), '1h');
   assert.match(await age('tt-stale').getAttribute('title'), /^Open .* · Updated /);
-  assert.equal(await age('tt-fresh').innerText(), 'open 1d', 'a just-moved item shows only its open age');
-  assert.equal(await age('tt-untouched').innerText(), 'open 3h', 'an untouched item reads its open age once');
+  assert.equal(await age('tt-fresh').innerText(), 'now', 'a just-moved item never looks stale');
+  assert.equal(await age('tt-untouched').innerText(), '3h');
   assert.deepEqual(errors, []);
   await page.close();
-  console.log('open/quiet ages: ok');
+  console.log('ages: ok');
 }
 async function polling(browser) {
   // The 30-second poll reloads the list: a changed row redraws, the others stay the same nodes, the focus and the

@@ -15,7 +15,7 @@ use crate::signin::{self, SignIn};
 use crate::util::text_of;
 
 pub const CLAUDE_MODELS: &[&str] = &["claude-fable-5-1", "claude-opus-5", "claude-opus-4-8", "claude-sonnet-5", "claude-haiku-4-5-20251001"];
-pub const NO_RUNTIME: &str = "No AI provider is chosen: the owner picks providers and a default model in Settings > AI providers";
+pub const NO_RUNTIME: &str = "No AI provider is chosen: the owner picks providers and a default model in Settings > Computers";
 
 /// `run` in `env` (a profile's homes) when given. Err(true) is a timeout, Err(false) a command that did not start.
 async fn run_env(argv: &[&str], timeout_s: u64, env: Option<&Env>) -> Result<(bool, String, String), bool> {
