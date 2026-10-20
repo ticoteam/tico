@@ -115,6 +115,8 @@ services:
       TICO_HQ_URL:
       TICO_INBOUND_KEY:
       TICO_INBOUND_URL:
+      # HQ's read-only staff key, on the Tico team's own server only: its Health page shows HQ's nightly billing check.
+      TICO_HQ_STAFF_READ_KEY:
       TICO_GITHUB_REVIEW_ROLE:
       TICO_TITLE_LINT:
       # Naming, a mounted integrations folder, the AWS region (KMS, Secrets Manager, S3) and the AWS identity the server

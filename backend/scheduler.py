@@ -36,6 +36,7 @@ class Scheduler:
         self.go_lives_checked = None
         self.health_scanned = None
         self.gateway_checked = None
+        self.billing_checked = None
         self.stale_checked = None
 
     def tick(self, at=None):
@@ -244,6 +245,16 @@ class Scheduler:
                     gateway_connection.check_soon(self.store, Vault(self.store), self.store.settings)
             except Exception as exc:
                 failures.append({"gateway": type(exc).__name__})
+        if self.billing_checked is None or at - self.billing_checked >= timedelta(hours=1):
+            # Every hour, while this server holds HQ's read-only staff key (the Tico team's own install only): HQ's
+            # nightly billing check for the owner's Health page (backend/billing_check.py). On its own thread.
+            self.billing_checked = at
+            try:
+                from . import billing_check
+                if billing_check.env_key(self.store.settings):
+                    billing_check.read_later(self.store, self.store.settings)
+            except Exception as exc:
+                failures.append({"billing_check": type(exc).__name__})
         if self.stale_checked is None or at - self.stale_checked >= timedelta(minutes=5):
             # Stale ticket review (backend/stale_review.py), while the team has it on: the watermark makes it hourly;
             # the Decide calls run on the pass's own thread, never under this lock.

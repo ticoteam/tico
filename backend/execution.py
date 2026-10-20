@@ -2367,7 +2367,7 @@ class Execution:
             streak = limit_streak(c, row["bot"])
             hit = H.now()
             retry = login_hold.get("until") or H.shift(hit, seconds=limit_cooldown(c, row["bot"]))
-            kind = "API quota or billing limit" if billing_limit(c, attempt_id=aid) else "usage limit"
+            src = {}
             if any(gateway.cap_reached(error) for error in limit_errors(c, aid)):
                 # The Tico AI Gateway's monthly cap for the company's key (clients/gateway.py): said as it is.
                 focus = (f"{gateway.CAP_MESSAGE} at {hit[11:16]}: the gateway key has used this month's cap; "
@@ -2375,31 +2375,41 @@ class Execution:
             elif tico_code == gateway.RATE_LIMITED:
                 focus = (f"Tico AI Gateway rate limited at {hit[11:16]} after too many refused keys from this "
                          f"address; retrying after {retry[:10]} {retry[11:16]} UTC")
-            elif login_hold:
-                # The hold on the login (backend/login_holds.py): that login's provider, its own words and its streak,
-                # so a fallback's quota is not reported as the bot's own runtime's.
-                said = (f"{login_hold['runtime']} " + ("API quota or billing limit"
-                        if BILLING_LIMIT_RE.search(login_hold.get("error") or "") else "usage limit")
-                        + (f" on the {login_hold['profile']} login" if login_hold.get("profile") else "")
-                        + f" at {hit[11:16]}")
-                if login_hold.get("reset"):
+            else:
+                # Whose limit it was, from the turn's own notes (backend/login_holds.py source): primary or fallback,
+                # which provider and login, and an API key's quota told apart from a plan's usage window. A fallback's
+                # quota is never reported as the bot's own runtime's (Dev 279).
+                from .subscriptions import effective
+                profile = effective(c, row["bot"])[0] or ""
+                own = login_holds.get(c, row["runner_id"], login_holds.canonical(c, row["runner_id"], profile, runtime),
+                                      runtime)
+                src = login_holds.source(c, aid, runtime, body, profile, row["runner_id"],
+                                         held=own if body.primary_held else None)
+                # Kept with the run: its log and Health name this source after the bot's settings or the login's hold
+                # change.
+                c.execute("UPDATE attempts SET result_json=json_set(result_json,'$.limit_source',json(?)) WHERE id=?",
+                          (encode(src), aid))
+                primary_until = ""
+                if src["role"] == "fallback" and src.get("primary") in ("limited", "held"):
+                    if (own.get("until") or "") > hit:
+                        # Its own hold and its own retry time: the fallback's never moves it.
+                        primary_until = (f"{own['until'][11:16]} UTC"
+                                         + ("" if own["until"][:10] == hit[:10] else f" on {own['until'][:10]}"))
+                said = login_holds.label(src, at=hit[11:16], primary_until=primary_until)
+                if login_hold.get("reset") or (not login_hold and body.limit_resets_at
+                                                and provider_reset(last_limit(c, row["bot"]), H.parse_ts(hit))):
                     focus = (f"{said}; resumes at {retry[11:16]} UTC"
                              + ("" if retry[:10] == hit[:10] else f" on {retry[:10]}") + " when it resets")
                 else:
-                    focus = (said + (", third in a row" if login_hold["streak"] >= LIMIT_STRIKES else "")
-                             + f"; retrying after {retry[:10]} {retry[11:16]} UTC")
-            elif body.limit_resets_at and provider_reset(last_limit(c, row["bot"]), H.parse_ts(hit)):
-                focus = (f"{runtime} {kind} at {hit[11:16]}; resumes at {retry[11:16]} UTC"
-                         + ("" if retry[:10] == hit[:10] else f" on {retry[:10]}") + " when it resets")
-            else:
-                focus = (f"{runtime} {kind} at {hit[11:16]}" + (", third in a row" if streak >= LIMIT_STRIKES else "")
-                         + f"; retrying after {retry[:10]} {retry[11:16]} UTC")
+                    third = (login_hold["streak"] if login_hold else streak) >= LIMIT_STRIKES
+                    focus = said + (", third in a row" if third else "") + f"; retrying after {retry[:10]} {retry[11:16]} UTC"
             H.status_set(c, H.KEEPER, row["bot"], state="limited", focus=focus)
             # Every limit restarts the cooldown; status_set keeps `since` while the state stays the same.
             c.execute("UPDATE bot_status SET since=? WHERE bot=?", (hit, row["bot"]))
             H.event(c, H.KEEPER, "attempt.limited", aid,
                     {"bot": row["bot"], "job_id": row["job_id"], "runtime": runtime, "streak": streak,
-                     "retry_after": retry, "provider_reset": bool(body.limit_resets_at)})
+                     "retry_after": retry, "provider_reset": bool(body.limit_resets_at),
+                     **({"source": {k: v for k, v in src.items() if k != "notice"}} if src else {})})
         elif rejected and any(gateway.key_refused(error) for error in limit_errors(c, aid)):
             settle_status(c, row["bot"], "idle" if requeue else "crashed",
                           "The Tico AI Gateway key is not working; save a new one in Settings > Computers",
