@@ -120,6 +120,7 @@ function tfPaint(d) {
   if (d.tfOpen && !files.some(f => f.id === d.tfOpen.id)) d.tfOpen = null;
   const can = d.canComment !== false;
   el.hidden = !files.length && !can;
+  el.classList.toggle('tsec-empty', !files.length);       // folds into the row of small add buttons (task-list.css)
   if (!$('.tf-strip', el)) el.innerHTML = `<h3 class="rail-h">Files<span class="muted tf-status" data-tf-status role="status"></span><button type="button" class="prop-add" data-tf-add aria-label="Add files" title="Add files, or drop them on this task, or paste a screenshot">${TL_ICON.plus}</button></h3>
     <input type="file" multiple hidden data-tf-input aria-label="Add files to this task"><div class="tf-strip"></div><div class="tf-view" data-tf-view hidden></div>`;
   $('[data-tf-add]', el).hidden = !can;
