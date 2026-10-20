@@ -7,12 +7,18 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.3.68] - 2026-10-20
+
 ### Added
 - **Start with your selected company chart**: the first setup screen previews and imports a company YAML file,
   keeping its selected catalog employees, titles, reporting lines and paused-later choices alongside Tico's built-ins.
   `tico setup --company-file PATH` carries the same plan privately into a self-hosted or cloud install and applies it
   once on first startup. Imports refuse to replace an existing team; goals, routines, first jobs, tool connections
   and model choices are retained and listed for later setup. ([Setup](docs/onboarding.md))
+
+## [0.3.67] - 2026-10-20
+
+### Added
 - **Roadmap items move with their Dev tickets by rule**: a Product roadmap item counts the Dev tickets linked to
   it as children and as blocked by alike. Linking alone moves nothing: it is **Building** once the first ticket is In
   Progress or later, at the new **Ready to ship** step (right after Building, shown publicly as "In progress") once
@@ -26,18 +32,9 @@ All notable changes to Tico are recorded here. The format follows
   Atomic generated configuration and a private health check remove stale visual listeners when settings change.
   The updater recreates an existing Caddy service after server health on updates and rollback; external CDNs and
   the default app proxy work without opting in. ([Install](docs/install.md#caddy-and-a-separate-visual-site))
-- **How bots get their models**, at the top of Settings > AI providers and the first setup step: **Your Claude and
-  ChatGPT subscriptions, plus Tico Gateway** (recommended, and what Tico's installer sets with
-  `TICO_MODELS_PRESET=subscriptions-gateway`), subscriptions only, Tico Gateway only, or your company's plans or API
-  keys. Under the recommended choice bots do their main work on your Claude and ChatGPT subscriptions; until you sign
-  in they run on Tico Mid 1.0 through the Gateway and move over on their next turn once you do, and a used-up plan
-  finishes on the Gateway, last. Decide and update drafts run on the Gateway. The owner sees one Needs you item, "Sign
-  in to Claude and ChatGPT, or add API keys", until both are signed in; where no computer runs bots as their own user
-  (a Mac), bots wait for the sign-in instead, the item says why, and the model list marks Tico models "not on this
-  computer". A bot on a Tico model waits there too, with Health saying why, rather than stopping. Health says
-  plainly when a used-up login has bots on the Gateway. Gateway usage records keep which gateway key and install
-  paid, never the key. The other three choices, and a team that never picks one, keep working
-  as before ([Tico AI Gateway](docs/ai-gateway.md#choose-how-bots-get-their-models)).
+- **Connect an existing Inbox to a portal company**: in Settings > More > Email & Phone, a workspace owner or admin
+  can preview the company chosen in the customer portal and connect the workspace's existing Inbox to it, after
+  agreeing to share Inbox both ways. The screen explains what history and local copies stay after a disconnect.
 
 ### Fixed
 - **A WAV file attached to a task plays inline again**: on servers running Python 3.15 a WAV uploaded to a task
@@ -45,6 +42,11 @@ All notable changes to Tico are recorded here. The format follows
   under the other name show the player too.
 - Inbox waits over MCP honor the full requested wait, up to 120 seconds, through both the local and HTTP transports.
   An internal request that exceeds its deadline is cancelled and returns a retryable tool error.
+- The desktop app keeps signed visuals from a workspace's separate visual site inline (pages, images, audio and
+  video) instead of opening them in the browser. If the app cannot confirm the site, visuals stay available as file
+  links. Signing out or switching workspace clears the allowance.
+- Running Tico's installer again keeps the install's domain settings (aliases, public, CORS and HQ origins, and
+  visual serving) instead of rebuilding them from an older list. Clearing a setting still clears it.
 
 ## [0.3.66] - 2026-10-20
 
@@ -3958,7 +3960,9 @@ First public release.
 - Hosting: local only on a Mac, or self-hosted, including a reference AWS stack under `infra/ec2/`
   with Litestream backups.
 
-[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.66...HEAD
+[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.68...HEAD
+[0.3.68]: https://github.com/ticoteam/tico/compare/v0.3.67...v0.3.68
+[0.3.67]: https://github.com/ticoteam/tico/compare/v0.3.66...v0.3.67
 [0.3.66]: https://github.com/ticoteam/tico/compare/v0.3.65...v0.3.66
 [0.3.65]: https://github.com/ticoteam/tico/compare/v0.3.64...v0.3.65
 [0.3.64]: https://github.com/ticoteam/tico/compare/v0.3.63...v0.3.64
