@@ -178,7 +178,7 @@ const WITHHELD: &str = "[output withheld: the runner restarted while this comman
 fn report(turn: &Value, redactor: Option<&Arc<Redactor>>) -> Value {
     let blind = redactor.is_none() && turn["secrets"] != false;
     let scrub = |t: &str| redactor.map(|r| r.scrub_text(t)).unwrap_or_else(|| t.to_string());
-    let description = |c: &Value| if blind && turn["secrets"].is_null() { "A background command".to_string() } else { scrub(&text_of(&c["description"])) };
+    let description = |c: &Value| if blind && turn["secrets"].is_null() { UNNAMED.to_string() } else { scrub(&text_of(&c["description"])) };
     let output = |c: &Value| if blind { WITHHELD.to_string() } else { scrub(&tail(&text_of(&c["output_file"]))) };
     let commands: Vec<Value> = turn["commands"]
         .as_array()
@@ -234,12 +234,25 @@ async fn tick(runner: &Runner) {
     }
 }
 
-/// Takes up what an earlier runner left in the state directory. Their redactors went with it.
+/// Said in place of a description that was stored before descriptions were stored scrubbed.
+const UNNAMED: &str = "A background command";
+
+/// Takes up what an earlier runner left in the state directory. Their redactors went with it. A turn stored before
+/// `secrets` was recorded may hold raw text, so it is cleaned before anything reads it (the next turn's prompt, the
+/// wake): its descriptions become `UNNAMED`, its commands are dropped, and it counts as holding secrets.
 fn restore(dir: &Path) {
     let path: PathBuf = dir.join(FILE);
-    if let Some(turns) = std::fs::read_to_string(&path).ok().and_then(|t| serde_json::from_str::<Vec<Value>>(&t).ok()) {
-        watched().lock().unwrap().turns.extend(turns);
+    let Some(mut turns) = std::fs::read_to_string(&path).ok().and_then(|t| serde_json::from_str::<Vec<Value>>(&t).ok()) else { return };
+    for t in turns.iter_mut().filter(|t| t["secrets"].is_null()) {
+        t["secrets"] = json!(true);
+        for c in t["commands"].as_array_mut().into_iter().flatten() {
+            c["description"] = json!(UNNAMED);
+            if let Some(c) = c.as_object_mut() {
+                c.remove("command");
+            }
+        }
     }
+    watched().lock().unwrap().turns.extend(turns);
 }
 
 /// Watches until the runner stops, starting with what an earlier runner left in the state directory.
@@ -423,6 +436,29 @@ mod tests {
         assert_eq!(c["exit"], 0);
         assert_eq!(c["tail"], format!("token={}\n12 passed\n", crate::redact::MASK));
         assert_eq!(c["description"], format!("Deploy with {}", crate::redact::MASK));
+    }
+
+    #[test]
+    fn a_restored_legacy_watch_names_no_raw_description_in_the_next_turns_prompt() {
+        let _one = serial();
+        let dir = std::env::temp_dir().join(format!("afterwatch-legacy-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let aid = format!("a-{}", uuid::Uuid::new_v4().simple());
+        // Stored by an earlier runner, before `secrets` was recorded: raw description and command, still running.
+        let legacy = json!([{"aid": aid, "bot": "acme-legacy", "session": "task:t7", "status_file": null, "deadline": epoch_s() + 3600.0,
+                             "commands": [{"task_id": "s1", "description": format!("Deploy with {MARKER}"), "command": format!("deploy --key {MARKER}"),
+                                           "pid": 0, "output_file": "/nonexistent", "kept_at": epoch_s()}]}]);
+        std::fs::write(dir.join(FILE), legacy.to_string()).unwrap();
+        watched().lock().unwrap().redactors.remove(&aid);
+        restore(&dir);
+        let line = still_running("acme-legacy", "task:t7").expect("the reminder for the next turn");
+        let held = watched().lock().unwrap().turns.iter().find(|t| t["aid"] == aid.as_str()).cloned().unwrap();
+        watched().lock().unwrap().turns.retain(|t| t["aid"] != aid.as_str());
+        std::fs::remove_dir_all(dir).ok();
+        assert!(!line.contains(MARKER), "a raw description reached the prompt: {line}");
+        assert!(line.contains(&format!("\"{UNNAMED}\"")) && line.contains("Do not start them again"), "{line}");
+        assert!(!held.to_string().contains(MARKER), "{held}");
+        assert_eq!(report(&held, None)["commands"][0]["tail"], WITHHELD);
     }
 
     #[test]
