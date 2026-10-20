@@ -146,7 +146,7 @@ tries again. `POST /v1/staff/releases` `{"tag": "v0.3.52", "refs": [712]}` posts
 commits to the watch; without `refs` it reads the commits and counts as the watch's look.
 
 
-## Company Email & Phone
+## Company Inbox
 
 An optional server setting `TICO_INBOUND_KEY` connects this install to HQ's inbound-only service.
 The `tin_` key is bound to the company's install id at HQ and stays on the server. The optional
@@ -155,7 +155,9 @@ This does not send transactional account mail or provider-profile magic links.
 
 HQ allocates named `agent-…@tico.team` email addresses and monthly-or-longer non-VoIP US mobile
 rentals. Current company members and agents can create email inboxes, within quota. Only owners
-and admins buy numbers or release inboxes. Numbers remain exclusive to one company; daily and
+and admins request numbers, accept exact quotes or release inboxes. Rentals require TICO approval
+until billing is available; request and acceptance operations make no supplier purchase.
+Numbers remain exclusive to one company; daily and
 weekly rentals, one-time activations, VoIP and sending are absent.
 
 The install authenticates with its bearer key, never an account id in a request:
@@ -164,12 +166,20 @@ The install authenticates with its bearer key, never an account id in a request:
 |---|---|
 | `GET inboxes` | This company's inboxes and transport status |
 | `POST inboxes/email` | `{name,created_by,operation_id}` creates a free address once |
+| `POST inboxes/{id}/rename` | `{name,created_by}` changes the shared name; local dependency notes stay local |
 | `GET phone-quote` | Current US renewable 30-day price and purchase availability |
-| `POST inboxes/sms` | `{name,created_by,operation_id,max_price_micros}` buys a monthly mobile rental; disabled until configured |
+| `GET phone-requests` | Bounded company approval records; follow `next` with `after` |
+| `POST phone-requests` | `{name,created_by,operation_id}` records an approval request once |
+| `POST phone-requests/{id}/accept` | `{created_by,price_micros}` accepts the current exact quote, without purchasing |
+| `POST phone-requests/{id}/cancel` | `{created_by}` cancels a pending request |
 | `POST inboxes/{id}/release` | Retire email permanently; cancel phone renewal at the paid period end |
 | `POST pull` | `{cursor,wait:0..25}` returns bounded deliveries, gaps and a continuation cursor |
 | `POST ack` | `{through_hq_seq}` after the local commit; a lost ack is retried without duplicates |
 | `GET usage` | Thirty-day record-only estimates; no customer debits |
+
+The company instance refuses direct SMS creation even for an owner/admin. The general HQ purchase
+switch remains off until billing is live. Any actual rental still needs explicit TICO approval of
+an exact quote and spending limits; completing a pilot does not enable customer self-service.
 
 Incoming email bodies and codes are retained at HQ seven days after acknowledgment, at most thirty
 days unacknowledged. The install commits message upserts and its HQ cursor together before acking.

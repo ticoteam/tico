@@ -141,13 +141,17 @@ function gatewayHTML(gateway, owner) {
     <p class="muted">Tico's own models, Tico Cheap, Mid and Power 1.0, and Decide, with one gateway key from Tico.</p>`;
   if (!owner) return `<div class="prov-gateway" id="set-gateway">${head}</div>`;
   const message = gateway.message ? `<p class="${gateway.working === false || state === 'cap_reached' ? 'err' : 'muted'}" data-gateway-message>${esc(gateway.message)}</p>` : '';
+  // An install the install command invited gets its own key from Tico: nothing to paste, and a pasted key still wins.
+  const automatic = gateway.automatic ? '<p data-gateway-automatic>Tico AI Gateway: connected automatically</p>'
+    : gateway.auto_off ? `<p class="muted">This install can connect to the Tico AI Gateway by itself.</p>
+      <div class="onb-actions"><button class="ghost" type="button" data-gateway-automatic-on>Connect automatically</button></div>` : '';
   if (!gateway.editable) {
     return `<div class="prov-gateway" id="set-gateway">${head}
       <p class="muted">Set by the server's environment (${esc(gateway.env || 'TICO_GATEWAY_KEY')}); change it there.</p>${message}
       <div class="onb-actions"><button class="ghost" type="button" data-gateway-check>Check now</button></div></div>`;
   }
-  return `<div class="prov-gateway" id="set-gateway">${head}
-    <label class="onb-field"><span class="k">Gateway key</span><input type="password" autocomplete="off" spellcheck="false"
+  return `<div class="prov-gateway" id="set-gateway">${head}${automatic}
+    <label class="onb-field"><span class="k">${gateway.automatic ? 'Use your own gateway key instead' : 'Gateway key'}</span><input type="password" autocomplete="off" spellcheck="false"
       data-gateway-key placeholder="${gateway.connected ? esc(`Saved (${gateway.preview || '••••••'}). Leave empty to keep it`) : 'Paste the gateway key Tico gave you'}"></label>
     <label class="onb-field"><span class="k">Gateway URL</span><input type="url" data-gateway-url
       value="${esc(gateway.url && gateway.url !== gateway.default_url ? gateway.url : '')}" placeholder="${esc(gateway.default_url || '')}"></label>
@@ -174,6 +178,8 @@ function gatewayWire(gateway) {
   };
   const check = root.querySelector('[data-gateway-check]');
   if (check) check.onclick = () => run(check, 'Checking…', () => post('/v2/providers/gateway/check', {}), shown => shown.message || 'Checked');
+  const automaticOn = root.querySelector('[data-gateway-automatic-on]');
+  if (automaticOn) automaticOn.onclick = () => run(automaticOn, 'Connecting…', () => post('/v2/providers/gateway/automatic', {}), () => 'Connecting automatically');
   const clear = root.querySelector('[data-gateway-clear]');
   if (clear) clear.onclick = () => {
     if (!confirm('Clear the gateway key? Bots on Tico models stop until a key is saved again.')) return;

@@ -1410,6 +1410,18 @@ def create_app(settings=None):
             gateway_connection.clear(c, who, H.now(), settings)
             return gateway_connection.view(c, settings, manage=True)
 
+    @app.post("/api/v2/providers/gateway/automatic")
+    def gateway_automatic(request: Request):
+        """Connect automatically again after the owner cleared the install's automatic key: the install enrolls with
+        its own secret on the next check, which starts now."""
+        who = request.state.identity
+        auth.domain(who)
+        with store.transaction() as c:
+            gateway_connection.automatic_on(c, who, H.now())
+        gateway_connection.check_later(store, app.state.vault, settings)
+        with store.read() as c:
+            return gateway_connection.view(c, settings, manage=True)
+
     @app.post("/api/v2/providers/gateway/check")
     def gateway_check(request: Request):
         """Check now: ask the Gateway whether the key works and how much of its cap is used."""

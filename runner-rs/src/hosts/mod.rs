@@ -26,6 +26,11 @@ use regex::Regex;
 use serde_json::{json, Map, Value};
 use tokio::sync::mpsc::UnboundedSender;
 
+#[cfg(test)]
+thread_local! {
+    pub(crate) static TEST_STARTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 use crate::env::Env;
 
 pub type Events = UnboundedSender<Value>;
@@ -350,6 +355,8 @@ impl Host {
     }
 
     pub async fn start(&self) -> Result<(), HostError> {
+        #[cfg(test)]
+        TEST_STARTS.with(|starts| starts.set(starts.get() + 1));
         match self {
             Host::Claude(h) => h.start().await,
             Host::Codex(h) => h.start().await,

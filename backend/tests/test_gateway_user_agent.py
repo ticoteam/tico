@@ -99,8 +99,20 @@ def check(base):
     return "GET", "/v1/gateway/key"
 
 
+def enrol(base):
+    """Connecting automatically: the install asks for its own key (backend/gateway_connection.py, Dev 210)."""
+    assert G.enroll(base, "gi_" + "0" * 24, "gis_" + "s" * 43, "tgi_" + "i" * 32)[0] == 200
+    return "POST", "/v1/gateway/enroll"
+
+
+def turn(base):
+    """Rotating the automatic key before it is due (backend/gateway_connection.py, Dev 210)."""
+    assert G.rotate(base, KEY)[0] == 200
+    return "POST", "/v1/gateway/rotate"
+
+
 # Every request the app sends the Gateway. A new one is added here, and to HQ_CLIENTS below when it is a new module.
-CALLS = {"decisions": decide, "chat completions": write, "key check": check}
+CALLS = {"decisions": decide, "chat completions": write, "key check": check, "enroll": enrol, "rotate": turn}
 
 
 @pytest.mark.parametrize("call", list(CALLS))

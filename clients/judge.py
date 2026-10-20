@@ -480,13 +480,15 @@ def direct(api_key, model=MODEL, timeout=TIMEOUT, opener=None, sleep=time.sleep,
     return engine
 
 
-def gateway(api_key, url, model=GATEWAY_MODEL, timeout=GATEWAY_TIMEOUT, opener=None):
+def gateway(api_key, url, model=GATEWAY_MODEL, timeout=GATEWAY_TIMEOUT, opener=None, headers=None):
     """The Tico AI Gateway with a gateway key: one try of at most `timeout` seconds, no retry (the Gateway makes none
     either; the server falls back instead). A refusal keeps the HTTP status and a code, never the Gateway's text.
     The key goes only to an https or exact-loopback `url` (`safe_gateway_url`), never follows a redirect, and reaches
-    a loopback URL without a proxy (`gateway_open`). `opener(request, timeout)` is the seam the tests use."""
+    a loopback URL without a proxy (`gateway_open`). `headers` adds the Gateway's own (its opaque bot id).
+    `opener(request, timeout)` is the seam the tests use."""
     if not api_key or not url:
         raise JudgeError("unconfigured", "no Tico AI Gateway key or URL")
+    extra = dict(headers or {})
     opener = opener or gateway_open
 
     def engine(state, questions, label=None):
@@ -497,7 +499,8 @@ def gateway(api_key, url, model=GATEWAY_MODEL, timeout=GATEWAY_TIMEOUT, opener=N
         if label:
             body["label"] = label
         request = urllib.request.Request(url, data=json.dumps(body, default=str).encode(), method="POST", headers={
-            "Authorization": "Bearer " + api_key, "Content-Type": "application/json", "Accept": "application/json"})
+            **extra, "Authorization": "Bearer " + api_key, "Content-Type": "application/json",
+            "Accept": "application/json"})
         started = time.monotonic()
         try:
             with one_try(timeout) as seconds, opener(request, timeout=seconds) as response:

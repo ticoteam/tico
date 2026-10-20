@@ -46,6 +46,9 @@ from clients import gateway as G
 from clients import judge as J
 from clients import openrouter
 from . import gateway_connection, providers
+
+# Who the Gateway's ledger counts the server's own decisions under (gateway_connection.bot_header): no bot has this slug.
+DECIDE_BOT = "tico:decide"
 from .config import Settings
 from .models import Contract
 from .store import H, Problem
@@ -297,9 +300,10 @@ def gateway(settings, store=None, vault=None):
         with store.read() as c:
             secret = gateway_connection.key(c, keys, settings) if keys.configured else ""
             base = gateway_connection.url(c, settings)
+            bot = gateway_connection.bot_header(c, keys, DECIDE_BOT)
         if not secret:
             raise J.JudgeError("unconfigured", "no Tico AI Gateway key is saved")
-        return J.gateway(secret, G.decisions_url(base))(state, questions, label)
+        return J.gateway(secret, G.decisions_url(base), headers=bot)(state, questions, label)
     engine.model, engine.provider, engine.saved = J.GATEWAY_MODEL, J.GATEWAY_PROVIDER, True
     return engine
 
