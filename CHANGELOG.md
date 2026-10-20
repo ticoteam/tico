@@ -8,19 +8,6 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
-- **Roadmap items move with their Dev tickets by rule**: a Product roadmap item counts the Dev tickets linked to
-  it as children and as blocked by alike. Linking alone moves nothing: it is **Building** once the first ticket is In
-  Progress or later, at the new **Ready to ship** step (right after Building, shown publicly as "In progress") once
-  every ticket is at Pending Release or later, and **Shipped** once every one is done. A ticket closed or declined
-  without shipping counts for neither. On every change the item follows its tickets, back as well as forward. A
-  finished Dev ticket stays linked to the item it delivered. Each Dev ticket that starts, gets an open blocker or
-  reaches done leaves one quiet line from a fixed template (ticket, step, blocker, pull request) on its roadmap
-  item, else for its requester on the ticket; it wakes nobody.
-- **Optional separate visual site on Caddy**: `TICO_CADDY_VISUALS=1` serves only signed visual reads on a distinct
-  HTTPS `TICO_VISUAL_ORIGIN`, stripping browser credentials and response cookies while the backend checks access.
-  Atomic generated configuration and a private health check remove stale visual listeners when settings change.
-  The updater recreates an existing Caddy service after server health on updates and rollback; external CDNs and
-  the default app proxy work without opting in. ([Install](docs/install.md#caddy-and-a-separate-visual-site))
 - **How bots get their models**, at the top of Settings > AI providers and the first setup step: **Your Claude and
   ChatGPT subscriptions, plus Tico Gateway** (recommended, and what Tico's installer sets with
   `TICO_MODELS_PRESET=subscriptions-gateway`), subscriptions only, Tico Gateway only, or your company's plans or API
@@ -34,12 +21,37 @@ All notable changes to Tico are recorded here. The format follows
   paid, never the key. The other three choices, and a team that never picks one, keep working
   as before ([Tico AI Gateway](docs/ai-gateway.md#choose-how-bots-get-their-models)).
 
+## [0.3.67] - 2026-10-20
+
+### Added
+- **Roadmap items move with their Dev tickets by rule**: a Product roadmap item counts the Dev tickets linked to
+  it as children and as blocked by alike. Linking alone moves nothing: it is **Building** once the first ticket is In
+  Progress or later, at the new **Ready to ship** step (right after Building, shown publicly as "In progress") once
+  every ticket is at Pending Release or later, and **Shipped** once every one is done. A ticket closed or declined
+  without shipping counts for neither. On every change the item follows its tickets, back as well as forward. A
+  finished Dev ticket stays linked to the item it delivered. Each Dev ticket that starts, gets an open blocker or
+  reaches done leaves one quiet line from a fixed template (ticket, step, blocker, pull request) on its roadmap
+  item, else for its requester on the ticket; it wakes nobody.
+- **Optional separate visual site on Caddy**: `TICO_CADDY_VISUALS=1` serves only signed visual reads on a distinct
+  HTTPS `TICO_VISUAL_ORIGIN`, stripping browser credentials and response cookies while the backend checks access.
+  Atomic generated configuration and a private health check remove stale visual listeners when settings change.
+  The updater recreates an existing Caddy service after server health on updates and rollback; external CDNs and
+  the default app proxy work without opting in. ([Install](docs/install.md#caddy-and-a-separate-visual-site))
+- **Connect an existing Inbox to a portal company**: in Settings > More > Email & Phone, a workspace owner or admin
+  can preview the company chosen in the customer portal and connect the workspace's existing Inbox to it, after
+  agreeing to share Inbox both ways. The screen explains what history and local copies stay after a disconnect.
+
 ### Fixed
 - **A WAV file attached to a task plays inline again**: on servers running Python 3.15 a WAV uploaded to a task
   showed as a plain file instead of an audio player. Tico now stores it as `audio/wav`, and WAV files already stored
   under the other name show the player too.
 - Inbox waits over MCP honor the full requested wait, up to 120 seconds, through both the local and HTTP transports.
   An internal request that exceeds its deadline is cancelled and returns a retryable tool error.
+- The desktop app keeps signed visuals from a workspace's separate visual site inline (pages, images, audio and
+  video) instead of opening them in the browser. If the app cannot confirm the site, visuals stay available as file
+  links. Signing out or switching workspace clears the allowance.
+- Running Tico's installer again keeps the install's domain settings (aliases, public, CORS and HQ origins, and
+  visual serving) instead of rebuilding them from an older list. Clearing a setting still clears it.
 
 ## [0.3.66] - 2026-10-20
 
@@ -3953,7 +3965,8 @@ First public release.
 - Hosting: local only on a Mac, or self-hosted, including a reference AWS stack under `infra/ec2/`
   with Litestream backups.
 
-[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.66...HEAD
+[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.67...HEAD
+[0.3.67]: https://github.com/ticoteam/tico/compare/v0.3.66...v0.3.67
 [0.3.66]: https://github.com/ticoteam/tico/compare/v0.3.65...v0.3.66
 [0.3.65]: https://github.com/ticoteam/tico/compare/v0.3.64...v0.3.65
 [0.3.64]: https://github.com/ticoteam/tico/compare/v0.3.63...v0.3.64
