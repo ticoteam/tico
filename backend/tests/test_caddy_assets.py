@@ -136,6 +136,15 @@ def test_unwritable_unmounted_directory_is_inert_while_off_but_refuses_explicit_
         assert subprocess.run(["bash", str(ENTRYPOINT), "caddy-config"], env=run, capture_output=True,
                               timeout=60).returncode != 0
         assert (directory / "caddy.json").read_bytes() == old
+        # Unable to look is not absence: an uninspectable directory or parent must not hide that generation.
+        for unreadable, refusal in ((directory, RuntimeError), (directory.parent, ValueError)):
+            unreadable.chmod(0o000)
+            try:
+                with pytest.raises(refusal, match="^caddy_config_(write_failed|directory_invalid)$"):
+                    assets.prepare({"TICO_CADDY_DIR": str(directory), "TICO_DOMAIN": APP})
+            finally:
+                unreadable.chmod(0o555 if unreadable == directory else 0o755)
+        assert (directory / "caddy.json").read_bytes() == old
     finally:
         directory.chmod(0o755)
 

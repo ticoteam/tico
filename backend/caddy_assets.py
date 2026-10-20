@@ -155,29 +155,40 @@ def _runner_host(value, app):
     return "" if is_ip or host == app else host
 
 
+def _present(path):
+    """Only real absence is False: a path that cannot be inspected may hold an old generation."""
+    try:
+        os.stat(path)
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+    except OSError:
+        pass
+    return True
+
+
 def prepare(environ=os.environ):
     """Atomically replace desired config before health; return nonsecret metadata.
 
     A missing optional volume is inert while off, and so is an unwritable one that
     holds no generation: the image directory under a read-only root when an older
-    compose mounts no volume. An unwritable directory with an old generation
-    refuses, because that generation may still serve visuals. Writable mounted
-    volumes always receive the new generation, including app-only/disabled states.
-    Explicit opt-in with missing required app/volume or write failure refuses
-    startup. Optional visual mistakes leave the app working with a reason-only
-    warning.
+    compose mounts no volume. An unwritable directory with an old generation, or
+    one that cannot be inspected, refuses, because that generation may still serve
+    visuals. Writable mounted volumes always receive the new generation, including
+    app-only/disabled states. Explicit opt-in with missing required app/volume or
+    write failure refuses startup. Optional visual mistakes leave the app working
+    with a reason-only warning.
     """
     directory = Path(environ.get("TICO_CADDY_DIR", "/caddy-generated"))
     enabled = environ.get("TICO_CADDY_VISUALS") == "1"
     inert = {"written": False, "path": None, "generation": None, "serve_visuals": False, "reason": None}
-    if not directory.exists():
+    if not _present(directory):
         if enabled:
             raise ValueError("caddy_config_directory_missing")
         return inert
     if not directory.is_dir():
         raise ValueError("caddy_config_directory_invalid")
     path = directory / "caddy.json"
-    if not enabled and not os.access(directory, os.W_OK) and not path.exists():
+    if not enabled and not os.access(directory, os.W_OK) and not _present(path):
         return inert
     app_value = environ.get("TICO_DOMAIN", "")
     app = _hostname(app_value, allow_ip=True) if app_value else ""
