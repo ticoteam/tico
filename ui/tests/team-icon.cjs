@@ -32,6 +32,7 @@ const logo = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQV
         return json({url:'/api/v2/team/icon',content_type:'image/png'});
       }
       if (p === '/api/v2/access') return json({rules});
+      if (p === '/api/v2/system/storage') return json({active: null, earlier: [], server: {mode: 'local', location: ''}, copy: {done: 0, total: 0, failed: 0, running: false}, doc: 'https://example.test/docs/files.md'});   // Storage shares General with the team rules
       if (p === '/api/v2/access/rules' && request.method() === 'PUT') {
         const body = request.postDataJSON(); ruleWrites.push(body); Object.assign(rules, body); return json(rules);
       }
@@ -46,7 +47,7 @@ const logo = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQV
       return json(unrouted(p));
     });
     await page.goto('https://tico-ui.test/#/settings');
-    await page.locator('[data-settings-tab=team]').click();
+    await page.locator('[data-settings-tab=general]').click();
     const input = page.locator('#settings-team-icon-file'), status = page.locator('#settings-team-icon-status');
     await page.waitForFunction(() => !document.querySelector('#settings-team-icon').hidden);
     await input.setInputFiles({name:'logo.gif',mimeType:'image/gif',buffer:logo});
@@ -87,11 +88,11 @@ const logo = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQV
     role = 'human';
     await page.reload();
     await page.locator('#settings-tabs').waitFor();
-    assert.equal(await page.locator('[data-settings-tab=team]').count(),0);
-    // A local hub's owner gets the tab for the Stale ticket review switch, without the team icon.
+    assert.equal(await page.locator('#settings-team').count(),0);
+    // A local hub's owner gets the Stale ticket review switch, without the team icon.
     role = 'owner'; cloud = false;
     await page.reload();
-    await page.locator('[data-settings-tab=team]').click();
+    await page.locator('[data-settings-tab=general]').click();
     assert.equal(await page.locator('#settings-team-icon-change').count(),0);
     const staleSwitch = page.locator('#settings-stale-review');
     await page.waitForFunction(() => !document.querySelector('#settings-stale-review').disabled);

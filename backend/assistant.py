@@ -147,7 +147,7 @@ def approving(method, path, body=None):
 
 def approve_hint(settings, state):
     """What the Assistant is told when it may not approve: the one sentence it passes on to the person."""
-    where = f"Settings > {settings.assistant_name}"
+    where = "Settings > General"
     if not state["team_allows"]:
         return ("Approving stays the person's click on a card: the team's owner turned off assistants deciding "
                 "approvals (Settings > Humans). Tell them that in one sentence and propose a card (`hub assistant "

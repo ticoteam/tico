@@ -3493,7 +3493,7 @@ def create_app(settings=None):
         who = request.state.identity
         auth.domain(who)
         if key.startswith("assistant."):
-            raise Problem("forbidden", "Your Assistant's settings are set in Settings > " + settings.assistant_name, 403)
+            raise Problem("forbidden", "Your Assistant's settings are set in Settings > General", 403)
         if key == "meetings.auto_share":
             views.human_only(who)
             if not isinstance(body.value, bool):
@@ -3555,7 +3555,7 @@ def create_app(settings=None):
         """The person takes back what their Assistant decided for them, before anything acted on it. Their own click."""
         who = request.state.identity
         if who.via:
-            raise Problem("forbidden", "Only the person undoes this, in Settings > " + settings.assistant_name, 403)
+            raise Problem("forbidden", "Only the person undoes this, in Settings > General", 403)
         def work(c):
             auth.approval(c, who, aid, decide=True)
             return H.approval_undo(c, who.actor, aid)

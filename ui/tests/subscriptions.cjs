@@ -164,10 +164,17 @@ async function navigation(browser) {
   }
   // Even if old navigation is still painted, losing a role cannot expose a restricted pane.
   await page.evaluate(() => { S.me.role = 'member'; S.me.bot_admin = false; });
-  for (const restricted of ['team', 'people', 'history', 'privacy', 'unknown-tab']) {
+  for (const restricted of ['people', 'history', 'unknown-tab']) {
     await page.evaluate(tab => settingsShow(tab), restricted);
     assert.equal(await page.locator('#settings-devices').isVisible(), true, `${restricted} safely falls back`);
     assert.equal(await page.evaluate(() => SETTINGS_TAB), 'devices');
+  }
+  // Team, Assistant, Privacy and Storage are sections of General; the ones this person lost stay hidden there.
+  for (const alias of ['team', 'assistant', 'privacy', 'storage']) {
+    await page.evaluate(alias => settingsShow(alias), alias);
+    assert.equal(await page.evaluate(() => SETTINGS_TAB), 'general', `${alias} opens General`);
+    assert.equal(await page.locator('#settings-assistant-pane').isVisible(), true);
+    for (const id of ['team', 'privacy', 'storage']) assert.equal(await page.locator('#settings-' + id).isVisible(), false, `${id} stays hidden`);
   }
   // AI providers is now Models on Computers; the Chat tab is gone.
   for (const alias of ['providers', 'models', 'chat']) {

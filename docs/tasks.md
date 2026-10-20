@@ -174,7 +174,7 @@ suggestions cover the quiet week.
 Stale ticket review finds open tasks that look finished or forgotten and suggests what to do with
 them. It only suggests: nothing changes unless the task's owner accepts.
 
-**Turn it on.** Go to **Settings > Team** and switch on **Stale ticket review**. It is off by
+**Turn it on.** Go to **Settings > General** and switch on **Stale ticket review**. It is off by
 default, and an owner or an admin can turn it on or off. (A server started with
 `TICO_STALE_REVIEW=1` has it on by default; a choice saved in Settings wins.)
 

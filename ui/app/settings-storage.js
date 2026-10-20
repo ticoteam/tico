@@ -1,4 +1,4 @@
-/* ui/app/settings-storage.js — Settings > Storage
+/* ui/app/settings-storage.js — Settings > General
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 

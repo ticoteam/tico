@@ -78,12 +78,12 @@ Tico's goal of 100 teams trying it and 100 still using it after 30 days.
 Any one of these is enough. When counting is off, the update check still works: it asks GitHub directly, exactly as
 before, with no ID and no flags.
 
-1. **In the app:** Settings > Privacy, switch off "Help count active installs" (the owner).
+1. **In the app:** Settings > General, switch off "Help count active installs" (the owner).
 2. **Environment:** `TICO_TELEMETRY=off` in your `.env`.
 3. **The standard:** `DO_NOT_TRACK=1` in your environment ([consoledonottrack.com](https://consoledonottrack.com/)).
 4. **The command line:** `docker compose exec server python -m backend.manage usage-count /data/hub.sqlite off`.
 
-Other controls: **Reset install ID** in Settings > Privacy (or `... usage-count /data/hub.sqlite reset-id`) makes a new
+Other controls: **Reset install ID** in Settings > General (or `... usage-count /data/hub.sqlite reset-id`) makes a new
 random ID, so the old one no longer connects to your install; do it when you clone a server. `TICO_UPDATE_CHECK=off`
 stops the update check altogether, and with it the count. `TICO_HQ_URL` points the check at your own HQ.
 
@@ -216,7 +216,7 @@ you set on the server, and never in rehearsal mode. Each provider keeps what it 
 |---|---|---|
 | **Decisions** (`POST /api/v2/decisions`, `hub_decision_ask`, scoring saved listening posts, live-meeting routing, the nightly learning run) | The JSON state and the typed questions the caller sends: whatever it puts there, which can be a mail's subject and body or a stretch of a transcript. The nightly learning run sends each of the day's items (chat and task text, Slack channel messages, mail and meeting excerpts) with the profiles of the bots it may reach | In this order, each one only when the one before is not set up or fails: the Tico AI Gateway on Tico HQ (Tico Decide 1.0, which asks TypeSafe's Jev; HQ keeps the label, counts, tokens, latency and cost per gateway key, never the state or the questions) when the server holds a gateway key (`TICO_GATEWAY_KEY`); TypeSafe (api.typesafe.ai, the Jev model) directly when you set your own `TYPESAFE_API_KEY`; the team's own provider from Settings > Computers > Models whose key the server holds: Anthropic, OpenAI, Google (Gemini), xAI or OpenRouter (which also serves the DeepSeek, Kimi, Llama and Mistral models). With none of them nothing is sent |
 | **Slack routing** (`backend/slack_gateway.py`, when the Slack gateway is on) | The message's text; the sender's name, roster id, team and the bots they are primary for; the channel's name and registry purpose; the last twelve exchanges in the thread and their previous routing; and the active roster (each bot's name, team, description and manager) | The same decision model as above |
-| **Topic changed** (`backend/topic_change.py`, when Settings > Team > **Start fresh when the topic changes** is on) | Before a message in a person's direct chat with a bot is sent, and only when the chat is long or idle: the chat's last 3 turns since its last clear (what the person said and what the bot answered, each cut to about 1,500 characters) and the new message. Task lines, task chats, group chats and shared bots' rooms are never sent. The audit keeps the answer, never the text | The same decision model as above |
+| **Topic changed** (`backend/topic_change.py`, when Settings > General > **Start fresh when the topic changes** is on) | Before a message in a person's direct chat with a bot is sent, and only when the chat is long or idle: the chat's last 3 turns since its last clear (what the person said and what the bot answered, each cut to about 1,500 characters) and the new message. Task lines, task chats, group chats and shared bots' rooms are never sent. The audit keeps the answer, never the text | The same decision model as above |
 | **Market ask** (`POST /api/v2/market/ask`) | The question, and up to about seventeen excerpts from the market graph that match it: entity names, aliases and summaries, evidence quotes and our reads, and the start of matching market pages | Google's Gemini API (generativelanguage.googleapis.com, `gemini-3.7-flash`) with the server's `GEMINI_API_KEY`, whatever Settings > Computers > Models says. Without a key nothing is sent and the pulled excerpts are the answer |
 
 What the server keeps of each call is an audit event, never the text that was sent: `judge.call` (the label, the number of

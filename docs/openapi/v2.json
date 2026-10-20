@@ -16248,7 +16248,7 @@
           "decides_approvals"
         ],
         "title": "AssistantSettings",
-        "description": "A person's own Assistant settings (Settings > Assistant)."
+        "description": "A person's own Assistant settings (Settings > General)."
       },
       "Audience": {
         "type": "object",

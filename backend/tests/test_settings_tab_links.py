@@ -7,9 +7,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SETTINGS = "#/settings"
-# Names settingsShow takes besides the tabs: old ones it maps (tags, types, providers), the Models section of Computers
-# (models), or ones it sends to the Tools page (credentials, cloud).
-ALIASES = {"tags", "types", "providers", "models", "credentials", "cloud"}
+# Names settingsShow takes besides the tabs: old ones it maps (tags, types, providers; team, assistant, privacy and
+# storage, now sections of General), the Models section of Computers (models), or ones it sends to the Tools page
+# (credentials, cloud).
+ALIASES = {"tags", "types", "providers", "models", "team", "assistant", "privacy", "storage", "credentials", "cloud"}
 
 
 def settings_tabs():

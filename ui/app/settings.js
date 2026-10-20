@@ -23,6 +23,14 @@ const SETTINGS_TAB_KEY = 'tico.settings.tab';
 // Remembered per browser tab so a reload lands where the owner was, not back on Computers.
 let SETTINGS_TAB = (() => { try { return sessionStorage.getItem(SETTINGS_TAB_KEY) || 'devices'; } catch { return 'devices'; } })();
 let SETTINGS_TRANSITION_TIMER = null;
+// A section a link points into (an old tab's name, settingsShow); it scrolls there once drawn.
+let SETTINGS_REVEAL = '';
+// The old tabs that are now sections of General.
+const SETTINGS_GENERAL = {team: '#settings-team', assistant: '#settings-assistant-pane', privacy: '#settings-privacy', storage: '#settings-storage'};
+const settingsReveal = selector => {
+  if (!selector || SETTINGS_REVEAL !== selector) return;
+  SETTINGS_REVEAL = ''; $(selector)?.scrollIntoView({block: 'start'});
+};
 // Owners and admins always; a member unless an admin switched create_bots off (the server decides, and counts the limit).
 const settingsCanCreateBots = () => S.me?.role === 'owner' || !!S.me?.bot_admin || S.me?.can_create_bots !== false;
 // The owner, an admin, one of the bot's owners, or someone it reports up to: what the server says (`can_manage`).
@@ -41,8 +49,7 @@ function pageSettings() {
   $('#main').innerHTML = `<div class="meeting-head"><div><h1>Settings</h1>${settingsVersionHTML()}</div>${settingsThemeHTML()}</div>
     <div id="settings-issues"></div>
     <div class="tabs settings-tabs" id="settings-tabs" data-role="${esc(S.me?.role || '')}" role="tablist" aria-label="Settings">
-      ${settingsIsAdmin() ? '<button type="button" data-settings-tab="team" role="tab">Team</button>' : ''}
-      <button type="button" data-settings-tab="assistant" role="tab">${esc(assistantName())}</button>
+      <button type="button" data-settings-tab="general" role="tab">General</button>
       ${settingsIsAdmin() ? '<button type="button" data-settings-tab="people" role="tab">Humans</button>' : ''}
       <button type="button" data-settings-tab="bots" role="tab">Bots</button>
       <button type="button" data-settings-tab="devices" role="tab">Computers</button>
@@ -53,26 +60,33 @@ function pageSettings() {
         <button type="button" data-settings-tab="recurring" role="tab">Routines</button>
         <button type="button" data-settings-tab="triggers" role="tab">Triggers</button>
         <button type="button" data-settings-tab="health" role="tab">Health<span class="hl-alert" data-hl-alert hidden></span></button>
-        ${S.me?.role === 'owner' ? '<button type="button" data-settings-tab="history" role="tab">History</button><button type="button" data-settings-tab="privacy" role="tab">Privacy</button><button type="button" data-settings-tab="storage" role="tab">Storage</button>' : ''}
+        ${S.me?.role === 'owner' ? '<button type="button" data-settings-tab="history" role="tab">History</button>' : ''}
       </div></details>
     </div>
-    ${settingsIsAdmin() ? `<div class="settings-pane" id="settings-team" role="tabpanel" hidden>
-      <section class="card"><header><h2>Stale ticket review</h2></header>
+    <div class="settings-pane" id="settings-general" role="tabpanel" hidden>
+      ${settingsIsAdmin() ? `<section class="card" id="settings-team"><header><h2>Team</h2></header>
         <label class="settings-team-rule">${peopleSwitch('id="settings-stale-review"', false, true, 'Stale ticket review')}
           <span><strong>Stale ticket review</strong><span class="settings-cell-note">Once an hour, Tico looks for open tasks that seem finished or forgotten and suggests what to do: a comment to a bot that owns one, a Stale tickets card in Needs you for a person. Nothing changes unless the owner accepts.</span></span></label>
-        <p id="settings-stale-review-status" class="settings-cell-note" role="status"></p></section>
-      <section class="card"><header><h2>Chat</h2></header>
+        <p id="settings-stale-review-status" class="settings-cell-note" role="status"></p>
         <label class="settings-team-rule">${peopleSwitch('id="settings-topic-fresh"', false, true, 'Start fresh when the topic changes')}
           <span><strong>Start fresh when the topic changes</strong><span class="settings-cell-note">In a long or idle direct chat with a bot, Tico checks whether your new message is about something else. If it is, the bot starts a fresh session before answering, the same as Clear, and the chat shows a quiet "Topic changed" line.</span></span></label>
-        <p id="settings-topic-fresh-status" class="settings-cell-note" role="status"></p></section>
-      ${S.me?.cloud && S.me?.role === 'owner' ? `<section class="card"><header><h2>Team</h2></header><div class="settings-team-icon">
-        <img id="settings-team-icon" alt="Team icon" hidden><span id="settings-team-icon-empty" class="muted">No icon</span>
-        <div><strong>Team icon</strong><p class="settings-cell-note">Public team logo. PNG, JPEG or WebP, up to 1 MB.</p>
-          <input id="settings-team-icon-file" type="file" accept="image/png,image/jpeg,image/webp" aria-label="Choose team icon" hidden>
-          <button type="button" class="ghost" id="settings-team-icon-change">Choose icon</button>
-          <p id="settings-team-icon-status" class="settings-cell-note" role="status"></p>
-        </div>
-      </div></section>` : ''}</div>` : ''}
+        <p id="settings-topic-fresh-status" class="settings-cell-note" role="status"></p>
+        ${S.me?.cloud && S.me?.role === 'owner' ? `<div class="settings-team-icon">
+          <img id="settings-team-icon" alt="Team icon" hidden><span id="settings-team-icon-empty" class="muted">No icon</span>
+          <div><strong>Team icon</strong><p class="settings-cell-note">Public team logo. PNG, JPEG or WebP, up to 1 MB.</p>
+            <input id="settings-team-icon-file" type="file" accept="image/png,image/jpeg,image/webp" aria-label="Choose team icon" hidden>
+            <button type="button" class="ghost" id="settings-team-icon-change">Choose icon</button>
+            <p id="settings-team-icon-status" class="settings-cell-note" role="status"></p>
+          </div>
+        </div>` : ''}</section>` : ''}
+      <section class="card" id="settings-assistant-pane"><header><h2>${esc(assistantName())}</h2><div class="row">
+        <a class="ghost" href="${ASSISTANT}">Open chat</a>
+        ${settingsCanManageBot((S.emps || []).find(e => e.name === assistantBot())) ? `<a class="ghost" href="#/bot/${encodeURIComponent(assistantBot())}/more">Bot settings</a>` : ''}
+      </div></header><div id="settings-assistant-approvals"></div></section>
+      <div id="settings-assistant"></div>
+      ${S.me?.role === 'owner' ? `<section class="card" id="settings-privacy"><header><h2>Privacy</h2></header><div id="set-privacy">${skelRows(3, {card: true, dot: false})}</div></section>
+      <section class="card" id="settings-storage"><header><h2>Storage</h2></header><div id="set-storage">${skelRows(3, {card: true, dot: false})}</div></section>` : ''}
+    </div>
     <div class="settings-pane" id="settings-devices" role="tabpanel">
       <section class="card"><div id="set-machines">${skelRows(3, {card: true, dot: false})}</div></section>
       <section class="card" id="settings-models"><header><h2>Models</h2></header><div id="set-providers">${skelRows(3, {card: true, dot: false})}</div></section>
@@ -92,14 +106,6 @@ function pageSettings() {
     <div class="settings-pane" id="settings-triggers" role="tabpanel" hidden>
       <section class="card"><header><h2>Triggers</h2></header><div id="set-triggers">${skelRows(2, {card: true, dot: false})}</div></section>
     </div>
-    <div class="settings-pane" id="settings-assistant-pane" role="tabpanel" hidden>
-      <section class="card"><header><h2>${esc(assistantName())}</h2></header>
-        <p>Your personal assistant helps find information and coordinate work.</p>
-        <a class="ghost" href="${ASSISTANT}">Open chat</a>
-        ${settingsCanManageBot((S.emps || []).find(e => e.name === assistantBot())) ? `<a class="ghost" href="#/bot/${encodeURIComponent(assistantBot())}/more">Bot settings</a>` : ''}
-      </section><div id="settings-assistant"></div>
-      <section class="card" id="settings-assistant-approvals" aria-labelledby="settings-assistant-approvals-h"></section>
-    </div>
     <div class="settings-pane" id="settings-tasks" role="tabpanel" hidden>
       <div id="settings-types"></div>
       <section class="card" id="settings-roadmaps"></section>
@@ -107,8 +113,6 @@ function pageSettings() {
     </div>
     <div class="settings-pane" id="settings-inbox" role="tabpanel" hidden><section class="card"><header><h2>Your Google account</h2></header><div id="set-google"></div></section></div>
     <div class="settings-pane" id="settings-history" role="tabpanel" hidden><section class="card"><header><h2>Settings history</h2></header><div id="set-history">${skelRows(3, {card: true, dot: false})}</div></section></div>
-    ${S.me?.role === 'owner' ? `<div class="settings-pane" id="settings-privacy" role="tabpanel" hidden><section class="card"><header><h2>Privacy</h2></header><div id="set-privacy">${skelRows(3, {card: true, dot: false})}</div></section></div>
-    <div class="settings-pane" id="settings-storage" role="tabpanel" hidden><section class="card"><header><h2>Storage</h2></header><div id="set-storage">${skelRows(3, {card: true, dot: false})}</div></section></div>` : ''}
     <dialog class="tmodal" id="people-dialog" aria-label="Humans"></dialog>
     <dialog class="owner-picker" id="owner-picker" aria-labelledby="owner-picker-title"></dialog>
     <dialog class="bot-editor" id="bot-editor" aria-labelledby="bot-editor-title"></dialog>
@@ -155,18 +159,17 @@ function settingsShow(tab) {
   if (tab === 'credentials' || tab === 'cloud') { location.hash = INTEGRATIONS; return; }
   if (tab === 'tags' || tab === 'types') tab = 'tasks'; // Saved links keep working.
   // The company's models choice is a section of Computers; a link to it (or to the old AI providers tab) scrolls there.
-  if (tab === 'models' || tab === 'providers') { tab = 'devices'; SETTINGS_MODELS_REVEAL = true; }
+  if (tab === 'models' || tab === 'providers') { tab = 'devices'; SETTINGS_REVEAL = '#settings-models'; }
+  if (SETTINGS_GENERAL[tab]) { SETTINGS_REVEAL = SETTINGS_GENERAL[tab]; tab = 'general'; }
   const tabs = [...document.querySelectorAll('#settings-tabs [data-settings-tab]')];
   // Tab names come from the navigation; recheck access in case this person's role just changed.
   const owner = S.me?.role === 'owner';
-  const access = {team: settingsIsAdmin(), people: settingsIsAdmin(), history: owner, privacy: owner, storage: owner};
+  const access = {people: settingsIsAdmin(), history: owner};
   SETTINGS_TAB = access[tab] !== false && tabs.some(button => button.dataset.settingsTab === tab) ? tab : 'devices';
   try { sessionStorage.setItem(SETTINGS_TAB_KEY, SETTINGS_TAB); } catch { /* private window: the tab is just not remembered */ }
-  if (['health', 'history', 'privacy', 'storage', 'recurring', 'triggers'].includes(SETTINGS_TAB)) $('#settings-more').open = true;
-  for (const name of ['assistant', 'tasks']) {
-    const pane = $(name === 'assistant' ? '#settings-assistant-pane' : '#settings-' + name);
-    if (pane) pane.hidden = SETTINGS_TAB !== name;
-  }
+  if (['health', 'history', 'recurring', 'triggers'].includes(SETTINGS_TAB)) $('#settings-more').open = true;
+  const tasks = $('#settings-tasks');
+  if (tasks) tasks.hidden = SETTINGS_TAB !== 'tasks';
   tabs.forEach(button => {
     const selected = button.dataset.settingsTab === SETTINGS_TAB;
     button.classList.toggle('cur', selected); button.setAttribute('aria-selected', String(selected));
@@ -177,21 +180,26 @@ function settingsShow(tab) {
   if (SETTINGS_TAB === 'tasks') void roadmapSettingsMount();
   const devices = $('#settings-devices'), history = $('#settings-history'), bots = $('#settings-bots');
   if (bots) bots.hidden = SETTINGS_TAB !== 'bots';
-  // The owner's one click when the team has no Assistant (ui/assistant.js): restore it or add it.
-  if (SETTINGS_TAB === 'assistant') void renderSettingsAssistantApprovals();
-  if (SETTINGS_TAB === 'assistant' && S.me?.role === 'owner') window.assistantChat?.settingsStrip($('#settings-assistant'), {get, post, esc, toast, after: async () => { await refresh(true); renderSettingsBots(); }});
   if (devices) devices.hidden = SETTINGS_TAB !== 'devices';
   // Before the first load the form has no models or computers to show; loadSettings draws it then.
   if (SETTINGS_TAB === 'devices' && SETTINGS_DATA.loaded) void renderSettingsProviders();
   if (history) history.hidden = SETTINGS_TAB !== 'history';
-  const team = $('#settings-team');
-  if (team) team.hidden = SETTINGS_TAB !== 'team';
+  const general = $('#settings-general');
+  if (general) {
+    general.hidden = SETTINGS_TAB !== 'general';
+    // Drawn for the role this person had; one lost since keeps its sections hidden.
+    const team = $('#settings-team'), privacy = $('#settings-privacy'), storage = $('#settings-storage');
+    if (team) team.hidden = !settingsIsAdmin();
+    if (privacy) privacy.hidden = storage.hidden = !owner;
+    if (SETTINGS_TAB === 'general') {
+      void Promise.all([renderSettingsAssistantApprovals(),
+        // The owner's one click when the team has no Assistant (ui/assistant.js): restore it or add it.
+        owner && window.assistantChat?.settingsStrip($('#settings-assistant'), {get, post, esc, toast, after: async () => { await refresh(true); renderSettingsBots(); }}),
+        privacy && owner && renderSettingsPrivacy(), storage && owner && renderSettingsStorage()]).then(() => settingsReveal(SETTINGS_REVEAL));
+    }
+  }
   const peoplePane = $('#settings-people');
   if (peoplePane) { peoplePane.hidden = SETTINGS_TAB !== 'people'; if (SETTINGS_TAB === 'people' && !formBusy(peoplePane)) void renderSettingsPeople(); }
-  const privacyPane = $('#settings-privacy');
-  if (privacyPane) { privacyPane.hidden = SETTINGS_TAB !== 'privacy'; if (SETTINGS_TAB === 'privacy') void renderSettingsPrivacy(); }
-  const storagePane = $('#settings-storage');
-  if (storagePane) { storagePane.hidden = SETTINGS_TAB !== 'storage'; if (SETTINGS_TAB === 'storage') void renderSettingsStorage(); }
   const healthPane = $('#settings-health');
   if (healthPane) { healthPane.hidden = SETTINGS_TAB !== 'health'; if (SETTINGS_TAB === 'health') window.hlMount?.(); }
   const inboxPane = $('#settings-inbox');
@@ -212,7 +220,7 @@ function settingsTabIntoView(target) {
   if (tab.left < box.left) bar.scrollLeft -= box.left - tab.left + pad;
   else if (tab.right > box.right) bar.scrollLeft += tab.right - box.right + pad;
 }
-// Settings > Team: the team rules an owner or an admin turns (backend/team_rules.py ADMIN_RULES): Stale ticket review
+// Settings > General: the team rules an owner or an admin turns (backend/team_rules.py ADMIN_RULES): Stale ticket review
 // (backend/stale_review.py) and Start fresh when the topic changes (backend/topic_change.py).
 const SETTINGS_TEAM_RULES = {stale_review: 'settings-stale-review', topic_fresh: 'settings-topic-fresh'};
 async function settingsTeamRulesBind() {
@@ -259,7 +267,7 @@ function settingsTeamIconBind() {
     finally { button.disabled = input.disabled = false; input.value = ''; }
   };
 }
-// Settings > Assistant: the person's own switch for their Assistant deciding approvals addressed to them, and what it
+// Settings > General > Assistant: the person's own switch for their Assistant deciding approvals addressed to them, and what it
 // decided, each undoable until it has run (backend/assistant.py decides, approval_undo). Only they see or change it.
 async function renderSettingsAssistantApprovals() {
   const host = $('#settings-assistant-approvals');
@@ -274,7 +282,7 @@ async function renderSettingsAssistantApprovals() {
       <span class="settings-cell-note">${esc(ago(d.decided_at))}${words ? ` · you said ${words}` : ''}${d.consumed_at ? ' · already ran' : ''}</span></span>
       ${d.can_undo ? `<button type="button" class="ghost" data-undo-approval="${esc(d.id)}">Undo</button>` : ''}</li>`;
   }).join('');
-  host.innerHTML = `<header><h2 id="settings-assistant-approvals-h">Approvals</h2></header>
+  host.innerHTML = `<h3 id="settings-assistant-approvals-h">Approvals</h3>
     <label class="people-line"><input type="checkbox" role="switch" class="people-switch" id="assistant-decides"${v.decides_approvals ? ' checked' : ''}${v.team_allows ? '' : ' disabled'} aria-label="My assistant can decide approvals for me">
       <span>My assistant can decide approvals for me</span></label>
     <p class="settings-cell-note">${v.team_allows
@@ -293,7 +301,7 @@ async function renderSettingsAssistantApprovals() {
     void renderSettingsAssistantApprovals();
   });
 }
-// Settings > Privacy: the one switch for the anonymous usage count, and a new random install ID (PRIVACY.md).
+// Settings > General > Privacy: the one switch for the anonymous usage count, and a new random install ID (PRIVACY.md).
 async function renderSettingsPrivacy() {
   const host = $('#set-privacy');
   if (!host) return;

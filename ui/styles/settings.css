@@ -561,6 +561,6 @@ fieldset.brepo>.repo-name+p{margin:-4px 0 4px 24px;font-size:var(--t-xs);line-he
 .trigger-deliveries{list-style:none;margin:0;padding:0;font-size:var(--t-sm)}
 .trigger-deliveries li{display:flex;flex-wrap:wrap;gap:6px;align-items:baseline;padding:3px 0}.trigger-deliveries code{overflow-wrap:anywhere}
 @media (max-width:640px){.trigger-list li{grid-template-columns:1fr}.trigger-actions{justify-content:flex-start}}
-/* Settings > Team: a team switch with its explanation beside it (Stale ticket review). */
+/* Settings > General: a team switch with its explanation beside it (Stale ticket review). */
 .settings-team-rule{display:flex;align-items:flex-start;gap:12px;cursor:pointer}
 .settings-team-rule > span{display:flex;flex-direction:column;gap:2px}

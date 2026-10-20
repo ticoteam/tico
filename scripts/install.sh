@@ -732,7 +732,7 @@ if [ -n "$DOCKER_ONLY" ]; then ensure_docker; say "Docker is ready."; exit 0; fi
 resolve_version
 ensure_docker
 say "Installing Tico $VERSION into $DIR"
-say "Tico counts active installs anonymously (a random ID, version, and three yes/no activity flags). Turn off: Settings > Privacy or TICO_TELEMETRY=off."
+say "Tico counts active installs anonymously (a random ID, version, and three yes/no activity flags). Turn off: Settings > General or TICO_TELEMETRY=off."
 say "Details: PRIVACY.md in the Tico repository."
 
 if [ -f "$DIR/.env" ]; then

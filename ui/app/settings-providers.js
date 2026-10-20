@@ -95,8 +95,6 @@ async function providersSave(view, chosen) {
     ...('check_models' in chosen ? {check_models: chosen.check_models} : {}),
     ...('preset' in chosen ? {preset: chosen.preset} : {})});
 }
-// Set by a link to the models choice (settingsShow 'models'); it scrolls there once the form is drawn.
-let SETTINGS_MODELS_REVEAL = false;
 async function renderSettingsProviders() {
   const el = $('#set-providers'); if (!el) return;
   const owner = S.me?.role === 'owner';
@@ -112,7 +110,7 @@ async function renderSettingsProviders() {
       ${gateway ? gatewayHTML(gateway, owner) : ''}`;
     providersWire($('#set-prov'), view, SETTINGS_DATA.models);
     if (gateway) gatewayWire(gateway);
-    if (SETTINGS_MODELS_REVEAL) { SETTINGS_MODELS_REVEAL = false; $('#settings-models')?.scrollIntoView({block: 'start'}); }
+    settingsReveal('#settings-models');
     const save = $('#set-prov-save');
     if (save) save.onclick = async () => {
       const chosen = providersCollect($('#set-prov')), status = $('#set-prov-status');
