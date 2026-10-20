@@ -405,13 +405,11 @@ def operation_issues(c, who, auth):
                 if hold:
                     runtime = hold["runtime"] + (f" (the {hold['profile']} login)" if hold.get("profile") else "")
                 if last:
-                    # Named from the turn's own notes, not the bot's runtime: once another turn replaces the login's
-                    # hold, a fallback's quota must still not read as the primary's (Dev 279).
+                    # Named from what the turn kept when it finished, not the bot's runtime or the login's hold now:
+                    # a fallback's quota must not read as the primary's, nor a past limit as a newly chosen provider's.
                     result = json.loads((c.execute("SELECT result_json FROM attempts WHERE id=?", (last["id"],))
                                          .fetchone() or ["{}"])[0] or "{}")
-                    src = login_holds.source(c, last["id"], own, result)
-                    if hold and hold.get("runtime") == src["runtime"]:
-                        src["profile"] = hold.get("profile") or ""
+                    src = login_holds.recorded(c, last["id"], result, own)
                     runtime, billing = login_holds.label(src), src["billing"]
                 streak = hold.get("streak", 0) if hold else limit_streak(c, slug)
                 reset = hold.get("reset") if hold else bool(last and provider_reset(last, H.parse_ts(last["finished"])))
@@ -1865,9 +1863,7 @@ def install_views(app, store, auth, mutate, task_view):
                 lines.append("Fallback: " + str(result["fallback"]) + " (primary harness unavailable; the turn ran on the fallback)")
             if result.get("limited"):
                 from . import login_holds
-                config = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (turn["bot"],)).fetchone()
-                own = providers.bot_choice(c, auth.settings, json.loads(config[0]) if config and config[0] else {})[0]
-                lines.append("Limit: " + login_holds.label(login_holds.source(c, run_id, own or "primary", result)))
+                lines.append("Limit: " + login_holds.label(login_holds.recorded(c, run_id, result, "")))
             lines += ["", "Request:", message["body"]]
             if events:
                 lines.extend(["", "Persisted runtime events:"])

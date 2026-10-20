@@ -2343,14 +2343,18 @@ class Execution:
                 # Whose limit it was, from the turn's own notes (backend/login_holds.py source): primary or fallback,
                 # which provider and login, and an API key's quota told apart from a plan's usage window. A fallback's
                 # quota is never reported as the bot's own runtime's (Dev 279).
-                src = login_holds.source(c, aid, runtime, body)
-                if login_hold and login_hold.get("runtime") == src["runtime"]:
-                    src["profile"] = login_hold.get("profile") or ""
+                from .subscriptions import effective
+                profile = effective(c, row["bot"])[0] or ""
+                own = login_holds.get(c, row["runner_id"], login_holds.canonical(c, row["runner_id"], profile, runtime),
+                                      runtime)
+                src = login_holds.source(c, aid, runtime, body, profile, row["runner_id"],
+                                         held=own if body.primary_held else None)
+                # Kept with the run: its log and Health name this source after the bot's settings or the login's hold
+                # change.
+                c.execute("UPDATE attempts SET result_json=json_set(result_json,'$.limit_source',json(?)) WHERE id=?",
+                          (encode(src), aid))
                 primary_until = ""
                 if src["role"] == "fallback" and src.get("primary") in ("limited", "held"):
-                    from .subscriptions import effective
-                    own = login_holds.get(c, row["runner_id"], login_holds.canonical(
-                        c, row["runner_id"], effective(c, row["bot"])[0] or "", runtime), runtime)
                     if (own.get("until") or "") > hit:
                         # Its own hold and its own retry time: the fallback's never moves it.
                         primary_until = (f"{own['until'][11:16]} UTC"

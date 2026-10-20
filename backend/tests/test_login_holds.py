@@ -387,7 +387,7 @@ def test_a_turn_with_no_fallback_ready_after_all_settles_unstarted_and_the_bot_w
     machine = two_bots(api, monkeypatch)
     for n in range(2):
         post(api, "tasks", {"owner": "ops", "title": f"Work {n}", "body": "Please do it."})
-    limit(api, machine, claim(api, machine))
+    limit(api, machine, claim(api, machine), errors=(QUOTA,))
     with api.app.state.store.read() as c:
         hold = login_holds.get(c, machine["runner_id"], "", "fake")
     at(monkeypatch, "2026-10-19T01:50:00.000000Z", api)
@@ -403,6 +403,12 @@ def test_a_turn_with_no_fallback_ready_after_all_settles_unstarted_and_the_bot_w
         after = login_holds.get(c, machine["runner_id"], "", "fake")
         assert c.execute("SELECT state FROM jobs WHERE id=?", (moved["job_id"],)).fetchone()[0] == "queued"
     assert (after["until"], after["streak"], after["stuck"]) == (hold["until"], 1, ["ops"])
+    # It waits on the earlier API quota hold: not reported as a fresh plan limit.
+    with api.app.state.store.read() as c:
+        assert H.status(c, "ops")["focus"].startswith("Primary fake API quota or billing limit, held from an earlier "
+                                                      "turn; no fallback could take this one; retrying after "
+                                                      "2026-10-19 02:16 UTC")
+    assert health_detail(api, "ops").startswith("Primary fake API quota or billing limit, held from an earlier turn")
     signed_in(api, machine, ["ops", "finance"], ["codex"])
     assert claim(api, machine) is None                          # not sent to that fallback again this window
 
@@ -414,7 +420,7 @@ def test_the_runners_report_of_a_fallback_that_never_started_requeues_the_job_an
     machine = two_bots(api, monkeypatch)
     for n in range(2):
         post(api, "tasks", {"owner": "ops", "title": f"Started nowhere {n}", "body": "Please do it."})
-    limit(api, machine, claim(api, machine))
+    limit(api, machine, claim(api, machine), errors=(QUOTA,))
     with api.app.state.store.read() as c:
         hold = login_holds.get(c, machine["runner_id"], "", "fake")
     at(monkeypatch, "2026-10-19T01:50:00.000000Z", api)
@@ -573,3 +579,26 @@ def test_both_limits_in_one_window_keep_two_holds_each_with_its_own_retry(api, m
         focus = H.status(c, "ops")["focus"]
     assert focus == ("Fallback codex API quota or billing limit at 01:46; primary fake also limited (plan usage limit "
                      "(5-hour window)) until 02:40 UTC; retrying after 2026-10-19 02:16 UTC")
+
+
+def test_a_limit_keeps_the_provider_and_login_it_came_from_after_settings_and_holds_change(api, monkeypatch):
+    at(monkeypatch, "2026-10-19T01:46:47.000000Z")
+    machine = runner(api)
+    assign(api, machine, "ops")
+    ready(api, machine, ["ops"])
+    post(api, "tasks", {"owner": "ops", "title": "Work", "body": "Please do it."})
+    first = claim(api, machine)
+    limit(api, machine, first, errors=(QUOTA,), profile_used="work")
+    said = "Primary fake (the work login) API quota or billing limit"
+    with api.app.state.store.transaction() as c:
+        assert H.status(c, "ops")["focus"].startswith(said + " at 01:46")
+        # The bot moves to Codex and another turn replaces the login's hold: the run still names what refused it.
+        assert c.execute("UPDATE bot_config SET config_json=? WHERE bot='ops'",
+                         (json.dumps({"runtime": "codex"}),)).rowcount == 1
+        login_holds.record(c, machine["runner_id"], "", "fake", "2026-10-19T01:47:00.000000Z", attempt_id="other",
+                           bot="finance", error=CLAUDE)
+        assert not login_holds.for_attempt(c, first["id"])
+        assert json.loads(c.execute("SELECT detail_json FROM events WHERE action='attempt.limited' AND target=?",
+                                    (first["id"],)).fetchone()[0])["source"]["profile"] == "work"
+    assert f"Limit: {said}" in api.get(f"/api/runs/{first['id']}/log", headers=headers()).text
+    assert health_detail(api, "ops").startswith(said)

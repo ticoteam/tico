@@ -306,21 +306,44 @@ def window(notice):
     return "plan usage limit"
 
 
-def source(c, attempt_id, runtime, result, profile=""):
-    """Whose limit ended a turn, from its own record (not a hold another turn may since have replaced): the login it
-    came from (primary or fallback, runtime, profile), which kind of limit it was, and how the primary fared."""
+def source(c, attempt_id, runtime, result, profile="", runner_id=None, held=None):
+    """Whose limit ended a turn: the login it came from (primary or fallback, runtime, login), which kind of limit it
+    was, and how the primary fared. Worked out when the turn finishes, with the runtime and login it ran on (`profile`
+    is the bot's own, `profile_used` the one the runner reports) and kept with the attempt (`limit_source`), so a
+    later settings change or another turn's hold does not rename it. `held` is the primary's hold when the claim sent
+    the turn away from it: a turn that ran nowhere waits on that hold and keeps its kind."""
     steps = turn_steps(c, attempt_id, runtime, result)
-    used = _field(result, "profile_used")
-    hop_profile = used if _field(result, "fallback") and used is not None else profile
+    used, fallback = _field(result, "profile_used"), _field(result, "fallback")
+    own = (used if used is not None and not fallback else profile) or ""
+    hop = (used if used is not None and fallback else profile) or ""
+    if runner_id:
+        own, hop = canonical(c, runner_id, own, runtime), canonical(c, runner_id, hop, steps[-1][0])
+    held_kind = window(held.get("error")) if held else ""
+    if _field(result, "primary_held") and _field(result, "limited") and not fallback:
+        # Sent away from its held login and no fallback started: nothing new was refused.
+        return {"role": "primary", "runtime": runtime, "profile": own, "kind": held_kind or "plan usage limit",
+                "billing": held_kind.startswith("API"), "notice": ((held or {}).get("error") or "")[:300],
+                "primary_runtime": runtime, "waiting": True}
     n = max((i for i, step in enumerate(steps) if step[2]), default=len(steps) - 1)
     rt, notice, _ = steps[n]
-    out = {"role": "fallback" if n else "primary", "runtime": rt, "profile": (hop_profile if n else profile) or "",
+    out = {"role": "fallback" if n else "primary", "runtime": rt, "profile": hop if n else own,
            "kind": window(notice), "billing": window(notice).startswith("API"), "notice": (notice or "")[:300],
-           "primary_runtime": runtime}
+           "primary_runtime": runtime, "primary_profile": own}
     if n:
         out["primary"] = ("held" if _field(result, "primary_held") else "limited" if steps[0][2] else "not limited")
-        out["primary_kind"] = window(steps[0][1]) if steps[0][2] and not _field(result, "primary_held") else ""
+        out["primary_kind"] = held_kind if _field(result, "primary_held") else window(steps[0][1]) if steps[0][2] else ""
     return out
+
+
+def recorded(c, attempt_id, result, runtime):
+    """The source a limited turn kept (`source`), or for a run from before it was kept, worked out again with the
+    runtime its limit event named at the time, so a later settings change does not rename the provider."""
+    if isinstance(result.get("limit_source"), dict):
+        return result["limit_source"]
+    # Keeper's events by action and target: the events_task_origin index.
+    row = c.execute("SELECT json_extract(detail_json,'$.runtime') FROM events WHERE actor=? AND action='attempt.limited' "
+                    "AND target=? LIMIT 1", (H.KEEPER, attempt_id)).fetchone()
+    return source(c, attempt_id, (row and row[0]) or runtime or "primary", result)
 
 
 def label(src, at="", primary_until=""):
@@ -328,10 +351,14 @@ def label(src, at="", primary_until=""):
     not limited", "Primary claude plan usage limit (5-hour window)". `at` is when it was met; `primary_until` when the
     primary's own hold ends, for a fallback's limit met while the primary is held too."""
     login = f" (the {src['profile']} login)" if src.get("profile") else ""
-    said = f"{src['role'].capitalize()} {src['runtime']}{login} {src['kind']}" + (f" at {at}" if at else "")
+    said = f"{src['role'].capitalize()} {src['runtime']}{login} {src['kind']}"
+    if src.get("waiting"):
+        return said + ", held from an earlier turn; no fallback could take this one"
+    said += f" at {at}" if at else ""
     if src["role"] == "fallback":
-        said += f"; primary {src['primary_runtime']} " + {
-            "held": "login held from an earlier limit",
+        own = f" (the {src['primary_profile']} login)" if src.get("primary_profile") else ""
+        said += f"; primary {src['primary_runtime']}{own} " + {
+            "held": "login held from an earlier limit" + (f" ({src['primary_kind']})" if src.get("primary_kind") else ""),
             "limited": "also limited" + (f" ({src['primary_kind']})" if src.get("primary_kind") else ""),
         }.get(src.get("primary"), "not limited")
         if primary_until and src.get("primary") in ("limited", "held"):
