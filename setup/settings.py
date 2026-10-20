@@ -21,7 +21,8 @@ TARGETS = {"local": "this server (you are running this on it; what scripts/insta
 FRONT_DOORS = {"caddy": "Caddy: automatic HTTPS, opens ports 80/443, DNS points at the server",
                "cloudflared": "Cloudflare Tunnel: no open ports, needs the domain on Cloudflare"}
 AUTHS = {"google": "Google sign-in (OIDC)", "microsoft": "Microsoft sign-in (OIDC)",
-         "cloudflare": "Cloudflare Access (needs the tunnel)"}
+         "cloudflare": "Cloudflare Access (needs the tunnel)",
+         "oidc": "Another OpenID Connect provider (its issuer URL, client ID and secret)"}
 # Only for a server Tico hosts (--hosted), so never offered in the question above: the owner signs in with a single-use
 # link our team sends (backend/owner_link.py).
 OWNER_LINK = "owner-link"
@@ -48,6 +49,8 @@ class Settings:
     tenant: str = ""
     client_id: str = ""
     client_secret: str = ""
+    issuer: str = ""               # --auth oidc: the provider's issuer URL
+    signin_label: str = ""         # --auth oidc: the provider's name on the sign-in button ("Sign in with <label>")
     allowed_domain: str = ""
     access_issuer: str = ""
     access_audience: str = ""
@@ -114,9 +117,14 @@ class Settings:
         elif self.auth == "cloudflare":
             e.update(TICO_AUTH_PROXY="cloudflare", TICO_ACCESS_ISSUER=self.access_issuer, TICO_ACCESS_AUDIENCE=self.access_audience)
         else:
-            e.update(TICO_AUTH_PROXY="oidc", TICO_OIDC_ISSUER=contract.issuer(self.auth, self.tenant),
+            e.update(TICO_AUTH_PROXY="oidc",
+                     TICO_OIDC_ISSUER=self.issuer if self.auth == "oidc" else contract.issuer(self.auth, self.tenant),
                      TICO_OIDC_CLIENT_ID=self.client_id, TICO_OIDC_CLIENT_SECRET=self.client_secret,
+                     TICO_OIDC_LABEL=self.signin_label if self.auth == "oidc" else "",
                      **{contract.KEY_ALLOWED_DOMAIN: self.allowed_domain})
+            if self.hosted:
+                # A server Tico hosts keeps the owner link beside it, for when the issuer is down (backend/owner_link.py).
+                e["TICO_OWNER_LINK_HASH"] = self.owner_link_hash
         if self.preset == "recommended":
             # The same choices as scripts/install.sh --recommended, read on the server's first start.
             e.update(TICO_INSTALL_PRESET="recommended", TICO_SAMPLE_COMPANY="on", TICO_MODELS_PRESET="subscriptions-gateway",

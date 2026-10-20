@@ -56,6 +56,10 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--sign-out", action="store_true", help="owner-link: also sign the owner out everywhere")
     p.add_argument("--tenant", help="Microsoft tenant id or domain")
     p.add_argument("--client-id")
+    p.add_argument("--issuer", help="with --auth oidc: the provider's issuer URL (https); the client secret comes only "
+                   "from TICO_OIDC_CLIENT_SECRET in the environment")
+    p.add_argument("--signin-label", metavar="NAME", help="with --auth oidc: the name on the sign-in button, "
+                   "\"Sign in with NAME\" (for example \"Tico account\"); without it, sign-in goes straight to the provider")
     p.add_argument("--allowed-domain", help="only this email domain may sign in")
     p.add_argument("--access-issuer")
     p.add_argument("--access-audience")

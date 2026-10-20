@@ -140,7 +140,8 @@ def test_self_hosted_installs_leave_the_mark_and_the_preset_unset(monkeypatch):
     (["--hosted", "team"], "--hosted is own or invited"),
     (["--hosted", "own", "--preset", "everything"], "--preset is recommended"),
     (["--auth", "owner-link"], "--auth owner-link is for a server Tico hosts"),
-    (["--hosted", "own", "--auth", "google"], "--hosted signs the owner in with the owner sign-in link"),
+    (["--hosted", "own", "--auth", "google"], "--hosted signs people in with the owner sign-in link, or with --auth oidc"),
+    (["--auth", "google", "--issuer", "https://id.example"], "--issuer is for --auth oidc"),
     (["--preset", "recommended"], "--preset recommended is for a server Tico hosts"),
 ])
 def test_hosted_flags_that_do_not_go_together_stop_with_one_line(argv, wanted):

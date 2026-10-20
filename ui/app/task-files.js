@@ -443,15 +443,18 @@ function tfStepImage(d, delta) {
 
 // ---- comments that carried files: small thumbs (images) or a chip, each opening its tile at that version
 function tfCommentFiles(m, files) {
-  const out = [], seen = new Set();
-  for (const f of files) for (const v of f.versions) if (v.comment_id != null && String(v.comment_id) === String(m.id)) { out.push({f, v}); seen.add(f.id + '@' + v.n); }
+  const out = [];
+  for (const f of files) for (const v of f.versions) if (v.comment_id != null && String(v.comment_id) === String(m.id)) out.push({f, v});
   for (const a of m.refs?.attachments || []) {
     const [aid, an] = String(a.id || '').split('@');
     const f = files.find(x => x.id === aid) || files.find(x => x.name === a.name);
     const n = a.version ?? an;
     const v = f && (n != null ? f.versions.find(x => x.n === Number(n)) : null) || f?.versions.find(x => x.comment_id == null) || f && tfVersion(f);
-    if (f && v) { if (!seen.has(f.id + '@' + v.n)) { out.push({f, v}); seen.add(f.id + '@' + v.n); } }
-    else out.push({loose: a});
+    const title = String(a.title || '').trim();
+    if (f && v) {
+      const had = out.find(x => x.f === f && x.v === v);
+      if (had) had.title ||= title; else out.push({f, v, title});
+    } else out.push({loose: a});
   }
   return out;
 }
@@ -462,12 +465,14 @@ function tfCommentFilesHTML(m, files) {
 function tfCommentChipsHTML(m, files, shown = new Set()) {
   const list = tfCommentFiles(m, files).filter(x => x.loose ? !shown.has(`${x.loose.file_id}@${x.loose.version}`) : !shown.has(`${x.f.id}@${x.v.n}`));
   if (!list.length) return '';
-  return `<div class="tc-files">${list.map(({f, v, loose}) => {
-    if (loose) return `<a class="tc-file" href="${API}/v2/files/${encodeURIComponent(loose.id)}">${esc(loose.name || 'file')}</a>`;
+  // A file the comment attached with a title (refs.attachments[].title) shows that title; the name stays in the tooltip.
+  return `<div class="tc-files">${list.map(({f, v, loose, title}) => {
+    if (loose) return `<a class="tc-file" href="${API}/v2/files/${encodeURIComponent(loose.id)}"${String(loose.title || '').trim() ? ` title="${esc(loose.name || '')}"` : ''}>${esc(String(loose.title || '').trim() || loose.name || 'file')}</a>`;
     const kind = tfKind(f.name, v.mime || f.mime), pic = kind === 'image' ? tfPicture(v, kind) : null;
-    const label = `${f.name} v${v.n}`;
-    return pic ? `<button type="button" class="tc-thumb tf-skel" data-tf-jump="${esc(f.id)}" data-tf-n="${v.n}" title="${esc(label)}" aria-label="Open ${esc(label)}"><img alt="" data-tf-src="${esc(pic)}"></button>`
-      : `<button type="button" class="tc-file" data-tf-jump="${esc(f.id)}" data-tf-n="${v.n}" aria-label="Open ${esc(label)}"><span class="tc-kind">${esc(tfGlyph(kind, f.name))}</span>${esc(f.name)} <span class="muted tnum">v${v.n}</span></button>`;
+    const name = title || f.name, label = title ? `${title} (${f.name} v${v.n})` : `${f.name} v${v.n}`;
+    const thumb = pic && `<button type="button" class="tc-thumb tf-skel" data-tf-jump="${esc(f.id)}" data-tf-n="${v.n}" title="${esc(label)}" aria-label="Open ${esc(label)}"><img alt="" data-tf-src="${esc(pic)}"></button>`;
+    return pic ? (title ? `<span class="tc-titled">${thumb}<span class="tc-file-title" aria-hidden="true">${esc(title)}</span></span>` : thumb)
+      : `<button type="button" class="tc-file" data-tf-jump="${esc(f.id)}" data-tf-n="${v.n}" aria-label="Open ${esc(label)}"${title ? ` title="${esc(f.name)}"` : ''}><span class="tc-kind">${esc(tfGlyph(kind, f.name))}</span>${esc(name)} <span class="muted tnum">v${v.n}</span></button>`;
   }).join('')}</div>`;
 }
 document.addEventListener('click', ev => {

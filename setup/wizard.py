@@ -102,8 +102,11 @@ def gather(io: IO, args, s: Settings, dry: bool) -> Settings:
 
 def gather_identity(io: IO, args, s: Settings, dry: bool) -> None:
     a = Asker(io, args, s, dry)
-    if s.auth != st.OWNER_LINK:         # set by hosted.gather for a server Tico hosts, never asked
+    if s.auth != st.OWNER_LINK and not s.hosted:   # hosted.gather sets it for a server Tico hosts, never asked
         a.get("auth", "How should people sign in?", flag="--auth", choices=st.AUTHS, default="google")
+    for flag in ("issuer", "signin_label"):
+        if getattr(args, flag, None) and s.auth != "oidc":
+            raise MissingInput(f"--{flag.replace('_', '-')} is for --auth oidc")
     if s.auth == st.OWNER_LINK:
         pass                            # the owner's sign-in link: no provider to set up
     elif s.auth == "cloudflare":
@@ -112,7 +115,7 @@ def gather_identity(io: IO, args, s: Settings, dry: bool) -> None:
         a.get("access_issuer", "Access team URL (https://<team>.cloudflareaccess.com)")
         a.get("access_audience", "Access application audience tag")
     else:
-        p = signin.PROVIDERS[s.auth]
+        p = signin.provider(s.auth)
         uri = signin.redirect_uri(s.domain)
         need_client = not (getattr(args, "client_id", None) or s.client_id)
         if need_client and io.interactive and not dry:
@@ -120,11 +123,18 @@ def gather_identity(io: IO, args, s: Settings, dry: bool) -> None:
             for i, step in enumerate(p.steps, 1):
                 io.say(f"  {i}. {step}")
             io.say(f"\n  Redirect URI to paste, exactly:  {uri}\n")
-            io.open_url(p.console_url)
+            if p.console_url:
+                io.open_url(p.console_url)
         elif not io.interactive or dry:
-            io.say(f"Sign-in: create a {p.label} OAuth client at {p.console_url}\n  with redirect URI exactly {uri}")
+            io.say(f"Sign-in: create a {p.label} OAuth client" + (f" at {p.console_url}" if p.console_url else "")
+                   + f"\n  with redirect URI exactly {uri}")
         if s.auth == "microsoft":
             a.get("tenant", "Directory (tenant) ID or domain")
+        if s.auth == "oidc":
+            a.get("issuer", "Issuer URL (https://..., the provider's OpenID Connect address)", validate=signin.valid_issuer)
+            s.issuer = s.issuer.rstrip("/") if not s.issuer.startswith("<") else s.issuer
+            a.get("signin_label", "Name on the sign-in button, \"Sign in with ...\" (blank: straight to the provider)",
+                  required=False, flag="--signin-label", validate=lambda v: len(v) <= 40 and not any(c in v for c in "<>\n\r"))
         a.get("client_id", f"{p.label} client ID")
         a.get("client_secret", f"{p.label} client secret (hidden)", secret=True, env="TICO_OIDC_CLIENT_SECRET")
         a.get("allowed_domain", "Only allow sign-in from this email domain (blank for anyone on the roster)", required=False,
@@ -282,7 +292,12 @@ def plan_lines(s: Settings, zone: dnsmod.Zone | None, records: list[dnsmod.Recor
     elif s.auth == "cloudflare":
         add("Sign-in: Cloudflare Access (issuer and audience you gave)")
     else:
-        add(f"Sign-in: {signin.PROVIDERS[s.auth].label} OIDC; OAuth client redirect URI must be exactly {signin.redirect_uri(s.domain)}")
+        add(f"Sign-in: {signin.provider(s.auth).label} OIDC" + (f" at {s.issuer}" if s.auth == "oidc" else "")
+            + (f", button \"Sign in with {s.signin_label}\"" if s.auth == "oidc" and s.signin_label else "")
+            + f"; OAuth client redirect URI must be exactly {signin.redirect_uri(s.domain)}")
+        if s.hosted:
+            for line in hosted.plan_lines(s):
+                add(line)
     if s.backup == "aws":
         add("Backups: create the backup storage on AWS")
         L += [f"       - {x}" for x in bk.aws_plan_lines(s.domain, s.aws_region)]
@@ -445,8 +460,9 @@ def run(args, io: IO, deps: Deps) -> int:
         tunnel_id = _tunnel(io, args, s, deps, zone, cf) or tunnel_id
         records = dnsmod.plan_records(s.domain, s.front_door, tunnel_id=tunnel_id, runner_host=s.runner())
 
-    if s.auth == st.OWNER_LINK and not s.owner_link_hash:
-        # The first link, made here; a re-run keeps it (the server only takes one when it has none).
+    if s.hosted and not s.owner_link_hash:
+        # The first link (break-glass beside --auth oidc), made here; a re-run keeps it (the server only takes one when it
+        # has none).
         s.owner_link_hash = hosted.new_link(s)
     env_text = envfile.render(s.to_env())
     state.save(s.domain, s.public(), env_text)
@@ -660,7 +676,7 @@ HTTPS_WAIT_SECONDS = 180
 
 def finish(io: IO, s: Settings, deps: Deps, records, runner: remote.Shell | None, args=None) -> int:
     io.say("\nChecking it works")
-    checks = verify.run_all(domain=s.domain, provider=s.auth, client_id=s.client_id, front_door=s.front_door,
+    checks = verify.run_all(domain=s.domain, provider=s.auth, client_id=s.client_id, issuer=s.issuer, front_door=s.front_door,
                             records=records, resolvers=deps.public_resolvers(), shell=runner, runner_host=s.runner(),
                             wait_https=HTTPS_WAIT_SECONDS, sleep=deps.sleep, say=io.say)
     show(io, checks)
@@ -669,6 +685,11 @@ def finish(io: IO, s: Settings, deps: Deps, records, runner: remote.Shell | None
         if s.auth == st.OWNER_LINK:
             io.say(f"\nDone. The owner's sign-in link is in {hosted.link_file(s.domain)} (0600): send it to {s.owner_email}. "
                    "It works once, for a week; `python3 -m setup owner-link --domain " + s.domain + "` makes a new one.")
+        elif s.hosted:
+            io.say(f"\nDone. Open https://{s.domain} and press \"Sign in with {s.signin_label or 'your provider'}\" as "
+                   f"{s.owner_email}, the owner.")
+            io.say(f"Break-glass, for our team only (not for the ready email): the owner's sign-in link is in "
+                   f"{hosted.link_file(s.domain)} (0600), for when the issuer is down.")
         else:
             io.say(f"\nDone. Open https://{s.domain} and sign in as {s.owner_email}.")
         if not s.backup_url:
@@ -718,7 +739,7 @@ def doctor(args, io: IO, deps: Deps) -> int:
         _, _, ssm, _ = deps.aws_clients(s.aws_region, s.aws_profile)
         runner = remote.SSMShell(ssm, s.aws_instance_id, deps.sleep)
     io.say(f"tico setup doctor for {domain}")
-    checks = verify.run_all(domain=domain, provider=s.auth, client_id=s.client_id, front_door=s.front_door,
+    checks = verify.run_all(domain=domain, provider=s.auth, client_id=s.client_id, issuer=s.issuer, front_door=s.front_door,
                             records=records, resolvers=deps.public_resolvers(), shell=runner, runner_host=s.runner())
     show(io, checks)
     ok = all(c.ok for c in checks)

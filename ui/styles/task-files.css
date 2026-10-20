@@ -94,6 +94,8 @@ dialog.tmodal.over{outline:2px dashed var(--accent);outline-offset:-6px}
 .tc-file{display:inline-flex;align-items:center;gap:5px;max-width:100%;padding:2px 8px;border:1px solid var(--line);border-radius:999px;background:var(--surface);color:var(--ink);font:inherit;font-size:var(--t-sm);text-decoration:none;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .tc-file:hover,.tc-thumb:hover{border-color:var(--g4)}
 .tc-kind{font-size:var(--t-2xs);font-weight:700;letter-spacing:.04em;color:var(--accent)}
+.tc-titled{display:inline-flex;flex-direction:column;gap:2px;max-width:120px;min-width:0}
+.tc-file-title{font-size:var(--t-sm);color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* a question: a chip, the question, its options; once answered, the answers */
 .ask{display:flex;flex-direction:column;gap:8px;margin-top:8px;padding:9px 10px;border:1px solid color-mix(in srgb,var(--wait) 45%,var(--line));border-radius:8px;background:var(--surface);font-size:var(--t-sm);line-height:1.45}
 .ask.answered{border-color:var(--line)}

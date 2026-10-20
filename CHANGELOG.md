@@ -8,6 +8,14 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- **"Sign in with Tico account" on hosted servers, through the ordinary OpenID Connect sign-in**: a new optional
+  `TICO_OIDC_LABEL` puts one "Sign in with <label>" button in front of any OpenID Connect provider (unset, sign-in goes
+  straight to the provider as before). The setup wizard's new `--auth oidc --issuer <url> --client-id <id>
+  [--signin-label <name>]` takes any issuer, with the client secret only from `TICO_OIDC_CLIENT_SECRET` in the
+  environment, never printed. With `--hosted`, the owner email is the owner, invited teammates sign in as members, and
+  the owner sign-in link stays as break-glass beside it: it works while the issuer is down, and people already
+  signed in stay signed in. Google, Microsoft, Cloudflare Access and the other sign-in options work as before.
+  ([Install](docs/install.md#sign-in))
 - **Tico AI Gateway connects by itself**: an install whose install command carries a Tico invite code
   (`TICO_GATEWAY_INVITE`) gets its own gateway key at start, with nothing to paste, and replaces it every 30 days.
   The invite is only needed for that first sign-up; after it, the install keeps its key without one.
