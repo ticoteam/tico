@@ -221,6 +221,12 @@ for you or reach a Tico server you run. Only `https://tico.team` may call these 
   random ID the panel makes for this chat (`crypto.randomUUID()`), and nothing else: the panel adds no name, email
   address, page history or cookie. Anything you type yourself, a name or an email address included, is part of the
   message.
+- **To TypeSafe** (api.typesafe.ai, the provider of the Jev decision model), only when the Tico team has set Ask
+  Tico's screening key on HQ (`HQ_SDR_DECIDE_KEY`): your current message as you wrote it, and nothing else (no chat
+  ID, no earlier messages), once, to check whether it is spam, abuse, an attempt to instruct the chat, or off-topic
+  before the model sees it. A message it judges so is answered with a fixed line and sent nowhere else. If TypeSafe
+  does not answer within 3 seconds, or is not sure, the message goes on unchecked. With no key set, nothing is sent to
+  TypeSafe.
 - **To OpenRouter** (openrouter.ai), which passes it to a provider that serves the model (Inception's Mercury 3 today;
   the Tico team can change it): a fixed instruction, Tico's sales brief, up to four excerpts of Tico's public manual
   that match your message, your current message and up to 20 previous messages from this chat, as you wrote them.
@@ -238,7 +244,8 @@ for you or reach a Tico server you run. Only `https://tico.team` may call these 
 - **The chat, in memory only,** under a salted hash of its ID, so the next message has the conversation. It is
   erased 30 minutes after its last message, and a restart or deploy of HQ erases every chat. Nothing of the chat is
   written to HQ's database, and no message text is logged.
-- **No counts** of Ask Tico chats are kept yet.
+- **No counts** of Ask Tico chats are kept yet, except how many messages the screening passed, refused or could not
+  check, in memory until HQ restarts: numbers only, never the text, the chat ID or TypeSafe's answer.
 - **No IP addresses are stored or logged.** HQ uses your address in memory only, as a salted hash, for the limit of
   60 requests an hour every HQ route has.
 - **No cookie or tracker** is set by HQ.
