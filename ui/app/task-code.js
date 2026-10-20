@@ -147,12 +147,12 @@ const taskSubAdder = t => canMove() && !['done', 'closed'].includes(String(t.sta
 function taskSubtasksHTML(t, kids, open, adding, owner) {
   if (!kids.length && !adding) return '';
   const summary = taskSubSummary(t, kids), counts = taskSubCounts(t, kids);
-  // The heading counts the children shown here; the line under it rolls up the whole tree, with a thin bar.
+  // The heading counts the children shown here; the roll-up of the whole tree sits on the same line, with a thin bar.
   const count = t.children_summary?.direct_total ?? kids.length;
   const pick = owner || actorSlug(t.owner) || t.owner || '';
   const actor = pick.includes(':') ? pick : 'bot:' + pick;
-  return `<section class="rail-sec task-subs" aria-labelledby="task-subs-h"><h3 class="rail-h" id="task-subs-h">Subtasks${count ? ` <span class="cnt">${count}</span>` : ''}</h3>
-    ${summary ? `<div class="sub-sum tnum"><span>${esc(summary)}</span><span class="sub-bar" aria-hidden="true"><i style="width:${Math.round(100 * counts.done / counts.total)}%"></i></span></div>` : ''}
+  return `<section class="rail-sec task-subs" aria-labelledby="task-subs-h"><h3 class="rail-h" id="task-subs-h">Subtasks${count ? ` <span class="cnt">${count}</span>` : ''}${
+    summary ? `<span class="sub-sum tnum"><span>${esc(summary)}</span><span class="sub-bar" aria-hidden="true"><i style="width:${Math.round(100 * counts.done / counts.total)}%"></i></span></span>` : ''}</h3>
     ${kids.length ? `<ul class="sub-list">${kids.map(k => taskSubRowHTML(k, open)).join('')}</ul>` : ''}
     ${taskSubAdder(t) ? `<form class="sub-add" data-sub-add><input name="title" type="text" maxlength="300" autocomplete="off" placeholder="Add subtask" aria-label="Add subtask">
       <input type="hidden" name="owner" value="${esc(pick)}"><button type="button" class="sub-owner" data-sub-owner aria-haspopup="menu" aria-label="For ${esc(actorLabel(actor))}. Change" title="For ${esc(actorLabel(actor))}">${actorFace(actor, 18)}</button></form>` : ''}</section>`;

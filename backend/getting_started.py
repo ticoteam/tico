@@ -153,7 +153,7 @@ def checklist(c, who, settings, github):
         _item("model", "A model is signed in on it", signed,
               ("Sign in to a model on the computer" + (" (run `" + login + "`)" if login else "") + "."
                if wanted else "Choose your AI providers first."),
-              "#/settings", "devices" if wanted else "providers", login=_login_target(runners, wanted)),
+              "#/settings", "devices" if wanted else "models", login=_login_target(runners, wanted)),
         _item("github", "GitHub is connected", installed,
               "Lets bots keep their work in your GitHub.", "#/settings", "cloud", optional=True),
         _item("botops", "BotOps is active", botops and botops["state"] == "active",

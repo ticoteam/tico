@@ -265,7 +265,7 @@ pub fn replay(attempt: &Value, tokens: usize) -> String {
 }
 
 /// The company's fallback models from the last GET /api/v2/config, and when they were read. Empty from an older
-/// server or when the owner turned automatic fallback off (Settings > AI providers).
+/// server or when the owner turned automatic fallback off (Settings > Computers).
 static CHOICES: Mutex<Option<(Instant, Vec<Value>)>> = Mutex::new(None);
 
 /// Whether the server keeps login holds (its config carries `login_holds`), and so knows a profile's `shared_login`.

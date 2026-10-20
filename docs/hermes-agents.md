@@ -203,7 +203,7 @@ only active bots and humans, and is checked and capped like any bot when it writ
   it is reporting in.
 - **Settings → Computers** lists every Hermes profile: profile, version, platform, model and when
   it last reported.
-- **Runs** stays empty. What the agent does through the API (tasks, messages, status) is recorded
+- **Runs** (Settings → History) stays empty. What the agent does through the API (tasks, messages, status) is recorded
   as for every bot.
 
 ## The credential

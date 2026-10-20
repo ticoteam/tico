@@ -2,7 +2,7 @@
 
 The Tico AI Gateway is Tico's own model service. With a gateway key from Tico, your bots can run on **Tico Cheap 1.0**,
 **Tico Mid 1.0** and **Tico Power 1.0**, and Decide asks the Gateway with the same key. You connect it once, in
-**Settings → AI providers**. How runs reach the Gateway, for developers, is in
+**Settings → Computers → Models**. How runs reach the Gateway, for developers, is in
 [Harnesses](harnesses.md#the-tico-ai-gateway).
 
 | Model | What runs underneath |
@@ -13,7 +13,7 @@ The Tico AI Gateway is Tico's own model service. With a gateway key from Tico, y
 
 ## Choose how bots get their models
 
-At the top of **Settings → AI providers**, and in the first step of setup, the owner picks one of four choices:
+At the top of **Settings → Computers → Models**, and in the first step of setup, the owner picks one of four choices:
 
 - **Your Claude and ChatGPT subscriptions, plus Tico Gateway** (recommended). Bots do their main work on your Claude
   and ChatGPT subscriptions. Personal plans are fine. Sign in with your own Claude and ChatGPT accounts in
@@ -49,7 +49,7 @@ its monthly cap, the Gateway work stops and Health says **Gateway cap reached** 
 
 Only the owner can do this.
 
-1. Open **Settings → AI providers**. The **Tico AI Gateway** card is under the providers.
+1. Open **Settings → Computers → Models**. The **Tico AI Gateway** card is under the providers.
 2. Paste the key Tico gave you in **Gateway key**.
 3. Leave **Gateway URL** empty to use the default, `https://updates.tico.team/v1/gateway`. Enter another only if Tico gave
    you one; it starts with `https://` (plain `http://` only for `localhost`). A URL set in the server's environment
@@ -98,7 +98,7 @@ status and **Needs you** say so.
 
 Tico asks the Gateway about the key when you save it, when you press **Check now**, when the owner opens the page
 (at most once a minute) and every hour. The card shows the Gateway's last answer, and **Settings → Health** shows the
-same warnings to the owner, with **Open AI providers**.
+same warnings to the owner, with **Open Models**.
 
 | The card says | What it means | What to do |
 |---|---|---|
@@ -116,7 +116,7 @@ The bot's status says why, in plain words, and the run waits or is saved for lat
 | The bot's status says | What happens to the run |
 |---|---|
 | **Gateway cap reached** | Waits until the next month (UTC). |
-| The Tico AI Gateway key is not working; save a new one in Settings > AI providers | Waits for a new key. |
+| The Tico AI Gateway key is not working; save a new one in Settings > Computers | Waits for a new key. |
 | Tico AI Gateway rate limited | Waits at least an hour. The Gateway limits an address that sent too many refused keys. |
 | The Tico AI Gateway doesn't offer this model | Saved for later, not retried. Pick Tico Cheap, Mid or Power 1.0. |
 | The Tico AI Gateway refused the request as sent, with the Gateway's reason | Saved for later, not retried. |

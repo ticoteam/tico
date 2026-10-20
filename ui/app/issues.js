@@ -1,4 +1,4 @@
-/* ui/app/issues.js — Shared issue and request rows, closeIssue, issue composer, Issues/Runs/Access tables, pageRuns
+/* ui/app/issues.js — Shared issue and request rows, closeIssue, issue composer, Issues/Runs/Access tables
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -297,11 +297,11 @@ function issuesTable(list, showOwner) {
 // The models that did a run's work (not the bot's configured one); empty when nothing was counted.
 const ranOn = made => [...new Set(((made || {}).segments || []).map(s => s.model).filter(Boolean))].join(' then ');
 // A failed run offers Report this: Support opens with it attached (ui/support.js).
-function runsReportHTML(r) {
+function runsReportHTML(r, icon = false) {
   if (!window.supportOn?.() || !window.reportThisHTML) return '';
   const why = r.failure_reason || r.outcome || `exit ${r.exit}`;
   return `<div>${window.reportThisHTML({kind: 'run', title: `${r.employee || 'Run'} failed: ${why}`, detail: why, ref: r.attempt_id || r.id || '',
-    group: 'run:' + String(why).replace(/\d+/g, '#').slice(0, 80)})}</div>`;
+    group: 'run:' + String(why).replace(/\d+/g, '#').slice(0, 80)}, icon)}</div>`;
 }
 function runsTable(list, showEmp=true) {
   if (!list.length) return `<div class="empty">No runs yet.${window.talkLineHTML?.() || ''}</div>`;
@@ -333,10 +333,4 @@ function accessTable(e) {
       ${e.secrets_file ? '' : '<div><span class="muted">No credentials file.</span></div>'}
     </div>
     ${rows ? `<div class="scroll"><table><tr><th>Service</th><th>As</th><th>Can</th><th>Status</th><th></th></tr>${rows}</table></div>` : ''}`;
-}
-
-async function pageRuns() {
-  $('#main').innerHTML = `<div class="meeting-head"><div><h1>Runs</h1></div></div>
-    <section class="card"><div id="runs">Loading…</div></section>`;
-  try { $('#runs').innerHTML = runsTable(await get('/runs')); } catch (e) { $('#runs').innerHTML = `<div class="err">${esc(e.message)}</div>`; }
 }

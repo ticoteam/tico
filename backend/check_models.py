@@ -71,12 +71,12 @@ def _auto(c, settings, bot, authors):
     raise CheckModelError("runner_not_ready" if refused else "check_model",
                           f"No check model from a provider other than {' or '.join(names) or 'the author'}"
                           + (": " + "; ".join(refused[:3]) if refused else
-                             ": enable another AI provider in Settings > AI providers, or name one with --check-model"))
+                             ": enable another AI provider in Settings > Computers, or name one with --check-model"))
 
 
 def choose(c, settings, bot, spec, role, authors=()):
     """The check model a subtask of `bot` may name, or CheckModelError. The company must have the provider
-    on (Settings > AI providers), the model must be current, and the bot's computer must not report that
+    on (Settings > Computers), the model must be current, and the bot's computer must not report that
     runtime signed out. `auto` takes the company's check model for work by `authors`, never one of their providers."""
     if role not in ROLES:
         raise CheckModelError("role", "Choose --role review or --role check")

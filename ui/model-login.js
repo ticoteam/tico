@@ -376,6 +376,11 @@
 
   // Every action here waits for the computer: offline, its button stays, disabled, and says why (nothing queues).
   const offline = online => online ? '' : ' disabled title="Computer is offline"';
+  // Switch account and Sign out sit on every signed-in line, so they are icons; the name is the label and the tooltip
+  // (an offline title in `attrs` comes first and wins).
+  // (A *_ICONS map, so scripts/build-icon-font.py keeps their glyphs.)
+  const LOGIN_ICONS = {switch: 'manage_accounts', signOut: 'logout'};
+  const iconButton = (icon, label, attrs) => `<button class="ghost machine-signin machine-icon-btn" type="button" ${attrs} aria-label="${label}" title="${label}"><span class="nav-icon" aria-hidden="true">${icon}</span></button>`;
 
   // The Sign out / Switch account buttons for a signed-in login, and Use the shared key for a computer login a person
   // signed out. Only for a CLI whose manifest has a logout (`sign_out`), to whoever may sign it in (the caller checks:
@@ -393,9 +398,9 @@
       const switches = !(caps.switch_unavailable_on || []).includes(platform);
       const toKey = switches && !onKey && !profile && caps.api_keys === 'computer' && (caps.api_key_login || caps.api_key_check);
       return (onKey && !profile ? toSubscriptionHTML({runnerId, runtime, machine, online, platform})
-        : switches ? ` <button class="ghost machine-signin" type="button" data-model-switch ${data}>Switch account</button>` : '')
+        : switches ? ` ${iconButton(LOGIN_ICONS.switch, 'Switch account', `data-model-switch ${data}`)}` : '')
         + (toKey ? ` <button class="ghost machine-signin" type="button" data-model-to-key ${data}>Switch to API key</button>` : '')
-        + ` <button class="ghost machine-signin" type="button" data-model-sign-out ${data}>Sign out</button>`;
+        + ` ${iconButton(LOGIN_ICONS.signOut, 'Sign out', `data-model-sign-out ${data}`)}`;
     }
     return signedOut && !profile ? ` <button class="ghost machine-signin" type="button" data-model-shared-key ${data}>Use the shared key</button>` : '';
   }

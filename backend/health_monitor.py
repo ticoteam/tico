@@ -449,7 +449,7 @@ def _near_start(line, starts):
 
 
 def _company_fallback(c, settings, declared, company):
-    """Whether a bot that names no fallback of its own still has the company's (Settings > AI providers, *Fall back
+    """Whether a bot that names no fallback of its own still has the company's (Settings > Computers, *Fall back
     when a plan runs out*): automatic fallback is on and lists a model on another runtime than the bot's. The runner
     picks from the same rows (runner-rs/src/fallback.rs default_choice); a bot that turned fallback off, or names a
     harness without a model, gets none."""

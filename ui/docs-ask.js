@@ -257,7 +257,7 @@ html.demo .dask{top:var(--demo-h)}
     }
     const state = t.error ? `<p class="dask-err" role="alert">${esc(t.error)}</p>`
       : t.answer != null ? ''
-      : t.noProvider ? '<p class="dask-empty" data-no-provider role="status">The Librarian needs an AI provider. <a href="#/settings" data-gs-tab="providers">Settings &gt; AI providers</a></p>'
+      : t.noProvider ? '<p class="dask-empty" data-no-provider role="status">The Librarian needs an AI provider. <a href="#/settings" data-gs-tab="models">Settings &gt; Computers</a></p>'
       : `<p class="dask-think" data-thinking role="status">The Librarian is reading the docs<i></i><i></i><i></i></p>`;
     return `<section data-turn="${i}"><div class="dask-q">${esc(t.question)}</div>
       ${t.results ? `<label class="dask-label">Matching docs <select data-collection="${i}" aria-label="Search collection">${[["all", "All docs"], ["team", "Team docs"], ["manual", "Tico manual"]].map(([value, label]) => `<option value="${value}"${(t.collection || "all") === value ? " selected" : ""}>${label}</option>`).join("")}</select></label>${resultsHtml(t.results)}` : ''}

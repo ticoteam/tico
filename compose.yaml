@@ -113,6 +113,8 @@ services:
       DO_NOT_TRACK:
       TICO_TELEMETRY_DEBUG:
       TICO_HQ_URL:
+      TICO_INBOUND_KEY:
+      TICO_INBOUND_URL:
       # HQ's read-only staff key, on the Tico team's own server only: its Health page shows HQ's nightly billing check.
       TICO_HQ_STAFF_READ_KEY:
       TICO_GITHUB_REVIEW_ROLE:

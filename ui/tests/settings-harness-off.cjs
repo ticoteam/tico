@@ -86,7 +86,7 @@ const {unrouted} = require('./support/routes.cjs');
     assert.ok(options.some(o => o.value === 'hermes' && !o.disabled), 'external harnesses are unaffected');
     const note = page.locator('[data-add-choice] [data-choice-off]');
     await note.waitFor();
-    assert.match(await note.innerText(), /Muse Code.*AI providers/, 'the note names Muse Code and AI providers');
+    assert.match(await note.innerText(), /Muse Code.*Models/, 'the note names Muse Code and Models');
     await note.locator('[data-off-providers]').click();
     await page.locator('#set-providers').waitFor();
     await page.evaluate(() => document.querySelector('#bot-editor').close());

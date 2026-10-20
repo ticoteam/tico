@@ -520,6 +520,32 @@ def parser():
 
     sub.add_parser("whoami").set_defaults(fn="whoami")
 
+    inbound = sub.add_parser('inbound', help='shared company email and SMS inboxes').add_subparsers(dest='sub')
+    item = inbound.add_parser('inboxes'); item.set_defaults(fn='inbound inboxes')
+    item.add_argument('--after'); item.add_argument('--limit', type=int)
+    item = inbound.add_parser('create-email'); item.add_argument('name', nargs='?'); item.set_defaults(fn='inbound create-email')
+    for action in ('list', 'search', 'cursor', 'wait'):
+        item = inbound.add_parser(action); item.set_defaults(fn='inbound '+action)
+        item.add_argument('--inbox-id', dest='inbox_ids', action='append')
+        if action == 'search': item.add_argument('q')
+        if action in ('list', 'search', 'wait'):
+            item.add_argument('--kind', choices=('email','sms'))
+            item.add_argument('--from', dest='sender')
+            item.add_argument('--has-code', action='store_true', default=None)
+            item.add_argument('--after', type=int, required=action=='wait')
+            item.add_argument('--limit', type=int)
+        if action == 'wait': item.add_argument('--timeout', type=int)
+        if action in ('list', 'search'):
+            item.add_argument('--before', type=int)
+        if action == 'list':
+            item.add_argument('--spam', action='store_true', default=None)
+    for action in ('read', 'code'):
+        item = inbound.add_parser(action); item.set_defaults(fn='inbound '+action)
+        item.add_argument('message_id')
+        if action == 'read':
+            item.add_argument('--offset', type=int); item.add_argument('--max-chars', type=int)
+
+
     meeting = sub.add_parser("meeting",
                              help="search meetings, read transcripts, import a transcript from another tool").add_subparsers(dest="sub")
     granola = meeting.add_parser("granola", help="your Granola account; connect in Meetings in your browser").add_subparsers(dest="granola_action")

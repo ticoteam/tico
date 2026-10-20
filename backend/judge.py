@@ -4,7 +4,7 @@
 The server asks its providers in this order, each failure falling through to the next (fail open), with the same keys
 the Slack gateway routes with:
 1. the Tico AI Gateway as `tico-decide-1.0`, with the gateway key (`TICO_GATEWAY_KEY` or `TICO_GATEWAY_SECRET_ARN`, at
-   `TICO_GATEWAY_URL`, Tico HQ's decisions endpoint by default), else the key and URL saved in Settings > AI providers
+   `TICO_GATEWAY_URL`, Tico HQ's decisions endpoint by default), else the key and URL saved in Settings > Computers
    (backend/gateway_connection.py), read at each call;
 2. a customer's own TypeSafe key (`TYPESAFE_API_KEY` or `TICO_TYPESAFE_SECRET_ARN`), never set by default;
 3. the team's own AI provider, when the server has that provider's API key (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`,
@@ -281,7 +281,7 @@ def _own_cost(result):
 
 def gateway(settings, store=None, vault=None):
     """The Tico AI Gateway as the server asks it: one try of at most `J.GATEWAY_TIMEOUT` seconds. The environment's key
-    wins; without one, and with a `store`, the key saved in Settings > AI providers, read at each call so saving or
+    wins; without one, and with a `store`, the key saved in Settings > Computers, read at each call so saving or
     clearing it counts at once (`saved` marks that step; `live` leaves it out while no key is saved). None in rehearsal
     or with neither."""
     if settings.rehearsal:

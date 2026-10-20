@@ -1054,7 +1054,7 @@ impl Runner {
         let turn_env = base_env.clone().unwrap_or_default();
         if pending.is_none() && (hit_limit || held.is_some()) && !native_control && prepared {
             // Out of quota with no fallback of its own: another provider signed in on this computer runs the turn
-            // once (Settings > AI providers can turn this off for the company).
+            // once (Settings > Computers can turn this off for the company).
             let choices = self.default_fallbacks().await;
             pending = crate::fallback::default_choice(&config, &choices, &turn_env, |rt| self.fallback_ready(rt, selected.as_ref()));
         }
