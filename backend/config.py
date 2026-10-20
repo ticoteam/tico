@@ -175,6 +175,8 @@ class Settings:
     google_oauth_client_id: str = ""
     google_oauth_client_secret: str = field(default="", repr=False)
     oidc_allowed_domains: tuple[str, ...] = ()
+    # The provider's name on the sign-in button (TICO_OIDC_LABEL, "Sign in with <label>"); empty goes straight to it.
+    oidc_label: str = ""
     session_secret: str = field(default="", repr=False)
     # Off: a bot may invite anyone to a calendar event. On: only people on the roster (403 external_attendee).
     block_external_invites: bool = False
@@ -437,6 +439,7 @@ class Settings:
             oidc_client_secret_file=(Path(os.environ["TICO_OIDC_CLIENT_SECRET_FILE"])
                                      if os.environ.get("TICO_OIDC_CLIENT_SECRET_FILE") else None),
             oidc_allowed_domains=_emails(os.environ.get("TICO_OIDC_ALLOWED_DOMAINS", "")),
+            oidc_label=os.environ.get("TICO_OIDC_LABEL", "").strip(),
             session_secret=os.environ.get("TICO_SESSION_SECRET", "").strip(),
             block_external_invites=os.environ.get("TICO_BLOCK_EXTERNAL_INVITES", "0") == "1",
             token_alert_input=int(os.environ.get("TICO_TOKEN_ALERT_INPUT", "").strip() or 100_000_000),

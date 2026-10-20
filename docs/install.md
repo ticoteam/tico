@@ -353,7 +353,7 @@ life of the server: use a client secret you can rotate. Progress is in `/var/log
 
 | `TICO_AUTH_PROXY` | Also set | Use |
 |---|---|---|
-| `oidc` | `TICO_OIDC_ISSUER`, `TICO_OIDC_CLIENT_ID`, `TICO_OIDC_CLIENT_SECRET`; optionally `TICO_OIDC_ALLOWED_DOMAINS` (comma-separated, such as `acme.com`) | Google, Okta, Microsoft Entra or any OpenID Connect provider. Register `https://<TICO_DOMAIN>/auth/callback` as the redirect URI with the provider. |
+| `oidc` | `TICO_OIDC_ISSUER`, `TICO_OIDC_CLIENT_ID`, `TICO_OIDC_CLIENT_SECRET`; optionally `TICO_OIDC_ALLOWED_DOMAINS` (comma-separated, such as `acme.com`) and `TICO_OIDC_LABEL` (the provider's name: a signed-out browser then gets a page with one "Sign in with <label>" button instead of going straight to the provider) | Google, Okta, Microsoft Entra or any OpenID Connect provider. Register `https://<TICO_DOMAIN>/auth/callback` as the redirect URI with the provider. The setup wizard's `--auth oidc --issuer <url> --client-id <id>` takes any issuer, with the secret from `TICO_OIDC_CLIENT_SECRET` in the environment and `--signin-label` for the button. On a server Tico hosts (`--hosted`), the owner sign-in link below stays as break-glass beside it (`TICO_OWNER_LINK_HASH`): it never calls the issuer, so the owner gets in while the issuer is down, and people already signed in stay signed in. |
 | `cloudflare` | `TICO_ACCESS_ISSUER`, `TICO_ACCESS_AUDIENCE` | Cloudflare Access in front of the tunnel |
 | `owner-link` | `TICO_HOSTED` (`own` or `invited`), `TICO_OWNER_EMAIL`; `TICO_OWNER_LINK_HASH` for the first link | Only for a server Tico hosts, on an https domain name (the server refuses to start on an IP address). The owner signs in once with a link our team sends (`/auth/owner-link#<secret>`): it works once, and for a week at most. The setup wizard writes it with `--hosted own|invited --hosted-zone <zone>` (the domain must be under that zone) to a 0600 file and never prints it; `python3 -m setup owner-link --domain <domain> [--sign-out]` makes a new one, the old unused one stops working, and `--sign-out` also ends the owner's sessions. `--preset recommended` adds the [recommended setup](#recommended-setup)'s choices and the server's own computer; the Gateway invite comes from `TICO_GATEWAY_INVITE` on each run and goes only to the server, never into setup's saved copy of the `.env`. |
 | unset (or `none`) | nothing; leave `TICO_DOMAIN` unset | The quick start. The server answers on `http://127.0.0.1:8765` and the owner signs in with the token from `docker compose exec server cat /data/local-owner.token` (`Authorization: Bearer <token>`, or `GET /api/v2/local-signin?token=...`). With `TICO_DOMAIN` set, the server refuses to start. |
@@ -391,9 +391,13 @@ No open ports, and Cloudflare Access can do the sign-in. The wizard creates the 
    external agents connect without a bypass. Keep that hostname out of the Access application; `setup doctor` checks it.
    When `TICO_VISUAL_ORIGIN` names a separate HTTPS site for inline visuals, the generated config also routes that
    hostname to the same server, for `^/visuals/` only, on every start. Add its proxied CNAME to the same tunnel,
-   bypass caching for that hostname, and keep it out of Access. Malformed origins and the app or runner hostname
-   are refused before the tunnel config is replaced. Dashboard-managed tunnels need this path-limited route added
-   in Cloudflare instead ([Visuals in replies](visuals.md)).
+   bypass caching for that hostname, and keep it out of Access. A malformed origin, or the app or runner hostname, is
+   never written: the server logs a warning naming the reason (`tico: warning: TICO_VISUAL_ORIGIN ...`), writes the
+   config without the visuals route and starts as usual. The one exception is the app's own address (the same origin
+   as `TICO_PUBLIC_URL`): the server refuses to start with that. Dashboard-managed tunnels need this path-limited
+   route added in Cloudflare instead ([Visuals in replies](visuals.md)).
+   cloudflared reads this config only when it starts, so after changing `TICO_VISUAL_ORIGIN`, `TICO_DOMAIN` or
+   `TICO_RUNNER_URL` in `.env` alone, restart it once the server is healthy: `docker compose restart cloudflared`.
 3. Create an Access application for the hostname with your identity provider and a policy for your humans.
    Note the team URL (`https://<team>.cloudflareaccess.com`) and the application's Audience tag. Any identity
    provider Access offers works with the desktop app too (Google, Microsoft Entra, Okta, GitHub, a one-time PIN): the
