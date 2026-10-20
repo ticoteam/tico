@@ -483,9 +483,13 @@ def wav():
     return out.getvalue()
 
 
-def test_a_wav_on_a_task_is_an_audio_player_whatever_python_calls_its_type(api):
+def test_a_wav_on_a_task_is_an_audio_player_whatever_python_calls_its_type(api, monkeypatch):
     """QA d1c1857a: Python 3.15 guesses .wav as audio/vnd.wave, which was a file chip. JSON and multipart uploads
     store it as audio/wav, the comment shows an audio card, and the visual route serves it by range."""
+    import mimetypes
+    guess = mimetypes.guess_type      # the machine's own MIME tables vary; pin the guess QA saw on the shipped build
+    monkeypatch.setattr(mimetypes, "guess_type", lambda name, *a, **k: ("audio/vnd.wave", None)
+                        if str(name).lower().endswith(".wav") else guess(name, *a, **k))
     data = wav()
     task = post(api, "tasks", {"owner": "ops", "title": "Voice note", "body": "x", "private": True}, "ben-test")
     tid = task["id"]
