@@ -7,6 +7,12 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.3.65] - 2026-10-20
+
+### Fixed
+- Reviews and other delegated work return directly to their parent task, reusing its session and avoiding extra
+  relay runs. Repeated review verdicts are delivered once.
+
 ## [0.3.64] - 2026-10-19
 
 ### Added
@@ -3695,7 +3701,9 @@ First public release.
 - Hosting: local only on a Mac, or self-hosted, including a reference AWS stack under `infra/ec2/`
   with Litestream backups.
 
-[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.63...HEAD
+[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.65...HEAD
+[0.3.65]: https://github.com/ticoteam/tico/compare/v0.3.64...v0.3.65
+[0.3.64]: https://github.com/ticoteam/tico/compare/v0.3.63...v0.3.64
 [0.3.63]: https://github.com/ticoteam/tico/compare/v0.3.62...v0.3.63
 [0.3.62]: https://github.com/ticoteam/tico/compare/v0.3.61...v0.3.62
 [0.3.61]: https://github.com/ticoteam/tico/compare/v0.3.60...v0.3.61
