@@ -2,12 +2,14 @@
 
 import base64
 import hashlib
+import html
 import json
+import re
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urljoin, urlparse
 
 import jwt
 import pytest
@@ -138,6 +140,7 @@ def signin(api, provider):
         settings.session_secret = "s" * 40
         for key, value in changes.items():
             setattr(settings, key, value)
+        api.base_url = settings.public_url
         auth.proxy = identity_proxy.build(settings, auth.store)
         return auth.proxy
     proxy = start()
@@ -195,11 +198,101 @@ def test_cookie_is_host_prefixed_and_secure_on_https(signin):
     assert "__Host-tico_login=" in began.headers["set-cookie"] and "Secure" in began.headers["set-cookie"]
     assert "Domain" not in began.headers["set-cookie"]
     code, state = signin.fake.approve(began.headers["location"])
-    pair = began.headers["set-cookie"].split(";")[0]
-    done = signin.api.get("/auth/callback", params={"code": code, "state": state},
-                          headers={"cookie": pair}, follow_redirects=False)
+    done = signin.api.get("/auth/callback", params={"code": code, "state": state}, follow_redirects=False)
     session = next(v for v in done.headers.get_list("set-cookie") if v.startswith("__Host-tico_session="))
     assert "Secure" in session and "Path=/" in session and "Domain" not in session
+
+
+@pytest.mark.parametrize("label", ["", "Tico account"])
+def test_fresh_alias_login_reaches_canonical_before_creating_host_only_cookies(signin, label):
+    canonical, alias = "https://app.acme.example", "https://old.acme.example"
+    signin.start(public_url=canonical, oidc_label=label)
+    page = signin.api.get(alias + "/tasks?x=1", headers={"accept": "text/html"}, follow_redirects=False)
+    assert page.status_code == 302
+    entry = signin.api.get(urljoin(alias, page.headers["location"]), follow_redirects=False)
+    assert entry.status_code == 302 and entry.headers["location"].startswith(canonical + signin.auth.proxy.sign_in_path)
+    assert "set-cookie" not in entry.headers and entry.headers["cache-control"] == "no-store"
+    assert signin.fake.codes == {} and signin.fake.token_calls == []
+    began = signin.api.get(entry.headers["location"], follow_redirects=False)
+    if label:
+        assert began.status_code == 200 and "Sign in with Tico account" in began.text
+        button = re.search(r'<a class="b" href="([^"]+)"', began.text)
+        assert button is not None
+        began = signin.api.get(urljoin(canonical, html.unescape(button[1])), follow_redirects=False)
+    query = parse_qs(urlparse(began.headers["location"]).query)
+    assert query["redirect_uri"] == [canonical + oidc.CALLBACK_PATH]
+    assert "Domain" not in began.headers["set-cookie"]
+    pending = [cookie for cookie in signin.api.cookies.jar if cookie.name == "__Host-tico_login"]
+    assert len(pending) == 1 and pending[0].domain == "app.acme.example" and not pending[0].domain_specified
+    code, state = signin.fake.approve(began.headers["location"])
+    done = signin.api.get(query["redirect_uri"][0], params={"code": code, "state": state}, follow_redirects=False)
+    assert done.status_code == 302 and done.headers["location"] == "/tasks?x=1"
+    assert me(signin.api).status_code == 200
+    assert signin.api.get(alias + "/api/v2/me").status_code == 401
+
+
+def test_canonical_entry_uses_only_host_authority_and_preserves_real_ports(signin, monkeypatch):
+    for public, hosts, aliases in [
+        ("https://app.acme.example", ["app.acme.example", "APP.ACME.EXAMPLE:443"],
+         ["old.acme.example", "app.acme.example.evil.example", "app.acme.example.", "app.acme.example:8443", "app.acme.example:0",
+          "app.acme.example:", "app.acme.example?", "app.acme.example#"]),
+        ("http://127.0.0.1:8765", ["127.0.0.1:8765"], ["127.0.0.1", "127.0.0.1:8766", "localhost:8765"]),
+        ("http://[::1]:8765", ["[::1]:8765"], ["[::1]:8766", "[::1]:", "::1"]),
+    ]:
+        proxy = signin.start(public_url=public)
+        calls = []
+
+        def begin(*args):
+            calls.append(args)
+            return "https://identity.example/authorize", "synthetic-pending"
+
+        monkeypatch.setattr(proxy, "begin", begin)
+        for host in hosts:
+            reply = signin.api.get("http://internal.example/auth/login", headers={
+                "Host": host, "Forwarded": "host=evil.example;proto=http", "X-Forwarded-Host": "evil.example"},
+                follow_redirects=False)
+            assert reply.headers["location"] == "https://identity.example/authorize"
+        assert len(calls) == len(hosts)
+        for host in aliases:
+            for path in (oidc.LOGIN_PATH, oidc.SIGN_IN_PATH):
+                reply = signin.api.get("http://internal.example" + path, headers={
+                    "Host": host, "Forwarded": "host=" + urlparse(public).netloc,
+                    "X-Forwarded-Host": urlparse(public).netloc}, follow_redirects=False)
+                assert reply.status_code == 302 and reply.headers["location"] == public + path
+                assert "set-cookie" not in reply.headers
+        for path in (oidc.LOGIN_PATH, oidc.SIGN_IN_PATH):
+            duplicate = [("Host", urlparse(public).netloc), ("Host", "old.acme.example")]
+            reply = signin.api.get(public + path, headers=duplicate, follow_redirects=False)
+            assert reply.request.headers.get_list("host") == [value for _, value in duplicate]
+            assert reply.status_code == 302 and reply.headers["location"] == public + path
+            assert "set-cookie" not in reply.headers
+        assert len(calls) == len(hosts)
+
+
+def test_alias_entry_only_keeps_existing_valid_login_arguments(signin, monkeypatch):
+    public, alias, frontend = "https://app.acme.example", "https://old.acme.example", "https://frontend.acme.example"
+    proxy = signin.start(public_url=public, cors_origins=(frontend,))
+
+    def no_begin(*args):
+        raise AssertionError("An alias must not begin a provider login")
+
+    monkeypatch.setattr(proxy, "begin", no_begin)
+    reply = signin.api.get(alias + oidc.LOGIN_PATH, params={
+        "next": "/tasks#/x", "fresh": "0", "code_challenge": "ignored-for-local", "unknown": "drop-me"},
+        follow_redirects=False)
+    assert parse_qs(urlparse(reply.headers["location"]).query) == {"next": ["/tasks#/x"], "fresh": ["1"]}
+    assert "set-cookie" not in reply.headers
+    for target in ("https://evil.example/x", "//evil.example/x", "/auth/login"):
+        reply = signin.api.get(alias + oidc.LOGIN_PATH, params={"next": target}, follow_redirects=False)
+        assert reply.headers["location"] == public + oidc.LOGIN_PATH and "set-cookie" not in reply.headers
+    for target, challenge in [(frontend + "/", ""), (frontend + "/", "short"), ("https://evil.example/", "a" * 43)]:
+        reply = signin.api.get(alias + oidc.LOGIN_PATH, params={"next": target, "code_challenge": challenge},
+                               follow_redirects=False)
+        assert reply.status_code == 400 and "location" not in reply.headers and "set-cookie" not in reply.headers
+    reply = signin.api.get(alias + oidc.SIGN_IN_PATH, params={
+        "next": "//evil.example/x", "fresh": "1", "code_challenge": "a" * 43, "unknown": "drop-me"},
+        follow_redirects=False)
+    assert reply.headers["location"] == public + oidc.SIGN_IN_PATH and "set-cookie" not in reply.headers
 
 
 @pytest.mark.parametrize("claims", [

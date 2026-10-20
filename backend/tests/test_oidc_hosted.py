@@ -29,7 +29,7 @@ def hosted(signin):  # noqa: F811
     signin.settings.owner_email = OWNER
     signin.start(public_url=URL, hosted="invited", owner_link_hash=digest(token), oidc_label=LABEL)
     identity_proxy.check(signin.settings)
-    signin.browser = TestClient(signin.api.app, base_url="https://testserver")
+    signin.browser = TestClient(signin.api.app, base_url=signin.settings.public_url)
     signin.token = token
     return signin
 
@@ -64,7 +64,7 @@ def test_the_owner_email_signs_in_as_owner_and_an_invited_teammate_as_a_member(h
     assert done.status_code == 302
     me = who(hosted.browser).json()
     assert me["actor"] == "human:ana" and me["email"] == OWNER and me["role"] == "owner"
-    teammate = TestClient(hosted.api.app, base_url="https://testserver")
+    teammate = TestClient(hosted.api.app, base_url=hosted.settings.public_url)
     assert browser_login(hosted, "ben@acme.example", teammate).status_code == 302
     me = who(teammate).json()
     assert me["actor"] == "human:ben" and me["role"] != "owner"
@@ -85,7 +85,7 @@ def test_with_the_issuer_down_from_startup_sessions_keep_working_and_the_owner_l
     # Signed in while the issuer was up.
     assert browser_login(hosted, OWNER).status_code == 302
     owner_cookie = hosted.browser.cookies.get("__Host-tico_session")
-    teammate = TestClient(hosted.api.app, base_url="https://testserver")
+    teammate = TestClient(hosted.api.app, base_url=hosted.settings.public_url)
     assert browser_login(hosted, "ben@acme.example", teammate).status_code == 302
     member_cookie = teammate.cookies.get("__Host-tico_session")
     # The issuer stops, and the server restarts on the same database with the issuer still unreachable.
@@ -93,7 +93,7 @@ def test_with_the_issuer_down_from_startup_sessions_keep_working_and_the_owner_l
     hosted.fake.server.server_close()
     with hosted.auth.store.read() as c:
         assert c.execute("SELECT count(*) FROM owner_links").fetchone()[0] == 0    # no link placed yet
-    with TestClient(create_app(dataclasses.replace(hosted.settings)), base_url="https://testserver") as app:
+    with TestClient(create_app(dataclasses.replace(hosted.settings)), base_url=hosted.settings.public_url) as app:
         app.app.state.auth.warm()           # what startup runs: the installer's link goes in although the issuer is down
         for name, value, actor in (("owner", owner_cookie, "human:ana"), ("member", member_cookie, "human:ben")):
             kept = app.get("/api/v2/me", headers={"cookie": "__Host-tico_session=" + value})
@@ -133,7 +133,7 @@ def test_the_owner_link_is_off_unless_the_install_is_hosted_and_was_given_one(si
         assert c.execute("SELECT count(*) FROM owner_links").fetchone()[0] == 0
     with signin.auth.store.transaction() as c:      # even a link that is in the table opens nothing
         owner_link.place(c, digest(token), OWNER)
-    browser = TestClient(signin.api.app, base_url="https://testserver")
+    browser = TestClient(signin.api.app, base_url=signin.settings.public_url)
     assert browser.get(owner_link.LINK_PATH).status_code == 404
     assert browser.get(owner_link.SCRIPT_PATH).status_code == 404
     pressed = browser.post(owner_link.LINK_PATH, data={"token": token}, follow_redirects=False)
@@ -147,7 +147,7 @@ def test_wrong_break_glass_links_are_rate_limited_per_address(hosted):
         assert wrong.status_code == 410
     blocked = hosted.browser.post(owner_link.LINK_PATH, data={"token": hosted.token}, follow_redirects=False)
     assert blocked.status_code == 429 and "set-cookie" not in blocked.headers
-    elsewhere = TestClient(hosted.api.app, base_url="https://testserver", client=("198.51.100.7", 50000))
+    elsewhere = TestClient(hosted.api.app, base_url=hosted.settings.public_url, client=("198.51.100.7", 50000))
     pressed = elsewhere.post(owner_link.LINK_PATH, data={"token": hosted.token}, follow_redirects=False)
     assert pressed.status_code == 303 and pressed.headers["set-cookie"].startswith("__Host-tico_session=")
 

@@ -525,8 +525,33 @@ def register(app, auth):
             raise Problem("not_found", "Not found", 404)
         return auth.proxy
 
+    def canonical_entry(request, path, query):
+        # Pending login cookies are host-only, while the provider's callback is canonical.
+        # Compare Host, not the proxy's internal HTTP scheme, and never trust forwarded hosts.
+        canonical = urlparse(settings.public_url)
+        hosts = request.headers.getlist("host")
+        host = hosts[0] if len(hosts) == 1 else ""
+        try:
+            incoming = urlparse("//" + host)
+            port = 443 if canonical.scheme == "https" else 80
+            same = (bool(canonical.hostname) and bool(host) and host.isascii()
+                    and all(32 < ord(ch) < 127 for ch in host)
+                    and incoming.netloc == host and not host.endswith(":")
+                    and incoming.username is None and incoming.password is None
+                    and not (incoming.path or incoming.query or incoming.fragment)
+                    and incoming.hostname == canonical.hostname
+                    and (incoming.port if incoming.port is not None else port)
+                    == (canonical.port if canonical.port is not None else port))
+        except ValueError:
+            same = False
+        if same:
+            return None
+        query = urlencode({key: value for key, value in query.items() if value})
+        return RedirectResponse(settings.public_url + path + ("?" + query if query else ""), status_code=302,
+                                headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
+
     @app.get(LOGIN_PATH)
-    def login(next: str = "/", fresh: str = "", code_challenge: str = ""):
+    def login(request: Request, next: str = "/", fresh: str = "", code_challenge: str = ""):
         oidc = active()
         challenge = ""
         target = None if next.startswith("/") else oidc.frontend_target(next)
@@ -537,6 +562,11 @@ def register(app, auth):
                              "Its address is not one this server allows (TICO_CORS_ORIGINS), or it did not send "
                              "a PKCE code_challenge.")
             next, challenge = target, code_challenge
+        next = next if challenge else safe_next(next)
+        entry = canonical_entry(request, LOGIN_PATH, {
+            "next": next if next != "/" else "", "fresh": "1" if fresh else "", "code_challenge": challenge})
+        if entry is not None:
+            return entry
         try:
             url, cookie = oidc.begin(next, bool(fresh), challenge)
         except SignInError as exc:
@@ -549,10 +579,14 @@ def register(app, auth):
         return response
 
     @app.get(SIGN_IN_PATH)
-    def sign_in_page(next: str = "/"):
+    def sign_in_page(request: Request, next: str = "/"):
         """One button, "Sign in with <TICO_OIDC_LABEL>", to the provider; without a label, straight to it."""
         active()
-        target = LOGIN_PATH + ("?" + urlencode({"next": safe_next(next)}) if safe_next(next) != "/" else "")
+        next = safe_next(next)
+        entry = canonical_entry(request, SIGN_IN_PATH, {"next": next if next != "/" else ""})
+        if entry is not None:
+            return entry
+        target = LOGIN_PATH + ("?" + urlencode({"next": next}) if next != "/" else "")
         if not settings.oidc_label:
             return RedirectResponse(target, status_code=302)
         page = _page(settings, 200, "Sign in to " + settings.app_name,

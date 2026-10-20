@@ -129,6 +129,33 @@ def test_a_frontend_signs_in_and_gets_a_code_then_a_bearer_session(signin):
     assert signin.sessions() == []
 
 
+def test_alias_entry_preserves_frontend_pkce_without_moving_cookies_or_api_calls(signin):
+    public, alias = "https://tico.acme.example", "https://old.acme.example"
+    signin.start(public_url=public)
+    target = PROD + "/app/?tab=tasks"
+    entry = signin.api.get(alias + "/auth/login", params={
+        "next": target, "code_challenge": CHALLENGE, "fresh": "1", "unknown": "drop-me"}, follow_redirects=False)
+    assert entry.status_code == 302 and "set-cookie" not in entry.headers
+    assert parse_qs(urlparse(entry.headers["location"]).query) == {
+        "next": [target], "code_challenge": [CHALLENGE], "fresh": ["1"]}
+    began = signin.api.get(entry.headers["location"], follow_redirects=False)
+    query = parse_qs(urlparse(began.headers["location"]).query)
+    assert query["redirect_uri"] == [public + "/auth/callback"] and query["prompt"] == ["select_account"]
+    code, state = signin.fake.approve(began.headers["location"])
+    done = signin.api.get(query["redirect_uri"][0], params={"code": code, "state": state}, follow_redirects=False)
+    location, code = tico_code(done)
+    assert (location.scheme, location.netloc, location.path, location.query) == (
+        "https", "app.acme.example", "/app/", "tab=tasks")
+    assert "tico_session" not in done.headers.get("set-cookie", "")
+    made = exchange(signin, code, origin=PROD)
+    assert made.status_code == 200
+    bearer = {"Authorization": "Bearer " + made.json()["access_token"], "Origin": PROD}
+    assert signin.api.get(alias + "/api/v2/me", headers=bearer).status_code == 200
+    revoked = signin.api.post(alias + "/auth/token/revoke", headers=bearer)
+    assert revoked.status_code == 200 and revoked.json() == {"revoked": True}
+    assert signin.api.get(alias + "/api/v2/me", headers=bearer).status_code == 401
+
+
 def me_status(signin, extra):
     return signin.api.get("/api/v2/me", headers=extra).status_code
 

@@ -407,6 +407,11 @@ No open ports, and Cloudflare Access can do the sign-in. The wizard creates the 
    Each alias needs its own proxied DNS record and equivalent sign-in protection. With Access, keep the existing
    application's issuer, audience and policy on every app hostname. Configure the exact old HTTPS Origins in
    `TICO_CORS_ORIGINS` if their pages still need to write; aliases grant no CORS permission and change no cookie scope.
+   With built-in OIDC, fresh sign-in from an alias first moves to `TICO_PUBLIC_URL` before creating a login cookie.
+   Register this installation's canonical callback with the provider; aliases need no extra callbacks,
+   and pending and session cookies remain host-only.
+   Existing alias sessions can keep working. This does not change a desktop app's selected server: update that
+   address separately when moving its native connection to the canonical host.
    Never put an unprotected runner or cookie-free visual hostname in this list.
    cloudflared reads this config only when it starts. After changing `TICO_VISUAL_ORIGIN`, `TICO_DOMAIN`,
    `TICO_DOMAIN_ALIASES` or `TICO_RUNNER_URL` in `.env`, recreate the server with `docker compose up -d server`,
