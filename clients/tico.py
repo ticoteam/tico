@@ -17,6 +17,20 @@ from pathlib import Path
 CLIENT_VERSION = "0.2.1"
 
 
+def inbound_wait_timeout(method, path, body, default, *, query=None):
+    """A valid Inbox wait gets its server deadline plus ten seconds (up to 130).
+
+    Both MCP transports use this exact-route rule. Malformed input gets no extra
+    time, and a caller's explicitly longer timeout remains authoritative.
+    """
+    if method != "POST" or path != "/api/v2/inbound/wait" or query or not isinstance(body, dict):
+        return default
+    wait = body.get("timeout", 25)
+    if type(wait) is not int or not 0 <= wait <= 120:
+        return default
+    return max(default, wait + 10)
+
+
 class APIError(Exception):
     def __init__(self, code, detail, status=0, retryable=False, operation_id=None, extra=None):
         super().__init__(detail)
@@ -86,12 +100,13 @@ class Client:
         elif isinstance(data, MultipartBody):
             headers["Content-Length"] = str(data.size)
         path = path.replace("#", "%23")     # a task number ("tasks/#18945") is in the path, not a fragment
+        timeout = inbound_wait_timeout(method, path, body, self.timeout)
         for attempt in range(self.retries + 1):
             if hasattr(data, "seek"):
                 data.seek(0)
             req = urllib.request.Request(self.url + path, data=data, headers=headers, method=method)
             try:
-                with self.opener.open(req, timeout=self.timeout) as response:
+                with self.opener.open(req, timeout=timeout) as response:
                     if binary:
                         data = response.read(20_000_001)
                         if (len(data) > 20_000_000 or hashlib.sha256(data).hexdigest() != response.headers.get("X-Content-SHA256")):

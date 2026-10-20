@@ -29,6 +29,7 @@ import httpx
 from fastapi import Request
 
 from . import models as M
+from . import visuals
 from . import rooms
 from .store import H, Problem, digest
 
@@ -88,6 +89,10 @@ def write_allowed(method, path, settings=None, body=b"", actor="", owns=None, di
         return False
     if not isinstance(fields, dict):
         return False
+    if path == '/api/v2/inbound/wait':
+        return True  # a non-consuming read carried as POST
+    if direct and path == '/api/v2/inbound/inboxes' and fields.get('kind','email') == 'email':
+        return True  # free address allocation; quota and identity still apply in inbound.py
     if direct and to_bot:
         chatting = re.fullmatch(r"/api/v2/chat/([^/]+)", path)
         if (chatting and (settings is None or chatting.group(1) != settings.assistant_bot)) or (
@@ -146,7 +151,7 @@ def approving(method, path, body=None):
 
 def approve_hint(settings, state):
     """What the Assistant is told when it may not approve: the one sentence it passes on to the person."""
-    where = f"Settings > {settings.assistant_name}"
+    where = "Settings > General"
     if not state["team_allows"]:
         return ("Approving stays the person's click on a card: the team's owner turned off assistants deciding "
                 "approvals (Settings > Humans). Tell them that in one sentence and propose a card (`hub assistant "
@@ -1255,6 +1260,7 @@ def install(app, store, auth, mutate, onboarding):
         from .views import conversation_snapshot
         snap = conversation_snapshot(c, room["id"], settings=settings) if room else {"messages": [], "execution": None, "has_more": False,
                                                                      "next_before": None}
+        visuals.for_reader(app, settings, c, who, snap["messages"])
         ids = [m["refs"]["action"] for m in snap["messages"] if isinstance(m.get("refs"), dict) and m["refs"].get("action")]
         pending = [action_view(dict(r), c) for r in c.execute(
             "SELECT * FROM assistant_actions WHERE owner=? AND status='pending' ORDER BY created", (who.actor,))]

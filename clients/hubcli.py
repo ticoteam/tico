@@ -7,7 +7,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
 `hub_` dropped: `hub message send` is `hub_message_send`, `hub bot go-live` is `hub_bot_go_live`.
 
     hub whoami
-    hub message send <bot|human> "<text>" [--fyi] [--conversation ID] [--ref task:ID ...] [--steer]
+    hub message send <bot|human> "<text>" [--fyi] [--conversation ID] [--ref task:ID ...] [--steer] [--needs-action]
                                            --fyi: expects no reply, takes no conversation or references
     hub message list                       what waits for you
     hub message mark-read <message-id>     an external agent's own delivery
@@ -114,6 +114,11 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            how the owner says it is going, in their words (colours a goal with no KPI)
     hub goal checkin-list <id>             a goal's check-ins, newest first
     hub goal needs-you                     red KPIs on your goals, stale KPIs you own, proposals to confirm
+    hub goal company                       the company's Vision and Description (read-only)
+    hub goal ceo-bot                       the CEO Bot switch, how much it does (level 1-3) and today's Needs you count
+    hub goal ceo-bot-merge <person> "<title>" "<question>" <task-id> <task-id>...
+                                           the CEO Bot at level 2+: one item for several bots' same ask of a person
+    hub goal ceo-bot-level3-offer          the CEO Bot: record the level-3 offer its Monday note made (when it is due)
     hub goal update <id> [--title ...] [--body ...|--body-file f] [--parent ID|--parent ""] [--owner X]
                     [--rank N|--top]
     hub kpi list [--goal ID] [--owner me|X] [--unlinked] [--bot SLUG] [--archived]
@@ -134,11 +139,12 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                 [--evidence "url or note"] [--quality measured|estimate|partial|--estimate] [--source posthog]
                 [--definition-version N] [--supersedes READING-ID]
                                            a reading: a fact with its period; to correct one, supersede it
-    hub proposal create --kind goal_wording|goal_kpi|kpi_definition|kpi_target|flag|goal_why [--goal ID] [--kpi ID]
+    hub proposal create --kind goal_wording|goal_kpi|kpi_definition|kpi_target|flag|goal_why|recovery [--goal ID] [--kpi ID]
                         (--payload '{json}'|--payload-file f.json) [--reason "..."]
                                            a change you may not make yourself, for the owner to confirm
     hub proposal list [--status pending|confirmed|rejected|all] [--goal ID] [--kpi ID]
-    hub proposal decide <id> confirm|reject [--note "..."]   a person's own decision; a bot is refused
+    hub proposal decide <id> confirm|reject [--note "..."] [--option N]
+                                           a person's own decision; a bot is refused. --option: a recovery's other option
     hub approval request --kind send|spend|publish|merge|support --payload-file f.json [--task ID] [--supersedes ID]
                                            if the owner already said send in Tico, skip this and
                                            `mail send --approve <their-message-id>`
@@ -520,6 +526,32 @@ def parser():
 
     sub.add_parser("whoami").set_defaults(fn="whoami")
 
+    inbound = sub.add_parser('inbound', help='shared company email and SMS inboxes').add_subparsers(dest='sub')
+    item = inbound.add_parser('inboxes'); item.set_defaults(fn='inbound inboxes')
+    item.add_argument('--after'); item.add_argument('--limit', type=int)
+    item = inbound.add_parser('create-email'); item.add_argument('name', nargs='?'); item.set_defaults(fn='inbound create-email')
+    for action in ('list', 'search', 'cursor', 'wait'):
+        item = inbound.add_parser(action); item.set_defaults(fn='inbound '+action)
+        item.add_argument('--inbox-id', dest='inbox_ids', action='append')
+        if action == 'search': item.add_argument('q')
+        if action in ('list', 'search', 'wait'):
+            item.add_argument('--kind', choices=('email','sms'))
+            item.add_argument('--from', dest='sender')
+            item.add_argument('--has-code', action='store_true', default=None)
+            item.add_argument('--after', type=int, required=action=='wait')
+            item.add_argument('--limit', type=int)
+        if action == 'wait': item.add_argument('--timeout', type=int)
+        if action in ('list', 'search'):
+            item.add_argument('--before', type=int)
+        if action == 'list':
+            item.add_argument('--spam', action='store_true', default=None)
+    for action in ('read', 'code'):
+        item = inbound.add_parser(action); item.set_defaults(fn='inbound '+action)
+        item.add_argument('message_id')
+        if action == 'read':
+            item.add_argument('--offset', type=int); item.add_argument('--max-chars', type=int)
+
+
     meeting = sub.add_parser("meeting",
                              help="search meetings, read transcripts, import a transcript from another tool").add_subparsers(dest="sub")
     granola = meeting.add_parser("granola", help="your Granola account; connect in Meetings in your browser").add_subparsers(dest="granola_action")
@@ -576,6 +608,12 @@ def parser():
     s.add_argument("--ref", action="append")
     s.add_argument("--steer", action="store_true",
                    help="with --ref task:<id> you requested: write this into its owner's running turn on that task")
+    s.add_argument("--visual", action="append", metavar="PATH",
+                   help="a picture, SVG, HTML page, video or audio to show with it (a file in your checkout, or ID@VERSION "
+                        "already in Tico); repeat for more")
+    s.add_argument("--title", action="append", dest="visual_title", metavar="TITLE",
+                   help="the caption for each --visual, in the same order")
+    s.add_argument("--needs-action", dest="needs_action", action="store_true", help="a bot's message to a bot waits for that bot's next run; this wakes it now")
     s.set_defaults(fn="message send")
     message.add_parser("list", help="the messages and fyis waiting for you").set_defaults(fn="message list")
     s = message.add_parser("mark-read", help="mark a message from your inbox as read (an external agent's own delivery)")
@@ -695,6 +733,11 @@ def parser():
     s.add_argument("text")
     s.add_argument("--conversation", dest="conversation_id")
     s.add_argument("--command", action="store_true")
+    s.add_argument("--visual", action="append", metavar="PATH",
+                   help="a picture, SVG, HTML page, video or audio to show with it (a file in your checkout, or ID@VERSION "
+                        "already in Tico); repeat for more")
+    s.add_argument("--title", action="append", dest="visual_title", metavar="TITLE",
+                   help="the caption for each --visual, in the same order")
     s.set_defaults(fn="chat send")
     assistant = sub.add_parser("assistant", help="the Assistant's proposals for a person to confirm").add_subparsers(dest="sub")
     assistant.add_parser("read", help="read your private Assistant chat").set_defaults(fn="assistant read")
@@ -874,10 +917,16 @@ def parser():
     s.add_argument("--attach", action="append", help="file to attach; repeat for more files")
     s.add_argument("--file", action="append", metavar="ID@VERSION",
                    help="a file already in Tico: one on this task, or (a person) a chat file you can open, as ID@1")
+    s.add_argument("--visual", action="append", metavar="PATH",
+                   help="a picture, SVG, HTML page, video or audio to show with it (a file in your checkout, or ID@VERSION "
+                        "already in Tico); repeat for more")
+    s.add_argument("--title", action="append", dest="visual_title", metavar="TITLE",
+                   help="the caption for each --visual, in the same order")
     choices = s.add_mutually_exclusive_group()
     choices.add_argument("--ask", help="JSON file containing structured questions")
     choices.add_argument("--choices", help="comma-separated option labels")
     s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
+    s.add_argument("--needs-action", dest="needs_action", action="store_true", help="a bot's message to a bot waits for that bot's next run; this wakes it now")
     s.set_defaults(fn="task comment")
     s = task.add_parser("comment-moderate", help="hide, show again or delete a public comment on a task you manage")
     s.add_argument("id")
@@ -1013,6 +1062,15 @@ def parser():
     s.add_argument("--until", required=True,
                    help="ISO-8601 date (the start of that day, Pacific) or date-time with a zone")
     s.set_defaults(fn="task snooze")
+    s = task.add_parser("defer", help="a quiet task carried into this run that you will not do now: say when it is "
+                        "picked up again (it gets one run of its own then); with none, your next run is handed it again")
+    s.add_argument("id")
+    when = s.add_mutually_exclusive_group(required=True)
+    when.add_argument("--after", help="when this task is done or closed (an id or number)")
+    when.add_argument("--at", help="at this time: ISO-8601 date-time with a zone, or a date (start of day, Pacific)")
+    when.add_argument("--next-run", action="store_true", help="with your next run, whatever starts it")
+    when.add_argument("--handled", action="store_true", help="this run is done with it for now (nothing to resume)")
+    s.set_defaults(fn="task defer")
     s = task.add_parser("unsnooze", help="bring a snoozed task back now; its owner bot is woken once")
     s.add_argument("id")
     s.set_defaults(fn="task unsnooze")
@@ -1074,6 +1132,18 @@ def parser():
     s.set_defaults(fn="goal checkin-list")
     s = goal.add_parser("needs-you", help="red KPIs on your goals, stale KPIs you own, proposals to confirm")
     s.set_defaults(fn="goal needs-you")
+    s = goal.add_parser("company", help="the company's Vision and Description (read-only)")
+    s.set_defaults(fn="goal company")
+    s = goal.add_parser("ceo-bot", help="the CEO Bot switch, its level and today's Needs you count per person")
+    s.set_defaults(fn="goal ceo-bot")
+    s = goal.add_parser("ceo-bot-merge", help="the CEO Bot at level 2+: one item for several bots' same ask of a person")
+    s.add_argument("person", help="the person they all wait on (a person id)")
+    s.add_argument("title")
+    s.add_argument("question", help="the one question that answers them all")
+    s.add_argument("tasks", nargs="+", help="2 to 10 task ids waiting on that person")
+    s.set_defaults(fn="goal ceo-bot-merge")
+    s = goal.add_parser("ceo-bot-level3-offer", help="the CEO Bot: record the level-3 offer its Monday note made")
+    s.set_defaults(fn="goal ceo-bot-level3-offer")
     def target_flags(s):
         s.add_argument("--baseline", type=float, help="improvement: where it starts (default the latest reading)")
         s.add_argument("--target", type=float, help="improvement: the value to reach; needs --deadline")
@@ -1145,7 +1215,8 @@ def parser():
 
     proposal = sub.add_parser("proposal", help="a change you may not make yourself, for the owner to confirm").add_subparsers(dest="sub")
     s = proposal.add_parser("create")
-    s.add_argument("--kind", required=True, choices=["goal_wording", "goal_kpi", "kpi_definition", "kpi_target", "flag", "goal_why"])
+    s.add_argument("--kind", required=True, choices=["goal_wording", "goal_kpi", "kpi_definition", "kpi_target", "flag", "goal_why",
+                                                     "recovery"])
     s.add_argument("--goal", dest="goal_id")
     s.add_argument("--kpi", dest="kpi_id")
     s.add_argument("--payload", help="the proposed change, as JSON")
@@ -1161,6 +1232,7 @@ def parser():
     s.add_argument("id")
     s.add_argument("decision", choices=["confirm", "reject"])
     s.add_argument("--note", default="")
+    s.add_argument("--option", type=int, help="a recovery: approve this option (0 is the first) instead of the pick")
     s.set_defaults(fn="proposal decide")
 
     market = sub.add_parser("market", help="the shared market graph: read it, report into it, curate it").add_subparsers(dest="sub")

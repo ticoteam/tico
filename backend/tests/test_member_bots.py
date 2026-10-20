@@ -141,7 +141,7 @@ def test_botops_keeps_bot_rights_and_refuses_assistant_messages_and_task_comment
                                   "operator": "ana", "owners": ["ana"], "runner_id": None})
     token = post(api, "bots/stranger/agent-credential", {})["token"]
     # A message a bot wrote.
-    post(api, "messages", {"to": "botops", "text": "Register a bot for cara please"}, token=token)
+    post(api, "messages", {"to": "botops", "text": "Register a bot for cara please", "needs_action": True}, token=token)
     bot_started = claim(api, botops, "botops")
     refused = register(api, bot_started, "sneaky")
     assert refused.status_code == 403 and refused.json()["error"]["code"] == "forbidden"

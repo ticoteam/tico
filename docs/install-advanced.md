@@ -31,7 +31,10 @@ flags for this mode: `--target ssh|aws|command`, `--ssh`, `--ssh-port`, `--ssh-i
 a security group with only 80 and 443 for Caddy (nothing for a tunnel), IMDSv2 with hop limit 1 (containers cannot
 reach the instance role), an Elastic IP for Caddy, and SSM instead of SSH. The `.env` is stored as an SSM SecureString
 that the instance reads at boot, so it is not in the user-data. Every resource is tagged `ManagedBy=tico-setup` and
-`tico-setup-name=<name>`. Because the hop limit is 1, backups from the container need explicit keys: an IAM user (or R2
+`tico-setup-name=<name>`, where the name is `--name` (lowercase letters, digits and dashes, up to 40) or, without it, made
+from the domain: the role, security group and instance are `tico-<name>` and the `.env` is `/tico/<name>/env`. In an
+account that only lets setup create IAM roles under a permissions boundary, pass its ARN with
+`--aws-permissions-boundary`: the role is created under it, with both tags, in one call. Because the hop limit is 1, backups from the container need explicit keys: an IAM user (or R2
 token) limited to the backup bucket, in `LITESTREAM_ACCESS_KEY_ID` and `LITESTREAM_SECRET_ACCESS_KEY`.
 
 ```
@@ -39,7 +42,10 @@ python3 -m setup destroy --domain tico.example.com --dry-run   # list what carri
 python3 -m setup destroy --domain tico.example.com             # asks you to type the name
 ```
 
-Destroy deletes the instance and its data with it, and leaves your DNS records alone.
+Destroy deletes the instance and its data with it, and leaves your DNS records alone. With `--dns` (and `--domain`) it
+first deletes the domain's A and AAAA records in Route 53 too, but only those that still point at this server's
+addresses; a record someone has pointed elsewhere is left and named. If Route 53 can't be read, nothing at all is
+deleted, so running it again is safe.
 
 ### A Linux runner computer from your laptop
 
@@ -95,6 +101,9 @@ behaviour is in [environments](environments.md#sign-in-options).
   reachable only from the load balancer's security group; anything that can reach it directly can send that header.
 
 Tico does not build or manage the load balancer, Cognito or the network around them.
+
+Visuals in replies need an address of their own, apart from the app's: `TICO_VISUAL_ORIGIN`. Without it, a
+production server shows them as file chips. See [Visuals in replies](visuals.md#self-hosting).
 
 
 ## Run recovery

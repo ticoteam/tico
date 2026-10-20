@@ -204,9 +204,9 @@ a.ref::before,.run-did .ref::before{content:'';display:inline-block;width:.8em;h
   .chat-outline .co-close{min-width:44px;min-height:44px}
 }
 /* The exchange a jump landed on, marked for a moment. */
-.conv-run.chat.jump-mark{animation:jump-mark 2s ease-out}
+.conv-run.chat.jump-mark,.tcomment.jump-mark{animation:jump-mark 2s ease-out}
 @keyframes jump-mark{0%,30%{background:color-mix(in srgb,var(--accent) 16%,transparent)}100%{background:transparent}}
-@media (prefers-reduced-motion:reduce){.conv-run.chat.jump-mark{animation:none;background:color-mix(in srgb,var(--accent) 12%,transparent)}}
+@media (prefers-reduced-motion:reduce){.conv-run.chat.jump-mark,.tcomment.jump-mark{animation:none;background:color-mix(in srgb,var(--accent) 12%,transparent)}}
 /* Files dragged anywhere over the chat: the composer says where they will land. */
 #chat-composer .p-pill{position:relative}
 #chat-composer .p-pill.over::after{content:'Drop to attach';position:absolute;inset:0;display:flex;align-items:center;justify-content:center;border-radius:inherit;background:color-mix(in srgb,var(--surface) 90%,transparent);color:var(--accent);font-size:var(--t-base);font-weight:600;pointer-events:none}
@@ -234,6 +234,8 @@ a.ref::before,.run-did .ref::before{content:'';display:inline-block;width:.8em;h
 .chat-thumb img{width:100%;height:100%;object-fit:cover;display:block}
 .chat-thumb img[hidden]{display:none}
 .chat-thumb:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.chat-titled{display:inline-flex;flex-direction:column;gap:2px;width:120px;min-width:0}
+.chat-file-title{font-size:var(--t-sm);color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .img-lightbox{padding:0;border:0;background:transparent;max-width:96vw;max-height:96vh;cursor:zoom-out}
 .img-lightbox::backdrop{background:rgba(0,0,0,.82)}
 .img-lightbox img{display:block;max-width:96vw;max-height:88vh;object-fit:contain;border-radius:8px}

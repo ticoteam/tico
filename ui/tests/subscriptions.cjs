@@ -1,15 +1,13 @@
 // Offline regression for subscriptions (docs: PLAN section 7). Fixtures follow backend/subscriptions.py (r2-subs):
 // names are lowercase-hyphen slugs, PUT answers the assignment it saved, a computer is {runner_id, label} or null,
 // signed_in is true, false or null (unknown) and the bot line may carry a `problem`; members list only their own computers.
-//  - Settings > AI providers > Subscriptions lists each computer's subscriptions with their sign-in per runtime (nothing for
-//    unknown); Sign in starts the browser-code login for that computer and subscription; the one-line add turns a
-//    typed name into a slug before signing in;
-//  - each group picks one with PUT /v2/subscriptions {scope: 'group'}; a nested group says which group it inherits from;
-//    a group whose bots sit on a computer where its subscription is known not to be signed in says so, an old runner
-//    that never reported does not;
-//  - the bot editor: Subscription "From group (<name>)" or its own (PUT {scope: 'bot'}), its computer's subscriptions
-//    first; owners, admins and the bot computer's operator may change it, a co-owner may not; under Model the line from
-//    GET /v2/bots/{bot}/subscription with the server's problem, or "Not signed in";
+//  - Computers holds Models and no Subscriptions section; old links (AI providers, Subscriptions) open Computers;
+//  - a computer's pop-up lists its subscriptions as connections (only the tools each is signed in to) next to the
+//    computer's own login; its one-line add turns a typed name into a slug and starts the browser-code login there;
+//  - groups no longer choose one: the bot editor offers "Computer's login" or its own (PUT {scope: 'bot'}), its
+//    computer's subscriptions first; owners, admins and the bot computer's operator may change it, a co-owner may not;
+//    under Model the line "Runs on <tool> · <connection> on <computer>" from GET /v2/bots/{bot}/subscription, with the
+//    server's problem;
 //  - an older server (404) shows none of it; a phone has no sideways scroll.
 // SUBS_SHOTS=<dir> saves the screenshots for the owner.
 const {chromium} = require('playwright');
@@ -33,14 +31,14 @@ function fixtures() {
       profiles_by_computer: [
         {runner_id: 'r1', label: 'Acme box', profiles: [
           {name: 'acme-eng', runtimes: {codex: {signed_in: true}, claude: {signed_in: false}}},
-          {name: 'acme-ops', runtimes: {claude: {signed_in: true}, codex: {signed_in: null}}},
+          {id: 'p-ops', name: 'acme-ops', runtimes: {claude: {signed_in: true}, codex: {signed_in: null}}},
           {name: 'acme-new', runtimes: {codex: {signed_in: null}, claude: {signed_in: null}}}]},     // reported, state unknown
         {runner_id: 'r2', label: "Sam's Mac", profiles: [
           {name: 'acme-eng', runtimes: {claude: {signed_in: false}}},
           {name: 'acme-ops', runtimes: {claude: {signed_in: true}}}]},
         {runner_id: 'r3', label: 'Old laptop', profiles: []},          // a runner too old to report subscriptions
       ],
-      assignments: [{scope: 'group', target: 'g-eng', profile: 'acme-eng', updated: now, updated_by: 'human:ana'}],
+      assignments: [],
     },
     groups: [{id: 'g-eng', name: 'Engineering', parent: '', order: 1}, {id: 'g-web', name: 'Web', parent: 'g-eng', order: 1},
       {id: 'g-ops', name: 'Operations', parent: '', order: 2}],
@@ -50,14 +48,13 @@ function fixtures() {
 function lineFor(data) {
   const own = data.subs.assignments.find(a => a.scope === 'bot' && a.target === 'builder');
   const computer = {runner_id: 'r2', label: "Sam's Mac"};
+  const tool = {runtime: 'claude', harness: 'claude'};
   if (own) {
     const ok = own.profile === 'acme-ops';
-    return {profile: own.profile, source: 'bot', computer, signed_in: ok ? true : false,
+    return {profile: own.profile, source: 'bot', computer, ...tool, signed_in: ok ? true : false,
       problem: ok ? '' : own.profile === 'acme-eng' ? "acme-eng is not signed in on Sam's Mac" : `profile ${own.profile} not on Sam's Mac`};
   }
-  const group = data.subs.assignments.find(a => a.scope === 'group' && a.target === 'g-eng');
-  if (!group) return {profile: null, source: 'computer', computer, signed_in: true, problem: ''};
-  return {profile: group.profile, source: 'group:Engineering', computer, signed_in: false, problem: "acme-eng is not signed in on Sam's Mac"};
+  return {profile: null, source: 'computer', computer, ...tool, signed_in: true, problem: ''};
 }
 
 async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'dark', old = false, as = 'owner'} = {}) {
@@ -100,7 +97,12 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
     if (p === '/api/issues') return json([]);
     if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: []});
     if (p === '/api/v2/status') return json({bots: []});
-    if (p === '/api/v2/operations') return json({machines: as === 'owner' ? data.machines : data.machines.filter(m => m.operator === me.id), services: [], agents: []});
+    // Each computer with the subscriptions it reported and its bots' connections (backend/views.py operations).
+    // `readiness_at`: the computer's last report, newer than a finished sign-in once its next heartbeat came (`beatAt`).
+    const reported = data.beatAt && Date.now() >= data.beatAt ? new Date().toISOString() : undefined;
+    const machines = data.machines.map(m => ({...m, readiness_at: reported || m.readiness_at, profiles: structuredClone(data.subs.profiles_by_computer.find(c => c.runner_id === m.id)?.profiles || []),
+      bot_connections: m.bots.map(bot => ({bot, ...(bot === 'builder' ? lineFor(data) : {profile: null, source: 'computer', runtime: 'codex', harness: 'codex', signed_in: null, problem: ''}), computer: undefined}))}));
+    if (p === '/api/v2/operations') return json({machines: as === 'owner' ? machines : machines.filter(m => m.operator === me.id), services: [], agents: []});
     if (p === '/api/v2/models') return json({models: [], harnesses});
     if (p === '/api/v2/settings/history') return json({changes: [], transitions: []});
     if ((p === '/api/v2/subscriptions' || p === '/api/v2/bots/builder/subscription') && old) return json({detail: 'Not Found'}, 404);
@@ -112,6 +114,19 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
       return json(body);                                           // backend: body.model_dump()
     }
     if (p === '/api/v2/bots/builder/subscription') return json(lineFor(data));
+    // A saved name, and a manual weekly reading (backend/subscriptions.py rename, save_weekly), in the next report.
+    const saved = body => data.subs.profiles_by_computer.find(c => c.runner_id === body.runner_id).profiles.find(x => x.name === body.profile);
+    if (p === '/api/v2/subscriptions/name' && method === 'PUT') {
+      const body = req.postDataJSON(); writes.push({p, body});
+      saved(body).display_name = body.display_name;
+      return json({ok: true});
+    }
+    if (p === '/api/v2/subscriptions/weekly' && method === 'PUT') {
+      const body = req.postDataJSON(); writes.push({p, body});
+      saved(body).runtimes[body.runtime].weekly = body.used_percent === null ? undefined
+        : {used_percent: body.used_percent, resets_at: body.resets_at, reported_at: new Date().toISOString(), source: 'manual'};
+      return json({ok: true});
+    }
     const login = p.match(/^\/api\/v2\/computers\/([^/]+)\/logins$/);
     if (login && method === 'POST') {
       const body = req.postDataJSON(); writes.push({p, body});
@@ -122,7 +137,8 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
       // finishLogin: the sign-in completes, and the computer reports it on its next heartbeat.
       if (data.finishLogin && method === 'GET') {
         data.subs.profiles_by_computer[0].profiles[0].runtimes.claude.signed_in = true;
-        return json({id: 'l1', state: 'signed_in', created: new Date().toISOString(), lines: []});
+        data.beatAt = data.beatAt || Date.now() + 2000;
+        return json({id: 'l1', state: 'signed_in', created: new Date().toISOString(), updated: new Date(data.beatAt - 2000).toISOString(), lines: []});
       }
       return json({id: 'l1', state: method === 'POST' ? 'cancelled' : 'waiting', url: 'https://claude.ai/oauth/example', code: 'ACME-1234', created: new Date().toISOString(), lines: []});
     }
@@ -130,7 +146,7 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
     return json(unrouted(p));
   });
   await page.goto('https://tico-ui.test/#/settings');
-  await page.locator('#settings-providers').waitFor();
+  await page.locator('#settings-models').waitFor();   // the saved tab is the old AI providers one
   await page.waitForFunction(() => { const el = document.querySelector('#set-machines'); return el && !/Loading/.test(el.textContent); });
   return {page, errors, writes, data};
 }
@@ -148,10 +164,28 @@ async function navigation(browser) {
   }
   // Even if old navigation is still painted, losing a role cannot expose a restricted pane.
   await page.evaluate(() => { S.me.role = 'member'; S.me.bot_admin = false; });
-  for (const restricted of ['team', 'people', 'history', 'privacy', 'unknown-tab']) {
+  for (const restricted of ['people', 'unknown-tab']) {
     await page.evaluate(tab => settingsShow(tab), restricted);
     assert.equal(await page.locator('#settings-devices').isVisible(), true, `${restricted} safely falls back`);
     assert.equal(await page.evaluate(() => SETTINGS_TAB), 'devices');
+  }
+  // History keeps Runs for everyone; Changes is the owner's. The old Runs page lands there.
+  await page.evaluate(() => { settingsShow('runs'); settingsHistoryShow('changes'); });
+  assert.equal(await page.locator('#set-runs').isVisible(), true, 'runs opens History on Runs');
+  assert.equal(await page.locator('#set-history').isVisible(), false, 'Changes stays hidden without the owner role');
+  assert.equal(await page.locator('#settings-history-view').isVisible(), false);
+  // Team, Assistant, Privacy and Storage are sections of General; the ones this person lost stay hidden there.
+  for (const alias of ['team', 'assistant', 'privacy', 'storage']) {
+    await page.evaluate(alias => settingsShow(alias), alias);
+    assert.equal(await page.evaluate(() => SETTINGS_TAB), 'general', `${alias} opens General`);
+    assert.equal(await page.locator('#settings-assistant-pane').isVisible(), true);
+    for (const id of ['team', 'privacy', 'storage']) assert.equal(await page.locator('#settings-' + id).isVisible(), false, `${id} stays hidden`);
+  }
+  // AI providers is now Models on Computers; the Chat tab is gone.
+  for (const alias of ['providers', 'models', 'chat']) {
+    await page.evaluate(alias => settingsShow(alias), alias);
+    assert.equal(await page.locator('#settings-models').isVisible(), true, `${alias} opens Computers`);
+    assert.equal(await page.evaluate(() => sessionStorage.getItem('tico.settings.tab')), 'devices');
   }
   for (const alias of ['credentials', 'cloud']) {
     assert.equal(await page.evaluate(alias => { settingsShow(alias); return location.hash; }, alias), '#/integrations');
@@ -163,70 +197,55 @@ async function navigation(browser) {
 
 async function computers(browser) {
   const {page, errors, writes} = await open(browser);
-  const card = page.locator('#settings-subs');
-  await card.locator('.subs-row').first().waitFor();
-  assert.equal(await card.locator('h2').innerText(), 'Subscriptions');
-  assert.deepEqual(await card.locator('.subs-pc:not(.subs-groups) .subs-h').allInnerTexts(), ['ACME BOX', "SAM'S MAC"], 'a computer with none is not listed');
-  const box = card.locator('.subs-pc').first();
-  const eng = box.locator('[data-subs-profile="acme-eng"]');
-  assert.equal(await eng.locator('.subs-name').innerText(), 'acme-eng');
-  assert.deepEqual(await eng.locator('.subs-rt .pill').allInnerTexts(), ['Codex · signed in', 'Claude Code · not signed in']);
-  assert.equal(await eng.locator('.subs-signin').count(), 1, 'Sign in only where it is not signed in');
-  assert.equal(await eng.locator('[data-shared-login]').innerText(), '2 bots share this sign-in. They take turns: one Codex run at a time.');
-  const ops = box.locator('[data-subs-profile="acme-ops"]');
-  assert.equal(await ops.locator('.subs-name').innerText(), 'acme-ops');
-  assert.deepEqual(await ops.locator('.subs-rt .pill').allInnerTexts(), ['Claude Code · signed in'], 'unknown sign-in adds no authentication pill');
-  assert.equal(await ops.locator('[data-shared-login]').count(), 0, 'a sign-in one bot uses says nothing');
-  assert.deepEqual(await ops.locator('.subs-weekly > span:first-child').allInnerTexts(), ['Claude Code weekly: usage unknown', 'Codex weekly: usage unknown'], 'weekly allowance stays separate from sign-in state');
-  // Unknown for every runtime: no state, but the owner can still sign it in.
-  assert.deepEqual(await box.locator('[data-subs-profile="acme-new"] .subs-signin').allInnerTexts(), ['Sign in to Codex', 'Sign in to Claude Code']);
-  assert.equal(await box.locator('[data-subs-profile="acme-new"] .pill').count(), 0);
-  if (SHOTS) { fs.mkdirSync(SHOTS, {recursive: true}); await card.screenshot({path: path.join(SHOTS, 'settings-computers-subscriptions-dark.png')}); }
-  // Sign in: the browser-code login for that computer and subscription.
-  await eng.locator('.subs-signin').click();
-  const dialog = page.locator('dialog.model-login');
-  await dialog.locator('[data-code]').waitFor();
-  assert.match(await dialog.locator('h2').innerText(), /Sign in to Claude Code · acme-eng on Acme box/);
-  assert.deepEqual(last(writes, '/api/v2/computers/r1/logins'), {runtime: 'claude', profile: 'acme-eng'});
-  await dialog.locator('[data-close]').first().click();
-  await dialog.waitFor({state: 'detached'});
-  // Groups: Engineering has one; Web inherits it and says so; Operations has none.
-  const groups = card.locator('.subs-groups');
-  assert.deepEqual(await groups.locator('.subs-name').allInnerTexts(), ['Engineering', 'Web', 'Operations']);
-  assert.equal(await groups.locator('[data-subs-group="g-eng"]').inputValue(), 'acme-eng');
-  assert.equal(await groups.locator('[data-subs-group="g-web"] option').first().innerText(), 'From Engineering (acme-eng)');
-  assert.deepEqual(await groups.locator('[data-subs-group="g-ops"] option').allInnerTexts(), ['None', 'acme-eng', 'acme-new', 'acme-ops']);
-  // Builder (in Web) runs on Sam's Mac where acme-eng is not signed in; Scout's old laptop never reported: no chip for it.
-  assert.deepEqual(await groups.locator('.subs-row', {hasText: 'Engineering'}).locator('.subs-gap').allInnerTexts(), ["Not signed in on Sam's Mac"]);
-  await groups.locator('[data-subs-group="g-ops"]').selectOption('acme-ops');
-  await page.waitForFunction(() => document.querySelector('[data-subs-group="g-ops"]')?.value === 'acme-ops' && !document.querySelector('[data-subs-group="g-ops"]').disabled);
-  assert.deepEqual(last(writes, '/api/v2/subscriptions'), {scope: 'group', target: 'g-ops', profile: 'acme-ops'});
-  await groups.locator('[data-subs-group="g-eng"]').selectOption('');
-  await page.waitForFunction(() => document.querySelector('[data-subs-group="g-eng"]')?.value === '' && !document.querySelector('[data-subs-group="g-eng"]').disabled);
-  assert.deepEqual(last(writes, '/api/v2/subscriptions'), {scope: 'group', target: 'g-eng', profile: null});
-  assert.equal(await card.locator('.subs-gap').count(), 0, 'no subscription, nothing to sign in');
-  assert.equal(await groups.locator('[data-subs-group="g-web"] option').first().innerText(), 'None');
-  // A new subscription: the typed name becomes a slug the server takes.
-  const add = card.locator('[data-subs-add]');
+  assert.equal(await page.locator('#settings-subs').count(), 0);
+  // An old link to Subscriptions opens Computers.
+  await page.evaluate(() => settingsShow('bots'));
+  await page.evaluate(() => { location.hash = '#/settings/subscriptions'; });
+  await page.waitForFunction(() => location.hash === '#/settings' && SETTINGS_TAB === 'devices');
+  await page.locator('#set-machines .machine-name[data-computer-open=r1]').click();
+  const detail = page.locator('#set-machines dialog.computer-detail[open]');
+  // A subscription is a connection only for a tool it is signed in to; the computer's own logins stand beside them.
+  assert.deepEqual(await detail.locator('[data-connection]').evaluateAll(list => list.map(c => c.dataset.connection)),
+    ['own:claude', 'profile:acme-ops:claude', 'own:codex', 'profile:acme-eng:codex']);
+  assert.match(await detail.locator('[data-connection="profile:acme-eng:codex"]').innerText(), /Codex\s+Subscription · acme-eng\s+Signed in/);
+  // Two bots take turns on acme-eng's Codex sign-in; a sign-in one bot uses says nothing.
+  assert.equal(await detail.locator('[data-connection="profile:acme-eng:codex"] [data-shared-login]').innerText(), '2 bots share this sign-in. They take turns: one Codex run at a time.');
+  assert.equal(await detail.locator('[data-connection="profile:acme-ops:claude"] [data-shared-login]').count(), 0);
+  assert.doesNotMatch(await detail.innerText(), /acme-new|not signed in/i, 'nothing for a slot that was never signed in');
+  if (SHOTS) { fs.mkdirSync(SHOTS, {recursive: true}); await detail.screenshot({path: path.join(SHOTS, 'computer-detail-dark.png')}); }
+  // A new subscription: the typed name becomes a slug the server takes, and the sign-in starts on this computer.
+  let add = await addSubscription(page, 'codex');
   await add.locator('input[name=profile]').fill('Acme Research');
-  assert.equal(await add.locator('#subs-add-msg').innerText(), 'Saved as acme-research');
+  assert.equal(await add.locator('[data-add-msg]').innerText(), 'Saved as acme-research');
   // A settings refresh while typing leaves the field alone.
   await page.evaluate(() => loadSettings());
   assert.equal(await add.locator('input[name=profile]').inputValue(), 'Acme Research');
-  await add.locator('select[name=runner]').selectOption('r2');
-  await add.locator('select[name=runtime]').selectOption('codex');
   await add.locator('button[type=submit]').click();
+  const dialog = page.locator('dialog.model-login');
   await dialog.locator('[data-code]').waitFor();
-  assert.deepEqual(last(writes, '/api/v2/computers/r2/logins'), {runtime: 'codex', profile: 'acme-research'});
+  assert.match(await dialog.locator('h2').innerText(), /Sign in to Codex \(ChatGPT\) · acme-research on Acme box/);
+  assert.deepEqual(last(writes, '/api/v2/computers/r1/logins'), {runtime: 'codex', profile: 'acme-research'});
   await dialog.locator('[data-close]').first().click();
   await dialog.waitFor({state: 'detached'});
+  add = await addSubscription(page, 'codex');
   await add.locator('input[name=profile]').fill('---');
   await add.locator('button[type=submit]').click();
-  assert.equal(await add.locator('#subs-add-msg').innerText(), 'Use letters or numbers');
-  assert.equal(writes.filter(w => w.p.endsWith('/logins')).length, 2, 'nothing sent for an empty name');
+  assert.equal(await add.locator('[data-add-msg]').innerText(), 'Use letters or numbers');
+  await page.keyboard.press('Escape');
+  assert.equal(writes.filter(w => w.p.endsWith('/logins')).length, 1, 'nothing sent for an empty name');
   assert.deepEqual(errors, []);
   console.log('computers: ok');
   await page.close();
+}
+
+// Add connection in the open computer pop-up: the tool, then Subscription; returns the pop-up at its name step.
+async function addSubscription(page, runtime) {
+  await page.locator('#set-machines dialog.computer-detail[open] [data-add-connection]').click();
+  const add = page.locator('dialog.computer-add-dialog[open]');
+  await add.locator(`[data-add-tool=${runtime}]`).click();
+  await add.locator('[data-add-kind=subscription]').click();
+  await add.locator('input[name=profile]').waitFor();
+  return add;
 }
 
 async function botEditor(browser) {
@@ -237,59 +256,92 @@ async function botEditor(browser) {
   await sub.waitFor();
   const line = rows.locator('[data-bot-sub-line]');
   await line.locator('.sb-sub-text').waitFor();
-  // Its computer's subscriptions first, then the others.
-  assert.deepEqual(await sub.locator('option').allInnerTexts(), ['From group (Engineering)', 'acme-eng', 'acme-ops', 'acme-new']);
+  // The computer's own login by default; its computer's subscriptions first, then the others. No group default.
+  assert.deepEqual(await sub.locator('option').allInnerTexts(), ["Computer's login", 'acme-eng', 'acme-ops', 'acme-new']);
   assert.deepEqual(await sub.locator('optgroup').evaluateAll(gs => gs.map(g => g.label)), ["Sam's Mac", 'Other computers']);
   assert.equal(await sub.inputValue(), '');
   assert.equal(await sub.isDisabled(), false, 'the owner may choose');
-  assert.equal(await line.locator('.sb-sub-text').innerText(), "Subscription: acme-eng · from group Engineering · Sam's Mac");
-  assert.equal(await line.locator('.sb-sub-warn').innerText(), "acme-eng is not signed in on Sam's Mac");
-  assert.doesNotMatch(await line.innerText(), /object Object/);
+  assert.equal(await line.locator('.sb-sub-text').innerText(), "Runs on Claude Code · Computer's login on Sam's Mac");
+  assert.equal(await line.locator('.sb-sub-warn').count(), 0);
+  assert.doesNotMatch(await line.innerText(), /object Object|group/i);
   // The line sits right under the model picker.
   const model = await rows.locator('.sb-row', {hasText: 'Model'}).first().boundingBox(), under = await line.boundingBox();
   assert.ok(under.y >= model.y + model.height - 1 && under.y - (model.y + model.height) < 16, 'under the model picker');
-  assert.equal(await sub.getAttribute('aria-label'), 'Subscription for Builder');
-  if (SHOTS) { await rows.scrollIntoViewIfNeeded(); await rows.screenshot({path: path.join(SHOTS, 'bot-settings-subscription-dark.png')}); }
-  // Its own choice.
+  assert.equal(await sub.getAttribute('aria-label'), 'Connection for Builder');
+  if (SHOTS) { await rows.scrollIntoViewIfNeeded(); await rows.screenshot({path: path.join(SHOTS, 'bot-settings-connection-dark.png')}); }
+  // Its own choice, and the server's word when it cannot run there.
   await sub.selectOption('acme-ops');
-  await page.waitForFunction(() => /acme-ops · set for this bot/.test(document.querySelector('#bot-editor [data-bot-sub-line]')?.innerText || ''));
+  await page.waitForFunction(() => /Runs on Claude Code · acme-ops on Sam's Mac/.test(document.querySelector('#bot-editor [data-bot-sub-line]')?.innerText || ''));
   assert.deepEqual(last(writes, '/api/v2/subscriptions'), {scope: 'bot', target: 'builder', profile: 'acme-ops'});
   assert.equal(await line.locator('.sb-sub-warn').count(), 0);
   assert.equal(await sub.inputValue(), 'acme-ops');
-  // Back to the group's.
+  await sub.selectOption('acme-eng');
+  await page.waitForFunction(() => /acme-eng is not signed in/.test(document.querySelector('#bot-editor [data-bot-sub-line] .sb-sub-warn')?.innerText || ''));
+  // Back to the computer's login.
   await sub.selectOption('');
-  await page.waitForFunction(() => /from group Engineering/.test(document.querySelector('#bot-editor [data-bot-sub-line]')?.innerText || ''));
+  await page.waitForFunction(() => /Computer's login on Sam's Mac/.test(document.querySelector('#bot-editor [data-bot-sub-line]')?.innerText || ''));
   assert.deepEqual(last(writes, '/api/v2/subscriptions'), {scope: 'bot', target: 'builder', profile: null});
   assert.deepEqual(errors, []);
   console.log('bot editor: ok');
   await page.close();
 }
 
-// After a sign-in the list catches up by itself, even with the keyboard still inside the card (N1); only a name
-// being typed holds a redraw back.
+// After a sign-in the computer's row and pop-up catch up by themselves, saying "Waiting for <computer>" until the
+// computer reports it; only a name being typed holds a redraw of the pop-up back.
 async function signInRefresh(browser) {
   const {page, errors, data} = await open(browser);
-  const card = page.locator('#settings-subs');
-  const eng = card.locator('.subs-pc').first().locator('[data-subs-profile="acme-eng"]');
-  await eng.locator('.subs-signin').waitFor();
-  // A redraw with focus on a group select still happens.
-  await card.locator('[data-subs-group="g-ops"]').focus();
-  data.subs.assignments.push({scope: 'group', target: 'g-ops', profile: 'acme-ops'});
-  await page.evaluate(() => loadSettings());
-  await page.waitForFunction(() => document.querySelector('[data-subs-group="g-ops"]')?.value === 'acme-ops');
+  await page.evaluate(() => settingsShow('devices'));
+  await page.locator('#set-machines .machine-name[data-computer-open=r1]').click();
+  const detail = page.locator('#set-machines dialog.computer-detail[open]');
+  // Signing acme-eng in to Claude Code as well: the add form with the existing name.
   data.finishLogin = true;
-  await eng.locator('.subs-signin').click();
+  const add = await addSubscription(page, 'claude');
+  await add.locator('input[name=profile]').fill('acme-eng');
+  await add.locator('button[type=submit]').click();
   const dialog = page.locator('dialog.model-login');
   await dialog.locator('[data-status][data-state="signed_in"]').waitFor({timeout: t(8000)});
   await dialog.locator('[data-close]').first().click();
-  await card.locator('.subs-pc').first().locator('[data-subs-profile="acme-eng"]', {hasText: 'Claude Code · signed in'}).waitFor({timeout: t(10000)});
+  await page.locator('#set-machines tr[data-computer-row=r1] [data-machine-waiting]').waitFor({timeout: t(8000)});
+  await detail.locator('[data-connection="profile:acme-eng:claude"]').waitFor({timeout: t(10000)});
+  await page.locator('#set-machines tr[data-computer-row=r1] [data-machine-waiting]').waitFor({state: 'detached', timeout: t(10000)});
   assert.deepEqual(errors, []);
   console.log('sign-in refresh: ok');
   await page.close();
 }
 
+// A saved name or reading is no draft: the open pop-up shows it at once and takes later reports. (A name still being
+// typed in Add connection stays as it is: computers, above.)
+async function savedForms(browser) {
+  const {page, errors, writes, data} = await open(browser);
+  await page.evaluate(() => settingsShow('devices'));
+  await page.locator('#set-machines .machine-name[data-computer-open=r1]').click();
+  const detail = page.locator('#set-machines dialog.computer-detail[open]');
+  const ops = detail.locator('[data-connection="profile:acme-ops:claude"]');
+  await ops.locator('.computer-conn-rename summary').click();
+  await ops.locator('[data-subs-rename] input[name=display_name]').fill('Acme Operations');
+  await ops.locator('[data-subs-rename] button[type=submit]').click();
+  await ops.locator('.computer-conn-head', {hasText: 'Subscription · Acme Operations'}).waitFor();
+  assert.deepEqual(last(writes, '/api/v2/subscriptions/name'), {runner_id: 'r1', profile: 'acme-ops', display_name: 'Acme Operations'});
+  assert.equal(await ops.locator('details.computer-conn-rename').evaluate(d => d.open), true, 'Rename stays open');
+  await ops.locator('details.subs-controls summary').click();
+  await ops.locator('[data-subs-weekly] input[name=percent]').fill('40');
+  await ops.locator('[data-subs-weekly] button[type=submit]').click();
+  await ops.locator('.computer-conn-usage', {hasText: 'Weekly 40% left'}).waitFor();
+  assert.equal(last(writes, '/api/v2/subscriptions/weekly').used_percent, 60);
+  assert.equal(await ops.locator('[data-subs-weekly] input[name=percent]').inputValue(), '40');
+  // The computer's next report reaches the same pop-up, still open.
+  data.subs.profiles_by_computer[0].profiles[1].runtimes.claude.weekly.used_percent = 90;
+  await page.evaluate(() => loadSettings());
+  await ops.locator('.computer-conn-usage', {hasText: 'Weekly 10% left'}).waitFor();
+  assert.equal(await ops.locator('[data-subs-weekly] input[name=percent]').inputValue(), '10');
+  assert.equal(await ops.locator('button:disabled').count(), 0, 'no button left waiting');
+  assert.deepEqual(errors, []);
+  console.log('saved forms refresh: ok');
+  await page.close();
+}
+
 async function who(browser) {
-  // A co-owner of the bot sees its subscription but may not change it; the person whose computer it runs on may.
+  // A co-owner of the bot sees its connection but may not change it; the person whose computer it runs on may.
   for (const [as, enabled] of [['coowner', false], ['operator', true]]) {
     const {page, errors, writes} = await open(browser, {as});
     await page.evaluate(() => settingsEditBot('builder'));
@@ -298,18 +350,16 @@ async function who(browser) {
     await page.locator('#bot-editor [data-bot-sub-line] .sb-sub-text').waitFor();
     assert.equal(await sub.isDisabled(), !enabled, `${as}: ${enabled ? 'may' : 'may not'} choose`);
     if (as === 'operator') {
-      // The Computer operator can sign in existing profiles and add a profile on their Computer.
-      const card = page.locator('#settings-subs');
-      await card.locator('.subs-row').first().waitFor();
-      assert.deepEqual(await card.locator('.subs-pc:not(.subs-groups) .subs-h').allInnerTexts(), ["SAM'S MAC"]);
-      assert.ok(await card.locator('.subs-signin').count() > 0);
-      assert.equal(await card.locator('[data-subs-add]').count(), 1);
-      assert.deepEqual(await card.locator('[data-subs-add] [name=runner] option').allTextContents(), ["Sam's Mac"]);
+      // The computer's operator sees only their computer, and adds and signs in subscriptions on it.
       await page.evaluate(() => document.querySelector('#bot-editor').close());
-      await card.locator('.subs-signin').first().click();
+      await page.evaluate(() => settingsShow('devices'));
+      assert.deepEqual(await page.locator('#set-machines tr[data-computer-row]').evaluateAll(r => r.map(x => x.dataset.computerRow)), ['r2']);
+      await page.locator('#set-machines .machine-name[data-computer-open=r2]').click();
+      const add = await addSubscription(page, 'claude');
+      await add.locator('input[name=profile]').fill('acme-eng');
+      await add.locator('button[type=submit]').click();
       await page.locator('dialog.model-login [data-status][data-state="waiting"]').waitFor();
       assert.deepEqual(last(writes, '/api/v2/computers/r2/logins'), {runtime: 'claude', profile: 'acme-eng'});
-      assert.equal(await card.locator('[data-subs-group="g-eng"]').isDisabled(), true, 'groups are for owners and admins');
     }
     assert.deepEqual(errors, []);
     await page.close();
@@ -319,8 +369,6 @@ async function who(browser) {
 
 async function oldServer(browser) {
   const {page, errors} = await open(browser, {old: true});
-  await page.evaluate(() => renderSettingsSubs());          // resolves once the 404 has been read and the card drawn
-  assert.equal(await page.locator('#settings-subs').isHidden(), true);
   await page.evaluate(() => settingsEditBot('builder'));
   await page.locator('#bot-editor [data-bot-people] .sb-row').first().waitFor();
   // resolves once both 404s have been read and the rows painted
@@ -334,10 +382,15 @@ async function oldServer(browser) {
 
 async function phone(browser) {
   const {page, errors} = await open(browser, {viewport: {width: 390, height: 844}});
-  await page.locator('#settings-subs .subs-row').first().waitFor();
+  await page.evaluate(() => settingsShow('devices'));
+  await page.locator('#set-machines .machine-name[data-computer-open=r1]').click();
+  const detail = page.locator('#set-machines dialog.computer-detail[open]');
+  await detail.locator('[data-connection]').first().waitFor();
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   assert.ok(overflow <= 0, `no sideways scroll on a phone (${overflow}px)`);
-  if (SHOTS) { await page.locator('#settings-subs').scrollIntoViewIfNeeded(); await page.screenshot({path: path.join(SHOTS, 'settings-subscriptions-phone-dark.png')}); }
+  const inside = await detail.evaluate(d => d.querySelector('.computer-detail-body').scrollWidth - d.querySelector('.computer-detail-body').clientWidth);
+  assert.ok(inside <= 0, `the pop-up fits a phone (${inside}px)`);
+  if (SHOTS) await page.screenshot({path: path.join(SHOTS, 'computer-detail-phone-dark.png')});
   assert.deepEqual(errors, []);
   console.log('phone: ok');
   await page.close();
@@ -345,6 +398,6 @@ async function phone(browser) {
 
 (async () => {
   const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
-  try { await navigation(browser); await computers(browser); await botEditor(browser); await signInRefresh(browser); await who(browser); await oldServer(browser); await phone(browser); }
+  try { await navigation(browser); await computers(browser); await botEditor(browser); await signInRefresh(browser); await savedForms(browser); await who(browser); await oldServer(browser); await phone(browser); }
   finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

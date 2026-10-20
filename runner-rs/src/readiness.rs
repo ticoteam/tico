@@ -15,7 +15,7 @@ use crate::signin::{self, SignIn};
 use crate::util::text_of;
 
 pub const CLAUDE_MODELS: &[&str] = &["claude-fable-5-1", "claude-opus-5", "claude-opus-4-8", "claude-sonnet-5", "claude-haiku-4-5-20251001"];
-pub const NO_RUNTIME: &str = "No AI provider is chosen: the owner picks providers and a default model in Settings > AI providers";
+pub const NO_RUNTIME: &str = "No AI provider is chosen: the owner picks providers and a default model in Settings > Computers";
 
 /// `run` in `env` (a profile's homes) when given. Err(true) is a timeout, Err(false) a command that did not start.
 async fn run_env(argv: &[&str], timeout_s: u64, env: Option<&Env>) -> Result<(bool, String, String), bool> {
@@ -276,6 +276,12 @@ pub async fn runtime_report(config: &Config, sign: &SignIn, client: &Client, ass
         }
         for (name, status) in targets.iter_mut() {
             let profile = used.get(name).cloned().flatten();
+            // A profile whose turns use the computer's own login on this runtime (`share_operator`): the server holds
+            // that login once, not once per name (backend/login_holds.py canonical). Only to a server that keeps
+            // login holds, since an older one refuses a field it does not know.
+            if !name.is_empty() && crate::fallback::server_keeps_holds() && crate::fallback::login(runtime, "", profile.as_ref()).is_some_and(|l| l.is_empty()) {
+                status.as_object_mut().unwrap().insert("shared_login".into(), json!(true));
+            }
             if status["installed"] != true {
                 continue;
             }

@@ -69,9 +69,9 @@ local ticket record. Closed requests remain readable.
 ### Reach us from anywhere
 
 - **Talk to us** sits at the bottom of the sidebar and on the phone's tab bar. It opens Help with a new request, ready to
-  write. Empty Tasks, Updates and Runs pages, and the screen after Create, carry the line "Stuck or curious? A person at
+  write. Empty Tasks, Updates and Runs lists, and the screen after Create, carry the line "Stuck or curious? A person at
   Tico reads every message." with the same button.
-- **Report this** appears on every error message (toast), on a failed run (a task's Runs section and the Runs page), on a red
+- **Report this** appears on every error message (toast), on a failed run (a task's Runs section and Settings → History → Runs), on a red
   Health line and on a stuck bot. It opens a new request with what failed named in the message and attached as
   diagnostics in a `report` section: its kind (`toast`, `run`, `health`, `stuck`, `setup_check`), the words on screen,
   the run, check or bot it is about, and a `group` that names the same problem the same way each time (numbers and quoted

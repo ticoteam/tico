@@ -3,6 +3,7 @@ bot reads them; ten loaded minutes record an overload naming what ran; minutes r
 days and everything goes after fourteen."""
 import time
 
+from backend import models as M
 from backend import performance as P
 from backend.auth import Identity
 from backend.store import H
@@ -211,3 +212,58 @@ def test_a_bot_the_computer_list_does_not_show_reads_any_computer_by_label_or_id
     for twin, cpu in zip(twins, (31.0, 62.0)):
         failed, seen = call(api, "hub_computer_performance", {"computer": twin["runner_id"], "hours": 1}, token=bot)
         assert not failed and seen["computer"]["id"] == twin["runner_id"] and seen["points"][0][1] == cpu, seen
+
+
+def test_an_open_overload_reads_only_the_turns_of_its_window_however_long_the_computers_history(api):
+    """Dev 249: every post during an open overload names what ran (`_runs`) under the write lock. It visited every turn
+    the computer had ever run, one table row each, and on a slow disk that held the lock ~100 s. The work now depends
+    on the window's turns, not on the history, and the turns it names are the same."""
+    r, _, attempt = setup_attempt(api)
+    rid, store = r["runner_id"], api.app.state.store
+    start = (int(time.time()) // 60 - 12) * 60
+    columns = "id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created,started,finished"
+
+    def turn(c, n, began, ended, state="completed"):
+        c.execute(f"INSERT INTO attempts({columns},lane) SELECT ?,job_id,bot,runner_id,generation,?,?,lease_until,?,?,?,? "
+                  "FROM attempts WHERE id=?", (f"old-{n}", f"tok-{n}", state, P._iso(began), P._iso(began),
+                                                ended and P._iso(ended), f"lane-{n}", attempt["id"]))
+
+    with store.transaction() as c:
+        c.execute("UPDATE attempts SET created=?,started=? WHERE id=?", (P._iso(start - 60), P._iso(start - 60), attempt["id"]))
+        turn(c, "before", start - 7200, start - 3600)            # finished before the window: not named
+        turn(c, "during", start - 600, start + 120)              # overlaps it
+        turn(c, "after", start + 3600, start + 4000)             # began after it
+        turn(c, "open", start - 86400, None, "running")          # still running since yesterday
+    busy = [sample(start + 60 * i, cpu=97.0) for i in range(10)]
+    post(api, "runners/performance", {"samples": busy}, token=r["token"])          # the overload opens
+    with store.read() as c:
+        assert {x["id"] for x in P._runs(c, rid, start, start + 660)} == {attempt["id"], "old-during", "old-open"}
+
+    def work(history):
+        """VM steps of one loaded post while the overload is open, with `history` older turns on the computer."""
+        with store.transaction() as c:
+            c.execute("DELETE FROM attempts WHERE id LIKE 'hist-%'")
+            for n in range(history):
+                began = start - 30 * 86400 + n * 60
+                c.execute(f"INSERT INTO attempts({columns}) SELECT ?,job_id,bot,runner_id,generation,?,'completed',"
+                          "lease_until,?,?,? FROM attempts WHERE id=?",
+                          (f"hist-{n}", f"htok-{n}", P._iso(began), P._iso(began), P._iso(began + 30), attempt["id"]))
+        steps = [0]
+
+        def count():
+            steps[0] += 1
+        with store.transaction() as c:
+            c.set_progress_handler(count, 100)
+            try:
+                P.ingest(c, rid, M.PerformanceBatch(samples=[sample(start + 600, cpu=97.0)]).samples, now=start + 630)
+            finally:
+                c.set_progress_handler(None, 0)
+            c.rollback()
+        return steps[0]
+
+    few, many = work(20), work(4000)
+    assert many < few * 2 + 50, (few, many)        # before the fix: 50 times as many (8 and 404)
+    with store.read() as c:
+        plan = " ".join(row[3] for row in c.execute(
+            "EXPLAIN QUERY PLAN SELECT rowid FROM attempts WHERE runner_id=? AND finished>=?", (rid, P._iso(start))))
+    assert "attempts_runner_finished" in plan

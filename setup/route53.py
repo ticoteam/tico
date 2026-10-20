@@ -23,3 +23,23 @@ def upsert(client, zone_id: str, records: list[Record]) -> None:
     changes = [{"Action": "UPSERT", "ResourceRecordSet": {"Name": r.name, "Type": r.type, "TTL": r.ttl,
                                                           "ResourceRecords": [{"Value": r.value}]}} for r in records]
     client.change_resource_record_sets(HostedZoneId=zone_id, ChangeBatch={"Comment": "tico setup", "Changes": changes})
+
+
+def pointing_at(client, zone_id: str, name: str, addresses: set[str]) -> tuple[list[dict], list[dict]]:
+    """The A and AAAA record sets for `name`, split into (ours, not ours). Ours means every value is one of `addresses`; an
+    alias, or a record someone has since pointed elsewhere, is never ours."""
+    want = name.rstrip(".").lower()
+    r = client.list_resource_record_sets(HostedZoneId=zone_id, StartRecordName=want, StartRecordType="A", MaxItems="10")
+    ours, other = [], []
+    for rs in r["ResourceRecordSets"]:
+        if rs["Name"].rstrip(".").lower() != want or rs["Type"] not in ("A", "AAAA"):
+            continue
+        values = {v["Value"] for v in rs.get("ResourceRecords", [])}
+        (ours if values and "AliasTarget" not in rs and values <= addresses else other).append(rs)
+    return ours, other
+
+
+def delete(client, zone_id: str, record_sets: list[dict]) -> None:
+    """Deletes exactly these record sets: Route 53 refuses the batch if any has changed since it was read."""
+    changes = [{"Action": "DELETE", "ResourceRecordSet": rs} for rs in record_sets]
+    client.change_resource_record_sets(HostedZoneId=zone_id, ChangeBatch={"Comment": "tico setup destroy", "Changes": changes})

@@ -25,7 +25,8 @@ from . import go_live as pending_go_lives
 from . import repo_waits
 from . import built_on
 from . import agents, app_delivery, batch, external_sync, inbox_isolation, mcp_oauth, harness_actions, model_login, oidc, personal_tokens, views
-from . import check_models, run_triggers, team_rules, update_feeds, topic_change, usage_limits, wake_presets
+from . import owner_link
+from . import check_models, run_triggers, team_rules, update_feeds, topic_change, usage_limits, wake_presets, visuals, wake_rules, quiet_work
 from . import task_privacy as privacy
 from . import task_relations as TR
 from . import task_roles as TRo
@@ -37,7 +38,7 @@ from . import models as M
 from .auth import LOCAL_COOKIE, LOCAL_COOKIE_DAYS, LOCAL_SIGNIN_PATH, LOGOUT_PATH, Auth, Identity
 from .config import Settings
 from .observability import Observability, browser_config, staff_display_name
-from .execution import Execution, bot_repository, bump_bot_session_epoch, clear_limits
+from .execution import Execution, bot_repository, bump_bot_session_epoch, clear_limits, own_login_hold
 from .onboarding import BOTOPS, Onboarding
 from .recruit import Recruiter
 from . import rooms
@@ -160,6 +161,8 @@ def create_app(settings=None):
             telemetry.capture("support_access", exc)
         telemetry.start()
         stop = asyncio.Event()
+        # Always runs: local 90-day retention must not depend on the inbound key or HQ (sync itself stays off).
+        inbound_task = asyncio.create_task(app.state.inbound.loop(stop))
         screen_relay_task = None
         if settings.screen_relay_url:
             await asyncio.to_thread(screen_sessions.start)
@@ -176,10 +179,12 @@ def create_app(settings=None):
             from .scheduler import Scheduler
             scheduler = Scheduler(store, execution)
             def github_wakes():
-                from .github import flush_wakes, refresh_deployed_tasks
+                from .github import flush_wakes, reconcile_worktree_prs, refresh_deployed_tasks
                 with store.transaction() as c:
                     flush_wakes(c)
                 refresh_deployed_tasks(app.state.github_app)
+                # A worktree is released by its pull requests' state, so a missed webhook must heal unread.
+                reconcile_worktree_prs(app.state.github_app)
             while not stop.is_set():
                 try:
                     await asyncio.to_thread(github_wakes)
@@ -244,6 +249,8 @@ def create_app(settings=None):
             yield
         finally:
             stop.set()
+            if inbound_task:
+                await inbound_task
             if screen_relay_task:
                 await screen_relay_task
             else:
@@ -402,7 +409,7 @@ def create_app(settings=None):
 
     @app.middleware("http")
     async def request_guard(request, call_next):
-        via_reset = delegation_reset = run_reset = None
+        via_reset = delegation_reset = run_reset = cause_reset = None
         try:
             # The sign-in exemptions below match on prefixes; a dot segment would carry one of
             # them onto the static files ("/download/../index.html").
@@ -412,6 +419,10 @@ def create_app(settings=None):
                 from .public_roadmaps import guard as public_roadmap_guard
                 return await public_roadmap_guard(request, call_next, store)
             if request.url.path == "/healthz":
+                return await call_next(request)
+            # A visual in a reply (backend/visuals.py): its signed token is the credential, and the app's cookies are
+            # never read there. Its own headers stand: nothing below adds the app's framing or caching rules.
+            if request.url.path.startswith("/visuals/") and request.method in ("GET", "HEAD"):
                 return await call_next(request)
             if request.url.path == "/_tico/screen/v1/authorize":
                 from .screen_relay import private_request
@@ -428,6 +439,11 @@ def create_app(settings=None):
             # Minting a loopback session is the one unauthenticated read: it carries its own
             # secret and is refused outright unless local sign-in is configured.
             if request.url.path in (LOCAL_SIGNIN_PATH, LOGOUT_PATH, *oidc.AUTH_PATHS) and request.method == "GET":
+                return await call_next(request)
+            # The hosted owner's sign-in link: the page with its button, and the press that spends it (backend/owner_link.py).
+            if request.url.path == owner_link.LINK_PATH and request.method in ("GET", "POST"):
+                return await call_next(request)
+            if request.url.path == owner_link.SCRIPT_PATH and request.method == "GET":
                 return await call_next(request)
             # A frontend's one-time sign-in code, exchanged with its PKCE verifier (backend/oidc.py).
             if request.url.path == oidc.TOKEN_PATH and request.method == "POST":
@@ -482,6 +498,9 @@ def create_app(settings=None):
                 if who.attempt_id and who.role != "runner" and not request.url.path.startswith(run_triggers.RUNNER_PATHS):
                     # A run's own tool call: what it writes counts toward whether the run acted.
                     run_reset = H.RUN.set(who.attempt_id)
+                if who.role != "runner":
+                    # Whose request this is: a bot's own writes never wake that bot (backend/wake_rules.py).
+                    cause_reset = wake_rules.CAUSE.set(who.actor)
             if request.method not in ("GET", "HEAD", "OPTIONS"):
                 origin = request.headers.get("origin")
                 if origin and not settings.allows_origin(origin):
@@ -651,8 +670,13 @@ def create_app(settings=None):
                     and not path.startswith(("/api", "/mcp")) and "authorization" not in request.headers
                     and "text/html" in request.headers.get("accept", "")):
                 back = path + ("?" + request.url.query if request.url.query else "")
-                return RedirectResponse(oidc.LOGIN_PATH + "?" + urlencode({"next": oidc.safe_next(back)}),
+                return RedirectResponse(auth.proxy.sign_in_path + "?" + urlencode({"next": oidc.safe_next(back)}),
                                         status_code=302)
+            if (exc.status == 401 and auth.proxy and auth.proxy.name == owner_link.KIND
+                    and request.method in ("GET", "HEAD") and not hasattr(request.state, "identity")
+                    and not path.startswith(("/api", "/mcp")) and "authorization" not in request.headers
+                    and "text/html" in request.headers.get("accept", "")):
+                return RedirectResponse(owner_link.LINK_PATH, status_code=302)
             response = await problem_handler(request, exc)
             if exc.status == 401 and path == mcp_oauth.MCP_PATH:
                 # Where an agent with no token can sign in (backend/mcp_oauth.py, RFC 9728).
@@ -677,6 +701,8 @@ def create_app(settings=None):
                 H.DELEGATION.reset(delegation_reset)
             if run_reset is not None:
                 H.RUN.reset(run_reset)
+            if cause_reset is not None:
+                wake_rules.CAUSE.reset(cause_reset)
 
     from . import routines
 
@@ -714,7 +740,8 @@ def create_app(settings=None):
         request.state.auth_ms = 0.0
         app.state.timing.begin()
         # This request's SQL time and write-lock wait, added to by the threads it runs on (backend/flight.py).
-        cost, cost_token = flight.request_started() if recorder is not None else (None, None)
+        cost, cost_token = (flight.request_started(request.method, request.scope) if recorder is not None
+                            else (None, None))
         route = request.url.path
         response = None
         try:
@@ -928,6 +955,11 @@ def create_app(settings=None):
                  "next_run": bool(row.get("next_run")), "private": H.task_private(c, row), "cover": None}
         if c is not None and row.get("next_run"):
             value["next_run_waiting"] = H.next_run_waiting(c, row)
+        if c is not None and (quiet := quiet_work.view(c, row)):
+            # Quiet work: delivered (into which run, when; deferred until what), eligible or queued (quiet_work.view).
+            value["quiet"] = quiet
+        # The stored condition is in `quiet.resume`; a board of 500 tasks does not carry the column besides.
+        value.pop("resume_json", None)
         value.pop("labels_json", None)
         if pipelines is None:
             if c is None:
@@ -1058,6 +1090,8 @@ def create_app(settings=None):
             })
             if row.get("next_run"):
                 value["next_run_waiting"] = H.next_run_waiting(c, row)
+                if quiet := quiet_work.view(c, row, history=False):
+                    value["quiet"] = quiet
             if row["id"] in routines_by_task:
                 value["routine_id"] = routines_by_task[row["id"]]
             if row["id"] in origins:
@@ -1083,6 +1117,25 @@ def create_app(settings=None):
                        limit=limit + 1, offset=offset, order=order, visible=visible_sql, **more)
         page, has_more = rows[:limit], len(rows) > limit
         return task_views(page, c, who, visible_sql), offset + limit if has_more else None
+
+    def visual_view(c, who, rows):
+        """Messages with each visual as this reader sees it now: fresh addresses on /visuals (backend/visuals.py), or
+        none at all while inline display is off (a file chip)."""
+        return visuals.for_reader(app, settings, c, who, rows)
+
+    def visual_key():
+        return visuals.key_for(app, settings)
+
+    def visual_ancestors():
+        from .visuals import origin_of
+        return list(dict.fromkeys(["'self'", origin_of(settings.public_url), *settings.cors_origins]))
+
+    @app.api_route("/visuals/{token}", methods=["GET", "HEAD"], include_in_schema=False)
+    def visual(request: Request, token: str):
+        """A visual for inline display, apart from the app's sign-in: the signed token is the only credential, and
+        the reader it names is checked again on every request (each range request too)."""
+        return visuals.serve(request, store, auth, app.state.files, app.state.blobs, visual_key(),
+                             visual_ancestors(), token, on=visuals.inline_on(settings))
 
     def check_refs(c, who, refs):
         # Validate referenced objects rather than trusting an arbitrary ID in a payload.
@@ -1158,6 +1211,8 @@ def create_app(settings=None):
         refs = dict(body.refs or {})
         if body.command:
             refs["command"] = True
+        if body.needs_action:
+            refs["needs_action"] = True
         if in_assistant_room:
             refs["assistant"] = True           # the server's mark: this turn acts for the person
         conversation_id = body.conversation_id
@@ -1179,6 +1234,13 @@ def create_app(settings=None):
             refs["goal_context"] = {"id": goal["id"], "updated_at": goal["updated_at"]}
             c.execute("UPDATE messages SET refs_json=? WHERE id=?", (encode(refs), message["id"]))
             message = H.message(c, message["id"])
+        if body.attachments:
+            # The visuals go on the message it was sent as: versions of files in this conversation (backend/visuals.py).
+            attached, report = visuals.attach(c, who, app.state.files, app.state.blobs, body.attachments,
+                                              conversation_id=message["conversation_id"])
+            refs["attachments"] = attached
+            c.execute("UPDATE messages SET refs_json=? WHERE id=?", (encode(refs), message["id"]))
+            message = {**visual_view(c, who, [H.message(c, message["id"])])[0], "visuals": report}
         if who.role == "bot":
             conv = H.conversation(c, message["conversation_id"])
             if who.attempt_id and all(p.startswith("bot:") for p in conv["participants"]):
@@ -1307,6 +1369,7 @@ def create_app(settings=None):
 
         def work(c):
             before, after = Providers.save(c, who.actor, body.model_dump(), H.now())
+            model_login.hold_removals(c, settings)   # bots on the company's default may now run another tool
             H.event(c, who.actor, "providers.updated", "",
                     {"before": {k: before[k] for k in ("enabled", "runtime", "model", "revision", "auto_fallback", "check_models", "preset")},
                      "after": {k: after[k] for k in ("enabled", "runtime", "model", "revision", "auto_fallback", "check_models", "preset")}})
@@ -1345,6 +1408,18 @@ def create_app(settings=None):
         auth.domain(who)
         with store.transaction() as c:
             gateway_connection.clear(c, who, H.now(), settings)
+            return gateway_connection.view(c, settings, manage=True)
+
+    @app.post("/api/v2/providers/gateway/automatic")
+    def gateway_automatic(request: Request):
+        """Connect automatically again after the owner cleared the install's automatic key: the install enrolls with
+        its own secret on the next check, which starts now."""
+        who = request.state.identity
+        auth.domain(who)
+        with store.transaction() as c:
+            gateway_connection.automatic_on(c, who, H.now())
+        gateway_connection.check_later(store, app.state.vault, settings)
+        with store.read() as c:
             return gateway_connection.view(c, settings, manage=True)
 
     @app.post("/api/v2/providers/gateway/check")
@@ -1541,11 +1616,16 @@ def create_app(settings=None):
 
     @app.get("/api/v2/ceo-bot")
     def ceo_bot_switch(request: Request):
-        """The CEO Bot rollout switch (backend/ceo_bot.py)."""
-        auth.domain(request.state.identity)
+        """The CEO Bot rollout switch and its level (backend/ceo_bot.py). How many items it put in each person's Needs
+        you today is the owner's, an admin's and the CEO Bot's to read; anyone else sees only their own count."""
+        who = request.state.identity
+        auth.domain(who)
         from . import ceo_bot
         with store.read() as c:
-            return ceo_bot.view(c)
+            value = ceo_bot.named(c, ceo_bot.view(c))
+        if who.actor != "bot:" + ceo_bot.SLUG and auth.company_role(who) not in ("owner", "admin"):
+            value["asked_today"] = {k: n for k, n in value["asked_today"].items() if k == who.actor}
+        return value
 
     @app.post("/api/v2/ceo-bot")
     def ceo_bot_switch_set(request: Request, body: M.CeoBotSwitch):
@@ -1553,7 +1633,7 @@ def create_app(settings=None):
         who = request.state.identity
         admin_only(who, "turns the CEO Bot on or off")
         from . import ceo_bot
-        return mutate(request, body, lambda c: ceo_bot.set_on(c, who.actor, body.on))
+        return mutate(request, body, lambda c: ceo_bot.named(c, ceo_bot.set_on(c, who.actor, body.on)))
 
     @app.post("/api/v2/goal-manager/turn-on")
     def turn_on_goal_manager(request: Request, body: M.Empty):
@@ -1618,6 +1698,7 @@ def create_app(settings=None):
         return response
 
     oidc.register(app, auth)
+    owner_link.register(app, auth)
     mcp_oauth.register(app, auth, store)
 
     @app.get(LOGOUT_PATH)
@@ -2008,7 +2089,7 @@ def create_app(settings=None):
                     auth.conversation(c, who, conv["id"])
                 except Problem:
                     continue
-                messages = privacy.page(c, who, conv["id"])["messages"]
+                messages = visual_view(c, who, privacy.page(c, who, conv["id"])["messages"])
                 bot = H.bot(c, row["bot"]) or {}
                 threads.append({"bot": row["bot"], "display_name": bot.get("display_name") or row["bot"],
                                 "conversation_id": conv["id"], "channel": row["channel"],
@@ -2101,6 +2182,7 @@ def create_app(settings=None):
             page = privacy.page(c, request.state.identity, cid, since=views.since_time(since), before=before,
                                 **views.page_options(limit, max_bytes))
             turn_work.annotate(c, auth, request.state.identity, page["messages"])
+            visual_view(c, request.state.identity, page["messages"])
             return {"conversation": H.conversation(c, cid), **page}
 
     @app.get("/api/v2/conversations/{cid}/outline")
@@ -2140,9 +2222,9 @@ def create_app(settings=None):
             who = request.state.identity
             privacy.require_message(c, who, row)
             if who.role == "bot" and (row.get("to_actor") == who.actor or row.get("from_actor") == who.actor):
-                return row
+                return visual_view(c, who, [row])[0]
             auth.conversation(c, who, row["conversation_id"])
-            return row
+            return visual_view(c, who, [row])[0]
 
     @app.post("/api/v2/chat/{bot}")
     def chat(request: Request, bot: str, body: M.ChatCreate):
@@ -2152,7 +2234,8 @@ def create_app(settings=None):
 
         def work(c):
             cleared = topic_change.apply(c, settings, who, bot, topic)
-            message = send(c, who, M.MessageCreate(to="bot:" + bot, text=body.text, refs=body.refs, command=body.command))
+            message = send(c, who, M.MessageCreate(to="bot:" + bot, text=body.text, refs=body.refs, command=body.command,
+                                                   attachments=body.attachments))
             if cleared:
                 message = topic_change.record(c, who, message, topic)
             onboarding.start_setup(c, who, bot)
@@ -2160,9 +2243,10 @@ def create_app(settings=None):
         return mutate(request, body, work)
 
     def topic_check(request, who, bot, body):
-        """The topic check's outcome for a person's chat message, or None: not a person, a command, a retried request
-        (its first try already decided), or a bot whose chat is another's (a shared or the Assistant's)."""
-        if who.role not in ("owner", "human") or who.via or body.command or (body.refs or {}).get("task"):
+        """The topic check's outcome for a person's chat message, or None: not a person, a retried request (its first
+        try already decided), a bot whose chat is another's (a shared or the Assistant's), or a send the check never
+        looks at (`topic_change.considered`: a command, a task chat's, or one carrying files)."""
+        if who.role not in ("owner", "human") or who.via:
             return None
         key, path = request.headers.get("idempotency-key"), request.url.path
         if not key:
@@ -2175,7 +2259,7 @@ def create_app(settings=None):
                 return False
             target = H.actor_id(route(c, who.actor, "bot:" + bot))
             return target == bot and bot != settings.assistant_bot and views.may_chat(c, auth, who, bot)
-        return topic_change.check(store, app.state.judge, who, bot, body.text, admit)
+        return topic_change.check(store, app.state.judge, who, bot, body, admit, uploads=())
 
     # ------------------------------------------------------------------ updates (backend/updates.py)
     def update_visible(c, who, mine=False, scope=None):
@@ -2514,7 +2598,8 @@ def create_app(settings=None):
             target = target or next((p for p in conv["participants"] if p != who.actor), None)
             if not target:
                 raise Problem("recipient", "This conversation has no other recipient", 422)
-            return {"message": send(c, who, M.MessageCreate(to=target, text=body.text, conversation_id=cid, refs=body.refs, command=body.command))}
+            return {"message": send(c, who, M.MessageCreate(to=target, text=body.text, conversation_id=cid, refs=body.refs,
+                                                            command=body.command, attachments=body.attachments))}
         return mutate(request, body, work)
 
     @app.post("/api/v2/messages/{mid}/answer")
@@ -2814,9 +2899,13 @@ def create_app(settings=None):
                     "can_comment": can_comment,
                     "children": children,
                     # The task page reads as its session's chat: each bot reply carries the run behind it (`run`,
-                    # the steps one click away) and `execution` is the owner's run while it works.
-                    "comments": turn_work.annotate(c, auth, who, H.task_comments(c, tid, actor=privacy.actor(who))),
+                    # the steps one click away) and `execution` is the run it follows while it works: the owner's,
+                    # or the one for a person's message, whichever bot that went to. `comment_to` is who the reader's
+                    # next comment reaches, so the composer says before sending when no bot will hear it.
+                    "comments": visual_view(c, who, turn_work.annotate(c, auth, who,
+                                                                          H.task_comments(c, tid, actor=privacy.actor(who)))),
                     "execution": task_execution(c, who, row),
+                    "comment_to": comment_to(c, who, row) if can_comment else None,
                     "mover": mover(c, request.state.identity),
                     "waiting_for": task_wait(c, tid, settings),
                     "runs": task_runs(c, who, tid),
@@ -2825,15 +2914,34 @@ def create_app(settings=None):
                     **privacy.page(c, who, row["conversation_id"], task_id=tid)}
 
     def task_execution(c, who, row):
-        """The owning bot's newest run in the task's own room, as a conversation snapshot shows it, or None. A task
-        still in a chat room (a person's task, or one filed into a chat before task rooms) shows none: that room's
-        runs are the chat's, and reading the task does not let one read the chat."""
+        """The run the task's page follows in its own room, as a conversation snapshot shows it, or None: the owning
+        bot's newest run, or a newer one for a message a person sent there, whichever bot it was routed to (the bot
+        that asked a person's task, say). Another bot's run for a bot's comment is not it. A task still in a chat
+        room (filed into a chat before task rooms) shows none: that room's runs are the chat's, and reading the task
+        does not let one read the chat."""
         cid, owner = row["conversation_id"], str(row["owner"] or "")
         room = H.conversation(c, cid) if cid else None
-        if not room or room.get("task_id") != row["id"] or not owner.startswith("bot:"):
+        if not room or room.get("task_id") != row["id"]:
             return None
         from .views import conversation_execution
-        return conversation_execution(c, cid, who, settings, bot=owner.removeprefix("bot:"), auth=auth)
+        return conversation_execution(c, cid, who, settings, bot=owner.removeprefix("bot:") if H.is_bot(owner) else None,
+                                      auth=auth, people=True)
+
+    def comment_to(c, who, row):
+        """Who a plain comment from this reader reaches (H.task_comment, H.comment_wakes): `bot`, the bot it goes to,
+        or None when no bot will get it; `wakes`, whether it starts that bot's turn now rather than waiting for its
+        next run on the task; `mention`, the @names that would wake it anyway for this reader, each checked against
+        the same rule (names_a_filer counts only for someone who may direct the task). None for a bot reader."""
+        if who.role == "bot":
+            return None
+        target = H.comment_target(c, who.actor, row)
+        if not H.is_bot(target):
+            return {"bot": None, "wakes": False, "mention": []}
+        moves = mover(c, who)
+        wakes = H.comment_wakes(c, who.actor, row, "", mover=moves)
+        mention = [] if wakes else [n for n in H.filer_handles(c, row)
+                                    if H.comment_wakes(c, who.actor, row, "@" + n, mover=moves)]
+        return {"bot": H.actor_id(target), "wakes": wakes, "mention": mention}
 
     def task_runs(c, who, tid, limit=200):
         """The runs that worked this task, each with the model that actually ran it (`ran_on`). A review that
@@ -3101,6 +3209,24 @@ def create_app(settings=None):
             return {"task": task_view(after, c, visible_sql=auth.task_sql(c, who), who=who)}
         return mutate(request, body, work)
 
+    @app.post("/api/v2/tasks/{tid}/defer")
+    def task_defer(request: Request, tid: str, body: M.TaskDefer):
+        """Say when a quiet task a run carried (or one still waiting for a run) is picked up again: after another task
+        is done, at a time, or with the next run; or that the run handled it (backend/quiet_work.py). The task's own
+        bot, or a person."""
+        def work(c):
+            who = request.state.identity
+            task_id = auth.resolve_task(c, who, tid)
+            auth.task(c, who, task_id)
+            after = None
+            if body.after:
+                after = auth.resolve_task(c, who, body.after)
+                auth.task(c, who, after)
+            row = quiet_work.defer(c, who.actor, task_id, after=after, at=body.at, next_run=body.next_run,
+                                   handled=body.handled)
+            return {"task": task_view(row, c, visible_sql=auth.task_sql(c, who), who=who)}
+        return mutate(request, body, work)
+
     @app.post("/api/v2/tasks/{tid}/unsnooze")
     def task_unsnooze(request: Request, tid: str, body: M.Empty):
         """End a snooze early: the task is back now and its owner bot is woken once."""
@@ -3129,17 +3255,10 @@ def create_app(settings=None):
         def work(c):
             task_id = auth.resolve_task(c, who, tid)
             row = auth.task(c, who, task_id)
-            from .task_review import comment_rights, check_ask, comment_file
+            from .task_review import comment_rights, check_ask
             comment_rights(c, auth, who, task_id)
             ask = check_ask(c, task_id, body.ask, auth, who)
-            attached = []
-            for reference in body.attachments:
-                fid, number = reference.rsplit("@", 1)
-                fid, version = comment_file(c, auth, app.state.files, who, task_id, fid, int(number))
-                number, reference = version["version"], f"{fid}@{version['version']}"
-                attached.append({"id": fid, "file_id": fid, "version": int(number), "ref": reference,
-                                 "name": version["name"], "size": version["size"], "content_type": version["mime"],
-                                 "url": f"/api/v2/files/{fid}?v={number}"})
+            attached, report = visuals.attach(c, who, app.state.files, app.state.blobs, body.attachments, task_id=task_id)
             moves = mover(c, who)
             # A person @mentioned in a comment gets it as a question, so it reaches their Needs you.
             # The comment itself is the question to the first one, unless it would wake the bot,
@@ -3150,9 +3269,13 @@ def create_app(settings=None):
             if ask:
                 wake = who.role == "bot" or who.actor in (row["owner"], row["requester"]) or moves
             else:
-                wake = H.comment_wakes(c, who.actor, row, body.text, mover=moves)
+                wake = H.comment_wakes(c, who.actor, row, body.text, mover=moves) or (
+                    who.role == "bot" and body.needs_action)
+            extra = {"attachments": attached, "files": [a["ref"] for a in attached]} if attached else {}
+            if body.needs_action:
+                extra["needs_action"] = True
             msg = H.task_comment(c, who.actor, task_id, body.text, wake=wake, ask=ask, public=body.public, approval_id=body.approval_id,
-                                 extra_refs={"attachments": attached, "files": [a["ref"] for a in attached]} if attached else None)
+                                 extra_refs=extra or None)
             for person in people:
                 H.task_comment(c, who.actor, task_id, body.text, wake=False, ask=H.mention_ask(body.text, person))
             for item in attached:
@@ -3160,10 +3283,12 @@ def create_app(settings=None):
                           (item["id"], item["version"]))
                 c.execute("UPDATE task_file_reviews SET comment_id=coalesce(comment_id,?) WHERE file_id=? AND version=?",
                           (msg["id"], item["id"], item["version"]))
-            msg = next(m for m in H.task_comments(c, task_id, actor=privacy.actor(request.state.identity)) if m["id"] == msg["id"])
+            comments = visual_view(c, who, H.task_comments(c, task_id, actor=privacy.actor(request.state.identity)))
+            msg = next(m for m in comments if m["id"] == msg["id"])
             held = H.held_note(c, msg.get("to_actor"))
-            return {"comment": msg, "comments": H.task_comments(c, task_id, actor=privacy.actor(request.state.identity)),
-                    "woke": bool(wake), **({"warning": held} if held else {})}
+            return {"comment": msg, "comments": comments,
+                    "woke": bool(wake) and not ({"can_wait", wake_rules.MARK} & set(msg.get("refs") or {})),
+                    **({"warning": held} if held else {}), **({"visuals": report} if report else {})}
         result = mutate(request, body, work)
         if body.attachments:
             app.state.file_metadata.wake.set()   # a chat file shared here is a new task copy: preview it now
@@ -3174,7 +3299,8 @@ def create_app(settings=None):
         with store.read() as c:
             task_id = auth.resolve_task(c, request.state.identity, tid)
             auth.task(c, request.state.identity, task_id)
-            return {"comments": H.task_comments(c, task_id, actor=privacy.actor(request.state.identity))}
+            return {"comments": visual_view(c, request.state.identity,
+                                            H.task_comments(c, task_id, actor=privacy.actor(request.state.identity)))}
 
     @app.get("/api/v2/tasks/{tid}/answers")
     def task_answers(request: Request, tid: str):
@@ -3256,7 +3382,9 @@ def create_app(settings=None):
             from .task_review import comment_rights
             comment_rights(c, auth, who, row["id"])
             msg = H.task_comment_edit(c, who.actor, row["id"], mid, body.text, approval_id=body.approval_id)
-            return {"comment": msg, "comments": H.task_comments(c, row["id"], actor=privacy.actor(request.state.identity)), "woke": False}
+            return {"comment": visual_view(c, request.state.identity, [msg])[0],
+                    "comments": visual_view(c, request.state.identity, H.task_comments(
+                c, row["id"], actor=privacy.actor(request.state.identity))), "woke": False}
         return mutate(request, body, work, check=lambda c: own_comment(c, who, tid, mid, allow_deleted=True))
 
     @app.post("/api/v2/tasks/{tid}/comments/{mid}/delete")
@@ -3266,7 +3394,9 @@ def create_app(settings=None):
         def work(c):
             row = own_comment(c, who, tid, mid)
             msg = H.task_comment_delete(c, who.actor, row["id"], mid)
-            return {"comment": msg, "comments": H.task_comments(c, row["id"], actor=privacy.actor(request.state.identity)), "woke": False}
+            return {"comment": visual_view(c, request.state.identity, [msg])[0],
+                    "comments": visual_view(c, request.state.identity, H.task_comments(
+                c, row["id"], actor=privacy.actor(request.state.identity))), "woke": False}
         return mutate(request, body, work, check=lambda c: own_comment(c, who, tid, mid, allow_deleted=True))
 
     @app.post("/api/v2/tasks/{tid}/comments/{mid}/resolve")
@@ -3285,8 +3415,8 @@ def create_app(settings=None):
         def work(c):
             row = readable(c)
             out = H.task_ask_resolve(c, who.actor, row["id"], mid, body.quote)
-            return {"comment": out["answer"] or out["ask"],
-                    "comments": H.task_comments(c, row["id"], actor=privacy.actor(who)), "woke": False}
+            return {"comment": visual_view(c, who, [out["answer"] or out["ask"]])[0],
+                    "comments": visual_view(c, who, H.task_comments(c, row["id"], actor=privacy.actor(who))), "woke": False}
         return mutate(request, body, work, check=readable)
 
     @app.post("/api/v2/tasks/{tid}/delete")
@@ -3384,7 +3514,7 @@ def create_app(settings=None):
         who = request.state.identity
         auth.domain(who)
         if key.startswith("assistant."):
-            raise Problem("forbidden", "Your Assistant's settings are set in Settings > " + settings.assistant_name, 403)
+            raise Problem("forbidden", "Your Assistant's settings are set in Settings > General", 403)
         if key == "meetings.auto_share":
             views.human_only(who)
             if not isinstance(body.value, bool):
@@ -3446,7 +3576,7 @@ def create_app(settings=None):
         """The person takes back what their Assistant decided for them, before anything acted on it. Their own click."""
         who = request.state.identity
         if who.via:
-            raise Problem("forbidden", "Only the person undoes this, in Settings > " + settings.assistant_name, 403)
+            raise Problem("forbidden", "Only the person undoes this, in Settings > General", 403)
         def work(c):
             auth.approval(c, who, aid, decide=True)
             return H.approval_undo(c, who.actor, aid)
@@ -4253,7 +4383,7 @@ def create_app(settings=None):
     @app.post("/api/v2/runners/{rid}/logins")
     def start_login(request: Request, rid: str, body: M.LoginStart):
         return mutate(request, body, lambda c: model_login.start(
-            c, request.state.identity, rid, body.runtime, body.profile, auth=auth, switch=body.switch))
+            c, request.state.identity, rid, body.runtime, body.profile, auth=auth, switch=body.switch, to=body.to))
 
     # Sign a login out (the computer's own, or a named subscription's); it is read back like a sign-in.
     @app.post("/api/v2/runners/{rid}/logouts")
@@ -4268,9 +4398,18 @@ def create_app(settings=None):
             return model_login.affected_bots(c, request.state.identity, rid, runtime, profile, store.settings,
                                              auth=auth)
 
+    # Take a named subscription off a computer (refused, naming them, while bots run on it); read back like a sign-in.
+    @app.post("/api/v2/runners/{rid}/removals")
+    def start_removal(request: Request, rid: str, body: M.RemovalStart):
+        return mutate(request, body, lambda c: model_login.remove(
+            c, request.state.identity, rid, body.runtime, body.profile, store.settings, auth=auth))
+
     # A signed-out computer login takes the company's shared key again.
     @app.post("/api/v2/runners/{rid}/shared-key")
     def use_shared_key(request: Request, rid: str, body: M.SharedKeyUse):
+        if body.credential:
+            return mutate(request, body, lambda c: model_login.attach_shared_key(
+                c, request.state.identity, rid, body.runtime, body.credential, auth=auth, vault=app.state.vault))
         return mutate(request, body, lambda c: model_login.use_shared_key(
             c, request.state.identity, rid, body.runtime, auth=auth))
 
@@ -4292,10 +4431,16 @@ def create_app(settings=None):
     def replace_computer_key(request: Request, rid: str, body: M.KeyReplace):
         who = request.state.identity
         vault = app.state.vault
+        if body.share and body.switch:
+            raise Problem("switch", "Switch to API key gives this computer a key of its own; share a key from Add "
+                          "connection instead", 422)
         return vault.change(who, request.url.path, request.headers.get("idempotency-key"), body,
                             lambda c, w: None,
-                            lambda c: model_login.replace_key(c, who, rid, body.runtime, body.secret.get_secret_value(),
-                                                              body.env, body.scope, auth=auth, vault=vault))
+                            lambda c: model_login.share_key(c, who, rid, body.runtime, body.secret.get_secret_value(),
+                                                            body.env, body.share, auth=auth, vault=vault)
+                            if body.share else
+                            model_login.replace_key(c, who, rid, body.runtime, body.secret.get_secret_value(),
+                                                    body.env, body.scope, auth=auth, vault=vault, switch=body.switch))
 
     @app.get("/api/v2/runners/{rid}/logins/{lid}")
     def read_login(request: Request, rid: str, lid: str):
@@ -4324,7 +4469,8 @@ def create_app(settings=None):
     def report_login(request: Request, lid: str, body: M.LoginReport):
         who = request.state.identity
         return mutate(request, body, lambda c: (execution.runner(c, who),
-                                                model_login.report(c, who.runner_id, lid, body))[1])
+                                                model_login.report(c, who.runner_id, lid, body,
+                                                                   store.settings))[1])
 
     @app.post("/api/v2/runners/{rid}/harness-actions")
     def harness_action(request: Request, rid: str, body: M.HarnessAction):
@@ -5016,6 +5162,8 @@ def create_app(settings=None):
                       (encode(config), bot))
             c.execute("UPDATE bots SET model=?,runtime=?,effort=? WHERE slug=?",
                       (choice["id"], runtime, effort, bot))
+            # Its shared copies follow it, so any bot may have moved onto another tool.
+            model_login.hold_removals(c, settings)
             reset = reset_bot_sessions(c, bot)
             settings_admin.record(c, who.actor, bot, "model", before,
                                   settings_admin.snapshot(c, bot, "model"))
@@ -5092,7 +5240,7 @@ def create_app(settings=None):
         def work(c):
             if not (auth.operator(c, who, bot) or auth.bot_manager(c, who, bot)):
                 raise Problem("forbidden", "Only a person who manages this bot can retry it now", 403)
-            if (H.status(c, bot) or {}).get("state") != "limited":
+            if (H.status(c, bot) or {}).get("state") != "limited" and not own_login_hold(c, settings, bot):
                 raise Problem("not_limited", "This bot is not waiting on a usage limit", 409)
             return {"cleared": clear_limits(c, settings, who.actor, bot)}
         return mutate(request, body, work)
@@ -5347,6 +5495,8 @@ def create_app(settings=None):
     install_report_order(app, store, auth, mutate)
     from .support import install as install_support
     install_support(app, store, settings, census)
+    from .inbound import install as install_inbound
+    install_inbound(app, store, settings, auth)
     from .support_access import install as install_support_access
     install_support_access(app, store, settings, auth)
     from .watchers import install as install_watchers

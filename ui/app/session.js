@@ -53,6 +53,7 @@ function sessionProbe() {
 // A page that has not yet loaded anything goes straight to the built-in login page (nothing on it to lose);
 // otherwise the banner says so and waits for the person.
 function signedOut(to) {
+  if (typeof clearNativeVisualOrigin === 'function') void clearNativeVisualOrigin();
   const login = loginPage(to);
   if (login && !SESSION.seen) {
     sessionKeep();

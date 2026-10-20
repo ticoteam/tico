@@ -20,7 +20,7 @@
     },
     {
       "name": "Subscriptions",
-      "description": "Named provider logins on Computers and defaults for groups and bots."
+      "description": "Named provider logins on Computers and the one each bot runs on."
     },
     {
       "name": "Team chart",
@@ -93,6 +93,10 @@
     {
       "name": "Roadmaps",
       "description": "Company roadmap settings, internal requesters, and anonymous publication (docs/roadmaps.md)."
+    },
+    {
+      "name": "Inbound",
+      "description": "Shared company inbound email and SMS for people and agents; reads never consume messages."
     }
   ],
   "paths": {
@@ -2132,14 +2136,16 @@
     },
     "/api/v2/ceo-bot": {
       "get": {
-        "summary": "Whether this install has the CEO Bot switch on (the Goal Manager shown as the CEO Bot, at the top of the chart)",
+        "summary": "Whether this install has the CEO Bot switch on (the Goal Manager shown as the CEO Bot, at the top of the chart), how much it does (its level, with each level's sentence and who changed it when), and how many items it put in each person's Needs you today against its cap of 5 (everyone's for the owner, admins and the CEO Bot; your own for anyone else)",
         "operationId": "getCeoBotSwitch",
         "responses": {
           "200": {
-            "description": "Successful Response",
+            "description": "OK",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/CeoBotView"
+                }
               }
             }
           },
@@ -2183,10 +2189,198 @@
         },
         "responses": {
           "200": {
-            "description": "Successful Response",
+            "description": "OK",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/CeoBotView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Goals"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ]
+      }
+    },
+    "/api/v2/ceo-bot/level": {
+      "post": {
+        "summary": "Settings > CEO Bot, \"How much your CEO Bot does\": the owner or an admin picks level 1, 2 or 3 on their own click, logged with who and when. No bot may, the CEO Bot included. 409 while the switch is off",
+        "operationId": "setCeoBotLevel",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CeoBotLevel"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CeoBotView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Goals"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ]
+      }
+    },
+    "/api/v2/ceo-bot/level3-offer": {
+      "post": {
+        "summary": "The CEO Bot only: record that its Monday note offered level 3. Refused (422) unless level3_offer.due: 10 recoveries approved in a row with its pick unchanged, and no offer in 30 days. It never raises its own level",
+        "operationId": "recordCeoBotLevel3Offer",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Empty"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CeoBotLevel3OfferResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Goals"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ]
+      }
+    },
+    "/api/v2/ceo-bot/merge": {
+      "post": {
+        "summary": "The CEO Bot only, at level 2 or 3: one item in a person's Needs you for 2 to 10 tasks where bots ask them the same thing. The originals leave their Needs you while it is open; their one answer goes to each bot that asked, and an item that ends unanswered puts the originals back. Counts toward its 5 a day",
+        "operationId": "mergeCeoBotAsks",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CeoBotMerge"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CeoBotMergeResult"
+                }
               }
             }
           },
@@ -6968,6 +7162,898 @@
         ]
       }
     },
+    "/api/v2/inbound/cursor": {
+      "get": {
+        "summary": "Capture a cursor before requesting a code",
+        "operationId": "getInboundCursor",
+        "parameters": [
+          {
+            "name": "inbox_ids",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 1000
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Inbox Ids"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InboundCursor"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Inbound"
+        ]
+      }
+    },
+    "/api/v2/inbound/inboxes": {
+      "get": {
+        "summary": "Company email and phone inboxes",
+        "operationId": "listInboundInboxes",
+        "parameters": [
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 64,
+              "default": "",
+              "title": "After"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 100,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InboundInboxes"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Inbound"
+        ]
+      },
+      "post": {
+        "summary": "Create a free email inbox; SMS creation requires a phone approval request",
+        "operationId": "createInboundInbox",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/backend__inbound__Create"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Inbound"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ]
+      }
+    },
+    "/api/v2/inbound/inboxes/{ident}": {
+      "patch": {
+        "summary": "Rename an inbox across connected interfaces and save local dependencies",
+        "operationId": "editInboundInbox",
+        "parameters": [
+          {
+            "name": "ident",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Ident"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/backend__inbound__Edit"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Inbound"
+        ]
+      }
+    },
+    "/api/v2/inbound/inboxes/{ident}/release": {
+      "post": {
+        "summary": "An admin retires email or cancels phone renewal",
+        "operationId": "releaseInboundInbox",
+        "parameters": [
+          {
+            "name": "ident",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Ident"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Release"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Inbound"
+        ]
+      }
+    },
+    "/api/v2/inbound/messages": {
+      "get": {
+        "summary": "Search one, many or all company inboxes",
+        "operationId": "listInboundMessages",
+        "parameters": [
+          {
+            "name": "inbox_ids",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 1000
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Inbox Ids"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "email",
+                    "sms"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Kind"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 200,
+              "default": "",
+              "title": "From"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 200,
+              "default": "",
+              "title": "Q"
+            }
+          },
+          {
+            "name": "has_code",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Has Code"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "After"
+            }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Before"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "spam",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Spam"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InboundMessages"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Inbound"
+        ]
+      }
+    },
+    "/api/v2/inbound/messages/{ident}": {
+      "get": {
+        "summary": "Untrusted message text, up to 32 KB per page",
+        "operationId": "readInboundMessage",
+        "parameters": [
+          {
+            "name": "ident",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Ident"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          },
+          {
+            "name": "max_chars",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 32768,
+              "minimum": 1,
+              "default": 32768,
+              "title": "Max Chars"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Inbound"
+        ]
+      }
+    },
+    "/api/v2/inbound/messages/{ident}/code": {
+      "get": {
+        "summary": "Extracted code for a specific message",
+        "operationId": "readInboundCode",
+        "parameters": [
+          {
+            "name": "ident",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Ident"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Inbound"
+        ]
+      }
+    },
+    "/api/v2/inbound/phone-quote": {
+      "get": {
+        "summary": "A current monthly US mobile rental quote",
+        "operationId": "quoteInboundPhone",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Inbound"
+        ]
+      }
+    },
+    "/api/v2/inbound/phone-requests": {
+      "get": {
+        "summary": "An owner or admin lists phone approval requests",
+        "operationId": "listInboundPhoneRequests",
+        "parameters": [
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 64,
+              "default": "",
+              "title": "After"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 100,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InboundPhoneRequests"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Inbound"
+        ]
+      },
+      "post": {
+        "summary": "An owner or admin requests a monthly mobile rental; no purchase",
+        "operationId": "requestInboundPhone",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PhoneRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Inbound"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ]
+      }
+    },
+    "/api/v2/inbound/phone-requests/{ident}/accept": {
+      "post": {
+        "summary": "An owner or admin accepts an exact quote for TICO review; no purchase",
+        "operationId": "acceptInboundPhoneQuote",
+        "parameters": [
+          {
+            "name": "ident",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Ident"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AcceptPhone"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Inbound"
+        ]
+      }
+    },
+    "/api/v2/inbound/phone-requests/{ident}/cancel": {
+      "post": {
+        "summary": "An owner or admin cancels a phone approval request",
+        "operationId": "cancelInboundPhoneRequest",
+        "parameters": [
+          {
+            "name": "ident",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Ident"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Inbound"
+        ]
+      }
+    },
     "/api/v2/inbound/tasks": {
       "post": {
         "summary": "Another system's work as it is now, by its own key: files, updates, closes or reopens one task (service key only; docs/service-keys.md)",
@@ -7031,6 +8117,68 @@
               "type": "string"
             },
             "description": "Not needed: the pair (service key, `key`) makes a repeated call harmless, and the header is ignored."
+          }
+        ]
+      }
+    },
+    "/api/v2/inbound/wait": {
+      "post": {
+        "summary": "Non-consuming wait after a cursor",
+        "operationId": "waitInboundMessages",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Wait"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InboundMessages"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Inbound"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
           }
         ]
       }
@@ -10278,7 +11426,7 @@
         ]
       },
       "post": {
-        "summary": "Propose a change the caller may not make: goal wording, a KPI for a goal, a definition, a target, or a flag",
+        "summary": "Propose a change the caller may not make: goal wording, a KPI for a goal, a definition, a target, or a flag; the CEO Bot at level 2 or 3, a recovery for a red or stalled goal (evidence, options of bot-task changes, its pick)",
         "operationId": "createGoalProposal",
         "requestBody": {
           "required": true,
@@ -10340,7 +11488,7 @@
     },
     "/api/v2/proposals/{pid}/decide": {
       "post": {
-        "summary": "A person's own decision, made by whoever owns the goal or KPI: confirm makes the change as them, reject drops it",
+        "summary": "A person's own decision, made by whoever owns the goal or KPI: confirm makes the change as them, reject drops it. A recovery applies exactly the chosen option (`option`, else the CEO Bot's pick) in the CEO Bot's name; what can't be done comes back as a new recovery saying why",
         "operationId": "decideGoalProposal",
         "parameters": [
           {
@@ -15924,6 +17072,21 @@
   },
   "components": {
     "schemas": {
+      "AcceptPhone": {
+        "properties": {
+          "price_micros": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Price Micros"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "price_micros"
+        ],
+        "title": "AcceptPhone"
+      },
       "Access": {
         "type": "object",
         "properties": {
@@ -16248,7 +17411,7 @@
           "decides_approvals"
         ],
         "title": "AssistantSettings",
-        "description": "A person's own Assistant settings (Settings > Assistant)."
+        "description": "A person's own Assistant settings (Settings > General)."
       },
       "Audience": {
         "type": "object",
@@ -16822,7 +17985,10 @@
             "type": "string"
           },
           "source": {
-            "type": "string"
+            "enum": [
+              "bot",
+              "computer"
+            ]
           },
           "computer": {
             "anyOf": [
@@ -16847,6 +18013,12 @@
               }
             ]
           },
+          "runtime": {
+            "type": "string"
+          },
+          "harness": {
+            "type": "string"
+          },
           "signed_in": {
             "type": [
               "boolean",
@@ -16860,9 +18032,11 @@
         "required": [
           "computer",
           "display_name",
+          "harness",
           "id",
           "problem",
           "profile",
+          "runtime",
           "signed_in",
           "source"
         ],
@@ -17085,6 +18259,146 @@
         ],
         "additionalProperties": true
       },
+      "CeoBotLevel": {
+        "properties": {
+          "level": {
+            "type": "integer",
+            "enum": [
+              1,
+              2,
+              3
+            ],
+            "title": "Level"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "level"
+        ],
+        "title": "CeoBotLevel"
+      },
+      "CeoBotLevel3Offer": {
+        "type": "object",
+        "properties": {
+          "streak": {
+            "type": "integer"
+          },
+          "needed": {
+            "type": "integer"
+          },
+          "due": {
+            "type": "boolean"
+          },
+          "last_offered_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "due",
+          "needed",
+          "streak"
+        ],
+        "additionalProperties": true
+      },
+      "CeoBotLevel3OfferResult": {
+        "type": "object",
+        "properties": {
+          "level3_offer": {
+            "$ref": "#/components/schemas/CeoBotLevel3Offer"
+          }
+        },
+        "required": [
+          "level3_offer"
+        ],
+        "additionalProperties": true
+      },
+      "CeoBotMerge": {
+        "properties": {
+          "person": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Person"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 300,
+            "minLength": 1,
+            "title": "Title"
+          },
+          "question": {
+            "type": "string",
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Question"
+          },
+          "tasks": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 10,
+            "minItems": 2,
+            "title": "Tasks"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "person",
+          "title",
+          "question",
+          "tasks"
+        ],
+        "title": "CeoBotMerge"
+      },
+      "CeoBotMergeResult": {
+        "type": "object",
+        "properties": {
+          "task": {
+            "type": "object",
+            "description": "The merged item: the CEO Bot's task, waiting on the person"
+          },
+          "originals": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "task_id": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "asker": {
+                  "type": "string"
+                },
+                "asker_name": {
+                  "type": "string"
+                },
+                "state": {
+                  "type": "string"
+                },
+                "note": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "asker",
+                "state",
+                "task_id"
+              ],
+              "additionalProperties": true
+            }
+          }
+        },
+        "required": [
+          "originals",
+          "task"
+        ],
+        "additionalProperties": true
+      },
       "CeoBotSwitch": {
         "properties": {
           "on": {
@@ -17098,6 +18412,118 @@
           "on"
         ],
         "title": "CeoBotSwitch"
+      },
+      "CeoBotView": {
+        "type": "object",
+        "properties": {
+          "on": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "changed_by": {
+            "type": "string"
+          },
+          "changed_at": {
+            "type": "string"
+          },
+          "level": {
+            "type": "integer",
+            "enum": [
+              1,
+              2,
+              3
+            ]
+          },
+          "levels": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "level": {
+                  "type": "integer"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "sentence": {
+                  "type": "string"
+                },
+                "ready": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "level",
+                "name",
+                "ready",
+                "sentence"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "level_changed_by": {
+            "type": "string"
+          },
+          "level_changed_by_name": {
+            "type": "string"
+          },
+          "level_changed_at": {
+            "type": "string"
+          },
+          "level_history": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "level": {
+                  "type": "integer"
+                },
+                "was": {
+                  "type": "integer"
+                },
+                "by": {
+                  "type": "string"
+                },
+                "by_name": {
+                  "type": "string"
+                },
+                "at": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "at",
+                "by",
+                "level",
+                "was"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "daily_cap": {
+            "type": "integer"
+          },
+          "asked_today": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "description": "{person actor: items the CEO Bot put in their Needs you today (UTC)}"
+          },
+          "level3_offer": {
+            "$ref": "#/components/schemas/CeoBotLevel3Offer"
+          }
+        },
+        "required": [
+          "daily_cap",
+          "level",
+          "levels",
+          "name",
+          "on"
+        ],
+        "additionalProperties": true
       },
       "ChangelogEntry": {
         "type": "object",
@@ -17244,6 +18670,31 @@
             "additionalProperties": true,
             "type": "object",
             "title": "Refs"
+          },
+          "attachments": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^[^@]+@[1-9][0-9]*$"
+                },
+                {
+                  "$ref": "#/components/schemas/VisualRef"
+                }
+              ]
+            },
+            "type": "array",
+            "maxItems": 10,
+            "title": "Attachments"
+          },
+          "titles": {
+            "items": {
+              "type": "string",
+              "maxLength": 200
+            },
+            "type": "array",
+            "maxItems": 10,
+            "title": "Titles"
           }
         },
         "additionalProperties": false,
@@ -17548,6 +18999,10 @@
           },
           "version": {
             "type": "string"
+          },
+          "visual_origin": {
+            "type": "string",
+            "description": "Configured non-secret visual origin, or empty when absent or invalid; grants no native IPC permission."
           },
           "s3_view_urls": {
             "type": "object",
@@ -19159,7 +20614,8 @@
               "kpi_definition",
               "kpi_target",
               "flag",
-              "goal_why"
+              "goal_why",
+              "recovery"
             ],
             "title": "Kind"
           },
@@ -19233,6 +20689,19 @@
               }
             ],
             "title": "Why"
+          },
+          "option": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 9.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Option"
           }
         },
         "additionalProperties": false,
@@ -19907,13 +21376,30 @@
               "properties": {
                 "kind": {
                   "enum": [
+                    "vision",
                     "kpi_red",
-                    "kpi_stale",
-                    "proposal"
+                    "recovery",
+                    "why",
+                    "proposal",
+                    "kpi_stale"
                   ]
                 },
                 "goal_id": {
                   "type": "string"
+                },
+                "options": {
+                  "type": "array",
+                  "description": "kind recovery: each option in plain words, {label, pick, actions: [{text, note}]}",
+                  "items": {
+                    "type": "object"
+                  }
+                },
+                "goals": {
+                  "type": "array",
+                  "description": "kind why: the goals whose proposed Why lines wait on you",
+                  "items": {
+                    "type": "object"
+                  }
                 },
                 "goal_title": {
                   "type": [
@@ -20552,6 +22038,103 @@
         ],
         "title": "IfNoAnswer",
         "description": "What the bot does if the person does not answer by `by` (backend/ask_deadlines.py). `kind` says what that step is:\nonly a `reversible` internal step goes ahead on its own; a send, a payment or a delete waits for an answer."
+      },
+      "InboundCursor": {
+        "type": "object",
+        "properties": {
+          "cursor": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "cursor"
+        ],
+        "additionalProperties": true
+      },
+      "InboundInboxes": {
+        "type": "object",
+        "properties": {
+          "inboxes": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "configured": {
+            "type": "boolean"
+          },
+          "last_sync": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "error": {
+            "type": "string"
+          },
+          "gaps": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        },
+        "required": [
+          "configured",
+          "error",
+          "gaps",
+          "inboxes",
+          "last_sync"
+        ],
+        "additionalProperties": true
+      },
+      "InboundMessages": {
+        "type": "object",
+        "properties": {
+          "messages": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "next": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "cursor": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "cursor",
+          "messages",
+          "next"
+        ],
+        "additionalProperties": true
+      },
+      "InboundPhoneRequests": {
+        "type": "object",
+        "properties": {
+          "phone_requests": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "next": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "next",
+          "phone_requests"
+        ],
+        "additionalProperties": true
       },
       "InboundTask": {
         "properties": {
@@ -22519,6 +24102,27 @@
               }
             ],
             "title": "Wait S"
+          },
+          "attachments": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^[^@]+@[1-9][0-9]*$"
+                },
+                {
+                  "$ref": "#/components/schemas/VisualRef"
+                }
+              ]
+            },
+            "type": "array",
+            "maxItems": 10,
+            "title": "Attachments"
+          },
+          "needs_action": {
+            "type": "boolean",
+            "title": "Needs Action",
+            "default": false
           }
         },
         "additionalProperties": false,
@@ -22957,6 +24561,20 @@
         ],
         "title": "PersonalTokenCreate",
         "description": "A personal API token (backend/personal_tokens.py): a label to tell it apart in the list\nand how long it lives; 90 days unless asked, never more than a year."
+      },
+      "PhoneRequest": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Name",
+            "default": "Mobile number"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "PhoneRequest"
       },
       "Problem": {
         "type": "object",
@@ -23540,6 +25158,19 @@
           "runtime"
         ],
         "title": "Refresh"
+      },
+      "Release": {
+        "properties": {
+          "confirm": {
+            "type": "string",
+            "maxLength": 160,
+            "title": "Confirm",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "Release"
       },
       "RepoAccessUpdate": {
         "properties": {
@@ -24757,11 +26388,9 @@
         "properties": {
           "scope": {
             "type": "string",
-            "enum": [
-              "group",
-              "bot"
-            ],
-            "title": "Scope"
+            "const": "bot",
+            "title": "Scope",
+            "default": "bot"
           },
           "target": {
             "type": "string",
@@ -24786,7 +26415,6 @@
         "additionalProperties": false,
         "type": "object",
         "required": [
-          "scope",
           "target"
         ],
         "title": "SubscriptionAssignment"
@@ -24796,7 +26424,6 @@
         "properties": {
           "scope": {
             "enum": [
-              "group",
               "bot"
             ]
           },
@@ -25828,6 +27455,11 @@
             "title": "Public",
             "default": false
           },
+          "needs_action": {
+            "type": "boolean",
+            "title": "Needs Action",
+            "default": false
+          },
           "approval_id": {
             "anyOf": [
               {
@@ -25859,8 +27491,15 @@
           },
           "attachments": {
             "items": {
-              "type": "string",
-              "pattern": "^[^@]+@[1-9][0-9]*$"
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^[^@]+@[1-9][0-9]*$"
+                },
+                {
+                  "$ref": "#/components/schemas/VisualRef"
+                }
+              ]
             },
             "type": "array",
             "maxItems": 10,
@@ -27993,6 +29632,155 @@
           "note"
         ],
         "additionalProperties": true
+      },
+      "VisualRef": {
+        "properties": {
+          "ref": {
+            "type": "string",
+            "pattern": "^[^@]+@[1-9][0-9]*$",
+            "title": "Ref"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 200,
+            "title": "Title",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "ref"
+        ],
+        "title": "VisualRef",
+        "description": "A file version attached to a message with the title it shows under (backend/visuals.py)."
+      },
+      "Wait": {
+        "properties": {
+          "inbox_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "maxItems": 30
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Inbox Ids"
+          },
+          "after": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "After"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "email",
+                  "sms"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kind"
+          },
+          "sender": {
+            "type": "string",
+            "maxLength": 200,
+            "title": "Sender",
+            "default": ""
+          },
+          "has_code": {
+            "type": "boolean",
+            "title": "Has Code",
+            "default": false
+          },
+          "timeout": {
+            "type": "integer",
+            "maximum": 120.0,
+            "minimum": 0.0,
+            "title": "Timeout",
+            "default": 25
+          },
+          "limit": {
+            "type": "integer",
+            "maximum": 10.0,
+            "minimum": 1.0,
+            "title": "Limit",
+            "default": 10
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "after"
+        ],
+        "title": "Wait"
+      },
+      "backend__inbound__Create": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "email",
+              "sms"
+            ],
+            "title": "Kind",
+            "default": "email"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Name",
+            "default": "Agent inbox"
+          },
+          "max_price_micros": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Max Price Micros",
+            "default": 0
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "Create"
+      },
+      "backend__inbound__Edit": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "used_for": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 1000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Used For"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "Edit"
       }
     },
     "securitySchemes": {

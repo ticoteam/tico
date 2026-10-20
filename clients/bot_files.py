@@ -29,13 +29,14 @@ TYPES = {
     ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
     ".odt": "application/vnd.oasis.opendocument.text", ".ods": "application/vnd.oasis.opendocument.spreadsheet",
     ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp",
+    ".svg": "image/svg+xml", ".m4v": "video/x-m4v", ".aac": "audio/aac",
 }
 KINDS = {".mp4": "video", ".webm": "video", ".mov": "video", ".mp3": "audio", ".wav": "audio", ".m4a": "audio", ".ogg": "audio",".md": "document", ".markdown": "document", ".txt": "document", ".pdf": "document", ".rtf": "document",
          ".doc": "document", ".docx": "document", ".odt": "document", ".html": "document", ".htm": "document",
          ".csv": "spreadsheet", ".tsv": "spreadsheet", ".xls": "spreadsheet", ".xlsx": "spreadsheet",
          ".ods": "spreadsheet", ".json": "data", ".yaml": "data", ".yml": "data",
          ".ppt": "slides", ".pptx": "slides", ".png": "image", ".jpg": "image", ".jpeg": "image",
-         ".gif": "image", ".webp": "image"}
+         ".gif": "image", ".webp": "image", ".svg": "image", ".m4v": "video", ".aac": "audio"}
 # A name that suggests a credential is never published, whatever its extension.
 CREDENTIAL_NAME = re.compile(
     r"(^|[._\-\s])(env|credentials?|secrets?|passwords?|passwd|api[-_ ]?keys?|private[-_ ]?keys?|"
@@ -71,7 +72,7 @@ def check_size(size):
         raise Refused(f"A file is at most {MAX_BYTES // (1024 * 1024)} MB; this one is {size // (1024 * 1024)} MB")
 
 
-def local_file(root, rel):
+def local_file(root, rel, extra_types=()):
     """(real path, relative posix name) of a file inside `root` a bot may publish, or Refused.
 
     Refuses a path that leaves the root, any symlink on the way, anything that is not a regular
@@ -99,7 +100,11 @@ def local_file(root, rel):
         raise Refused(f"{'/'.join(parts)} is not a regular file")
     if root not in walk.resolve().parents:
         raise Refused("That path is outside the bot's checkout")
-    check_name(walk.name)
+    if Path(walk.name).suffix.lower() in extra_types:      # e.g. a font a visual page embeds (clients/visual_embed.py)
+        if CREDENTIAL_NAME.search(walk.name) or walk.name.lower().startswith(".env"):
+            raise Refused(f"{walk.name} looks like a credential, which is never published")
+    else:
+        check_name(walk.name)
     info = walk.stat()
     if info.st_nlink > 1:
         raise Refused(f"{'/'.join(parts)} has more than one hard link, so it may be another file under a new name")

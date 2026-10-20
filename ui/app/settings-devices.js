@@ -220,39 +220,39 @@ async function enrollmentDownload(operator, label) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
   return filename;
 }
-// One row per AI tool on a computer, in aligned parts: the tool, its installed version, whether it is enabled here, its
-// sign-in and account, and its usage. From the computer's readiness (`harnesses` per tool, `runtimes` per runtime; an
-// older runner sends only `runtimes`) and its named subscriptions (`profiles`, one line each under the tool). Only what
-// its bots use (with no bot yet, the team's default), plus anything installed anyway. A CLI whose manifest has
-// `browser_sign_in` signs in from here: the computer runs the login as the bot user and relays only the link and
-// one-time code (backend/model_login.py, runner-rs/src/login.rs). One with only a `terminal_login` gets that command to
-// run there; one whose keys belong to each bot (`api_keys = "bot"`) gets a link to Credentials.
-// The account (email, plan) comes only from a provider's own status command (#610) and only to an administrator or the
-// computer's operator; anything not reported reads unavailable, never a guessed value.
+// The computer's AI tools: its readiness (`harnesses` per tool, `runtimes` per runtime; an older runner sends only
+// `runtimes`) and its named subscriptions (`profiles`) make its connections (ui/app/computer-detail.js). A CLI whose
+// manifest has `browser_sign_in` signs in from the computer's pop-up: the computer runs the login as the bot user and
+// relays only the link and one-time code (backend/model_login.py, runner-rs/src/login.rs). One with only a
+// `terminal_login` gets that command to run there; one whose keys belong to each bot (`api_keys = "bot"`) gets a link
+// to Credentials. The account (email, plan) comes only from a provider's own status command (#610) and only to an
+// administrator or the computer's operator; anything not reported reads unavailable, never a guessed value.
 // The server's rule (model_login._operator): the owner, an admin, or the person whose computer it is.
 const machineCanSignIn = machine => settingsIsAdmin() || (!!S.me?.id && machine.operator === S.me.id);
 function machineLoginCommand(machine, name) {
   const command = harnessCaps(name).terminal_login;
   return command && machine.update?.kind === 'docker' ? `docker exec -it -u bot <container> ${command}` : command;
 }
-const machinePlan = plan => plan ? String(plan).replace(/^./, c => c.toUpperCase()) : '';
 // A computer reads an account again every 10 minutes (runner-rs/src/accounts.rs READ_EVERY), the answer landing on a
 // later heartbeat's report, which is kept a minute; a reading older than this has missed its refresh.
 const MACHINE_ACCOUNT_FRESH_MS = 15 * 60000;
-// "Signed in as <email> · <plan>" from an account; what the provider did not say is left out, not guessed. A reading
+const machinePlanName = plan => plan ? String(plan).replace(/^./, c => c.toUpperCase()) : '';
+// "Signed in as <email>" from an account (the plan is left out: the usage says what matters); what the provider did not
+// say is left out, not guessed. A reading
 // that has missed its refresh says when it was last checked, since the login may have changed since.
 function machineAccountHTML(account, runtime, title = '') {
   const who = account?.kind === 'api_key' ? 'with an API key · no plan usage'
-    : [account?.email, machinePlan(account?.plan)].filter(Boolean).join(' · ');
+    : account?.email || '';
   const rest = who ? (account?.kind === 'api_key' ? who : `as ${who}`)
     : harnessCaps(runtime).account ? '· account not reported yet' : '· account unavailable';
   const checked = Date.parse(account?.checked_at);
   const old = who && Number.isFinite(checked) && Date.now() - checked > MACHINE_ACCOUNT_FRESH_MS
     ? ` <span class="muted" data-account-checked>account last checked ${esc(ago(account.checked_at))}</span>` : '';
-  return `<span class="pill ok"${title ? ` title="${esc(title)}"` : ''}>Signed in</span> <span class="machine-account${who ? '' : ' muted'}"${account?.org ? ` title="${esc(account.org)}"` : ''}>${esc(rest)}</span>${old}`;
+  const tip = [account?.org, machinePlanName(account?.plan)].filter(Boolean).join(' · ');
+  return `<span class="pill ok"${title ? ` title="${esc(title)}"` : ''}>Signed in</span> <span class="machine-account${who ? '' : ' muted'}"${tip ? ` title="${esc(tip)}"` : ''}>${esc(rest)}</span>${old}`;
 }
-// One usage window ("weekly" or "5-hour window"): what is left and when it resets, with the reading's age. A window with
-// no provider percentage says so; it never reads as 0% or a full allowance.
+// One usage window ("weekly" or "5-hour window"): what is left and when it resets; its age only once it is a day old. A
+// window with no provider percentage says so; it never reads as 0% or a full allowance.
 function machineWindowHTML(label, reading, name) {
   if (!reading) return '';
   const percent = Number.isFinite(reading.used_percent) ? Math.min(100, Math.max(0, reading.used_percent)) : null;
@@ -262,8 +262,7 @@ function machineWindowHTML(label, reading, name) {
   const left = percent === null ? null : Math.round(100 - percent);
   const value = expired ? 'previous window; refresh needed' : left === null ? 'percentage unavailable' : `${left}% left`;
   const notes = [Number.isFinite(reset) && !expired ? `resets ${new Date(reset).toLocaleString([], {weekday: 'short', hour: 'numeric', minute: '2-digit'})}` : '',
-    reading.status === 'rejected' ? 'limit reached' : '',
-    Number.isFinite(reported) ? `${reading.source === 'manual' ? 'recorded' : 'as of'} ${ago(reading.reported_at)}${stale ? ', may be out of date' : ''}` : ''].filter(Boolean);
+    stale ? `from ${ago(reading.reported_at)}` : ''].filter(Boolean);
   const bar = left !== null && !expired
     ? `<meter class="machine-usage-bar" min="0" max="100" low="20" optimum="100" value="${left}" aria-label="${esc(name)} ${esc(label)}: ${left}% left"></meter>` : '';
   return `<span class="machine-usage-line${stale || expired ? ' stale' : ''}" data-usage-window="${esc(label)}">${bar}<span>${esc(label)} ${esc(value)}</span>${notes.length ? `<span class="muted">${esc(notes.join(' · '))}</span>` : ''}</span>`;
@@ -274,15 +273,16 @@ function machineUsageHTML(runtime, state, name, where = 'this computer') {
   const caps = harnessCaps(runtime);
   if (!caps.weekly_usage) return '<span class="muted" data-usage-window="none">Usage unavailable</span>';
   if (state?.account?.kind === 'api_key') return '<span class="muted" data-usage-window="none">No plan usage (API key)</span>';
-  const idle = caps.weekly_usage === 'turns' && !state?.weekly && !state?.five_hour
-    ? ` · reported after a ${harnessWords(runtime)} turn on ${where}` : '';
-  const weekly = machineWindowHTML('Weekly', state?.weekly, name) || `<span class="muted" data-usage-window="Weekly">Weekly usage unavailable${esc(idle)}</span>`;
+  const idle = caps.weekly_usage === 'turns' && !state?.weekly && !state?.five_hour;
+  const weekly = machineWindowHTML('Weekly', state?.weekly, name)
+    || `<span class="muted" data-usage-window="Weekly"${idle ? ` title="${esc(`Shows after a ${harnessWords(runtime)} turn on ${where}`)}"` : ''}>${idle ? 'No usage yet' : 'Usage unavailable'}</span>`;
   return weekly + machineWindowHTML('5-hour window', state?.five_hour, name);
 }
 // The sign-in cell: signed in as <account>, signed out, login expired or rejected, checking, or couldn't check (with
 // when the computer last reported).
 function machineSignInHTML(machine, online, name, auth, value) {
   const checked = machine.last_seen ? ` · last checked ${ago(machine.last_seen)}` : '';
+  if (auth !== 'ready' && machineKeyCleared(machine, name)) return '<span class="pill fail" title="Its key was cleared from Tico: the company\'s shared key does not sign it back in by itself">No key</span>';
   if (auth !== 'ready' && machineSignedOut(machine, name)) return '<span class="pill fail" title="Signed out from Tico: the company\'s shared key does not sign it back in by itself">Signed out</span>';
   if (auth === 'ready') return `${machineAccountHTML(value.account, name, value.detail)}${online ? '' : ` <span class="muted">${esc(checked.slice(3))}</span>`}`;
   if (auth === 'rejected') return `<span class="pill fail" title="${esc(value.detail || '')}">Login expired or rejected</span>`;
@@ -293,10 +293,13 @@ function machineSignInHTML(machine, online, name, auth, value) {
 }
 // A login someone signed out from Tico (backend/model_login.py model_login_cleared); '' is the computer's own login.
 const machineSignedOut = (machine, runtime, profile = '') => (machine.signed_out?.[runtime] || []).includes(profile);
-// Sign out / Switch account (or Use the shared key) for one login, from the shared sign-in module (ui/model-login.js).
+// Of those, the computer's own login whose key a person cleared (Clear key, not Sign out): it reads "No key · Add key".
+const machineKeyCleared = (machine, runtime) => machineSignedOut(machine, runtime) && (machine.key_cleared || []).includes(runtime);
+// Sign out / Switch account (or Use the shared key, or Switch to subscription for the computer's login on an API key)
+// for one login, from the shared sign-in module (ui/model-login.js).
 const machineLoginActions = (machine, online, runtime, profile, signedIn) => window.TicoModelLogin?.actionsHTML({
   runnerId: machine.id, runtime, machine: machine.label, profile, signedIn, signedOut: machineSignedOut(machine, runtime, profile), online,
-  platform: machine.platform || ''}) || '';
+  platform: machine.platform || '', onKey: !profile && machine.readiness?.runtimes?.[runtime]?.account?.kind === 'api_key'}) || '';
 // The key a login runs on (its readiness `key`: {name, source}), by its stored preview only: this computer's own key or
 // the company's shared one (backend/computer_keys.py), or one set on the computer itself.
 function machineKeyHTML(machine, runtime, key) {
@@ -306,8 +309,10 @@ function machineKeyHTML(machine, runtime, key) {
   return ` <span class="muted machine-key" data-machine-key="${esc(key.source)}">· ${esc(whose)}${stored?.preview ? ` <code>${esc(stored.preview)}</code>` : ''}</span>`;
 }
 // Replace key / Clear key, or Add key, from the shared sign-in module (ui/model-login.js).
-const machineKeyActions = (machine, online, runtime, key, signedIn) => window.TicoModelLogin?.keyActionsHTML({
-  runnerId: machine.id, runtime, machine: machine.label, key, signedIn, online}) || '';
+const machineKeyActions = (machine, online, runtime, key, signedIn) => (window.TicoModelLogin?.keyActionsHTML({
+  runnerId: machine.id, runtime, machine: machine.label, key, signedIn, online}) || '')
+  + (signedIn && key ? window.TicoModelLogin?.toSubscriptionHTML({runnerId: machine.id, runtime, machine: machine.label, online,
+    platform: machine.platform || ''}) || '' : '');
 // A sign-in several of the computer's bots run on (`shared_logins`, backend/views.py shared_logins), for a harness whose
 // login serves one run at a time (`one_turn_per_login`): those bots take turns, so it says so beside that login.
 function machineSharedLoginHTML(machine, runtime, profile = '') {
@@ -321,69 +326,6 @@ function machineProfileSignIn(state, runtime) {
   if (state?.signed_in === true) return machineAccountHTML(state.account, runtime);
   if (state?.signed_in === false) return '<span class="pill fail">Signed out</span>';
   return '<span class="pill waiting">Couldn\'t check</span>';
-}
-function machineToolsHtml(machine, online) {
-  const needed = Array.isArray(machine.needed_runtimes) ? new Set(machine.needed_runtimes) : null;
-  const isNeeded = name => !needed || needed.has(name);
-  const runtimes = machine.readiness?.runtimes || {};
-  const tools = Object.entries(machine.readiness?.harnesses || {}).map(([id, tool]) => ({...tool, id}));
-  const toolFor = name => tools.find(tool => tool.runtime === name && tool.installed) || tools.find(tool => tool.runtime === name) || {};
-  const names = [...new Set([...Object.keys(runtimes), ...tools.filter(tool => tool.installed).map(tool => tool.runtime)])]
-    .filter(name => isNeeded(name) || runtimes[name]?.installed || toolFor(name).installed);
-  const manage = machineCanSignIn(machine) && !machine.revoked_at;
-  const choices = machine.harness_choices || {};
-  const botRuntimes = new Set(machine.bot_runtimes || ((machine.bots || []).length ? machine.needed_runtimes || [] : []));
-  const profiles = Array.isArray(machine.profiles) ? machine.profiles : [];
-  const rows = names.map(name => {
-    const tool = toolFor(name), value = runtimes[name] || {installed: !!tool.installed, authenticated: tool.authenticated};
-    const installed = value.installed || tool.installed, auth = value.authenticated;
-    const label = tool.name || harnessWords(name);
-    const version = installed ? (tool.version || value.version || '') : '';
-    // Enabled is the owner's choice per computer (harness_choices), always on for what its bots run on; an older
-    // runner that reports no tools cannot say.
-    const enabled = !tool.id ? '' : botRuntimes.has(name) ? 'Enabled' : (choices[tool.id] ?? (tool.wanted || tool.installed)) ? 'Enabled' : 'Off';
-    let action = '';
-    if (manage && installed && auth !== 'ready') {
-      const command = machineLoginCommand(machine, name);
-      const caps = harnessCaps(name);
-      if (caps.browser_sign_in) action = online
-        ? ` <button class="ghost machine-signin" type="button" data-model-login data-runner="${esc(machine.id)}" data-runtime="${esc(name)}" data-machine="${esc(machine.label)}">Sign in</button>` : '';
-      else if (command) action = ` <span class="machine-login-command" title="Run on the computer${command.includes('<container>') ? '; docker ps shows the container name' : ''}"><code>${esc(command)}</code><button class="ghost machine-signin" type="button" data-machine-copy-login="${esc(command)}">Copy</button></span>`;
-      else if (caps.api_keys === 'bot') action = ' <a class="machine-signin-link" href="#/credentials">Add key</a>';
-      if (caps.browser_sign_in) action += machineLoginActions(machine, online, name, '', false);
-      if (caps.api_keys === 'computer') action += machineKeyActions(machine, online, name, null, false);
-    // A login a key signs in: Clear key stands in for Sign out.
-    } else if (manage && installed) action = value.key && harnessCaps(name).api_keys === 'computer'
-      ? machineKeyActions(machine, online, name, value.key, true) : machineLoginActions(machine, online, name, '', true);
-    const rejected = auth === 'rejected'
-      ? `<span class="err machine-rejected" data-rejected="${esc(name)}">${value.rejected_at ? esc(ago(value.rejected_at)) + '. ' : ''}${value.rejected_reason ? esc(value.rejected_reason) + '. ' : ''}${hlCredentialFix(value.credential_source)}. It takes no work that needs ${esc(name)} until then.</span>` : '';
-    const signIn = !installed ? '<span class="muted">—</span>'
-      : machineSignInHTML(machine, online, name, auth, value) + (auth === 'ready' ? machineKeyHTML(machine, name, value.key) : '');
-    // The computer's own login's usage windows (only to whoever may see its account); each named subscription below
-    // carries its own.
-    const own = installed ? machineUsageHTML(name, {account: value.account, weekly: value.weekly, five_hour: value.five_hour}, label) : '<span class="muted">—</span>';
-    const lines = installed ? profiles.filter(p => p.runtimes?.[name]).map(p => {
-      const state = p.runtimes[name];
-      // A signed-out named subscription signs in again from here, like the computer's own login above.
-      const signIn = !manage ? '' : state.signed_in === true ? machineLoginActions(machine, online, name, p.name, true)
-        : state.signed_in === false && online && harnessCaps(name).browser_sign_in
-          ? ` <button class="ghost machine-signin" type="button" data-model-login data-runner="${esc(machine.id)}" data-runtime="${esc(name)}" data-profile="${esc(p.name)}" data-machine="${esc(machine.label)}" aria-label="Sign in ${esc(p.display_name || p.name)} to ${esc(label)}">Sign in</button>` : '';
-      return `<div class="machine-tool machine-tool-profile" role="row" data-machine-profile="${esc(p.name)}" data-machine-tool="${esc(name)}">
-        <span role="cell" class="machine-tool-name" title="Named subscription ${esc(p.display_name || p.name)}">${esc(p.display_name || p.name)}</span>
-        <span role="cell" class="machine-tool-version"></span><span role="cell" class="machine-tool-enabled"></span>
-        <span role="cell" class="machine-tool-signin">${machineProfileSignIn(state, name)}${signIn}${machineSharedLoginHTML(machine, name, p.name)}</span>
-        <span role="cell" class="machine-tool-usage">${state.signed_in === false ? '<span class="muted">—</span>' : machineUsageHTML(name, state, `${label} ${p.display_name || p.name}`, 'this subscription')}</span></div>`;
-    }).join('') : '';
-    return `<div class="machine-tool" role="row" data-machine-tool="${esc(name)}">
-      <span role="cell" class="machine-tool-name">${esc(label)}</span>
-      <span role="cell" class="machine-tool-version"${version ? ` title="${esc(version)}"` : ''}>${installed ? esc(version || 'Installed') : '<span class="muted">Not installed</span>'}</span>
-      <span role="cell" class="machine-tool-enabled"${botRuntimes.has(name) ? ' title="Its bots use it"' : ''}>${enabled ? esc(enabled) : '<span class="muted">—</span>'}</span>
-      <span role="cell" class="machine-tool-signin">${signIn}${action}${rejected}${installed ? machineSharedLoginHTML(machine, name) : ''}</span>
-      <span role="cell" class="machine-tool-usage">${own}</span></div>${lines}`;
-  }).join('');
-  if (!rows) return '';
-  return `<div class="machine-tools" role="table" aria-label="AI tools on ${esc(machine.label)}"><div class="machine-tool machine-tool-head" role="row">
-    <span role="columnheader">Tool</span><span role="columnheader">Installed</span><span role="columnheader">Enabled</span><span role="columnheader">Sign-in</span><span role="columnheader">Usage</span></div>${rows}</div>`;
 }
 // Desktop apps the computer's app driver operates for synced bots (readiness `appdriver`, a Mac's native runner):
 // one row per app with its state and the driver's own detail, such as which System Settings entry to turn on. A
@@ -414,71 +356,30 @@ function machineScreenHTML(machine) {
   return screenMayOpen(machine) ? `<a class="machine-screen" href="${screenHref(machine.id)}"><span class="nav-icon" aria-hidden="true">computer</span>${label}</a>${betaPill('computer_screen')}`
     : `<span class="machine-screen"><span class="nav-icon" aria-hidden="true">computer</span>${label}</span>${betaPill('computer_screen')}`;
 }
+// "Update" on the row only when one waits; the details are under Versions and updates in the pop-up.
+function machineUpdateWords(update) {
+  if (!update) return '';
+  if (update.state === 'updating') return `<span class="pill waiting" title="${esc(update.label || 'Updating')}">Updating</span>`;
+  if (update.state === 'needs_update' || update.state === 'incompatible' || update.outdated)
+    return `<span class="pill ${update.state === 'incompatible' ? 'fail' : 'waiting'}" data-runner-outdated title="${esc([update.label, update.target ? `to ${update.target}` : ''].filter(Boolean).join(' '))}">Update</span>`;
+  return '';
+}
+// One compact row per computer: name, status, operator and Tico version in one cell, then its AI tool chips and Add.
+// A click opens the pop-up.
 function renderSettingsMachines() {
   const el = $('#set-machines'); if (!el) return;
-  const expanded = new Set([...el.querySelectorAll('details[data-machine-details][open]')].map(node => node.dataset.machineDetails));
   const showRevoked = el.dataset.showRevoked === 'true';
   const revoked = SETTINGS_DATA.machines.filter(machine => machine.revoked_at).length;
   const machines = SETTINGS_DATA.machines.filter(machine => showRevoked || !machine.revoked_at);
   const cards = machines.map(machine => {
-    const online = !machine.revoked_at && machine.last_seen && Date.now() - new Date(machine.last_seen) < 60000;
-    const tools = machineToolsHtml(machine, online);
-    // The model CLIs the computer runs: version, pin, and the owner's Update / Pin actions. The
-    // computer applies them between turns (backend/harness_actions.py, runner-rs/src/harness_tools.rs).
-    // It installs what its bots run on by itself; the owner turns any other one on or off here.
-    const choices = machine.harness_choices || {};
-    // What its bots run on, fallbacks included, stays on (the server refuses an off for it); an older server sends
-    // no bot_runtimes, only its bots' own runtimes.
-    const botRuntimes = new Set(machine.bot_runtimes || ((machine.bots || []).length ? machine.needed_runtimes || [] : []));
-    const asked = new Set((machine.harness_actions || []).filter(row => ['requested', 'running'].includes(row.state)).map(row => `${row.harness}:${row.action}`));
-    const harnessAction = (id, action, label, value) => {
-      const waiting = asked.has(`${id}:${action}`);
-      return ` <button class="ghost" type="button" data-harness-action="${esc(action)}" data-runner="${esc(machine.id)}" data-harness="${esc(id)}"${waiting ? ' disabled' : ''}>${waiting ? 'Requested' : esc(label)}</button>`;
-    };
-    const harnessChip = ([id, value]) => {
-      const owner = S.me?.role === 'owner' && online && value.managed;
-      const busy = value.state !== 'idle';
-      const text = `${value.name || id} · ${value.installed ? `Installed${value.version ? ' ' + value.version : ''}` : 'Not installed'}${value.pinned ? ' · pinned' : ''}${value.update_available ? ` · ${value.latest || 'update'} available` : ''}${busy ? ` · ${value.state}` : ''}`;
-      const tone = value.state === 'failed' ? 'fail' : !value.installed || busy || value.update_available ? 'waiting' : '';
-      const buttons = owner && value.installed && !busy ? [
-        value.update_available ? harnessAction(id, 'update', 'Update') : '',
-        value.pinned ? harnessAction(id, 'unpin', 'Resume updates') : (value.version ? harnessAction(id, 'pin', 'Pin to this version') : '')].join('') : '';
-      const title = [value.detail, value.managed ? '' : (value.installed ? 'Installed outside Tico; update it where it was installed' : '')].filter(Boolean).join(' · ');
-      const needed = botRuntimes.has(value.runtime);
-      const on = needed || (choices[id] ?? (value.wanted || value.installed));
-      const toggle = S.me?.role === 'owner' && !machine.revoked_at
-        ? ` <label class="machine-harness-toggle"${needed ? ' title="Its bots use it"' : ''}><input type="checkbox" aria-label="Enable ${esc(value.name || id)} on ${esc(machine.label)}" data-harness-choice="${esc(id)}" data-runner="${esc(machine.id)}"${on ? ' checked' : ''}${needed ? ' disabled' : ''}> Enabled</label>` : '';
-      return `<span class="machine-harness-item" data-harness-chip="${esc(id)}"><span class="pill ${tone}" title="${esc(title)}">${esc(text)}</span>${toggle}${buttons}</span>`;
-    };
-    // The owner sees every model CLI, to turn one on; everyone else what is there.
-    const harnesses = Object.entries(machine.readiness?.harnesses || {}).filter(([, value]) => S.me?.role === 'owner' || value.installed || value.wanted || value.state !== 'idle').map(harnessChip).join('');
+    const online = machineOnline(machine);
+    const status = machine.revoked_at ? ['failed', 'revoked'] : online ? ['ok', 'online'] : ['', machine.last_seen ? `offline ${ago(machine.last_seen)}` : 'offline'];
     const failures = Object.values(machine.readiness?.bots || {}).filter(value => !value.ready).length;
-    const bots = machine.bots || [];
-    const botNames = bots.map(settingsBotName);
-    const status = machine.revoked_at ? ['failed', 'revoked'] : online ? ['ok', 'online'] : ['', 'offline'];
-    // Rarely used actions sit in the row's ⋯ menu, so each computer stays one compact row.
-    const admin = settingsIsAdmin(), mayRemove = !machine.revoked_at && (admin || machine.operator === S.me?.id);
-    // Screen (Off / View / Control): offered once the computer itself has a screen turned on (`screen_available`),
-    // and kept while a mode is set so it can be turned off again. The operator or a bot admin sets it.
-    const screen = machine.screen || 'off';
-    const screenChoice = screenMayOpen(machine) && (machine.screen_available || screen !== 'off')
-      ? `<div class="people-menu-check machine-screen-choice" data-computer-screen="${esc(machine.id)}"><span>Screen${betaPill('computer_screen')}</span>${repoSegHTML(`screen-${machine.id}`, 'Screen', [['off', 'Off'], ['view', 'View'], ['control', 'Control']], screen, false, ' repo-seg-sm')}</div>` : '';
-    // Performance (everyone reads it); its operator or a bot admin turns the diagnostics off and on.
-    const performance = machine.revoked_at ? '' : `<button type="button" role="menuitem" data-computer-performance="${esc(machine.id)}">Performance${betaPill('replay_performance')}</button>`
-      + (screenMayOpen(machine) ? `<label class="people-menu-check"><input type="checkbox" data-performance-mode="${esc(machine.id)}" ${machine.performance !== 'off' ? 'checked' : ''}> Performance diagnostics</label>` : '');
-    const menu = [bots.length ? `<button type="button" role="menuitem" data-computer-bots="${esc(machine.id)}">Show bots</button>` : '',
-      performance, screenChoice,
-      !machine.revoked_at && admin ? `<label class="people-menu-check"><input type="checkbox" data-member-bots="${esc(machine.id)}" ${machine.accepts_member_bots ? 'checked' : ''}> Accepts members' bots</label>` : '',
-      mayRemove ? `<button type="button" role="menuitem" class="danger-text" data-computer-remove="${esc(machine.id)}">Remove computer</button>` : ''].join('');
-    // Which runner engine it runs (runner/engine.py); hovering says the build, or why it is on Python.
-    const engine = machine.readiness?.engine;
-    const engineLabel = engine?.name ? ` · <span title="${esc(engine.note || engine.build || '')}">${engine.name === 'rust' ? 'Rust' : 'Python'}</span>` : '';
-    return `<tr class="machine-card"><td><strong>${esc(machine.label)}</strong><span class="settings-cell-note">${esc(machine.version || 'version not reported')}${machine.platform ? ` · ${esc(machine.platform)}` : ''}${engineLabel}</span>${window.runnerUpdateHtml?.(machine.update, machine.version) || ''}</td>
-      <td data-label="Operator">${esc(settingsPersonName(machine.operator))}${!machine.revoked_at && machine.accepts_member_bots ? '<span class="settings-cell-note">Accepts members\' bots</span>' : ''}</td>
-      <td data-label="Bots">${bots.length ? `<a href="#/settings" class="machine-bots" data-computer-bots="${esc(machine.id)}" title="${esc(botNames.join(', '))}"><strong>${bots.length} bot${bots.length === 1 ? '' : 's'}</strong><span class="settings-cell-note">${esc(botNames.join(', '))}</span></a>` : '<span class="muted">No bots</span>'}${failures ? `<span class="settings-cell-note err">${failures} not ready</span>` : ''}</td>
-      <td data-label="AI tools"><div class="machine-runtime">${tools || '<span class="muted">No AI tools reported</span>'}</div>${machineAppsHtml(machine)}${harnesses ? `<details data-machine-details="${esc(machine.id)}:tools"><summary>Installation and updates</summary><p class="settings-cell-note">Enabled tools stay installed. Sign-in status is shown above.</p><div class="machine-harnesses">${harnesses}</div></details>` : ''}</td>
-      <td data-label="Status"><span class="machine-status"><span class="dot ${status[0]}" aria-hidden="true"></span>${status[1]}${machine.last_seen ? `<span class="muted"> · ${esc(ago(machine.last_seen))}</span>` : ''}</span>${online && machine.restarting ? `<span class="settings-cell-note" data-machine-restarting title="${esc(`Since ${machine.restarting.slice(0, 16).replace('T', ' ')} UTC`)}">Restarting: it starts new work once its running turns end</span>` : ''}${machineScreenHTML(machine)}</td>
-      <td class="settings-row-actions"><div class="people-cell-more">${menu ? `<button class="people-more" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="More for ${esc(machine.label)}"><span class="nav-icon" aria-hidden="true">more_horiz</span></button><div class="people-menu" role="menu" hidden>${menu}</div>` : ''}</div></td></tr>`;
+    const facts = [settingsPersonName(machine.operator), machine.version ? `Tico ${machine.version}` : ''].filter(Boolean).join(' · ');
+    return `<tr class="machine-card" data-computer-row="${esc(machine.id)}">
+      <td><span class="machine-head"><button type="button" class="machine-name" data-computer-open="${esc(machine.id)}" aria-haspopup="dialog">${esc(machine.label)}</button><span class="machine-status" data-machine-status><span class="dot ${status[0]}" aria-hidden="true"></span>${esc(status[1])}</span></span>
+        <span class="settings-cell-note machine-facts">${esc(facts)} ${machineUpdateWords(machine.update)}</span>${failures ? `<span class="settings-cell-note err">${failures} bot${failures === 1 ? '' : 's'} not ready</span>` : ''}${online && machine.restarting ? `<span class="settings-cell-note" data-machine-restarting title="${esc(`Since ${machine.restarting.slice(0, 16).replace('T', ' ')} UTC`)}">Restarting: it starts new work once its running turns end</span>` : ''}</td>
+      <td data-label="AI tools">${machineChipsHTML(machine)}</td></tr>`;
   }).join('');
   el.onchange = async event => {
     if (event.target.matches('[data-show-revoked-computers]')) {
@@ -522,6 +423,16 @@ function renderSettingsMachines() {
       } catch (error) { toast(error.message, true); perf.checked = !perf.checked; perf.disabled = false; }
       return;
     }
+    const inbox = event.target.closest('[data-inbox-only]');
+    if (inbox) {
+      inbox.disabled = true;
+      try {
+        await post(`/v2/runners/${encodeURIComponent(inbox.dataset.inboxOnly)}/inbox-only`, {enabled: inbox.checked});
+        toast(inbox.checked ? 'Kept for inbox bots' : 'No longer kept for inbox bots');
+        await loadSettings();
+      } catch (error) { toast(error.message, true); inbox.checked = !inbox.checked; inbox.disabled = false; }
+      return;
+    }
     const box = event.target.closest('[data-member-bots]');
     if (!box) return;
     box.disabled = true;
@@ -531,20 +442,25 @@ function renderSettingsMachines() {
       await loadSettings();
     } catch (error) { toast(error.message, true); box.checked = !box.checked; box.disabled = false; }
   };
+  el.onsubmit = event => { subsHandleSubmit(event); };   // a bare `false` would cancel any other form's submit
   el.onclick = async event => {
-    const more = event.target.closest('.people-more');
-    if (more) {
-      const menu = more.nextElementSibling, open = menu.hidden;
-      peopleCloseMenus(menu); menu.hidden = !open; more.setAttribute('aria-expanded', String(open));
-      // Fixed, so the table's sideways scroll box does not clip it.
-      if (open) { const r = more.getBoundingClientRect(); menu.style.position = 'fixed'; menu.style.top = `${Math.min(r.bottom + 4, innerHeight - menu.offsetHeight - 8)}px`; menu.style.left = `${Math.max(8, r.right - menu.offsetWidth)}px`; menu.style.right = 'auto'; }
-      return;
-    }
+    // The pop-up: a click on a row (its name, a chip, anywhere on it) opens it; ✕ or the backdrop closes it.
+    const dialog = el.querySelector('dialog.computer-detail');
+    if (dialog && (event.target === dialog || event.target.closest('[data-detail-close]'))) { dialog.close(); return; }
+    if (dialog && event.target.closest('dialog.computer-detail a[href]:not([data-computer-bots])')) dialog.close();   // leaving for a link
+    // Add, on the row or in the pop-up, opens its own pop-up (before the row's click opens the computer's).
+    const add = event.target.closest('[data-add-connection]');
+    if (add) { if (!add.disabled) computerAddOpen(add.dataset.addConnection); return; }
+    const row = event.target.closest('[data-computer-open], [data-computer-row]');
+    if (row && !event.target.closest('a')) { computerDetailOpen(row.dataset.computerOpen || row.dataset.computerRow); return; }
+    if (subsHandleClick(event)) return;
+    const removeLine = event.target.closest('[data-connection-remove]');
+    if (removeLine) { if (!removeLine.disabled) computerRemoveOpen(removeLine); return; }
     const perfLink = event.target.closest('[data-computer-performance]');
-    if (perfLink) { peopleCloseMenus(); location.hash = performanceHref(perfLink.dataset.computerPerformance); return; }
+    if (perfLink) { dialog?.close(); location.hash = performanceHref(perfLink.dataset.computerPerformance); return; }
     const shown = event.target.closest('[data-computer-bots]');
     if (shown) {
-      event.preventDefault(); peopleCloseMenus();
+      event.preventDefault(); dialog?.close();
       SETTINGS_BOTS_VIEW.computer = shown.dataset.computerBots; settingsBotsRemember(); settingsShow('bots'); renderSettingsBots();
       return;
     }
@@ -552,12 +468,16 @@ function renderSettingsMachines() {
     if (login) { void copyText(login.dataset.machineCopyLogin).then(() => toast('Command copied')); return; }
     const remove = event.target.closest('[data-computer-remove]');
     if (remove) {
+      const machine = SETTINGS_DATA.machines.find(m => m.id === remove.dataset.computerRemove);
+      const bots = (machine?.bots || []).length;
+      if (!confirm(`Revoke ${machine?.label || 'this computer'}? It stops taking work at once${bots ? `; its ${bots === 1 ? 'bot waits' : `${bots} bots wait`} until reassigned on the Bots page` : ''}.`)) return;
       remove.disabled = true;
       try {
         await post(`/v2/computers/${encodeURIComponent(remove.dataset.computerRemove)}/revoke`, {});
+        dialog?.close();
         await loadSettings();
-        $('#machine-enroll-status').innerHTML = 'Computer removed. Its bots wait until reassigned in Bots. For Docker, stop its runner from its install directory: <code>docker compose -f runner.compose.yaml down</code>. Include <code>-f runner.override.yaml</code> before <code>down</code> if that file is present. This keeps repositories and sign-in.';
-        toast('Computer removed');
+        $('#machine-enroll-status').innerHTML = 'Computer revoked. Its bots wait until reassigned in Bots. For Docker, stop its runner from its install directory: <code>docker compose -f runner.compose.yaml down</code>. Include <code>-f runner.override.yaml</code> before <code>down</code> if that file is present. This keeps repositories and sign-in.';
+        toast('Computer revoked');
       } catch (error) { toast(error.message, true); remove.disabled = false; }
       return;
     }
@@ -576,7 +496,7 @@ function renderSettingsMachines() {
       <td>${agent.model ? `${esc(agent.model)}${agent.provider ? `<span class="settings-cell-note">${esc(agent.provider)}</span>` : ''}` : '<span class="muted">—</span>'}</td>
       <td><span class="machine-status"><span class="dot ${agent.revoked_at ? 'failed' : agent.online ? 'ok' : ''}" aria-hidden="true"></span>${agent.revoked_at ? 'revoked' : agent.online ? 'reporting in' : 'not reporting'}${agent.last_seen ? `<span class="muted"> · ${esc(ago(agent.last_seen))}</span>` : ''}</span></td></tr>`).join('');
   const list = `${revoked ? `<label class="settings-cell-note"><input type="checkbox" data-show-revoked-computers${showRevoked ? ' checked' : ''}> Show revoked computers (${revoked})</label>` : ''}
-    ${cards ? `<div class="scroll"><table class="settings-table settings-machines"><thead><tr><th>Computer</th><th>Operator</th><th>Bots</th><th>AI tools</th><th>Status</th><th aria-label="Actions"></th></tr></thead><tbody>${cards}</tbody></table></div>` : `<div class="empty">${revoked ? 'No active computers.' : 'No computers yet.'}</div>`}
+    ${cards ? `<div class="scroll"><table class="settings-table settings-machines"><thead><tr><th>Computer</th><th>AI tools</th></tr></thead><tbody>${cards}</tbody></table></div>` : `<div class="empty">${revoked ? 'No active computers.' : 'No computers yet.'}</div>`}
     ${agents ? `<h3 class="settings-agents-title">External agents${betaPill('external_agents')}</h3><div class="scroll"><table class="settings-table"><thead><tr><th>Agent</th><th>Owner</th><th>Model</th><th>Status</th></tr></thead><tbody>${agents}</tbody></table></div>` : ''}`;
   // Only the list is redrawn; the Add computer form (and the code it shows) keeps what was typed.
   if (!el.querySelector('.machine-enroll')) el.innerHTML = `<div data-machines-list></div>
@@ -586,8 +506,9 @@ function renderSettingsMachines() {
       <input id="machine-label" type="text" autocomplete="off" aria-label="Computer name" placeholder="Computer name" value="${esc(settingsPersonName(people.find(person => person.id === S.me?.id)?.id || people[0]?.id) + "'s Mac")}">
       <button class="primary" type="button" id="register-machine">Add computer</button>
       <div class="machine-enroll-status" id="machine-enroll-status"></div></div>`;
-  el.querySelector('[data-machines-list]').innerHTML = `<p class="settings-cell-note">Computers run your bots. The operator manages the computer; each bot can use its own named subscription.</p>${window.runnerOutdatedBanner?.(machines, S.me?.id, settingsPersonName) || ''}${list}`;
-  el.querySelectorAll('details[data-machine-details]').forEach(node => { node.open = expanded.has(node.dataset.machineDetails); });
+  el.querySelector('[data-machines-list]').innerHTML = `${window.runnerOutdatedBanner?.(machines, S.me?.id, settingsPersonName) || ''}${list}`;
+  computerDetailPaint();
+  subsScheduleRefresh();
   const machineDefaultLabel = () => $('#machine-kind').value === 'linux' && S.config?.local ? 'This computer'
     : `${settingsPersonName($('#machine-operator').value)}'s ${({linux: 'server', windows: 'PC'})[$('#machine-kind').value] || 'Mac'}`;
   $('#machine-operator').onchange = () => { $('#machine-label').value = machineDefaultLabel(); };

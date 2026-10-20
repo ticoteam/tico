@@ -400,7 +400,7 @@ async function orgGroupDelete(id) {
   if (!orgCanGroups() || !group || ORG_DELETING.has(id)) return;
   const parent = (S.orgGroups || []).find(g => g.id === group.parent);
   const destination = parent ? parent.name : 'No group';
-  if (!confirm(`Delete ${group.name}? Its teammates and groups move to ${destination}; its subscriptions are unassigned.`)) return;
+  if (!confirm(`Delete ${group.name}? Its teammates and groups move to ${destination}.`)) return;
   ORG_DELETING.add(id);
   renderTree();
   try {
@@ -738,7 +738,6 @@ function renderTree() {
       (a.dataset.nav === 'market' && (S.route === '#/market' || S.route.startsWith('#/market?') || S.route.startsWith('#/market/'))) ||
       (a.dataset.nav === 'integrations' && (S.route === INTEGRATIONS || S.route.startsWith(INTEGRATIONS + '/'))) ||
       (a.dataset.nav === 'changelog' && S.route === '#/changelog') ||
-      (a.dataset.nav === 'runs' && S.route === '#/runs') ||
       (a.dataset.nav === 'learnings' && (S.route === LEARNINGS || S.route.startsWith(LEARNINGS + '?'))) ||
       (a.dataset.nav === 'usage' && S.route === '#/usage') ||
       (a.dataset.nav === 'replay' && S.route.startsWith('#/replay')) ||

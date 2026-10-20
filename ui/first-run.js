@@ -104,7 +104,7 @@ function frNextStepHTML(state) {
   const line = waiting === 'computer' ? 'Waiting for a computer. Your bots start once one is online.'
     : `${onbMachineStatus(state.record)}${waiting === 'provider' ? '. Waiting for an AI provider.' : ''}`;
   const button = waiting === 'computer' ? '<button class="primary" type="button" data-onb-go="devices">Add a computer</button>'
-    : waiting === 'provider' ? '<button class="primary" type="button" data-onb-go="providers">Add an AI provider</button>' : '';
+    : waiting === 'provider' ? '<button class="primary" type="button" data-onb-go="models">Add an AI provider</button>' : '';
   return `<p class="onb-machine" id="onb-next-status" role="status">${esc(line)}</p>${button}
     <button class="ghost" type="button" id="onb-tour" data-gs-tour>Show me around</button>`;
 }
@@ -160,8 +160,8 @@ function frNextHTML(state) {
         `<option value="${esc(person.id)}">${esc(person.name || person.id)}${('human:' + person.id) === frOwner() ? ' (you)' : ''}</option>`).join('')}</select>
       <span class="muted" data-fr-owned="${esc(bot.slug)}">${esc(frPersonName(S.me?.id))} owns it</span></div>`).join('');
   return `<section class="card fr-card" id="fr-providers"><header><h2>AI providers</h2></header>
-      ${S.config?.providers_configured === false ? '<a href="#/settings" data-gs-tab="providers">Add an AI provider</a>'
-        : '<p>Chosen. <a href="#/settings" data-gs-tab="providers">Change them</a></p>'}</section>
+      ${S.config?.providers_configured === false ? '<a href="#/settings" data-gs-tab="models">Add an AI provider</a>'
+        : '<p>Chosen. <a href="#/settings" data-gs-tab="models">Change them</a></p>'}</section>
     <section class="card fr-card" id="fr-admin"><header><h2>Add an admin</h2></header>
       <form id="fr-admin-form" class="fr-form"><label class="onb-field"><span class="k">Name</span><input name="name" autocomplete="off" placeholder="Sam"></label>
         <label class="onb-field"><span class="k">Email</span><input name="email" type="email" autocomplete="off" required placeholder="sam@example.com"></label>

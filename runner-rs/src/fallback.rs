@@ -179,6 +179,16 @@ pub fn diagnostic(primary: &str, hop: &Hop, hit_limit: bool) -> String {
     format!("{primary} {why}; running this turn on {}{auto}", hop.harness)
 }
 
+/// The turn's note when the server held the bot's own login after a usage limit (backend/login_holds.py) until
+/// `until`: where the turn runs instead, or, with no `hop`, why it did not start.
+pub fn held_note(primary: &str, until: &str, hop: Option<&Hop>) -> String {
+    let at = until.get(11..16).map_or_else(String::new, |hm| format!(" until {hm} UTC"));
+    match hop {
+        Some(hop) => format!("{primary} login held (usage limit){at}; running this turn on {}", hop.harness),
+        None => format!("{primary} login held (usage limit){at}, and no fallback is ready on this computer"),
+    }
+}
+
 /// The turn's note when its ChatGPT login was busy with another turn (crate::login_turns) and its own fallback took
 /// it: `why` is the login's line ("ChatGPT login busy with builder").
 pub fn busy_diagnostic(why: &str, hop: &Hop) -> String {
@@ -255,13 +265,36 @@ pub fn replay(attempt: &Value, tokens: usize) -> String {
 }
 
 /// The company's fallback models from the last GET /api/v2/config, and when they were read. Empty from an older
-/// server or when the owner turned automatic fallback off (Settings > AI providers).
+/// server or when the owner turned automatic fallback off (Settings > Computers).
 static CHOICES: Mutex<Option<(Instant, Vec<Value>)>> = Mutex::new(None);
+
+/// Whether the server keeps login holds (its config carries `login_holds`), and so knows a profile's `shared_login`.
+static SERVER_HOLDS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn server_keeps_holds() -> bool {
+    SERVER_HOLDS.load(std::sync::atomic::Ordering::Relaxed)
+}
 
 /// Keep `fallback_models` from a GET /api/v2/config answer (the harness relay reads it once a minute).
 pub fn remember(config: &Value) {
+    if config["login_holds"].is_array() {
+        SERVER_HOLDS.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
     let rows = config["fallback_models"].as_array().map(|r| r.iter().filter(|v| v.is_object()).cloned().collect()).unwrap_or_default();
     *CHOICES.lock().unwrap() = Some((Instant::now(), rows));
+    // The server's saved holds on this computer's logins (backend/login_holds.py): after a restart this runner has
+    // forgotten the limits it met, and still skips a held login in the fallback choice until the hold ends.
+    if let Some(holds) = config["login_holds"].as_array() {
+        let now = crate::util::epoch_s();
+        let mut limits = limits().lock().unwrap();
+        for hold in holds {
+            let (Some(runtime), Some(until)) = (hold["runtime"].as_str(), hold["until"].as_str()) else { continue };
+            let profile = hold["profile"].as_str().unwrap_or_default();
+            if !limits.out_of_quota(profile, runtime, now) {
+                limits.remember(profile, runtime, now, Some(crate::util::parse_iso(until)));
+            }
+        }
+    }
 }
 
 impl Runner {
@@ -347,6 +380,13 @@ mod tests {
         assert!(note.starts_with("This turn runs on the fallback codex with model gpt-test because claude hit its usage limit"));
         assert!(note.contains("name gpt-test, not claude"));
         assert_eq!(busy_diagnostic("ChatGPT login busy with builder", &codex), "ChatGPT login busy with builder; running this turn on codex");
+        // A login the server holds is never tried; the note is not a limit met on this turn (backend/login_holds.py
+        // reads "usage limit; running this turn on" as one, and would hold the login longer).
+        let held = held_note("claude", "2026-10-19T02:40:00.000000Z", Some(&codex));
+        assert_eq!(held, "claude login held (usage limit) until 02:40 UTC; running this turn on codex");
+        assert!(!held.contains("usage limit; running this turn on"));
+        assert_eq!(held_note("claude", "2026-10-19T02:40:00.000000Z", None),
+                   "claude login held (usage limit) until 02:40 UTC, and no fallback is ready on this computer");
     }
 
     #[test]
@@ -490,6 +530,24 @@ mod tests {
         assert!(out_of_quota("limit-test-key", "codex", now + 1.0));
         settle_limit("codex", "codex", Some(&profile), false, true);
         assert!(!out_of_quota("limit-test-key", "codex", now + 1.0));
+    }
+
+    #[test]
+    fn a_restarted_runner_skips_the_logins_the_server_still_holds() {
+        let until = |s: f64| crate::util::iso(&json!(crate::util::epoch_s() + s));
+        remember(&json!({"fallback_models": [], "login_holds": [
+            {"profile": "", "runtime": "restart-test", "until": until(600.0)},
+            {"profile": "", "runtime": "restart-test-over", "until": until(-60.0)}]}));
+        let now = crate::util::epoch_s();
+        assert!(out_of_quota("", "restart-test", now) && !out_of_quota("", "restart-test", now + 601.0));
+        assert!(!out_of_quota("", "restart-test-over", now));
+        forget_limit("", "restart-test");
+        // Such a server knows a profile's `shared_login` (readiness.rs), so the runner reports it from now on.
+        assert!(server_keeps_holds());
+        let shared = crate::profiles::Profile::new("team-a", "/tmp/acme-team-a", true);
+        let own = crate::profiles::Profile::new("solo", "/tmp/acme-solo", false);
+        assert_eq!(login("claude", "", Some(&shared)).as_deref(), Some(""));
+        assert_eq!(login("claude", "", Some(&own)).as_deref(), Some("solo"));
     }
 
     #[test]

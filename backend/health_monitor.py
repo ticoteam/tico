@@ -6,10 +6,13 @@ hour. The scan is plain code over what the server already knows (computers' vers
 report, turns stopped by a usage limit, bots held in setup, queued work that does not start,
 task worktrees that failed, the server's own CPU): it costs no model. Each finding has a key (what and where, on this
 install) and a signature (what, without where, the same on every install). A finding the last scan did not have opens
-one task for the Health Monitor, or wakes it on the task it already has, through the same path as a watcher's events
-(backend/watchers.py); a finding still there an hour later says nothing, and one that goes away and comes back
-within a day of its last wake counts but wakes nothing. The bot's own watcher, `software/health-scan`,
-looks at the computer it runs on (processes using CPU or memory while idle) the same way.
+one task for the Health Monitor through the same path as a watcher's events (backend/watchers.py). Seeing it again
+counts: its count and last-seen time move on the finding, and nothing runs, whether it was still there an hour later
+or went away and came back while the Health Monitor's task for it is still open (that task gets a quiet note it reads
+on its next turn). Only a finding the bot has not been told of wakes it: a new one, one whose severity rises (it is
+woken on its open task), or one back after its task was finished (done, closed or declined), which counts as new: it
+is woken on that task while it is only done, or gets a new one. The bot's own watcher, `software/health-scan`, looks at the computer it runs on (processes using
+CPU or memory while idle) the same way.
 
 A Tico bug goes to HQ as a support ticket with `report`: one ticket per signature, a message written here from the
 finding (never task or message text) and the redacted diagnostics bundle (backend/diagnostics.py). The team rule
@@ -42,16 +45,19 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS health_findings(
  key TEXT PRIMARY KEY, signature TEXT NOT NULL, check_id TEXT NOT NULL, kind TEXT NOT NULL, title TEXT NOT NULL,
  detail TEXT NOT NULL DEFAULT '', fix TEXT NOT NULL DEFAULT '', first_seen TEXT NOT NULL, last_seen TEXT NOT NULL,
- present INTEGER NOT NULL DEFAULT 1, occurrences INTEGER NOT NULL DEFAULT 1, last_woke TEXT NOT NULL DEFAULT '');
+ present INTEGER NOT NULL DEFAULT 1, occurrences INTEGER NOT NULL DEFAULT 1, last_woke TEXT NOT NULL DEFAULT '',
+ severity TEXT NOT NULL DEFAULT 'warn');
 CREATE TABLE IF NOT EXISTS health_reports(
  signature TEXT PRIMARY KEY, ticket_id TEXT, approval_id TEXT, created TEXT NOT NULL, reported_occurrences INTEGER NOT NULL DEFAULT 1);
 """
 SETUP, BUG = "setup", "tico-bug"
+# A finding's severity, lowest first. `bad` where the Health page says bad for the same thing; a rise wakes the bot.
+WARN, BAD = "warn", "bad"
+SEVERITY = (WARN, BAD)
 REPORTS_PER_DAY = 5          # new tickets the monitor files in a day; a repeat on a filed ticket is not counted
 SERVER_CPU = 40.0            # the server's average CPU over an hour, in percent, while hardly anyone used it
 QUIET_REQUESTS = 600         # requests in that hour below which the server counts as idle
 REPEATED = 3                 # a runner error line seen this often in its last 50 is a pattern, not a blip
-REWAKE_HOURS = 24            # a finding back within this long of its last wake counts but wakes nothing
 CHECK_HELD_HOURS = 12        # a check subtask whose every turn this long stopped on its model's usage limit
 LOGIN_LIMITS = 2             # turns in a row on a computer's default login that stopped on a usage limit: out of quota
 # A server start (a deploy, an update, a restart) ends every runner's event stream: a drop from this long before a start
@@ -148,9 +154,13 @@ def signature(check_id, subject=""):
     return "hm-" + hashlib.sha256((check_id + "\n" + subject).encode()).hexdigest()[:12]
 
 
-def _finding(key, check_id, kind, title, detail, fix, subject=""):
+def _finding(key, check_id, kind, title, detail, fix, subject="", severity=WARN):
     return {"key": key, "signature": signature(check_id, subject), "check_id": check_id, "kind": kind,
-            "title": title[:200], "detail": detail[:1500], "fix": fix[:600]}
+            "title": title[:200], "detail": detail[:1500], "fix": fix[:600], "severity": severity}
+
+
+def _rank(severity):
+    return SEVERITY.index(severity) if severity in SEVERITY else 0
 
 
 def active(c):
@@ -196,7 +206,9 @@ def _runner_checks(c, settings):
                                 and update["state"] != "incompatible"
                                 and not update["error"] else
                                 f"BotOps: update the runner on {machine['label']} (Settings > Computers, or "
-                                "`scripts/tico install` once on that computer so it updates itself)."))
+                                "`scripts/tico install` once on that computer so it updates itself).",
+                                # Its bots are paused until it updates: bad, as Health says (runner_versions.health_check).
+                                severity=BAD if update["state"] == "incompatible" else WARN))
     cutoff = H.shift(H.now(), minutes=-health.RESTART_STUCK_MINUTES)
     for r in c.execute("SELECT id,label,restart_since FROM runners WHERE revoked_at IS NULL AND restart_since<? "
                        "ORDER BY label", (cutoff,)).fetchall():
@@ -375,6 +387,34 @@ def _check_hold_checks(c):
     return out
 
 
+def _release_approval_checks(c, settings):
+    """A release's publish approval ready longer than the setting (release_approval_wait_minutes) with nobody's decision:
+    one finding per approval, so the same wait seen again only counts (scan) and a re-cut release's new ask is its own.
+    The person decides it in Needs you; nothing here approves or changes who may."""
+    minutes = getattr(settings, "release_approval_wait_minutes", 60)
+    if not minutes:
+        return []
+    at = H.now()
+    out = []
+    for row in H._rows(c.execute("SELECT * FROM approvals WHERE decision IS NULL AND kind='publish' "
+                                 "AND coalesce(ready_since,created)<? ORDER BY created",
+                                 (H.shift(at, minutes=-minutes),))):
+        row["payload"] = H._json(row.get("payload_json"), {}) or {}
+        if not H.is_release_approval(row["kind"], row["payload"]):
+            continue
+        H.approval_wait(c, row, at)
+        who = row["decision_owner_name"] or "a person"
+        version, commit = str(row["payload"]["version"])[:40], str(row["payload"]["commit"])[:12]
+        out.append(_finding("release_approval_wait:" + row["id"], "release_approval_wait", SETUP,
+                            f"The release {version} approval has waited {H.wait_words(row['age_s'])} on {who}",
+                            f"The publish approval for {version} (commit {commit}) has been ready since "
+                            f"{row['ready_since'][:16].replace('T', ' ')} UTC, {H.wait_words(row['age_s'])}, with no "
+                            f"decision. It is {who}'s to decide; the release waits until then.",
+                            f"{who}: approve or decline it in Needs you (or `hub approval show {row['id']}`). Tico does "
+                            "not decide it for anyone."))
+    return out
+
+
 def _brief_drops(lines):
     """Where the "lost" lines are whose next word on the stream, before another drop, is that it was back within
     BRIEF_DROP_S."""
@@ -409,7 +449,7 @@ def _near_start(line, starts):
 
 
 def _company_fallback(c, settings, declared, company):
-    """Whether a bot that names no fallback of its own still has the company's (Settings > AI providers, *Fall back
+    """Whether a bot that names no fallback of its own still has the company's (Settings > Computers, *Fall back
     when a plan runs out*): automatic fallback is on and lists a model on another runtime than the bot's. The runner
     picks from the same rows (runner-rs/src/fallback.rs default_choice); a bot that turned fallback off, or names a
     harness without a model, gets none."""
@@ -484,6 +524,26 @@ def _bot_checks(c, settings=None):
                                     f"{bot}: {error[:400]}",
                                     "BotOps: save any unique work in that worktree on a branch, then remove its link so "
                                     "the computer can make it again (docs/worktrees.md)."))
+    out.extend(_quiet_work_checks(c))
+    return out
+
+
+def _quiet_work_checks(c):
+    """A quiet task handed to a bot's run over two hours ago and not worked since, with no time set to pick it up
+    (backend/quiet_work.py stale): one finding per bot and task. It names them; it asks no person anything."""
+    from . import quiet_work
+    out = []
+    for item in quiet_work.stale(c):
+        task, bot = item["task"], item["bot"]
+        # A private task's title stays out of a finding other people read; its number or short id names it.
+        name = quiet_work._task_name(task) if H.task_private(c, task) else f"{quiet_work._task_name(task)} {task['title']}"
+        out.append(_finding(f"quiet_unworked:{bot}:{task['id']}", "quiet_unworked", SETUP,
+                            f"{bot} was handed a quiet task and has not worked it",
+                            f"{bot} was handed the next-run task {name} at {item['since'][:16]} UTC (run "
+                            f"{str(item['run'] or '')[:8]}) and has not worked it since, with no time set to pick it "
+                            "up again.",
+                            f"{bot}: work it, or say when to pick it up (hub task defer {task['id']} --after <task> | "
+                            "--at <time>). Anyone may press Run now on it to give it a run of its own."))
     return out
 
 
@@ -507,26 +567,40 @@ def findings(c, settings):
     """Everything wrong right now, each once by key."""
     out = {}
     for part in (_runner_checks(c, settings), _login_checks(c, settings), _check_hold_checks(c),
-                 _bot_checks(c, settings), _server_checks(c)):
+                 _bot_checks(c, settings), _release_approval_checks(c, settings), _server_checks(c)):
         for item in part:
             out.setdefault(item["key"], item)
     return list(out.values())
 
 
 # ---------------------------------------------------------------------------------------------------- the scan
-def _event(item, occurrences):
+def _event(item, occurrences, was=None):
+    """What the bot is told: a task for a new finding (a comment on its finished task, while that can still be woken), or
+    `was` (the severity it had) when it got worse."""
     from .watchers import WatcherEvent
     body = (f"{item['title']}\n\nKind: {item['kind']}\nCheck: {item['check_id']}\nSignature: {item['signature']}\n"
-            f"Seen: {occurrences} time(s)\n\nWhat was seen:\n{item['detail']}\n\nFix:\n{item['fix']}\n\n"
-            "Follow playbooks/finding.md.")
-    text = (f"Seen again ({occurrences} times): {item['title']}. Signature {item['signature']}. "
-            f"{item['detail']}")
+            f"Severity: {item['severity']}\nSeen: {occurrences} time(s)\n\nWhat was seen:\n{item['detail']}\n\n"
+            f"Fix:\n{item['fix']}\n\nFollow playbooks/finding.md.")
+    text = (f"Worse now ({item['severity']}, was {was}; seen {occurrences} times): {item['title']}. "
+            f"Signature {item['signature']}. {item['detail']}\n\nFix:\n{item['fix']}") if was else (
+           f"Back after its task was finished (seen {occurrences} times): {item['title']}. Signature {item['signature']}. "
+           f"{item['detail']}\n\nFix:\n{item['fix']}")
     return WatcherEvent(op="comment", key="hm:" + item["key"], ref=f"{item['key']}#{occurrences}",
                         title=("Health: " + item["title"])[:300], body=body, text=text[:8000])
 
 
+def _open_task(c, key):
+    """The Health Monitor's task for a finding while it still works it (not done, closed or declined), else None."""
+    item = c.execute("SELECT task_id FROM watcher_items WHERE bot=? AND key=?", (SLUG, "hm:" + key)).fetchone()
+    task = H.task(c, item["task_id"]) if item else None
+    return task if task and task["status"] not in ("done", "closed", "declined") else None
+
+
 def scan(c, auth, settings):
-    """One pass. Returns the keys that opened or woke a task; nothing when the Health Monitor is off."""
+    """One pass. Returns the keys that opened or woke a task; nothing when the Health Monitor is off.
+
+    Every finding seen counts once a scan. Only a new finding, one whose severity rose, or one back after its task was
+    finished wakes the bot; seeing it again otherwise moves its count and last-seen time and starts no run."""
     if not active(c):
         return []
     from .watchers import deliver
@@ -535,19 +609,25 @@ def scan(c, auth, settings):
     keys = {item["key"] for item in found}
     for item in found:
         row = c.execute("SELECT * FROM health_findings WHERE key=?", (item["key"],)).fetchone()
-        if row and row["present"]:
-            c.execute("UPDATE health_findings SET last_seen=?,detail=? WHERE key=?", (now, item["detail"], item["key"]))
-            continue                                         # still there: already said
         occurrences = row["occurrences"] + 1 if row else 1
         c.execute("INSERT INTO health_findings(key,signature,check_id,kind,title,detail,fix,first_seen,last_seen,present,"
-                  "occurrences) VALUES(?,?,?,?,?,?,?,?,?,1,?) ON CONFLICT(key) DO UPDATE SET signature=excluded.signature,"
-                  "kind=excluded.kind,title=excluded.title,detail=excluded.detail,fix=excluded.fix,last_seen=excluded.last_seen,"
-                  "present=1,occurrences=excluded.occurrences",
+                  "occurrences,severity) VALUES(?,?,?,?,?,?,?,?,?,1,?,?) ON CONFLICT(key) DO UPDATE SET "
+                  "signature=excluded.signature,kind=excluded.kind,title=excluded.title,detail=excluded.detail,"
+                  "fix=excluded.fix,last_seen=excluded.last_seen,present=1,occurrences=excluded.occurrences,"
+                  "severity=excluded.severity",
                   (item["key"], item["signature"], item["check_id"], item["kind"], item["title"], item["detail"],
-                   item["fix"], now, now, occurrences))
-        if row and row["last_woke"] and row["last_woke"] > H.shift(now, hours=-REWAKE_HOURS):
-            continue                             # back within a day of its last wake: counted above, wakes nothing
-        if deliver(c, auth, SLUG, _event(item, occurrences)):
+                   item["fix"], now, now, occurrences, item["severity"]))
+        was = row["severity"] if row and _rank(item["severity"]) > _rank(row["severity"]) else None
+        if row and not was:
+            if row["present"]:
+                continue                                     # still there: counted, already said
+            task = _open_task(c, item["key"])
+            if task:                             # back while its task is open: counted, read on the bot's next turn
+                H.task_comment(c, H.KEEPER, task["id"], f"Seen again ({occurrences} times, last {now[:16]} UTC): "
+                               f"{item['title']}. It wakes nothing while this task is open.", wake=False)
+                continue
+            # back after its task was finished: new again
+        if deliver(c, auth, SLUG, _event(item, occurrences, was)):
             c.execute("UPDATE health_findings SET last_woke=? WHERE key=?", (now, item["key"]))
             woke.append(item["key"])
     gone = [r["key"] for r in c.execute("SELECT key FROM health_findings WHERE present=1") if r["key"] not in keys]
@@ -670,7 +750,8 @@ def report(c_factory, support, auth, settings, who, key):
 def view(c):
     row = H.bot(c, SLUG)
     rows = [dict(r) for r in c.execute(
-        "SELECT f.key,f.signature,f.check_id,f.kind,f.title,f.first_seen,f.last_seen,f.occurrences,r.ticket_id,r.approval_id "
+        "SELECT f.key,f.signature,f.check_id,f.kind,f.title,f.severity,f.first_seen,f.last_seen,f.occurrences,"
+        "r.ticket_id,r.approval_id "
         "FROM health_findings f LEFT JOIN health_reports r ON r.signature=f.signature WHERE f.present=1 "
         "ORDER BY f.last_seen DESC LIMIT 50")]
     return {"state": row["state"] if row else "absent", "on": bool(row) and row["state"] == "active",

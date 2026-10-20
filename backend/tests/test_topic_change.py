@@ -13,6 +13,7 @@ import pytest
 
 from backend import team_rules, views
 from backend import topic_change as T
+from backend.harnesses import HARNESS_CATALOG
 from backend.store import H
 from backend.tests.test_api import api, assign, claim, headers, post, ready, runner  # noqa: F401  (api is a fixture)
 from backend.tests.test_session_clear import clear, finish
@@ -94,20 +95,68 @@ def session_state(api, conversation):
 
 def test_warm_needs_a_turn_under_five_minutes_old_that_read_the_cache():
     now = H.now()
-    recent = {"finished": H.shift(now, seconds=-60), "cached_tokens": 12_000, "prompt_tokens": 17_000}
+    recent = {"finished": H.shift(now, seconds=-60), "input_tokens": 5_000, "cached_tokens": 12_000,
+              "prompt_tokens": 17_000}
     assert T.warmth(recent, now) == (True, 17_000), "a recent turn with cached tokens: warm; context is its last prompt"
     stale = {**recent, "finished": H.shift(now, seconds=-301)}
     assert T.warmth(stale, now) == (False, 17_000), "older than the 5-minute cache lifetime: cold"
     no_usage = {"finished": H.shift(now, seconds=-10), "cached_tokens": None, "prompt_tokens": 5_000}
     assert T.warmth(no_usage, now) == (False, 5_000), "a harness that reports no cache use (Grok) is always cold"
     assert T.warmth({**no_usage, "cached_tokens": 0}, now)[0] is False
+    assert T.warmth({**recent, "input_tokens": None}, now)[0] is False, "cached but no fresh count: unknown share, cold"
     assert T.warmth({**recent, "prompt_tokens": None}, now) == (True, None), "no request counts: size unknown"
     assert T.warmth(None, now) == (False, None), "no turn on the session yet: cold"
 
 
+@pytest.mark.parametrize("cached,fresh,warm", [
+    (50_000, 50_000, True),            # exactly half the input from the cache: warm
+    (49_000, 51_000, False),           # 49%: cold
+    (1_000, 59_000, False),            # a tiny cache hit on a 60k turn: cold, so it gets checked
+    (12_000, 0, True),                 # everything cached
+])
+def test_warm_needs_at_least_half_the_input_read_from_the_cache(cached, fresh, warm):
+    now = H.now()
+    turn = {"finished": H.shift(now, seconds=-60), "input_tokens": fresh, "cached_tokens": cached,
+            "prompt_tokens": cached + fresh, "runtime": "claude"}
+    assert T.warmth(turn, now)[0] is warm
+
+
+def test_every_harness_has_a_cache_lifetime_and_reads_warm_inside_it_and_cold_after():
+    assert set(T.CACHE_LIFETIME) == {row["runtime"] for row in HARNESS_CATALOG if not row.get("external")}
+    now = H.now()
+    for runtime, lifetime in T.CACHE_LIFETIME.items():
+        turn = {"input_tokens": 2_000, "cached_tokens": 18_000, "prompt_tokens": 20_000, "runtime": runtime}
+        inside = {**turn, "finished": H.shift(now, seconds=-(lifetime - 5))}
+        after = {**turn, "finished": H.shift(now, seconds=-(lifetime + 1))}
+        assert T.warmth(inside, now)[0] is True, runtime
+        assert T.warmth(after, now)[0] is False, runtime
+        if runtime == "grok":
+            reported_none = {**inside, "cached_tokens": None, "input_tokens": 20_000}
+            assert T.warmth(reported_none, now)[0] is False, "Grok reports no cached tokens: always cold"
+    unknown = {"finished": H.shift(now, seconds=-(T.WARM_SECONDS + 1)), "input_tokens": 0, "cached_tokens": 9_000,
+               "runtime": "something-new"}
+    assert T.warmth(unknown, now)[0] is False and T.warmth({**unknown, "finished": H.shift(now, seconds=-60)}, now)[0], \
+        "a harness not in the table takes the 5-minute default"
+
+
+def test_the_lifetimes_are_the_documented_ones_and_are_read_per_harness(chat, monkeypatch):
+    # Pinned to the provider docs cited in CACHE_LIFETIME: change one only with its doc.
+    assert T.CACHE_LIFETIME == {"claude": 300, "codex": 300, "gemini": 300, "grok": 300, "pi": 300, "cursor": 300,
+                                "musecode": 300}
+    api, _, _, _, usage = chat
+    usage(15_000, 12_000, 600)
+    with api.app.state.store.read() as c:
+        turn = T.last_turn(c, api.app.state.store.settings, "ops")
+    assert turn["runtime"] == "fake", "the test runner's harness, read from the bot's session"
+    assert T.warmth(turn)[0] is False, "10 minutes old: cold under the 5-minute default"
+    monkeypatch.setitem(T.CACHE_LIFETIME, turn["runtime"], 900)
+    assert T.warmth(turn)[0] is True, "the bot's own harness lifetime decides, not the default"
+
+
 @pytest.mark.parametrize("context,cached,age,checked", [
     (15_000, 8_000, 30, False),        # under 20k, warm: no check (acceptance 2)
-    (60_000, 20_000, 30, False),       # 20k to 100k, warm: no check (the lead's reading)
+    (60_000, 45_000, 30, False),       # 20k to 100k, warm (75% cached): no check (the lead's reading)
+    (60_000, 20_000, 30, True),        # 20k to 100k with a small cache hit (33%): cold, so checked (Dev 190)
     (100_000, 40_000, 30, True),       # 100k or more: checked, warm or not
     (15_000, 8_000, 600, True),        # cold (stale turn): checked at any size
     (15_000, 0, 30, True),             # cold (no cache use reported): checked
@@ -131,7 +180,7 @@ def test_the_size_bands_and_warmth_decide_whether_decide_is_asked(chat, context,
 def test_the_size_is_the_newest_prompt_never_the_turns_summed_usage(chat, context, age, checked):
     api, _, _, model, usage = chat
     model.choice = "same_topic"
-    usage(context, 15_000, age, summed=6 * 18_000)
+    usage(context, 90_000, age, summed=6 * 18_000)
     post(api, "chat/ops", {"text": "Next one"})
     assert bool(model.calls) is checked and len(checks(api)) == int(checked)
     if checked:
@@ -511,6 +560,52 @@ def test_never_checked_in_a_task_chat(chat):
     post(api, f"tasks/{task['id']}/chat", {"text": UNRELATED})
     post(api, "chat/ops", {"text": UNRELATED, "refs": {"task": task["id"]}})
     assert model.calls == [] and checks(api) == []
+
+
+def test_never_checked_with_files_uploaded_alongside(chat):
+    """The multipart route (files uploaded with the message): no check, the session kept."""
+    api, machine, conversation, model, usage = chat
+    before = session_state(api, conversation)
+    r = api.post("/api/v2/uploads/chat/ops", data={"text": UNRELATED},
+                 files={"files": ("note.txt", b"Agenda for the offsite", "text/plain")}, headers=headers())
+    assert r.status_code == 200, r.text
+    assert model.calls == [] and checks(api) == [] and session_state(api, conversation) == before
+    assert not r.json()["message"]["refs"].get("topic_changed")
+    finish(api, machine, claim(api, machine))
+    usage()
+    post(api, "chat/ops", {"text": UNRELATED})
+    assert len(model.calls) == 1, "the same chat, without files, is checked"
+
+
+def test_never_checked_with_files_attached_on_the_json_route(chat):
+    """A file already in the chat, attached by reference on the JSON route (`attachments`): no check, the session
+    kept, as for files uploaded alongside. QA on the v0.3.64 candidate saw one Decide call and a clear here."""
+    api, machine, conversation, model, usage = chat
+    r = api.post("/api/v2/uploads/chat/ops", data={"text": "Here is the note"},
+                 files={"files": ("note.txt", b"Agenda for the offsite", "text/plain")}, headers=headers())
+    fid = r.json()["message"]["refs"]["attachments"][0]["file_id"]
+    finish(api, machine, claim(api, machine))
+    usage()
+    before = session_state(api, conversation)
+    message = post(api, "chat/ops", {"text": UNRELATED, "attachments": [f"{fid}@1"]})
+    assert [a["file_id"] for a in message["refs"]["attachments"]] == [fid], "the file still goes with the message"
+    assert model.calls == [] and checks(api) == [] and session_state(api, conversation) == before
+    assert not message["refs"].get("topic_changed")
+    finish(api, machine, claim(api, machine))
+    usage()
+    post(api, "chat/ops", {"text": UNRELATED})
+    assert len(model.calls) == 1, "the same chat, without files, is checked"
+
+
+def test_a_send_with_files_is_never_considered_whatever_the_route():
+    """The one rule both routes answer to: referenced files, uploaded files, a command or a task chat's message."""
+    from backend import models as M
+    plain = M.ChatCreate(text="Hello")
+    assert T.considered(plain, uploads=())
+    assert not T.considered(plain, uploads=[{"name": "note.txt"}])
+    assert not T.considered(M.ChatCreate(text="Hello", attachments=["f1@1"]), uploads=())
+    assert not T.considered(M.ChatCreate(text="/clear", command=True), uploads=())
+    assert not T.considered(M.ChatCreate(text="Hello", refs={"task": "t1"}), uploads=())
 
 
 def test_a_retried_send_does_not_check_again(chat):

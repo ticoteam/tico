@@ -132,8 +132,10 @@ def test_a_subordinates_ordinary_edits_do_not_wake_its_manager(api, name):
         H.task_update(c, "bot:ops", task["id"], note="Half way")
         assert c.execute("SELECT count(*) FROM jobs WHERE bot='coo'").fetchone()[0] == before
         H.task_update(c, "bot:ops", task["id"], status="done", note="Drafted")
-    [done] = [j for j in jobs(api, "coo") if j["body"].startswith("Finished")]
-    assert done["held"] == 1 and done["wake_class"] == "completion"     # news it was not waiting on
+        [done] = c.execute("SELECT j.held,m.refs_json FROM jobs j JOIN messages m ON m.id=j.message_id "
+                           "WHERE j.bot='coo' AND json_extract(m.refs_json,'$.subtask')=?", (task["id"],))
+        assert done["held"] == 0                       # a delegated result continues the parent's work immediately
+        assert json.loads(done["refs_json"])["task"] == parent["id"]
 
 
 def test_token_saver_gives_three_notices_in_its_window_one_wake(api):

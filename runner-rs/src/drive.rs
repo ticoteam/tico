@@ -219,7 +219,8 @@ impl Runner {
                         first_output = true;
                         mark("first_output", aid);
                     }
-                    self.state.append(aid, if kind == "turn_failed" { "error" } else { &kind }, &clean)?;
+                    let (id, saved, row) = (aid.to_string(), if kind == "turn_failed" { "error".to_string() } else { kind.clone() }, clean.clone());
+                    self.state.off(move |s| s.append(&id, &saved, &row)).await?;
                     d.wake.notify_one();
                     if kind == "message" && (truthy(event.get("final")) || reply.is_empty()) {
                         reply = text_of(&clean["text"]);

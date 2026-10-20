@@ -16,7 +16,16 @@ const entryRoute = () => {
   const tab = (params.get('tab') || '').trim();
   return `#/bot/${encodeURIComponent(bot)}${tab ? '/' + encodeURIComponent(tab) : ''}`;
 };
+// `&message=<id>` (and, for a bot, `&conversation=<id>`: the chat room it is in) with either of them (the "N visuals - view in Tico" line in Slack, backend/visuals.py elsewhere)
+// also brings that message into view once the task or chat has loaded (ui/app/task-modal.js, ui/app/chat-outline.js).
+const entryJump = () => {
+  const params = new URLSearchParams(location.search);
+  const id = (params.get('message') || '').trim(), task = (params.get('task') || '').trim(), bot = (params.get('bot') || '').trim();
+  const conversation = (params.get('conversation') || '').trim();
+  return !id ? null : task ? {task, id} : bot ? {slug: bot, id, conversation} : null;
+};
 let BOOT_DEFAULT_ROUTE = false;
+const ENTRY_JUMP = entryJump();
 const ENTRY_ROUTE = entryRoute();
 if (ENTRY_ROUTE) history.replaceState(null, '', location.pathname + ENTRY_ROUTE);
 else if (!location.hash || location.hash === '#/') { BOOT_DEFAULT_ROUTE = true; history.replaceState(null, '', UPDATES); }   // Updates is home
@@ -24,7 +33,7 @@ else if (!location.hash || location.hash === '#/') { BOOT_DEFAULT_ROUTE = true; 
 // so a second environment shows its own application, team and assistant names. The defaults keep
 // an older server working, and strings built before /api/me answers read the names lazily.
 const CONFIG_DEFAULTS = {environment_id: '', company_name: '', app_name: 'Tico', assistant_name: 'Assistant',
-                         assistant_bot: 'coo', public_url: '', runner_url: location.origin,
+                         assistant_bot: 'coo', public_url: '', runner_url: location.origin, visual_origin: '',
                          github_owner: '', local: false, release: '', onboarding_needed: false, version: '', update: null, s3_view_urls: {}};
 const S = { emps: [], people: [], orgGroups: [], status: null, statusPending: true, issues: [], me: null, route: location.hash || UPDATES,
             config: {...CONFIG_DEFAULTS},
@@ -50,6 +59,69 @@ const brandLogo = () => appName() === CONFIG_DEFAULTS.app_name
   : `<span class="brand-name">${esc(appName())}</span>`;
 const publicUrl = () => S.config.public_url || location.origin;
 const runnerUrl = () => S.config.runner_url || location.origin;
+// Only a successful authenticated workspace config may grant native visual navigation.
+// Local name/provider edits still use synchronous applyConfig and never change that grant.
+const NATIVE_VISUAL_WAIT_MS = 5000, NATIVE_VISUAL_TIMEOUT = Symbol('native visual wait');
+let NATIVE_VISUAL_VERSION = 0, NATIVE_VISUAL_PENDING = Promise.resolve(), NATIVE_VISUAL_ORIGIN = '';
+const nativeVisualVersion = () => NATIVE_VISUAL_VERSION;
+const authenticatedConfigPerson = me => !!(me && typeof me.id === 'string' && me.id.trim()
+  && me.cloud === true && ['owner', 'viewer'].includes(me.role));
+function nativeVisualOrigin(config) {
+  const raw = config?.visual_origin;
+  if (typeof raw !== 'string' || !raw || /[^\x21-\x7e]|[@\\%?#]/.test(raw)) return '';
+  try {
+    const url = new URL(raw);
+    return url.protocol === 'https:' && !url.username && !url.password && url.pathname === '/'
+      && !url.search && !url.hash && url.origin !== location.origin ? url.origin : '';
+  } catch { return ''; }
+}
+function nativeVisualChange(origin, clear = false) {
+  const version = ++NATIVE_VISUAL_VERSION;
+  NATIVE_VISUAL_ORIGIN = '';
+  const pending = NATIVE_VISUAL_PENDING.catch(() => {}).then(async () => {
+    if (!clear && version !== NATIVE_VISUAL_VERSION) return false;
+    if ((window.ticoNativeFeatures || []).includes('visualOrigin') && window.ticoNative) {
+      let handler, accepted = false;
+      try { handler = window.ticoNative('visualOrigin'); accepted = await handler.postMessage({origin}) === true; } catch {}
+      if (origin && !accepted && handler) try { await handler.postMessage({origin: ''}); } catch {}
+      return accepted;
+    }
+    return false;
+  });
+  NATIVE_VISUAL_PENDING = pending;
+  return {version, pending};
+}
+function nativeVisualWait(pending) {
+  let timer;
+  return Promise.race([pending.catch(() => false), new Promise(done => {
+    timer = setTimeout(() => done(NATIVE_VISUAL_TIMEOUT), NATIVE_VISUAL_WAIT_MS);
+  })]).finally(() => clearTimeout(timer));
+}
+function clearNativeVisualOrigin() {
+  S.config.visual_origin = '';
+  // Clears follow an in-flight invocation; queued grants are invalidated before
+  // either resolves, so an old ACK cannot restore trust after signing out.
+  return nativeVisualWait(nativeVisualChange('', true).pending);
+}
+async function applyAuthenticatedConfig(config, expected = nativeVisualVersion()) {
+  if (SESSION.out || expected !== nativeVisualVersion()) return null;
+  const origin = nativeVisualOrigin(config), {version, pending} = nativeVisualChange(origin);
+  const accepted = await nativeVisualWait(pending);
+  if (SESSION.out || version !== nativeVisualVersion()) return null;
+  if (accepted === NATIVE_VISUAL_TIMEOUT) {
+    // Bound only the UI wait. The actual invocation/FIFO stays intact; its late
+    // ACK cannot grant UI trust, and its ordered clear still waits behind it.
+    void clearNativeVisualOrigin();
+    const clearedVersion = nativeVisualVersion();
+    return {config: applyConfig(config), version: clearedVersion};
+  }
+  if (accepted) NATIVE_VISUAL_ORIGIN = origin;
+  const value = applyConfig(config);
+  if (accepted && origin && typeof nativeVisualRepaint === 'function') nativeVisualRepaint();
+  return {config: value, version};
+}
+// A page reload is not evidence that the previous browser session is still valid.
+void clearNativeVisualOrigin();
 function applyConfig(config) {
   const ceoBotWas = ceoBotOn();
   S.config = {...CONFIG_DEFAULTS, ...(config && typeof config === 'object' ? config : {})};

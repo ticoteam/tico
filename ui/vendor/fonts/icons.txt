@@ -113,7 +113,6 @@ radio_button_unchecked
 receipt
 receipt_long
 record_voice_over
-replay
 request_quote
 reviews
 rocket_launch

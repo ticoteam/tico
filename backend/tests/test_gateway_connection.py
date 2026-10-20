@@ -1,4 +1,4 @@
-"""Settings > AI providers > Tico AI Gateway (backend/gateway_connection.py), against a fake Gateway on localhost."""
+"""Settings > Computers > Tico AI Gateway (backend/gateway_connection.py), against a fake Gateway on localhost."""
 
 import json
 import logging
@@ -869,7 +869,7 @@ def test_a_gateway_with_no_chat_endpoint_yet_reads_plainly(api, monkeypatch, act
     with api.app.state.store.read() as c:
         focus = H.status(c, "ops")["focus"]
     assert focus == ("The Tico AI Gateway doesn't serve Tico models at its URL yet; check the Gateway URL in "
-                     "Settings > AI providers. This run is saved for later"), focus
+                     "Settings > Computers. This run is saved for later"), focus
 
 
 def test_a_404_on_another_model_is_not_blamed_on_the_gateway(api, monkeypatch):

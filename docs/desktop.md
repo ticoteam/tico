@@ -22,6 +22,13 @@ The app saves the address and restarts automatically to replace its native permi
 Only the selected server's origin can use native IPC; Access and external sign-in pages that
 remain in the window receive no native permissions.
 
+The app can keep [signed visuals](visuals.md) inline when the selected server uses
+a separate HTTPS address for them. After sign-in, the server supplies that address
+and the app accepts only its signed visual paths. Changing servers, signing out or
+starting another sign-in clears the allowance. Visual pages keep their sandbox;
+their origin is not granted native command or app-log permissions. If this app build cannot confirm
+the visual address, the page stays usable and those visuals appear as file links.
+
 Links to other sites, and any link that would open a new tab (links in chat and Markdown), open in your
 default browser, and email links in your mail app. A sign-in stays in the app window from start to finish,
 whichever identity provider it goes through (Cloudflare Access with Google, Microsoft, Okta, GitHub or a one-time PIN,
@@ -158,7 +165,7 @@ build directory and does not replace or install an app. Root owns installation a
 current company `.app` before any install, restore it to its original path if the bridge cannot update
 or relaunch, and keep the bundle identity and app data unchanged.
 
-Owners can set the public team logo in **Settings → Team → Choose icon**, or with
+Owners can set the public team logo in **Settings → General → Choose icon**, or with
 `hub team icon logo.png`, using their owner credential
 (`HUB_API_URL` and `HUB_TOKEN`). The API is `POST /api/v2/team/icon`, with an opaque binary PNG,
 JPEG or WebP body up to 1 MB and an `Idempotency-Key`. Images up to 16 megapixels are normalized

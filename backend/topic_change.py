@@ -5,8 +5,10 @@ and the message carries `refs.topic_changed`, which the chat shows as a quiet "T
 
 The gate is plain code, read from what runners already report. The session is the bot's provider thread the message
 would continue (its `bot_sessions` row); its last turn is the newest finished turn on that thread.
-- Warm: that turn finished under WARM_SECONDS ago and reported `cached_tokens` > 0. Anything else is cold: no turn, an
-  older one, or a harness that reports no cache use (Grok, today).
+- Warm: that turn finished within its harness's prompt-cache lifetime (CACHE_LIFETIME, WARM_SECONDS when the harness
+  is not listed) and read at least WARM_SHARE of its input from the cache (`cached_tokens` over `input_tokens +
+  cached_tokens`). Anything else is cold: no turn, an older one, a small cache hit, or a harness that reports no cache
+  use (Grok, today).
 - Context size: that turn's newest request of the bot's own (not a subagent's) whole prompt (`turns.prompt_tokens`,
   uncached + cached), when its runner marked its requests. The turn's summed `input_tokens + cached_tokens` count every
   request of the turn again and are not a context size; without `prompt_tokens` (an older runner, a harness that does
@@ -14,6 +16,7 @@ would continue (its `bot_sessions` row); its last turn is the newest finished tu
 - Check at BIG_CONTEXT tokens or more, or when the cache is cold; not under BIG_CONTEXT with a warm cache.
 - Never when the team's `topic_fresh` rule is off, the chat is a shared bot's room (even one with a single person), the
   chat has an active goal, a turn is running, or the chat has fewer than MIN_TURNS turns since its last clear.
+- Never for a send `considered` turns away: a command, a task chat's message, or one carrying files by any route.
 
 The whole check, its reads, the call and the answer, runs on a worker the send waits for at most BUDGET seconds; an
 answer later than that is dropped, whichever thread runs first. Its reads are one snapshot, admission to history. A decision holds only for the chat as it was read: `apply` re-reads it in the send's
@@ -46,6 +49,35 @@ RULE = "topic_fresh"
 BUDGET = 1.5
 # The default prompt-cache lifetime: a session whose last turn read the cache this recently is warm.
 WARM_SECONDS = 300
+# Each harness's prompt-cache lifetime in seconds, by the runtime its sessions are kept under (`bot_sessions.runtime`;
+# antigravity runs as gemini). A row is either a lifetime its provider documents (the shortest, when it gives a range:
+# a cold reading only asks Decide, a warm one skips it) or, where no provider page gives one, the WARM_SECONDS fallback.
+CACHE_LIFETIME = {
+    # Documented: "By default, the cache has a 5-minute lifetime" (1 hour is opt-in).
+    # https://platform.claude.com/docs/en/build-with-claude/prompt-caching
+    "claude": 300,
+    # Documented: in-memory entries "typically remain active for around 5 to 10 minutes of inactivity, up to one
+    # hour"; extended retention is longer. https://developers.openai.com/api/docs/guides/prompt-caching
+    "codex": 300,
+    # Fallback: Google's caching page gives no lifetime for implicit caching
+    # (https://ai.google.dev/gemini-api/docs/caching); OpenRouter's guide reports Gemini's implicit cache lives
+    # "on average 3-5 minutes, but will vary".
+    "gemini": WARM_SECONDS,
+    # Fallback: xAI's models page prices cached input but gives no lifetime (https://docs.x.ai/docs/models). The value
+    # does not matter today: the runner's Grok host reports no cached tokens, so its sessions always read cold.
+    "grok": WARM_SECONDS,
+    # Fallback: OpenRouter documents each upstream's own expiry, not one of its own (Anthropic 5 minutes by default,
+    # Gemini explicit writes 5 minutes, several upstreams none).
+    # https://openrouter.ai/docs/guides/best-practices/prompt-caching
+    "pi": WARM_SECONDS,
+    # Fallback: Cursor's docs price cache reads per model but give no lifetime (https://cursor.com/docs).
+    "cursor": WARM_SECONDS,
+    # Fallback: no lifetime found for Muse Code; Cursor's model table prices Muse Spark cached input with no lifetime
+    # (https://cursor.com/docs).
+    "musecode": WARM_SECONDS,
+}
+# The least share of the last turn's input read from the cache for the session to count as warm.
+WARM_SHARE = 0.5
 BIG_CONTEXT = 100_000
 MIN_TURNS = 3
 # The turns the check reads, and how much of each message it sends.
@@ -70,21 +102,24 @@ def last_turn(c, settings, bot):
                         (bot, runtime, model)).fetchone()
     if not session or not session[0]:
         return None
-    row = c.execute("SELECT finished,cached_tokens,prompt_tokens FROM turns WHERE bot=? AND thread_id=? "
+    row = c.execute("SELECT finished,input_tokens,cached_tokens,prompt_tokens FROM turns WHERE bot=? AND thread_id=? "
                     "AND finished IS NOT NULL ORDER BY finished DESC LIMIT 1", (bot, session[0])).fetchone()
-    return dict(row) if row else None
+    return {**dict(row), "runtime": runtime} if row else None
 
 
 def warmth(turn, now=None):
     """(warm, context tokens) of a session from its last turn (`last_turn`). The context is None when unknown."""
     if not turn:
         return False, None
-    cached = int(turn.get("cached_tokens") or 0)
+    cached, fresh = int(turn.get("cached_tokens") or 0), turn.get("input_tokens")
+    lifetime = CACHE_LIFETIME.get(turn.get("runtime"), WARM_SECONDS)
     context = turn.get("prompt_tokens")
     context = int(context) if context is not None else None
     finished, at = H.parse_ts(turn.get("finished")), H.parse_ts(now or H.now())
     age = (at - finished).total_seconds() if finished and at else None
-    return cached > 0 and age is not None and 0 <= age < WARM_SECONDS, context
+    # An unknown fresh count (an older row, a runner that sent none) is cold: counting it as 0 would read 100% cached.
+    share = cached / (cached + int(fresh)) if cached > 0 and fresh is not None else 0.0
+    return share >= WARM_SHARE and age is not None and 0 <= age < lifetime, context
 
 
 def epoch_since(c, conversation_id):
@@ -203,11 +238,22 @@ def settle(timeout=5.0):
         worker.join(timeout)
 
 
-def check(store, primary, who, bot, text, admit=None):
-    """Whether to clear this person's direct chat with `bot` before `text` is sent: {"clear", "reason",
+def considered(body, uploads):
+    """Whether a person's send (`models.ChatCreate`) is one the check looks at: plain text, not a command or a task
+    chat's message, and no files, whether referenced (`body.attachments`) or uploaded with it (`uploads`). `check` asks it
+    first and every caller must say what it uploads, so no route that sends files can be checked."""
+    return not (body.command or (body.refs or {}).get("task") or body.attachments or uploads)
+
+
+def check(store, primary, who, bot, body, admit=None, *, uploads):
+    """Whether to clear this person's direct chat with `bot` before `body` is sent: {"clear", "reason",
     "conversation_id", "context_tokens", "snapshot", "delay_ms", ...}, or None when no check ran or it did not finish
-    in time. `admit(c)`, when given, is the caller's own condition read with the gate. Never raises and never waits
+    in time. `uploads` are the files sent with it (none on the JSON route); a send `considered` turns away is never
+    checked. `admit(c)`, when given, is the caller's own condition read with the gate. Never raises and never waits
     more than BUDGET seconds; anything short of a confident new topic is no clear."""
+    if not considered(body, uploads):
+        return None
+    text = body.text
     started = _clock()
     deadline = started + BUDGET
     box, lock, ready = {}, threading.Lock(), threading.Event()

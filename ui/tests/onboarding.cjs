@@ -205,7 +205,9 @@ function recruitFor({department, briefing, share}) {
         if (fs.existsSync(file)) return route.fulfill({contentType: p.endsWith('.woff2') ? 'font/woff2' : 'application/javascript', body: fs.readFileSync(file)});
       }
       // Polls must report the setup state that the completion endpoint already saved.
-      const config = {...CONFIG, ...record.names, onboarding_needed: me.role === 'owner' && record.needed};
+      // A new install has product updates unread until Create marks them read for the owner, as the server does.
+      const config = {...CONFIG, ...record.names, onboarding_needed: me.role === 'owner' && record.needed,
+                      changelog: {unread_count: record.completed ? 0 : 105}};
       if (p === '/api/me') return json({...me, config});
       if (p === '/api/v2/config') return json(config);
       if (p === '/api/status') return json({cloud: true, keeper_alive: true, health_issues: [], active: [], recent_runs: []});
@@ -782,6 +784,9 @@ function recruitFor({department, briefing, share}) {
 
     // ---- after Create, one screen: the team is created, and nothing covers it. The tour waits for Show me around.
     assert.equal(await page.locator('#onb h1').textContent(), 'Your team is created');
+    // The full nav is back, and the owner starts caught up: no What's new count left over from before Create.
+    assert.equal(await page.locator('#changelog-notice').isVisible(), false, "no What's new count after Create");
+    assert.equal(await page.locator('#changelog-badge').isHidden(), true, 'nor its badge in the account menu');
     assert.equal(await page.locator('.gs-tour').count(), 0);
     assert.deepEqual(tourPosts, []);
     // A computer is online and a provider chosen, so nothing is waited on: Open Tasks is the next step and the only primary.
@@ -1086,11 +1091,11 @@ function recruitFor({department, briefing, share}) {
     await waiting.reload();
     await waiting.locator('[data-onb-bot=coo]').waitFor();
     assert.equal(await waiting.locator('#onb-next-status').textContent(), "Ana's Mac, Cloud box online. Waiting for an AI provider.");
-    assert.deepEqual(await waiting.locator('#onb button.primary').evaluateAll(els => els.map(el => el.dataset.onbGo)), ['providers']);
+    assert.deepEqual(await waiting.locator('#onb button.primary').evaluateAll(els => els.map(el => el.dataset.onbGo)), ['models']);
     assert.equal(await waiting.locator('[data-onb-bot=coo] .onb-bot-actions').textContent().then(text => text.trim()), 'Waiting');
     assert.equal(await waiting.locator('#onb-after > section').first().getAttribute('id'), 'fr-providers');
-    await waiting.locator('#fr-providers [data-gs-tab=providers]').click();
-    await waiting.locator('#settings-tabs [data-settings-tab=providers][aria-selected=true]').waitFor();   // lands on that tab
+    await waiting.locator('#fr-providers [data-gs-tab=models]').click();
+    await waiting.locator('#settings-tabs [data-settings-tab=devices][aria-selected=true]').waitFor();   // lands on Computers, where Models is
     CONFIG.local = true;
     await waiting.reload();
     await waiting.goto('https://tico-ui.test/#/welcome');

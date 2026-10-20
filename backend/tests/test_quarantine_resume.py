@@ -42,7 +42,7 @@ def test_a_quarantined_bots_manager_bot_writes_to_it_and_it_waits_but_no_other_b
         task = H.task_create(c, "human:ana", "Research imports", "x", "bot:cpo", lint=False)
         H.quarantine(c, "cpo", "10 repeated refusals today", refusal={"rule": "label", "detail": "x"})
     with api.app.state.store.transaction() as c:
-        said = H.say(c, "bot:ops", "bot:cpo", "Stop adding the roadmap label; Ben will.")
+        said = H.say(c, "bot:ops", "bot:cpo", "Stop adding the roadmap label; Ben will.", refs={"needs_action": True})
         assert c.execute("SELECT state FROM jobs WHERE message_id=?", (said["id"],)).fetchone()[0] == "queued"
         H.note_create(c, "bot:ops", "bot:cpo", "The roadmap label needs an approval.")
         c.execute("UPDATE tasks SET requester='bot:ops' WHERE id=?", (task["id"],))
@@ -50,8 +50,11 @@ def test_a_quarantined_bots_manager_bot_writes_to_it_and_it_waits_but_no_other_b
         assert comment["to_actor"] == "bot:cpo"
     # Any other bot's message waits too (a refused one quarantined the sender in turn), but its note does not.
     with api.app.state.store.transaction() as c:
-        said = H.say(c, "bot:cmo", "bot:cpo", "Are you stuck?")
+        said = H.say(c, "bot:cmo", "bot:cpo", "Are you stuck?", refs={"needs_action": True})
         assert c.execute("SELECT state FROM jobs WHERE message_id=?", (said["id"],)).fetchone()[0] == "queued"
+        # One that can wait (Dev 149) is kept the same way, for the bot's next run once it is back.
+        said = H.say(c, "bot:cmo", "bot:cpo", "FYI: the export finished.")
+        assert c.execute("SELECT count(*) FROM notes WHERE message_id=?", (said["id"],)).fetchone()[0] == 1
     with pytest.raises(H.Refused) as got:
         with api.app.state.store.transaction() as c:
             H.note_create(c, "bot:cmo", "bot:cpo", "Are you stuck?")
@@ -69,7 +72,7 @@ def test_a_quarantined_bots_manager_bot_writes_to_it_and_it_waits_but_no_other_b
             H.note_create(c, "bot:ops", "bot:cpo", "Start the export work.")
     assert got.value.rule == "target_inactive"
     with api.app.state.store.transaction() as c:
-        said = H.say(c, "bot:ops", "bot:cpo", "Start the export work.")
+        said = H.say(c, "bot:ops", "bot:cpo", "Start the export work.", refs={"needs_action": True})
         assert c.execute("SELECT state FROM jobs WHERE message_id=?", (said["id"],)).fetchone()[0] == "queued"
 
 

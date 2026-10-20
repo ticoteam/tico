@@ -83,7 +83,7 @@ const shots = process.env.TICO_SHOTS || '';
     await page.locator('[data-hl-metrics]').waitFor();
     assert.equal(await page.locator('#hl-page .hl-table').count(), 2);
     for (const mode of ['dark', 'light']) { await theme(mode); await shot(`storage-s3-desktop-${mode}`); }
-    // local disk: no copy line, a link to Settings > Storage
+    // local disk: no copy line, a link to Settings > General
     await settled();
     health = {...health, storage: {mode: 'local', bucket: null, region: null, files: 1, bytes: 2048, copy: {done: 0, total: 0, failed: 0}}};
     await redraw();

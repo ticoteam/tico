@@ -67,7 +67,7 @@ maintained, replacing the catch-all is a manifest and a host adapter, described 
 
 ## How providers map to harnesses
 
-The owner enables providers in **Settings > AI providers** (`backend/providers.py`). Each provider names its runtime
+The owner enables providers in **Settings > Computers > Models** (`backend/providers.py`). Each provider names its runtime
 (the host adapter) and its harness (the manifest). Enabling a provider offers its models; it does not install
 anything. Each computer installs only:
 
@@ -86,7 +86,7 @@ the `openrouter` provider offers every such model; enabling one vendor offers th
 
 Tico Cheap, Mid and Power 1.0 (`tico-cheap-1.0`, `tico-mid-1.0`, `tico-power-1.0`; Claude Haiku, Sonnet and Opus 5.5
 underneath) run on pi through Tico's own Gateway, not OpenRouter. Their provider, `tico`, is never ticked: it is on
-exactly while the **Tico AI Gateway** connection in Settings > AI providers has a key (`backend/gateway_connection.py`),
+exactly while the **Tico AI Gateway** connection in Settings > Computers > Models has a key (`backend/gateway_connection.py`),
 and OpenRouter's catch-all does not offer them. The key is the one Decide uses; the server's `TICO_GATEWAY_KEY` and
 `TICO_GATEWAY_URL` win over a saved one and show as connected. A saved key is sealed and never read back, only a
 preview of its first and last three characters. What the owner sees and does is in [Tico AI Gateway](ai-gateway.md).
@@ -329,6 +329,7 @@ some of `files`, and `logout` needs `files`. `keychain` lists the platforms wher
 | `sign_in_status` | How readiness checks the sign-in: `check` = `command` (`args`, `ready`, `not_ready` text), `json` (`args`, `field`, `method_field`), `file` (the host's login file), `bot-key` (each bot's key grant) or `none`; `ready_detail`, `missing_detail`, `timeout_s` | `none`: reported as `unknown` |
 | `api_keys` | Who holds `auth.api_key_env`: `computer` (one key signs every bot in; the company can give it to every computer) or `bot` (each bot's own Credential, the first name) | Keys are not wired by Tico |
 | `api_key_login` | The command that turns a computer's key into a stored login (key on stdin) | The key in the environment is the sign-in |
+| `api_key_check` | A command that asks the provider about the key in its environment, run in an empty home so no other login answers; it passes on exit 0 with no `"is_error": true` in its JSON. Switch to API key checks a key with it (or with `api_key_login`) before the subscription is signed out | Switch to API key is offered only with this or `api_key_login` |
 | `api_key_in_turn` | The computer's key is put in each turn's environment, which is the only place the CLI reads it, and wins over a stored login | Not put there |
 | `subscription_marker` | Text in the sign-in detail that means a plan, so turns bill as `subscription` | Every turn bills as `api` |
 | `subscription_profiles` | Runs on a named subscription's own login (`profile_home` is the variable pointed at the profile's folder; `profile_dirs` are made inside it) | Not covered by subscriptions |

@@ -203,6 +203,18 @@ SELECT bot, sum(runs) AS runs, sum(input_tokens) AS input_tokens,
 FROM run_weekly WHERE week >= date('now', '-27 days', 'weekday 1') GROUP BY bot ORDER BY input_tokens DESC
 ```
 
+Wakes that waited (token saving 2/9, `backend/wake_rules.py`): each is one `wake.skipped` event naming the bot, the
+task, the held message (`target`; for a bot's own comment on its task, that comment), its trigger and the rule
+(`parked` or `own_write`). A sample of 50 from last week
+for the audit:
+
+```sql
+SELECT ts, json_extract(detail_json, '$.bot') AS bot, json_extract(detail_json, '$.task') AS task,
+       json_extract(detail_json, '$.rule') AS rule, json_extract(detail_json, '$.trigger') AS trigger, target AS message
+FROM events WHERE action = 'wake.skipped' AND ts >= date('now', '-13 days', 'weekday 1')
+  AND ts < date('now', '-6 days', 'weekday 1') ORDER BY random() LIMIT 50
+```
+
 Who asked what today:
 
 ```sql

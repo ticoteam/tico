@@ -3,6 +3,7 @@
 import hashlib
 import hmac
 import json
+import logging
 import re
 import sqlite3
 import stat
@@ -235,6 +236,13 @@ class Auth:
 
     def warm(self):
         """Fetch the proxy's signing keys once at startup, so no person's request waits for them."""
+        from . import owner_link
+        if owner_link.break_glass(self.settings):
+            try:
+                # The hosted owner's break-glass link, first: an issuer that is down must not keep it out.
+                owner_link.place_first(self.settings, self.store)
+            except Exception:
+                logging.getLogger("tico.auth").exception("the owner sign-in link could not be put in place")
         try:
             if self.proxy:
                 self.proxy.warm()
@@ -444,7 +452,8 @@ class Auth:
                     email = self.proxy.email(headers) if self.proxy else None
                 if email is None:
                     # The UI's fetch layer follows `sign_in` to the built-in login page.
-                    extra = {"sign_in": "/auth/login"} if self.proxy and self.proxy.name == "oidc" else None
+                    extra = ({"sign_in": self.proxy.sign_in_path} if self.proxy and self.proxy.name == "oidc"
+                             else {"sign_in": "/auth/owner-link"} if self.proxy and self.proxy.name == "owner-link" else None)
                     raise Problem("identity", "Sign in to " + self.settings.app_name, 401, extra=extra)
                 # A signed assertion without an email (a Cloudflare service token) would otherwise
                 # match a roster entry that has none, and "" is also an unset owner email.

@@ -39,6 +39,8 @@ def test_aws_bootstrap_takes_the_code_from_ssm_not_from_user_data():
 
 def test_ssh_target_mints_code_late_and_passes_it_by_stdin(monkeypatch):
     monkeypatch.setenv("TICO_OWNER_TOKEN", "owner-token-xyz")
+    monkeypatch.setenv("TICO_INBOUND_KEY", "tin_private-0123456789abcdefghijklmnopqrstuv")
+    monkeypatch.setenv("TICO_INBOUND_URL", "https://inbox.private.example")
     monkeypatch.setattr(rs, "mint_code", lambda url, tok: CODE)
     shell = FakeShell({"docker ps": Result(0, "Up 3 seconds\n")})
     d = fakes.deps()
@@ -50,6 +52,8 @@ def test_ssh_target_mints_code_late_and_passes_it_by_stdin(monkeypatch):
     assert CODE not in out and "owner-token-xyz" not in out
     assert any(CODE.encode() in (i or b"") for _, i in shell.calls) and not any(CODE in c for c in shell.cmds())
     assert state.load_runners("https://tico.example.com")[0]["label"] == "build-1"
+    assert all(b"TICO_INBOUND_" not in (data or b"") and "TICO_INBOUND_" not in cmd for cmd, data in shell.calls)
+    assert "tin_private-" not in out and "inbox.private.example" not in out
 
 
 def test_mint_code_uses_bearer_and_maps_errors():

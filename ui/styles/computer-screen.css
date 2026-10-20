@@ -35,8 +35,8 @@ body.screen-open{overflow:hidden}
   .scr .scr-btn{height:36px}
 }
 
-/* Settings > Computers: the row's sign and the ⋯ menu's Screen choice. */
+/* Settings > Computers: the pop-up's Screen link and choice. */
 .machine-screen{display:flex;width:fit-content;align-items:center;gap:4px;margin-top:3px;font-size:var(--t-xs);color:var(--muted);white-space:nowrap}
 a.machine-screen{color:var(--accent)}
 .machine-screen .nav-icon{width:14px;height:14px;font-size:14px;color:inherit}
-.machine-screen-choice{justify-content:space-between;gap:12px;cursor:default}
+.machine-screen-choice{display:flex;align-items:center;flex-wrap:wrap;gap:12px;cursor:default}
