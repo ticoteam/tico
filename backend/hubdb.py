@@ -3314,13 +3314,25 @@ def link_kind(url):
     return "url"
 
 
+def worktree_heads(detail):
+    """What a worktree's branch is known to hold, as the background pass records what it checked: the push webhook's
+    head and the computer's committed head, the latter marked while the computer reports it unpushed so a later push
+    of that same head is checked again."""
+    last = detail.get("last_commit")
+    local = last if not last or detail.get("ahead") == 0 else last + " unpushed"
+    return sorted({detail.get("pushed"), local} - {None, ""})
+
+
 def unlinked_pushes(conn, task_id):
     """The task's worktrees whose branch carries pushed commits of the task's own and no pull request link on that
     repository (a link whose branch GitHub has not reported yet counts): work a hand-off would leave with nothing to
     review, merge or release. Pushed is the push webhook's head, or a committed head the computer reports nothing
     unpushed on; the background pass's look at the branch on GitHub (github.reconcile_worktree_prs) settles both, so a
-    missed webhook still counts and a branch only moved to newer main does not. A head the tree started at, or one on
-    the repository's default branch, is no work of the task's. Each is {link_id, repo, branch}."""
+    missed webhook still counts and a branch only moved to newer main does not. A branch that pass can read and has
+    not read since its last known head counts too, `unchecked`: a push whose webhook was missed and that no computer
+    has reported is on GitHub only. A head the tree started at, or one on the repository's default branch, is no work
+    of the task's. Each is {link_id, repo, branch, unchecked}."""
+    app = conn.execute("SELECT org FROM github_app WHERE id='app'").fetchone()
     out = []
     for w in _rows(conn.execute("SELECT id,repo,branch,detail_json FROM task_links WHERE task_id=? AND kind='worktree' "
                                 "AND coalesce(state,'unknown')<>'removed' AND repo IS NOT NULL AND branch IS NOT NULL",
@@ -3332,15 +3344,27 @@ def unlinked_pushes(conn, task_id):
         work = remote.get("ahead") or any(
             not conn.execute("SELECT 1 FROM main_pushes WHERE sha=? AND lower(repo)=lower(?)", (head, w["repo"])).fetchone()
             for head in heads)
-        if work and not conn.execute("SELECT 1 FROM task_links WHERE task_id=? AND kind='pr' AND lower(repo)=lower(?) "
-                                     "AND (branch=? OR branch IS NULL)", (task_id, w["repo"], w["branch"])).fetchone():
-            out.append({"link_id": w["id"], "repo": w["repo"], "branch": w["branch"]})
+        readable = (app and re.match(r"^tico/[0-9a-f]{8}-", w["branch"])
+                    and w["repo"].lower().startswith(str(app[0] or "").lower() + "/")
+                    and conn.execute("SELECT 1 FROM repositories WHERE lower(full_name)=lower(?) AND reachable=1",
+                                     (w["repo"],)).fetchone())
+        unchecked = bool(readable) and not (remote.get("at") and set(worktree_heads(detail)) <= set(remote.get("heads") or []))
+        if (work or unchecked) and not conn.execute(
+                "SELECT 1 FROM task_links WHERE task_id=? AND kind='pr' AND lower(repo)=lower(?) "
+                "AND (branch=? OR branch IS NULL)", (task_id, w["repo"], w["branch"])).fetchone():
+            out.append({"link_id": w["id"], "repo": w["repo"], "branch": w["branch"], "unchecked": not work})
     return out
 
 
 def _unlinked_text(missing):
-    return ("has commits with no pull request linked: " + "; ".join(f"{m['repo']} branch {m['branch']}" for m in missing)
-            + ". Open the pull request (Tico links a worktree branch's PR itself) or run `hub task link <PR URL>`")
+    pushed = [m for m in missing if not m["unchecked"]]
+    unchecked = [m for m in missing if m["unchecked"]]
+    parts = ([("has commits with no pull request linked: " + "; ".join(f"{m['repo']} branch {m['branch']}" for m in pushed))]
+             if pushed else []) + ([("has a branch Tico has not checked on GitHub since its last commit or push: "
+                                     + "; ".join(f"{m['repo']} branch {m['branch']}" for m in unchecked)
+                                     + " (Tico checks it within a few minutes)")] if unchecked else [])
+    return ("; and ".join(parts) + ". Open the pull request (Tico links a worktree branch's PR itself) or run "
+            "`hub task link <PR URL>`")
 
 
 @private_task_write

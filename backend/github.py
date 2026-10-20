@@ -562,22 +562,25 @@ def reconcile_worktree_prs(service):
                 "AND coalesce(p.state,'open') NOT IN ('merged','closed','shipped') AND " + held.format("p") +
                 " AND EXISTS (SELECT 1 FROM task_links w WHERE w.task_id=p.task_id AND w.kind='worktree' "
                 "AND coalesce(w.state,'unknown')<>'removed')", (org,)))
-            branches = H._rows(c.execute(
-                "SELECT w.repo,w.branch,max(json_extract(w.detail_json,'$.pushed')) AS pushed,"
-                "max(CASE WHEN json_extract(w.detail_json,'$.ahead')=0 THEN json_extract(w.detail_json,'$.last_commit') END) AS reported,"
-                "min(CASE WHEN coalesce(t.private,0)=0 THEN t.title END) AS title,"
+            branches = {}
+            for w in H._rows(c.execute(
+                "SELECT w.repo,w.branch,w.detail_json,CASE WHEN coalesce(t.private,0)=0 THEN t.title END AS title,"
                 "(SELECT r.default_branch FROM repositories r WHERE lower(r.full_name)=lower(w.repo)) AS base "
                 "FROM task_links w JOIN tasks t ON t.id=w.task_id WHERE w.kind='worktree' "
                 "AND coalesce(w.state,'unknown')<>'removed' AND w.branch LIKE 'tico/%' AND " + held.format("w") +
                 " AND NOT EXISTS (SELECT 1 FROM task_links p WHERE p.task_id=w.task_id AND p.kind='pr' "
-                "AND lower(p.repo)=lower(w.repo) AND p.branch=w.branch) GROUP BY w.repo,w.branch", (org,)))
+                "AND lower(p.repo)=lower(w.repo) AND p.branch=w.branch)", (org,))):
+                b = branches.setdefault((w["repo"], w["branch"]), {**w, "title": None, "heads": set()})
+                b["title"] = min(filter(None, (b["title"], w["title"])), default=None)
+                b["heads"].update(H.worktree_heads(H._json(w["detail_json"], {}) or {}))
+            branches = list(branches.values())
         def ready(kind, repo, key, heads=None):
             seen = cache.get((kind, repo, key))
             return not seen or seen["next"] <= now or heads is not None and seen.get("heads") != heads
         def last(item):
             return (cache.get(item[:3]) or {}).get("last", 0)
         prs = sorted((("pr", l["repo"], l["number"], l) for l in links if ready("pr", l["repo"], l["number"])), key=last)
-        heads = {(b["repo"], b["branch"]): sorted(h for h in (b["pushed"], b["reported"]) if h) for b in branches}
+        heads = {(b["repo"], b["branch"]): sorted(b["heads"]) for b in branches}
         found = sorted((("branch", b["repo"], b["branch"], b) for b in branches if WORKTREE_BRANCH.match(b["branch"])
                         and ready("branch", b["repo"], b["branch"], heads[(b["repo"], b["branch"])])), key=last)
         due = [item for pair in itertools.zip_longest(prs, found) for item in pair if item][:20]

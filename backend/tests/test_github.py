@@ -1033,3 +1033,40 @@ def test_a_hand_off_refuses_a_pushed_worktree_branch_no_pr_carries_until_it_is_l
     assert 'ticoteam/tico-services branch' in still and 'ticoteam/tico branch' not in still
     post(api, 'tasks/' + task['id'] + '/links', {'url': 'https://github.com/ticoteam/tico-services/pull/16'})
     assert move(step='Review 2') == 'review' and move(step='Done') == 'done'
+
+
+def test_a_hand_off_waits_for_a_branch_check_when_a_push_left_no_webhook_and_no_report(api, monkeypatch):
+    """A push GitHub never announced and no computer reported is on GitHub only: until the background pass has read
+    the branch since its last known head, a hand-off is held; the pass drafts the PR (or finds nothing) and frees
+    it. A head reported while unpushed is read again once it is reported pushed. Synthetic: no real GitHub call."""
+    _app(api)
+    pushed = post(api, 'tasks', {'owner': 'cpo', 'title': 'Silent push', 'body': 'x'})
+    branch = f"tico/{pushed['id'][:8]}-silent-push"
+    _worktree(api, pushed['id'], 'ticoteam/tico', branch, expected_head='a' * 40)
+    quiet = post(api, 'tasks', {'owner': 'cpo', 'title': 'Quiet', 'body': 'x'})
+    local = _worktree(api, quiet['id'], 'ticoteam/tico', f"tico/{quiet['id'][:8]}-quiet", expected_head='a' * 40,
+                      last_commit='e' * 40, ahead=1)
+    def fetch(method, path, headers=None, params=None, json=None):
+        if method == 'POST':
+            return SimpleNamespace(status_code=201, json=lambda: _branch_pr(31, branch, draft=True))
+        if '/compare/' in path:
+            # Only the silent push's branch is on GitHub; the quiet one has its commit on the computer only.
+            return (SimpleNamespace(status_code=200, json=lambda: {'ahead_by': 1}) if path.endswith(quote(branch, safe=''))
+                    else SimpleNamespace(status_code=404, json=lambda: {}))
+        return SimpleNamespace(status_code=200, json=lambda: [])
+    _, run = _reconciler(api, monkeypatch, fetch)
+
+    def review(task):
+        try:
+            with api.app.state.store.transaction() as c:
+                return H.task_update(c, 'human:ana', task['id'], status='review')['status']
+        except H.Refused as refused:
+            return str(refused)
+    assert all('not checked on GitHub' in review(task) for task in (pushed, quiet))
+    run()
+    assert _prs(api, pushed['id'])[31]['state'] == 'draft' and review(pushed) == 'review'
+    assert _worktree_detail(api, local)['remote']['absent'] and review(quiet) == 'review'
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET status='doing' WHERE id=?", (quiet['id'],))
+        c.execute("UPDATE task_links SET detail_json=json_set(detail_json,'$.ahead',0) WHERE id=?", (local,))
+    assert 'has commits with no pull request linked' in review(quiet)
