@@ -42,7 +42,7 @@ DECISIONS_KEYS = {"openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY", 
 
 SECRET_KEYS = frozenset({
     "TICO_OIDC_CLIENT_SECRET", "CLOUDFLARE_TUNNEL_TOKEN", "LITESTREAM_SECRET_ACCESS_KEY", "TICO_GATEWAY_INVITE",
-    "TICO_INBOUND_KEY", "TICO_INBOUND_URL", "TICO_VISUAL_SECRET",
+    "TICO_INBOUND_KEY", "TICO_INBOUND_URL", "TICO_VISUAL_SECRET", "TICO_COMPANY_FILE_B64",
     *DECISIONS_KEYS.values(),
 })
 # Sent to the server only: the private copy of the .env setup keeps on this computer leaves these out.

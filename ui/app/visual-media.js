@@ -7,7 +7,7 @@
 'use strict';
 const VM_TYPE = {'video/mp4': 'MP4', 'video/webm': 'WebM', 'video/quicktime': 'MOV', 'video/x-m4v': 'M4V',
   'audio/mpeg': 'MP3', 'audio/mp4': 'M4A', 'audio/x-m4a': 'M4A', 'audio/wav': 'WAV', 'audio/x-wav': 'WAV',
-  'audio/wave': 'WAV', 'audio/ogg': 'OGG', 'audio/aac': 'AAC'};
+  'audio/wave': 'WAV', 'audio/vnd.wave': 'WAV', 'audio/ogg': 'OGG', 'audio/aac': 'AAC'};
 const vmWord = kind => kind === 'video' ? 'video' : 'audio';
 // Whether this device says it can't play the type at all ('' from canPlayType); 'maybe' and 'probably' get a try.
 function vmUnplayable(kind, type) {

@@ -1756,6 +1756,14 @@ class OnboardingDraft(Contract):
     selected: dict[Slug, OnboardingSelection] = Field(default_factory=dict, max_length=150)
 
 
+class OnboardingCompanyFile(Contract):
+    company_yaml: str = Field(min_length=1, max_length=131072)
+
+
+class OnboardingCompanyImport(OnboardingCompanyFile):
+    fingerprint: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
 class Recruit(Contract):
     """One department's answer in the org builder, asking which bots to suggest. `share` is the person's own toggle on
     the card ("Suggestions from Tico HQ"); the server sends the answer only when it is on and the install allows it."""
