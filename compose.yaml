@@ -32,6 +32,7 @@ services:
       TICO_ALB_ARN:
       TICO_ALB_REGION:
       TICO_DOMAIN:
+      TICO_DOMAIN_ALIASES:
       TICO_PORT: ${TICO_PORT:-8765}
       TICO_PUBLIC_URL:
       # Visuals in replies (backend/visuals.py): a separate site of their own; unset in production = file chips.

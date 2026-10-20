@@ -396,8 +396,21 @@ No open ports, and Cloudflare Access can do the sign-in. The wizard creates the 
    config without the visuals route and starts as usual. The one exception is the app's own address (the same origin
    as `TICO_PUBLIC_URL`): the server refuses to start with that. Dashboard-managed tunnels need this path-limited
    route added in Cloudflare instead ([Visuals in replies](visuals.md)).
-   cloudflared reads this config only when it starts, so after changing `TICO_VISUAL_ORIGIN`, `TICO_DOMAIN` or
-   `TICO_RUNNER_URL` in `.env` alone, restart it once the server is healthy: `docker compose restart cloudflared`.
+   A locally managed tunnel can retain old app hostnames with `TICO_DOMAIN_ALIASES`, for example
+   `old.acme.example,legacy.acme.example`. These are full-app routes, after `TICO_DOMAIN` and before the restricted
+   runner and visual routes. Names are normalized to lowercase and duplicates are removed; malformed names,
+   wildcards, empty comma-separated entries, and runner/visual host collisions reject the new config. With aliases
+   set, an invalid runner URL or visual origin also rejects the config so its host cannot accidentally become an app route.
+   The runner URL must be a plain DNS HTTP(S) address without credentials, a path, query or fragment. A runner URL
+   on `TICO_DOMAIN` is still allowed and adds no separate route.
+   The previous config stays intact on validation failure. Removing an alias removes only its route at the next start.
+   Each alias needs its own proxied DNS record and equivalent sign-in protection. With Access, keep the existing
+   application's issuer, audience and policy on every app hostname. Configure the exact old HTTPS Origins in
+   `TICO_CORS_ORIGINS` if their pages still need to write; aliases grant no CORS permission and change no cookie scope.
+   Never put an unprotected runner or cookie-free visual hostname in this list.
+   cloudflared reads this config only when it starts. After changing `TICO_VISUAL_ORIGIN`, `TICO_DOMAIN`,
+   `TICO_DOMAIN_ALIASES` or `TICO_RUNNER_URL` in `.env`, recreate the server with `docker compose up -d server`,
+   then restart the connector once the server is healthy: `docker compose restart cloudflared`.
 3. Create an Access application for the hostname with your identity provider and a policy for your humans.
    Note the team URL (`https://<team>.cloudflareaccess.com`) and the application's Audience tag. Any identity
    provider Access offers works with the desktop app too (Google, Microsoft Entra, Okta, GitHub, a one-time PIN): the
@@ -424,6 +437,9 @@ there: the config the server writes is ignored, so keep that route at `HTTP` `se
 it. Before this was shipped such a tunnel logged `No ingress rules ... cloudflared will return 503` and answered every
 request with a 503 while its container showed as running. `python3 -m setup doctor` now fails on that 503 and on that log
 line, and says what to run: `docker compose pull && docker compose up -d` in `/opt/tico`.
+
+`TICO_DOMAIN_ALIASES` changes only the locally generated tunnel config; add explicit app and restricted visual
+routes in Cloudflare for a remotely managed tunnel. Caddy continues to serve only `TICO_DOMAIN`.
 
 **A runner hostname without Access.** To keep Access on the team hostname and let computers and external agents in
 without a bypass, add a second proxied CNAME, `runner.<domain>`, to the same tunnel (`<tunnel id>.cfargotunnel.com`),
