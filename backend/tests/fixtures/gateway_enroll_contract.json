@@ -14,7 +14,7 @@
   "bot_header": "X-Tico-Bot",
   "invite_env": "TICO_GATEWAY_INVITE",
   "rotate_days": 30,
-  "grace_seconds": 600,
+  "grace_seconds": 86400,
   "error_body": {"error": "<code>"},
   "enroll": {
     "method": "POST",

@@ -75,6 +75,8 @@ class Settings:
     aws_instance_type: str = "t4g.small"
     aws_os: str = "ubuntu"
     aws_instance_id: str = ""
+    aws_name: str = ""             # --name: the resources are tico-<name>; blank derives it from the domain
+    aws_permissions_boundary: str = ""
     cloud_location: str = ""
     cloud_size: str = ""
     cloud_ssh_key: str = ""

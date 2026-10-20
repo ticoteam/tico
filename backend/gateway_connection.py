@@ -391,7 +391,8 @@ def run_credentials_for(c, vault, settings, who, attempt_id):
         items.append({"id": "gateway-bot", "name": G.LABEL + " bot", "env": RUN_BOT_ENV, "kind": "text",
                       "value": bot[G.BOT_HEADER]})
     if items:
-        # Which key paid is fixed now: the runner's relay holds this one for the whole turn (execution.run_usage).
+        # Which key paid is fixed now: the relay holds it for the turn (execution.run_usage). The runner's shared
+        # primary/fallback deadline stays inside HQ's 24-hour rotation grace (runner-rs/src/gateway_relay.rs).
         c.execute("UPDATE attempts SET gateway_key_id=? WHERE id=?", (key_id(c, settings) or None, attempt_id))
         H.event(c, who.actor, "gateway.key_sent", PROVIDER,
                 {"bot": row["bot"], "attempt": attempt_id, "runner": who.runner_id})

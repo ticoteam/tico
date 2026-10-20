@@ -582,6 +582,19 @@ impl Runner {
         let _ = self.state.append(aid, "diagnostic", &json!({"text": text}));
     }
 
+    fn run_deadline(&self, aid: &str, config: &Value, relay: Option<&crate::gateway_relay::Relay>) -> Result<Instant, Fail> {
+        let minutes = config["max_run_minutes"].as_f64().or_else(|| text_of(&config["max_run_minutes"]).parse().ok()).unwrap_or(60.0);
+        let requested = Instant::now() + Duration::from_secs_f64(60.0 * minutes);
+        let limit = relay.map_or(requested, |r| r.limit(requested));
+        if limit < requested {
+            self.diagnose(aid, "Tico Gateway limits this attempt to just under 24 hours from when it received its key, including any fallback, so the key remains valid after rotation.");
+        }
+        if limit <= Instant::now() {
+            return Err(Fail::runtime("Tico Gateway run time limit reached; start a new attempt to continue with its current key"));
+        }
+        Ok(limit)
+    }
+
     /// publish_history with the turn's token, logged when it changes (service.py publish).
     /// After a completed turn: its reports and artifacts as Tico files, and its memory commits (service.py).
     async fn after_completed(&self, attempt: &Value, root: &Path, pushed: bool, skipped: &[String], memory_before: &str, own_turn: bool) {
@@ -937,8 +950,7 @@ impl Runner {
                 }
             }
             let previous = self.state.session(&bot, &conv, &session_runtime)?;
-            let minutes = config["max_run_minutes"].as_f64().or_else(|| text_of(&config["max_run_minutes"]).parse().ok()).unwrap_or(60.0);
-            let limit = Instant::now() + Duration::from_secs_f64(60.0 * minutes);
+            let limit = self.run_deadline(&aid, &config, vault.relay.as_ref())?;
             prepared = true;
             if busy.is_some() || held.is_some() {
                 return Ok(()); // the fallback takes the turn below; this harness never starts
@@ -1131,6 +1143,7 @@ impl Runner {
                 if let Some(c) = &capture {
                     h.set_capture(c);
                 }
+                let limit = self.run_deadline(&aid, &config, vault.relay.as_ref())?;
                 h.start().await?;
                 let settings = Settings {
                     cwd: execution_path.display().to_string(),
@@ -1162,8 +1175,6 @@ impl Runner {
                 let text = format!("{}\n\n{}", crate::prompt::replayed(&attempt, &names, None, false, &replay), crate::fallback::prompt_note(&because, &primary, &hop));
                 let t = h.start_turn(&th, &text, hop.reasoning_effort.as_deref()).await?;
                 turn = Some(t.clone());
-                let minutes = config["max_run_minutes"].as_f64().or_else(|| text_of(&config["max_run_minutes"]).parse().ok()).unwrap_or(60.0);
-                let limit = Instant::now() + Duration::from_secs_f64(60.0 * minutes);
                 let d = Drive {
                     aid: &aid,
                     host: h,

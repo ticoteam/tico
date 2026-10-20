@@ -124,6 +124,8 @@ const shot = async (locator, name) => { if (SHOTS) await locator.screenshot({pat
     assert.match(await signIn.locator('[data-status]').innerText(), /Signed in\. Codex \(ChatGPT\) · team-chatgpt is ready on Team box/);
     await row.locator('[data-chip="profile:team-chatgpt:codex"]').waitFor({timeout: 15000});
     await signIn.locator('[data-close]').last().click();
+    // Close clears [open] before its close-event handler removes the node.
+    await page.locator('dialog[data-marker=same]').waitFor({state: 'detached'});
     assert.equal(await page.locator('dialog[data-marker=same]').count(), 0);
 
     // Rename a subscription: its name only; login and bots stay.

@@ -619,7 +619,9 @@ def install_credentials(app,store,delegate=None,propose=None):
             people=[dict(r) for r in c.execute('SELECT id,name,email FROM humans ORDER BY name')] if admin else []
             bots=[dict(r) for r in c.execute('SELECT b.slug AS id,b.display_name AS name,bc.operator FROM bots b JOIN bot_config bc ON bc.bot=b.slug ORDER BY b.display_name')
                   if admin or r['operator']==H.actor_id(who.actor) or (added and vault.manages_bot(c,who,'bot:'+r['id']))]
-            return {'credentials':rows,'can_manage':admin,'people':people,'bots':bots,'configured':vault.configured,'key_storage':vault.cipher.storage}
+            # The computers a model key is shared with by name (Settings > Computers, "Shared with"), named on its grants.
+            computers=[dict(r) for r in c.execute("SELECT id,label FROM runners ORDER BY lower(label),id")] if admin else []
+            return {'credentials':rows,'can_manage':admin,'people':people,'bots':bots,'computers':computers,'configured':vault.configured,'key_storage':vault.cipher.storage}
 
     @app.post('/api/v2/credentials')
     def create(request:Request,body:CredentialWrite):

@@ -15,7 +15,7 @@
 //! only, a model call (`POST /chat/completions`): the key opens nothing else at the Gateway for a turn.
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::Value;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -37,15 +37,17 @@ pub const NOT_ISOLATED: &str = "Tico models need a runner that runs bots as thei
 computer can't, so pick another model or move the bot (not_isolated)";
 const MAX_HEAD: usize = 64 * 1024;
 const MAX_BODY: usize = 32 * 1024 * 1024;
+/// HQ keeps a rotated key for 24 hours. End this attempt before then, leaving one model call's 90-second budget.
+const MAX_RUN_SECONDS: u64 = 24 * 60 * 60 - 90;
 /// The bot's opaque id for the Gateway's ledger (clients/gateway.py BOT_HEADER): the relay's, never the turn's.
 const BOT_HEADER: &str = "x-tico-bot";
 /// The server hands the bot id under this name, beside the key and URL (backend/gateway_connection.py RUN_BOT_ENV).
 const BOT_ENV: &str = "TICOAI_GATEWAY_BOT";
 /// Request headers never passed on: the turn's token, the bot id it could name itself, and what belongs to this
-/// connection only.
+/// connection only, and the harness's user agent (the relay sends Tico's own).
 const DROP_REQUEST: &[&str] = &[
     "authorization", BOT_HEADER, "host", "connection", "content-length", "transfer-encoding", "proxy-authorization",
-    "proxy-connection", "keep-alive", "te", "upgrade", "expect", "trailer",
+    "proxy-connection", "keep-alive", "te", "upgrade", "expect", "trailer", "user-agent",
 ];
 /// Response headers never passed back: the relay's answer ends when it closes the connection.
 const DROP_RESPONSE: &[&str] =
@@ -57,7 +59,15 @@ pub struct Relay {
     pub url: String,
     pub token: String,
     pub dir: Option<std::path::PathBuf>,
+    deadline: Instant,
     task: tokio::task::JoinHandle<()>,
+}
+
+impl Relay {
+    /// Every harness in this attempt shares the deadline from when its key was pinned. A fallback never resets it.
+    pub fn limit(&self, requested: Instant) -> Instant {
+        requested.min(self.deadline)
+    }
 }
 
 impl Drop for Relay {
@@ -170,11 +180,21 @@ pub async fn hand_to_turn(
     Ok(())
 }
 
+/// The agent every call to the Gateway carries: Cloudflare in front of Tico HQ refuses a library's default agent
+/// before the call reaches the Gateway, and a harness's own agent (pi's) is not one Tico controls.
+pub fn user_agent() -> String {
+    format!("Tico-Client/{}", crate::runner::RUNNER_VERSION)
+}
+
 /// Start a relay to the Gateway at `upstream` with `key`, naming the turn's bot by `bot` on every call.
 pub async fn start(upstream: &str, key: String, bot: Option<String>) -> Result<Relay, String> {
+    let deadline = Instant::now() + Duration::from_secs(MAX_RUN_SECONDS);
     let base = safe_upstream(upstream).ok_or("the Gateway URL is neither https nor this computer")?;
     let local = base.starts_with("http://");
-    let mut builder = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).connect_timeout(Duration::from_secs(30));
+    let mut builder = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(Duration::from_secs(30))
+        .user_agent(user_agent());
     if local {
         builder = builder.no_proxy();
     }
@@ -198,7 +218,7 @@ pub async fn start(upstream: &str, key: String, bot: Option<String>) -> Result<R
             }
         }
     });
-    Ok(Relay { url: format!("http://127.0.0.1:{port}{PREFIX}"), token, dir: None, task })
+    Ok(Relay { url: format!("http://127.0.0.1:{port}{PREFIX}"), token, dir: None, deadline, task })
 }
 
 fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
@@ -315,8 +335,39 @@ mod tests {
     use super::*;
     use std::sync::Mutex;
 
+    #[tokio::test]
+    async fn primary_and_fallback_share_one_deadline_inside_the_rotation_grace() {
+        let before = Instant::now();
+        let relay = start("http://127.0.0.1:9/v1/gateway", "synthetic-key".into(), None).await.unwrap();
+        let contract: Value = serde_json::from_str(include_str!("../../backend/tests/fixtures/gateway_enroll_contract.json")).unwrap();
+        let grace = contract["grace_seconds"].as_u64().unwrap();
+        assert_eq!(grace, 24 * 60 * 60);
+        let ordinary = before + Duration::from_secs(3600);
+        assert_eq!(relay.limit(ordinary), ordinary, "a normal turn keeps its own shorter limit");
+        let requested = before + Duration::from_secs(2 * grace);
+        let primary = relay.limit(requested);
+        assert!(primary < before + Duration::from_secs(grace));
+        assert!(primary >= before + Duration::from_secs(grace - 90));
+        // A later harness asks for a fresh run limit; it still cannot move the key's original deadline.
+        assert_eq!(relay.limit(requested + Duration::from_secs(3600)), primary);
+    }
+
     /// A fake Gateway on 127.0.0.1: keeps each request's head and body, answers with `reply` (raw bytes).
     async fn upstream(reply: Vec<u8>) -> (String, Arc<Mutex<Vec<String>>>) {
+        upstream_with(Arc::new(move |_: &str| reply.clone())).await
+    }
+
+    /// The Gateway behind its edge, which answers 403 to any user agent but Tico's before the Gateway sees the call.
+    async fn behind_the_edge(reply: Vec<u8>) -> (String, Arc<Mutex<Vec<String>>>) {
+        upstream_with(Arc::new(move |request: &str| {
+            let tico = request.lines().any(|l| l.to_ascii_lowercase().starts_with("user-agent: tico-client/"));
+            if tico { reply.clone() } else { b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n".to_vec() }
+        }))
+        .await
+    }
+
+    /// `upstream`, answering each request with `reply_to(request)`.
+    async fn upstream_with(reply_to: Arc<dyn Fn(&str) -> Vec<u8> + Send + Sync>) -> (String, Arc<Mutex<Vec<String>>>) {
         let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let seen = Arc::new(Mutex::new(vec![]));
@@ -338,7 +389,9 @@ mod tests {
                         break;
                     }
                 }
-                kept.lock().unwrap().push(String::from_utf8_lossy(&buf[..got]).to_string());
+                let request = String::from_utf8_lossy(&buf[..got]).to_string();
+                let reply = reply_to(&request);
+                kept.lock().unwrap().push(request);
                 let _ = socket.write_all(&reply).await;
                 let _ = socket.shutdown().await;
             }
@@ -353,7 +406,7 @@ mod tests {
     async fn send(relay: &Relay, method: &str, token: &str, path: &str, body: &str) -> String {
         let mut socket = TcpStream::connect(relay.url.trim_start_matches("http://").split('/').next().unwrap()).await.unwrap();
         let request = format!(
-            "{method} {path} HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nX-Kept: yes\r\nX-Tico-Bot: gb_forged\r\nContent-Length: {}\r\n\r\n{body}",
+            "{method} {path} HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nUser-Agent: OpenAI/JS 5.8.2\r\nX-Kept: yes\r\nX-Tico-Bot: gb_forged\r\nContent-Length: {}\r\n\r\n{body}",
             body.len()
         );
         socket.write_all(request.as_bytes()).await.unwrap();
@@ -382,6 +435,17 @@ mod tests {
         assert!(!request.contains(&relay.token) && lower.contains("x-kept: yes") && request.ends_with(&big));
         // The bot id is the server's, never one the turn names itself.
         assert!(lower.contains("x-tico-bot: gb_0123456789abcdef") && !lower.contains("gb_forged"), "{request}");
+    }
+
+    #[tokio::test]
+    async fn a_turn_gets_past_an_edge_that_refuses_any_agent_but_ticos() {
+        let (url, seen) = behind_the_edge(SSE.to_vec()).await;
+        let relay = start(&url, KEY.into(), None).await.unwrap();
+        let out = call(&relay, &relay.token, "/gateway/chat/completions", "{}").await;
+        assert!(out.starts_with("HTTP/1.1 200 OK\r\n"), "{out}");
+        let request = seen.lock().unwrap()[0].to_ascii_lowercase();
+        let agents: Vec<&str> = request.lines().filter(|l| l.starts_with("user-agent:")).collect();
+        assert_eq!(agents, [format!("user-agent: tico-client/{}", crate::runner::RUNNER_VERSION)], "{request}");
     }
 
     #[tokio::test]

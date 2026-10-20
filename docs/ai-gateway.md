@@ -80,6 +80,10 @@ automatically**. Nobody types or sees the code or the key. The server replaces t
 itself. The invite is only needed for this first sign-up: after it, the server keeps its key with no invite in the
 environment.
 
+When the key rotates, a running bot keeps its previous key for up to 24 hours, with the same install spending cap.
+Turning the install off still stops all its keys immediately. A run that could exceed that grace is limited to just
+under 24 hours, including any fallback; its run details explain the shorter limit.
+
 - A key you paste on the card, or one the server's environment sets, wins over the automatic key.
 - **Clear key** removes the automatic key, and the server does not get a new one by itself. **Connect automatically**
   on the card turns it back on.
