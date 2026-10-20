@@ -91,7 +91,7 @@ def post(api, path, body, token="ana-test", key=None, expected=200):
     if expected == 200 and isinstance(data, dict):
         if path.startswith("chat/"):
             return data["message"]
-        if set(data) == {"task"}:
+        if "task" in data and set(data) <= {"task", "readback"}:   # a relation write reads back what it stored
             return data["task"]
     return data
 

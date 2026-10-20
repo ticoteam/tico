@@ -313,7 +313,7 @@ def classify(message):
     if body.startswith(("New task from", "Open:", "Next-run task:")):
         return "assignment", "An assignment"
     if body.startswith(("Unblocked:", "All subtasks done")) or refs.get("subtask") or refs.get("worktree_wait") \
-            or wake in ("watcher", "watcher-done", "resume") or refs.get("approval"):
+            or wake in ("watcher", "watcher-done", "resume") or refs.get("approval") or refs.get("milestone"):
         return "dependency", "An awaited result"
     if body.startswith(("Stuck:", "Your task for")) or refs.get("setup_held") or wake == "stuck_cause":
         return "blocker", "A blocker"

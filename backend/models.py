@@ -399,6 +399,13 @@ class TaskLink(Contract):
     wake_once: bool | None = None
 
 
+class TaskWait(Contract):
+    """What the task waits on: `task:<id>` (blocked_by), `pr:<url>` or `pr:<task>` (until that pull request merges),
+    `release:<tag>` (until that release is published). `remove` takes it off."""
+    on: Annotated[str, Field(min_length=3, max_length=400)]
+    remove: bool = False
+
+
 class TaskRelation(Contract):
     """`{id} kind {task}`: parent (task is its parent), blocks, blocked_by, related, duplicate_of,
     follow_up (it was split off or followed up from task)."""

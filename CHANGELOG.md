@@ -8,6 +8,14 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Wait for a milestone, not the whole task**: `hub task wait <id> --on pr:<url>` waits until that pull request
+  merges, `--on release:v0.3.64` until that release is published (`task:<id>` is blocked_by). The owner gets one wake
+  when it happens, while the task it came from keeps its own step (In QA, a release watch). A wait made after the
+  merge, or a merge that arrived while the server was down, is woken once by the minute sweep; a replayed webhook
+  never wakes it twice. The task page shows it under Related ("Waits for PR #943 to merge"). MCP `hub_task_wait`.
+- **Relation writes read back their direction**: `hub task relate`, `hub_task_relate`, task create with relations and
+  `hub task wait` answer with what was stored, from both ends ("#237 waits for #233" / "#233 blocks #237"), so a
+  reversed link is visible in the reply.
 - **Roadmap items move with their Dev tickets by rule**: a Product roadmap item counts the Dev tickets linked to
   it as children and as blocked by alike. Linking alone moves nothing: it is **Building** once the first ticket is In
   Progress or later, at the new **Ready to ship** step (right after Building, shown publicly as "In progress") once

@@ -26,7 +26,7 @@ from . import repo_waits
 from . import built_on
 from . import agents, app_delivery, batch, external_sync, inbox_isolation, mcp_oauth, harness_actions, model_login, oidc, personal_tokens, views
 from . import owner_link
-from . import check_models, run_triggers, team_rules, update_feeds, topic_change, usage_limits, wake_presets, visuals, wake_rules, quiet_work
+from . import check_models, run_triggers, team_rules, update_feeds, topic_change, usage_limits, wake_presets, visuals, wake_rules, quiet_work, milestone_waits
 from . import task_privacy as privacy
 from . import task_relations as TR
 from . import task_roles as TRo
@@ -990,6 +990,8 @@ def create_app(settings=None):
             value["links"] = H.task_links(c, row["id"])
             from .worktree_waits import for_task as worktree_waits_for
             value["worktree_waits"] = worktree_waits_for(c, row["id"])
+            # What it waits for besides tasks: a pull request to merge, a release to be published (Dev 256).
+            value["milestone_waits"] = milestone_waits.waits(c, row["id"])
             value["children_summary"] = H.children_summary(c, row["id"], visible_sql)
             value["pr_state"] = H.pr_state(value["links"])
             if parts is None:
@@ -3095,8 +3097,10 @@ def create_app(settings=None):
             c.execute("UPDATE tasks SET request_id=? WHERE id=?", (inherited_request or request_id, row["id"]))
         for url in body.links:
             H.task_link(c, who.actor, row["id"], url, mover=True)
+        readback = []
         for other, kind in others:
-            TR.relate(c, who.actor, row["id"], other, kind, mover=mover(c, who) or None)
+            changed = TR.relate(c, who.actor, row["id"], other, kind, mover=mover(c, who) or None)
+            readback += TR.readback(c, row["id"], other, kind, changed=changed)
         if body.roles:
             try:
                 TRo.set_roles(c, who.actor, row["id"], body.roles, mover=mover(c, who) or None)
@@ -3104,6 +3108,7 @@ def create_app(settings=None):
                 raise Problem("roles", str(exc), 422)
         note = usage_limits.warning(c, owner) or H.setup_hold(c, owner)
         return {"task": task_view(H.task(c, row["id"]), c, visible_sql=auth.task_sql(c, who), who=who),
+                **({"readback": readback} if readback else {}),
                 **({"warning": note} if note else {}), **({"warnings": row["warnings"]} if row.get("warnings") else {})}
 
     @app.post("/api/v2/tasks")
@@ -3497,8 +3502,46 @@ def create_app(settings=None):
             other_id = auth.resolve_task(c, who, body.task)
             auth.task(c, who, task_id)
             auth.task(c, who, other_id)
-            TR.relate(c, who.actor, task_id, other_id, body.kind, remove=body.remove, mover=mover(c, who) or None)
-            return {"task": task_view(H.task(c, task_id), c, visible_sql=auth.task_sql(c, who), who=who)}
+            changed = TR.relate(c, who.actor, task_id, other_id, body.kind, remove=body.remove,
+                                mover=mover(c, who) or None)
+            # The stored direction in words, from both ends (Dev 256): a reversed write shows in the reply.
+            return {"readback": TR.readback(c, task_id, other_id, body.kind, remove=body.remove, changed=changed),
+                    "task": task_view(H.task(c, task_id), c, visible_sql=auth.task_sql(c, who), who=who)}
+        return mutate(request, body, work)
+
+    @app.post("/api/v2/tasks/{tid}/waits")
+    def task_wait_on(request: Request, tid: str, body: M.TaskWait):
+        """Wait on `task:<id>` (blocked_by), `pr:<url|task>` (until it merges) or `release:<tag>` (until it is
+        published); `remove` takes the wait off. The upstream task never moves (backend/milestone_waits.py)."""
+        who = request.state.identity
+        def work(c):
+            task_id = auth.resolve_task(c, who, tid)
+            row = auth.task(c, who, task_id)
+            kind, _, value = body.on.partition(":")
+            if kind.strip().lower() == "task":
+                other_id = auth.resolve_task(c, who, value.strip())
+                auth.task(c, who, other_id)
+                changed = TR.relate(c, who.actor, task_id, other_id, "blocked_by", remove=body.remove,
+                                    mover=mover(c, who) or None)
+                readback = TR.readback(c, task_id, other_id, "blocked_by", remove=body.remove, changed=changed)
+            else:
+                H._writer(c, who.actor)
+                H._task_private_writer(c, who.actor, row)
+                TR._mine(c, who.actor, row, mover(c, who))
+                if body.remove:
+                    milestone_waits.remove(c, who.actor, row, body.on, release_repo=settings.release_repo)
+                    readback = [f"Removed: {TR._name(c, task_id)} no longer waits for {body.on.strip()}"]
+                else:
+                    def resolve(value):
+                        other = auth.resolve_task(c, who, value)
+                        auth.task(c, who, other)
+                        return other
+                    wait = milestone_waits.add(c, who.actor, row, body.on, release_repo=settings.release_repo,
+                                               resolve_task=resolve)
+                    readback = [("" if wait["added"] else "Already: ") + f"{TR._name(c, task_id)} {wait['sentence']}"
+                                + (" (already happened: woken once)" if wait["woke_at"] else "")]
+            return {"readback": readback,
+                    "task": task_view(H.task(c, task_id), c, visible_sql=auth.task_sql(c, who), who=who)}
         return mutate(request, body, work)
 
     @app.get("/api/v2/preferences/{key}")

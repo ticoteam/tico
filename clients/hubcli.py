@@ -59,6 +59,8 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            --note is then your ask to them, one or two plain sentences:
                                            "Approve the video tool trial on Thursday? If yes, I'll send the invite."
     hub task close <id> [--note "..."]
+    hub task wait <id> --on task:<id>|pr:<url>|release:<tag>
+                                           wait on a task, a PR merging or a release; one wake when it happens
     hub task snooze <id> --until DATE      set it aside until DATE: off the lists and quiet until then
     hub task unsnooze <id>                 bring a snoozed task back now
     hub task attach <id> <file> [--name "..."]
@@ -1004,6 +1006,14 @@ def parser():
                         "follow_up: it was split off or followed up from task")
     s.add_argument("--remove", action="store_true", help="take it off instead")
     s.set_defaults(fn="task relate")
+    s = task.add_parser("wait", help="make a task wait on another task, a pull request merging or a release being "
+                                     "published; prints what was stored")
+    s.add_argument("id")
+    s.add_argument("--on", dest="wait_on", required=True,
+                   help="task:<id> (blocked_by), pr:<url> or pr:<task> (until that pull request merges), "
+                        "release:<tag> (until that release is published). The task it waits on keeps its own step.")
+    s.add_argument("--remove", action="store_true", help="take the wait off instead")
+    s.set_defaults(fn="task wait")
     s = task.add_parser("label", help="add or remove labels on a task")
     s.add_argument("id")
     s.add_argument("--add", action="append")

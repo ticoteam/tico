@@ -1044,7 +1044,8 @@ def task_link(api, args):
 @tool("hub_task_relate", "Relate another task to this one, read as `id kind task`: parent (task is its "
       "parent; moves it and its subtree), blocks, blocked_by (it waits on task; several are allowed), "
       "related (they belong together, the default), duplicate_of, follow_up (it was split off or followed "
-      "up from task). `remove` takes the relation off.",
+      "up from task). `remove` takes the relation off. The reply's `readback` says what was stored, both ends "
+      "(\"#237 waits for #233\" / \"#233 blocks #237\"): check it before reporting the link as fixed.",
       {"id": TASK_ID, "task": {**TASK_ID, "description": "The other task: its id or first 8 or more characters"},
        "kind": {"type": "string", "enum": ["parent", "blocks", "blocked_by", "related", "duplicate_of", "follow_up"], "default": "related"},
        "remove": {"type": "boolean", "default": False}},
@@ -1052,6 +1053,17 @@ def task_link(api, args):
 def task_relate(api, args):
     return api.post(f"tasks/{args['id']}/relations", {"task": args["task"], "kind": args.get("kind") or "related",
                                                       "remove": bool(args.get("remove"))}, key=_key(args))
+
+
+@tool("hub_task_wait", "Make a task wait on another task (task:<id>, blocked_by), a pull request merging (pr:<url>, "
+      "or pr:<task> for the one pull request linked on that task) or a release being published (release:<tag>). The "
+      "owner gets one wake when it happens; the task waited on keeps its own step. The reply's `readback` says what was "
+      "stored: check it before reporting the wait as set. `remove` takes it off.",
+      {"id": TASK_ID, "on": _s("task:<id>, pr:<url|task> or release:<tag>"),
+       "remove": {"type": "boolean", "default": False}},
+      required=("id", "on"), writes=True)
+def task_wait(api, args):
+    return api.post(f"tasks/{args['id']}/waits", {"on": args["on"], "remove": bool(args.get("remove"))}, key=_key(args))
 
 
 # ----------------------------------------------------------------------------- goals

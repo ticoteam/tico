@@ -133,6 +133,10 @@ class Scheduler:
             # Quiet tasks a run deferred to a time that has come get their run (backend/quiet_work.py).
             from . import quiet_work
             quiet_work.due(c, stamp(at), failures)
+            # A milestone wait whose pull request merged or release was published, while the server was down or
+            # before its wake was written, gets its one wake (backend/milestone_waits.py).
+            from . import milestone_waits
+            milestone_waits.reconcile(c, failures)
             for row in H.tasks_due_for_bots(c, stamp(at + timedelta(days=1))[:10]):
                 with isolated(c, "reminder", row["id"], failures):
                     due = H.parse_ts(row.get("due"))
