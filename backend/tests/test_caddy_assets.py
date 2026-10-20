@@ -91,6 +91,28 @@ def test_absent_optional_mount_is_inert_but_explicit_serving_needs_required_conf
     assert not list(tmp_path.iterdir())
 
 
+def test_unwritable_unmounted_directory_is_inert_while_off_but_refuses_explicit_serving(tmp_path):
+    # An older compose mounts no volume, so the image's directory sits under the read-only root.
+    directory = tmp_path / "caddy-generated"
+    directory.mkdir()
+    directory.chmod(0o555)
+    try:
+        assert not os.access(directory, os.W_OK)
+        for env in ({"TICO_CADDY_DIR": str(directory)},
+                    {"TICO_CADDY_DIR": str(directory), "TICO_DOMAIN": APP, "TICO_CADDY_VISUALS": "0"}):
+            assert assets.prepare(env) == {"written": False, "path": None, "generation": None,
+                                           "serve_visuals": False, "reason": None}
+        with pytest.raises(RuntimeError, match="^caddy_config_write_failed$"):
+            assets.prepare({"TICO_CADDY_DIR": str(directory), "TICO_DOMAIN": APP, "TICO_CADDY_VISUALS": "1",
+                            "TICO_VISUAL_ORIGIN": "https://" + VISUAL})
+        assert not list(directory.iterdir())
+    finally:
+        directory.chmod(0o755)
+    result = assets.prepare({"TICO_CADDY_DIR": str(directory), "TICO_DOMAIN": APP})
+    assert result["written"] and result["path"] == str(directory / "caddy.json")
+    assert hosts(json.loads((directory / "caddy.json").read_bytes())) == [APP]
+
+
 def test_runner_collision_validation_preserves_canonical_runner_and_refuses_ambiguous_optional_url(tmp_path, caplog):
     env = {"TICO_CADDY_DIR": str(tmp_path), "TICO_DOMAIN": APP, "TICO_CADDY_VISUALS": "1",
            "TICO_VISUAL_ORIGIN": "https://" + VISUAL}

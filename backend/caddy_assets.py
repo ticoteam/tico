@@ -158,19 +158,24 @@ def _runner_host(value, app):
 def prepare(environ=os.environ):
     """Atomically replace desired config before health; return nonsecret metadata.
 
-    A missing optional volume is inert while off. Mounted volumes always receive
-    the new generation, including app-only/disabled states. Explicit opt-in with
-    missing required app/volume or write failure refuses startup. Optional visual
-    mistakes leave the app working with a reason-only warning.
+    A missing optional volume is inert while off, and so is an unwritable one: the
+    image directory under a read-only root when an older compose mounts no volume.
+    Writable mounted volumes always receive the new generation, including
+    app-only/disabled states. Explicit opt-in with missing required app/volume or
+    write failure refuses startup. Optional visual mistakes leave the app working
+    with a reason-only warning.
     """
     directory = Path(environ.get("TICO_CADDY_DIR", "/caddy-generated"))
     enabled = environ.get("TICO_CADDY_VISUALS") == "1"
+    inert = {"written": False, "path": None, "generation": None, "serve_visuals": False, "reason": None}
     if not directory.exists():
         if enabled:
             raise ValueError("caddy_config_directory_missing")
-        return {"written": False, "path": None, "generation": None, "serve_visuals": False, "reason": None}
+        return inert
     if not directory.is_dir():
         raise ValueError("caddy_config_directory_invalid")
+    if not enabled and not os.access(directory, os.W_OK):
+        return inert
     app_value = environ.get("TICO_DOMAIN", "")
     app = _hostname(app_value, allow_ip=True) if app_value else ""
     if enabled and not app:
