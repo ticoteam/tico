@@ -129,7 +129,8 @@ def test_a_frontend_signs_in_and_gets_a_code_then_a_bearer_session(signin):
     assert signin.sessions() == []
 
 
-def test_alias_entry_preserves_frontend_pkce_without_moving_cookies_or_api_calls(signin):
+def test_alias_entry_preserves_frontend_pkce_without_moving_cookies_or_api_calls(signin, monkeypatch):
+    monkeypatch.setenv("TICO_DOMAIN_ALIASES", "old.acme.example")
     public, alias = "https://tico.acme.example", "https://old.acme.example"
     signin.start(public_url=public)
     target = PROD + "/app/?tab=tasks"

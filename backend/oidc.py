@@ -526,6 +526,9 @@ def register(app, auth):
         return auth.proxy
 
     def canonical_entry(request, path, query):
+        # Existing single-host proxies may replace Host; canonical entry is opt-in with aliases.
+        if not os.environ.get("TICO_DOMAIN_ALIASES", "").strip():
+            return None
         # Pending login cookies are host-only, while the provider's callback is canonical.
         # Compare Host, not the proxy's internal HTTP scheme, and never trust forwarded hosts.
         canonical = urlparse(settings.public_url)

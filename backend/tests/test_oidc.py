@@ -129,7 +129,8 @@ def provider():
 
 
 @pytest.fixture
-def signin(api, provider):
+def signin(api, provider, monkeypatch):
+    monkeypatch.delenv("TICO_DOMAIN_ALIASES", raising=False)
     fake = provider()
     auth = api.app.state.auth
     settings = auth.settings
@@ -203,8 +204,44 @@ def test_cookie_is_host_prefixed_and_secure_on_https(signin):
     assert "Secure" in session and "Path=/" in session and "Domain" not in session
 
 
+@pytest.mark.parametrize("aliases,label", [(None, ""), ("", "Tico account"), (" \t ", "")])
+def test_no_alias_login_preserves_host_rewriting_proxies(signin, monkeypatch, aliases, label):
+    public = "https://app.acme.example"
+    if aliases is not None:
+        monkeypatch.setenv("TICO_DOMAIN_ALIASES", aliases)
+    signin.start(public_url=public, oidc_label=label)
+    # The browser keeps its public HTTPS URL and cookie jar while a proxy replaces Host upstream.
+    signin.api.headers["Host"] = "server:8765"
+    assert me(signin.api).status_code == 401
+    page = signin.api.get(oidc.SIGN_IN_PATH, params={"next": "/tasks?x=1"}, follow_redirects=False)
+    if label:
+        assert page.status_code == 200 and "Sign in with Tico account" in page.text
+        button = re.search(r'<a class="b" href="([^"]+)"', page.text)
+        assert button is not None
+        login = html.unescape(button[1])
+    else:
+        assert page.status_code == 302
+        login = page.headers["location"]
+    assert login.startswith(oidc.LOGIN_PATH + "?")
+    began = signin.api.get(login, follow_redirects=False)
+    query = parse_qs(urlparse(began.headers["location"]).query)
+    assert began.status_code == 302 and query["redirect_uri"] == [public + oidc.CALLBACK_PATH]
+    pending = [cookie for cookie in signin.api.cookies.jar if cookie.name == "__Host-tico_login"]
+    assert len(pending) == 1 and pending[0].domain == "app.acme.example" and not pending[0].domain_specified
+    code, state = signin.fake.approve(began.headers["location"])
+    done = signin.api.get(query["redirect_uri"][0], params={"code": code, "state": state}, follow_redirects=False)
+    assert done.request.headers["host"] == "server:8765"
+    assert "__Host-tico_login=" in done.request.headers["cookie"]
+    assert done.status_code == 302 and done.headers["location"] == "/tasks?x=1"
+    assert signin.fake.token_calls[0]["redirect_uri"] == public + oidc.CALLBACK_PATH
+    assert me(signin.api).status_code == 200 and signin.api.get("/api/me").json()["proxy_session"] is True
+    session = [cookie for cookie in signin.api.cookies.jar if cookie.name == "__Host-tico_session"]
+    assert len(session) == 1 and session[0].domain == "app.acme.example" and not session[0].domain_specified
+
+
 @pytest.mark.parametrize("label", ["", "Tico account"])
-def test_fresh_alias_login_reaches_canonical_before_creating_host_only_cookies(signin, label):
+def test_fresh_alias_login_reaches_canonical_before_creating_host_only_cookies(signin, label, monkeypatch):
+    monkeypatch.setenv("TICO_DOMAIN_ALIASES", "old.acme.example")
     canonical, alias = "https://app.acme.example", "https://old.acme.example"
     signin.start(public_url=canonical, oidc_label=label)
     page = signin.api.get(alias + "/tasks?x=1", headers={"accept": "text/html"}, follow_redirects=False)
@@ -232,6 +269,7 @@ def test_fresh_alias_login_reaches_canonical_before_creating_host_only_cookies(s
 
 
 def test_canonical_entry_uses_only_host_authority_and_preserves_real_ports(signin, monkeypatch):
+    monkeypatch.setenv("TICO_DOMAIN_ALIASES", "old.acme.example")
     for public, hosts, aliases in [
         ("https://app.acme.example", ["app.acme.example", "APP.ACME.EXAMPLE:443"],
          ["old.acme.example", "app.acme.example.evil.example", "app.acme.example.", "app.acme.example:8443", "app.acme.example:0",
@@ -270,6 +308,7 @@ def test_canonical_entry_uses_only_host_authority_and_preserves_real_ports(signi
 
 
 def test_alias_entry_only_keeps_existing_valid_login_arguments(signin, monkeypatch):
+    monkeypatch.setenv("TICO_DOMAIN_ALIASES", "old.acme.example")
     public, alias, frontend = "https://app.acme.example", "https://old.acme.example", "https://frontend.acme.example"
     proxy = signin.start(public_url=public, cors_origins=(frontend,))
 
