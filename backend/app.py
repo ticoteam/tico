@@ -1598,11 +1598,16 @@ def create_app(settings=None):
 
     @app.get("/api/v2/ceo-bot")
     def ceo_bot_switch(request: Request):
-        """The CEO Bot rollout switch (backend/ceo_bot.py)."""
-        auth.domain(request.state.identity)
+        """The CEO Bot rollout switch and its level (backend/ceo_bot.py). How many items it put in each person's Needs
+        you today is the owner's, an admin's and the CEO Bot's to read; anyone else sees only their own count."""
+        who = request.state.identity
+        auth.domain(who)
         from . import ceo_bot
         with store.read() as c:
-            return ceo_bot.view(c)
+            value = ceo_bot.named(c, ceo_bot.view(c))
+        if who.actor != "bot:" + ceo_bot.SLUG and auth.company_role(who) not in ("owner", "admin"):
+            value["asked_today"] = {k: n for k, n in value["asked_today"].items() if k == who.actor}
+        return value
 
     @app.post("/api/v2/ceo-bot")
     def ceo_bot_switch_set(request: Request, body: M.CeoBotSwitch):
@@ -1610,7 +1615,7 @@ def create_app(settings=None):
         who = request.state.identity
         admin_only(who, "turns the CEO Bot on or off")
         from . import ceo_bot
-        return mutate(request, body, lambda c: ceo_bot.set_on(c, who.actor, body.on))
+        return mutate(request, body, lambda c: ceo_bot.named(c, ceo_bot.set_on(c, who.actor, body.on)))
 
     @app.post("/api/v2/goal-manager/turn-on")
     def turn_on_goal_manager(request: Request, body: M.Empty):

@@ -8,6 +8,14 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- **How much your CEO Bot does**: where the CEO Bot switch is on, Settings > CEO Bot has three levels (1 Goals and
+  tracking, 2 Suggests actions, 3 Acts on its own), each with one sentence on what it will and won't do, confirmed
+  before it changes. Every company starts at 1; levels 2 and 3 do what level 1 does until they arrive. Only the owner
+  or an admin changes it, each change logged with who and when; no bot can. At level 1 the CEO Bot asks for the vision
+  first while it is empty, proposes a Why for each goal with none as one Needs you item, sends a Monday note (started
+  when the switch goes on), asks a red or stalled goal's owner what is happening, and changes no tasks. It puts at most
+  5 items a day in one person's Needs you. `hub goal ceo-bot` and `hub goal company` read it
+  ([Goals](docs/goals-and-kpis.md#how-much-your-ceo-bot-does)).
 - **"Sign in with Tico account" on hosted servers, through the ordinary OpenID Connect sign-in**: a new optional
   `TICO_OIDC_LABEL` puts one "Sign in with <label>" button in front of any OpenID Connect provider (unset, sign-in goes
   straight to the provider as before). The setup wizard's new `--auth oidc --issuer <url> --client-id <id>

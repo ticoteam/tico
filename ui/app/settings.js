@@ -37,14 +37,15 @@ function pageSettings() {
   // A repeat visit to the page already on screen (a refresh, a same-route redraw) keeps it: rebuilding
   // it would snap back to the default tab and drop whatever is half typed in a form.
   const built = $('#settings-tabs');
-  if (built && built.dataset.role === (S.me?.role || '')) { settingsShow(SETTINGS_TAB); loadSettings(); return; }
+  if (built && built.dataset.role === (S.me?.role || '') && built.dataset.ceo === String(settingsCeoBotShown())) { settingsShow(SETTINGS_TAB); loadSettings(); return; }
   $('#main').innerHTML = `<div class="meeting-head"><div><h1>Settings</h1>${settingsVersionHTML()}</div>${settingsThemeHTML()}</div>
     <div id="settings-issues"></div>
-    <div class="tabs settings-tabs" id="settings-tabs" data-role="${esc(S.me?.role || '')}" role="tablist" aria-label="Settings">
+    <div class="tabs settings-tabs" id="settings-tabs" data-role="${esc(S.me?.role || '')}" data-ceo="${settingsCeoBotShown()}" role="tablist" aria-label="Settings">
       ${settingsIsAdmin() ? '<button type="button" data-settings-tab="team" role="tab">Team</button>' : ''}
       <button type="button" data-settings-tab="assistant" role="tab">${esc(assistantName())}</button>
       ${settingsIsAdmin() ? '<button type="button" data-settings-tab="people" role="tab">Humans</button>' : ''}
       <button type="button" data-settings-tab="bots" role="tab">Bots</button>
+      ${settingsCeoBotShown() ? '<button type="button" data-settings-tab="ceo" role="tab">CEO Bot</button>' : ''}
       <button type="button" data-settings-tab="devices" role="tab">Computers</button>
       <button type="button" data-settings-tab="providers" role="tab">AI providers</button>
       <button type="button" data-settings-tab="repos" role="tab">Repositories</button>
@@ -117,6 +118,7 @@ function pageSettings() {
     </div>
     <div class="settings-pane" id="settings-inbox" role="tabpanel" hidden><section class="card"><header><h2>Your Google account</h2></header><div id="set-google"></div></section></div>
     <div class="settings-pane" id="settings-history" role="tabpanel" hidden><section class="card"><header><h2>Settings history</h2></header><div id="set-history">${skelRows(3, {card: true, dot: false})}</div></section></div>
+    ${settingsCeoBotShown() ? `<div class="settings-pane" id="settings-ceo" role="tabpanel" hidden><section class="card"><header><h2>How much your CEO Bot does</h2></header><div id="set-ceo-bot">${skelRows(3, {card: true, dot: false})}</div></section></div>` : ''}
     ${S.me?.role === 'owner' ? `<div class="settings-pane" id="settings-privacy" role="tabpanel" hidden><section class="card"><header><h2>Privacy</h2></header><div id="set-privacy">${skelRows(3, {card: true, dot: false})}</div></section></div>
     <div class="settings-pane" id="settings-storage" role="tabpanel" hidden><section class="card"><header><h2>Storage</h2></header><div id="set-storage">${skelRows(3, {card: true, dot: false})}</div></section></div>` : ''}
     <dialog class="tmodal" id="people-dialog" aria-label="Humans"></dialog>
@@ -168,7 +170,7 @@ function settingsShow(tab) {
   const tabs = [...document.querySelectorAll('#settings-tabs [data-settings-tab]')];
   // Tab names come from the navigation; recheck access in case this person's role just changed.
   const owner = S.me?.role === 'owner';
-  const access = {team: settingsIsAdmin(), people: settingsIsAdmin(), history: owner, privacy: owner, storage: owner};
+  const access = {team: settingsIsAdmin(), people: settingsIsAdmin(), ceo: settingsCeoBotShown(), history: owner, privacy: owner, storage: owner};
   SETTINGS_TAB = access[tab] !== false && tabs.some(button => button.dataset.settingsTab === tab) ? tab : 'devices';
   try { sessionStorage.setItem(SETTINGS_TAB_KEY, SETTINGS_TAB); } catch { /* private window: the tab is just not remembered */ }
   if (['health', 'history', 'privacy', 'storage', 'recurring', 'triggers'].includes(SETTINGS_TAB)) $('#settings-more').open = true;
@@ -197,6 +199,8 @@ function settingsShow(tab) {
   if (peoplePane) { peoplePane.hidden = SETTINGS_TAB !== 'people'; if (SETTINGS_TAB === 'people' && !formBusy(peoplePane)) void renderSettingsPeople(); }
   const privacyPane = $('#settings-privacy');
   if (privacyPane) { privacyPane.hidden = SETTINGS_TAB !== 'privacy'; if (SETTINGS_TAB === 'privacy') void renderSettingsPrivacy(); }
+  const ceoPane = $('#settings-ceo');
+  if (ceoPane) { ceoPane.hidden = SETTINGS_TAB !== 'ceo'; if (SETTINGS_TAB === 'ceo') void renderSettingsCeoBot(); }
   const storagePane = $('#settings-storage');
   if (storagePane) { storagePane.hidden = SETTINGS_TAB !== 'storage'; if (SETTINGS_TAB === 'storage') void renderSettingsStorage(); }
   const healthPane = $('#settings-health');

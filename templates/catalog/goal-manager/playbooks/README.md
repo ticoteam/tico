@@ -18,6 +18,7 @@ to a file, then `hub proposal create --kind <kind> [--goal ID] [--kpi ID] --payl
 | `goal_wording` | `--goal` | `{"title": "...", "body": "..."}` (either one) |
 | `goal_kpi` | `--goal` | `{"kpi_id": "..."}` to link an existing KPI, or `{"kpi": {"name", "definition", "unit", "direction", "cadence", "source_note"}, "owner": "...", "target": {...}}` for a new one |
 | `kpi_definition` | `--kpi` | any of `{"name", "definition", "unit", "direction", "cadence", "source_note"}` |
+| `goal_why` | `--goal` | `{"why": "one line tying the goal to the vision"}` (only where the CEO Bot is on) |
 | `kpi_target` | `--kpi` and `--goal` | `{"kind": "improve", "baseline": 40, "target": 65, "deadline": "2026-12-31"}` or `{"kind": "maintain", "min": 40, "max": 60}` |
 
 `direction` is up, down or range; `cadence` is daily, weekly or monthly. An improvement target needs a target and a

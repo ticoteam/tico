@@ -114,6 +114,8 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            how the owner says it is going, in their words (colours a goal with no KPI)
     hub goal checkin-list <id>             a goal's check-ins, newest first
     hub goal needs-you                     red KPIs on your goals, stale KPIs you own, proposals to confirm
+    hub goal company                       the company's Vision and Description (read-only)
+    hub goal ceo-bot                       the CEO Bot switch, how much it does (level 1-3) and today's Needs you count
     hub goal update <id> [--title ...] [--body ...|--body-file f] [--parent ID|--parent ""] [--owner X]
                     [--rank N|--top]
     hub kpi list [--goal ID] [--owner me|X] [--unlinked] [--bot SLUG] [--archived]
@@ -1100,6 +1102,10 @@ def parser():
     s.set_defaults(fn="goal checkin-list")
     s = goal.add_parser("needs-you", help="red KPIs on your goals, stale KPIs you own, proposals to confirm")
     s.set_defaults(fn="goal needs-you")
+    s = goal.add_parser("company", help="the company's Vision and Description (read-only)")
+    s.set_defaults(fn="goal company")
+    s = goal.add_parser("ceo-bot", help="the CEO Bot switch, its level and today's Needs you count per person")
+    s.set_defaults(fn="goal ceo-bot")
     def target_flags(s):
         s.add_argument("--baseline", type=float, help="improvement: where it starts (default the latest reading)")
         s.add_argument("--target", type=float, help="improvement: the value to reach; needs --deadline")

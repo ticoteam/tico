@@ -1607,6 +1607,10 @@ class CeoBotSwitch(Contract):
     on: bool
 
 
+class CeoBotLevel(Contract):
+    level: Literal[1, 2, 3]
+
+
 class UsageCountNotice(Contract):
     state: Literal["shown", "dismissed"]
 

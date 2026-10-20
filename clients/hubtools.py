@@ -1138,6 +1138,19 @@ def goal_needs_you(api, args):
     return api.get("goals/needs-you")
 
 
+@tool("hub_goal_company", "The company's Vision and Description (the Company section at the top of Goals, where the CEO "
+      "Bot is on), empty until a person writes them. Read-only: only the owner or an admin changes them.", {})
+def goal_company(api, args):
+    return api.get("company")
+
+
+@tool("hub_goal_ceo_bot", "Whether the CEO Bot switch is on, how much it does (level 1 goals and tracking, 2 suggests "
+      "actions, 3 acts on its own; only a person changes it) and how many items it put in each person's Needs you "
+      "today against its cap of 5.", {})
+def goal_ceo_bot(api, args):
+    return api.get("ceo-bot")
+
+
 @tool("hub_goal_update", "Edit a goal: title, body, the goal it serves, its owner, or its place in "
       "the owner's order. Moving it is for the parent's owner or someone above.",
       {"id": _s("Goal id"), "title": _s("New title"), "body": _s("New body"),

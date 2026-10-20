@@ -152,6 +152,25 @@ gave the bot while the switch was on stays.
 With the switch on, Goals also opens with the [Company section](#the-company-section) and each goal gets a
 [Why line](#a-goals-why).
 
+### How much your CEO Bot does
+
+With the switch on, **Settings > CEO Bot** has three levels, each with one sentence on what the CEO Bot will and won't
+do, shown again before you confirm a change:
+
+1. **Goals and tracking**, where every company starts: what the Goal Manager does, plus asking for the vision while it
+   is empty (first in the owner's list), proposing a Why for each goal with none, a Monday note in the owner's chat
+   and asking a red or stalled goal's owner what is happening. It never changes anyone's tasks.
+2. **Suggests actions** and 3. **Acts on its own** can be chosen already, but do what level 1 does until they arrive
+   in a later release; their sentences say so.
+
+Only the owner or an admin changes the level, on their own click; no bot can, the CEO Bot included, nor the Assistant
+acting for someone. Each change is kept with who and when (`GET /api/v2/ceo-bot`, `level_history`;
+`POST /api/v2/ceo-bot/level` with `{"level": 2}`). Turning the switch on starts the Monday note (the weekly goals
+review); turning it off pauses it again only if the switch started it.
+
+At every level, the CEO Bot puts at most 5 items a day (UTC) in one person's **Needs you**, the vision first; the rest
+wait for the next day. The server refuses a sixth.
+
 ### The Company section
 
 Only with the [CEO Bot switch](#the-ceo-bot-switch) on, the top of Goals is a **Company** section with two fields:
@@ -191,7 +210,8 @@ other Why still waiting on that goal.
 A goal with no accepted Why shows "Not tied to the vision". That is a note, not an error.
 
 Bots, the CEO Bot included, only propose a Why. They can never accept one or write one directly. A waiting Why
-shows on its goal, not under **Needs you**, and files no task of its own.
+shows on its goal, and all the Why lines waiting on one person are one item in their **Needs you**, "These goals need
+a Why line", never one per goal. It closes by itself once every one is settled.
 
 With the switch off, the Company section and the Why lines are hidden, and every write to them answers `409`.
 What was saved is kept and shows again when the switch is turned back on.

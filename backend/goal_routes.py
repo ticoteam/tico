@@ -197,6 +197,24 @@ def install(app, store, auth, mutate, settings):
             return company_view(c, who)
         return mutate(request, body, work)
 
+    # ------------------------------------------------------------------ how much the CEO Bot does
+    @app.post("/api/v2/ceo-bot/level")
+    def ceo_bot_level(request: Request, body: M.CeoBotLevel):
+        """Settings > CEO Bot, "How much your CEO Bot does": the owner or an admin picks level 1, 2 or 3 on their own
+        click; each change is kept with who and when. A bot never does, the CEO Bot included, nor the Assistant
+        acting for someone."""
+        who = request.state.identity
+        def work(c):
+            auth.domain(who)
+            if not company_editor(who):
+                raise Problem("forbidden", "Only the owner or an admin chooses how much the CEO Bot does, on their own "
+                              "click; no bot changes it, the CEO Bot included", 403)
+            if not ceo_bot.on(c):
+                raise Problem("state", "The CEO Bot is off on this install, so it has no level to change", 409)
+            ceo_bot.set_level(c, who.actor, body.level)
+            return ceo_bot.named(c, ceo_bot.view(c))
+        return mutate(request, body, work)
+
     @app.get("/api/v2/company/history")
     def company_history(request: Request):
         """Every change to the Vision and the Description, newest first, with who made it."""

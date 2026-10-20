@@ -2132,14 +2132,16 @@
     },
     "/api/v2/ceo-bot": {
       "get": {
-        "summary": "Whether this install has the CEO Bot switch on (the Goal Manager shown as the CEO Bot, at the top of the chart)",
+        "summary": "Whether this install has the CEO Bot switch on (the Goal Manager shown as the CEO Bot, at the top of the chart), how much it does (its level, with each level's sentence and who changed it when), and how many items it put in each person's Needs you today against its cap of 5 (everyone's for the owner, admins and the CEO Bot; your own for anyone else)",
         "operationId": "getCeoBotSwitch",
         "responses": {
           "200": {
-            "description": "Successful Response",
+            "description": "OK",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/CeoBotView"
+                }
               }
             }
           },
@@ -2183,10 +2185,74 @@
         },
         "responses": {
           "200": {
-            "description": "Successful Response",
+            "description": "OK",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/CeoBotView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Goals"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ]
+      }
+    },
+    "/api/v2/ceo-bot/level": {
+      "post": {
+        "summary": "Settings > CEO Bot, \"How much your CEO Bot does\": the owner or an admin picks level 1, 2 or 3 on their own click, logged with who and when. No bot may, the CEO Bot included. 409 while the switch is off",
+        "operationId": "setCeoBotLevel",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CeoBotLevel"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CeoBotView"
+                }
               }
             }
           },
@@ -17096,6 +17162,25 @@
         ],
         "additionalProperties": true
       },
+      "CeoBotLevel": {
+        "properties": {
+          "level": {
+            "type": "integer",
+            "enum": [
+              1,
+              2,
+              3
+            ],
+            "title": "Level"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "level"
+        ],
+        "title": "CeoBotLevel"
+      },
       "CeoBotSwitch": {
         "properties": {
           "on": {
@@ -17109,6 +17194,115 @@
           "on"
         ],
         "title": "CeoBotSwitch"
+      },
+      "CeoBotView": {
+        "type": "object",
+        "properties": {
+          "on": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "changed_by": {
+            "type": "string"
+          },
+          "changed_at": {
+            "type": "string"
+          },
+          "level": {
+            "type": "integer",
+            "enum": [
+              1,
+              2,
+              3
+            ]
+          },
+          "levels": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "level": {
+                  "type": "integer"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "sentence": {
+                  "type": "string"
+                },
+                "ready": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "level",
+                "name",
+                "ready",
+                "sentence"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "level_changed_by": {
+            "type": "string"
+          },
+          "level_changed_by_name": {
+            "type": "string"
+          },
+          "level_changed_at": {
+            "type": "string"
+          },
+          "level_history": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "level": {
+                  "type": "integer"
+                },
+                "was": {
+                  "type": "integer"
+                },
+                "by": {
+                  "type": "string"
+                },
+                "by_name": {
+                  "type": "string"
+                },
+                "at": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "at",
+                "by",
+                "level",
+                "was"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "daily_cap": {
+            "type": "integer"
+          },
+          "asked_today": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "description": "{person actor: items the CEO Bot put in their Needs you today (UTC)}"
+          }
+        },
+        "required": [
+          "daily_cap",
+          "level",
+          "levels",
+          "name",
+          "on"
+        ],
+        "additionalProperties": true
       },
       "ChangelogEntry": {
         "type": "object",
@@ -19943,13 +20137,22 @@
               "properties": {
                 "kind": {
                   "enum": [
+                    "vision",
                     "kpi_red",
-                    "kpi_stale",
-                    "proposal"
+                    "why",
+                    "proposal",
+                    "kpi_stale"
                   ]
                 },
                 "goal_id": {
                   "type": "string"
+                },
+                "goals": {
+                  "type": "array",
+                  "description": "kind why: the goals whose proposed Why lines wait on you",
+                  "items": {
+                    "type": "object"
+                  }
                 },
                 "goal_title": {
                   "type": [

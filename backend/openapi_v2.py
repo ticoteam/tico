@@ -366,10 +366,17 @@ STABLE = [
      "be approved on your yes", None),
     # Goals and KPIs (docs/goals-and-kpis.md)
     ("/api/v2/ceo-bot", "get", "Goals", "getCeoBotSwitch",
-     "Whether this install has the CEO Bot switch on (the Goal Manager shown as the CEO Bot, at the top of the chart)", None),
+     "Whether this install has the CEO Bot switch on (the Goal Manager shown as the CEO Bot, at the top of the chart), "
+     "how much it does (its level, with each level's sentence and who changed it when), and how many items it put in "
+     "each person's Needs you today against its cap of 5 (everyone's for the owner, admins and the CEO Bot; your own "
+     "for anyone else)", "CeoBotView"),
     ("/api/v2/ceo-bot", "post", "Goals", "setCeoBotSwitch",
      "Owners and admins: turn the CEO Bot switch on or off for this install; no bot may. Only names and the chart change",
-     None),
+     "CeoBotView"),
+    ("/api/v2/ceo-bot/level", "post", "Goals", "setCeoBotLevel",
+     "Settings > CEO Bot, \"How much your CEO Bot does\": the owner or an admin picks level 1, 2 or 3 on their own "
+     "click, logged with who and when. No bot may, the CEO Bot included. 409 while the switch is off",
+     "CeoBotView"),
     ("/api/v2/company", "get", "Goals", "getCompany",
      "The company's Vision and Description (the Company section at the top of Goals where the CEO Bot switch is on), "
      "and whether the caller may edit them", "CompanyResult"),
@@ -916,9 +923,21 @@ SCHEMAS = {
                      "unaligned": {"type": "object", "description": "{actor: open tasks that serve no goal}"},
                      "other_kpis": items(ref("Kpi")), "proposals": items(ref("GoalProposalView"))},
                     required=["goals", "owners", "unaligned", "other_kpis", "proposals"]),
+    "CeoBotView": obj({"on": "b", "name": "s", "changed_by": "s", "changed_at": "s",
+                       "level": {"type": "integer", "enum": [1, 2, 3]},
+                       "levels": items(obj({"level": "i", "name": "s", "sentence": "s", "ready": "b"},
+                                           required=["level", "name", "sentence", "ready"])),
+                       "level_changed_by": "s", "level_changed_by_name": "s", "level_changed_at": "s",
+                       "level_history": items(obj({"level": "i", "was": "i", "by": "s", "by_name": "s", "at": "s"},
+                                                  required=["level", "was", "by", "at"])),
+                       "daily_cap": "i", "asked_today": {"type": "object", "additionalProperties": {"type": "integer"},
+                                                         "description": "{person actor: items the CEO Bot put in their Needs you today (UTC)}"}},
+                      required=["on", "name", "level", "levels", "daily_cap"]),
     "GoalsNeedsYou": obj({"actor": "s", "items": items({
         "type": "object", "required": ["kind"], "additionalProperties": True,
-        "properties": {"kind": {"enum": ["kpi_red", "kpi_stale", "proposal"]}, "goal_id": {"type": "string"},
+        "properties": {"kind": {"enum": ["vision", "kpi_red", "why", "proposal", "kpi_stale"]}, "goal_id": {"type": "string"},
+                       "goals": {"type": "array", "description": "kind why: the goals whose proposed Why lines wait on you",
+                                 "items": {"type": "object"}},
                        "goal_title": {"type": ["string", "null"]}, "kpi_id": {"type": "string"}, "kpi_name": {"type": ["string", "null"]},
                        "reason": {"type": "string"}, "freshness": {"type": "string"}, "proposal": {"type": "object"},
                        "task": {"type": "object", "required": ["id"], "properties": {
