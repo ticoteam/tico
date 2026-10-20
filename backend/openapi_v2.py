@@ -1108,6 +1108,7 @@ SCHEMAS['TaskType']['properties'].update({'default_visibility': {'enum': ['publi
 
 TAGS['Inbound'] = 'Shared company inbound email and SMS for people and agents; reads never consume messages.'
 STABLE.extend([
+    ('/api/v2/inbound/company-connection','post','Inbound','connectInboundCompany','A direct human owner or admin previews and connects Inbox to a portal company','InboundCompanyConnection'),
     ('/api/v2/inbound/inboxes','get','Inbound','listInboundInboxes','Company email and phone inboxes','InboundInboxes'),
     ('/api/v2/inbound/inboxes','post','Inbound','createInboundInbox','Create a free email inbox; SMS creation requires a phone approval request',None),
     ('/api/v2/inbound/inboxes/{ident}','patch','Inbound','editInboundInbox','Rename an inbox across connected interfaces and save local dependencies',None),
@@ -1124,6 +1125,11 @@ STABLE.extend([
     ('/api/v2/inbound/wait','post','Inbound','waitInboundMessages','Non-consuming wait after a cursor','InboundMessages'),
 ])
 SCHEMAS.update({
+    'InboundConnectionCompany': {**obj({'company_id':{'type':'string','format':'uuid'},'name':{'type':'string','minLength':1,'maxLength':100}}),'additionalProperties':False},
+    'InboundCompanyConnection': {'oneOf':[
+        {**obj({'connected':{'enum':[False]},'scope':{'enum':['inbox']},'company':{'$ref':'#/components/schemas/InboundConnectionCompany'},'expires_at':{'type':'number'}}),'additionalProperties':False},
+        {**obj({'connected':{'enum':[True]},'scope':{'enum':['inbox']},'company':{'$ref':'#/components/schemas/InboundConnectionCompany'}}),'additionalProperties':False},
+    ]},
     'InboundCursor': obj({'cursor':'i'}),
     'InboundInboxes': obj({'inboxes':items({'type':'object'}),'configured':'b','last_sync':NUM_N,'error':'s','gaps':items({'type':'object'})}),
     'InboundMessages': obj({'messages':items({'type':'object'}),'next':{'type':['integer','null']},'cursor':'i'}),
@@ -1151,7 +1157,8 @@ DESCRIPTION = (
     "never removed or renamed, and a breaking change is a new /api/v3. Routes not listed are internal. "
     "Public roadmap writes require an allowlisted Origin; reads permit server-side requests. No sign-in or idempotency key (docs/roadmaps.md). "
     "Granola connection and sync writes do not require an idempotency key, nor does POST /api/v2/inbound/tasks, whose "
-    "own `key` is its idempotency. Other writes need an `Idempotency-Key` header (1-200 characters; a retry with the same "
+    "own `key` is its idempotency. Inbox company connection actions reconcile the same short-lived code under current grant checks. "
+    "Other writes need an `Idempotency-Key` header (1-200 characters; a retry with the same "
     "key and body returns the first answer). Errors are `{\"error\": {code, detail, retryable}}`. See docs/custom-frontend.md.")
 
 
@@ -1196,6 +1203,22 @@ def spec(app):
             op["requestBody"] = TOKEN_REQUEST
             op["security"] = []
             responses["400"] = {"description": "invalid_grant, or the request is malformed", **ERROR}
+        connection = path == '/api/v2/inbound/company-connection'
+        if connection:
+            op['requestBody'] = {'required':True,'content':{'application/json':{'schema':{
+                'type':'object','additionalProperties':False,'required':['action','code'],'properties':{
+                    'action':{'type':'string','enum':['preview','connect']},
+                    'code':{'type':'string','minLength':43,'maxLength':43,'pattern':'^[A-Za-z0-9_-]{43}$','writeOnly':True},
+                }}}}}
+            op['description'] = ('Direct signed-in human owner/admin only; no personal tokens, support or delegated agents. '
+                'Preview shows the target company before explicit consent to share Inbox in both directions. '
+                'The server supplies its private key and existing reported installation identity; neither belongs in this body. '
+                'Requests are limited to 2 KiB; code validation errors never echo supplied values. '
+                'Disconnect in the portal stops future access, preserving merged history and existing local copies.')
+            for code,detail in [('403','Direct human management or portal authorization required'),
+                                ('409','Missing saved identity, expired code or conflicting connection'),
+                                ('503','Inbox connection unavailable; reconcile the same code in its original lifetime')]:
+                responses[code] = {**ERROR,'description':detail}
         if path in ("/healthz", "/auth/login"):
             op["security"] = []
         if path.startswith('/public/roadmaps/'):
@@ -1214,9 +1237,10 @@ def spec(app):
             parameters = op.setdefault("parameters", [])
             parameters[:] = [p for p in parameters if (p.get("name"), p.get("in")) != ("Idempotency-Key", "header")]
             parameters.append({
-                "name": "Idempotency-Key", "in": "header", "required": not (inbound or granola), "schema": {"type": "string"},
+                "name": "Idempotency-Key", "in": "header", "required": not (inbound or granola or connection), "schema": {"type": "string"},
                 "description": ("Not needed: the pair (service key, `key`) makes a repeated call harmless, and the header "
                                 "is ignored." if inbound else
+                                'Optional. Retry the same action and code; HQ rechecks the current grant, role, session and original expiry without readoption.' if connection else
                                 "Optional. Sync uses a two-minute debounce; connecting starts a new device sign-in."
                                 if granola else
                                 "1-200 characters. Reusing a key with the same body replays the first answer.")})

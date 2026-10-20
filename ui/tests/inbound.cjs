@@ -13,6 +13,11 @@ const {unrouted} = require('./support/routes.cjs');
     const inbox={inbox_id:'ibx_a',kind:'email',name:'Account logins',address:'agent-acme-login@tico.team',state:'active',created_by:'human:ana',used_for:'',period_end:null,cancel_pending:0};
     const evil='<img src=x onerror="window.INBOUND_PWNED=1">';
     let preview=evil;
+    let connectionFailures=1;
+    let releaseConnection,connectionStarted;
+    const connectionGate=new Promise(resolve=>{releaseConnection=resolve;});
+    const connectionInFlight=new Promise(resolve=>{connectionStarted=resolve;});
+    const connectionCode='synthetic_'+'x'.repeat(33),companyId='7d05caa5-e578-4c2a-8887-3d5b557f6a0a';
     const phoneRequests=[{request_id:'prq_quoted',name:'Monthly logins',state:'quoted',price_micros:14000000,quoted_until:Date.now()/1000+3600}];
     await page.route('**/*', route=>{
       const request=route.request(),url=new URL(request.url()),p=url.pathname;
@@ -23,7 +28,16 @@ const {unrouted} = require('./support/routes.cjs');
       if(p.endsWith('.js'))return route.fulfill({contentType:'application/javascript',body:''});
       if(p==='/')return route.fulfill({contentType:'text/html',body:html});
       if(p.startsWith('/api/v2/inbound/')){
-        calls.push({p,query:url.search,method:request.method(),body:request.postDataJSON()});
+        calls.push({p,query:url.search,method:request.method(),body:request.postDataJSON(),operation:request.headers()['idempotency-key']});
+        if(p.endsWith('/company-connection')){
+          const body=request.postDataJSON(),result={connected:body.action==='connect',scope:'inbox',company:{company_id:companyId,name:evil}};
+          if(body.action==='preview')result.expires_at=Date.now()/1000+300;
+          if(body.action==='connect'&&connectionFailures-- > 0){
+            connectionStarted();
+            return connectionGate.then(()=>route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:{code:'inbox_connection_unavailable',detail:'Retry the same code.'}})}));
+          }
+          return json(result);
+        }
         if(p.endsWith('/inboxes'))return json({inboxes:[inbox],configured:true,last_sync:1800000000,error:'',gaps:[]});
         if(p.endsWith('/messages'))return json({messages:[{seq:1,message_id:'ses:test:ibx_a',inbox_id:'ibx_a',kind:'email',received_at:1800000000,from:'Login service',subject:'Sign in',preview,has_code:true}],next:null,cursor:1});
         if(p.endsWith('/code'))return json({code:'123456',untrusted:true});
@@ -67,6 +81,47 @@ const {unrouted} = require('./support/routes.cjs');
     await page.locator('[data-inbound-code]').click();
     await page.locator('.inbound-dialog pre').filter({hasText:'123456'}).waitFor();
     await page.locator('.inbound-dialog [data-close]').click();
+    await page.locator('#inbound-connection > summary').click();
+    const codeInput=page.locator('#inbound-connection-form input[name=code]');
+    const connectionTarget=page.locator('#inbound-connection-company');
+    const connect=page.locator('#inbound-connection-connect');
+    await codeInput.fill(connectionCode);
+    await page.locator('#inbound-connection-form button[type=submit]').click();
+    await connectionTarget.filter({hasText:companyId}).waitFor();
+    assert.match(await connectionTarget.innerText(),/onerror/);
+    assert.equal(await connectionTarget.locator('img').count(),0);
+    assert(await connect.isDisabled(),'sharing requires explicit consent');
+    await page.locator('#inbound-connection-form input[name=consent]').check();
+    assert(await connect.isEnabled());
+    await codeInput.fill('othercode_'+'y'.repeat(33));
+    assert(await page.locator('#inbound-connection-preview').isHidden(),'changing code invalidates the shown company');
+    assert(await connect.isDisabled());
+    assert(!calls.some(c=>c.p.endsWith('/company-connection')&&c.body.action==='connect'));
+    await codeInput.fill(connectionCode);
+    await page.locator('#inbound-connection-form button[type=submit]').click();
+    await connectionTarget.filter({hasText:companyId}).waitFor();
+    for(const width of [1440,390]){
+      await page.setViewportSize({width,height:1000});
+      await page.waitForFunction(()=>document.getAnimations().every(a=>a.playState!=='running'||a.effect?.getTiming().iterations===Infinity));
+      assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'connection preview fits '+width);
+      assert(await connectionTarget.evaluate(target=>target.scrollWidth<=target.clientWidth),'company name and ID are readable at '+width);
+      if(process.env.TICO_SHOTS)await page.screenshot({path:process.env.TICO_SHOTS+'/inbound-connection-'+width+'.png'});
+    }
+    await page.locator('#inbound-connection-form input[name=consent]').check();
+    await connect.click();
+    await connectionInFlight;
+    assert(await codeInput.isDisabled(),'committing adoption cannot discard its result after an edit');
+    assert(await page.locator('#inbound-connection-form input[name=consent]').isDisabled());
+    releaseConnection();
+    await page.locator('#inbound-connection-status').filter({hasText:'Inbox connected to'}).waitFor();
+    assert.equal(await codeInput.inputValue(),'');
+    const connections=calls.filter(c=>c.p.endsWith('/company-connection'));
+    assert(connections.every(c=>JSON.stringify(Object.keys(c.body).sort())==='["action","code"]'));
+    const completed=connections.filter(c=>c.body.action==='connect');
+    assert.equal(completed.length,2,'lost confirmation retries the same submission');
+    assert.equal(completed[0].operation,completed[1].operation);
+    assert(!page.url().includes(connectionCode));
+    assert(!await page.evaluate(code=>JSON.stringify([Object.entries(localStorage),Object.entries(sessionStorage)]).includes(code),connectionCode));
     await page.locator('#inbound-create input[name=name]').fill('Login number');
     await page.locator('#inbound-phone').click();
     await page.locator('#inbound-status').filter({hasText:'No number has been purchased'}).waitFor();
@@ -94,6 +149,7 @@ const {unrouted} = require('./support/routes.cjs');
     await page.evaluate(()=>{S.me.role='human';S.me.bot_admin=false;return inboundMount();});
     assert.equal(await page.locator('#inbound-phone').count(),0);
     assert.equal(await page.locator('#inbound-phone-requests').count(),0);
+    assert.equal(await page.locator('#inbound-connection-form').count(),0);
     assert.deepEqual(errors,[]);
     console.log('Inbound passed: safe text, scope, code reveal, approval requests/quote acceptance/cancellation, admin UI, desktop and phone.');
   } finally {await browser.close();}
