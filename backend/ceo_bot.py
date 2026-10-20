@@ -92,6 +92,9 @@ def migrate(c):
     bot = H.bot(c, SLUG)
     if bot and (bot.get("display_name") or "").strip() in ("", OLD_NAME):
         _rename(c, H.KEEPER, NAME)
+    # Before the scheduler's first pass: a Monday note the old level 1 started must not fire at Passive.
+    reconcile(c)
+    record = _record(c)
     if record.get("on") is True:
         return False
     record.update(on=True, migrated_at=H.now())
@@ -174,7 +177,7 @@ def _review_touched(c, since):
 
 
 def reconcile(c):
-    """Once an hour (backend/scheduler.py): above Passive, a Monday note whose routine appeared after the level was
+    """At startup (`migrate`) and once an hour (backend/scheduler.py): above Passive, a Monday note whose routine appeared after the level was
     raised is started once, never again after that one go, so a person who pauses it later stays paused. At Passive,
     a Monday note the old level 1 started (before v3) and nobody touched since is paused."""
     record = _record(c)

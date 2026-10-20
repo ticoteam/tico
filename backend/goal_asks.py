@@ -71,7 +71,10 @@ def wanted(conn, owner_id, at=None):
     org = None
     items = []
     ceo = ceo_bot.proactive(conn)      # above Passive: the vision ask and Why lines in Needs you
-    if ceo and owner_id and not C.profile(conn)["vision"]:
+    # At Passive nothing new is asked, but an ask filed above it stays until its cause is resolved.
+    filed = set() if ceo else {(r[0], r[1]) for r in conn.execute(
+        "SELECT kind, owner FROM goal_asks WHERE kind IN ('vision','why')")}
+    if owner_id and not C.profile(conn)["vision"] and (ceo or ("vision", H.human_actor(owner_id)) in filed):
         items.append({"kind": "vision", "ref": "company", "owner": H.human_actor(owner_id)})
     live = G.goals(conn, live_only=True)
     for goal_id, rows in K.goal_views(conn, [g["id"] for g in live], at).items():
@@ -111,11 +114,11 @@ def wanted(conn, owner_id, at=None):
             continue
         if p["kind"] == "goal_why":
             # Never one task per goal: each person who decides Why lines is asked once for all of theirs.
-            goal = G.goal(conn, p["goal_id"]) if ceo and p["goal_id"] else None
+            goal = G.goal(conn, p["goal_id"]) if (ceo or filed) and p["goal_id"] else None
             if goal:
                 org = org or _org(conn)
                 who = _person(conn, goal["owner"], owner_id, org)
-                if who:
+                if who and (ceo or ("why", who) in filed):
                     whys.setdefault(who, {})[goal["id"]] = {"goal_id": goal["id"], "goal_title": goal["title"],
                                                            "why": (p.get("payload") or {}).get("why") or ""}
             continue

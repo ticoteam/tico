@@ -250,3 +250,73 @@ def test_a_monday_note_the_old_level_1_started_is_paused_at_passive_once(api):
         routines.update(c, OWNER, REVIEW, {"enabled": True})                 # a person's own choice
         ceo_bot.reconcile(c)
     assert review_enabled(api)
+
+
+def test_lowering_to_passive_keeps_the_vision_and_why_asks_until_they_are_resolved(api):
+    """v3: at Passive nothing new is asked, but a vision or Why ask filed above it stays open and shown until its cause
+    is resolved; only then does it close."""
+    ceo = with_ceo_bot(api, level=2)
+    goal_id = post(api, "goals", {"title": "Grow rentals", "owner": "company"})["goal"]["id"]
+    why = propose_why(api, goal_id, "More rentals is more landlords on Tico.", ceo)
+    sync(api)
+    filed = {a["kind"]: a["id"] for a in asks(api, OWNER)}
+    assert set(filed) == {"vision", "why"}
+    level(api, 1)
+    sync(api)
+    assert {a["kind"]: a["id"] for a in asks(api, OWNER) if a["status"] == "open"} == filed
+    assert {"vision", "why"} <= {i["kind"] for i in get(api, "goals/needs-you")["items"]}
+    post(api, "goals", {"title": "Cut churn", "owner": "company"})
+    post(api, "kpis", {"name": "Unreported measure", "owner": "me", "cadence": "weekly"})
+    sync(api)
+    assert {a["id"] for a in asks(api)} == set(filed.values())               # nothing new at Passive
+    post(api, "company", {"vision": "Every small landlord runs their rentals on Tico."})
+    post(api, f"goal-proposals/{why['id']}/decide", {"decision": "confirm"})
+    sync(api)
+    with api.app.state.store.read() as c:
+        assert [H.task(c, t)["status"] for t in filed.values()] == ["closed", "closed"]
+
+
+def test_with_regular_checks_off_a_due_kpi_pass_neither_opens_nor_continues_a_run(api):
+    """Off, the next KPI pass occurrence is skipped even while an earlier run is still unfinished: no new task and no
+    notice to continue the old one."""
+    from datetime import datetime, timezone
+    from backend.scheduler import Scheduler
+    goal_manager(api)
+    store = api.app.state.store
+    with store.transaction() as c:
+        routines.create(c, H.KEEPER, "goal-manager", {"title": "KPI pass", "cron": "0 7 * * *", "timezone": "UTC"},
+                        key="kpi-pass")
+        c.execute("UPDATE schedules SET next_due=NULL, last_fired='2026-09-14T00:00:00.000000Z' WHERE id=?",
+                  (ceo_bot.PASS,))
+    [first] = Scheduler(store, api.app.state.execution).tick(datetime(2026, 9, 14, 8, tzinfo=timezone.utc))["fired"]
+    post(api, "ceo-bot/checks", {"on": False})
+    with store.read() as c:
+        said = c.execute("SELECT count(*) FROM messages").fetchone()[0]
+    Scheduler(store, api.app.state.execution).tick(datetime(2026, 9, 15, 8, tzinfo=timezone.utc))
+    with store.read() as c:
+        assert [tuple(r) for r in c.execute("SELECT task_id, outcome FROM schedule_occurrences WHERE schedule_id=? "
+                                            "ORDER BY occurrence", (ceo_bot.PASS,))] == \
+            [(first, "created"), (None, "skipped")]
+        assert c.execute("SELECT count(*) FROM messages").fetchone()[0] == said
+
+
+def test_at_upgrade_a_due_monday_note_the_old_level_1_started_never_fires(api):
+    """An install from before v3 at level 1 with its Monday note started and overdue: the startup migration pauses
+    it before the scheduler's first pass, so no weekly review opens at Passive."""
+    import json
+    from datetime import datetime, timezone
+    from backend.scheduler import Scheduler
+    goal_manager(api)
+    review_routine(api)
+    store = api.app.state.store
+    with store.transaction() as c:
+        routines.update(c, H.KEEPER, REVIEW, {"enabled": True})
+        c.execute("INSERT OR REPLACE INTO registry_metadata VALUES(?,?)", (ceo_bot.KEY, json.dumps(
+            {"on": True, "level": 1, "review_armed": H.now(), "review_settled": True})))
+        c.execute("UPDATE schedules SET next_due=NULL, last_fired='2026-09-01T00:00:00.000000Z' WHERE id=?", (REVIEW,))
+        ceo_bot.migrate(c)                                                   # as the server does at startup
+    assert not review_enabled(api)
+    Scheduler(store, api.app.state.execution).tick(datetime(2026, 9, 14, 17, tzinfo=timezone.utc))
+    with store.read() as c:
+        assert c.execute("SELECT count(*) FROM schedule_occurrences WHERE schedule_id=? AND task_id IS NOT NULL",
+                         (REVIEW,)).fetchone()[0] == 0

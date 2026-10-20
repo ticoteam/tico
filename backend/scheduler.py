@@ -93,8 +93,12 @@ class Scheduler:
                                            (row["id"], when)).fetchone()
                         if not exists:
                             from . import routines
-                            existing, skip = routines.latest_task(c, row["id"]), None
-                            if existing:
+                            from . import ceo_bot
+                            existing = routines.latest_task(c, row["id"])
+                            # Regular checks off: no new KPI pass and no wake to continue an unfinished one.
+                            if skip := ceo_bot.held_routine(c, row):
+                                tid, outcome = None, "skipped"
+                            elif existing:
                                 tid, outcome = existing["id"], "coalesced_into_existing_task"
                                 # An absorbed occurrence still wakes the owner, or an open task
                                 # would swallow every later run in silence; a waiting task is
