@@ -5,8 +5,10 @@ and the message carries `refs.topic_changed`, which the chat shows as a quiet "T
 
 The gate is plain code, read from what runners already report. The session is the bot's provider thread the message
 would continue (its `bot_sessions` row); its last turn is the newest finished turn on that thread.
-- Warm: that turn finished under WARM_SECONDS ago and reported `cached_tokens` > 0. Anything else is cold: no turn, an
-  older one, or a harness that reports no cache use (Grok, today).
+- Warm: that turn finished within its harness's prompt-cache lifetime (CACHE_LIFETIME, WARM_SECONDS when the harness
+  is not listed) and read at least WARM_SHARE of its input from the cache (`cached_tokens` over `input_tokens +
+  cached_tokens`). Anything else is cold: no turn, an older one, a small cache hit, or a harness that reports no cache
+  use (Grok, today).
 - Context size: that turn's newest request of the bot's own (not a subagent's) whole prompt (`turns.prompt_tokens`,
   uncached + cached), when its runner marked its requests. The turn's summed `input_tokens + cached_tokens` count every
   request of the turn again and are not a context size; without `prompt_tokens` (an older runner, a harness that does
@@ -47,6 +49,26 @@ RULE = "topic_fresh"
 BUDGET = 1.5
 # The default prompt-cache lifetime: a session whose last turn read the cache this recently is warm.
 WARM_SECONDS = 300
+# Each harness's prompt-cache lifetime in seconds, by the runtime its sessions are kept under (`bot_sessions.runtime`;
+# antigravity runs as gemini), from its provider's docs. A provider that gives a range counts its shortest: a cold
+# reading only asks Decide, a warm one skips it.
+CACHE_LIFETIME = {
+    # Anthropic, docs.claude.com prompt caching: "By default, the cache has a 5-minute lifetime" (1 hour is opt-in).
+    "claude": 300,
+    # OpenAI, developers.openai.com prompt caching: in-memory entries "typically remain active for around 5 to 10
+    # minutes of inactivity, up to one hour"; extended retention keeps them "around 30 minutes" and up to 24 hours.
+    "codex": 300,
+    # Google, ai.google.dev Gemini caching: implicit caching documents no lifetime, so the default.
+    "gemini": WARM_SECONDS,
+    # xAI: Grok Build reports no cached tokens, so its sessions are always cold whatever this says.
+    "grok": WARM_SECONDS,
+    # OpenRouter (pi), Cursor and Muse Code pass through to an upstream provider and document no lifetime of their own.
+    "pi": WARM_SECONDS,
+    "cursor": WARM_SECONDS,
+    "musecode": WARM_SECONDS,
+}
+# The least share of the last turn's input read from the cache for the session to count as warm.
+WARM_SHARE = 0.5
 BIG_CONTEXT = 100_000
 MIN_TURNS = 3
 # The turns the check reads, and how much of each message it sends.
@@ -71,21 +93,23 @@ def last_turn(c, settings, bot):
                         (bot, runtime, model)).fetchone()
     if not session or not session[0]:
         return None
-    row = c.execute("SELECT finished,cached_tokens,prompt_tokens FROM turns WHERE bot=? AND thread_id=? "
+    row = c.execute("SELECT finished,input_tokens,cached_tokens,prompt_tokens FROM turns WHERE bot=? AND thread_id=? "
                     "AND finished IS NOT NULL ORDER BY finished DESC LIMIT 1", (bot, session[0])).fetchone()
-    return dict(row) if row else None
+    return {**dict(row), "runtime": runtime} if row else None
 
 
 def warmth(turn, now=None):
     """(warm, context tokens) of a session from its last turn (`last_turn`). The context is None when unknown."""
     if not turn:
         return False, None
-    cached = int(turn.get("cached_tokens") or 0)
+    cached, fresh = int(turn.get("cached_tokens") or 0), int(turn.get("input_tokens") or 0)
+    lifetime = CACHE_LIFETIME.get(turn.get("runtime"), WARM_SECONDS)
     context = turn.get("prompt_tokens")
     context = int(context) if context is not None else None
     finished, at = H.parse_ts(turn.get("finished")), H.parse_ts(now or H.now())
     age = (at - finished).total_seconds() if finished and at else None
-    return cached > 0 and age is not None and 0 <= age < WARM_SECONDS, context
+    share = cached / (cached + fresh) if cached > 0 else 0.0
+    return share >= WARM_SHARE and age is not None and 0 <= age < lifetime, context
 
 
 def epoch_since(c, conversation_id):

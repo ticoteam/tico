@@ -265,6 +265,10 @@ All notable changes to Tico are recorded here. The format follows
   before this keeps today's behaviour ([sessions](docs/sessions.md)).
 
 ### Changed
+- **Topic changed counts a chat as warm only when the cache did most of the work**: the topic check is skipped for a
+  chat under 100k tokens only when its last turn read at least half its input from the prompt cache, within that
+  harness's cache lifetime (5 minutes for Claude Code, Codex and the rest, from each provider's docs). A small
+  cache hit now counts as cold, so the check runs.
 - **A bot creating a task meets the same label gate as when it edits one**: a bot that is not a mover can no longer
   create a task already carrying `goal:on` or `goal:off` (which Tico acts on) or a public roadmap label. The create is
   refused as a `label` refusal, nothing is written, and the refusal says the way through: create the task without the
