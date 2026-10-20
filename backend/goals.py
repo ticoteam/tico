@@ -762,6 +762,8 @@ def decide(conn, actor, proposal_id, decision, note="", why=None, option=None):
             result = {"why": kept, "edited": kept != proposed}
         elif row["kind"] == "recovery":
             applied = ceo_suggest.apply(conn, actor, row, chosen)
+            # Settled before its follow-up is filed: a retry of a retry is a new proposal, not this one found again.
+            conn.execute("UPDATE goal_proposals SET status='confirmed' WHERE id=?", (proposal_id,))
             again = ceo_suggest.follow_up(conn, row, applied["left"])
             result = {"option": chosen, "unchanged": chosen == pick, **applied, "follow_up": again and again["id"]}
     conn.execute("UPDATE goal_proposals SET status=?, decided_by=?, decided_at=?, decision_note=?, result_json=? "

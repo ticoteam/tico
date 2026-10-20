@@ -115,6 +115,26 @@ def test_what_cant_be_done_comes_back_saying_why_and_lowering_to_1_withdraws(api
         assert H.task(c, item["id"])["status"] == "closed"
 
 
+def test_a_retry_approved_while_still_blocked_comes_back_again_and_then_applies(api):
+    """Approving the retry while the bot is still paused files a new retry, not the one just decided; once the bot is
+    back, approving that one makes the task."""
+    ceo = switched_on(api)
+    level(api, 2)
+    proposal = recovery(api, red_goal(api)["id"], bot_task(api, "ops", "Clean up old reports"), ceo)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bots SET state='paused' WHERE slug='finance'")
+    first = post(api, f"goal-proposals/{proposal['id']}/decide", {"decision": "confirm", "option": 1})["proposal"]
+    second = post(api, f"goal-proposals/{first['result']['follow_up']}/decide", {"decision": "confirm"})["proposal"]
+    retry = second["result"]["follow_up"]
+    assert retry and retry != second["id"]
+    assert [p["id"] for p in get(api, "goal-proposals")["proposals"] if p["kind"] == "recovery"] == [retry]
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bots SET state='active' WHERE slug='finance'")
+    done = post(api, f"goal-proposals/{retry}/decide", {"decision": "confirm"})["proposal"]["result"]
+    assert done["left"] == [] and done["follow_up"] is None
+    assert [t["title"] for t in tasks_of(api, "bot:finance")] == ["Pause the signup campaign"]
+
+
 def ask_ana(api, slug, title):
     """A bot's task Ana asked for, where the bot asks her a question back."""
     with api.app.state.store.transaction() as c:
@@ -171,6 +191,13 @@ def test_three_bots_asking_the_same_thing_are_one_item_and_the_answer_reaches_ea
     with api.app.state.store.transaction() as c:
         H.task_update(c, CEO, second["id"], status="declined", note="Not the same question after all.")
     assert set(again) <= needs_tasks(api, "ana-test")
+    # A new question after the answer was passed on is back in her Needs you, and may be merged again.
+    with api.app.state.store.transaction() as c:
+        H.task_comment(c, "bot:ops", asked, "And which price goes on it?", ask={"who": OWNER})
+        H.task_comment(c, "bot:coo", waiting, "Which day do we launch?", ask={"who": OWNER})
+        H.task_update(c, "bot:coo", waiting, status="waiting", waiting_on=OWNER, note="Which day do we launch?")
+    assert {asked, waiting} <= needs_tasks(api, "ana-test") and filed not in needs_tasks(api, "ana-test")
+    post(api, "ceo-bot/merge", {**body, "title": "Price and launch day?", "tasks": [asked, waiting]}, token=ceo)
     # Answered as an open question (the "answer" step in Needs you) rather than a reply: the same pass-on.
     third = post(api, "ceo-bot/merge", {**body, "tasks": again}, token=ceo)["task"]
     with api.app.state.store.transaction() as c:
@@ -179,6 +206,28 @@ def test_three_bots_asking_the_same_thing_are_one_item_and_the_answer_reaches_ea
     with api.app.state.store.read() as c:
         assert H.task(c, third["id"])["status"] == "done"
         assert not any(H.open_task_asks(c, H.task(c, t)) for t in again)
+
+
+def test_a_merged_answer_never_settles_a_question_asked_after_the_merge(api):
+    """Ana answers one original where it was asked, and that bot asks her something else; her answer on the merged
+    item reaches the other bot only, and the new question stays open in her Needs you."""
+    ceo = switched_on(api)
+    level(api, 2)
+    first, second = ask_ana(api, "ops", "Ship the pricing page"), ask_ana(api, "coo", "Plan the launch")
+    item = post(api, "ceo-bot/merge", {"person": OWNER, "title": "Which pricing page first?", "question": "Which one?",
+                                       "tasks": [first, second]}, token=ceo)["task"]
+    with api.app.state.store.transaction() as c:
+        [old] = H.open_task_asks(c, H.task(c, first))
+        H.answer(c, OWNER, old["id"], "The landlord page.")
+        H.task_comment(c, "bot:ops", first, "Which price goes on it?", ask={"who": OWNER})
+    assert first in needs_tasks(api, "ana-test") and second not in needs_tasks(api, "ana-test")
+    post(api, f"tasks/{item['id']}/comments", {"text": "The tenant page first."})
+    with api.app.state.store.read() as c:
+        [new] = H.open_task_asks(c, H.task(c, first))
+        assert new["body"] == "Which price goes on it?" and not H.open_task_asks(c, H.task(c, second))
+        states = dict(c.execute("SELECT original, state FROM ceo_merges WHERE merged_into=?", (item["id"],)).fetchall())
+    assert states == {first: "released", second: "answered"}
+    assert first in needs_tasks(api, "ana-test")
 
 
 def test_ten_approvals_in_a_row_offer_level_3_once_a_month(api):

@@ -21107,6 +21107,7 @@
                   "enum": [
                     "vision",
                     "kpi_red",
+                    "recovery",
                     "why",
                     "proposal",
                     "kpi_stale"
@@ -21114,6 +21115,13 @@
                 },
                 "goal_id": {
                   "type": "string"
+                },
+                "options": {
+                  "type": "array",
+                  "description": "kind recovery: each option in plain words, {label, pick, actions: [{text, note}]}",
+                  "items": {
+                    "type": "object"
+                  }
                 },
                 "goals": {
                   "type": "array",

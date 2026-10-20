@@ -954,7 +954,10 @@ SCHEMAS = {
                                                       "state": "s", "note": "s"}, required=["task_id", "asker", "state"]))}),
     "GoalsNeedsYou": obj({"actor": "s", "items": items({
         "type": "object", "required": ["kind"], "additionalProperties": True,
-        "properties": {"kind": {"enum": ["vision", "kpi_red", "why", "proposal", "kpi_stale"]}, "goal_id": {"type": "string"},
+        "properties": {"kind": {"enum": ["vision", "kpi_red", "recovery", "why", "proposal", "kpi_stale"]},
+                       "goal_id": {"type": "string"},
+                       "options": {"type": "array", "description": "kind recovery: each option in plain words, "
+                                   "{label, pick, actions: [{text, note}]}", "items": {"type": "object"}},
                        "goals": {"type": "array", "description": "kind why: the goals whose proposed Why lines wait on you",
                                  "items": {"type": "object"}},
                        "goal_title": {"type": ["string", "null"]}, "kpi_id": {"type": "string"}, "kpi_name": {"type": ["string", "null"]},

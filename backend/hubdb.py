@@ -693,6 +693,7 @@ ALTER TABLE tasks ADD COLUMN guest TEXT;
 CEO_MERGES_SCHEMA = """
 CREATE TABLE IF NOT EXISTS ceo_merges (
   merged_into TEXT NOT NULL, original TEXT NOT NULL, person TEXT NOT NULL, asker TEXT NOT NULL,
+  how TEXT NOT NULL DEFAULT 'asked', ask_id TEXT,
   state TEXT NOT NULL DEFAULT 'merged', created TEXT NOT NULL, settled_at TEXT, note TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (merged_into, original));
 CREATE INDEX IF NOT EXISTS ceo_merges_original ON ceo_merges(original, state);

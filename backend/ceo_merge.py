@@ -34,28 +34,61 @@ def _open_ask(c, row, person):
 
 
 def waiting_on(c, person, row):
-    """How this task waits on `person` in their Needs you, and the bot that asked: ("asked", bot) for a bot's open
-    question on it, ("waiting", bot) for a bot's task set waiting on them, ("owned", bot) for a task a bot filed for
-    them; None when it does not wait on them."""
+    """How this task waits on `person` in their Needs you, the bot that asked, and the question when it is one:
+    ("asked", bot, ask id) for a bot's open question on it, ("waiting", bot, None) for a bot's task set waiting on
+    them, ("owned", bot, None) for a task a bot filed for them; None when it does not wait on them."""
     if not row or row["status"] not in H.ACTIVE_STATUSES:
         return None
     ask = _open_ask(c, row, person)
     if ask:
-        return "asked", ask["from_actor"]
+        return "asked", ask["from_actor"], ask["id"]
     if H.is_bot(row["owner"]) and row["status"] == "waiting" and row.get("waiting_on") == person:
-        return "waiting", row["owner"]
+        return "waiting", row["owner"], None
     if row["owner"] == person and H.is_bot(row["requester"]):
-        return "owned", row["requester"]
+        return "owned", row["requester"], None
     return None
+
+
+def _current(c, link, row):
+    """Whether the original still waits on the person the way it did when merged: the same question still open, or
+    the same bot's task still waiting on them or filed for them. A new question since is not what was merged."""
+    if not row or row["status"] not in H.ACTIVE_STATUSES:
+        return False
+    if link["how"] == "asked":
+        return any(a["id"] == link["ask_id"] for a in H.open_task_asks(c, row))
+    how = waiting_on(c, link["person"], row)
+    return bool(how) and how[:2] == (link["how"], link["asker"])
+
+
+def _asked_again(c, link, row):
+    """Whether a bot asked the person something new on the original after their answer was passed on: a message to
+    them on it, or the task set waiting on them again."""
+    said = c.execute(
+        "SELECT 1 FROM messages m JOIN conversations cv ON cv.id=m.conversation_id WHERE m.conversation_id=? AND "
+        "m.to_actor=? AND m.from_actor<>? AND m.from_actor LIKE 'bot:%' AND m.created>? "
+        f"AND {H.MESSAGE_TASK_SQL}=? LIMIT 1",
+        (row["conversation_id"], link["person"], CEO, link["settled_at"], row["id"])).fetchone()
+    return bool(said) or bool(c.execute(
+        "SELECT 1 FROM task_events WHERE task_id=? AND field='waiting_on' AND new=? AND ts>? LIMIT 1",
+        (row["id"], link["person"], link["settled_at"])).fetchone())
 
 
 def hidden(c, person):
     """Ids of the tasks the CEO Bot merged for this person that stay out of their Needs you: while the merged item is
-    open, and once its answer was passed on."""
+    open and the original still waits on them as it did when merged, and once its answer was passed on until a bot
+    asks them something new there. Anything else on the original is back in their Needs you."""
     marks = ",".join("?" * len(H.ACTIVE_STATUSES))
-    return {r[0] for r in c.execute(
-        "SELECT m.original FROM ceo_merges m JOIN tasks t ON t.id=m.merged_into WHERE m.person=? AND "
-        f"(m.state='answered' OR (m.state='merged' AND t.status IN ({marks})))", (person, *H.ACTIVE_STATUSES))}
+    out = set()
+    for link in H._rows(c.execute(
+            "SELECT m.* FROM ceo_merges m JOIN tasks t ON t.id=m.merged_into JOIN tasks o ON o.id=m.original "
+            f"WHERE m.person=? AND o.status IN ({marks}) AND "
+            f"(m.state='answered' OR (m.state='merged' AND t.status IN ({marks})))",
+            (person, *H.ACTIVE_STATUSES, *H.ACTIVE_STATUSES))):
+        row = H.task(c, link["original"])
+        if link["state"] == "merged" and _current(c, link, row) or \
+                link["state"] == "answered" and not _asked_again(c, link, row):
+            out.add(link["original"])
+    return out
 
 
 def originals(c, merged_into):
@@ -113,8 +146,8 @@ def merge(c, actor, person, title, question, task_ids):
     H.task_update(c, CEO, item["id"], status="waiting", waiting_on=person, note=question[:1000])
     at = H.now()
     for row, how in found:
-        c.execute("INSERT INTO ceo_merges (merged_into, original, person, asker, created) VALUES (?,?,?,?,?)",
-                  (item["id"], row["id"], person, how[1], at))
+        c.execute("INSERT INTO ceo_merges (merged_into, original, person, asker, how, ask_id, created) "
+                  "VALUES (?,?,?,?,?,?,?)", (item["id"], row["id"], person, how[1], how[0], how[2], at))
         H.task_comment(c, CEO, row["id"],
                        f'Merged with {len(found) - 1} similar ask(s) into one item for {_name(c, person)}: "{title}". '
                        "Their answer comes back to this task; nothing to do until then.", wake=False)
@@ -131,16 +164,15 @@ def _settle(c, merged_into, original, state, note):
 def _pass_on(c, person, link, item, text):
     """The person's answer to one original, as the bot that asked reads it. Returns why it couldn't be, or None."""
     row = H.task(c, link["original"])
-    how = waiting_on(c, person, row)
-    if not how:
-        return "it no longer waits on them"
+    if not _current(c, link, row):
+        # Answered there already, or asked something else since: this answer was for what was merged, not that.
+        return "it no longer waits on them for what was merged"
     said = f'{_name(c, person)} answered this in the {ceo_bot.name(c)}\'s merged item "{item["title"]}": "{text}"'
-    if how[0] == "asked":
-        ask = _open_ask(c, row, person)
-        H.task_ask_resolve(c, CEO, row["id"], ask["id"], quote=text, relay=True)
+    if link["how"] == "asked":
+        H.task_ask_resolve(c, CEO, row["id"], link["ask_id"], quote=text, relay=True)
         return None
     H.task_comment(c, CEO, row["id"], said)
-    if how[0] == "waiting":
+    if link["how"] == "waiting":
         # The person has answered: the next move is the bot's, as when they reply on its task themselves.
         c.execute("UPDATE tasks SET waiting_on=NULL WHERE id=?", (row["id"],))
         H._task_event(c, row["id"], CEO, "waiting_on", person, None, "")
