@@ -8,6 +8,11 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Tico HQ's nightly billing check on the Tico team's Health page**: on the one server that holds HQ's read-only
+  staff key (`TICO_HQ_STAFF_READ_KEY`), the server reads HQ's nightly ledger check every hour and the owner's Health
+  page shows each mismatch in red, naming the company's install id and the difference in dollars. A check that missed
+  a night, or that cannot be read for three hours, is red too; a clean check shows nothing. It only reads; every other
+  install sends nothing.
 - **"Sign in with Tico account" on hosted servers, through the ordinary OpenID Connect sign-in**: a new optional
   `TICO_OIDC_LABEL` puts one "Sign in with <label>" button in front of any OpenID Connect provider (unset, sign-in goes
   straight to the provider as before). The setup wizard's new `--auth oidc --issuer <url> --client-id <id>
