@@ -9,7 +9,7 @@ All notable changes to Tico are recorded here. The format follows
 
 ### Added
 - PRIVACY.md has a section for **Ask Tico**, the chat on tico.team: what goes to Tico HQ and to OpenRouter (with
-  fixed filters: no data collection, zero data retention, DeepSeek's own service excluded), that chats are kept with no
+  fixed filters: no data collection, zero data retention), that chats are kept with no
   automatic deletion and deleted on request by chat or email, that notes stay with the Tico team's customer record,
   and the limits and $20 daily cap. ([Privacy](PRIVACY.md#ask-tico-the-chat-on-ticoteam))
 - **Stale ticket review** (Settings > Team; off by default, an owner or an admin turns it on): once an hour Tico

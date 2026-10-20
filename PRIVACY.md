@@ -222,14 +222,15 @@ for you or reach a Tico server you run. Only `https://tico.team` may call these 
   you type yourself, a name or an email address included, is part of the message and is kept like the rest of the
   chat. The panel also tells HQ when the chat opens and when you click a card's link (the card and the link's title,
   never text).
-- **To OpenRouter** (openrouter.ai), which passes it to a provider that serves the model (DeepSeek V4.1 Flash today;
+- **To OpenRouter** (openrouter.ai), which passes it to a provider that serves the model (Inception's Mercury 3 today;
   the Tico team can change it): a fixed instruction, Tico's sales brief, up to four excerpts of Tico's public manual
   that match your message, your current message and up to 20 previous messages from this chat, as you wrote them.
   HQ adds nothing about you (not the chat ID, your IP address or any other detail): anything personal in the call is
   what you typed. HQ
-  calls OpenRouter with its own key and the same three filters on every call, which are not a setting: no provider
-  that may keep or train on data (`data_collection: deny`), only endpoints OpenRouter classes as zero data retention
-  (`zdr: true`), and never DeepSeek's own service (`ignore: ["deepseek"]`). If no provider meets them, the call is
+  calls OpenRouter with one of its own OpenRouter keys (Ask Tico's own key, or HQ's shared one when that is not set;
+  either way OpenRouter receives the same call) and the same two filters on every call, which are not a setting: no
+  provider that may keep or train on data (`data_collection: deny`), and only endpoints OpenRouter classes as zero
+  data retention (`zdr: true`). If no provider meets them, the call is
   refused and the chat rests; it is never sent again with looser filters. OpenRouter's policy does not count a
   provider's in-memory prompt caching as retention
   ([OpenRouter: zero data retention](https://openrouter.ai/docs/guides/features/zdr#caching)).
