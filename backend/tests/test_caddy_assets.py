@@ -124,6 +124,20 @@ def test_unwritable_unmounted_directory_is_inert_while_off_but_refuses_explicit_
     result = assets.prepare({"TICO_CADDY_DIR": str(directory), "TICO_DOMAIN": APP})
     assert result["written"] and result["path"] == str(directory / "caddy.json")
     assert hosts(json.loads((directory / "caddy.json").read_bytes())) == [APP]
+    # An old generation that serves visuals cannot be retired from an unwritable directory, so off must refuse.
+    assets.prepare({"TICO_CADDY_DIR": str(directory), "TICO_DOMAIN": APP, "TICO_CADDY_VISUALS": "1",
+                    "TICO_VISUAL_ORIGIN": "https://" + VISUAL})
+    old = (directory / "caddy.json").read_bytes()
+    assert hosts(json.loads(old)) == [APP, VISUAL]
+    directory.chmod(0o555)
+    try:
+        with pytest.raises(RuntimeError, match="^caddy_config_write_failed$"):
+            assets.prepare({"TICO_CADDY_DIR": str(directory), "TICO_DOMAIN": APP})
+        assert subprocess.run(["bash", str(ENTRYPOINT), "caddy-config"], env=run, capture_output=True,
+                              timeout=60).returncode != 0
+        assert (directory / "caddy.json").read_bytes() == old
+    finally:
+        directory.chmod(0o755)
 
 
 def test_runner_collision_validation_preserves_canonical_runner_and_refuses_ambiguous_optional_url(tmp_path, caplog):
