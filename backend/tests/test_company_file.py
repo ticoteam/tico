@@ -297,6 +297,12 @@ def test_10_a_long_run_of_letters_and_digits_is_removed_however_regular(value):
     assert C.scrub("Use " + value + " now") == ("Use [removed] now", True)
 
 
+@pytest.mark.parametrize("value", [REGULAR[0] + "-", REGULAR[0] + "_", REGULAR[0] + "=", "x_" + REGULAR[0] + "=="])
+def test_10_a_long_run_inside_a_longer_token_is_removed(value):
+    out, cut = C.scrub("Use " + value + " now")
+    assert cut and REGULAR[0] not in out and "[removed]" in out
+
+
 @pytest.mark.parametrize("text", [
     "aaaaaaaa-0000-aaaa-0000-aaaaaaaaaaaa",                  # a UUID: dashes, so not a letters-and-digits run
     "a1" * 15 + "a",                                         # 31 letters and digits

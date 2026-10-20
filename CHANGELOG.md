@@ -292,7 +292,7 @@ All notable changes to Tico are recorded here. The format follows
   harness's cache lifetime (5 minutes for Claude Code, Codex and the rest, from each provider's docs). A small
   cache hit now counts as cold, so the check runs.
 - The key scrubber (setup chat, company file, setup support tickets) also removes 32 or more letters and digits in a
-  row, however regular, as Tico HQ's copy now does (Dev 285).
+  row, however regular and whether alone or inside a longer token, as Tico HQ's copy now does (Dev 285).
 - **A bot creating a task meets the same label gate as when it edits one**: a bot that is not a mover can no longer
   create a task already carrying `goal:on` or `goal:off` (which Tico acts on) or a public roadmap label. The create is
   refused as a `label` refusal, nothing is written, and the refusal says the way through: create the task without the
