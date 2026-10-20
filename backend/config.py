@@ -163,6 +163,8 @@ class Settings:
     # Where the identity provider ends its own session (a Cognito /logout URL with its
     # client_id and logout_uri); without it, logout returns to the app's root.
     cognito_logout_url: str = ""
+    # TICO_AUTH_PROXY=owner-link: the sha256 of the owner's first sign-in link, from the installer (backend/owner_link.py).
+    owner_link_hash: str = ""
     # Built-in sign-in (TICO_AUTH_PROXY=oidc, backend/oidc.py). The secret is read from its file
     # when one is named; the session secret defaults to a generated file beside the database.
     oidc_issuer: str = ""
@@ -173,6 +175,8 @@ class Settings:
     google_oauth_client_id: str = ""
     google_oauth_client_secret: str = field(default="", repr=False)
     oidc_allowed_domains: tuple[str, ...] = ()
+    # The provider's name on the sign-in button (TICO_OIDC_LABEL, "Sign in with <label>"); empty goes straight to it.
+    oidc_label: str = ""
     session_secret: str = field(default="", repr=False)
     # Off: a bot may invite anyone to a calendar event. On: only people on the roster (403 external_attendee).
     block_external_invites: bool = False
@@ -415,6 +419,7 @@ class Settings:
             compose_project=os.environ.get("TICO_COMPOSE_PROJECT", "tico"),
             server_network=os.environ.get("TICO_SERVER_NETWORK", "tico_default"),
             hosted=os.environ.get("TICO_HOSTED", ""),
+            owner_link_hash=os.environ.get("TICO_OWNER_LINK_HASH", "").strip().lower(),
             runner_url=os.environ.get("TICO_RUNNER_URL", "").rstrip("/"),
             screen_relay_url=os.environ.get("TICO_SCREEN_RELAY_URL", ""),
             screen_relay_key=os.environ.get("TICO_SCREEN_RELAY_KEY", ""),
@@ -434,6 +439,7 @@ class Settings:
             oidc_client_secret_file=(Path(os.environ["TICO_OIDC_CLIENT_SECRET_FILE"])
                                      if os.environ.get("TICO_OIDC_CLIENT_SECRET_FILE") else None),
             oidc_allowed_domains=_emails(os.environ.get("TICO_OIDC_ALLOWED_DOMAINS", "")),
+            oidc_label=os.environ.get("TICO_OIDC_LABEL", "").strip(),
             session_secret=os.environ.get("TICO_SESSION_SECRET", "").strip(),
             block_external_invites=os.environ.get("TICO_BLOCK_EXTERNAL_INVITES", "0") == "1",
             token_alert_input=int(os.environ.get("TICO_TOKEN_ALERT_INPUT", "").strip() or 100_000_000),

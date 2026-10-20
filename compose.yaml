@@ -45,10 +45,13 @@ services:
       TICO_HOSTED:
       TICO_ENVIRONMENT_ID:
       TICO_AUTH_PROXY:
+      # TICO_AUTH_PROXY=owner-link: the hash of the hosted owner's first sign-in link (backend/owner_link.py).
+      TICO_OWNER_LINK_HASH:
       TICO_OIDC_ISSUER:
       TICO_OIDC_CLIENT_ID:
       TICO_OIDC_CLIENT_SECRET:
       TICO_OIDC_ALLOWED_DOMAINS:
+      TICO_OIDC_LABEL:
       TICO_CORS_ORIGINS:
       TICO_CLIENT_IP_HEADER:
       # Forwarded client addresses are believed only from loopback (the server's own relay) and the two front doors'
@@ -166,10 +169,13 @@ services:
       # Sign-in settings: the gateway loads the same settings as the server and refuses to start when the
       # selected proxy (oidc, cloudflare) is missing its own.
       TICO_AUTH_PROXY:
+      # TICO_AUTH_PROXY=owner-link: the hash of the hosted owner's first sign-in link (backend/owner_link.py).
+      TICO_OWNER_LINK_HASH:
       TICO_OIDC_ISSUER:
       TICO_OIDC_CLIENT_ID:
       TICO_OIDC_CLIENT_SECRET:
       TICO_OIDC_ALLOWED_DOMAINS:
+      TICO_OIDC_LABEL:
       TICO_ACCESS_ISSUER:
       TICO_ACCESS_AUDIENCE:
       TICO_REHEARSAL:

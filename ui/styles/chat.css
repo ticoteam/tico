@@ -234,6 +234,8 @@ a.ref::before,.run-did .ref::before{content:'';display:inline-block;width:.8em;h
 .chat-thumb img{width:100%;height:100%;object-fit:cover;display:block}
 .chat-thumb img[hidden]{display:none}
 .chat-thumb:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.chat-titled{display:inline-flex;flex-direction:column;gap:2px;width:120px;min-width:0}
+.chat-file-title{font-size:var(--t-sm);color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .img-lightbox{padding:0;border:0;background:transparent;max-width:96vw;max-height:96vh;cursor:zoom-out}
 .img-lightbox::backdrop{background:rgba(0,0,0,.82)}
 .img-lightbox img{display:block;max-width:96vw;max-height:88vh;object-fit:contain;border-radius:8px}

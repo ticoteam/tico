@@ -212,28 +212,51 @@ def test_a_task_still_in_a_chat_room_never_shows_that_chats_run(api):
         assert get(api, f"tasks/{tid}", token)["execution"] is None, "the chat's run is not the task's"
 
 
-def test_the_working_line_is_only_the_owning_bots_run(api):
-    """In the task's own room, only the owning bot's run is the task's "Working" line: another bot's run there is not,
-    and a task a person owns has none."""
-    from backend.views import conversation_execution
+def test_the_working_line_follows_whichever_bot_a_persons_message_went_to(api):
+    """The task's "Working" line is the owning bot's run, or the run for a person's message in the task's room,
+    whichever bot that went to: on a person's task the bot that asked it answers, and the page shows it working.
+    Another bot's run for a bot's message is not the line. `comment_to` says before sending who will get a comment."""
     machine = runner(api, "ana")
     assign(api, machine, "ops")
     ready(api, machine, ["ops"])
     tid, attempt = task_attempt(api, machine)
     assert get(api, f"tasks/{tid}")["execution"]["attempt_id"] == attempt["id"]
-    with api.app.state.store.read() as c:
+    post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "text": "Counted.", "last_seq": 0},
+         machine["token"])
+    with api.app.state.store.transaction() as c:
         cid = H.task(c, tid)["conversation_id"]
-        assert conversation_execution(c, cid, bot="coo") is None, "another bot's runs only"
-        assert conversation_execution(c, cid, bot="ops")["attempt_id"] == attempt["id"]
-    # Another bot's newer job in the task's room (the requester's bot answering there, say) does not take the line.
-    with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,refs_json,created) "
-                  "VALUES('msg-coo',?,'human:ana','bot:coo','chat','Over to you','{}',?)", (cid, H.now()))
+                  "VALUES('msg-coo',?,'bot:ops','bot:coo','chat','Over to you','{}',?)", (cid, H.now()))
         assert c.execute("SELECT bot FROM jobs WHERE message_id='msg-coo'").fetchone()["bot"] == "coo"
-    assert get(api, f"tasks/{tid}")["execution"]["attempt_id"] == attempt["id"], "the owner's run, not the newest"
+    assert get(api, f"tasks/{tid}")["execution"]["attempt_id"] == attempt["id"], "a bot's message to a bot is not it"
+    # A person owns the task and the bot that asked it answers them.
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET owner='human:ana' WHERE id=?", (tid,))
-    assert get(api, f"tasks/{tid}")["execution"] is None, "a person's task has no session to follow"
+        c.execute("UPDATE tasks SET owner='human:ana', requester='bot:ops' WHERE id=?", (tid,))
+    said = post(api, f"tasks/{tid}/comments", {"text": "Which app is still open?"})
+    assert said["woke"] and said["comment"]["to_actor"] == "bot:ops"
+    queued = get(api, f"tasks/{tid}")["execution"] or {}
+    assert (queued["message_id"], queued["bot"], queued["state"], queued["from_person"]) == (
+        said["comment"]["id"], "ops", "queued", True)
+    turn = claim(api, machine)
+    post(api, f"attempts/{turn['id']}/started", {"thread_id": "answer"}, machine["token"])
+    working = get(api, f"tasks/{tid}")["execution"]
+    assert (working["attempt_id"], working["state"], working["bot"]) == (turn["id"], "running", "ops")
+    assert get(api, f"tasks/{tid}")["comment_to"] == {"bot": "ops", "wakes": True, "mention": []}
+    # Someone who neither owns, asked nor may move it is saved for the bot's next run, and no @mention changes that:
+    # the composer offers none, and one sent anyway wakes nobody.
+    assert get(api, f"tasks/{tid}", token="cara-test")["comment_to"] == {"bot": "ops", "wakes": False, "mention": []}
+    assert post(api, f"tasks/{tid}/comments", {"text": "@ops is it billing?"}, token="cara-test")["woke"] is False
+    # A mover who does not own it is saved too, unless they @mention the bot that asked: the composer offers it and
+    # it wakes the bot.
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET owner='human:ben' WHERE id=?", (tid,))
+    to = get(api, f"tasks/{tid}")["comment_to"]
+    assert (to["bot"], to["wakes"], "ops" in to["mention"]) == ("ops", False, True)
+    assert post(api, f"tasks/{tid}/comments", {"text": "Noted."})["woke"] is False
+    assert post(api, f"tasks/{tid}/comments", {"text": "@ops is it billing?"})["woke"] is True
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET requester='human:ben' WHERE id=?", (tid,))
+    assert get(api, f"tasks/{tid}")["comment_to"] == {"bot": None, "wakes": False, "mention": []}, "no bot gets it"
 
 
 def test_a_run_waiting_for_its_chatgpt_login_says_so_and_names_the_holder_only_to_who_may_see_it(api):

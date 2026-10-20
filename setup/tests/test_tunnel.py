@@ -77,16 +77,59 @@ def test_visual_origin_survives_restart_with_only_its_visuals_path_exposed(tmp_p
 
 
 def test_unsafe_visual_origins_cannot_replace_or_inject_tunnel_routes(tmp_path):
-    assert write_config(tmp_path, "app.example.com", TICO_VISUAL_ORIGIN="").returncode == 0
     config = tmp_path / "cloudflared.yml"
-    before = config.read_bytes()
-    for origin in ("http://visuals.example.net", "https://visuals.example.net/private", "https://user@visuals.example.net",
-                   "https://visuals.example.net\n  - service: http://other", "https://app.example.com",
-                   "https://runner.example.com", "https://127.0.0.1", "https://visuals.example.net:bad"):
-        refused = write_config(tmp_path, "app.example.com", TICO_VISUAL_ORIGIN=origin,
+    without_visuals = [
+        {"hostname": "app.example.com", "service": "http://server:8765"},
+        {"hostname": "runner.example.com", "path": "^/(?:api/v2|download)(?:/.*)?$", "service": "http://server:8765"},
+        {"service": "http_status:404"},
+    ]
+    for origin, reason in (("http://visuals.example.net", "https://"), ("https://visuals.example.net/private", "path"),
+                           ("https://user@visuals.example.net", "user name"),
+                           ("https://visuals.example.net\n  - service: http://other", "control characters"),
+                           ("https://app.example.com", "TICO_DOMAIN"), ("https://runner.example.com", "TICO_RUNNER_URL"),
+                           ("https://127.0.0.1", "IP address"), ("https://visuals.example.net:bad", "valid URL"),
+                           ("https://visuals.example.net:0", "port 0"), ("https://visuals_example.net", "DNS hostname")):
+        # A bad value is skipped, not fatal: the app and runner routes are written and the server goes on starting.
+        skipped = write_config(tmp_path, "app.example.com", TICO_VISUAL_ORIGIN=origin,
                                TICO_RUNNER_URL="https://runner.example.com")
-        assert refused.returncode != 0 and "TICO_VISUAL_ORIGIN" in refused.stderr, origin
-        assert config.read_bytes() == before and not list(tmp_path.glob("*.new"))
+        assert skipped.returncode == 0, (origin, skipped.stderr)
+        assert yaml.safe_load(config.read_text())["ingress"] == without_visuals, origin
+        assert "visuals" not in config.read_text() and "other" not in config.read_text() and not list(tmp_path.glob("*.new"))
+        # One warning naming the reason, never the value itself.
+        warning, = skipped.stderr.splitlines()
+        assert warning.startswith("tico: warning: TICO_VISUAL_ORIGIN ") and reason in warning, (origin, warning)
+        assert origin not in skipped.stderr and "http://other" not in skipped.stderr
+
+
+def test_a_visual_origin_with_a_trailing_cr_from_an_edited_env_file_still_gets_its_route(tmp_path):
+    done = write_config(tmp_path, "app.example.com", TICO_VISUAL_ORIGIN="https://Visuals.example.net\r")
+    assert done.returncode == 0 and not done.stderr, done.stderr
+    assert yaml.safe_load((tmp_path / "cloudflared.yml").read_text())["ingress"][1] == {
+        "hostname": "visuals.example.net", "path": "^/visuals/", "service": "http://server:8765"}
+
+
+def test_a_server_start_with_a_bad_visual_origin_still_reaches_the_server(tmp_path, monkeypatch):
+    from backend.config import Settings
+    from backend.tests.test_rehearsal import serve
+    tunnel = tmp_path / "tunnel"
+    tunnel.mkdir()
+    for bad, reason in (("https://visuals.example.net/typo", "has a path"), ("https://[visuals.example.net", "is not a valid URL")):
+        (tmp_path / "stub.log").unlink(missing_ok=True)
+        result, seen, log = serve(tmp_path, TICO_BACKUP="off", TICO_TUNNEL_DIR=str(tunnel), TICO_AUTH_PROXY="cloudflare",
+                                  TICO_ACCESS_ISSUER="https://acme.cloudflareaccess.com", TICO_ACCESS_AUDIENCE="aud",
+                                  TICO_LOCAL_OWNER_TOKEN_FILE="",
+                                  TICO_DOMAIN="app.example.com", TICO_VISUAL_ORIGIN=bad)
+        assert result.returncode == 0, result.stderr
+        assert "python -m backend.server" in log and f"TICO_VISUAL_ORIGIN {reason}" in result.stderr, bad
+        assert yaml.safe_load((tunnel / "cloudflared.yml").read_text())["ingress"] == [
+            {"hostname": "app.example.com", "service": "http://server:8765"}, {"service": "http_status:404"}]
+        # The server reads the same unchanged value: its settings load too, with visuals as file chips at worst.
+        for key in [k for k in os.environ if k.startswith("TICO_")]:
+            monkeypatch.delenv(key)
+        for key, value in seen.items():
+            monkeypatch.setenv(key, value)
+        assert seen["TICO_VISUAL_ORIGIN"] == bad
+        Settings.from_env()
 
 
 def test_compose_always_runs_cloudflared_with_that_config_and_the_server_is_what_writes_it():
