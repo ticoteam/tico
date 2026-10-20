@@ -4,6 +4,7 @@ import base64
 import hashlib
 import pathlib
 import re
+from dataclasses import replace
 
 from backend import visuals as V
 from backend.tests.test_api import api, assign, claim, headers, post, ready, runner  # noqa: F401  (fixtures)
@@ -379,6 +380,41 @@ def test_a_visual_origin_equal_to_the_app_origin_is_refused():
         pass
     else:
         raise AssertionError("the app's own origin was accepted as the visual origin")
+
+
+def test_actual_config_projects_visual_origin_only_after_api_auth_without_private_settings(api, monkeypatch):
+    settings = api.app.state.store.settings
+    for path in ("/api/me", "/api/v2/config"):
+        assert api.get(path).status_code == 401
+    assert api.get("/api/v2/config", headers=headers()).json()["visual_origin"] == ""
+    monkeypatch.setattr(settings, "visual_origin", replace(settings, visual_origin="https://visuals.acme-files.example/").visual_origin)
+    monkeypatch.setattr(settings, "oidc_client_secret", "synthetic-private-oidc-secret")
+    monkeypatch.setattr(settings, "gateway_key", "synthetic-private-gateway-key")
+    monkeypatch.setattr(settings, "screen_relay_key", "synthetic-private-screen-key")
+    for path in ("/api/me", "/api/v2/config"):
+        response = api.get(path, headers=headers("ben-test"))
+        assert response.status_code == 200
+        config = response.json()["config"] if path == "/api/me" else response.json()
+        assert config["visual_origin"] == "https://visuals.acme-files.example"
+        assert "synthetic-private-" not in response.text
+        assert not {"oidc_client_secret", "gateway_key", "screen_relay_key", "visual_key"} & config.keys()
+
+
+def test_visual_projection_hides_legacy_credentials_and_bad_hosts_without_changing_runtime(api, monkeypatch):
+    settings = api.app.state.store.settings
+    for configured in ("https://synthetic-user:synthetic-visual-password@visuals.acme-files.example/",
+                       "https://@visuals.acme-files.example/", "https://bad_host.acme.example/",
+                       "https://visuals.acme-files.example:"):
+        legacy = replace(settings, visual_origin=configured).visual_origin
+        monkeypatch.setattr(settings, "visual_origin", legacy)
+        response = api.get("/api/v2/config", headers=headers())
+        assert response.status_code == 200 and response.json()["visual_origin"] == ""
+        assert "synthetic-visual-password" not in response.text
+        assert settings.visual_origin == legacy and V.inline_on(settings)
+    local = replace(settings, visual_origin="http://localhost:9001/").visual_origin
+    monkeypatch.setattr(settings, "visual_origin", local)
+    assert api.get("/api/v2/config", headers=headers()).json()["visual_origin"] == "http://localhost:9001"
+    assert settings.visual_origin == local and V.inline_on(settings)
 
 
 def test_production_without_a_visual_origin_shows_chips_and_serves_nothing(api, monkeypatch):

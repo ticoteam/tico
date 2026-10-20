@@ -11,6 +11,17 @@ async function inboundMount() {
   host.innerHTML = `<header><h2>Inbox</h2></header>
     <p>Incoming messages for your company’s agents. Every company agent can check these inboxes. Reading a message leaves it available to everyone else.</p>
     <p id="inbound-status" role="status"></p>
+    ${settingsIsAdmin() ? `<details id="inbound-connection"><summary>Connect Inbox to Tico account/company</summary>
+      <p>Get a connection code for your company from <a href="https://app.tico.dev/inbox" target="_blank" rel="noopener noreferrer">Inbox in the customer portal</a>. The code expires after five minutes.</p>
+      <form id="inbound-connection-form"><label>Connection code <input name="code" type="password" autocomplete="off" spellcheck="false" minlength="43" maxlength="43" required></label>
+        <button type="submit" class="ghost">Preview company</button>
+        <div id="inbound-connection-preview" hidden><p id="inbound-connection-company"></p>
+          <p>This workspace’s existing inboxes and messages will join the company’s shared Inbox. This workspace and its agents will also gain access to the company’s shared Inbox, including messages from other connected workspaces. Inbox IDs and addresses stay the same.</p>
+          <p>Disconnecting in the portal stops future access. It cannot undo merged message history or remove copies already saved in a workspace.</p>
+          <label><input name="consent" type="checkbox"> I agree to share Inbox in both directions with this company.</label>
+          <button type="button" class="primary" id="inbound-connection-connect" disabled>Connect Inbox</button></div>
+        <p id="inbound-connection-status" role="status"></p>
+      </form></details>` : ''}
     <form id="inbound-create" class="row"><label>Inbox name <input name="name" maxlength="80" required placeholder="Account logins"></label>
       <button type="submit" class="primary">Create email inbox</button>
       ${settingsIsAdmin() ? '<button type="button" class="ghost" id="inbound-phone">Request a US mobile number</button>' : ''}</form>
@@ -30,6 +41,56 @@ async function inboundMount() {
   const active = () => version === INBOUND_VIEW && host.isConnected && !host.closest('.settings-pane')?.hidden;
   const failure = error => { if (active()) status.textContent = error.message; };
   const price = value => (value/1000000).toLocaleString('en-US',{style:'currency',currency:'USD'});
+  const connectionForm = $('#inbound-connection-form');
+  if (connectionForm) {
+    let shown = null, generation = 0, busy = false;
+    const input = connectionForm.elements.code, consent = connectionForm.elements.consent;
+    const preview = $('#inbound-connection-preview'), connect = $('#inbound-connection-connect');
+    const connectionStatus = $('#inbound-connection-status'), submit = connectionForm.querySelector('[type="submit"]');
+    const clearPreview = () => {
+      generation++;shown=null;preview.hidden=true;consent.checked=false;connect.disabled=true;
+      $('#inbound-connection-company').textContent='';
+    };
+    input.oninput = () => { clearPreview();connectionStatus.textContent=''; };
+    consent.onchange = () => { connect.disabled=busy || !shown || !consent.checked; };
+    async function connectionAction(action) {
+      if (busy) return;
+      if (action==='connect' && (!shown || !consent.checked)) return;
+      if (action==='connect' && shown.expires_at*1000<=Date.now()) {
+        clearPreview();connectionStatus.textContent='This code expired. Get a new code in the portal.';return;
+      }
+      const code=input.value, target=shown?.company.company_id;
+      if (action==='preview') clearPreview();
+      const pending=generation;
+      busy=true;submit.disabled=true;connect.disabled=true;
+      if (action==='connect') { input.disabled=true;consent.disabled=true; }
+      connectionStatus.textContent=action==='preview' ? 'Checking company…' : 'Connecting Inbox…';
+      try {
+        const result=await post('/v2/inbound/company-connection',{action,code});
+        if (!active() || generation!==pending || input.value!==code) return;
+        if (action==='preview') {
+          shown=result;
+          $('#inbound-connection-company').textContent=`Company: ${result.company.name} · ${result.company.company_id}`;
+          preview.hidden=false;connectionStatus.textContent='Review the company and shared Inbox access before connecting.';
+        } else {
+          if (result.company.company_id!==target) throw new Error('Could not confirm the selected company. Check the portal.');
+          input.value='';clearPreview();
+          connectionStatus.textContent=`Inbox connected to ${result.company.name} (${result.company.company_id}). Manage or disconnect it in the customer portal.`;
+          await refreshInboxes();await messages();
+        }
+      } catch(error) {
+        if (active() && generation===pending) {
+          if ([403,409,422].includes(error.status)) clearPreview();
+          connectionStatus.textContent=error.message;
+        }
+      } finally {
+        busy=false;input.disabled=false;consent.disabled=false;
+        if (active()) { submit.disabled=false;connect.disabled=!shown || !consent.checked; }
+      }
+    }
+    connectionForm.onsubmit = event => {event.preventDefault();void connectionAction('preview');};
+    connect.onclick = () => void connectionAction('connect');
+  }
   async function refreshPhoneRequests() {
     const target = $('#inbound-phone-requests');
     if (!target) return;

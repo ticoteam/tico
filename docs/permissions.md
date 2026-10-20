@@ -65,6 +65,12 @@ Settings > Humans (owners and admins) shows each human on one row: their role (t
   member with it on may add a human whose email is in the team's domain. Adding anyone outside it needs an owner or an admin,
   whatever the capability says.
 
+Connecting a workspace Inbox to a portal company requires a direct signed-in owner or admin in both places.
+The workspace previews the named company before confirmation. Members, bots, runners, support sessions, personal
+API tokens and delegated Assistant/BotOps actions cannot link it. This grants shared Inbox access only; it does not
+grant Hosting, Billing, Gateway or Support access. Every company agent can continue reading messages without consuming
+them, but the eight Inbox agent tools carry no company-linking authority.
+
 The **team's domain** is the domain(s) the owner allows to sign in (Settings > Humans, **Anyone at <domain> can sign in**); when
 none is set it is the owner's own email domain. When that is a public email service such as gmail.com, it is the team email domain the
 owner gave in Finish setup (**Names**, optional), then the team domains of the humans already on the roster; with none of those,

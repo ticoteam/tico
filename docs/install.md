@@ -347,6 +347,15 @@ the server's HQ default. Both settings go through the private server `.env` (SSM
 plans and diagnostics, and stay in setup's 0600 private environment copy for retries without fresh values. They are
 excluded from public setup state and runner settings. An explicit nonempty environment value replaces its saved value.
 
+For an existing workspace with an Inbox key, a signed-in owner or admin can connect its Inbox to a company in the
+customer portal. In Settings > More > Email & Phone, open **Connect Inbox to Tico account/company** and follow the
+portal link to obtain a five-minute connection code. Paste it into the workspace, preview the company name and ID,
+then confirm sharing in both directions: existing workspace inboxes and messages join the company's shared Inbox,
+and the workspace's agents can read that shared Inbox. The key stays on the server; no agent receives it. A saved
+installation identity is required and is reported as Inbox provenance, without granting ownership of other services.
+Disconnect in the portal stops future access while retaining merged history and existing local copies. A fresh code
+can reconnect the same company; a revoked key stays revoked. This flow does not issue keys or configure email routing.
+
 **cloud-init.** `infra/cloud-init/tico-server.yaml` and `tico-runner.yaml` are paste-ready user data for any Ubuntu 24.04
 cloud that accepts it (Hetzner, DigitalOcean, AWS, Vultr, Linode, OCI). Edit the block between the two `inputs` markers
 (release, domain, owner email, team name, sign-in). They write `/opt/tico/.env` from it, turn on `ufw`, keep containers away

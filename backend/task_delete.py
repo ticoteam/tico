@@ -248,7 +248,8 @@ def delete_tasks(c, ids, apply=False, actor=None):
                                                 "restorable": True})
     H.recount(c, parties)       # what a bot waited on a person for leaves with the task
     from .roadmap_flow import sync
-    for parent in {r["to_task"] for edges in relations.values() for r in edges if r["kind"] == "parent"}:
+    # A roadmap item counts its children and the Dev tickets it is blocked by.
+    for parent in {r["to_task"] for edges in relations.values() for r in edges if r["kind"] in ("parent", "blocks")}:
         sync(c, parent)
     report["applied"] = True
     return report

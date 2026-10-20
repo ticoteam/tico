@@ -16,6 +16,14 @@ All notable changes to Tico are recorded here. The format follows
   is told which commands still run. The run's events record "Turn ended: background wait" with the minutes saved,
   and the wake counts as `background_done` in `hub sql`. On a Mac the exit code reads "unknown". A turn still
   working, or running a subagent, waits as before.
+- **Roadmap items move with their Dev tickets by rule**: a Product roadmap item counts the Dev tickets linked to
+  it as children and as blocked by alike. Linking alone moves nothing: it is **Building** once the first ticket is In
+  Progress or later, at the new **Ready to ship** step (right after Building, shown publicly as "In progress") once
+  every ticket is at Pending Release or later, and **Shipped** once every one is done. A ticket closed or declined
+  without shipping counts for neither. On every change the item follows its tickets, back as well as forward. A
+  finished Dev ticket stays linked to the item it delivered. Each Dev ticket that starts, gets an open blocker or
+  reaches done leaves one quiet line from a fixed template (ticket, step, blocker, pull request) on its roadmap
+  item, else for its requester on the ticket; it wakes nobody.
 - **Optional separate visual site on Caddy**: `TICO_CADDY_VISUALS=1` serves only signed visual reads on a distinct
   HTTPS `TICO_VISUAL_ORIGIN`, stripping browser credentials and response cookies while the backend checks access.
   Atomic generated configuration and a private health check remove stale visual listeners when settings change.

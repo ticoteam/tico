@@ -22,6 +22,13 @@ The app saves the address and restarts automatically to replace its native permi
 Only the selected server's origin can use native IPC; Access and external sign-in pages that
 remain in the window receive no native permissions.
 
+The app can keep [signed visuals](visuals.md) inline when the selected server uses
+a separate HTTPS address for them. After sign-in, the server supplies that address
+and the app accepts only its signed visual paths. Changing servers, signing out or
+starting another sign-in clears the allowance. Visual pages keep their sandbox;
+their origin is not granted native command or app-log permissions. If this app build cannot confirm
+the visual address, the page stays usable and those visuals appear as file links.
+
 Links to other sites, and any link that would open a new tab (links in chat and Markdown), open in your
 default browser, and email links in your mail app. A sign-in stays in the app window from start to finish,
 whichever identity provider it goes through (Cloudflare Access with Google, Microsoft, Okta, GitHub or a one-time PIN,
