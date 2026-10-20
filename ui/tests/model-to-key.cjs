@@ -93,7 +93,8 @@ const {unrouted} = require('./support/routes.cjs');
     const {page, box, writes, errors} = await open();
     const detail = page.locator('#set-machines dialog.computer-detail[open]');
     const own = name => detail.locator(`[data-connection="own:${name}"]`);
-    const buttons = row => row.locator('.computer-conn-signin button').allInnerTexts();
+    // Switch account and Sign out are icons: their name is the aria-label.
+    const buttons = row => row.locator('.computer-conn-signin button').evaluateAll(all => all.map(b => b.getAttribute('aria-label') || b.innerText));
     assert.deepEqual(await buttons(own('codex')), ['Switch account', 'Switch to API key', 'Sign out']);
     assert.deepEqual(await buttons(own('claude')), ['Switch account', 'Switch to API key', 'Sign out']);
     const before = await own('codex').innerText();

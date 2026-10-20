@@ -51,6 +51,8 @@ EMPTY = (
     "mail_mailboxes", "bot_mail_settings", "google_connects", "google_mail_holders", "slack_credentials", "slack_posts", "slack_events", "slack_threads",
     "github_app", "github_app_states", "granola_connections", "meeting_importers", "live_meeting_bots",
     "support_tickets", "support_access", "support_access_log",
+    # Agent inbox bodies/codes and delivery cursors never enter a rehearsal copy.
+    "inbound_inboxes", "inbound_messages", "inbound_sync",
     "usage_alerts", "task_requesters", "roadmap_actions",
     # raw provider streams: customer text, and whatever the secret scrub missed
     "attempt_captures", "attempt_capture_drops",

@@ -1,4 +1,4 @@
-"""The Tico AI Gateway connection in Settings > AI providers: one gateway key and the Gateway's URL.
+"""The Tico AI Gateway connection in Settings > Computers: one gateway key and the Gateway's URL.
 
 It is the one key for everything the app asks the Gateway (clients/gateway.py): Decide's questions and the bots that run
 on Tico Cheap, Mid and Power 1.0. The server's environment may set it (`TICO_GATEWAY_KEY`, `TICO_GATEWAY_URL`), which
@@ -92,7 +92,7 @@ def url(c, settings=None):
 
 
 def view(c, settings=None, *, manage=False):
-    """What Settings > AI providers shows. Never the key; its preview and the Gateway's last word only to the people
+    """What Settings > Computers shows. Never the key; its preview and the Gateway's last word only to the people
     who manage the connection (`manage`: the owner)."""
     record, where = _row(c), source(c, settings)
     out = {"label": G.LABEL, "connected": bool(where), "source": where, "url": url(c, settings),

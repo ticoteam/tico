@@ -60,8 +60,11 @@ def test_the_preview_create_command_names_everything_after_its_name_under_the_bo
     assert "TICO_INSTALL_PRESET=recommended" in param["Value"]
     (run,) = ec2.called("run_instances")
     assert run["InstanceType"] == "t4g.medium" and run["IamInstanceProfile"] == {"Name": f"tico-{NAME}"}
-    assert {"Key": "Name", "Value": f"tico-{NAME}"} in run["TagSpecifications"][0]["Tags"]
-    assert all(t in run["TagSpecifications"][0]["Tags"] for t in OURS)
+    # The instance, its disk and its network interface are each tagged in the launch call: DevOps's role refuses a
+    # launch whose network interface lacks them (it attaches the address only to a tagged interface).
+    specs = {s["ResourceType"]: s["Tags"] for s in run["TagSpecifications"]}
+    assert set(specs) == {"instance", "volume", "network-interface"}
+    assert all({"Key": "Name", "Value": f"tico-{NAME}"} in t and all(o in t for o in OURS) for t in specs.values())
     assert ec2.called("create_security_group")[0]["GroupName"] == f"tico-{NAME}"
     (change,) = r53.called("change_resource_record_sets")
     assert change["ChangeBatch"]["Changes"][0]["ResourceRecordSet"]["ResourceRecords"] == [{"Value": "203.0.113.9"}]

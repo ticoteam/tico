@@ -94,7 +94,7 @@ def write(base):
 
 
 def check(base):
-    """Settings > AI providers checking the key (backend/gateway_connection.py)."""
+    """Settings > Computers checking the key (backend/gateway_connection.py)."""
     assert G.check(KEY, base)["state"] == "connected"
     return "GET", "/v1/gateway/key"
 
@@ -132,6 +132,7 @@ HQ_NAMES = re.compile(r"updates\.tico\.team|TICO_HQ_URL|hq_url\(|DEFAULT_HQ|TICO
 SENDS = re.compile(r"urllib\.request|httpx|\brequests\.|aiohttp|http\.client")
 # Each module that sends to HQ or the Gateway, and how it names its user agent.
 HQ_CLIENTS = {
+    "backend/inbound.py": '"User-Agent": user_agent()',
     "backend/recruit.py": '"User-Agent": "tico"',
     "backend/releases.py": '"User-Agent": "tico-update-check"',
     "backend/support.py": '"User-Agent": "tico-support"',

@@ -1,4 +1,4 @@
-"""A company's own S3 bucket for its files, set by the owner in Settings > Storage.
+"""A company's own S3 bucket for its files, set by the owner in Settings > General.
 
 With one set, Tico's file store (backend/blobs.py) writes every new file there instead of the server's own storage
 (TICO_BLOB_BUCKET or the data volume), and reads from it first. Nothing already stored moves out from under a reader:

@@ -233,24 +233,26 @@ function machineLoginCommand(machine, name) {
   const command = harnessCaps(name).terminal_login;
   return command && machine.update?.kind === 'docker' ? `docker exec -it -u bot <container> ${command}` : command;
 }
-const machinePlan = plan => plan ? String(plan).replace(/^./, c => c.toUpperCase()) : '';
 // A computer reads an account again every 10 minutes (runner-rs/src/accounts.rs READ_EVERY), the answer landing on a
 // later heartbeat's report, which is kept a minute; a reading older than this has missed its refresh.
 const MACHINE_ACCOUNT_FRESH_MS = 15 * 60000;
-// "Signed in as <email> · <plan>" from an account; what the provider did not say is left out, not guessed. A reading
+const machinePlanName = plan => plan ? String(plan).replace(/^./, c => c.toUpperCase()) : '';
+// "Signed in as <email>" from an account (the plan is left out: the usage says what matters); what the provider did not
+// say is left out, not guessed. A reading
 // that has missed its refresh says when it was last checked, since the login may have changed since.
 function machineAccountHTML(account, runtime, title = '') {
   const who = account?.kind === 'api_key' ? 'with an API key · no plan usage'
-    : [account?.email, machinePlan(account?.plan)].filter(Boolean).join(' · ');
+    : account?.email || '';
   const rest = who ? (account?.kind === 'api_key' ? who : `as ${who}`)
     : harnessCaps(runtime).account ? '· account not reported yet' : '· account unavailable';
   const checked = Date.parse(account?.checked_at);
   const old = who && Number.isFinite(checked) && Date.now() - checked > MACHINE_ACCOUNT_FRESH_MS
     ? ` <span class="muted" data-account-checked>account last checked ${esc(ago(account.checked_at))}</span>` : '';
-  return `<span class="pill ok"${title ? ` title="${esc(title)}"` : ''}>Signed in</span> <span class="machine-account${who ? '' : ' muted'}"${account?.org ? ` title="${esc(account.org)}"` : ''}>${esc(rest)}</span>${old}`;
+  const tip = [account?.org, machinePlanName(account?.plan)].filter(Boolean).join(' · ');
+  return `<span class="pill ok"${title ? ` title="${esc(title)}"` : ''}>Signed in</span> <span class="machine-account${who ? '' : ' muted'}"${tip ? ` title="${esc(tip)}"` : ''}>${esc(rest)}</span>${old}`;
 }
-// One usage window ("weekly" or "5-hour window"): what is left and when it resets, with the reading's age. A window with
-// no provider percentage says so; it never reads as 0% or a full allowance.
+// One usage window ("weekly" or "5-hour window"): what is left and when it resets; its age only once it is a day old. A
+// window with no provider percentage says so; it never reads as 0% or a full allowance.
 function machineWindowHTML(label, reading, name) {
   if (!reading) return '';
   const percent = Number.isFinite(reading.used_percent) ? Math.min(100, Math.max(0, reading.used_percent)) : null;
@@ -260,8 +262,7 @@ function machineWindowHTML(label, reading, name) {
   const left = percent === null ? null : Math.round(100 - percent);
   const value = expired ? 'previous window; refresh needed' : left === null ? 'percentage unavailable' : `${left}% left`;
   const notes = [Number.isFinite(reset) && !expired ? `resets ${new Date(reset).toLocaleString([], {weekday: 'short', hour: 'numeric', minute: '2-digit'})}` : '',
-    reading.status === 'rejected' ? 'limit reached' : '',
-    Number.isFinite(reported) ? `${reading.source === 'manual' ? 'recorded' : 'as of'} ${ago(reading.reported_at)}${stale ? ', may be out of date' : ''}` : ''].filter(Boolean);
+    stale ? `from ${ago(reading.reported_at)}` : ''].filter(Boolean);
   const bar = left !== null && !expired
     ? `<meter class="machine-usage-bar" min="0" max="100" low="20" optimum="100" value="${left}" aria-label="${esc(name)} ${esc(label)}: ${left}% left"></meter>` : '';
   return `<span class="machine-usage-line${stale || expired ? ' stale' : ''}" data-usage-window="${esc(label)}">${bar}<span>${esc(label)} ${esc(value)}</span>${notes.length ? `<span class="muted">${esc(notes.join(' · '))}</span>` : ''}</span>`;
@@ -272,9 +273,9 @@ function machineUsageHTML(runtime, state, name, where = 'this computer') {
   const caps = harnessCaps(runtime);
   if (!caps.weekly_usage) return '<span class="muted" data-usage-window="none">Usage unavailable</span>';
   if (state?.account?.kind === 'api_key') return '<span class="muted" data-usage-window="none">No plan usage (API key)</span>';
-  const idle = caps.weekly_usage === 'turns' && !state?.weekly && !state?.five_hour
-    ? ` · reported after a ${harnessWords(runtime)} turn on ${where}` : '';
-  const weekly = machineWindowHTML('Weekly', state?.weekly, name) || `<span class="muted" data-usage-window="Weekly">Weekly usage unavailable${esc(idle)}</span>`;
+  const idle = caps.weekly_usage === 'turns' && !state?.weekly && !state?.five_hour;
+  const weekly = machineWindowHTML('Weekly', state?.weekly, name)
+    || `<span class="muted" data-usage-window="Weekly"${idle ? ` title="${esc(`Shows after a ${harnessWords(runtime)} turn on ${where}`)}"` : ''}>${idle ? 'No usage yet' : 'Usage unavailable'}</span>`;
   return weekly + machineWindowHTML('5-hour window', state?.five_hour, name);
 }
 // The sign-in cell: signed in as <account>, signed out, login expired or rejected, checking, or couldn't check (with
@@ -363,7 +364,8 @@ function machineUpdateWords(update) {
     return `<span class="pill ${update.state === 'incompatible' ? 'fail' : 'waiting'}" data-runner-outdated title="${esc([update.label, update.target ? `to ${update.target}` : ''].filter(Boolean).join(' '))}">Update</span>`;
   return '';
 }
-// One compact row per computer: name, Tico version, operator, bots, AI tool chips, status. A click opens the pop-up.
+// One compact row per computer: name, status, operator and Tico version in one cell, then its AI tool chips and Add.
+// A click opens the pop-up.
 function renderSettingsMachines() {
   const el = $('#set-machines'); if (!el) return;
   const showRevoked = el.dataset.showRevoked === 'true';
@@ -371,17 +373,13 @@ function renderSettingsMachines() {
   const machines = SETTINGS_DATA.machines.filter(machine => showRevoked || !machine.revoked_at);
   const cards = machines.map(machine => {
     const online = machineOnline(machine);
-    const bots = machine.bots || [], names = bots.map(settingsBotName);
-    const few = names.slice(0, 3).join(', ') + (names.length > 3 ? ', …' : '');
-    const status = machine.revoked_at ? ['failed', 'revoked'] : online ? ['ok', 'online'] : ['', 'offline'];
+    const status = machine.revoked_at ? ['failed', 'revoked'] : online ? ['ok', 'online'] : ['', machine.last_seen ? `offline ${ago(machine.last_seen)}` : 'offline'];
     const failures = Object.values(machine.readiness?.bots || {}).filter(value => !value.ready).length;
+    const facts = [settingsPersonName(machine.operator), machine.version ? `Tico ${machine.version}` : ''].filter(Boolean).join(' · ');
     return `<tr class="machine-card" data-computer-row="${esc(machine.id)}">
-      <td><button type="button" class="machine-name" data-computer-open="${esc(machine.id)}" aria-haspopup="dialog">${esc(machine.label)}</button></td>
-      <td data-label="Tico">${esc(machine.version || '—')} ${machineUpdateWords(machine.update)}</td>
-      <td data-label="Operator">${esc(settingsPersonName(machine.operator))}</td>
-      <td data-label="Bots">${bots.length ? `<span class="machine-bots" title="${esc(names.join(', '))}"><strong>${bots.length} bot${bots.length === 1 ? '' : 's'}</strong>${few ? ` · ${esc(few)}` : ''}</span>` : '<span class="muted">No bots</span>'}${failures ? `<span class="settings-cell-note err">${failures} not ready</span>` : ''}</td>
-      <td data-label="AI tools">${machineChipsHTML(machine)}</td>
-      <td data-label="Status"><span class="machine-status"><span class="dot ${status[0]}" aria-hidden="true"></span>${status[1]}${!online && !machine.revoked_at && machine.last_seen ? `<span class="muted"> · last seen ${esc(ago(machine.last_seen))}</span>` : ''}</span>${online && machine.restarting ? `<span class="settings-cell-note" data-machine-restarting title="${esc(`Since ${machine.restarting.slice(0, 16).replace('T', ' ')} UTC`)}">Restarting: it starts new work once its running turns end</span>` : ''}</td></tr>`;
+      <td><span class="machine-head"><button type="button" class="machine-name" data-computer-open="${esc(machine.id)}" aria-haspopup="dialog">${esc(machine.label)}</button><span class="machine-status" data-machine-status><span class="dot ${status[0]}" aria-hidden="true"></span>${esc(status[1])}</span></span>
+        <span class="settings-cell-note machine-facts">${esc(facts)} ${machineUpdateWords(machine.update)}</span>${failures ? `<span class="settings-cell-note err">${failures} bot${failures === 1 ? '' : 's'} not ready</span>` : ''}${online && machine.restarting ? `<span class="settings-cell-note" data-machine-restarting title="${esc(`Since ${machine.restarting.slice(0, 16).replace('T', ' ')} UTC`)}">Restarting: it starts new work once its running turns end</span>` : ''}</td>
+      <td data-label="AI tools">${machineChipsHTML(machine)}</td></tr>`;
   }).join('');
   el.onchange = async event => {
     if (event.target.matches('[data-show-revoked-computers]')) {
@@ -450,11 +448,12 @@ function renderSettingsMachines() {
     const dialog = el.querySelector('dialog.computer-detail');
     if (dialog && (event.target === dialog || event.target.closest('[data-detail-close]'))) { dialog.close(); return; }
     if (dialog && event.target.closest('dialog.computer-detail a[href]:not([data-computer-bots])')) dialog.close();   // leaving for a link
+    // Add, on the row or in the pop-up, opens its own pop-up (before the row's click opens the computer's).
+    const add = event.target.closest('[data-add-connection]');
+    if (add) { if (!add.disabled) computerAddOpen(add.dataset.addConnection); return; }
     const row = event.target.closest('[data-computer-open], [data-computer-row]');
     if (row && !event.target.closest('a')) { computerDetailOpen(row.dataset.computerOpen || row.dataset.computerRow); return; }
     if (subsHandleClick(event)) return;
-    const add = event.target.closest('[data-add-connection]');
-    if (add) { if (!add.disabled) computerAddOpen(add.dataset.addConnection); return; }
     const removeLine = event.target.closest('[data-connection-remove]');
     if (removeLine) { if (!removeLine.disabled) computerRemoveOpen(removeLine); return; }
     const perfLink = event.target.closest('[data-computer-performance]');
@@ -497,7 +496,7 @@ function renderSettingsMachines() {
       <td>${agent.model ? `${esc(agent.model)}${agent.provider ? `<span class="settings-cell-note">${esc(agent.provider)}</span>` : ''}` : '<span class="muted">—</span>'}</td>
       <td><span class="machine-status"><span class="dot ${agent.revoked_at ? 'failed' : agent.online ? 'ok' : ''}" aria-hidden="true"></span>${agent.revoked_at ? 'revoked' : agent.online ? 'reporting in' : 'not reporting'}${agent.last_seen ? `<span class="muted"> · ${esc(ago(agent.last_seen))}</span>` : ''}</span></td></tr>`).join('');
   const list = `${revoked ? `<label class="settings-cell-note"><input type="checkbox" data-show-revoked-computers${showRevoked ? ' checked' : ''}> Show revoked computers (${revoked})</label>` : ''}
-    ${cards ? `<div class="scroll"><table class="settings-table settings-machines"><thead><tr><th>Computer</th><th>Tico</th><th>Operator</th><th>Bots</th><th>AI tools</th><th>Status</th></tr></thead><tbody>${cards}</tbody></table></div>` : `<div class="empty">${revoked ? 'No active computers.' : 'No computers yet.'}</div>`}
+    ${cards ? `<div class="scroll"><table class="settings-table settings-machines"><thead><tr><th>Computer</th><th>AI tools</th></tr></thead><tbody>${cards}</tbody></table></div>` : `<div class="empty">${revoked ? 'No active computers.' : 'No computers yet.'}</div>`}
     ${agents ? `<h3 class="settings-agents-title">External agents${betaPill('external_agents')}</h3><div class="scroll"><table class="settings-table"><thead><tr><th>Agent</th><th>Owner</th><th>Model</th><th>Status</th></tr></thead><tbody>${agents}</tbody></table></div>` : ''}`;
   // Only the list is redrawn; the Add computer form (and the code it shows) keeps what was typed.
   if (!el.querySelector('.machine-enroll')) el.innerHTML = `<div data-machines-list></div>
@@ -507,7 +506,7 @@ function renderSettingsMachines() {
       <input id="machine-label" type="text" autocomplete="off" aria-label="Computer name" placeholder="Computer name" value="${esc(settingsPersonName(people.find(person => person.id === S.me?.id)?.id || people[0]?.id) + "'s Mac")}">
       <button class="primary" type="button" id="register-machine">Add computer</button>
       <div class="machine-enroll-status" id="machine-enroll-status"></div></div>`;
-  el.querySelector('[data-machines-list]').innerHTML = `<p class="settings-cell-note">Computers run your bots on their AI logins and keys. Open a computer for its connections, screen, bots and settings.</p>${window.runnerOutdatedBanner?.(machines, S.me?.id, settingsPersonName) || ''}${list}`;
+  el.querySelector('[data-machines-list]').innerHTML = `${window.runnerOutdatedBanner?.(machines, S.me?.id, settingsPersonName) || ''}${list}`;
   computerDetailPaint();
   subsScheduleRefresh();
   const machineDefaultLabel = () => $('#machine-kind').value === 'linux' && S.config?.local ? 'This computer'

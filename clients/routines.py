@@ -12,7 +12,7 @@ MAX_CONTENT = 100_000
 MAX_SNAPSHOT = 1_000_000
 # An event a routine may run `on:` instead of a cron. Tico emits these (docs/routines.md).
 # `recording.ready` is the old name of `meeting.ready`; Tico still emits both.
-EVENTS = ('meeting.ready', 'recording.ready', 'market.insight.urgent')
+EVENTS = ('meeting.ready', 'recording.ready', 'market.insight.urgent', 'inbound.received')
 # A webhook trigger's event (backend/triggers.py); the server checks that the trigger exists.
 WEBHOOK_EVENT = re.compile(r'webhook\.[a-z0-9][a-z0-9-]{0,39}')
 

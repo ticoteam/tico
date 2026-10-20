@@ -45,8 +45,8 @@ function pageTasks(forced, openId = '') {
           <button type="button" class="linkish tl-clear" id="task-filter-clear" hidden>Clear</button></div>
         <span class="spacer"></span>
         <a class="tl-decide tl-decide-bar" href="${DECIDE}" hidden></a>
-        ${S.me?.role === 'bot' ? '' : `<button type="button" class="tl-addf" id="task-stats" aria-label="Task stats" title="Task stats">${TL_ICON.chart}<span>Stats</span></button>`}
-        <button type="button" class="tl-addf tl-pin" id="task-pin" aria-pressed="false">Pin</button>
+        ${S.me?.role === 'bot' ? '' : `<button type="button" class="tl-addf tl-ic" id="task-stats" aria-label="Task stats" title="Task stats">${TL_ICON.chart}</button>`}
+        <button type="button" class="tl-addf tl-ic tl-pin" id="task-pin" aria-pressed="false" aria-label="Pin to the sidebar" title="Pin to the sidebar">${TL_ICON.pin}</button>
         <button type="button" class="tl-addf tl-selmode" id="task-select-mode" aria-pressed="false" hidden>Select</button>
         <span class="tl-groupby" id="task-group-wrap"></span>
       </div>

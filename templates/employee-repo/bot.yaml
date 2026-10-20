@@ -3,7 +3,7 @@ display_name: "Change Me"
 labels: [owner:CHANGE-ME]
 reads: []                    # other bot-* repos to clone read-only
 slack_channel: "#agents"
-# Runtime and model come from the team's provider choice (Settings > AI providers).
+# Runtime and model come from the team's provider choice (Settings > Computers).
 # Override here only if this bot needs something different:
 # runtime: <runtime>
 # model: <model id>

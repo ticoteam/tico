@@ -1,4 +1,4 @@
-// Settings > AI providers' Tico AI Gateway card against a fake server: the key is typed once, sent once and never
+// Settings > Computers > Models' Tico AI Gateway card against a fake server: the key is typed once, sent once and never
 // shown again (only its preview); the Tico models appear only while the connection has a key, by their Tico names
 // with what runs underneath; the Gateway's 80% warning, "Gateway cap reached" and a revoked key read plainly to the
 // owner; members see only whether it is connected.
@@ -77,7 +77,7 @@ const {unrouted} = require('./support/routes.cjs');
     const card = page.locator('#set-gateway');
     const open = async () => {
       await page.evaluate(() => loadSettings());
-      await page.locator('[data-settings-tab=providers]').click();
+      await page.locator('[data-settings-tab=devices]').click();
       await page.evaluate(() => renderSettingsProviders());
       await card.waitFor();
     };

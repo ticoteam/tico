@@ -254,7 +254,7 @@ def run_status(code, text=""):
     if code == "no_route":
         return "No Tico route for this request"
     if code == NOT_FOUND:
-        return NOT_SERVED + "; check the Gateway URL in Settings > AI providers"
+        return NOT_SERVED + "; check the Gateway URL in Settings > Computers"
     if code == UNAVAILABLE:
         return "Tico AI Gateway is unavailable, try again"
     if code == NOT_ISOLATED:

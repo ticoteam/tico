@@ -80,9 +80,6 @@ async function access(browser) {
   await page.goto('https://tico-ui.test/#/settings');
   await page.locator('[data-settings-tab="bots"]').click();
   await page.locator('tr[data-settings-bot=legal]').waitFor();
-  await page.locator('[data-settings-tab="chat"]').click();
-  await page.locator('#settings-chat-bots').click();
-  assert.equal(await page.locator('#settings-bots').isVisible(), true, 'Chat shortcut opens Bots');
   assert.equal(await page.locator('[data-settings-tab="bots"]').getAttribute('aria-selected'), 'true');
   assert.match(await page.locator('#set-bots thead').innerText(), /access/i);
   assert.doesNotMatch(await page.locator('#set-bots thead').innerText(), /can use/i);

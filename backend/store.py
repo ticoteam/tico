@@ -679,6 +679,8 @@ class Store:
             _google_connect.ensure_schema(c)
             from . import support as _support
             c.executescript(_support.SCHEMA)
+            from . import inbound as _inbound
+            c.executescript(_inbound.SCHEMA)
             from . import support_access as _support_access
             c.executescript(_support_access.SCHEMA)
             from . import credential_cards as _credential_cards
