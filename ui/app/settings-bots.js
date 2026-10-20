@@ -614,7 +614,7 @@ function renderSettingsBots() {
   const copyAll = $('#copy-setup-prompt');
   if (copyAll) { copyAll.onclick = () => settingsCopyPrompt(); copyAll.disabled = false; }
   const add = $('#settings-add-bot');
-  if (add) { add.onclick = () => settingsEditBot(); add.disabled = false; }
+  if (add) { add.onclick = () => void settingsRecruitFlow(); add.disabled = false; }
   const fromCatalog = $('#settings-add-catalog');
   if (fromCatalog) { fromCatalog.onclick = () => void settingsCatalogPicker(); fromCatalog.disabled = false; }
 }

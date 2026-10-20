@@ -92,6 +92,14 @@ def gather(io: IO, args, s: Settings, dry: bool) -> Settings:
               choices={k: k for k in awsmod.HOURLY}, default="t4g.small")
         a.get("aws_os", "Operating system", flag="--aws-os", choices={"ubuntu": "Ubuntu 24.04", "al2023": "Amazon Linux 2023"}, default="ubuntu")
         a.get("aws_profile", "AWS profile (blank for the default credentials)", flag="--aws-profile", required=False)
+        s.aws_name = (getattr(args, "name", None) or s.aws_name or "").strip().lower()
+        if s.aws_name and not awsmod.NAME_RE.fullmatch(s.aws_name):
+            raise MissingInput("--name is 1 to 40 lowercase letters, digits and dashes, starting and ending with a letter or digit")
+        s.aws_permissions_boundary = (getattr(args, "aws_permissions_boundary", None) or s.aws_permissions_boundary or "").strip()
+        if s.aws_permissions_boundary and not awsmod.POLICY_ARN_RE.fullmatch(s.aws_permissions_boundary):
+            raise MissingInput("--aws-permissions-boundary is an IAM policy ARN (arn:aws:iam::<account>:policy/<name>)")
+    elif getattr(args, "name", None) or getattr(args, "aws_permissions_boundary", None):
+        raise MissingInput("--name and --aws-permissions-boundary are for a server on AWS (--cloud aws)")
     if s.target in cloudmod.PROVIDERS:
         pv = cloudmod.PROVIDERS[s.target]
         a.get("cloud_location", f"{pv.label} location", flag="--cloud-location", choices=pv.locations, default=pv.default_location)
@@ -204,7 +212,7 @@ def provision_backup(io: IO, s: Settings, deps: Deps, cf: Cloudflare | None) -> 
         if s.backup == "aws":
             _, iam, _, account = deps.aws_clients(s.aws_region, s.aws_profile)
             values = bk.create_s3(deps.aws_s3(s.aws_region, s.aws_profile), iam, domain=s.domain, region=s.aws_region,
-                                  account_id=account, name=awsmod.slug(s.domain), say=io.say)
+                                  account_id=account, name=s.aws_name or awsmod.slug(s.domain), say=io.say)
         else:
             account_id = s.cf_account_id
             if not account_id:
@@ -231,8 +239,8 @@ def provision_backup(io: IO, s: Settings, deps: Deps, cf: Cloudflare | None) -> 
 # --- 2. plan ---------------------------------------------------------------------------------------------
 
 def aws_plan(s: Settings) -> awsmod.AwsPlan:
-    return awsmod.plan_aws(domain=s.domain, front_door=s.front_door, region=s.aws_region,
-                           instance_type=s.aws_instance_type, os_family=s.aws_os)
+    return awsmod.plan_aws(domain=s.domain, front_door=s.front_door, region=s.aws_region, instance_type=s.aws_instance_type,
+                           os_family=s.aws_os, name=s.aws_name, boundary=s.aws_permissions_boundary)
 
 
 def cloudname(s: Settings) -> str:
@@ -783,6 +791,12 @@ def destroy(args, io: IO, deps: Deps) -> int:
     for kind, ids in found.items():
         for i in ids:
             io.say(f"  {kind}: {i}")
+    records = None
+    if getattr(args, "dns", False):
+        records = _dns_to_delete(io, args, saved, deps, awsmod.addresses(ec2, name))
+        if records is None:
+            io.say("Nothing was deleted: run it again, or without --dns and remove the DNS record yourself.")
+            return 1
     io.say("The server's data (the tico-data volume) is deleted with the instance. Back it up first if you need it.")
     io.say(f"The backup bucket and its IAM user (tico-backup-{name}) are left alone: they hold the copy you would restore from.")
     if args.dry_run:
@@ -791,5 +805,40 @@ def destroy(args, io: IO, deps: Deps) -> int:
     if not args.yes and not (io.interactive and io.ask(f"Type {name} to delete these") == name):
         io.say("Not confirmed; nothing was deleted.")
         return 1
-    awsmod.destroy(ec2, iam, ssm, found, say=io.say, sleep=deps.sleep)
+    if records and records[2]:
+        client, zid, sets = records
+        route53.delete(client, zid, sets)       # first: the name never points at an address AWS may give someone else
+        io.say("  DNS records deleted.")
+    awsmod.destroy(ec2, iam, ssm, found, say=io.say, sleep=deps.sleep, dns_done=records is not None)
     return 0
+
+
+def _dns_to_delete(io: IO, args, saved: dict, deps: Deps, ours: set[str]):
+    """destroy --dns: (client, zone id, the record sets to delete) for the domain's A and AAAA records that still point at
+    this server; None when Route 53 can't be read, so nothing at all is deleted and a re-run tries again."""
+    domain = (args.domain or "").lower()
+    if not domain:
+        raise MissingInput("--dns needs --domain: the name whose record points at the server")
+    zone = dnsmod.detect_zone(domain, deps.resolver)
+    if not zone or zone.provider.key != "route53":
+        io.say(f"--dns deletes records in Route 53, and {domain} is not served from there "
+               f"({zone.provider.name if zone else 'no nameservers found'}).")
+        return None
+    profile = args.aws_profile or saved.get("aws_profile", "")
+    try:
+        client = deps.route53_client(profile) if deps.route53_client else _r53_client(profile)
+        zid, status = route53.find_zone(client, zone)
+        if status != "authoritative":
+            io.say(f"No Route 53 zone in this account serves {zone.name}.")
+            return None
+        sets, other = route53.pointing_at(client, zid, domain, ours)
+    except Exception as e:
+        io.say(f"Could not read Route 53 ({type(e).__name__}).")
+        return None
+    for rs in sets:
+        io.say(f"  dns: {rs['Type']} {domain} -> {', '.join(v['Value'] for v in rs['ResourceRecords'])}")
+    for rs in other:
+        io.say(f"  Left alone: {rs['Type']} {domain} no longer points only at this server.")
+    if not sets and not other:
+        io.say(f"  No A or AAAA record for {domain} in Route 53.")
+    return client, zid, sets

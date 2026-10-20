@@ -45,7 +45,12 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--aws-profile")
     p.add_argument("--aws-instance-type", choices=["t4g.small", "t4g.medium", "t4g.large"], help="server default t4g.small; runner default t4g.medium")
     p.add_argument("--aws-os", choices=["ubuntu", "al2023"])
-    p.add_argument("--name", help="destroy: the tico-setup-name tag value (default: derived from --domain)")
+    p.add_argument("--aws-permissions-boundary", metavar="ARN", help="AWS: the IAM policy ARN set as the permissions boundary of "
+                   "the server's role when it is created, for an account that only lets setup make roles under one")
+    p.add_argument("--name", help="AWS: the server's name: its resources are tico-<name>, tagged tico-setup-name=<name>, and its "
+                   "settings are in /tico/<name>/env (default: derived from --domain); destroy: the tico-setup-name tag value")
+    p.add_argument("--dns", action="store_true", help="destroy: also delete the domain's A and AAAA records in Route 53, only "
+                   "while they still point at this server (needs --domain)")
     p.add_argument("--auth", choices=[*st.AUTHS, st.OWNER_LINK],
                    help="owner-link: a single-use sign-in link for the owner, only with --hosted")
     p.add_argument("--hosted", metavar="own|invited", help="a server Tico hosts: own (our team) or invited (an invited company); "

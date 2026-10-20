@@ -354,9 +354,10 @@ async function loadSettings() {
     if (!formBusy($('#set-recurring'))) renderSettingsRecurring();   // not while its search box has the cursor
     void renderSettingsTokens();
     const add = $('#settings-add-bot');
-    if (add) { add.onclick = () => settingsEditBot(); add.disabled = false; }
+    if (add) { add.onclick = () => void settingsRecruitFlow(); add.disabled = false; }
     const fromCatalog = $('#settings-add-catalog');
     if (fromCatalog) { fromCatalog.onclick = () => void settingsCatalogPicker(); fromCatalog.disabled = false; }
+    settingsRecruitHandoff();
   } catch (error) {
     for (const id of ['#set-bots','#set-machines','#set-services','#set-history']) {
       const el = $(id); if (el) el.innerHTML = `<div class="err">${esc(error.message || 'Settings could not be loaded')}</div>`;

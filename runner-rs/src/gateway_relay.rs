@@ -37,10 +37,11 @@ pub const NOT_ISOLATED: &str = "Tico models need a runner that runs bots as thei
 computer can't, so pick another model or move the bot (not_isolated)";
 const MAX_HEAD: usize = 64 * 1024;
 const MAX_BODY: usize = 32 * 1024 * 1024;
-/// Request headers never passed on: the turn's token, and what belongs to this connection only.
+/// Request headers never passed on: the turn's token, what belongs to this connection only, and the harness's user
+/// agent (the relay sends Tico's own, `user_agent`).
 const DROP_REQUEST: &[&str] = &[
     "authorization", "host", "connection", "content-length", "transfer-encoding", "proxy-authorization",
-    "proxy-connection", "keep-alive", "te", "upgrade", "expect", "trailer",
+    "proxy-connection", "keep-alive", "te", "upgrade", "expect", "trailer", "user-agent",
 ];
 /// Response headers never passed back: the relay's answer ends when it closes the connection.
 const DROP_RESPONSE: &[&str] =
@@ -162,11 +163,20 @@ pub async fn hand_to_turn(
     Ok(())
 }
 
+/// The agent every call to the Gateway carries: Cloudflare in front of Tico HQ refuses a library's default agent
+/// before the call reaches the Gateway, and a harness's own agent (pi's) is not one Tico controls.
+pub fn user_agent() -> String {
+    format!("Tico-Client/{}", crate::runner::RUNNER_VERSION)
+}
+
 /// Start a relay to the Gateway at `upstream` with `key`.
 pub async fn start(upstream: &str, key: String) -> Result<Relay, String> {
     let base = safe_upstream(upstream).ok_or("the Gateway URL is neither https nor this computer")?;
     let local = base.starts_with("http://");
-    let mut builder = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).connect_timeout(Duration::from_secs(30));
+    let mut builder = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(Duration::from_secs(30))
+        .user_agent(user_agent());
     if local {
         builder = builder.no_proxy();
     }
@@ -306,6 +316,20 @@ mod tests {
 
     /// A fake Gateway on 127.0.0.1: keeps each request's head and body, answers with `reply` (raw bytes).
     async fn upstream(reply: Vec<u8>) -> (String, Arc<Mutex<Vec<String>>>) {
+        upstream_with(Arc::new(move |_: &str| reply.clone())).await
+    }
+
+    /// The Gateway behind its edge, which answers 403 to any user agent but Tico's before the Gateway sees the call.
+    async fn behind_the_edge(reply: Vec<u8>) -> (String, Arc<Mutex<Vec<String>>>) {
+        upstream_with(Arc::new(move |request: &str| {
+            let tico = request.lines().any(|l| l.to_ascii_lowercase().starts_with("user-agent: tico-client/"));
+            if tico { reply.clone() } else { b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n".to_vec() }
+        }))
+        .await
+    }
+
+    /// `upstream`, answering each request with `reply_to(request)`.
+    async fn upstream_with(reply_to: Arc<dyn Fn(&str) -> Vec<u8> + Send + Sync>) -> (String, Arc<Mutex<Vec<String>>>) {
         let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let seen = Arc::new(Mutex::new(vec![]));
@@ -327,7 +351,9 @@ mod tests {
                         break;
                     }
                 }
-                kept.lock().unwrap().push(String::from_utf8_lossy(&buf[..got]).to_string());
+                let request = String::from_utf8_lossy(&buf[..got]).to_string();
+                let reply = reply_to(&request);
+                kept.lock().unwrap().push(request);
                 let _ = socket.write_all(&reply).await;
                 let _ = socket.shutdown().await;
             }
@@ -342,7 +368,7 @@ mod tests {
     async fn send(relay: &Relay, method: &str, token: &str, path: &str, body: &str) -> String {
         let mut socket = TcpStream::connect(relay.url.trim_start_matches("http://").split('/').next().unwrap()).await.unwrap();
         let request = format!(
-            "{method} {path} HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nX-Kept: yes\r\nContent-Length: {}\r\n\r\n{body}",
+            "{method} {path} HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nUser-Agent: OpenAI/JS 5.8.2\r\nX-Kept: yes\r\nContent-Length: {}\r\n\r\n{body}",
             body.len()
         );
         socket.write_all(request.as_bytes()).await.unwrap();
@@ -369,6 +395,17 @@ mod tests {
         let lower = request.to_ascii_lowercase();
         assert!(lower.contains(&format!("authorization: bearer {}", KEY.to_ascii_lowercase())));
         assert!(!request.contains(&relay.token) && lower.contains("x-kept: yes") && request.ends_with(&big));
+    }
+
+    #[tokio::test]
+    async fn a_turn_gets_past_an_edge_that_refuses_any_agent_but_ticos() {
+        let (url, seen) = behind_the_edge(SSE.to_vec()).await;
+        let relay = start(&url, KEY.into()).await.unwrap();
+        let out = call(&relay, &relay.token, "/gateway/chat/completions", "{}").await;
+        assert!(out.starts_with("HTTP/1.1 200 OK\r\n"), "{out}");
+        let request = seen.lock().unwrap()[0].to_ascii_lowercase();
+        let agents: Vec<&str> = request.lines().filter(|l| l.starts_with("user-agent:")).collect();
+        assert_eq!(agents, [format!("user-agent: tico-client/{}", crate::runner::RUNNER_VERSION)], "{request}");
     }
 
     #[tokio::test]

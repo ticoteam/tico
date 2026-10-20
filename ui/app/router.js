@@ -4,6 +4,16 @@
 
 let LAST_ROUTE = '';
 function route() {
+  if (location.hash.startsWith('#/settings?recruit=')) {
+    try {
+      const raw = new URLSearchParams(location.hash.split('?')[1]).get('recruit');
+      if (raw && raw.length <= 5000) {
+        const value = JSON.parse(raw);
+        if (value && typeof value.title === 'string' && typeof value.brief === 'string') RECRUIT_HANDOFF = value;
+      }
+    } catch { /* A malformed external handoff never changes a bot. */ }
+    SETTINGS_TAB = 'bots'; location.replace(SETTINGS); return;
+  }
   overviewStop();
   GOAL_MANAGER_STOP?.();
   $('#main').classList.remove('overview-layout');

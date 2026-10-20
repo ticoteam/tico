@@ -2041,7 +2041,10 @@ class RemovalStart(Contract):
 
 
 class SharedKeyUse(Contract):
+    """Use the shared key again on a signed-out login; with `credential`, Add connection > API key > "Use a shared
+    key": that shared key, attached to this computer (a credential administrator's change)."""
     runtime: Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]*$", max_length=40)]
+    credential: str = Field(default="", max_length=100)
 
 
 class KeyClear(Contract):
@@ -2057,6 +2060,8 @@ class KeyReplace(Contract):
     secret: SecretStr = Field(max_length=4000)
     env: str = Field(default="", max_length=100, pattern=r"^$|^[A-Z_][A-Z0-9_]*$")
     scope: Literal["this", "all"] = "this"
+    # Add connection > API key > "Shared with: [computers]": the other computers it serves (this one always does).
+    share: list[Annotated[str, Field(max_length=100)]] = Field(default_factory=list, max_length=200)
     # Switch to API key: the computer's own login moves off its subscription onto this key once the key works there.
     switch: bool = False
 
