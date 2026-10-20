@@ -610,6 +610,12 @@ class SettingsAdmin:
             arrive(c, "bot:" + bot, values.get("reports_to"))   # a new manager's report goes last there
         c.execute("UPDATE bots SET display_name=?,state=? WHERE slug=?",
                   (values["display_name"], values["status"], bot))
+        if before.get("status") == "paused" and values["status"] == "active":
+            # Settings must lift the control API's pause too. An edit to an already-active
+            # bot leaves deployment drains intact.
+            c.execute("UPDATE bot_control SET draining=0 WHERE bot=?", (bot,))
+            H.status_set(c, who.actor, bot, state="active", focus="", reason="Resumed in Settings")
+            H.event(c, who.actor, "bot.resume", bot, {"via": "definition"})
         c.execute(
             "UPDATE bot_config SET config_json=?,description=?,reports_to=?,repo=?,thread_mode=?,"
             "definition_updated=?,definition_updated_by=?,revision=revision+1 WHERE bot=?",

@@ -155,6 +155,7 @@ All notable changes to Tico are recorded here. The format follows
   with the saved one is refused.
 
 ### Fixed
+- Resuming a paused bot in Settings now clears its pause control, so queued work starts again.
 - **Subtask results resume the parent task**: completed reviews and other delegated work return to the
   immediate parent's working session, without a separate session to relay the result. Review verdicts posted
   as a comment, completion note and final reply are delivered once; managers hear when their own child task
