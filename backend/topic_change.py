@@ -60,7 +60,8 @@ CACHE_LIFETIME = {
     # hour"; extended retention is longer. https://developers.openai.com/api/docs/guides/prompt-caching
     "codex": 300,
     # Fallback: Google's caching page gives no lifetime for implicit caching
-    # (https://ai.google.dev/gemini-api/docs/caching); OpenRouter's guide reports Gemini's implicit cache lives "on average 3-5 minutes, but will vary".
+    # (https://ai.google.dev/gemini-api/docs/caching); OpenRouter's guide reports Gemini's implicit cache lives
+    # "on average 3-5 minutes, but will vary".
     "gemini": WARM_SECONDS,
     # Fallback: xAI's models page prices cached input but gives no lifetime (https://docs.x.ai/docs/models). The value
     # does not matter today: the runner's Grok host reports no cached tokens, so its sessions always read cold.
