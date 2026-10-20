@@ -19,6 +19,20 @@ All notable changes to Tico are recorded here. The format follows
   key again when it is given one (refused, naming it, while it is offline). A shared key's name and preview show only
   to credential administrators; a computer's operator sees which computers it serves. Credentials names each computer
   it is shared with, and revoking one there stops sharing it with that computer.
+- **AWS setup: `--name`, `--aws-permissions-boundary` and `destroy --dns`**: `--name` now names a new AWS server (its
+  resources are `tico-<name>`, tagged `tico-setup-name=<name>`, its `.env` in `/tico/<name>/env`), not only the one
+  destroy removes. `--aws-permissions-boundary <arn>` creates the server's IAM role under that boundary, with both
+  tags in the same call, for accounts that only allow that. `destroy --dns` also deletes the domain's Route 53 A and
+  AAAA records, first and only while they still point at the server, and deletes nothing if Route 53 can't be read.
+  ([Advanced install](docs/install-advanced.md#the-aws-server))
+- **"Sign in with Tico account" on hosted servers, through the ordinary OpenID Connect sign-in**: a new optional
+  `TICO_OIDC_LABEL` puts one "Sign in with <label>" button in front of any OpenID Connect provider (unset, sign-in goes
+  straight to the provider as before). The setup wizard's new `--auth oidc --issuer <url> --client-id <id>
+  [--signin-label <name>]` takes any issuer, with the client secret only from `TICO_OIDC_CLIENT_SECRET` in the
+  environment, never printed. With `--hosted`, the owner email is the owner, invited teammates sign in as members, and
+  the owner sign-in link stays as break-glass beside it: it works while the issuer is down, and people already
+  signed in stay signed in. Google, Microsoft, Cloudflare Access and the other sign-in options work as before.
+  ([Install](docs/install.md#sign-in))
 - **Quiet work stays visible and comes back**: a task filed for a bot's next run now says where it stands, on the task
   and in `hub task show` (`quiet`): eligible (the next run carries it), delivered (which run took it and when, and
   until what it was deferred) or queued (a run of its own). A run that will not do a carried task now says when to
@@ -136,12 +150,20 @@ All notable changes to Tico are recorded here. The format follows
   ([Computers](docs/computers.md#remove-a-subscription)).
 
 ### Fixed
+- **A finished answer is no longer held up on a busy computer.** After a turn, the runner's secret scrub of the
+  changed files, its git checks and its local database writes now run on threads of their own. Two slow turns can
+  no longer stop every other turn's progress and answers on that computer. The runner's flight file now times each
+  hand-in step (model done, scrubbed, saved, events sent, result posted) and every slow scrub git command, so
+  `tico-runner flight summary` names the slow step.
 - **A task's chat shows your message being answered, whichever bot answers it.** After you send a message on a task,
   the task's chat shows the same line as a bot's chat: Sent, Queued (and why, when the bot is busy or at a limit),
   Starting, "<Bot> is working" with its latest step, then the reply, or "Reply failed" when the turn errors. This now
   follows the bot your message went to, such as the bot that asked you on a task you own, not only the task's owner.
   Before you send, the message box says when no bot will get the message, or when it waits for the bot's next run on
   the task.
+- **Tico AI Gateway calls are no longer refused at the edge**: Decide's questions, writing on a Tico model and the key check in
+  Settings > AI providers now send Tico's own user agent (`Tico-Client/<version>`). Without it Python's default one was
+  refused before the call reached the Gateway, so a server on a gateway key got no answers from Decide.
 - **Computers: a cleared key reads "No key · Add key"**, not "Signed out · Sign in", in a computer's pop-up, and its
   chip's hover says No key. On an offline computer, a connection's **Replace key**, **Clear key**, **Switch to
   subscription**, **Sign out** and **Switch account** stay on the line, disabled, with "Computer is offline", instead

@@ -37,6 +37,17 @@ fn local_stamp() -> String {
     }
 }
 
+/// Blocking work (git, file reads, the state database's fsyncs) run on tokio's blocking pool, awaited in place so
+/// the caller's order holds. The runtime has two async workers; two turns' blocking calls on them would stall
+/// every other turn's event flushes and result posts. A panic in `f` is the caller's panic, as before.
+pub async fn off_worker<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+    match tokio::task::spawn_blocking(f).await {
+        Ok(v) => v,
+        Err(e) if e.is_panic() => std::panic::resume_unwind(e.into_panic()),
+        Err(e) => panic!("blocking work did not run: {e}"),
+    }
+}
+
 /// One log line on stdout, as `runner/outage.py` log prints it, with every running turn's secrets taken out.
 pub fn log(line: &str) {
     say(line, false);
@@ -247,5 +258,20 @@ mod tests {
     #[test]
     fn py_dumps_spaces_like_python() {
         assert_eq!(py_dumps(&json!({"a": [1, "é"], "b": {"c": null}})), "{\"a\": [1, \"é\"], \"b\": {\"c\": null}}");
+    }
+
+    #[tokio::test]
+    async fn a_panic_off_the_workers_is_the_callers_panic_and_nothing_after_it_runs() {
+        // A scrub that panics must never read as an empty tree (nothing left out) and go on to publish.
+        let reached = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let after = reached.clone();
+        let ran = tokio::spawn(async move {
+            let tree: crate::redact::Tree = off_worker(|| panic!("scrub failed")).await;
+            after.store(true, std::sync::atomic::Ordering::SeqCst);
+            tree
+        })
+        .await;
+        assert!(ran.unwrap_err().is_panic());
+        assert!(!reached.load(std::sync::atomic::Ordering::SeqCst));
     }
 }
