@@ -285,12 +285,19 @@ def for_person(conn, actor, items):
     """The Goals page's Needs you for one caller: each item carries the task that asks it (`task`), and an item
     the person already closed or declined while its cause stands is left out, as the task is."""
     rows = {(r["kind"], r["ref"]): r["task_id"] for r in conn.execute("SELECT * FROM goal_asks WHERE owner=?", (actor,))}
+    # Where the CEO Bot is on, an ask not filed yet shows only while today's room holds it, most important first
+    # (`items` are in ORDER): the rest wait for the next day, as their tasks do (`sync`).
+    room = ceo_bot.room_today(conn, actor)
     out = []
     for item in items:
         task_id = rows.get((item["kind"], item["ref"]))
         task = H.task(conn, task_id) if task_id else None
         if task_id and not (task and task["status"] in H.ACTIVE_STATUSES):
             continue
+        if not task_id and room is not None:
+            if room <= 0:
+                continue
+            room -= 1
         view = {k: v for k, v in item.items() if k not in ("ref", "owner")}
         if task:
             view["task"] = {"id": task["id"], "title": task["title"], "status": task["status"]}

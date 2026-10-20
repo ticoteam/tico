@@ -15,7 +15,7 @@ const bot = (name, display_name, org_parent, over) => ({name, display_name, org_
 const bots = [bot('coo', 'Assistant', ''), bot('botops', 'BotOps', ''), bot('librarian', 'Librarian', ''),
   bot('goal-manager', 'CEO Bot', 'p:ana', {reports_to: ''}), bot('cmo', 'Head of Marketing', 'b:goal-manager', {reports_to: ''})];
 
-async function open(browser, {on = true, role = 'owner', company = {vision: '', description: ''}, history = []} = {}) {
+async function open(browser, {on = true, role = 'owner', company = {vision: '', description: ''}, history = [], needs = []} = {}) {
   const server = {on};
   const page = await browser.newPage({viewport: {width: 1440, height: 900}, serviceWorkers: 'block'});
   const errors = [], posted = [];
@@ -48,7 +48,7 @@ async function open(browser, {on = true, role = 'owner', company = {vision: '', 
     if (p === '/api/status') return json({active: [], employees: []});
     if (p === '/api/v2/status') return json({bots: []});
     if (p === '/api/v2/goals/tree') return json({goals: state.goals, owners: {}, other_kpis: [], proposals: state.proposals.filter(x => x.status === 'pending' && (on || x.kind !== 'goal_why'))});
-    if (p === '/api/v2/goals/needs-you') return json({actor: 'human:ana', items: []});
+    if (p === '/api/v2/goals/needs-you') return json({actor: 'human:ana', items: needs});
     if (p === '/api/v2/bots/goal-manager/routines') return json({routines: []});
     if (p === '/api/v2/company' && req.method() === 'GET') {
       assert.ok(on, 'the company is only asked for where the switch is on');
@@ -276,6 +276,26 @@ const panelFor = async (page, owner) => {
       await flip(page, server, true);
       await page.locator('#goal-company textarea[name="vision"]').waitFor();
       assert.equal(await page.locator('#goal-company textarea[name="vision"]').inputValue(), 'A draft not saved yet.');
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+    // Needs you (backend/goal_asks.py): the vision ask and the bundled Why ask read as themselves, not as empty KPI
+    // rows; the vision row takes the owner to the Vision field, a goal in the Why row opens its panel at that goal.
+    {
+      const needs = [{kind: 'vision', task: {id: 't-vision', title: 'Tell your CEO Bot what this company is for', status: 'open'}},
+        {kind: 'why', goals: [{goal_id: 'g-top', goal_title: 'Grow rentals 30%', why: 'x'}, {goal_id: 'g-cmo', goal_title: 'Double organic signups', why: 'y'}],
+         task: {id: 't-why', title: 'These goals need a Why line', status: 'open'}}];
+      const {page, errors} = await open(browser, {needs});
+      const rows = page.locator('#goal-needs li');
+      assert.equal(await rows.count(), 2);
+      assert.match(await rows.nth(0).innerText(), /^Tell your CEO Bot what this company is for/);
+      assert.match(await rows.nth(1).innerText(), /These goals need a Why line: Grow rentals 30%, Double organic signups/);
+      assert.equal(await page.locator('#goal-needs [data-kpi]').count(), 0);
+      await rows.nth(0).click();
+      assert.equal(await page.evaluate(() => document.activeElement?.name), 'vision');
+      await rows.nth(1).locator('[data-need-why-goal="g-cmo"]').click();
+      await page.locator('#goal-panel[open] .gp-body').waitFor();
+      assert.match(await page.locator('#goal-panel').innerText(), /Double organic signups/);
       assert.deepEqual(errors, []);
       await page.close();
     }

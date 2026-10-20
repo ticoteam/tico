@@ -123,6 +123,8 @@ def test_at_most_five_a_day_in_one_persons_needs_you_most_important_first(api):
     mine = asks(api, OWNER)
     assert len(mine) == 5 and mine[0]["kind"] == "vision"
     assert get(api, "ceo-bot")["asked_today"] == {OWNER: 5}
+    shown = get(api, "goals/needs-you")["items"]                             # what waits for tomorrow is not shown
+    assert len(shown) == 5 and all(i.get("task") for i in shown) and shown[0]["kind"] == "vision"
     post(api, "tasks", {"title": "One more question", "body": "Why?", "owner": OWNER}, token=ceo, expected=422)
     post(api, "tasks", {"title": "A question for Ben", "body": "Why?", "owner": "human:ben"}, token=ceo)
     sync(api)
@@ -133,6 +135,7 @@ def test_at_most_five_a_day_in_one_persons_needs_you_most_important_first(api):
                   (H.shift(H.now(), days=-1), OWNER))
     sync(api)
     assert len(asks(api, OWNER)) == 8 and ceo_bot.room_today
+    assert len(get(api, "goals/needs-you")["items"]) == 8
     assert get(api, "ceo-bot")["asked_today"] == {OWNER: 3, "human:ben": 1}
     assert get(api, "ceo-bot", token=ceo)["asked_today"] == {OWNER: 3, "human:ben": 1}
     assert get(api, "ceo-bot", token="cara-test")["asked_today"] == {}                 # a member: only their own
@@ -161,9 +164,41 @@ def test_switching_on_starts_the_monday_note_and_off_pauses_only_what_it_started
     assert enabled()
     assert post(api, "ceo-bot", {"on": False})["on"] is False
     assert not enabled()
+    # Started by the switch, then paused and started again by a person: it is theirs now, and switching off leaves it.
+    post(api, "ceo-bot", {"on": True})
+    with api.app.state.store.transaction() as c:
+        routines.update(c, OWNER, sid, {"enabled": False})
+        routines.update(c, OWNER, sid, {"enabled": True})
+    post(api, "ceo-bot", {"on": False})
+    assert enabled()
+    with api.app.state.store.transaction() as c:
+        routines.update(c, OWNER, sid, {"enabled": False})
     # Started by a person while the switch was off: switching on and off leaves it running.
     with api.app.state.store.transaction() as c:
         routines.update(c, OWNER, sid, {"enabled": True})
     post(api, "ceo-bot", {"on": True})
     post(api, "ceo-bot", {"on": False})
     assert enabled()
+
+
+def test_an_install_already_on_starts_the_monday_note_once(api):
+    """An install whose switch was on before the Monday note started with it, or whose routine appears later, gets it
+    started once by the hourly reconcile; a person who pauses it after that stays paused."""
+    import json
+    goal_manager(api)
+    sid = "goal-manager:goals-review"
+    store = api.app.state.store
+    with store.transaction() as c:                                           # on, from before this release
+        c.execute("INSERT INTO registry_metadata VALUES(?,?)", (ceo_bot.KEY, json.dumps({"on": True, "by": OWNER})))
+        ceo_bot.reconcile(c)                                                 # no routine yet: nothing to start
+        routines.create(c, H.KEEPER, "goal-manager", {"title": "Weekly goals review", "cron": "0 9 * * 1",
+                                                      "timezone": "America/Los_Angeles", "enabled": False},
+                        key="goals-review")
+        ceo_bot.reconcile(c)
+    enabled = lambda: bool(store.read().__enter__().execute(
+        "SELECT coalesce(enabled,1) FROM schedule_config WHERE schedule_id=?", (sid,)).fetchone()[0])
+    assert enabled()
+    with store.transaction() as c:
+        routines.update(c, OWNER, sid, {"enabled": False})
+        ceo_bot.reconcile(c)
+    assert not enabled()

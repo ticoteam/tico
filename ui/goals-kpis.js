@@ -662,6 +662,21 @@ function goalsRender(state) {
   const needs = body.querySelector('#goal-needs');
   if (needs) {
     bindKpiLines(needs); bindProposals(needs, () => goalsReload(state));
+    const vision = () => {
+      const section = body.querySelector('#goal-company');
+      section?.scrollIntoView({block: 'nearest'});
+      (section?.querySelector('textarea[name="vision"]') || section?.querySelector('[data-gco-edit]'))?.focus();
+    };
+    const why = id => {
+      const goal = (state.goals || []).find(g => g.id === id);
+      if (goal) goalPanelOpen(state, goal.owner, {tapped: goal.id});
+    };
+    for (const li of needs.querySelectorAll('[data-need-vision], [data-need-why]')) {
+      const open = () => li.dataset.needWhy !== undefined ? why(li.dataset.needWhy) : vision();
+      li.onclick = open;
+      li.onkeydown = ev => { if (ev.target === li && (ev.key === 'Enter' || ev.key === ' ')) { ev.preventDefault(); open(); } };
+    }
+    for (const b of needs.querySelectorAll('[data-need-why-goal]')) b.onclick = ev => { ev.stopPropagation(); why(b.dataset.needWhyGoal); };
     // The task link opens the task, not the KPI its row opens.
     for (const a of needs.querySelectorAll('[data-need-task]')) { a.onclick = ev => ev.stopPropagation(); a.onkeydown = ev => ev.stopPropagation(); }
   }
@@ -852,6 +867,14 @@ function goalNeedsHtml(items) {
   if (!items?.length) return '';
   const rows = items.map(it => {
     if (it.kind === 'proposal') return proposalHtml({...it.proposal, may_decide: true}, it.kpi_name || it.goal_title || '').replace(/<\/li>$/, `${needTaskLink(it)}</li>`);
+    // Where the CEO Bot is on: the vision, written in the Company section above, and the Why lines waiting on this
+    // person, one row for all of them, each goal opening its panel where the Why is accepted or edited.
+    if (it.kind === 'vision') return `<li class="need-row" data-need-vision tabindex="0" role="button">${gdot('gray')}<span class="need-text"><b>Tell your ${esc(goalManagerName())} what this company is for</b><span class="muted">: write the Vision in the Company section above</span></span>${needTaskLink(it)}</li>`;
+    if (it.kind === 'why') {
+      const goals = it.goals || [];
+      return `<li class="need-row" data-need-why="${esc(goals[0]?.goal_id || '')}" tabindex="0" role="button">${gdot('gray')}<span class="need-text"><b>These goals need a Why line</b><span class="muted">: </span>${goals.map(g =>
+        `<button class="linkish" type="button" data-need-why-goal="${esc(g.goal_id)}">${esc(g.goal_title)}</button>`).join('<span class="muted">, </span>')}</span>${needTaskLink(it)}</li>`;
+    }
     const red = it.kind === 'kpi_red';
     return `<li class="need-row" data-kpi="${esc(it.kpi_id)}" tabindex="0" role="button">${gdot(red ? 'red' : 'gray')}<span class="need-text"><b>${esc(it.kpi_name)}</b>${red ? ` on ${esc(it.goal_title)}` : ''}<span class="muted">: ${esc(it.reason)}</span></span>${needTaskLink(it)}</li>`;
   }).join('');

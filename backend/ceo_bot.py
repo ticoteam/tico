@@ -107,20 +107,45 @@ REVIEW = SLUG + ":goals-review"
 
 def _review(c, actor, record, value):
     """The Monday note (the Goal Manager's `goals-review` routine, declared paused) starts when the switch goes on.
-    Off, it is paused again only if the switch started it and it still runs: a person who paused or started it
-    themselves is not overruled."""
+    Off, it is paused again only if the switch started it and nobody has paused or started it since: a person's own
+    choice is never overruled. `review_settled` says the switch has had its one go at starting it while on, so
+    `reconcile` never starts it again."""
     from . import routines
     row = routines.row(c, REVIEW)
-    if not row or row["deleted_at"]:
-        record.pop("review_armed", None)
+    if not value:
+        armed = record.pop("review_armed", None)
+        record.pop("review_settled", None)
+        if row and not row["deleted_at"] and armed and row["enabled"] and not _review_touched(c, armed):
+            routines.update(c, H.KEEPER, REVIEW, {"enabled": False})
+            H.event(c, actor, "ceo_bot.review_paused", REVIEW, {})
         return
-    if value and not row["enabled"]:
+    if not row or row["deleted_at"]:
+        return              # not there yet: `reconcile` starts it once it is
+    record["review_settled"] = True
+    if not row["enabled"]:
         routines.update(c, H.KEEPER, REVIEW, {"enabled": True})
-        record["review_armed"] = True
+        record["review_armed"] = H.now()
         H.event(c, actor, "ceo_bot.review_armed", REVIEW, {})
-    elif not value and record.pop("review_armed", None) and row["enabled"]:
-        routines.update(c, H.KEEPER, REVIEW, {"enabled": False})
-        H.event(c, actor, "ceo_bot.review_paused", REVIEW, {})
+
+
+def _review_touched(c, since):
+    """Whether anyone but the switch started or paused the Monday note after the switch started it."""
+    since = since if isinstance(since, str) else ""
+    return c.execute("SELECT 1 FROM events WHERE action='routine.updated' AND target=? AND actor!=? AND ts>=? "
+                     "AND detail_json LIKE '%\"enabled\"%' LIMIT 1", (REVIEW, H.KEEPER, since)).fetchone() is not None
+
+
+def reconcile(c):
+    """Once an hour (backend/scheduler.py): an install whose switch was on before the Monday note was started on
+    switch-on, or whose routine appeared after it, gets it started once. Never again after that one go, so a person
+    who pauses it later stays paused."""
+    record = _record(c)
+    if record.get("on") is not True or record.get("review_settled"):
+        return
+    before = dict(record)
+    _review(c, H.KEEPER, record, True)
+    if record != before:
+        _save(c, record)
 
 
 def _outside(slug, entry, assistant, helpers):

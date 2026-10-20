@@ -214,6 +214,13 @@ class Scheduler:
                     goal_asks.sync(c, self.execution.auth.owner_id(c), at)
             except Exception as exc:
                 failures.append({"goal_asks": type(exc).__name__})
+            try:
+                # The CEO Bot's Monday note, started once on an install whose switch was already on (backend/ceo_bot.py).
+                from . import ceo_bot
+                with self.store.transaction() as c:
+                    ceo_bot.reconcile(c)
+            except Exception as exc:
+                failures.append({"ceo_bot": type(exc).__name__})
         if self.health_scanned is None or at - self.health_scanned >= timedelta(hours=1):
             # Every hour, only while the owner has it on: the Health Monitor's scan (backend/health_monitor.py). Plain
             # code; it wakes the bot only for a finding the last scan did not have.
