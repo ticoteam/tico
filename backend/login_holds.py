@@ -209,9 +209,11 @@ def on_runner(c, runner_id):
 
 
 def for_attempt(c, attempt_id):
-    """The hold an attempt's limit saved, while it is still the login's latest."""
+    """The hold an attempt's limit saved, while it is still the login's latest. A turn that met limits on two logins
+    saved two; the one it ended on comes first, so the bot's wait does not depend on which row is read first."""
     if not attempt_id:
         return {}
+    found = {}
     for (value,) in c.execute("SELECT value_json FROM registry_metadata WHERE key LIKE ? AND value_json LIKE ?",
                               (PREFIX + "%", f'%"{attempt_id}"%')):
         try:
@@ -219,8 +221,10 @@ def for_attempt(c, attempt_id):
         except ValueError:
             continue
         if isinstance(hold, dict) and hold.get("attempt_id") == attempt_id:
-            return hold
-    return {}
+            if hold.get("ended"):
+                return hold
+            found = found or hold
+    return found
 
 
 def limit_texts(c, attempt_id):
@@ -265,6 +269,103 @@ def chain(texts, runtime, final=None):
     return steps
 
 
+def _field(result, name):
+    return result.get(name) if isinstance(result, dict) else getattr(result, name, None)
+
+
+def turn_steps(c, attempt_id, runtime, result):
+    """The logins a finished turn ran on, in order, each [runtime, its first limit notice or None, limited]: `chain`,
+    with what the runner's result says on top. A turn whose fallback ran with no note naming the hop (an older runner)
+    puts its limit notices on that fallback unless the result says the primary was limited: a fallback's quota text
+    must not hold the bot's own login (Dev 279)."""
+    final, limited = _field(result, "fallback"), bool(_field(result, "limited"))
+    if _field(result, "primary_held") and limited and not final:
+        # Sent away from its held login, no fallback ran it: the turn ran nowhere, so no login met a limit.
+        return [[runtime, None, False]]
+    texts = limit_texts(c, attempt_id)
+    steps = chain(texts, runtime, final)
+    if (final and len(steps) == 2 and not _field(result, "primary_limited")
+            and not any(kind == "note" and _HOP_RE.search(text) for kind, text in texts)):
+        steps = [[runtime, None, False], [steps[1][0], steps[0][1], steps[0][2]]]
+    if _field(result, "primary_limited"):
+        steps[0][2] = True
+    if limited:
+        steps[-1][2] = True
+    return steps
+
+
+def window(notice):
+    """Which kind of limit a notice is: an API key's quota or billing refusal, or the plan's usage window."""
+    from .execution import BILLING_LIMIT_RE
+    if BILLING_LIMIT_RE.search(notice or ""):
+        return "API quota or billing limit"
+    if re.search(r"\bweekly\b", notice or "", re.I):
+        return "plan usage limit (weekly)"
+    if re.search(r"\bsession limit\b|5-hour|five-hour", notice or "", re.I):
+        return "plan usage limit (5-hour window)"
+    return "plan usage limit"
+
+
+def source(c, attempt_id, runtime, result, profile="", runner_id=None, held=None):
+    """Whose limit ended a turn: the login it came from (primary or fallback, runtime, login), which kind of limit it
+    was, and how the primary fared. Worked out when the turn finishes, with the runtime and login it ran on (`profile`
+    is the bot's own, `profile_used` the one the runner reports) and kept with the attempt (`limit_source`), so a
+    later settings change or another turn's hold does not rename it. `held` is the primary's hold when the claim sent
+    the turn away from it: a turn that ran nowhere waits on that hold and keeps its kind."""
+    steps = turn_steps(c, attempt_id, runtime, result)
+    used, fallback = _field(result, "profile_used"), _field(result, "fallback")
+    own = (used if used is not None and not fallback else profile) or ""
+    hop = (used if used is not None and fallback else profile) or ""
+    if runner_id:
+        own, hop = canonical(c, runner_id, own, runtime), canonical(c, runner_id, hop, steps[-1][0])
+    held_kind = window(held.get("error")) if held else ""
+    if _field(result, "primary_held") and _field(result, "limited") and not fallback:
+        # Sent away from its held login and no fallback started: nothing new was refused.
+        return {"role": "primary", "runtime": runtime, "profile": own, "kind": held_kind or "plan usage limit",
+                "billing": held_kind.startswith("API"), "notice": ((held or {}).get("error") or "")[:300],
+                "primary_runtime": runtime, "waiting": True}
+    n = max((i for i, step in enumerate(steps) if step[2]), default=len(steps) - 1)
+    rt, notice, _ = steps[n]
+    out = {"role": "fallback" if n else "primary", "runtime": rt, "profile": hop if n else own,
+           "kind": window(notice), "billing": window(notice).startswith("API"), "notice": (notice or "")[:300],
+           "primary_runtime": runtime, "primary_profile": own}
+    if n:
+        out["primary"] = ("held" if _field(result, "primary_held") else "limited" if steps[0][2] else "not limited")
+        out["primary_kind"] = held_kind if _field(result, "primary_held") else window(steps[0][1]) if steps[0][2] else ""
+    return out
+
+
+def recorded(c, attempt_id, result, runtime):
+    """The source a limited turn kept (`source`), or for a run from before it was kept, worked out again with the
+    runtime its limit event named at the time, so a later settings change does not rename the provider."""
+    if isinstance(result.get("limit_source"), dict):
+        return result["limit_source"]
+    # Keeper's events by action and target: the events_task_origin index.
+    row = c.execute("SELECT json_extract(detail_json,'$.runtime') FROM events WHERE actor=? AND action='attempt.limited' "
+                    "AND target=? LIMIT 1", (H.KEEPER, attempt_id)).fetchone()
+    return source(c, attempt_id, (row and row[0]) or runtime or "primary", result)
+
+
+def label(src, at="", primary_until=""):
+    """One line a person reads: "Fallback codex (the work login) API quota or billing limit at 20:05; primary claude
+    not limited", "Primary claude plan usage limit (5-hour window)". `at` is when it was met; `primary_until` when the
+    primary's own hold ends, for a fallback's limit met while the primary is held too."""
+    login = f" (the {src['profile']} login)" if src.get("profile") else ""
+    said = f"{src['role'].capitalize()} {src['runtime']}{login} {src['kind']}"
+    if src.get("waiting"):
+        return said + ", held from an earlier turn; no fallback could take this one"
+    said += f" at {at}" if at else ""
+    if src["role"] == "fallback":
+        own = f" (the {src['primary_profile']} login)" if src.get("primary_profile") else ""
+        said += f"; primary {src['primary_runtime']}{own} " + {
+            "held": "login held from an earlier limit" + (f" ({src['primary_kind']})" if src.get("primary_kind") else ""),
+            "limited": "also limited" + (f" ({src['primary_kind']})" if src.get("primary_kind") else ""),
+        }.get(src.get("primary"), "not limited")
+        if primary_until and src.get("primary") in ("limited", "held"):
+            said += f" until {primary_until}"
+    return said
+
+
 def after_turn(c, runner_id, bot, profile, runtime, body, attempt_id, hit):
     """Save or clear the logins' holds a finished turn shows, and return the hold that keeps the bot waiting, or {}.
     `profile` and `runtime` are the bot's own login. Every login the turn met a usage limit on is held, with the reset
@@ -274,11 +375,7 @@ def after_turn(c, runner_id, bot, profile, runtime, body, attempt_id, hit):
     # Sent away from its held login, no fallback ran it (none was ready, or it failed before it acknowledged the
     # turn): the turn ran nowhere, so no login met a limit; the hop its notes name only failed to start.
     unstarted = body.primary_held and body.limited and not body.fallback
-    steps = [[runtime, None, False]] if unstarted else chain(limit_texts(c, attempt_id), runtime, body.fallback)
-    if body.primary_limited:
-        steps[0][2] = True
-    if body.limited:
-        steps[-1][2] = True
+    steps = turn_steps(c, attempt_id, runtime, body)
     hop_profile = body.profile_used if body.fallback and body.profile_used is not None else profile
     claimed = (c.execute("SELECT created FROM attempts WHERE id=?", (attempt_id,)).fetchone() or [""])[0] or ""
     kept = {}
@@ -290,6 +387,10 @@ def after_turn(c, runner_id, bot, profile, runtime, body, attempt_id, hit):
                 continue                # never tried: its hold stands as it is
             reset = reset_from_text(notice, hit) or (body.limit_resets_at if last else None)
             hold = record(c, runner_id, login, rt, hit, reset, attempt_id, bot, error=notice or "")
+            if last:
+                # The login the turn ended on: the one its bot waits for (for_attempt), when a turn held two.
+                hold = {**hold, "ended": True}
+                _save(c, hold)
             if last or n == 0:
                 kept = hold
         elif last and body.outcome == "completed" and not (n == 0 and body.primary_held):

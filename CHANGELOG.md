@@ -8,6 +8,11 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Tico HQ's nightly billing check on the Tico team's Health page**: on the one server that holds HQ's read-only
+  staff key (`TICO_HQ_STAFF_READ_KEY`), the server reads HQ's nightly ledger check every hour and the owner's Health
+  page shows each mismatch in red, naming the company's install id and the difference in dollars. A check that missed
+  a night, or that cannot be read for three hours, is red too; a clean check shows nothing. It only reads; every other
+  install sends nothing.
 - **Shared connections on the Computers page (part 4 of 4)**: an API key added from a computer's Add connection can be
   shared with other computers by name ("Shared with: [computers]"), or a key already shared can be picked instead of
   pasting one; both are a credential administrator's change, and an operator still adds a key for this computer only.
@@ -165,6 +170,13 @@ All notable changes to Tico are recorded here. The format follows
 - **Bots on Tico models are not refused at the edge**: the runner's Gateway relay now sends Tico's own user agent
   (`Tico-Client/<runner version>`) instead of the harness's, so a turn's model calls are not blocked by Cloudflare in
   front of the Tico AI Gateway.
+- **A limit names the login that returned it**: when a fallback provider's quota stopped a turn, the bot's status
+  said the bot's own provider had hit an "API quota or billing limit", pointing people at a primary that was fine. The
+  status, the run log and Health now say primary or fallback, which provider and login, and whether it was an API
+  quota or billing refusal or the plan's usage limit, e.g. "Fallback codex API quota or billing limit; primary claude
+  not limited". A fallback's quota no longer holds the primary's login when an older runner leaves out the note that
+  names the hop, and a turn that met limits on both keeps two holds, each with its own retry time.
+  ([How it works](docs/how-it-works.md))
 - **A finished answer is no longer held up on a busy computer.** After a turn, the runner's secret scrub of the
   changed files, its git checks and its local database writes now run on threads of their own. Two slow turns can
   no longer stop every other turn's progress and answers on that computer. The runner's flight file now times each

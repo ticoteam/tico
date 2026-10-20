@@ -401,35 +401,43 @@ def operation_issues(c, who, auth):
                 last = last_limit(c, slug)
                 hold = login_holds.for_attempt(c, last["id"]) if last else {}
                 billing = bool(BILLING_LIMIT_RE.search(hold.get("error") or "")) if hold else billing_limit(c, slug)
+                own = runtime
                 if hold:
                     runtime = hold["runtime"] + (f" (the {hold['profile']} login)" if hold.get("profile") else "")
+                if last:
+                    # Named from what the turn kept when it finished, not the bot's runtime or the login's hold now:
+                    # a fallback's quota must not read as the primary's, nor a past limit as a newly chosen provider's.
+                    result = json.loads((c.execute("SELECT result_json FROM attempts WHERE id=?", (last["id"],))
+                                         .fetchone() or ["{}"])[0] or "{}")
+                    src = login_holds.recorded(c, last["id"], result, own)
+                    runtime, billing = login_holds.label(src), src["billing"]
                 streak = hold.get("streak", 0) if hold else limit_streak(c, slug)
                 reset = hold.get("reset") if hold else bool(last and provider_reset(last, H.parse_ts(last["finished"])))
                 if billing:
                     retry = H.shift(status["since"], seconds=cooldown)
                     add("bot", bot["display_name"] + " needs attention",
-                        f"{runtime} API quota or billing limit; queued work waits until {retry[:10]} {retry[11:16]} UTC, "
+                        f"{runtime}; queued work waits until {retry[:10]} {retry[11:16]} UTC, "
                         "check the API key's plan and billing", bot=slug, needs_person=False,
                         **({} if streak >= LIMIT_STRIKES else {"severity": "warning"}),
                         action="Check the API key's plan and billing, or set a fallback harness in Settings → Bots.")
                 elif cooldown > LIMIT_COOLDOWN_LONG:
                     retry = H.shift(status["since"], seconds=cooldown)
                     add("bot", bot["display_name"] + " needs attention",
-                        f"{runtime} subscription quota exhausted; queued work waits until {retry[:10]} "
+                        f"{runtime}: subscription quota exhausted; queued work waits until {retry[:10]} "
                         f"{retry[11:16]} UTC", bot=slug, severity="warning", needs_person=False,
                         action="Wait for the subscription reset, or set a fallback harness in Settings → Bots.")
                 # A reported reset says when the limit lifts, so a streak is no reason to check the subscription.
                 elif streak >= LIMIT_STRIKES and not reset:
                     retry = H.shift(status["since"], seconds=cooldown)
                     add("bot", bot["display_name"] + " needs attention",
-                        f"{runtime} usage limit three times in a row; queued work waits until {retry[11:16]} UTC, "
+                        f"{runtime}, three times in a row; queued work waits until {retry[11:16]} UTC, "
                         "check the subscription or the API-key fallback on its Mac", bot=slug,
                         needs_person=False,
                         action="Check the subscription or set a fallback harness in Settings → Bots.")
                 else:
                     retry = H.shift(status["since"], seconds=cooldown)
                     add("bot", bot["display_name"] + " needs attention",
-                        f"{runtime} usage limit; resumes at {retry[11:16]} UTC", bot=slug,
+                        f"{runtime}; resumes at {retry[11:16]} UTC", bot=slug,
                         severity="warning", needs_person=False)
         queued = privacy.job_count(c, who, slug)
         if location.get("agent"):
@@ -1866,6 +1874,9 @@ def install_views(app, store, auth, mutate, task_view):
             result = json.loads(attempt["result_json"]) if attempt and attempt["result_json"] else {}
             if result.get("fallback"):
                 lines.append("Fallback: " + str(result["fallback"]) + " (primary harness unavailable; the turn ran on the fallback)")
+            if result.get("limited"):
+                from . import login_holds
+                lines.append("Limit: " + login_holds.label(login_holds.recorded(c, run_id, result, "")))
             lines += ["", "Request:", message["body"]]
             if events:
                 lines.extend(["", "Persisted runtime events:"])
