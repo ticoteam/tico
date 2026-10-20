@@ -82,12 +82,11 @@ function machineLeft(weekly) {
   if (!Number.isFinite(weekly?.used_percent) || (Number.isFinite(reset) && reset <= Date.now())) return null;
   return Math.round(100 - Math.min(100, Math.max(0, weekly.used_percent)));
 }
-// "33% left · resets Thu 12:06 AM · as of 2m ago", or what is known when there is no reading.
+// "33% left · resets Thu 12:06 AM", or what is known when there is no reading.
 function machineLeftWords(weekly) {
   const left = machineLeft(weekly), reset = Date.parse(weekly?.resets_at);
   if (left === null) return weekly ? 'Previous week\'s reading; refresh needed' : 'No usage reading yet';
-  return [`${left}% left`, Number.isFinite(reset) ? `resets ${machineReset(reset)}` : '',
-    weekly.reported_at ? `as of ${ago(weekly.reported_at)}` : ''].filter(Boolean).join(' · ');
+  return [`${left}% left`, Number.isFinite(reset) ? `resets ${machineReset(reset)}` : ''].filter(Boolean).join(' · ');
 }
 function machineAttentionWords(conn) {
   if (conn.missing) return conn.problem;
@@ -116,7 +115,13 @@ function machineChipsHTML(machine) {
   if (!machineReported(machine)) return conns.length ? `<div class="machine-chips">${conns.map(conn => machineChipHTML(machine, conn)).join('')}${waiting}</div>` : waiting;
   const chips = conns.map(conn => machineChipHTML(machine, conn)).join('')
     || `<button type="button" class="machine-chip attention" data-computer-open="${esc(machine.id)}" data-no-connection><span class="machine-chip-dot" aria-hidden="true"></span><span>No AI connection</span></button>`;
-  return `<div class="machine-chips">${chips}${waiting}</div>`;
+  return `<div class="machine-chips">${chips}${waiting}${machineRowAddHTML(machine)}</div>`;
+}
+// One Add per computer, after its chips: the same Add connection pop-up as in the computer's own.
+function machineRowAddHTML(machine) {
+  if (machine.revoked_at || !machineCanSignIn(machine)) return '';
+  const online = machineOnline(machine);
+  return `<button type="button" class="machine-chip machine-chip-add" data-add-connection="${esc(machine.id)}" aria-label="Add connection to ${esc(machine.label)}"${online ? '' : ' disabled title="Computer is offline"'}>+ Add</button>`;
 }
 
 // ---- the pop-up
@@ -331,7 +336,7 @@ function machineBotsHTML(machine) {
   return `${rows ? `<ul class="computer-detail-bots">${rows}</ul>` : '<p class="muted">No bots on this computer.</p>'}
     <a href="#/settings" data-computer-bots="${esc(machine.id)}">Assign on the Bots page</a>`;
 }
-// Each AI tool's version and whether it is enabled here, then the owner's install and update actions.
+// Each AI tool's version, then the owner's install and update actions.
 function machineVersionsHTML(machine, online) {
   const runtimes = machine.readiness?.runtimes || {};
   const tools = Object.entries(machine.readiness?.harnesses || {}).map(([id, tool]) => ({...tool, id}));
@@ -346,15 +351,13 @@ function machineVersionsHTML(machine, online) {
   const rows = names.map(name => {
     const tool = toolFor(name), value = runtimes[name] || {};
     const installed = value.installed || tool.installed, version = installed ? (tool.version || value.version || '') : '';
-    // Enabled is the owner's choice per computer, always on for what its bots run on; an older runner cannot say.
-    const enabled = !tool.id ? '' : botRuntimes.has(name) || (choices[tool.id] ?? (tool.wanted || tool.installed)) ? 'Enabled' : 'Off';
     return `<div class="machine-tool" role="row" data-machine-tool="${esc(name)}">
       <span role="cell" class="machine-tool-name">${esc(tool.name || harnessWords(name))}</span>
-      <span role="cell" class="machine-tool-version"${version ? ` title="${esc(version)}"` : ''}>${installed ? esc(version || 'Installed') : '<span class="muted">Not installed</span>'}</span>
-      <span role="cell" class="machine-tool-enabled"${botRuntimes.has(name) ? ' title="Its bots use it"' : ''}>${enabled ? esc(enabled) : '<span class="muted">—</span>'}</span></div>`;
+      <span role="cell" class="machine-tool-version"${version ? ` title="${esc(version)}"` : ''}>${installed ? esc(version || 'Installed') : '<span class="muted">Not installed</span>'}</span></div>`;
   }).join('');
-  const table = rows ? `<div class="machine-tools" role="table" aria-label="AI tools on ${esc(machine.label)}"><div class="machine-tool machine-tool-head" role="row">
-    <span role="columnheader">Tool</span><span role="columnheader">Installed</span><span role="columnheader">Enabled</span></div>${rows}</div>` : '<p class="muted">No AI tools reported.</p>';
+  // Whether a tool is kept installed is the owner's toggle under Installation and updates, not a column here.
+  const table = rows ? `<div class="machine-tools machine-tools-2" role="table" aria-label="AI tools on ${esc(machine.label)}"><div class="machine-tool machine-tool-head" role="row">
+    <span role="columnheader">Tool</span><span role="columnheader">Version</span></div>${rows}</div>` : '<p class="muted">No AI tools reported.</p>';
   // The owner's Update / Pin actions and on/off per tool; the computer applies them between turns
   // (backend/harness_actions.py, runner-rs/src/harness_tools.rs).
   const asked = new Set((machine.harness_actions || []).filter(row => ['requested', 'running'].includes(row.state)).map(row => `${row.harness}:${row.action}`));
@@ -369,12 +372,12 @@ function machineVersionsHTML(machine, online) {
     const tone = value.state === 'failed' ? 'fail' : !value.installed || busy || value.update_available ? 'waiting' : '';
     const buttons = owner && value.installed && !busy ? [
       value.update_available ? harnessAction(id, 'update', 'Update') : '',
-      value.pinned ? harnessAction(id, 'unpin', 'Resume updates') : (value.version ? harnessAction(id, 'pin', 'Pin to this version') : '')].join('') : '';
+      value.pinned ? harnessAction(id, 'unpin', 'Resume updates') : (value.version ? harnessAction(id, 'pin', 'Stop updates') : '')].join('') : '';
     const title = [value.detail, value.managed ? '' : (value.installed ? 'Installed outside Tico; update it where it was installed' : '')].filter(Boolean).join(' · ');
     const needed = botRuntimes.has(value.runtime);
     const on = needed || (choices[id] ?? (value.wanted || value.installed));
     const toggle = S.me?.role === 'owner' && !machine.revoked_at
-      ? ` <label class="machine-harness-toggle"${needed ? ' title="Its bots use it"' : ''}><input type="checkbox" aria-label="Enable ${esc(value.name || id)} on ${esc(machine.label)}" data-harness-choice="${esc(id)}" data-runner="${esc(machine.id)}"${on ? ' checked' : ''}${needed || !online ? ' disabled' : ''}> Enabled</label>` : '';
+      ? ` <label class="machine-harness-toggle"${needed ? ' title="Its bots use it"' : ''}><input type="checkbox" aria-label="Keep ${esc(value.name || id)} installed on ${esc(machine.label)}" data-harness-choice="${esc(id)}" data-runner="${esc(machine.id)}"${on ? ' checked' : ''}${needed || !online ? ' disabled' : ''}> Keep installed</label>` : '';
     return `<span class="machine-harness-item" data-harness-chip="${esc(id)}"><span class="pill ${tone}" title="${esc(title)}">${esc(text)}</span>${toggle}${buttons}</span>`;
   };
   // The owner sees every model CLI, to turn one on; everyone else what is there.
@@ -384,7 +387,7 @@ function machineVersionsHTML(machine, online) {
   const facts = [`Tico ${machine.version || 'version not reported'}`, machine.platform || '',
     engine?.name ? `<span title="${esc(engine.note || engine.build || '')}">${engine.name === 'rust' ? 'Rust' : 'Python'} runner</span>` : ''].filter(Boolean);
   return `<p class="computer-detail-facts">${facts.map((fact, i) => i === 2 ? fact : esc(fact)).join(' · ')}</p>${window.runnerUpdateHtml?.(machine.update, machine.version) || ''}
-    ${table}${machineAppsHtml(machine)}${harnesses ? `<details data-machine-details="${esc(machine.id)}:tools"><summary>Installation and updates</summary><p class="settings-cell-note">Enabled tools stay installed.</p><div class="machine-harnesses">${harnesses}</div></details>` : ''}`;
+    ${table}${machineAppsHtml(machine)}${harnesses ? `<details data-machine-details="${esc(machine.id)}:tools"><summary>Installation and updates</summary><div class="machine-harnesses">${harnesses}</div></details>` : ''}`;
 }
 function machineScreenSectionHTML(machine, online) {
   // Screen (Off / View / Control): offered once the computer itself has a screen turned on (`screen_available`),
