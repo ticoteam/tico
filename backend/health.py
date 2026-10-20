@@ -531,7 +531,7 @@ def runtime_choice(c, bot, runtime, who, computers, harness="", model=""):
 
 # Why the claim holds an idle bot's queued work on purpose (execution.claim_refusal, job_refusal): what Health says, and
 # where the fix is. A reason not here is "Not started": a Tico bug (Health Monitor queue_idle).
-RUNS, COMPUTERS, BOT_SETTINGS = ("Open Runs", "#/runs"), ("Open Computers", "#/settings", "devices"), \
+RUNS, COMPUTERS, BOT_SETTINGS = ("Open Runs", "#/settings", "runs"), ("Open Computers", "#/settings", "devices"), \
     ("Open bot settings", "#/settings", "bots")
 HELD = {
     "draining": ("Paused, or held while Tico updates: its work starts when it is resumed", BOT_SETTINGS),
@@ -615,7 +615,7 @@ def _stuck(c, rows, online_ids, who, full, auth=None):
             fix = _fix(*where)
         else:
             text = f"Not started after {QUEUE_MINUTES} min"
-            fix = _fix("Open Runs", "#/runs")
+            fix = _fix("Open Runs", "#/settings", "runs")
         if move:
             fix = {**_fix(f"Move to {move['label']}"), "move": {"bot": row["bot"], "runner_id": move["id"], "computer": move["label"]}}
         out.append({key: row[key] for key in ("bot", "name", "queued", "oldest", "computer", "reason")}
@@ -1433,7 +1433,7 @@ def view(c, who, settings, auth, github, config):
         checks.append(_check("queue", "Work queueing", "warn",
                              f"{_plural(len(slow), 'bot')} with work waiting more than {QUEUE_MINUTES} minutes"
                              + (": " + ", ".join(s["name"] for s in slow[:5]) + "." if full else "."),
-                             [_fix("Open Runs", "#/runs")] if full else []))
+                             [_fix("Open Runs", "#/settings", "runs")] if full else []))
     else:
         checks.append(_check("queue", "Work queueing", "ok", "No work is waiting long."))
     for slug, name, count, what, oldest in unfinished_setup(c) if full else ():
@@ -1465,7 +1465,7 @@ def view(c, who, settings, auth, github, config):
         checks.append(_check("watchers", "Watchers", "warn",
                              "; ".join(f"{bot}/{name} {why}" for bot, name, why in stuck[:3])
                              + ("." if len(stuck) <= 3 else f"; and {len(stuck) - 3} more."),
-                             [_fix("Open Runs", "#/runs")]))
+                             [_fix("Open Runs", "#/settings", "runs")]))
     if full and (mixed := inbox_isolation.violations(c, roster(c))):
         checks.append(_check("inbox", "Inbox bots", "warn",
                              "A computer kept for inbox bots also runs " + "; ".join(
@@ -1509,7 +1509,7 @@ def view(c, who, settings, auth, github, config):
         checks.extend(_server_settings(c, settings))
     checks.append(_check("failed", "Failed runs", "warn" if failed else "ok",
                          f"{_plural(failed, 'run')} failed in the last day." if failed else "No failed runs in the last day.",
-                         [_fix("Open Runs", "#/runs")] if failed and full else []))
+                         [_fix("Open Runs", "#/settings", "runs")] if failed and full else []))
     return {**({"storage": storage_view(c, settings)} if kind == "owner" else {}), "audience": kind, "checks": checks, "attention": sum(1 for x in checks if x["status"] in ("warn", "bad")),
             "computers": computers if full else _bot_computers(computers) if kind == "bot" else [],
             "waiting": waiting if full else [], "slow": slow if full else [], "stuck": blocked,

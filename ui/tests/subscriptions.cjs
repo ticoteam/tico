@@ -164,11 +164,16 @@ async function navigation(browser) {
   }
   // Even if old navigation is still painted, losing a role cannot expose a restricted pane.
   await page.evaluate(() => { S.me.role = 'member'; S.me.bot_admin = false; });
-  for (const restricted of ['people', 'history', 'unknown-tab']) {
+  for (const restricted of ['people', 'unknown-tab']) {
     await page.evaluate(tab => settingsShow(tab), restricted);
     assert.equal(await page.locator('#settings-devices').isVisible(), true, `${restricted} safely falls back`);
     assert.equal(await page.evaluate(() => SETTINGS_TAB), 'devices');
   }
+  // History keeps Runs for everyone; Changes is the owner's. The old Runs page lands there.
+  await page.evaluate(() => { settingsShow('runs'); settingsHistoryShow('changes'); });
+  assert.equal(await page.locator('#set-runs').isVisible(), true, 'runs opens History on Runs');
+  assert.equal(await page.locator('#set-history').isVisible(), false, 'Changes stays hidden without the owner role');
+  assert.equal(await page.locator('#settings-history-view').isVisible(), false);
   // Team, Assistant, Privacy and Storage are sections of General; the ones this person lost stay hidden there.
   for (const alias of ['team', 'assistant', 'privacy', 'storage']) {
     await page.evaluate(alias => settingsShow(alias), alias);

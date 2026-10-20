@@ -60,7 +60,7 @@ function pageSettings() {
         <button type="button" data-settings-tab="recurring" role="tab">Routines</button>
         <button type="button" data-settings-tab="triggers" role="tab">Triggers</button>
         <button type="button" data-settings-tab="health" role="tab">Health<span class="hl-alert" data-hl-alert hidden></span></button>
-        ${S.me?.role === 'owner' ? '<button type="button" data-settings-tab="history" role="tab">History</button>' : ''}
+        <button type="button" data-settings-tab="history" role="tab">History</button>
       </div></details>
     </div>
     <div class="settings-pane" id="settings-general" role="tabpanel" hidden>
@@ -112,7 +112,10 @@ function pageSettings() {
       <section class="card"><header><h2>Task tags</h2></header><div id="settings-tags"></div></section>
     </div>
     <div class="settings-pane" id="settings-inbox" role="tabpanel" hidden><section class="card"><header><h2>Your Google account</h2></header><div id="set-google"></div></section></div>
-    <div class="settings-pane" id="settings-history" role="tabpanel" hidden><section class="card"><header><h2>Settings history</h2></header><div id="set-history">${skelRows(3, {card: true, dot: false})}</div></section></div>
+    <div class="settings-pane" id="settings-history" role="tabpanel" hidden><section class="card"><header><h2>History</h2>
+      ${S.me?.role === 'owner' ? '<div class="theme-seg" id="settings-history-view" role="radiogroup" aria-label="History"><button type="button" role="radio" data-history-view="runs">Runs</button><button type="button" role="radio" data-history-view="changes">Changes</button></div>' : ''}</header>
+      <div id="set-runs">${skelRows(3, {card: true, dot: false})}</div>
+      ${S.me?.role === 'owner' ? `<div id="set-history" hidden>${skelRows(3, {card: true, dot: false})}</div>` : ''}</section></div>
     <dialog class="tmodal" id="people-dialog" aria-label="Humans"></dialog>
     <dialog class="owner-picker" id="owner-picker" aria-labelledby="owner-picker-title"></dialog>
     <dialog class="bot-editor" id="bot-editor" aria-labelledby="bot-editor-title"></dialog>
@@ -122,6 +125,10 @@ function pageSettings() {
   pageSettingsThemeBind();
   settingsTeamIconBind();
   void settingsTeamRulesBind();
+  $('#settings-history-view')?.addEventListener('click', event => {
+    const button = event.target.closest('[data-history-view]');
+    if (button) settingsHistoryShow(button.dataset.historyView);
+  });
   $('#settings-tabs').onclick = event => {
     const button = event.target.closest('[data-settings-tab]');
     if (button) settingsShow(button.dataset.settingsTab);
@@ -161,10 +168,11 @@ function settingsShow(tab) {
   // The company's models choice is a section of Computers; a link to it (or to the old AI providers tab) scrolls there.
   if (tab === 'models' || tab === 'providers') { tab = 'devices'; SETTINGS_REVEAL = '#settings-models'; }
   if (SETTINGS_GENERAL[tab]) { SETTINGS_REVEAL = SETTINGS_GENERAL[tab]; tab = 'general'; }
+  if (tab === 'runs') { tab = 'history'; SETTINGS_HISTORY_VIEW = 'runs'; }   // the Runs page moved here
   const tabs = [...document.querySelectorAll('#settings-tabs [data-settings-tab]')];
   // Tab names come from the navigation; recheck access in case this person's role just changed.
   const owner = S.me?.role === 'owner';
-  const access = {people: settingsIsAdmin(), history: owner};
+  const access = {people: settingsIsAdmin()};
   SETTINGS_TAB = access[tab] !== false && tabs.some(button => button.dataset.settingsTab === tab) ? tab : 'devices';
   try { sessionStorage.setItem(SETTINGS_TAB_KEY, SETTINGS_TAB); } catch { /* private window: the tab is just not remembered */ }
   if (['health', 'history', 'recurring', 'triggers'].includes(SETTINGS_TAB)) $('#settings-more').open = true;
@@ -183,7 +191,7 @@ function settingsShow(tab) {
   if (devices) devices.hidden = SETTINGS_TAB !== 'devices';
   // Before the first load the form has no models or computers to show; loadSettings draws it then.
   if (SETTINGS_TAB === 'devices' && SETTINGS_DATA.loaded) void renderSettingsProviders();
-  if (history) history.hidden = SETTINGS_TAB !== 'history';
+  if (history) { history.hidden = SETTINGS_TAB !== 'history'; if (SETTINGS_TAB === 'history') settingsHistoryShow(); }
   const general = $('#settings-general');
   if (general) {
     general.hidden = SETTINGS_TAB !== 'general';

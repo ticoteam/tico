@@ -116,7 +116,7 @@ reply back under that bot's name, and stores everything else said in the channel
 in so that each channel's readers see it within the hour (`docs/slack-gateway.md`).
 Pages: **Tasks** (where the app opens), **Meetings** (imported transcripts, source sync status, Import, and each meeting's
 action items), **Docs**,
-**Tools**, **Changelog**, the **Team** tree, and under your email **Runs** and **Settings**
+**Tools**, **Changelog**, the **Team** tree, and under your email **Settings**
 and, for the owner and admins, **SQL**. Tasks has List, Board and Done; Routines are in **Settings → Routines**.
 Credentials are in **Tools → Credentials**. See [Navigation](navigation.md). A bot's page has **Chat**,
 **Tasks**, **Docs** and **More**. The assistant (Tico, `coo`), BotOps, the Librarian and the Goal Manager are built in and cannot be archived or deleted (`409 system_bot`); the assistant
@@ -295,7 +295,7 @@ the subscription (`limit.cleared` in the event log). If the bot has a fallback
 harness in **Settings → Bots**, the runner reruns that run at once on the fallback (fresh
 session, given the conversation's latest messages, up to about 16,000 tokens, marked as history; never a
 person's private Assistant chat) and
-reports `fallback` as that harness, which **Runs** shows in the Session column.
+reports `fallback` as that harness, which **Settings → History → Runs** shows beside the model.
 Tico is seeded with Gemini CLI as its fallback from Antigravity, so a usage limit uses
 a stored `GEMINI_API_KEY` Credential granted to the bot. **None (fail)** means no hop:
 the cloud cooldown applies.
@@ -377,7 +377,7 @@ down, into another column, or between lanes; everyone else sees the board and co
 **A bot finishes.** It commits its repository, marks the task `done` with a note, and the reply is
 saved in the conversation. The task shows under **Tasks → Done** with the bot's note; a bot that
 requested it gets a *Finished: <title>* message (`/api/v2/messages?unread=1`) and may choose Close.
-Done stays Done until someone authorized closes it. Every run is listed under **Runs** and on
+Done stays Done until someone authorized closes it. Every run is listed under **Settings → History → Runs** and on
 the bot's **More** tab.
 
 **You change a bot's Instructions.** Open **Bot → More → Instructions → Edit Instructions**
