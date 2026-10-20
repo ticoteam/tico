@@ -111,13 +111,14 @@ def warmth(turn, now=None):
     """(warm, context tokens) of a session from its last turn (`last_turn`). The context is None when unknown."""
     if not turn:
         return False, None
-    cached, fresh = int(turn.get("cached_tokens") or 0), int(turn.get("input_tokens") or 0)
+    cached, fresh = int(turn.get("cached_tokens") or 0), turn.get("input_tokens")
     lifetime = CACHE_LIFETIME.get(turn.get("runtime"), WARM_SECONDS)
     context = turn.get("prompt_tokens")
     context = int(context) if context is not None else None
     finished, at = H.parse_ts(turn.get("finished")), H.parse_ts(now or H.now())
     age = (at - finished).total_seconds() if finished and at else None
-    share = cached / (cached + fresh) if cached > 0 else 0.0
+    # An unknown fresh count (an older row, a runner that sent none) is cold: counting it as 0 would read 100% cached.
+    share = cached / (cached + int(fresh)) if cached > 0 and fresh is not None else 0.0
     return share >= WARM_SHARE and age is not None and 0 <= age < lifetime, context
 
 
