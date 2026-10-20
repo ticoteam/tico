@@ -13,6 +13,9 @@ All notable changes to Tico are recorded here. The format follows
   in the CEO Bot's name; what can't be done says why and comes back as a new recovery. Several bots asking one person
   the same thing become one item, and the one answer reaches each of them. After 10 approvals in a row unchanged, the
   Monday note offers level 3, at most once a month; the CEO Bot never raises its own level.
+- PRIVACY.md has a section for **Ask Tico**, the chat on tico.team: what goes to Tico HQ and to OpenRouter (with
+  fixed filters: no data collection, zero data retention), and that HQ holds a chat in memory only, erased 30 minutes
+  after its last message. ([Privacy](PRIVACY.md#ask-tico-the-chat-on-ticoteam))
 - **Inbox across connected interfaces**: Settings > More > Email & Phone shares email and phone inbox names with
   the customer portal while preserving local dependency notes. Owners and admins can request monthly US
   mobile numbers, accept an exact quote and cancel a request. These actions record a request for TICO

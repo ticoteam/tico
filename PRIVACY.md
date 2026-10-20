@@ -3,6 +3,7 @@
 What a Tico install sends outside your own server, and what the receiving side keeps: the anonymous usage count, the
 suggestions while you build your team chart, and, only when you press Send, a support ticket. Each has its own switch.
 The setup page on tico.team, which you use before installing, has its own section ([below](#the-setup-page-on-ticoteam)).
+Ask Tico, the chat on tico.team's pages, has its own section too ([below](#ask-tico-the-chat-on-ticoteam)).
 Separately, the server calls AI model providers with your own keys for a few features ([below](#the-servers-own-model-calls)). Bots you set to use Tico Cheap, Mid or Power send their model calls through Tico HQ to OpenRouter ([below](#tico-cheap-mid-and-power-through-tico-hq)). Tico's source is available, so you can read the code that
 sends them (`backend/census.py`, `backend/releases.py`, `backend/recruit.py`, `backend/support.py`). The service that receives them,
 Tico HQ, is run by the Tico team from a separate, private repository; its code is not published. What it is sent and what it keeps is described in [docs/tico-hq.md](docs/tico-hq.md).
@@ -206,6 +207,41 @@ session cost. No message text.
   of 60 requests an hour as every other route.
 - **Retention:** a session row is deleted 13 months after its day, by the daily job.
 - The Tico team reads daily totals only (sessions, sessions with 2 or more messages, how many of those downloaded the file, downloads, cost), never a session's row.
+
+## Ask Tico, the chat on tico.team
+
+**Ask Tico** is the chat panel on tico.team's pages (not on /setup). It answers questions about Tico and suggests one
+way to use it: Tico Open Core, Tico Services or Fully managed. It runs in your browser and calls Tico HQ at
+`https://updates.tico.team/v1/sdr`. No install is involved. It has no tools: it cannot look anything up about you, act
+for you or reach a Tico server you run. Only `https://tico.team` may call these routes from a page.
+
+### What is sent, and to whom
+
+- **To Tico HQ:** each message you type (up to 2,000 characters; a longer one is refused and sent nowhere) with a
+  random ID the panel makes for this chat (`crypto.randomUUID()`), and nothing else: the panel adds no name, email
+  address, page history or cookie. Anything you type yourself, a name or an email address included, is part of the
+  message.
+- **To OpenRouter** (openrouter.ai), which passes it to a provider that serves the model (Inception's Mercury 3 today;
+  the Tico team can change it): a fixed instruction, Tico's sales brief, up to four excerpts of Tico's public manual
+  that match your message, your current message and up to 20 previous messages from this chat, as you wrote them.
+  HQ adds nothing about you (not the chat ID, your IP address or any other detail): anything personal in the call is
+  what you typed. HQ calls OpenRouter with one of its own OpenRouter keys (Ask Tico's own key, or HQ's shared one
+  when that is not set; either way OpenRouter receives the same call) and the same two filters on every call, which
+  are not a setting: no provider that may keep or train on data (`data_collection: deny`), and only endpoints
+  OpenRouter classes as zero data retention (`zdr: true`). If no provider meets them, the call is refused and the
+  chat rests; it is never sent again with looser filters. OpenRouter's policy does not count a provider's in-memory
+  prompt caching as retention
+  ([OpenRouter: zero data retention](https://openrouter.ai/docs/guides/features/zdr#caching)).
+
+### What HQ keeps
+
+- **The chat, in memory only,** under a salted hash of its ID, so the next message has the conversation. It is
+  erased 30 minutes after its last message, and a restart or deploy of HQ erases every chat. Nothing of the chat is
+  written to HQ's database, and no message text is logged.
+- **No counts** of Ask Tico chats are kept yet.
+- **No IP addresses are stored or logged.** HQ uses your address in memory only, as a salted hash, for the limit of
+  60 requests an hour every HQ route has.
+- **No cookie or tracker** is set by HQ.
 
 ## The server's own model calls
 
