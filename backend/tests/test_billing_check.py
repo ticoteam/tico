@@ -134,6 +134,57 @@ def test_hq_not_readable_for_three_hours_is_red_and_a_blip_keeps_the_last_check(
     assert billing(api) == []
 
 
+def test_past_twenty_mismatches_twenty_are_listed_and_one_item_counts_the_rest(api, hq):
+    hq.answer = check([mismatch(subject="d-%02d" % n, kind="debit", difference=n) for n in range(1, 24)])
+    assert read(api) == "ok"
+    items = billing(api)
+    assert len(items) == B.SHOWN + 1 == 21
+    assert [i["summary"].split(" is off")[0] for i in items[:20]] == [f"Company {INSTALL}: debit d-%02d" % n
+                                                                      for n in range(1, 21)]
+    assert items[20]["id"] == "billing_check:more" and items[20]["summary"].startswith("3 more billing mismatches")
+    assert not any("d-21" in i["summary"] or "d-23" in i["summary"] for i in items)
+
+
+def test_an_overlapping_read_sends_no_second_get_and_hq_is_asked_outside_any_transaction(api, hq, monkeypatch):
+    store, open_tx, seen = api.app.state.store, [], {}
+    transaction = store.transaction
+
+    def watched():
+        open_tx.append(1)
+        try:
+            with transaction() as c:
+                yield c
+        finally:
+            open_tx.pop()
+    monkeypatch.setattr(store, "transaction", __import__("contextlib").contextmanager(watched))
+    answer = hq.handle
+
+    def handle(request):
+        seen["in_transaction"] = bool(open_tx)
+        seen["overlap"] = read(api)                         # a second read while the first waits on HQ
+        return answer(request)
+    monkeypatch.setattr(B, "TRANSPORT", httpx.MockTransport(handle))
+    assert read(api) == "ok"
+    assert seen == {"in_transaction": False, "overlap": None}
+    assert len(hq.requests) == 1 and hq.requests[0].method == "GET"
+    assert read(api) == "ok" and len(hq.requests) == 2      # the guard is let go once the read ends
+
+
+def test_the_missed_and_unread_limits_fall_exactly_on_26_and_3_hours(api, hq):
+    hq.answer = check()
+    read(api)
+    with api.app.state.store.transaction() as c:
+        at = B._parse_at(B._row(c)["check"]["checked_at"])
+        assert B.health(c, now=at + timedelta(hours=B.STALE_HOURS, seconds=-1)) == []
+        (missed,) = B.health(c, now=at + timedelta(hours=B.STALE_HOURS))
+        assert missed["id"] == "billing_check:missed" and B.STALE_HOURS == 26
+        stored = B._row(c)
+        B.record(c, "unreachable", None, stored["check"]["checked_at"])
+        assert B.health(c, now=at + timedelta(hours=B.UNREAD_HOURS, seconds=-1)) == []
+        (unread,) = B.health(c, now=at + timedelta(hours=B.UNREAD_HOURS))
+        assert unread["id"] == "billing_check:unread" and B.UNREAD_HOURS == 3
+
+
 def test_without_the_key_nothing_is_sent_and_nothing_is_shown(api, monkeypatch):
     monkeypatch.delenv(B.ENV_KEY, raising=False)
     calls = []
