@@ -40,13 +40,15 @@ PASSWORD = re.compile(r"(?i)\s*[\"']?(?:password|passwd|passcode|pwd)\b")
 # not a count).
 COUNT = re.compile(r"(?i)token\W*$")
 QUOTES = ('\\"', '"', "'")
-# A long run of token characters with letters and digits mixed, and close to random.
+# A long run of token characters with letters and digits mixed, and close to random (or letters and digits only).
 TOKEN = re.compile(r"[A-Za-z0-9_+/=-]{32,}")
 
 
 def _random(word):
     if not (re.search(r"[A-Za-z]", word) and re.search(r"[0-9]", word)):
         return False
+    if word.isalnum():
+        return True                     # 32 or more letters and digits, however regular: no word or number is that
     counts = {}
     for char in word:
         counts[char] = counts.get(char, 0) + 1
