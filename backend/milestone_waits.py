@@ -15,14 +15,20 @@ wakes). The key is the waiting task and the milestone: `woke_at` is set in the s
 webhook, a replayed webhook and the minute sweep can all see it and only the first sends anything.
 
 What happened is recorded too (`milestones`: the GitHub webhook writes a merged pull request and a published release),
-and a merged pull request link on any task counts, so a wait made after the merge, or a merge that arrived while the
-server was down or before the wake was written, is settled by `reconcile`: at create, and on the scheduler's minute pass.
+and a merged pull request link on any task counts, so a wait made after the merge, or a merge recorded before its wake
+was written, is settled by `reconcile`: at create, and on the scheduler's minute pass, bounded and once per distinct
+milestone. A merge or release whose webhook never arrived at all is asked of GitHub by `recover` (the background
+GitHub pass, outside any write), which records it through `happened`.
 A `task:<id>` wait is the existing blocked_by relation (task_relations.add_blocker); nothing here duplicates it.
 
 This module imports nothing from hubdb at load, so hubdb can import it.
 """
 
+import logging
 import re
+import threading
+import time
+from urllib.parse import quote
 
 from .batch_work import isolated
 
@@ -87,15 +93,13 @@ def describe(c, row):
 
 
 # ------------------------------------------------------------------------------------------------ writes
-def add(c, actor, task_row, spec, release_repo="", resolve_task=None):
-    """Store one milestone wait on `task_row` from `spec` (`pr:<url>`, `pr:<task>`, `release:<tag>`). Returns the
-    wait as `waits` lists it, with `added` False when it was already there. Settles it at once when the milestone has
-    already happened."""
+def parse(c, actor, spec, release_repo="", resolve_task=None):
+    """(kind, target, label, url) for `pr:<url>`, `pr:<task>` (its one pull request link) or `release:<tag>`. Adding
+    and removing read a spec the same way, so a wait added through a task reference comes off through it too.
+    `resolve_task` resolves and access-checks a task reference; without it only a URL is read."""
     H = _H()
-    ensure(c)
     kind_word, _, value = str(spec or "").partition(":")
     kind_word, value = kind_word.strip().lower(), value.strip()
-    url = None
     if kind_word == "pr":
         parsed = pr_target(value)
         if not parsed and resolve_task:
@@ -109,15 +113,23 @@ def add(c, actor, task_row, spec, release_repo="", resolve_task=None):
         if not parsed:
             H.refuse(c, actor, "milestone", "pr: takes a pull request URL (https://github.com/<owner>/<repo>/pull/<n>) "
                                             "or a task with one pull request link")
-        kind, (target, label, url) = "pr_merged", parsed
-    elif kind_word == "release":
+        return ("pr_merged", *parsed)
+    if kind_word == "release":
         parsed = release_target(value, release_repo)
         if not parsed:
             H.refuse(c, actor, "milestone", "release: takes a tag like v0.3.64, or <owner>/<repo>@v0.3.64 when this "
                                             "server has no release repository")
-        kind, (target, label) = "release_published", parsed
-    else:
-        H.refuse(c, actor, "milestone", "wait on pr:<url|task>, release:<tag> or task:<id>")
+        return ("release_published", *parsed, None)
+    H.refuse(c, actor, "milestone", "wait on pr:<url|task>, release:<tag> or task:<id>")
+
+
+def add(c, actor, task_row, spec, release_repo="", resolve_task=None):
+    """Store one milestone wait on `task_row` from `spec` (`pr:<url>`, `pr:<task>`, `release:<tag>`). Returns the
+    wait as `waits` lists it, with `added` False when it was already there. Settles it at once when the milestone has
+    already happened."""
+    H = _H()
+    ensure(c)
+    kind, target, label, url = parse(c, actor, spec, release_repo, resolve_task)
     added = c.execute("INSERT OR IGNORE INTO task_milestone_waits(task_id,kind,target,label,url,created_by,created) "
                       "VALUES(?,?,?,?,?,?,?)", (task_row["id"], kind, target, label, url, actor, H.now())).rowcount == 1
     if added:
@@ -130,18 +142,17 @@ def add(c, actor, task_row, spec, release_repo="", resolve_task=None):
     return {**view(c, dict(row)), "added": added}
 
 
-def remove(c, actor, task_row, spec, release_repo=""):
+def remove(c, actor, task_row, spec, release_repo="", resolve_task=None):
+    """Take a wait off, read from the same spec that added it. Returns its label."""
     H = _H()
     ensure(c)
-    kind_word, _, value = str(spec or "").partition(":")
-    parsed = pr_target(value) if kind_word.strip().lower() == "pr" else release_target(value, release_repo)
-    kind = "pr_merged" if kind_word.strip().lower() == "pr" else "release_published"
-    if not parsed or not c.execute("DELETE FROM task_milestone_waits WHERE task_id=? AND kind=? AND target=?",
-                                   (task_row["id"], kind, parsed[0])).rowcount:
+    kind, target, label, _ = parse(c, actor, spec, release_repo, resolve_task)
+    if not c.execute("DELETE FROM task_milestone_waits WHERE task_id=? AND kind=? AND target=?",
+                     (task_row["id"], kind, target)).rowcount:
         H.refuse(c, actor, "not-found", f"{task_row['id']} does not wait on {spec}")
-    H._task_event(c, task_row["id"], actor, "milestone_wait", f"{kind}:{parsed[0]}", None, "")
+    H._task_event(c, task_row["id"], actor, "milestone_wait", f"{kind}:{target}", None, "")
     c.execute("UPDATE tasks SET version=version+1, updated=? WHERE id=?", (H.now(), task_row["id"]))
-    return True
+    return sentence(kind, label)
 
 
 # ------------------------------------------------------------------------------------------------ reads
@@ -214,20 +225,129 @@ def happened(c, kind, target, source=""):
     return woken
 
 
+RECONCILE_TARGETS = 200     # distinct milestones the minute pass settles at most; the oldest waits go first
+
+
+def _met(c, targets):
+    """The (kind, target) pairs among `targets` that are on record: one query for the milestones seen, one for merged
+    pull request links (those from before milestones were recorded), whatever the number of waits on each."""
+    targets = list(targets)
+    if not targets:
+        return set()
+    marks = ",".join("(?,?)" for _ in targets)
+    met = {(r[0], r[1]) for r in c.execute(
+        f"SELECT kind,target FROM milestones WHERE (kind,target) IN (VALUES {marks})",
+        [v for pair in targets for v in pair])}
+    prs = {}
+    for kind, target in targets:
+        if kind == "pr_merged" and (kind, target) not in met:
+            repo, _, number = target.rpartition("#")
+            prs.setdefault(int(number), set()).add(repo)
+    if prs:
+        numbers = ",".join("?" * len(prs))
+        for repo, number in c.execute(f"SELECT DISTINCT lower(repo),number FROM task_links WHERE kind='pr' "
+                                      f"AND number IN ({numbers}) AND state IN ('merged','shipped')", list(prs)):
+            if repo in prs.get(number, ()):
+                met.add(("pr_merged", f"{repo}#{number}"))
+    return met
+
+
+def _pending_targets(c, task_id=None, limit=RECONCILE_TARGETS):
+    """Distinct milestones open waits on unfinished tasks are waiting for, the longest-waiting first."""
+    H = _H()
+    where, args = ("AND w.task_id=?", (task_id,)) if task_id else ("", ())
+    marks = ",".join("?" * (len(H.ACTIVE_STATUSES) + 1))
+    return [(r[0], r[1]) for r in c.execute(
+        "SELECT w.kind,w.target FROM task_milestone_waits w JOIN tasks t ON t.id=w.task_id WHERE w.woke_at IS NULL "
+        f"AND t.status IN ({marks}) {where} GROUP BY w.kind,w.target ORDER BY min(w.created) LIMIT ?",
+        (*H.ACTIVE_STATUSES, "blocked", *args, limit))]
+
+
 def reconcile(c, failures=None, task_id=None):
     """Every open wait whose milestone is already on record gets its one wake: one made after the merge, or a merge
-    or release that arrived while the server was down or before its wake was written. The scheduler's minute pass and
-    `add`. Returns the woken task ids."""
+    or release that arrived while the server was down or before its wake was written. Bounded: at most
+    RECONCILE_TARGETS distinct milestones a pass, each looked up once whatever the number of waits on it. The
+    scheduler's minute pass and `add`. Returns the woken task ids."""
     H = _H()
     if not _present(c):
         return []
-    where, args = ("AND w.task_id=?", (task_id,)) if task_id else ("", ())
-    marks = ",".join("?" * (len(H.ACTIVE_STATUSES) + 1))
     woken = []
-    for wait in H._rows(c.execute(
-            "SELECT w.* FROM task_milestone_waits w JOIN tasks t ON t.id=w.task_id WHERE w.woke_at IS NULL "
-            f"AND t.status IN ({marks}) {where} ORDER BY w.created, w.task_id", (*H.ACTIVE_STATUSES, "blocked", *args))):
-        with isolated(c, "milestone_wait", wait["task_id"], failures):
-            if happened_already(c, wait["kind"], wait["target"]) and _fire(c, wait, _why(wait)):
-                woken.append(wait["task_id"])
+    for kind, target in sorted(_met(c, _pending_targets(c, task_id))):
+        with isolated(c, "milestone_wait", f"{kind}:{target}", failures):
+            where, args = ("AND task_id=?", (task_id,)) if task_id else ("", ())
+            for wait in H._rows(c.execute(f"SELECT * FROM task_milestone_waits WHERE kind=? AND target=? "
+                                          f"AND woke_at IS NULL {where} ORDER BY created, task_id",
+                                          (kind, target, *args))):
+                if _fire(c, wait, _why(wait)):
+                    woken.append(wait["task_id"])
     return woken
+
+
+# ------------------------------------------------------------------------------------------------ GitHub
+CHECK_EVERY = 180          # seconds between passes that ask GitHub
+CHECK_TARGETS = 20         # milestones asked about a pass, least recently asked first
+RECHECK = 600              # seconds before the same unmet milestone is asked about again
+
+
+def recover(service):
+    """A merge or release whose webhook never arrived (the server was down, the delivery failed, or the pull request
+    is linked on no task) is asked of GitHub: distinct pending milestones in repositories the App reaches, at most
+    CHECK_TARGETS a pass, least recently asked first, each again after RECHECK. GitHub is read outside any write; a
+    milestone found is recorded through `happened`, which wakes each waiting task once. Runs in its own thread, like
+    github.reconcile_worktree_prs."""
+    with service.lock:
+        now = time.monotonic()
+        if getattr(service, "milestone_recover_running", False) or getattr(service, "milestone_recover_next", 0) > now:
+            return
+        service.milestone_recover_next = now + CHECK_EVERY
+        cache = service.__dict__.setdefault("milestone_recover_cache", {})
+        with service.store.read() as c:
+            app = service.row(c)
+            if not app or not _present(c):
+                return
+            org = str(app["org"] or "").lower()
+            reachable = {r[0].lower() for r in c.execute("SELECT full_name FROM repositories WHERE reachable=1")}
+            targets = [t for t in _pending_targets(c) if t not in _met(c, [t])]
+        def repo_of(kind, target):
+            return (target.rpartition("#")[0] if kind == "pr_merged" else target.partition("@")[0]).lower()
+        due = sorted((t for t in targets if repo_of(*t) in reachable and repo_of(*t).split("/")[0] == org
+                      and cache.get(t, {}).get("next", 0) <= now),
+                     key=lambda t: cache.get(t, {}).get("last", 0))[:CHECK_TARGETS]
+        if not due:
+            return
+        service.milestone_recover_running = True
+
+    def run():
+        tokens = {}
+        try:
+            for kind, target in due:
+                try:
+                    repo = repo_of(kind, target)
+                    if repo not in tokens:
+                        tokens[repo] = service.mint([repo], {"pull_requests": "read", "contents": "read"})[0]
+                    auth = {"Authorization": "Bearer " + tokens[repo]}
+                    if kind == "pr_merged":
+                        response = service._call("GET", f"/repos/{quote(repo, safe='/')}/pulls/"
+                                                        f"{int(target.rpartition('#')[2])}", headers=auth)
+                        body = response.json() if response.status_code == 200 else {}
+                        found = bool(body.get("merged")) and str(body.get("html_url") or "")
+                    else:
+                        tag = target.partition("@")[2]
+                        response = service._call("GET", f"/repos/{quote(repo, safe='/')}/releases/tags/"
+                                                        f"{quote(tag, safe='')}", headers=auth)
+                        body = response.json() if response.status_code == 200 else {}
+                        found = bool(body.get("published_at")) and not body.get("draft") and \
+                            str(body.get("html_url") or "github")
+                    if found:
+                        with service.store.transaction() as c:
+                            happened(c, kind, target, found)
+                except Exception:
+                    logging.getLogger("tico.milestone_waits").exception("Milestone check failed for %s", target)
+                with service.lock:
+                    if (kind, target) not in cache and len(cache) >= 512:
+                        cache.pop(next(iter(cache)))
+                    cache[(kind, target)] = {"next": time.monotonic() + RECHECK, "last": time.monotonic()}
+        finally:
+            with service.lock:
+                service.milestone_recover_running = False
+    threading.Thread(target=run, name="tico-milestone-recover", daemon=True).start()

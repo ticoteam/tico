@@ -98,10 +98,17 @@ def test_a_wait_made_after_the_merge_is_woken_once_at_create(api):
     assert len(wakes(api, waiter)) == 1
 
 
-def test_a_wait_on_a_task_with_one_pr_link_waits_for_that_pr(api):
+def test_a_wait_on_a_task_with_one_pr_link_waits_for_that_pr_and_comes_off_the_same_way(api):
     upstream, waiter = pair(api)
     wait(api, waiter, "pr:" + upstream["id"])
     assert shown(api, waiter)["milestone_waits"][0]["target"] == "ticoteam/tico#412"
+    r = api.post(f"/api/v2/tasks/{waiter['id']}/waits", json={"on": "pr:" + upstream["id"], "remove": True},
+                 headers=headers())
+    assert r.status_code == 200, r.text
+    assert r.json()["readback"] == [f"Removed: {name(waiter)} waits for PR #412 to merge"]
+    merge(api)
+    assert wakes(api, waiter) == [] and shown(api, waiter)["milestone_waits"] == []
+    wait(api, waiter, "pr:" + upstream["id"])
     other = post(api, "tasks", {"owner": "cpo", "title": "No PR here", "body": "x"})
     refused = wait(api, waiter, "pr:" + other["id"], expected=422)
     assert "has 0 pull request links" in str(refused), refused
@@ -156,8 +163,13 @@ def test_a_relation_write_reads_back_its_direction(api):
     same = wait(api, first, "task:" + second["id"])
     assert same["readback"] == [f"Already: {a} waits for {b}", f"Already: {b} blocks {a}"]
     made = raw(api, "tasks", {"owner": "cpo", "title": "Dev 238", "body": "x",
-                               "relations": [{"task": first["id"], "kind": "blocked_by"}]})
-    assert made["readback"][0].endswith(f"waits for {a}")
+                               "relations": [{"task": first["id"], "kind": "parent"},
+                                             {"task": second["id"], "kind": "blocked_by"}]})
+    assert made["readback"][0] == f'{name(made["task"])} is a subtask of {a}', "the parent reads back too"
+    assert made["readback"][2] == f'{name(made["task"])} waits for {b}'
+    child = raw(api, "tasks", {"owner": "cpo", "title": "Dev 239", "body": "x",
+                               "relations": [{"task": first["id"], "kind": "parent"}]})
+    assert child["readback"] == [f'{name(child["task"])} is a subtask of {a}', f'{a} is the parent of {name(child["task"])}']
 
 
 def test_a_milestone_wait_is_awaited_and_parks_the_task():
@@ -166,3 +178,77 @@ def test_a_milestone_wait_is_awaited_and_parks_the_task():
     assert MW.release_target("0.3.64", "TicoTeam/Tico") == ("ticoteam/tico@v0.3.64", "release v0.3.64")
     assert MW.release_target("v0.3.64") is None, "no repository to name: refused"
     assert MW.pr_target(PR + "/") == ("ticoteam/tico#412", "PR #412", PR)
+
+
+class FakeGitHub:
+    """GitHub as the recovery pass reads it: a merged pull request, a published release, nothing else."""
+    def __init__(self):
+        self.merged, self.released, self.calls = set(), set(), []
+
+    def call(self, method, path, headers=None, **kw):
+        from types import SimpleNamespace
+        self.calls.append(path)
+        if "/pulls/" in path:
+            number = int(path.rsplit("/", 1)[1])
+            body = {"merged": number in self.merged, "html_url": f"https://github.com/ticoteam/tico/pull/{number}"}
+            return SimpleNamespace(status_code=200, json=lambda: body)
+        tag = path.rsplit("/", 1)[1]
+        if tag in self.released:
+            body = {"tag_name": tag, "draft": False, "published_at": "2026-10-19T13:41:25Z", "html_url": RELEASE_URL}
+            return SimpleNamespace(status_code=200, json=lambda: body)
+        return SimpleNamespace(status_code=404, json=lambda: {})
+
+
+def recover(app, monkeypatch, github):
+    import threading
+    service = app.state.github_app
+    with service.store.transaction() as c:
+        c.execute("INSERT OR IGNORE INTO repositories(full_name,reachable,enabled,added_by,updated,default_branch) "
+                  "VALUES('ticoteam/tico',1,1,'human:ana',?,'main')", (H.now(),))
+    monkeypatch.setattr(service, "row", lambda c=None: {"slug": "test-app", "org": "ticoteam"})
+    monkeypatch.setattr(service, "mint", lambda *a, **kw: ("test-token", "later"))
+    monkeypatch.setattr(service, "_call", github.call)
+    service.milestone_recover_next = 0
+    service.__dict__.get("milestone_recover_cache", {}).clear()
+    MW.recover(service)
+    for worker in threading.enumerate():
+        if worker.name == "tico-milestone-recover":
+            worker.join(5)
+
+
+def test_a_missed_merge_and_release_are_asked_of_github_and_wake_once(api, monkeypatch):
+    """No webhook ever came and nothing local records either: an unlinked pull request merged while the server was
+    down, and a release published before the wait was made. GitHub is asked; each waiter wakes once."""
+    unlinked = "https://github.com/ticoteam/tico/pull/977"
+    upstream = post(api, "tasks", {"owner": "cpo", "title": "v0.3.63 release checklist", "body": "watch"})
+    on_pr = post(api, "tasks", {"owner": "cmo", "title": "Stacked change", "body": "x"})
+    on_release = post(api, "tasks", {"owner": "cmo", "title": "v0.3.64 release checklist", "body": "x"})
+    wait(api, on_pr, "pr:" + unlinked)
+    wait(api, on_release, "release:v0.3.63")
+    github = FakeGitHub()
+    recover(api.app, monkeypatch, github)
+    assert wakes(api, on_pr) == [] and wakes(api, on_release) == [], "not merged, not published: nothing"
+    github.merged.add(977)
+    github.released.add("v0.3.63")
+    recover(api.app, monkeypatch, github)
+    assert len(wakes(api, on_pr)) == 1 and len(wakes(api, on_release)) == 1
+    recover(api.app, monkeypatch, github)
+    Scheduler(api.app.state.store, api.app.state.execution).tick()
+    assert len(wakes(api, on_pr)) == 1 and len(wakes(api, on_release)) == 1, "asked again, still one wake"
+    assert shown(api, upstream)["status"] == upstream["status"]
+
+
+def test_a_release_published_while_the_server_was_down_wakes_once_after_restart(api, monkeypatch):
+    following = post(api, "tasks", {"owner": "cmo", "title": "v0.3.64 release checklist", "body": "x"})
+    wait(api, following, "release:v0.3.63")
+    github = FakeGitHub()
+    github.released.add("v0.3.63")          # published while the server was down: no webhook, no local record
+    restarted = create_app(api.app.state.store.settings)
+    with TestClient(restarted):
+        recover(restarted, monkeypatch, github)
+        recover(restarted, monkeypatch, github)
+        with restarted.state.store.read() as c:
+            woke = c.execute("SELECT count(*) FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
+                             f"WHERE {H.MESSAGE_TASK_SQL}=? AND json_extract(m.refs_json,'$.milestone') IS NOT NULL",
+                             (following["id"],)).fetchone()[0]
+        assert woke == 1

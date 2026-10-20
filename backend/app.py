@@ -185,6 +185,8 @@ def create_app(settings=None):
                 refresh_deployed_tasks(app.state.github_app)
                 # A worktree is released by its pull requests' state, so a missed webhook must heal unread.
                 reconcile_worktree_prs(app.state.github_app)
+                # A merge or release a task waits for whose webhook never came is asked of GitHub (Dev 256).
+                milestone_waits.recover(app.state.github_app)
             while not stop.is_set():
                 try:
                     await asyncio.to_thread(github_wakes)
@@ -3097,7 +3099,9 @@ def create_app(settings=None):
             c.execute("UPDATE tasks SET request_id=? WHERE id=?", (inherited_request or request_id, row["id"]))
         for url in body.links:
             H.task_link(c, who.actor, row["id"], url, mover=True)
-        readback = []
+        # The parent it was filed under is a relation written here too, and reads back first.
+        filed_under = TR.parent_of(c, row["id"])
+        readback = TR.readback(c, row["id"], filed_under, "parent") if filed_under else []
         for other, kind in others:
             changed = TR.relate(c, who.actor, row["id"], other, kind, mover=mover(c, who) or None)
             readback += TR.readback(c, row["id"], other, kind, changed=changed)
@@ -3528,14 +3532,15 @@ def create_app(settings=None):
                 H._writer(c, who.actor)
                 H._task_private_writer(c, who.actor, row)
                 TR._mine(c, who.actor, row, mover(c, who))
+                def resolve(value):
+                    other = auth.resolve_task(c, who, value)
+                    auth.task(c, who, other)
+                    return other
                 if body.remove:
-                    milestone_waits.remove(c, who.actor, row, body.on, release_repo=settings.release_repo)
-                    readback = [f"Removed: {TR._name(c, task_id)} no longer waits for {body.on.strip()}"]
+                    gone = milestone_waits.remove(c, who.actor, row, body.on, release_repo=settings.release_repo,
+                                                  resolve_task=resolve)
+                    readback = [f"Removed: {TR._name(c, task_id)} waits for {gone}"]
                 else:
-                    def resolve(value):
-                        other = auth.resolve_task(c, who, value)
-                        auth.task(c, who, other)
-                        return other
                     wait = milestone_waits.add(c, who.actor, row, body.on, release_repo=settings.release_repo,
                                                resolve_task=resolve)
                     readback = [("" if wait["added"] else "Already: ") + f"{TR._name(c, task_id)} {wait['sentence']}"

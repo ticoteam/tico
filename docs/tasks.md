@@ -75,8 +75,8 @@ hub task wait <task> --on pr:<url> --remove                                # tak
 
 The task shows it ("Waits for PR #943 to merge"). When the pull request merges or the release is published (the
 GitHub webhook), the owner gets one wake; the task it came from keeps its own step, and nothing is closed or moved.
-A wait made after the milestone, or a merge that arrived while the server was down, is woken once by the minute
-sweep instead. Replays and the sweep never wake it twice. `release:` takes the server's release repository unless
+A wait made after the milestone is woken once by the minute sweep instead, and a merge or release whose webhook
+never arrived (the server was down) is checked with GitHub every few minutes, in repositories the GitHub App reaches. Replays and the sweep never wake it twice. `release:` takes the server's release repository unless
 named (`release:<owner>/<repo>@v0.3.64`). The MCP tool is `hub_task_wait`; the API is
 `POST /api/v2/tasks/{id}/waits` with `{"on": "pr:<url>", "remove": false}`; each task answer carries
 `milestone_waits`.
