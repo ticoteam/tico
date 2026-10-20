@@ -17,17 +17,20 @@ const A = (id, name, content_type, kind, title) => ({id, file_id: id, version: 1
   const now = new Date().toISOString();
   const messages = [{id: 'm1', from_actor: 'bot:designer', body: 'This week.', created: now, refs: {attachments: [
     A('f-chart', 'chart.png', 'image/png', 'image', 'Weekly signups'), A('f-page', 'local.html', 'text/html', 'page', 'Embedded pair'),
-    A('f-csv', 'data.csv', 'text/csv', 'file', '')]}}];
+    A('f-csv', 'data.csv', 'text/csv', 'file', 'data.csv')]}}];
   const task = {id: 't1', title: 'Metrics', owner: 'bot:designer', requester: 'human:ana', status: 'review', lane: 'company', rank: 1, labels: [], links: [],
     parts: {total: 0, done: 0}, version: 1, created: now, updated: now, body: 'Metrics.', attachments: []};
   const tver = (id, mime) => ({n: 1, size: 1000, mime, sha256: 'x', created: now, by: 'bot:designer', comment_id: 'c1', note: null, ask: null, answers: [],
     width: null, height: null, duration_ms: null, media_state: 'none', url: `/api/v2/files/${id}?v=1`, poster_url: null, thumb_url: null});
   const taskFiles = [{id: 'f-metrics', name: 'metrics.png', mime: 'image/png', current_version: 1, archived: false, versions: [tver('f-metrics', 'image/png')]},
     {id: 'f-remote', name: 'remote.html', mime: 'text/html', current_version: 1, archived: false, versions: [tver('f-remote', 'text/html')]},
-    {id: 'f-notes', name: 'notes.txt', mime: 'text/plain', current_version: 1, archived: false, versions: [tver('f-notes', 'text/plain')]}];
+    {id: 'f-notes', name: 'notes.csv', mime: 'text/csv', current_version: 1, archived: false, versions: [tver('f-notes', 'text/csv')]},
+    {id: 'f-plain', name: 'untitled.png', mime: 'image/png', current_version: 1, archived: false, versions: [tver('f-plain', 'image/png')]}];
   const taskComments = [{id: 'c1', kind: 'say', from_actor: 'bot:designer', body: 'Metrics attached.', created: now, answers: [], refs: {task: 't1', comment: true,
     attachments: [A('f-metrics', 'metrics.png', 'image/png', 'image', 'Private metrics'), A('f-remote', 'remote.html', 'text/html', 'page', 'Remote reference'),
-      A('f-gone', 'old.html', 'text/html', 'page', 'Earlier draft')]}}];
+      A('f-gone', 'old.html', 'text/html', 'page', 'Earlier draft'),
+      // sent without a title: the server stores the file's name as its title (backend/visuals.py)
+      A('f-notes', 'notes.csv', 'text/csv', 'file', 'notes.csv'), A('f-plain', 'untitled.png', 'image/png', 'image', 'untitled.png')]}}];
 
   const context = await browser.newContext({viewport: {width: 1200, height: 900}, serviceWorkers: 'block'});
   await context.addCookies([{name: 'tico_session', value: 'secret', domain: 'tico-ui.test', path: '/', secure: true, httpOnly: true}]);
@@ -75,13 +78,15 @@ const A = (id, name, content_type, kind, title) => ({id, file_id: id, version: 1
   const c1 = page.locator('#task-modal .tcomment', {hasText: 'Metrics attached.'});
   await c1.locator('.tc-thumb[data-tf-jump="f-metrics"]').waitFor();
   assert.equal(await c1.locator('figure.vcard').count(), 0, 'no visual address: no cards');
-  assert.deepEqual(await c1.locator('.tc-thumb').evaluate(b => [b.getAttribute('aria-label'), b.title]),
-    ['Open Private metrics (metrics.png v1)', 'Private metrics (metrics.png v1)']);
-  assert.equal(await c1.locator('.tc-file-title').innerText(), 'Private metrics', 'the title shows under the thumbnail');
+  assert.deepEqual(await c1.locator('.tc-thumb').evaluateAll(bs => bs.map(b => [b.getAttribute('aria-label'), b.title])),
+    [['Open Private metrics (metrics.png v1)', 'Private metrics (metrics.png v1)'], ['Open untitled.png v1', 'untitled.png v1']],
+    'a titled thumb is named by its title; an untitled one (title = its name) as before');
+  assert.deepEqual(await c1.locator('.tc-file-title').allInnerTexts(), ['Private metrics'], 'only the titled thumb has a caption');
   const chips = c1.locator('.tc-files .tc-file');
-  assert.deepEqual((await chips.allInnerTexts()).map(t => t.replace(/\s+/g, ' ').trim()), ['HTML Remote reference v1', 'TXT notes.txt v1', 'Earlier draft'],
+  assert.deepEqual((await chips.allInnerTexts()).map(t => t.replace(/\s+/g, ' ').trim()), ['HTML Remote reference v1', 'CSV notes.csv v1', 'Earlier draft'],
     'a chip shows the title, or the name when there is none');
-  assert.equal(await chips.first().getAttribute('aria-label'), 'Open Remote reference (remote.html v1)');
+  assert.deepEqual(await chips.evaluateAll(bs => bs.map(b => [b.getAttribute('aria-label'), b.getAttribute('title')])),
+    [['Open Remote reference (remote.html v1)', 'remote.html'], ['Open notes.csv v1', null], [null, 'old.html']]);
   await chips.first().click();
   assert.deepEqual(await page.evaluate(() => [$('#task-modal').tfOpen?.id, $('#task-modal').tfOpen?.n]), ['f-remote', 1], 'a titled chip still opens its file');
 
