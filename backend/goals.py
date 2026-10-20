@@ -8,11 +8,11 @@ optional. Bots read theirs with `hub goal list`; nothing is pushed into a run.
 A goal links to KPIs (backend/kpis.py) and its colour is set automatically from them, by the Goal
 Manager, or from its owner's check-ins and its tasks when it has none. A person may override that:
 the colour they set sticks (`status_source` is `person`, with their note) until a person hands it
-back, and the Goal Manager may only *suggest* a different one. Every colour is stored with who set
+back, and the CEO Bot may only *suggest* a different one. Every colour is stored with who set
 it (`status_by`) and how (`status_source`, auto or person), in `goals` and in `goal_events`.
 
 Rows are appended, never deleted: `dropped` is a status. Every change leaves a `goal_events` row, as
-`task_events` does for tasks. Changes to a definition or a target that the Goal Manager wants are
+`task_events` does for tasks. Changes to a definition or a target that the CEO Bot wants are
 proposals (`goal_proposals`) that the goal's or KPI's owner confirms.
 """
 
@@ -449,7 +449,7 @@ def kpi_unlink(conn, actor, goal_id, kpi_id):
 
 
 def arm_pass(conn):
-    """The Goal Manager's daily pass starts paused, like a starter bot's first routine, and may start once a
+    """The CEO Bot's daily pass starts paused, like a starter bot's first routine, and may start once a
     KPI exists. Once: a person who pauses it afterwards is not overruled."""
     from . import routines
     sid = f"{GOAL_MANAGER}:kpi-pass"
@@ -522,9 +522,12 @@ def score(conn, row, at=None):
 def apply_auto(conn, goal_id, at=None):
     """Set a goal's automatic colour, unless a person set one. A goal a person set only gets a
     visible suggestion when the arithmetic disagrees, never a change. Done, dropped and proposed goals
-    are left alone. Returns what happened, or None."""
+    are left alone. Nothing at all while the owner has the CEO Bot's regular checks off (backend/ceo_bot.py `checks`):
+    turning them back on works every colour out again. Returns what happened, or None."""
     row = goal(conn, goal_id)
     if not row or row["status"] in ("done", "dropped") or (row["status"] is None and row["parent_id"]):
+        return None
+    if not ceo_bot.checks(conn):
         return None
     result = score(conn, row, at)
     ts = H.now()
@@ -556,7 +559,7 @@ def apply_auto(conn, goal_id, at=None):
 
 
 def refresh(conn, goal_ids=None, at=None):
-    """The Goal Manager's status pass: every live goal (or the ones named) gets its automatic colour
+    """The CEO Bot's status pass: every live goal (or the ones named) gets its automatic colour
     worked out again, which is how time passing turns fresh data stale."""
     rows = [goal(conn, g) for g in goal_ids] if goal_ids else goals(conn, live_only=True)
     changed, suggested = [], []
@@ -571,7 +574,7 @@ def refresh(conn, goal_ids=None, at=None):
 
 
 def hand_back(conn, actor, goal_id):
-    """A person lets the Goal Manager set the colour again: the override ends and it is worked out now."""
+    """A person lets the CEO Bot set the colour again: the override ends and it is worked out now."""
     H._writer(conn, actor)
     row = goal(conn, goal_id)
     if not row:
@@ -664,7 +667,7 @@ WHY_REPLACED = "Replaced by a newer Why"
 
 
 def propose(conn, actor, kind, goal_id=None, kpi_id=None, payload=None, reason=""):
-    """A change somebody may not make themselves (the Goal Manager, above all, may not change a target it
+    """A change somebody may not make themselves (the CEO Bot, above all, may not change a target it
     is judged against): stored for the goal's or KPI's owner to confirm. The same proposal twice is one."""
     H._writer(conn, actor)
     payload = payload if isinstance(payload, dict) else {}
@@ -728,7 +731,7 @@ def decide(conn, actor, proposal_id, decision, note="", why=None, option=None):
     if row["kind"] == "recovery" and decision == "confirm":
         from . import ceo_suggest
         if not ceo_suggest.suggests(conn):
-            H.refuse(conn, actor, "state", f"The {ceo_bot.name(conn)} is at level 1 now, where it changes no tasks")
+            H.refuse(conn, actor, "state", f"The {ceo_bot.name(conn)} is at Passive now, where it changes no tasks")
         pick = row["payload"]["pick"]
         chosen = pick if option is None else option
         if not isinstance(chosen, int) or not 0 <= chosen < len(row["payload"]["options"]):

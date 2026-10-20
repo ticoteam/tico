@@ -7,7 +7,7 @@ from backend import ceo_suggest
 from backend.store import H
 from backend.tests.test_api import api, get, post  # noqa: F401
 from backend.tests.test_ceo_bot_level import level
-from backend.tests.test_company import bot, switched_on
+from backend.tests.test_company import bot, with_ceo_bot
 from backend.tests.test_goal_asks import asks, needs_tasks, sync
 from backend.tests.test_kpis import goal_with_kpi, log
 
@@ -49,7 +49,7 @@ def test_at_level_2_a_red_goal_gets_one_recovery_the_owner_approves_exactly(api)
     """Spec test 8, level 2 half: a red goal is one proposal with options in Needs you, no task changes until the owner
     approves, and approving applies exactly the option chosen, as the CEO Bot. Level 1 makes no proposal (refused), and
     nobody but the CEO Bot proposes one."""
-    ceo = switched_on(api)
+    ceo = with_ceo_bot(api)
     post(api, "company", {"vision": "Every small landlord runs their rentals on Tico."})
     goal = red_goal(api)
     first = bot_task(api, "ops", "Write the onboarding email")
@@ -92,7 +92,7 @@ def test_what_cant_be_done_comes_back_saying_why_and_lowering_to_1_withdraws(api
     """Spec test 15, proposal side: a bot that is paused when the owner approves gets nothing, and that part comes back
     as a new proposal that says why in plain words; nothing is dropped. Choosing another option is not "unchanged".
     Lowering the level to 1 withdraws what still waits."""
-    ceo = switched_on(api)
+    ceo = with_ceo_bot(api)
     level(api, 2)
     goal = red_goal(api)
     proposal = recovery(api, goal["id"], bot_task(api, "ops", "Clean up old reports"), ceo)
@@ -118,7 +118,7 @@ def test_what_cant_be_done_comes_back_saying_why_and_lowering_to_1_withdraws(api
 def test_a_retry_approved_while_still_blocked_comes_back_again_and_then_applies(api):
     """Approving the retry while the bot is still paused files a new retry, not the one just decided; once the bot is
     back, approving that one makes the task."""
-    ceo = switched_on(api)
+    ceo = with_ceo_bot(api)
     level(api, 2)
     proposal = recovery(api, red_goal(api)["id"], bot_task(api, "ops", "Clean up old reports"), ceo)
     with api.app.state.store.transaction() as c:
@@ -147,7 +147,7 @@ def test_three_bots_asking_the_same_thing_are_one_item_and_the_answer_reaches_ea
     """Spec test 13: three bots ask the owner the same thing (a question on a task, a task waiting on her, a task filed
     for her); the CEO Bot merges them and Needs you shows one item, not three. Her one answer reaches each bot that
     asked, and the item is done. A merged item that ends unanswered puts the originals back."""
-    ceo = switched_on(api)
+    ceo = with_ceo_bot(api)
     asked = ask_ana(api, "ops", "Ship the pricing page")
     waiting = bot_task(api, "coo", "Plan the launch")
     with api.app.state.store.transaction() as c:
@@ -211,7 +211,7 @@ def test_three_bots_asking_the_same_thing_are_one_item_and_the_answer_reaches_ea
 def test_a_merged_answer_never_settles_a_question_asked_after_the_merge(api):
     """Ana answers one original where it was asked, and that bot asks her something else; her answer on the merged
     item reaches the other bot only, and the new question stays open in her Needs you."""
-    ceo = switched_on(api)
+    ceo = with_ceo_bot(api)
     level(api, 2)
     first, second = ask_ana(api, "ops", "Ship the pricing page"), ask_ana(api, "coo", "Plan the launch")
     item = post(api, "ceo-bot/merge", {"person": OWNER, "title": "Which pricing page first?", "question": "Which one?",
@@ -234,7 +234,7 @@ def test_ten_approvals_in_a_row_offer_level_3_once_a_month(api):
     """Spec test 19: at level 2, after 10 recoveries approved in a row with its pick unchanged, the Monday note may
     offer level 3: the CEO Bot records the offer, which is refused before it is due and again within 30 days. It
     never raises its own level, and a rejection starts the count again."""
-    ceo = switched_on(api)
+    ceo = with_ceo_bot(api)
     level(api, 2)
     goal = red_goal(api)
     for n in range(13):

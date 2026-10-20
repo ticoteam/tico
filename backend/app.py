@@ -1619,9 +1619,9 @@ def create_app(settings=None):
             return {"cards": onboarding.catalog(c)}
 
     @app.get("/api/v2/ceo-bot")
-    def ceo_bot_switch(request: Request):
-        """The CEO Bot rollout switch and its level (backend/ceo_bot.py). How many items it put in each person's Needs
-        you today is the owner's, an admin's and the CEO Bot's to read; anyone else sees only their own count."""
+    def ceo_bot_settings(request: Request):
+        """The CEO Bot's name, level and regular checks (backend/ceo_bot.py). How many items it put in each person's
+        Needs you today is the owner's, an admin's and the CEO Bot's to read; anyone else sees only their own count."""
         who = request.state.identity
         auth.domain(who)
         from . import ceo_bot
@@ -1630,14 +1630,6 @@ def create_app(settings=None):
         if who.actor != "bot:" + ceo_bot.SLUG and auth.company_role(who) not in ("owner", "admin"):
             value["asked_today"] = {k: n for k, n in value["asked_today"].items() if k == who.actor}
         return value
-
-    @app.post("/api/v2/ceo-bot")
-    def ceo_bot_switch_set(request: Request, body: M.CeoBotSwitch):
-        """Owners and admins flip it at runtime, no release; a bot never does, the Goal Manager included."""
-        who = request.state.identity
-        admin_only(who, "turns the CEO Bot on or off")
-        from . import ceo_bot
-        return mutate(request, body, lambda c: ceo_bot.named(c, ceo_bot.set_on(c, who.actor, body.on)))
 
     @app.post("/api/v2/goal-manager/turn-on")
     def turn_on_goal_manager(request: Request, body: M.Empty):
@@ -1953,7 +1945,7 @@ def create_app(settings=None):
             access = auth.bot_accesses(c, who)
             roster, configs = views.roster(c), views.entries(c)
             archived = {row["slug"] for row in H.bots(c) if row.get("state") == "archived"}
-            # The CEO Bot switch moves bots on the chart only; each keeps the `reports_to` it has (backend/ceo_bot.py).
+            # The CEO Bot heads the chart: bots move on the chart only; each keeps the `reports_to` it has (backend/ceo_bot.py).
             from . import ceo_bot
             chart = ceo_bot.chart_entries(c, settings, roster, configs, archived)
             view = P.org_view(roster, chart, archived, person_id=person or "", team=team or "")

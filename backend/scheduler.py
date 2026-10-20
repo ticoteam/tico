@@ -216,7 +216,7 @@ class Scheduler:
             except Exception as exc:
                 failures.append({"goal_asks": type(exc).__name__})
             try:
-                # The CEO Bot's Monday note, started once on an install whose switch was already on (backend/ceo_bot.py).
+                # The CEO Bot's Monday note: started once above Passive, paused at Passive (backend/ceo_bot.py `reconcile`).
                 from . import ceo_bot
                 with self.store.transaction() as c:
                     ceo_bot.reconcile(c)

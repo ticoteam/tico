@@ -1,13 +1,16 @@
-"""What the Goals page needs from a person, as tasks the Goal Manager asks (docs/goals-and-kpis.md, "Needs you").
+"""What the Goals page needs from a person, as tasks the CEO Bot asks (docs/goals-and-kpis.md, "Needs you").
+
+Only above Passive (backend/ceo_bot.py `proactive`): at Passive, the default, `sync` files nothing new and Needs you
+shows only what was already asked. A task filed before stays until it is resolved, as below.
 
 Three things wait on a person: a KPI off track (red) on a goal they own, a KPI they keep whose reading is out of
-date (stale or missing), and a proposal to confirm or reject. Each is one task, requested by the Goal Manager and
+date (stale or missing), and a proposal to confirm or reject. Each is one task, requested by the CEO Bot and
 owned by the person who must act, so it shows in Tasks and Decide like any other ask. One per KPI or proposal,
 kind and person (`goal_asks`), never two. `sync` files what is new and closes what is resolved: a fresh reading,
 a KPI back on track, a proposal decided, or the thing now someone else's. A task the person closed or declined
 while the cause stands is left alone, and asked again only once the cause has cleared and come back.
 
-Where the CEO Bot switch is on (backend/ceo_bot.py) two more wait on a person: the company's vision, while it is empty
+Two more wait on a person: the company's vision, while it is empty
 (one ask to the environment owner, first in their list), and the Why lines the CEO Bot proposed (one bundled ask per
 person who decides them, never one per goal). There it also puts at most 5 asks a day in one person's list
 (`ceo_bot.room_today`), most important first (`ORDER`); the rest wait for the next day's room. At level 2 and 3 a
@@ -15,7 +18,7 @@ recovery the CEO Bot proposes for a goal (backend/ceo_suggest.py) is its own ite
 of asking that goal's owner why a KPI is off track.
 
 A company goal or KPI is the environment owner's to act on. A bot's red or stale KPI is the bot's own work (the
-Goal Manager's pass asks it), so no task is filed for it; a proposal about a bot's goal or KPI goes to the nearest
+CEO Bot's pass asks it), so no task is filed for it; a proposal about a bot's goal or KPI goes to the nearest
 person above the bot on the org chart, as only a person decides one.
 """
 
@@ -67,7 +70,7 @@ def wanted(conn, owner_id, at=None):
     roster id."""
     org = None
     items = []
-    ceo = ceo_bot.on(conn)
+    ceo = ceo_bot.proactive(conn)      # above Passive: the vision ask and Why lines in Needs you
     if ceo and owner_id and not C.profile(conn)["vision"]:
         items.append({"kind": "vision", "ref": "company", "owner": H.human_actor(owner_id)})
     live = G.goals(conn, live_only=True)
@@ -91,10 +94,10 @@ def wanted(conn, owner_id, at=None):
                           "kpi_name": record["name"], "freshness": state["freshness"], "reason": state["reason"]})
     whys, recovering = {}, set()
     from . import ceo_suggest
-    suggests = ceo and ceo_suggest.suggests(conn)
+    suggests = ceo_suggest.suggests(conn)
     for p in G.proposals(conn, "pending"):
         if p["kind"] == "recovery":
-            # Only while it suggests (level 2 or 3, switch on); lowering the level withdraws them.
+            # Only while it suggests (level 2 or 3); lowering the level withdraws them.
             goal = G.goal(conn, p["goal_id"]) if suggests and p["goal_id"] else None
             if goal:
                 org = org or _org(conn)
@@ -159,7 +162,7 @@ def _change(p, kpi_name):
     return p["kind"]
 
 
-def _ask(item, manager="Goal Manager"):
+def _ask(item, manager=ceo_bot.NAME):
     """The task's title and body: the ask first, in plain words. `manager` is the bot's name (backend/ceo_bot.py)."""
     name, goal = item.get("kpi_name") or "", item.get("goal_title") or ""
     closes = "This closes by itself once "
@@ -252,18 +255,21 @@ def sync(conn, owner_id, at=None):
     for one row: a failure is recorded and the rest go on (backend/batch_work.py)."""
     if not manager_ready(conn):
         return {"created": [], "closed": []}
-    # Only someone on the roster: a refused ask counts against the Goal Manager (rule 8), every hour.
+    asks = ceo_bot.proactive(conn)      # at Passive nothing new is filed; what was asked still closes when resolved
+    # Only someone on the roster: a refused ask counts against the CEO Bot (rule 8), every hour.
     want = {(i["kind"], i["ref"], i["owner"]): i for i in wanted(conn, owner_id, at)
             if H.is_human(i["owner"]) and H.human(conn, H.actor_id(i["owner"]))}
     have = {(r["kind"], r["ref"], r["owner"]): dict(r) for r in conn.execute("SELECT * FROM goal_asks")}
     created, closed = [], []
     moved = {(kind, ref): owner for kind, ref, owner in want}
-    room = {}           # each person's room left today in the CEO Bot's 5 a day; None while the switch is off
+    room = {}           # each person's room left today in the CEO Bot's 5 a day
 
     def has_room(owner):
+        if not asks:
+            return False
         if owner not in room:
             room[owner] = ceo_bot.room_today(conn, owner)
-        return room[owner] is None or room[owner] > 0
+        return room[owner] > 0
 
     for key, row in list(have.items()):
         task = H.task(conn, row["task_id"])
@@ -296,7 +302,7 @@ def sync(conn, owner_id, at=None):
         with isolated(conn, "goal_ask_file", ":".join(key)):
             title, body = _ask(item, ceo_bot.name(conn))
             if H.TITLE_LINT == "refuse" and H.lint_title(title):
-                # A KPI name the title lint refuses would be refused, and counted against the Goal Manager, every hour.
+                # A KPI name the title lint refuses would be refused, and counted against the CEO Bot, every hour.
                 log.warning("Not asking %s: the title lint refuses its KPI's name", item["owner"])
                 continue
             made = H.task_create(conn, G.AUTO_ACTOR, _free_title(conn, item["owner"], title), body, item["owner"],
@@ -304,8 +310,7 @@ def sync(conn, owner_id, at=None):
             conn.execute("INSERT INTO goal_asks (kind, ref, owner, task_id, created) VALUES (?,?,?,?,?)",
                          (*key, made["id"], H.now()))
             created.append(made["id"])
-            if room.get(item["owner"]) is not None:
-                room[item["owner"]] -= 1
+            room[item["owner"]] -= 1
     return {"created": created, "closed": closed}
 
 
@@ -313,16 +318,16 @@ def for_person(conn, actor, items):
     """The Goals page's Needs you for one caller: each item carries the task that asks it (`task`), and an item
     the person already closed or declined while its cause stands is left out, as the task is."""
     rows = {(r["kind"], r["ref"]): r["task_id"] for r in conn.execute("SELECT * FROM goal_asks WHERE owner=?", (actor,))}
-    # Where the CEO Bot is on, an ask not filed yet shows only while today's room holds it, most important first
-    # (`items` are in ORDER): the rest wait for the next day, as their tasks do (`sync`).
-    room = ceo_bot.room_today(conn, actor)
+    # An ask not filed yet shows only while today's room holds it, most important first (`items` are in ORDER): the
+    # rest wait for the next day, as their tasks do (`sync`). At Passive nothing new is asked, so only filed ones show.
+    room = ceo_bot.room_today(conn, actor) if ceo_bot.proactive(conn) else 0
     out = []
     for item in items:
         task_id = rows.get((item["kind"], item["ref"]))
         task = H.task(conn, task_id) if task_id else None
         if task_id and not (task and task["status"] in H.ACTIVE_STATUSES):
             continue
-        if not task_id and room is not None:
+        if not task_id:
             if room <= 0:
                 continue
             room -= 1

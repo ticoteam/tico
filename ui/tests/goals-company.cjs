@@ -1,10 +1,9 @@
-// The Company section at the top of Goals and each goal's Why line (ui/goals-kpis.js goalCompanyHtml, goalWhyHtml), where
-// the CEO Bot switch is on (backend/company.py): empty, it asks the owner what the company is for with the two fields;
-// the owner saves them; a member reads them with no Edit; History lists who changed what and when. A goal with no Why says
+// The Company section at the top of Goals and each goal's Why line (ui/goals-kpis.js goalCompanyHtml, goalWhyHtml), on every
+// install (backend/company.py): empty, it asks the owner what the company is for with the two fields; the owner saves
+// them; an admin or a member reads them with no Edit; History lists who changed what and when. A goal with no Why says
 // "Not tied to the vision"; the CEO Bot's proposal is accepted as it is or edited, and an Accept on a line the CEO Bot has
-// since replaced is refused and shows the new one. Off, none of it shows; flipped with the page open, it comes and goes
-// at once, an open panel and a focused Company draft included. At level 2 a recovery in Needs you is approved one option
-// at a time. Fixtures only.
+// since replaced is refused and shows the new one. At level 2 a recovery in Needs you is approved one option at a time.
+// Fixtures only.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -16,8 +15,8 @@ const bot = (name, display_name, org_parent, over) => ({name, display_name, org_
 const bots = [bot('coo', 'Assistant', ''), bot('botops', 'BotOps', ''), bot('librarian', 'Librarian', ''),
   bot('goal-manager', 'CEO Bot', 'p:ana', {reports_to: ''}), bot('cmo', 'Head of Marketing', 'b:goal-manager', {reports_to: ''})];
 
-async function open(browser, {on = true, role = 'owner', company = {vision: '', description: ''}, history = [], needs = []} = {}) {
-  const server = {on};
+async function open(browser, {role = 'owner', company = {vision: '', description: ''}, history = [], needs = []} = {}) {
+  const server = {};
   const page = await browser.newPage({viewport: {width: 1440, height: 900}, serviceWorkers: 'block'});
   const errors = [], posted = [];
   page.on('pageerror', e => errors.push(e.message));
@@ -34,26 +33,25 @@ async function open(browser, {on = true, role = 'owner', company = {vision: '', 
       may_decide: role === 'owner'}],
   };
   await page.route('**/*', async route => {
-    const req = route.request(), url = new URL(req.url()), p = url.pathname, on = server.on;
+    const req = route.request(), url = new URL(req.url()), p = url.pathname;
     const json = body => route.fulfill({status: 200, contentType: 'application/json', body: JSON.stringify(body)});
     if (url.origin !== 'http://tico-ui.test') return route.abort();
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
     if (ui) { const file = uiFile(ui[1]); if (fs.existsSync(file)) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(file, 'utf8')}); }
     if (p === '/api/v2/events') return;
-    if (p === '/api/v2/config') return json({ceo_bot: on});
+    if (p === '/api/v2/config') return json({});
     if (p === '/api/employees') return json(bots);
     if (p === '/api/me') return json({id: role === 'owner' ? 'ana' : 'cara', name: role === 'owner' ? 'Ana Silva' : 'Cara Diaz', email: 'x@example.test',
-      role: role === 'owner' ? 'owner' : 'viewer', company_role: role, mover: role === 'owner', cloud: true, config: {ceo_bot: on}});
+      role: role === 'owner' ? 'owner' : 'viewer', company_role: role, mover: role === 'owner', cloud: true, config: {}});
     if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana Silva', org_parent: ''}, {id: 'cara', name: 'Cara Diaz', org_parent: 'p:ana'}]});
     if (p === '/api/status') return json({active: [], employees: []});
     if (p === '/api/v2/status') return json({bots: []});
-    if (p === '/api/v2/goals/tree') return json({goals: state.goals, owners: {}, other_kpis: [], proposals: state.proposals.filter(x => x.status === 'pending' && (on || x.kind !== 'goal_why'))});
+    if (p === '/api/v2/goals/tree') return json({goals: state.goals, owners: {}, other_kpis: [], proposals: state.proposals.filter(x => x.status === 'pending')});
     if (p === '/api/v2/goals/needs-you') return json({actor: 'human:ana', items: needs});
     if (p === '/api/v2/bots/goal-manager/routines') return json({routines: []});
     if (p === '/api/v2/company' && req.method() === 'GET') {
-      assert.ok(on, 'the company is only asked for where the switch is on');
-      return json({company: state.company, on, may_edit: role !== 'member'});
+      return json({company: state.company, may_edit: role === 'owner'});
     }
     if (p === '/api/v2/company' && req.method() === 'POST') {
       const body = req.postDataJSON();
@@ -62,7 +60,7 @@ async function open(browser, {on = true, role = 'owner', company = {vision: '', 
       for (const field of ['vision', 'description']) if (body[field] !== undefined && body[field] !== state.company[field])
         state.history.unshift({id: 'e' + state.history.length, ts, actor: 'human:ana', actor_name: 'Ana Silva', field, old: state.company[field], new: body[field]});
       state.company = {...state.company, ...body, updated: ts, updated_by: 'human:ana', updated_by_name: 'Ana Silva'};
-      return json({company: state.company, on, may_edit: true});
+      return json({company: state.company, may_edit: true});
     }
     if (p === '/api/v2/company/history') return json({events: state.history});
     const decide = p.match(/^\/api\/v2\/proposals\/([^/]+)\/decide$/);
@@ -95,13 +93,6 @@ function replaceWhy(state, goalId, why) {
   state.proposals.push(p);
   return p;
 }
-// Another admin flips the switch; the page learns it from its config poll (ui/tests/ceo-bot.cjs flip).
-async function flip(page, server, on) {
-  server.on = on;
-  await page.evaluate(() => refreshConfig());
-  await page.waitForFunction(want => document.querySelector('#goal-manager-panel h2')?.textContent === want, on ? 'CEO Bot' : 'Goal Manager');
-}
-
 const panelFor = async (page, owner) => {
   await page.locator(`#goal-tree .gt-row[data-owner="${owner}"]`).first().click();
   await page.locator('#goal-panel[open] .gp-body').waitFor();
@@ -151,9 +142,9 @@ const panelFor = async (page, owner) => {
       assert.deepEqual(errors, []);
       await page.close();
     }
-    // Spec test 2: a member reads both, with no Edit and no form; History is theirs to read.
-    {
-      const {page, errors} = await open(browser, {role: 'member',
+    // Spec test 2 (v3): an admin or a member reads both, with no Edit and no form; History is theirs to read.
+    for (const role of ['admin', 'member']) {
+      const {page, errors} = await open(browser, {role,
         company: {vision: 'Every small landlord runs their rentals on Tico.', description: 'Bots that run rentals.'},
         history: [{id: 'e1', ts: new Date(Date.now() - 3600000).toISOString(), actor: 'human:ana', actor_name: 'Ana Silva', field: 'vision', old: '', new: 'Every small landlord runs their rentals on Tico.'}]});
       const section = page.locator('#goal-company');
@@ -243,43 +234,6 @@ const panelFor = async (page, owner) => {
       assert.deepEqual(errors, []);
       await page.close();
     }
-    // Off, on, off in one open page: the Company section and the open panel's Why lines come and go with the
-    // switch, a focused Company draft included, and a goal being edited in the panel keeps its words.
-    {
-      const {page, errors, server} = await open(browser, {on: false, company: {vision: 'Every landlord on Tico.', description: ''}});
-      const panel = await panelFor(page, 'company');
-      await panel.locator('[data-goal-form="g-top"] input[name="title"]').fill('Grow rentals 40%');
-      assert.equal(await panel.locator('[data-why]').count(), 0);
-      await flip(page, server, true);
-      await page.locator('#goal-company [data-gco-vision]').waitFor();
-      await panel.locator('[data-why="g-top"] [data-why-none]').waitFor();
-      await panel.locator('[data-why-prop="p-why"] [data-why-accept]').waitFor();
-      assert.equal(await panel.locator('[data-goal-form="g-top"] input[name="title"]').inputValue(), 'Grow rentals 40%', 'the goal edit is kept');
-      // Off with the panel still open: its Why line and the proposal's buttons go; the goal edit stays.
-      await flip(page, server, false);
-      await page.locator('#goal-company').waitFor({state: 'detached'});
-      await page.waitForFunction(() => !document.querySelector('#goal-panel [data-why]'));
-      assert.equal(await panel.locator('[data-why-accept]').count(), 0);
-      assert.equal(await panel.locator('[data-goal-form="g-top"] input[name="title"]').inputValue(), 'Grow rentals 40%');
-      await panel.locator('[data-goal-cancel]').click();
-      await panel.locator('[data-gp-close]').click();
-      await page.locator('#goal-panel[open]').waitFor({state: 'detached'});
-      // A Company draft has focus when the switch goes off: the section goes all the same, and the tree's Why with it.
-      await flip(page, server, true);
-      await page.locator('#goal-company [data-gco-edit]').click();
-      const vision = page.locator('#goal-company textarea[name="vision"]');
-      await vision.fill('A draft not saved yet.');
-      await vision.focus();
-      await flip(page, server, false);
-      await page.locator('#goal-company').waitFor({state: 'detached'});
-      assert.doesNotMatch(await page.locator('#goal-tree .gt-row[data-goal="g-top"] .gt-goal').getAttribute('title'), /Why/);
-      // On again: the draft is where it was.
-      await flip(page, server, true);
-      await page.locator('#goal-company textarea[name="vision"]').waitFor();
-      assert.equal(await page.locator('#goal-company textarea[name="vision"]').inputValue(), 'A draft not saved yet.');
-      assert.deepEqual(errors, []);
-      await page.close();
-    }
     // Needs you (backend/goal_asks.py): the vision ask and the bundled Why ask read as themselves, not as empty KPI
     // rows; the vision row takes the owner to the Vision field, a goal in the Why row opens its panel at that goal.
     {
@@ -321,17 +275,6 @@ const panelFor = async (page, owner) => {
       assert.equal(await row.locator('[data-option="1"]').getAttribute('class'), 'primary');
       await Promise.all([page.waitForResponse(r => r.url().endsWith('/proposals/p-rec/decide')), row.locator('[data-option="0"]').click()]);
       assert.deepEqual(posted.find(x => x[0] === 'decide'), ['decide', 'p-rec', {decision: 'confirm', option: 0}]);
-      assert.deepEqual(errors, []);
-      await page.close();
-    }
-    // Off (spec test 17): no Company section, no Why lines, no request for the company.
-    {
-      const {page, errors} = await open(browser, {on: false});
-      assert.equal(await page.locator('#goal-company').count(), 0);
-      assert.doesNotMatch(await page.locator('#goal-tree .gt-row[data-goal="g-top"] .gt-goal').getAttribute('title'), /Why/);
-      const panel = await panelFor(page, 'company');
-      assert.equal(await panel.locator('[data-why]').count(), 0);
-      assert.doesNotMatch(await page.locator('body').innerText(), /Not tied to the vision|Tell your CEO Bot/);
       assert.deepEqual(errors, []);
       await page.close();
     }

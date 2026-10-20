@@ -1302,6 +1302,9 @@ class Store:
                 # so no migration number to collide with another branch's.
                 from . import groups as Groups
                 Groups.migrate(c, self.settings)
+                # The Goal Manager becomes the CEO Bot on every install, once (backend/ceo_bot.py). Idempotent.
+                from . import ceo_bot as CeoBot
+                CeoBot.migrate(c)
                 from . import releases as Releases
                 Releases.record_start(c, H.now())
                 from .credentials import FILE_MIGRATION, HUB_MIGRATION

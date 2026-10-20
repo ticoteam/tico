@@ -664,7 +664,7 @@ CREATE TABLE IF NOT EXISTS task_check_models (
   harness TEXT NOT NULL, effort TEXT NOT NULL DEFAULT '', role TEXT NOT NULL, created_by TEXT, created TEXT);
 """
 
-# What the Goal Manager has asked a person on the Goals page's behalf (backend/goal_asks.py): one row per
+# What the CEO Bot has asked a person on the Goals page's behalf (backend/goal_asks.py): one row per
 # KPI or proposal, kind and person, naming the task that asks it; append to preserve existing installations.
 GOAL_ASKS_SCHEMA = """
 CREATE TABLE IF NOT EXISTS goal_asks (

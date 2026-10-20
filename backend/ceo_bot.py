@@ -1,19 +1,24 @@
-"""The CEO Bot rollout switch: one per install, off by default (docs/goals-and-kpis.md; spec: Head of Product, CEO Bot).
+"""The CEO Bot: every install has one, at the top of its org chart (docs/ceo-bot.md; spec: Head of Product, CEO Bot v3).
 
-The CEO Bot is the Goal Manager under another name and in another place on the org chart. Its slug stays
-`goal-manager` (actor `bot:goal-manager`), so its KPI readings, goal events and old messages stay attached.
+The CEO Bot is the built-in bot that was the Goal Manager. Its slug stays `goal-manager` (actor `bot:goal-manager`), so
+its KPI readings, goal events and old messages stay attached. It is named "CEO Bot" unless the owner renames it
+(`name`), and nobody sees "Goal Manager" any more.
 
-Off, nothing changes: the bot is the Goal Manager, built in and off the chart. On:
-- its display name is "CEO Bot" (`bots.display_name`); the name it had before is kept here and given back when the
-  switch goes off, unless someone renamed it since;
-- the org chart (`chart_entries`) shows it under the owner, and under it the bots that would hang straight under the
+- `migrate` (once, when the server starts after the upgrade) names the bot "CEO Bot" where it still had its old name and
+  records `on` in this install's `registry_metadata` row. `on` is an internal flag that says the migration ran; no person
+  sees it or turns it off.
+- The org chart (`chart_entries`) shows it under the owner, and under it the bots that would hang straight under the
   owner and are a Head or have no manager, and (`chart_groups`) the top-level groups those Heads are in. Built-in
-  bots, helpers and message bots stay where they are.
+  bots, helpers and message bots stay where they are. The chart is the only thing that moves: `bot_config.reports_to`
+  is never written, so who manages whom (the access chain in backend/auth.py, goal rights in backend/goals.py,
+  `bot_contact`) is exactly what it was.
+- "Regular checks" (`checks`, default on) are the KPI pass routine and the automatic goal colours. Off, neither runs
+  until the owner turns them back on; the owner's chat still works.
+- "How much your CEO Bot does" (`level`): Passive (1, the default), Suggests actions (2), Acts on its own (3). At
+  Passive it does nothing on its own beyond the regular checks (`proactive`).
 
-The chart is the only thing that moves: `bot_config.reports_to` is never written, so who manages whom (the access
-chain in backend/auth.py, goal rights in backend/goals.py, `bot_contact`) is exactly what it was. Turning the switch off
-gives the chart back as it was. The switch is one `registry_metadata` row, flipped at runtime by an owner or admin
-(`POST /api/v2/ceo-bot`); a bot never flips it.
+Only the owner changes the level, the regular checks and its name, on their own click (backend/goal_routes.py,
+backend/settings_admin.py); a bot never does, the CEO Bot included.
 """
 import json
 from datetime import datetime, timezone
@@ -28,7 +33,7 @@ def encode(value):
 KEY = "ceo-bot"
 SLUG = "goal-manager"
 NAME = "CEO Bot"
-OLD_NAME = "Goal Manager"
+OLD_NAME = "Goal Manager"       # its name before; only `migrate` reads it
 
 
 def _record(c):
@@ -40,21 +45,15 @@ def _record(c):
     return value if isinstance(value, dict) else {}
 
 
-def on(c):
-    """Whether this install has the CEO Bot switch on."""
-    return _record(c).get("on") is True
-
-
 def name(c):
-    """The name the built-in Goal Manager is given when it is (re)created: "CEO Bot" while the switch is on."""
-    return NAME if on(c) else OLD_NAME
+    """What a person sees it called: the name the owner gave it, else "CEO Bot"."""
+    current = ((H.bot(c, SLUG) or {}).get("display_name") or "").strip()
+    return current if current and current != OLD_NAME else NAME
 
 
 def view(c):
-    record = _record(c)
     history = level_history(c)
-    return {"on": record.get("on") is True, "name": NAME if record.get("on") is True else OLD_NAME,
-            "changed_by": record.get("by") or "", "changed_at": record.get("at") or "",
+    return {"name": name(c), "regular_checks": checks(c),
             "level": level(c), "levels": levels(),
             "level_changed_by": history[0]["by"] if history else "",
             "level_changed_at": history[0]["at"] if history else "",
@@ -85,40 +84,73 @@ def _rename(c, actor, display_name):
               (H.now(), actor, SLUG))
 
 
-def set_on(c, actor, value):
-    """Turn the switch on or off for this install. Idempotent: the same value again changes nothing."""
+def migrate(c):
+    """Once per install, when the server starts (backend/store.py): the bot that was the Goal Manager becomes the CEO
+    Bot. Its old name (or none) becomes "CEO Bot"; a name a person gave it stays. Idempotent: `on` in the record says
+    it ran. Also run where the bot is built in later (backend/onboarding.py names it with `name`)."""
     record = _record(c)
-    value = bool(value)
-    if (record.get("on") is True) == value:
-        return view(c)
     bot = H.bot(c, SLUG)
-    current = (bot or {}).get("display_name") or ""
-    if value:
-        record["name_before"] = current if current and current != NAME else OLD_NAME
-        if bot:
-            _rename(c, actor, NAME)
-    else:
-        # A name a person gave it while the switch was on is theirs: only "CEO Bot" goes back.
-        if bot and current == NAME:
-            _rename(c, actor, record.get("name_before") or OLD_NAME)
-    record.update(on=value, by=actor, at=H.now())
-    _review(c, actor, record, value)
+    if bot and (bot.get("display_name") or "").strip() in ("", OLD_NAME):
+        _rename(c, H.KEEPER, NAME)
+    if record.get("on") is True:
+        return False
+    record.update(on=True, migrated_at=H.now())
+    record.pop("name_before", None)
     _save(c, record)
-    H.event(c, actor, "ceo_bot.switched", SLUG, {"on": value})
-    return view(c)
+    H.event(c, H.KEEPER, "ceo_bot.migrated", SLUG, {})
+    return True
+
+
+# ----------------------------------------------------------------------------- regular checks
+def checks(c):
+    """Whether the regular checks run: the KPI pass routine and the automatic goal colours. On unless the owner
+    turned them off."""
+    return _record(c).get("checks") is not False
+
+
+def set_checks(c, actor, value):
+    """Turn the regular checks on or off. The caller has checked it is the owner (backend/goal_routes.py). Back on,
+    every goal's automatic colour is worked out again at once. The same value again changes nothing."""
+    H._writer(c, actor)
+    value = bool(value)
+    if checks(c) == value:
+        return
+    record = _record(c)
+    record.update(checks=value, checks_by=actor, checks_at=H.now())
+    _save(c, record)
+    H.event(c, actor, "ceo_bot.checks", SLUG, {"on": value})
+    if value:
+        from . import goals as G
+        G.refresh(c)
+
+
+PASS = SLUG + ":kpi-pass"
+
+
+def held_routine(c, schedule):
+    """Why a scheduled run of the CEO Bot's KPI pass is skipped (the regular checks are off), or None."""
+    if schedule["id"] == PASS and not checks(c):
+        return "regular checks are off"
+    return None
 
 
 REVIEW = SLUG + ":goals-review"
 
 
-def _review(c, actor, record, value):
-    """The Monday note (the Goal Manager's `goals-review` routine, declared paused) starts when the switch goes on.
-    Off, it is paused again only if the switch started it and nobody has paused or started it since: a person's own
-    choice is never overruled. `review_settled` says the switch has had its one go at starting it while on, so
-    `reconcile` never starts it again."""
+def proactive(c):
+    """Whether it does anything on its own beyond the regular checks: asking goal owners, the vision ask, Why lines
+    in Needs you, the Monday note. Only at a level the owner raised it to; at Passive, never."""
+    return level(c) >= 2
+
+
+def _review(c, actor, record):
+    """The Monday note (the bot's `goals-review` routine, declared paused) starts when the owner raises the level
+    from Passive. Back at Passive, it is paused again only if this started it and nobody has paused or started it
+    since: a person's own choice is never overruled. `review_settled` says it has had its one go at starting it at
+    the current raise, so `reconcile` never starts it again."""
     from . import routines
     row = routines.row(c, REVIEW)
-    if not value:
+    if (record.get("level") if record.get("level") in LEVELS else DEFAULT_LEVEL) < 2:     # the level being saved
         armed = record.pop("review_armed", None)
         record.pop("review_settled", None)
         if row and not row["deleted_at"] and armed and row["enabled"] and not _review_touched(c, armed):
@@ -135,21 +167,23 @@ def _review(c, actor, record, value):
 
 
 def _review_touched(c, since):
-    """Whether anyone but the switch started or paused the Monday note after the switch started it."""
+    """Whether anyone but the server started or paused the Monday note after the server started it."""
     since = since if isinstance(since, str) else ""
     return c.execute("SELECT 1 FROM events WHERE action='routine.updated' AND target=? AND actor!=? AND ts>=? "
                      "AND detail_json LIKE '%\"enabled\"%' LIMIT 1", (REVIEW, H.KEEPER, since)).fetchone() is not None
 
 
 def reconcile(c):
-    """Once an hour (backend/scheduler.py): an install whose switch was on before the Monday note was started on
-    switch-on, or whose routine appeared after it, gets it started once. Never again after that one go, so a person
-    who pauses it later stays paused."""
+    """Once an hour (backend/scheduler.py): above Passive, a Monday note whose routine appeared after the level was
+    raised is started once, never again after that one go, so a person who pauses it later stays paused. At Passive,
+    a Monday note the old level 1 started (before v3) and nobody touched since is paused."""
     record = _record(c)
-    if record.get("on") is not True or record.get("review_settled"):
+    if proactive(c) and record.get("review_settled"):
+        return
+    if not proactive(c) and not record.get("review_armed"):
         return
     before = dict(record)
-    _review(c, H.KEEPER, record, True)
+    _review(c, H.KEEPER, record)
     if record != before:
         _save(c, record)
 
@@ -160,13 +194,13 @@ def _outside(slug, entry, assistant, helpers):
 
 
 def chart_entries(c, settings, roster, entries, archived=()):
-    """`entries` as the org chart draws them. With the switch on, the CEO Bot reports to the owner, and so do on the
-    chart the bots that hang straight under the owner and are a Head (a `lead: true` card) or have no manager at all.
-    Built-in bots, helpers and message bots stay where they are, and so does anyone under a group or another person.
-    A copy; with the switch off, `entries` itself. Only for drawing the chart: permission checks read the stored
-    `reports_to`."""
+    """`entries` as the org chart draws them. The CEO Bot reports to the owner, and so do on the chart the bots that
+    hang straight under the owner and are a Head (a `lead: true` card) or have no manager at all. Built-in bots,
+    helpers and message bots stay where they are, and so does anyone under a group or another person. A copy; with no
+    CEO Bot (or no owner on the roster) yet, `entries` itself. Only for drawing the chart: permission checks read the
+    stored `reports_to`."""
     archived = set(archived or ())
-    if not on(c) or SLUG not in (entries or {}) or SLUG in archived:
+    if SLUG not in (entries or {}) or SLUG in archived:
         return entries
     owner = P.person((roster or {}).get("default_user"), roster)
     if not owner or owner.get("hidden"):
@@ -190,9 +224,9 @@ def chart_entries(c, settings, roster, entries, archived=()):
 
 def chart_groups(roster, entries, chart, groups, archived=()):
     """`groups` (`org_view` rows) as the chart draws them. A Head is usually in a group of its own department, which
-    sits at the top of the chart: with the switch on, a top-level group that holds a bot the CEO Bot heads on the
+    sits at the top of the chart: a top-level group that holds a bot the CEO Bot heads on the
     chart (`chart`, from `chart_entries`) hangs under the CEO Bot, so the department sits in its subtree. Never the
-    group the owner is in, since the CEO Bot hangs under the owner. With the switch off, `groups` itself."""
+    group the owner is in, since the CEO Bot hangs under the owner. With nothing moved, `groups` itself."""
     if chart is entries:
         return groups
     archived = set(archived or ())
@@ -209,18 +243,20 @@ def chart_groups(roster, entries, chart, groups, archived=()):
 
 
 # ----------------------------------------------------------------------------- how much it does
-# "How much your CEO Bot does" (Settings > CEO Bot): three levels, chosen by the owner or an admin on their own click,
-# never by a bot, the CEO Bot included (backend/goal_routes.py). Every install starts at level 1. Each change is kept in
-# the switch's record with who and when. Level 2 suggests (backend/ceo_suggest.py, backend/ceo_merge.py). Level 3 can
-# be chosen now but adds nothing to level 2 yet: its behaviour arrives in a later release, and its sentence says so
-# until then (`READY`).
+# "How much your CEO Bot does" (Settings > CEO Bot): three levels, chosen by the owner on their own click, never by
+# an admin or a bot, the CEO Bot included (backend/goal_routes.py). Every install starts at Passive (level 1; installs
+# on the old level 1, "Goals and tracking", are Passive now). Each change is kept in the record with who and when.
+# Level 2 asks goal owners, proposes Why lines, sends the Monday note and suggests recoveries (backend/goal_asks.py,
+# backend/ceo_suggest.py, backend/ceo_merge.py). Level 3 can be chosen now but adds nothing to level 2 yet: its
+# behaviour arrives in a later release, and its sentence says so until then (`READY`).
 LEVELS = {
-    1: ("Goals and tracking",
-        "It keeps your goals clear and tracked: KPI readings, red and stale flags, Why lines and target changes to "
-        "propose, a Monday note, and asking a goal's owner what's happening. It never changes anyone's tasks."),
+    1: ("Passive",
+        "It keeps the regular checks running, KPI readings and the automatic goal colours, and otherwise acts only when "
+        "you talk to it: it suggests KPIs, goals and Why lines when you ask and changes nothing until you accept."),
     2: ("Suggests actions",
-        "It also suggests how your bots could recover a goal that falls behind, as items in Needs you that you approve "
-        "one by one, and makes the same question from several bots one item; nothing changes without your yes."),
+        "It also asks a goal's owner what's happening when a KPI goes red or stale, proposes Why lines, sends you a "
+        "Monday note, and suggests how your bots could recover a goal that falls behind, as items in Needs you that you "
+        "approve one by one; nothing changes without your yes."),
     3: ("Acts on its own",
         "It also makes, reorders and closes bot tasks itself to recover a goal, each logged with an Undo; spending, "
         "publishing, people and changes to goals or the vision stay yours."),
@@ -232,7 +268,7 @@ HISTORY_KEEP = 50
 
 
 def level(c):
-    """The level this install's CEO Bot works at: 1 unless an owner or admin chose another."""
+    """The level this install's CEO Bot works at: 1 (Passive) unless the owner chose another."""
     value = _record(c).get("level")
     return value if value in LEVELS else DEFAULT_LEVEL
 
@@ -259,7 +295,7 @@ def named(c, value):
 
 
 def set_level(c, actor, value):
-    """Choose the level. The caller has checked it is a person who may (backend/goal_routes.py). The same level again
+    """Choose the level. The caller has checked it is the owner (backend/goal_routes.py). The same level again
     changes nothing and logs nothing."""
     H._writer(c, actor)
     if value not in LEVELS:
@@ -272,10 +308,12 @@ def set_level(c, actor, value):
     history = [r for r in record.get("level_history") or [] if isinstance(r, dict)]
     history.append({"level": value, "was": was, "by": actor, "at": at})
     record.update(level=value, level_history=history[-HISTORY_KEEP:])
+    if (value >= 2) != (was >= 2):
+        _review(c, actor, record)               # the Monday note starts above Passive and stops back at it
     _save(c, record)
     if value < 2:
         from . import ceo_suggest
-        ceo_suggest.withdraw(c, actor)          # level 1 suggests no task changes: what still waits is withdrawn
+        ceo_suggest.withdraw(c, actor)          # Passive suggests no task changes: what still waits is withdrawn
     H.event(c, actor, "ceo_bot.level", SLUG, {"level": value, "was": was})
 
 
@@ -287,8 +325,7 @@ def _save(c, record):
 # ----------------------------------------------------------------------------- at most 5 a day in Needs you
 # At every level the CEO Bot puts at most 5 items a day in a person's Needs you (spec test 14). The server counts the
 # tasks it filed for that person since midnight UTC, whoever filed them for it: its own `hub task create` and the asks
-# backend/goal_asks.py files in its name, and the items it merged several bots' asks into (backend/ceo_merge.py). Only
-# while the switch is on: off, the Goal Manager works as before.
+# backend/goal_asks.py files in its name, and the items it merged several bots' asks into (backend/ceo_merge.py).
 DAILY_CAP = 5
 
 
@@ -318,9 +355,7 @@ def asked_today_all(c, at=None):
 
 
 def room_today(c, person, at=None):
-    """How many more items the CEO Bot may put in this person's Needs you today; None while the switch is off."""
-    if not on(c):
-        return None
+    """How many more items the CEO Bot may put in this person's Needs you today."""
     return max(0, DAILY_CAP - asked_today(c, person, at))
 
 
@@ -331,5 +366,5 @@ def check_cap(c, actor, owner):
     if actor != "bot:" + SLUG or not H.is_human(owner):
         return
     if room_today(c, owner) == 0:
-        raise H.Refused("cap", f"The {NAME} already put {DAILY_CAP} items in this person's Needs you today; "
+        raise H.Refused("cap", f"The {name(c)} already put {DAILY_CAP} items in this person's Needs you today; "
                                "keep the rest for tomorrow, most important first")

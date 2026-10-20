@@ -524,7 +524,7 @@ class Auth:
     FULL = {"see": True, "read": True, "write": True}
 
     def system_bot(self, slug):
-        """The built-in bots (the Assistant, BotOps, the Librarian, the Goal Manager, the Health Monitor): they act for
+        """The built-in bots (the Assistant, BotOps, the Librarian, the CEO Bot, the Health Monitor): they act for
         the whole company, so only the company owner changes them. Admins manage every other bot."""
         return slug in (self.settings.assistant_bot, "assistant", "botops", "librarian", "goal-manager", "health-monitor")
 

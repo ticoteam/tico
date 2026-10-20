@@ -1089,8 +1089,8 @@ def goal_create(api, args):
 
 @tool("hub_goal_status", "Set a goal's colour by hand: red, yellow or green with one honest sentence; "
       "done when reached, dropped when it stops mattering. A colour set by hand sticks, with your name and "
-      "note, until a person hands it back (status `auto`); the Goal Manager only suggests a different one. "
-      "`auto` lets the Goal Manager set the colour again: it ends a colour set by hand and works the automatic one "
+      "note, until a person hands it back (status `auto`); the CEO Bot only suggests a different one. "
+      "`auto` lets the CEO Bot set the colour again: it ends a colour set by hand and works the automatic one "
       "out now, from the goal's KPIs, or its owner's check-ins and tasks. The goal's owner, the owner of the goal "
       "it serves, or someone above them.",
       {"id": _s("Goal id"),
@@ -1104,9 +1104,9 @@ def goal_status(api, args):
                     key=_key(args))["goal"]
 
 
-@tool("hub_goal_refresh", "The Goal Manager's status pass: work the automatic colour of every live goal (or "
+@tool("hub_goal_refresh", "The CEO Bot's status pass: work the automatic colour of every live goal (or "
       "the ones named) out again. A goal whose colour a person set only gets a visible suggestion. "
-      "Returns {changed, suggested, checked}. The Goal Manager or the team owner.",
+      "Returns {changed, suggested, checked}. The CEO Bot or the team owner.",
       {"goal_ids": {"type": "array", "items": {"type": "string"}, "description": "Only these goals; default all"}},
       writes=True)
 def goal_refresh(api, args):
@@ -1115,7 +1115,7 @@ def goal_refresh(api, args):
 
 @tool("hub_goal_checkin", "Record how the owner says a goal is going, in their words: interpretation, kept "
       "apart from the readings (facts). It colours a goal that has no KPI. The goal's owner, someone above "
-      "them, or the Goal Manager recording an owner's answer (`from_actor`).",
+      "them, or the CEO Bot recording an owner's answer (`from_actor`).",
       {"id": _s("Goal id"), "body": _s("What is going on, in a sentence or two"),
        "signal": {"type": "string", "enum": ["on_track", "at_risk", "off_track"]},
        "from_actor": _s("Whose words these are, when you record them for someone else: a bot slug or a person id"),
@@ -1144,9 +1144,9 @@ def goal_company(api, args):
     return api.get("company")
 
 
-@tool("hub_goal_ceo_bot", "Whether the CEO Bot switch is on, how much it does (level 1 goals and tracking, 2 suggests "
-      "actions, 3 acts on its own; only a person changes it) and how many items it put in each person's Needs you "
-      "today against its cap of 5.", {})
+@tool("hub_goal_ceo_bot", "The CEO Bot's name, how much it does (level 1 Passive, 2 suggests actions, 3 acts on its "
+      "own; only the owner changes it), whether its regular checks run, and how many items it put in each person's "
+      "Needs you today against its cap of 5.", {})
 def goal_ceo_bot(api, args):
     return api.get("ceo-bot")
 
@@ -1239,7 +1239,7 @@ def kpi_show(api, args):
 @tool("hub_kpi_create", "Make a KPI: a measure on its own that goals link to. Name what is counted, per what; "
       "give a definition, the unit, which way is good, how often it is read and who is accountable (default you). "
       "With `goal_id` it is linked to that goal, with the target fields on the link (an improvement: target and "
-      "deadline; or a range: min/max). The Goal Manager proposes instead (hub_proposal_create).",
+      "deadline; or a range: min/max). The CEO Bot proposes instead (hub_proposal_create).",
       {"name": _s("'booked Calendly demos per two weeks'"), "goal_id": _s("Link it to this goal"),
        "owner": _s("`me` (default), `company` (the owner's), a bot slug or a person id"),
        **KPI_PROPS, **TARGET_PROPS},
@@ -1276,7 +1276,7 @@ def kpi_restore(api, args):
 
 @tool("hub_kpi_link", "Link a goal to a KPI and set the target on that link, or change the target of an "
       "existing link: an improvement (baseline, target, deadline) or a range (min, max); none is just "
-      "linked. The goal's owner or someone above them; the Goal Manager proposes instead.",
+      "linked. The goal's owner or someone above them; the CEO Bot proposes instead.",
       {"goal_id": _s("Goal id"), "kpi_id": _s("KPI id (auto:<bot>:<metric> for a bot's automatic KPI)"),
        **TARGET_PROPS},
       required=("goal_id", "kpi_id"), writes=True)
@@ -1293,7 +1293,7 @@ def kpi_unlink(api, args):
 
 @tool("hub_kpi_log", "Log a reading on a KPI: a fact, with the period it describes, where it came from and how "
       "good it is. Never edited: to correct one, log a new reading that `supersedes` it. The KPI's owner, the "
-      "Goal Manager, or the owner of a goal that uses it.",
+      "CEO Bot, or the owner of a goal that uses it.",
       {"kpi_id": _s("KPI id"), "value": {"type": "number"},
        "note": _s("Where the number came from", default=""),
        "period_start": _s("Start of the period it describes, ISO date or date-time; default one cadence before the end"),
@@ -1321,7 +1321,7 @@ def kpi_log(api, args):
       "flag (flag: payload issue vague|duplicate|unmeasured), or, where the CEO Bot is on, a goal's Why (goal_why: "
       "payload why, one line tying the goal to the company's vision), or, from the CEO Bot at level 2 or 3, a red or "
       "stalled goal's recovery (recovery: payload evidence, options [{label, actions}], pick; actions create, "
-      "reorder or settle). The Goal Manager cannot change a definition or a target it is judged against without one.",
+      "reorder or settle). The CEO Bot cannot change a definition or a target it is judged against without one.",
       {"kind": {"type": "string", "enum": list(PROPOSAL_KINDS)}, "goal_id": _s("The goal it is about"),
        "kpi_id": _s("The KPI it is about"), "payload": {"type": "object", "description": "The proposed change"},
        "reason": _s("One sentence: why")},
