@@ -15,7 +15,8 @@ COMMANDS = ("run", "doctor", "destroy", "runner", "backup-storage", "support", "
 def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="tico setup", description="Set up Tico on one Docker server, from a domain to a signed-in app.",
                                 epilog="Secrets are never taken as flags: set TICO_OIDC_CLIENT_SECRET, CLOUDFLARE_API_TOKEN, "
-                                       "CLOUDFLARE_TUNNEL_TOKEN or OPENAI_API_KEY (ANTHROPIC_/GEMINI_) in the environment.")
+                                       "CLOUDFLARE_TUNNEL_TOKEN, TICO_INBOUND_KEY or OPENAI_API_KEY (ANTHROPIC_/GEMINI_) "
+                                       "in the environment. Optional server endpoint: TICO_INBOUND_URL.")
     p.add_argument("command", nargs="?", choices=COMMANDS, default="run",
                    help="run (default): set up the server; runner: add a Linux computer that runs bots; doctor: re-run the checks; "
                         "destroy: remove what setup created on AWS; backup-storage: from a laptop with AWS credentials, create the "
@@ -32,7 +33,16 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--cloud-ssh-key", help="name (hetzner) or id/fingerprint (digitalocean) of an SSH key already in your account")
     p.add_argument("--tico-version", help="release to install, such as v1.2.3 (cloud targets: default the latest release; local: what scripts/install.sh pins)")
     p.add_argument("--domain")
+    p.add_argument("--dns-name", help="hosted AWS/Caddy: exact operational Route 53 hostname; defaults to --domain")
+    p.add_argument("--dns-zone", help="hosted AWS/Caddy: authoritative zone of --dns-name; no public URL or certificate change")
     p.add_argument("--front-door", choices=list(st.FRONT_DOORS))
+    p.add_argument("--domain-aliases", help="cloudflared: comma-separated full-app hosts; empty clears saved aliases")
+    p.add_argument("--public-url", help="canonical HTTPS origin on --domain; empty clears the saved override")
+    p.add_argument("--cors-origins", help="explicit comma-separated app origins; empty clears, never adds visual trust")
+    p.add_argument("--hq-url", help="public HQ HTTPS origin; omitted keeps the saved/default endpoint")
+    p.add_argument("--visual-origin", help="isolated HTTPS visual origin; empty clears, without acquiring DNS authority")
+    p.add_argument("--visual-same-origin", choices=("0", "1"), help="explicitly retain or disable legacy same-origin visuals")
+    p.add_argument("--caddy-visuals", choices=("0", "1"), help="explicit local Caddy visual serving; default off")
     p.add_argument("--runner-hostname", dest="runner_host", metavar="HOST",
                    help="cloudflared: a hostname without Access where computers and outside agents connect (only /api/v2 and "
                         "/download are routed there); default with --auth cloudflare: runner.<domain>, or <name>-runner.<zone> "

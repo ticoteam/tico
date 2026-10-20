@@ -70,3 +70,57 @@ jobs:
         env:
           TICO_PYTHON: ${{ runner.temp }}/venv/bin/python
         run: PATH="$RUNNER_TEMP/venv/bin:$PATH" node scripts/ui-tests.cjs
+
+  caddy-linux:
+    name: caddy-linux-${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {arch: amd64, runner: ubuntu-24.04}
+          - {arch: arm64, runner: ubuntu-24.04-arm}
+    env:
+      PYTHONUNBUFFERED: '1'
+      TICO_CADDY_CONTAINER_QA: '1'
+      TICO_CADDY_EXPECTED_ARCH: ${{ matrix.arch }}
+      TICO_CADDY_TEST_IMAGE: tico-caddy-qa:current
+      DOCKER_BUILD_RECORD_UPLOAD: 'false'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.15'
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Build this source's server image locally; never publish
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          target: server
+          platforms: linux/${{ matrix.arch }}
+          load: true
+          push: false
+          tags: tico-caddy-qa:current
+          build-args: |
+            TICO_VERSION=dev
+            TICO_COMMIT=${{ github.sha }}
+            TICO_REPOSITORY=${{ github.repository }}
+          cache-from: type=gha,scope=tico-${{ matrix.arch }}
+      - name: Install existing pinned test requirements
+        run: |
+          python3 -m venv "$RUNNER_TEMP/caddy-venv"
+          "$RUNNER_TEMP/caddy-venv/bin/python" -m pip install -r backend/requirements-dev.txt
+      - name: Actual pinned Linux Caddy runtime and lifecycle
+        env:
+          TICO_CADDY_TEST_OUTPUT: ${{ runner.temp }}/caddy-runtime-evidence
+        run: '"$RUNNER_TEMP/caddy-venv/bin/python" -m pytest -q -m slow -n 0 backend/tests/test_caddy_container.py'
+      - name: Preserve fixture receipts and redacted failure logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: caddy-runtime-${{ matrix.arch }}
+          path: ${{ runner.temp }}/caddy-runtime-evidence/
+          if-no-files-found: warn

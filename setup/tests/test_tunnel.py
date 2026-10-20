@@ -198,3 +198,17 @@ def test_the_server_and_setup_write_the_same_runner_hostname_route(tmp_path):
                         TICO_TUNNEL_ORIGIN="http://untrusted.example")
     assert done.returncode == 0, done.stderr
     assert yaml.safe_load((tmp_path / "cloudflared.yml").read_text()) == written
+
+
+def test_local_generated_runtime_and_remote_put_share_complete_alias_and_restricted_ingress(tmp_path, monkeypatch):
+    from setup.tests.test_cloudflare import Api
+    for key in list(os.environ):
+        if key.startswith('TICO_'): monkeypatch.delenv(key)
+    api = Api({('PUT','/accounts/a/cfd_tunnel/t/configurations'): {}})
+    cf = cloudflare.Cloudflare('fictional-token', api)
+    for aliases, visual, runner in [(' Old.Acme.Example,old.acme.example,app.acme.example ', 'https://files.acme.example/', 'https://runner.acme.example'),
+                                     ('', '', 'https://app.acme.example/')]:
+        done = write_config(tmp_path, 'app.acme.example', TICO_DOMAIN_ALIASES=aliases, TICO_VISUAL_ORIGIN=visual, TICO_RUNNER_URL=runner)
+        assert done.returncode == 0, done.stderr
+        cf.configure_tunnel('a','t','app.acme.example',runner.split('://')[1].rstrip('/'), aliases=aliases, visual_origin=visual)
+        assert yaml.safe_load((tmp_path/'cloudflared.yml').read_bytes()) == api.calls[-1][2]['config']

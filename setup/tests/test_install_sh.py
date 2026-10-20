@@ -138,6 +138,43 @@ def test_import_does_not_probe_docker(monkeypatch):
     assert calls == []
 
 
+def test_wizard_keeps_private_inbox_settings_across_sudo_by_name_only(tmp_path):
+    # Run the real privilege boundary with a sudo stand-in that drops settings not explicitly preserved.
+    stubs = tmp_path / "bin"
+    stubs.mkdir()
+    scripts = {
+        "id": '#!/bin/sh\necho 1000\n',
+        "sudo": '''#!/bin/sh
+printf '%s\\n' "$*" > "$CAPTURE/argv"
+keep=$2
+for name in TICO_INBOUND_KEY TICO_INBOUND_URL; do
+  case ",$keep," in *",$name,"*) ;; *) unset "$name" ;; esac
+done
+shift 2
+exec "$@"
+''',
+        "python3": '''#!/bin/sh
+umask 077
+printf '%s\\n' "${TICO_INBOUND_KEY:-}" > "$CAPTURE/key"
+printf '%s\\n' "${TICO_INBOUND_URL:-}" > "$CAPTURE/url"
+''',
+    }
+    for name, text in scripts.items():
+        (stubs / name).write_text(text)
+        (stubs / name).chmod(0o755)
+    source = (SCRIPTS / "install.sh").read_text()
+    function = "run_wizard() {" + source.split("run_wizard() {", 1)[1].split("\n}\n", 1)[0] + "\n}\n"
+    script = ('set -eu\nstep() { :; }; ensure_python() { :; }; warn() { :; }; as_root() { "$@"; }\n'
+              'TUNNEL= YES=1 VERSION=v1.2.3 DIR="$CAPTURE"\n' + function + "run_wizard --non-interactive\n")
+    key, url = "tin_private-0123456789abcdefghijklmnopqrstuv", "https://inbox.private.example"
+    result = subprocess.run(["sh", "-c", script], env={"PATH": f"{stubs}:/usr/bin:/bin", "CAPTURE": str(tmp_path),
+                            "TICO_INBOUND_KEY": key, "TICO_INBOUND_URL": url}, capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (tmp_path / "key").read_text().strip() == key and (tmp_path / "url").read_text().strip() == url
+    shown = result.stdout + result.stderr + (tmp_path / "argv").read_text()
+    assert key not in shown and url not in shown
+
+
 def test_docker_is_ready_returns_false_on_nonzero_exit(monkeypatch):
     monkeypatch.setattr(shutil, "which", lambda _: "/usr/bin/docker")
     calls = []

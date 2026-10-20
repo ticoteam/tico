@@ -32,13 +32,18 @@ function machineConnections(machine) {
       rows.push({key: `profile:${p.name}:${runtime}`, runtime, name: p.display_name || p.name, profile: p, own: false, state: {...state}, bots});
     }
   }
-  for (const [runtime, value] of Object.entries(runtimes)) {
+  // A tool a shared key serves is listed even when the computer has not reported that tool (or anything) yet.
+  for (const runtime of [...new Set([...Object.keys(runtimes), ...Object.keys(machine.shared_with || {})])]) {
+    const value = runtimes[runtime];
     const bots = links.filter(b => !b.profile && b.runtime === runtime).map(b => b.bot);
     const auth = value?.authenticated;
+    // A shared key that serves this computer (`shared_with`, backend/computer_keys.py serving) is a connection here
+    // even before the tool reports it signed in; until it does, the line says so and claims no reading.
+    const shared = machine.shared_with?.[runtime] || null;
     // Signed out from Tico (Sign out) stays a line, so it can sign in again or go back to the shared key.
-    if (!(auth === 'ready' || auth === 'rejected' || bots.length || machineSignedOut(machine, runtime))) continue;
-    const reading = {signed_in: auth === 'ready' ? true : ['missing', 'rejected'].includes(auth) ? false : null,
-      account: value.account, weekly: value.weekly, five_hour: value.five_hour};
+    if (!(auth === 'ready' || auth === 'rejected' || bots.length || machineSignedOut(machine, runtime) || shared)) continue;
+    const reading = {signed_in: auth === 'ready' ? true : auth === 'rejected' || (auth === 'missing' && !shared) ? false : null,
+      account: value?.account, weekly: value?.weekly, five_hour: value?.five_hour};
     // The same provider account as a named subscription here: one line, one reading (the newer one). The server
     // names it in `same_account`, since only an admin or the operator receives the accounts themselves.
     const email = auth === 'ready' && machineEmail(value.account), match = auth === 'ready' && machine.same_account?.[runtime];
@@ -48,7 +53,7 @@ function machineConnections(machine) {
       if (machineNewer(value.weekly, same.state.weekly)) Object.assign(same.state, {weekly: value.weekly, five_hour: value.five_hour});
       continue;
     }
-    rows.push({key: `own:${runtime}`, runtime, name: "Computer's login", profile: null, own: true, auth, value, state: reading, bots});
+    rows.push({key: `own:${runtime}`, runtime, name: shared ? 'Shared key' : "Computer's login", profile: null, own: true, auth, value, state: reading, bots, shared});
   }
   // Bots on a subscription this computer does not have (or that does not cover their tool).
   for (const b of links) {
@@ -67,6 +72,9 @@ function machineConnections(machine) {
   }
   return rows.sort((a, b) => a.tool.localeCompare(b.tool) || Number(b.own) - Number(a.own) || a.name.localeCompare(b.name));
 }
+// The connections to show: before the computer's first report, only the shared keys that serve it (nothing else is
+// known yet, and a bot's subscription it has not reported is not missing).
+const machineShown = machine => machineReported(machine) ? machineConnections(machine) : machineConnections(machine).filter(conn => conn.shared);
 
 // What is left of the weekly allowance, as a whole percent; null with no current reading.
 function machineLeft(weekly) {
@@ -74,12 +82,11 @@ function machineLeft(weekly) {
   if (!Number.isFinite(weekly?.used_percent) || (Number.isFinite(reset) && reset <= Date.now())) return null;
   return Math.round(100 - Math.min(100, Math.max(0, weekly.used_percent)));
 }
-// "33% left · resets Thu 12:06 AM · as of 2m ago", or what is known when there is no reading.
+// "33% left · resets Thu 12:06 AM", or what is known when there is no reading.
 function machineLeftWords(weekly) {
   const left = machineLeft(weekly), reset = Date.parse(weekly?.resets_at);
   if (left === null) return weekly ? 'Previous week\'s reading; refresh needed' : 'No usage reading yet';
-  return [`${left}% left`, Number.isFinite(reset) ? `resets ${machineReset(reset)}` : '',
-    weekly.reported_at ? `as of ${ago(weekly.reported_at)}` : ''].filter(Boolean).join(' · ');
+  return [`${left}% left`, Number.isFinite(reset) ? `resets ${machineReset(reset)}` : ''].filter(Boolean).join(' · ');
 }
 function machineAttentionWords(conn) {
   if (conn.missing) return conn.problem;
@@ -88,10 +95,15 @@ function machineAttentionWords(conn) {
   const what = conn.keyCleared ? 'No key' : 'Signed out';
   return conn.bots.length ? `${what}; bots use it` : what;
 }
+// "Shared with Alpha, Bravo", or "Shared with every computer (…)" for the "Every computer" key in Credentials.
+function machineSharedWords(shared) {
+  const names = (shared.computers || []).map(c => c.label).join(', ');
+  return shared.every ? `Shared with every computer${names ? ` (${names})` : ''}` : `Shared with ${names}`;
+}
 // One chip per connection: the tool, a thin bar and the % left; a red dot only when it needs attention.
 function machineChipHTML(machine, conn) {
   const left = machineLeft(conn.state.weekly), warn = machineAttentionWords(conn);
-  const title = [`${conn.tool} · ${conn.name}${conn.own && conn.profile ? " (Computer's login)" : ''}`, warn, machineLeftWords(conn.state.weekly)].filter(Boolean).join(' · ');
+  const title = [`${conn.tool} · ${conn.name}${conn.own && conn.profile ? " (Computer's login)" : ''}`, conn.shared ? machineSharedWords(conn.shared) : '', warn, machineLeftWords(conn.state.weekly)].filter(Boolean).join(' · ');
   return `<button type="button" class="machine-chip${conn.attention ? ' attention' : ''}" data-computer-open="${esc(machine.id)}" data-chip="${esc(conn.key)}" title="${esc(title)}" aria-label="${esc(title)}">`
     + `${conn.attention ? '<span class="machine-chip-dot" aria-hidden="true"></span>' : ''}<span>${esc(conn.tool)}</span>`
     + `${left !== null ? `<meter class="machine-chip-bar" min="0" max="100" low="20" optimum="100" value="${left}" aria-hidden="true"></meter><span class="machine-chip-pct">${left}%</span>` : ''}</button>`;
@@ -99,27 +111,37 @@ function machineChipHTML(machine, conn) {
 function machineChipsHTML(machine) {
   if (machine.revoked_at) return '<span class="muted">—</span>';
   const waiting = machineWaiting(machine) ? `<span class="machine-chip waiting" data-machine-waiting>Waiting for ${esc(machine.label)}</span>` : '';
-  if (!machineReported(machine)) return waiting;
-  const conns = machineConnections(machine);
+  const conns = machineShown(machine);
+  if (!machineReported(machine)) return conns.length ? `<div class="machine-chips">${conns.map(conn => machineChipHTML(machine, conn)).join('')}${waiting}</div>` : waiting;
   const chips = conns.map(conn => machineChipHTML(machine, conn)).join('')
     || `<button type="button" class="machine-chip attention" data-computer-open="${esc(machine.id)}" data-no-connection><span class="machine-chip-dot" aria-hidden="true"></span><span>No AI connection</span></button>`;
-  return `<div class="machine-chips">${chips}${waiting}</div>`;
+  return `<div class="machine-chips">${chips}${waiting}${machineRowAddHTML(machine)}</div>`;
+}
+// One Add per computer, after its chips: the same Add connection pop-up as in the computer's own.
+function machineRowAddHTML(machine) {
+  if (machine.revoked_at || !machineCanSignIn(machine)) return '';
+  const online = machineOnline(machine);
+  return `<button type="button" class="machine-chip machine-chip-add" data-add-connection="${esc(machine.id)}" aria-label="Add connection to ${esc(machine.label)}"${online ? '' : ' disabled title="Computer is offline"'}>+ Add</button>`;
 }
 
 // ---- the pop-up
 function machineConnectionHTML(machine, conn, online, manage) {
   const c = {runner_id: machine.id, label: machine.label};
-  const kind = conn.profile ? `Subscription · ${conn.name}` : "Computer's login";
-  const tags = [conn.own && conn.profile ? '<span class="pill computer-conn-own">Computer\'s login</span>' : ''].join('');
+  const kind = conn.profile ? `Subscription · ${conn.name}` : conn.shared ? `API key${conn.shared.name ? ` · ${conn.shared.name}` : ''}` : "Computer's login";
+  const tags = [conn.own && conn.profile ? '<span class="pill computer-conn-own">Computer\'s login</span>' : '',
+    conn.shared ? '<span class="pill computer-conn-shared" data-shared>Shared</span>' : ''].join('');
   let signIn;
   if (conn.missing) signIn = `<span class="pill fail">${esc(conn.problem)}</span>`;
   else if (conn.profile) signIn = machineProfileSignIn(conn.state, conn.runtime);
+  // A shared key the tool has not reported signing in with yet: nothing is claimed until it has.
+  else if (conn.shared && conn.auth !== 'ready' && conn.auth !== 'rejected') signIn = `<span class="muted" data-shared-waiting>Not checked on ${esc(machine.label)} yet; it is used from the computer's next key check</span>`;
   else signIn = machineSignInHTML(machine, online, conn.runtime, conn.auth, conn.value)
     + (conn.auth === 'ready' ? machineKeyHTML(machine, conn.runtime, conn.value?.key) : '');
   const offline = online ? '' : ' disabled title="Computer is offline"';
   const sep = '<span class="computer-conn-sep" aria-hidden="true"> · </span>';
   // "No key · Add key" for a key cleared from here: adding one is the way back (a sign-in or the shared key also are).
-  const addKey = manage && !conn.missing && !conn.profile && conn.state.signed_in !== true;
+  // Not on a shared key's line: Replace key / Clear key act on it there.
+  const addKey = manage && !conn.missing && !conn.profile && !conn.shared && conn.state.signed_in !== true;
   let action = addKey && conn.keyCleared ? sep + machineKeyActions(machine, online, conn.runtime, null, false).trimStart() : '';
   if (manage && conn.state.signed_in !== true && !conn.missing) {
     // "Signed out · Sign in": the way back sits next to what is wrong.
@@ -129,8 +151,9 @@ function machineConnectionHTML(machine, conn, online, manage) {
   // Switch account / Sign out (or Use the shared key) per login, from ui/model-login.js; disabled offline. On the
   // computer's own login a key signs in, Replace key / Clear key stand in for them. A line that is both the computer's
   // login and a subscription names which login each pair acts on.
-  const key = conn.value?.key && harnessCaps(conn.runtime).api_keys === 'computer';
+  const key = (conn.value?.key || conn.shared) && harnessCaps(conn.runtime).api_keys === 'computer';
   const login = (profile, signedIn) => !manage || conn.missing ? ''
+    : !profile && conn.shared && key ? machineKeyActions(machine, online, conn.runtime, conn.value?.key || {name: '', source: 'shared'}, true)
     : !profile && signedIn && key ? machineKeyActions(machine, online, conn.runtime, conn.value.key, true)
     : machineLoginActions(machine, online, conn.runtime, profile, signedIn);
   if (conn.own && conn.profile) {
@@ -155,6 +178,7 @@ function machineConnectionHTML(machine, conn, online, manage) {
     <div class="computer-conn-head">${conn.attention ? '<span class="machine-chip-dot" aria-hidden="true"></span>' : ''}<strong>${esc(conn.tool)}</strong><span>${esc(kind)}</span>${tags}</div>
     <div class="computer-conn-signin">${signIn}${action}${rejected}</div>
     ${usage ? `<div class="computer-conn-usage">${usage}</div>` : ''}
+    ${conn.shared ? `<div class="computer-conn-shared-with muted" data-shared-with>${esc(machineSharedWords(conn.shared))}</div>` : ''}
     <div class="computer-conn-bots muted">${esc(bots)}</div>${shared}
     ${tools || note ? `<div class="computer-conn-tools">${tools}${note ? `<span class="muted" role="status">${esc(note)}</span>` : ''}</div>` : ''}
   </div>`;
@@ -312,7 +336,7 @@ function machineBotsHTML(machine) {
   return `${rows ? `<ul class="computer-detail-bots">${rows}</ul>` : '<p class="muted">No bots on this computer.</p>'}
     <a href="#/settings" data-computer-bots="${esc(machine.id)}">Assign on the Bots page</a>`;
 }
-// Each AI tool's version and whether it is enabled here, then the owner's install and update actions.
+// Each AI tool's version, then the owner's install and update actions.
 function machineVersionsHTML(machine, online) {
   const runtimes = machine.readiness?.runtimes || {};
   const tools = Object.entries(machine.readiness?.harnesses || {}).map(([id, tool]) => ({...tool, id}));
@@ -327,15 +351,13 @@ function machineVersionsHTML(machine, online) {
   const rows = names.map(name => {
     const tool = toolFor(name), value = runtimes[name] || {};
     const installed = value.installed || tool.installed, version = installed ? (tool.version || value.version || '') : '';
-    // Enabled is the owner's choice per computer, always on for what its bots run on; an older runner cannot say.
-    const enabled = !tool.id ? '' : botRuntimes.has(name) || (choices[tool.id] ?? (tool.wanted || tool.installed)) ? 'Enabled' : 'Off';
     return `<div class="machine-tool" role="row" data-machine-tool="${esc(name)}">
       <span role="cell" class="machine-tool-name">${esc(tool.name || harnessWords(name))}</span>
-      <span role="cell" class="machine-tool-version"${version ? ` title="${esc(version)}"` : ''}>${installed ? esc(version || 'Installed') : '<span class="muted">Not installed</span>'}</span>
-      <span role="cell" class="machine-tool-enabled"${botRuntimes.has(name) ? ' title="Its bots use it"' : ''}>${enabled ? esc(enabled) : '<span class="muted">—</span>'}</span></div>`;
+      <span role="cell" class="machine-tool-version"${version ? ` title="${esc(version)}"` : ''}>${installed ? esc(version || 'Installed') : '<span class="muted">Not installed</span>'}</span></div>`;
   }).join('');
-  const table = rows ? `<div class="machine-tools" role="table" aria-label="AI tools on ${esc(machine.label)}"><div class="machine-tool machine-tool-head" role="row">
-    <span role="columnheader">Tool</span><span role="columnheader">Installed</span><span role="columnheader">Enabled</span></div>${rows}</div>` : '<p class="muted">No AI tools reported.</p>';
+  // Whether a tool is kept installed is the owner's toggle under Installation and updates, not a column here.
+  const table = rows ? `<div class="machine-tools machine-tools-2" role="table" aria-label="AI tools on ${esc(machine.label)}"><div class="machine-tool machine-tool-head" role="row">
+    <span role="columnheader">Tool</span><span role="columnheader">Version</span></div>${rows}</div>` : '<p class="muted">No AI tools reported.</p>';
   // The owner's Update / Pin actions and on/off per tool; the computer applies them between turns
   // (backend/harness_actions.py, runner-rs/src/harness_tools.rs).
   const asked = new Set((machine.harness_actions || []).filter(row => ['requested', 'running'].includes(row.state)).map(row => `${row.harness}:${row.action}`));
@@ -350,12 +372,12 @@ function machineVersionsHTML(machine, online) {
     const tone = value.state === 'failed' ? 'fail' : !value.installed || busy || value.update_available ? 'waiting' : '';
     const buttons = owner && value.installed && !busy ? [
       value.update_available ? harnessAction(id, 'update', 'Update') : '',
-      value.pinned ? harnessAction(id, 'unpin', 'Resume updates') : (value.version ? harnessAction(id, 'pin', 'Pin to this version') : '')].join('') : '';
+      value.pinned ? harnessAction(id, 'unpin', 'Resume updates') : (value.version ? harnessAction(id, 'pin', 'Stop updates') : '')].join('') : '';
     const title = [value.detail, value.managed ? '' : (value.installed ? 'Installed outside Tico; update it where it was installed' : '')].filter(Boolean).join(' · ');
     const needed = botRuntimes.has(value.runtime);
     const on = needed || (choices[id] ?? (value.wanted || value.installed));
     const toggle = S.me?.role === 'owner' && !machine.revoked_at
-      ? ` <label class="machine-harness-toggle"${needed ? ' title="Its bots use it"' : ''}><input type="checkbox" aria-label="Enable ${esc(value.name || id)} on ${esc(machine.label)}" data-harness-choice="${esc(id)}" data-runner="${esc(machine.id)}"${on ? ' checked' : ''}${needed || !online ? ' disabled' : ''}> Enabled</label>` : '';
+      ? ` <label class="machine-harness-toggle"${needed ? ' title="Its bots use it"' : ''}><input type="checkbox" aria-label="Keep ${esc(value.name || id)} installed on ${esc(machine.label)}" data-harness-choice="${esc(id)}" data-runner="${esc(machine.id)}"${on ? ' checked' : ''}${needed || !online ? ' disabled' : ''}> Keep installed</label>` : '';
     return `<span class="machine-harness-item" data-harness-chip="${esc(id)}"><span class="pill ${tone}" title="${esc(title)}">${esc(text)}</span>${toggle}${buttons}</span>`;
   };
   // The owner sees every model CLI, to turn one on; everyone else what is there.
@@ -365,7 +387,7 @@ function machineVersionsHTML(machine, online) {
   const facts = [`Tico ${machine.version || 'version not reported'}`, machine.platform || '',
     engine?.name ? `<span title="${esc(engine.note || engine.build || '')}">${engine.name === 'rust' ? 'Rust' : 'Python'} runner</span>` : ''].filter(Boolean);
   return `<p class="computer-detail-facts">${facts.map((fact, i) => i === 2 ? fact : esc(fact)).join(' · ')}</p>${window.runnerUpdateHtml?.(machine.update, machine.version) || ''}
-    ${table}${machineAppsHtml(machine)}${harnesses ? `<details data-machine-details="${esc(machine.id)}:tools"><summary>Installation and updates</summary><p class="settings-cell-note">Enabled tools stay installed.</p><div class="machine-harnesses">${harnesses}</div></details>` : ''}`;
+    ${table}${machineAppsHtml(machine)}${harnesses ? `<details data-machine-details="${esc(machine.id)}:tools"><summary>Installation and updates</summary><div class="machine-harnesses">${harnesses}</div></details>` : ''}`;
 }
 function machineScreenSectionHTML(machine, online) {
   // Screen (Off / View / Control): offered once the computer itself has a screen turned on (`screen_available`),
@@ -391,7 +413,7 @@ function machineSettingsHTML(machine) {
 }
 function computerDetailHTML(machine) {
   const online = machineOnline(machine), manage = !machine.revoked_at && machineCanSignIn(machine);
-  const conns = machineReported(machine) ? machineConnections(machine) : [];
+  const conns = machineShown(machine);
   const status = machine.revoked_at ? 'revoked' : online ? 'online' : `offline${machine.last_seen ? ` · last seen ${ago(machine.last_seen)}` : ''}`;
   const notes = [!machine.revoked_at && !online ? '<p class="computer-detail-note" role="status" data-computer-offline>Computer is offline. Sign-in, usage refresh, screen and updates wait until it is back.</p>' : '',
     machineWaiting(machine) ? `<p class="computer-detail-note" role="status" data-machine-waiting>Waiting for ${esc(machine.label)} to report.</p>` : ''].join('');

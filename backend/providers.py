@@ -276,7 +276,7 @@ class NoProvider(ProviderError):
     def __init__(self, what="This bot"):
         super().__init__(
             "no_provider", f"{what} has no runtime or model and the company has no default. Choose "
-            "which AI providers you use and a default model in Settings > AI providers "
+            "which AI providers you use and a default model in Settings > Computers "
             "(or run `tico env create ... --providers ...` / set TICO_ENABLED_PROVIDERS).", 409)
 
 
@@ -407,7 +407,7 @@ def env_seed(settings):
 
 def with_gateway(record, connected):
     """`record` with the Tico AI Gateway's provider on exactly while its connection has a key: it is never the owner's
-    to tick, so it follows Settings > AI providers > Tico AI Gateway (backend/gateway_connection.py)."""
+    to tick, so it follows Settings > Computers > Tico AI Gateway (backend/gateway_connection.py)."""
     enabled = [name for name in record["enabled"] if not PROVIDER_BY_ID[name].get("gateway")]
     if connected:
         enabled += [row["id"] for row in PROVIDERS if row.get("gateway")]
@@ -607,7 +607,7 @@ def check_choice(record, author, available=None):
         return row
     raise ProviderError("check_model", "No check model from a provider other than "
                         f"{PROVIDER_BY_ID[own]['label'] if own else 'the author'}: enable or sign in another AI "
-                        "provider in Settings > AI providers, or name one with --check-model", 409)
+                        "provider in Settings > Computers, or name one with --check-model", 409)
 
 
 # ----------------------------------------------------------------------------- resolution

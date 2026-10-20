@@ -20,10 +20,12 @@ from fastapi import Request
 from fastapi.responses import JSONResponse, Response
 
 from clients import hubtools
+from clients.tico import inbound_wait_timeout
 from .store import Problem
 
 PATH = "/api/v2/mcp"
 INTERNAL_TIMEOUT_S = 60
+FUTURE_MARGIN_S = 5
 MAX_CONTENT_BYTES = 1024 * 1024
 
 
@@ -66,19 +68,26 @@ class InProcessApi:
                         "User-Agent": "Tico-MCP/" + hubtools.SERVER_INFO["version"]}
 
     def _run(self, method, path, body=None, key=None, query=None, delegate=False):
+        path = "/api/v2/" + path.replace("#", "%23")
+        timeout = inbound_wait_timeout(method, path, body, INTERNAL_TIMEOUT_S, query=query)
         async def go():
             transport = httpx.ASGITransport(app=self.app)
             async with httpx.AsyncClient(transport=transport, base_url=self.base_url,
-                                         timeout=INTERNAL_TIMEOUT_S) as client:
+                                         timeout=timeout) as client:
                 headers = dict(self.headers)
                 if delegate:
                     headers["X-Tico-On-Behalf-Of"] = delegate if isinstance(delegate, str) else "turn"
                 if method.upper() in ("POST", "PUT", "PATCH", "DELETE"):
                     headers["Idempotency-Key"] = key or hubtools_key()
-                # A task number ("tasks/#18945") is in the path, not a fragment.
-                return await client.request(method, "/api/v2/" + path.replace("#", "%23"), json=body,
+                return await client.request(method, path, json=body,
                                             headers=headers, params=query or None)
-        response = asyncio.run_coroutine_threadsafe(go(), self.loop).result(INTERNAL_TIMEOUT_S + 5)
+        future = asyncio.run_coroutine_threadsafe(go(), self.loop)
+        try:
+            response = future.result(timeout + FUTURE_MARGIN_S)
+        except TimeoutError:
+            future.cancel()
+            raise ApiProblem("unavailable", "Tico did not answer before the request deadline", 504,
+                             retryable=True, operation_id=key) from None
         if response.headers.get("content-disposition"):
             payload = response_content(response)
         else:

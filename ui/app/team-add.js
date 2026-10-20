@@ -101,9 +101,14 @@ function teamAddDialog(title, body) {
 }
 function teamAddBot() {
   const dialog = teamAddDialog('Add bot', `<div class="team-add-choices">
+    <button type="button" data-team-recruit><strong>Tico Recruit</strong><span>Describe the role, review candidate pitches, then create your bot.</span></button>
     <button type="button" data-team-template><strong>From template</strong><span>Choose a bot and adjust its instructions.</span></button>
     <button type="button" data-team-botops><strong>Ask BotOps</strong><span>Create a custom bot, or get help connecting one you already have. Share its folder and computer, or a GitHub URL.</span></button>
   </div>`);
+  dialog.querySelector('[data-team-recruit]').onclick = () => {
+    if (!teamAddCanBot()) return;
+    dialog.close('next'); void settingsRecruitFlow();
+  };
   dialog.querySelector('[data-team-template]').onclick = () => {
     if (!teamAddCanBot()) return;
     dialog.close('next'); void settingsCatalogPicker();

@@ -227,7 +227,7 @@ class Deployer:
             MetadataOptions={"HttpTokens": "required", "HttpPutResponseHopLimit": 1, "HttpEndpoint": "enabled"},
             BlockDeviceMappings=[{"DeviceName": "/dev/sda1" if self.p.os_family == "ubuntu" else "/dev/xvda",
                                   "Ebs": {"VolumeSize": VOLUME_GIB, "VolumeType": "gp3", "Encrypted": True, "DeleteOnTermination": True}}],
-            TagSpecifications=[{"ResourceType": rt, "Tags": tags(self.p.name, n)} for rt in ("instance", "volume")])
+            TagSpecifications=[{"ResourceType": rt, "Tags": tags(self.p.name, n)} for rt in ("instance", "volume", "network-interface")])
         if subnet:
             args["SubnetId"] = subnet
         for attempt in range(8):  # a new instance profile takes a few seconds to be usable

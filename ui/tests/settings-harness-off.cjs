@@ -65,6 +65,10 @@ const {unrouted} = require('./support/routes.cjs');
     const openAdd = async () => {
       await page.locator('[data-settings-tab=bots]').click();
       await page.locator('#settings-add-bot').click();
+      await page.locator('[data-recruit-route=scratch]').click();
+      await page.locator('#recruit-picker [name=title]').fill('Harness test bot');
+      await page.locator('#recruit-picker [name=brief]').fill('Check the available harness choices for this new bot.');
+      await page.locator('#recruit-picker [type=submit]').click();
       await page.locator('[data-add-choice] [data-choice-harness]').waitFor();
     };
     const harnessOptions = () => page.locator('[data-add-choice] [data-choice-harness] option').evaluateAll(
@@ -82,7 +86,7 @@ const {unrouted} = require('./support/routes.cjs');
     assert.ok(options.some(o => o.value === 'hermes' && !o.disabled), 'external harnesses are unaffected');
     const note = page.locator('[data-add-choice] [data-choice-off]');
     await note.waitFor();
-    assert.match(await note.innerText(), /Muse Code.*AI providers/, 'the note names Muse Code and AI providers');
+    assert.match(await note.innerText(), /Muse Code.*Models/, 'the note names Muse Code and Models');
     await note.locator('[data-off-providers]').click();
     await page.locator('#set-providers').waitFor();
     await page.evaluate(() => document.querySelector('#bot-editor').close());

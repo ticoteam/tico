@@ -1,4 +1,4 @@
-"""The Tico AI Gateway connection in Settings > AI providers: one gateway key and the Gateway's URL.
+"""The Tico AI Gateway connection in Settings > Computers: one gateway key and the Gateway's URL.
 
 It is the one key for everything the app asks the Gateway (clients/gateway.py): Decide's questions and the bots that run
 on Tico Cheap, Mid and Power 1.0. The server's environment may set it (`TICO_GATEWAY_KEY`, `TICO_GATEWAY_URL`), which
@@ -14,11 +14,19 @@ The Gateway's own word on the key (`<base>/key`: working, revoked, how much of t
 save, on Check now, when the owner opens the page and hourly (backend/scheduler.py), never more than once a minute
 unasked (`check_soon`: the Gateway answers it 6 times a minute per key), and kept with the connection for Settings and
 Health.
+
+An install can also get its own key with no one copying it (`auto_tick`): when the install command sets an invite
+(`TICO_GATEWAY_INVITE`) and no key is set, the server enrolls at start and hourly, keeps the key sealed like a pasted
+one with `origin: "automatic"`, and swaps it for a new one when the Gateway says (`rotate_after`). The install's id and
+secret (sealed) prove it is the same install if it ever loses the key. A pasted or environment key always wins. When Tico
+turns the install off, enrolling stops and Health says so in plain words.
 """
 
+import datetime
 import hashlib
 import json
 import os
+import secrets
 import threading
 import time
 
@@ -32,7 +40,30 @@ PROVIDER = "tico"
 ENV_KEY, ENV_URL = "TICO_GATEWAY_KEY", "TICO_GATEWAY_URL"
 # What a Tico-model bot's run gets them as. Not TICO_: the runner keeps those names for itself (runner-rs/src/env.rs).
 RUN_KEY_ENV, RUN_URL_ENV = "TICOAI_GATEWAY_KEY", "TICOAI_GATEWAY_URL"
+# The bot's opaque id for the Gateway's ledger, to the runner's relay only (runner-rs/src/gateway_relay.rs).
+RUN_BOT_ENV = "TICOAI_GATEWAY_BOT"
 MODEL_PREFIX = "tico-"
+INVITE_ENV = "TICO_GATEWAY_INVITE"
+INSTALL_CONTEXT = "gateway-connection:install"
+AUTOMATIC = "automatic"
+SYSTEM = "system:gateway"
+# What Health says once Tico has turned this install off: it then never asks again under the same invite.
+STOPPED = "Tico AI Gateway was turned off for this install by Tico. Contact support."
+# Refusals that mean "this key is gone, but the install may still be welcome": enroll again with the install's secret.
+ENROLL_AGAIN = (G.REVOKED_KEY, G.UNKNOWN_KEY, "already_rotated", "not_enrolled")
+# Why an enroll did not work, for the owner on Health; anything else is a plain "try again later".
+AUTO_MESSAGES = {
+    "invalid_invite": "Tico AI Gateway could not connect automatically: the invite code in the install command is not "
+                      "one Tico made. Ask Tico Team for a new one, or paste a gateway key here.",
+    "invite_expired": "Tico AI Gateway could not connect automatically: the invite code has expired. Ask Tico Team for a "
+                      "new one, or paste a gateway key here.",
+    "invite_used_up": "Tico AI Gateway could not connect automatically: the invite code has been used by all the "
+                      "installs it allows. Ask Tico Team for a new one, or paste a gateway key here.",
+    "invite_revoked": "Tico AI Gateway could not connect automatically: Tico cancelled the invite code. Ask Tico Team "
+                      "for a new one, or paste a gateway key here.",
+}
+AUTO_LATER = "Tico AI Gateway could not connect automatically yet. Tico tries again every hour."
+_auto_lock = threading.Lock()
 # Unasked checks (page loads, the hourly sweep) are at least this far apart for one key.
 CHECK_EVERY = 60
 _tried, _tried_lock = {}, threading.Lock()
@@ -92,13 +123,18 @@ def url(c, settings=None):
 
 
 def view(c, settings=None, *, manage=False):
-    """What Settings > AI providers shows. Never the key; its preview and the Gateway's last word only to the people
+    """What Settings > Computers shows. Never the key; its preview and the Gateway's last word only to the people
     who manage the connection (`manage`: the owner)."""
     record, where = _row(c), source(c, settings)
     out = {"label": G.LABEL, "connected": bool(where), "source": where, "url": url(c, settings),
-           "default_url": G.DEFAULT_BASE, "editable": where != "environment"}
+           "default_url": G.DEFAULT_BASE, "editable": where != "environment",
+           "automatic": where == "settings" and record.get("origin") == AUTOMATIC}
     if not manage:
         return out
+    auto = record.get("auto") if isinstance(record.get("auto"), dict) else {}
+    # Cleared by the owner, or turned off by Tico (and since turned back on there): the owner may try again.
+    out["auto_off"] = bool(auto.get("off") or auto.get("stopped")) and not where and (bool(invite(settings))
+                                                                         or _identity(record))
     check = record.get("check") if isinstance(record.get("check"), dict) else {}
     # A check is about the key it was made with: one made before the key changed (or under the environment's) is none.
     fresh = check if check.get("for") == _fingerprint(c, settings) else {}
@@ -123,7 +159,11 @@ def _fingerprint(c, settings=None):
 
 
 def key_id(c, settings=None):
-    """A non-secret id of the gateway key in use, for usage records (`_fingerprint`): never the key, '' with none."""
+    """A non-secret id of the gateway key in use, for usage records: the Gateway's own id of an automatic key (`gk_`),
+    else `_fingerprint`. Never the key; '' with none."""
+    record = _row(c)
+    if source(c, settings) == "settings" and record.get("origin") == AUTOMATIC and record.get("key_id"):
+        return str(record["key_id"])
     return _fingerprint(c, settings)
 
 
@@ -169,6 +209,8 @@ def save(c, vault, who, body, now, settings=None):
             raise Problem("vault_unavailable", "Credentials are not set up on this server, so a key cannot be stored", 503)
         after["key"] = vault.cipher.seal(c, CONTEXT, secret)
         after["preview"] = secret[:3] + "…" + secret[-3:] if len(secret) >= 12 else "••••••"
+        for field in ("origin", "key_id", "rotate_after"):
+            after.pop(field, None)                        # a pasted key is the owner's: never rotated or replaced
     elif not before.get("key"):
         raise Problem("key", "Paste the gateway key Tico gave you", 422)
     after.pop("check", None)
@@ -188,13 +230,32 @@ def clear(c, who, now, settings=None):
         return _public(before), _public(before)
     after = {"url": before.get("url", ""), "revision": int(before.get("revision") or 0) + 1, "updated": now,
              "updated_by": who.actor}
+    for field in ("install", "install_secret"):
+        if before.get(field):
+            after[field] = before[field]                  # the install stays itself if it connects again
+    if before.get("origin") == AUTOMATIC:
+        after["auto"] = {"off": True, "at": now}          # cleared on purpose: not enrolled again behind the owner's back
     _write(c, after)
     H.event(c, who.actor, "gateway.connection.cleared", PROVIDER, {"revision": after["revision"]})
     return _public(before), _public(after)
 
 
 def _public(record):
-    return {k: v for k, v in record.items() if k not in ("key", "check")}
+    return {k: v for k, v in record.items() if k not in ("key", "check", "install_secret")}
+
+
+def automatic_on(c, who, now):
+    """Let the install connect automatically again after the owner cleared its automatic key, or after Tico turned the
+    install back on: the next `auto_tick` enrolls with the install's own secret."""
+    owner_only(who)
+    record = _row(c)
+    auto = record.get("auto") if isinstance(record.get("auto"), dict) else {}
+    if not auto.get("off") and not auto.get("stopped"):
+        return False
+    record.pop("auto", None)
+    _write(c, record)
+    H.event(c, who.actor, "gateway.connection.automatic_on", PROVIDER, {})
+    return True
 
 
 def record_check(c, result, fingerprint, now, settings=None):
@@ -228,7 +289,9 @@ def check_soon(store, vault, settings=None, opener=None):
     """`check_now` on a background thread, unless this key was asked about less than CHECK_EVERY seconds ago. For the
     checks nobody pressed a button for: the page opening and the hourly sweep. Returns the thread, or None."""
     with store.read() as c:
-        fingerprint = _fingerprint(c, settings)
+        record = _row(c)
+        fingerprint = _fingerprint(c, settings) or ("invite:" + _invite_mark(invite(settings)) if invite(settings) else
+                                                    "install:" + record["install"] if _identity(record) else "")
     if not fingerprint:
         return None
     now = time.monotonic()
@@ -246,6 +309,13 @@ def check_later(store, vault, settings=None, opener=None):
             check_now(store, vault, settings, opener)
         except Exception:
             pass                                          # the next check tries again; the last answer stays
+        try:
+            with store.read() as c:
+                due = maintained(c, settings)
+            if due:
+                auto_tick(store, vault, settings, opener)  # a refused automatic key is replaced, or the stop recorded
+        except Exception:
+            pass
     thread = threading.Thread(target=run, name="gateway-check", daemon=True)
     thread.start()
     return thread
@@ -316,8 +386,13 @@ def run_credentials_for(c, vault, settings, who, attempt_id):
     items = run_credentials(c, vault, settings, config.get("model") if is_tico(config.get("model"))
                             else fallback.get("model") if is_tico(fallback.get("model"))
                             else config.get("gateway_fallback"))
+    if items and (bot := bot_header(c, vault, row["bot"])):
+        # The relay sends it on every model call of the turn, in place of anything the turn sends by that name.
+        items.append({"id": "gateway-bot", "name": G.LABEL + " bot", "env": RUN_BOT_ENV, "kind": "text",
+                      "value": bot[G.BOT_HEADER]})
     if items:
-        # Which key paid is fixed now: the runner's relay holds this one for the whole turn (execution.run_usage).
+        # Which key paid is fixed now: the relay holds it for the turn (execution.run_usage). The runner's shared
+        # primary/fallback deadline stays inside HQ's 24-hour rotation grace (runner-rs/src/gateway_relay.rs).
         c.execute("UPDATE attempts SET gateway_key_id=? WHERE id=?", (key_id(c, settings) or None, attempt_id))
         H.event(c, who.actor, "gateway.key_sent", PROVIDER,
                 {"bot": row["bot"], "attempt": attempt_id, "runner": who.runner_id})
@@ -343,8 +418,185 @@ def run_credentials(c, vault, settings, model):
 
 def health(c, settings=None):
     """The Health row for the people who manage the connection, or None when there is nothing to say."""
+    record = _row(c)
+    auto = record.get("auto") if isinstance(record.get("auto"), dict) else {}
+    if not env_key(settings) and not record.get("key") and maintained(c, settings) and not auto.get("off"):
+        if _stopped(auto, settings):
+            return {"status": "bad", "summary": STOPPED}
+        if auto.get("code"):
+            return {"status": "warn", "summary": AUTO_MESSAGES.get(auto["code"], AUTO_LATER)}
     shown = view(c, settings, manage=True)
     if not shown["connected"] or shown["state"] in ("connected", "unchecked", *G.TRANSIENT):
         return None
     status = "warn" if shown["state"] in ("warning", "not_ready") else "bad"
     return {"status": status, "summary": shown["message"]}
+
+
+# ----------------------------------------------------------------------------- automatic key per install
+def invite(settings=None):
+    """The invite code the install command set (`TICO_GATEWAY_INVITE`), or ''. Never typed, shown or logged."""
+    return str(getattr(settings, "gateway_invite", "") or os.environ.get(INVITE_ENV, "")).strip()
+
+
+def _invite_mark(code):
+    """Which invite a stop was made under, without keeping it: a new invite in the install command tries again."""
+    return hashlib.sha256(f"tico-gateway-invite\n{code}".encode()).hexdigest()[:16]
+
+
+def _identity(record):
+    """Whether the install has its own identity (id and sealed secret) from a first enroll."""
+    return bool(record.get("install") and record.get("install_secret"))
+
+
+def maintained(c, settings=None):
+    """Whether the install looks after its own Gateway key: it has an invite to sign up with, or the identity a first
+    sign-up gave it (which keeps rotating and enrolling again by its secret with no invite)."""
+    return bool(invite(settings)) or _identity(_row(c))
+
+
+def _stopped(auto, settings):
+    """Whether Tico's stop holds: with no invite always; with one, only the stop made under that same invite."""
+    mark = auto.get("stopped")
+    return bool(mark) and (not invite(settings) or mark == _invite_mark(invite(settings)))
+
+
+def _utc(value):
+    try:
+        return datetime.datetime.strptime(str(value), "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc)
+    except ValueError:
+        return None
+
+
+def bot_header(c, vault, slug):
+    """{X-Tico-Bot: gb_...} for a Gateway call made for bot `slug` with an automatic key, else {}. The id is opaque
+    (an HMAC under the install's secret), so the Gateway's ledger can tell bots apart without learning their names."""
+    record = _row(c)
+    if not slug or not record.get("install_secret") or not getattr(vault, "configured", False):
+        return {}
+    try:
+        secret = vault.cipher.unseal(c, INSTALL_CONTEXT, record["install_secret"])
+    except Exception:
+        return {}
+    return {G.BOT_HEADER: G.bot_id(secret, slug)}
+
+
+def _due(record, settings, now):
+    """What `auto_tick` should do with the connection as it is: "enroll", "rotate" or None."""
+    if env_key(settings) or getattr(settings, "rehearsal", False):
+        return None
+    if not invite(settings) and not _identity(record):
+        return None                                       # the invite is only needed to make the identity
+    auto = record.get("auto") if isinstance(record.get("auto"), dict) else {}
+    if auto.get("off") or _stopped(auto, settings):
+        return None
+    tried = _utc(auto.get("at")) if auto.get("code") else None
+    if tried and now - tried < datetime.timedelta(hours=1):
+        return None                                       # a failed try waits an hour, however often the page is
+                                                          # opened: HQ allows an address 5 enrolls an hour
+    if not record.get("key"):
+        return "enroll"
+    if record.get("origin") != AUTOMATIC:
+        return None                                       # the owner's pasted key wins
+    check = record.get("check") if isinstance(record.get("check"), dict) else {}
+    if check.get("state") in ("revoked", "unknown") and check.get("for") == f"settings:{record.get('revision', 0)}":
+        return "enroll"                                   # the Gateway refused this key: enroll again by the secret
+    after = _utc(record.get("rotate_after"))
+    return "rotate" if after and now >= after else None
+
+
+def auto_tick(store, vault, settings=None, opener=None, now=None):
+    """Enroll or rotate this install's own key when it is due (`_due`); a network call, so outside any transaction.
+    Returns what it did ("enrolled", "rotated", "stopped", a refusal code) or None when nothing was due."""
+    if not getattr(vault, "configured", False) or not _auto_lock.acquire(blocking=False):
+        return None
+    try:
+        return _auto_tick(store, vault, settings, opener, now or datetime.datetime.now(datetime.timezone.utc))
+    finally:
+        _auto_lock.release()
+
+
+def _auto_tick(store, vault, settings, opener, now):
+    with store.read() as c:
+        record = _row(c)
+        action = _due(record, settings, now)
+        if not action:
+            return None
+        base = url(c, settings)
+        current = vault.cipher.unseal(c, CONTEXT, record["key"]) if action == "rotate" else ""
+        install = str(record.get("install") or "")
+        secret = vault.cipher.unseal(c, INSTALL_CONTEXT, record["install_secret"]) if install and record.get(
+            "install_secret") else ""
+    try:
+        G.safe_base(base)
+    except ValueError:
+        return None                                       # Settings already says the URL is wrong
+    if action == "rotate":
+        status, answer, code = G.rotate(base, current, opener=opener)
+        if status == 201 and answer.get("key"):
+            return _keep(store, vault, record, answer, now, install, secret, "rotated")
+        if code not in ENROLL_AGAIN:
+            return _note(store, record, code or "unreachable", now)
+    if not install or not secret:
+        install, secret = "gi_" + secrets.token_hex(12), "gis_" + secrets.token_urlsafe(32)
+        # Kept before HQ is asked: if HQ enrolls it but the answer is lost, the next try is the same install.
+        with store.transaction() as c:
+            if not _unchanged(c, record):
+                return None
+            record = {**_row(c), "install": install, "install_secret": vault.cipher.seal(c, INSTALL_CONTEXT, secret)}
+            _write(c, record)
+    status, answer, code = G.enroll(base, install, secret, invite(settings), opener=opener)
+    if status == 201 and answer.get("key"):
+        return _keep(store, vault, record, answer, now, install, secret, "enrolled")
+    if code == G.INSTALL_REVOKED:
+        return _note(store, record, code, now, stopped=_invite_mark(invite(settings)))
+    if code == "already_enrolled":
+        record = {**record, "install": "", "install_secret": ""}   # another install has this id: the next try makes a new one
+    return _note(store, record, code or "unreachable", now)
+
+
+def _stamp(now):
+    return now.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _unchanged(c, record):
+    """Whether the connection is as `record` was when the network call started: an owner who pasted or cleared a key
+    meanwhile wins."""
+    return int(_row(c).get("revision") or 0) == int(record.get("revision") or 0)
+
+
+def _keep(store, vault, record, answer, now, install, secret, what):
+    key_value = _clean_key(answer["key"])
+    with store.transaction() as c:
+        if not _unchanged(c, record):
+            return None
+        after = {**{k: v for k, v in record.items() if k not in ("check", "auto")},
+                 "key": vault.cipher.seal(c, CONTEXT, key_value),
+                 "preview": key_value[:3] + "…" + key_value[-3:],
+                 "install": install, "install_secret": vault.cipher.seal(c, INSTALL_CONTEXT, secret),
+                 "origin": AUTOMATIC, "key_id": str(answer.get("key_id") or ""),
+                 "rotate_after": str(answer.get("rotate_after") or ""),
+                 "revision": int(record.get("revision") or 0) + 1, "updated": _stamp(now), "updated_by": SYSTEM}
+        _write(c, after)
+        H.event(c, SYSTEM, f"gateway.connection.{what}", PROVIDER,
+                {"install": install, "key_id": after["key_id"], "revision": after["revision"]})
+    check_later(store, vault, getattr(store, "settings", None))
+    return what
+
+
+def _note(store, record, code, now, stopped=""):
+    """Keep why the last try did not work, for Health and the hour's wait. `stopped`: Tico turned the install off; its
+    key is dropped and nothing is asked again under this invite (or, with none, at all)."""
+    with store.transaction() as c:
+        if not _unchanged(c, record):
+            return None
+        after = dict(record)
+        if stopped:
+            for field in ("key", "preview", "origin", "key_id", "rotate_after", "check"):
+                after.pop(field, None)
+            after["revision"] = int(record.get("revision") or 0) + 1
+            after["auto"] = {"stopped": stopped, "code": code, "at": _stamp(now)}
+            H.event(c, SYSTEM, "gateway.connection.stopped", PROVIDER, {"install": record.get("install", "")})
+        else:
+            after["auto"] = {"code": code, "at": _stamp(now)}
+        _write(c, after)
+    return "stopped" if stopped else code

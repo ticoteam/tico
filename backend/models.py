@@ -517,7 +517,7 @@ class KpiReading(Contract):
 
 
 class GoalProposalCreate(Contract):
-    kind: Literal["goal_wording", "goal_kpi", "kpi_definition", "kpi_target", "flag", "goal_why"]
+    kind: Literal["goal_wording", "goal_kpi", "kpi_definition", "kpi_target", "flag", "goal_why", "recovery"]
     goal_id: str | None = Field(default=None, max_length=200)
     kpi_id: str | None = Field(default=None, max_length=200)
     payload: dict = Field(default_factory=dict)
@@ -531,6 +531,7 @@ class GoalProposalDecision(Contract):
     decision: Literal["confirm", "reject"]
     note: str = Field(default="", max_length=1000)
     why: str | None = Field(default=None, max_length=1000)    # a Why proposal confirmed as edited
+    option: int | None = Field(default=None, ge=0, le=9)     # the option a recovery is confirmed with (its pick if none)
 
 
 # The company at the top of Goals (backend/company.py): only the fields sent change.
@@ -688,7 +689,7 @@ class ApprovalDecision(Contract):
 
 
 class AssistantSettings(Contract):
-    """A person's own Assistant settings (Settings > Assistant)."""
+    """A person's own Assistant settings (Settings > General)."""
     decides_approvals: StrictBool
 
 
@@ -1607,6 +1608,18 @@ class CeoBotSwitch(Contract):
     on: bool
 
 
+class CeoBotLevel(Contract):
+    level: Literal[1, 2, 3]
+
+
+# Several bots' asks waiting on one person, made one CEO Bot item (backend/ceo_merge.py).
+class CeoBotMerge(Contract):
+    person: str = Field(min_length=1, max_length=200)
+    title: str = Field(min_length=1, max_length=300)
+    question: str = Field(min_length=1, max_length=4000)
+    tasks: list[str] = Field(min_length=2, max_length=10)
+
+
 class UsageCountNotice(Contract):
     state: Literal["shown", "dismissed"]
 
@@ -2050,7 +2063,10 @@ class RemovalStart(Contract):
 
 
 class SharedKeyUse(Contract):
+    """Use the shared key again on a signed-out login; with `credential`, Add connection > API key > "Use a shared
+    key": that shared key, attached to this computer (a credential administrator's change)."""
     runtime: Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]*$", max_length=40)]
+    credential: str = Field(default="", max_length=100)
 
 
 class KeyClear(Contract):
@@ -2066,6 +2082,8 @@ class KeyReplace(Contract):
     secret: SecretStr = Field(max_length=4000)
     env: str = Field(default="", max_length=100, pattern=r"^$|^[A-Z_][A-Z0-9_]*$")
     scope: Literal["this", "all"] = "this"
+    # Add connection > API key > "Shared with: [computers]": the other computers it serves (this one always does).
+    share: list[Annotated[str, Field(max_length=100)]] = Field(default_factory=list, max_length=200)
     # Switch to API key: the computer's own login moves off its subscription onto this key once the key works there.
     switch: bool = False
 

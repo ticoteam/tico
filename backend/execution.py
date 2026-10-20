@@ -321,6 +321,42 @@ def isolation_refused(c, who, auth, bot):
                for row, _, seen in _readable_held(c, who, auth, bot))
 
 
+def held_back(c, who, auth, bot, limit=3):
+    """The bot's queued work the claim's interrupted-work fence (unfenced_sql) passes over, as `who` may read it:
+    (count, titles of up to `limit` tasks it is on). Each job waits behind a stopped run on its task or chat until
+    someone reviews that run, so a stopped run with work behind it needs a person, not a later look."""
+    fence, count, titles = auth.task_sql(c, who), 0, []
+    for row in c.execute(f"SELECT m.*,j.attempt_id FROM jobs j JOIN messages m ON m.id=j.message_id "
+                         "JOIN conversations cv ON cv.id=m.conversation_id "
+                         f"WHERE j.bot=? AND j.state='queued' AND j.held=0 AND NOT {unfenced_sql()} "
+                         "ORDER BY j.created", (bot,)).fetchall():
+        if not (privacy.message_readable(c, privacy.actor(who), row)
+                and (not row["attempt_id"] or privacy.attempt_readable(c, privacy.actor(who), row["attempt_id"]))):
+            continue
+        count += 1
+        message = H.message(c, row["id"])
+        task_id = H.message_task_id(message, H.conversation(c, message["conversation_id"]))
+        task = H.task(c, task_id) if task_id else None
+        if (task and task["title"] not in titles and len(titles) < limit
+                and H.task_private_readable(c, privacy.actor(who), task)
+                and c.execute(f"SELECT 1 FROM tasks WHERE id=? AND {fence}", (task["id"],)).fetchone()):
+            titles.append(task["title"])
+    return count, titles
+
+
+def left_by_keeper(c, who, bot):
+    """How many of the bot's runs saved for later that `who` may read rode on a stopped run whose own request the
+    keeper already settled (auto_reconcile): it decided that one and could not decide these safely, so nobody else
+    was going to look at them."""
+    return sum(privacy.message_readable(c, privacy.actor(who), row)
+               and privacy.attempt_readable(c, privacy.actor(who), row["attempt_id"])
+               for row in c.execute("SELECT m.*,j.attempt_id FROM jobs j JOIN messages m ON m.id=j.message_id "
+                                    "JOIN attempts a ON a.id=j.attempt_id "
+                                    "JOIN job_recovery r ON r.job_id=a.job_id AND r.attempt_id=a.id "
+                                    "WHERE j.bot=? AND j.state='uncertain' AND j.id<>a.job_id AND r.actor=?",
+                                    (bot, H.KEEPER)).fetchall())
+
+
 def limit_streak(c, bot):
     """How many of the bot's latest finished attempts in a row ended on a usage limit (capped
     at LIMIT_STRIKES; a lapsed lease or any other outcome ends the run)."""
@@ -2365,7 +2401,7 @@ class Execution:
             streak = limit_streak(c, row["bot"])
             hit = H.now()
             retry = login_hold.get("until") or H.shift(hit, seconds=limit_cooldown(c, row["bot"]))
-            kind = "API quota or billing limit" if billing_limit(c, attempt_id=aid) else "usage limit"
+            src = {}
             if any(gateway.cap_reached(error) for error in limit_errors(c, aid)):
                 # The Tico AI Gateway's monthly cap for the company's key (clients/gateway.py): said as it is.
                 focus = (f"{gateway.CAP_MESSAGE} at {hit[11:16]}: the gateway key has used this month's cap; "
@@ -2373,34 +2409,44 @@ class Execution:
             elif tico_code == gateway.RATE_LIMITED:
                 focus = (f"Tico AI Gateway rate limited at {hit[11:16]} after too many refused keys from this "
                          f"address; retrying after {retry[:10]} {retry[11:16]} UTC")
-            elif login_hold:
-                # The hold on the login (backend/login_holds.py): that login's provider, its own words and its streak,
-                # so a fallback's quota is not reported as the bot's own runtime's.
-                said = (f"{login_hold['runtime']} " + ("API quota or billing limit"
-                        if BILLING_LIMIT_RE.search(login_hold.get("error") or "") else "usage limit")
-                        + (f" on the {login_hold['profile']} login" if login_hold.get("profile") else "")
-                        + f" at {hit[11:16]}")
-                if login_hold.get("reset"):
+            else:
+                # Whose limit it was, from the turn's own notes (backend/login_holds.py source): primary or fallback,
+                # which provider and login, and an API key's quota told apart from a plan's usage window. A fallback's
+                # quota is never reported as the bot's own runtime's (Dev 279).
+                from .subscriptions import effective
+                profile = effective(c, row["bot"])[0] or ""
+                own = login_holds.get(c, row["runner_id"], login_holds.canonical(c, row["runner_id"], profile, runtime),
+                                      runtime)
+                src = login_holds.source(c, aid, runtime, body, profile, row["runner_id"],
+                                         held=own if body.primary_held else None)
+                # Kept with the run: its log and Health name this source after the bot's settings or the login's hold
+                # change.
+                c.execute("UPDATE attempts SET result_json=json_set(result_json,'$.limit_source',json(?)) WHERE id=?",
+                          (encode(src), aid))
+                primary_until = ""
+                if src["role"] == "fallback" and src.get("primary") in ("limited", "held"):
+                    if (own.get("until") or "") > hit:
+                        # Its own hold and its own retry time: the fallback's never moves it.
+                        primary_until = (f"{own['until'][11:16]} UTC"
+                                         + ("" if own["until"][:10] == hit[:10] else f" on {own['until'][:10]}"))
+                said = login_holds.label(src, at=hit[11:16], primary_until=primary_until)
+                if login_hold.get("reset") or (not login_hold and body.limit_resets_at
+                                                and provider_reset(last_limit(c, row["bot"]), H.parse_ts(hit))):
                     focus = (f"{said}; resumes at {retry[11:16]} UTC"
                              + ("" if retry[:10] == hit[:10] else f" on {retry[:10]}") + " when it resets")
                 else:
-                    focus = (said + (", third in a row" if login_hold["streak"] >= LIMIT_STRIKES else "")
-                             + f"; retrying after {retry[:10]} {retry[11:16]} UTC")
-            elif body.limit_resets_at and provider_reset(last_limit(c, row["bot"]), H.parse_ts(hit)):
-                focus = (f"{runtime} {kind} at {hit[11:16]}; resumes at {retry[11:16]} UTC"
-                         + ("" if retry[:10] == hit[:10] else f" on {retry[:10]}") + " when it resets")
-            else:
-                focus = (f"{runtime} {kind} at {hit[11:16]}" + (", third in a row" if streak >= LIMIT_STRIKES else "")
-                         + f"; retrying after {retry[:10]} {retry[11:16]} UTC")
+                    third = (login_hold["streak"] if login_hold else streak) >= LIMIT_STRIKES
+                    focus = said + (", third in a row" if third else "") + f"; retrying after {retry[:10]} {retry[11:16]} UTC"
             H.status_set(c, H.KEEPER, row["bot"], state="limited", focus=focus)
             # Every limit restarts the cooldown; status_set keeps `since` while the state stays the same.
             c.execute("UPDATE bot_status SET since=? WHERE bot=?", (hit, row["bot"]))
             H.event(c, H.KEEPER, "attempt.limited", aid,
                     {"bot": row["bot"], "job_id": row["job_id"], "runtime": runtime, "streak": streak,
-                     "retry_after": retry, "provider_reset": bool(body.limit_resets_at)})
+                     "retry_after": retry, "provider_reset": bool(body.limit_resets_at),
+                     **({"source": {k: v for k, v in src.items() if k != "notice"}} if src else {})})
         elif rejected and any(gateway.key_refused(error) for error in limit_errors(c, aid)):
             settle_status(c, row["bot"], "idle" if requeue else "crashed",
-                          "The Tico AI Gateway key is not working; save a new one in Settings > AI providers",
+                          "The Tico AI Gateway key is not working; save a new one in Settings > Computers",
                           claimed=row["created"])
         elif rejected:
             settle_status(c, row["bot"], "idle" if requeue else "crashed",

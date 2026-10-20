@@ -73,7 +73,7 @@ def test_recommended_writes_the_choices_and_the_invite_and_never_shows_the_invit
     # The link is the only sign-in, and the one step left is the two subscription sign-ins.
     assert f"/api/v2/local-signin?token={TOKEN}" in r.stdout
     assert "One step is left: in the app, Settings > Computers > Server computer > Sign in, to Claude and to ChatGPT." in r.stdout
-    assert "Finish setup" not in r.stdout and "Settings > AI providers" not in r.stdout
+    assert "Finish setup" not in r.stdout and "Bots need an AI provider" not in r.stdout
 
 
 def test_recommended_adds_a_docker_computer_on_the_server_network_without_the_owner_token_on_a_command_line(server):

@@ -51,6 +51,8 @@ EMPTY = (
     "mail_mailboxes", "bot_mail_settings", "google_connects", "google_mail_holders", "slack_credentials", "slack_posts", "slack_events", "slack_threads",
     "github_app", "github_app_states", "granola_connections", "meeting_importers", "live_meeting_bots",
     "support_tickets", "support_access", "support_access_log",
+    # Agent inbox bodies/codes and delivery cursors never enter a rehearsal copy.
+    "inbound_inboxes", "inbound_messages", "inbound_sync",
     "usage_alerts", "task_requesters", "roadmap_actions",
     # raw provider streams: customer text, and whatever the secret scrub missed
     "attempt_captures", "attempt_capture_drops",
@@ -67,7 +69,7 @@ KEEP = frozenset((
     "attempt_inputs", "backup_verified_blobs", "batches", "blob_locations", "blob_media", "blobs",
     "bot_agent_instructions", "bot_config", "bot_control", "bot_file_activity", "bot_file_versions", "bot_files",
     "bot_memory_documents", "bot_memory_seen", "bot_memory_updates", "bot_repo_access", "bot_status",
-    "bot_tool_requests", "bot_transition_checkpoints", "bot_transitions", "bots", "changes", "chat_goals",
+    "bot_tool_requests", "bot_transition_checkpoints", "bot_transitions", "bots", "ceo_merges", "changes", "chat_goals",
     "cloud_migrations", "company_events", "company_profile", "connector_snapshots", "conversations", "doc_sources", "doc_versions", "docs",
     "document_versions", "documents", "external_documents", "external_sections", "external_snapshot_docs",
     "external_snapshots", "external_versions", "feed_sources", "feed_updates", "flight_db", "flight_events",

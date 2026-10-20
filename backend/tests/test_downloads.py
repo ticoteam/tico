@@ -264,6 +264,10 @@ def stubbed_s3(monkeypatch):
     import os
     import boto3
     from botocore.stub import Stubber
+    from backend import blob_s3
+    # Building a real client on a loaded box can outlast the 5 s production budget, and file_url
+    # turns that timeout into None; these tests check signing, not that budget.
+    monkeypatch.setattr(blob_s3, "CLIENT_BUILD_TIMEOUT", 60)
     for name in list(os.environ):
         if name.startswith(("AWS_", "LITESTREAM_", "TICO_BLOB_", "TICO_BACKUP_")):
             monkeypatch.delenv(name)

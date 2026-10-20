@@ -31,7 +31,7 @@ DEFAULTS = {
     "stale_review": False,          # the hourly stale ticket review suggests updates to owners (backend/stale_review.py)
     "topic_fresh": False,           # a direct chat starts fresh when the topic changes (backend/topic_change.py)
 }
-# Rules an admin may change too, not only the owner (Settings > Team).
+# Rules an admin may change too, not only the owner (Settings > General).
 ADMIN_RULES = ("stale_review", "topic_fresh")
 # A rule whose default the server's environment sets (`TICO_STALE_REVIEW=1`, `TICO_TOPIC_FRESH=1` on Tico Team's own
 # server). A saved choice wins; until someone sets the rule it is not stored, so it keeps following the environment.

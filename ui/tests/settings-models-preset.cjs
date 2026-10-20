@@ -1,4 +1,4 @@
-// Settings > AI providers' models choice (backend/models_preset.py) against a fake server: the four choices in plain
+// Settings > Computers > Models' models choice (backend/models_preset.py) against a fake server: the four choices in plain
 // words, the recommended one marked; picking a subscription choice with nothing ticked ticks Claude and ChatGPT; Save
 // sends the choice; the same form serves the first-run step. Its wording names no logo, partner or approval, and
 // says nothing about what Tico keeps of a sign-in.
@@ -61,7 +61,7 @@ const {unrouted} = require('./support/routes.cjs');
     const choices = page.locator('#set-prov [data-provider-presets]');
     const open = async () => {
       await page.evaluate(() => loadSettings());
-      await page.locator('[data-settings-tab=providers]').click();
+      await page.locator('[data-settings-tab=devices]').click();
       await page.evaluate(() => renderSettingsProviders());
       await choices.waitFor();
     };

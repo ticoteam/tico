@@ -140,13 +140,14 @@ function kpiTargetKinds(form) {
 }
 
 function kpiProposalLine(p) {
-  const what = {goal_wording: 'New wording', goal_kpi: 'Add a KPI', kpi_definition: 'New definition', kpi_target: 'New target', flag: 'Flag', goal_why: 'A Why'}[p.kind] || p.kind;
+  const what = {goal_wording: 'New wording', goal_kpi: 'Add a KPI', kpi_definition: 'New definition', kpi_target: 'New target', flag: 'Flag', goal_why: 'A Why', recovery: 'A recovery'}[p.kind] || p.kind;
   const pl = p.payload || {};
   const detail = p.kind === 'goal_wording' ? (pl.title || pl.body || '')
     : p.kind === 'kpi_definition' ? (pl.definition || pl.name || Object.keys(pl).join(', '))
     : p.kind === 'kpi_target' ? (pl.kind === 'maintain' ? `range ${pl.min ?? ''}–${pl.max ?? ''}` : pl.kind === 'improve' ? `→ ${pl.target} by ${kpiDay(pl.deadline + 'T00:00:00Z')}` : 'no target')
     : p.kind === 'goal_kpi' ? (pl.kpi?.name || 'existing KPI')
     : p.kind === 'goal_why' ? (pl.why || '')
+    : p.kind === 'recovery' ? (pl.options?.[pl.pick || 0]?.label || '')
     : `${pl.issue || ''}${pl.note ? ': ' + pl.note : ''}`;
   return {what, detail, reason: p.reason || ''};
 }
@@ -159,7 +160,9 @@ function proposalHtml(p, extra = '') {
 function bindProposals(root, after) {
   for (const li of root.querySelectorAll('[data-proposal]')) for (const b of li.querySelectorAll('[data-decide]')) b.onclick = async () => {
     b.disabled = true;
-    try { await post(`/v2/proposals/${encodeURIComponent(li.dataset.proposal)}/decide`, {decision: b.dataset.decide}); await after(); }
+    // A recovery's Approve buttons carry their option: approving applies exactly that one.
+    const body = {decision: b.dataset.decide, ...(b.dataset.option ? {option: Number(b.dataset.option)} : {})};
+    try { await post(`/v2/proposals/${encodeURIComponent(li.dataset.proposal)}/decide`, body); await after(); }
     catch (e) { toast(e.message || 'Could not decide', true); b.disabled = false; }
   };
 }
@@ -662,6 +665,21 @@ function goalsRender(state) {
   const needs = body.querySelector('#goal-needs');
   if (needs) {
     bindKpiLines(needs); bindProposals(needs, () => goalsReload(state));
+    const vision = () => {
+      const section = body.querySelector('#goal-company');
+      section?.scrollIntoView({block: 'nearest'});
+      (section?.querySelector('textarea[name="vision"]') || section?.querySelector('[data-gco-edit]'))?.focus();
+    };
+    const why = id => {
+      const goal = (state.goals || []).find(g => g.id === id);
+      if (goal) goalPanelOpen(state, goal.owner, {tapped: goal.id});
+    };
+    for (const li of needs.querySelectorAll('[data-need-vision], [data-need-why]')) {
+      const open = () => li.dataset.needWhy !== undefined ? why(li.dataset.needWhy) : vision();
+      li.onclick = open;
+      li.onkeydown = ev => { if (ev.target === li && (ev.key === 'Enter' || ev.key === ' ')) { ev.preventDefault(); open(); } };
+    }
+    for (const b of needs.querySelectorAll('[data-need-why-goal]')) b.onclick = ev => { ev.stopPropagation(); why(b.dataset.needWhyGoal); };
     // The task link opens the task, not the KPI its row opens.
     for (const a of needs.querySelectorAll('[data-need-task]')) { a.onclick = ev => ev.stopPropagation(); a.onkeydown = ev => ev.stopPropagation(); }
   }
@@ -848,10 +866,31 @@ function goalPanelRender(state) {
 // ---------------------------------------------------------------- Needs you
 // Each item is a Goal Manager task for the caller (backend/goal_asks.py), the same one Tasks and Decide show: linked.
 const needTaskLink = it => it.task ? `<a class="need-task muted" href="#/task/${esc(it.task.id)}" data-need-task>Task</a>` : '';
+// The CEO Bot's recovery for a red or stalled goal (level 2): the evidence, each option in plain words with its pick
+// marked, one Approve per option and one Reject for them all. A part that can't happen now says why.
+function recoveryHtml(it) {
+  const p = it.proposal || {}, pl = p.payload || {}, name = esc(goalManagerName());
+  const options = (it.options || []).map((o, n) => `<li class="rec-opt${o.pick ? ' rec-pick' : ''}"><div class="rec-opt-h"><b>${esc(o.label)}</b>${o.pick ? `<span class="muted"> · the ${name}'s pick</span>` : ''}</div>
+    <ul class="rec-acts">${o.actions.map(a => `<li>${esc(a.text)}${a.note ? `<span class="muted"> · ${esc(a.note)}; this part would come back to you</span>` : ''}</li>`).join('')}</ul>
+    <button class="${o.pick ? 'primary' : 'ghost'}" type="button" data-decide="confirm" data-option="${n}">Approve${(it.options || []).length > 1 ? ` option ${n + 1}` : ''}</button></li>`).join('');
+  return `<li class="kpi-prop rec" data-proposal="${esc(p.id)}"><div class="kpi-prop-main"><span><b>A recovery</b> <span class="muted">· ${esc(it.goal_title || '')}</span></span>
+    <span class="kpi-prop-detail">${esc(pl.evidence || '')}</span>${p.reason ? `<span class="muted kpi-prop-why">${esc(p.reason)} · ${name}</span>` : ''}
+    <ol class="rec-opts">${options}</ol></div>
+    <div class="kpi-prop-do"><button class="ghost" type="button" data-decide="reject">Reject</button></div>${needTaskLink(it)}</li>`;
+}
 function goalNeedsHtml(items) {
   if (!items?.length) return '';
   const rows = items.map(it => {
+    if (it.kind === 'recovery') return recoveryHtml(it);
     if (it.kind === 'proposal') return proposalHtml({...it.proposal, may_decide: true}, it.kpi_name || it.goal_title || '').replace(/<\/li>$/, `${needTaskLink(it)}</li>`);
+    // Where the CEO Bot is on: the vision, written in the Company section above, and the Why lines waiting on this
+    // person, one row for all of them, each goal opening its panel where the Why is accepted or edited.
+    if (it.kind === 'vision') return `<li class="need-row" data-need-vision tabindex="0" role="button">${gdot('gray')}<span class="need-text"><b>Tell your ${esc(goalManagerName())} what this company is for</b><span class="muted">: write the Vision in the Company section above</span></span>${needTaskLink(it)}</li>`;
+    if (it.kind === 'why') {
+      const goals = it.goals || [];
+      return `<li class="need-row" data-need-why="${esc(goals[0]?.goal_id || '')}" tabindex="0" role="button">${gdot('gray')}<span class="need-text"><b>These goals need a Why line</b><span class="muted">: </span>${goals.map(g =>
+        `<button class="linkish" type="button" data-need-why-goal="${esc(g.goal_id)}">${esc(g.goal_title)}</button>`).join('<span class="muted">, </span>')}</span>${needTaskLink(it)}</li>`;
+    }
     const red = it.kind === 'kpi_red';
     return `<li class="need-row" data-kpi="${esc(it.kpi_id)}" tabindex="0" role="button">${gdot(red ? 'red' : 'gray')}<span class="need-text"><b>${esc(it.kpi_name)}</b>${red ? ` on ${esc(it.goal_title)}` : ''}<span class="muted">: ${esc(it.reason)}</span></span>${needTaskLink(it)}</li>`;
   }).join('');

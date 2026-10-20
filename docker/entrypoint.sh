@@ -138,16 +138,88 @@ print(host)
 PY
 }
 
+# An app alias has the whole app, unlike the runner and cookie-free visuals. Validate the complete list before
+# replacing the config, so a typo cannot promote either restricted hostname or inject another YAML rule.
+domain_aliases() {
+  [ -n "${TICO_DOMAIN_ALIASES:-}" ] || return 0
+  python3 - "$1" "$2" <<'PY'
+import ipaddress
+import os
+import re
+import sys
+from urllib.parse import urlsplit
+
+
+def refuse(reason):
+    print("tico: error: TICO_DOMAIN_ALIASES " + reason, file=sys.stderr)
+    sys.exit(1)
+
+
+def plain_hostname(host):
+    return bool(host and len(host) <= 253 and "." in host
+                and any(ch in "abcdefghijklmnopqrstuvwxyz" for ch in host)
+                and all(re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label) for label in host.split(".")))
+
+
+value = os.environ["TICO_DOMAIN_ALIASES"]
+if any(ord(ch) < 32 or ord(ch) == 127 for ch in value):
+    refuse("has control characters")
+if not value.isascii():
+    refuse("must use plain ASCII DNS hostnames")
+if os.environ.get("TICO_VISUAL_ORIGIN", "").strip() and not sys.argv[2]:
+    refuse("needs a valid separate visual origin before app aliases can be routed")
+canonical = os.environ["TICO_DOMAIN"].lower()
+runner_value = os.environ.get("TICO_RUNNER_URL", "")
+if runner_value.strip():
+    try:
+        runner = urlsplit(runner_value)
+        runner_name, port = runner.hostname or "", runner.port
+    except ValueError:
+        refuse("needs a valid runner URL before app aliases can be routed")
+    if (not runner_value.isascii() or any(ch.isspace() or ord(ch) < 32 or ord(ch) == 127 for ch in runner_value)
+            or runner.scheme not in ("http", "https") or runner.path not in ("", "/")
+            or runner.query or runner.fragment or runner.username is not None or runner.password is not None
+            or port == 0 or not plain_hostname(runner_name)
+            or runner_name != canonical and runner_name != sys.argv[1]):
+        refuse("needs a valid runner URL before app aliases can be routed")
+seen = {canonical}
+aliases = []
+for part in value.split(","):
+    host = part.strip(" ").lower()
+    if not plain_hostname(host):
+        refuse("must contain comma-separated plain DNS hostnames with no empty entries")
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        pass
+    else:
+        refuse("must not contain an IP address")
+    if host == sys.argv[1] or host == sys.argv[2]:
+        refuse("collides with the restricted runner or visual hostname")
+    if host not in seen:
+        seen.add(host)
+        aliases.append(host)
+print("\n".join(aliases))
+PY
+}
+
 tunnel_config() {
   [ -n "${TICO_DOMAIN:-}" ] && [ -d "$TUNNEL_DIR" ] && [ -w "$TUNNEL_DIR" ] || return 0
   case "$TICO_DOMAIN" in *[!A-Za-z0-9.-]*|.*|*.|'') die "TICO_DOMAIN is not a plain hostname: $TICO_DOMAIN" ;; esac
-  local runner visual origin=http://server:8765
+  local runner visual aliases host origin=http://server:8765
   runner=$(runner_host)
   visual=$(visual_host "$runner") || visual=  # visual_host printed the warning
+  aliases=$(domain_aliases "$runner" "$visual") || return 1
   {
     echo "ingress:"
     echo "  - hostname: $TICO_DOMAIN"
     echo "    service: $origin"
+    if [ -n "$aliases" ]; then
+      while IFS= read -r host; do
+        echo "  - hostname: $host"
+        echo "    service: $origin"
+      done <<< "$aliases"
+    fi
     if [ -n "$runner" ]; then
       # A separate runner hostname has no sign-in page in front of it, so it serves only what runners and
       # external agents call: the API (which checks their tokens) and the runner download.
@@ -278,6 +350,32 @@ aws_identity() {
   log "$confirmed"
 }
 
+caddy_config() {
+  python - <<'PY'
+import os
+from pathlib import Path
+import tempfile
+from backend import caddy_assets
+
+directory = Path(os.environ.get("TICO_CADDY_DIR", "/caddy-generated"))
+if directory.is_dir() and os.access(directory, os.W_OK):
+    # Directory mounts expose atomic replacements; a single-file bind could retain an older inode.
+    source = Path(caddy_assets.__file__).resolve().parent.parent / "docker" / "caddy-supervisor.sh"
+    descriptor, temporary = tempfile.mkstemp(prefix=".supervisor-", dir=directory)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(source.read_bytes())
+            handle.flush()
+            os.fsync(handle.fileno())
+            os.fchmod(handle.fileno(), 0o644)
+        os.replace(temporary, directory / "supervisor.sh")
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+caddy_assets.prepare()
+PY
+}
+
 prepare() {  # everything `server` does before it starts serving: also what the tests run
   server_environment
   for arg in "$@"; do
@@ -287,6 +385,7 @@ prepare() {  # everything `server` does before it starts serving: also what the 
   seed
   environment_identity
   tunnel_config
+  caddy_config
   backup_configuration || true
   # After the restore above, which only reads the backup: from here nothing is written to it.
   if rehearsal; then export TICO_BACKUP_MODE=rehearsal; fi
@@ -391,6 +490,7 @@ case "${1:-server}" in
   server) shift; server "$@" ;;
   prepare) shift; prepare "$@" ;;
   tunnel-config) tunnel_config ;;
+  caddy-config) caddy_config ;;
   aws-identity) aws_identity ;;
   demo) demo "$@" ;;
   restore) shift; restore "$@" ;;

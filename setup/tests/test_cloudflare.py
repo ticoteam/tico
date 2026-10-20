@@ -59,3 +59,24 @@ def test_upsert_cname_repoints_a_record_elsewhere_only_when_allowed():
     mine = [{**elsewhere[0], "content": "t9.cfargotunnel.com"}]
     assert Cloudflare("tok", Api({("GET", "/zones/z1/dns_records?"): mine})).upsert_cname(
         "z1", "r.example.com", "t9.cfargotunnel.com", repoint=False) == "unchanged"
+
+
+def test_full_ingress_is_validated_before_put_and_removal_restores_only_restricted_routes():
+    from setup.cloudflare import ingress_config
+    from setup.ui import MissingInput
+    api = Api({('PUT', '/accounts/a1/cfd_tunnel/t2/configurations'): {}})
+    cf = Cloudflare('fictional-token', api)
+    cf.configure_tunnel('a1', 't2', 'app.acme.example', 'runner.acme.example',
+                        aliases=('Old.Acme.Example', 'old.acme.example', 'app.acme.example'), visual_origin='https://files.acme.example')
+    rules = api.calls[-1][2]['config']['ingress']
+    assert [r.get('hostname') for r in rules] == ['app.acme.example', 'old.acme.example', 'runner.acme.example', 'files.acme.example', None]
+    assert rules[2]['path'] == '^/(?:api/v2|download)(?:/.*)?$' and rules[3]['path'] == '^/visuals/'
+    calls = list(api.calls)
+    for aliases, origin in [(('runner.acme.example',), 'https://files.acme.example'),
+                            (('files.acme.example',), 'https://files.acme.example'),
+                            (('old.acme.example',), 'https://private@files.acme.example/invalid')]:
+        with pytest.raises(MissingInput):
+            cf.configure_tunnel('a1', 't2', 'app.acme.example', 'runner.acme.example', aliases=aliases, visual_origin=origin)
+        assert api.calls == calls
+    cf.configure_tunnel('a1', 't2', 'app.acme.example', 'app.acme.example')
+    assert api.calls[-1][2]['config'] == ingress_config('app.acme.example')

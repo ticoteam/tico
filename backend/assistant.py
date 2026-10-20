@@ -89,6 +89,10 @@ def write_allowed(method, path, settings=None, body=b"", actor="", owns=None, di
         return False
     if not isinstance(fields, dict):
         return False
+    if path == '/api/v2/inbound/wait':
+        return True  # a non-consuming read carried as POST
+    if direct and path == '/api/v2/inbound/inboxes' and fields.get('kind','email') == 'email':
+        return True  # free address allocation; quota and identity still apply in inbound.py
     if direct and to_bot:
         chatting = re.fullmatch(r"/api/v2/chat/([^/]+)", path)
         if (chatting and (settings is None or chatting.group(1) != settings.assistant_bot)) or (
@@ -147,7 +151,7 @@ def approving(method, path, body=None):
 
 def approve_hint(settings, state):
     """What the Assistant is told when it may not approve: the one sentence it passes on to the person."""
-    where = f"Settings > {settings.assistant_name}"
+    where = "Settings > General"
     if not state["team_allows"]:
         return ("Approving stays the person's click on a card: the team's owner turned off assistants deciding "
                 "approvals (Settings > Humans). Tell them that in one sentence and propose a card (`hub assistant "

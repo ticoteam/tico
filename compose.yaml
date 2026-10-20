@@ -32,12 +32,15 @@ services:
       TICO_ALB_ARN:
       TICO_ALB_REGION:
       TICO_DOMAIN:
+      TICO_DOMAIN_ALIASES:
       TICO_PORT: ${TICO_PORT:-8765}
       TICO_PUBLIC_URL:
       # Visuals in replies (backend/visuals.py): a separate site of their own; unset in production = file chips.
       TICO_VISUAL_ORIGIN:
       TICO_VISUAL_SECRET:
       TICO_VISUAL_SAME_ORIGIN:
+      # Local Caddy serving is a separate opt-in; a visual origin may belong to an external CDN.
+      TICO_CADDY_VISUALS:
       TICO_RUNNER_URL:
       TICO_COMPOSE_PROJECT: ${COMPOSE_PROJECT_NAME:-tico}
       TICO_SERVER_NETWORK: ${TICO_SERVER_NETWORK:-${COMPOSE_PROJECT_NAME:-tico}_default}
@@ -113,6 +116,10 @@ services:
       DO_NOT_TRACK:
       TICO_TELEMETRY_DEBUG:
       TICO_HQ_URL:
+      TICO_INBOUND_KEY:
+      TICO_INBOUND_URL:
+      # HQ's read-only staff key, on the Tico team's own server only: its Health page shows HQ's nightly billing check.
+      TICO_HQ_STAFF_READ_KEY:
       TICO_GITHUB_REVIEW_ROLE:
       TICO_TITLE_LINT:
       # Naming, a mounted integrations folder, the AWS region (KMS, Secrets Manager, S3) and the AWS identity the server
@@ -132,6 +139,8 @@ services:
       - tico-backups:/backups
       # The Cloudflare tunnel's route for TICO_DOMAIN, written at every start for the cloudflared service below.
       - tico-tunnel:/tunnel
+      # Complete Caddy generations and its supervisor, produced before the server becomes healthy.
+      - tico-caddy:/caddy-generated
     # Loopback only: for health checks and TICO_AUTH_PROXY=none test installs.
     ports: ["127.0.0.1:${TICO_PORT:-8765}:8765"]
     networks: [default, edge]
@@ -220,12 +229,15 @@ services:
     depends_on:
       server: {condition: service_healthy}
 
-  # Front door 1: automatic HTTPS for TICO_DOMAIN (Let's Encrypt). Needs ports 80 and 443 open.
+  # Front door 1: automatic HTTPS for the app and an explicitly enabled restricted visual origin.
+  # A private supervisor validates each generated snapshot and removes stale sites before replacing it.
   caddy:
     <<: *hardening
     profiles: [caddy]
     image: caddy:2-alpine@sha256:6aeddd44c3078b0f9a35206472a11420648a79c184603ef95957d0a20044cb2b
-    command: caddy reverse-proxy --from ${TICO_DOMAIN:-} --to server:8765
+    entrypoint: ["/bin/sh", "/generated/supervisor.sh"]
+    command: []
+    tmpfs: [/tmp]
     cap_add: [NET_BIND_SERVICE]
     ports: ["80:80", "443:443", "443:443/udp"]
     networks:
@@ -233,6 +245,14 @@ services:
     volumes:
       - caddy-data:/data
       - caddy-config:/config
+      - tico-caddy:/generated:ro
+    healthcheck:
+      test: ["CMD", "/bin/sh", "/generated/supervisor.sh", "health"]
+      interval: 10s
+      timeout: 3s
+      start_period: 10s
+      start_interval: 1s
+      retries: 3
     depends_on:
       server: {condition: service_healthy}
 
@@ -294,5 +314,6 @@ volumes:
   tico-backups:
   tico-control:
   tico-tunnel:
+  tico-caddy:
   caddy-data:
   caddy-config:

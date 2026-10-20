@@ -63,6 +63,21 @@ def test_ssh_run_stops_before_docker_when_dns_never_goes_live():
     assert shell.calls == []
 
 
+def test_private_inbox_values_are_scrubbed_from_failed_server_command_output(monkeypatch):
+    key, url = "tin_private-0123456789abcdefghijklmnopqrstuv", "http://localhost:8080"
+    monkeypatch.setenv("TICO_INBOUND_KEY", key)
+    monkeypatch.setenv("TICO_INBOUND_URL", url)
+    shell = FakeShell({"docker compose pull": Result(1, "", f"failed with {key} at {url}")})
+    d = fakes.deps(records={("tico.example.com", dns.A): ["203.0.113.7"]})
+    d.ssh_shell = lambda *a: shell
+    code, out = go(["--target", "ssh", "--ssh", "root@h", "--server-ip", "203.0.113.7", "--yes", *BASE], deps=d)
+    assert code == 1 and "Failed:" in out
+    assert key not in out and url not in out
+    assert key not in "\n".join(shell.cmds()) and url not in "\n".join(shell.cmds())
+    private_input = next(i for c, i in shell.calls if i and b"TICO_DOMAIN" in i)
+    assert key.encode() in private_input and url.encode() in private_input
+
+
 def test_cloudflare_tunnel_flow_creates_tunnel_and_uses_its_token(monkeypatch):
     from setup.tests.test_cloudflare import Api
     api = Api({("GET", "/zones?name=tico.example.com"): [],
@@ -180,3 +195,113 @@ def test_the_default_runner_hostname_never_takes_over_a_record_that_points_elsew
     code, out, env, ingress, cnames = _tunnel_run(["--runner-hostname", "tico-runner.example.com", *ACCESS], runner_record=elsewhere)
     assert code == 0, out
     assert "Cloudflare DNS CNAME tico-runner.example.com: repointed from app.other.net" in out and "tico-runner.example.com" in cnames
+
+
+def test_invalid_or_credential_runtime_choices_stop_before_any_mutation(monkeypatch, tmp_path):
+    from setup import wizard
+    from setup.settings import Settings
+    calls = []
+    monkeypatch.setattr(wizard, 'provision_backup', lambda *a: calls.append('backup'))
+    monkeypatch.setattr(wizard, '_tunnel', lambda *a: calls.append('tunnel'))
+    monkeypatch.setattr(state, 'save', lambda *a: calls.append('state'))
+    monkeypatch.setattr(wizard.hosted, 'new_link', lambda *a: calls.append('link'))
+    d = fakes.deps(); d.cloudflare = lambda *a: calls.append('cloud')
+    cases = [(['--hq-url', 'https://fictional-secret@hq.acme.example'], 'TICO_HQ_URL'),
+             (['--visual-origin', 'https://files.acme.example?fictional-secret'], 'TICO_VISUAL_ORIGIN'),
+             (['--public-url', 'https://different.acme.example'], 'TICO_PUBLIC_URL'),
+             (['--cors-origins', '*'], 'TICO_CORS_ORIGINS'),
+             (['--cors-origins', 'http://external.acme.example'], 'TICO_CORS_ORIGINS'),
+             (['--cors-origins', 'https://frontend.acme.example/'], 'TICO_CORS_ORIGINS'),
+             (['--domain-aliases', 'old.example.com', '--cors-origins', 'https://old.example.com'], 'cloudflared'),
+             (['--caddy-visuals', '1'], 'separate visual origin'),
+             (['--front-door','cloudflared','--domain-aliases','old.example.com'], 'explicitly list each app alias'),
+             (['--front-door','cloudflared','--domain-aliases','old.example.com','--cors-origins','https://old.example.com',
+               '--visual-origin','https://old.example.com'], 'restricted runner and visual')]
+    for extra, reason in cases:
+        code, out = go(['--target','ssh','--ssh','root@h','--server-ip','203.0.113.7','--yes',*BASE,*extra], deps=d)
+        assert code == 2 and reason in out and 'fictional-secret' not in out
+        assert calls == [] and not (tmp_path/'home').exists()
+    # Private legacy URL values are validated too, before they can be classified as public state.
+    legacy = Settings(domain='tico.example.com', target='ssh', auth='google', client_id='cid', owner_email='me@example.com')
+    saved = legacy.public(); saved.pop('hq_url')
+    monkeypatch.setattr(state, 'load', lambda domain: (saved, 'TICO_HQ_URL=https://fictional-secret@hq.acme.example\n'))
+    code, out = go(['--target','ssh','--ssh','root@h','--yes',*BASE], deps=d)
+    assert code == 2 and 'TICO_HQ_URL' in out and 'fictional-secret' not in out and calls == []
+
+
+def test_passive_runner_and_visual_secret_survive_real_fake_tunnel_rerun_without_dns_authority(monkeypatch):
+    from setup.settings import Settings
+    from setup import envfile
+    monkeypatch.setenv('CLOUDFLARE_API_TOKEN', 'cf-fictional-token')
+    verified = []
+    def record_checks(**kwargs):
+        verified.append(kwargs)
+        return [verify.Check('stub', True, 'ok')]
+    monkeypatch.setattr(verify, 'run_all', record_checks)
+    saved = Settings(domain='tico.example.com', front_door='cloudflared', auth='cloudflare', access_issuer='https://acme.cloudflareaccess.com',
+                     access_audience='aud', company='Acme', owner_email='me@example.com', runner_url='http://legacy.other.example:8080/helper/',
+                     visual_origin='https://files.acme.example', visual_secret='fictional-visual-secret')
+    state.save(saved.domain, saved.public(), envfile.render(saved.to_env()))
+    code, out, env, ingress, cnames = _tunnel_run(ACCESS)
+    assert code == 0, out
+    assert 'TICO_RUNNER_URL=http://legacy.other.example:8080/helper/' in env
+    assert [r.get('hostname') for r in ingress] == ['tico.example.com','legacy.other.example','files.acme.example',None]
+    assert cnames == ['tico.example.com'] and 'fictional-visual-secret' not in out
+    assert state.load(saved.domain)[0]['runner_host'] == ''
+    assert verified[-1]['runner_host'] == ''  # No invented managed HTTPS443 probe of the passive HTTP endpoint.
+    doctor_deps = fakes.deps()
+    doctor_deps.ssh_shell = lambda *args: FakeShell()
+    code, out = go(['doctor', '--non-interactive', '--domain', saved.domain], deps=doctor_deps)
+    assert code == 0 and verified[-1]['runner_host'] == ''
+    code, out, env, ingress, cnames = _tunnel_run(['--runner-hostname','none',*ACCESS])
+    assert code == 0 and 'TICO_RUNNER_URL' not in env
+    assert [r.get('hostname') for r in ingress] == ['tico.example.com','files.acme.example',None]
+    code, out, env, ingress, cnames = _tunnel_run(ACCESS)
+    assert code == 0 and 'TICO_RUNNER_URL' not in env  # Explicit none remains durable on another run.
+
+    # Explicit app aliases require their own CORS trust; neither this choice nor visuals grant DNS authority.
+    code, out, env, ingress, cnames = _tunnel_run(['--domain-aliases','Old.Example.Com,tico.example.com',
+        '--cors-origins','https://old.example.com','--public-url','https://tico.example.com',
+        '--hq-url','https://hq.acme.example','--visual-same-origin','0',*ACCESS])
+    assert code == 0, out
+    parsed = envfile.parse(env)
+    assert parsed['TICO_DOMAIN_ALIASES'] == 'old.example.com' and parsed['TICO_HQ_URL'] == 'https://hq.acme.example'
+    assert parsed['TICO_PUBLIC_URL'] == 'https://tico.example.com' and parsed['TICO_VISUAL_SAME_ORIGIN'] == '0'
+    assert parsed['TICO_CORS_ORIGINS'] == 'https://old.example.com' and 'TICO_CADDY_VISUALS' not in parsed
+    assert [r.get('hostname') for r in ingress] == ['tico.example.com','old.example.com','files.acme.example',None]
+    assert cnames == ['tico.example.com']
+
+
+def test_public_origin_spelling_preserves_exact_callback_before_any_mutation(monkeypatch, tmp_path):
+    from backend.config import Settings as BackendSettings
+    from backend.oidc import Oidc
+    from setup import contract, envfile, signin, wizard
+    from setup.settings import Settings, from_saved, gather_runtime
+    from setup.cli import parser
+    mutations = []
+    monkeypatch.setattr(wizard, 'provision_backup', lambda *args: mutations.append('backup'))
+    monkeypatch.setattr(wizard, '_tunnel', lambda *args: mutations.append('tunnel'))
+    monkeypatch.setattr(state, 'save', lambda *args: mutations.append('state'))
+    original = Settings(domain='tico.example.com', target='ssh', auth='google', client_id='fictional-client', owner_email='me@example.com').public()
+    for value in ('https://tico.example.com:443', 'HTTPS://TICO.EXAMPLE.COM'):
+        for retained in (False, True):
+            saved = {**original, 'public_url': value} if retained else original
+            monkeypatch.setattr(state, 'load', lambda domain: (saved, ''))
+            flags = [] if retained else ['--public-url', value]
+            code, out = go(['--target','ssh','--ssh','root@h','--yes',*BASE,*flags])
+            assert code == 2 and 'TICO_PUBLIC_URL' in out and value not in out
+            assert mutations == []
+    for value in ('https://tico.example.com', 'https://tico.example.com/'):
+        settings = Settings(domain='tico.example.com')
+        gather_runtime(parser().parse_args(['--public-url',value]), settings, final=True)
+        emitted = settings.to_env()['TICO_PUBLIC_URL']
+        backend = BackendSettings(db_path=tmp_path/'not-opened.sqlite', public_url=emitted, owner_email='owner@acme.example',
+            auth_proxy='oidc', oidc_issuer='https://id.acme.example', oidc_client_id='fictional-client',
+            oidc_client_secret='fictional-secret', session_secret='fictional-session-secret-0123456789')
+        # Actual config normalization and OIDC constructor; no discovery, network, file secret or DB is used.
+        assert Oidc(backend, None).redirect_uri == signin.redirect_uri(settings.domain)
+        assert emitted == value  # Retained or newly supplied strings are never silently rewritten.
+        assert from_saved({**original,'public_url':value}, '').to_env()['TICO_PUBLIC_URL'] == value
+    local = from_saved({**original,'public_url':'http://[::1]:8765/'}, '')
+    assert local.to_env()['TICO_PUBLIC_URL'] == 'http://[::1]:8765/'
+    assert not (tmp_path/'not-opened.sqlite').exists() and not (tmp_path/'tico-session-secret').exists()

@@ -518,6 +518,7 @@ run_wizard() {
   else
     keep=
     for v in TICO_OIDC_CLIENT_SECRET CLOUDFLARE_API_TOKEN CLOUDFLARE_TUNNEL_TOKEN OPENAI_API_KEY ANTHROPIC_API_KEY GEMINI_API_KEY \
+             TICO_INBOUND_KEY TICO_INBOUND_URL \
              LITESTREAM_ACCESS_KEY_ID LITESTREAM_SECRET_ACCESS_KEY AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN \
              TICO_SUPPORT TICO_SUPPORT_ASKED TICO_HQ_URL; do
       eval "[ -n \"\${$v:-}\" ]" && keep="$keep,$v"
@@ -577,7 +578,7 @@ run_local() {
     say "One step is left: in the app, Settings > Computers > Server computer > Sign in, to Claude and to ChatGPT."
   else
     say "In the app, follow Finish setup: name the team, pick its groups, and use Add computer to join this computer."
-    say "Bots need an AI provider to run: Settings > AI providers, any time."
+    say "Bots need an AI provider to run: Settings > Computers > Models, any time."
   fi
   say "Add a domain and sign-in for your humans later: docs/install.md, \"Add a domain and sign-in later\"."
 }
@@ -732,7 +733,7 @@ if [ -n "$DOCKER_ONLY" ]; then ensure_docker; say "Docker is ready."; exit 0; fi
 resolve_version
 ensure_docker
 say "Installing Tico $VERSION into $DIR"
-say "Tico counts active installs anonymously (a random ID, version, and three yes/no activity flags). Turn off: Settings > Privacy or TICO_TELEMETRY=off."
+say "Tico counts active installs anonymously (a random ID, version, and three yes/no activity flags). Turn off: Settings > General or TICO_TELEMETRY=off."
 say "Details: PRIVACY.md in the Tico repository."
 
 if [ -f "$DIR/.env" ]; then

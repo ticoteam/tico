@@ -37,6 +37,10 @@ async function vaultLoad() {
 function vaultSubject(subject) {
   if (subject === 'computers') return 'Every computer (signs models in)';
   const [kind,id] = subject.split(':');
+  if (kind === 'computer') {
+    const computer = (VAULT.computers || []).find(row => row.id === id);
+    return `${computer?.label || id} (computer)`;
+  }
   const row = (kind === 'human' ? VAULT.people : VAULT.bots).find(row => row.id === id);
   return row?.name || row?.email || id;
 }

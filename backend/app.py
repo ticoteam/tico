@@ -161,6 +161,8 @@ def create_app(settings=None):
             telemetry.capture("support_access", exc)
         telemetry.start()
         stop = asyncio.Event()
+        # Always runs: local 90-day retention must not depend on the inbound key or HQ (sync itself stays off).
+        inbound_task = asyncio.create_task(app.state.inbound.loop(stop))
         screen_relay_task = None
         if settings.screen_relay_url:
             await asyncio.to_thread(screen_sessions.start)
@@ -177,10 +179,12 @@ def create_app(settings=None):
             from .scheduler import Scheduler
             scheduler = Scheduler(store, execution)
             def github_wakes():
-                from .github import flush_wakes, refresh_deployed_tasks
+                from .github import flush_wakes, reconcile_worktree_prs, refresh_deployed_tasks
                 with store.transaction() as c:
                     flush_wakes(c)
                 refresh_deployed_tasks(app.state.github_app)
+                # A worktree is released by its pull requests' state, so a missed webhook must heal unread.
+                reconcile_worktree_prs(app.state.github_app)
             while not stop.is_set():
                 try:
                     await asyncio.to_thread(github_wakes)
@@ -245,6 +249,8 @@ def create_app(settings=None):
             yield
         finally:
             stop.set()
+            if inbound_task:
+                await inbound_task
             if screen_relay_task:
                 await screen_relay_task
             else:
@@ -1404,6 +1410,18 @@ def create_app(settings=None):
             gateway_connection.clear(c, who, H.now(), settings)
             return gateway_connection.view(c, settings, manage=True)
 
+    @app.post("/api/v2/providers/gateway/automatic")
+    def gateway_automatic(request: Request):
+        """Connect automatically again after the owner cleared the install's automatic key: the install enrolls with
+        its own secret on the next check, which starts now."""
+        who = request.state.identity
+        auth.domain(who)
+        with store.transaction() as c:
+            gateway_connection.automatic_on(c, who, H.now())
+        gateway_connection.check_later(store, app.state.vault, settings)
+        with store.read() as c:
+            return gateway_connection.view(c, settings, manage=True)
+
     @app.post("/api/v2/providers/gateway/check")
     def gateway_check(request: Request):
         """Check now: ask the Gateway whether the key works and how much of its cap is used."""
@@ -1598,11 +1616,16 @@ def create_app(settings=None):
 
     @app.get("/api/v2/ceo-bot")
     def ceo_bot_switch(request: Request):
-        """The CEO Bot rollout switch (backend/ceo_bot.py)."""
-        auth.domain(request.state.identity)
+        """The CEO Bot rollout switch and its level (backend/ceo_bot.py). How many items it put in each person's Needs
+        you today is the owner's, an admin's and the CEO Bot's to read; anyone else sees only their own count."""
+        who = request.state.identity
+        auth.domain(who)
         from . import ceo_bot
         with store.read() as c:
-            return ceo_bot.view(c)
+            value = ceo_bot.named(c, ceo_bot.view(c))
+        if who.actor != "bot:" + ceo_bot.SLUG and auth.company_role(who) not in ("owner", "admin"):
+            value["asked_today"] = {k: n for k, n in value["asked_today"].items() if k == who.actor}
+        return value
 
     @app.post("/api/v2/ceo-bot")
     def ceo_bot_switch_set(request: Request, body: M.CeoBotSwitch):
@@ -1610,7 +1633,7 @@ def create_app(settings=None):
         who = request.state.identity
         admin_only(who, "turns the CEO Bot on or off")
         from . import ceo_bot
-        return mutate(request, body, lambda c: ceo_bot.set_on(c, who.actor, body.on))
+        return mutate(request, body, lambda c: ceo_bot.named(c, ceo_bot.set_on(c, who.actor, body.on)))
 
     @app.post("/api/v2/goal-manager/turn-on")
     def turn_on_goal_manager(request: Request, body: M.Empty):
@@ -3491,7 +3514,7 @@ def create_app(settings=None):
         who = request.state.identity
         auth.domain(who)
         if key.startswith("assistant."):
-            raise Problem("forbidden", "Your Assistant's settings are set in Settings > " + settings.assistant_name, 403)
+            raise Problem("forbidden", "Your Assistant's settings are set in Settings > General", 403)
         if key == "meetings.auto_share":
             views.human_only(who)
             if not isinstance(body.value, bool):
@@ -3553,7 +3576,7 @@ def create_app(settings=None):
         """The person takes back what their Assistant decided for them, before anything acted on it. Their own click."""
         who = request.state.identity
         if who.via:
-            raise Problem("forbidden", "Only the person undoes this, in Settings > " + settings.assistant_name, 403)
+            raise Problem("forbidden", "Only the person undoes this, in Settings > General", 403)
         def work(c):
             auth.approval(c, who, aid, decide=True)
             return H.approval_undo(c, who.actor, aid)
@@ -4384,6 +4407,9 @@ def create_app(settings=None):
     # A signed-out computer login takes the company's shared key again.
     @app.post("/api/v2/runners/{rid}/shared-key")
     def use_shared_key(request: Request, rid: str, body: M.SharedKeyUse):
+        if body.credential:
+            return mutate(request, body, lambda c: model_login.attach_shared_key(
+                c, request.state.identity, rid, body.runtime, body.credential, auth=auth, vault=app.state.vault))
         return mutate(request, body, lambda c: model_login.use_shared_key(
             c, request.state.identity, rid, body.runtime, auth=auth))
 
@@ -4405,11 +4431,16 @@ def create_app(settings=None):
     def replace_computer_key(request: Request, rid: str, body: M.KeyReplace):
         who = request.state.identity
         vault = app.state.vault
+        if body.share and body.switch:
+            raise Problem("switch", "Switch to API key gives this computer a key of its own; share a key from Add "
+                          "connection instead", 422)
         return vault.change(who, request.url.path, request.headers.get("idempotency-key"), body,
                             lambda c, w: None,
-                            lambda c: model_login.replace_key(c, who, rid, body.runtime, body.secret.get_secret_value(),
-                                                              body.env, body.scope, auth=auth, vault=vault,
-                                                              switch=body.switch))
+                            lambda c: model_login.share_key(c, who, rid, body.runtime, body.secret.get_secret_value(),
+                                                            body.env, body.share, auth=auth, vault=vault)
+                            if body.share else
+                            model_login.replace_key(c, who, rid, body.runtime, body.secret.get_secret_value(),
+                                                    body.env, body.scope, auth=auth, vault=vault, switch=body.switch))
 
     @app.get("/api/v2/runners/{rid}/logins/{lid}")
     def read_login(request: Request, rid: str, lid: str):
@@ -5469,6 +5500,8 @@ def create_app(settings=None):
     install_report_order(app, store, auth, mutate)
     from .support import install as install_support
     install_support(app, store, settings, census)
+    from .inbound import install as install_inbound
+    install_inbound(app, store, settings, auth)
     from .support_access import install as install_support_access
     install_support_access(app, store, settings, auth)
     from .watchers import install as install_watchers

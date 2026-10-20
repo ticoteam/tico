@@ -738,7 +738,6 @@ function renderTree() {
       (a.dataset.nav === 'market' && (S.route === '#/market' || S.route.startsWith('#/market?') || S.route.startsWith('#/market/'))) ||
       (a.dataset.nav === 'integrations' && (S.route === INTEGRATIONS || S.route.startsWith(INTEGRATIONS + '/'))) ||
       (a.dataset.nav === 'changelog' && S.route === '#/changelog') ||
-      (a.dataset.nav === 'runs' && S.route === '#/runs') ||
       (a.dataset.nav === 'learnings' && (S.route === LEARNINGS || S.route.startsWith(LEARNINGS + '?'))) ||
       (a.dataset.nav === 'usage' && S.route === '#/usage') ||
       (a.dataset.nav === 'replay' && S.route.startsWith('#/replay')) ||

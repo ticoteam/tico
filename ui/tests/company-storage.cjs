@@ -1,4 +1,4 @@
-// Offline browser regression: Settings > Storage (backend/company_storage.py) is the owner's alone; the form sends the
+// Offline browser regression: Settings > General (backend/company_storage.py) is the owner's alone; the form sends the
 // bucket and keys once, shows the server's refusal where it was typed, clears the secret after a save and goes back to
 // the server's storage on confirm. Health's "Set up S3" opens it. Every request is intercepted.
 const {chromium} = require('playwright');
@@ -79,10 +79,10 @@ const {unrouted} = require('./support/routes.cjs');
 
     v = await visit({role: 'human', hash: '#/settings'});
     await v.page.locator('#settings-tabs').waitFor();
-    assert.equal(await v.page.locator('[data-settings-tab="storage"]').count(), 0, 'only the owner has Storage');
+    assert.equal(await v.page.locator('#settings-storage').count(), 0, 'only the owner has Storage');
     assert.equal(v.calls.length, 0);
     await v.ctx.close();
-    console.log('PASS: Settings > Storage, owner only, refusal shown, secret cleared, back to server storage');
+    console.log('PASS: Settings > General, owner only, refusal shown, secret cleared, back to server storage');
   } finally {
     await browser.close();
   }
