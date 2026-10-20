@@ -84,6 +84,15 @@ def permit(c, who, *, admin=False, auth=None):
         raise Problem('forbidden','An owner or admin manages phone rentals and releases inboxes',403)
 
 
+RETENTION = 90*86400
+
+
+def expire(c, now=None):
+    # Retention needs no supplier: it runs on reads and on a local timer, so HQ outages or a removed key never keep content.
+    c.execute('UPDATE inbound_messages SET body=NULL,code=NULL,preview=\'\',retention_removed=1 WHERE '
+              'retention_removed=0 AND received_at<?',((now or time.time())-RETENTION,))
+
+
 def save_inbox(c, item):
     c.execute('INSERT INTO inbound_inboxes(inbox_id,kind,name,address,state,created_by,period_end,cancel_pending) '
               'VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(inbox_id) DO UPDATE SET address=excluded.address,state=excluded.state,'
@@ -204,8 +213,11 @@ class Inbound:
                              ' ORDER BY seq '+order+' LIMIT ?',values+[limit+1]).fetchall()
             current = c.execute('SELECT coalesce(max(seq),0) FROM inbound_messages').fetchone()[0]
         result,used = [],0
+        cutoff = time.time()-RETENTION
         for row in rows[:limit]:
             item = dict(row);item['from'] = item.pop('sender')
+            if item['received_at']<cutoff:
+                item.update(preview='',has_code=0,retention_removed=1)
             size = len(encode(item).encode())
             if used+size>96*1024:break
             result.append(item);used+=size
@@ -219,7 +231,7 @@ class Inbound:
             permit(c,who)
             row = c.execute('SELECT * FROM inbound_messages WHERE message_id=?',(ident,)).fetchone()
             if not row:raise Problem('not_found','Message not found',404)
-            if row['retention_removed']:raise Problem('retention','Message content was removed by retention',410)
+            if row['retention_removed'] or row['received_at']<time.time()-RETENTION:raise Problem('retention','Message content was removed by retention',410)
             if code:return {'code':row['code'],'untrusted':True}
             body = row['body'] or ''
             # max_chars also observes a byte cap for multibyte text.
@@ -231,6 +243,8 @@ class Inbound:
             result = run(c)
             H.event(c,who.actor,'inbound.read',ident)
             return result
+        # Committed on its own: a 410 rolls back the audited read, which must not undo the purge.
+        self.purge()
         return self.store.write(who,audited)
 
     def ingest(self,page):
@@ -263,8 +277,7 @@ class Inbound:
             gaps = {(g['inbox_id'],g['from'],g['to']):g for g in old+page.get('gaps',[])}
             c.execute("UPDATE inbound_sync SET cursor=?,last_sync=?,error='',gaps_json=? WHERE singleton=1",
                       (through,time.time(),encode(list(gaps.values())[-100:])))
-            c.execute('UPDATE inbound_messages SET body=NULL,code=NULL,preview=\'\',retention_removed=1 WHERE '
-                      'retention_removed=0 AND received_at<?',(time.time()-90*86400,))
+            expire(c)
 
     def sync(self):
         if self.off or not self.sync_lock.acquire(blocking=False):return
@@ -291,8 +304,13 @@ class Inbound:
         finally:
             self.sync_lock.release()
 
+    def purge(self):
+        with self.store.transaction() as c:expire(c)
+
     async def loop(self,stop):
         while not stop.is_set():
+            try:await asyncio.to_thread(self.purge)
+            except Exception:pass
             try:await asyncio.to_thread(self.sync)
             except Exception:pass  # stable error code in Settings, never message content or a supplier traceback
             try:await asyncio.wait_for(stop.wait(),15)

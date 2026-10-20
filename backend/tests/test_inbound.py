@@ -134,3 +134,42 @@ def test_native_and_registered_agents_share_inboxes_but_lose_access_when_paused(
     with svc.store.transaction() as c:c.execute("UPDATE bots SET state='paused' WHERE slug='ops'")
     with pytest.raises(Problem):svc.list_inboxes(external)
     assert api.get('/api/v2/inbound/messages',headers=headers(attempt['token'])).status_code==409
+
+
+def test_retention_expires_body_and_code_while_hq_fails_or_key_is_removed(api):
+    import asyncio
+    svc=seed(api)
+    for n,ident in enumerate(('ses:hqdown:ibx_b','ses:keyless:ibx_b','ses:timer:ibx_b'),1):svc.ingest(page(n,ident=ident))
+    def backdate(ident):
+        with svc.store.transaction() as c:
+            c.execute('UPDATE inbound_messages SET received_at=? WHERE message_id=?',(time.time()-inbound.RETENTION-60,ident))
+    def stored(ident):
+        with svc.store.read() as c:
+            return dict(c.execute('SELECT body,code,retention_removed FROM inbound_messages WHERE message_id=?',(ident,)).fetchone())
+    def gone(ident):
+        listed={m['message_id']:m for m in api.get('/api/v2/inbound/messages',headers=headers()).json()['messages']}
+        assert listed[ident]['preview']=='' and listed[ident]['retention_removed'] and not listed[ident]['has_code']
+        for path in ('','/code'):
+            got=api.get('/api/v2/inbound/messages/'+ident+path,headers=headers())
+            assert got.status_code==410 and '123456' not in got.text
+        assert stored(ident)=={'body':None,'code':None,'retention_removed':1}
+    # HQ is configured but every call fails, so sync never reaches ingest: body and code past the cutoff are still gone.
+    backdate('ses:hqdown:ibx_b');svc.off=False
+    def down(method,path,body=None):raise Problem('inbound_unavailable','HQ down',503)
+    svc.remote=down
+    with pytest.raises(Problem):svc.sync()
+    assert stored('ses:hqdown:ibx_b')['code']=='123456'
+    gone('ses:hqdown:ibx_b')
+    # The inbound key is removed, so the service is off and sync is a no-op.
+    backdate('ses:keyless:ibx_b')
+    svc.off=True;del svc.remote
+    svc.sync()
+    assert stored('ses:keyless:ibx_b')['code']=='123456'
+    gone('ses:keyless:ibx_b')
+    # With no key, the local timer still clears stored content with no read and no HQ call.
+    backdate('ses:timer:ibx_b')
+    keyless=inbound.Inbound(svc.store,svc.settings,svc.auth)
+    assert keyless.off
+    stop=asyncio.Event();keyless.sync=stop.set
+    asyncio.run(keyless.loop(stop))
+    assert stored('ses:timer:ibx_b')=={'body':None,'code':None,'retention_removed':1}

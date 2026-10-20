@@ -161,7 +161,7 @@ def create_app(settings=None):
             telemetry.capture("support_access", exc)
         telemetry.start()
         stop = asyncio.Event()
-        inbound_task = asyncio.create_task(app.state.inbound.loop(stop)) if not app.state.inbound.off else None
+        inbound_task = asyncio.create_task(app.state.inbound.loop(stop))
         screen_relay_task = None
         if settings.screen_relay_url:
             await asyncio.to_thread(screen_sessions.start)
