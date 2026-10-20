@@ -9,9 +9,8 @@ All notable changes to Tico are recorded here. The format follows
 
 ### Added
 - PRIVACY.md has a section for **Ask Tico**, the chat on tico.team: what goes to Tico HQ and to OpenRouter (with
-  fixed filters: no data collection, zero data retention), that chats are kept with no
-  automatic deletion and deleted on request by chat or email, that notes stay with the Tico team's customer record,
-  and the limits and $20 daily cap. ([Privacy](PRIVACY.md#ask-tico-the-chat-on-ticoteam))
+  fixed filters: no data collection, zero data retention), and that HQ holds a chat in memory only, erased 30 minutes
+  after its last message. ([Privacy](PRIVACY.md#ask-tico-the-chat-on-ticoteam))
 - **How much your CEO Bot does**: where the CEO Bot switch is on, Settings > CEO Bot has three levels (1 Goals and
   tracking, 2 Suggests actions, 3 Acts on its own), each with one sentence on what it will and won't do, confirmed
   before it changes. Every company starts at 1; levels 2 and 3 do what level 1 does until they arrive. Only the owner

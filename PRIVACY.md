@@ -217,50 +217,31 @@ for you or reach a Tico server you run. Only `https://tico.team` may call these 
 
 ### What is sent, and to whom
 
-- **To Tico HQ:** each message you type (up to 2,000 characters) with a random ID the panel makes for this chat
-  (`crypto.randomUUID()`), and nothing else: the panel adds no name, email address, page history or cookie. Anything
-  you type yourself, a name or an email address included, is part of the message and is kept like the rest of the
-  chat. The panel also tells HQ when the chat opens and when you click a card's link (the card and the link's title,
-  never text).
+- **To Tico HQ:** each message you type (up to 2,000 characters; a longer one is refused and sent nowhere) with a
+  random ID the panel makes for this chat (`crypto.randomUUID()`), and nothing else: the panel adds no name, email
+  address, page history or cookie. Anything you type yourself, a name or an email address included, is part of the
+  message.
 - **To OpenRouter** (openrouter.ai), which passes it to a provider that serves the model (Inception's Mercury 3 today;
   the Tico team can change it): a fixed instruction, Tico's sales brief, up to four excerpts of Tico's public manual
   that match your message, your current message and up to 20 previous messages from this chat, as you wrote them.
   HQ adds nothing about you (not the chat ID, your IP address or any other detail): anything personal in the call is
-  what you typed. HQ
-  calls OpenRouter with one of its own OpenRouter keys (Ask Tico's own key, or HQ's shared one when that is not set;
-  either way OpenRouter receives the same call) and the same two filters on every call, which are not a setting: no
-  provider that may keep or train on data (`data_collection: deny`), and only endpoints OpenRouter classes as zero
-  data retention (`zdr: true`). If no provider meets them, the call is
-  refused and the chat rests; it is never sent again with looser filters. OpenRouter's policy does not count a
-  provider's in-memory prompt caching as retention
+  what you typed. HQ calls OpenRouter with one of its own OpenRouter keys (Ask Tico's own key, or HQ's shared one
+  when that is not set; either way OpenRouter receives the same call) and the same two filters on every call, which
+  are not a setting: no provider that may keep or train on data (`data_collection: deny`), and only endpoints
+  OpenRouter classes as zero data retention (`zdr: true`). If no provider meets them, the call is refused and the
+  chat rests; it is never sent again with looser filters. OpenRouter's policy does not count a provider's in-memory
+  prompt caching as retention
   ([OpenRouter: zero data retention](https://openrouter.ai/docs/guides/features/zdr#caching)).
-- **To Tico Decide:** each message is screened for spam, abuse and attempts to change the assistant's instructions
-  before it reaches the model (Tico Decide 1.0, which asks TypeSafe's Jev model at api.typesafe.ai). If screening is
-  down, the message goes to the model unscreened and only that fact is counted. A note you send is checked the same
-  way, to see whether it is a real enquiry.
-- **Send us a note:** your email address, your name and note if you give them, and, only if you tick to include it,
-  HQ's own copy of the chat. The panel never sends the chat itself.
 
 ### What HQ keeps
 
-- **The chat text.** HQ keeps each chat, under a salted hash of its ID, with no automatic deletion at any age. A chat
-  you sent with a note stays with that note.
-- **Your notes** go into Tico's customer records (the Tico team's CRM) and stay there with your contact details.
-- **Deletion on request:** ask us with **Send us a note**, giving the email address you used. The Tico team deletes
-  the chat's text, found by the chat or by that email address. The counts below stay; they hold no text.
-- **Counts, with no text:** per day, how many chats started, which way the assistant suggested (Open Core, Services,
-  Fully managed), card clicks, notes sent, messages refused by screening, messages not screened, and times the daily
-  spend cap was reached; and the day's OpenRouter spend.
-- **No IP addresses are stored or logged.** HQ uses your address only as a salted hash (an IPv6 address by its /64),
-  for the limits below and for the 60 requests an hour every HQ route has.
+- **The chat, in memory only,** under a salted hash of its ID, so the next message has the conversation. It is
+  erased 30 minutes after its last message, and a restart or deploy of HQ erases every chat. Nothing of the chat is
+  written to HQ's database, and no message text is logged.
+- **No counts** of Ask Tico chats are kept yet.
+- **No IP addresses are stored or logged.** HQ uses your address in memory only, as a salted hash, for the limit of
+  60 requests an hour every HQ route has.
 - **No cookie or tracker** is set by HQ.
-
-### Limits
-
-2,000 characters a message, 30 messages a chat, 50 messages a day from one address, and a chat ends 30 minutes after
-its last message. Ask Tico also stops for the day when its OpenRouter spend reaches its daily cap ($20 a day). When a
-limit is reached, nothing is sent to OpenRouter or Tico Decide, and the panel shows the reason or its resting view
-with the three options and the note form.
 
 ## The server's own model calls
 
