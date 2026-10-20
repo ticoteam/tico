@@ -168,3 +168,60 @@ def test_label_refusals_on_different_tasks_each_count(api):
             "SELECT detail_json FROM refusals WHERE actor='bot:cpo' AND rule='label' ORDER BY ts")]
     assert about == [tickets[0]["id"]] * 2 + [tickets[1]["id"]] * 2, "the replayed refusal keeps its task"
 
+
+
+def created(api, slug, title):
+    with api.app.state.store.read() as c:
+        return c.execute("SELECT count(*) FROM tasks WHERE requester=? AND title=?", ("bot:" + slug, title)).fetchone()[0]
+
+
+def test_a_bot_creates_a_task_with_a_classification_label_but_not_one_tico_acts_on(api):
+    token = bot_token(api, "cpo")
+    r = api.post("/api/v2/tasks", json={"owner": "ops", "title": "Run the exports in goal mode", "body": "x",
+                                        "labels": ["goal:on", "area-exports"]}, headers=headers(token))
+    assert r.status_code == 403 and r.json()["error"]["code"] == "label", r.text
+    detail = r.json()["error"]["detail"]
+    assert "goal:on changes how Tico runs the task, so a person on the leadership, product, engineering teams" in detail
+    assert "area-exports you may set on its own" in detail
+    assert created(api, "cpo", "Run the exports in goal mode") == 0, "nothing is written"
+    r = api.post("/api/v2/tasks", json={"owner": "ops", "title": "Stop goal mode", "body": "x", "labels": ["goal:off"]},
+                 headers=headers(token))
+    assert r.status_code == 403 and r.json()["error"]["code"] == "label", r.text
+    ticket = post(api, "tasks", {"owner": "ops", "title": "Build exports", "body": "x", "type": "Engineering",
+                                 "labels": ["qa"]}, token=token)
+    assert ticket["labels"] == ["qa"]
+    assert [rule for rule, _ in refusals(api, "cpo")] == ["label", "label"] and state(api, "cpo") == "active"
+
+
+def test_a_bot_creates_no_task_with_a_public_roadmap_label_and_is_told_the_way_through(api):
+    public_setup(api)
+    token = bot_token(api, "cpo")
+    body = {"owner": "cpo", "title": "Research search", "body": "x", "type": "Product roadmap",
+            "labels": ["roadmap", "area-search"]}
+    refused = post(api, "tasks", body, token=token, expected=403)["error"]
+    assert refused["code"] == "label" and "roadmap is a public roadmap label" in refused["detail"]
+    assert "create the task without it, then add it on the task" in refused["detail"]
+    assert "--approval-id" in refused["detail"] and "area-search you may set on its own" in refused["detail"]
+    assert created(api, "cpo", "Research search") == 0
+    post(api, "roadmaps/settings", {"bot_public_approval": False})
+    refused = post(api, "tasks", body, token=token, expected=403)["error"]
+    assert "a person on the leadership, product, engineering teams adds it" in refused["detail"]
+    assert created(api, "cpo", "Research search") == 0
+    # The way through: created without it, then labelled on the task with an approved publish approval.
+    post(api, "roadmaps/settings", {"bot_public_approval": True})
+    item = post(api, "tasks", {**body, "labels": ["area-search"]}, token=token)
+    preview = post(api, "tasks/" + item["id"] + "/publication-preview", {"labels": ["roadmap", "area-search"]}, token=token)
+    approval = post(api, "approvals", {"kind": "publish", "task_id": item["id"], "payload": preview["payload"]}, token=token)
+    post(api, "approvals/" + approval["id"], {"decision": "approved"})
+    assert label(api, item["id"], ["roadmap", "area-search"], token, approval_id=approval["id"])["labels"] == [
+        "roadmap", "area-search"]
+
+
+def test_a_mover_and_the_keeper_create_a_task_with_any_label_as_before(api):
+    public_setup(api)
+    made = post(api, "tasks", {"owner": "cmo", "title": "Draft the newsletter", "body": "x",
+                               "labels": ["goal:on", "roadmap"]}, token="ben-test")
+    assert made["labels"] == ["goal:on", "roadmap"]
+    with api.app.state.store.transaction() as c:
+        kept = H.task_create(c, H.KEEPER, "Refresh the map", "x", "bot:ops", labels=["goal:off"])
+    assert get(api, "tasks/" + kept["id"])["task"]["labels"] == ["goal:off"]

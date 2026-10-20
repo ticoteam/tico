@@ -223,6 +223,12 @@ All notable changes to Tico are recorded here. The format follows
   before this keeps today's behaviour ([sessions](docs/sessions.md)).
 
 ### Changed
+- **A bot creating a task meets the same label gate as when it edits one**: a bot that is not a mover can no longer
+  create a task already carrying `goal:on` or `goal:off` (which Tico acts on) or a public roadmap label. The create is
+  refused as a `label` refusal, nothing is written, and the refusal says the way through: create the task without the
+  roadmap label, then add it on the task with an approved publish approval, or ask a person on the leadership, product
+  or engineering teams. Classification labels such as `qa` still go on at creation; people, movers and Tico's own
+  tasks are unchanged. ([Permissions](docs/permissions.md#tags))
 - **A bot can hold 50 task worktrees, up from 30.** The computer's 5 GB free-disk floor and normal cleanup rules still apply.
 - **A waiting task sleeps, and a bot's own writes never wake it** (token saving): news about a task that waits on
   another task (blocked by) or on a pull request's checks (wake once), such as a step move, a relation change or a

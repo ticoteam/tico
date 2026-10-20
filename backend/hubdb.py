@@ -3199,22 +3199,49 @@ def _label_writer(conn, actor, row, labels, approval_id=None):
                    f"approved, and must match `hub task publication-preview {row['id']}` with a --label for each "
                    f"label the task keeps; request a new one, or ask a person on the {teams} teams", task=row["id"])
         return True
+    held = _held_labels(flow, public, teams, (
+        f"it needs an approved publish approval: get the payload with `hub task publication-preview {row['id']}` and "
+        f"a --label for each label the task keeps, request the approval, then retry with its id (--approval-id), or "
+        f"ask a person on the {teams} teams" if settings["bot_public_approval"] else
+        f"a person on the {teams} teams changes it"))
+    if held:
+        rest = [k for k in changed if k not in public and k not in flow]
+        refuse(conn, actor, "label", "; ".join(held) + (f". {', '.join(rest)} you may change on its own" if rest else ""),
+               task=row["id"])
+    return False
+
+
+def _held_labels(flow, public, teams, publish):
+    """The clauses of a `label` refusal: `flow` labels Tico acts on, `public` roadmap labels and what `publish`
+    says the bot does about them."""
     held = []
     if flow:
         held.append(f"{', '.join(flow)} {'changes' if len(flow) == 1 else 'change'} how Tico runs the task, so "
                     f"a person on the {teams} teams changes {'it' if len(flow) == 1 else 'them'}")
     if public:
         held.append(f"{', '.join(public)} {'is a public roadmap label' if len(public) == 1 else 'are public roadmap labels'}"
-                    f" (adding or removing one puts the task on a roadmap or takes it off), so "
-                    + (f"it needs an approved publish approval: get the payload with `hub task publication-preview "
-                       f"{row['id']}` and a --label for each label the task keeps, request the approval, then retry "
-                       f"with its id (--approval-id), or ask a person on the {teams} teams"
-                       if settings["bot_public_approval"] else f"a person on the {teams} teams changes it"))
+                    f" (adding or removing one puts the task on a roadmap or takes it off), so " + publish)
+    return held
+
+
+def _create_labels(conn, actor, keys):
+    """A bot that is not a mover creating a task with `keys` (task_create): _label_writer's rule for the new task.
+    A classification label goes on as before; a label Tico acts on stays a mover's, and a public roadmap label is
+    refused before anything is written. A publish approval is for a task that exists (publication-preview), so the
+    refusal says to create the task without it and add it on the task. Refused as rule `label`."""
+    from .roadmaps import settings as roadmap_settings
+    settings = roadmap_settings(conn)
+    public = [k for k in keys if k in settings["labels"]]
+    flow = [k for k in keys if k in WORKFLOW_LABELS]
+    teams = ", ".join(MOVER_TEAMS)
+    held = _held_labels(flow, public, teams, (
+        f"it needs an approved publish approval, which is for a task that exists: create the task without "
+        f"{'it' if len(public) == 1 else 'them'}, then add {'it' if len(public) == 1 else 'them'} on the task with the "
+        f"approval (`hub task publication-preview <id>`, then --approval-id), or ask a person on the {teams} teams"
+        if settings["bot_public_approval"] else f"a person on the {teams} teams adds {'it' if len(public) == 1 else 'them'}"))
     if held:
-        rest = [k for k in changed if k not in public and k not in flow]
-        refuse(conn, actor, "label", "; ".join(held) + (f". {', '.join(rest)} you may change on its own" if rest else ""),
-               task=row["id"])
-    return False
+        rest = [k for k in keys if k not in public and k not in flow]
+        refuse(conn, actor, "label", "; ".join(held) + (f". {', '.join(rest)} you may set on its own" if rest else ""))
 
 
 def _lane_for(conn, lane, owner, actor):
@@ -4332,6 +4359,8 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
         refuse(conn, actor, "lint", "; ".join(plain), severity)
     plain = warnings + plain
     labels = _labels(labels)
+    if labels and is_bot(actor) and not mover:
+        _create_labels(conn, actor, labels)     # people, movers and the keeper as before
     dup = _one(conn, "SELECT id FROM tasks WHERE requester=? AND owner=? AND title=? "
                      f"AND coalesce({TR.parent_sql()},'')=? "
                      f"AND status IN ({','.join('?' * len(ACTIVE_STATUSES))})",

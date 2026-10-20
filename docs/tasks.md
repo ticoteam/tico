@@ -299,6 +299,9 @@ Labels are a mover's, with one exception for bots: a bot adds and removes classi
 `manager`), whatever the type's `bots` setting. A public roadmap label needs its exact approved
 publish approval (`hub task publication-preview <id> --label ...` for the labels the task keeps,
 then `hub task label <id> --add roadmap --approval-id <id>`), and `goal:on`/`goal:off` need a mover.
+The same goes for a task a bot creates: it may carry classification labels, but one created with a
+public roadmap label or `goal:on`/`goal:off` is refused before anything is written; create it without
+the label, then add it on the task as above.
 Lane and number are a mover's alone ([Permissions](permissions.md#tags)).
 A bot's comment is a message to the people on the task, under the usual rules for reaching them.
 
