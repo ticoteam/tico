@@ -553,9 +553,11 @@ def test_a_held_company_task_involving_a_bot_the_reader_cannot_read_stays_unname
         {'seq': 1, 'kind': 'tool', 'payload': {'tool': 'Bash', 'status': 'started', 'item_id': 'b1'}}]}, machine['token'])
     expire(api, attempt['id'])
     assert claim(api, machine) is None
+    post(api, f"tasks/{task_id}/comments", {'text': 'Cite the new clause.'})         # waits behind the stopped run
     def held_for(token):
         return ' '.join(i['detail'] for i in get(api, 'operations', token=token)['issues'] if i['kind'] == 'uncertain_work')
     assert 'Counsel memo for Acme' in held_for('ben-test')          # control: Ben may read it
+    assert stopped_issue(api, 'ben-test')['held_tasks'] == ['Counsel memo for Acme']
     real = Auth.bot_accesses
     def without_legal(self, c, who, slugs=None):
         levels = real(self, c, who, slugs)
@@ -564,6 +566,7 @@ def test_a_held_company_task_involving_a_bot_the_reader_cannot_read_stays_unname
         return levels
     monkeypatch.setattr(Auth, 'bot_accesses', without_legal)
     assert 'Counsel memo for Acme' not in held_for('ben-test')
+    assert stopped_issue(api, 'ben-test')['held_tasks'] == []
     assert 'Counsel memo for Acme' in held_for('ana-test')
 
 
@@ -865,22 +868,55 @@ def test_a_stopped_run_that_holds_queued_work_needs_a_person_and_says_what_waits
     assert claim(api, machine)                             # reviewed: the waiting work runs
 
 
-def test_held_work_is_counted_and_named_only_for_who_may_read_it(api):
-    machine = runner(api, 'ana')
-    assign(api, machine, 'ops')
-    ready(api, machine, ['ops'])
-    task = post(api, 'tasks', {'owner': 'ops', 'title': 'Ana only', 'body': 'Private work.', 'private': True})
-    task_id = task.get('task', task).get('id') or task['refs']['task']
-    attempt = claim(api, machine)
-    post(api, f"attempts/{attempt['id']}/started", {'thread_id': 'private'}, machine['token'])
+def stop_partway(api, machine, attempt, thread):
+    post(api, f"attempts/{attempt['id']}/started", {'thread_id': thread}, machine['token'])
     post(api, f"attempts/{attempt['id']}/events", {'events': [
         {'seq': 1, 'kind': 'tool', 'payload': {'tool': 'Bash', 'status': 'started', 'item_id': 'b1'}}]}, machine['token'])
     expire(api, attempt['id'])
     assert claim(api, machine) is None
-    post(api, f"tasks/{task_id}/comments", {'text': 'One more thing for you.'})
-    assert stopped_issue(api)['held_tasks'] == ['Ana only']
-    for i in get(api, 'operations', token='ben-test')['issues']:
-        assert 'Ana only' not in i['detail'] and not i.get('held_back')
+
+
+def test_held_work_is_counted_and_named_only_for_who_may_read_it(api):
+    """Ben reads one of ops' stopped runs, so his issue is drawn; what the keeper left on Ana's private run, and what
+    waits behind it, counts toward neither its numbers, its names nor its urgency."""
+    machine = runner(api, 'ana')
+    assign(api, machine, 'ops')
+    ready(api, machine, ['ops'])
+    post(api, 'tasks', {'owner': 'ops', 'title': 'Weekly digest', 'body': 'Send it.'})
+    stop_partway(api, machine, claim(api, machine), 'company')
+    private = post(api, 'tasks', {'owner': 'ops', 'title': 'Ana only', 'body': 'Private work.', 'private': True})
+    private_id = private.get('task', private).get('id') or private['refs']['task']
+    # The keeper settles the request Ana's private run was for and leaves the comment carried on that run.
+    ready(api, machine, ['ops'])
+    first = claim(api, machine)
+    stop_partway(api, machine, first, 'twice')
+    aged(api, first['id'])
+    assert sweep(api) == []
+    post(api, f"jobs/{first['job_id']}/reconcile", {'attempt_id': first['id'], 'decision': 'resume',
+         'note': 'Nothing happened yet; run it again.', 'acknowledge_uncertain_effects': True})
+    ready(api, machine, ['ops'])
+    again = claim(api, machine)
+    post(api, f"attempts/{again['id']}/started", {'thread_id': 'twice-again'}, machine['token'])
+    post(api, f"tasks/{private_id}/comments", {'text': 'Also include the weekly numbers.'})
+    carried = post(api, f"attempts/{again['id']}/inputs", {}, machine['token'])['messages']
+    assert len(carried) == 1
+    post(api, f"attempts/{again['id']}/inputs/{carried[0]['id']}/ack", {}, machine['token'])
+    post(api, f"attempts/{again['id']}/events", {'events': [{'seq': 1, 'kind': 'tool', 'payload': {'name': 'shell'}}]},
+         machine['token'])
+    expire(api, again['id'])
+    assert claim(api, machine) is None
+    aged(api, again['id'])
+    assert [d['state'] for d in sweep(api)] == ['cancelled']
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT state FROM jobs WHERE message_id=?", (carried[0]['id'],)).fetchone()[0] == 'uncertain'
+    post(api, f"tasks/{private_id}/comments", {'text': 'One more thing for you.'})     # waits behind it
+    ready(api, machine, ['ops'])
+    assert claim(api, machine) is None
+    ana = stopped_issue(api)
+    assert ana['needs_person'] is True and ana['held_back'] == 1 and ana['held_tasks'] == ['Ana only']
+    ben = stopped_issue(api, 'ben-test')
+    assert 'saved 1 stopped run for later' in ben['title'] and ben['needs_person'] is False
+    assert not ben.get('held_back') and 'Ana only' not in ben['detail']
 
 
 def test_a_run_carried_on_a_stopped_run_the_keeper_settled_is_left_for_a_person(api):
