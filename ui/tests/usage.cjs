@@ -91,16 +91,18 @@ const total = rows => rows.reduce((t, r) => ({runs: t.runs + r.runs, est_cost_us
     await page.locator('#account-menu a[data-nav=usage]').click();
     await page.locator('.use-row').first().waitFor();
 
-    // Seven days by default, sorted by spend (estimate plus API-equivalent), with the total on top.
+    // Seven days by default, sorted by API-equivalent (billed plus subscriptions), one figure each, billed in the hover.
     assert.deepEqual([asked[0].from, asked[0].to], [day(6), day(0)]);
     assert.deepEqual(await page.locator('.use-name').allInnerTexts(), ['Support', 'COO', 'Sales', 'Inbox']);
-    assert.match(await page.locator('.use-total').innerText(), /^Estimated\s+\$6\.50 · 24 runs/);
-    assert.equal(await page.locator('.use-note').count(), 1, 'the word Estimated is said once');
+    assert.match(await page.locator('.use-total').innerText(), /^\$10\.20 API-equivalent · 24 runs/);
+    assert.equal(await page.locator('.use-note').count(), 1, 'API-equivalent is said once');
+    assert.equal(await page.locator('#use-total').getAttribute('title'), '$6.50 billed on API keys or Tico Gateway; the rest ran on subscriptions');
     const support = page.locator('.use-row[data-bot=support]');
     assert.match(await support.locator('.use-runs').innerText(), /12 runs/);
     assert.match(await support.locator('.use-tok').innerText(), /3\.06M tokens/);
-    assert.match(await support.locator('.use-cost').innerText(), /\$6\.10\s*≈ \$1\.50 API-equivalent/);
-    assert.equal((await page.locator('.use-row[data-bot=coo] .use-cost').innerText()).trim(), '≈ $2.20 API-equivalent', 'a subscription is not spend');
+    assert.match(await support.locator('.use-cost').innerText(), /^\$7\.60$/);
+    assert.equal((await page.locator('.use-row[data-bot=coo] .use-cost').innerText()).trim(), '$2.20');
+    assert.equal(await page.locator('.use-row[data-bot=coo] .use-est').getAttribute('title'), 'All on subscriptions');
     // Runs on a model that charges more for long prompts, without each request's tokens, may read low.
     assert.match(await page.locator('.use-row[data-bot=sales] .use-cost').innerText(), /\$0\.40\s*estimate, may be low/);
     assert.match(await page.locator('.use-total').innerText(), /Estimate, may be low: 2 runs on a model that charges more for long prompts/);
@@ -156,7 +158,7 @@ const total = rows => rows.reduce((t, r) => ({runs: t.runs + r.runs, est_cost_us
     await support.locator('.use-col').first().waitFor();
     assert.equal(await support.locator('.use-col').count(), 7);
     assert.match(await support.locator('.use-routines tbody tr').first().innerText(), /Morning triage\s+7\s+\$4\.20/);
-    assert.match(await support.locator('.use-routines tbody tr').nth(1).innerText(), /Other runs.*\$1\.90.*≈ \$1\.50 API-equivalent/s);
+    assert.match(await support.locator('.use-routines tbody tr').nth(1).innerText(), /Other runs.*\$3\.40/s);
     assert.equal(asked.at(-1).bot, 'support');
     const [download] = await Promise.all([page.waitForEvent('download'), support.locator('[data-use-csv]').click()]);
     assert.match(download.suggestedFilename(), /^usage-support-\d{4}-\d\d-\d\d-\d{4}-\d\d-\d\d\.csv$/);
