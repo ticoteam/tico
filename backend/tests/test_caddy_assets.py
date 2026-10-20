@@ -9,17 +9,20 @@ from pathlib import Path
 import re
 import socket
 import subprocess
+import sys
 import threading
 import time
 
 import pytest
 
 from backend import caddy_assets as assets
+from backend.config import ROOT
 
 
 APP, VISUAL, RUNNER = "acme.example", "files.acme.example", "runner.acme.example"
 TOKEN = "c3ludGhldGljLWZpbGU" + "." + "a" * 43
 SIGNED_PATH = "/visuals/" + TOKEN
+ENTRYPOINT = ROOT / "docker" / "entrypoint.sh"
 
 
 def hosts(config):
@@ -105,6 +108,16 @@ def test_unwritable_unmounted_directory_is_inert_while_off_but_refuses_explicit_
         with pytest.raises(RuntimeError, match="^caddy_config_write_failed$"):
             assets.prepare({"TICO_CADDY_DIR": str(directory), "TICO_DOMAIN": APP, "TICO_CADDY_VISUALS": "1",
                             "TICO_VISUAL_ORIGIN": "https://" + VISUAL})
+        assert not list(directory.iterdir())
+        # The entrypoint runs under set -euo pipefail, so its exit status decides whether the server starts.
+        run = {**os.environ, "PATH": f"{Path(sys.executable).parent}:{os.environ['PATH']}",
+               "PYTHONPATH": str(ROOT), "TICO_CADDY_DIR": str(directory), "TICO_DOMAIN": APP}
+        run.pop("TICO_CADDY_VISUALS", None)
+        assert subprocess.run(["bash", str(ENTRYPOINT), "caddy-config"], env=run, capture_output=True,
+                              timeout=60).returncode == 0
+        refused = subprocess.run(["bash", str(ENTRYPOINT), "caddy-config"], env={**run, "TICO_CADDY_VISUALS": "1"},
+                                 capture_output=True, text=True, timeout=60)
+        assert refused.returncode != 0 and "caddy_config_write_failed" in refused.stderr
         assert not list(directory.iterdir())
     finally:
         directory.chmod(0o755)
