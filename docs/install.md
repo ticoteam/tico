@@ -361,6 +361,15 @@ life of the server: use a client secret you can rotate. Progress is in `/var/log
 The owner is the first human on the roster; add the others in the app. The wizard writes these settings; to change
 one later, edit `/opt/tico/.env` and run `docker compose up -d` there. `.env.example` in the bundle lists every setting.
 
+For a hosted AWS/Caddy workspace whose public name is a DNS-only alias, keep `--domain acme.tico.dev
+--hosted-zone tico.dev` for the application, HTTPS certificate and exact OIDC callback. Give the separate operational
+record with `--dns-name pv-abcdefgh.preview.tico.team --dns-zone preview.tico.team --name pv-abcdefgh`. Both DNS flags
+are exact hostnames and the detected authoritative zone must match the named Route53 zone. The domain owner publishes
+the public CNAME; setup writes only the operational A/AAAA record and verifies both addresses before success. Without
+these flags, setup keeps its existing single-domain behavior. The DNS settings are saved for `destroy --dns`, which
+deletes only records still pointing at that server, before releasing its address; they can also be passed explicitly
+when recovering without saved state. Keep each attempt's `TICO_SETUP_HOME` separate when retrying the same public name.
+
 Attachment storage settings also go in `.env` next to `compose.yaml`:
 
 | Setting | Use |

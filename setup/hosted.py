@@ -46,6 +46,15 @@ def gather(args, s: Settings, dry: bool) -> None:
         raise MissingInput("--preset recommended is for a server Tico hosts (--hosted); on your own server run "
                            "scripts/install.sh --recommended")
     s.hosted, s.preset = hosted, preset
+    dns_name = (getattr(args, "dns_name", None) or s.dns_name or "").lower()
+    dns_zone = (getattr(args, "dns_zone", None) or s.dns_zone or "").lower()
+    if dns_name or dns_zone:
+        if not (hosted and s.target == "aws" and s.front_door == "caddy"):
+            raise MissingInput("--dns-name/--dns-zone require --hosted with AWS and Caddy")
+        if not (st.DOMAIN_RE.fullmatch(dns_name) and st.DOMAIN_RE.fullmatch(dns_zone)
+                and dns_name.endswith("." + dns_zone)):
+            raise MissingInput("--dns-name must be an exact hostname beneath --dns-zone (both are required)")
+        s.dns_name, s.dns_zone = dns_name, dns_zone
     if not hosted:
         return
     s.auth = "oidc" if auth == "oidc" else st.OWNER_LINK

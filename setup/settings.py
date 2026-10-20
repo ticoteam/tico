@@ -41,6 +41,8 @@ TRANSIENT_FIELDS = ("runner_given",)
 class Settings:
     target: str = ""
     domain: str = ""
+    dns_name: str = ""             # optional operational record, separate from the public domain
+    dns_zone: str = ""             # exact authoritative Route 53 zone for dns_name
     front_door: str = "caddy"
     updater: bool = True
     company: str = ""
@@ -101,6 +103,9 @@ class Settings:
 
     def runner(self) -> str:
         return "" if self.front_door != "cloudflared" or self.runner_host in ("", "none") else self.runner_host
+
+    def dns(self) -> str:
+        return self.dns_name or self.domain
 
     def to_env(self) -> dict[str, str]:
         # Keep the alias too: a pinned older server can use the generated settings.

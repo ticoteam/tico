@@ -32,6 +32,8 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--cloud-ssh-key", help="name (hetzner) or id/fingerprint (digitalocean) of an SSH key already in your account")
     p.add_argument("--tico-version", help="release to install, such as v1.2.3 (cloud targets: default the latest release; local: what scripts/install.sh pins)")
     p.add_argument("--domain")
+    p.add_argument("--dns-name", help="hosted AWS/Caddy: exact operational Route 53 hostname; defaults to --domain")
+    p.add_argument("--dns-zone", help="hosted AWS/Caddy: authoritative zone of --dns-name; no public URL or certificate change")
     p.add_argument("--front-door", choices=list(st.FRONT_DOORS))
     p.add_argument("--runner-hostname", dest="runner_host", metavar="HOST",
                    help="cloudflared: a hostname without Access where computers and outside agents connect (only /api/v2 and "

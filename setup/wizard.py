@@ -359,7 +359,7 @@ def ensure_dns(io: IO, s: Settings, deps: Deps, zone: dnsmod.Zone | None, record
     if skip_wait:
         return True
     io.say("  Waiting for public DNS ...")
-    return dnsmod.wait_until_live(s.domain, records, deps.public_resolvers(), timeout=timeout, say=io.say, sleep=deps.sleep)
+    return dnsmod.wait_until_live(s.dns(), records, deps.public_resolvers(), timeout=timeout, say=io.say, sleep=deps.sleep)
 
 
 def _route53(io: IO, s: Settings, deps: Deps, zone: dnsmod.Zone, records) -> bool:
@@ -415,7 +415,9 @@ def run(args, io: IO, deps: Deps) -> int:
     s.compose_ref = args.compose_ref
 
     io.say("\nLooking up who serves DNS for the domain ...")
-    zone = dnsmod.detect_zone(s.domain, deps.resolver)
+    zone = dnsmod.detect_zone(s.dns(), deps.resolver)
+    if s.dns_zone and (not zone or zone.name != s.dns_zone or zone.provider.key != "route53"):
+        raise MissingInput("--dns-zone must match the detected authoritative Route 53 zone for --dns-name")
     if zone:
         io.say(f"  {zone.name}: {zone.provider.name}  ({', '.join(zone.nameservers)})")
     gather_runner_host(io, args, s, zone, dry)
@@ -442,7 +444,7 @@ def run(args, io: IO, deps: Deps) -> int:
 
     tunnel_id = s.tunnel_id or tunnel_id_from_token(s.tunnel_token)
     ip = "<elastic-ip>" if s.target == "aws" else "<reserved-ip>" if s.target in cloudmod.PROVIDERS else s.server_ip
-    records = dnsmod.plan_records(s.domain, s.front_door, ipv4=ip if s.front_door == "caddy" else "", tunnel_id=tunnel_id,
+    records = dnsmod.plan_records(s.dns(), s.front_door, ipv4=ip if s.front_door == "caddy" else "", tunnel_id=tunnel_id,
                                   runner_host=s.runner())
 
     io.say("\nPlan")
@@ -563,7 +565,7 @@ def _aws(io, args, s, deps, zone, records, cf, env_text, compose, url, timeout) 
     ip = prep["public_ip"]
     if s.front_door == "caddy":
         s.server_ip = ip
-        records = dnsmod.plan_records(s.domain, "caddy", ipv4=ip)
+        records = dnsmod.plan_records(s.dns(), "caddy", ipv4=ip)
         io.say(f"\nDNS (Elastic IP {ip})")
         ensure_dns(io, s, deps, zone, records, timeout=0, skip_wait=True, cf=cf)
     script = remote.bootstrap_script(os_family=s.aws_os, domain=s.domain, front_door=s.front_door, compose=compose, compose_url=url,
@@ -574,7 +576,12 @@ def _aws(io, args, s, deps, zone, records, cf, env_text, compose, url, timeout) 
     runner = remote.SSMShell(ssm, iid, deps.sleep)
     if s.front_door == "caddy" and not args.skip_dns_wait:
         io.say("\nWaiting for public DNS (the server holds back Caddy until this is true) ...")
+        if s.dns_name and not dnsmod.wait_until_live(s.dns(), records, deps.public_resolvers(), timeout=timeout,
+                                                    say=io.say, sleep=deps.sleep):
+            return None
         if not dnsmod.wait_until_live(s.domain, records, deps.public_resolvers(), timeout=timeout, say=io.say, sleep=deps.sleep):
+            if s.dns_name:
+                return None
             io.say("The server keeps waiting for DNS for about 20 minutes after boot; if you fix DNS later, run "
                    "`tico setup doctor` (or re-run `tico setup`).")
     elif s.front_door == "cloudflared":
@@ -816,10 +823,18 @@ def destroy(args, io: IO, deps: Deps) -> int:
 def _dns_to_delete(io: IO, args, saved: dict, deps: Deps, ours: set[str]):
     """destroy --dns: (client, zone id, the record sets to delete) for the domain's A and AAAA records that still point at
     this server; None when Route 53 can't be read, so nothing at all is deleted and a re-run tries again."""
-    domain = (args.domain or "").lower()
+    domain = (getattr(args, "dns_name", None) or saved.get("dns_name") or args.domain or "").lower()
+    dns_zone = (getattr(args, "dns_zone", None) or saved.get("dns_zone") or "").lower()
+    if (getattr(args, "dns_name", None) or dns_zone) and not (
+            st.DOMAIN_RE.fullmatch(domain) and st.DOMAIN_RE.fullmatch(dns_zone)
+            and domain.endswith("." + dns_zone)):
+        raise MissingInput("--dns-name must be an exact hostname beneath --dns-zone (both are required)")
     if not domain:
         raise MissingInput("--dns needs --domain: the name whose record points at the server")
     zone = dnsmod.detect_zone(domain, deps.resolver)
+    if dns_zone and (not zone or zone.name != dns_zone):
+        io.say("--dns-zone does not match the detected authoritative zone; nothing was deleted.")
+        return None
     if not zone or zone.provider.key != "route53":
         io.say(f"--dns deletes records in Route 53, and {domain} is not served from there "
                f"({zone.provider.name if zone else 'no nameservers found'}).")
