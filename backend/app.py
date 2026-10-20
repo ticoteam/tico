@@ -664,7 +664,7 @@ def create_app(settings=None):
                     and not path.startswith(("/api", "/mcp")) and "authorization" not in request.headers
                     and "text/html" in request.headers.get("accept", "")):
                 back = path + ("?" + request.url.query if request.url.query else "")
-                return RedirectResponse(oidc.LOGIN_PATH + "?" + urlencode({"next": oidc.safe_next(back)}),
+                return RedirectResponse(auth.proxy.sign_in_path + "?" + urlencode({"next": oidc.safe_next(back)}),
                                         status_code=302)
             if (exc.status == 401 and auth.proxy and auth.proxy.name == owner_link.KIND
                     and request.method in ("GET", "HEAD") and not hasattr(request.state, "identity")
@@ -4384,6 +4384,9 @@ def create_app(settings=None):
     # A signed-out computer login takes the company's shared key again.
     @app.post("/api/v2/runners/{rid}/shared-key")
     def use_shared_key(request: Request, rid: str, body: M.SharedKeyUse):
+        if body.credential:
+            return mutate(request, body, lambda c: model_login.attach_shared_key(
+                c, request.state.identity, rid, body.runtime, body.credential, auth=auth, vault=app.state.vault))
         return mutate(request, body, lambda c: model_login.use_shared_key(
             c, request.state.identity, rid, body.runtime, auth=auth))
 
@@ -4405,11 +4408,16 @@ def create_app(settings=None):
     def replace_computer_key(request: Request, rid: str, body: M.KeyReplace):
         who = request.state.identity
         vault = app.state.vault
+        if body.share and body.switch:
+            raise Problem("switch", "Switch to API key gives this computer a key of its own; share a key from Add "
+                          "connection instead", 422)
         return vault.change(who, request.url.path, request.headers.get("idempotency-key"), body,
                             lambda c, w: None,
-                            lambda c: model_login.replace_key(c, who, rid, body.runtime, body.secret.get_secret_value(),
-                                                              body.env, body.scope, auth=auth, vault=vault,
-                                                              switch=body.switch))
+                            lambda c: model_login.share_key(c, who, rid, body.runtime, body.secret.get_secret_value(),
+                                                            body.env, body.share, auth=auth, vault=vault)
+                            if body.share else
+                            model_login.replace_key(c, who, rid, body.runtime, body.secret.get_secret_value(),
+                                                    body.env, body.scope, auth=auth, vault=vault, switch=body.switch))
 
     @app.get("/api/v2/runners/{rid}/logins/{lid}")
     def read_login(request: Request, rid: str, lid: str):

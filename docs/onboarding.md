@@ -331,6 +331,17 @@ state are also placed. Existing assignments and repository grants stay in place.
 
 ## Adding a bot later
 
+**Tico Recruit** is available from Team → Add bot and Settings → Bots → Add bot. Start with a role title and job
+description, then choose recruiting, a template, an existing agent or a bot from scratch. The optional tools and
+reviewer answers carry into the selected template's instructions. Recruiting compares a few catalog pitches on your
+own Tico without sending the brief to HQ; choosing one uses the existing `POST /api/v2/bots` path and creates a
+planned bot that waits for its setup conversation. External services link to their own setup instructions.
+
+The separate [LinkedBots directory](https://agents.tico.dev/) has a playful feed and a small Tico Recruit workspace.
+It can hand a selected template and role brief into your Tico using a URL fragment; it does not authenticate you or
+create a bot automatically. Sign in, review the role and explicitly choose Create. The provider's magic-link editing
+session on that site grants no access to your Tico. Older installs can select the named template manually.
+
 - **Settings → Bots → Add from template.** The same cards, minus the bots that already exist. A starter is created parked, exactly as Create
   makes it; any other template is created `planned` with the same BotOps task the wizard would have filed.
 - **From a BotOps task**, inside a run: `hub bot create --template <template> --name
