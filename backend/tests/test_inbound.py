@@ -139,6 +139,9 @@ def test_native_and_registered_agents_share_inboxes_but_lose_access_when_paused(
 @pytest.mark.parametrize('outage',[False,True],ids=['key_absent','hq_outage'])
 def test_bodies_and_codes_expire_at_90_days_without_hq(api,monkeypatch,outage):
     svc=seed(api);start=1_800_000_000.0
+    # The server's 15-second loop would tick on its own thread and race this test's tick (an extra HQ call, or the
+    # sync lock taken so this tick skips), so the loop's tick does nothing here and the test calls the real one.
+    monkeypatch.setattr(svc,'tick',lambda:None)
     monkeypatch.setattr(inbound,'now',lambda:start)
     old=page(1,ident='ses:old:ibx_b');old['deliveries'][0]['received_at']=start
     svc.ingest(old)
@@ -170,10 +173,10 @@ def test_bodies_and_codes_expire_at_90_days_without_hq(api,monkeypatch,outage):
                                                 ('Your verification code is 123456.','123456','x'))
     svc.purged_at=0
     if outage:
-        with pytest.raises(Problem):svc.tick()
+        with pytest.raises(Problem):inbound.Inbound.tick(svc)
         assert calls==['inboxes']
     else:
-        svc.tick()
+        inbound.Inbound.tick(svc)
     with svc.store.read() as c:
         row=dict(c.execute('SELECT * FROM inbound_messages').fetchone())
     assert row['body'] is None and row['code'] is None and row['preview']=='' and row['retention_removed']==1
