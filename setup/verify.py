@@ -128,8 +128,9 @@ def check_runner_host(host: str, get=_get) -> Check:
                  f"{contract.SERVICE_SERVER}:{contract.SERVER_PORT}." + old)
 
 
-def check_signin(domain: str, provider: str, client_id: str, get=_get) -> Check:
+def check_signin(domain: str, provider: str, client_id: str, get=_get, issuer: str = "") -> Check:
     want_uri = signin.redirect_uri(domain)
+    host = signin.issuer_host(provider, issuer)
     try:
         code, headers, _ = get(f"https://{domain}{contract.SIGNIN_PATH}", follow=False)
     except (OSError, urllib.error.URLError) as e:
@@ -137,9 +138,9 @@ def check_signin(domain: str, provider: str, client_id: str, get=_get) -> Check:
     loc = {k.lower(): v for k, v in headers.items()}.get("location", "")
     u = urllib.parse.urlparse(loc)
     q = urllib.parse.parse_qs(u.query)
-    if code not in (301, 302, 303, 307, 308) or u.hostname != contract.OIDC_HOSTS.get(provider):
+    if code not in (301, 302, 303, 307, 308) or u.hostname != host:
         return Check("Sign-in redirect", False, f"HTTP {code}, redirect to {u.hostname or 'nowhere'}",
-                     f"Expected a redirect to {contract.OIDC_HOSTS.get(provider)}. Check TICO_AUTH_PROXY=oidc and "
+                     f"Expected a redirect to {host}. Check TICO_AUTH_PROXY=oidc and "
                      "TICO_OIDC_ISSUER in /opt/tico/.env, then `docker compose up -d`.")
     if q.get("redirect_uri", [""])[0] != want_uri:
         return Check("Sign-in redirect", False, f"redirect_uri is {q.get('redirect_uri', ['(missing)'])[0]}",
@@ -175,19 +176,20 @@ def check_env_perms(r: Shell) -> Check:
     return Check(".env permissions", False, f"mode {mode or 'unknown'}", f"chmod 600 {contract.REMOTE_DIR}/.env")
 
 
-def _https_checks(domain, provider, client_id, front_door="") -> list[Check]:
+def _https_checks(domain, provider, client_id, front_door="", issuer="") -> list[Check]:
     out = [check_tls(domain), check_health(domain, front_door=front_door)]
-    if provider in contract.OIDC_HOSTS:
-        out.append(check_signin(domain, provider, client_id))
+    if signin.issuer_host(provider, issuer):
+        out.append(check_signin(domain, provider, client_id, issuer=issuer))
     return out
 
 
 def run_all(*, domain: str, provider: str, client_id: str, front_door: str, records, resolvers,
             shell: Shell | None, runner_host: str = "", wait_https: float = 0, sleep: Callable[[float], None] = time.sleep,
-            say: Callable[[str], None] | None = None) -> list[Check]:
-    """`wait_https` seconds of retrying the HTTPS checks: right after `docker compose up` Caddy has no certificate yet."""
+            say: Callable[[str], None] | None = None, issuer: str = "") -> list[Check]:
+    """`wait_https` seconds of retrying the HTTPS checks: right after `docker compose up` Caddy has no certificate yet.
+    `issuer` is the provider's address for `--auth oidc`, where the sign-in must redirect."""
     dns_check = check_dns(domain, records, resolvers)
-    https = _https_checks(domain, provider, client_id, front_door)
+    https = _https_checks(domain, provider, client_id, front_door, issuer)
     waited, delay = 0.0, 3.0
     while wait_https and not all(c.ok for c in https) and waited < wait_https:
         if not waited and say:
@@ -197,7 +199,7 @@ def run_all(*, domain: str, provider: str, client_id: str, front_door: str, reco
         sleep(delay)
         waited += delay
         delay = min(delay + 3, 15)
-        https = _https_checks(domain, provider, client_id, front_door)
+        https = _https_checks(domain, provider, client_id, front_door, issuer)
     out = [dns_check, *https]
     if runner_host:
         out.append(check_runner_host(runner_host))

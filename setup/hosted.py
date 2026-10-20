@@ -1,8 +1,9 @@
 """A server Tico hosts for a company: our operator's flags only, never a question.
 
 `--hosted own|invited` marks the install (TICO_HOSTED) and signs the owner in with a single-use link (TICO_AUTH_PROXY=
-owner-link, backend/owner_link.py). The link's secret is made here, on our operator's computer: it goes only into a
-0600 file for our team to send, and the server gets its sha256. `--preset recommended` writes the same choices as
+owner-link, backend/owner_link.py). With `--auth oidc` (a Tico account issuer, say) people sign in there instead, and
+the link stays as the owner's break-glass for when the issuer is down. The link's secret is made here, on our operator's
+computer: it goes only into a 0600 file for our team, and the server gets its sha256. `--preset recommended` writes the same choices as
 `scripts/install.sh --recommended` and adds the server's own computer, the Docker runner on the server's network.
 `python3 -m setup owner-link --domain D [--sign-out]` makes a new link and puts it in place of the old one.
 """
@@ -30,21 +31,24 @@ def gather(args, s: Settings, dry: bool) -> None:
     hosted = (getattr(args, "hosted", None) or s.hosted or "").strip().lower()
     preset = (getattr(args, "preset", None) or s.preset or "").strip().lower()
     auth = getattr(args, "auth", None) or ""
+    if not auth and hosted and s.hosted and s.auth == "oidc":
+        auth = "oidc"                   # a re-run keeps the OIDC sign-in the first run chose
     if hosted and hosted not in st.HOSTED:
         raise MissingInput("--hosted is own or invited")
     if preset and preset not in st.PRESETS:
         raise MissingInput("--preset is recommended")
     if auth == st.OWNER_LINK and not hosted:
         raise MissingInput("--auth owner-link is for a server Tico hosts: pass --hosted own or --hosted invited")
-    if hosted and auth and auth != st.OWNER_LINK:
-        raise MissingInput("--hosted signs the owner in with the owner sign-in link: leave out --auth, or pass --auth owner-link")
+    if hosted and auth and auth not in (st.OWNER_LINK, "oidc"):
+        raise MissingInput("--hosted signs people in with the owner sign-in link, or with --auth oidc (the link then stays "
+                           "as break-glass): leave out --auth, or pass --auth owner-link or --auth oidc")
     if preset and not hosted:
         raise MissingInput("--preset recommended is for a server Tico hosts (--hosted); on your own server run "
                            "scripts/install.sh --recommended")
     s.hosted, s.preset = hosted, preset
     if not hosted:
         return
-    s.auth = st.OWNER_LINK
+    s.auth = "oidc" if auth == "oidc" else st.OWNER_LINK
     zone = (getattr(args, "hosted_zone", None) or s.hosted_zone or "").strip().lower().strip(".")
     if not zone or not st.DOMAIN_RE.match(zone):
         raise MissingInput("--hosted needs --hosted-zone: the DNS zone of ours that the domain is under")
@@ -72,8 +76,13 @@ def new_link(s: Settings) -> str:
 
 
 def plan_lines(s: Settings) -> list[str]:
-    out = [f"Sign-in: the owner's single-use sign-in link (a week at most), written to {link_file(s.domain)} (0600) for our "
-           f"team to send; never printed. Hosted install: {s.hosted}, under {s.hosted_zone}"]
+    if s.auth == st.OWNER_LINK:
+        out = [f"Sign-in: the owner's single-use sign-in link (a week at most), written to {link_file(s.domain)} (0600) for "
+               f"our team to send; never printed. Hosted install: {s.hosted}, under {s.hosted_zone}"]
+    else:
+        out = [f"Break-glass: the owner's single-use sign-in link (a week at most), for when the issuer is down, written to "
+               f"{link_file(s.domain)} (0600) for our team only; never printed, and not for the ready email. Hosted install: "
+               f"{s.hosted}, under {s.hosted_zone}"]
     if s.preset:
         out.append("Recommended setup: the sample company, your Claude and ChatGPT subscriptions plus Tico Gateway, "
                    f"Tico Support {s.support or 'on'}, and a computer on the server (the Docker runner). "
@@ -150,7 +159,7 @@ def rotate(args, io: IO, deps) -> int:
     if not saved:
         raise MissingInput(f"No saved setup for {domain}; run `tico setup` first.")
     s = st.from_saved(saved, env_text)
-    if s.auth != st.OWNER_LINK:
+    if s.auth != st.OWNER_LINK and not (s.hosted and s.auth == "oidc"):
         raise MissingInput(f"{domain} does not use the owner sign-in link (it was set up with --auth {s.auth}).")
     what = "a new owner sign-in link" + (" and sign the owner out everywhere" if args.sign_out else "")
     if args.dry_run:

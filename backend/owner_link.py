@@ -1,4 +1,4 @@
-"""Owner sign-in link for a server our team hosts (TICO_AUTH_PROXY=owner-link).
+"""Owner sign-in link for a server our team hosts (TICO_AUTH_PROXY=owner-link), or its break-glass way in.
 
 The quick start's owner token is reusable and only safe on loopback (backend/config.py). A hosted server is
 reachable by anyone, so its owner gets a different link instead: single use, unused for at most LINK_DAYS, and only
@@ -11,6 +11,10 @@ holds a random id in a Secure, HttpOnly, SameSite=Lax cookie. The button stops m
 using the link up. A link that was used, replaced or is too old gets a page that says to ask
 Tico for a new one. `python -m backend.owner_link replace DATABASE HASH [--sign-out]` puts a new link in place of the old one
 and can also sign out every owner session; the installer runs it (`python3 -m setup owner-link`).
+
+Break-glass: a hosted install that signs people in with OpenID Connect (TICO_AUTH_PROXY=oidc, TICO_HOSTED, and a
+TICO_OWNER_LINK_HASH from the installer) keeps the same link next to it, so the owner still gets in while the issuer
+is down. Its sessions are the OIDC proxy's own rows, and nothing here calls the issuer.
 """
 
 import argparse
@@ -44,17 +48,30 @@ CREATE TABLE IF NOT EXISTS owner_links(
 """
 
 
+def break_glass(settings):
+    """A hosted install on the built-in OIDC sign-in that the installer gave an owner link: the link works beside it."""
+    return settings.proxy_kind == "oidc" and settings.hosted in HOSTED and bool(settings.owner_link_hash)
+
+
 def check(settings):
     """A reachable server takes this sign-in only as a hosted install on https, with a link to start from."""
+    what = "TICO_AUTH_PROXY=owner-link" if settings.proxy_kind == KIND else "The owner sign-in link (TICO_OWNER_LINK_HASH)"
     if not settings.public_url.startswith("https://") or settings.loopback or not _is_domain(settings.public_url):
-        raise RuntimeError("TICO_AUTH_PROXY=owner-link needs an https address on a domain name (TICO_DOMAIN), not an IP "
+        raise RuntimeError(what + " needs an https address on a domain name (TICO_DOMAIN), not an IP "
                            "address; it is for servers Tico hosts")
     if settings.hosted not in HOSTED:
-        raise RuntimeError("TICO_AUTH_PROXY=owner-link is for a hosted install: set TICO_HOSTED to own or invited")
+        raise RuntimeError(what + " is for a hosted install: set TICO_HOSTED to own or invited")
     if settings.owner_link_hash and not HASH_RE.fullmatch(settings.owner_link_hash):
         raise RuntimeError("TICO_OWNER_LINK_HASH must be the 64-character sha256 of the link's secret")
     if not settings.owner_email:
-        raise RuntimeError("TICO_AUTH_PROXY=owner-link needs TICO_OWNER_EMAIL")
+        raise RuntimeError(what + " needs TICO_OWNER_EMAIL")
+
+
+def place_first(settings, store):
+    """On every start, after the tables exist: the hash the installer gave becomes the first link, once."""
+    if settings.owner_link_hash:
+        with store.transaction() as c:
+            place(c, settings.owner_link_hash, settings.owner_email, only_if_none=True)
 
 
 def _is_domain(url):
@@ -134,10 +151,7 @@ class OwnerLink:
             setattr(self, method, getattr(oidc.Oidc, method).__get__(self))
 
     def warm(self):
-        """After the tables exist, on every start: the hash the installer gave becomes the first link, once."""
-        if self.settings.owner_link_hash:
-            with self.store.transaction() as c:
-                place(c, self.settings.owner_link_hash, self.settings.owner_email, only_if_none=True)
+        place_first(self.settings, self.store)
 
     def logout(self, headers):
         from .auth import cookies
@@ -157,15 +171,20 @@ SCRIPT = (
 
 
 def register(app, auth):
-    """GET shows the button, POST spends the link. Both answer 404 unless this is an owner-link server."""
+    """GET shows the button, POST spends the link. Both answer 404 unless this is an owner-link server, or a hosted
+    OIDC one with the link as break-glass."""
     from . import oidc
     from .client_ip import client_ip
     settings, store = auth.settings, auth.store
+    # The break-glass link's wrong tries; an owner-link server keeps its own on the proxy.
+    failures = Failures()
 
     def active():
-        if not isinstance(auth.proxy, OwnerLink):
-            raise Problem("not_found", "Not found", 404)
-        return auth.proxy
+        if isinstance(auth.proxy, OwnerLink):
+            return auth.proxy
+        if isinstance(auth.proxy, oidc.Oidc) and break_glass(settings):
+            return auth.proxy
+        raise Problem("not_found", "Not found", 404)
 
     @app.get(LINK_PATH)
     def owner_link_page(request: Request, signed_out: str = "", next: str = ""):
@@ -203,14 +222,15 @@ def register(app, auth):
         if origin and not settings.allows_origin(origin):
             raise Problem("origin", "Cross-site writes are not allowed", 403)
         ip = client_ip(request, settings)
-        if proxy.failures.blocked(ip):
+        tries = getattr(proxy, "failures", failures)
+        if tries.blocked(ip):
             return oidc._page(settings, 429, "Too many tries", "Wait a few minutes, or " + ASK[0].lower() + ASK[1:])
         with store.transaction() as c:
             human = c.execute("SELECT id FROM humans WHERE lower(email)=?", (settings.owner_email,)).fetchone()
             ok = bool(human) and spend(c, token)
             sid = proxy.start_session(c, human["id"], settings.owner_email) if ok else ""
         if not ok:
-            proxy.failures.note(ip)
+            tries.note(ip)
             return oidc._page(settings, 410, "This sign-in link has been used or has expired", ASK)
         # Back where the app was, a same-origin path only (oidc.safe_next: never another site, never //, \\ or a scheme).
         response = RedirectResponse(oidc.safe_next(next), status_code=303)
@@ -234,8 +254,10 @@ def main(argv=None):
         print("The hash must be 64 lowercase hex characters.", file=sys.stderr)
         return 2
     import os
-    if os.environ.get("TICO_AUTH_PROXY", "").strip().lower() != KIND:
-        print("This server does not use the owner sign-in link (TICO_AUTH_PROXY=owner-link).", file=sys.stderr)
+    kind = os.environ.get("TICO_AUTH_PROXY", "").strip().lower()
+    if kind != KIND and not (kind == "oidc" and os.environ.get("TICO_HOSTED", "").strip() in HOSTED):
+        print("This server does not use the owner sign-in link (TICO_AUTH_PROXY=owner-link, or oidc on a hosted install).",
+              file=sys.stderr)
         return 2
     from .auth import Auth
     from .config import Settings

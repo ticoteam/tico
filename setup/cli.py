@@ -45,7 +45,12 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--aws-profile")
     p.add_argument("--aws-instance-type", choices=["t4g.small", "t4g.medium", "t4g.large"], help="server default t4g.small; runner default t4g.medium")
     p.add_argument("--aws-os", choices=["ubuntu", "al2023"])
-    p.add_argument("--name", help="destroy: the tico-setup-name tag value (default: derived from --domain)")
+    p.add_argument("--aws-permissions-boundary", metavar="ARN", help="AWS: the IAM policy ARN set as the permissions boundary of "
+                   "the server's role when it is created, for an account that only lets setup make roles under one")
+    p.add_argument("--name", help="AWS: the server's name: its resources are tico-<name>, tagged tico-setup-name=<name>, and its "
+                   "settings are in /tico/<name>/env (default: derived from --domain); destroy: the tico-setup-name tag value")
+    p.add_argument("--dns", action="store_true", help="destroy: also delete the domain's A and AAAA records in Route 53, only "
+                   "while they still point at this server (needs --domain)")
     p.add_argument("--auth", choices=[*st.AUTHS, st.OWNER_LINK],
                    help="owner-link: a single-use sign-in link for the owner, only with --hosted")
     p.add_argument("--hosted", metavar="own|invited", help="a server Tico hosts: own (our team) or invited (an invited company); "
@@ -56,6 +61,10 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--sign-out", action="store_true", help="owner-link: also sign the owner out everywhere")
     p.add_argument("--tenant", help="Microsoft tenant id or domain")
     p.add_argument("--client-id")
+    p.add_argument("--issuer", help="with --auth oidc: the provider's issuer URL (https); the client secret comes only "
+                   "from TICO_OIDC_CLIENT_SECRET in the environment")
+    p.add_argument("--signin-label", metavar="NAME", help="with --auth oidc: the name on the sign-in button, "
+                   "\"Sign in with NAME\" (for example \"Tico account\"); without it, sign-in goes straight to the provider")
     p.add_argument("--allowed-domain", help="only this email domain may sign in")
     p.add_argument("--access-issuer")
     p.add_argument("--access-audience")

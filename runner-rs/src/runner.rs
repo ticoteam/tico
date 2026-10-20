@@ -196,7 +196,8 @@ impl Runner {
         let lock = self.flush_locks.lock().unwrap().entry(aid.to_string()).or_default().clone();
         let _held = lock.lock().await;
         loop {
-            let batch = self.state.pending(aid).map_err(|e| ApiError::new("state", e, 0, false))?;
+            let id = aid.to_string();
+            let batch = self.state.off(move |s| s.pending(&id)).await.map_err(|e| ApiError::new("state", e, 0, false))?;
             if batch.is_empty() {
                 return Ok(());
             }
@@ -207,7 +208,8 @@ impl Runner {
                 mark("first_delta_posted", aid);
             }
             let ack = result["ack_seq"].as_i64().unwrap_or(0);
-            self.state.ack(aid, ack).map_err(|e| ApiError::new("state", e, 0, false))?;
+            let id = aid.to_string();
+            self.state.off(move |s| s.ack(&id, ack)).await.map_err(|e| ApiError::new("state", e, 0, false))?;
         }
     }
 

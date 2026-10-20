@@ -51,6 +51,7 @@ services:
       TICO_OIDC_CLIENT_ID:
       TICO_OIDC_CLIENT_SECRET:
       TICO_OIDC_ALLOWED_DOMAINS:
+      TICO_OIDC_LABEL:
       TICO_CORS_ORIGINS:
       TICO_CLIENT_IP_HEADER:
       # Forwarded client addresses are believed only from loopback (the server's own relay) and the two front doors'
@@ -174,6 +175,7 @@ services:
       TICO_OIDC_CLIENT_ID:
       TICO_OIDC_CLIENT_SECRET:
       TICO_OIDC_ALLOWED_DOMAINS:
+      TICO_OIDC_LABEL:
       TICO_ACCESS_ISSUER:
       TICO_ACCESS_AUDIENCE:
       TICO_REHEARSAL:
