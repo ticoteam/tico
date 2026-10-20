@@ -3,6 +3,7 @@ the claim passes over a bot (execution.claim_refusal, job_refusal) is Health's r
 and computer only by the labels of the diagnostics bundle sent with it."""
 import json
 import re
+from types import SimpleNamespace
 
 import pytest
 
@@ -68,13 +69,16 @@ def test_a_bot_whose_worktrees_the_runner_is_maintaining(api):
     says(api, machine, "maintaining", busy_bots=["ops"])
 
 
-def test_a_lane_a_lapsed_lease_still_runs_in(api):
+def test_a_lane_a_lapsed_lease_still_runs_in(api, monkeypatch):
     """expire() requeued the job, but the runner's worker still runs it: the runner's busy list holds its lane."""
+    # A new computer can still be inside the freshness window measured from monotonic zero.
+    monkeypatch.setattr(execution, "time", SimpleNamespace(monotonic=lambda: execution.CLAIMED_FRESH / 2))
     machine = task_bot(api, lanes=True)
     task = new_task(api, "first")
     says(api, machine, "lane_held", busy_lanes=["ops|task:" + task["id"]])
     # The busy list is the runner's latest claim, and only while it is fresh.
-    execution.CLAIMED_BUSY[machine["runner_id"]] = (*execution.CLAIMED_BUSY[machine["runner_id"]][:2], 0.0)
+    expired = execution.time.monotonic() - execution.CLAIMED_FRESH - 1
+    execution.CLAIMED_BUSY[machine["runner_id"]] = (*execution.CLAIMED_BUSY[machine["runner_id"]][:2], expired)
     store = api.app.state.store
     with store.read() as c:
         assert execution.bot_refusal(c, store.settings, machine["runner_id"], "ops") is None

@@ -593,17 +593,22 @@ def test_a_fallback_chain_stops_before_a_third_usage_segment(api, computer):
     assert saved.status_code == 200, saved.text
     computer.start()
     post(api, "chat/ops", {"text": "Please LIMIT yourself"})
-    result = until(lambda: (computer.attempts() or [{}])[-1].get("result"), "the completion")
+    # A limited attempt can be retried immediately on another ready provider. Keep this attempt's identity.
+    attempt = until(lambda: (computer.attempts() or [None])[0], "the first attempt")
+    aid = attempt["id"]
+    result = until(lambda: next((a["result"] for a in computer.attempts() if a["id"] == aid), None), "the completion")
+    hops = [e["payload"]["fallback"] for e in computer.events(aid)
+            if e["kind"] == "diagnostic" and e["payload"].get("fallback")]
     segments = [s["runtime"] for s in result["usage"]["segments"]]
     if spends == "claude":      # Codex refused with nothing spent: Muse Code still takes the turn
         assert result["outcome"] == "completed" and result["fallback"] == "musecode" and not result.get("limited")
-        assert [p["harness"] for p in computer.prompts()] == ["claude", "codex", "musecode"]
+        assert hops == ["codex", "musecode"]
         assert segments == ["claude", "musecode"]
-    else:                       # both spent tokens: Muse Code never starts, and the server takes the two segments
+    else:                       # No third hop in this attempt; the server takes its two segments.
         assert result.get("limited") and result["fallback"] == "codex"
-        assert [p["harness"] for p in computer.prompts()] == ["claude", "codex"]
+        assert hops == ["codex"]
         assert segments == ["claude", "codex"]
-    made = next(r["ran_on"] for r in get(api, "bots/ops/turns") if r["id"] == computer.attempts()[-1]["id"])
+    made = next(r["ran_on"] for r in get(api, "bots/ops/turns") if r["id"] == aid)
     assert [s["runtime"] for s in made["segments"]] == segments
 
 
