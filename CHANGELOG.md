@@ -15,7 +15,7 @@ All notable changes to Tico are recorded here. The format follows
   first while it is empty, proposes a Why for each goal with none as one Needs you item, sends a Monday note (started
   when the switch goes on), asks a red or stalled goal's owner what is happening, and changes no tasks. It puts at most
   5 items a day in one person's Needs you. `hub goal ceo-bot` and `hub goal company` read it
-  ([Goals](docs/goals-and-kpis.md#how-much-your-ceo-bot-does)).
+  ([Your CEO Bot](docs/ceo-bot.md)).
 - **Tico HQ's nightly billing check on the Tico team's Health page**: on the one server that holds HQ's read-only
   staff key (`TICO_HQ_STAFF_READ_KEY`), the server reads HQ's nightly ledger check every hour and the owner's Health
   page shows each mismatch in red, naming the company's install id and the difference in dollars. A check that missed
