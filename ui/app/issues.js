@@ -297,11 +297,11 @@ function issuesTable(list, showOwner) {
 // The models that did a run's work (not the bot's configured one); empty when nothing was counted.
 const ranOn = made => [...new Set(((made || {}).segments || []).map(s => s.model).filter(Boolean))].join(' then ');
 // A failed run offers Report this: Support opens with it attached (ui/support.js).
-function runsReportHTML(r) {
+function runsReportHTML(r, icon = false) {
   if (!window.supportOn?.() || !window.reportThisHTML) return '';
   const why = r.failure_reason || r.outcome || `exit ${r.exit}`;
   return `<div>${window.reportThisHTML({kind: 'run', title: `${r.employee || 'Run'} failed: ${why}`, detail: why, ref: r.attempt_id || r.id || '',
-    group: 'run:' + String(why).replace(/\d+/g, '#').slice(0, 80)})}</div>`;
+    group: 'run:' + String(why).replace(/\d+/g, '#').slice(0, 80)}, icon)}</div>`;
 }
 function runsTable(list, showEmp=true) {
   if (!list.length) return `<div class="empty">No runs yet.${window.talkLineHTML?.() || ''}</div>`;

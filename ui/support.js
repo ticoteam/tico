@@ -530,7 +530,10 @@
   // Report this is offered unless this server has support turned off.
   // Pages re-render once support's state loads; a toast does not, so it asks for `known` and waits for a yes.
   window.supportOn = known => known ? state.enabled === true : state.enabled !== false;
-  window.reportThisHTML = report => `<button type="button" class="linkish report-this" data-report-this="${escape(JSON.stringify(report))}">Report this</button>`;
+  // `icon`: a small flag button for a dense row (Settings > History > Runs); the words become its label and tooltip.
+  window.reportThisHTML = (report, icon = false) => icon
+    ? `<button type="button" class="report-this report-this-icon" data-report-this="${escape(JSON.stringify(report))}" aria-label="Report this" title="Report this"><span class="nav-icon" aria-hidden="true">bug_report</span></button>`
+    : `<button type="button" class="linkish report-this" data-report-this="${escape(JSON.stringify(report))}">Report this</button>`;
   window.talkLineHTML = () => state.enabled === false ? '' : '<p class="talk-line">Stuck or curious? A person at Tico reads every message. <button type="button" class="linkish" data-chat-with-us>Chat with us</button></p>';
   document.addEventListener('click', e => {
     const talk = e.target.closest?.('[data-chat-with-us]'), report = e.target.closest?.('[data-report-this]');

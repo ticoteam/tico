@@ -45,18 +45,21 @@ function settingsHistoryShow(view = SETTINGS_HISTORY_VIEW) {
   document.querySelectorAll('[data-history-view]').forEach(button => button.setAttribute('aria-checked', String(button.dataset.historyView === SETTINGS_HISTORY_VIEW)));
   if (SETTINGS_HISTORY_VIEW === 'runs') void renderSettingsRuns();
 }
+// "18K out", so a run with no price fits its column on a phone; the exact count is in the CSV and the log.
+const settingsRunTokens = new Intl.NumberFormat(undefined, {notation: 'compact', maximumFractionDigits: 1});
 const settingsRunTook = s => s == null ? '' : s >= 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${s}s`;
 function settingsRunsHTML(list) {
   if (!list.length) return `<div class="empty">No runs yet.${window.talkLineHTML?.() || ''}</div>`;
   return `<div class="runs-list"><div class="run-row run-head"><span>Bot</span><span>Result</span><span>Model</span><span>Took</span><span>Cost</span><span>Finished</span><span></span></div>
     ${list.map(r => {
       const attempt = r.record_kind === 'attempt', ok = !attempt && r.exit === 0;
-      const result = attempt ? `${r.outcome} attempt` : ok ? 'Done' : r.outcome || `exit ${r.exit}`;
+      // An attempt reads its outcome alone; "attempt" and its id are in the pill's tooltip.
+      const result = ok ? 'Done' : r.outcome || `exit ${r.exit}`;
       const why = attempt ? r.failure_reason || '' : '';
-      const cost = r.cost_usd != null ? '$' + r.cost_usd.toFixed(2) : r.output_tokens != null ? `${r.output_tokens.toLocaleString()} out` : '';
+      const cost = r.cost_usd != null ? '$' + r.cost_usd.toFixed(2) : r.output_tokens != null ? `${settingsRunTokens.format(r.output_tokens)} out` : '';
       return `<div class="run-row">
         <span class="run-bot">${empChip(r.employee)}</span>
-        <span class="run-result"><span class="pill ${ok ? 'ok' : 'fail'}"${attempt ? ` title="${esc(r.attempt_id || '')}"` : ''}>${esc(result)}</span>${ok ? '' : runsReportHTML(r)}</span>
+        <span class="run-result"><span class="pill ${ok ? 'ok' : 'fail'}"${attempt ? ` title="${esc(`Attempt ${r.attempt_id || ''}`.trim())}"` : ''}>${esc(result)}</span>${ok ? '' : runsReportHTML(r, true)}</span>
         <span class="run-model">${why ? `<span class="run-why" title="${esc(why)}">${esc(why)}</span>` : ''}<span class="mono" title="The model that did the work; a fallback changes it">${esc(ranOn(r.ran_on))}</span>${r.fallback
           ? `<span class="pill waiting" title="Ran on the fallback after the primary was unavailable">${esc(r.fallback)}</span>` : ''}${r.resumed ? '<span class="run-tag" title="Picked up where it left off">resumed</span>' : ''}</span>
         <span class="run-took tnum">${settingsRunTook(r.duration_s)}</span>

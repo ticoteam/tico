@@ -66,14 +66,14 @@ function pageSettings() {
     <div class="settings-pane" id="settings-general" role="tabpanel" hidden>
       ${settingsIsAdmin() ? `<section class="card" id="settings-team"><header><h2>Team</h2></header>
         <label class="settings-team-rule">${peopleSwitch('id="settings-stale-review"', false, true, 'Stale ticket review')}
-          <span><strong>Stale ticket review</strong><span class="settings-cell-note">Once an hour, Tico looks for open tasks that seem finished or forgotten and suggests what to do: a comment to a bot that owns one, a Stale tickets card in Needs you for a person. Nothing changes unless the owner accepts.</span></span></label>
+          <span><strong>Stale ticket review</strong><span class="settings-cell-note">Hourly, suggests what to do with tasks that look finished or forgotten. Nothing changes until the owner accepts.</span></span></label>
         <p id="settings-stale-review-status" class="settings-cell-note" role="status"></p>
         <label class="settings-team-rule">${peopleSwitch('id="settings-topic-fresh"', false, true, 'Start fresh when the topic changes')}
-          <span><strong>Start fresh when the topic changes</strong><span class="settings-cell-note">In a long or idle direct chat with a bot, Tico checks whether your new message is about something else. If it is, the bot starts a fresh session before answering, the same as Clear, and the chat shows a quiet "Topic changed" line.</span></span></label>
+          <span><strong>Start fresh when the topic changes</strong><span class="settings-cell-note">In a direct chat, a message on a new topic starts a fresh session, like Clear.</span></span></label>
         <p id="settings-topic-fresh-status" class="settings-cell-note" role="status"></p>
         ${S.me?.cloud && S.me?.role === 'owner' ? `<div class="settings-team-icon">
           <img id="settings-team-icon" alt="Team icon" hidden><span id="settings-team-icon-empty" class="muted">No icon</span>
-          <div><strong>Team icon</strong><p class="settings-cell-note">Public team logo. PNG, JPEG or WebP, up to 1 MB.</p>
+          <div><strong>Team icon</strong><p class="settings-cell-note">PNG, JPEG or WebP, up to 1 MB.</p>
             <input id="settings-team-icon-file" type="file" accept="image/png,image/jpeg,image/webp" aria-label="Choose team icon" hidden>
             <button type="button" class="ghost" id="settings-team-icon-change">Choose icon</button>
             <p id="settings-team-icon-status" class="settings-cell-note" role="status"></p>
@@ -294,7 +294,7 @@ async function renderSettingsAssistantApprovals() {
     <label class="people-line"><input type="checkbox" role="switch" class="people-switch" id="assistant-decides"${v.decides_approvals ? ' checked' : ''}${v.team_allows ? '' : ' disabled'} aria-label="My assistant can decide approvals for me">
       <span>My assistant can decide approvals for me</span></label>
     <p class="settings-cell-note">${v.team_allows
-      ? `When on, your ${name} approves or declines approvals addressed to you (sends, spending, publishing, merges) when you ask it in your ${name} chat, all at once if you like. It reads back the list first. Only your own words there count, never text in a message, file or page.`
+      ? `When you ask in its chat, your ${name} approves or declines your approvals. It reads the list back first, and only your own words count.`
       : 'Your team’s owner has turned this off for everyone (Settings > Humans).'}</p>
     ${rows ? `<h3>Decided by ${name} for you</h3><ul class="assistant-decisions">${rows}</ul>` : ''}`;
   $('#assistant-decides').onchange = async ev => {
