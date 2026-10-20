@@ -18,8 +18,10 @@ const EVERY: Duration = Duration::from_secs(10);
 const TAIL_CHARS: usize = 2000;
 const FILE: &str = "background.json";
 
-/// One turn's kept commands: `{aid, bot, session, status_file, deadline, commands: [{task_id, description, command,
-/// ci_watch, pid, output_file, kept_at, exit, killed, ended}]}`. `ended` is set once the command is over.
+/// One turn's kept commands: `{aid, bot, session, status_file, deadline, secrets, commands: [{task_id, description,
+/// command, ci_watch, pid, output_file, kept_at, exit, killed, ended}]}`. `ended` is set once the command is over.
+/// `secrets`: the turn held values to hide, so its descriptions and commands are stored already scrubbed and its
+/// output is only ever sent through its redactor (withheld once a restart has lost it).
 struct Watched {
     turns: Vec<Value>,
     /// Each run's secrets, while this runner still has them (not across a restart).
@@ -53,6 +55,14 @@ pub fn keep(dir: &Path, aid: &str, bot: &str, session: &str, deadline: f64, even
         .map(|k| {
             let mut c = k.clone();
             c["kept_at"] = json!(now);
+            // Stored scrubbed: background.json outlives the turn's redactor.
+            if let Some(r) = redactor {
+                for field in ["description", "command"] {
+                    if let Some(t) = c[field].as_str() {
+                        c[field] = json!(r.scrub_text(t));
+                    }
+                }
+            }
             c
         })
         .collect();
@@ -60,7 +70,7 @@ pub fn keep(dir: &Path, aid: &str, bot: &str, session: &str, deadline: f64, even
         return;
     }
     let mut w = watched().lock().unwrap();
-    w.turns.push(json!({"aid": aid, "bot": bot, "session": session, "status_file": event["status_file"], "deadline": deadline, "commands": commands}));
+    w.turns.push(json!({"aid": aid, "bot": bot, "session": session, "status_file": event["status_file"], "deadline": deadline, "secrets": redactor.is_some(), "commands": commands}));
     if let Some(r) = redactor {
         w.redactors.insert(aid.into(), r.clone());
     }
@@ -160,20 +170,27 @@ fn poll(turn: &mut Value, now: f64) -> bool {
     commands.iter().all(|c| !c["ended"].is_null())
 }
 
-/// What the wake says about one turn's commands.
+/// Said in place of a command's output when it cannot be scrubbed.
+const WITHHELD: &str = "[output withheld: the runner restarted while this command ran, and no longer holds the run's secrets to redact it]";
+
+/// What the wake says about one turn's commands. A turn that held secrets (or one stored before `secrets` was
+/// recorded) and whose redactor this runner no longer has, after a restart, gets no output at all: fail closed.
 fn report(turn: &Value, redactor: Option<&Arc<Redactor>>) -> Value {
+    let blind = redactor.is_none() && turn["secrets"] != false;
     let scrub = |t: &str| redactor.map(|r| r.scrub_text(t)).unwrap_or_else(|| t.to_string());
+    let description = |c: &Value| if blind && turn["secrets"].is_null() { "A background command".to_string() } else { scrub(&text_of(&c["description"])) };
+    let output = |c: &Value| if blind { WITHHELD.to_string() } else { scrub(&tail(&text_of(&c["output_file"]))) };
     let commands: Vec<Value> = turn["commands"]
         .as_array()
         .into_iter()
         .flatten()
         .map(|c| {
             json!({
-                "description": scrub(&text_of(&c["description"])).chars().take(300).collect::<String>(),
+                "description": description(c).chars().take(300).collect::<String>(),
                 "exit": c["exit"],
                 "killed": c["killed"] == true,
                 "ci_watch": c["ci_watch"],
-                "tail": scrub(&tail(&text_of(&c["output_file"]))),
+                "tail": output(c),
             })
         })
         .collect();
@@ -217,12 +234,17 @@ async fn tick(runner: &Runner) {
     }
 }
 
-/// Watches until the runner stops, starting with what an earlier runner left in the state directory.
-pub async fn run_loop(runner: Arc<Runner>) {
-    let path: PathBuf = runner.state.directory.join(FILE);
+/// Takes up what an earlier runner left in the state directory. Their redactors went with it.
+fn restore(dir: &Path) {
+    let path: PathBuf = dir.join(FILE);
     if let Some(turns) = std::fs::read_to_string(&path).ok().and_then(|t| serde_json::from_str::<Vec<Value>>(&t).ok()) {
         watched().lock().unwrap().turns.extend(turns);
     }
+}
+
+/// Watches until the runner stops, starting with what an earlier runner left in the state directory.
+pub async fn run_loop(runner: Arc<Runner>) {
+    restore(&runner.state.directory);
     let mut ticker = tokio::time::interval(EVERY);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     while !runner.stopping() {
@@ -236,8 +258,15 @@ mod tests {
     use super::*;
     use std::os::unix::process::ExitStatusExt;
 
+    /// The tests that use the runner-wide list, one at a time.
+    fn serial() -> std::sync::MutexGuard<'static, ()> {
+        static S: Mutex<()> = Mutex::new(());
+        S.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     #[test]
     fn a_kept_command_is_reported_once_it_ends_and_killed_at_the_runs_limit() {
+        let _one = serial();
         let dir = std::env::temp_dir().join(format!("afterwatch-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&dir).unwrap();
         let out = dir.join("s1.output");
@@ -322,5 +351,85 @@ mod tests {
         assert!(left.is_empty(), "the suite ran on after its shell was killed: {left:?}");
         assert!(other_alive, "another command's job was killed");
         assert_eq!(report(&turn, None)["commands"][0]["killed"], true);
+    }
+
+    const MARKER: &str = "SYNTH_SECRET_9f3a";
+
+    /// A runner whose state directory holds one kept, already ended command that printed `MARKER`, its description
+    /// naming it too. Keeps it with the turn's redactor, then (`restart`) drops everything held in memory and takes
+    /// the list up again from background.json, as a new runner would. Returns each POST the server saw over two ticks.
+    async fn deliver(restart: bool) -> Vec<String> {
+        let _one = serial();
+        let (url, seen) = crate::client::tests::serve(vec![(200, r#"{"woke": true}"#), (200, r#"{"woke": false}"#)]).await;
+        let dir = std::env::temp_dir().join(format!("afterwatch-redact-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(dir.join("projects")).unwrap();
+        let path = dir.join("runner.json");
+        std::fs::write(&path, json!({"url": url, "token": "t", "runner_id": "r1", "projects_dir": dir.join("projects")}).to_string()).unwrap();
+        let config = crate::config::Config::load(&path).unwrap();
+        let mut client = crate::client::Client::new(&config.url(), &config.token(), 5, 0).unwrap();
+        client.backoff_scale = 0.0;
+        let runner = Runner::new(config, client, crate::state::State::open(&dir.join("state")).unwrap());
+        let state = runner.state.directory.clone();
+        let out = state.join("s1.output");
+        let mut shell = std::process::Command::new("sh").arg("-c").arg(format!("echo 'token={MARKER}'; echo '12 passed'")).stdout(std::fs::File::create(&out).unwrap()).spawn().unwrap();
+        shell.wait().unwrap();
+        let status = state.join("status");
+        std::fs::write(&status, format!("{} 0\n", shell.id())).unwrap();
+        let aid = format!("a-{}", uuid::Uuid::new_v4().simple());
+        let event = json!({"kept": [{"task_id": "s1", "description": format!("Deploy with {MARKER}"), "command": format!("deploy --key {MARKER}"),
+                                     "pid": shell.id(), "output_file": out.display().to_string()}], "status_file": status});
+        let redactor = Arc::new(Redactor::new(&[MARKER.to_string()]));
+        keep(&state, &aid, "acme-afterwatch", "task:t9", epoch_s() + 3600.0, &event, Some(&redactor));
+        let stored = std::fs::read_to_string(state.join(FILE)).unwrap();
+        assert!(!stored.contains(MARKER), "a granted value was written to the watch list: {stored}");
+        if restart {
+            {
+                let mut w = watched().lock().unwrap();
+                w.turns.retain(|t| t["aid"] != aid.as_str());
+                w.redactors.remove(&aid);
+            }
+            restore(&state);
+        }
+        tick(&runner).await;
+        tick(&runner).await;
+        assert!(!watched().lock().unwrap().turns.iter().any(|t| t["aid"] == aid.as_str()), "the turn is done with");
+        assert!(!state.join(FILE).exists());
+        std::fs::remove_dir_all(dir).ok();
+        let seen = seen.lock().unwrap().clone();
+        seen.into_iter().filter(|r| r.starts_with(&format!("POST /api/v2/attempts/{aid}/background-done"))).collect()
+    }
+
+    fn body_of(request: &str) -> Value {
+        serde_json::from_str(&request[request.find("\r\n\r\n").unwrap() + 4..]).unwrap()
+    }
+
+    #[tokio::test]
+    async fn after_a_restart_a_turn_that_held_secrets_gets_one_wake_with_its_output_withheld() {
+        let posts = deliver(true).await;
+        assert_eq!(posts.len(), 1, "one wake for the turn: {posts:?}");
+        assert!(!posts[0].contains(MARKER), "a granted value reached the server: {}", posts[0]);
+        let c = &body_of(&posts[0])["commands"][0];
+        assert_eq!(c["exit"], 0);
+        assert_eq!(c["tail"], WITHHELD);
+        assert_eq!(c["description"], format!("Deploy with {}", crate::redact::MASK));
+    }
+
+    #[tokio::test]
+    async fn without_a_restart_the_output_is_sent_scrubbed() {
+        let posts = deliver(false).await;
+        assert_eq!(posts.len(), 1, "one wake for the turn: {posts:?}");
+        assert!(!posts[0].contains(MARKER), "a granted value reached the server: {}", posts[0]);
+        let c = &body_of(&posts[0])["commands"][0];
+        assert_eq!(c["exit"], 0);
+        assert_eq!(c["tail"], format!("token={}\n12 passed\n", crate::redact::MASK));
+        assert_eq!(c["description"], format!("Deploy with {}", crate::redact::MASK));
+    }
+
+    #[test]
+    fn a_turn_stored_before_secrets_were_recorded_says_nothing_it_cannot_scrub() {
+        let turn = json!({"aid": "a3", "commands": [{"description": format!("Deploy with {MARKER}"), "exit": 0, "output_file": "/nonexistent"}]});
+        let sent = report(&turn, None);
+        assert!(!sent.to_string().contains(MARKER), "{sent}");
+        assert_eq!(sent["commands"][0]["tail"], WITHHELD);
     }
 }

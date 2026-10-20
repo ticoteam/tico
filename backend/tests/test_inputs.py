@@ -453,3 +453,21 @@ def test_background_commands_a_finished_turn_kept_wake_the_bot_once(api):
     assert len(rows) == 1 and rows[0]["conversation_id"] == origin["conversation_id"]
     assert json.loads(rows[0]["refs_json"])["trigger"] == "background_done"
     assert "exit 1" in rows[0]["body"] and "2 failed, 3788 passed" in rows[0]["body"] and "ran over" in rows[0]["body"]
+
+
+def test_a_wake_restored_after_a_runner_restart_stores_only_what_the_runner_sent(api):
+    # The runner's restart payload (afterwatch.rs, `report` without the turn's redactor): the description was stored
+    # scrubbed and the output is withheld. The notice is built from that payload alone, so no granted value is stored.
+    r, origin, a = setup_attempt(api)
+    post(api, f"attempts/{a['id']}/started", {"thread_id": "thread"}, r["token"])
+    post(api, f"attempts/{a['id']}/complete", {"outcome": "completed", "text": "Deploy running.", "last_seq": 0}, r["token"])
+    withheld = ("[output withheld: the runner restarted while this command ran, and no longer holds the run's secrets "
+                "to redact it]")
+    done = {"commands": [{"description": "Deploy with ••••", "exit": 0, "tail": withheld}]}
+    assert post(api, f"attempts/{a['id']}/background-done", done, r["token"]) == {"woke": True}
+    assert post(api, f"attempts/{a['id']}/background-done", done, r["token"]) == {"woke": False}
+    with api.app.state.store.read() as c:
+        rows = c.execute("SELECT body FROM messages WHERE to_actor='bot:ops' AND kind='notice'").fetchall()
+        logged = c.execute("SELECT detail_json FROM events WHERE action='attempt.background-done'").fetchall()
+    assert len(rows) == 1 and withheld in rows[0]["body"] and "Deploy with ••••: exit 0" in rows[0]["body"]
+    assert "SYNTH_SECRET" not in rows[0]["body"] and all("SYNTH_SECRET" not in e[0] for e in logged)
