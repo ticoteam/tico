@@ -175,8 +175,16 @@ def created(api, slug, title):
         return c.execute("SELECT count(*) FROM tasks WHERE requester=? AND title=?", ("bot:" + slug, title)).fetchone()[0]
 
 
+def written(api):
+    """What a create writes besides the task: its room, a new tag, the task's tags."""
+    with api.app.state.store.read() as c:
+        return [c.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
+                for table in ("tasks", "conversations", "tags", "task_tags")]
+
+
 def test_a_bot_creates_a_task_with_a_classification_label_but_not_one_tico_acts_on(api):
     token = bot_token(api, "cpo")
+    before = written(api)
     r = api.post("/api/v2/tasks", json={"owner": "ops", "title": "Run the exports in goal mode", "body": "x",
                                         "labels": ["goal:on", "area-exports"]}, headers=headers(token))
     assert r.status_code == 403 and r.json()["error"]["code"] == "label", r.text
@@ -187,6 +195,7 @@ def test_a_bot_creates_a_task_with_a_classification_label_but_not_one_tico_acts_
     r = api.post("/api/v2/tasks", json={"owner": "ops", "title": "Stop goal mode", "body": "x", "labels": ["goal:off"]},
                  headers=headers(token))
     assert r.status_code == 403 and r.json()["error"]["code"] == "label", r.text
+    assert written(api) == before, "no task, room, tag or task tag is written"
     ticket = post(api, "tasks", {"owner": "ops", "title": "Build exports", "body": "x", "type": "Engineering",
                                  "labels": ["qa"]}, token=token)
     assert ticket["labels"] == ["qa"]
@@ -198,6 +207,7 @@ def test_a_bot_creates_no_task_with_a_public_roadmap_label_and_is_told_the_way_t
     token = bot_token(api, "cpo")
     body = {"owner": "cpo", "title": "Research search", "body": "x", "type": "Product roadmap",
             "labels": ["roadmap", "area-search"]}
+    before = written(api)
     refused = post(api, "tasks", body, token=token, expected=403)["error"]
     assert refused["code"] == "label" and "roadmap is a public roadmap label" in refused["detail"]
     assert "create the task without it, then add it on the task" in refused["detail"]
@@ -206,7 +216,7 @@ def test_a_bot_creates_no_task_with_a_public_roadmap_label_and_is_told_the_way_t
     post(api, "roadmaps/settings", {"bot_public_approval": False})
     refused = post(api, "tasks", body, token=token, expected=403)["error"]
     assert "a person on the leadership, product, engineering teams adds it" in refused["detail"]
-    assert created(api, "cpo", "Research search") == 0
+    assert created(api, "cpo", "Research search") == 0 and written(api) == before
     # The way through: created without it, then labelled on the task with an approved publish approval.
     post(api, "roadmaps/settings", {"bot_public_approval": True})
     item = post(api, "tasks", {**body, "labels": ["area-search"]}, token=token)
