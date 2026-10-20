@@ -8,6 +8,17 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Shared connections on the Computers page (part 4 of 4)**: an API key added from a computer's Add connection can be
+  shared with other computers by name ("Shared with: [computers]"), or a key already shared can be picked instead of
+  pasting one; both are a credential administrator's change, and an operator still adds a key for this computer only.
+  A shared key, the "Every computer" key in Credentials included, shows on each computer it serves, its line marked
+  Shared and listing those computers, also before the computer has used it. Clear key and Replace key on it ask "This
+  computer only" or "All listed computers", naming them, and warn that the second changes every one. A key shared
+  with one computer by name comes before the "Every computer" key there, and the key picked or shared last for a tool
+  replaces the one shared with it before. A computer cleared or switched to a subscription from here takes the shared
+  key again when it is given one (refused, naming it, while it is offline). A shared key's name and preview show only
+  to credential administrators; a computer's operator sees which computers it serves. Credentials names each computer
+  it is shared with, and revoking one there stops sharing it with that computer.
 - **AWS setup: `--name`, `--aws-permissions-boundary` and `destroy --dns`**: `--name` now names a new AWS server (its
   resources are `tico-<name>`, tagged `tico-setup-name=<name>`, its `.env` in `/tico/<name>/env`), not only the one
   destroy removes. `--aws-permissions-boundary <arn>` creates the server's IAM role under that boundary, with both
@@ -145,6 +156,15 @@ All notable changes to Tico are recorded here. The format follows
   missed GitHub webhook no longer keeps a finished tree counted against the bot's limit. A tree whose pushed commits no
   pull request carries is held with the reason shown, gets a draft pull request even when the push webhook was
   missed, and a move to any review step or to done names the unlinked branch ([Task worktrees](docs/worktrees.md)).
+- **A stopped run that holds up work can be reviewed again**: when a bot's unreviewed stopped run keeps its other
+  queued work on that task or chat from running, it is now something that needs you: Settings → System checks and
+  Needs you list it with its Review stopped runs button, and say how many requests wait and on which tasks. So is a
+  run that rode along on a stopped run the keeper already settled but could not settle itself. A stopped run that holds
+  nothing stays a note under Health, which now has the Review stopped runs button too. Before, every stopped run was
+  "not urgent" and the button showed nowhere, so 14 queued wake-ups waited with no control to free them (Dev 280).
+- **Bots on Tico models are not refused at the edge**: the runner's Gateway relay now sends Tico's own user agent
+  (`Tico-Client/<runner version>`) instead of the harness's, so a turn's model calls are not blocked by Cloudflare in
+  front of the Tico AI Gateway.
 - **A finished answer is no longer held up on a busy computer.** After a turn, the runner's secret scrub of the
   changed files, its git checks and its local database writes now run on threads of their own. Two slow turns can
   no longer stop every other turn's progress and answers on that computer. The runner's flight file now times each

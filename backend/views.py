@@ -445,9 +445,11 @@ def operation_issues(c, who, auth):
                            if queued else " Other work can continue.")
             # A stopped run is held so an automatic retry cannot repeat an outside action. It is
             # useful in Settings, but age alone never turns it into an interruption for a person.
-            from .execution import held_runs, isolation_refused
+            from .execution import held_back, held_runs, isolation_refused, left_by_keeper
             named = "; ".join(f"\"{h['title']}\" (owner {h['owner_name']})" for h in held_runs(c, who, auth, slug))
             held_note = f" Held: {named}." if named else ""
+            waiting, waiting_on = held_back(c, who, auth, slug)
+            left = left_by_keeper(c, who, slug)
             if isolation_refused(c, who, auth, slug):
                 # Not a possible outside action: the bot's model can't run on its computer, and its later work waits
                 # behind the held run until a person acts.
@@ -455,6 +457,17 @@ def operation_issues(c, who, auth):
                     gateway.run_status(gateway.NOT_ISOLATED) + f".{held_note} Its other work waits behind this run.",
                     bot=slug, action="Pick another model in Settings → Bots, or move the bot to a computer with "
                     "Tico's Docker runner, then review its stopped run.")
+            elif waiting or left:
+                # Work is stuck behind it (the claim's own fence), or the keeper settled the rest of its run and left
+                # it: only a review lets it go, so this one is a person's now, not a later look (Dev 280).
+                wakes = f"{waiting} queued request{' waits' if waiting == 1 else 's wait'}"
+                on = " on " + ", ".join(f"\"{t}\"" for t in waiting_on) if waiting_on else ""
+                behind = (f" {wakes}{on} until it is reviewed." if waiting else
+                          " Tico settled the rest of that run but could not decide this safely.")
+                add("uncertain_work", f"{bot['display_name']} has {uncertain} stopped {noun} holding up work",
+                    f"The bot stopped before returning an answer, so Tico will not repeat it on its own.{held_note}"
+                    f"{behind} Review it to let the work run.",
+                    bot=slug, action="review", held_back=waiting, held_tasks=waiting_on)
             else:
                 add("uncertain_work", f"{bot['display_name']} saved {uncertain} stopped {noun} for later",
                     "The bot stopped before returning an answer. Tico paused only that request so it "
@@ -1681,10 +1694,14 @@ def install_views(app, store, auth, mutate, task_view):
             default = {providers.default_runtime(providers.load(c, store.settings))} - {""}
             run_on = providers.runtimes_run_on(c, store.settings)
             from . import subscriptions, inbox_isolation
-            from .computer_keys import shared_all, shared_listing
+            from .computer_keys import serving, shared_listing
             subscription_context = subscriptions.context(c, store.settings)
             kept_for_inbox = inbox_isolation.inbox_only(c, roster(c))
-            shared_keys = shared_all(c)
+            shared_keys = serving(c)
+            # A company key's name and preview are a credential administrator's to read, as in Credentials; a
+            # computer's operator reads its own key's.
+            from .credentials import administrator
+            key_admin = administrator(c, who, store.settings.credential_admins)
             access = auth.bot_accesses(c, who)
             # The bots a member may not even see (an admin sees them all): left off another person's computer.
             unseen = set() if auth.bot_admin(who) else {bot for bot, a in access.items() if not a["see"]}
@@ -1734,13 +1751,26 @@ def install_views(app, store, auth, mutate, task_view):
                 from .computer_keys import listing as computer_key_listing
                 profiles = subscriptions.computer_profiles(c, row, True)
                 same_account = subscriptions.same_account(value["readiness"].get("runtimes") or {}, profiles)
-                keys, shared = computer_key_listing(c, row["id"]), shared_listing(shared_keys, value["readiness"])
+                keys = computer_key_listing(c, row["id"])
+                # `shared_keys`: {runtime: {env, preview}} of the shared key it runs on; `shared_with`: that key's
+                # name, whether it is the "Every computer" one, and every computer it serves.
+                served = shared_keys.get(row["id"]) or {}
+                shared = shared_listing(c, row)
+                shared_with = {runtime: {"id": key["id"], "name": key["name"], "every": key["every"],
+                                         "computers": [dict(m) for m in key["computers"]]}
+                               for runtime, key in served.items()}
                 if not manage:
                     for profile in profiles:
                         subscriptions.without_accounts(profile["runtimes"])
                     subscriptions.without_accounts(value["readiness"].get("runtimes") or {}, windows=True)
-                    for key in (*keys.values(), *shared.values()):
+                    for key in keys.values():
                         key.pop("preview", None)
+                if not key_admin:
+                    for key in shared.values():
+                        key.pop("preview", None)
+                    for key in shared_with.values():
+                        key.pop("name", None)
+                        key.pop("id", None)
                 machines.append({**value, "bots": bots, "needed_runtimes": sorted(assigned.get(row["id"]) or default),
                                  "may_manage": manage, "profiles": profiles, "same_account": same_account,
                                  "bot_connections": [link for link in subscriptions.connections(
@@ -1752,7 +1782,7 @@ def install_views(app, store, auth, mutate, task_view):
                                  # ones, for the rows a key signs in (backend/computer_keys.py). Never a value, and a
                                  # preview only for whoever may change the computer.
                                  "keys": keys,
-                                 "shared_keys": shared,
+                                 "shared_keys": shared, "shared_with": shared_with,
                                  # The sign-ins several of its bots share, which they take turns on (counting only
                                  # the bots this reader may see).
                                  "shared_logins": shared_logins(c, row["id"], value["readiness"], assigned_here - hidden, access),
