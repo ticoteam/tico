@@ -783,6 +783,7 @@ def _destroy_hint(io: IO, saved: dict) -> int:
 
 def destroy(args, io: IO, deps: Deps) -> int:
     saved, _ = state.load((args.domain or "").lower()) if args.domain else ({}, "")
+    hosted.check_dns_identity(args, saved.get("dns_name", ""), saved.get("dns_zone", ""))
     if saved.get("target") in cloudmod.PROVIDERS:
         return _destroy_hint(io, saved)
     name = args.name or saved.get("aws_name") or (awsmod.slug(args.domain) if args.domain else "")

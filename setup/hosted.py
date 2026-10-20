@@ -26,8 +26,17 @@ _EXEC_ENV = f"-e TICO_REGISTRY_DIR={contract.DATA_DIR}/registry"
 _DOCKER = 'if docker info >/dev/null 2>&1; then dk=docker; else dk="sudo -n docker"; fi'
 
 
+def check_dns_identity(args, dns_name: str, dns_zone: str) -> None:
+    """Keep cleanup tied to the operational DNS identity saved by this install."""
+    for field, saved in (("dns_name", dns_name), ("dns_zone", dns_zone)):
+        explicit = getattr(args, field, None)
+        if saved and explicit and explicit.lower() != saved.lower():
+            raise MissingInput(f"--{field.replace('_', '-')} conflicts with saved DNS identity; omit it or use {saved}")
+
+
 def gather(args, s: Settings, dry: bool) -> None:
     """Our operator's flags, checked before anything is asked or created. A self-hosted install leaves all of it unset."""
+    check_dns_identity(args, s.dns_name, s.dns_zone)
     hosted = (getattr(args, "hosted", None) or s.hosted or "").strip().lower()
     preset = (getattr(args, "preset", None) or s.preset or "").strip().lower()
     auth = getattr(args, "auth", None) or ""

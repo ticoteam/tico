@@ -106,3 +106,66 @@ def test_destroy_refuses_mismatched_dns_authority_without_releasing_resources():
                     "--dns-name", "pv-abcdefgh.child." + ZONE, "--dns-zone", "child." + ZONE], d)
     assert code == 1 and "nothing was deleted" in out
     assert not ec2.called("terminate_instances") and not r53.calls
+
+
+@pytest.fixture
+def saved_alias():
+    d, ec2, iam, ssm, r53 = alias_world()
+    argv = create()
+    argv[argv.index("--dns-name") + 1] = NAME + ".child." + ZONE
+    argv[argv.index("--dns-zone") + 1] = "child." + ZONE
+    d.resolver.records[(NAME + ".child." + ZONE, dns.A)] = ["203.0.113.9"]
+    d.resolver.ns = {"child." + ZONE: fakes.R53_NS}
+    r53.zone = "child." + ZONE
+    assert go(argv, d)[0] == 0
+    return argv, d, ec2, r53
+
+
+@pytest.mark.parametrize("flag,value", [("--dns-name", "pv-ijklmnop.child." + ZONE), ("--dns-zone", ZONE)])
+def test_resume_rejects_conflicting_saved_dns_identity_before_state_or_cloud_changes(saved_alias, flag, value):
+    argv, d, ec2, r53 = saved_alias
+    before = {p.name: p.read_bytes() for p in (state.home() / PUBLIC).iterdir()}
+    requested = []
+    clients, route53_client = d.aws_clients, d.route53_client
+    d.aws_clients = lambda *a: requested.append("aws") or clients(*a)
+    d.route53_client = lambda *a: requested.append("route53") or route53_client(*a)
+    argv[argv.index(flag) + 1] = value
+    if flag == "--dns-zone":
+        d.resolver.ns = {value: fakes.R53_NS}
+        r53.zone = value
+    code, out = go([*argv, "--skip-dns-wait"], d)
+    assert {p.name: p.read_bytes() for p in (state.home() / PUBLIC).iterdir()} == before
+    assert code == 2, out
+    assert requested == []
+
+
+@pytest.mark.parametrize("flag,value", [("--dns-name", "pv-ijklmnop.child." + ZONE), ("--dns-zone", ZONE)])
+def test_destroy_rejects_conflicting_saved_dns_identity_before_releasing_the_old_address(saved_alias, flag, value):
+    _, d, ec2, r53 = saved_alias
+    original = list(r53.records)
+    before = state.load(PUBLIC)
+    requested = []
+    clients, route53_client = d.aws_clients, d.route53_client
+    d.aws_clients = lambda *a: requested.append("aws") or clients(*a)
+    d.route53_client = lambda *a: requested.append("route53") or route53_client(*a)
+    if flag == "--dns-zone":
+        d.resolver.ns = {value: fakes.R53_NS}
+        r53.zone = value
+    code, out = go(["destroy", "--domain", PUBLIC, "--name", NAME, "--dns", "--yes", flag, value], d)
+    assert not ec2.called("release_address"), (ec2.calls, r53.records)
+    assert not ec2.called("terminate_instances") and r53.records == original
+    assert code == 2, out
+    assert state.load(PUBLIC) == before and requested == []
+
+
+def test_resume_keeps_saved_dns_identity_with_omitted_or_unchanged_explicit_flags():
+    d, ec2, iam, ssm, r53 = alias_world()
+    assert go(create(), d)[0] == 0
+    before = state.load(PUBLIC)
+    original = list(r53.records)
+    for flags in ([], ["--dns-name", DOMAIN.upper(), "--dns-zone", ZONE.upper()]):
+        code, out = go(["--domain", PUBLIC, "--non-interactive", "--yes", *flags], d)
+        assert code == 0, out
+        assert state.load(PUBLIC) == before
+    assert len(ec2.called("run_instances")) == len(ec2.called("allocate_address")) == 1
+    assert r53.records == original
