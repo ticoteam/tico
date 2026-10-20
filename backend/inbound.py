@@ -9,7 +9,7 @@ import re
 import time
 import uuid
 from typing import Literal
-from urllib.parse import urlparse
+from urllib.parse import quote, urlencode, urlparse
 
 import httpx
 from fastapi import Query, Request
@@ -52,11 +52,19 @@ class Create(Contract):
 
 class Edit(Contract):
     name: str = Field(min_length=1,max_length=80)
-    used_for: str = Field(default='',max_length=1000)
+    used_for: str | None = Field(default=None,max_length=1000)
 
 
 class Release(Contract):
     confirm: str = Field(default='',max_length=160)
+
+
+class PhoneRequest(Contract):
+    name: str = Field(default='Mobile number',min_length=1,max_length=80)
+
+
+class AcceptPhone(Contract):
+    price_micros: int = Field(ge=1)
 
 
 class Wait(Contract):
@@ -90,7 +98,7 @@ def permit(c, who, *, admin=False, auth=None):
 
 def save_inbox(c, item):
     c.execute('INSERT INTO inbound_inboxes(inbox_id,kind,name,address,state,created_by,period_end,cancel_pending) '
-              'VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(inbox_id) DO UPDATE SET address=excluded.address,state=excluded.state,'
+              'VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(inbox_id) DO UPDATE SET name=excluded.name,address=excluded.address,state=excluded.state,'
               'period_end=excluded.period_end,cancel_pending=excluded.cancel_pending',
               tuple(item.get(k) for k in ('inbox_id','kind','name','address','state','created_by','period_end','cancel_pending')))
 
@@ -118,10 +126,15 @@ class Inbound:
                 if not response.is_success:
                     error = response.json().get('error','inbound_unavailable')
                     allowed = {'email_unavailable','email_quota','creator_rate_limit','sms_unavailable','sms_purchases_disabled',
-                               'price_exceeds_cap','monthly_cap','sms_balance_low','phone_quota','operation_conflict'}
+                               'price_exceeds_cap','monthly_cap','sms_balance_low','phone_quota','operation_conflict',
+                               'phone_approval_required','not_found','request_already_provisioned',
+                               'quote_expired_or_changed','phone_request_quota'}
                     if error not in allowed:
                         error = 'inbound_unavailable'
-                    raise Problem(error,error.replace('_',' ').capitalize(),response.status_code)
+                    detail = {'quote_expired_or_changed':'The quote expired or changed. Refresh the phone request before accepting.',
+                              'request_already_provisioned':'This request has already entered provisioning. Manage the number from its inbox.',
+                              'phone_request_quota':'There are already five open phone requests. Cancel a request before adding another.'}.get(error)
+                    raise Problem(error,detail or error.replace('_',' ').capitalize(),response.status_code)
                 if len(response.content)>1024*1024:
                     raise ValueError('oversized_delivery')
                 return response.json()
@@ -139,11 +152,11 @@ class Inbound:
     def create(self, who, body, operation):
         with self.store.read_transaction() as c:
             permit(c,who,admin=body.kind=='sms',auth=self.auth)
+        if body.kind=='sms':
+            raise Problem('phone_approval_required','Request a monthly phone rental for TICO approval',409)
         if not operation or not re.fullmatch(r'[A-Za-z0-9_.:-]{8,100}',operation):
             raise Problem('idempotency','Supply an Idempotency-Key of 8 to 100 characters',422)
         request = {'name':body.name,'created_by':who.actor,'operation_id':operation}
-        if body.kind=='sms':
-            request['max_price_micros'] = body.max_price_micros
         result = self.remote('POST','inboxes/'+body.kind,request)
         def commit(c):
             permit(c,who,admin=body.kind=='sms',auth=self.auth)
@@ -153,13 +166,49 @@ class Inbound:
         return self.store.write(who,commit)
 
     def edit(self, who, ident, body):
+        with self.store.read_transaction() as c:
+            permit(c,who)
+            row = c.execute('SELECT kind,name FROM inbound_inboxes WHERE inbox_id=?',(ident,)).fetchone()
+            if not row:
+                raise Problem('unknown_inbox','Unknown inbox',404)
+            permit(c,who,admin=row['kind']=='sms',auth=self.auth)
+            rename = row['name']!=body.name
+        result = self.remote('POST','inboxes/'+quote(ident,safe='')+'/rename',{'name':body.name,'created_by':who.actor}) if rename else None
         def commit(c):
             permit(c,who)
-            if not c.execute('SELECT 1 FROM inbound_inboxes WHERE inbox_id=?',(ident,)).fetchone():
+            row = c.execute('SELECT kind FROM inbound_inboxes WHERE inbox_id=?',(ident,)).fetchone()
+            if not row:
                 raise Problem('unknown_inbox','Unknown inbox',404)
-            c.execute('UPDATE inbound_inboxes SET name=?,used_for=? WHERE inbox_id=?',(body.name,body.used_for,ident))
+            permit(c,who,admin=row['kind']=='sms',auth=self.auth)
+            if result is not None:save_inbox(c,result)
+            if body.used_for is not None:
+                c.execute('UPDATE inbound_inboxes SET used_for=? WHERE inbox_id=?',(body.used_for,ident))
             H.event(c,who.actor,'inbound.inbox_updated',ident)
             return dict(c.execute('SELECT * FROM inbound_inboxes WHERE inbox_id=?',(ident,)).fetchone())
+        return self.store.write(who,commit)
+
+    def phone_requests(self, who, after='', limit=100):
+        with self.store.read_transaction() as c:
+            permit(c,who,admin=True,auth=self.auth)
+        return self.remote('GET','phone-requests?'+urlencode({'after':after,'limit':limit}))
+
+    def phone_request(self, who, *, name=None, operation=None, ident=None, action=None, price=None):
+        with self.store.read_transaction() as c:
+            permit(c,who,admin=True,auth=self.auth)
+        body = {'created_by':who.actor}
+        if ident is None:
+            if not operation or not re.fullmatch(r'[A-Za-z0-9_.:-]{8,100}',operation):
+                raise Problem('idempotency','Supply an Idempotency-Key of 8 to 100 characters',422)
+            path = 'phone-requests'
+            body.update(name=name,operation_id=operation)
+        else:
+            path = 'phone-requests/'+quote(ident,safe='')+'/'+action
+            if action=='accept':body['price_micros'] = price
+        result = self.remote('POST',path,body)
+        def commit(c):
+            permit(c,who,admin=True,auth=self.auth)
+            H.event(c,who.actor,'inbound.phone_request_'+(action or 'created'),result['phone_request']['request_id'])
+            return result
         return self.store.write(who,commit)
 
     def release(self, who, ident, confirmation):
@@ -352,6 +401,22 @@ def install(app,store,settings,auth):
     def quote(request:Request):
         with store.read_transaction() as c:permit(c,request.state.identity,admin=True,auth=auth)
         return service.remote('GET','phone-quote')
+
+    @app.get('/api/v2/inbound/phone-requests')
+    def phone_requests(request:Request,after:str=Query(default='',max_length=64),limit:int=Query(default=100,ge=1,le=100)):
+        return service.phone_requests(request.state.identity,after,limit)
+
+    @app.post('/api/v2/inbound/phone-requests')
+    def request_phone(request:Request,body:PhoneRequest):
+        return service.phone_request(request.state.identity,name=body.name,operation=request.headers.get('Idempotency-Key'))
+
+    @app.post('/api/v2/inbound/phone-requests/{ident}/accept')
+    def accept_phone(request:Request,ident:str,body:AcceptPhone):
+        return service.phone_request(request.state.identity,ident=ident,action='accept',price=body.price_micros)
+
+    @app.post('/api/v2/inbound/phone-requests/{ident}/cancel')
+    def cancel_phone(request:Request,ident:str):
+        return service.phone_request(request.state.identity,ident=ident,action='cancel')
 
     @app.get('/api/v2/inbound/cursor')
     def cursor(request:Request,inbox_ids:str|None=Query(default=None,max_length=1000)):

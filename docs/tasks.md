@@ -406,10 +406,20 @@ using `tasks.type_id` and `tasks.step_id`; the task visibility rules still apply
 
 ## Subtasks and PRs
 
-Subtasks can nest to any depth. Whoever files a subtask, person or bot, is its requester: it
-shows them as asking, and they receive its completion notice. A bot that filed one may close it
-explicitly; until then a completed subtask stays Done. The parent's requester still hears when
-the parent finishes.
+Subtasks can nest to any depth. Whoever files a subtask, person or bot, is its requester. When a
+worker finishes a subtask under a bot-owned task, its result returns directly to the immediate
+parent's owning bot, in that parent's task session. An active turn takes it as an input; otherwise
+the parent's next turn resumes there. There is no requester delivery session on the completed
+subtask and no relay or `hub task run` needed. The worker keeps its own independent task session.
+A bot that filed the subtask may close it explicitly; until then it stays Done. The parent's
+requester hears when the parent itself finishes, so a manager's task → builder task → review
+subtask sends the review back to the builder, and the completed build back to the manager.
+
+A review verdict on a subtask's comment or final reply takes the same direct path. Its comment,
+Done note and final reply are one delivery for that verdict and review cycle; reopening the
+subtask permits a new review. Completed or closed parents record late results quietly. Private
+subtask text returns on the parent only when that parent's readers may receive it; otherwise the
+requester receives it on the private subtask as before. Ask and answer messages keep their own routing.
 Subtasks never inherit a human's delegation anchor from a bot's request. BotOps acts with the
 filing bot's rights when that bot asks it to work on a subtask.
 
@@ -421,7 +431,8 @@ and cycles are refused.
 A parent may be marked Done or closed, by a bot or a person, while subtasks are still open. The
 subtasks stay open, and the parent's history and its Finished or Closed notice end with
 "Still open:" and their titles. Finishing or moving away the last open subtask wakes the
-parent's owner with “All subtasks done”, unless that owner made the change (a bot finishing a subtask it filed
+immediate parent's owner with “All subtasks done”, unless its result already resumed that parent or
+that owner made the change (a bot finishing a subtask it filed
 for itself, which runs in its own session, still wakes the parent).
 Closing a parent cancels it; later subtask completion does not wake its owner.
 Done, Closed and Declined count as finished. Open descendants under a finished subtask do not

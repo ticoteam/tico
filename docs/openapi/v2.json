@@ -7164,7 +7164,7 @@
         ]
       },
       "post": {
-        "summary": "Create an email inbox, or an admin-approved monthly mobile rental",
+        "summary": "Create a free email inbox; SMS creation requires a phone approval request",
         "operationId": "createInboundInbox",
         "requestBody": {
           "required": true,
@@ -7224,7 +7224,7 @@
     },
     "/api/v2/inbound/inboxes/{ident}": {
       "patch": {
-        "summary": "Rename an inbox and record its dependencies",
+        "summary": "Rename an inbox across connected interfaces and save local dependencies",
         "operationId": "editInboundInbox",
         "parameters": [
           {
@@ -7643,6 +7643,258 @@
       "get": {
         "summary": "A current monthly US mobile rental quote",
         "operationId": "quoteInboundPhone",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Inbound"
+        ]
+      }
+    },
+    "/api/v2/inbound/phone-requests": {
+      "get": {
+        "summary": "An owner or admin lists phone approval requests",
+        "operationId": "listInboundPhoneRequests",
+        "parameters": [
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 64,
+              "default": "",
+              "title": "After"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 100,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InboundPhoneRequests"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Inbound"
+        ]
+      },
+      "post": {
+        "summary": "An owner or admin requests a monthly mobile rental; no purchase",
+        "operationId": "requestInboundPhone",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PhoneRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Inbound"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ]
+      }
+    },
+    "/api/v2/inbound/phone-requests/{ident}/accept": {
+      "post": {
+        "summary": "An owner or admin accepts an exact quote for TICO review; no purchase",
+        "operationId": "acceptInboundPhoneQuote",
+        "parameters": [
+          {
+            "name": "ident",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Ident"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AcceptPhone"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Inbound"
+        ]
+      }
+    },
+    "/api/v2/inbound/phone-requests/{ident}/cancel": {
+      "post": {
+        "summary": "An owner or admin cancels a phone approval request",
+        "operationId": "cancelInboundPhoneRequest",
+        "parameters": [
+          {
+            "name": "ident",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Ident"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -16696,6 +16948,21 @@
   },
   "components": {
     "schemas": {
+      "AcceptPhone": {
+        "properties": {
+          "price_micros": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Price Micros"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "price_micros"
+        ],
+        "title": "AcceptPhone"
+      },
       "Access": {
         "type": "object",
         "properties": {
@@ -21573,6 +21840,28 @@
         ],
         "additionalProperties": true
       },
+      "InboundPhoneRequests": {
+        "type": "object",
+        "properties": {
+          "phone_requests": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "next": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "next",
+          "phone_requests"
+        ],
+        "additionalProperties": true
+      },
       "InboundTask": {
         "properties": {
           "key": {
@@ -23998,6 +24287,20 @@
         ],
         "title": "PersonalTokenCreate",
         "description": "A personal API token (backend/personal_tokens.py): a label to tell it apart in the list\nand how long it lives; 90 days unless asked, never more than a year."
+      },
+      "PhoneRequest": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Name",
+            "default": "Mobile number"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "PhoneRequest"
       },
       "Problem": {
         "type": "object",
@@ -29186,10 +29489,16 @@
             "title": "Name"
           },
           "used_for": {
-            "type": "string",
-            "maxLength": 1000,
-            "title": "Used For",
-            "default": ""
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 1000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Used For"
           }
         },
         "additionalProperties": false,

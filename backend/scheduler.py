@@ -233,14 +233,18 @@ class Scheduler:
             except Exception as exc:
                 failures.append({"health_monitor": type(exc).__name__})
         if self.gateway_checked is None or at - self.gateway_checked >= timedelta(hours=1):
-            # Every hour, while a gateway key is set: the Tico AI Gateway's word on it (revoked, 80% of the month's cap,
+            # Every hour, while a gateway key or an invite is set: the Tico AI Gateway's word on it (revoked, 80% of the month's cap,
             # the cap reached), for Settings and Health. On its own thread: a tick never waits on the Gateway.
             self.gateway_checked = at
             try:
                 from . import gateway_connection
                 from .credentials import Vault
                 with self.store.read() as c:
-                    due = gateway_connection.connected(c, self.store.settings)
+                    # An install command's invite, or the identity a first sign-up gave the install, also makes it
+                    # due: the install enrolls for its own key, at start and hourly until it has one, and rotates it
+                    # when the Gateway says.
+                    due = gateway_connection.connected(c, self.store.settings) or gateway_connection.maintained(
+                        c, self.store.settings)
                 if due:
                     gateway_connection.check_soon(self.store, Vault(self.store), self.store.settings)
             except Exception as exc:

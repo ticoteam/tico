@@ -8,13 +8,14 @@ async function inboundMount() {
   if (!host) return;
   const version = ++INBOUND_VIEW;
   clearInterval(INBOUND_TIMER);
-  host.innerHTML = `<header><h2>Email &amp; Phone</h2></header>
+  host.innerHTML = `<header><h2>Inbox</h2></header>
     <p>Incoming messages for your company’s agents. Every company agent can check these inboxes. Reading a message leaves it available to everyone else.</p>
     <p id="inbound-status" role="status"></p>
     <form id="inbound-create" class="row"><label>Inbox name <input name="name" maxlength="80" required placeholder="Account logins"></label>
       <button type="submit" class="primary">Create email inbox</button>
-      ${settingsIsAdmin() ? '<button type="button" class="ghost" id="inbound-phone">Rent a US mobile number</button>' : ''}</form>
+      ${settingsIsAdmin() ? '<button type="button" class="ghost" id="inbound-phone">Request a US mobile number</button>' : ''}</form>
     <details><summary>Manage inboxes</summary><div id="inbound-inboxes" class="inbound-scroll"></div></details>
+    ${settingsIsAdmin() ? '<details><summary>Phone requests</summary><p>Monthly non-VoIP US numbers receive SMS only. Rentals require TICO approval until billing is available. Accepting a quote records your agreement to that price; it does not buy a number.</p><p id="inbound-phone-status" role="status"></p><div id="inbound-phone-requests" class="inbound-scroll"></div></details>' : ''}
     <form id="inbound-filter" class="inbound-filters">
       <label>Inboxes <select name="inboxes" multiple size="3" aria-describedby="inbound-scope-note"></select></label>
       <label>Channel <select name="kind"><option value="">All channels</option><option value="email">Email</option><option value="sms">SMS</option></select></label>
@@ -24,10 +25,31 @@ async function inboundMount() {
     <p id="inbound-scope-note" class="muted">No inbox selected means all inboxes. Select several to see them together.</p>
     <div class="inbound-scroll"><table class="inbound-table"><thead><tr><th>Received</th><th>Channel</th><th>To</th><th>From</th><th>Message</th><th>Code</th></tr></thead><tbody id="inbound-messages"></tbody></table></div>
     <div class="row"><button type="button" class="ghost" id="inbound-newest">Newest</button><button type="button" class="ghost" id="inbound-older" hidden>Older messages</button></div>`;
-  let inboxes = [], before = 0, next = null;
+  let inboxes = [], phoneRequests = [], before = 0, next = null;
   const status = $('#inbound-status');
   const active = () => version === INBOUND_VIEW && host.isConnected && !host.closest('.settings-pane')?.hidden;
   const failure = error => { if (active()) status.textContent = error.message; };
+  const price = value => (value/1000000).toLocaleString('en-US',{style:'currency',currency:'USD'});
+  async function refreshPhoneRequests() {
+    const target = $('#inbound-phone-requests');
+    if (!target) return;
+    const data = await get('/v2/inbound/phone-requests');
+    if (!active()) return;
+    phoneRequests = data.phone_requests;
+    let after = data.next;
+    for (let n=0; after && n<9; n++) {
+      const more = await get('/v2/inbound/phone-requests?after='+encodeURIComponent(after));
+      if (!active()) return;
+      phoneRequests.push(...more.phone_requests);after=more.next;
+    }
+    const at = Date.now()/1000;
+    target.innerHTML = phoneRequests.length ? `<table class="inbound-table"><thead><tr><th>Name</th><th>Status</th><th>Monthly price</th><th>Actions</th></tr></thead><tbody>${phoneRequests.map(r => {
+      const quoted = r.state==='quoted' && r.price_micros>0 && r.quoted_until>at;
+      const cancellable = ['requested','quoted','accepted','approved'].includes(r.state);
+      return `<tr><td>${esc(r.name)}</td><td>${esc(r.state)}${r.state==='quoted' && !quoted ? ' · quote expired' : ''}</td><td>${r.price_micros>0 ? esc(price(r.price_micros))+' / 30 days' : 'Awaiting quote'}${r.quoted_until ? `<br>Quote valid until ${esc(new Date(r.quoted_until*1000).toLocaleString())}` : ''}</td><td>${quoted ? `<button class="linkish" data-inbound-phone-accept="${esc(r.request_id)}">Accept quote</button> ` : ''}${cancellable ? `<button class="linkish" data-inbound-phone-cancel="${esc(r.request_id)}">Cancel request</button>` : '—'}</td></tr>`;
+    }).join('')}</tbody></table>` : '<p>No phone requests yet.</p>';
+    $('#inbound-phone-status').textContent = after ? 'Showing the first 1,000 requests.' : '';
+  }
   async function refreshInboxes() {
     const data = await get('/v2/inbound/inboxes');
     if (!active()) return;
@@ -46,8 +68,13 @@ async function inboundMount() {
       : data.gaps.length ? `${data.gaps.reduce((sum,g) => sum+g.count,0)} messages expired before Tico reconnected.`
       : data.last_sync ? `Last synced ${new Date(data.last_sync*1000).toLocaleString()}.` : 'Waiting for the first sync.';
     $('#inbound-create').querySelector('button[type="submit"]').disabled = !data.configured;
-    if ($('#inbound-phone')) $('#inbound-phone').disabled = !data.configured;
-    $('#inbound-inboxes').innerHTML = inboxes.length ? `<table class="inbound-table"><thead><tr><th>Name</th><th>Address / number</th><th>Status</th><th>Used for</th><th>Actions</th></tr></thead><tbody>${inboxes.map(i => `<tr><td>${esc(i.name)}</td><td>${esc(i.address)}</td><td>${esc(i.state)}${i.cancel_pending ? ' · renewal off' : ''}${i.period_end ? `<br>Paid through ${esc(new Date(i.period_end*1000).toLocaleDateString())}` : ''}</td><td>${esc(i.used_for)}</td><td><button class="linkish" data-inbound-edit="${esc(i.inbox_id)}">Edit</button>${settingsIsAdmin() && i.state !== 'released' ? ` <button class="linkish" data-inbound-release="${esc(i.inbox_id)}">${i.kind === 'sms' ? 'Cancel renewal' : 'Release'}</button>` : ''}</td></tr>`).join('')}</tbody></table>` : '<p>No inboxes yet.</p>';
+    if ($('#inbound-phone')) {
+      $('#inbound-phone').disabled = !data.configured;
+      if (data.configured) void refreshPhoneRequests().catch(error => {
+        if (active()) $('#inbound-phone-status').textContent=error.message;
+      });
+    }
+    $('#inbound-inboxes').innerHTML = inboxes.length ? `<table class="inbound-table"><thead><tr><th>Name</th><th>Address / number</th><th>Status</th><th>Used for</th><th>Actions</th></tr></thead><tbody>${inboxes.map(i => `<tr><td>${esc(i.name)}</td><td>${esc(i.address)}</td><td>${esc(i.state)}${i.cancel_pending ? ' · renewal off' : ''}${i.period_end ? `<br>Paid through ${esc(new Date(i.period_end*1000).toLocaleDateString())}` : ''}</td><td>${esc(i.used_for)}</td><td>${i.kind!=='sms' || settingsIsAdmin() ? `<button class="linkish" data-inbound-edit="${esc(i.inbox_id)}">Edit</button>` : '—'}${settingsIsAdmin() && i.state !== 'released' ? ` <button class="linkish" data-inbound-release="${esc(i.inbox_id)}">${i.kind === 'sms' ? 'Cancel renewal' : 'Release'}</button>` : ''}</td></tr>`).join('')}</tbody></table>` : '<p>No inboxes yet.</p>';
   }
   async function messages() {
     const form = $('#inbound-filter'), params = new URLSearchParams({limit:'50'});
@@ -76,19 +103,31 @@ async function inboundMount() {
     finally { button.disabled=false; }
   };
   if ($('#inbound-phone')) $('#inbound-phone').onclick = async () => {
+    const button=$('#inbound-phone');button.disabled=true;
     try {
-      const quote = await get('/v2/inbound/phone-quote');
-      if (!quote.purchases_enabled) { status.textContent='Phone rentals are not enabled for purchase yet.';return; }
-      const price = (quote.price_micros/1000000).toLocaleString('en-US',{style:'currency',currency:'USD'});
-      if (!confirm(`Rent one non-VoIP US mobile number for ${price} per 30 days? Incoming SMS is included. It renews until an admin cancels renewal.`)) return;
       const name = $('#inbound-create').elements.name.value || 'Mobile number';
-      await post('/v2/inbound/inboxes',{kind:'sms',name,max_price_micros:quote.price_micros});
-      await refreshInboxes();
+      await post('/v2/inbound/phone-requests',{name});
+      await refreshPhoneRequests();
+      status.textContent='Phone request sent for TICO review. No number has been purchased.';
     } catch(error) { failure(error); }
+    finally { button.disabled=false; }
   };
   host.onclick = async event => {
     const read=event.target.closest('[data-inbound-read]'),code=event.target.closest('[data-inbound-code]'),edit=event.target.closest('[data-inbound-edit]'),release=event.target.closest('[data-inbound-release]');
+    const accept=event.target.closest('[data-inbound-phone-accept]'),cancel=event.target.closest('[data-inbound-phone-cancel]');
     try {
+      if (accept || cancel) {
+        const id=accept?.dataset.inboundPhoneAccept || cancel.dataset.inboundPhoneCancel;
+        const request=phoneRequests.find(r=>r.request_id===id);
+        if (!request) return;
+        if (accept && !confirm(`Accept ${price(request.price_micros)} per 30 days for ${request.name}? Incoming SMS is included. TICO must still approve the rental; this does not buy a number.`)) return;
+        if (cancel && !confirm(`Cancel the phone request for ${request.name}?`)) return;
+        const button=accept || cancel;button.disabled=true;
+        try {
+          await post('/v2/inbound/phone-requests/'+encodeURIComponent(id)+(accept ? '/accept' : '/cancel'),accept ? {price_micros:request.price_micros} : {});
+          await refreshPhoneRequests();
+        } finally { button.disabled=false; }
+      }
       if (read || code) {
         const id=read?.dataset.inboundRead || code.dataset.inboundCode;
         const dialog=document.createElement('dialog');dialog.className='tmodal inbound-dialog';dialog.setAttribute('aria-label',code ? 'Verification code' : 'Incoming message');
@@ -118,7 +157,10 @@ async function inboundMount() {
         else if (!confirm(warning)) return;
         await post('/v2/inbound/inboxes/'+i.inbox_id+'/release',{confirm:confirmation});await refreshInboxes();
       }
-    } catch(error) { failure(error); }
+    } catch(error) {
+      if (accept || cancel) await refreshPhoneRequests().catch(()=>{});
+      failure(error);
+    }
   };
   try { await refreshInboxes(); await messages(); } catch(error) { failure(error); }
   INBOUND_TIMER=setInterval(()=>{

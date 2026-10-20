@@ -72,6 +72,29 @@ key is set by the server's environment, and has only **Check now**. Change it wh
 
 People other than the owner see only whether the Gateway is connected.
 
+### Connected automatically
+
+When Tico invites your company, the install command carries an invite code (`TICO_GATEWAY_INVITE`). The server then
+gets its own gateway key from Tico when it starts, with nothing to paste, and the card says **Tico AI Gateway: connected
+automatically**. Nobody types or sees the code or the key. The server replaces the key with a new one every 30 days by
+itself. The invite is only needed for this first sign-up: after it, the server keeps its key with no invite in the
+environment.
+
+When the key rotates, a running bot keeps its previous key for up to 24 hours, with the same install spending cap.
+Turning the install off still stops all its keys immediately. A run that could exceed that grace is limited to just
+under 24 hours, including any fallback; its run details explain the shorter limit.
+
+- A key you paste on the card, or one the server's environment sets, wins over the automatic key.
+- **Clear key** removes the automatic key, and the server does not get a new one by itself. **Connect automatically**
+  on the card turns it back on.
+- If Tico turns the Gateway off for your install, Health says "Tico AI Gateway was turned off for this install by
+  Tico. Contact support." Decide and bots on Tico models stop, and the server stops asking for a key.
+- If the invite code doesn't work (expired, used by all the installs it allows, or cancelled), Health says so. Ask
+  Tico Team for a new code and run the install command again with it, or paste a gateway key on the card.
+
+The Gateway counts each call against the install, its key, the model and the bot. It gets an id for the bot that only
+your server can make, never the bot's name.
+
 ## Pick a Tico model for a bot
 
 While the Gateway is connected, pick **Tico Cheap 1.0**, **Tico Mid 1.0** or **Tico Power 1.0** in **Settings → Bots**
