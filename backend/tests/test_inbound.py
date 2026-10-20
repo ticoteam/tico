@@ -18,6 +18,16 @@ def no_live_inbound(monkeypatch):
     monkeypatch.setenv('TICO_INBOUND_URL','https://hq.example.test')
 
 
+@pytest.fixture
+def retention_api(monkeypatch, request):
+    # This test drives real ticks explicitly; the app's autonomous worker must
+    # not race those ticks or observe its temporary clock and remote fake.
+    async def manual_ticks_only(self, stop):
+        await stop.wait()
+    monkeypatch.setattr(inbound.Inbound, 'loop', manual_ticks_only)
+    return request.getfixturevalue('api')
+
+
 def seed(api):
     svc=api.app.state.inbound
     with svc.store.transaction() as c:
@@ -137,7 +147,8 @@ def test_native_and_registered_agents_share_inboxes_but_lose_access_when_paused(
 
 
 @pytest.mark.parametrize('outage',[False,True],ids=['key_absent','hq_outage'])
-def test_bodies_and_codes_expire_at_90_days_without_hq(api,monkeypatch,outage):
+def test_bodies_and_codes_expire_at_90_days_without_hq(retention_api,monkeypatch,outage):
+    api=retention_api
     svc=seed(api);start=1_800_000_000.0
     monkeypatch.setattr(inbound,'now',lambda:start)
     old=page(1,ident='ses:old:ibx_b');old['deliveries'][0]['received_at']=start
