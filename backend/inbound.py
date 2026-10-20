@@ -4,16 +4,18 @@ HQ owns supplier credentials. This install holds its own inbound key and pulls n
 """
 import asyncio
 import json
+import math
 import os
 import re
 import time
 import uuid
+from dataclasses import replace
 from typing import Literal
 from urllib.parse import quote, urlencode, urlparse
 
 import httpx
 from fastapi import Query, Request
-from pydantic import Field
+from pydantic import ConfigDict, Field, ValidationError
 
 from clients.gateway import user_agent
 
@@ -24,6 +26,7 @@ from .store import H, Problem, encode
 TRANSPORT = None  # tests' fake HQ, never a live company database
 RETENTION = 90*86400  # bodies and codes; metadata stays
 PURGE_EVERY = 600  # reads refuse expired content before the next purge
+CONNECTION_TIMEOUT = 15  # includes headers and a slow-drip response, not just each socket read
 now = time.time  # tests' controlled clock
 SCHEMA = '''
 CREATE TABLE IF NOT EXISTS inbound_inboxes(
@@ -67,6 +70,12 @@ class AcceptPhone(Contract):
     price_micros: int = Field(ge=1)
 
 
+class CompanyConnection(Contract):
+    model_config = ConfigDict(extra='forbid',str_strip_whitespace=False)
+    action: Literal['preview','connect']
+    code: str = Field(strict=True,min_length=43,max_length=43,pattern=r'^[A-Za-z0-9_-]{43}$')
+
+
 class Wait(Contract):
     inbox_ids: list[str] | None = Field(default=None,max_length=30)
     after: int = Field(ge=0)
@@ -101,6 +110,16 @@ def save_inbox(c, item):
               'VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(inbox_id) DO UPDATE SET name=excluded.name,address=excluded.address,state=excluded.state,'
               'period_end=excluded.period_end,cancel_pending=excluded.cancel_pending',
               tuple(item.get(k) for k in ('inbox_id','kind','name','address','state','created_by','period_end','cancel_pending')))
+
+
+def connection_json(raw):
+    def unique(pairs):
+        result = {}
+        for key,value in pairs:
+            if key in result:raise ValueError('duplicate_field')
+            result[key] = value
+        return result
+    return json.loads(raw,object_pairs_hook=unique)
 
 
 class Inbound:
@@ -148,6 +167,79 @@ class Inbound:
             sync = dict(c.execute('SELECT * FROM inbound_sync WHERE singleton=1').fetchone())
         return {'inboxes':rows[:limit],'next':rows[limit-1]['inbox_id'] if len(rows)>limit else None,'configured':not self.off,'last_sync':sync['last_sync'],'error':sync['error'],
                 'gaps':json.loads(sync['gaps_json'])}
+
+    def connection_actor(self, who):
+        # Delegated human identities may manage other Inbox operations, never company linking.
+        if (who.role not in ('owner','human') or not who.actor.startswith('human:')
+                or any((who.support,who.via,who.via_token,who.runner_id,who.attempt_id,who.agent,who.task_actor))):
+            raise Problem('inbox_connection_forbidden','A signed-in owner or admin must connect Inbox directly.',403)
+        from . import access, census
+        with self.store.read_transaction() as c:
+            validate_identity(c,who)
+            human = H.human(c,H.actor_id(who.actor))
+            role = access.role_of(access.load_access(c,self.settings),access.load_owner(c,self.settings)['email'],human.get('email'))
+            if role not in ('owner','admin'):
+                raise Problem('inbox_connection_forbidden','A signed-in owner or admin must connect Inbox directly.',403)
+            validate_identity(c,replace(who,role='owner' if role=='owner' else 'human',email=human.get('email') or ''))
+            # This getter must stay read-only: a reported census ID does not prove ownership.
+            try:record = census._load(c)
+            except (ValueError,TypeError):record = {}
+        ident = record.get('install_id')
+        try:
+            if not isinstance(ident,str) or str(uuid.UUID(ident))!=ident:raise ValueError()
+        except (ValueError,TypeError,AttributeError):
+            raise Problem('inbox_connection_unavailable','This workspace has no saved installation identity yet.',409) from None
+        if len(who.actor)>100 or any(ord(ch)<32 or ord(ch)==127 for ch in who.actor):
+            raise Problem('inbox_connection_forbidden','A signed-in owner or admin must connect Inbox directly.',403)
+        return {'reported_install_id':ident,'actor':who.actor}
+
+    async def company_connection(self, who, body):
+        proof = self.connection_actor(who)
+        unavailable = 'Inbox could not confirm the connection. Retry the same code or check the portal.'
+        if self.off or self.url not in ('https://api.tico.dev','https://updates.tico.team'):
+            raise Problem('inbox_connection_unavailable',unavailable,503,retryable=True)
+        errors = {
+            'inbox_connection_invalid':(422,'Enter the connection code from the portal.'),
+            'inbox_connection_expired':(409,'This connection code expired. Get a new code in the portal.'),
+            'inbox_connection_conflict':(409,'This Inbox cannot connect to that company. Check its existing connection in the portal.'),
+            'inbox_connection_forbidden':(403,'The connection is no longer authorized. Check your company access in the portal.'),
+        }
+        try:
+            # Identity encoding plus raw streaming bounds both wire and decoded JSON bytes.
+            async with asyncio.timeout(CONNECTION_TIMEOUT):
+                async with httpx.AsyncClient(transport=TRANSPORT,timeout=10,trust_env=False,follow_redirects=False) as client:
+                    async with client.stream('POST',self.url+'/v1/inbound/company-connection',
+                                       json={**body.model_dump(),**proof},headers={'Authorization':'Bearer '+self.key,
+                                       'User-Agent':user_agent(),'Accept-Encoding':'identity'}) as response:
+                        if 300<=response.status_code<400:raise ValueError()
+                        if response.headers.get('content-encoding','identity').lower() not in ('','identity'):
+                            raise ValueError()
+                        chunks,total = [],0
+                        async for chunk in response.aiter_raw(chunk_size=1024):
+                            total += len(chunk)
+                            if total>4096:raise ValueError()
+                            chunks.append(chunk)
+                        result = connection_json(b''.join(chunks))
+                        if response.status_code!=200:
+                            code = result.get('error') if isinstance(result,dict) else None
+                            if isinstance(code,str) and code in errors and response.status_code==errors[code][0]:
+                                raise Problem(code,errors[code][1],response.status_code)
+                            raise ValueError()
+            expected = {'connected','scope','company'} | ({'expires_at'} if body.action=='preview' else set())
+            if (not isinstance(result,dict) or set(result)!=expected or result['scope']!='inbox'
+                    or result['connected'] is not (body.action=='connect')):raise ValueError()
+            company = result['company']
+            if (not isinstance(company,dict) or set(company)!={'company_id','name'}
+                    or not isinstance(company['company_id'],str)
+                    or not re.fullmatch(r'[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}',company['company_id'])
+                    or not isinstance(company['name'],str) or not 1<=len(company['name'])<=100
+                    or any(ord(ch)<32 or ord(ch)==127 for ch in company['name'])):raise ValueError()
+            company['name'].encode('utf-8')
+            if body.action=='preview' and (type(result['expires_at']) not in (int,float)
+                    or not math.isfinite(result['expires_at']) or result['expires_at']<=0):raise ValueError()
+            return result
+        except (httpx.HTTPError,httpx.StreamError,TimeoutError,ValueError,KeyError,TypeError,OverflowError,RecursionError):
+            raise Problem('inbox_connection_unavailable',unavailable,503,retryable=True) from None
 
     def create(self, who, body, operation):
         with self.store.read_transaction() as c:
@@ -383,6 +475,22 @@ class Inbound:
 def install(app,store,settings,auth):
     service = Inbound(store,settings,auth)
     app.state.inbound = service
+
+    @app.post('/api/v2/inbound/company-connection')
+    async def company_connection(request:Request):
+        # Authenticate before parsing; ordinary validation errors can reveal supplied secrets.
+        who = request.state.identity
+        service.connection_actor(who)
+        try:
+            if request.headers.get('content-type','').split(';',1)[0]!='application/json':raise ValueError()
+            raw = bytearray()
+            async for chunk in request.stream():
+                if len(raw)+len(chunk)>2048:raise ValueError()
+                raw.extend(chunk)
+            body = CompanyConnection.model_validate(connection_json(raw))
+        except (ValueError,TypeError,ValidationError,RecursionError):
+            raise Problem('inbox_connection_invalid','Enter the connection code from the portal.',422) from None
+        return await service.company_connection(who,body)
 
     @app.get('/api/v2/inbound/inboxes')
     def inboxes(request:Request,after:str=Query(default='',max_length=64),limit:int=Query(default=100,ge=1,le=100)):

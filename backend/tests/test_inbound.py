@@ -12,6 +12,152 @@ from backend.tests.test_api import api, headers, setup_attempt  # noqa: F401
 from clients import hubcli, hubtools, remotecli
 
 
+CONNECTION_CODE = 'synthetic_'+'x'*33
+CONNECTION_ID = '7d05caa5-e578-4c2a-8887-3d5b557f6a0a'
+INSTALL_ID = 'cc4a8541-2661-4eb8-a1d3-a34e913571c0'
+
+
+def connection_ready(api, monkeypatch, handler):
+    svc=api.app.state.inbound
+    svc.off=False;svc.url='https://api.tico.dev';svc.key='tin_synthetic_private_key'
+    monkeypatch.setattr(inbound,'TRANSPORT',httpx.MockTransport(handler))
+    with svc.store.transaction() as c:
+        c.execute("INSERT OR REPLACE INTO registry_metadata VALUES('usage-count',?)",
+                  (json.dumps({'install_id':INSTALL_ID}),))
+    return svc
+
+
+def connection_answer(action):
+    result={'connected':action=='connect','scope':'inbox','company':{'company_id':CONNECTION_ID,'name':'Acme'}}
+    if action=='preview':result['expires_at']=time.time()+300
+    return result
+
+
+def connection_reply(status,body,**kwargs):
+    return httpx.Response(status,stream=httpx.ByteStream(json.dumps(body).encode()),**kwargs)
+
+
+def test_connection_requires_actual_direct_human_management_before_secret_parsing(api,monkeypatch):
+    from dataclasses import replace
+    from backend.tests.test_api import as_member
+    calls=[]
+    svc=connection_ready(api,monkeypatch,lambda request:calls.append(request))
+    path='/api/v2/inbound/company-connection'
+    assert api.post(path,content=b'invalid JSON').status_code==401
+    assert api.post(path,headers=headers('cara-test'),content=b'invalid JSON').status_code==403
+    owner=Identity('human:ana','owner','ana@acme.example')
+    for changes in ({'via':'assistant','confirmed':True},{'via':'botops'},{'via_token':True},
+                    {'support':'full'},{'task_actor':'bot:ops'},{'runner_id':'r_test'},
+                    {'attempt_id':'a_test'},{'agent':'external'}):
+        with pytest.raises(Problem) as denied:svc.connection_actor(replace(owner,**changes))
+        assert denied.value.status==403
+    # A cached or forged owner role never substitutes for current stored company authority.
+    with pytest.raises(Problem):svc.connection_actor(Identity('human:cara','owner','ana@acme.example'))
+    assert svc.connection_actor(owner)['actor']=='human:ana'  # loopback owner need not have via_proxy
+    assert svc.connection_actor(Identity('human:ben','human','ben@acme.example'))['actor']=='human:ben'
+    with svc.store.transaction() as c:
+        roster=json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])
+        next(p for p in roster['people'] if p['id']=='ben')['sign_in']=False
+        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'",(json.dumps(roster),))
+    with pytest.raises(Problem):svc.connection_actor(Identity('human:ben','owner','ben@acme.example'))
+    as_member(api,'ben@acme.example')
+    assert api.post(path,headers=headers('ben-test'),json={'action':'connect','code':CONNECTION_CODE}).status_code==403
+    assert calls==[]
+
+
+def test_connection_validation_and_missing_identity_never_persist_or_echo_code(api,monkeypatch,caplog):
+    calls=[]
+    svc=connection_ready(api,monkeypatch,lambda request:calls.append(request))
+    path='/api/v2/inbound/company-connection'
+    assert len(CONNECTION_CODE)==43
+    valid=json.dumps({'action':'preview','code':CONNECTION_CODE})
+    malformed=[valid[:-1],valid[:-1]+',"code":"'+CONNECTION_CODE+'"}',
+               json.dumps({'action':'preview','code':CONNECTION_CODE,CONNECTION_CODE:'unknown'}),
+               json.dumps({'action':'preview','code':CONNECTION_CODE+'\n'}),
+               json.dumps({'action':'preview','code':{'secret':CONNECTION_CODE}}),
+               json.dumps({'action':'other','code':CONNECTION_CODE}),valid+' '*2048]
+    for body in malformed:
+        response=api.post(path,headers={**headers(),'Content-Type':'application/json'},content=body)
+        assert response.status_code==422
+        assert response.json()['error']['code']=='inbox_connection_invalid'
+        assert CONNECTION_CODE not in response.text
+    with svc.store.transaction() as c:c.execute("DELETE FROM registry_metadata WHERE key='usage-count'")
+    response=api.post(path,headers=headers(),json={'action':'preview','code':CONNECTION_CODE})
+    assert response.status_code==409 and CONNECTION_CODE not in response.text
+    with svc.store.read() as c:
+        assert c.execute("SELECT 1 FROM registry_metadata WHERE key='usage-count'").fetchone() is None
+        assert CONNECTION_CODE not in '\n'.join(c.iterdump())
+    with svc.store.transaction() as c:c.execute("INSERT INTO registry_metadata VALUES('usage-count','{corrupt')")
+    assert api.post(path,headers=headers(),json={'action':'connect','code':CONNECTION_CODE}).status_code==409
+    with svc.store.read() as c:
+        assert c.execute("SELECT value_json FROM registry_metadata WHERE key='usage-count'").fetchone()[0]=='{corrupt'
+    assert CONNECTION_CODE not in caplog.text and calls==[]
+
+
+def test_connection_preview_connect_fixed_transport_and_fresh_role(api,monkeypatch,caplog):
+    from backend.tests.test_api import as_member
+    calls=[]
+    def hq(request):
+        body=json.loads(request.content);calls.append(body)
+        assert request.url==httpx.URL('https://api.tico.dev/v1/inbound/company-connection')
+        assert request.headers['authorization']=='Bearer tin_synthetic_private_key'
+        assert request.headers['accept-encoding']=='identity'
+        assert set(body)=={'action','code','reported_install_id','actor'}
+        assert body['reported_install_id']==INSTALL_ID and body['code']==CONNECTION_CODE
+        return connection_reply(200,connection_answer(body['action']))
+    svc=connection_ready(api,monkeypatch,hq)
+    path='/api/v2/inbound/company-connection'
+    for action in ('preview','connect','connect'):
+        response=api.post(path,headers=headers('ben-test'),json={'action':action,'code':CONNECTION_CODE})
+        assert response.status_code==200,response.text
+        assert response.json()['connected'] is (action=='connect')
+        assert calls[-1]['actor']=='human:ben'
+        assert CONNECTION_CODE not in response.text
+    as_member(api,'ben@acme.example')
+    assert api.post(path,headers=headers('ben-test'),json={'action':'connect','code':CONNECTION_CODE}).status_code==403
+    assert len(calls)==3
+    with svc.store.read() as c:assert CONNECTION_CODE not in '\n'.join(c.iterdump())
+    assert CONNECTION_CODE not in caplog.text
+
+
+def test_connection_bounds_upstream_response_and_refuses_redirects_and_false_success(api,monkeypatch):
+    calls=[];closed=[];chunks=[]
+    class Large(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            for n in range(10):chunks.append(n);yield b'x'*1024
+        async def aclose(self):closed.append(True)
+    replies=[lambda:httpx.Response(200,stream=Large()),
+             lambda:connection_reply(302,{},headers={'location':'https://elsewhere.example/'+CONNECTION_CODE}),
+             lambda:connection_reply(200,{},headers={'content-encoding':'gzip'}),
+             lambda:connection_reply(200,{**connection_answer('preview'),'key':CONNECTION_CODE}),
+             lambda:connection_reply(200,{**connection_answer('preview'),'connected':True}),
+             lambda:connection_reply(409,{'error':'inbox_connection_expired','detail':CONNECTION_CODE})]
+    def hq(request):calls.append(str(request.url));return replies.pop(0)()
+    svc=connection_ready(api,monkeypatch,hq)
+    for i in range(6):
+        response=api.post('/api/v2/inbound/company-connection',headers=headers(),json={'action':'preview','code':CONNECTION_CODE})
+        assert response.status_code==(409 if i==5 else 503)
+        assert CONNECTION_CODE not in response.text
+    assert len(calls)==6 and len(chunks)==5 and closed
+    svc.url='https://elsewhere.example'
+    assert api.post('/api/v2/inbound/company-connection',headers=headers(),json={'action':'preview','code':CONNECTION_CODE}).status_code==503
+    assert len(calls)==6
+
+    # A peer that never finishes a body is cancelled and closed by the overall deadline.
+    import asyncio
+    class Slow(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            await asyncio.Event().wait()
+            yield b'{}'
+        async def aclose(self):closed.append('cancelled')
+    monkeypatch.setattr(inbound,'CONNECTION_TIMEOUT',.1)
+    monkeypatch.setattr(inbound,'TRANSPORT',httpx.MockTransport(lambda request:httpx.Response(200,stream=Slow())))
+    svc.url='https://api.tico.dev'
+    response=api.post('/api/v2/inbound/company-connection',headers=headers(),json={'action':'preview','code':CONNECTION_CODE})
+    assert response.status_code==503 and response.json()['error']['retryable'] is True
+    assert 'cancelled' in closed and CONNECTION_CODE not in response.text
+
+
 @pytest.fixture(autouse=True)
 def no_live_inbound(monkeypatch):
     monkeypatch.delenv('TICO_INBOUND_KEY',raising=False)

@@ -64,7 +64,7 @@ function vmWire(card) {
   });
 }
 function vmRecover(m, card) {
-  const fresh = card.dataset.freshSrc;
+  const fresh = visualSrc({src: card.dataset.freshSrc});
   if (!fresh || fresh === m.dataset.vmSrc || m.dataset.vmTried === fresh) return false;
   const at = m.currentTime || Number(m.dataset.vmAt) || 0;
   // It was playing when the address ran out: it resumes, unless the person starts another clip meanwhile (the
@@ -74,6 +74,7 @@ function vmRecover(m, card) {
   m.dataset.vmTried = fresh;
   m.dataset.vmSrc = fresh;
   m.addEventListener('loadedmetadata', () => {
+    if (!visualSrc({src: fresh})) { delete m.dataset.vmResume; return; }
     if (at) m.currentTime = at;
     if (m.dataset.vmResume === '1') m.play().catch(() => {});
     delete m.dataset.vmResume;
