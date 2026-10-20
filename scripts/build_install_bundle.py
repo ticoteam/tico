@@ -32,6 +32,10 @@ def bundle_names(source: Path) -> list[str]:
         rel = p.relative_to(source)
         if "tests" not in rel.parts and "__pycache__" not in rel.parts:
             names.append(rel.as_posix())
+    # The same pure validator and transport as the app, without the app's imports.
+    for p in sorted((source / "backend/company_file").glob("*")):
+        if p.suffix in (".py", ".json"):
+            names.append(p.relative_to(source).as_posix())
     return sorted(names)
 
 

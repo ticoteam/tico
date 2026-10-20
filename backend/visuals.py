@@ -25,13 +25,22 @@ KINDS = {"image/png": "image", "image/jpeg": "image", "image/gif": "image", "ima
          "image/svg+xml": "svg", "text/html": "page",
          "video/mp4": "video", "video/webm": "video", "video/quicktime": "video", "video/x-m4v": "video",
          "audio/mpeg": "audio", "audio/mp4": "audio", "audio/x-m4a": "audio", "audio/wav": "audio",
-         "audio/x-wav": "audio", "audio/wave": "audio", "audio/ogg": "audio", "audio/aac": "audio"}
+         "audio/x-wav": "audio", "audio/wave": "audio", "audio/vnd.wave": "audio", "audio/ogg": "audio",
+         "audio/aac": "audio"}
+# Python 3.15's mimetypes names .wav audio/vnd.wave; browsers know audio/wav. A type the server picks is stored as the
+# common name, and versions already stored under the other still show inline (KINDS above).
+ALIASES = {"audio/vnd.wave": "audio/wav"}
 MB = 1024 * 1024
 # A page or SVG is read whole by the viewer (ui/app/viewer.js caps it at 10 MB); video and audio stream by range.
 LIMITS = {"image": 25 * MB, "svg": 10 * MB, "page": 10 * MB, "video": 2048 * MB, "audio": 2048 * MB}
 MAGIC = {"image/png": (b"\x89PNG\r\n\x1a\n",), "image/jpeg": (b"\xff\xd8\xff",), "image/gif": (b"GIF87a", b"GIF89a")}
 TITLE_MAX = 200
 LIFE = 2 * 3600          # lead, Oct 19: two hours, every request re-checked
+
+
+def stored_type(mime):
+    """The type to store for a type the server guessed from a file name: the common name for an alias, else as is."""
+    return ALIASES.get(mime, mime) if mime else mime
 
 
 def kind_of(mime, size, head=b""):

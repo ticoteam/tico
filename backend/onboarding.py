@@ -261,6 +261,7 @@ def load(c):
             "assigned_to": stored.get("assigned_to") or None,
             # When the company started as the sample company (backend/sample_company.py): when, by whom, what it made.
             "sample": stored.get("sample") or None,
+            "company_import": stored.get("company_import") or None,
             "updated": stored.get("updated") or "", "updated_by": stored.get("updated_by") or ""}
 
 
