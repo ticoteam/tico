@@ -142,7 +142,7 @@ function overviewFallbackLine() {
   const clock = first ? new Date(first).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}) : '';
   const parts = [on.length ? `${on.length} ${on.length === 1 ? 'bot' : 'bots'} running on fallback${clock ? ' since ' + clock : ''}` : '',
     limited.length ? `${limited.length} limited` : ''].filter(Boolean);
-  return `<p class="overview-fallback"><a href="#/runs">${esc(parts.join(', '))}</a></p>`;
+  return `<p class="overview-fallback"><a href="#/settings" data-gs-tab="runs">${esc(parts.join(', '))}</a></p>`;
 }
 function overviewStuckDraw() {
   const el = OVERVIEW_PAGE && $('#overview-stuck'); if (!el) return;

@@ -34,7 +34,8 @@ your email) gives it a token and Tico's MCP ([Connect an external agent](connect
 **How do I know my bot ran?**
 The conversation goes *Saved — queued* → *Starting* → *Working* → the reply. When the bot marks
 a task done, the task shows under **Tasks → Done** with the bot's note.
-Every run is under your email → **Runs**, and on the bot's **More** tab with its files and routines.
+Every run is under **Settings → History → Runs** (the owner also sees **Changes**, the bot settings history), and
+on the bot's **More** tab with its files and routines.
 
 **What does *waiting* mean, and the other states?**
 *Waiting*: the bot is parked on something — a bot, a child task, or an answer from you.
@@ -80,7 +81,7 @@ your own, and anyone's below you.
 **How do I add a routine?**
 **Settings → Routines → New routine** (or the Routines card on the bot's page): pick the bot, a
 title, a cron (five fields, America/Los_Angeles by default) or a Tico event, and the text the bot
-is told each time. A bot can set up its own with `hub routine set`. Details: `docs/routines.md`.
+is told each time. A bot can set up its own with `hub routine set`. Details: [Routines](routines.md).
 
 **How do I change what a bot does?**
 Open **Bot → More → Instructions → Edit Instructions**, describe the change, and choose
@@ -92,6 +93,14 @@ For a manual edit, change `AGENT.md` in `bot-<slug>` (playbooks and `knowledge/`
 facts), commit and push. The computer pulls before the next run; if you maintain its checkout by
 hand, pull the update there too. Model, effort, computer, owners and status are changed in
 **Settings → Bots**. One-off requests are tasks, not edits.
+
+How often a bot wakes for routine news is its **Wakes** row in **Settings → Bots**: **Token saver** (the default for
+new bots) or **Performance**. Under **Subscribe to updates** in the bot editor you choose whether it hears about
+template changes and Tico releases. See [Creating bots](creating-bots.md#subscribe-to-updates).
+
+**How do I contact the Tico team?**
+Click **?** at the bottom of the sidebar (**Support** on a phone), write your message and press Enter. Replies come
+back into the same pop-up. See [Support](support.md).
 
 ## Updates
 
@@ -161,6 +170,28 @@ ordinary task states and needs a completion result. Close it with
 **Run now** on the task to start it sooner. Deferred does not mean delayed forever: the stalled-task
 check can wake an idle bot after 30 minutes when no other work or Routine will move it.
 
+The task shows where it stands, under **Quiet work** on the task and as `quiet` in `hub task show`:
+
+- **Eligible**: the bot's next run carries it.
+- **Delivered**: a run carried it; which run and when are shown. **Deferred** is a delivered task whose run said
+  when to pick it up again.
+- **Queued**: it has a run of its own, waiting or going (after **Run now**, or when its resume condition came true).
+
+A run that carries a task it will not do now says when to pick it up, rather than in its reply's words:
+
+```bash
+hub task defer <task-id> --after <other-task>   # when that task is done or closed
+hub task defer <task-id> --at 2026-10-20T09:00Z # at a time
+hub task defer <task-id> --next-run             # with the next run, whatever starts it
+hub task defer <task-id> --handled              # this run is done with it for now (MCP: hub_task_defer)
+```
+
+When the condition comes true the task gets one run of its own, as **Run now** gives it. A run that ends without
+working a carried task (a comment, a step, status or note change, a pull request, or `--handled`) and without a
+condition hands it back: it is eligible again and the next run carries it, with a line in its history. The bot's
+own task, or a person, may defer it (`POST /api/v2/tasks/{id}/defer`). The Health Monitor names a quiet task handed
+to a run more than two hours ago and not worked since, with no condition (`quiet_unworked`).
+
 The equivalent API calls are internal routes (subject to change); use your own rights and an
 `Idempotency-Key` on writes:
 
@@ -209,7 +240,7 @@ Tags give related tasks a shared label, metadata and a Markdown checklist. A chi
 Click a tag chip to open its notes and tasks. The task filter uses tags. Existing label strings,
 `hub task label` and `--label` continue to use the same keys. Unknown keys create plain tags.
 
-Open **Settings > Tags** to create tags or templates. A template holds a reusable checklist and
+Open **Settings > Tasks**, under **Task tags**, to create tags or templates. A template holds a reusable checklist and
 metadata defaults. Open it and choose a key under **Make a tag** to copy those defaults into a new
 tag; later template edits leave existing instances alone. Put the instance on tasks. Templates
 cannot be attached directly.
@@ -247,7 +278,7 @@ a stale version returns `409 version_conflict` without overwriting the checklist
 ## Task types and steps
 
 Tasks use **General** until you choose another type. Movers add types and named steps in
-**Settings → Types**. A custom task's **Step** control sets its status; General keeps the usual
+**Settings → Tasks**. A custom task's **Step** control sets its status; General keeps the usual
 **Status** control. Select **Filter → Type** on the board to use that type's steps as columns.
 Bots and older runners keep using statuses. See [Task types and steps](tasks.md) for mapping rules,
 CLI, MCP and API examples.

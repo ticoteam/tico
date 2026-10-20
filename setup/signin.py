@@ -1,6 +1,7 @@
 """Sign-in: which console to open, what to paste in it, and what comes back."""
 from __future__ import annotations
 
+import urllib.parse
 from dataclasses import dataclass
 
 from . import contract
@@ -30,5 +31,32 @@ PROVIDERS = {
 }
 
 
+# `--auth oidc`: any OpenID Connect issuer, given by its address. Whoever runs it registers the client.
+GENERIC = Provider("oidc", "OpenID Connect", "", (
+    "At your OpenID Connect provider, register a web client (authorization code flow) for Tico.",
+    "Its redirect URI is the URI below, exactly, with no trailing slash.",
+    "Copy the issuer URL, the client ID and the client secret."))
+
+
 def redirect_uri(domain: str) -> str:
     return f"https://{domain}{contract.REDIRECT_PATH}"
+
+
+def provider(auth: str) -> Provider:
+    return GENERIC if auth == "oidc" else PROVIDERS[auth]
+
+
+def issuer_host(auth: str, issuer: str = "") -> str:
+    """The host sign-in redirects to: Google's or Microsoft's, or the given issuer's for `--auth oidc`; "" for neither."""
+    if auth == "oidc":
+        return urllib.parse.urlsplit(issuer).hostname or ""
+    return contract.OIDC_HOSTS.get(auth, "")
+
+
+def valid_issuer(url: str) -> bool:
+    """An https address with a host and no query, fragment or credentials: what TICO_OIDC_ISSUER takes."""
+    try:
+        u = urllib.parse.urlsplit(url)
+    except ValueError:
+        return False
+    return u.scheme == "https" and bool(u.hostname) and not (u.query or u.fragment or u.username or u.password)

@@ -121,7 +121,7 @@ const {unrouted} = require('./support/routes.cjs');
     await page.locator('#set-recurring [data-new-routine]').click();
     assert.equal(await page.locator('#routine-editor select[name=bot]').inputValue(), 'helper');
     await page.locator('#routine-editor [data-routine-close]').first().click();
-    await page.locator('[data-settings-tab=providers]').click();
+    await page.locator('[data-settings-tab=devices]').click();
     await page.locator('#set-prov-save').waitFor();
     assert.equal(await page.locator('#set-providers [data-model-login]').isVisible(), true);
     assert.equal(await page.locator('#set-providers a[href="#/credentials"]').isVisible(), true);
@@ -135,8 +135,9 @@ const {unrouted} = require('./support/routes.cjs');
     assert.equal(writes.find(row => row.p === '/api/v2/providers').body.auto_fallback, false);
     // The check-model order was not edited, so the save leaves it alone instead of re-checking it.
     assert.equal('check_models' in writes.find(row => row.p === '/api/v2/providers').body, false);
-    await page.locator('#set-providers .muted', {hasText: 'Bots wait'}).waitFor();
-    assert.match(await page.locator('#set-providers').innerText(), /Bots wait/);
+    // With nothing ticked it says bots wait for a provider (the models choices above have wording of their own).
+    await page.locator('#set-providers .muted', {hasText: 'Bots wait until you add an AI provider'}).waitFor();
+    assert.match(await page.locator('#set-providers').innerText(), /Bots wait until you add an AI provider/);
     // Edited, the order is sent as typed.
     const saves = () => writes.filter(row => row.p === '/api/v2/providers').length, before = saves();
     await page.locator('#set-prov [data-provider-check]').fill('grok, codex');
@@ -146,7 +147,8 @@ const {unrouted} = require('./support/routes.cjs');
     await page.locator('[data-settings-tab=people]').click();
     await page.locator('#people-add').waitFor();
     await page.locator('[data-settings-tab=devices]').click();
-    await page.locator('#set-machines .people-more').click();
+    await page.locator('#set-machines .machine-name[data-computer-open=computer-1]').click();
+    page.once('dialog', confirm => confirm.accept());
     await page.locator('[data-computer-remove]').click();
     await page.waitForFunction(() => !!SETTINGS_DATA.machines[0].revoked_at);
     assert.ok(writes.some(row => row.p === '/api/v2/computers/computer-1/revoke'));

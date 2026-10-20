@@ -11,7 +11,8 @@ question per goal per week.
 2. Ask the owner, a human or a bot, one question with the facts in it:
    "Activation is 52% against the 58% we need on pace this week (from 55% last week). What is going on?" Ask a
    human with `hub task create --owner <person>` when it needs their answer; ask a bot with `hub question ask <bot>`.
-   Do not suggest an answer and do not argue with the one you get.
+   Do not suggest an answer and do not argue with the one you get. Where the CEO Bot is on, a question to a person
+   counts toward their 5 a day: read `asked_today` in `hub goal ceo-bot` first.
 3. When the answer arrives, record it in their words:
    `hub goal checkin <goal-id> "<their words>" --signal on_track|at_risk|off_track --from <owner> [--kpi <id>]`.
    Choose the signal only when they said it; otherwise leave it out. A long answer is trimmed to what they said

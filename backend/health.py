@@ -12,7 +12,7 @@ import os
 import shlex
 from datetime import datetime, timezone
 
-from . import (access, blob_s3, inbox_isolation, model_login, providers, releases, roadmaps, runner_versions,
+from . import (access, billing_check, blob_s3, gateway_connection, inbox_isolation, model_login, providers, releases, roadmaps, runner_versions,
                setup_stuck, watchers)
 from .getting_started import _online_runners, _signed_in_runtime, _wanted_runtimes, _person
 
@@ -34,7 +34,8 @@ NEEDS_YOU_MINUTES = 30      # this quiet, its owner is asked to bring it back
 BACKUP_STALE_HOURS = 6      # the replica normally trails by seconds
 RECENT_HOURS = 24
 GITHUB_HEALTH = "github:token"
-PROXIES = {"cloudflare": "Cloudflare Access", "aws-alb": "an AWS load balancer", "oidc": "OpenID Connect"}
+PROXIES = {"cloudflare": "Cloudflare Access", "aws-alb": "an AWS load balancer", "oidc": "OpenID Connect",
+           "owner-link": "the owner sign-in link Tico sends"}
 
 
 def _fix(label, href="", tab="", click=""):
@@ -505,12 +506,12 @@ def _movable(c, who, online_ids):
             if r["id"] in online_ids and (who.role == "owner" or r["operator"] == me)]
 
 
-def runtime_choice(c, bot, runtime, who, computers, harness=""):
+def runtime_choice(c, bot, runtime, who, computers, harness="", model=""):
     """What Settings and Health show for running `runtime` on this bot's computer, from the one rule
     (backend/readiness.py `can_run`): the answer, a short label, and at most one way out: sign in there (a computer's
     shared sign-in for a runtime that signs in from the browser) or a computer `who` may move it to that can run it."""
     from .readiness import can_run
-    answer = can_run(c, bot, runtime, harness=harness)
+    answer = can_run(c, bot, runtime, harness=harness, model=model)
     view = {key: answer.get(key) for key in ("can_run", "problem", "fix", "link")}
     view["computer"] = answer.get("computer")
     if answer.get("can_run") is not False:
@@ -520,17 +521,17 @@ def runtime_choice(c, bot, runtime, who, computers, harness=""):
     if here.get("label") and here["label"] not in problem and answer.get("link") != "#/credentials":
         view["problem"] = f"{problem} on {here['label']}"      # the runner's own words name no computer
     view["short"] = ("not installed" if "not installed" in problem else "no key" if answer.get("link") == "#/credentials"
-                     else "sign in")
+                     else "not on this computer" if "Tico Gateway work" in problem else "sign in")
     if (runtime in model_login.RUNTIMES and str(answer.get("fix") or "").startswith(f"Sign in {runtime} ")):
         view["sign_in"] = {"runner_id": here.get("id"), "runtime": runtime, "computer": here.get("label")}
     view["move"] = next(({"id": rid, "label": label} for rid, label in computers
-                         if rid != here.get("id") and can_run(c, bot, runtime, runner=rid, harness=harness)["can_run"] is True), None)
+                         if rid != here.get("id") and can_run(c, bot, runtime, runner=rid, harness=harness, model=model)["can_run"] is True), None)
     return view
 
 
 # Why the claim holds an idle bot's queued work on purpose (execution.claim_refusal, job_refusal): what Health says, and
 # where the fix is. A reason not here is "Not started": a Tico bug (Health Monitor queue_idle).
-RUNS, COMPUTERS, BOT_SETTINGS = ("Open Runs", "#/runs"), ("Open Computers", "#/settings", "devices"), \
+RUNS, COMPUTERS, BOT_SETTINGS = ("Open Runs", "#/settings", "runs"), ("Open Computers", "#/settings", "devices"), \
     ("Open bot settings", "#/settings", "bots")
 HELD = {
     "draining": ("Paused, or held while Tico updates: its work starts when it is resumed", BOT_SETTINGS),
@@ -539,9 +540,14 @@ HELD = {
     "lane_held": ("{computer} still runs an earlier turn of this bot whose lease lapsed: the next starts when it ends",
                   RUNS),
     "uncertain": ("An interrupted run on the same task or chat waits for review in Runs", RUNS),
-    "cooling_off": ("Waiting out a usage limit before it tries again", RUNS),
+    "cooling_off": ("Waiting out a usage limit, or a Tico AI Gateway outage, before it tries again", RUNS),
     "readiness_unknown": ("{computer} has not said whether it can run this bot", COMPUTERS),
     "sign_in_rejected": ("Its model sign-in was rejected on {computer}", COMPUTERS),
+    # A Tico model runs only where bots run as their own user (execution.claim_refusal): the bot waits, it never fails.
+    "not_isolated": ("{computer} can't run Tico Gateway work (it needs Tico's Docker runner): it waits for another "
+                     "model or computer", BOT_SETTINGS),
+    "isolation_unknown": ("{computer} hasn't said it can run Tico Gateway work: it waits until its runner is updated",
+                          COMPUTERS),
     "profile": ("Its subscription profile is not signed in or not reported on {computer}", COMPUTERS),
     "config": ("Its settings cannot be read", BOT_SETTINGS),
     "check_model": ("Its check model does not run on {computer}, or is on hold", BOT_SETTINGS),
@@ -609,7 +615,7 @@ def _stuck(c, rows, online_ids, who, full, auth=None):
             fix = _fix(*where)
         else:
             text = f"Not started after {QUEUE_MINUTES} min"
-            fix = _fix("Open Runs", "#/runs")
+            fix = _fix("Open Runs", "#/settings", "runs")
         if move:
             fix = {**_fix(f"Move to {move['label']}"), "move": {"bot": row["bot"], "runner_id": move["id"], "computer": move["label"]}}
         out.append({key: row[key] for key in ("bot", "name", "queued", "oldest", "computer", "reason")}
@@ -1370,7 +1376,7 @@ def view(c, who, settings, auth, github, config):
         rejected = _rejected(computers)
         if not wanted:
             checks.append(_check("models", "Models", "warn", "No AI provider is chosen yet.",
-                                 [_fix("Choose providers", "#/settings", "providers")]))
+                                 [_fix("Choose providers", "#/settings", "models")]))
         elif online and not signed and rejected:
             checks.append(_check("models", "Models", "bad", _rejected_summary(rejected),
                                  [_fix("Open Credentials", "#/credentials"), _fix("Open Computers", "#/settings", "devices")]))
@@ -1391,6 +1397,15 @@ def view(c, who, settings, auth, github, config):
                              + " Sign in from Settings > Computers (BotOps can start it). To have new computers sign in by "
                              "themselves, store the company's model key in Credentials and give it to every computer.",
                              [_fix("Open Computers", "#/settings", "devices"), _fix("Open Credentials", "#/credentials")]))
+    # The Tico AI Gateway's word on the company's key, for the owner who manages the connection: 80% of the month's cap
+    # used, the cap reached, or the key revoked (backend/gateway_connection.py).
+    if kind == "owner" and (gateway := gateway_connection.health(c, settings)):
+        checks.append(_check("gateway", "Tico AI Gateway", gateway["status"], gateway["summary"],
+                             [_fix("Open Models", "#/settings", "models")]))
+    # Tico HQ's nightly billing check, on the Tico team's own install only (the one server holding HQ's read-only staff
+    # key): each mismatch, and a check that missed a night or cannot be read, red (backend/billing_check.py).
+    if kind == "owner":
+        checks.extend(billing_check.health(c, settings))
     if full and (versions := runner_versions.health_check(computers)):
         checks.append(versions)
     silent = silent_computers(c) if waiting else []
@@ -1422,7 +1437,7 @@ def view(c, who, settings, auth, github, config):
         checks.append(_check("queue", "Work queueing", "warn",
                              f"{_plural(len(slow), 'bot')} with work waiting more than {QUEUE_MINUTES} minutes"
                              + (": " + ", ".join(s["name"] for s in slow[:5]) + "." if full else "."),
-                             [_fix("Open Runs", "#/runs")] if full else []))
+                             [_fix("Open Runs", "#/settings", "runs")] if full else []))
     else:
         checks.append(_check("queue", "Work queueing", "ok", "No work is waiting long."))
     for slug, name, count, what, oldest in unfinished_setup(c) if full else ():
@@ -1454,7 +1469,7 @@ def view(c, who, settings, auth, github, config):
         checks.append(_check("watchers", "Watchers", "warn",
                              "; ".join(f"{bot}/{name} {why}" for bot, name, why in stuck[:3])
                              + ("." if len(stuck) <= 3 else f"; and {len(stuck) - 3} more."),
-                             [_fix("Open Runs", "#/runs")]))
+                             [_fix("Open Runs", "#/settings", "runs")]))
     if full and (mixed := inbox_isolation.violations(c, roster(c))):
         checks.append(_check("inbox", "Inbox bots", "warn",
                              "A computer kept for inbox bots also runs " + "; ".join(
@@ -1498,7 +1513,7 @@ def view(c, who, settings, auth, github, config):
         checks.extend(_server_settings(c, settings))
     checks.append(_check("failed", "Failed runs", "warn" if failed else "ok",
                          f"{_plural(failed, 'run')} failed in the last day." if failed else "No failed runs in the last day.",
-                         [_fix("Open Runs", "#/runs")] if failed and full else []))
+                         [_fix("Open Runs", "#/settings", "runs")] if failed and full else []))
     return {**({"storage": storage_view(c, settings)} if kind == "owner" else {}), "audience": kind, "checks": checks, "attention": sum(1 for x in checks if x["status"] in ("warn", "bad")),
             "computers": computers if full else _bot_computers(computers) if kind == "bot" else [],
             "waiting": waiting if full else [], "slow": slow if full else [], "stuck": blocked,

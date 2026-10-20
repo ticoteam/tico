@@ -1,6 +1,8 @@
 """Release isolation checks must use the runner image built from the candidate."""
 from types import SimpleNamespace
 
+import pytest
+
 from scripts import release_checks
 
 
@@ -148,3 +150,63 @@ def test_python_shards_cover_every_collected_file_once_balanced_by_tests(monkeyp
         with pytest.raises(Exception):
             release_checks.parse_shard(bad)
     assert release_checks.parse_shard('3/4') == (3, 4)
+
+
+def test_shard_alone_runs_a_file_group_of_the_default_suite_pr_checks_run(monkeypatch, capsys):
+    listing = '\n'.join(['a.py::t%d' % i for i in range(4)] + ['b.py::t0', 'b.py::t1', 'c.py::t', 'd.py::t',
+                                                                 '', '8/9 tests collected (1 deselected) in 0.1s'])
+    commands = []
+
+    def run(command, **kwargs):
+        commands.append(command)
+        return SimpleNamespace(returncode=0, stdout=listing, stderr='')
+    monkeypatch.setattr(release_checks, 'subprocess', SimpleNamespace(run=run))
+    monkeypatch.setattr(release_checks, 'release', lambda args: pytest.fail('--shard alone is not the release gate'))
+    monkeypatch.setattr(release_checks, 'full', lambda: pytest.fail('--shard alone runs one Python file group'))
+    runs = {}
+    for index in (1, 2, 3):
+        commands.clear()
+        assert release_checks.main(['--shard', f'{index}/3']) == 0
+        collect, test = commands
+        assert collect[collect.index('pytest') + 1:] == ['--collect-only', '-q', '-n', '0']   # pytest.ini selects
+        assert test[test.index('pytest') + 1] == '-q'   # then only files: no release marker or ignore
+        runs[index] = test[test.index('pytest') + 2:]
+    files = sum(runs.values(), [])
+    assert sorted(files) == ['a.py', 'b.py', 'c.py', 'd.py']   # every collected file, none dropped or doubled
+    assert runs == {1: ['a.py'], 2: ['b.py'], 3: ['c.py', 'd.py']}   # 4, 2 and 2 of the 8 tests
+
+    for argv, message in ((['--part', 'python'], '--part needs --release'),
+                          (['--release', '--shard', '1/3'], '--shard with --release needs --part python'),
+                          (['--shard', '4/3'], 'K/N')):
+        with pytest.raises(SystemExit):
+            release_checks.main(argv)
+        assert message in capsys.readouterr().err
+    monkeypatch.setattr(release_checks, 'release', lambda args: 7 if args.shard == (1, 3) else 0)
+    assert release_checks.main(['--release', '--part', 'python', '--shard', '1/3']) == 7
+
+
+@pytest.mark.slow
+def test_three_default_shards_collect_exactly_the_single_default_run(monkeypatch):
+    """Real collection: the three PR-check shards hold every test of today's single `pytest` job, each once."""
+    import os
+    import subprocess
+    import sys
+    from concurrent.futures import ThreadPoolExecutor
+
+    def collect(*files):
+        result = subprocess.run([sys.executable, '-m', 'pytest', '--collect-only', '-q', '-n', '0', *files],
+                                cwd=release_checks.ROOT, env=dict(os.environ), capture_output=True, text=True)
+        assert result.returncode == 0, result.stdout[-2000:] + result.stderr[-2000:]
+        return result.stdout
+    listing = collect()   # the single job's collection, the same command shard_files runs for the default suite
+    single = [line for line in listing.splitlines() if '::' in line and not line.startswith(' ')]
+    with monkeypatch.context() as patch:
+        patch.setattr(release_checks, 'subprocess', SimpleNamespace(
+            run=lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=listing, stderr='')))
+        shards = [release_checks.shard_files(index, 3, {}, selection=()) for index in (1, 2, 3)]
+    files = sum(shards, [])
+    assert len(files) == len(set(files)) == len({test.split('::', 1)[0] for test in single})
+    with ThreadPoolExecutor(3) as pool:
+        sharded = [line for output in pool.map(lambda group: collect(*group), shards)
+                   for line in output.splitlines() if '::' in line and not line.startswith(' ')]
+    assert len(sharded) == len(single) and sorted(sharded) == sorted(single)

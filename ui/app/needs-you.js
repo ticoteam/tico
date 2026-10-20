@@ -54,6 +54,9 @@ function needsV2Item(it, folded, showName = true) {
   if (kind === 'approval') {
     acts.push(`<button class="primary" type="button" data-v2-approval="${esc(it.id)}" data-v2-decision="approved">Approve</button>`);
     acts.push(`<button class="ghost danger" type="button" data-v2-approval="${esc(it.id)}" data-v2-decision="declined">Decline</button>`);
+  } else if (kind === 'setup') {
+    // A setup card is no task: it goes away by itself once the sign-in is done (backend/models_preset.py).
+    acts.push(`<a class="button primary" href="${esc(it.link || '#/settings')}">${esc(it.link_label || 'Open Settings')}</a>`);
   } else {
     if (it.status !== 'done') acts.push(`<button class="${rec ? 'ghost' : 'primary'}" type="button" data-v2-task="${esc(it.id)}" data-v2-status="done">Done</button>`);
     if (['done', 'declined'].includes(String(it.status))) acts.push(`<button class="ghost" type="button" data-v2-task="${esc(it.id)}" data-v2-status="open">Reopen</button>`);
@@ -62,11 +65,12 @@ function needsV2Item(it, folded, showName = true) {
   if (it.conversation_id) acts.push(`<button class="ghost" type="button" data-v2-reply="${esc(it.conversation_id)}">Reply</button>`);
   const payload = it.payload && typeof it.payload === 'object' ? approvalPayloadNode(it).outerHTML : '';
   const keep = kind === 'approval' ? ` data-patch-key="approval:${esc(it.id)}"` : '';
+  const ageNode = kind === 'approval' ? approvalAgeNode(it) : null;
   return `<details class="req v2" data-v2-id="${esc(it.id)}" data-task-version="${esc(it.version || '')}"${keep}${folded ? ' hidden data-folded' : ''}>
     <summary>
       ${slug && S.emps.some(e => e.name === slug) ? avatar(slug, 24) : personCircle(actorLabel(from) || 'Tico', 24)}
       <span class="req-text">${showName ? `<span class="req-from">${esc(actorLabel(from) || 'Tico')}:</span> ` : ''}${esc(plainActors(title))}</span>
-      <span class="req-meta">${dueChip({due: it.due, owner: it.owner, status: it.status})}<span class="pill ${kind === 'approval' || kind === 'question' ? 'needs' : kind === 'declined' ? 'blocked' : ''}">${esc(V2_KIND[kind] || kind)}</span>${esc(ago(it.created))}</span>
+      <span class="req-meta">${dueChip({due: it.due, owner: it.owner, status: it.status})}<span class="pill ${kind === 'approval' || kind === 'question' ? 'needs' : kind === 'declined' ? 'blocked' : ''}">${esc(V2_KIND[kind] || kind)}</span>${ageNode ? 'ready ' + ageNode.outerHTML : esc(ago(it.created))}</span>
       <span class="req-arrow" aria-hidden="true">›</span>
     </summary>
     <div class="req-body">
@@ -84,6 +88,56 @@ function needsV2Item(it, folded, showName = true) {
     </div>
   </details>`;
 }
+// How long an approval's exact payload has been ready to decide, in seconds (until its decision once decided), and whose
+// decision it is: "Ready 2 h 10 min, waiting on Chris" (backend/hubdb.py approval_wait). Counted here from `ready_since`
+// so a page left open stays right.
+function waitWords(s) {
+  const m = Math.floor(Math.max(0, +s || 0) / 60), d = Math.floor(m / 1440), h = Math.floor(m % 1440 / 60), r = m % 60;
+  if (d) return h ? `${d} d ${h} h` : `${d} d`;
+  if (h) return r ? `${h} h ${r} min` : `${h} h`;
+  return `${r} min`;
+}
+function approvalReadyAge(it) {
+  const at = Date.parse(it?.ready_since || '');
+  if (!Number.isFinite(at)) return null;
+  const end = it.decided_at ? Date.parse(it.decided_at) : Date.now();
+  return Math.max(0, ((Number.isFinite(end) ? end : Date.now()) - at) / 1000);
+}
+// The age as its own element, marked with what it counts from: a card the list keeps across redraws (its patch key)
+// keeps this node too, so approvalAgesTick updates its text where it stands.
+function approvalAgeNode(it) {
+  const age = approvalReadyAge(it);
+  if (age == null) return null;
+  const span = document.createElement('span');
+  span.className = 'approval-age';
+  span.dataset.readySince = it.ready_since;
+  if (it.decided_at) span.dataset.decidedAt = it.decided_at;
+  span.textContent = waitWords(age);
+  return span;
+}
+function approvalReadyLine(it) {
+  const age = approvalAgeNode(it);
+  if (!age) return null;
+  const owner = it.decision_owner || '';
+  const who = !owner ? '' : actorPerson(owner) && actorPerson(owner) === S.me?.id ? 'you'
+    : it.decision_owner_name || actorLabel(owner);
+  const line = document.createElement('p');
+  line.className = 'approval-ready';
+  if (it.decision) line.append('Decided ', age, ' after it was ready');
+  else line.append('Ready ', age, who ? `, waiting on ${who}` : '');
+  return line;
+}
+// Every age on screen (Needs you's rows and cards, an idle Decide card) moves on with the clock, without redrawing
+// the card: open details, a draft and focus stay as they are.
+function approvalAgesTick() {
+  for (const node of document.querySelectorAll('.approval-age[data-ready-since]')) {
+    const age = approvalReadyAge({ready_since: node.dataset.readySince, decided_at: node.dataset.decidedAt || ''});
+    const text = age == null ? '' : waitWords(age);
+    if (node.textContent !== text) node.textContent = text;
+  }
+}
+setInterval(approvalAgesTick, 30000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) approvalAgesTick(); });
 // What an approval asks for, built as elements with every payload value set as text; the markup the list
 // redraws from is this element's serialization, so a value is never parsed as HTML. A send shows its
 // recipients, subject, draft and files readably; a publish where it goes and its full text; a spend or merge
@@ -153,6 +207,8 @@ function approvalPayloadNode(it) {
   };
   const box = el('div', 'req-next approval-payload'), main = el('div', 'md');
   box.append(el('span', '', 'Exactly this'), main);
+  const ready = approvalReadyLine(it);
+  if (ready) main.append(ready);
   const raw = el('pre', '', JSON.stringify(p, null, 2));
   if (it.what !== 'send') {
     const rows = approvalFacts(it.what, p, it);
@@ -223,9 +279,12 @@ function approvalsHTML() {
 // its reason and suggestion, Accept or Skip, and Accept all. Accept is the person's own change, refused as by hand,
 // and names the task version the row showed; Accept all names the rows on screen, so a row added since is not applied.
 const staleCards = () => (S.v2?.needs || []).filter(it => it.kind === 'stale');
+// The card keeps its key while its rows change: `data-patch-sig` says what it shows, so the Tasks page's redraw
+// (tasksPatchNode) takes an answered row out and a new one in, and leaves the card open or shut as the person left it.
+const staleSig = v => esc(JSON.stringify(v));
 function staleCardRow(r) {
   const accept = r.action ? `<button type="button" class="ghost" data-stale="${esc(r.id)}" data-stale-decision="accept">Accept</button>` : '';
-  return `<li class="stale-row" data-stale-row="${esc(r.id)}" data-stale-version="${esc(String(r.version ?? ''))}"${r.action ? ' data-stale-action' : ''}>
+  return `<li class="stale-row" data-patch-key="stale-row:${esc(r.id)}" data-patch-sig="${staleSig([r.task, r.title, r.reason, r.suggest, r.action, r.version])}" data-stale-row="${esc(r.id)}" data-stale-version="${esc(String(r.version ?? ''))}"${r.action ? ' data-stale-action' : ''}>
     <div class="stale-what"><a href="#/task/${encodeURIComponent(r.task)}">${esc(plainActors(r.title || ''))}</a>
       <div class="muted">${esc(r.reason)}. Suggest: ${esc(r.suggest)}.</div></div>
     <div class="row">${accept}<button type="button" class="ghost" data-stale="${esc(r.id)}" data-stale-decision="skip">Skip</button></div>
@@ -233,7 +292,8 @@ function staleCardRow(r) {
 }
 function staleCardHTML(it) {
   const all = (it.rows || []).some(r => r.action);
-  return `<details class="req v2" data-patch-key="stale:${esc(it.id)}" data-stale-card open>
+  const sig = [it.title, it.created, (it.rows || []).map(r => [r.id, r.task, r.title, r.reason, r.suggest, r.action, r.version])];
+  return `<details class="req v2" data-patch-key="stale:${esc(it.id)}" data-patch-sig="${staleSig(sig)}" data-stale-card open>
     <summary>
       ${personCircle('Tico', 24)}
       <span class="req-text"><span class="req-from">Tico:</span> ${esc(it.title)}</span>
@@ -253,8 +313,11 @@ function staleCardsHTML() {
   return `<section class="tl-group" data-group="stale"><header class="tl-ghead"><span class="tl-gname">Stale tickets</span><span class="tl-gcount tnum">${cards.reduce((n, it) => n + (it.rows || []).length, 0)}</span></header>
     <div class="tl-rows" role="list" aria-label="Stale tickets">${cards.map(staleCardHTML).join('')}</div></section>`;
 }
+// After the answer the card is drawn again from the new list. A button still on screen (a refused row, Accept all
+// with rows left) is ready again, and when the answered row took the focus with it, focus moves to the row now in its place.
 async function staleDecide(button, path, body) {
-  const label = button.textContent;
+  const label = button.textContent, card = button.closest('[data-stale-card]')?.dataset.patchKey || '';
+  const at = [...(button.closest('[data-stale-card]')?.querySelectorAll('[data-stale-row]') || [])].indexOf(button.closest('[data-stale-row]'));
   button.disabled = true; button.textContent = '…';
   try {
     const out = await post(path, body);
@@ -263,7 +326,15 @@ async function staleDecide(button, path, body) {
     else toast(out.accepted ? `Accepted ${out.accepted.length}` : out.outcome === 'skipped' ? 'Skipped' : 'Accepted');
     await v2Refresh(); await refresh(true);
     if (TASKS_ST && isTasksRoute(S.route)) tasksRender(TASKS_ST);
-  } catch (e) { toast(e.message, true); button.disabled = false; button.textContent = label; }
+  } catch (e) { toast(e.message, true); }
+  finally {
+    if (button.isConnected) { button.disabled = false; button.textContent = label; }
+    else if (card && (!document.activeElement || document.activeElement === document.body)) {
+      const host = document.querySelector(`[data-stale-card][data-patch-key="${CSS.escape(card)}"]`);
+      const rows = host?.open ? host.querySelectorAll('[data-stale-row]') : [];
+      (rows[Math.min(Math.max(at, 0), rows.length - 1)]?.querySelector('[data-stale]') || host?.querySelector('summary'))?.focus({preventScroll: true});
+    }
+  }
 }
 // A question a bot asked the person outside any task: no task row carries it, so Needs you lists it on its own,
 // answered in place. `data-patch-key` keeps an opened row (and a half-written answer) through the list's redraws.

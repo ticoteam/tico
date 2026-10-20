@@ -145,3 +145,33 @@ then, once. The first tag an HQ sees is only remembered, and GitHub not answerin
 tries again. `POST /v1/staff/releases` `{"tag": "v0.3.52", "refs": [712]}` posts for those refs by hand and leaves the release's other
 commits to the watch; without `refs` it reads the commits and counts as the watch's look.
 
+
+## Company Email & Phone
+
+An optional server setting `TICO_INBOUND_KEY` connects this install to HQ's inbound-only service.
+The `tin_` key is bound to the company's install id at HQ and stays on the server. The optional
+`TICO_INBOUND_URL` defaults to `TICO_HQ_URL`. Demo and rehearsal installs never connect.
+This does not send transactional account mail or provider-profile magic links.
+
+HQ allocates named `agent-…@tico.team` email addresses and monthly-or-longer non-VoIP US mobile
+rentals. Current company members and agents can create email inboxes, within quota. Only owners
+and admins buy numbers or release inboxes. Numbers remain exclusive to one company; daily and
+weekly rentals, one-time activations, VoIP and sending are absent.
+
+The install authenticates with its bearer key, never an account id in a request:
+
+| Route under `/v1/inbound` | Meaning |
+|---|---|
+| `GET inboxes` | This company's inboxes and transport status |
+| `POST inboxes/email` | `{name,created_by,operation_id}` creates a free address once |
+| `GET phone-quote` | Current US renewable 30-day price and purchase availability |
+| `POST inboxes/sms` | `{name,created_by,operation_id,max_price_micros}` buys a monthly mobile rental; disabled until configured |
+| `POST inboxes/{id}/release` | Retire email permanently; cancel phone renewal at the paid period end |
+| `POST pull` | `{cursor,wait:0..25}` returns bounded deliveries, gaps and a continuation cursor |
+| `POST ack` | `{through_hq_seq}` after the local commit; a lost ack is retried without duplicates |
+| `GET usage` | Thirty-day record-only estimates; no customer debits |
+
+Incoming email bodies and codes are retained at HQ seven days after acknowledgment, at most thirty
+days unacknowledged. The install commits message upserts and its HQ cursor together before acking.
+Expired deliveries return gap summaries, shown in Settings. HQ keeps deduplication tombstones and
+estimated usage for thirteen months. Attachment bytes and raw MIME are never delivered.

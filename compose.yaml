@@ -34,15 +34,24 @@ services:
       TICO_DOMAIN:
       TICO_PORT: ${TICO_PORT:-8765}
       TICO_PUBLIC_URL:
+      # Visuals in replies (backend/visuals.py): a separate site of their own; unset in production = file chips.
+      TICO_VISUAL_ORIGIN:
+      TICO_VISUAL_SECRET:
+      TICO_VISUAL_SAME_ORIGIN:
       TICO_RUNNER_URL:
       TICO_COMPOSE_PROJECT: ${COMPOSE_PROJECT_NAME:-tico}
       TICO_SERVER_NETWORK: ${TICO_SERVER_NETWORK:-${COMPOSE_PROJECT_NAME:-tico}_default}
+      # A Tico our team runs for a company (own or invited); unset is self-hosted (backend/config.py).
+      TICO_HOSTED:
       TICO_ENVIRONMENT_ID:
       TICO_AUTH_PROXY:
+      # TICO_AUTH_PROXY=owner-link: the hash of the hosted owner's first sign-in link (backend/owner_link.py).
+      TICO_OWNER_LINK_HASH:
       TICO_OIDC_ISSUER:
       TICO_OIDC_CLIENT_ID:
       TICO_OIDC_CLIENT_SECRET:
       TICO_OIDC_ALLOWED_DOMAINS:
+      TICO_OIDC_LABEL:
       TICO_CORS_ORIGINS:
       TICO_CLIENT_IP_HEADER:
       # Forwarded client addresses are believed only from loopback (the server's own relay) and the two front doors'
@@ -81,6 +90,11 @@ services:
       TICO_GATEWAY_KEY:
       TICO_GATEWAY_SECRET_ARN:
       TICO_GATEWAY_URL:
+      # The recommended setup's choices (scripts/install.sh --recommended), read on the server's first start.
+      TICO_GATEWAY_INVITE:
+      TICO_INSTALL_PRESET:
+      TICO_SAMPLE_COMPANY:
+      TICO_MODELS_PRESET:
       TYPESAFE_API_KEY:
       TICO_TYPESAFE_SECRET_ARN:
       TICO_DECISIONS_DAILY_CALLS_OWNER:
@@ -91,6 +105,7 @@ services:
       TICO_DECISIONS_JEV_USD_PER_MTOK_OUTPUT:
       TICO_DECISIONS_IDEA_TRIAGE:
       TICO_STALE_REVIEW:
+      TICO_TOPIC_FRESH:
       TICO_UPDATER_URL:
       TICO_UPDATE_CHECK:
       TICO_SUPPORT:
@@ -98,6 +113,10 @@ services:
       DO_NOT_TRACK:
       TICO_TELEMETRY_DEBUG:
       TICO_HQ_URL:
+      TICO_INBOUND_KEY:
+      TICO_INBOUND_URL:
+      # HQ's read-only staff key, on the Tico team's own server only: its Health page shows HQ's nightly billing check.
+      TICO_HQ_STAFF_READ_KEY:
       TICO_GITHUB_REVIEW_ROLE:
       TICO_TITLE_LINT:
       # Naming, a mounted integrations folder, the AWS region (KMS, Secrets Manager, S3) and the AWS identity the server
@@ -149,13 +168,18 @@ services:
       TICO_RUNNER_URL:
       TICO_COMPOSE_PROJECT: ${COMPOSE_PROJECT_NAME:-tico}
       TICO_SERVER_NETWORK: ${TICO_SERVER_NETWORK:-${COMPOSE_PROJECT_NAME:-tico}_default}
+      # A Tico our team runs for a company (own or invited); unset is self-hosted (backend/config.py).
+      TICO_HOSTED:
       # Sign-in settings: the gateway loads the same settings as the server and refuses to start when the
       # selected proxy (oidc, cloudflare) is missing its own.
       TICO_AUTH_PROXY:
+      # TICO_AUTH_PROXY=owner-link: the hash of the hosted owner's first sign-in link (backend/owner_link.py).
+      TICO_OWNER_LINK_HASH:
       TICO_OIDC_ISSUER:
       TICO_OIDC_CLIENT_ID:
       TICO_OIDC_CLIENT_SECRET:
       TICO_OIDC_ALLOWED_DOMAINS:
+      TICO_OIDC_LABEL:
       TICO_ACCESS_ISSUER:
       TICO_ACCESS_AUDIENCE:
       TICO_REHEARSAL:

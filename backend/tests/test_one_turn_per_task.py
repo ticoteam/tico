@@ -36,7 +36,7 @@ def test_wakes_on_a_task_with_a_live_turn_join_it_and_only_the_other_side_starts
         task = H.task_create(c, "bot:finance", "Install", "Install the admin page.", "bot:ops", lint=False)
     active = busy_on(api, machine, task["id"])
     # The owner's status comment wakes its requester, another bot, whose turn on the task is its own; never the owner.
-    status = post(api, f"tasks/{task['id']}/comments", {"text": "Install started; receipt follows."},
+    status = post(api, f"tasks/{task['id']}/comments", {"text": "Install started; receipt follows.", "needs_action": True},
                   token=active["token"])["comment"]
     assert queued(api) == [] and queued(api, "finance") == [status["id"]]
     assert (claim(api, machine) or {}).get("bot") == "finance"

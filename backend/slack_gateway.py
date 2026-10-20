@@ -73,6 +73,7 @@ from . import hubdb as H
 from . import people as P
 from . import providers
 from . import task_privacy as privacy
+from . import visuals
 from . import slack_app
 from . import slack_channels as SC
 from .config import Settings, slack_credentials
@@ -268,6 +269,19 @@ def humanize(text, names=None):
     s = LINK_RE.sub(lambda m: (f"{m.group(2)} ({m.group(1)})" if m.group(2) else m.group(1)), s)
     s = BANG_RE.sub(lambda m: "@" + m.group(1), s)
     return s.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&").strip()
+
+
+def completion_result(c, notice):
+    """The result a task-done notice reports: the owner's newest comment on the task that has visuals, written before
+    the notice and after the task's previous done or declined notice (a reopened task's earlier visuals are not this
+    result), or None. A comment is what the task page shows, so the link lands on it."""
+    task_id, owner = notice["refs"]["task"], notice["refs"]["task_completion"]["owner"]
+    since = c.execute("SELECT MAX(created) FROM messages WHERE id<>? AND created<=? AND deleted_at IS NULL "
+                      "AND json_extract(refs_json,'$.task')=? AND json_extract(refs_json,'$.task_completion') IS NOT NULL",
+                      (notice["id"], notice["created"], task_id)).fetchone()[0] or ""
+    found = [m for m in H.task_comments(c, task_id) if m["from_actor"] == owner and since < m["created"] <= notice["created"]
+             and visuals.elsewhere("", m)]
+    return found[-1] if found else None
 
 
 def slack_escape(text):
@@ -475,13 +489,13 @@ class Gateway:
         provider, each failure falling through to the next; None with none of them. One short try each per pass: the
         gateway's own retry (RETRY_SECONDS, up to ROUTE_GIVE_UP_SECONDS) is the only retry, so an outage costs one HTTP
         attempt a minute per provider, not three, and never blocks the loop long."""
-        from .judge import fallback_engine, ordered, primary_engine
+        from .judge import fallback_engine, live, ordered, primary_engine
         if self._judge is None:
-            self._judge = primary_engine(self.settings)
-        first = list(getattr(self._judge, "steps", None) or [self._judge]) if self._judge is not None else []
-        # The company's provider is looked up each time, because the owner can change the choice while this runs.
+            self._judge = primary_engine(self.settings, self.store)
+        # The saved Gateway key and the company's provider are looked up each time: the owner can change either while
+        # this runs.
         with self.store.read() as c:
-            return ordered(first + [fallback_engine(providers.load(c, self.settings))])
+            return ordered(live(self._judge, c, self.settings) + [fallback_engine(providers.load(c, self.settings))])
 
     def verify_app(self):
         """Refuse to start unless the token is the configured workspace's and app's."""
@@ -1275,11 +1289,19 @@ class Gateway:
 
     def rendered(self, c, post):
         """What Slack shows: the reply, then the footer that names the bot even where customize is not honoured."""
+        message = H.message(c, post["message_id"]) or {}
+        if post["bot"]:
+            conv = H.conversation(c, message["conversation_id"]) if message.get("conversation_id") else None
+            line = visuals.elsewhere(self.settings.public_url, message, H.message_task_id(message, conv))
+        else:
+            # A task-done notice carries no visuals of its own: the line is the result's, linked to that comment.
+            result = completion_result(c, message)
+            line = result and visuals.elsewhere(self.settings.public_url, result, message["refs"]["task"])
+        seen = "\n<" + slack_escape(line["url"]) + "|" + line["label"] + ">" if line else ""
         if not post["bot"]:
-            message = H.message(c, post["message_id"])
             task_id = message["refs"]["task"]
             url = self.settings.public_url + "/#/task/" + urllib.parse.quote(task_id, safe="")
-            return {"text": slack_escape(str(post["text"])[:POST_CHARS]) + "\n<" + slack_escape(url) + "|Open task>",
+            return {"text": slack_escape(str(post["text"])[:POST_CHARS]) + seen + "\n<" + slack_escape(url) + "|Open task>",
                     "username": None, "icon_emoji": None, "icon_url": None}
         bot = H.bot(c, post["bot"]) or {}
         name = bot.get("display_name") or post["bot"]
@@ -1287,7 +1309,7 @@ class Gateway:
         text = str(post["text"] or "").strip()
         if len(text) > POST_CHARS:
             text = text[:POST_CHARS].rstrip() + " …"
-        return {"text": slack_escape(text) + f"\n\n(sent from {name})", "username": name,
+        return {"text": slack_escape(text) + ("\n" + seen if seen else "") + f"\n\n(sent from {name})", "username": name,
                 "icon_emoji": str(config.get("slack_icon") or "") or None,
                 "icon_url": str(config.get("slack_icon_url") or "") or None}
 

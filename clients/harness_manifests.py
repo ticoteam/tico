@@ -17,11 +17,13 @@ FIELDS = {
     "terminal_login": (list, []),
     "api_keys": (str, ""),
     "api_key_login": (list, []),
+    "api_key_check": (list, []),
     "api_key_in_turn": (bool, False),
     "subscription_marker": (str, ""),
     "subscription_profiles": (bool, False),
     "profile_home": (str, ""),
     "profile_dirs": (list, []),
+    "profile_home_overrides": (list, []),
     "own_config_home": (bool, False),
     "weekly_usage": (str, ""),
     "account": (str, ""),
@@ -33,6 +35,7 @@ FIELDS = {
     "persistent_session": (bool, False),
     "goal_runs_across_turns": (bool, False),
     "serial_cold_start": (bool, False),
+    "one_turn_per_login": (bool, False),
     "compaction": (bool, False),
     "resume_command": (str, ""),
     "model_list": (str, ""),
@@ -91,6 +94,7 @@ def _row(harness, runtime, data, where, auth=None, login=None):
               "terminal_login": " ".join([executable, *caps["terminal_login"]]) if caps["terminal_login"] else "",
               "container_login": " ".join([executable, *(relay or caps["terminal_login"])]) if relay or caps["terminal_login"] else "",
               "api_key_env": keys, "api_key_login": bool(caps["api_key_login"]),
+              "api_key_check": bool(caps["api_key_check"]),
               "resume_command": caps["resume_command"] or f"{executable} --resume"}
     for private in ("profile_dirs", "model_list_args"):
         public.pop(private)

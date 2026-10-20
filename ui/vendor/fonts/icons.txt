@@ -85,6 +85,8 @@ loyalty
 mail
 manage_accounts
 manage_search
+mark_email_read
+mark_email_unread
 menu
 menu_book
 monitor_heart
@@ -111,7 +113,6 @@ radio_button_unchecked
 receipt
 receipt_long
 record_voice_over
-replay
 request_quote
 reviews
 rocket_launch
@@ -141,6 +142,7 @@ today
 tour
 travel_explore
 troubleshoot
+unarchive
 verified_user
 view_agenda
 view_timeline

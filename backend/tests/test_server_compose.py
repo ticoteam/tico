@@ -6,9 +6,10 @@ ROOT = Path(__file__).resolve().parents[2]
 
 STORAGE_KEYS = {"TICO_BLOB_BUCKET", "TICO_BLOB_REGION", "TICO_BLOB_ENDPOINT", "TICO_UPLOAD_MAX_BYTES",
                 "TICO_BLOB_ACCESS_KEY_ID", "TICO_BLOB_SECRET_ACCESS_KEY"}
+SERVER_ONLY_KEYS = STORAGE_KEYS | {"TICO_INBOUND_KEY", "TICO_INBOUND_URL"}
 
 
-def test_server_forwards_storage_without_operator_aws_settings_in_checkout_and_release_bundle():
+def test_server_forwards_private_settings_only_to_server_in_checkout_and_release_bundle():
     import io
     import tarfile
     import yaml
@@ -21,14 +22,16 @@ def test_server_forwards_storage_without_operator_aws_settings_in_checkout_and_r
     for content in ((ROOT / "compose.yaml").read_text(), bundled_compose):
         services = yaml.safe_load(content)["services"]
         environment = services["server"]["environment"]
-        assert STORAGE_KEYS <= set(environment)
-        assert all(environment[key] is None for key in STORAGE_KEYS)
+        assert SERVER_ONLY_KEYS <= set(environment)
+        assert all(environment[key] is None for key in SERVER_ONLY_KEYS)
         assert {"LITESTREAM_ACCESS_KEY_ID", "LITESTREAM_SECRET_ACCESS_KEY"} <= set(environment)
         assert not {"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"}.intersection(environment)
         assert "CLOUDFLARE_TUNNEL_TOKEN" not in environment
         for name, service in services.items():
             if name != "server":
-                assert not STORAGE_KEYS.intersection(service.get("environment", {}))
+                assert not SERVER_ONLY_KEYS.intersection(service.get("environment", {}))
+    for service in yaml.safe_load((ROOT / "docker/runner.compose.yaml").read_text())["services"].values():
+        assert not SERVER_ONLY_KEYS.intersection(service.get("environment", {}))
 
 
 def test_a_server_update_recreates_only_the_server_never_the_updater(monkeypatch, tmp_path):
@@ -62,6 +65,16 @@ def test_the_slack_gateway_gets_every_sign_in_setting_the_server_gets():
         assert all(services[name]["environment"][key] is None for key in ("TICO_ACCESS_ISSUER", "TICO_ACCESS_AUDIENCE")), \
             "Cloudflare issuer and audience pass through the operator's environment"
 
+
+
+def test_the_server_and_the_slack_gateway_get_the_hosted_mark_as_set_in_env():
+    # Compose passes settings only through each service's list, so without these entries a hosted Tico's server
+    # reads TICO_HOSTED as unset and its sign-in offers the terminal again (ui/model-login.js). Both load Settings.
+    import yaml
+    services = yaml.safe_load((ROOT / "compose.yaml").read_text())["services"]
+    for name in ("server", "slack"):
+        assert "TICO_HOSTED" in services[name]["environment"], name
+        assert services[name]["environment"]["TICO_HOSTED"] is None, f"{name} takes it from .env as set, no default"
 
 def test_the_server_and_the_slack_gateway_get_the_decision_model_keys_but_not_other_services_secrets():
     import yaml
@@ -101,3 +114,12 @@ def test_the_server_gets_every_setting_that_turns_a_team_rule_default_on():
     environment = yaml.safe_load((ROOT / "compose.yaml").read_text())["services"]["server"]["environment"]
     assert set(team_rules.ENV_DEFAULTS.values()) <= set(environment)
     assert all(environment[key] is None for key in team_rules.ENV_DEFAULTS.values())
+
+
+def test_the_server_gets_the_visual_settings():
+    # Without them forwarded, setting the visual origin in .env or SSM does nothing and production keeps visuals as
+    # file chips (Dev 245).
+    import yaml
+    environment = yaml.safe_load((ROOT / "compose.yaml").read_text())["services"]["server"]["environment"]
+    for key in ("TICO_VISUAL_ORIGIN", "TICO_VISUAL_SECRET", "TICO_VISUAL_SAME_ORIGIN"):
+        assert key in environment and environment[key] is None, key

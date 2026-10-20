@@ -522,7 +522,7 @@ const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
     await page.locator('.dask-form button').click();
     await page.locator('[data-no-provider]').waitFor();
     assert.equal(await page.locator('[data-docs-ask] [data-thinking]').count(), 0);
-    assert.equal(await page.locator('[data-no-provider] a').getAttribute('data-gs-tab'), 'providers');
+    assert.equal(await page.locator('[data-no-provider] a').getAttribute('data-gs-tab'), 'models');
     assert.equal(await page.locator('.dask-form button').isDisabled(), false);
     await shot(page, 'rail-phone-no-provider');
     librarianQueued = false;

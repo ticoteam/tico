@@ -293,6 +293,10 @@ def test_bot_creation_and_label_publication_require_review(api):
         for extra in ({'visibility': 'public'}, {'public_title': 'Exports'}, {'public_summary': 'Soon'}):
             refused = api.post('/api/v2/tasks', json={**task_body, **extra}, headers=headers(identity))
             assert refused.status_code == 422 and refused.json()['error']['code'] == 'approval', refused.text
+        if identity == token:
+            # A bot also creates no task carrying a public roadmap label (test_task_labels); it adds it on the task.
+            assert post(api, 'tasks', task_body, token=identity, expected=403)['error']['code'] == 'label'
+            task_body['labels'] = []
         created = post(api, 'tasks', task_body, token=identity)
         assert created['visibility'] == 'private' and created['public_title'] == ''
         assert api.get('/public/roadmaps/roadmap/tasks/' + created['id']).status_code == 404

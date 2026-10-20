@@ -1,0 +1,12 @@
+{
+  "about": "A turn the server sent away from a held Claude login, whose fallback cannot start on this computer. runner-rs/src/execute.rs drives it and checks it sends exactly these events and completion fields; backend/tests/test_login_holds.py replays them against the server.",
+  "config": {"runtime": "claude", "harness": "claude", "model": "claude-sonnet-5",
+             "primary_held": "2026-10-19T02:40:00Z", "fallback": {"harness": "acme-missing", "model": "acme-1"}},
+  "events": [
+    {"kind": "diagnostic", "payload": {"text": "claude login held (usage limit) until 02:40 UTC; running this turn on acme-missing", "fallback": "acme-missing"}},
+    {"kind": "diagnostic", "payload": {"text": "RuntimeError: fallback harness interrupted; inspect local runner"}},
+    {"kind": "error", "payload": {"error": "claude login held (usage limit); its fallback acme-missing did not start on this computer", "limit": true}}
+  ],
+  "completion": {"outcome": "failed", "limited": true, "primary_held": true,
+                 "text": "claude login held (usage limit); its fallback acme-missing did not start on this computer"}
+}

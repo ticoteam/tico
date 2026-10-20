@@ -42,30 +42,51 @@ pub fn configured(config: &Value) -> Option<Hop> {
 /// (`fallback: {off: true}`), or no other runtime is ready. A harness signed in by the bot's own key is
 /// skipped unless the turn's `env` carries that key.
 pub fn default_choice(config: &Value, choices: &[Value], env: &crate::env::Env, ready: impl Fn(&str) -> bool) -> Option<Hop> {
+    choose(config, choices, env, &[], ready)
+}
+
+/// The next of the company's providers once a default hop's own login hit its usage limit too: the first row
+/// whose slot (`slot`) this turn has not run on yet (`tried`) that `ready` still takes.
+pub fn next_choice(config: &Value, choices: &[Value], env: &crate::env::Env, tried: &[String], ready: impl Fn(&str) -> bool) -> Option<Hop> {
+    choose(config, choices, env, tried, ready)
+}
+
+/// What a turn counts as one place it ran, for `next_choice`'s `tried`: the runtime, except that the Tico AI
+/// Gateway is a place of its own though it runs on pi. So a pi bot on its own key can still end on the Gateway,
+/// and a Gateway hop that hit its cap is never chosen again for the same turn.
+pub const GATEWAY_SLOT: &str = "tico-gateway";
+
+pub fn slot(runtime: &str, model: &str) -> String {
+    if crate::hosts::pi::is_gateway(Some(model)) { GATEWAY_SLOT.to_string() } else { runtime.to_string() }
+}
+
+fn choose(config: &Value, choices: &[Value], env: &crate::env::Env, tried: &[String], ready: impl Fn(&str) -> bool) -> Option<Hop> {
     let fallback = &config["fallback"];
     if fallback.is_object() && (crate::util::truthy(fallback.get("off")) || crate::util::truthy(fallback.get("harness"))) {
         return None;
     }
     let primary = text_of(&config["runtime"]);
+    let primary_on_gateway = crate::hosts::pi::is_gateway(Some(&text_of(&config["model"])));
     choices.iter().find_map(|row| {
         let (runtime, model) = (text_of(&row["runtime"]), text_of(&row["model"]));
-        if runtime.is_empty() || model.is_empty() || runtime == primary || !ready(&runtime) {
+        if runtime.is_empty() || model.is_empty() || tried.iter().any(|t| *t == slot(&runtime, &model)) {
             return None;
         }
         let harness = Some(text_of(&row["harness"])).filter(|h| !h.is_empty()).unwrap_or_else(|| runtime.clone());
-        if !bot_key(&harness).iter().all(|k| env.get(k).is_some_and(|v| !v.trim().is_empty())) {
+        // The Gateway (last under the company's Gateway choices, backend/models_preset.py) signs in with the turn's
+        // relay alone (gateway_relay.rs): no login or key of its own here, and no relay means no hop. It is never a
+        // hop from itself; any other row is never one on the primary's own runtime.
+        if crate::hosts::pi::is_gateway(Some(&model)) {
+            if primary_on_gateway || env.get(crate::gateway_relay::KEY_ENV).is_none_or(|v| v.trim().is_empty()) {
+                return None;
+            }
+        } else if runtime == primary || !ready(&runtime) || !bot_key(&harness).iter().all(|k| env.get(k).is_some_and(|v| !v.trim().is_empty())) {
             return None;
         }
         let runtime = crate::harness_tools::runtime_of(&harness);
         let effort = Some(text_of(&config["reasoning_effort"])).filter(|e| !e.is_empty());
         Some(Hop { harness, runtime, model, reasoning_effort: effort, default: true })
     })
-}
-
-/// The next of the company's providers once a default hop's own login hit its usage limit too: the first row
-/// after the runtimes this turn already ran on (`tried`) that `ready` still takes.
-pub fn next_choice(config: &Value, choices: &[Value], env: &crate::env::Env, tried: &[String], ready: impl Fn(&str) -> bool) -> Option<Hop> {
-    default_choice(config, choices, env, |rt| !tried.iter().any(|t| t == rt) && ready(rt))
 }
 
 /// How long a login that failed a turn on its usage limit, with no reset time from the provider, stays out of the
@@ -158,12 +179,28 @@ pub fn diagnostic(primary: &str, hop: &Hop, hit_limit: bool) -> String {
     format!("{primary} {why}; running this turn on {}{auto}", hop.harness)
 }
 
+/// The turn's note when the server held the bot's own login after a usage limit (backend/login_holds.py) until
+/// `until`: where the turn runs instead, or, with no `hop`, why it did not start.
+pub fn held_note(primary: &str, until: &str, hop: Option<&Hop>) -> String {
+    let at = until.get(11..16).map_or_else(String::new, |hm| format!(" until {hm} UTC"));
+    match hop {
+        Some(hop) => format!("{primary} login held (usage limit){at}; running this turn on {}", hop.harness),
+        None => format!("{primary} login held (usage limit){at}, and no fallback is ready on this computer"),
+    }
+}
+
+/// The turn's note when its ChatGPT login was busy with another turn (crate::login_turns) and its own fallback took
+/// it: `why` is the login's line ("ChatGPT login busy with builder").
+pub fn busy_diagnostic(why: &str, hop: &Hop) -> String {
+    format!("{why}; running this turn on {}", hop.harness)
+}
+
 /// What the agent is told on a fallback turn: its configured model is not doing this work, so whatever it records
-/// about who did it (a review's provenance, a pull request, a task note) names the model that is.
-pub fn prompt_note(primary: &str, hop: &Hop, hit_limit: bool) -> String {
-    let why = if hit_limit { "hit its usage limit" } else { "was unavailable" };
+/// about who did it (a review's provenance, a pull request, a task note) names the model that is. `because` says why
+/// ("claude hit its usage limit").
+pub fn prompt_note(because: &str, primary: &str, hop: &Hop) -> String {
     format!(
-        "This turn runs on the fallback {} with model {} because {primary} {why}; your configured model is not doing this work. Wherever you record which model did it (a review's provenance, a pull request, a task note), name {}, not {primary}.",
+        "This turn runs on the fallback {} with model {} because {because}; your configured model is not doing this work. Wherever you record which model did it (a review's provenance, a pull request, a task note), name {}, not {primary}.",
         hop.harness, hop.model, hop.model
     )
 }
@@ -228,13 +265,36 @@ pub fn replay(attempt: &Value, tokens: usize) -> String {
 }
 
 /// The company's fallback models from the last GET /api/v2/config, and when they were read. Empty from an older
-/// server or when the owner turned automatic fallback off (Settings > AI providers).
+/// server or when the owner turned automatic fallback off (Settings > Computers).
 static CHOICES: Mutex<Option<(Instant, Vec<Value>)>> = Mutex::new(None);
+
+/// Whether the server keeps login holds (its config carries `login_holds`), and so knows a profile's `shared_login`.
+static SERVER_HOLDS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn server_keeps_holds() -> bool {
+    SERVER_HOLDS.load(std::sync::atomic::Ordering::Relaxed)
+}
 
 /// Keep `fallback_models` from a GET /api/v2/config answer (the harness relay reads it once a minute).
 pub fn remember(config: &Value) {
+    if config["login_holds"].is_array() {
+        SERVER_HOLDS.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
     let rows = config["fallback_models"].as_array().map(|r| r.iter().filter(|v| v.is_object()).cloned().collect()).unwrap_or_default();
     *CHOICES.lock().unwrap() = Some((Instant::now(), rows));
+    // The server's saved holds on this computer's logins (backend/login_holds.py): after a restart this runner has
+    // forgotten the limits it met, and still skips a held login in the fallback choice until the hold ends.
+    if let Some(holds) = config["login_holds"].as_array() {
+        let now = crate::util::epoch_s();
+        let mut limits = limits().lock().unwrap();
+        for hold in holds {
+            let (Some(runtime), Some(until)) = (hold["runtime"].as_str(), hold["until"].as_str()) else { continue };
+            let profile = hold["profile"].as_str().unwrap_or_default();
+            if !limits.out_of_quota(profile, runtime, now) {
+                limits.remember(profile, runtime, now, Some(crate::util::parse_iso(until)));
+            }
+        }
+    }
 }
 
 impl Runner {
@@ -315,9 +375,18 @@ mod tests {
                    "claude hit its usage limit; running this turn on codex (no fallback set; another provider signed in here)");
         assert_eq!(diagnostic("codex", &configured(&json!({"fallback": {"harness": "claude", "model": "m"}})).unwrap(), false),
                    "codex unavailable; running this turn on claude");
-        let note = prompt_note("claude", &Hop { runtime: "codex".into(), harness: "codex".into(), model: "gpt-test".into(), ..hop }, true);
+        let codex = Hop { runtime: "codex".into(), harness: "codex".into(), model: "gpt-test".into(), ..hop };
+        let note = prompt_note("claude hit its usage limit", "claude", &codex);
         assert!(note.starts_with("This turn runs on the fallback codex with model gpt-test because claude hit its usage limit"));
         assert!(note.contains("name gpt-test, not claude"));
+        assert_eq!(busy_diagnostic("ChatGPT login busy with builder", &codex), "ChatGPT login busy with builder; running this turn on codex");
+        // A login the server holds is never tried; the note is not a limit met on this turn (backend/login_holds.py
+        // reads "usage limit; running this turn on" as one, and would hold the login longer).
+        let held = held_note("claude", "2026-10-19T02:40:00.000000Z", Some(&codex));
+        assert_eq!(held, "claude login held (usage limit) until 02:40 UTC; running this turn on codex");
+        assert!(!held.contains("usage limit; running this turn on"));
+        assert_eq!(held_note("claude", "2026-10-19T02:40:00.000000Z", None),
+                   "claude login held (usage limit) until 02:40 UTC, and no fallback is ready on this computer");
     }
 
     #[test]
@@ -329,6 +398,78 @@ mod tests {
         env.insert("OPENROUTER_API_KEY".into(), "or-key".into());
         assert_eq!(default_choice(&config, &choices, &env, |_| true).unwrap().harness, "pi");
         assert!(default_choice(&config, &[json!({"runtime": "gemini", "model": "g"})], &env, |_| true).is_none());
+    }
+
+    #[test]
+    fn the_gateway_row_runs_only_with_the_turn_relay_and_last() {
+        let config = json!({"runtime": "claude", "harness": "claude-code", "model": "claude-sonnet-5-5"});
+        let choices = vec![json!({"runtime": "codex", "harness": "codex", "model": "gpt-5.5"}),
+                           json!({"runtime": "pi", "harness": "pi", "model": "tico-mid-1.0"})];
+        let mut env = crate::env::Env::new();
+        // The signed-in provider comes first; the Gateway is the last row.
+        assert_eq!(default_choice(&config, &choices, &env, |_| true).unwrap().harness, "codex");
+        // No relay for the turn: never the Gateway, even when pi reports ready.
+        assert!(default_choice(&config, &choices, &env, |r| r == "pi").is_none());
+        env.insert(crate::gateway_relay::KEY_ENV.into(), "turn-token".into());
+        // With the relay, the Gateway needs neither a pi login nor an OpenRouter key.
+        let hop = default_choice(&config, &choices, &env, |_| false).unwrap();
+        assert_eq!((hop.harness.as_str(), hop.model.as_str(), hop.default), ("pi", "tico-mid-1.0", true));
+    }
+
+    #[test]
+    fn a_gateway_hop_that_hit_its_cap_is_not_chosen_again_for_the_turn() {
+        // Claude over quota -> the Gateway -> the Gateway's cap, with no tokens spent: what execute.rs builds as
+        // `tried` (the primary's slot, then each hop's) leaves no next hop, so the turn settles on the cap.
+        let config = json!({"runtime": "claude", "harness": "claude-code", "model": "claude-sonnet-5-5"});
+        let choices = vec![json!({"runtime": "pi", "harness": "pi", "model": "tico-mid-1.0"})];
+        let mut env = crate::env::Env::new();
+        env.insert(crate::gateway_relay::KEY_ENV.into(), "relay-fixture".into());
+        let hop = default_choice(&config, &choices, &env, |_| false).unwrap();
+        let tried = vec![slot("claude", "claude-sonnet-5-5"), slot(&hop.runtime, &hop.model)];
+        assert_eq!(tried[1], GATEWAY_SLOT);
+        assert!(next_choice(&config, &choices, &env, &tried, |_| true).is_none(), "a capped Gateway is never picked again");
+        // The no-pi-login case still takes the Gateway the first time.
+        assert!(next_choice(&config, &choices, &env, &tried[..1], |_| false).is_some());
+    }
+
+    #[test]
+    fn a_turn_whose_every_hop_hits_its_limit_tries_each_place_once_and_ends() {
+        // execute.rs's hop loop, with every hop limited and spending no tokens (a Gateway cap answers before any):
+        // `tried` grows by each hop's slot, so the loop ends after each of the company's rows ran once at most.
+        let choices = vec![json!({"runtime": "codex", "harness": "codex", "model": "gpt-5.5"}),
+                           json!({"runtime": "pi", "harness": "pi", "model": "tico-mid-1.0"})];
+        let mut env = crate::env::Env::new();
+        env.insert(crate::gateway_relay::KEY_ENV.into(), "relay-fixture".into());
+        for config in [json!({"runtime": "claude", "harness": "claude-code", "model": "claude-sonnet-5-5"}),
+                       json!({"runtime": "pi", "harness": "pi", "model": "openrouter/other-model"})] {
+            let mut tried = vec![slot(&text_of(&config["runtime"]), &text_of(&config["model"]))];
+            let mut ran = vec![];
+            let mut pending = default_choice(&config, &choices, &env, |_| true);
+            while let Some(hop) = pending.take() {
+                tried.push(slot(&hop.runtime, &hop.model));
+                ran.push(hop.model.clone());
+                assert!(ran.len() <= choices.len(), "{config}: hopped {ran:?}");
+                pending = next_choice(&config, &choices, &env, &tried, |_| true);
+            }
+            assert_eq!(ran, ["gpt-5.5", "tico-mid-1.0"], "{config}: the Gateway last, once");
+        }
+    }
+
+    #[test]
+    fn a_pi_bot_on_its_own_key_can_end_on_the_gateway_and_a_gateway_bot_never_hops_to_itself() {
+        let choices = vec![json!({"runtime": "pi", "harness": "pi", "model": "openrouter/some-model"}),
+                           json!({"runtime": "pi", "harness": "pi", "model": "tico-mid-1.0"})];
+        let mut env = crate::env::Env::new();
+        env.insert(crate::gateway_relay::KEY_ENV.into(), "relay-fixture".into());
+        let own = json!({"runtime": "pi", "harness": "pi", "model": "openrouter/other-model"});
+        // Another pi row is still never a hop from a pi primary; the Gateway is.
+        let hop = default_choice(&own, &choices, &env, |_| true).unwrap();
+        assert_eq!(hop.model, "tico-mid-1.0");
+        let tried = vec![slot("pi", "openrouter/other-model"), slot(&hop.runtime, &hop.model)];
+        assert!(next_choice(&own, &choices, &env, &tried, |_| true).is_none());
+        // A bot already on the Gateway: no hop to the Gateway.
+        let tico = json!({"runtime": "pi", "harness": "pi", "model": "tico-mid-1.0"});
+        assert!(default_choice(&tico, &choices[1..], &env, |_| true).is_none());
     }
 
     // TK-EKWAFWPD: the computer's own Codex login answered every turn "Quota exceeded" with no reset time, and each
@@ -389,6 +530,24 @@ mod tests {
         assert!(out_of_quota("limit-test-key", "codex", now + 1.0));
         settle_limit("codex", "codex", Some(&profile), false, true);
         assert!(!out_of_quota("limit-test-key", "codex", now + 1.0));
+    }
+
+    #[test]
+    fn a_restarted_runner_skips_the_logins_the_server_still_holds() {
+        let until = |s: f64| crate::util::iso(&json!(crate::util::epoch_s() + s));
+        remember(&json!({"fallback_models": [], "login_holds": [
+            {"profile": "", "runtime": "restart-test", "until": until(600.0)},
+            {"profile": "", "runtime": "restart-test-over", "until": until(-60.0)}]}));
+        let now = crate::util::epoch_s();
+        assert!(out_of_quota("", "restart-test", now) && !out_of_quota("", "restart-test", now + 601.0));
+        assert!(!out_of_quota("", "restart-test-over", now));
+        forget_limit("", "restart-test");
+        // Such a server knows a profile's `shared_login` (readiness.rs), so the runner reports it from now on.
+        assert!(server_keeps_holds());
+        let shared = crate::profiles::Profile::new("team-a", "/tmp/acme-team-a", true);
+        let own = crate::profiles::Profile::new("solo", "/tmp/acme-solo", false);
+        assert_eq!(login("claude", "", Some(&shared)).as_deref(), Some(""));
+        assert_eq!(login("claude", "", Some(&own)).as_deref(), Some("solo"));
     }
 
     #[test]

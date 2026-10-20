@@ -15,6 +15,7 @@ import json
 
 from clients import harness_manifests as manifests
 
+from . import models_preset
 from .harnesses import attach_harnesses, normalize_fallback
 from .store import Problem
 
@@ -47,6 +48,10 @@ PROVIDERS = (
      "detail": "The pi agent, with an OpenRouter API key in the shared secrets"},
     {"id": "openrouter", "label": "OpenRouter", "runtime": "pi", "harness": "pi",
      "catch_all": True, "detail": "The pi agent, with an OpenRouter API key in the shared secrets"},
+    # Tico's own models through the Tico AI Gateway (clients/gateway.py): on only while the gateway connection is set
+    # (backend/gateway_connection.py turns it on and off with the key); the pi agent reaches it with the gateway key.
+    {"id": "tico", "label": "Tico AI Gateway", "runtime": "pi", "harness": "pi", "gateway": True,
+     "detail": "Tico's own models through the Tico AI Gateway, with a gateway key from Tico"},
 )
 PROVIDERS = tuple({**row, "login": manifests.caps(row["runtime"]).get("terminal_login", "")} for row in PROVIDERS)
 PROVIDER_BY_ID = {row["id"]: row for row in PROVIDERS}
@@ -143,6 +148,14 @@ MODEL_CATALOG = tuple(attach_harnesses(row) for row in (
      "recommended": True, "efforts": ("low", "high"), "default_effort": "low"},
     {"id": "devstral-2512", "label": "devstral 2512", "runtime": "pi", "provider": "mistral",
      "efforts": ("low", "high"), "default_effort": "low"},
+    # The Tico AI Gateway's lineup 1.0 (Head of Product, 2026-10-18), on pi through the Gateway's OpenAI-chat endpoint
+    # (runner-rs/src/hosts/pi.rs). Bots see Tico names; `description` says what runs underneath.
+    {"id": "tico-cheap-1.0", "label": "Tico Cheap 1.0", "runtime": "pi", "provider": "tico",
+     "description": "Claude Haiku 5.5 underneath", "efforts": ("low", "high", "max"), "default_effort": "low"},
+    {"id": "tico-mid-1.0", "label": "Tico Mid 1.0", "runtime": "pi", "provider": "tico", "recommended": True,
+     "description": "Claude Sonnet 5.5 underneath", "efforts": ("low", "high", "max"), "default_effort": "high"},
+    {"id": "tico-power-1.0", "label": "Tico Power 1.0", "runtime": "pi", "provider": "tico",
+     "description": "Claude Opus 5.5 underneath", "efforts": ("low", "high", "max"), "default_effort": "high"},
     # An external agent brings its own model; the profile's config decides, and the heartbeat
     # reports what it is. This row exists so the bot can be created and shown like any other.
     {"id": "hermes-profile", "label": "profile's own model", "runtime": "hermes", "provider": "",
@@ -200,6 +213,10 @@ PRICES = {
     "deepseek-v4-pro": (0.955, 0.080, 1.911),
     "kimi-k3": (3.0, 0.30, 15.0),
     "kimi-k2.7-code": (0.671, 0.18, 3.35),
+    # The Tico AI Gateway's price, lineup 1.0 (fixed per version; cached input at 10% of input).
+    "tico-cheap-1.0": (0.15, 0.015, 0.75),
+    "tico-mid-1.0": (2.50, 0.25, 12.50),
+    "tico-power-1.0": (5.0, 0.50, 25.0),
     "llama-4-maverick": (0.1875, 0.1875, 0.6525),
     "mistral-medium-3.5": (1.5, 1.5, 7.5),
     "devstral-2512": (0.40, 0.04, 2.0),
@@ -236,7 +253,7 @@ def estimate(model, input_tokens, cached_tokens, output_tokens, requests=None):
     limit, high = long
     cost, rest = 0.0, totals
     for request in requests or ():
-        counts = [int(n or 0) for n in request]
+        counts = [int(n or 0) for n in request[:3]]      # a fourth, whose request it was, is not a count
         cost += sum(n * rate for n, rate in zip(counts, high if counts[0] + counts[1] > limit else price))
         rest = [r - n for r, n in zip(rest, counts)]
     rest = [max(r, 0) for r in rest]
@@ -259,7 +276,7 @@ class NoProvider(ProviderError):
     def __init__(self, what="This bot"):
         super().__init__(
             "no_provider", f"{what} has no runtime or model and the company has no default. Choose "
-            "which AI providers you use and a default model in Settings > AI providers "
+            "which AI providers you use and a default model in Settings > Computers "
             "(or run `tico env create ... --providers ...` / set TICO_ENABLED_PROVIDERS).", 409)
 
 
@@ -273,7 +290,10 @@ def serves(provider, row):
     """Whether enabling `provider` lets bots run this catalog model: the model's own provider, or
     the catch-all provider of the model's runtime (OpenRouter serves every pi model)."""
     named = PROVIDER_BY_ID.get(provider) or {}
-    return bool(row["provider"] == provider or (named.get("catch_all") and named["runtime"] == row["runtime"]))
+    # OpenRouter serves the pi runtime's models, but never the Gateway's: those need the gateway key.
+    gateway = (PROVIDER_BY_ID.get(row["provider"]) or {}).get("gateway")
+    return bool(row["provider"] == provider
+                or (named.get("catch_all") and named["runtime"] == row["runtime"] and not gateway))
 
 
 def provider_models(provider, *, current=True):
@@ -362,31 +382,49 @@ def _record(value):
             "updated_by": str(stored.get("updated_by") or ""), "source": str(stored.get("source") or ""),
             # On unless the owner turned it off: a bot out of quota runs on another provider (default_fallbacks).
             "auto_fallback": stored.get("auto_fallback") is not False,
-            "check_models": [str(entry) for entry in stored.get("check_models") or [] if isinstance(entry, str)]}
+            "check_models": [str(entry) for entry in stored.get("check_models") or [] if isinstance(entry, str)],
+            # The models choice (backend/models_preset.py); '' is the choice as it was before presets.
+            "preset": models_preset.normalize(stored.get("preset"))}
 
 
 def env_seed(settings):
     """What the environment asks for on first boot; empty when it asks for nothing."""
     enabled = normalize_enabled(getattr(settings, "enabled_providers", ()))
     runtime, model = getattr(settings, "default_runtime", ""), getattr(settings, "default_model", "")
+    preset = models_preset.normalize(getattr(settings, "models_preset", ""))
+    if not enabled and not (runtime or model) and preset in (models_preset.RECOMMENDED, "subscriptions"):
+        # The installer's subscription choices mean Claude and ChatGPT (scripts/install.sh --recommended).
+        enabled = ["anthropic", "openai"]
     if not enabled and (runtime or model):
         # A default without providers still means its own provider.
         row = MODEL_BY_ID.get(model) or PROVIDER_BY_RUNTIME.get(runtime) and {"provider": runtime_provider(runtime)}
         enabled = [row["provider"]] if row and row.get("provider") else []
     if not enabled:
-        return None
+        return {"enabled": [], "runtime": "", "model": "", "preset": preset} if preset else None
     runtime, model = complete_choice(enabled, runtime, model)
-    return {"enabled": enabled, "runtime": runtime, "model": model}
+    return {"enabled": enabled, "runtime": runtime, "model": model, **({"preset": preset} if preset else {})}
+
+
+def with_gateway(record, connected):
+    """`record` with the Tico AI Gateway's provider on exactly while its connection has a key: it is never the owner's
+    to tick, so it follows Settings > Computers > Tico AI Gateway (backend/gateway_connection.py)."""
+    enabled = [name for name in record["enabled"] if not PROVIDER_BY_ID[name].get("gateway")]
+    if connected:
+        enabled += [row["id"] for row in PROVIDERS if row.get("gateway")]
+    return {**record, "enabled": enabled}
 
 
 def load(c, settings=None):
     """The company's choice. Before the owner has saved one, the environment's seed stands in
     (`source: environment`), so a deployment that sets TICO_ENABLED_PROVIDERS works at once."""
+    from . import gateway_connection
     row = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (KEY,)).fetchone()
     if row:
-        return _record(row[0])
-    seed = env_seed(settings) if settings is not None else None
-    return _record({**seed, "source": "environment"} if seed else {})
+        record = _record(row[0])
+    else:
+        seed = env_seed(settings) if settings is not None else None
+        record = _record({**seed, "source": "environment"} if seed else {})
+    return with_gateway(record, gateway_connection.connected(c, settings))
 
 
 def configured(record):
@@ -412,17 +450,24 @@ def save(c, actor, body, now):
     before = load(c)
     if before["revision"] != int(body.get("expected_revision") or 0):
         raise ProviderError("conflict", "The provider choice changed since you opened it; reload and try again", 409)
-    enabled = normalize_enabled(body.get("enabled"))
+    gateway = [name for name in before["enabled"] if PROVIDER_BY_ID[name].get("gateway")]
+    enabled = with_gateway({"enabled": normalize_enabled(body.get("enabled"))}, bool(gateway))["enabled"]
     runtime, model = complete_choice(enabled, body.get("runtime"), body.get("model"))
     auto, checks = body.get("auto_fallback"), body.get("check_models")
+    preset = before["preset"] if body.get("preset") is None else models_preset.normalize(body.get("preset"))
+    if body.get("preset") not in (None, "") and not preset:
+        raise ProviderError("preset", "Choose one of the four models choices", 422)
     after = {"enabled": enabled, "runtime": runtime, "model": model, "revision": before["revision"] + 1,
              "updated": now, "updated_by": actor, "source": "owner",
              "auto_fallback": before["auto_fallback"] if auto is None else bool(auto),
              "check_models": (before["check_models"] if checks is None
                               else normalize_check_models(checks, {"enabled": enabled, "runtime": runtime,
-                                                                   "model": model}, before["check_models"]))}
+                                                                   "model": model}, before["check_models"])),
+             "preset": preset}
+    # The Gateway's provider is never stored: it follows the connection (`with_gateway`).
+    stored = {**after, "enabled": [name for name in enabled if name not in gateway]}
     c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
-              (KEY, json.dumps(after, sort_keys=True)))
+              (KEY, json.dumps(stored, sort_keys=True)))
     return before, after
 
 
@@ -434,9 +479,16 @@ def view(record):
             "updated": record["updated"], "updated_by": record["updated_by"],
             "auto_fallback": record["auto_fallback"],
             "check_models": record["check_models"], "check_order": check_order(record),
+            "preset": record.get("preset", ""), "presets": list(models_preset.PRESETS),
             "providers": [{**row, "enabled": row["id"] in record["enabled"],
                            "recommended": (recommended(row["id"]) or {}).get("id", "")}
                           for row in PROVIDERS]}
+
+
+def gateway_model(model):
+    """Whether `model` is served by a Gateway provider (the Tico models), which only runs with the gateway key."""
+    provider = (MODEL_BY_ID.get(str(model or "")) or {}).get("provider")
+    return bool(provider and (PROVIDER_BY_ID.get(provider) or {}).get("gateway"))
 
 
 def default_fallbacks(record):
@@ -448,13 +500,21 @@ def default_fallbacks(record):
         return []
     rows, seen = [], set()
     for name in record["enabled"]:
+        if PROVIDER_BY_ID[name].get("gateway"):
+            continue                # a fallback the bot did not name never spends the company's gateway key
         runtime = PROVIDER_BY_ID[name]["runtime"]
-        model = (record["model"] if record["runtime"] == runtime and record["model"]
-                 else (recommended(name) or {}).get("id"))
+        # Nor does a company default on a Gateway model reach it through another provider on the same runtime.
+        own = record["model"] if record["runtime"] == runtime and not gateway_model(record["model"]) else ""
+        model = own or (recommended(name) or {}).get("id")
         if runtime in seen or not model:
             continue
         seen.add(runtime)
         rows.append({"runtime": runtime, "harness": runtime, "model": model})
+    # Except under the two choices that include the Gateway: it goes last, after every signed-in provider
+    # (backend/models_preset.py). A runner without a relay for the turn leaves it out (gateway_relay.rs admit).
+    gateway = models_preset.fallback_row(record)
+    if gateway:
+        rows.append(gateway)
     return rows
 
 
@@ -547,7 +607,7 @@ def check_choice(record, author, available=None):
         return row
     raise ProviderError("check_model", "No check model from a provider other than "
                         f"{PROVIDER_BY_ID[own]['label'] if own else 'the author'}: enable or sign in another AI "
-                        "provider in Settings > AI providers, or name one with --check-model", 409)
+                        "provider in Settings > Computers, or name one with --check-model", 409)
 
 
 # ----------------------------------------------------------------------------- resolution

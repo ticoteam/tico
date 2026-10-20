@@ -22,6 +22,7 @@ from .blobs import Blobs, brief, register
 from .files import is_file_id
 from clients import bot_files as BF
 from . import rooms
+from . import visuals
 from .store import H, P, Problem, encode, digest as request_digest
 from .views import default_bot, human_only, roster
 
@@ -175,7 +176,7 @@ async def form(request, model, blobs, store):
                         raise ValueError("Duplicate or unnamed form field")
                     else:
                         fields[name] = data.decode("utf-8")
-                for field in ("calendar", "refs", "acceptance_criteria", "participants", "context",
+                for field in ("calendar", "refs", "acceptance_criteria", "participants", "context", "titles",
                               "labels", "links"):
                     if field in fields:
                         fields[field] = json.loads(fields[field])
@@ -458,11 +459,22 @@ def install_media(app, store, auth, mutate, send_message, task_create):
             items = [register(c, who, **upload) for upload in uploads]
             for item in items:
                 c.execute("INSERT INTO message_assets VALUES(?,?)", (message["id"], item["id"]))
+            for index, (item, upload) in enumerate(zip(items, uploads)):
+                # Each is also a versioned file in this conversation, so a picture, video or audio a person sends
+                # is a visual like a bot's (backend/visuals.py); `id` and `url` stay the blob's for older clients.
+                cid = message["conversation_id"]
+                row, _, _ = files.add_version(
+                    c, bot=bot, actor=who.actor, scope="conversation:" + cid, task=None, conversation=cid, attempt="",
+                    identity="chat-file:" + item["id"], title=item["name"], name=item["name"],
+                    mime=item["content_type"], blob_id=item["id"], digest=upload["digest"], size=item["size"])
+                title = body.titles[index] if index < len(body.titles) else ""
+                item.update(file_id=row["id"], version=row["current_version"], title=title or item["name"],
+                            kind=visuals.kind_of(item["content_type"], item["size"], visuals._head(blobs, upload["digest"])))
             if items:
                 refs = {**message["refs"], "attachments": items}
                 c.execute("UPDATE messages SET refs_json=? WHERE id=?", (encode(refs), message["id"]))
             return {"conversation": H.conversation(c, message["conversation_id"]),
-                    "message": H.message(c, message["id"])}
+                    "message": visuals.for_reader(app, store.settings, c, who, [H.message(c, message["id"])])[0]}
         return await asyncio.to_thread(write, request, body, uploads, work)
 
     @app.post("/api/v2/uploads/tasks", openapi_extra=upload_contract(M.TaskCreate))
@@ -491,7 +503,9 @@ def install_media(app, store, auth, mutate, send_message, task_create):
         check, including whether the person could read the task, runs first in a read, the bytes are stored with no
         transaction open (an upload never holds the write lock), then the write runs the checks again. A private
         question is a private task whose parties are the bot and the person asked. Bytes stored for a write refused
-        only by a later change stay: the same bytes may already back another file, so they are never deleted here."""
+        only by a later change stay: the same bytes may already back another file, so they are never deleted here.
+        One open question per topic: asked again on the same topic (`topic`, else the same parent task) while the
+        first still waits on the person, it is folded into that one (`folded: true`) rather than filed again."""
         who = request.state.identity
         if who.role != "bot":
             raise Problem("identity", "A bot puts a question to a person this way; a person asks in a comment", 403)
@@ -513,6 +527,9 @@ def install_media(app, store, auth, mutate, send_message, task_create):
                 raise Problem("validation", "Option files are at least one byte and at most 10 MB together", 422)
             decoded.append((data, option.file.name, mimetypes.guess_type(option.file.name)[0] or "application/octet-stream"))
         question = body.question.strip()
+        if body.topic is not None and not H.question_topic(body.topic):
+            # A key given but empty once compared would silently mean "no topic" and join the task's unkeyed question.
+            raise Problem("validation", "A question's topic needs at least one letter or digit", 422)
         if not body.parent and who.attempt_id:
             # One question, one card: asked from a run on one of the bot's own tasks, it is filed under that task,
             # which stays the bot's, rather than as a second task of its own.
@@ -575,10 +592,17 @@ def install_media(app, store, auth, mutate, send_message, task_create):
             guest = readable_by(c, person, private, parent)
             if guest:
                 H.task_reach(c, who.actor, parent, person)
-            made = task_create(c, who, M.TaskCreate(
-                title=body.title or question, body=body.body or question, owner=who.actor, private=body.private,
-                relations=[M.TaskRelationRef(task=body.parent, kind="parent")] if body.parent else []), asked=person)
-            tid = made["task"]["id"]
+            topic = H.question_topic(body.topic)
+            # One open question per topic: asked again while the first waits, it joins that one (hubdb.fold_question).
+            found = H.open_question(c, who.actor, person, parent=parent["id"] if parent else None, topic=topic,
+                                    private=private)
+            if found:
+                tid = found["task"]["id"]
+            else:
+                made = task_create(c, who, M.TaskCreate(
+                    title=body.title or question, body=body.body or question, owner=who.actor, private=body.private,
+                    relations=[M.TaskRelationRef(task=body.parent, kind="parent")] if body.parent else []), asked=person)
+                tid = made["task"]["id"]
             # The person must be able to read the task by every rule a read checks, or the question would reach
             # them (Slack, mail) while the task stays hidden from them.
             try:
@@ -601,9 +625,14 @@ def install_media(app, store, auth, mutate, send_message, task_create):
             ask = check_ask(c, tid, M.ReviewAsk(questions=[M.ReviewQuestion(
                 id="decision", header="", question=question, options=choices)], who=person,
                 if_no_answer=body.if_no_answer), auth, who)
-            said = H.task_comment(c, who.actor, tid, question, ask=ask)
-            H.task_update(c, who.actor, tid, status="waiting", waiting_on=person, note=question)
-            return {"task": H.task(c, tid),
+            if topic:
+                ask["topic"] = topic
+            if found:
+                said = H.fold_question(c, who.actor, found, question, ask, title=body.title, body=body.body)
+            else:
+                said = H.task_comment(c, who.actor, tid, question, ask=ask)
+                H.task_update(c, who.actor, tid, status="waiting", waiting_on=person, note=question)
+            return {"task": H.task(c, tid), "folded": bool(found),
                     "question": next(m for m in H.task_comments(c, tid, actor=who.actor) if m["id"] == said["id"])}
         result = mutate(request, body, work)
         app.state.file_metadata.wake.set()

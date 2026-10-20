@@ -33,6 +33,31 @@ const shownEmps = () => (S.emps || []).filter(e => !isHiddenBot(e.name));
 // Branches are personal workspaces, not additional teammates. Admin access still belongs in the branch picker.
 const orgBranchVisible = e => !(e.shared_from || e.is_branch) || (!!S.me?.id && e.operator === S.me.id);
 const orgBranchMark = e => (e.shared_from || e.is_branch) ? '<span class="org-branch">Your branch</span>' : '';
+// A team made from the catalog has several "Head of …" bots, and a narrow row cut each one to "Head of …". The first
+// words a bot's name shares with another bot's on the chart are muted, and drop out whole when the row is too narrow
+// for all of it (ui/styles/sidebar.css), so the part that tells them apart stays; the row's tooltip has the whole name.
+function orgNameLeads(names) {
+  const words = name => String(name).match(/\S+\s*/g) || [];
+  const lead = new Map();
+  for (const name of names) {
+    const mine = words(name);
+    let most = 0;
+    for (const other of names) {
+      if (other === name) continue;
+      const theirs = words(other);
+      let k = 0;
+      while (k < mine.length - 1 && k < theirs.length && mine[k].trim() === theirs[k].trim()) k++;
+      most = Math.max(most, k);
+    }
+    if (most) lead.set(name, mine.slice(0, most).join(''));
+  }
+  return lead;
+}
+function orgNodeName(e, lead) {
+  const name = (e.display_name || '').replace(TEMP_RE, ''), shared = lead.get(name);
+  if (!shared) return `<span class="nm">${shownName(e)}</span>`;
+  return `<span class="nm nm-split">${isTempBot(e) ? TEMP_FLAG : ''}<span class="nm-words"><span class="nm-lead">${esc(shared)}</span><span class="nm-rest">${esc(name.slice(shared.length))}</span></span></span>`;
+}
 const orgGroupIds = () => new Set((S.orgGroups || []).map(g => g.id));
 const orgCanGroups = () => S.me?.role === 'owner' || !!S.me?.bot_admin;
 // Who a human or bot reports to, as a key (`p:<id>` or `b:<slug>`); '' when nobody is on the chart above it.
@@ -44,9 +69,24 @@ function orgBossKey(n) {
 }
 function orgHang(key, boss, groupOf) {
   const group = groupOf[key] || '';
+  // With the CEO Bot switch on, the CEO Bot hangs under the owner wherever the owner sits. A bot the server hangs under
+  // the CEO Bot (backend/ceo_bot.py) stays in its group only when that group hangs under the CEO Bot too, else it
+  // leaves the group for the CEO Bot's branch: the owner's own group never moves there, or the chart would loop.
+  if (ceoBotOn() && boss && (key === 'b:goal-manager' || (boss === 'b:goal-manager' && group && !orgGroupUnderCeo(group)))) return boss;
   if (group) return boss && groupOf[boss] === group ? boss : 'g:' + group;
   return boss && !groupOf[boss] ? boss : '';
 }
+// Whether this group, through its top-level group, hangs under the CEO Bot (orgGroupParent).
+function orgGroupUnderCeo(id) {
+  const byId = new Map((S.orgGroups || []).map(g => [g.id, g]));
+  let g = byId.get(id);
+  for (let hops = 0; g?.parent && byId.has(g.parent) && hops < 20; hops++) g = byId.get(g.parent);
+  return g?.org_parent === 'b:goal-manager';
+}
+// Where a group hangs: in its parent group, else at the top. With the CEO Bot switch on, the server hangs the top-level
+// group of a Head it puts under the CEO Bot there too (`org_parent`, backend/ceo_bot.py), when the CEO Bot is on the chart.
+const orgGroupParent = (g, keys) => g.parent && keys.has('g:' + g.parent) ? 'g:' + g.parent
+  : ceoBotOn() && g.org_parent === 'b:goal-manager' && keys.has('b:goal-manager') ? 'b:goal-manager' : '';
 function orgGroupOf(people, bots) {
   const groups = orgGroupIds(), out = {};
   for (const p of people) if (groups.has(p.team)) out['p:' + p.id] = p.team;
@@ -62,8 +102,9 @@ function orgTreeByParent() {
   const bots = (S.emps || []).filter(e => orgBranchVisible(e) && orgMineKeep(e));
   const empIds = new Set(bots.map(e => e.name));
   const groupOf = orgGroupOf(people, bots);
+  const keys = new Set([...[...groups].map(id => 'g:' + id), ...bots.map(e => 'b:' + e.name)]);
   for (const g of (S.orgGroups || [])) {
-    (byParent[g.parent && groups.has(g.parent) ? 'g:' + g.parent : ''] ||= []).push({kind: 'group', id: g.id, name: g.name, order: g.order || 0});
+    (byParent[orgGroupParent(g, keys)] ||= []).push({kind: 'group', id: g.id, name: g.name, order: g.order || 0});
   }
   for (const p of people) {
     (byParent[orgHang('p:' + p.id, orgBossKey({kind: 'person', person: p}), groupOf)] ||= []).push({kind: 'person', id: p.id, person: p});
@@ -180,6 +221,7 @@ function defaultCollapsed() {
     if (!k || !by[k].length) continue;
     if (k.startsWith('g:')) continue;
     if (founder && k === 'p:' + founder.id) continue;
+    if (k === 'b:goal-manager' && ceoBotOn()) continue;        // the CEO Bot heads the chart: its Heads show
     keys.add(k);
   }
   return keys;
@@ -358,7 +400,7 @@ async function orgGroupDelete(id) {
   if (!orgCanGroups() || !group || ORG_DELETING.has(id)) return;
   const parent = (S.orgGroups || []).find(g => g.id === group.parent);
   const destination = parent ? parent.name : 'No group';
-  if (!confirm(`Delete ${group.name}? Its teammates and groups move to ${destination}; its subscriptions are unassigned.`)) return;
+  if (!confirm(`Delete ${group.name}? Its teammates and groups move to ${destination}.`)) return;
   ORG_DELETING.add(id);
   renderTree();
   try {
@@ -491,7 +533,9 @@ $('#org-history').onclick = () => {
 // Message bots sit in their own group after the team chart; built-ins have separate entry points. `reports_to` is untouched,
 // and a bot that reports to one hangs where it would have.
 const MESSAGE_BOTS_GROUP = '__message_bots';
-const isHelperBot = e => isBuiltInBot(e.name) || !!e.helper || (S.people || []).some(p => p.inbox_bot === e.name);
+// With the CEO Bot switch on, the Goal Manager is on the chart as the CEO Bot (ceoBotOn).
+const isHelperBot = e => (isBuiltInBot(e.name) && !(e.name === 'goal-manager' && ceoBotOn())) || !!e.helper
+  || (S.people || []).some(p => p.inbox_bot === e.name);
 // The order here and on Goals: the Assistant, then the other built-ins, then message bots.
 const HELPER_ORDER = ['botops', 'librarian', 'goal-manager', 'inbox'];
 const helperRank = e => e.name === assistantBot() ? -1 : HELPER_ORDER.includes(e.name) ? HELPER_ORDER.indexOf(e.name) : 99;
@@ -514,6 +558,19 @@ function orgTreeWithHelpers(byParent) {
     out['g:' + id] = members;
   }
   return out;
+}
+// One parent's rows in the team chart's order. The screen after Create (ui/first-run.js) lists its groups the same way.
+function orgSorted(parent, kids) {
+  const placed = byReportOrder(parent);
+  return (kids || []).slice().sort((a, b) => {
+    if (!!a.helpers !== !!b.helpers) return a.helpers ? 1 : -1;        // built-in and message groups come last
+    // A group's own humans and bots come first, then the groups nested in it.
+    if ((a.kind === 'group') !== (b.kind === 'group')) return a.kind === 'group' ? 1 : -1;
+    if (a.kind === 'group' && b.kind === 'group') return (a.order || 0) - (b.order || 0);
+    if (placed(a, b)) return placed(a, b);               // a manager's reports in the order someone put them
+    if (a.kind === 'bot' && b.kind === 'bot' && isHelperBot(a) && isHelperBot(b) && helperRank(a) !== helperRank(b)) return helperRank(a) - helperRank(b);
+    return chartFallback(a, b);                          // then the chart's own order, as on the server
+  });
 }
 // Whether one of my personal tokens has reached Tico (GET /v2/me/tokens): undefined before asking, null when I may not
 // hold tokens (no button), else true or false. Without one, my row offers Connect (ui/connect-agent.js).
@@ -542,20 +599,12 @@ function renderTree() {
     (c.kind === 'person' && subtreeNeeds('p:' + c.id)) ||
     (c.kind === 'group' && subtreeNeeds('g:' + c.id)));
   const nameOf = n => n.kind === 'person' ? (n.person.name || n.id) : (n.display_name || '').replace(TEMP_RE, '');
+  const leads = orgNameLeads(new Set(Object.values(byParent).flat().filter(n => n.kind === 'bot').map(nameOf).filter(Boolean)));
   const sources = {};
   for (const r of inboxNavRows()) (sources[r.bot] ||= []).push(r);
   INBOX_PLACED = new Set();
   const rec = (parent, depth) => {
-    const placed = byReportOrder(parent);
-    const sorted = (byParent[parent] || []).slice().sort((a, b) => {
-      if (!!a.helpers !== !!b.helpers) return a.helpers ? 1 : -1;        // built-in and message groups come last
-      // A group's own humans and bots come first, then the groups nested in it.
-      if ((a.kind === 'group') !== (b.kind === 'group')) return a.kind === 'group' ? 1 : -1;
-      if (a.kind === 'group' && b.kind === 'group') return (a.order || 0) - (b.order || 0);
-      if (placed(a, b)) return placed(a, b);               // a manager's reports in the order someone put them
-      if (a.kind === 'bot' && b.kind === 'bot' && isHelperBot(a) && isHelperBot(b) && helperRank(a) !== helperRank(b)) return helperRank(a) - helperRank(b);
-      return chartFallback(a, b);                          // then the chart's own order, as on the server
-    });
+    const sorted = orgSorted(parent, byParent[parent]);
     // The reports here that the viewer may put in order, per manager: a manager's own rows, or in a group the members
     // that share one. Each gets a place to drop before or after, and Move up and Move down.
     const lists = {};
@@ -609,8 +658,8 @@ function renderTree() {
     if (own) INBOX_PLACED.add(e.name);
     return `<li class="${kids ? 'dept' : ''}"><div class="noderow">
       ${kids ? `<button class="chev ${isCol ? 'col' : ''}" data-toggle="${esc(key)}" aria-label="${isCol ? 'Expand' : 'Collapse'} ${esc(e.display_name)}">›</button>` : ''}
-      <a class="node ${e.status} ${curBot === e.name ? 'cur' : ''} ${st}" href="#/bot/${e.name}"${curBot === e.name ? ' aria-current="page"' : ''} data-org="b:${esc(e.name)}"${helper ? ' data-helper' : placeAttrs(key, at)}${!flat && !helper && (orgMayDrag(key) || at.order.includes(key)) ? ' draggable="true"' : ''}>
-        ${avatar(e.name, depth ? 16 : 20, st)}<span class="nm">${shownName(e)}</span>${orgBranchMark(e)}${runtimeTag(e)}${frTreeMark(e)}
+      <a class="node ${e.status} ${curBot === e.name ? 'cur' : ''} ${st}" href="#/bot/${e.name}" title="${esc(e.display_name || e.name)}"${curBot === e.name ? ' aria-current="page"' : ''} data-org="b:${esc(e.name)}"${helper ? ' data-helper' : placeAttrs(key, at)}${!flat && !helper && (orgMayDrag(key) || at.order.includes(key)) ? ' draggable="true"' : ''}>
+        ${avatar(e.name, depth ? 16 : 20, st)}${orgNodeName(e, leads)}${orgBranchMark(e)}${runtimeTag(e)}${frTreeMark(e)}
         ${e.goal_active ? '<span class="nav-icon tree-goal" role="img" aria-label="Goal" title="Goal">target</span>' : ''}
         ${isCol && subtreeNeeds(key) ? '<span class="dot needs" title="something inside needs attention"></span>' : ''}
         ${treeLimitMark(e.name)}${treeBadge(n, st)}</a>${moveMenu(key, e.display_name || e.name, at)}</div>
@@ -689,7 +738,6 @@ function renderTree() {
       (a.dataset.nav === 'market' && (S.route === '#/market' || S.route.startsWith('#/market?') || S.route.startsWith('#/market/'))) ||
       (a.dataset.nav === 'integrations' && (S.route === INTEGRATIONS || S.route.startsWith(INTEGRATIONS + '/'))) ||
       (a.dataset.nav === 'changelog' && S.route === '#/changelog') ||
-      (a.dataset.nav === 'runs' && S.route === '#/runs') ||
       (a.dataset.nav === 'learnings' && (S.route === LEARNINGS || S.route.startsWith(LEARNINGS + '?'))) ||
       (a.dataset.nav === 'usage' && S.route === '#/usage') ||
       (a.dataset.nav === 'replay' && S.route.startsWith('#/replay')) ||

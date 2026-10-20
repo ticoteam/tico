@@ -108,7 +108,7 @@ async function taskModalShow(task, d = taskModal(), opts = {}) {
   const seq = d.drawSeq = (d.drawSeq || 0) + 1;
   const typing = d.contains(document.activeElement) && document.activeElement.matches('.task-chat textarea');
   if (peek && TASKS_ST && TASKS_ST.peek !== 't' + task.id && tasksById(TASKS_ST).has(String(task.id))) {
-    taskPeekOpen(TASKS_ST, 't' + task.id); return;           // a parent or subtask opened from the peek: the list follows it
+    taskPeekOpen(TASKS_ST, 't' + task.id, {via: 'link'}); return;   // a parent or subtask opened from the peek: the list follows it
   }
   d.dataset.task = task.id;
   // a property that has the focus now keeps it through the redraw (over the one a save asked for)
@@ -290,7 +290,7 @@ function taskSessionsHTML(t) {
       ? `<span class="tlink session"><a href="${esc(l.url)}" target="_blank" rel="noopener">${label}</a>${drop(l)}</span>`
       : `<span class="tlink session"><span title="${esc(l.value)}">${label}</span>${copy(l.value, 'session')}${drop(l)}</span>`;
   });
-  return `<section class="tsec task-sessions"><h3 class="rail-h">Sessions<button type="button" class="prop-add" data-session-add aria-label="Add a session" title="Add a session">${TL_ICON.plus}</button></h3>
+  return `<section class="tsec task-sessions${rows.length ? '' : ' tsec-empty'}"><h3 class="rail-h">Sessions<button type="button" class="prop-add" data-session-add aria-label="Add a session" title="Add a session">${TL_ICON.plus}</button></h3>
     ${rows.length ? `<div class="tlinks">${rows.join('')}</div>` : ''}
     <form class="inline task-link-add" data-modal-session hidden><input type="text" autocomplete="off" spellcheck="false" placeholder="URL or resume command" aria-label="Add a session"></form></section>`;
 }
@@ -310,7 +310,7 @@ async function taskRelate(d, task, body, on = task.id) {
 }
 function taskRelHTML(t) {
   const groups = TASK_REL_GROUPS.map(([kind, dir, label]) => [kind, dir, label, taskRels(t, kind, dir)]).filter(g => g[3].length);
-  return `<section class="tsec task-related"><h3 class="rail-h">Related<button type="button" class="prop-add" data-related-add aria-haspopup="menu" aria-label="Relate a task" title="Relate a task">${TL_ICON.plus}</button></h3>
+  return `<section class="tsec task-related${groups.length ? '' : ' tsec-empty'}"><h3 class="rail-h">Related<button type="button" class="prop-add" data-related-add aria-haspopup="menu" aria-label="Relate a task" title="Relate a task">${TL_ICON.plus}</button></h3>
     ${groups.map(([kind, dir, label, rows]) => `<div class="trel"><span class="trel-k">${esc(label)}</span><div class="tlinks">${rows.map(k => `<span class="tlink task"><button type="button" class="linkish" data-open-task="t${esc(k.id)}" aria-label="Open ${esc(k.title)}">${taskStatusText(k)} ${esc(clipLine(k.title, 70))}</button><button type="button" class="x" data-drop-rel="${esc(kind)} ${esc(dir)} ${esc(k.id)}" aria-label="Remove ${esc(label.toLowerCase())}: ${esc(k.title)}">×</button></span>`).join('')}</div></div>`).join('')}</section>`;
 }
 // ---- saving a task's properties. One save at a time per dialog, each with the version the last one returned, so a
@@ -353,8 +353,10 @@ async function taskSave(d, id, body, then, field) {
     }
     void personTasksReload();
     // The list reloads behind it. If the task left the view (done, closed, handed on, declined), the list and the
-    // peek move on to the next row: checked by whichever load lands last (a poll may overtake this one).
-    if (state) state.pendingFinish = {key, at, after: state.loadSeq};
+    // peek move on to the next row: checked by whichever load lands last (a poll may overtake this one). Not for a
+    // task reached from inside the peek (a parent's subtask): its row's neighbour is some other task, and edits made
+    // after the save would land on it, so the peek stays on the task that was saved.
+    if (state && state.peekVia !== 'link') state.pendingFinish = {key, at, after: state.loadSeq};
     if (TASKS_ST) void tasksLoad(TASKS_ST);
     roadmapRankingRefresh();
     return true;
@@ -375,6 +377,7 @@ async function taskSave(d, id, body, then, field) {
 // "Working" line shows its newest step, with Stop for whoever may stop it. The box says it in the task (a comment),
 // which wakes its bot. `taskChatStop` and `taskChatLoad` keep their names: the router and the chat cards call them.
 let TASK_CHAT = null;
+let TASK_JUMP = ENTRY_JUMP?.task ? {task: ENTRY_JUMP.task, id: ENTRY_JUMP.id} : null;   // {task, id}: a link's message, once that task's conversation shows
 const TASK_DRAFTS = new Map();         // an unsent comment, per task, kept across redraws until it is sent or cleared
 function taskChatStop() {
   if (TASK_CHAT) { clearInterval(TASK_CHAT.poll); TASK_CHAT.liveOff?.(); }
@@ -478,19 +481,44 @@ async function taskStepsOpen(el) {
   const list = $(`.task-comments details.run-steps[data-turn="${CSS.escape(turn)}"] .steps-list`, document);
   if (list) list.innerHTML = html;
 }
-// The owner's run while it works: "Working" and its newest step, the steps so far one click away, and Stop for whoever
-// manages the bot (POST /v2/bots/{slug}/stop, as in the bot's chat).
-function taskLiveHTML(x, stopping = '') {
-  if (!x || !['leased', 'running'].includes(x.state)) return '';
-  const part = (x.parts || []).at(-1);
+// The line under the thread while a run answers it: the bot chat's pending line (pendingRunText, ui/app/chat.js), so
+// Sent, Queued and why, Starting, "<Bot> is working" with its newest step, or Reply failed. `execution` is the owner's
+// run or the run for a person's message, whichever bot that went to (GET /v2/tasks/{id}); a queued run for anything
+// else is `waiting_for`'s. The steps so far are one click away, and Stop is there for whoever manages the bot
+// (POST /v2/bots/{slug}/stop, as in the bot's chat). `sent`: the id of a message just sent; until its own run is read,
+// it is Sent, never the state of an earlier message's run.
+function taskLiveHTML(x, stopping = '', sent = '') {
+  if (sent && x?.message_id !== sent) x = null;
+  const working = !!x && ['leased', 'running'].includes(x.state);
+  const run = working || x?.from_person && v2RunLive(x) ? x : null;
+  if (!run && !sent) return '';
+  const t = pendingRunText(run, run?.bot);
+  // Several bots may answer on a task, so the line names the one at work.
+  const word = t.word || t.tip;
+  const part = working ? (x.parts || []).at(-1) : null;
   const step = part ? clipLine(part.text.replace(/\s+/g, ' ').trim(), 120) : '';
-  const word = x.state === 'leased' ? 'Starting' : x.label && x.label !== 'Working' ? x.label : 'Working';
-  const label = `<span class="typing run" aria-hidden="true"><i></i><i></i><i></i></span><span class="thinking-word">${esc(word)}…</span>${step ? `<span class="task-live-step">${esc(step)}</span>` : ''}`;
-  const stop = x.attempt_id && settingsCanManageBot(S.emps.find(e => e.name === x.bot))
+  const label = `<span class="typing ${t.mode}" aria-hidden="true"><i></i><i></i><i></i></span><span class="thinking-word">${esc(word)}${
+    working ? '…' : ''}</span>${step ? `<span class="task-live-step">${esc(step)}</span>` : ''}`;
+  const stop = working && x.attempt_id && settingsCanManageBot(S.emps.find(e => e.name === x.bot))
     ? `<button type="button" class="ghost task-live-stop" data-task-stop="${esc(x.attempt_id)}" data-bot="${esc(x.bot)}" title="Stop this run"${
       stopping === x.attempt_id ? ' disabled>Stopping…' : '>Stop'}</button>` : '';
-  return `<div class="thinking task-live" role="status" aria-label="${esc(actorLabel('bot:' + x.bot))} is ${esc(word.toLowerCase())}${step ? ': ' + esc(step) : ''}">${
-    x.attempt_id ? taskStepsFold(x.attempt_id, label, true) : label}${stop}</div>`;
+  return `<div class="thinking task-live" role="status" aria-label="${esc(t.tip)}${step ? ': ' + esc(step) : ''}">${
+    working && x.attempt_id ? taskStepsFold(x.attempt_id, label, true) : label}${pendingHintHTML(run)}${stop}</div>`;
+}
+// Who the comment being written will reach (GET /v2/tasks/{id} `comment_to`), said before it is sent: no bot at all,
+// or a bot that reads it on its next run on the task unless the draft @mentions it.
+function taskComposerTo(to, draft) {
+  if (!to) return '';
+  if (!to.bot) return 'No bot gets this message: it is saved on the task for the people on it.';
+  // As the server reads an @mention (backend/hubdb.py _at): the name, not inside a word or another @name.
+  const at = n => new RegExp('(?<![\\w@])@' + n.replace(/[.*+?^$()|[\]\\{}]/g, '\\$&') + '(?![\\w-])', 'i');
+  const named = (to.mention || []).some(n => at(n).test(draft || ''));
+  if (to.wakes || named) return '';
+  return `Saved for ${botDisplayName(to.bot)}'s next run on this task.${to.mention?.length ? ` Write @${to.mention[0]} to ask now.` : ''}`;
+}
+function taskComposerToPaint(state) {
+  const hint = $('[data-task-chat-to]', state.host), box = $('textarea', state.host);
+  if (hint) hint.textContent = taskComposerTo(state.data?.comment_to, box?.value);
 }
 async function taskRunStop(state, button) {
   button.disabled = true;
@@ -501,7 +529,7 @@ async function taskRunStop(state, button) {
     taskChatLive(state);
   } catch (e) { button.disabled = false; toast(`Not stopped: ${e.message}`, true); }
 }
-function taskCommentsRender(state, data) {
+function taskCommentsRender(state, data, sent = '') {
   const host = state.host;
   const lines = [
     ...(data.comments || data.messages || []).filter(m => ['say', 'ask', 'answer'].includes(m.kind)).map(m => ({kind: 'comment', ts: m.created, message: m})),
@@ -511,14 +539,17 @@ function taskCommentsRender(state, data) {
     // The box is the main chat's composer: a pill, one line that grows, the send arrow, Return sends.
     host.innerHTML = `<h3>Conversation</h3>
       <div class="task-comments" role="log" aria-live="polite"></div>
-      <form class="task-pill"><div class="p-pill"><textarea class="p-text" rows="1" maxlength="4000" required aria-label="Message" placeholder="Message…"></textarea>
+      <form class="task-pill"><span class="muted" data-task-chat-to role="note"></span><div class="p-pill"><textarea class="p-text" rows="1" maxlength="4000" required aria-label="Message" placeholder="Message…"></textarea>
           <button class="p-send p-send-icon" type="submit" aria-label="Send" title="Send">${ICON_SEND}</button></div>
           <span class="muted" data-task-chat-status role="status"></span></form>`;
     $('form', host).onsubmit = ev => { ev.preventDefault(); void taskCommentSend(state); };
     const box = $('textarea', host);
     box.value = TASK_DRAFTS.get(String(state.id)) || '';
     const grow = () => { box.style.height = 'auto'; box.style.height = box.scrollHeight + 'px'; };
-    box.oninput = () => { grow(); if (box.value) TASK_DRAFTS.set(String(state.id), box.value); else TASK_DRAFTS.delete(String(state.id)); };
+    box.oninput = () => {
+      grow(); taskComposerToPaint(state);
+      if (box.value) TASK_DRAFTS.set(String(state.id), box.value); else TASK_DRAFTS.delete(String(state.id));
+    };
     if (box.value) requestAnimationFrame(grow);
     // As in the main chat: on a computer Return sends and Shift+Return is a new line; on a phone Return is a line.
     box.onkeydown = ev => {
@@ -533,6 +564,7 @@ function taskCommentsRender(state, data) {
     });
   }
   state.data = data;
+  taskComposerToPaint(state);
   // `can_comment`: false for someone who may read the task but not comment on it; they get no box and no answer controls
   const can = data.can_comment !== false, d = state.dialog;
   $('form', host).hidden = !can;
@@ -542,8 +574,8 @@ function taskCommentsRender(state, data) {
   if (state.count != null && count !== state.count) void tfLoad(state.dialog, state.id);
   state.count = count;
   const files = tfFiles(state.dialog);
-  // The bot's next run on this task, when it is queued: what it waits for, where its reply will appear.
-  const live = taskLiveHTML(data.execution, state.stopping);
+  // The run answering the thread; otherwise the bot's next run on this task, when it is queued: what it waits for.
+  const live = taskLiveHTML(data.execution, state.stopping, sent);
   const wait = live || !data.waiting_for ? live : `<p class="muted task-wait" role="status">${esc(data.waiting_for)}</p>`;
   const html = (lines.map((x, i, all) => commentLineHTML(x, i, all, files, state.id, can)).join('') || '<p class="muted">Nothing said yet.</p>') + wait;
   const thread = $('.task-comments', host);
@@ -553,7 +585,7 @@ function taskCommentsRender(state, data) {
     // At the newest comment, new ones keep it in view; scrolled up, nothing moves (ui/app/stick-scroll.js).
     const stick = stickScroll(thread);
     if (!state.rendered) stick.toBottom();
-    stick.update(() => { thread.innerHTML = html; askDraftRestore(thread, d); }, {fresh: !!state.rendered});
+    stick.update(() => { visualSwap(thread, html); askDraftRestore(thread, d); }, {fresh: !!state.rendered});
     // A working run's steps, left open, follow it as it moves on.
     const liveSteps = $('details.run-steps[data-live][open]', thread);
     if (liveSteps) void taskStepsOpen(liveSteps);
@@ -589,6 +621,7 @@ async function taskChatLoad(id, dialog, data = null) {
   if (data?.task?.conversation_id) state.cid = data.task.conversation_id;
   if (data) taskCommentsRender(state, data); else await taskChatRead(state);
   if (!taskChatCurrent(state) || state.stopped) return;
+  taskJumpPending(state);
   // Without live events, the poll they replaced.
   state.poll = liveFallback(() => {
     if (document.hidden || !taskChatCurrent(state)) return;
@@ -608,6 +641,18 @@ async function taskChatLoad(id, dialog, data = null) {
     })] : [];
   state.liveOff = () => { offs.forEach(off => off()); state.liveOff = null; };
 }
+// A link from outside Tico (the Slack visuals line) names a message: bring it into view and mark it for a moment.
+// The task opened only because the reader may read it; a message not on the page loaded says so.
+function taskJumpPending(state) {
+  if (!TASK_JUMP || ![String(state.id), state.data?.task?.id].includes(TASK_JUMP.task)) return;
+  const {id} = TASK_JUMP; TASK_JUMP = null;
+  const thread = $('.task-comments', state.host), el = thread?.querySelector(`[data-message="${CSS.escape(id)}"]`);
+  if (!el) { toast('That message is not in this conversation', true); return; }
+  stickScroll(thread).release();           // the first paint follows the newest comment; the jump stops that
+  el.scrollIntoView({block: 'center', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'});
+  el.classList.add('jump-mark');
+  setTimeout(() => el.classList.remove('jump-mark'), 2000);
+}
 async function taskCommentSend(state) {
   if (!taskChatCurrent(state) || state.sending) return;
   const form = $('form', state.host);
@@ -622,8 +667,11 @@ async function taskCommentSend(state) {
     box.value = ''; box.style.height = ''; TASK_DRAFTS.delete(String(state.id)); state.sending = false;
     const thread = $('.task-comments', state.host);
     if (thread) stickScroll(thread).toBottom();      // your comment is where you look
+    // Your comment and "Sent" at once, as in the bot's chat; the read that follows has its run.
+    if (data.comments && state.data) taskCommentsRender(state, {...state.data, comments: data.comments}, data.woke ? data.comment?.id : '');
     await taskChatRead(state);
-    status.textContent = data.woke ? '' : 'Saved. The bot reads it on its next run on this task.';
+    // The composer said so before sending when no bot would get it; the server has the last word.
+    status.textContent = data.woke || taskComposerTo(state.data?.comment_to, text) ? '' : 'Saved. The bot reads it on its next run on this task.';
   } catch (e) {
     if (taskChatCurrent(state)) status.textContent = `Not saved: ${e.message}`;
   } finally {
@@ -655,9 +703,19 @@ function taskPeekPos(id) {
   const keys = tasksVisibleKeys(), i = keys.indexOf('t' + id);
   return i < 0 ? '' : `${i + 1} / ${keys.length}`;
 }
-// The task in full or in the peek. The header: its status, its owner, its age, Done and Close task for whoever may use
-// them (the two most common actions) as labelled buttons, then the quiet icon buttons: "…" and, past a rule, ✕ for the window. Then the title, who added it and when, the properties, the
-// details, Code, Subtasks, Comments.
+// Quiet work (a next-run task, backend/quiet_work.py): delivered into a run (deferred until something), eligible for the
+// bot's next run, or queued with a run of its own; which run, and when it was handed over.
+function taskQuietHTML(t) {
+  const q = t.quiet;
+  if (!q || taskFinished(t)) return '';
+  const label = {queued: 'Queued', eligible: 'Eligible', delivered: q.resume ? 'Deferred' : 'Delivered'}[q.state] || q.state;
+  const more = [q.run ? `run ${String(q.run).slice(0, 8)}` : '', q.at ? `handed over ${ago(q.at)}` : ''].filter(Boolean).join(', ');
+  return `<p class="task-wait task-quiet" data-task-quiet="${esc(q.resume ? 'deferred' : q.state)}"><span class="lbl">Quiet work: ${esc(label)}</span> ${esc(q.words || '')}${more ? ` <span class="muted">(${esc(more)})</span>` : ''}</p>`;
+}
+// The task in full or in the peek. The header: its status, its age, Done and Close task for whoever may use them (the
+// two most common actions) as labelled buttons, then the quiet icon buttons: "…" and, past a rule, ✕ for the window.
+// The owner and who asked are properties, so the header does not repeat them; who added it and when is the age's
+// tooltip. Then the title, the properties, the details, Code, Subtasks, Comments.
 function hubModalHTML(t, it, opts = {}) {
   const askToYou = taskAskToPerson(t);
   const finished = taskFinished(t);
@@ -681,25 +739,27 @@ function hubModalHTML(t, it, opts = {}) {
       <span class="tthread-only tthread-title" tabindex="-1">${esc(t.title)}</span>` : ''}<span class="pill tstatus">${esc(statusWord)}</span>${blockers.length && !finished
       ? `<span class="tchip-blocked" title="Blocked by ${esc(blockers.map(b => b.title).join(', '))}">blocked</span>` : ''}${taskSnoozed(t)
       ? `<button type="button" class="tl-due wake tchip-snoozed" data-task-unsnooze title="Snoozed until ${esc(fmt(t.snoozed_until))} by ${esc(actorLabel(t.snoozed_by))}${rights.snooze ? '. Click to bring it back now' : ''}"${rights.snooze ? '' : ' disabled'}>Snoozed to ${esc(snoozeDay(t))}</button>` : ''}
-      <span class="tmodal-owner">${actorFace(t.owner, 18)}<span class="who">${esc(actorLabel(t.owner))}</span></span>${finished ? '' : taskScreenLinkHTML(t.owner)}
+      ${finished ? '' : taskScreenLinkHTML(t.owner)}
       <span class="spacer"></span>${pos ? `<span class="peek-pos tnum" title="J / K or ↑ / ↓ move to the next or previous task">${esc(pos)}</span>` : ''}
-      <span class="muted tnum tmodal-age" title="Updated ${esc(fmt(it.updated))}">${esc(ago(it.updated))}</span>
+      <span class="muted tnum tmodal-age" title="${esc(`${taskSourceLine(t)}${t.created ? ' ' + fmt(t.created) : ''} · Updated ${fmt(it.updated)}`)}">${esc(ago(it.updated))}</span>
       ${canDone ? `<button class="ghost tmodal-act" type="button" data-task-finish="done" title="Mark this task done">${PROP_ICON.check}<span>Done</span></button>` : ''}
       ${canClose ? `<button class="ghost tmodal-act" type="button" data-task-finish="close" title="Close this task">Close task</button>` : ''}
       <button class="ghost peek-btn" type="button" data-task-more aria-haspopup="menu" aria-label="More actions" title="More actions">${PROP_ICON.more}</button>
       ${thread ? '<button class="ghost tmodal-act tthread-only" type="button" data-thread-details>Details</button>' : ''}
       <span class="tmodal-sep" aria-hidden="true"></span><button class="ghost peek-btn tmodal-x" type="button" data-modal-close aria-label="Close window" title="Close window (Esc)">${TL_ICON.x}</button></div>
     <h2 class="tmodal-title" tabindex="-1">${esc(t.title)}</h2>
-    <div class="muted tmeta">${esc(taskSourceLine(t))} · ${esc(ago(t.created))}${t.goal_id ? ` · <a href="#/goals/${encodeURIComponent(t.goal_id)}" class="task-goal" data-goal-title="${esc(t.goal_id)}">serves a goal</a>` : ''}</div>
+    ${t.goal_id ? `<div class="muted tmeta"><a href="#/goals/${encodeURIComponent(t.goal_id)}" class="task-goal" data-goal-title="${esc(t.goal_id)}">serves a goal</a></div>` : ''}
     <div class="tmodal-body task-layout">
       <div class="tmodal-main">
       ${waitLabel && waitText ? (askToYou ? `<div class="task-ask"><div class="lbl">${esc(waitLabel)}</div><div class="task-ask-body">${esc(waitText)}</div></div>`
         : `<p class="task-wait"><span class="lbl">${esc(waitLabel)}</span> ${esc(waitText)}</p>`) : ''}
+      ${taskQuietHTML(t)}
       ${original ? (waitText ? `<details class="task-orig"><summary>Original request</summary><div class="tdesc md">${safeMd(original)}</div></details>`
         : `<div class="tdesc md">${safeMd(original)}</div>`) : (waitText ? '' : '<p class="muted tdesc">No details.</p>')}
       ${note && note.replace(/\s+/g, ' ').trim() !== waitText ? `<details class="task-orig"><summary>Progress</summary><div class="tdesc md">${safeMd(note)}</div></details>` : ''}
       ${(t.acceptance_criteria || []).length ? `<section class="tsec"><h3 class="rail-h">Done looks like</h3><ul class="tcriteria">${t.acceptance_criteria.map(a => `<li>${esc(a)}</li>`).join('')}</ul></section>` : ''}
-      <section class="tsec task-links"><h3 class="rail-h">Links<button type="button" class="prop-add" data-link-add aria-label="Add a link" title="Add a link">${TL_ICON.plus}</button></h3>
+      <div class="tsecs">
+      <section class="tsec task-links${links.length ? '' : ' tsec-empty'}"><h3 class="rail-h">Links<button type="button" class="prop-add" data-link-add aria-label="Add a link" title="Add a link">${TL_ICON.plus}</button></h3>
         ${links.length ? `<div class="tlinks">${links.map(l => `<span class="tlink ${esc(l.kind)} ${esc(l.state || '')}"><a href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.title || l.url)}</a>${l.state && l.state !== 'open' ? ` · ${esc(l.state)}` : ''}${mover ? `<button type="button" class="x" data-drop-link="${esc(l.id)}" aria-label="Remove link">×</button>` : ''}</span>`).join('')}</div>` : ''}
         <form class="inline task-link-add" data-modal-link hidden><input type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://…" aria-label="Add a link"></form></section>
       ${roadmapTaskHTML(t)}
@@ -707,6 +767,7 @@ function hubModalHTML(t, it, opts = {}) {
       <section class="tsec task-runs" data-task-runs aria-label="Runs" hidden></section>
       ${t.relations ? taskRelHTML(t) : ''}
       <section class="tsec task-files" data-task-files aria-label="Files" hidden></section>
+      </div>
       </div>
       <aside class="task-side" aria-label="Details">
         <section class="task-props" data-task-props aria-label="Properties">${taskPropsHTML(t, opts)}</section>

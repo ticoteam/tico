@@ -51,7 +51,7 @@ async function v2ChatLoad(slug, room = null) {
     Object.assign(state, {conv: room.conv, messages: room.messages || [], nextBefore: room.nextBefore, execution: x,
                           live: S.me?.cloud && v2RunLive(x) ? {text: x.text || ''} : null, listed: true, loaded: true});
     v2ChatRender(state);
-  } else if (seen && seen.mode === mode) {
+  } else if (seen && seen.mode === mode && !chatJumpRoom(slug)) {
     Object.assign(state, {conv: seen.conv, messages: seen.messages, nextBefore: seen.nextBefore, execution: seen.execution,
                           live: seen.live, listed: true, loaded: true});
     v2ChatRender(state);                               // what it showed last time, at once
@@ -100,7 +100,11 @@ async function v2ChatFind(state) {
       if (!list) continue;
       if (!state.listed) {                        // a message sent while this loaded already put its chat in place
         state.listed = true;
-        state.conv = v2ChatRoom(list.conversations, state.slug, state.mode);
+        // A link to a message in another of my rooms with this bot opens that room; its mode keeps it out of the cache
+        // the usual room is read from.
+        const want = chatJumpRoom(state.slug), linked = want && (list.conversations || []).find(c => c.id === want);
+        if (linked) state.mode = 'linked';
+        state.conv = linked || v2ChatRoom(list.conversations, state.slug, state.mode);
       }
     }
     if (!state.conv || await v2ChatMessages(state)) { state.loaded = true; state.failed = false; return; }
@@ -176,18 +180,28 @@ function chatImageURL(f) {
     .catch(error => { CHAT_IMAGES.delete(f.id); throw error; }));
   return CHAT_IMAGES.get(f.id);
 }
-function chatAttachmentsHTML(files) {
+// The first visuals show as cards (ui/app/visual-cards.js); the rest stay these chips and thumbnails.
+function chatAttachmentsHTML(files, key = '') {
+  return visualCardsHTML(files, {key, chips: rest => chatChipsHTML(rest)});
+}
+// A chip or thumbnail shows the title the sender gave the file (refs.attachments[].title), else its name; data-name
+// keeps the file's own name for the viewer and the download.
+const chatFileLabel = f => String(f?.title || '').trim() || f?.name || 'file';
+function chatChipsHTML(files) {
   if (!files.length) return '';
-  return `<div class="chat-files">${files.map(f => isChatImage(f)
-    ? `<button type="button" class="chat-thumb" data-chat-image="${esc(f.id)}" data-type="${esc(f.content_type || '')}" data-name="${esc(f.name || 'image')}" aria-label="View ${esc(f.name || 'image')}" title="${esc(f.name || 'image')}"><img alt="${esc(f.name || 'image')}" hidden></button>`
-    : `<a class="pill" href="${API}/v2/files/${encodeURIComponent(f.id)}">${esc(f.name)}</a>`).join('')}</div>`;   // opens in the viewer, or downloads
+  return `<div class="chat-files">${files.map(f => {
+    const label = chatFileLabel(f), titled = label !== (f.name || 'file');
+    if (!isChatImage(f)) return `<a class="pill" href="${API}/v2/files/${encodeURIComponent(f.id)}" data-name="${esc(f.name || 'file')}"${titled ? ` title="${esc(f.name || '')}"` : ''}>${esc(label)}</a>`;   // opens in the viewer, or downloads
+    const thumb = `<button type="button" class="chat-thumb" data-chat-image="${esc(f.id)}" data-type="${esc(f.content_type || '')}" data-name="${esc(f.name || 'image')}" data-title="${esc(label)}" aria-label="View ${esc(label)}" title="${esc(label)}"><img alt="${esc(label)}" hidden></button>`;
+    return titled ? `<span class="chat-titled">${thumb}<span class="chat-file-title" aria-hidden="true">${esc(label)}</span></span>` : thumb;
+  }).join('')}</div>`;
 }
 function chatThumbsLoad(root = document) {
   for (const button of root.querySelectorAll('.chat-thumb:not([data-loading])')) {
     button.dataset.loading = '1';
     const f = {id: button.dataset.chatImage, content_type: button.dataset.type, name: button.dataset.name};
     chatImageURL(f).then(url => { const img = button.querySelector('img'); img.src = url; img.hidden = false; button.classList.add('ready'); })
-      .catch(() => { button.replaceWith(Object.assign(document.createElement('a'), {className: 'pill', href: `${API}/v2/files/${encodeURIComponent(f.id)}`, download: f.name, textContent: f.name})); });
+      .catch(() => { (button.closest('.chat-titled') || button).replaceWith(Object.assign(document.createElement('a'), {className: 'pill', href: `${API}/v2/files/${encodeURIComponent(f.id)}`, download: f.name, textContent: button.dataset.title || f.name})); });
   }
 }
 new MutationObserver(() => { if (document.querySelector('.chat-thumb:not([data-loading])')) chatThumbsLoad(); })
@@ -201,7 +215,7 @@ function chatImageOpen(button) {
   }
   const src = button.querySelector('img')?.src; if (!src) return;
   const download = button.dataset.chatImage ? `<a href="${API}/v2/files/${encodeURIComponent(button.dataset.chatImage)}" download>Download</a>` : '';
-  d.innerHTML = `<img src="${esc(src)}" alt="${esc(button.dataset.name)}"><div class="img-lightbox-bar"><span>${esc(button.dataset.name)}</span>${download}</div>`;
+  d.innerHTML = `<img src="${esc(src)}" alt="${esc(button.dataset.name)}"><div class="img-lightbox-bar"><span>${esc(button.dataset.title || button.dataset.name)}</span>${download}</div>`;
   d.showModal();
 }
 // Attached chat images open in the one viewer (see viewerOpenFrom), with the message's other files.
@@ -359,7 +373,9 @@ function v2MessageHTML(m) {
   const mine = !!pid;                       // any person's message sits on the right, under their name
   const who = mine ? esc(personHandle(pid)) : esc(actorLabel(m.from_actor));
   const me = m.from_actor === myActor();    // your own lines need no name on a bot's page
-  return `<div class="conv-run chat${me ? ' from-me' : ''}" data-message="${esc(m.id || '')}">
+  // The message a new topic started a fresh session for (backend/topic_change.py): one quiet line above it.
+  const fresh = mine && m.refs?.topic_changed ? '<div class="conv-break chat-topic-break" role="separator">Topic changed</div>' : '';
+  return `${fresh}<div class="conv-run chat${me ? ' from-me' : ''}" data-message="${esc(m.id || '')}">
     <time class="chat-stamp" datetime="${esc(m.created || '')}" title="${esc(fmt(m.created))}">${esc(ago(m.created))}</time>
     <div class="conv-run-head">${mine ? `<span class="mono muted">${who}</span>` : actorChip(m.from_actor)}
       ${m.kind && m.kind !== 'say' ? `<span class="pill">${esc(m.kind)}</span>` : ''}
@@ -373,7 +389,7 @@ function v2MessageHTML(m) {
         : `<div class="md">${safeMd(m.body || '', {shortLinks: true})}</div>`}${chatCopyHTML(m.body)}</div>
     ${v2DeliveryHTML(m)}
     ${(m.refs?.warnings || []).map(w => `<div class="chat-warn" title="From the runner, not the bot">${esc(w.charAt(0).toUpperCase() + w.slice(1))}</div>`).join('')}
-    ${S.me?.cloud ? chatAttachmentsHTML(m.refs?.attachments || []) : ''}
+    ${S.me?.cloud ? chatAttachmentsHTML(m.refs?.attachments || [], m.id || '') : ''}
     ${v2RunHTML(m)}${v2MessageCards(m)}</div>`;
 }
 // A message sent while the bot answers here is written into that turn, or held for the next one (`delivery`, from the
@@ -443,7 +459,7 @@ function chatSideItemHTML(m) {
   const when = m.created ? `<time class="chat-time" title="${esc(fmt(m.created))}">${esc(ago(m.created))}</time>` : '';
   return `<div class="cs-item${open ? ' open' : ''}" data-message="${esc(m.id || '')}">
     <div class="cs-head"><b>${esc(chatSideHead(m))}</b>${when}</div>
-    <div class="cs-text md${open ? '' : ' clamp'}">${safeMd(text, {shortLinks: true})}</div>${open && S.me?.cloud ? chatAttachmentsHTML(m.refs?.attachments || []) : ''}
+    <div class="cs-text md${open ? '' : ' clamp'}">${safeMd(text, {shortLinks: true})}</div>${open && S.me?.cloud ? chatAttachmentsHTML(m.refs?.attachments || [], m.id || '') : ''}
     ${long ? `<button type="button" class="link cs-more" data-cs-more="${esc(m.id || '')}" aria-expanded="${open}">${open ? 'Show less' : 'Show more'}</button>` : ''}${
       m.elsewhere?.preview ? `<button type="button" class="link cs-more" data-bots-open="${esc(m.elsewhere.id)}">Earlier messages</button>` : ''}</div>`;
 }
@@ -492,17 +508,33 @@ function v2PendingText(state) {
   if (!S.me?.cloud) return {word: '', tip: `${name} is thinking`, mode: 'run'};
   if (state.live?.interrupted) return SESSION.out ? {word: 'Signed out', tip: "You've been signed out", mode: 'wait'}
     : {word: 'Reconnecting', tip: 'Connection interrupted — reconnecting', mode: 'wait'};
+  return pendingRunText(x, state.slug);
+}
+// The words for one run, wherever a message waits on it (this chat, a task's chat): Sent, Queued and why, Starting,
+// "<Bot> is working", or how it ended (Reply failed).
+function pendingRunText(x, slug) {
+  const name = botDisplayName(slug);
   if (!x) return {word: 'Sent', tip: 'Sent', mode: 'wait'};
   if (x.state === 'queued') {
     if (x.label && x.label !== 'Saved — queued') return {word: x.label, tip: x.label, mode: 'wait'};   // the server's reason
-    const s = v2StatusOf(state.slug);
+    const s = v2StatusOf(slug);
     return {word: 'Queued', mode: 'wait', tip: s?.state === 'running' && s.focus
       ? `${name} is on another run: ${s.focus}` : 'Starts when its computer picks it up'};
   }
+  // Its ChatGPT login is busy with another turn (backend/login_waits.py): waiting, not failed.
+  if (x.waiting && ['leased', 'running'].includes(x.state)) return {word: x.waiting, tip: x.waiting, mode: 'wait'};
   if (x.state === 'leased') return {word: 'Starting', tip: `${name} is starting`, mode: 'run'};
   if (x.state === 'running') return x.label && x.label !== 'Working'
     ? {word: x.label, tip: x.label, mode: 'run'} : {word: '', tip: `${name} is working`, mode: 'run'};
   return {word: x.label || x.state, tip: x.label || x.state, mode: 'wait'};
+}
+// The hint a queued run carries when its bot cannot start: no AI provider, or its computer not signed in to its model.
+function pendingHintHTML(x) {
+  if (x?.state !== 'queued') return '';
+  if (x.readiness_reason === 'missing_provider') return ' <a href="#/settings" data-gs-tab="models">Add an AI provider</a>';
+  return x.readiness_reason === 'model_sign_in'
+    ? ' <span>Its computer is not signed in to its model: <a href="#/settings" data-gs-tab="devices">Sign in on Settings &gt; Computers</a> · <a href="#/settings" data-gs-tab="health">Health</a></span>'
+    : '';
 }
 function v2PendingHTML(state) {
   const x = state.execution, key = x?.message_id || 'sent';
@@ -511,12 +543,7 @@ function v2PendingHTML(state) {
   clearTimeout(state.waitTimer);
   const late = S.me?.cloud && sent && Date.now() - sent >= REPLY_WAIT_MS;
   if (S.me?.cloud && sent && !late) state.waitTimer = setTimeout(() => v2ChatRender(state), sent + REPLY_WAIT_MS - Date.now() + 50);
-  const providerMissing = x?.state === 'queued' && x?.readiness_reason === 'missing_provider';
-  // A provider is chosen but this bot's computer is not signed in to its model.
-  const signInMissing = x?.state === 'queued' && x?.readiness_reason === 'model_sign_in';
-  const hint = providerMissing ? ' <a href="#/settings" data-gs-tab="providers">Add an AI provider</a>'
-    : signInMissing ? ' <span>Its computer is not signed in to its model: <a href="#/settings" data-gs-tab="devices">Sign in on Settings &gt; Computers</a> · <a href="#/settings" data-gs-tab="health">Health</a></span>'
-    : '';
+  const hint = pendingHintHTML(x);
   if (late && !hint) return `<div class="thinking late" data-pending="${esc(key)}"><span class="dot"></span>
     <span>No reply after 20 minutes · <button type="button" class="dismiss" data-pending-dismiss>dismiss</button></span></div>`;
   const t = v2PendingText(state);
@@ -603,7 +630,7 @@ function v2ChatRender(state) {
     state.stick.update(() => {
       // A Confirm card kept through the rebuild (assistantChat.cards puts the same element back) keeps its focus too.
       const focused = thread.contains(document.activeElement) ? document.activeElement : null;
-      thread.innerHTML = html;
+      visualSwap(thread, html);              // cards both trees share keep their node (ui/app/visual-cards.js)
       if (thread.querySelector('[data-action-host]')) void window.assistantChat?.cards(thread, {get, post, esc, toast,
         reload: () => v2ChatMessages(state).then(() => { if (V2C === state) v2ChatRender(state); })});
       if (focused?.isConnected && document.activeElement !== focused) focused.focus({preventScroll: true});

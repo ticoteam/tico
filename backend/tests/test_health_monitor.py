@@ -1,9 +1,10 @@
 """The Health Monitor (backend/health_monitor.py, docs/health-monitor.md): off until the owner turns it on, a scan that
-wakes it only for a finding the last scan did not have, a day of quiet when a finding comes straight back, and one
-Tico bug report per signature that carries the finding and the redacted diagnostics, never task text, with a message
-on the same ticket when it comes back."""
+wakes it only for a new finding, one whose severity rose or one back after its task was finished (seeing a finding
+again counts and starts no run), and one Tico bug report per signature that carries the finding and the redacted
+diagnostics, never task text, with a message on the same ticket when it comes back."""
 
 import calendar
+import dataclasses
 import json
 import shutil
 import time
@@ -57,16 +58,32 @@ def scan(api):
         return health_monitor.scan(c, api.app.state.auth, api.app.state.store.settings)
 
 
+def scan_with(api, settings):
+    with api.app.state.store.transaction() as c:
+        return health_monitor.scan(c, api.app.state.auth, settings)
+
+
 def monitor_tasks(api):
     with api.app.state.store.read() as c:
         return [dict(r) for r in c.execute("SELECT id,title,body FROM tasks WHERE owner=? ORDER BY created",
                                            ("bot:" + health_monitor.SLUG,))]
 
 
-def notices(api, task_id):
+def notices(api, task_id, start="Seen again"):
     with api.app.state.store.read() as c:
         return c.execute("SELECT count(*) FROM messages m JOIN tasks t ON t.conversation_id=m.conversation_id "
-                         "WHERE t.id=? AND m.body LIKE 'Seen again%'", (task_id,)).fetchone()[0]
+                         "WHERE t.id=? AND m.body LIKE ?", (task_id, start + "%")).fetchone()[0]
+
+
+def wakes(api):
+    """Runs queued for the Health Monitor: the jobs its messages started (the runs token saving 1/9 records)."""
+    with api.app.state.store.read() as c:
+        return c.execute("SELECT count(*) FROM jobs WHERE bot=?", (health_monitor.SLUG,)).fetchone()[0]
+
+
+def finding(api, key):
+    with api.app.state.store.read() as c:
+        return dict(c.execute("SELECT * FROM health_findings WHERE key=?", (key,)).fetchone())
 
 
 def runner_errors(api, runner, lines):
@@ -119,22 +136,149 @@ def test_a_finding_wakes_it_once_is_filed_once_without_task_text_and_a_repeat_go
     runner_errors(api, runner, [])
     scan(api)                                                             # gone
     runner_errors(api, runner, STREAM)
-    assert scan(api) == []                                                # back within a day: counted, wakes nothing
-    assert len(monitor_tasks(api)) == 1 and notices(api, task["id"]) == 0
-    with api.app.state.store.read() as c:
-        assert c.execute("SELECT occurrences FROM health_findings WHERE key=?", (key,)).fetchone()[0] == 2
+    assert scan(api) == []                                    # back while its task is open: counted, wakes nothing
+    assert len(monitor_tasks(api)) == 1 and notices(api, task["id"]) == 1
+    assert finding(api, key)["occurrences"] == 3                          # seen by three scans
     repeat = api.post(f"/api/v2/health-monitor/findings/{key}/report", json={}, headers=bot).json()
     assert repeat["comment"] and len(hq.tickets) == 1
     (ticket,) = hq.tickets.values()
-    assert [m["body"][:37] for m in ticket["messages"]] == ["[Health Monitor] Seen again (2 times)"]
-    with api.app.state.store.transaction() as c:                          # a day after its last wake it wakes again
-        c.execute("UPDATE health_findings SET last_woke=?, present=0 WHERE key=?",
-                  (H.shift(H.now(), hours=-25), key))
+    assert [m["body"][:37] for m in ticket["messages"]] == ["[Health Monitor] Seen again (3 times)"]
+    with api.app.state.store.transaction() as c:          # a day since its last wake no longer wakes it again
+        c.execute("UPDATE health_findings SET last_woke=? WHERE key=?", (H.shift(H.now(), hours=-25), key))
     runner_errors(api, runner, [])
     scan(api)
     runner_errors(api, runner, STREAM)
+    assert scan(api) == [] and len(monitor_tasks(api)) == 1 and notices(api, task["id"]) == 2
+
+
+def test_a_finding_seen_again_counts_and_starts_no_run(environment):
+    api, runner = built(environment)
+    api.post("/api/v2/health-monitor/turn-on", json={}, headers=signed_in())
+    runner_errors(api, runner, STREAM)
+    key = "event_stream:" + runner["runner_id"]
+    before = wakes(api)
+    assert scan(api) == [key] and wakes(api) == before + 1                # new: one run
+    (task,) = monitor_tasks(api)
+    first = finding(api, key)
+    assert first["occurrences"] == 1 and first["severity"] == "warn"
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE health_findings SET last_seen=? WHERE key=?", (H.shift(H.now(), hours=-1), key))
+    assert scan(api) == []                                                # still there an hour later
+    again = finding(api, key)
+    assert again["occurrences"] == 2 and again["last_seen"] > H.shift(H.now(), minutes=-1)
+    runner_errors(api, runner, [])
+    scan(api)                                                             # gone, its task still open
+    assert finding(api, key)["present"] == 0
+    runner_errors(api, runner, STREAM)
+    assert scan(api) == [] and wakes(api) == before + 1                   # back: counted, no run for anyone
+    assert finding(api, key)["occurrences"] == 3 and len(monitor_tasks(api)) == 1
+    with api.app.state.store.read() as c:                                 # a quiet note the bot reads next turn
+        (note,) = c.execute("SELECT m.body,m.refs_json FROM messages m JOIN tasks t ON t.conversation_id=m.conversation_id "
+                            "WHERE t.id=? AND m.body LIKE 'Seen again%'", (task["id"],)).fetchall()
+    assert note["body"].startswith("Seen again (3 times, last ") and json.loads(note["refs_json"])["quiet"]
+    shown = api.get("/api/v2/health-monitor", headers=signed_in()).json()["findings"]
+    assert [(f["key"], f["occurrences"], f["severity"]) for f in shown] == [(key, 3, "warn")]
+    assert shown[0]["last_seen"] == finding(api, key)["last_seen"]
+
+
+def test_a_finding_back_after_its_task_was_finished_counts_as_new(environment):
+    api, runner = built(environment)
+    api.post("/api/v2/health-monitor/turn-on", json={}, headers=signed_in())
+    runner_errors(api, runner, STREAM)
+    key = "event_stream:" + runner["runner_id"]
     assert scan(api) == [key]
-    assert len(monitor_tasks(api)) == 1 and notices(api, task["id"]) == 1
+    (task,) = monitor_tasks(api)
+    with api.app.state.store.transaction() as c:                          # the bot finished it ("Cleared on its own")
+        c.execute("UPDATE tasks SET status='done' WHERE id=?", (task["id"],))
+    assert scan(api) == []                                                # still there: its task being done says nothing
+    runner_errors(api, runner, [])
+    scan(api)
+    runner_errors(api, runner, STREAM)
+    before = wakes(api)
+    assert scan(api) == [key] and wakes(api) == before + 1                # back after it was cleared: new, it runs
+    assert notices(api, task["id"], "Back after its task was finished (seen 3 times)") == 1
+    assert notices(api, task["id"]) == 0
+    with api.app.state.store.transaction() as c:                          # a closed task: a new one
+        c.execute("UPDATE tasks SET status='closed' WHERE id=?", (task["id"],))
+    runner_errors(api, runner, [])
+    scan(api)
+    runner_errors(api, runner, STREAM)
+    assert scan(api) == [key] and wakes(api) == before + 2
+    old, new = monitor_tasks(api)
+    assert old["id"] == task["id"] and "Seen: 4 time(s)" in new["body"]
+    with api.app.state.store.transaction() as c:                          # a declined task: a new one too
+        c.execute("UPDATE tasks SET status='declined' WHERE id=?", (new["id"],))
+    runner_errors(api, runner, [])
+    scan(api)
+    runner_errors(api, runner, STREAM)
+    assert scan(api) == [key] and wakes(api) == before + 3
+    assert len(monitor_tasks(api)) == 3 and "Seen: 5 time(s)" in monitor_tasks(api)[-1]["body"]
+
+
+def test_a_finding_whose_severity_rises_wakes_it(environment, monkeypatch):
+    api, _ = built(environment)
+    api.post("/api/v2/health-monitor/turn-on", json={}, headers=signed_in())
+    level = {"now": "warn"}
+    item = lambda: health_monitor._finding("runner_outdated:r1", "runner_outdated", health_monitor.SETUP,
+                                           "Studio Mac runs an older Tico release", "Release 0.0.9.", "Update it.",
+                                           severity=level["now"])
+    monkeypatch.setattr(health_monitor, "findings", lambda c, settings: [item()])
+    key = "runner_outdated:r1"
+    assert scan(api) == [key]
+    (task,) = monitor_tasks(api)
+    assert "Severity: warn" in task["body"]
+    before = wakes(api)
+    level["now"] = "bad"
+    assert scan(api) == [key] and wakes(api) == before + 1                # worse: woken on its open task
+    assert notices(api, task["id"], "Worse now (bad, was warn") == 1 and len(monitor_tasks(api)) == 1
+    assert scan(api) == [] and wakes(api) == before + 1                   # still bad: counted only
+    level["now"] = "warn"
+    assert scan(api) == [] and finding(api, key)["severity"] == "warn"    # better: counted, nobody woken
+    level["now"] = "bad"
+    assert scan(api) == [key] and wakes(api) == before + 2                # worse again
+    assert finding(api, key)["occurrences"] == 5
+
+
+def test_a_release_approval_ready_past_the_setting_is_one_finding_counted_not_repeated(environment):
+    api, _ = built(environment)
+    api.post("/api/v2/health-monitor/turn-on", json={}, headers=signed_in())
+    settings = dataclasses.replace(api.app.state.store.settings, release_approval_wait_minutes=5)
+    release = {"url": "https://github.com/acme/tico/releases/tag/v1.2.0", "version": "1.2.0", "commit": "c" * 40,
+               "content_sha256": "a" * 64}
+    with api.app.state.store.transaction() as c:
+        appr = H.approval_request(c, "bot:coo", "publish", release)
+        blog = H.approval_request(c, "bot:coo", "publish", {"url": "https://acme.example/blog", "content_sha256": "b" * 64})
+        c.execute("UPDATE approvals SET ready_since=? WHERE id IN (?,?)", (H.shift(H.now(), minutes=-4), appr["id"], blog["id"]))
+    key = "release_approval_wait:" + appr["id"]
+    assert scan_with(api, settings) == []                                  # under the setting: nothing yet
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE approvals SET ready_since=? WHERE id IN (?,?)", (H.shift(H.now(), minutes=-6), appr["id"], blog["id"]))
+    before = wakes(api)
+    assert scan_with(api, settings) == [key] and wakes(api) == before + 1  # a blog post's wait is not a release's
+    (task,) = monitor_tasks(api)
+    with api.app.state.store.read() as c:
+        who = H.person_name(c, H.actor_id(appr["decision_owner"]))
+    assert f"has waited 6 min on {who}" in task["title"] and "1.2.0 (commit cccccccccccc)" in task["body"]
+    assert scan_with(api, settings) == [] and wakes(api) == before + 1     # seen again: counted, no run, one finding
+    assert finding(api, key)["occurrences"] == 2 and len(monitor_tasks(api)) == 1
+    assert scan_with(api, dataclasses.replace(settings, release_approval_wait_minutes=0)) == []
+    assert finding(api, key)["present"] == 0                               # 0 turns the check off
+    with api.app.state.store.transaction() as c:
+        H.approval_decide(c, appr["decision_owner"], appr["id"], "declined")
+    assert scan_with(api, settings) == [] and finding(api, key)["present"] == 0
+
+
+@pytest.mark.parametrize("release,severity", [("0.0.9", "bad"), ("0.3.40", "warn")])
+def test_a_computer_on_a_release_the_server_cannot_work_with_is_bad(environment, monkeypatch, release, severity):
+    monkeypatch.setenv("TICO_VERSION", "0.3.45")
+    api, runner = built(environment)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runners SET last_seen=? WHERE id=?", (H.now(), runner["runner_id"]))
+        c.execute("INSERT INTO runner_versions(runner_id,release,reported) VALUES(?,?,?) ON CONFLICT(runner_id) "
+                  "DO UPDATE SET release=excluded.release,update_state='',update_error=''",
+                  (runner["runner_id"], release, H.now()))
+        found = {f["check_id"]: f for f in health_monitor.findings(c, api.app.state.store.settings)}
+    assert found["runner_outdated"]["severity"] == severity
 
 
 def test_event_stream_counts_drops_and_not_the_ones_a_server_restart_caused(environment, monkeypatch):
@@ -460,3 +604,55 @@ def test_a_bots_own_key_is_not_the_computers_login(environment):
     turn(api, rid, {**QUOTA, "fallback": "codex"}, 20, bot="pi-a")
     turn(api, rid, {"outcome": "completed", "profile_used": None}, 10, bot="gem-b")
     assert list(login_findings(api)) == [f"default_login_limited:{rid}:codex"]
+
+
+def gateway_choice(api, monkeypatch, runner_id, isolated, enabled=("anthropic",)):
+    """The recommended models choice with the Gateway connected, on a computer that does (or does not) run Gateway work."""
+    from backend import gateway_connection
+    monkeypatch.setattr(gateway_connection, "connected", lambda c, settings=None: True)
+    with api.app.state.store.transaction() as c:
+        providers.save(c, "human:test", {"expected_revision": providers.load(c)["revision"], "enabled": list(enabled),
+                                         "runtime": "claude", "auto_fallback": True, "preset": "subscriptions-gateway"},
+                       H.now())
+        c.execute("UPDATE runners SET readiness_json=? WHERE id=?",
+                  (json.dumps({"schema_version": 1, "isolated": isolated, "runtimes": {}, "bots": {}}), runner_id))
+
+
+@pytest.mark.parametrize("isolated", [True, False])
+def test_a_used_up_login_under_the_gateway_choice_is_one_plain_finding(environment, monkeypatch, isolated):
+    api, runner = built(environment)
+    rid = runner["runner_id"]
+    gateway_choice(api, monkeypatch, rid, isolated)
+    limited(api, config={"runtime": "claude"})
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO assignments(bot,runner_id,generation,updated,updated_by) VALUES(?,?,1,?,'t')",
+                  (SECRET_BOT, rid, H.now()))
+    for ago in (30, 20):
+        turn(api, rid, {**QUOTA, "usage": {"runtime": "claude"}}, ago, bot=SECRET_BOT)
+    with api.app.state.store.read() as c:
+        found = [i for i in health_monitor.findings(c, api.app.state.store.settings)
+                 if i["check_id"] in ("limited_no_fallback", "default_login_limited")]
+    if isolated:
+        # The Gateway takes the turn last: the bot is not stuck, and the login says so in plain words.
+        assert [(i["check_id"], i["title"]) for i in found] == [
+            ("default_login_limited", f"{CANARY}'s Claude login is used up")]
+        assert found[0]["detail"] == f"{CANARY}'s Claude login is used up. Bots are on Tico Gateway until it resets."
+        return
+    # A Mac skips the Gateway row, so the bot is stopped, and that finding says why and what to do.
+    stopped = [i for i in found if i["check_id"] == "limited_no_fallback"]
+    assert [i["title"] for i in stopped] == [f"{SECRET_BOT} stopped: its Claude login is used up"]
+    assert "no computer here can run Tico Gateway work" in stopped[0]["detail"]
+    assert stopped[0]["fix"] == "Sign in another Claude login, or add a Docker runner."
+
+
+def test_the_gateway_row_counts_as_a_fallback_only_under_the_gateway_choices(environment, monkeypatch):
+    api, runner = built(environment)
+    gateway_choice(api, monkeypatch, runner["runner_id"], True)
+    with api.app.state.store.transaction() as c:
+        record = providers.load(c)
+        providers.save(c, "human:test", {"expected_revision": record["revision"], "preset": "subscriptions"}, H.now())
+    limited(api, config={"runtime": "claude"})
+    with api.app.state.store.read() as c:
+        found = [i for i in health_monitor.findings(c, api.app.state.store.settings)
+                 if i["check_id"] == "limited_no_fallback"]
+    assert [i["title"] for i in found] == [f"{SECRET_BOT} stopped on a usage limit and has no fallback model"]

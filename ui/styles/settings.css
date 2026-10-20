@@ -191,8 +191,12 @@ p:empty{display:none}
 .prov{display:flex;align-items:center;flex-wrap:wrap;gap:2px 8px;padding:6px 0;min-height:36px}
 .prov strong{font-weight:600}
 .prov .muted{font-size:var(--t-base);min-width:0}
+.prov-preset .muted{flex-basis:100%;padding-left:24px}
 .prov-routed{gap:6px 14px;padding-top:10px}
 .prov-chip{display:inline-flex;align-items:center;gap:4px;font-size:var(--t-base)}
+/* The Tico AI Gateway connection, below the providers: its own key and Save (ui/app/settings-providers.js). */
+.prov-gateway{margin-top:var(--s5);padding-top:var(--s4);border-top:1px solid var(--line)}
+.prov-gateway-title{display:flex;align-items:center;gap:8px;margin:0 0 4px}
 .settings-bots-filters{display:flex;align-items:center;gap:8px;margin-bottom:10px;min-width:0}
 .settings-bots-filters .settings-inline-select{flex:0 1 auto;min-width:0;max-width:170px}
 .settings-filter-search{flex:1 1 160px;min-width:120px;max-width:280px;padding:7px 10px 7px 32px;font-size:var(--t-sm);border-radius:6px;background-position:10px center}
@@ -279,14 +283,53 @@ p:empty{display:none}
 .needs-you header{display:flex;align-items:center;justify-content:space-between;padding:12px 16px 4px}.needs-you header h2{margin:0;font-size:var(--t-lg)}
 .needs-you [data-list]{padding:0 16px 8px}.needs-you .row{display:flex;gap:8px;align-items:center;padding:0 16px 14px}
 #heartbeat-alert.muted{color:var(--muted)}
-.machine-runtime{display:flex;gap:5px;flex-wrap:wrap}
 .machine-status{display:inline-flex;align-items:center;gap:6px;white-space:nowrap;font-size:var(--t-base)}.machine-status .dot.ok{background:var(--ok)}
-.machine-bots{display:block;min-width:0;color:var(--ink);text-decoration:none}.machine-bots:hover strong{color:var(--accent)}
-.machine-bots .settings-cell-note{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.settings-machines td:nth-child(3){max-width:220px}
+.machine-bots{display:block;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.settings-machines td:first-child{width:1%;white-space:nowrap;padding-right:24px}
+.machine-head{display:flex;align-items:center;gap:10px}
+.machine-head .machine-status{font-size:var(--t-sm);color:var(--muted)}
+.machine-facts{display:block}
+/* Settings > Computers (ui/app/computer-detail.js): one compact row per computer, a chip per AI connection. */
+.settings-machines tbody tr{cursor:pointer}.settings-machines tbody tr:hover{background:var(--surface2)}
+.machine-name{all:unset;cursor:pointer;font-weight:600;color:var(--ink)}.machine-name:hover{color:var(--accent)}.machine-name:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.machine-chips{display:flex;flex-wrap:wrap;gap:4px}
+.machine-chip{display:inline-flex;align-items:center;gap:5px;padding:1px 8px;border:1px solid var(--line);border-radius:999px;background:var(--surface);color:var(--ink);font-size:var(--t-sm);line-height:20px;white-space:nowrap;cursor:pointer}
+.machine-chip.waiting{color:var(--muted);cursor:default;border-style:dashed}
+.machine-chip-bar{width:28px;height:4px}
+.machine-chip-pct{color:var(--muted);font-variant-numeric:tabular-nums}
+.machine-chip-dot{flex:none;width:7px;height:7px;border-radius:50%;background:var(--fail)}
+.machine-chip-add{color:var(--muted);border-style:dashed}.machine-chip-add:hover:not(:disabled){color:var(--accent);border-color:var(--accent)}.machine-chip-add:disabled{cursor:default;opacity:.5}
+/* The computer's pop-up: Connections, Screen, Bots on this computer, Versions and updates, Settings. */
+.computer-detail{width:min(760px,calc(100vw - 32px))}
+.computer-detail-head{display:flex;align-items:flex-start;justify-content:space-between;gap:8px;padding:14px 16px 6px;border-bottom:1px solid var(--line)}
+.computer-detail-head h2{margin:0;font-size:var(--t-lg)}
+.computer-detail-body{padding:4px 16px 16px;overflow:auto;max-height:calc(86vh - 70px)}
+.computer-detail-section{padding:10px 0;border-bottom:1px solid var(--line)}.computer-detail-section:last-child{border-bottom:0}
+.computer-detail-section h3{margin:0 0 6px;font-size:var(--t-label);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase;color:var(--muted)}
+.computer-detail-note{margin:8px 0 0;padding:6px 10px;border-radius:8px;background:var(--wait-bg);color:var(--wait)}
+.computer-detail-empty{display:flex;align-items:center;gap:6px;margin:0 0 6px}
+.computer-detail-facts{margin:0 0 6px}
+.computer-conn{display:grid;gap:3px;padding:8px 0;font-size:var(--t-sm)}.computer-conn+.computer-conn{border-top:1px dashed var(--line)}
+.computer-conn-head{display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-size:var(--t-base)}
+.computer-conn-signin,.computer-conn-tools{display:flex;flex-wrap:wrap;align-items:center;gap:4px 6px;min-width:0}
+.computer-conn-login{display:inline-flex;flex-wrap:wrap;align-items:center;gap:4px;font-size:var(--t-sm);color:var(--muted)}
+.computer-add{display:flex;margin-top:6px;padding-top:8px;border-top:1px solid var(--line)}
+.computer-conn-rename{display:contents}
+.computer-conn-rename summary{list-style:none;cursor:pointer;padding:5px 10px;line-height:20px;color:var(--ink);border:1px solid var(--line);border-radius:var(--r-ctl)}
+.computer-conn-rename summary::-webkit-details-marker{display:none}
+.computer-conn-rename form{order:10;flex-basis:100%;display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.computer-add-where{margin:2px 16px 0;font-size:var(--t-sm)}
+.computer-add-choices{display:grid;gap:6px;padding:0 16px 16px}
+.computer-add-choice{display:grid;gap:2px;justify-items:start;text-align:left;padding:8px 12px}.computer-add-choice .muted{font-size:var(--t-sm)}
+.computer-add-name{display:grid;gap:6px;padding:8px 16px 0}.computer-add-name label{display:grid;gap:4px}.computer-add-name p{margin:0;font-size:var(--t-sm)}
+.computer-add-name .model-login-actions{padding:8px 0 16px}
+.computer-detail-bots{margin:0 0 6px;padding-left:18px;display:grid;gap:2px}
+.computer-detail-check{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px;margin:4px 0}.computer-detail-check .muted{flex-basis:100%;padding-left:22px;font-size:var(--t-sm)}
+.computer-detail-revoke{display:block;margin-top:12px}
 .people-menu-check{display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:5px;font-size:var(--t-base);white-space:nowrap;cursor:pointer}.people-menu-check:hover{background:var(--surface2)}
-.machine-runtime-item{display:inline-flex;flex-wrap:wrap;align-items:center;gap:4px}.machine-rejected{flex-basis:100%;font-size:var(--t-sm)}
+.machine-rejected{flex-basis:100%;font-size:var(--t-sm)}.machine-shared-login{display:block;flex-basis:100%;font-size:var(--t-sm)}
 .machine-signin{padding:1px 8px;font-size:var(--t-sm)}
+.machine-icon-btn{display:inline-flex;align-items:center;justify-content:center;padding:1px 4px;line-height:1}.machine-icon-btn .nav-icon{width:18px;height:18px;font-size:18px;color:inherit}
 .machine-harnesses{display:flex;gap:5px 10px;flex-wrap:wrap;margin-top:6px}
 .machine-harness-item{display:inline-flex;align-items:center;gap:4px;flex-wrap:wrap}
 .machine-harness-item .ghost{padding:1px 8px;font-size:var(--t-sm)}
@@ -316,27 +359,25 @@ p:empty{display:none}
 .machine-command code{display:block;min-width:0;overflow-x:auto;white-space:nowrap;padding:5px 8px;border:1px solid var(--line);border-radius:6px;background:var(--surface2);color:var(--ink)}
 .machine-command .ghost,.machine-login-command .ghost{flex-shrink:0;padding:1px 8px;font-size:var(--t-sm)}
 .machine-login-command{display:inline-flex;align-items:center;gap:4px;max-width:100%;min-width:0}
-.machine-runtime-item{max-width:100%;min-width:0}
 .machine-login-command code{font-size:var(--t-sm);overflow-x:auto;white-space:nowrap;min-width:0;padding:1px 6px;border:1px solid var(--line);border-radius:6px;background:var(--surface2)}
 .machine-signin-link{font-size:var(--t-sm)}
-/* AI tools: one aligned row per tool (name | installed version | enabled | sign-in and account | usage), #610. */
-.machine-tools{display:grid;grid-template-columns:minmax(90px,max-content) minmax(0,110px) max-content minmax(160px,1.4fr) minmax(150px,1fr);column-gap:12px;min-width:0;font-size:var(--t-sm)}
+/* Versions and updates: one aligned row per AI tool (name | installed version | enabled); every header gets its own width. */
+.machine-tools{display:grid;grid-template-columns:minmax(0,1fr) max-content max-content;column-gap:16px;min-width:0;margin:6px 0;font-size:var(--t-sm)}
+.machine-tools-2{grid-template-columns:minmax(0,1fr) max-content}
 .machine-tool{display:contents}
 .machine-tool>[role=cell],.machine-tool>[role=columnheader]{padding:5px 0;border-top:1px solid var(--line);min-width:0;display:flex;flex-wrap:wrap;align-items:flex-start;align-content:flex-start;gap:3px 4px}
 .machine-tool-head>[role=columnheader]{border-top:0;color:var(--muted);font-size:var(--t-xs);text-transform:uppercase;letter-spacing:.04em}
-.machine-tool-profile>[role=cell]{border-top:1px dashed var(--line)}
-.machine-tool-name{font-weight:600}.machine-tool-profile .machine-tool-name{font-weight:400;padding-left:12px;color:var(--muted)}
+.machine-tool-name{font-weight:600}
 .machine-account{overflow-wrap:anywhere;min-width:0}
-.machine-tool-version{display:block!important;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.machine-tool-version{display:block!important;max-width:18ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .machine-usage-line{display:flex;flex-wrap:wrap;align-items:center;gap:0 6px;flex-basis:100%;min-width:0}.machine-usage-line.stale{color:var(--muted)}
 .machine-usage-line .muted{flex-basis:100%;font-size:var(--t-xs)}
 .machine-usage-bar{width:64px;height:8px;flex-shrink:0}
-@media (max-width:900px){.machine-tools{grid-template-columns:1fr 1fr}.machine-tool-head{display:none}.machine-tool>[role=cell]{border-top:0}.machine-tool-name{grid-column:1/-1;border-top:1px solid var(--line)!important}}
 /* Desktop apps: the same rows as AI tools (app | installed version | state and its detail). On a phone the head row
    keeps only its title, so the rows still say they are desktop apps. */
 .machine-apps{grid-template-columns:minmax(90px,max-content) minmax(0,110px) minmax(160px,1fr);margin-top:6px}
 .machine-app-detail{flex-basis:100%;font-size:var(--t-xs);overflow-wrap:anywhere}
-@media (max-width:900px){.machine-apps .machine-tool-head{display:contents}.machine-apps .machine-tool-head>[role=columnheader]{display:none}.machine-apps .machine-tool-head>:first-child{display:flex;grid-column:1/-1}}
+@media (max-width:900px){.machine-apps{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}.machine-apps .machine-tool-name,.machine-apps .machine-tool-signin{grid-column:1/-1}.machine-apps .machine-tool-head{display:contents}.machine-apps .machine-tool-head>[role=columnheader]{display:none}.machine-apps .machine-tool-head>:first-child{display:flex;grid-column:1/-1}}
 .settings-services summary{cursor:pointer;font-weight:600}
 .settings-services-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:6px 14px;margin-top:12px;font-size:var(--t-sm)}
 .settings-team-icon{display:flex;align-items:center;gap:20px;padding:16px 0}
@@ -387,6 +428,29 @@ p:empty{display:none}
 .owner-options{display:grid;grid-template-columns:repeat(auto-fit,minmax(185px,1fr));gap:7px;margin:14px 0 18px}
 .owner-option{display:flex;align-items:center;gap:8px;padding:9px;border:1px solid var(--line);border-radius:7px;cursor:pointer}
 .owner-option:hover{background:var(--surface2)}
+/* Settings > History: Runs | Changes beside the title. Runs is one dense line per run; on a phone, two. */
+#settings-history .card>header{display:flex;align-items:center;justify-content:space-between;gap:12px}
+#settings-history-view[hidden]{display:none}
+.runs-list{display:grid;grid-template-columns:minmax(110px,1fr) auto minmax(0,1.6fr) auto auto auto auto;column-gap:18px;font-size:var(--t-sm)}
+.run-row{display:contents}
+.run-row>*{display:flex;align-items:center;gap:6px;min-width:0;padding:7px 0;border-top:1px solid var(--line);white-space:nowrap}
+.run-head>*{border-top:0;padding-top:0;color:var(--muted);font-size:var(--t-xs);font-weight:600}
+.run-row .chip{max-width:100%;overflow:hidden;text-overflow:ellipsis}
+.run-model,.run-took,.run-cost,.run-when{color:var(--muted)}
+.run-model .mono,.run-why{overflow:hidden;text-overflow:ellipsis}
+.run-tag{font-size:var(--t-xs)}
+.run-took,.run-cost{justify-content:flex-end}
+.run-result>div{display:contents}
+@media (max-width:640px){
+  .runs-list{display:block}
+  .run-row.run-head{display:none}
+  /* Fixed right columns, so Finished, Took, Cost and Log line up from row to row. */
+  .run-row{display:grid;grid-template-columns:auto minmax(0,1fr) 5.5em 4.5em;grid-template-areas:"bot bot when log" "result model took cost";column-gap:10px;padding:8px 0;border-top:1px solid var(--line)}
+  .run-row>*{padding:0;border-top:0}
+  .run-bot{grid-area:bot}.run-when{grid-area:when}.run-log{grid-area:log}.run-result{grid-area:result}
+  .run-model{grid-area:model}.run-took{grid-area:took}.run-cost{grid-area:cost}
+  .run-when,.run-log{justify-content:flex-end}
+}
 .settings-history-row{display:grid;grid-template-columns:28px minmax(0,1fr) auto;gap:10px;align-items:start;padding:10px 0;border-bottom:1px solid var(--line)}
 .settings-history-row:last-child{border-bottom:0}.settings-history-row p{margin:2px 0 0;font-size:var(--t-sm);color:var(--muted)}
 .settings-history-row .history-action{display:flex;gap:6px;align-items:center}.settings-history-row details{grid-column:2/-1;font-size:var(--t-sm)}
@@ -479,40 +543,20 @@ fieldset.brepo>.repo-name+p{margin:-4px 0 4px 24px;font-size:var(--t-xs);line-he
   .brepo-row .repo-name{flex:1 1 160px}
   .brepo-row:has([data-brepo-pick]:not(:checked)) :is(.repo-seg,.brepo-run){display:none}
 }
-/* Subscriptions (ui/app/subscriptions.js): Settings > AI providers lists each computer's subscriptions and their sign-in,
-   the groups' choice and a one-line add; the bot editor has its own choice and the line under Model. */
-.subs-card #set-subs{display:grid;gap:10px}
-.subs-h{margin:0 0 2px;font-size:var(--t-label);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase;color:var(--muted)}
-.subs-pc+.subs-pc{border-top:1px solid var(--line);padding-top:8px}
-.subs-list{list-style:none;margin:0;padding:0}
-.subs-row{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;min-height:30px;padding:2px 0;font-size:var(--t-base)}
-.subs-name{flex:0 0 140px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
-.subs-rt{display:inline-flex;align-items:center;gap:4px}
-.subs-rt .subs-signin{padding:2px 8px;font-size:var(--t-sm)}
-.subs-row .subs-select{width:auto;min-width:160px;max-width:240px;font-size:var(--t-base);padding:3px 6px}
-.subs-add{display:flex;flex-wrap:wrap;gap:6px;align-items:center;border-top:1px solid var(--line);padding-top:10px}
-.subs-add input{flex:1 1 160px;max-width:220px;font-size:var(--t-base);padding:4px 7px}
-.subs-add select{width:auto;font-size:var(--t-base);padding:4px 6px}
-/* Weekly allowance snapshots under AI providers: use the existing compact form styles. */
-.subs-weekly{flex-basis:100%;display:flex;flex-wrap:wrap;align-items:center;gap:4px 10px;padding:4px 0}
-.subs-weekly progress{width:110px;height:8px;accent-color:var(--accent)}
-.subs-weekly-note,.subs-controls{flex-basis:100%;font-size:var(--t-sm)}
+/* Subscriptions (ui/app/subscriptions.js): a connection's controls in the computer's pop-up, and the bot editor's line. */
+.subs-controls{flex-basis:100%;font-size:var(--t-sm)}
 .subs-controls summary{cursor:pointer;color:var(--muted)}
 .subs-controls form{display:flex;flex-wrap:wrap;align-items:end;gap:8px;padding:8px 0}
 .subs-controls label{display:grid;gap:4px;max-width:100%}
 .subs-controls input{max-width:100%;box-sizing:border-box}
 .subs-controls input[type=number]{width:100px}
 .subs-controls form>strong{flex-basis:100%;font-weight:500}
-.subs-account{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:8px 0}.subs-account>strong{flex-basis:100%;font-weight:500}.subs-account>.muted{flex-basis:100%}
-
-.subs-add-msg{font-size:var(--t-sm)}
 .sb-sub{display:flex;flex-wrap:wrap;align-items:center;gap:4px 6px;margin:-4px 0 0 104px;font-size:var(--t-sm);color:var(--muted);min-width:0}
 .sb-sub[hidden]{display:none}
 /* Compact at sits under Model: space it off Model's subscription line, and size it like Model's own selects. */
 .sb-compact{margin-top:8px}.sb-row.sb-compact .settings-inline-select{font-size:16px}
 .sb-sub .pill{font-size:var(--t-xs)}
 @media (max-width:760px){
-  .subs-name{flex-basis:100%}
   .sb-sub{margin-left:0}
 }
 
@@ -540,6 +584,15 @@ fieldset.brepo>.repo-name+p{margin:-4px 0 4px 24px;font-size:var(--t-xs);line-he
 .trigger-deliveries{list-style:none;margin:0;padding:0;font-size:var(--t-sm)}
 .trigger-deliveries li{display:flex;flex-wrap:wrap;gap:6px;align-items:baseline;padding:3px 0}.trigger-deliveries code{overflow-wrap:anywhere}
 @media (max-width:640px){.trigger-list li{grid-template-columns:1fr}.trigger-actions{justify-content:flex-start}}
-/* Settings > Team: a team switch with its explanation beside it (Stale ticket review). */
+/* Settings > General: a team switch with its explanation beside it (Stale ticket review). */
 .settings-team-rule{display:flex;align-items:flex-start;gap:12px;cursor:pointer}
 .settings-team-rule > span{display:flex;flex-direction:column;gap:2px}
+/* The rules share one card on General: room between them. */
+.settings-team-rule ~ .settings-team-rule{margin-top:14px}
+/* Settings > CEO Bot (ui/app/settings-ceo-bot.js): three levels, one sentence each, a Confirm before a change. */
+.ceo-levels{display:grid;gap:8px;margin:10px 0}
+.ceo-level{display:grid;gap:4px;text-align:left;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:none;color:inherit;font:inherit;cursor:pointer}
+.ceo-level span{font-size:var(--t-sm);color:var(--muted)}
+.ceo-level[aria-checked="true"]{border-color:var(--accent)}
+.ceo-confirm{padding:10px 12px;border:1px solid var(--accent);border-radius:8px;margin-bottom:8px}
+.ceo-confirm p{margin:0 0 8px}

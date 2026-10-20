@@ -41,6 +41,33 @@ class Withdrawn(HubCase):
         self.assertEqual(H.approval(self.conn, loose["id"])["decision"], "withdrawn")
         self.assertEqual(sorted(self.pending()), sorted([recut["id"], other["id"], named["id"]]))
 
+    def test_an_approval_records_when_it_was_ready_and_whose_decision_it_is(self):
+        row = H.task_create(self.conn, ANA, "Release", "Cut it.", CMO, lint=False)
+        release = {"url": "https://github.com/acme/site/releases/tag/v1.2.0", "version": "1.2.0", "commit": "a1",
+                   "content_sha256": "a" * 64}
+        appr = H.approval_request(self.conn, CMO, "publish", release, task_id=row["id"])
+        stored = self.conn.execute("SELECT ready_since, decision_owner FROM approvals WHERE id=?", (appr["id"],)).fetchone()
+        self.assertEqual(tuple(stored), (appr["created"], ANA))           # recorded, not only read back
+        self.assertEqual(appr["decision_owner_name"], H.person_name(self.conn, "ana"))
+        self.assertTrue(H.is_release_approval("publish", appr["payload"]))
+        self.assertFalse(H.is_release_approval("publish", {**release, "commit": ""}))
+        # Ready 2 h 10 min ago, as Needs you and the batch read it; then its decision stops the clock.
+        ready = H.shift(H.now(), hours=-2, minutes=-10)
+        self.conn.execute("UPDATE approvals SET ready_since=? WHERE id=?", (ready, appr["id"]))
+        (pending,) = H.needs_you(self.conn, ANA)["approvals"]
+        self.assertEqual(pending["age_s"] // 60, 130)
+        self.assertEqual(H.approval_wait_line(pending), f"Ready 2 h 10 min, waiting on {pending['decision_owner_name']}")
+        decided = H.approval_decide(self.conn, ANA, appr["id"], "approved")
+        self.conn.execute("UPDATE approvals SET decided_at=? WHERE id=?", (H.shift(ready, minutes=30), appr["id"]))
+        self.assertEqual(H.approval(self.conn, appr["id"])["age_s"], 30 * 60)
+        self.assertEqual(decided["decision"], "approved")
+        # A row from before these were recorded reads its request time and the person it was sent to.
+        old = H.approval_request(self.conn, CMO, "merge", MERGE)
+        self.conn.execute("UPDATE approvals SET ready_since=NULL, decision_owner=NULL WHERE id=?", (old["id"],))
+        (legacy,) = H.approvals(self.conn, pending=True)
+        to = H.message(self.conn, old["message_id"])["to_actor"]
+        self.assertEqual((legacy["ready_since"], legacy["decision_owner"]), (old["created"], to))
+
     def test_an_approval_undecided_for_fourteen_days_is_withdrawn_and_may_be_asked_again(self):
         appr = H.approval_request(self.conn, CMO, "merge", MERGE)
         later = H.shift(appr["created"], days=H.APPROVAL_STALE_DAYS, minutes=1)

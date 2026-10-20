@@ -135,13 +135,9 @@ function gsTourEnd() {
 }
 
 window.gsStartTour = gsTourStart;
-// The wizard's last screen: the first look around, once per person.
-window.gsTourAfterSetup = async function () {
-  const seen = await gsRefresh();
-  if (!seen?.tour_seen) gsTourStart();
-};
 window.gsBoot = function () {
-  // Someone who joins later gets the same first look, once, unless the wizard is about to run.
+  // The first look around, once per person, never over the wizard: the owner who just created the team has Show me
+  // around on that screen (ui/app/welcome.js), else gets it on the next visit, like someone who joins later.
   void gsRefresh().then(seen => {
     if (seen && !seen.tour_seen && !S.config?.onboarding_needed && S.route !== '#/welcome') gsTourStart();
   });

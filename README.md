@@ -46,7 +46,7 @@ API key); no GitHub account or outside Tool. [Demo mode](docs/demo.md) does not 
 Success is a draft file on the task, read by a person, and a task you closed. The steps, and what to try next (meeting notes
 with Project Coordinator), are in [Your first result](docs/install.md#your-first-result).
 
-You can choose providers later in **Settings > AI providers**; bots wait with “Add an AI provider” until you do.
+You can choose providers later in **Settings > Computers > Models**; bots wait with “Add an AI provider” until you do.
 Add a domain and sign-in later ([Install](docs/install.md#add-a-domain-and-sign-in-later)).
 
 For a team, on a Linux server (about 2 GB, with a domain pointed at it), run the installer with no flags:
@@ -234,7 +234,8 @@ named team must also carry a permanent id, or the process refuses to start.
 | `TICO_GATEWAY_KEY` or `TICO_GATEWAY_SECRET_ARN`, and `TICO_GATEWAY_URL` | The Tico AI Gateway key behind `hub_decision_ask` / `POST /api/v2/decisions` and the Slack gateway: Decide asks the Gateway first, as Tico Decide 1.0, in one try of at most 8 seconds. The URL defaults to Tico HQ's (`<TICO_HQ_URL>/v1/gateway/decisions`). When the Gateway is not set up, is down or refuses the key, the server asks the next provider below; all of them together answer within 25 seconds | |
 | `TICO_TYPESAFE_SECRET_ARN` or `TYPESAFE_API_KEY` | Optional: your own key for TypeSafe's Jev, asked after the Gateway, behind `hub_decision_ask` / `POST /api/v2/decisions` and the Slack gateway (`skills/decisions/SKILL.md`, `questions/README.md`), which is also what checks a message bot's mail for spam and injection. Not set by default and not needed. Without it, or when it fails, the server asks the team's own model provider, using `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `XAI_API_KEY` or `OPENROUTER_API_KEY` from `.env` (`compose.yaml` hands these to the server); with none of them the route answers 503. The `judge.call` audit events and `TYPESAFE_*` names are unchanged | |
 | `TICO_UPDATE_CHECK`, `TICO_RELEASES_URL`, `TICO_VERSION`, `TICO_UPDATER_URL`, `TICO_UPDATER_TOKEN` | The "New version" notice and owner-only "Update now"; `TICO_UPDATE_CHECK=off` disables it. See [docs/releasing.md](docs/releasing.md) | |
-| `TICO_TELEMETRY`, `DO_NOT_TRACK`, `TICO_TELEMETRY_DEBUG`, `TICO_HQ_URL` | The anonymous usage count: `TICO_TELEMETRY=off` or `DO_NOT_TRACK=1` (or Settings > Privacy) turns it off, `TICO_TELEMETRY_DEBUG=1` prints what would be sent and sends nothing. See [PRIVACY.md](PRIVACY.md) | |
+| `TICO_TELEMETRY`, `DO_NOT_TRACK`, `TICO_TELEMETRY_DEBUG`, `TICO_HQ_URL` | The anonymous usage count: `TICO_TELEMETRY=off` or `DO_NOT_TRACK=1` (or Settings > General) turns it off, `TICO_TELEMETRY_DEBUG=1` prints what would be sent and sends nothing. See [PRIVACY.md](PRIVACY.md) | |
+| `TICO_HQ_STAFF_READ_KEY` | For the Tico team's own server only: Tico HQ's read-only staff key. With it, the server reads HQ's nightly billing check every hour and the owner's Health page shows each billing mismatch (the company's install id and the difference in dollars), and a check that missed a night or cannot be read, in red. Read-only; unset, nothing is sent | |
 | `TICO_RELEASE`, `TICO_OBSERVABILITY_*`, `TICO_POSTHOG_*`, `TICO_SENTRY_*` | Optional release id and telemetry. Empty disables all of it | |
 
 Sign-in for a hosted server is either built in (`TICO_AUTH_PROXY=oidc`: Google, Microsoft Entra ID
@@ -353,7 +354,7 @@ and accounts out of the repository: examples use the fictional team Acme (`acme.
 
 ## Privacy
 
-Tico counts active installs anonymously: a random ID, the version and three yes/no activity flags, sent with the update check. Turn it off in Settings > Privacy, with `TICO_TELEMETRY=off` or with `DO_NOT_TRACK=1`. Exactly what is sent, and what is kept: [PRIVACY.md](PRIVACY.md).
+Tico counts active installs anonymously: a random ID, the version and three yes/no activity flags, sent with the update check. Turn it off in Settings > General, with `TICO_TELEMETRY=off` or with `DO_NOT_TRACK=1`. Exactly what is sent, and what is kept: [PRIVACY.md](PRIVACY.md).
 
 ## Your own deployment
 
@@ -362,11 +363,11 @@ registry directory (`TICO_REGISTRY_DIR`) and in bot repositories outside this on
 is the product. `templates/environment-registry/` shows the shape of the registry.
 
 Tasks support [tags with metadata, Markdown checklists and templates](docs/using-tico.md#tags-and-release-checklists).
-Open **Settings > Tags** or use `hub tag list|show|create|update`. Existing `--label` and
+Open **Settings > Tasks** (under **Task tags**) or use `hub tag list|show|create|update`. Existing `--label` and
 `hub_task_label` calls keep using tag keys.
 
 ## Task pipelines
 
-Tasks start on General. Movers can add types and named steps in Settings → Types, then select a
+Tasks start on General. Movers can add types and named steps in Settings → Tasks, then select a
 type on the board to use its steps as columns. Bots and existing scripts keep using task statuses.
 See [Task types and steps](docs/tasks.md) for the UI, CLI, MCP and API.

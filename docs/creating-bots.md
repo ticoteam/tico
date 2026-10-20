@@ -44,8 +44,6 @@ New bots start with their own repository unless the team selected all ticked rep
 
 ## Subscribe to updates
 
-> **Unreleased**: this setting is on `main` and not in a published release yet.
-
 A bot can hear about changes that may matter to it, as information only. In the bot editor (**Settings → Bots →
 Edit**, or **Bot settings** on the bot's Setup card), under **Subscribe to updates**, people who manage the bot tick
 either, both or neither:
@@ -277,7 +275,7 @@ Every run is the same shape, and `AGENT.md` should say so plainly:
 3. **Check `memory/learnings.md` and the playbook the task names** before touching anything.
 4. **Do the work**, updating `knowledge/` as it learns rather than at the end.
 5. **Report in the task conversation.** The result goes in the task's completion note, first line
-   first. Put the ask first and stay under 120 words. The lint checks that the first line is not empty; it does not judge its meaning.
+   first. A chart or a mockup can go with the comment as a titled [visual](visuals.md); every bot's instructions already say when to add one ([When a bot adds a visual](visuals.md#when-a-bot-adds-a-visual)), so `AGENT.md` needn't. Put the ask first and stay under 120 words. The lint checks that the first line is not empty; it does not judge its meaning.
 6. **When blocked, ask through the task**, having read the record first, since most questions a bot
    wants to ask are already answered there. One open clarifying question per task, phrased so the
    question is the only thing the human has to read. Internal routing, reminders, task closure,
@@ -584,7 +582,8 @@ Levers set in **Settings → Bots**, not in the repository:
 - **Harness**: which CLI performs the run (`openai` / Codex, `claude`, `gemini`, `antigravity`,
   `grok`, `cursor` / Cursor Agent, `musecode` / Muse Code, `pi`). A harness whose provider is off still
   shows in the picker, greyed out, with where to turn it on. **Model**: the latest model in that family (Sol, Astra, Grok 4.6, Gemini Flash,
-  Claude Opus 5, Claude Fable 5.1). Search the picker: `grok` shows `grok/grok 4.6` at every
+  Claude Opus 5, Claude Fable 5.1). While the [Tico AI Gateway](ai-gateway.md) is connected, `pi` also offers
+  Tico Cheap, Mid and Power 1.0, each listed with what runs underneath. Search the picker: `grok` shows `grok/grok 4.6` at every
   effort; `sol` shows `openai/gpt 5.6 sol`. The same levers set the built-in BotOps bot: it may
   run on any harness and model here, limited in practice to the providers the company enabled
   and what its computer is signed in to.
@@ -593,10 +592,14 @@ Levers set in **Settings → Bots**, not in the repository:
   the runtime refused). **None (fail)** is the default. A pick is saved with **Apply** next to it or with
   **Save bot** ([harnesses.md](harnesses.md#choosing-a-harness-model-and-effort)). The hop starts a fresh session. OpenRouter
   is not a bot harness. With none set, a usage limit still moves the turn to another provider signed in on
-  the bot's computer unless the owner turned that off in **Settings → AI providers** (docs/how-it-works.md).
+  the bot's computer unless the owner turned that off in **Settings → Computers → Models** (docs/how-it-works.md).
+- **Connection**: the login the bot runs on: **Computer's login** (the default) or one of the subscriptions on its
+  computer, listed first, then those on other computers. A line under **Model** says "Runs on *tool* · *connection* on
+  *computer*". The bot's computer operator, owners and admins choose it; groups no longer give their bots one
+  ([Computers](computers.md#which-connection-a-bot-runs-on)).
 - **Compact at**: how full the bot's conversation gets before it is compacted: 150k, 250k tokens (the default),
   400k, 600k or 1M. Claude Code and Codex only. Changing it keeps the session.
-- **Wakes** (Coming soon): how soon news starts a run. **Token saver**, the default for a new bot, holds
+- **Wakes**: how soon news starts a run. **Token saver**, the default for a new bot, holds
   nonblocking news (a request it asked for finished, review comments, a failing check nobody waits on) and
   sends it as one wake at most every 30 minutes. It also runs an enabled routine, or a stall check on a task,
   at most every 2 hours. **Performance** coalesces the same news for 1 minute and runs those sweeps at most
@@ -721,7 +724,7 @@ is supplied. Leave `slug` out: Tico picks a free one from `name` (else the templ
 reserved slugs, and returns it. Restore an archived bot only when asked.
 Use `build: false` to register only the record,
 for example when building it yourself on a Computer. BotOps defaults to record-only registration.
-An empty model in Add from template also inherits the Team default; choose one in Settings > AI providers
+An empty model in Add from template also inherits the Team default; choose one in Settings > Computers > Models
 if none is saved. `hub_template_list` includes Setup questions, first-routine output and draft-only status,
 and the example result. Unknown templates are refused before creating a record. To correct an existing
 record, update its `template` through the definition API or `hub_bot_update`; this changes metadata,
@@ -753,4 +756,4 @@ See [Tags and release checklists](using-tico.md#tags-and-release-checklists).
 A bot can keep using task statuses with any task type. Tico maps each status change to the type's
 matching step, or shows the plain status when no step matches. `hub task types` lists definitions;
 `hub task update <id> --step "Legal review"` chooses a named step explicitly. Types are optional,
-managed by movers in Settings → Types. See [Task types and steps](tasks.md).
+managed by movers in Settings → Tasks. See [Task types and steps](tasks.md).

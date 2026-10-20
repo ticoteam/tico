@@ -67,7 +67,7 @@ maintained, replacing the catch-all is a manifest and a host adapter, described 
 
 ## How providers map to harnesses
 
-The owner enables providers in **Settings > AI providers** (`backend/providers.py`). Each provider names its runtime
+The owner enables providers in **Settings > Computers > Models** (`backend/providers.py`). Each provider names its runtime
 (the host adapter) and its harness (the manifest). Enabling a provider offers its models; it does not install
 anything. Each computer installs only:
 
@@ -81,6 +81,44 @@ A runner whose team has no provider yet installs nothing and still joins and goe
 A model with no CLI of its own has a row in `MODEL_CATALOG` with `runtime: "pi"` and an entry in
 `runner-rs/src/hosts/pi.rs` `MODELS` that gives its OpenRouter id (for example `kimi-k3` is `moonshotai/kimi-k3`). Enabling
 the `openrouter` provider offers every such model; enabling one vendor offers that vendor's models only.
+
+### The Tico AI Gateway
+
+Tico Cheap, Mid and Power 1.0 (`tico-cheap-1.0`, `tico-mid-1.0`, `tico-power-1.0`; Claude Haiku, Sonnet and Opus 5.5
+underneath) run on pi through Tico's own Gateway, not OpenRouter. Their provider, `tico`, is never ticked: it is on
+exactly while the **Tico AI Gateway** connection in Settings > Computers > Models has a key (`backend/gateway_connection.py`),
+and OpenRouter's catch-all does not offer them. The key is the one Decide uses; the server's `TICO_GATEWAY_KEY` and
+`TICO_GATEWAY_URL` win over a saved one and show as connected. A saved key is sealed and never read back, only a
+preview of its first and last three characters. What the owner sees and does is in [Tico AI Gateway](ai-gateway.md).
+
+No bot gets the key. For a bot on a Tico model, or whose own fallback is one, the runner fetches it
+(`GET /api/v2/runner-gateway-credentials`, runner only) and starts a relay on 127.0.0.1 for that turn
+(`runner-rs/src/gateway_relay.rs`); the turn gets the relay's URL and a token good for that turn's model calls only, as
+`TICOAI_GATEWAY_URL` and `TICOAI_GATEWAY_KEY`. pi reads them through a `tico` provider in the turn's own `models.json`
+(OpenAI chat completions, streamed), in a directory removed when the turn ends. A runner hands out the key only when
+it runs bot code as another user (Tico's Docker runner); elsewhere a Tico model's turn is refused once
+(`not_isolated`, not retried) and a Tico fallback is left out. The server reads the Gateway's word on the key
+(`<gateway>/key`) on save, on **Check now**, hourly, and when an owner opens the page (at most once a minute, since
+the Gateway answers that six times a minute per key): the owner sees the 80% warning, **Gateway cap reached** and a
+key the Gateway doesn't recognise (revoked or unknown, one plain message) in Settings and Health. A Gateway that
+answers 404 (no chat endpoint yet, or a wrong URL) shows as **Not ready**.
+
+The Gateway names every refusal with a code, the same on every endpoint (`error.code`, or a flat `error` from
+decisions). pi's own retry is off for Tico models, so the server decides what happens next from the code, for a Tico model the bot runs on or names as its own fallback (an automatic fallback is never a Tico model). pi sends the bot's effort as `reasoning_effort`, its `max` as the Gateway's `xhigh`:
+
+| Code | What the bot says | The run |
+|---|---|---|
+| `cap_reached` | Gateway cap reached | Waits until the next UTC month, whatever Retry-After says |
+| `revoked_key`, `unknown_key` | The Tico AI Gateway key is not working | Waits for a new key |
+| `rate_limited` | Tico AI Gateway rate limited | Waits the Gateway's Retry-After (an hour), never sooner |
+| `unknown_model` | The Gateway doesn't offer this model, and the three it does | Saved for later, not retried |
+| `unsupported_field`, `bad_request`, `upstream_refused` | Refused as sent, with the Gateway's message | Saved for later, not retried |
+| `no_route` | No Tico route for this request | Saved for later, not retried |
+| 404 | The Gateway doesn't serve Tico models at its URL yet | Saved for later, not retried |
+| `upstream_unavailable` | Tico AI Gateway is unavailable, try again | Back in the queue if nothing ran, at most twice, the bot waiting 1 then 2 minutes first; then saved for later |
+
+A reply the Gateway cuts off after it began streaming is posted as far as it got, with a note saying the Gateway cut
+it off. Only codes are logged, never the key.
 
 ## Choosing a harness, model and effort
 
@@ -291,9 +329,11 @@ some of `files`, and `logout` needs `files`. `keychain` lists the platforms wher
 | `sign_in_status` | How readiness checks the sign-in: `check` = `command` (`args`, `ready`, `not_ready` text), `json` (`args`, `field`, `method_field`), `file` (the host's login file), `bot-key` (each bot's key grant) or `none`; `ready_detail`, `missing_detail`, `timeout_s` | `none`: reported as `unknown` |
 | `api_keys` | Who holds `auth.api_key_env`: `computer` (one key signs every bot in; the company can give it to every computer) or `bot` (each bot's own Credential, the first name) | Keys are not wired by Tico |
 | `api_key_login` | The command that turns a computer's key into a stored login (key on stdin) | The key in the environment is the sign-in |
+| `api_key_check` | A command that asks the provider about the key in its environment, run in an empty home so no other login answers; it passes on exit 0 with no `"is_error": true` in its JSON. Switch to API key checks a key with it (or with `api_key_login`) before the subscription is signed out | Switch to API key is offered only with this or `api_key_login` |
 | `api_key_in_turn` | The computer's key is put in each turn's environment, which is the only place the CLI reads it, and wins over a stored login | Not put there |
 | `subscription_marker` | Text in the sign-in detail that means a plan, so turns bill as `subscription` | Every turn bills as `api` |
 | `subscription_profiles` | Runs on a named subscription's own login (`profile_home` is the variable pointed at the profile's folder; `profile_dirs` are made inside it) | Not covered by subscriptions |
+| `profile_home_overrides` | Variables the CLI reads ahead of `profile_home`; a profile's sign-in, sign-in check and runs never inherit them | Nothing dropped |
 | `own_config_home` | Bot runs use a config folder of Tico's own, never the operator's | The operator's (or the profile's) home |
 | `weekly_usage` | `refresh` (turns report it, and it can be refreshed on demand), `turns`, or `manual` (only a person's reading) | No weekly usage |
 | `account` | Where the signed-in account (email, plan, organization) is read: `status-json` (the `sign_in_status` JSON's `email`, `subscriptionType`, `orgName`) or `app-server` (Codex app-server `account/read`, never with a token refresh). Credential files are never read | Account shown as unavailable |
@@ -304,6 +344,7 @@ some of `files`, and `logout` needs `files`. `keychain` lists the platforms wher
 | `persistent_session` | One process per conversation is kept between turns | One process per turn |
 | `goal_runs_across_turns` | A native goal keeps the thread going after a turn completes, and a clear is reconciled | A goal ends with its turn |
 | `serial_cold_start` | An expired stored token is refreshed by the first turn; the others wait for it | Turns start together |
+| `one_turn_per_login` | A subscription login (its `subscription_marker` in the sign-in detail) runs one turn at a time on the computer: another bot's turn on it waits, or runs on its fallback. A key login is not held | Turns on one login run together |
 | `compaction` | The bot's Compact at setting applies | Setting hidden |
 | `resume_command` | The local command that resumes a session (the id follows) | `<executable> --resume` |
 | `model_list` | `host`: the host adapter lists the models in readiness; `command`: the CLI lists them (`model_list_args`) | No model list |

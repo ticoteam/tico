@@ -16,6 +16,34 @@ browser -> caddy (HTTPS) or cloudflared --> server :8765 (data volume)
                     Mac (native) and Linux runners join from anywhere over https://<your domain>
 ```
 
+## Recommended setup
+
+The quick start below with the recommended choices already made: a **sample company** (Sample Co: the Assistant and
+four role bots with short starter tasks), models on **your Claude and ChatGPT subscriptions, plus Tico Gateway**, **Tico
+Support on**, and a computer on this server that runs the bots (a Docker runner on the server's network, named *Server
+computer*). There is no domain, DNS or sign-in provider to set up:
+
+```
+curl -fsSL https://github.com/ticoteam/tico/releases/latest/download/install.sh -o install.sh && sh install.sh --recommended --owner-email you@example.com
+```
+
+Run on a terminal with no options, the installer asks which setup you want and offers this one first (press Enter); with
+any option, or piped without a terminal, it asks nothing and installs as before. It
+prints the owner sign-in link, as the quick start does. What is left is one step: open the link, then **Settings >
+Computers > Server computer > Sign in**, to Claude and to ChatGPT.
+
+- `--support off` turns Tico Support off (`TICO_SUPPORT=off`: the **?** chat sends nothing; [PRIVACY.md](../PRIVACY.md)).
+  With Support on, its tickets are tied to this install. On an installed Tico, `sh install.sh --local --support off`
+  (or `on`) saves the switch and restarts; every other setting stays as it is.
+- The Gateway is enrolled from an invite whoever runs the install puts in the environment, `TICO_GATEWAY_INVITE`; you
+  never type it, and the installer never prints it. With one, the Gateway connects on Tico's first start; without one
+  the install still runs, on your subscriptions, and says the Gateway is not set up.
+- If the server computer cannot start, Tico keeps running and the installer says how to add it from **Settings >
+  Computers > Add computer**.
+- It writes `TICO_INSTALL_PRESET=recommended`, `TICO_SAMPLE_COMPANY=on`, `TICO_MODELS_PRESET=subscriptions-gateway` and
+  `TICO_SUPPORT` into `.env`; the server reads them on its first start. Every other choice below (the quick start, your own
+  domain with Google, Microsoft or Cloudflare Access, your own API keys) installs as before.
+
 ## Quick start on your own computer
 
 Nothing to set up first: no domain, no DNS, no sign-in provider. Tico runs on this computer only, at
@@ -40,7 +68,10 @@ Recover the token any time with `docker compose exec server cat /data/local-owne
 Open the link in your browser: the app opens on **Finish setup**. Then:
 
 1. **Choose AI providers** (optional): leave them all unticked to do it later. Bots need one to run; until then each bot says
-   "Add an AI provider", and Settings > AI providers adds it.
+   "Add an AI provider", and Settings > Computers > Models adds it. With a gateway key from Tico, the
+   [Tico AI Gateway](ai-gateway.md) card there adds Tico Cheap, Mid and Power 1.0. The step starts with how bots get
+   their models; **Your Claude and ChatGPT subscriptions, plus Tico Gateway** is recommended
+   ([the four choices](ai-gateway.md#choose-how-bots-get-their-models)).
 2. **Name the team**, say what it does, and pick its groups. A few bots are suggested for each group. For the first result
    below, pick **Marketing** and keep **Content Marketer** (`content`) checked; untick the other suggestions if you want only it.
 3. **Add computer**: choose *A Linux or cloud server (Docker)*, press **Add computer**, and run the line it shows on this computer.
@@ -50,7 +81,7 @@ Open the link in your browser: the app opens on **Finish setup**. Then:
 5. **Sign in to a model.** In **Settings > Computers**, wait for the selected harness to be installed, then press **Sign in**
    beside Codex or Claude Code. Open the provider link and enter its device code, or paste the returned code into Tico when asked.
    Wait for the computer's model sign-in to show **ready**. Other harnesses use their own terminal sign-in; API credentials and
-   profiles are explained in [Harnesses](harnesses.md). Pick a provider in **Settings > AI providers** if you skipped it,
+   profiles are explained in [Harnesses](harnesses.md). Pick a provider in **Settings > Computers > Models** if you skipped it,
    then choose the starter's model in **Settings > Bots**.
 
 ### Your first result
@@ -101,7 +132,7 @@ Paste this into its Setup chat (or replace it with your own facts):
 ### First-result recovery
 
 - **Add an AI provider**: when chat says "Saved — no AI provider is chosen", use its **Add an AI provider** link
-  to open **Settings > AI providers**, then select the bot's model in **Settings > Bots**. Your message stays saved.
+  to open **Settings > Computers > Models**, then select the bot's model in **Settings > Bots**. Your message stays saved.
 - **Offline** or **Missing bot repository or AGENT.md**: check **Settings > Computers** and keep the joined computer running;
   [Setup troubleshooting](onboarding.md#troubleshooting) explains repository and placement failures.
 - **Sign-in rejected**: Health names the credential source when the computer reports it. Replace a shared model key in
@@ -245,7 +276,7 @@ Then it shows the plan and asks "Go ahead?". `--dry-run` prints the plan and cha
 
 ```
 $ python3 -m setup --dry-run --non-interactive --target local --front-door caddy --domain tico.example.com \
-    --server-ip 203.0.113.7 --auth google --client-id 1234-abc.apps.googleusercontent.com --team-name Acme --owner-email you@example.com
+    --server-ip 203.0.113.7 --auth google --client-id 1234-abc.apps.googleusercontent.com --company Acme --owner-email you@example.com
 tico setup (dry run: nothing will be created or changed)
 Sign-in: create a Google OAuth client at https://console.cloud.google.com/auth/clients/create
   with redirect URI exactly https://tico.example.com/auth/callback
@@ -300,12 +331,12 @@ they never appear in a process list:
 
 ```
 TICO_OIDC_CLIENT_SECRET=... sh install.sh --yes --version vX.Y.Z -- --domain tico.example.com --front-door caddy \
-  --server-ip 203.0.113.7 --auth google --client-id 1234-abc.apps.googleusercontent.com --team-name Acme \
+  --server-ip 203.0.113.7 --auth google --client-id 1234-abc.apps.googleusercontent.com --company Acme \
   --owner-email you@example.com --backup local
 ```
 
 Flags: `--domain`, `--front-door caddy|cloudflared`, `--server-ip`, `--tico-version`, `--auth google|microsoft|cloudflare`,
-`--tenant`, `--client-id`, `--allowed-domain`, `--team-name` (`--company` remains an alias), `--owner-email`, `--decisions-provider` (the old `--judge-provider` still works), `--backup`,
+`--tenant`, `--client-id`, `--allowed-domain`, `--company` (the team name), `--owner-email`, `--decisions-provider` (the old `--judge-provider` still works), `--backup`,
 `--backup-url`, `--backup-endpoint`, `--backup-region`, `--no-updater`, `--dns-timeout MINUTES`, `--skip-dns-wait`.
 Credentials: `TICO_OIDC_CLIENT_SECRET`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_TUNNEL_TOKEN`, `OPENAI_API_KEY` (or
 `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`). `python3 -m setup --help` lists all of them.
@@ -322,8 +353,9 @@ life of the server: use a client secret you can rotate. Progress is in `/var/log
 
 | `TICO_AUTH_PROXY` | Also set | Use |
 |---|---|---|
-| `oidc` | `TICO_OIDC_ISSUER`, `TICO_OIDC_CLIENT_ID`, `TICO_OIDC_CLIENT_SECRET`; optionally `TICO_OIDC_ALLOWED_DOMAINS` (comma-separated, such as `acme.com`) | Google, Okta, Microsoft Entra or any OpenID Connect provider. Register `https://<TICO_DOMAIN>/auth/callback` as the redirect URI with the provider. |
+| `oidc` | `TICO_OIDC_ISSUER`, `TICO_OIDC_CLIENT_ID`, `TICO_OIDC_CLIENT_SECRET`; optionally `TICO_OIDC_ALLOWED_DOMAINS` (comma-separated, such as `acme.com`) and `TICO_OIDC_LABEL` (the provider's name: a signed-out browser then gets a page with one "Sign in with <label>" button instead of going straight to the provider) | Google, Okta, Microsoft Entra or any OpenID Connect provider. Register `https://<TICO_DOMAIN>/auth/callback` as the redirect URI with the provider. The setup wizard's `--auth oidc --issuer <url> --client-id <id>` takes any issuer, with the secret from `TICO_OIDC_CLIENT_SECRET` in the environment and `--signin-label` for the button. On a server Tico hosts (`--hosted`), the owner sign-in link below stays as break-glass beside it (`TICO_OWNER_LINK_HASH`): it never calls the issuer, so the owner gets in while the issuer is down, and people already signed in stay signed in. |
 | `cloudflare` | `TICO_ACCESS_ISSUER`, `TICO_ACCESS_AUDIENCE` | Cloudflare Access in front of the tunnel |
+| `owner-link` | `TICO_HOSTED` (`own` or `invited`), `TICO_OWNER_EMAIL`; `TICO_OWNER_LINK_HASH` for the first link | Only for a server Tico hosts, on an https domain name (the server refuses to start on an IP address). The owner signs in once with a link our team sends (`/auth/owner-link#<secret>`): it works once, and for a week at most. The setup wizard writes it with `--hosted own|invited --hosted-zone <zone>` (the domain must be under that zone) to a 0600 file and never prints it; `python3 -m setup owner-link --domain <domain> [--sign-out]` makes a new one, the old unused one stops working, and `--sign-out` also ends the owner's sessions. `--preset recommended` adds the [recommended setup](#recommended-setup)'s choices and the server's own computer; the Gateway invite comes from `TICO_GATEWAY_INVITE` on each run and goes only to the server, never into setup's saved copy of the `.env`. |
 | unset (or `none`) | nothing; leave `TICO_DOMAIN` unset | The quick start. The server answers on `http://127.0.0.1:8765` and the owner signs in with the token from `docker compose exec server cat /data/local-owner.token` (`Authorization: Bearer <token>`, or `GET /api/v2/local-signin?token=...`). With `TICO_DOMAIN` set, the server refuses to start. |
 
 The owner is the first human on the roster; add the others in the app. The wizard writes these settings; to change
@@ -357,6 +389,15 @@ No open ports, and Cloudflare Access can do the sign-in. The wizard creates the 
    `runner.<domain>`, or `tico-runner.example.com` for `tico.example.com`, which Cloudflare's universal certificate covers;
    `none` to skip): its route for `/api/v2` and `/download` only, its DNS record, and `TICO_RUNNER_URL`, so computers and
    external agents connect without a bypass. Keep that hostname out of the Access application; `setup doctor` checks it.
+   When `TICO_VISUAL_ORIGIN` names a separate HTTPS site for inline visuals, the generated config also routes that
+   hostname to the same server, for `^/visuals/` only, on every start. Add its proxied CNAME to the same tunnel,
+   bypass caching for that hostname, and keep it out of Access. A malformed origin, or the app or runner hostname, is
+   never written: the server logs a warning naming the reason (`tico: warning: TICO_VISUAL_ORIGIN ...`), writes the
+   config without the visuals route and starts as usual. The one exception is the app's own address (the same origin
+   as `TICO_PUBLIC_URL`): the server refuses to start with that. Dashboard-managed tunnels need this path-limited
+   route added in Cloudflare instead ([Visuals in replies](visuals.md)).
+   cloudflared reads this config only when it starts, so after changing `TICO_VISUAL_ORIGIN`, `TICO_DOMAIN` or
+   `TICO_RUNNER_URL` in `.env` alone, restart it once the server is healthy: `docker compose restart cloudflared`.
 3. Create an Access application for the hostname with your identity provider and a policy for your humans.
    Note the team URL (`https://<team>.cloudflareaccess.com`) and the application's Audience tag. Any identity
    provider Access offers works with the desktop app too (Google, Microsoft Entra, Okta, GitHub, a one-time PIN): the
@@ -365,12 +406,16 @@ No open ports, and Cloudflare Access can do the sign-in. The wizard creates the 
    `TICO_AUTH_PROXY=cloudflare`, `TICO_ACCESS_ISSUER=<team URL>`, `TICO_ACCESS_AUDIENCE=<AUD tag>`.
 5. `docker compose up -d`
 
-**How long a sign-in lasts.** The Access application's Session Duration (24 hours unless you change it) decides how
-often people sign in again; behind Access, Tico keeps no session of its own. When it ends, Cloudflare sends the app's next
+**How long a sign-in lasts.** Cloudflare Access controls when people must sign in again; behind Access, Tico has no
+sign-in timeout of its own. The Access application's session duration (24 hours unless you change it) sets how long its
+session lasts, and a policy's own session duration overrides it. When that session ends, Cloudflare sends the app's next
 request to its login page, which a page cannot follow in the background, and Cloudflare offers no way to renew the
 session from the page. Tico then stops reconnecting and shows "You've been signed out" with **Sign in again**: Access's
-login opens in the same window, and afterwards the page comes back where it was, with any text typed in an open box. The
-desktop app's Dock badge shows "!" until then. To sign in less often, lengthen the Session Duration.
+login opens in the same window, and afterwards the page comes back where it was, with any text typed in an open box.
+While the global Access session (also 24 hours by default) is still valid, that login goes straight through without
+asking your identity provider again. The desktop app's Dock badge shows "!" until then. To see the signed-out screen
+less often, lengthen the application's session duration (and the policy's, if it sets one); to be asked by your identity
+provider less often, lengthen the global session duration in Zero Trust settings.
 
 **Which route wins.** cloudflared prefers the configuration Cloudflare holds for the tunnel. A tunnel you created in the
 dashboard, or that setup created through the API, is remotely managed and keeps the **Public Hostname** route you set
@@ -433,16 +478,16 @@ A subscription login (a ChatGPT or Claude plan) cannot be copied. If that is how
 "*computer name*: sign in to Codex" (or Claude Code) for each new computer that needs it. Sign it in from Settings > Computers, or ask
 BotOps to start it, then finish the sign-in in your browser.
 
-To change the account a computer uses, choose **Switch account** next to it in Settings > Computers: the new account is
+To change the account a computer uses, open it in Settings > Computers and choose **Switch account** on its connection: the new account is
 signed in on the side, and the old one keeps working until that finishes (or if you cancel). **Sign out** names the bots
 that stop first; they wait until someone signs in again. A computer you signed out is not signed back in by the model key
-given to every computer until you sign in or choose **Use the shared key**. See [subscriptions](subscriptions.md#signing-out-and-switching-accounts).
+given to every computer until you sign in or choose **Use the shared key**. See [Computers](computers.md#signing-out-and-switching-accounts).
 
-A computer can also run on a model API key of its own, with no terminal: **Add key** (or **Replace key**) next to it in
+A computer can also run on a model API key of its own, with no terminal: **Add key** (or **Replace key**) on its connection in
 Settings > Computers keeps the key in Tico's credential vault for that computer alone, and the computer checks it before
 the old one goes. **Clear key** names the bots that stop, then takes the key off the computer. For the key given to every
 computer, both ask whether to change **this computer only** or **all of them**; an offline computer clears its copy when
-it is next online. See [subscriptions](subscriptions.md#api-keys-on-a-computer).
+it is next online. See [Computers](computers.md#api-keys-on-a-computer).
 
 ### Linux or cloud server (Docker)
 
@@ -531,7 +576,7 @@ image still starts on the migrated volume and reads its own files; the bots then
 the next update. Use `docker exec -u bot` for what a bot should
 own (model logins). Legacy secret files stay with the runner supervisor; bots receive granted Credentials.
 
-The image holds no model CLI. Once your team has enabled a provider (Settings > AI providers), the runner installs
+The image holds no model CLI. Once your team has enabled a provider (Settings > Computers > Models), the runner installs
 that provider's CLI into `/home/runner/tools` in the volume (a minute or two; Settings > Computers shows the progress),
 keeps it current between runs, and lets the owner pin a version. See [harnesses](harnesses.md).
 

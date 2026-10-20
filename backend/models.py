@@ -50,6 +50,15 @@ class ConversationCreate(Contract):
     subject: str = Field(default="", max_length=300)
 
 
+class VisualRef(Contract):
+    """A file version attached to a message with the title it shows under (backend/visuals.py)."""
+    ref: Annotated[StrictStr, Field(pattern=r"^[^@]+@[1-9][0-9]*$")]
+    title: Annotated[StrictStr, Field(max_length=200)] = ""
+
+
+Attachment = Annotated[StrictStr, Field(pattern=r"^[^@]+@[1-9][0-9]*$")] | VisualRef
+
+
 class MessageCreate(Contract):
     command: bool = False
     to: ID
@@ -59,12 +68,19 @@ class MessageCreate(Contract):
     refs: dict = Field(default_factory=dict)
     in_reply_to: ID | None = None
     wait_s: int | None = Field(default=None, ge=0, le=300)
+    # Versions of files in this conversation, shown with the message (backend/visuals.py), in this order.
+    attachments: list[Attachment] = Field(default_factory=list, max_length=10)
+    # A bot's message to a bot waits for that bot's next run unless it needs action now (backend/bot_to_bot.py).
+    needs_action: bool = False
 
 
 class ChatCreate(Contract):
     command: bool = False
     text: Text
     refs: dict = Field(default_factory=dict)
+    attachments: list[Attachment] = Field(default_factory=list, max_length=10)
+    # With files uploaded alongside (POST /api/v2/uploads/chat/{bot}): each one's caption, in upload order.
+    titles: list[Annotated[StrictStr, Field(max_length=200)]] = Field(default_factory=list, max_length=10)
 
 
 class BatchStart(Contract):
@@ -289,6 +305,9 @@ class TaskQuestion(Contract):
     parent: ID | None = None
     private: StrictBool | None = None
     if_no_answer: IfNoAnswer | None = None
+    # One open question per topic: a second question to the same person on this topic, while the first is open, is
+    # folded into it (hubdb.open_question). Without one, an earlier question under the same parent task with no topic.
+    topic: Annotated[StrictStr, Field(min_length=1, max_length=80)] | None = None
 
     @model_validator(mode="after")
     def unique_labels(self):
@@ -356,10 +375,12 @@ class FileVersionEdit(Contract):
 
 class TaskComment(Contract):
     public: bool = False
+    # As MessageCreate.needs_action: a bot's comment to a bot wakes it now only when this is set.
+    needs_action: bool = False
     approval_id: ID | None = None
     text: Text
     ask: ReviewAsk | None = None
-    attachments: list[Annotated[StrictStr, Field(pattern=r"^[^@]+@[1-9][0-9]*$")]] = Field(default_factory=list, max_length=10)
+    attachments: list[Attachment] = Field(default_factory=list, max_length=10)
 
 
 class TaskAskResolve(Contract):
@@ -496,7 +517,7 @@ class KpiReading(Contract):
 
 
 class GoalProposalCreate(Contract):
-    kind: Literal["goal_wording", "goal_kpi", "kpi_definition", "kpi_target", "flag"]
+    kind: Literal["goal_wording", "goal_kpi", "kpi_definition", "kpi_target", "flag", "goal_why"]
     goal_id: str | None = Field(default=None, max_length=200)
     kpi_id: str | None = Field(default=None, max_length=200)
     payload: dict = Field(default_factory=dict)
@@ -509,6 +530,17 @@ GoalProposal = GoalProposalCreate
 class GoalProposalDecision(Contract):
     decision: Literal["confirm", "reject"]
     note: str = Field(default="", max_length=1000)
+    why: str | None = Field(default=None, max_length=1000)    # a Why proposal confirmed as edited
+
+
+# The company at the top of Goals (backend/company.py): only the fields sent change.
+class CompanyUpdate(Contract):
+    vision: str | None = Field(default=None, max_length=4000)
+    description: str | None = Field(default=None, max_length=10_000)
+
+
+class GoalWhy(Contract):
+    why: str = Field(default="", max_length=1000)     # "" clears it: the goal is not tied to the vision
 
 
 # Market (backend/market.py). Reporters send prose. The Librarian (the curator) and the owner write the graph.
@@ -656,7 +688,7 @@ class ApprovalDecision(Contract):
 
 
 class AssistantSettings(Contract):
-    """A person's own Assistant settings (Settings > Assistant)."""
+    """A person's own Assistant settings (Settings > General)."""
     decides_approvals: StrictBool
 
 
@@ -776,6 +808,9 @@ class ProfileReadiness(GoalReadiness):
     models: list[ID] = Field(default_factory=list, max_length=50)
     controls: list[Literal["interrupt", "new-session"]] = Field(default_factory=list)
     detail: str = Field(default="", max_length=500)
+    # Its turns on this runtime use the computer's own login (a profile that shares the operator's): one login, held
+    # once (backend/login_holds.py canonical).
+    shared_login: bool | None = None
 
 
 class HarnessReadiness(GoalReadiness):
@@ -820,6 +855,7 @@ class RuntimeReadiness(GoalReadiness):
     # One machine may hold several subscriptions for the same runtime. The runtime row keeps
     # the profile that needs attention first; this is the per-profile breakdown behind it.
     profiles: dict[str, ProfileReadiness] = Field(default_factory=dict, max_length=50)
+    shared_login: bool | None = None    # the one profile's row shown as the runtime's (ProfileReadiness)
     # The computer's own login's account, beside a ready sign-in. Shown only to an administrator or the
     # computer's operator (backend/views.py computer_details, /api/v2/operations).
     account: Account = None
@@ -996,6 +1032,8 @@ class StructuredReadiness(Contract):
     worktree_waits: bool | None = None
     schema_version: Literal[1] = 1
     disk: DiskReadiness | None = None
+    # Bots run as their own user here (runner-rs/src/isolation.rs), so a Tico model may run (backend/models_preset.py).
+    isolated: bool | None = None
     runtimes: dict[str, RuntimeReadiness] = Field(default_factory=dict)
     bots: dict[str, BotReadiness] = Field(default_factory=dict)
     harnesses: dict[str, HarnessReadiness] = Field(default_factory=dict, max_length=50)
@@ -1062,7 +1100,8 @@ class ComputerProfile(Contract):
 
 
 class SubscriptionAssignment(Contract):
-    scope: Literal["group", "bot"]
+    # Only a bot chooses a subscription; a group no longer gives its bots one.
+    scope: Literal["bot"] = "bot"
     target: str = Field(min_length=1, max_length=100)
     profile: str | None = Field(default=None, pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$", max_length=80)
 
@@ -1095,7 +1134,7 @@ class Heartbeat(Contract):
     platform: str = Field(max_length=100)
     capacity: int = Field(default=4, ge=1, le=256)
     # The assignment_* values name the retired temporary assignments (#420); an older runner still sends them.
-    capabilities: list[Literal["assignment_instances_v1", "assignment_cleanup_v1", "task_lanes_v1", "task_lanes_v2", "session_roots_v1", "task_goals_v1", "screen_v1", "model_sign_out_v1", "model_keys_v1"]] = Field(default_factory=list, max_length=20)
+    capabilities: list[Literal["assignment_instances_v1", "assignment_cleanup_v1", "task_lanes_v1", "task_lanes_v2", "session_roots_v1", "task_goals_v1", "screen_v1", "model_sign_out_v1", "model_keys_v1", "model_switch_type_v1", "model_remove_v1", "model_switch_to_key_v1"]] = Field(default_factory=list, max_length=20)
     # The bool map remains accepted during runner rollout. The server normalizes both
     # shapes before storing them, so every read path sees one structured document.
     readiness: StructuredReadiness | dict[str, bool] = Field(default_factory=dict)
@@ -1202,6 +1241,12 @@ class BotAccess(Contract):
     on_behalf_of: ID | None = None
 
 
+# A bot's instructions (its AGENT.md) as a person reviewed them, one limit wherever they are sent: registering a bot,
+# adding one from the catalog and the first-run wizard. The longest shipped template is about half of it, and
+# backend/tests/test_onboarding.py checks every one against it.
+INSTRUCTIONS_MAX = 50_000
+
+
 class BotRegister(Contract):
     """Register a bot with the server, planned, before BotOps builds its repository. Left out, the slug is
     picked from the name (or the template's name)."""
@@ -1210,7 +1255,7 @@ class BotRegister(Contract):
     description: str = Field(default="", max_length=2000)
     reports_to: ID | None = None
     template: str = Field(default="", max_length=80)
-    instructions: str = Field(default="", max_length=50000)
+    instructions: str = Field(default="", max_length=INSTRUCTIONS_MAX)
     title_prefix: str = Field(default="", max_length=100)
     model: ID | None = None
     build: bool = False
@@ -1320,7 +1365,7 @@ class BotDefinitionCreate(Contract):
     # "Add from catalog": the template this bot is built from and the instructions a person
     # reviewed for it. Both are empty for a bot typed in by hand.
     template: str = Field(default="", max_length=80)
-    instructions: str = Field(default="", max_length=20_000)
+    instructions: str = Field(default="", max_length=INSTRUCTIONS_MAX)
 
 
 class BotBranch(Contract):
@@ -1527,6 +1572,14 @@ class SettingsUndo(Contract):
     expected_revision: int = Field(ge=1)
 
 
+class GatewayConnectionSave(Contract):
+    """The Tico AI Gateway connection (backend/gateway_connection.py): a new key, or none to keep the saved one, and
+    the Gateway's URL ('' for Tico's). `expected_revision` is the revision the editor read."""
+    key: SecretStr | None = None
+    url: str = Field(default="", max_length=300)
+    expected_revision: int = Field(default=0, ge=0)
+
+
 class ProvidersUpdate(Contract):
     """The owner's AI provider choice. `expected_revision` is the revision the editor read."""
     enabled: list[Annotated[str, Field(min_length=1, max_length=40)]] = Field(max_length=10)
@@ -1538,6 +1591,8 @@ class ProvidersUpdate(Contract):
     # What review and check subtasks run on, best first (`runtime` or `runtime:model`); None keeps the saved order,
     # [] follows the enabled providers' order.
     check_models: list[Annotated[str, Field(min_length=1, max_length=140)]] | None = Field(default=None, max_length=10)
+    # The models choice (backend/models_preset.py): one of its four, '' for none; None keeps the saved one.
+    preset: str | None = Field(default=None, max_length=40)
 
 
 class SystemUpdate(Contract):
@@ -1546,6 +1601,14 @@ class SystemUpdate(Contract):
 
 class UsageCount(Contract):
     enabled: bool
+
+
+class CeoBotSwitch(Contract):
+    on: bool
+
+
+class CeoBotLevel(Contract):
+    level: Literal[1, 2, 3]
 
 
 class UsageCountNotice(Contract):
@@ -1605,6 +1668,7 @@ class AccessRules(Contract):
     bots_go_ahead: bool | None = None
     support_access: bool | None = None
     stale_review: bool | None = None
+    topic_fresh: bool | None = None
     go_ahead_days: Annotated[int, Field(strict=True, ge=1, le=14)] | None = None
 
 
@@ -1672,7 +1736,7 @@ class OnboardingSelection(Contract):
     """One bot the person chose: which template builds it, and what they named and told it."""
     template: str = Field(min_length=1, max_length=80)
     display_name: str = Field(min_length=1, max_length=100)
-    instructions: str = Field(default="", max_length=20_000)
+    instructions: str = Field(default="", max_length=INSTRUCTIONS_MAX)
     # Who it reports to: `human:<id>` or a bot slug. Empty is the company owner.
     reports_to: str = Field(default="", max_length=120)
 
@@ -1730,16 +1794,21 @@ class AuthRejected(Contract):
 
 
 RequestTokens = Annotated[int, Field(ge=0, le=10**9)]
+# A request's three counts, and from a runner that can tell, whether it was the bot's own request (1) or a subagent's (0).
+RequestUsage = tuple[RequestTokens, RequestTokens, RequestTokens] | tuple[RequestTokens, RequestTokens, RequestTokens,
+                                                                          Literal[0, 1]]
 
 
 class RunUsagePart(Contract):
     """What a run spent, as its runner counted it: uncached input, cached input and output tokens.
     `requests` is the same three per model request, sent when the runner saw every request, so a model whose
-    long prompts cost more (providers.LONG_PROMPT) is priced request by request."""
+    long prompts cost more (providers.LONG_PROMPT) is priced request by request. A fourth count, when the runner
+    sends one, marks the bot's own requests (1) from its subagents' (0): the newest of its own is the session's
+    context size (`turns.prompt_tokens`)."""
     input_tokens: int = Field(default=0, ge=0, le=10**12)
     cached_tokens: int = Field(default=0, ge=0, le=10**12)
     output_tokens: int = Field(default=0, ge=0, le=10**12)
-    requests: list[tuple[RequestTokens, RequestTokens, RequestTokens]] | None = Field(default=None, max_length=2000)
+    requests: list[RequestUsage] | None = Field(default=None, max_length=2000)
     model: str = Field(default="", max_length=120)
     runtime: str = Field(default="", max_length=60)
     profile_used: str | None = Field(default=None, max_length=80)
@@ -1781,6 +1850,7 @@ class Completion(Contract):
     retryable: bool = False  # the runtime could not renew its sign-in; the turn never started
     fallback: str | None = Field(default=None, max_length=80)  # harness that actually ran the turn
     primary_limited: bool = False  # the bot's own runtime hit its usage limit and the company's default `fallback` ran the turn
+    primary_held: bool = False  # the claim held the bot's own login (config `primary_held`): the runner never tried it
     auth_rejected: AuthRejected | None = None  # the provider refused this computer's key or sign-in
     usage: RunUsage | None = None  # the run's token counts and the model that ran it
     # Inputs this run took from `attempts/{aid}/inputs` but never gave the runtime (the turn ended between
@@ -1841,6 +1911,14 @@ class BotGoLive(Contract):
 class TaskSnooze(Contract):
     # An ISO-8601 date (the start of that day in the team's zone) or a date-time (backend/task_snooze.py).
     until: str = Field(min_length=10, max_length=40)
+
+
+class TaskDefer(Contract):
+    # Exactly one (backend/quiet_work.py defer): a task to wait for, a time, the next run, or "handled".
+    after: str | None = Field(default=None, min_length=1, max_length=80)
+    at: str | None = Field(default=None, min_length=10, max_length=40)
+    next_run: bool = False
+    handled: bool = False
 
 
 class Empty(Contract):
@@ -1948,6 +2026,8 @@ class LoginStart(Contract):
     profile: Annotated[str, Field(pattern=r"^(?:[a-z0-9]+(?:-[a-z0-9]+)*)?$", max_length=80)] = ""
     # Sign in to another account in place: the old login keeps working until the new one has finished.
     switch: bool = False
+    # Switch type: "subscription" moves the computer's own login off its API key, once the sign-in has worked.
+    to: Literal["", "subscription"] = ""
 
 
 class LogoutStart(Contract):
@@ -1955,8 +2035,16 @@ class LogoutStart(Contract):
     profile: Annotated[str, Field(pattern=r"^(?:[a-z0-9]+(?:-[a-z0-9]+)*)?$", max_length=80)] = ""
 
 
-class SharedKeyUse(Contract):
+class RemovalStart(Contract):
     runtime: Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]*$", max_length=40)]
+    profile: Annotated[str, Field(pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$", max_length=80)]
+
+
+class SharedKeyUse(Contract):
+    """Use the shared key again on a signed-out login; with `credential`, Add connection > API key > "Use a shared
+    key": that shared key, attached to this computer (a credential administrator's change)."""
+    runtime: Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]*$", max_length=40)]
+    credential: str = Field(default="", max_length=100)
 
 
 class KeyClear(Contract):
@@ -1972,6 +2060,10 @@ class KeyReplace(Contract):
     secret: SecretStr = Field(max_length=4000)
     env: str = Field(default="", max_length=100, pattern=r"^$|^[A-Z_][A-Z0-9_]*$")
     scope: Literal["this", "all"] = "this"
+    # Add connection > API key > "Shared with: [computers]": the other computers it serves (this one always does).
+    share: list[Annotated[str, Field(max_length=100)]] = Field(default_factory=list, max_length=200)
+    # Switch to API key: the computer's own login moves off its subscription onto this key once the key works there.
+    switch: bool = False
 
 
 class LoginCode(Contract):

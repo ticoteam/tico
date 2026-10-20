@@ -17,7 +17,7 @@ def test_resolution_order_bot_then_company_then_first_provider_then_error():
     assert P.resolve(first, {}) == ("gemini", "gemini-3.8-flash")
     with pytest.raises(P.NoProvider) as refused:
         P.resolve(none, {})
-    assert "Settings > AI providers" in refused.value.detail and refused.value.status == 409
+    assert "Settings > Computers" in refused.value.detail and refused.value.status == 409
 
 
 def test_a_claimed_attempt_carries_the_company_default_for_a_bot_that_names_none(api):

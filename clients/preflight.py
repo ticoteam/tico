@@ -362,7 +362,7 @@ def check_runtime(r, entry, defaults):
     if not runtime or runtime == "default":
         # The registry names no runtime: the company's provider choice decides on the server.
         r.warn("runtime: none in the registry; the bot runs on the company default "
-               "(Settings > AI providers)")
+               "(Settings > Computers)")
         r.ok(f"outbound_send requested in bot.yaml: {bool(e.get('outbound_send'))} (a person turns sending on in Tico)")
         return
     # A CLI that reads the registry's model and effort its own way (Grok Build) translates them first.

@@ -42,8 +42,11 @@ import stat
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
+
+from clients import gateway as G
 
 URL = "https://api.typesafe.ai/v1/systemone"
 MODEL = "jev-latest"
@@ -263,6 +266,42 @@ def urlopen(request, timeout):
     return _OPENER.open(request, timeout=timeout)
 
 
+# The only hosts the gateway key goes to over plain HTTP: this computer, named exactly (clients/gateway.py LOOPBACK).
+LOOPBACK = ("localhost", "127.0.0.1", "::1")
+
+
+def safe_gateway_url(url):
+    """`url` if the gateway key may be sent there, else None: HTTPS, or plain HTTP to an exact loopback host, with no
+    user, password, query or fragment. The host is parsed, not prefix-matched (clients/gateway.py `safe_base`)."""
+    url = str(url or "").strip()
+    if not url or any(ch in url for ch in " \t\r\n\0\\?#@"):
+        return None
+    try:
+        parts = urllib.parse.urlsplit(url)
+        host = parts.hostname or ""
+        parts.port
+    except ValueError:
+        return None
+    return url if parts.scheme == "https" and host or parts.scheme == "http" and host in LOOPBACK else None
+
+
+class _Unredirected(urllib.request.HTTPRedirectHandler):
+    """Never follows a redirect: urllib's would resend the key's Authorization header to wherever it points."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def gateway_open(request, timeout):
+    """`urlopen` for the Gateway's key, built for each call: a redirect is answered as the HTTP error it is, and plain
+    HTTP (only ever to this computer, `safe_gateway_url`) goes straight there, never through a proxy, which would get
+    the key in clear. HTTPS may use the environment's proxy, which only tunnels it."""
+    handlers = [_HTTPHandler, _HTTPSHandler, _Unredirected]
+    if urllib.parse.urlsplit(request.full_url).scheme == "http":
+        handlers.append(urllib.request.ProxyHandler({}))
+    return G.branded_opener(*handlers).open(request, timeout=timeout)   # Tico's user agent: Cloudflare refuses urllib's
+
+
 def time_left(timeout):
     """`timeout`, cut to what is left of the deadline; `unavailable`, asking nothing, when less than MIN_ATTEMPT is."""
     deadline = _DEADLINE.get()
@@ -444,13 +483,16 @@ def direct(api_key, model=MODEL, timeout=TIMEOUT, opener=None, sleep=time.sleep,
 def gateway(api_key, url, model=GATEWAY_MODEL, timeout=GATEWAY_TIMEOUT, opener=None):
     """The Tico AI Gateway with a gateway key: one try of at most `timeout` seconds, no retry (the Gateway makes none
     either; the server falls back instead). A refusal keeps the HTTP status and a code, never the Gateway's text.
-    `opener(request, timeout)` is the seam the tests use."""
+    The key goes only to an https or exact-loopback `url` (`safe_gateway_url`), never follows a redirect, and reaches
+    a loopback URL without a proxy (`gateway_open`). `opener(request, timeout)` is the seam the tests use."""
     if not api_key or not url:
         raise JudgeError("unconfigured", "no Tico AI Gateway key or URL")
-    opener = opener or urlopen
+    opener = opener or gateway_open
 
     def engine(state, questions, label=None):
         validate(state, questions, label)
+        if not safe_gateway_url(url):                   # checked at use, so the next provider is asked instead
+            raise JudgeError("unconfigured", "the Tico AI Gateway URL is neither https nor this computer")
         body = {"state": state, "model": model, "questions": clean(questions)}
         if label:
             body["label"] = label
@@ -462,6 +504,8 @@ def gateway(api_key, url, model=GATEWAY_MODEL, timeout=GATEWAY_TIMEOUT, opener=N
                 payload = read_json(response)
         except urllib.error.HTTPError as exc:
             status = exc.code
+            if 300 <= status < 400:                     # not the Gateway's own answer: its key went no further
+                raise JudgeError("http", f"the Tico AI Gateway answered with a redirect ({status})", status)
             if status in (401, 403):                    # unknown or revoked key
                 raise JudgeError("auth", f"the Tico AI Gateway refused the key ({status})", status)
             if status in (402, 429, 529) or status >= 500:  # the Gateway's cap, a rate limit, or down
@@ -621,6 +665,43 @@ def llm(provider, api_key, model, timeout=TIMEOUT, opener=None):
                 "ms": round((time.monotonic() - started) * 1000), "provider": LLM_PROVIDERS[provider]}
     engine.model, engine.provider = model, LLM_PROVIDERS[provider]
     return engine
+
+
+def gateway_writer(key_of, url, model, timeout=TIMEOUT, opener=None):
+    """Writing on the Tico AI Gateway (`<base>/chat/completions`, OpenAI chat shape) with the company's gateway key:
+    `write(system, user)` as `llm_writer`. `key_of()` reads the key at the call, so no writer holds it; it goes only to
+    an https or exact-loopback `url` (`safe_gateway_url`), never through a redirect."""
+    opener = opener or gateway_open
+
+    def write(system, user):
+        api_key = key_of()
+        if not api_key or not url or not model:
+            raise JudgeError("unconfigured", "no Tico AI Gateway key or model to write with")
+        if not safe_gateway_url(url):
+            raise JudgeError("unconfigured", "the Tico AI Gateway URL is neither https nor this computer")
+        body = {"model": model, "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]}
+        request = urllib.request.Request(url.rstrip("/") + "/chat/completions", data=json.dumps(body).encode(),
+                                         method="POST", headers={"Authorization": "Bearer " + api_key,
+                                                                 "Content-Type": "application/json"})
+        try:
+            with opener(request, timeout=timeout) as response:
+                text = llm_text("openai", json.load(response)).strip()
+        except urllib.error.HTTPError as exc:
+            raise JudgeError("unavailable", f"the Tico AI Gateway answered {exc.code}", exc.code, retryable=True)
+        except (urllib.error.URLError, http.client.HTTPException, TimeoutError, OSError, ValueError, KeyError,
+                IndexError, TypeError) as exc:
+            raise JudgeError("unavailable", f"the Tico AI Gateway did not answer: {type(exc).__name__}", retryable=True)
+        if text.startswith("```"):
+            text = text.strip("`").removeprefix("json").strip()
+        try:
+            parsed = json.loads(text)
+        except ValueError:
+            raise JudgeError("shape", "the model did not answer with JSON")
+        if not isinstance(parsed, dict):
+            raise JudgeError("shape", "the model did not answer with an object")
+        return parsed
+    write.model = model
+    return write
 
 
 def llm_writer(provider, api_key, model, timeout=TIMEOUT, opener=None):

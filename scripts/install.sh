@@ -3,6 +3,7 @@
 # `tico setup` wizard. Safe to run again: it upgrades or repairs and never rewrites an existing .env.
 #
 #   curl -fsSL https://github.com/ticoteam/tico/releases/download/vX.Y.Z/install.sh -o install.sh && sh install.sh
+#   sh install.sh --recommended [--owner-email you@example.com]   # the recommended setup (below)
 #   sh install.sh --local [--owner-email you@example.com] [--team-name Acme]   # quick start: no domain, no sign-in setup
 #   sh install.sh [--version vX.Y.Z] [--dir /opt/tico] [--yes] [--tunnel] [--docker-only] [-- wizard flags]
 #   sh install.sh --runner --url https://tico.example.com --code <code> --label "Build box" [--version vX.Y.Z]
@@ -13,6 +14,13 @@
 #
 # --local runs Tico on this computer only (http://127.0.0.1:8765, the owner signs in with a token): no domain, no DNS, no
 # OIDC client. The domain and sign-in are added later in .env (docs/install.md, "Add a domain and sign-in later").
+#
+# --recommended is the quick start with the recommended choices made: the sample company, models on your
+# Claude and ChatGPT subscriptions plus Tico Gateway, Tico Support on, and a computer on this server that runs the bots
+# (a runner on the server's Docker network). What is left for the person is signing in to Claude and ChatGPT from
+# Settings > Computers. The Gateway invite comes from the environment (TICO_GATEWAY_INVITE, set by whoever runs the
+# install) and is never printed; without one the Gateway is simply not set up. On a terminal with no other choice made,
+# the install asks which setup to use and offers this one first.
 #
 # --runner sets up a computer that runs bots for a Tico server instead: Docker, that release's runner.compose.yaml (the
 # runner and its updater sidecar, both pinned to the release) in /opt/tico-runner, a .env with the join settings, and
@@ -53,6 +61,8 @@ FORCED=
 YES=
 TUNNEL=
 LOCAL=
+RECOMMENDED=
+SUPPORT=
 COMPANY=
 OWNER_EMAIL=
 OWNER_NAME=
@@ -97,7 +107,12 @@ Usage: install.sh [options] [-- tico-setup flags]
   --version vX.Y.Z   install this release (default: the release this script came from)
   --dir PATH         install directory (default /opt/tico; ~/tico on a Mac)
   --yes, -y          do not ask for confirmation
+  --recommended      the recommended setup on this computer: the quick start plus the sample company, your
+                     Claude and ChatGPT subscriptions plus Tico Gateway, Tico Support on and a computer on this server
+                     (the Gateway invite comes from TICO_GATEWAY_INVITE in the environment, never a flag)
   --local            quick start on this computer only: no domain and no sign-in setup (add them later in .env)
+  --support on|off   with --local or --recommended: Tico Support, where the ? chat sends tickets to Tico, tied to
+                     this install. off writes TICO_SUPPORT=off, which removes it (PRIVACY.md, Support tickets)
   --owner-email E    with --local: the owner's email (asked when omitted)
   --owner-name NAME  with --local: prefill your name in Finish setup
   --team-name NAME   with --local: prefill the team name (default: My Team); --company is an alias
@@ -126,6 +141,8 @@ as_root() {
   if [ "$(id -u)" = 0 ] || [ -n "$MAC" ]; then "$@"; else sudo "$@"; fi
 }
 
+# Whether the install was started with any argument at all: the setup question is only for a bare `sh install.sh`.
+ARGC=$#
 while [ $# -gt 0 ]; do
   case $1 in
     --version) [ $# -ge 2 ] || { usage >&2; die 2 "--version needs a value"; }; VERSION=$2; FORCED=1; shift 2 ;;
@@ -148,6 +165,9 @@ while [ $# -gt 0 ]; do
     --yes|-y) YES=1; shift ;;
     --tunnel) TUNNEL=1; shift ;;
     --local) LOCAL=1; shift ;;
+    --recommended) RECOMMENDED=1; LOCAL=1; shift ;;
+    --support) [ $# -ge 2 ] || { usage >&2; die 2 "--support needs on or off"; }; SUPPORT=$2; shift 2 ;;
+    --support=*) SUPPORT=${1#--support=}; shift ;;
     --owner-email) [ $# -ge 2 ] || { usage >&2; die 2 "--owner-email needs a value"; }; OWNER_EMAIL=$2; shift 2 ;;
     --owner-email=*) OWNER_EMAIL=${1#--owner-email=}; shift ;;
     --team-name|--company) [ $# -ge 2 ] || { usage >&2; die 2 "$1 needs a value"; }; COMPANY=$2; shift 2 ;;
@@ -164,6 +184,48 @@ while [ $# -gt 0 ]; do
 done
 # The wizard's --no-support also keeps this script from offering.
 case " $* " in *" --no-support "*) TICO_SUPPORT=off; export TICO_SUPPORT ;; esac
+
+# Nothing chosen on a terminal (no arguments at all, nothing installed yet): ask, with the recommended setup first.
+# Without a terminal nothing is asked and the install does what it always did.
+if [ "$ARGC" -eq 0 ] && [ -z "$LOCAL$RUNNER$DOCKER_ONLY$TUNNEL$YES" ] && [ ! -f "$DIR/.env" ] && ( : </dev/tty ) 2>/dev/null; then
+  say "How should Tico be set up?"
+  say "  1) Recommended: Tico on this computer with a sample company, your Claude and ChatGPT subscriptions plus"
+  say "     Tico Gateway, and Tico Support on. No domain or sign-in setup; you sign in to Claude and ChatGPT afterwards."
+  say "  2) Quick start: Tico on this computer only; you choose the team and the models yourself."
+  say "  3) Team install: your own domain and sign-in (Google, Microsoft or Cloudflare Access)."
+  printf 'Choose [1]: '
+  read -r choice </dev/tty || choice=
+  case ${choice:-1} in
+    1) RECOMMENDED=1; LOCAL=1 ;;
+    2) LOCAL=1 ;;
+    3) ;;
+    *) die 2 "Choose 1, 2 or 3." ;;
+  esac
+fi
+case $SUPPORT in
+  ''|on|off) ;;
+  *) die 2 "--support is on or off." ;;
+esac
+[ -z "$SUPPORT" ] || [ -n "$LOCAL" ] || die 2 "--support goes with --local or --recommended (the team install's wizard takes --no-support)."
+# Given on the command line, the switch is also saved on an existing install; the preset's default is for new ones.
+SUPPORT_GIVEN=$SUPPORT
+[ -n "$SUPPORT" ] || [ -z "$RECOMMENDED" ] || SUPPORT=on
+# Support off also keeps this script and the wizard from offering to send an install error.
+[ "$SUPPORT" != off ] || { TICO_SUPPORT=off; export TICO_SUPPORT; }
+# The Gateway invite is the operator's, so it is read from the environment and never shown: not here, not in an error.
+GATEWAY_INVITE=
+if [ -n "$RECOMMENDED" ]; then
+  GATEWAY_INVITE=${TICO_GATEWAY_INVITE:-}
+  # The whole value is checked, not line by line: it goes into .env as one line, so a newline must never pass.
+  if [ -n "$GATEWAY_INVITE" ]; then
+    case $GATEWAY_INVITE in
+      *[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-]*) invite_ok= ;;
+      *) invite_ok=1; [ ${#GATEWAY_INVITE} -ge 8 ] && [ ${#GATEWAY_INVITE} -le 200 ] || invite_ok= ;;
+    esac
+    [ -n "$invite_ok" ] \
+      || die 2 "TICO_GATEWAY_INVITE is not an invite code (8 to 200 letters, digits, - and _). It is not shown here."
+  fi
+fi
 
 # The default runner is `tico-runner` in /opt/tico-runner. --name adds `tico-runner-<slug>` in /opt/tico-runner-<slug>.
 RUNNER_SLUG=
@@ -479,7 +541,9 @@ run_local() {
     else die 2 "--local needs --owner-email (there is no terminal to ask on)."; fi
   fi
   printf '%s' "$OWNER_EMAIL" | grep -Eq '^[A-Za-z0-9._+-]+@[A-Za-z0-9.-]+$' || die 2 "--owner-email must be a plain email address."
-  [ -n "$COMPANY" ] || COMPANY="My Team"
+  if [ -z "$COMPANY" ]; then
+    if [ -n "$RECOMMENDED" ]; then COMPANY="Sample Co"; else COMPANY="My Team"; fi
+  fi
   printf '%s' "$COMPANY" | grep -Eq '^[^"$`\\]{1,80}$' || die 2 "--team-name is 1 to 80 characters without quotes, dollar signs, backticks or backslashes."
   env_tmp=$(mktemp)
   ( umask 077
@@ -489,19 +553,56 @@ run_local() {
       printf 'TICO_PORT=%s\n' "${PORT:-8765}"
       [ -z "$RUNNER_URL" ] || printf 'TICO_PUBLIC_URL=%s\n' "$RUNNER_URL"
       printf 'COMPOSE_PROFILES=updater\nTICO_UPDATER_URL=http://updater:8080\nTICO_TAG=%s\n' "$VERSION"
+      [ -z "$SUPPORT" ] || printf 'TICO_SUPPORT=%s\n' "$SUPPORT"
+      if [ -n "$RECOMMENDED" ]; then
+        # The recommended choices, read by the server on its first start (sample company, models preset, Gateway enrollment).
+        printf 'TICO_INSTALL_PRESET=recommended\nTICO_SAMPLE_COMPANY=on\nTICO_MODELS_PRESET=subscriptions-gateway\n'
+        [ -z "$GATEWAY_INVITE" ] || printf 'TICO_GATEWAY_INVITE=%s\n' "$GATEWAY_INVITE"
+      fi
     } > "$env_tmp" )
   as_root install -m 0600 "$env_tmp" "$DIR/.env"
   rm -f "$env_tmp"
   start_stack
   token=$(cd "$DIR" && as_root docker compose exec -T server cat /data/local-owner.token 2>/dev/null) || token=
+  [ -z "$RECOMMENDED" ] || add_server_computer
   say ""
   say "Tico is running on this computer only."
   if [ -n "$token" ]; then say "Keep this reusable owner sign-in link private. Sign in as $OWNER_EMAIL: ${RUNNER_URL:-http://127.0.0.1:${PORT:-8765}}/api/v2/local-signin?token=$token"
   else say "Sign in as $OWNER_EMAIL with the token from: cd $DIR && docker compose exec server cat /data/local-owner.token"; fi
   say "Recover the sign-in token: cd $DIR && docker compose exec server cat /data/local-owner.token"
-  say "In the app, follow Finish setup: name the team, pick its groups, and use Add computer to join this computer."
-  say "Bots need an AI provider to run: Settings > AI providers, any time."
+  if [ -n "$RECOMMENDED" ]; then
+    say "The sample company is loaded and Tico Support is ${SUPPORT}."
+    if [ -n "$GATEWAY_INVITE" ]; then say "Tico Gateway: it connects on the first start, from the invite this install was given."
+    else say "Tico Gateway: not set up (this install was given no invite). Bots use your Claude and ChatGPT subscriptions."; fi
+    say "One step is left: in the app, Settings > Computers > Server computer > Sign in, to Claude and to ChatGPT."
+  else
+    say "In the app, follow Finish setup: name the team, pick its groups, and use Add computer to join this computer."
+    say "Bots need an AI provider to run: Settings > Computers > Models, any time."
+  fi
   say "Add a domain and sign-in for your humans later: docs/install.md, \"Add a domain and sign-in later\"."
+}
+
+# The recommended setup's computer: a runner on the server's own Docker network (docs/install.md, "A computer on the
+# server"), joined with a one-time code the owner token asks the server for. The token goes to curl on stdin, never on a
+# command line. A failure here leaves the server running and says how to add the computer by hand.
+add_server_computer() {
+  step "Adding a computer on this server"
+  later="Add it later: Settings > Computers > Add computer, then the --runner command it shows with --server-network tico_default."
+  if [ -z "$token" ]; then warn "No owner token to ask for a computer code. $later"; return 0; fi
+  code=$(printf 'header = "Authorization: Bearer %s"\n' "$token" \
+    | curl -fsS --config - -X POST -H 'Content-Type: application/json' -d '{}' "http://127.0.0.1:${PORT:-8765}/api/v2/enrollments" 2>/dev/null \
+    | sed -n 's/.*"code"[[:space:]]*:[[:space:]]*"\([A-Za-z0-9_-]*\)".*/\1/p') || code=
+  if [ -z "$code" ]; then warn "The server did not give a computer code. $later"; return 0; fi
+  rm -rf "$work"
+  # A subshell: the runner install sets its own directory and options, and its failure must not stop this one.
+  ( server_computer_runner "$code" ) || warn "The server computer did not start. $later"
+}
+
+# The runner install's own settings for the server's computer; add_server_computer runs it in a subshell, so they stay there.
+server_computer_runner() {
+  RUNNER=1; LOCAL=''; RUNNER_URL=http://server:8765; RUNNER_CODE=$1; RUNNER_LABEL="Server computer"
+  SERVER_NETWORK=tico_default; DIR=$DIR-runner
+  run_runner
 }
 
 # A runner started with a bare `docker run -v tico-runner:/home/runner` keeps its login and repositories in that
@@ -631,7 +732,7 @@ if [ -n "$DOCKER_ONLY" ]; then ensure_docker; say "Docker is ready."; exit 0; fi
 resolve_version
 ensure_docker
 say "Installing Tico $VERSION into $DIR"
-say "Tico counts active installs anonymously (a random ID, version, and three yes/no activity flags). Turn off: Settings > Privacy or TICO_TELEMETRY=off."
+say "Tico counts active installs anonymously (a random ID, version, and three yes/no activity flags). Turn off: Settings > General or TICO_TELEMETRY=off."
 say "Details: PRIVACY.md in the Tico repository."
 
 if [ -f "$DIR/.env" ]; then
@@ -650,12 +751,17 @@ if [ -f "$DIR/.env" ]; then
       say "Already at $VERSION: repairing and restarting; your .env is kept."
     fi
   fi
-  if [ -n "$PORT" ]; then
+  # --port and --support given again are saved; every other line of .env stays as it is.
+  if [ -n "$PORT$SUPPORT_GIVEN" ]; then
+    drop=; [ -z "$PORT" ] || drop=PORT; [ -z "$SUPPORT_GIVEN" ] || drop=${drop:+$drop|}SUPPORT
     env_tmp=$(mktemp)
     ( umask 077
-      { as_root cat "$DIR/.env" | sed '/^TICO_PORT=/d'; printf 'TICO_PORT=%s\n' "$PORT"; } > "$env_tmp" )
+      { as_root cat "$DIR/.env" | sed -E "/^TICO_($drop)=/d"
+        [ -z "$PORT" ] || printf 'TICO_PORT=%s\n' "$PORT"
+        [ -z "$SUPPORT_GIVEN" ] || printf 'TICO_SUPPORT=%s\n' "$SUPPORT_GIVEN"; } > "$env_tmp" )
     as_root install -m 0600 "$env_tmp" "$DIR/.env"
     rm -f "$env_tmp"
+    [ -z "$SUPPORT_GIVEN" ] || say "Tico Support is now $SUPPORT_GIVEN (saved in $DIR/.env)."
   fi
   start_stack
   say ""

@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from clients.catalog import free_slug, slug_from_name
 
 from . import access as Access
+from . import ceo_bot
 from . import message_bots as MessageBots
 from . import bot_access as BA
 from . import models as M
@@ -272,7 +273,7 @@ class SettingsAdmin:
         default = providers.load(c, self.settings) if not body.model else {}
         choice = self.models.get(body.model or default.get("model"))
         if not choice:
-            raise Problem("model", "Choose a Team default in Settings > AI providers" if not body.model
+            raise Problem("model", "Choose a Team default in Settings > Computers" if not body.model
                           else "Choose one of the supported models", 422)
         self.refuse_retired(choice)
         effort = self._effort(choice, body.effort or default.get("effort") or None)
@@ -455,7 +456,7 @@ class SettingsAdmin:
         if bot in (self.settings.assistant_bot, "botops", "librarian", "goal-manager"):
             raise Problem("system_bot", (self.settings.assistant_name if bot == self.settings.assistant_bot
                                          else "BotOps" if bot == "botops" else "The Librarian" if bot == "librarian"
-                                         else "The Goal Manager")
+                                         else "The " + ceo_bot.name(c))
                           + " is built in to every team and cannot be archived or deleted; you can pause or rename it", 409)
         self._manager(c, who, bot)
         if self._config(c, bot)["revision"] != body.expected_revision:
@@ -799,6 +800,8 @@ class SettingsAdmin:
                 c.execute("UPDATE bot_config SET config_json=?,revision=revision+1 WHERE bot=?", (encode(declared), bot))
                 c.execute("UPDATE bots SET model=?,runtime=?,effort=? WHERE slug=?",
                           (target["model"], target["runtime"], target["effort"], bot))
+                from .model_login import hold_removals
+                hold_removals(c, self.settings)
             else:
                 runner = c.execute("SELECT * FROM runners WHERE id=? AND revoked_at IS NULL", (target["runner_id"],)).fetchone()
                 if not runner:

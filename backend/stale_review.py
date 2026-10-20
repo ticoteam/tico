@@ -20,7 +20,7 @@ update (mark done), close, ask the owner, or leave. What comes of it:
   and Accept all. Accept is the person's own change (`accept`), refused exactly as by hand when it isn't theirs to make.
 Each suggestion keeps its outcome (accepted, skipped, or the task's next change) for the acceptance share.
 
-Off unless the team's `stale_review` rule is on (Settings > Team; backend/team_rules.py). The calls run on the pass's
+Off unless the team's `stale_review` rule is on (Settings > General; backend/team_rules.py). The calls run on the pass's
 own thread, off the write lock: one can take up to `judge.CHAIN_SECONDS`, and the pass stops before PASS_SECONDS so it
 never runs into the next hour. One `stale_review.pass` event per pass that had a new candidate: the counts, the cost
 and which route answered (the Gateway, the team's own TypeSafe key, or the team's AI provider)."""
@@ -335,7 +335,7 @@ def run_pass(store, at=None, engine=None, clock=time.monotonic):
     label = qset["label"] if qset else QUESTION_SET
     if engine is None and qset:
         with store.read() as c:
-            engine = server_engine(store, c, primary_engine(settings))
+            engine = server_engine(store, c, primary_engine(settings, store))
     summary = {"candidates": len(found), "new": len(found), "calls": 0, "suggested": 0, "left": 0,
                "deferred": 0, "errors": 0, "changed": 0, "routes": {}, "cost_usd": 0.0}
     if engine is None or qset is None:

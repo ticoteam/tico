@@ -777,3 +777,22 @@ def test_readiness_skips_a_private_worktree_it_cannot_read_and_keeps_the_ones_it
     with api.app_state.store.read() as c, pytest.raises(task_privacy.Problem):
         task_privacy.require_payload(c, computer, {'worktree_actions': [{'task_id': tid, 'owner': 'cmo', 'action': 'restore'}]})
 
+
+
+def test_a_finished_task_pr_never_releases_a_tree_whose_own_commits_no_pr_carries(prepared):
+    api, tid, _ = prepared
+    link = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test').json()
+    assert mark_ready(api, tid, link['link_id']).status_code == 200
+    body = {'version': '0.3.2', 'platform': 'linux', 'readiness': {'schema_version': 1, 'bots': {}, 'worktrees': True},
+            'worktrees': [{'link_id': link['link_id'], 'state': 'present', 'branch': link['branch'], 'last_commit': 'f' * 40}]}
+    with api.app_state.store.transaction() as c:
+        merged = H.task_link(c, 'bot:cmo', tid, 'https://github.com/Acme/product/pull/1')
+        c.execute("UPDATE task_links SET state='merged',branch='tico/elsewhere' WHERE id=?", (merged['id'],))
+    assert post(api, 'runners/heartbeat', body, 'runner-test').json()['worktree_actions'] == []
+    with api.app_state.store.transaction() as c:
+        held = {w['link_id']: w for w in W.holdings(c, 'bot:cmo')}[link['link_id']]
+    assert held['kept'] == f"held: commits on {link['branch']} with no pull request linked"
+    with api.app_state.store.transaction() as c:
+        c.execute("UPDATE task_links SET branch=? WHERE id=?", (link['branch'], merged['id']))
+    actions = post(api, 'runners/heartbeat', body, 'runner-test').json()['worktree_actions']
+    assert [a['release'] for a in actions] == [True]

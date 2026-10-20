@@ -80,9 +80,6 @@ async function access(browser) {
   await page.goto('https://tico-ui.test/#/settings');
   await page.locator('[data-settings-tab="bots"]').click();
   await page.locator('tr[data-settings-bot=legal]').waitFor();
-  await page.locator('[data-settings-tab="chat"]').click();
-  await page.locator('#settings-chat-bots').click();
-  assert.equal(await page.locator('#settings-bots').isVisible(), true, 'Chat shortcut opens Bots');
   assert.equal(await page.locator('[data-settings-tab="bots"]').getAttribute('aria-selected'), 'true');
   assert.match(await page.locator('#set-bots thead').innerText(), /access/i);
   assert.doesNotMatch(await page.locator('#set-bots thead').innerText(), /can use/i);
@@ -309,9 +306,8 @@ async function roles(browser) {
 
   // ---- Settings > Computers: an admin says which computers take members' bots
   await page.locator('[data-settings-tab="devices"]').click();
+  await page.locator('#set-machines .machine-name[data-computer-open=r1]').click();   // under Settings in its pop-up
   const box = page.locator('[data-member-bots=r1]');
-  await box.waitFor({state: 'attached'});
-  await box.locator('xpath=ancestor::div[contains(@class,"people-cell-more")]').locator('.people-more').click();
   assert.equal(await box.isChecked(), false);
   await box.check();
   await page.waitForFunction(() => document.querySelector('[data-member-bots=r1]')?.checked === true);

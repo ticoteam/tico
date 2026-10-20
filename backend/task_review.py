@@ -55,8 +55,11 @@ def comment_file(c, auth, files, who, task_id, fid, number):
     try:
         return fid, file_version(c, task_id, fid, number)
     except Problem:
+        # A person's own chat upload is also a versioned file in that chat (backend/visuals.py); any other file's
+        # bytes are shared by that file's id, never by its blob's.
         if number != 1 or who.role not in ("owner", "human") or \
-                c.execute("SELECT 1 FROM bot_file_versions WHERE blob_id=?", (fid,)).fetchone():
+                c.execute("SELECT 1 FROM bot_file_versions v JOIN bot_files f ON f.id=v.file_id WHERE v.blob_id=? "
+                          "AND f.identity NOT LIKE 'chat-file:%'", (fid,)).fetchone():
             raise
     from .blobs import register
     from .media import blob_for
@@ -196,6 +199,11 @@ def answer_task(c, auth, who, task_id, body, wake):
         if body.answers or body.other:
             raise Problem("validation", "Dismiss does not include answers or other text", 422)
     else:
+        if asked["refs"].get("asked_again_at") and set(questions) - set(body.answers):
+            # A question the bot reworded in place (hubdb.fold_question) is answered only by naming its current
+            # question id, so a pick or an Other made on the earlier wording never settles the new one.
+            raise Problem("changed", "The question was reworded after you opened it: read the new wording and answer "
+                          "again", 409)
         if set(body.answers) - set(questions):
             raise Problem("validation", "Unknown question id", 422)
         missing = set(questions) - set(body.answers)

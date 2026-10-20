@@ -54,6 +54,8 @@ body.native #app-nudge{display:none}
     font-feature-settings:"liga";-webkit-font-feature-settings:"liga";
     -webkit-font-smoothing:antialiased;
   }
+  body.in-setup #mobile-nav{grid-template-columns:repeat(4,minmax(0,1fr))}
+  body.in-setup #mobile-nav [data-nav="tasks"],body.in-setup #mobile-nav [data-nav="updates"]{display:none}
   body.mobile-composer-focus #mobile-nav{visibility:hidden;pointer-events:none;transform:translateY(100%)}
   /* Org pops the bots up like floating action buttons, recent ones nearest the
      thumb. No animation ("just make it instant and fast"); a tap anywhere outside a bot, the

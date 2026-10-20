@@ -409,7 +409,10 @@ async fn report_not_synced(client: &Client, row: &Row) {
 pub async fn after_turn(state: &State, client: &Client, attempt: &Value, root: &Path, pushed: bool, skip: &[String]) {
     let bot = crate::util::text_of(&attempt["bot"]);
     let config = if attempt["config"].is_object() { attempt["config"].clone() } else { Value::Object(Default::default()) };
-    match prepare(state, &bot, &crate::util::text_of(&attempt["id"]), root, &config, pushed, skip) {
+    // The scan stats and reads the checkout and asks git about each file: blocking work, kept off the async workers.
+    let (aid, root, skip) = (crate::util::text_of(&attempt["id"]), root.to_path_buf(), skip.to_vec());
+    let who = bot.clone();
+    match state.off(move |s| prepare(s, &who, &aid, &root, &config, pushed, &skip)).await {
         Ok((queued, _)) => {
             if queued > 0 {
                 log(&format!("Tico runner: {bot}: publishing {queued} file{}", if queued != 1 { "s" } else { "" }));

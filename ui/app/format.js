@@ -130,6 +130,8 @@ function modelWords(id) {
   if (/^gpt$/i.test(parts[0])) return ['GPT', version(parts.slice(1)), words(parts.slice(1))].filter(Boolean).join(' ');
   if (/^gpt/i.test(raw)) return raw.replace(/^gpt/i, 'GPT');
   if (/^gemini$/i.test(parts[0])) return ['Gemini', version(parts.slice(1)), words(parts.slice(1))].filter(Boolean).join(' ');
+  // Tico's own models, served by the Tico AI Gateway: tico-mid-1.0 is "Tico Mid 1.0".
+  if (/^tico$/i.test(parts[0])) return ['Tico', words(parts.slice(1)), version(parts.slice(1))].filter(Boolean).join(' ');
   return raw;
 }
 // A bot's model choice: "Claude Opus 5 · high", and the tool that runs it when that is not the model's own.

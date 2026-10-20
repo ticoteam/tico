@@ -1,0 +1,205 @@
+"""Shared inbound messages: identity boundaries, non-consuming cursors and durable delivery."""
+import json
+import time
+
+import httpx
+import pytest
+
+from backend import inbound
+from backend.auth import Identity
+from backend.store import Problem
+from backend.tests.test_api import api, headers, setup_attempt  # noqa: F401
+from clients import hubcli, hubtools, remotecli
+
+
+@pytest.fixture(autouse=True)
+def no_live_inbound(monkeypatch):
+    monkeypatch.delenv('TICO_INBOUND_KEY',raising=False)
+    monkeypatch.setenv('TICO_INBOUND_URL','https://hq.example.test')
+
+
+def seed(api):
+    svc=api.app.state.inbound
+    with svc.store.transaction() as c:
+        for ident in ('ibx_a','ibx_b','ibx_c'):
+            inbound.save_inbox(c,{'inbox_id':ident,'kind':'email','name':ident,'address':ident+'@example.test',
+                                 'state':'active','created_by':'human:ana','period_end':None,'cancel_pending':0})
+    return svc
+
+
+def page(seq=1,inbox='ibx_b',ident='ses:msg:ibx_b',body='Your verification code is 123456.'):
+    return {'deliveries':[{'hq_seq':seq,'delivery_id':ident,'inbox_id':inbox,'kind':'email','received_at':time.time(),
+                            'from':'Login <login@example.test>','subject':'Sign in','text':body}], 'gaps':[],'cursor':seq}
+
+
+def test_company_members_share_non_consuming_reads_and_waits(api):
+    svc=seed(api);svc.ingest(page())
+    for caller in ('ana-test','cara-test'):
+        h=headers(caller)
+        listed=api.get('/api/v2/inbound/messages?inbox_ids=ibx_a,ibx_b',headers=h)
+        assert listed.status_code==200 and len(listed.json()['messages'])==1
+        assert '123456' not in listed.json()['messages'][0].keys()
+        body=api.get('/api/v2/inbound/messages/ses:msg:ibx_b',headers=h).json()
+        assert body['untrusted'] and '123456' in body['text']
+        assert api.get('/api/v2/inbound/messages/ses:msg:ibx_b/code',headers=h).json()['code']=='123456'
+        waited=api.post('/api/v2/inbound/wait',headers=h,json={'inbox_ids':['ibx_a','ibx_b'],'after':0,'timeout':0}).json()
+        assert len(waited['messages'])==1
+    assert api.get('/api/v2/inbound/messages?inbox_ids=ibx_a,unknown',headers=headers()).status_code==404
+    assert api.get('/api/v2/inbound/messages?inbox_ids=ibx_c',headers=headers()).json()['messages']==[]
+    # A 100 KB body is paged, including multibyte text, with no markup rendering.
+    text='é'*60000;svc.ingest(page(2,ident='ses:large:ibx_b',body=text))
+    data=api.get('/api/v2/inbound/messages/ses:large:ibx_b',headers=headers()).json()
+    assert len(data['text'].encode())<=32768 and data['next_offset']
+    assert len(api.get('/api/v2/inbound/messages',headers=headers()).content)<96*1024
+
+
+def test_authorization_rejects_bare_runners_support_and_non_admin_phone_writes(api):
+    svc=seed(api)
+    for who in (Identity('runner:x','runner'),Identity('service:x','service',scope='tasks'),
+                Identity('human:tico-support','human',support='full')):
+        with pytest.raises(Problem):svc.list_inboxes(who)
+    assert api.post('/api/v2/inbound/inboxes',headers=headers('cara-test'),json={'kind':'sms','name':'Login'}).status_code==403
+    assert api.post('/api/v2/inbound/inboxes/ibx_a/release',headers=headers('cara-test'),json={}).status_code==403
+    assert api.get('/api/v2/inbound/inboxes').status_code==401
+    # Current non-admin members can create email, with the creator bound to the authenticated identity.
+    calls=[]
+    def remote(method,path,body=None):
+        calls.append(body)
+        return {'inbox_id':'ibx_new','kind':'email','name':'Login','address':'agent-acme-login@tico.team',
+                'state':'active','created_by':body['created_by'],'period_end':None,'cancel_pending':0}
+    svc.remote=remote
+    result=api.post('/api/v2/inbound/inboxes',headers=headers('cara-test'),json={'kind':'email','name':'Login'})
+    assert result.status_code==200 and calls[-1]['created_by']=='human:cara'
+    assert 'account_id' not in calls[-1]
+
+
+def test_commit_before_ack_lost_ack_and_wait_cursor_do_not_lose_messages(api,monkeypatch):
+    svc=seed(api);svc.off=False
+    ack=[]
+    def remote(method,path,body=None):
+        if path=='inboxes':return {'inboxes':[]}
+        if path=='pull':return page() if body['cursor']==0 else {'deliveries':[],'gaps':[],'cursor':1}
+        if path=='ack':
+            ack.append(body['through_hq_seq'])
+            if len(ack)==1:raise Problem('inbound_unavailable','Lost ack',503)
+            return {'ok':True}
+    svc.remote=remote
+    with pytest.raises(Problem):svc.sync()
+    svc.sync()
+    with svc.store.read() as c:
+        assert c.execute('SELECT count(*) FROM inbound_messages').fetchone()[0]==1
+        assert c.execute('SELECT cursor FROM inbound_sync').fetchone()[0]==1
+    assert ack==[1,1]
+    svc.ingest(page(2,inbox='ibx_c',ident='ses:other:ibx_c'))
+    empty=api.post('/api/v2/inbound/wait',headers=headers(),json={'after':1,'inbox_ids':['ibx_b'],'timeout':0}).json()
+    assert empty['messages']==[] and empty['cursor']==2
+    svc.ingest(page(3,ident='ses:later:ibx_b'))
+    for _ in range(2):
+        got=api.post('/api/v2/inbound/wait',headers=headers(),json={'after':2,'inbox_ids':['ibx_b'],'timeout':0}).json()
+        assert len(got['messages'])==1
+    # No content or code is copied into the audit log.
+    with svc.store.read() as c:
+        events=[dict(r) for r in c.execute("SELECT * FROM events WHERE action LIKE 'inbound.%'")]
+    assert '123456' not in json.dumps(events)
+
+
+def test_cli_and_mcp_reach_the_same_inbound_tools(monkeypatch):
+    class API:
+        def get(self,path,**query):return {'path':path,'query':query}
+        def post(self,path,body,key=None):return {'path':path,'body':body}
+    api=API()
+    monkeypatch.setattr(remotecli,"Client",lambda *a,**kw:api)
+    monkeypatch.setenv("HUB_API_URL","https://hub.example.test")
+    for command in [['inbound','inboxes'],['inbound','create-email','Login'],
+                    ['inbound','list','--inbox-id','ibx_a','--inbox-id','ibx_b'],
+                    ['inbound','search','code'],['inbound','cursor'],['inbound','wait','--after','0','--timeout','0'],
+                    ['inbound','read','ses:msg:ibx_b'],['inbound','code','ses:msg:ibx_b']]:
+        args=hubcli.parser().parse_args(command)
+        name=remotecli.tool_name(args.fn)
+        assert name in hubtools.BY_NAME
+        result=remotecli.run(args)
+        assert result['path'].startswith('inbound/')
+
+
+def test_native_and_registered_agents_share_inboxes_but_lose_access_when_paused(api):
+    svc=seed(api);svc.ingest(page())
+    runner,message,attempt=setup_attempt(api)
+    native=api.get('/api/v2/inbound/messages',headers=headers(attempt['token']))
+    assert native.status_code==200 and len(native.json()['messages'])==1
+    external=Identity('bot:ops','bot',agent='hermes')
+    with svc.store.transaction() as c:
+        c.execute("INSERT INTO agents(bot,harness,token_hash,created,created_by) VALUES('ops','hermes','synthetic',?,'human:ana')",
+                  (inbound.H.now(),))
+    assert len(svc.list_inboxes(external)['inboxes'])==3
+    with svc.store.transaction() as c:c.execute("UPDATE bots SET state='paused' WHERE slug='ops'")
+    with pytest.raises(Problem):svc.list_inboxes(external)
+    assert api.get('/api/v2/inbound/messages',headers=headers(attempt['token'])).status_code==409
+
+
+@pytest.mark.parametrize('outage',[False,True],ids=['key_absent','hq_outage'])
+def test_bodies_and_codes_expire_at_90_days_without_hq(api,monkeypatch,outage):
+    svc=seed(api);start=1_800_000_000.0
+    # The server's 15-second loop would tick on its own thread and race this test's tick (an extra HQ call, or the
+    # sync lock taken so this tick skips), so the loop's tick does nothing here and the test calls the real one.
+    monkeypatch.setattr(svc,'tick',lambda:None)
+    monkeypatch.setattr(inbound,'now',lambda:start)
+    old=page(1,ident='ses:old:ibx_b');old['deliveries'][0]['received_at']=start
+    svc.ingest(old)
+    calls=[]
+    if outage:
+        svc.off=False
+        def remote(method,path,body=None):
+            calls.append(path);raise Problem('inbound_unavailable','HQ down',503)
+        svc.remote=remote
+    else:
+        assert svc.off and not svc.key
+    def listed(q=''):
+        return api.get('/api/v2/inbound/messages'+('?q='+q if q else ''),headers=headers()).json()['messages']
+    # One second before the cutoff the content is readable.
+    monkeypatch.setattr(inbound,'now',lambda:start+inbound.RETENTION-1)
+    assert api.get('/api/v2/inbound/messages/ses:old:ibx_b/code',headers=headers()).json()['code']=='123456'
+    assert listed('verification')[0]['has_code']
+    # Past the cutoff reads refuse before any purge or HQ call, and listing masks preview and code.
+    monkeypatch.setattr(inbound,'now',lambda:start+inbound.RETENTION+1)
+    rows=listed()
+    assert rows[0]['retention_removed'] and rows[0]['preview']=='' and not rows[0]['has_code']
+    assert listed('verification')==[]
+    assert api.get('/api/v2/inbound/messages?has_code=true',headers=headers()).json()['messages']==[]
+    for path in ('ses:old:ibx_b','ses:old:ibx_b/code'):
+        refused=api.get('/api/v2/inbound/messages/'+path,headers=headers())
+        assert refused.status_code==410 and refused.json()['error']['code']=='retention'
+    # The background tick purges stored content although sync is off or failing; metadata stays.
+    with svc.store.transaction() as c:c.execute('UPDATE inbound_messages SET retention_removed=0,body=?,code=?,preview=?',
+                                                ('Your verification code is 123456.','123456','x'))
+    svc.purged_at=0
+    if outage:
+        with pytest.raises(Problem):inbound.Inbound.tick(svc)
+        assert calls==['inboxes']
+    else:
+        inbound.Inbound.tick(svc)
+    with svc.store.read() as c:
+        row=dict(c.execute('SELECT * FROM inbound_messages').fetchone())
+    assert row['body'] is None and row['code'] is None and row['preview']=='' and row['retention_removed']==1
+    assert row['sender'] and row['subject']=='Sign in'
+
+
+def test_search_pages_to_older_matches_with_before(monkeypatch,api):
+    svc=seed(api)
+    for seq in range(1,6):
+        svc.ingest(page(seq,ident=f'ses:m{seq}:ibx_b',body=f'Login code is 12345{seq}.' if seq!=3 else 'Unrelated note'))
+    class API:
+        def get(self,path,**query):
+            return api.get('/api/v2/'+path,params=query,headers=headers()).json()
+    monkeypatch.setattr(remotecli,"Client",lambda *a,**kw:API())
+    monkeypatch.setenv("HUB_API_URL","https://hub.example.test")
+    def cli(*extra):
+        return remotecli.run(hubcli.parser().parse_args(['inbound','search','Login','--limit','2',*extra]))
+    first=cli()
+    second=cli('--before',str(first['next']))
+    assert [m['message_id'] for m in first['messages']]==['ses:m5:ibx_b','ses:m4:ibx_b']
+    assert [m['message_id'] for m in second['messages']]==['ses:m2:ibx_b','ses:m1:ibx_b'] and second['next'] is None
+    # MCP takes the same continuation.
+    tool=hubtools.BY_NAME['hub_inbound_search']
+    assert 'before' in tool['inputSchema']['properties']
+    again=tool['fn'](API(),{'q':'Login','limit':2,'before':first['next']})
+    assert again['messages']==second['messages']

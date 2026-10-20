@@ -130,6 +130,9 @@ CREATE TABLE IF NOT EXISTS computer_keys(
  credential_id TEXT PRIMARY KEY REFERENCES credentials(id), runner_id TEXT NOT NULL REFERENCES runners(id),
  runtime TEXT NOT NULL, state TEXT NOT NULL, login_id TEXT, created TEXT NOT NULL, created_by TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS computer_keys_by_runner ON computer_keys(runner_id,runtime,state);
+CREATE TABLE IF NOT EXISTS model_login_key_off(
+ runner_id TEXT NOT NULL REFERENCES runners(id), runtime TEXT NOT NULL, profile TEXT NOT NULL DEFAULT '',
+ set_at TEXT NOT NULL, set_by TEXT NOT NULL, PRIMARY KEY(runner_id,runtime,profile));
 CREATE TABLE IF NOT EXISTS runner_harness_actions(
  id TEXT PRIMARY KEY, runner_id TEXT NOT NULL REFERENCES runners(id), harness TEXT NOT NULL,
  action TEXT NOT NULL, state TEXT NOT NULL, message TEXT NOT NULL DEFAULT '',
@@ -660,6 +663,8 @@ class Store:
             c.executescript(_learnings.SCHEMA)
             from . import stale_review as _stale_review
             c.executescript(_stale_review.SCHEMA)
+            from . import owner_link as _owner_link
+            c.executescript(_owner_link.SCHEMA)
             from . import docs as _docs
             _docs.ensure_schema(c, self.settings)
             from . import doc_sources as _doc_sources
@@ -674,6 +679,8 @@ class Store:
             _google_connect.ensure_schema(c)
             from . import support as _support
             c.executescript(_support.SCHEMA)
+            from . import inbound as _inbound
+            c.executescript(_inbound.SCHEMA)
             from . import support_access as _support_access
             c.executescript(_support_access.SCHEMA)
             from . import credential_cards as _credential_cards
@@ -682,8 +689,9 @@ class Store:
             c.executescript(_watchers.SCHEMA)
             from . import health_monitor as _health_monitor
             c.executescript(_health_monitor.SCHEMA)
-            # When a finding last woke the Health Monitor: a return within a day counts but wakes nothing.
+            # When a finding last woke the Health Monitor, and how bad it is: a rise wakes it (backend/health_monitor.py).
             H.add_column(c, "health_findings", "last_woke", "TEXT NOT NULL DEFAULT ''")
+            H.add_column(c, "health_findings", "severity", "TEXT NOT NULL DEFAULT 'warn'")
             from . import slack_channels as _slack_channels
             c.executescript(_slack_channels.SCHEMA)
             from . import flight as _flight
@@ -1181,6 +1189,10 @@ class Store:
                 # Tasks waiting for room for a worktree (backend/worktree_waits.py). Unversioned like the trash.
                 from .worktree_waits import ensure as ensure_worktree_waits
                 ensure_worktree_waits(c)
+                # The company's Vision, Description and their history, and each goal's Why (backend/company.py).
+                # Unversioned like the trash: an older release never reads the tables or the columns.
+                from .company import ensure as ensure_company
+                ensure_company(c)
                 # Temporary task assignments are retired (#420): their actors are archived and off every computer,
                 # their open tasks back with the role. Unversioned and idempotent like the trash; the tables stay inert.
                 from .shared_bots import retire_assignments
@@ -1194,6 +1206,10 @@ class Store:
                 # Who asked a running turn to stop (backend/execution.py stop); the runner reads it on its next
                 # lease renewal. Unversioned like the key scope: an older release never reads the column.
                 H.add_column(c, "attempts", "stop_requested", "TEXT")
+                # Which gateway key the attempt's runner was handed (gateway_connection.run_credentials_for): what its
+                # Gateway segments are recorded under, even if the key is rotated or cleared before the run ends.
+                # NULL with none handed. Unversioned like stop_requested.
+                H.add_column(c, "attempts", "gateway_key_id", "TEXT")
                 # A queued message a person sent with Stop and redirect (backend/execution.py stop): it is claimed
                 # before the bot's other queued work once the stopped turn ends. Unversioned like stop_requested.
                 H.add_column(c, "jobs", "redirect", "INTEGER NOT NULL DEFAULT 0")
@@ -1235,6 +1251,9 @@ class Store:
                                    ("attempts_bot_finished", "attempts(bot, finished)"),
                                    ("attempts_job", "attempts(job_id)"),
                                    ("attempts_runner_state", "attempts(runner_id, state)"),
+                                   # The turns a computer ran in a window, read under the write lock by an
+                                   # open overload (backend/performance.py `_runs`).
+                                   ("attempts_runner_finished", "attempts(runner_id, finished)"),
                                    # A computer asking after the tasks its session checkouts are kept for.
                                    ("attempts_bot_lane", "attempts(bot, lane)"),
                                    ("events_action_target", "events(action, target, ts)"),
