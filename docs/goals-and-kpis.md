@@ -154,24 +154,10 @@ With the switch on, Goals also opens with the [Company section](#the-company-sec
 
 ### How much your CEO Bot does
 
-With the switch on, **Settings > CEO Bot** has three levels, each with one sentence on what the CEO Bot will and won't
-do, shown again before you confirm a change:
-
-1. **Goals and tracking**, where every company starts: what the Goal Manager does, plus asking for the vision while it
-   is empty (first in the owner's list), proposing a Why for each goal with none, a Monday note in the owner's chat
-   and asking a red or stalled goal's owner what is happening. It never changes anyone's tasks.
-2. **Suggests actions**: level 1, plus a **recovery** for a red or stalled goal, and merged asks. Nothing changes
-   without your yes ([Recoveries and merged asks](#recoveries-and-merged-asks)).
-3. **Acts on its own** can be chosen already, but does what level 2 does until it arrives in a later release; its
-   sentence says so.
-
-Only the owner or an admin changes the level, on their own click; no bot can, the CEO Bot included, nor the Assistant
-acting for someone. Each change is kept with who and when (`GET /api/v2/ceo-bot`, `level_history`;
-`POST /api/v2/ceo-bot/level` with `{"level": 2}`). Turning the switch on starts the Monday note (the weekly goals
-review); turning it off pauses it again only if the switch started it.
-
-At every level, the CEO Bot puts at most 5 items a day (UTC) in one person's **Needs you**, the vision first; the rest
-wait for the next day. The server refuses a sixth.
+With the switch on, **Settings > CEO Bot** has three levels: 1 Goals and tracking (where every company starts), 2 Suggests
+actions and 3 Acts on its own. Level 3 does what level 2 does until it arrives in a later release. Only the owner
+or an admin changes the level, and the CEO Bot puts at most 5 items a day in one person's **Needs you**. The levels, who
+changes them and what stays yours are on [Your CEO Bot](ceo-bot.md).
 
 #### Recoveries and merged asks
 

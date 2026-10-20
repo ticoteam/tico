@@ -20,7 +20,7 @@ All notable changes to Tico are recorded here. The format follows
   first while it is empty, proposes a Why for each goal with none as one Needs you item, sends a Monday note (started
   when the switch goes on), asks a red or stalled goal's owner what is happening, and changes no tasks. It puts at most
   5 items a day in one person's Needs you. `hub goal ceo-bot` and `hub goal company` read it
-  ([Goals](docs/goals-and-kpis.md#how-much-your-ceo-bot-does)).
+  ([Your CEO Bot](docs/ceo-bot.md)).
 - **Tico HQ's nightly billing check on the Tico team's Health page**: on the one server that holds HQ's read-only
   staff key (`TICO_HQ_STAFF_READ_KEY`), the server reads HQ's nightly ledger check every hour and the owner's Health
   page shows each mismatch in red, naming the company's install id and the difference in dollars. A check that missed
@@ -168,6 +168,10 @@ All notable changes to Tico are recorded here. The format follows
   ([Computers](docs/computers.md#remove-a-subscription)).
 
 ### Fixed
+- **Tasks: a subtask saved from its parent's peek stays open**: opening a parent from a filtered list, then one of
+  its subtasks, and saving a change that takes the subtask out of the list (Done, a new status or owner) moved the peek
+  on to the list's next row, often a sibling, so the next edit landed on the wrong task. The peek now stays on the
+  task that was saved; a task opened from its own row still moves on to the next row as before.
 - **Finished worktrees free themselves even when nobody linked or reopened the pull request.** A pull request opened
   from a task worktree's branch is linked to the task automatically (both repositories of a two-repository task), and a
   background pass every few minutes refreshes worktree tasks' pull request state, closed and unread tasks included, so a
