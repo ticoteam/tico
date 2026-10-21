@@ -41,7 +41,7 @@ body.native #app-nudge{display:none}
   body.drawer #side-backdrop{display:block}
   body.drawer{overflow:hidden}
   #main{padding:18px 12px calc(var(--mobile-nav-height) + env(safe-area-inset-bottom) + 12px);max-width:none}
-  #mobile-nav{position:fixed;z-index:18;left:0;right:0;bottom:0;height:calc(var(--mobile-nav-height) + env(safe-area-inset-bottom));display:grid;grid-template-columns:repeat(6,minmax(0,1fr));align-items:start;padding:6px 4px env(safe-area-inset-bottom);border-top:1px solid var(--line);background:var(--surface);background:color-mix(in srgb,var(--surface) 94%,transparent);box-shadow:0 -5px 20px rgba(0,0,0,.08);-webkit-backdrop-filter:blur(16px);backdrop-filter:blur(16px);transition:transform var(--dur) var(--ease),visibility var(--dur) var(--ease)}
+  #mobile-nav{position:fixed;z-index:18;left:0;right:0;bottom:0;height:calc(var(--mobile-nav-height) + env(safe-area-inset-bottom));display:grid;grid-template-columns:repeat(7,minmax(0,1fr));align-items:start;padding:6px 4px env(safe-area-inset-bottom);border-top:1px solid var(--line);background:var(--surface);background:color-mix(in srgb,var(--surface) 94%,transparent);box-shadow:0 -5px 20px rgba(0,0,0,.08);-webkit-backdrop-filter:blur(16px);backdrop-filter:blur(16px);transition:transform var(--dur) var(--ease),visibility var(--dur) var(--ease)}
   .mobile-nav-item{min-width:0;height:52px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;padding:3px 2px;border:0;background:transparent;color:var(--muted);font:600 var(--t-xs)/1.1 var(--sans);cursor:pointer;text-decoration:none;-webkit-tap-highlight-color:transparent}
   .mobile-nav-item:hover{text-decoration:none}
   .mobile-nav-item.cur{color:var(--accent)}
@@ -54,7 +54,7 @@ body.native #app-nudge{display:none}
     font-feature-settings:"liga";-webkit-font-feature-settings:"liga";
     -webkit-font-smoothing:antialiased;
   }
-  body.in-setup #mobile-nav{grid-template-columns:repeat(4,minmax(0,1fr))}
+  body.in-setup #mobile-nav{grid-template-columns:repeat(5,minmax(0,1fr))}
   body.in-setup #mobile-nav [data-nav="tasks"],body.in-setup #mobile-nav [data-nav="updates"]{display:none}
   body.mobile-composer-focus #mobile-nav{visibility:hidden;pointer-events:none;transform:translateY(100%)}
   /* Org pops the bots up like floating action buttons, recent ones nearest the

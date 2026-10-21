@@ -8,6 +8,8 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- **A Menu button left of Search on a phone.** The bottom bar now starts with Team, then Menu, then Search; Menu
+  opens the side menu in one tap, the same menu More opens, and closes the same way.
 - **Bots read the runs of the bots that report to them.** A bot above another in `reports_to` (at any depth) now
   sees that bot's chat-room runs too, such as the wake-ups the hub posts there, in `hub_run_list` and their steps, so
   a manager like a Product Manager can score its monitors' cost per catch. A human's own chat with a report stays

@@ -375,19 +375,30 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
     const p = phone.page;
     await p.goto('http://tico-ui.test/#/updates');
     await p.locator('#upd-feed .upd-card').first().waitFor();
-    assert.deepEqual(await p.locator('#mobile-nav .mobile-nav-label').allInnerTexts(), ['Team', 'Search', 'Tasks', 'Updates', 'Support', 'More']);
+    assert.deepEqual(await p.locator('#mobile-nav .mobile-nav-label').allInnerTexts(), ['Team', 'Menu', 'Search', 'Tasks', 'Updates', 'Support', 'More']);
     const navWidths=await p.locator('#mobile-nav .mobile-nav-item').evaluateAll(items=>items.map(el=>el.getBoundingClientRect().width));
-    assert.equal(navWidths.length,6);
-    assert.ok(Math.max(...navWidths)-Math.min(...navWidths)<1,'six evenly spaced navigation items');
-    // The six fit a 360px phone: no label is cut and the bar does not scroll sideways.
+    assert.equal(navWidths.length,7);
+    assert.ok(Math.max(...navWidths)-Math.min(...navWidths)<1,'seven evenly spaced navigation items');
+    // Menu, just left of Search, opens the side menu in one tap; it says so, and closing hands focus back to it.
+    const menu = p.locator('#mobile-menu');
+    assert.deepEqual(await menu.evaluate(el => [el.getAttribute('aria-label'), el.getAttribute('aria-controls'), el.getAttribute('aria-expanded'),
+      el.nextElementSibling.id, el.querySelector('.mobile-nav-icon').textContent, el.tabIndex]), ['Open menu', 'side', 'false', 'mobile-search', 'menu', 0]);
+    await menu.click();
+    await p.locator('body.drawer').waitFor();
+    assert.equal(await p.locator('#side .side-scroll [data-nav="tasks"]').isVisible(), true, 'Menu opens the same side menu');
+    assert.deepEqual(await p.locator('#mobile-nav [aria-controls="side"]').evaluateAll(els => els.map(el => el.getAttribute('aria-expanded'))), ['true', 'true']);
+    await p.keyboard.press('Escape');
+    await p.waitForFunction(() => !document.body.classList.contains('drawer'));
+    assert.equal(await menu.evaluate(el => el === document.activeElement && el.getAttribute('aria-expanded')), 'false', 'closing returns to Menu');
+    // The seven fit a 360px phone: no label is cut and the bar does not scroll sideways.
     await p.setViewportSize({width: 360, height: 800});
-    await p.waitForFunction(() => document.querySelector('#mobile-nav .mobile-nav-item').getBoundingClientRect().width < 61);
+    await p.waitForFunction(() => document.querySelector('#mobile-nav .mobile-nav-item').getBoundingClientRect().width < 53);
     assert.equal(await p.locator('#mobile-nav').evaluate(nav => nav.scrollWidth <= nav.clientWidth &&
       [...nav.querySelectorAll('.mobile-nav-label')].every(l => { const r = l.getBoundingClientRect(), item = l.parentElement.getBoundingClientRect();
         return r.left >= item.left && r.right <= item.right; })), true, 'the bar fits 360px');
     if (shots) await p.screenshot({path: path.join(shots, 'updates-phone-360.png')});
     await p.setViewportSize({width: 390, height: 844});
-    await p.waitForFunction(() => document.querySelector('#mobile-nav .mobile-nav-item').getBoundingClientRect().width > 62);
+    await p.waitForFunction(() => document.querySelector('#mobile-nav .mobile-nav-item').getBoundingClientRect().width > 53);
     assert.equal(await p.locator('#mobile-nav [data-nav="overview"]').count(),0);
     // Day, week, unread and my bots are icons on a phone.
     for (const sel of ['[data-upd-kind="daily"]', '[data-upd-kind="weekly"]', '#upd-mine']) {
@@ -452,6 +463,6 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
     assert.equal(await p.locator('.side-scroll [data-nav="overview"]').isVisible(), true, 'Overview remains in More');
     assert.deepEqual(phone.errors, []);
     await p.close();
-    console.log('PASS: Updates first in the rail with an unread badge, just the bullets (no title, sections, greeting, day headers or missed list), seen-is-read in one batched request, mark unread without re-sorting, unread first on the next visit, an instant reply that goes to the bot\'s chat, threads, j/k, Daily/Weekly toggle, a week in review as five swipeable slides with KPI lines, cached paint, and on a phone Tasks and Updates in a six-item bottom bar (with Support) that fits 360px, with Tasks also in More.');
+    console.log('PASS: Updates first in the rail with an unread badge, just the bullets (no title, sections, greeting, day headers or missed list), seen-is-read in one batched request, mark unread without re-sorting, unread first on the next visit, an instant reply that goes to the bot\'s chat, threads, j/k, Daily/Weekly toggle, a week in review as five swipeable slides with KPI lines, cached paint, and on a phone Tasks and Updates in a seven-item bottom bar (with Menu left of Search, and Support) that fits 360px, with Tasks also in More.');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exitCode = 1; });

@@ -17,8 +17,8 @@ $('#search-input').onkeydown = ev => {
 document.addEventListener('keydown', ev => {
   if ((ev.metaKey || ev.ctrlKey) && ev.key.toLowerCase() === 'k') { ev.preventDefault(); searchOpen(); }
 });
-$('#mobile-more').onclick = () => {
-  setDrawer(true, false, $('#mobile-more'));
+for (const id of ['#mobile-menu', '#mobile-more']) $(id).onclick = () => {
+  setDrawer(true, false, $(id));
   $('.side-scroll').scrollTop = 0;
 };
 $('.side-close').onclick = () => setDrawer(false, true);
