@@ -189,7 +189,9 @@ impl Runner {
                     }
                     if let Some(g) = &chat_goal {
                         // Only while the goal still runs: a clear after "met" is not checked into a second "met".
-                        if across_turns && goal_running {
+                        // Not while salvaging: the native query can wait two minutes or fail, and the answer behind
+                        // this event is what the salvage is for. The goal event is only filed on the lapsed run anyway.
+                        if across_turns && goal_running && salvage.is_none() {
                             event = host.reconcile_codex_clear(thread, event, &text_of(&g["objective"])).await?;
                         }
                         if truthy(event.get("objective")) {
@@ -330,8 +332,10 @@ impl Runner {
                 .await;
                 if let Err(e) = step {
                     if e.api.as_ref().is_some_and(|a| a.code == "stale_lease") {
-                        // Refused before the renewer heard: the same lost lease, read out the same way.
+                        // Refused before the renewer heard: the same lost lease, read out the same way, from now: a
+                        // harness found gone further down this pass is waited on, not given up (Dev 242 R1 delta).
                         d.flags.lost.store(true, Ordering::SeqCst);
+                        salvage.get_or_insert_with(|| Instant::now() + SALVAGE);
                     } else if e.api.as_ref().is_none_or(|a| !a.retryable) {
                         return Err(e);
                     }
@@ -452,16 +456,17 @@ mod tests {
 
     /// Drive one Acme turn on `host` against `runner`; `feed` gets the host's event sender.
     async fn drive_turn(runner: &Runner, host: &Host, rx: &mut UnboundedReceiver<Value>, f: &Flags, thread: &str) -> Result<Drove, Fail> {
-        drive_with(runner, host, rx, f, thread, None, BTreeMap::new()).await.0
+        drive_with(runner, host, rx, f, thread, "claude", None, BTreeMap::new()).await.0
     }
 
     /// `drive_turn` with a Tico chat goal and inputs a steer refused, handing back what is still carried after.
-    async fn drive_with(runner: &Runner, host: &Host, rx: &mut UnboundedReceiver<Value>, f: &Flags, thread: &str, chat_goal: Option<Value>,
+    #[allow(clippy::too_many_arguments)]
+    async fn drive_with(runner: &Runner, host: &Host, rx: &mut UnboundedReceiver<Value>, f: &Flags, thread: &str, runtime: &str, chat_goal: Option<Value>,
                         mut carried: BTreeMap<String, Value>) -> (Result<Drove, Fail>, BTreeMap<String, Value>, GoalRun) {
         runner.state.record(&json!({"id": "acme-late"})).unwrap();
         let wake = Notify::new();
         let d = Drive { aid: "acme-late", host, thread, effort: None, limit: Instant::now() + Duration::from_secs(60),
-                        flags: f, wake: &wake, redactor: None, runtime: "claude" };
+                        flags: f, wake: &wake, redactor: None, runtime };
         let mut segment = Segment { meter: Meter::default(), config: json!({}), profile: None, billing: "api" };
         let mut goal = GoalRun { chat_goal, controlled: false, failure: None, paused: None, tries_key: ("acme".into(), thread.into()) };
         let mut rejected = None;
@@ -579,7 +584,7 @@ mod tests {
         }
         let carried: BTreeMap<String, Value> = [("m-1".to_string(), json!({"id": "m-1", "body": "Also add Q3.", "from_actor": "human:ana"}))].into();
         let f = flags(true);
-        let (drove, left, _) = drive_with(&runner, &host, &mut rx, &f, "th-6", None, carried).await;
+        let (drove, left, _) = drive_with(&runner, &host, &mut rx, &f, "th-6", "claude", None, carried).await;
         let drove = drove.unwrap_or_else(|e| panic!("refused: {}", e.text));
         assert_eq!((drove.outcome.as_str(), drove.reply.as_str()), ("completed", "Acme's renewal summary is ready."));
         assert_eq!(left.keys().collect::<Vec<_>>(), ["m-1"], "still carried, so the result reports it undelivered");
@@ -610,7 +615,7 @@ mod tests {
             }
         });
         let f = flags(false);
-        let (drove, _, _) = drive_with(&runner, &host, &mut rx, &f, "th-7", Some(acme_goal()), BTreeMap::new()).await;
+        let (drove, _, _) = drive_with(&runner, &host, &mut rx, &f, "th-7", "claude", Some(acme_goal()), BTreeMap::new()).await;
         feed.await.unwrap();
         assert_eq!(drove.unwrap_or_else(|e| panic!("refused: {}", e.text)).outcome, "completed");
         assert!(f.lost.load(Ordering::SeqCst));
@@ -640,7 +645,7 @@ mod tests {
             tx.send(ev).unwrap();
         }
         let f = flags(true);
-        let (drove, _, goal) = drive_with(&runner, &host, &mut rx, &f, "th-8", None, BTreeMap::new()).await;
+        let (drove, _, goal) = drive_with(&runner, &host, &mut rx, &f, "th-8", "claude", None, BTreeMap::new()).await;
         let drove = drove.unwrap_or_else(|e| panic!("refused: {}", e.text));
         assert_eq!((drove.outcome.as_str(), drove.reply.as_str()), ("completed", "Acme's renewal summary is ready."));
         assert!(goal.paused.is_none(), "no pause, so no /goal clear turn");
@@ -673,7 +678,7 @@ mod tests {
             drop(completed);
         });
         let began = Instant::now();
-        let (drove, _, goal) = drive_with(&runner, &host, &mut rx, &f, "th-9", None, BTreeMap::new()).await;
+        let (drove, _, goal) = drive_with(&runner, &host, &mut rx, &f, "th-9", "claude", None, BTreeMap::new()).await;
         later.await.unwrap();
         let drove = drove.unwrap_or_else(|e| panic!("refused: {}", e.text));
         assert_eq!(drove.outcome, "completed");
@@ -682,6 +687,74 @@ mod tests {
         assert!(began.elapsed() < SALVAGE + Duration::from_secs(1), "bounded: {:?}", began.elapsed());
         let said = format!("{:?} {:?}", seen.lock().unwrap(), runner.state.pending("acme-late").unwrap());
         assert!(!said.contains("could not be cleared"), "no /goal clear turn was tried: {said}");
+        std::fs::remove_dir_all(dir).ok();
+    }
+    #[tokio::test]
+    async fn a_goal_read_refused_as_the_harness_exits_waits_for_the_reader_instead_of_giving_up() {
+        // R1 delta 1: the goal GET is refused before the renewer hears, in the same pass that finds the harness gone
+        // with nothing read yet; the answer the reader delivers a moment later still comes out completed.
+        let (url, seen) = lapsed_hub().await;
+        let (runner, dir) = runner_at(&url);
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let host = Host::Claude(ClaudeHost::new("acme", vec![], tx.clone())); // not alive
+        let watched = seen.clone();
+        let feed = tokio::spawn(async move {
+            while !watched.lock().unwrap().iter().any(|p| p.contains("/goal ")) {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            for ev in answer_events("th-10", "turn-1") {
+                tx.send(ev).unwrap();
+            }
+        });
+        let f = flags(false);
+        let (drove, _, _) = drive_with(&runner, &host, &mut rx, &f, "th-10", "claude", Some(acme_goal()), BTreeMap::new()).await;
+        feed.await.unwrap();
+        let drove = drove.unwrap_or_else(|e| panic!("refused: {}", e.text));
+        assert_eq!((drove.outcome.as_str(), drove.reply.as_str()), ("completed", "Acme's renewal summary is ready."));
+        let asked = seen.lock().unwrap().iter().filter(|p| p.contains("/goal ") || p.contains("/inputs")).count();
+        assert_eq!(asked, 1, "one goal read, refused; nothing after");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn a_buffered_codex_goal_clear_does_not_query_the_harness_before_the_answer_is_read() {
+        // R1 delta 2: Codex reports `thread/goal/cleared` with no turn id; checking it asks the app server, which can
+        // take two minutes or, with the process gone as here, fail. Neither may cost the answer queued behind it.
+        let (url, _) = lapsed_hub().await;
+        let (runner, dir) = runner_at(&url);
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let host = Host::Codex(crate::hosts::codex::CodexHost::on_home(Default::default(), tx.clone(), None));
+        tx.send(json!({"kind": "goal", "thread_id": "th-11", "status": "cleared", "objective": "Finish the Acme renewal summary"})).unwrap();
+        for ev in answer_events("th-11", "turn-1") {
+            tx.send(ev).unwrap();
+        }
+        let (f, began) = (flags(true), Instant::now());
+        let (drove, _, _) = drive_with(&runner, &host, &mut rx, &f, "th-11", "codex", Some(acme_goal()), BTreeMap::new()).await;
+        let drove = drove.unwrap_or_else(|e| panic!("refused: {}", e.text));
+        assert_eq!((drove.outcome.as_str(), drove.reply.as_str()), ("completed", "Acme's renewal summary is ready."));
+        assert!(began.elapsed() < SALVAGE, "{:?}", began.elapsed());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn a_codex_goal_that_runs_across_turns_is_not_continued_once_the_lease_is_lost() {
+        // R1 delta 3: on Codex a completed turn under an active goal normally waits for the next continuation; read
+        // out after a lost lease, it is the end. No goal-met or clear event comes to end it some other way.
+        let (url, seen) = lapsed_hub().await;
+        let (runner, dir) = runner_at(&url);
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let host = Host::Claude(ClaudeHost::new("acme", vec![], tx.clone())); // Codex's capabilities come from `runtime`
+        for ev in answer_events("th-12", "turn-1") {
+            tx.send(ev).unwrap();
+        }
+        let (f, began) = (flags(true), Instant::now());
+        let (drove, _, goal) = drive_with(&runner, &host, &mut rx, &f, "th-12", "codex", Some(acme_goal()), BTreeMap::new()).await;
+        let drove = drove.unwrap_or_else(|e| panic!("refused: {}", e.text));
+        assert_eq!((drove.outcome.as_str(), drove.reply.as_str()), ("completed", "Acme's renewal summary is ready."));
+        assert!(began.elapsed() < SALVAGE, "ended on the completed turn, not the window: {:?}", began.elapsed());
+        assert!(goal.paused.is_none() && !goal.controlled);
+        assert!(!seen.lock().unwrap().iter().any(|p| p.contains("/goal ") || p.contains("/inputs")));
         std::fs::remove_dir_all(dir).ok();
     }
 }
