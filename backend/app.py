@@ -1139,7 +1139,8 @@ def create_app(settings=None):
         """A visual for inline display, apart from the app's sign-in: the signed token is the only credential, and
         the reader it names is checked again on every request (each range request too)."""
         return visuals.serve(request, store, auth, app.state.files, app.state.blobs, visual_key(),
-                             visual_ancestors(), token, full=visuals.mode(settings) == "full")
+                             visual_ancestors(), token, full=visuals.mode(settings) == "full",
+                             visual_origin=settings.visual_origin)
 
     def check_refs(c, who, refs):
         # Validate referenced objects rather than trusting an arbitrary ID in a payload.

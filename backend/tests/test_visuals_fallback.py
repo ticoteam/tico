@@ -131,6 +131,23 @@ def test_with_a_visual_address_all_five_kinds_show_inline_there(api, monkeypatch
         assert r.status_code == 200 and r.headers["content-disposition"] == "inline" and "set-cookie" not in r.headers
 
 
+def test_with_a_visual_address_the_apps_own_address_still_serves_media_only(api, monkeypatch):
+    """The route answers on every host the server does (a front door passes the app's host through to it), so a page
+    or SVG link opened on the app's own address is refused there in full mode too; media still plays there."""
+    monkeypatch.setattr(api.app.state.store.settings, "visual_origin", VISUALS)
+    media = media_reply(api)["refs"]["attachments"]
+    tid, comment = page_and_svg_comment(api)
+    for a in comment_items(api, tid, comment):
+        path = a["src"].removeprefix(VISUALS)
+        assert api.get(a["src"]).status_code == 200                                     # on the visual address
+        for host in ("testserver", "tico.example", "visuals.localhost", "visuals.localhost:9002", "bad host:x"):
+            r = api.get("http://" + host.split(" ")[0] + path, headers={"Host": host})
+            assert r.status_code == 404 and not r.content, (a["kind"], host)
+    for a in media:
+        r = api.get(a["src"].removeprefix(VISUALS), headers={"Host": "tico.example"})
+        assert r.status_code == 200 and r.headers["content-disposition"] == "inline", a["kind"]
+
+
 def test_no_visual_response_ever_sets_a_cookie(api, monkeypatch):
     """No cookie on a ticofiles.com host until the Public Suffix listing is live: every response on the visual route,
     in either mode, found or not, GET or HEAD, with the app's own cookie sent along, carries no Set-Cookie."""

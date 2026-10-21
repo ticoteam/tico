@@ -355,14 +355,14 @@ def origin_of(url):
 def check_origin(settings):
     """A separate visual origin must really be separate: the app's own origin there would put visuals next to its
     cookies. A value that is not a URL at all (a stray bracket, a port that is not a number) counts as unset, so
-    visuals show as file chips: like a missing setting, it never stops the server."""
+    visuals take the fallback (mode): like a missing setting, it never stops the server."""
     value = getattr(settings, "visual_origin", "")
     try:
         urlsplit(value or "").port
         visual = origin_of(value)
     except ValueError:
         logging.getLogger("tico.visuals").warning(
-            "TICO_VISUAL_ORIGIN is not a valid URL; visuals show as file chips until it is fixed")
+            "TICO_VISUAL_ORIGIN is not a valid URL; visuals show pictures, video and audio only until it is fixed")
         return ""
     if visual and visual == origin_of(settings.public_url):
         raise ValueError("TICO_VISUAL_ORIGIN must differ from the app's own address (TICO_PUBLIC_URL)")
@@ -539,10 +539,21 @@ def for_reader(app, settings, c, who, messages):
 
 
 # ---------------------------------------------------------------------------------------------- serve
-def serve(request, store, auth, files, blobs, key, ancestors, token, full=True):
-    """GET /visuals/<token>: one visual for the reader the token names, checked again on every request. In the
-    fallback (`full` False, mode) the route is on the app's own address and serves media only: a page or SVG is
-    refused there, whatever the token says, and so is a poster or preview that is not a picture."""
+def on_host(request, origin):
+    """Whether this request came in on `origin`'s host (the Host header, its default port dropped)."""
+    try:
+        want, got = urlsplit(origin or ""), urlsplit("//" + request.headers.get("host", ""))
+        default = 443 if want.scheme == "https" else 80
+        return bool(want.hostname) and (got.hostname, got.port or default) == (want.hostname, want.port or default)
+    except ValueError:                      # a malformed Host or origin is never the visual address
+        return False
+
+
+def serve(request, store, auth, files, blobs, key, ancestors, token, full=True, visual_origin=""):
+    """GET /visuals/<token>: one visual for the reader the token names, checked again on every request. The route
+    answers on every host the server does, the app's own included, so a page or SVG is served only to a request that
+    came in on the visual address (`visual_origin`, in full mode); anywhere else, the app's own address and the whole
+    fallback (`full` False), the route serves media only. A poster or preview that is not a picture is refused."""
     from fastapi.responses import Response
     from .auth import Identity
     from .store import H, Problem
@@ -578,7 +589,7 @@ def serve(request, store, auth, files, blobs, key, ancestors, token, full=True):
             if kind != "image":
                 return gone
             blob["content_type"] = mime
-        elif kind not in INLINE or (not full and kind not in MEDIA):
+        elif kind not in INLINE or (kind not in MEDIA and not (full and on_host(request, visual_origin))):
             return gone
         else:
             blob = {"digest": v["digest"], "size": v["size"], "name": v["name"], "content_type": mime}

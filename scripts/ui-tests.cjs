@@ -38,7 +38,7 @@ async function main() {
 
   const dir = path.join(__dirname, '..', 'ui', 'tests');
   const CORE = ['bot-permissions', 'chat', 'docs', 'goals', 'inbound', 'meetings', 'people-access', 'recruit-unit',
-                'settings-forms', 'sign-in-redirect', 'task-privacy', 'tasks-page', 'team-groups', 'visual-cards', 'visual-media', 'visual-media-app'];
+                'settings-forms', 'sign-in-redirect', 'task-privacy', 'tasks-page', 'team-groups', 'visual-cards', 'visual-fallback', 'visual-media', 'visual-media-app'];
   const args = process.argv.slice(2);
   let jobs = selected.jobs;
   let all = false;

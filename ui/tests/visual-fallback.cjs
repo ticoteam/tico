@@ -39,6 +39,7 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
       const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
       if (p.startsWith('/visuals/')) {
         visualReqs.push(p);
+        if (p.endsWith('-broken')) return route.fulfill({status: 404, body: ''});
         return route.fulfill({contentType: 'image/png', headers: {'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "default-src 'none'; sandbox"}, body: PNG});
       }
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
@@ -91,6 +92,22 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
       [['page', 'open'], ['svg', 'open']], `${label}: a page and an SVG are Open cards`);
     assert.deepEqual(await m2.locator('.vcard-title').allTextContents(), ['Title f-funnel', 'Title f-logo'], `${label}: each card has its title`);
     assert.equal(await m2.locator('figure.vcard[data-kind="page"] img.vcard-preview').getAttribute('src'), ORIGIN + '/visuals/tok-f-funnel-preview', `${label}: the still preview`);
+    // A redraw keeps the Open card and takes the preview's renewed address; a preview that fails to load is hidden.
+    assert.deepEqual(await page.evaluate(async () => {
+      const root = document.createElement('div'), f = {file_id: 'f-x', version: 1, kind: 'page', title: 'X', name: 'x.html', open: true, src: null,
+        preview_url: '/visuals/tok-x-broken', current_version: 1};
+      document.body.append(root);
+      root.innerHTML = visualCardsHTML([f], {key: 'k'});
+      const img = root.querySelector('img.vcard-preview');
+      for (let i = 0; !img.hidden && i < 100; i++) await new Promise(r => setTimeout(r, 20));
+      const hiddenAfterError = img.hidden;
+      root.querySelector('figure.vcard').dataset.mark = 'kept';
+      visualSwap(root, visualCardsHTML([{...f, preview_url: '/visuals/tok-x.2'}], {key: 'k'}));
+      const now = root.querySelector('figure.vcard'), out = [hiddenAfterError, now.dataset.mark, now.querySelector('img.vcard-preview').getAttribute('src'),
+        now.querySelector('img.vcard-preview').hidden];
+      root.remove();
+      return out;
+    }), [true, 'kept', ORIGIN + '/visuals/tok-x.2', false], `${label}: a kept Open card takes the renewed preview`);
     assert.equal(await m2.locator('figure.vcard[data-kind="svg"] img.vcard-preview').count(), 0, `${label}: no preview when there is none`);
     assert.equal(await page.locator('figure.vcard iframe').count(), 0, `${label}: no page frame on the app's own address`);
     assert.equal(await m2.locator('.chat-files').count(), 0, `${label}: an Open card is not also a file chip`);

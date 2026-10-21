@@ -70,7 +70,8 @@ function visualCardHTML(f, key, state) {
   const body = state === 'removed' ? '<div class="vcard-note">This visual was removed</div>'
     : state === 'open' ? visualOpenBody(f) : VISUAL_BODY[f.kind](f);
   return `<figure class="vcard" data-visual-key="${esc(key)}" data-kind="${esc(f.kind)}" data-state="${state}" data-file="${esc(fid)}" data-version="${n}"${
-    current > n ? ` data-current="${current}"` : ''} data-name="${esc(f.name || title)}"${state === 'ready' ? ` data-fresh-src="${esc(visualSrc(f))}"` : ''}>
+    current > n ? ` data-current="${current}"` : ''} data-name="${esc(f.name || title)}"${state === 'ready' ? ` data-fresh-src="${esc(visualSrc(f))}"` : ''}${
+    state === 'open' && visualSrc(f, 'preview_url') ? ` data-fresh-preview="${esc(visualSrc(f, 'preview_url'))}"` : ''}>
     <div class="vcard-body" style="${esc(state === 'ready' ? visualSpace(f) : '')}">${body}</div>
     <figcaption class="vcard-cap"><span class="vcard-title">${esc(title)}</span>${newer}${menu}</figcaption></figure>`;
 }
@@ -103,6 +104,11 @@ function visualKept(oldRoot, newRoot) {
     if (!was || was.dataset.state !== card.dataset.state || was.dataset.current !== card.dataset.current) continue;
     old.delete(card.dataset.visualKey);
     if (card.dataset.freshSrc) was.dataset.freshSrc = card.dataset.freshSrc;
+    // An Open card's still preview is a plain picture: a renewed address replaces the one that may have run out.
+    const still = was.querySelector('img.vcard-preview');
+    if (still && card.dataset.freshPreview && still.getAttribute('src') !== card.dataset.freshPreview) {
+      still.hidden = false; still.src = card.dataset.freshPreview;
+    }
     pairs.push([was, card]);
   }
   return pairs;
@@ -167,6 +173,11 @@ document.addEventListener('click', ev => {
   else if (what === 'newer') visualOpen(card, Number(card.dataset.current));
   else if (what === 'open') visualOpen(card);
 });
+// A still preview that did not load leaves the card with its title and Open, never a broken picture; a redraw with a
+// renewed address shows it again (visualKept). Errors do not bubble, so this listens in the capture phase.
+document.addEventListener('error', ev => {
+  if (ev.target instanceof HTMLImageElement && ev.target.classList.contains('vcard-preview')) ev.target.hidden = true;
+}, true);
 // One menu open at a time; a click elsewhere closes it.
 document.addEventListener('click', ev => {
   for (const m of document.querySelectorAll('details.vcard-menu[open]')) if (!m.contains(ev.target)) m.removeAttribute('open');
