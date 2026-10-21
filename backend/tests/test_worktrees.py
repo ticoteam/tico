@@ -915,6 +915,8 @@ def test_a_checkout_stuck_past_the_deadline_fails_once_owned_and_retries_on_the_
         assert post(api, 'runners/heartbeat', {**HEARTBEAT, 'worktrees': []}, 'runner-test').json()['worktree_actions'] == []
     assert told() == 1
     with api.app_state.store.read() as c:
+        assert '`hub task worktree add Acme/product`' in c.execute(           # nothing checked out: add starts it
+            "SELECT body FROM messages WHERE body LIKE '%Setup did not finish%'").fetchone()[0]
         held = {w['link_id']: w for w in W.holdings(c, 'bot:cmo')}
         assert W.current_error('pending', json.loads(c.execute('SELECT detail_json FROM task_links WHERE id=?',
                                                                (link['link_id'],)).fetchone()[0]))
@@ -926,54 +928,77 @@ def test_a_checkout_stuck_past_the_deadline_fails_once_owned_and_retries_on_the_
     assert detail['checkout_state'] == 'queued' and 'pending_expired' not in detail
 
 
-def test_a_retry_after_the_deadline_resumes_a_checked_out_folder_at_setup_and_finishes(prepared):
+def test_a_retry_after_the_deadline_keeps_the_setup_phase_and_names_the_registered_setup_command(prepared):
     api, tid, _ = prepared
     link = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test').json()
     proof = {'expected_head': 'a' * 40, 'checkout_target': 'refs/remotes/origin/main', 'expected_base': 'b' * 64}
     route = f'/api/v2/tasks/{tid}/links/{link["link_id"]}'
+
+    def patch(**fields):
+        return api.patch(route, json=fields, headers={**auth('runner-test'), 'Idempotency-Key': uuid.uuid4().hex})
     for fields in ({'state': 'pending', 'checkout_state': 'initializing', 'setup_pending': True, **proof},
                    {'state': 'pending', 'checkout_state': 'checkout_ready', 'setup_pending': True},
                    {'state': 'pending', 'checkout_state': 'setup_running', 'setup_pending': True}):   # setup began
-        assert api.patch(route, json=fields, headers={**auth('runner-test'), 'Idempotency-Key': uuid.uuid4().hex}
-                         ).status_code == 200
+        assert patch(**fields).status_code == 200
     with api.app_state.store.transaction() as c:
         c.execute('UPDATE task_links SET updated=? WHERE id=?',
                   (H.shift(H.now(), hours=-(W.PENDING_HOURS + 1)), link['link_id']))
     post(api, 'runners/heartbeat', {**HEARTBEAT, 'worktrees': []}, 'runner-test')
-    again = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test').json()
-    # The folder is already checked out: the retry resumes at setup with its proof, never a fresh checkout.
-    assert again['link_id'] == link['link_id'] and again['checkout_state'] == 'checkout_ready'
-    assert {k: again[k] for k in proof} == proof and again['setup_pending'] is True
-    done = api.patch(route, json={'state': 'present', 'checkout_state': 'ready', 'setup_pending': False, **proof},
-                     headers={**auth('runner-test'), 'Idempotency-Key': uuid.uuid4().hex})
-    assert done.status_code == 200, done.text
     with api.app_state.store.read() as c:
-        assert c.execute('SELECT state FROM task_links WHERE id=?', (link['link_id'],)).fetchone()[0] == 'present'
+        told = c.execute("SELECT body FROM messages WHERE to_actor='bot:cmo' AND body LIKE '%Setup did not finish%'"
+                         ).fetchone()[0]
+    assert '`hub task worktree setup Acme/product`' in told        # the folder exists: setup resumes it in place
+    again = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test').json()
+    assert again['link_id'] == link['link_id'] and again['checkout_state'] == 'setup_running'
+    assert {k: again[k] for k in proof} == proof
+    # The registered setup command's own reports (runner/worktrees.py _run_registered_setup) finish it.
+    assert patch(state='pending', checkout_state='setup_running', setup_pending=True, **proof).status_code == 200
+    assert patch(state='present', checkout_state='ready', setup_pending=False, **proof).status_code == 200
+    with api.app_state.store.read() as c:
+        row = c.execute('SELECT state,detail_json FROM task_links WHERE id=?', (link['link_id'],)).fetchone()
+    assert row['state'] == 'present' and 'pending_expired' not in json.loads(row['detail_json'])
 
 
-def test_a_stale_push_webhook_never_hides_a_newer_head_the_computer_reports(prepared):
+def test_a_delayed_old_push_clears_on_the_next_clean_report_and_a_real_fix_forward_push_holds(prepared):
     api, tid, _ = prepared
     link = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test').json()
     assert mark_ready(api, tid, link['link_id']).status_code == 200
     report = {'link_id': link['link_id'], 'state': 'present', 'checkout_state': 'ready', 'branch': link['branch'],
-              'last_commit': 'f' * 40, 'ahead': 0}
+              'last_commit': 'b' * 40, 'ahead': 0, 'dirty_files': 0}
     body = {**HEARTBEAT, 'worktrees': [report]}
     with api.app_state.store.transaction() as c:
         pr = H.task_link(c, 'bot:cmo', tid, 'https://github.com/Acme/product/pull/7')
-        c.execute("UPDATE task_links SET state='merged',branch=?,pr_merged_at=?,detail_json=? WHERE id=?",
-                  (link['branch'], H.now(), json.dumps({'head_sha': 'e' * 40}), pr['id']))
-        # The webhook's last push is the merged head, from before the merge; the fix-forward push it missed.
-        detail = json.loads(c.execute('SELECT detail_json FROM task_links WHERE id=?', (link['link_id'],)).fetchone()[0])
-        detail.update(pushed='e' * 40, pushed_last_at=H.shift(H.now(), minutes=-30))
-        c.execute('UPDATE task_links SET detail_json=? WHERE id=?', (json.dumps(detail), link['link_id']))
+        c.execute("UPDATE task_links SET state='merged',branch=?,detail_json=? WHERE id=?",
+                  (link['branch'], json.dumps({'head_sha': 'b' * 40}), pr['id']))
+
+    def deliver(sha):
+        """The push webhook for `sha` on the worktree branch, through the real handler."""
+        from backend import github
+        with api.app_state.store.transaction() as c:
+            github.push(c, {'ref': 'refs/heads/' + link['branch'], 'after': sha,
+                            'repository': {'full_name': 'Acme/product', 'default_branch': 'main'}})
+
+    def held():
+        with api.app_state.store.read() as c:
+            row = dict(c.execute('SELECT * FROM task_links WHERE id=?', (link['link_id'],)).fetchone())
+            return W.held_reason(c, {**row, 'owner': 'bot:cmo'}, json.loads(row['detail_json']))
+    # A real fix-forward: C pushed, and the computer is at C too. Held until C's pull request finishes.
+    deliver('c' * 40)
+    report['last_commit'] = 'c' * 40
     assert post(api, 'runners/heartbeat', body, 'runner-test').json()['worktree_actions'] == []
-    with api.app_state.store.read() as c:
-        assert {w['link_id']: w for w in W.holdings(c, 'bot:cmo')}[link['link_id']]['kept'] == \
-            'held: new commits since PR #7'
-    # The fix-forward's own pull request carries that head and finishes: released.
+    assert held() == 'held: new commits since PR #7'
     with api.app_state.store.transaction() as c:
         pr2 = H.task_link(c, 'bot:cmo', tid, 'https://github.com/Acme/product/pull/8')
-        c.execute("UPDATE task_links SET state='merged',branch=?,pr_merged_at=?,detail_json=? WHERE id=?",
-                  (link['branch'], H.shift(H.now(), seconds=1), json.dumps({'head_sha': 'f' * 40}), pr2['id']))
+        c.execute("UPDATE task_links SET state='open',branch=?,detail_json=? WHERE id=?",
+                  (link['branch'], json.dumps({'head_sha': 'c' * 40}), pr2['id']))
+    assert post(api, 'runners/heartbeat', body, 'runner-test').json()['worktree_actions'] == []
+    # C's pull request merges; then an old push of A is delivered late. It holds only until the next report.
+    with api.app_state.store.transaction() as c:
+        c.execute("UPDATE task_links SET state='merged',pr_merged_at=? WHERE id=?", (H.now(), pr2['id']))
+    deliver('a' * 40)
+    assert held() == 'held: new commits since PR #8'
     actions = post(api, 'runners/heartbeat', body, 'runner-test').json()['worktree_actions']
     assert [(a['action'], a.get('release')) for a in actions] == [('remove', True)]
+    report['state'] = 'removed'
+    post(api, 'runners/heartbeat', body, 'runner-test')
+    assert released_events(api, tid)[-1]['reason'] == f"pull request merged (stale push {'a' * 12} cleared)"

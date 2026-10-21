@@ -175,6 +175,8 @@ def start_refusal(c, task):
 def released_event(c, row, detail):
     """One `worktree.released` event per tree, with why: the task's run history and Health read it."""
     data = {'link': row['id'], 'path': row['path'], 'reason': detail.get('release_reason') or 'cleanup'}
+    if detail.get('stale_push_cleared'):
+        data['reason'] += f" (stale push {detail['stale_push_cleared'][:12]} cleared)"
     if data['reason'] == 'task finished' and (detail.get('dirty_files') or detail.get('ahead')) \
             and not detail.get('snapshot_skipped'):
         data['wip_branch'] = 'wip/' + row['task_id'][:8] + '-' + row['id'][:6]     # runner/worktrees.py wip_branch
@@ -194,6 +196,12 @@ def cancel_pending(c, row, detail, reason):
     released_event(c, row, detail)
 
 
+def checked_out(detail):
+    """A pending checkout that may have a folder on disk with its recorded proof: it resumes, never starts over."""
+    return (detail.get('checkout_state') in ('initializing', 'checkout_ready', 'setup_running', 'setup_failed')
+            and all(detail.get(key) for key in IDENTITY))
+
+
 def expire_pending(c, row, detail):
     """A checkout or setup that made no progress for PENDING_HOURS has failed: it would otherwise hold a place
     forever. The tree keeps its place and says why, its computer stops preparing it, a reserved wait ends, and its
@@ -202,10 +210,11 @@ def expire_pending(c, row, detail):
     detail['pending_expired'] = reason
     if wait := waits.preparing(c, row['id']):
         waits._finish(c, wait, 'failed', reason)
+    retry = ('hub task worktree setup ' if checked_out(detail) else 'hub task worktree add ') + (row['repo'] or '')
     if row.get('bot_state', 'active') == 'active':
         H._wake(c, H.task(c, row['task_id']), row['owner'],
                 f"Tico stopped preparing this task's {row['repo'] or ''} worktree at {row['path']}: {reason}. Its place "
-                f"stays this task's; run `hub task worktree add {row['repo'] or ''}` to try again on the same worktree.",
+                f"stays this task's; run `{retry}` to try again on the same worktree.",
                 trigger='other', source=row['id'])
 
 
@@ -220,15 +229,20 @@ def held_reason(c, row, detail):
                      f"AND branch=? AND state IN {PR_FINISHED} ORDER BY coalesce(pr_merged_at,updated,created) DESC LIMIT 1",
                      (row['task_id'], row['repo'] or '', row['branch'] or '')).fetchone() if row['branch'] else None
     pr_head = json.loads(last['detail_json'] or '{}').get('head_sha') if last else None
-    # The branch's newest known head: the computer's committed head once it has nothing unpushed, and the push
-    # webhook's head when that push came after the pull request finished. An older webhook value (a missed later
-    # push) never stands in for a newer head the computer reports, nor holds a tree whose branch is the merged head.
-    heads = {detail.get('last_commit') if detail.get('ahead') == 0 else None}
-    pushed_at = H.parse_ts(detail.get('pushed_last_at') or '')
-    if last and pushed_at and pushed_at > (H.parse_ts(last['finished'] or '') or pushed_at):
-        heads.add(detail.get('pushed'))
-    heads -= {None, ''}
-    if pr_head and heads - {pr_head}:
+    # The computer's committed head, once it has nothing unpushed, is the branch as it is now. A push webhook's head
+    # that differs from the merged head holds too (a push from elsewhere), but only until the computer's first report
+    # after that delivery: a clean tree with nothing unpushed at the merged head proves it stale (a delayed or
+    # replayed delivery), and it is cleared and named in the release.
+    runner = detail.get('last_commit') if detail.get('ahead') == 0 else None
+    if pr_head and runner and runner != pr_head:
+        return f"held: new commits since PR #{last['number']}"
+    pushed = detail.get('pushed')
+    if pr_head and pushed and pushed != pr_head:
+        seen = detail.get('runner_report_at') or ''
+        if (seen > (detail.get('pushed_last_at') or detail.get('pushed_at') or '') and runner == pr_head
+                and not detail.get('dirty_files')):
+            detail['stale_push_cleared'] = detail.pop('pushed')
+            return ''
         return f"held: new commits since PR #{last['number']}"
     return ''
 
@@ -391,6 +405,8 @@ def heartbeat(c, who, reports, capable, default_org=""):
                                      exclude={'link_id', 'state', 'branch', 'checkout_state', 'record_updated',
                                               *(IDENTITY if stale else ())})
         detail.update(reported)
+        if detail.get('pushed') and (detail.get('pushed_last_at') or '') >= (detail.get('runner_report_at') or ''):
+            detail['runner_report_at'] = now        # the computer's first report after a push webhook's delivery
         if report.error is None and not refused_cleanup(report.state, detail):
             detail.pop('error', None)           # every report carries the computer's current error, if any
         legacy_present = (report.state == 'present' and report.checkout_state == 'legacy_present'
@@ -569,15 +585,13 @@ def provision(c, who, task, repo, path=None, branch=None, default_org='', brief=
                 # A retry after the deadline starts the same worktree over: same link, path and branch.
                 if why := start_refusal(c, task):
                     raise Problem('worktree_start', why, 409)
-                # The checkout proof stays: a folder already checked out resumes at setup instead of starting over
-                # into a path that exists. Only a checkout that never got that far is queued again.
+                # A folder already checked out keeps its phase and proof: the registered setup command
+                # (`hub task worktree setup`, the one the expiry names) resumes it in place. Only a checkout that
+                # never got that far is queued again.
                 for key in ('pending_expired', 'error'):
                     detail.pop(key, None)
-                if detail.get('checkout_state') == 'initializing' and all(detail.get(key) for key in IDENTITY):
-                    detail['setup_pending'] = True        # the computer resumes an interrupted checkout from its proof
-                elif detail.get('checkout_state') in ('checkout_ready', 'setup_running', 'setup_failed') \
-                        and all(detail.get(key) for key in IDENTITY):
-                    detail.update(checkout_state='checkout_ready', setup_pending=True)
+                if checked_out(detail):
+                    detail['setup_pending'] = True
                 elif detail.get('checkout_state') != 'attached_pending':
                     for key in IDENTITY:
                         detail.pop(key, None)
@@ -771,6 +785,8 @@ def install(app, store, auth, mutate):
                     detail[key] = getattr(body, key)
             if not current_error(body.state or link['state'], detail):
                 detail.pop('error', None)       # a successful setup supersedes the failed action before it
+            if body.checkout_state is not None or body.state in ('present', 'removed'):
+                detail.pop('pending_expired', None)     # the retry is making progress again
             fields = body.model_dump(exclude_none=True, exclude={'cleanup', 'setup_pending', 'checkout_state', 'expected_head', 'checkout_target', 'expected_base', 'skipped_files', 'snapshot_skipped', 'restore_source'})
             now = detail['record_changed'] = H.now()
             fields['detail_json'] = json.dumps(detail)
