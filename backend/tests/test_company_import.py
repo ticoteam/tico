@@ -163,3 +163,25 @@ def test_reserved_alias_cannot_replace_a_custom_named_assistant_now_or_later(env
         assert result.status_code == 422 and "conflicts" in result.text
         assert rows(api, "SELECT bot,config_json FROM bot_config ORDER BY bot") == before
     assert len(rows(api, "SELECT bot FROM bot_config WHERE json_extract(config_json,'$.template')='assistant'")) == 1
+
+
+def test_a_300_bot_company_file_imports_and_a_301_bot_file_is_refused_plainly(environment):
+    from backend.tests.test_company_file import chart
+
+    api = environment()
+    draft = chart(300)
+    draft["company"].update(name="Acme Finance", about="We help small firms manage their books.")
+    text = C.to_yaml(draft)
+    assert len(starter.canonical(starter.load(text)).encode()) > 131072      # past the old 128 KB plan limit
+    preview = api.post("/api/v2/onboarding/company/preview", json={"company_yaml": text}, headers=signed_in())
+    assert preview.status_code == 200, preview.text
+    assert len(preview.json()["employees"]) == 300
+    done = api.post("/api/v2/onboarding/company/import", json={"company_yaml": text, "fingerprint": preview.json()["fingerprint"]},
+                    headers=signed_in())
+    assert done.status_code == 200, done.text
+    imported = {r["bot"] for r in rows(api, "SELECT bot FROM bot_config")}
+    assert all(e["id"] in imported for e in preview.json()["employees"])
+    extra = "  - id: one-too-many\n    template: bookkeeping\n    title: One Too Many\n"
+    over = text.replace("employees:\n", "employees:\n" + extra, 1)
+    refused = api.post("/api/v2/onboarding/company/preview", json={"company_yaml": over}, headers=signed_in())
+    assert refused.status_code == 422 and refused.json()["error"]["code"] == "company_file"
