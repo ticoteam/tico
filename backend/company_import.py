@@ -7,6 +7,8 @@ import hashlib
 from pydantic import ValidationError
 
 from . import company_file as C
+from . import goals as G
+from . import kpis as K
 from . import models as M
 from . import onboarding as O
 from .company_file import draft as D
@@ -82,8 +84,6 @@ def plan(onboarding, c, who, text):
         deferred.append("open_seats")
     if len(draft["people"]) > 1:
         deferred.append("coworkers")
-    if draft["goals"]:
-        deferred.append("goals")
     if tool_list(draft):
         deferred.append("tool_connections")
     if any(b.get("first_job") for b in draft["bots"]):
@@ -94,8 +94,48 @@ def plan(onboarding, c, who, text):
                "employees": [{"id": slug, "template": choice.template, "title": choice.display_name,
                               "reports_to": choice.reports_to, "start": "later" if slug in later else "now"}
                              for slug, choice in selected.items()],
+               "goals": [{"id": goal["id"], "title": goal_title(goal), "owner": goal_owner(goal, owner_id, ids)}
+                         for goal in draft["goals"]],
                "builtins": sorted(required), "deferred": deferred}
     return body, saved, later, summary
+
+
+def goal_owner(goal, owner_id, ids):
+    """Who owns an imported goal on Goals. The file names the company's owner for a company goal (setup's
+    recruiting/goals.py gives every company goal to the owner) and keeps no level or parent, so the owner's goals are
+    the company's. Any other owner is a bot on the imported chart; check() has already given a goal whose owner left
+    the chart to the owner."""
+    return G.COMPANY if goal["owner"] == owner_id or goal["owner"] not in ids else "bot:" + ids[goal["owner"]]
+
+
+def goal_title(goal):
+    """The file may leave a goal's title blank; Tico names every goal, so it is called by its measure instead."""
+    return goal["title"].strip() or goal["measure"] or "Untitled goal"
+
+
+def target(goal):
+    """The file's numbers as the KPI link's target: an improvement needs both a target and its deadline, a range
+    a min or a max. Anything less is a measure with no target yet."""
+    if goal["direction"] == "range":
+        if goal["min"] is None and goal["max"] is None:
+            return {"kind": "none"}
+        return {"kind": "maintain", "min": goal["min"], "max": goal["max"]}
+    if goal["target"] is None or not goal["deadline"]:
+        return {"kind": "none"}
+    return {"kind": "improve", "target": goal["target"], "baseline": goal["baseline"], "deadline": goal["deadline"]}
+
+
+def import_goals(c, actor, goals):
+    """Each goal under its owner, with its measure as a KPI on it. The file holds a baseline and a target but never
+    readings, so no history is made up. A target Tico would refuse (one on the wrong side of its baseline) is left
+    off for the owner to set; the goal and its measure still land."""
+    for goal, owner in goals:
+        made = G.create(c, actor, goal_title(goal), owner)
+        if not goal["measure"]:
+            continue
+        kpi = G.kpi_create(c, actor, owner, {"name": goal["measure"], "unit": goal["unit"], "direction": goal["direction"]})
+        aim = target(goal)
+        G.kpi_link(c, actor, made["id"], kpi["id"], {"kind": "none"} if K.validate_target(kpi, aim)[1] else aim)
 
 
 def preview(onboarding, c, who, text):
@@ -136,6 +176,8 @@ def apply(onboarding, c, who, text, fingerprint):
         parent = body.selected[slug].reports_to
         if row["reports_to"] != parent:
             onboarding.admin.update_bot(c, who, slug, M.BotDefinitionUpdate(reports_to=parent, expected_revision=row["revision"]))
+    owners = {goal["id"]: goal["owner"] for goal in summary["goals"]}
+    import_goals(c, who.actor, [(goal, owners[goal["id"]]) for goal in saved["goals"]])
     for slug in later:
         revision = c.execute("SELECT revision FROM bot_config WHERE bot=?", (slug,)).fetchone()[0]
         onboarding.admin.update_bot(c, who, slug, M.BotDefinitionUpdate(status="paused", expected_revision=revision))
