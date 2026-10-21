@@ -140,7 +140,7 @@ The bot's status says why, in plain words, and the run waits or is saved for lat
 |---|---|
 | **Gateway cap reached** | Waits until the next month (UTC). |
 | The Tico AI Gateway key is not working; save a new one in Settings > Computers | Waits for a new key. |
-| Tico AI Gateway rate limited | Waits at least an hour. The Gateway limits an address that sent too many refused keys. |
+| Tico AI Gateway rate limited | Retries after the Gateway's requested wait, for the key's minute rate window or an address block. Update the server and its computers to use that wait; older computers without it wait at least an hour. |
 | The Tico AI Gateway doesn't offer this model | Saved for later, not retried. Pick Tico Cheap, Mid or Power 1.0. |
 | The Tico AI Gateway refused the request as sent, with the Gateway's reason | Saved for later, not retried. |
 | No Tico route for this request | Saved for later, not retried. |

@@ -630,10 +630,12 @@ def ended(api, attempt):
         return H.status(c, "ops"), job
 
 
-def test_a_rate_limited_gateway_waits_its_retry_after_and_is_not_called_a_cap(api, monkeypatch):
+@pytest.mark.parametrize("reported", [False, True])
+def test_a_rate_limited_gateway_waits_its_retry_after_and_is_not_called_a_cap(api, monkeypatch, reported):
     machine, attempt = tico_run(api, monkeypatch)
     finish(api, machine, attempt, "Tico AI Gateway: rate limited after too many refused keys from this address; wait "
-           "an hour (rate_limited)", limited=True)
+           "an hour (rate_limited)", limited=True,
+           **({"limit_resets_at": H.shift(H.now(), seconds=3600)} if reported else {}))
     status, job = ended(api, attempt)
     assert status["state"] == "limited" and job == "queued"
     assert status["focus"].startswith("Tico AI Gateway rate limited at ") and "cap" not in status["focus"]
@@ -642,6 +644,26 @@ def test_a_rate_limited_gateway_waits_its_retry_after_and_is_not_called_a_cap(ap
         from backend.execution import limit_cooldown
         assert limit_cooldown(c, "ops") >= G.RETRY_AFTER
     assert claim(api, machine, "ops") is None
+
+
+def test_gateway_work_resumes_after_the_reported_rate_window(api, monkeypatch):
+    machine, attempt = tico_run(api, monkeypatch)
+    wait = 42
+    at = H.now()
+    monkeypatch.setattr(H, "now", lambda: at)
+    reset = H.shift(at, seconds=wait)
+    finish(api, machine, attempt, "Tico AI Gateway: rate limited; retrying after the Gateway's requested wait "
+           "(rate_limited)", limited=True, limit_resets_at=reset)
+    status, job = ended(api, attempt)
+    assert job == "queued" and "refused keys" not in status["focus"]
+    with api.app.state.store.read() as c:
+        from backend.execution import limit_cooldown
+        assert wait <= limit_cooldown(c, "ops") <= wait + 1
+    assert claim(api, machine, "ops") is None
+    at = H.shift(at, seconds=wait + 2)
+    ready(api, machine, ["ops"])
+    retried = claim(api, machine, "ops")
+    assert retried and retried["job_id"] == attempt["job_id"] and retried["id"] != attempt["id"]
 
 
 @pytest.mark.parametrize("code", ["revoked_key", "unknown_key"])

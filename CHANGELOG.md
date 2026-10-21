@@ -25,6 +25,8 @@ All notable changes to Tico are recorded here. The format follows
   as before ([Tico AI Gateway](docs/ai-gateway.md#choose-how-bots-get-their-models)).
 
 ### Fixed
+- **Gateway turns retry when their rate window resets.** The computer carries the Gateway's requested wait back to
+  the server, so a busy minute does not hold starter bots for an hour or claim their address sent refused keys.
 - **A bot is no longer handed a picture link for a chat's file that never opens.** The visual route checks a bot's
   link as the bot without its run, which cannot see a chat's files, so those links always answered "not found". A bot
   reading a chat visual now gets the file itself (its file link, no picture address); people's links and a bot's
