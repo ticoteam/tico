@@ -14,6 +14,9 @@ All notable changes to Tico are recorded here. The format follows
   Tico refuses a bot's question to a person that lists picks without options, leaves out what happens, has no
   recommended pick among several, or puts ids, paths or errors in the question. Decide shows cards due within 2
   working days first, then those holding up a roadmap item at Approved or Building, then newest first.
+- **A menu button left of Search in a chat's bot switcher on a phone.** In a bot's chat the bottom bar is hidden;
+  tapping the bot's icon by the chat bar now shows a round menu button beside Search that opens the side menu in one
+  tap, the same menu More opens, and it closes the same way.
 - **How bots get their models**, at the top of Settings > AI providers and the first setup step: **Your Claude and
   ChatGPT subscriptions, plus Tico Gateway** (recommended, and what Tico's installer sets with
   `TICO_MODELS_PRESET=subscriptions-gateway`), subscriptions only, Tico Gateway only, or your company's plans or API
