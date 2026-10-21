@@ -86,7 +86,7 @@ Open the link in your browser: the app opens on **Finish setup**. Then:
 
 1. **Choose AI providers** (optional): leave them all unticked to do it later. Bots need one to run; until then each bot says
    "Add an AI provider", and Settings > Computers > Models adds it. With a gateway key from Tico, the
-   [Tico AI Gateway](ai-gateway.md) card there adds Tico Cheap, Mid and Power 1.0. The step starts with how bots get
+   [Tico AI Gateway](ai-gateway.md) card there adds Tico Cheap 1.1, Mid 1.0 and Power 1.0. The step starts with how bots get
    their models; **Your Claude and ChatGPT subscriptions, plus Tico Gateway** is recommended
    ([the four choices](ai-gateway.md#choose-how-bots-get-their-models)).
 2. **Name the team**, say what it does, and pick its groups. A few bots are suggested for each group. For the first result
@@ -769,6 +769,10 @@ allowed, take control. The computer itself decides whether it offers one:
   override file a named or `--server-network` runner has, as every compose call for that runner must.
 - A Linux checkout: `sudo apt-get install xvfb x11vnc matchbox-window-manager`, then `scripts/tico screen on`
   (`screen off` and `screen status` too; a running runner follows within seconds).
+
+In **Bot → Settings → Screen**, use the switch to enable or disable screen access. If setup is needed, the switch
+reveals the command to run on the computer and shows **Waiting for computer setup** until it reports readiness.
+The same switch is in the computer’s details under **Settings → Computers**.
 
 The first time a new computer offers its screen, its **Screen** setting in **Settings > Computers** starts at
 **Control**, so its operator and admins can watch it and drive it: the screen opens in Control, with **View** one tap

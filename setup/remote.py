@@ -55,11 +55,27 @@ class SSMShell:
     def __init__(self, ssm, instance_id: str, sleep: Callable[[float], None] = time.sleep):
         self.ssm, self.iid, self.sleep = ssm, instance_id, sleep
 
-    def run(self, cmd: str, input: bytes | None = None) -> Result:
+    def run(self, cmd: str, input: bytes | None = None, *, ready_timeout: int = 0) -> Result:
         if input is not None:
             raise ValueError("SSMShell does not pass stdin")
-        sent = self.ssm.send_command(InstanceIds=[self.iid], DocumentName="AWS-RunShellScript",
-                                     Parameters={"commands": [cmd]}, TimeoutSeconds=900)
+        deadline = time.monotonic() + ready_timeout
+        while True:
+            if ready_timeout and time.monotonic() >= deadline:
+                return Result(124, "", "timed out waiting for Systems Manager")
+            try:
+                online = not ready_timeout or any(
+                    row.get("PingStatus") == "Online" for row in self.ssm.describe_instance_information(
+                        Filters=[{"Key": "InstanceIds", "Values": [self.iid]}])["InstanceInformationList"])
+                if online:
+                    sent = self.ssm.send_command(InstanceIds=[self.iid], DocumentName="AWS-RunShellScript",
+                                                 Parameters={"commands": [cmd]}, TimeoutSeconds=900)
+                    break
+            except Exception as exc:
+                # Online can precede Run Command registration. Retry only this pre-acceptance refusal,
+                # never a failed/uncertain invocation, an explicit access denial, or a transport failure.
+                if not ready_timeout or getattr(exc, "response", {}).get("Error", {}).get("Code") != "InvalidInstanceId":
+                    raise
+            self.sleep(min(5, max(0, deadline - time.monotonic())))
         cid = sent["Command"]["CommandId"]
         for _ in range(450):
             self.sleep(2)

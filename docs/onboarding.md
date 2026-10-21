@@ -30,8 +30,11 @@ team or setup tasks, and an import cannot replace a company whose setup is compl
 
 This starter import supports one owner and catalog AI employees with the default rules. The signed-in owner remains
 the owner; a file does not add sign-in accounts. Additional people, existing external agents and custom rules are
-refused with an explanation. Goals, first jobs, routines, model choices and tool connections are saved for later setup and
-listed in the preview; the team uses its currently configured AI providers. Bots follow their normal setup and
+refused with an explanation. The file's goals are imported onto [Goals](goals-and-kpis.md): the owner's goals become
+company goals, and so do goals the file gives a built-in bot such as the Assistant (Goals keeps the built-ins out of
+its tree). Each other bot's goal sits under that bot, with the goal's measure as a KPI carrying the file's baseline and
+target (the file holds no readings, so a new KPI starts with no history). First jobs, routines, model choices and tool
+connections are saved for later setup and listed in the preview; the team uses its currently configured AI providers. Bots follow their normal setup and
 computer-enrollment flow after import.
 
 The implementation is `backend/onboarding.py` (the record, creating the team), `backend/recruit.py` and `backend/recruit_rank.py`

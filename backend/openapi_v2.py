@@ -555,7 +555,10 @@ SCHEMAS = {
                    ask=ref("TaskReviewAskView"),
                    answer=ref("ReviewAnswer"),
                    answers=items({"oneOf": [{"type": "string"}, ref("ReviewAnswer")]}) | {
-                       "description": "On a structured ask: all review answers, oldest first. On a bot reply: handled message ids"}),
+                       "description": "On a structured ask: all review answers, oldest first. On a bot reply: handled message ids"},
+                   woke={"type": "boolean", "description": "On a send: false when the message was held (see `held`)"},
+                   held={"type": "string", "description": "On a send: a bot's message to a bot held for that bot's next "
+                         "run, and how to wake it now (backend/bot_to_bot.py)"}),
     "Execution": obj({"job_id": "s", "message_id": "s", "bot": "s", "attempt_id": "n", "state": "s", "label": "s", "text": "s"},
                      required=["job_id", "message_id", "bot", "attempt_id", "state", "label", "text", "parts"],
                      parts=items(obj({"kind": {"enum": ["progress", "reply", "tool"]}, "text": "s", "at": "s"})) | {
@@ -734,7 +737,9 @@ SCHEMAS = {
     "TaskAnswerResult": obj({"comment": ref("Message"), "answer": ref("ReviewAnswer"),
                              "comments": items(ref("Message")), "woke": "b"}),
     # `warning`: the bot it went to is paused or quarantined; the comment is kept and runs when it is back.
-    "CommentResult": obj({"comment": ref("Message"), "comments": items(ref("Message")), "woke": "b", "warning": "s"},
+    # `held`: a bot's comment to a bot waits for that bot's next run; it says how to wake it now.
+    "CommentResult": obj({"comment": ref("Message"), "comments": items(ref("Message")), "woke": "b", "warning": "s",
+                          "held": "s"},
                          required=["comment", "comments", "woke"]),
     "InboundTaskResult": obj({"task": {"oneOf": [obj({"id": "s"}), {"type": "null"}]}, "created": "b", "changed": "b"}),
     "UpdateList": obj({"updates": "a", "unread": "i", "next_before": "n"}, required=["updates", "unread"]),

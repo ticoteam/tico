@@ -388,21 +388,6 @@ function renderSettingsMachines() {
       el.querySelector('[data-show-revoked-computers]')?.focus();
       return;
     }
-    const screenBox = event.target.closest('[data-computer-screen]');
-    if (screenBox && event.target.type === 'radio') {
-      const id = screenBox.dataset.computerScreen, before = SETTINGS_DATA.machines.find(m => m.id === id)?.screen || 'off';
-      screenBox.querySelectorAll('input').forEach(input => { input.disabled = true; });
-      try {
-        const saved = await post(`/v2/computers/${encodeURIComponent(id)}/screen`, {mode: event.target.value});
-        screenSaved(id, {screen: event.target.value, ...saved});
-        toast(event.target.value === 'off' ? 'Screen off' : `Screen: ${event.target.value}`);
-        await loadSettings();
-      } catch (error) {
-        toast(error.message, true);
-        screenBox.querySelectorAll('input').forEach(input => { input.disabled = false; input.checked = input.value === before; });
-      }
-      return;
-    }
     const choice = event.target.closest('[data-harness-choice]');
     if (choice) {
       choice.disabled = true;
@@ -502,7 +487,7 @@ function renderSettingsMachines() {
   if (!el.querySelector('.machine-enroll')) el.innerHTML = `<div data-machines-list></div>
     <div class="machine-enroll"><select class="settings-inline-select" id="machine-operator" aria-label="Computer owner">
       ${people.map(person => `<option value="${esc(person.id)}" ${person.id === S.me?.id ? 'selected' : ''}>${esc(person.name || person.id)}</option>`).join('')}</select>
-      <select class="settings-inline-select" id="machine-kind" aria-label="Kind of computer"><option value="mac">Mac</option><option value="linux">Linux or cloud server</option><option value="windows">Windows PC (WSL 2${betaFeature('windows') ? ', Beta' : ''})</option></select>
+      <select class="settings-inline-select" id="machine-kind" aria-label="Kind of computer">${S.config?.hosted ? '<option value="hosted">Hosted computer</option>' : ''}<option value="mac" selected>Mac</option><option value="linux">Linux or cloud server</option><option value="windows">Windows PC (WSL 2${betaFeature('windows') ? ', Beta' : ''})</option></select>
       <input id="machine-label" type="text" autocomplete="off" aria-label="Computer name" placeholder="Computer name" value="${esc(settingsPersonName(people.find(person => person.id === S.me?.id)?.id || people[0]?.id) + "'s Mac")}">
       <button class="primary" type="button" id="register-machine">Add computer</button>
       <div class="machine-enroll-status" id="machine-enroll-status"></div></div>`;
@@ -512,8 +497,16 @@ function renderSettingsMachines() {
   const machineDefaultLabel = () => $('#machine-kind').value === 'linux' && S.config?.local ? 'This computer'
     : `${settingsPersonName($('#machine-operator').value)}'s ${({linux: 'server', windows: 'PC'})[$('#machine-kind').value] || 'Mac'}`;
   $('#machine-operator').onchange = () => { $('#machine-label').value = machineDefaultLabel(); };
-  $('#machine-kind').onchange = () => { $('#machine-label').value = machineDefaultLabel(); };
+  // A hosted computer is named and sized on app.tico.dev, so the owner and name fields step aside.
+  const machineKindPaint = () => { const hosted = $('#machine-kind').value === 'hosted';
+    $('#machine-operator').hidden = hosted; $('#machine-label').hidden = hosted; };
+  $('#machine-kind').onchange = () => { $('#machine-label').value = machineDefaultLabel(); machineKindPaint(); };
+  machineKindPaint();
   $('#register-machine').onclick = async event => {
+    if ($('#machine-kind').value === 'hosted') {
+      window.open('https://app.tico.dev/hosting?workspace=' + encodeURIComponent(location.hostname), '_blank', 'noopener');
+      return;
+    }
     const operator = $('#machine-operator').value, label = $('#machine-label').value.trim();
     if (!label) { toast('Give this computer a recognizable name', true); return; }
     event.target.disabled = true;

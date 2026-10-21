@@ -91,18 +91,20 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     await page.evaluate(() => botBranchesLoad('architect-ana'));
     assert.match(await page.locator('#bot-branches').innerText(), /branches off/);
     await page.evaluate(() => settingsEditBot('architect-ana'));
+    dialog = page.locator('#bot-editor');
+    await dialog.locator('[name=status]').waitFor();
     assert.equal(await dialog.locator('[name=description]').count(), 0);
     assert.equal(await dialog.locator('[name=model_effort]').count(), 0);
     await dialog.locator('[name=status]').selectOption('paused');
     await dialog.locator('[type=submit]').click();
     await dialog.locator('[data-branch-status]').filter({hasText: 'configuration changed'}).waitFor();
-    await page.waitForFunction(() => !document.querySelector('#branch-editor [type=submit]').disabled);
+    await page.waitForFunction(() => !document.querySelector('#bot-editor [type=submit]').disabled);
     await dialog.locator('[type=submit]').click();
-    await page.waitForFunction(() => !document.querySelector('#branch-editor'));
+    await page.waitForFunction(() => !document.querySelector('#bot-editor [type=submit]')?.disabled);
     assert.deepEqual(writes.at(-1)[1], {status: 'paused', expected_revision: 2});
     await page.waitForFunction(() => document.querySelector('#bot-branches select'));
     await page.evaluate(() => { location.hash = '#/bot/architect/more'; });
-    await page.waitForFunction(() => BOT?.slug === 'architect' && BOT?.tab === 'more');
+    await page.waitForFunction(() => BOT?.slug === 'architect' && BOT?.tab === 'info');
     await page.locator('[data-branch-picker]').waitFor();
     assert.equal(await page.locator('[data-branch-picker] option[value=architect-ana]').count(), 1);
     dialog = page.locator('#bot-editor');
@@ -113,15 +115,12 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     assert.match(await allow.locator('..').innerText(), /Allow branches/);
     await allow.check();
     await dialog.locator('[type=submit]').click();
-    await page.waitForFunction(() => !document.querySelector('#bot-editor').open);
+    await page.waitForFunction(() => document.querySelector('#bot-editor [data-bot-status]')?.textContent === 'Saved');
     assert.equal(writes.at(-1)[1].shared, true);
-    // A queued close also leaves a reopened Edit form subscribed to current settings.
-    const refreshed = await page.evaluate(async () => {
-      settingsEditBot('architect');
+    // Rebuilding the inline form leaves only its current settings subscription active.
+    const refreshed = await page.evaluate(() => {
+      settingsEditBot('architect', true);
       const editor = document.querySelector('#bot-editor');
-      const closed = new Promise(resolve => editor.addEventListener('close', resolve, {once: true}));
-      editor.close(); settingsEditBot('architect');
-      await closed;
       const bot = S.emps.find(e => e.name === 'architect'), name = bot.display_name;
       bot.display_name = 'Refreshed Architect';
       document.dispatchEvent(new Event('tico:settings-loaded'));
@@ -130,16 +129,14 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
       return label;
     });
     assert.equal(refreshed, 'Change access for Refreshed Architect');
-    // Adding a bot asks only for its name: the slug is under Advanced, follows the name, and is left to the server.
-    await page.evaluate(async () => {
+    // New bot creation remains in the company Settings flow.
+    await page.goto('https://tico-ui.test/#/settings');
+    await page.waitForFunction(() => !!document.querySelector('dialog#bot-editor'));
+    await page.evaluate(() => {
       settingsChoiceFromValue = () => ({harness: 'claude', model: 'm', effort: 'high'});
-      settingsEditBot('architect');
-      const editor = document.querySelector('#bot-editor');
-      const closed = new Promise(resolve => editor.addEventListener('close', resolve, {once: true}));
-      editor.close(); settingsEditBot(''); // Reopen before the queued close event from the previous form.
-      await closed;
+      settingsEditBot('');
     });
-    assert.equal(await dialog.locator('[name=display_name]').count(), 1, 'a previous close cannot clear the reopened Add form');
+    dialog = page.locator('#bot-editor');
     const slug = dialog.locator('[name=slug]');
     assert.equal(await slug.isVisible(), false);
     await dialog.locator('[name=display_name]').fill('Head of Marketing');

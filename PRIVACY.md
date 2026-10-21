@@ -270,7 +270,7 @@ these calls (`TICO_DECISIONS_DAILY_CALLS_OWNER`, `_HUMAN`, `_BOT`; README.md).
 ## Tico Cheap, Mid and Power through Tico HQ
 
 Only when your team has a Tico AI Gateway key (Settings > Computers > Models, or `TICO_GATEWAY_KEY`) and a bot is set to
-Tico Cheap, Mid or Power 1.0. That bot's computer then sends each of its model calls, with the gateway key, to Tico HQ
+a Tico model (Tico Cheap, Mid or Power). That bot's computer then sends each of its model calls, with the gateway key, to Tico HQ
 (`https://updates.tico.team/v1/gateway/chat/completions`), and HQ sends it on to **OpenRouter** (openrouter.ai) with
 HQ's own OpenRouter key. OpenRouter passes it to a provider that serves the Claude model behind that Tico model (Haiku,
 Sonnet or Opus). Without a gateway key, or with the bot on another model, nothing goes this way.
