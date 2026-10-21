@@ -193,6 +193,9 @@ async function loadBotIssues(slug) {
         </div></details>`;
     $('#t-open').innerHTML = open.length ? open.map(i => row(i, i.updatedAt, 'Last comment')).join('') : '<div class="rail-empty">None</div>';
     $('#t-done').innerHTML = closed.length ? closed.map(i => row(i, i.closedAt, 'Closing comment')).join('') : '<div class="rail-empty">None</div>';
+    // An Issues bot has no questions or waits in Tico: those tabs are simply empty.
+    $('#t-needs').innerHTML = '<div class="rail-empty">Nothing needs you.</div>';
+    $('#t-blocked').innerHTML = '<div class="rail-empty">Nothing is blocked.</div>';
   } catch (e) { if ($('#t-open')) $('#t-open').innerHTML = `<div class="err">${esc(e.message)}</div>`; }
 }
 // The bot page's Runs card, when /status came back without recent_runs: same cached /runs list.

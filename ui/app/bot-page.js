@@ -293,18 +293,19 @@ async function pageBot(slug, tab) {
   </div>
 
   <aside id="pane-tasks" class="bot-rail" aria-label="Tasks" hidden>
-    <section class="rail-sec bot-needs" id="bot-needs" aria-labelledby="bot-needs-h" hidden><h2 class="rail-h" id="bot-needs-h">Needs you <span class="cnt" id="cnt-needs"></span></h2>
-      <div id="t-needs" class="tpane"></div>
-    </section>
-    <section class="rail-sec bot-active" aria-labelledby="bot-active-h"><h2 class="rail-h" id="bot-active-h">Active <span class="cnt" id="cnt-active"></span></h2>
-      <div id="t-open" class="tpane"><div class="rail-empty">Loading…</div></div>
+    <section class="rail-sec bot-tasks-sec" id="bot-tasks" aria-labelledby="bot-tasks-h"><h2 class="rail-h" id="bot-tasks-h">Tasks</h2>
+      <div class="tabs slim bot-task-tabs" role="tablist" aria-label="Task lists">${BOT_TASK_TABS.map(([key, label, count]) =>
+        `<button type="button" role="tab" id="bot-tab-t-${key}" data-bot-task-tab="${key}" aria-controls="bot-${key}" aria-selected="false">${label} <span class="cnt" id="${count}"></span></button>`).join('')}</div>
+      <div class="bot-needs" id="bot-needs" role="tabpanel" aria-labelledby="bot-tab-t-needs" hidden><div id="t-needs" class="tpane"><div class="rail-empty">Loading…</div></div></div>
+      <div class="bot-active" id="bot-active" role="tabpanel" aria-labelledby="bot-tab-t-active" hidden><div id="t-open" class="tpane"><div class="rail-empty">Loading…</div></div></div>
+      <div class="bot-blocked" id="bot-blocked" role="tabpanel" aria-labelledby="bot-tab-t-blocked" hidden><div id="t-blocked" class="tpane"><div class="rail-empty">Loading…</div></div></div>
+      <div class="bot-done" id="bot-done" role="tabpanel" aria-labelledby="bot-tab-t-done" hidden><div id="t-done" class="tpane"><div class="rail-empty">Loading…</div></div></div>
     </section>
     <details class="rail-sec rail-fold" id="bot-assigned" hidden><summary class="rail-h">Assigned to others <span class="cnt" id="cnt-assigned"></span></summary>
       <div id="t-assigned" class="tpane"></div></details>
     ${limited ? '' : `<section class="rail-sec bot-latest" id="bot-latest" aria-label="Updates" hidden></section>
     <section class="rail-sec bot-files" id="bot-files" aria-label="Files" hidden></section>
     <section class="rail-sec bot-recurring" id="bot-recurring" aria-label="Routines" hidden></section>`}
-    <details class="rail-sec rail-fold bot-done"><summary class="rail-h">Done <span class="cnt" id="cnt-done"></span></summary><div id="t-done" class="tpane"><div class="rail-empty">Loading…</div></div></details>
   </aside>
   ${railEdgeHTML('right')}
   </div>
@@ -462,13 +463,18 @@ async function pageBot(slug, tab) {
     void botGoalsCardLoad(slug);
   }
 
-  // The right rail: what needs you from this bot, its Active work, what it assigned to others, Updates, Files,
-  // Recurring, then Done folded away.
-  const showTab = t => { if (t === 'done') $('#pane-tasks .bot-done').open = true; };
+  // The right rail: one Tasks section with its tabs, what it assigned to others, Updates, Files, then Recurring.
+  const showTab = t => { if (t === 'done') botTaskTabShow(slug, 'done'); };
+  botTaskTabShow(slug, BOT_TASK_TAB.get(slug) || 'active');
   // A click opens a folded section without focusing it, so its ring shows only for the keyboard.
   $('#pane-tasks').querySelectorAll('.rail-fold>summary').forEach(sum => sum.addEventListener('mousedown', ev => ev.preventDefault()));
   if (!limited) botRecurringPaint(e, slug);
-  $('#pane-tasks').addEventListener('click', ev => { if (ev.target.dataset.tab) { ev.preventDefault(); showTab(ev.target.dataset.tab); } });
+  $('#pane-tasks').addEventListener('click', ev => {
+    const tabButton = ev.target.closest('[data-bot-task-tab]');
+    if (tabButton) { BOT_TASK_TAB.set(slug, tabButton.dataset.botTaskTab); botTaskTabShow(slug, tabButton.dataset.botTaskTab); return; }
+    if (ev.target.dataset.tab) { ev.preventDefault(); showTab(ev.target.dataset.tab); }
+  });
+  $('#pane-tasks .bot-task-tabs').addEventListener('keydown', ev => botTaskTabKey(slug, ev));
 
   if (!limited) bindRoutineExpand($('#pane-more'));
   moreClampWatch();

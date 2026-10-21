@@ -14,6 +14,10 @@ All notable changes to Tico are recorded here. The format follows
   HQ registers only a join code's hash through scoped SSM; no owner token or join secret crosses that control plane.
 
 ### Changed
+- **A bot's tasks are one Tasks section with four tabs.** The right rail's Needs you, Active and Done sections become
+  tabs, each with its count: **Needs You** (what the bot needs from you), **Doing** (every open task it holds, of every
+  type, newest first), **Blocked** (each task saying who or what it waits on) and **Done Recently** (the last 14 days).
+  Assigned to others, Updates, Files and Routines stay below.
 - **One new subscription per AI tool on each computer.** Adding a second subscription for the same tool is refused
   with a Switch account message, including while the first sign-in is pending. Different tools and computers stay
   independent; existing connections and API keys are kept.
