@@ -9,7 +9,7 @@ All notable changes to Tico are recorded here. The format follows
 
 ### Added
 - **Five company models for the setup org chart** replace the one 22-bot starter pack: Everything (73 seats), Software
-  company (51), Services firm (38), Local service business (40) and Online store (39), with Legal, People, Operations
+  company (51), Services firm (38), Local service business (41) and Online store (39), with Legal, People, Operations
   and Leadership and bigger Finance, Sales, Marketing and Support teams. The first chart starts from the model the
   company's signals point to (new signals: sells services, on-site jobs, sells products; none of them is Everything),
   adds every department head it lacks and the roles that fit what the visitor said, and drops nothing. New setup

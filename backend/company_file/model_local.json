@@ -9,6 +9,7 @@
  "seats": [
   {"team": "operations", "template": "ops-manager"},
   {"team": "operations", "template": "dispatcher"},
+  {"team": "operations", "template": "logistics"},
   {"team": "operations", "template": "inventory"},
   {"team": "operations", "template": "procurement"},
   {"team": "operations", "template": "vendor-manager"},

@@ -57,7 +57,7 @@ def depts(draft):
     return counts
 
 
-SPEC_COUNTS = {"everything": 73, "software": 51, "services": 38, "local": 40, "store": 39}
+SPEC_COUNTS = {"everything": 73, "software": 51, "services": 38, "local": 41, "store": 39}
 
 
 def test_1_each_model_has_its_spec_seat_count_and_every_seat_names_a_template_or_a_seat_to_build():
@@ -137,8 +137,8 @@ def test_3_a_house_cleaning_company_starts_from_the_local_service_business_model
     assert line.startswith("This looks like a local service business, so we started from the Local service business model")
     counts = depts(draft)
     assert not {"product", "engineering"} & set(counts)
-    assert counts["operations"] == max(counts.values()), counts
-    assert {"Scheduling & Bookings", "Quality & Inspections", "Dispatcher"} <= set(titles(draft))
+    assert all(counts["operations"] > n for team, n in counts.items() if team != "operations"), counts  # strictly
+    assert {"Scheduling & Bookings", "Quality & Inspections", "Dispatcher", "Logistics Coordinator"} <= set(titles(draft))
 
 
 def test_5_the_software_company_s_finance_holds_investor_relations_and_two_seats_with_no_bot_yet():
