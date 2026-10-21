@@ -388,3 +388,45 @@ def test_the_owner_saves_the_choice_through_the_api_and_reads_it_back(api):
     assert again["preset"] == models_preset.RECOMMENDED
     put(api, "providers", {"enabled": ["anthropic"], "preset": "something-else", "expected_revision": again["revision"]},
         expected=422)
+
+
+@pytest.mark.parametrize("gateway", ["connected", "connected, no pi", "connected, no repository", "none"])
+def test_a_bot_the_gateway_runs_before_sign_in_is_not_reported_as_needing_a_login(api, monkeypatch, gateway):
+    """Dev 326: with no Claude login and the Gateway connected under the recommended choice, the bot's own state, its
+    model check and its chat say what runs it, never "Claude login required"; with no Gateway either, they still do.
+    A computer without the Gateway's runtime, or a bot without its checkout, holds the turn (the claim's rule), so
+    the bot's row stays as reported."""
+    from backend import readiness, views
+    if gateway != "none":
+        connected(api, monkeypatch)
+    choose(api, models_preset.RECOMMENDED)
+    on_claude(api, "ops")
+    machine = runner(api)
+    assign(api, machine, "ops")
+    report = {"ready": False, "runtime": "claude", "model": CLAUDE["model"], "repository_present": True,
+              "configuration_valid": True, "problems": ["Claude login required"], "sign_in": "missing"}
+    if gateway == "connected, no repository":
+        report = {**report, "repository_present": False, "problems": [*report["problems"], "Missing bot repository"]}
+    post(api, "runners/heartbeat", {"version": "test", "platform": "test", "readiness": {
+        "schema_version": 1, "isolated": True, "bots": {"ops": report},
+        "runtimes": {"claude": {"installed": True, "authenticated": "missing", "detail": "Claude login required"},
+                     "pi": {"installed": gateway != "connected, no pi", "authenticated": "missing"}}}},
+         token=machine["token"])
+    with api.app.state.store.read() as c:
+        location = views.machine(c, "ops")
+        can = readiness.can_run(c, "ops", "claude", model=CLAUDE["model"])
+        label = views.queued_label(c, "ops", location, api.app.state.store.settings, human=True)
+    said = json.dumps([location, can, label])
+    if gateway == "connected":
+        assert location["ready"] is True and location["readiness"]["problems"] == [], location
+        assert location["readiness"]["gateway"] == "Using Tico AI Gateway; sign in to Claude to use your subscription"
+        assert can["can_run"] is True and can["bot_ready"] is True and not can.get("sign_in"), can
+        assert "login required" not in said, said
+    elif gateway == "connected, no repository":
+        assert location["ready"] is False and location["readiness"]["problems"] == report["problems"], location
+        assert can["can_run"] is True and can["gateway"], can     # the model is fine; the checkout is what's missing
+    else:
+        assert location["ready"] is False and location["readiness"]["problems"] == ["Claude login required"]
+        assert "gateway" not in location["readiness"]
+        assert can["can_run"] is False and can["sign_in"] is True and can["problem"] == "Claude login required", can
+        assert label == ("Saved — Claude login required", "model_sign_in"), label

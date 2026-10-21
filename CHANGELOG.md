@@ -10,6 +10,9 @@ All notable changes to Tico are recorded here. The format follows
 ### Fixed
 - **Gateway turns retry when their rate window resets.** The computer carries the Gateway's requested wait back to
   the server, so a busy minute does not hold starter bots for an hour or claim their address sent refused keys.
+- **No "Claude login required" while the Tico AI Gateway runs the bot.** Under the recommended choice a bot whose
+  Claude or ChatGPT is not signed in yet shows as ready, its card says "Using Tico AI Gateway; sign in to Claude to use
+  your subscription", and its model check and chat no longer ask for a login. With no Gateway either, it still does.
 
 ## [0.3.70] - 2026-10-21
 
