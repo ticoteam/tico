@@ -26,6 +26,8 @@ All notable changes to Tico are recorded here. The format follows
   as before ([Tico AI Gateway](docs/ai-gateway.md#choose-how-bots-get-their-models)).
 
 ### Fixed
+- **Questions the CEO Bot merged no longer show again in Tasks > Needs you.** The merged item names the questions it
+  stands for, and the Tasks page leaves them out, as the server's Needs you already did.
 - A goal's automatic colour follows its worst KPI: red takes priority over yellow and green, and yellow over green.
   The note explains that KPI; a colour set by a person stays in place until handed back to the Goal Manager.
 
