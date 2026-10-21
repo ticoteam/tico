@@ -368,3 +368,19 @@ def test_two_freed_places_and_repeated_passes_give_one_reservation_and_one_wake(
         beat(api)
         waits.tick(api.app_state.store, 'Acme', force=True)
     assert len(wakes(api, tid)) == 1
+
+
+def test_a_reserved_worktree_whose_task_closes_is_cancelled_once_and_never_prepared(prepared):
+    api, tid, _ = prepared
+    filler, links = setup_wait(api, tid)
+    assert 'wait' in post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test').json()['error']
+    free(api, filler, links[0])
+    link = rows(api, "SELECT * FROM task_links WHERE task_id=? AND kind='worktree'", (tid,))[0]
+    assert link['state'] == 'pending'
+    with api.app_state.store.transaction() as c:
+        c.execute("UPDATE tasks SET status='closed' WHERE id=?", (tid,))
+    actions = beat(api) + beat(api)
+    assert not [a for a in actions if a['link_id'] == link['id']]
+    assert rows(api, 'SELECT state FROM task_links WHERE id=?', (link['id'],))[0]['state'] == 'removed'
+    assert len(rows(api, "SELECT * FROM events WHERE action='worktree.released' AND target=?", (tid,))) == 1
+    assert not wakes(api, tid)

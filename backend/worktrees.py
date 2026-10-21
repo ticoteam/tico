@@ -185,8 +185,10 @@ def cancel_pending(c, row, detail, reason):
     """End a `pending` worktree nothing was checked out for (queued, or an attach not yet confirmed): no computer is
     asked, nothing on disk is touched, its place frees at once. A reserved wait for it ends once with the reason."""
     detail = {**detail, 'removed_by': 'cancelled', 'release_reason': 'pending cancelled', 'cancelled': reason}
-    c.execute("UPDATE task_links SET state='removed',detail_json=?,updated=? WHERE id=?",
-              (json.dumps(detail), H.now(), row['id']))
+    # Guarded on the stored state: serving waits and the heartbeat's own pass can both reach one reservation.
+    if not c.execute("UPDATE task_links SET state='removed',detail_json=?,updated=? WHERE id=? AND state='pending'",
+                     (json.dumps(detail), H.now(), row['id'])).rowcount:
+        return
     if wait := waits.preparing(c, row['id']):
         waits._finish(c, wait, 'cancelled', reason)
     released_event(c, row, detail)
@@ -214,12 +216,19 @@ def held_reason(c, row, detail):
     carries the commits and finishes."""
     if live_turn(c, row['task_id'], row.get('owner')):
         return 'held: live turn'
-    head = detail.get('pushed') or (detail.get('last_commit') if detail.get('ahead') == 0 else None)
-    last = c.execute("SELECT number,detail_json FROM task_links WHERE task_id=? AND kind='pr' AND lower(repo)=lower(?) "
+    last = c.execute("SELECT number,detail_json,coalesce(pr_merged_at,updated) AS finished FROM task_links WHERE task_id=? AND kind='pr' AND lower(repo)=lower(?) "
                      f"AND branch=? AND state IN {PR_FINISHED} ORDER BY coalesce(pr_merged_at,updated,created) DESC LIMIT 1",
                      (row['task_id'], row['repo'] or '', row['branch'] or '')).fetchone() if row['branch'] else None
     pr_head = json.loads(last['detail_json'] or '{}').get('head_sha') if last else None
-    if head and pr_head and head != pr_head:
+    # The branch's newest known head: the computer's committed head once it has nothing unpushed, and the push
+    # webhook's head when that push came after the pull request finished. An older webhook value (a missed later
+    # push) never stands in for a newer head the computer reports, nor holds a tree whose branch is the merged head.
+    heads = {detail.get('last_commit') if detail.get('ahead') == 0 else None}
+    pushed_at = H.parse_ts(detail.get('pushed_last_at') or '')
+    if last and pushed_at and pushed_at > (H.parse_ts(last['finished'] or '') or pushed_at):
+        heads.add(detail.get('pushed'))
+    heads -= {None, ''}
+    if pr_head and heads - {pr_head}:
         return f"held: new commits since PR #{last['number']}"
     return ''
 
@@ -560,9 +569,18 @@ def provision(c, who, task, repo, path=None, branch=None, default_org='', brief=
                 # A retry after the deadline starts the same worktree over: same link, path and branch.
                 if why := start_refusal(c, task):
                     raise Problem('worktree_start', why, 409)
-                for key in ('pending_expired', 'error', *IDENTITY):
+                # The checkout proof stays: a folder already checked out resumes at setup instead of starting over
+                # into a path that exists. Only a checkout that never got that far is queued again.
+                for key in ('pending_expired', 'error'):
                     detail.pop(key, None)
-                if detail.get('checkout_state') != 'attached_pending':
+                if detail.get('checkout_state') == 'initializing' and all(detail.get(key) for key in IDENTITY):
+                    detail['setup_pending'] = True        # the computer resumes an interrupted checkout from its proof
+                elif detail.get('checkout_state') in ('checkout_ready', 'setup_running', 'setup_failed') \
+                        and all(detail.get(key) for key in IDENTITY):
+                    detail.update(checkout_state='checkout_ready', setup_pending=True)
+                elif detail.get('checkout_state') != 'attached_pending':
+                    for key in IDENTITY:
+                        detail.pop(key, None)
                     detail.update(checkout_state='queued', setup_pending=True)
                 now = detail['record_changed'] = H.now()
                 c.execute('UPDATE task_links SET detail_json=?,updated=? WHERE id=?',

@@ -924,3 +924,56 @@ def test_a_checkout_stuck_past_the_deadline_fails_once_owned_and_retries_on_the_
     with api.app_state.store.read() as c:
         detail = json.loads(c.execute('SELECT detail_json FROM task_links WHERE id=?', (link['link_id'],)).fetchone()[0])
     assert detail['checkout_state'] == 'queued' and 'pending_expired' not in detail
+
+
+def test_a_retry_after_the_deadline_resumes_a_checked_out_folder_at_setup_and_finishes(prepared):
+    api, tid, _ = prepared
+    link = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test').json()
+    proof = {'expected_head': 'a' * 40, 'checkout_target': 'refs/remotes/origin/main', 'expected_base': 'b' * 64}
+    route = f'/api/v2/tasks/{tid}/links/{link["link_id"]}'
+    for fields in ({'state': 'pending', 'checkout_state': 'initializing', 'setup_pending': True, **proof},
+                   {'state': 'pending', 'checkout_state': 'checkout_ready', 'setup_pending': True},
+                   {'state': 'pending', 'checkout_state': 'setup_running', 'setup_pending': True}):   # setup began
+        assert api.patch(route, json=fields, headers={**auth('runner-test'), 'Idempotency-Key': uuid.uuid4().hex}
+                         ).status_code == 200
+    with api.app_state.store.transaction() as c:
+        c.execute('UPDATE task_links SET updated=? WHERE id=?',
+                  (H.shift(H.now(), hours=-(W.PENDING_HOURS + 1)), link['link_id']))
+    post(api, 'runners/heartbeat', {**HEARTBEAT, 'worktrees': []}, 'runner-test')
+    again = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test').json()
+    # The folder is already checked out: the retry resumes at setup with its proof, never a fresh checkout.
+    assert again['link_id'] == link['link_id'] and again['checkout_state'] == 'checkout_ready'
+    assert {k: again[k] for k in proof} == proof and again['setup_pending'] is True
+    done = api.patch(route, json={'state': 'present', 'checkout_state': 'ready', 'setup_pending': False, **proof},
+                     headers={**auth('runner-test'), 'Idempotency-Key': uuid.uuid4().hex})
+    assert done.status_code == 200, done.text
+    with api.app_state.store.read() as c:
+        assert c.execute('SELECT state FROM task_links WHERE id=?', (link['link_id'],)).fetchone()[0] == 'present'
+
+
+def test_a_stale_push_webhook_never_hides_a_newer_head_the_computer_reports(prepared):
+    api, tid, _ = prepared
+    link = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test').json()
+    assert mark_ready(api, tid, link['link_id']).status_code == 200
+    report = {'link_id': link['link_id'], 'state': 'present', 'checkout_state': 'ready', 'branch': link['branch'],
+              'last_commit': 'f' * 40, 'ahead': 0}
+    body = {**HEARTBEAT, 'worktrees': [report]}
+    with api.app_state.store.transaction() as c:
+        pr = H.task_link(c, 'bot:cmo', tid, 'https://github.com/Acme/product/pull/7')
+        c.execute("UPDATE task_links SET state='merged',branch=?,pr_merged_at=?,detail_json=? WHERE id=?",
+                  (link['branch'], H.now(), json.dumps({'head_sha': 'e' * 40}), pr['id']))
+        # The webhook's last push is the merged head, from before the merge; the fix-forward push it missed.
+        detail = json.loads(c.execute('SELECT detail_json FROM task_links WHERE id=?', (link['link_id'],)).fetchone()[0])
+        detail.update(pushed='e' * 40, pushed_last_at=H.shift(H.now(), minutes=-30))
+        c.execute('UPDATE task_links SET detail_json=? WHERE id=?', (json.dumps(detail), link['link_id']))
+    assert post(api, 'runners/heartbeat', body, 'runner-test').json()['worktree_actions'] == []
+    with api.app_state.store.read() as c:
+        assert {w['link_id']: w for w in W.holdings(c, 'bot:cmo')}[link['link_id']]['kept'] == \
+            'held: new commits since PR #7'
+    # The fix-forward's own pull request carries that head and finishes: released.
+    with api.app_state.store.transaction() as c:
+        pr2 = H.task_link(c, 'bot:cmo', tid, 'https://github.com/Acme/product/pull/8')
+        c.execute("UPDATE task_links SET state='merged',branch=?,pr_merged_at=?,detail_json=? WHERE id=?",
+                  (link['branch'], H.shift(H.now(), seconds=1), json.dumps({'head_sha': 'f' * 40}), pr2['id']))
+    actions = post(api, 'runners/heartbeat', body, 'runner-test').json()['worktree_actions']
+    assert [(a['action'], a.get('release')) for a in actions] == [('remove', True)]
