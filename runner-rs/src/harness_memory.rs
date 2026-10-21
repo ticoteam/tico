@@ -374,4 +374,144 @@ mod tests {
         assert!(two.contains("- a.md [source: claude-memory/a.md; added: d]\n- b.md [source: claude-memory/b.md; added: d]\n\n## 2026-10-01"), "{two}");
         assert_eq!(insert("# L\nintro", &[&e("c.md")], "d").matches(HEADING).count(), 1);
     }
+
+    // Run this permission contract only in a disposable Linux container, as root with
+    // TICO_RUNNER_BOT_UID=10003 TICO_RUNNER_BOT_GID=10002. It never touches an installed runner; every file is made up.
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "requires a disposable Linux two-user environment"]
+    fn as_two_users_the_bot_reaches_nothing_of_the_supervisors_and_owns_what_the_copy_creates() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        const SECRET: &str = "SYNTHETIC-SUPERVISOR-SECRET\n";
+        assert_eq!(unsafe { libc::geteuid() }, 0, "the supervisor side runs as root");
+        assert_eq!(crate::isolation::identity(), Some((10003, 10002)), "bot code runs as 10003:10002");
+        let mode = |p: &Path, m: u32| std::fs::set_permissions(p, std::fs::Permissions::from_mode(m)).unwrap();
+        let own = |p: &Path| std::os::unix::fs::lchown(p, Some(10003), Some(10002)).unwrap();
+        let bot_sh = |script: &str, args: &[&Path]| crate::isolation::std_command("/bin/sh").arg("-c").arg(script).arg("sh").args(args)
+            .env_clear().env("PATH", "/usr/bin:/bin").output().unwrap();
+        let unchanged = |p: &Path| {
+            let m = std::fs::symlink_metadata(p).unwrap();
+            assert!(m.file_type().is_file(), "{} is still a file", p.display());
+            assert_eq!((m.uid(), m.gid(), m.permissions().mode() & 0o777), (0, 0, 0o600), "{}", p.display());
+            assert_eq!(std::fs::read_to_string(p).unwrap(), SECRET, "{}", p.display());
+        };
+        let root = temp();
+        mode(&root, 0o755);
+        // The supervisor's own, closed to the bot: a folder with a learnings.md and memories in it.
+        let private = root.join("supervisor");
+        std::fs::create_dir_all(private.join("memory")).unwrap();
+        for f in ["memory/learnings.md", "learnings.md", "MEMORY.md", "secret.md", "GEMINI.md", "runner.json"] {
+            std::fs::write(private.join(f), SECRET).unwrap();
+            mode(&private.join(f), 0o600);
+        }
+        mode(&private.join("memory"), 0o700);
+        mode(&private, 0o700);
+        let protected = ["memory/learnings.md", "learnings.md", "MEMORY.md", "secret.md", "GEMINI.md", "runner.json"].map(|f| private.join(f));
+        // The bot's own place: checkouts and its HOME, as on the runner.
+        let bot = root.join("bot");
+        std::fs::create_dir(&bot).unwrap();
+        own(&bot);
+        let state = root.join("state"); // the supervisor's state for the move
+        let mk_bot_dir = |p: &Path| { let out = bot_sh(r#"mkdir -p -- "$1""#, &[p]); assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr)); };
+        let entry = |t: &str| Entry { tag: format!("claude-memory/{t}"), text: format!("- **{t}** [source: claude-memory/{t}; added: d]\n  Synthetic rule {t}.") };
+        let fresh_state = |n: &str| { let s = state.join(n); let _ = std::fs::remove_dir_all(&s); s };
+        let no_secret = |text: &str| assert!(!text.contains("SYNTHETIC-SUPERVISOR-SECRET"), "{text}");
+        let now = SystemTime::now();
+
+        // 1. Sources. A memory folder that is a link to the supervisor's folder lists nothing; its index is not read.
+        let home = bot.join("home");
+        let linked_src = home.join("linked-src");
+        mk_bot_dir(&home);
+        let out = bot_sh(r#"ln -s -- "$1" "$2""#, &[&private, &linked_src]);
+        assert!(out.status.success());
+        let got = claude_entries(&linked_src, "d").unwrap();
+        assert!(got.is_empty(), "a linked source folder yields nothing the bot cannot read");
+        // A plain folder with a linked index, a linked memory and a linked Gemini memory: none is copied.
+        let src = home.join("src");
+        mk_bot_dir(&src);
+        assert!(bot_sh(r#"printf 'Ask first.\n' > "$1/ask.md"; ln -s -- "$2/MEMORY.md" "$1/MEMORY.md"; ln -s -- "$2/secret.md" "$1/planted.md""#, &[&src, &private]).status.success());
+        let got = claude_entries(&src, "d").unwrap();
+        assert_eq!(got.iter().map(|e| e.tag.as_str()).collect::<Vec<_>>(), ["claude-memory/ask.md"]);
+        got.iter().for_each(|e| no_secret(&e.text));
+        let gem = home.join("gemini");
+        mk_bot_dir(&gem.join(".gemini"));
+        assert!(bot_sh(r#"ln -s -- "$2/GEMINI.md" "$1/.gemini/GEMINI.md""#, &[&gem, &private]).status.success());
+        assert!(gemini_entries(&gem, "d").unwrap().is_empty());
+        // Even with the supervisor's folder opened for traversal (0711) a bot listing names nothing in it.
+        mode(&private, 0o711);
+        // (it may then fail to read the index it can see but not open: that copies nothing and says no more than that)
+        match claude_entries(&linked_src, "d") {
+            Ok(e) => assert!(e.is_empty()),
+            Err(e) => no_secret(&e.to_string()),
+        }
+        mode(&private, 0o700);
+
+        // 2. Destinations. A checkout whose memory/ is a link to the supervisor's folder: refused, nothing changed.
+        let work = bot.join("work-linked-dir");
+        mk_bot_dir(&work);
+        assert!(bot_sh(r#"ln -s -- "$2/memory" "$1/memory""#, &[&work, &private]).status.success());
+        assert!(before_turn(Ok(vec![entry("a.md")]), &work, &fresh_state("s1"), "d", now).is_err());
+        // An ancestor of the checkout that is a link to the supervisor's folder: refused, nothing changed.
+        let parent = bot.join("parent");
+        assert!(bot_sh(r#"ln -s -- "$2" "$1""#, &[&parent, &private]).status.success());
+        assert!(before_turn(Ok(vec![entry("a.md")]), &parent, &fresh_state("s2"), "d", now).is_err());
+        assert!(before_turn(Ok(vec![entry("a.md")]), &parent.join("nested"), &fresh_state("s2b"), "d", now).is_err());
+        // The leaf: learnings.md as a link is refused; a link that appears at the leaf is replaced, never written through.
+        let work = bot.join("work-linked-leaf");
+        mk_bot_dir(&work.join("memory"));
+        assert!(bot_sh(r#"ln -s -- "$2/learnings.md" "$1/memory/learnings.md""#, &[&work, &private]).status.success());
+        assert!(before_turn(Ok(vec![entry("a.md")]), &work, &fresh_state("s3"), "d", now).is_err());
+        let leaf = work.join("leaf.md");
+        assert!(bot_sh(r#"ln -s -- "$2/runner.json" "$1""#, &[&leaf, &private]).status.success());
+        bot_write(&leaf, "mine\n").unwrap();
+        let m = std::fs::symlink_metadata(&leaf).unwrap();
+        assert!(m.file_type().is_file() && m.uid() == 10003);
+        // An ancestor swapped back and forth by the bot while copies run: each copy lands in the bot's folder or fails.
+        let swap = bot.join("swap");
+        let real = bot.join("swap-real");
+        mk_bot_dir(&real);
+        assert!(bot_sh(r#"ln -s -- "$1" "$2""#, &[&real, &swap]).status.success());
+        let mut flipper = crate::isolation::std_command("/bin/sh").arg("-c")
+            .arg(r#"i=0; while [ $i -lt 4000 ]; do ln -sfn -- "$2" "$1.n" && mv -T -- "$1.n" "$1"; ln -sfn -- "$3" "$1.n" && mv -T -- "$1.n" "$1"; i=$((i+1)); done"#)
+            .arg("sh").arg(&swap).arg(&private).arg(&real).env_clear().env("PATH", "/usr/bin:/bin").spawn().unwrap();
+        let (mut ok, mut refused) = (0, 0);
+        for i in 0..200 {
+            match before_turn(Ok(vec![entry(&format!("r{i}.md"))]), &swap.join("c"), &fresh_state("race"), "d", now) {
+                Ok(_) => ok += 1,
+                Err(_) => refused += 1,
+            }
+        }
+        assert!(flipper.wait().unwrap().success());
+        eprintln!("ancestor-swap race: {ok} copies landed, {refused} refused");
+        protected.iter().for_each(|p| unchanged(p));
+        let names: Vec<_> = std::fs::read_dir(&private).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
+        assert_eq!(names.len(), 6, "nothing was created in the supervisor's folder: {names:?}");
+        assert_eq!(std::fs::read_dir(private.join("memory")).unwrap().count(), 1);
+        if real.join("c/memory/learnings.md").exists() {
+            assert_eq!(std::fs::metadata(real.join("c/memory/learnings.md")).unwrap().uid(), 10003);
+        }
+
+        // 3. Missing paths. No memory/ at all, then memory/ without learnings.md: the bot owns all that is created,
+        // the copy has only the bot's sources, and a later bot write succeeds.
+        for (name, pre) in [("work-no-dir", false), ("work-no-leaf", true)] {
+            let work = bot.join(name);
+            mk_bot_dir(&work);
+            if pre { mk_bot_dir(&work.join("memory")); }
+            let entries = claude_entries(&src, "d");
+            assert_eq!(before_turn(entries, &work, &fresh_state(name), "d", now).unwrap(), Moved::Copied(1), "{name}");
+            for p in [work.join("memory"), work.join("memory/learnings.md")] {
+                let m = std::fs::symlink_metadata(&p).unwrap();
+                assert_eq!((m.uid(), m.gid()), (10003, 10002), "{} belongs to the bot", p.display());
+            }
+            let text = std::fs::read_to_string(work.join("memory/learnings.md")).unwrap();
+            assert!(text.contains("[source: claude-memory/ask.md;") && text.contains("Ask first."), "{text}");
+            no_secret(&text);
+            let out = bot_sh(r#"printf -- '- 2026-10-21: the bot edits its own memory\n' >> "$1/memory/learnings.md" && mkdir -- "$1/memory/more""#, &[&work]);
+            assert!(out.status.success(), "the bot can edit what was created: {}", String::from_utf8_lossy(&out.stderr));
+            let st = std::fs::metadata(&state.join(name).join("claim")).unwrap();
+            assert_eq!(st.uid(), 0, "the move's own state stays the supervisor's");
+        }
+        protected.iter().for_each(|p| unchanged(p));
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }
