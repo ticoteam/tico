@@ -269,8 +269,9 @@ def imported_goals_on_goals_page(api, text):
 
 
 @pytest.mark.parametrize("bootstrap", [False, True], ids=["owner-api", "installer-bootstrap"])
-def test_imported_goals_follow_a_renamed_assistant_and_an_untitled_unmeasured_goal_gets_no_kpi(tmp_path, environment,
-                                                                                               bootstrap):
+def test_a_renamed_assistants_goals_import_as_company_goals_and_an_untitled_unmeasured_goal_gets_no_kpi(tmp_path, environment,
+                                                                                                       bootstrap):
+    # Goals keeps the built-in bots out of its tree, so a goal the file gives the Assistant must land on the company.
     draft = C.from_yaml(company_text())
     draft["goals"] = [
         {"id": "g-week", "title": "Run the week", "owner": "coo", "measure": "Weekly reviews held", "unit": "",
@@ -278,7 +279,7 @@ def test_imported_goals_follow_a_renamed_assistant_and_an_untitled_unmeasured_go
         {"id": "g-blank", "title": "", "owner": "coo", "measure": "", "unit": "", "direction": "up", "target": None,
          "baseline": None, "deadline": None}]
     text = C.to_yaml(draft)
-    owners = [("Run the week", "bot:ace"), ("Untitled goal", "bot:ace")]
+    owners = [("Run the week", "company"), ("Untitled goal", "company")]
     if bootstrap:
         from clients.environments import seed_registry
         registry = seed_registry(tmp_path, "Owner", OWNER_EMAIL,
@@ -314,6 +315,6 @@ def renamed_assistant_goals_on_goals_page(api, owners):
     goals = {g["title"]: g for g in api.get("/api/v2/goals/tree", headers=signed_in()).json()["goals"]}
     assert sorted((title, g["owner"]) for title, g in goals.items()) == owners
     week, = goals["Run the week"]["kpis"]
-    assert rows(api, "SELECT owner FROM kpis WHERE id=?", (week["id"],)) == [{"owner": "bot:ace"}]
+    assert rows(api, "SELECT owner FROM kpis WHERE id=?", (week["id"],)) == [{"owner": "company"}]
     assert goals["Untitled goal"]["kpis"] == []
-    assert not rows(api, "SELECT id FROM goals WHERE owner='bot:coo'")
+    assert not rows(api, "SELECT id FROM goals WHERE owner IN ('bot:ace','bot:coo')")
