@@ -1,4 +1,6 @@
 """The server update fence, rollback recovery and the update-key boundary."""
+import json
+
 import pytest
 
 from backend import execution, releases, server_updates as updates
@@ -87,6 +89,89 @@ def test_rollback_releases_claims_and_waits_for_a_different_release(api, updater
     updater[2][0] = "0.3.0"
     updates.tick(store)
     assert updater[1] == ["0.2.0", "0.2.0", "0.3.0"]
+
+
+def test_busy_wait_releases_after_60_minutes_and_requeues_six_hours_later(api, updater, monkeypatch):
+    store = api.app.state.store
+    store.settings.hosted = "invited"
+    clock = [updates.H.now()]
+    monkeypatch.setattr(updates.H, "now", lambda: clock[0])
+    monkeypatch.setattr(updates, "busy", lambda c: True)
+    queued = clock[0]
+    updates.tick(store)
+    clock[0] = updates.H.shift(queued, minutes=59)
+    updates.tick(store)
+    with store.read() as c:
+        assert updates.holding(c) and updates.load(c)["queued_at"] == queued
+    clock[0] = updates.H.shift(queued, minutes=60)
+    updates.tick(store)
+    with store.read() as c:
+        policy = updates.load(c)
+        assert not updates.holding(c) and policy["state"] == "idle"
+        assert policy["failed_version"] == "" and "retry" in policy["error"]
+        retry = policy["retry_at"]
+        assert retry == updates.H.shift(clock[0], hours=6)
+    clock[0] = updates.H.shift(retry, seconds=-1)
+    with store.transaction() as c:
+        updates.request(c, store.settings, "0.2.0", "human:ana")  # staff polling cannot restart the hold early
+    updates.tick(store)
+    with store.read() as c:
+        assert not updates.holding(c)
+    assert updater[1] == []
+    clock[0] = retry
+    monkeypatch.setattr(updates, "busy", lambda c: False)
+    updates.tick(store)
+    with store.read() as c:
+        assert updates.load(c)["queued_at"] == retry
+    assert updater[1] == ["0.2.0"]
+
+
+def test_updater_health_deadline_is_45_minutes_despite_errors_and_lost_status(api, updater, monkeypatch):
+    store = api.app.state.store
+    store.settings.hosted = "invited"
+    clock = [updates.H.now()]
+    monkeypatch.setattr(updates.H, "now", lambda: clock[0])
+    started = clock[0]
+
+    def unanswered():
+        raise updates.Problem("updater_unavailable", "No answer", 502)
+
+    monkeypatch.setattr(releases, "status", unanswered)
+    updates.tick(store)                              # starts the clock even before an update was sent
+    with store.read() as c:
+        assert not updates.load(c).get("attempted")
+        assert updates.load(c)["started_at"] == started
+    clock[0] = updates.H.shift(started, minutes=15)
+    monkeypatch.setattr(releases, "status", lambda: updater[0].copy())
+    updates.tick(store)                              # a later successful start cannot reset it
+    assert updater[1] == ["0.2.0"]
+    for minute, state in ((30, "pulling"), (35, "restarting"), (40, "uncertain"), (44, "idle")):
+        clock[0] = updates.H.shift(started, minutes=minute)
+        updater[0].update(state=state, to="0.2.0" if state != "idle" else "")
+        if state == "idle":
+            monkeypatch.setenv("TICO_VERSION", "0.2.0")  # image changed but status was lost
+        updates.tick(store)
+        with store.read() as c:
+            assert updates.holding(c) and updates.load(c)["started_at"] == started
+    clock[0] = updates.H.shift(started, minutes=45)
+    updates.tick(store)
+    with store.read() as c:
+        assert not updates.holding(c) and updates.load(c)["failed_version"] == "0.2.0"
+        events = [json.loads(row[0]) for row in c.execute(
+            "SELECT detail_json FROM events WHERE action='system.update.finished'")]
+        assert [e["outcome"] for e in events] == ["timed_out"]
+        assert events[0]["from"] == "0.1.0" and events[0]["to"] == "0.2.0"
+    monkeypatch.setenv("TICO_VERSION", "0.1.0")
+    updates.tick(store)
+    assert updater[1] == ["0.2.0"]                   # the same release cannot start another hold
+    updater[2][0] = "0.3.0"
+    monkeypatch.setattr(releases, "status", unanswered)
+    updates.tick(store)                              # a later release is still followed
+    clock[0] = updates.H.shift(clock[0], minutes=45)
+    updates.tick(store)                              # no answer ever, and no update-pending marker
+    with store.read() as c:
+        assert not updates.holding(c) and updates.load(c)["failed_version"] == "0.3.0"
+        assert c.execute("SELECT count(*) FROM events WHERE action='system.update.finished'").fetchone()[0] == 2
 
 
 def test_only_owner_or_update_key_controls_policy_and_off_cancels_a_wait(api, updater):

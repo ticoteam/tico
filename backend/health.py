@@ -534,7 +534,7 @@ def runtime_choice(c, bot, runtime, who, computers, harness="", model=""):
 RUNS, COMPUTERS, BOT_SETTINGS = ("Open Runs", "#/settings", "runs"), ("Open Computers", "#/settings", "devices"), \
     ("Open bot settings", "#/settings", "bots")
 HELD = {
-    "server_update": ("Waiting for running turns to finish and the Tico server to update", COMPUTERS),
+    "server_update": ("Temporarily holding new work for the Tico server update: up to 60 minutes for running turns, then up to 45 minutes for health", COMPUTERS),
     "draining": ("Paused, or held while Tico updates: its work starts when it is resumed", BOT_SETTINGS),
     "restarting": ("{computer} is restarting: it starts new work once its running turns end", COMPUTERS),
     "maintaining": ("{computer} is tidying this bot's task worktrees: its work starts when that finishes", COMPUTERS),

@@ -47,14 +47,17 @@ manual updates unless the owner enables this policy. The existing release check 
 six hours; once it finds a newer stable release, the server holds new claims and waits for leased/running turns and
 the computers' recently reported busy work to finish. Queued work stays queued. It then uses the same updater,
 verified bundle, pre-update snapshot, health check and rollback as **Update now**. The claim hold survives the
-restart and stays until the updater confirms the target is healthy; missing status keeps that hold. Computers
+restart and stays until the updater confirms the target is healthy, within the deadlines below. Computers
 follow the updated server through their existing idle-aware update path.
 
 The owner or an update service key reads `automatic` in `GET /api/v2/system/update` and sets the policy with
 `PUT /api/v2/system/update` and `{"enabled":true}` or `false`. Turning it off cancels a request still waiting for
-idle; an update already sent to Docker must finish or roll back. A failed/rolled-back release releases the claim
-hold and is not automatically tried again; a different release can proceed. Updater outages keep the pending
-request and retry after 15 minutes. Rehearsal installs never apply updates.
+idle; an update already sent to Docker keeps its bounded health wait. If running work is still busy after 60 minutes,
+the hold ends and the request retries six hours later without marking the release failed. Once the updater is called,
+or first fails to answer, it has 45 minutes to confirm health. Polling retries after 15 minutes do not extend that
+deadline: missing status or an updater stuck pulling, restarting or uncertain releases the hold at the deadline,
+records a `timed_out` outcome and marks that version failed. A failed, rolled-back or timed-out release is not
+automatically tried again; a different release can proceed. Rehearsal installs never apply updates.
 
 `POST /api/v2/system/update` with `{"version":"X.Y.Z","when_idle":true}` requests the same idle-aware path for a
 specific stable release. Include `"automatic":true` to enable the policy atomically with that request. An explicit

@@ -11,7 +11,8 @@ All notable changes to Tico are recorded here. The format follows
 - **Hosted servers keep Tico updated automatically.** They follow stable releases through the normal updater,
   holding new turns until running work finishes and the new server passes its health check. Computers then follow
   the server as usual. The owner or an update key can see progress, turn following off, or queue a named release;
-  rollback releases the hold and does not automatically retry the failed version.
+  holds are temporary: a busy server retries six hours after a 60-minute wait, and an updater without confirmed
+  health after 45 minutes releases work and waits for a different release, as after rollback.
 
 ### Changed
 - **Tico AI Gateway: Tico Cheap 1.1 replaces Cheap 1.0** in every model list. It costs the same for a prompt up to
