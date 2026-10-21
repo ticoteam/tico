@@ -29,6 +29,10 @@ pub fn from_person(message: &Value) -> bool {
     text_of(&message["from_actor"]).starts_with("human:")
 }
 
+/// How long a turn whose lease is lost keeps reading what its harness already said. A model that finished while this
+/// computer was asleep has its whole answer waiting in the pipe; one still working is not waited for.
+const SALVAGE: Duration = if cfg!(test) { Duration::from_millis(500) } else { Duration::from_secs(10) };
+
 /// One metered stretch of a turn: the primary harness, then a fallback's.
 pub struct Segment {
     pub meter: Meter,
@@ -84,6 +88,8 @@ impl Runner {
         let mut last_flush: Option<Instant> = None;
         let mut first_output = false;
         let mut queue: Vec<Value> = vec![];
+        // Set once the lease is lost: until then the turn's remaining output is read, and nothing more is asked of the hub.
+        let mut salvage: Option<Instant> = None;
         let answer = |earlier: &str, reply: &str| [earlier, reply].iter().filter(|t| !t.is_empty()).cloned().collect::<Vec<_>>().join("\n\n");
         let spent = |earlier: &Option<Value>, tokens: &Value| match earlier {
             None => tokens.clone(),
@@ -131,7 +137,13 @@ impl Runner {
                 return Ok(Drove { outcome: "interrupted".into(), reply: answer(&earlier, &reply), tokens: spent(&earlier_tokens, &tokens), limited: false, retryable: false, turn });
             }
             let late = Instant::now() >= d.limit;
-            if self.stopping() || d.flags.lost.load(Ordering::SeqCst) || late {
+            if d.flags.lost.load(Ordering::SeqCst) && salvage.is_none() {
+                // The hub let the lease go, often because this computer slept or was paused through it. The model may
+                // have finished meanwhile: what it already said is read before the turn is given up (Dev 242 QA).
+                salvage = Some(Instant::now() + SALVAGE);
+            }
+            let salvaged = salvage.is_some_and(|until| Instant::now() >= until || (!host.alive() && queue.is_empty() && rx.is_empty()));
+            if self.stopping() || salvaged || late {
                 goal.failure = Some(if late { "Run time limit reached" } else if self.stopping() { "The computer stopped" } else { "The execution lease expired" }.into());
                 let _ = host.interrupt(thread, &turn).await;
                 return Err(Fail::runtime("Execution interrupted after stop, run-time limit, or loss of ownership"));
@@ -265,7 +277,7 @@ impl Runner {
                     }
                 }
             }
-            if complete && outcome == "completed" && !carried.is_empty() && !goal.controlled {
+            if complete && outcome == "completed" && !carried.is_empty() && !goal.controlled && salvage.is_none() {
                 // Not on a failed or stopped turn: those settle the attempt, inputs included.
                 turn = self.carry_inputs(aid, host, thread, carried, d.effort).await?;
                 outcome = "interrupted".into();
@@ -279,6 +291,9 @@ impl Runner {
                 let step: Result<(), Fail> = async {
                     host.poll_goal(thread);
                     self.flush(aid).await?;
+                    if salvage.is_some() {
+                        return Ok(()); // the hub refuses this attempt's goal and inputs now; its events and result it keeps
+                    }
                     if goal_running {
                         let latest = self.client.get(&format!("attempts/{aid}/goal")).await?;
                         let latest = &latest["goal"];
@@ -301,7 +316,10 @@ impl Runner {
                 }
                 .await;
                 if let Err(e) = step {
-                    if e.api.as_ref().is_none_or(|a| !a.retryable) {
+                    if e.api.as_ref().is_some_and(|a| a.code == "stale_lease") {
+                        // Refused before the renewer heard: the same lost lease, read out the same way.
+                        d.flags.lost.store(true, Ordering::SeqCst);
+                    } else if e.api.as_ref().is_none_or(|a| !a.retryable) {
                         return Err(e);
                     }
                 }
@@ -332,5 +350,176 @@ impl Runner {
             text = if text.is_empty() { p.clone() } else { format!("{text}\n\n{p}") };
         }
         Ok(Drove { outcome, reply: text, tokens: spent(&earlier_tokens, &tokens), limited, retryable, turn })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::hosts::claude::ClaudeHost;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::Mutex;
+
+    /// A hub that has let this attempt's lease go: renewals, inputs and goal reads are refused as stale, while
+    /// events and the result are still taken (backend/execution.py `attempt` with `active=False` / `final=True`).
+    async fn lapsed_hub() -> (String, Arc<Mutex<Vec<String>>>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let seen = Arc::new(Mutex::new(vec![]));
+        let kept = seen.clone();
+        tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                let kept = kept.clone();
+                tokio::spawn(async move {
+                    let (mut request, mut buffer) = (Vec::new(), [0u8; 8192]);
+                    let head = loop {
+                        if let Some(at) = request.windows(4).position(|part| part == b"\r\n\r\n") {
+                            break at;
+                        }
+                        let n = socket.read(&mut buffer).await.unwrap_or(0);
+                        if n == 0 {
+                            return;
+                        }
+                        request.extend_from_slice(&buffer[..n]);
+                    };
+                    let text = String::from_utf8_lossy(&request[..head]).to_string();
+                    let length = text.lines().find_map(|l| l.to_ascii_lowercase().strip_prefix("content-length:").map(|v| v.trim().parse::<usize>().unwrap_or(0))).unwrap_or(0);
+                    while request.len() < head + 4 + length {
+                        let n = socket.read(&mut buffer).await.unwrap_or(0);
+                        if n == 0 {
+                            break;
+                        }
+                        request.extend_from_slice(&buffer[..n]);
+                    }
+                    let path = text.lines().next().unwrap_or_default().split_whitespace().nth(1).unwrap_or_default().to_string();
+                    let body: Value = serde_json::from_slice(&request[head + 4..]).unwrap_or(Value::Null);
+                    kept.lock().unwrap().push(path.clone());
+                    let (status, answer) = if ["/renew", "/inputs", "/goal"].iter().any(|p| path.ends_with(p)) {
+                        ("409 Conflict", json!({"error": {"code": "stale_lease", "detail": "Execution ownership expired; stop this attempt", "retryable": false}}))
+                    } else {
+                        ("200 OK", json!({"ack_seq": body["events"].as_array().and_then(|e| e.last()).map_or(json!(0), |l| l["seq"].clone())}))
+                    };
+                    let answer = answer.to_string();
+                    let response = format!("HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{answer}", answer.len());
+                    let _ = socket.write_all(response.as_bytes()).await;
+                    let _ = socket.shutdown().await;
+                });
+            }
+        });
+        (url, seen)
+    }
+
+    fn runner_at(url: &str) -> (Runner, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("tico-salvage-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(dir.join("projects")).unwrap();
+        let path = dir.join("runner.json");
+        std::fs::write(&path, json!({"url": url, "token": "t", "runner_id": "r1", "projects_dir": dir.join("projects")}).to_string()).unwrap();
+        let config = crate::config::Config::load(&path).unwrap();
+        let client = crate::client::Client::new(&config.url(), &config.token(), 5, 0).unwrap();
+        (Runner::new(config, client, crate::state::State::open(&dir.join("state")).unwrap()), dir)
+    }
+
+    fn flags(lost: bool) -> Flags {
+        Flags { lost: AtomicBool::new(lost), stopped: AtomicBool::new(false), done: AtomicBool::new(false),
+                done_notify: Notify::new(), deadline: Mutex::new(Instant::now()) }
+    }
+
+    /// The model's last words for `turn` on `thread`, the way the Claude host reports a finished turn.
+    fn answer_events(thread: &str, turn: &str) -> Vec<Value> {
+        vec![
+            json!({"kind": "message", "thread_id": thread, "turn_id": turn, "text": "Acme's renewal summary is ready.", "final": true}),
+            json!({"kind": "turn_completed", "thread_id": thread, "turn_id": turn, "status": "completed"}),
+        ]
+    }
+
+    /// Drive one Acme turn on `host` against `runner`; `feed` gets the host's event sender.
+    async fn drive_turn(runner: &Runner, host: &Host, rx: &mut UnboundedReceiver<Value>, f: &Flags, thread: &str) -> Result<Drove, Fail> {
+        runner.state.record(&json!({"id": "acme-late"})).unwrap();
+        let wake = Notify::new();
+        let d = Drive { aid: "acme-late", host, thread, effort: None, limit: Instant::now() + Duration::from_secs(60),
+                        flags: f, wake: &wake, redactor: None, runtime: "claude" };
+        let mut segment = Segment { meter: Meter::default(), config: json!({}), profile: None, billing: "api" };
+        let mut goal = GoalRun { chat_goal: None, controlled: false, failure: None, paused: None, tries_key: ("acme".into(), "late".into()) };
+        let (mut carried, mut rejected) = (BTreeMap::new(), None);
+        tokio::time::timeout(Duration::from_secs(10), runner.drive(&d, rx, "turn-1".into(), &mut segment, &mut carried, &mut rejected, &mut goal))
+            .await
+            .expect("the drive ends")
+    }
+
+    #[tokio::test]
+    async fn an_answer_that_finished_while_the_computer_slept_is_handed_in_completed_after_the_renewal_is_refused() {
+        // QA case A/B: the runner was paused past the lease and the cleanup; the model finished meanwhile. On wake the
+        // renewer hears 409 first (`lost`), with the whole answer still waiting in the host's stream.
+        let (url, seen) = lapsed_hub().await;
+        let (runner, dir) = runner_at(&url);
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let host = Host::Claude(ClaudeHost::new("acme", vec![], tx.clone()));
+        for ev in answer_events("th-1", "turn-1") {
+            tx.send(ev).unwrap();
+        }
+        let f = flags(true);
+        let drove = drive_turn(&runner, &host, &mut rx, &f, "th-1").await.unwrap_or_else(|e| panic!("refused: {}", e.text));
+        assert_eq!((drove.outcome.as_str(), drove.reply.as_str()), ("completed", "Acme's renewal summary is ready."));
+        assert!(!seen.lock().unwrap().iter().any(|p| p.ends_with("/inputs") || p.ends_with("/goal")), "nothing more was asked of the hub");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn an_inputs_refusal_heard_before_the_renewer_still_reads_out_the_finished_answer() {
+        // QA's native log: the inputs poll got the 409 too, and its error used to end the drive at once.
+        let (url, seen) = lapsed_hub().await;
+        let (runner, dir) = runner_at(&url);
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let claude = ClaudeHost::new("acme", vec![], tx.clone());
+        claude.pretend_up(true);
+        let host = Host::Claude(claude);
+        let watched = seen.clone();
+        let feed = tokio::spawn(async move {
+            while !watched.lock().unwrap().iter().any(|p| p.ends_with("/inputs")) {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            for ev in answer_events("th-2", "turn-1") {
+                tx.send(ev).unwrap();
+            }
+        });
+        let f = flags(false);
+        let drove = drive_turn(&runner, &host, &mut rx, &f, "th-2").await.unwrap_or_else(|e| panic!("refused: {}", e.text));
+        feed.await.unwrap();
+        assert_eq!(drove.outcome, "completed");
+        assert_eq!(drove.reply, "Acme's renewal summary is ready.");
+        assert!(f.lost.load(Ordering::SeqCst), "the refusal counts as a lost lease");
+        assert_eq!(seen.lock().unwrap().iter().filter(|p| p.ends_with("/inputs")).count(), 1, "inputs are asked for once, not after the refusal");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn a_lost_lease_on_a_model_still_working_ends_the_turn_after_a_short_read() {
+        let (url, _) = lapsed_hub().await;
+        let (runner, dir) = runner_at(&url);
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let claude = ClaudeHost::new("acme", vec![], tx.clone());
+        claude.pretend_up(false);
+        let host = Host::Claude(claude);
+        tx.send(json!({"kind": "delta", "thread_id": "th-3", "turn_id": "turn-1", "text": "Acme's renewal"})).unwrap();
+        let (f, began) = (flags(true), Instant::now());
+        let err = drive_turn(&runner, &host, &mut rx, &f, "th-3").await.err().expect("not completed");
+        assert!(err.text.contains("loss of ownership"), "{}", err.text);
+        assert!(began.elapsed() >= SALVAGE && began.elapsed() < SALVAGE + Duration::from_secs(3), "{:?}", began.elapsed());
+        drop(tx);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn a_lost_lease_with_the_harness_gone_and_nothing_left_to_read_ends_at_once() {
+        let (url, _) = lapsed_hub().await;
+        let (runner, dir) = runner_at(&url);
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let host = Host::Claude(ClaudeHost::new("acme", vec![], tx.clone()));
+        let (f, began) = (flags(true), Instant::now());
+        let err = drive_turn(&runner, &host, &mut rx, &f, "th-4").await.err().expect("not completed");
+        assert!(err.text.contains("loss of ownership"), "{}", err.text);
+        assert!(began.elapsed() < SALVAGE, "{:?}", began.elapsed());
+        std::fs::remove_dir_all(dir).ok();
     }
 }

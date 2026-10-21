@@ -308,6 +308,13 @@ impl ClaudeHost {
         self.inner().up
     }
 
+    /// A host that is up and steers without a Claude process, for tests that feed its events themselves.
+    #[cfg(test)]
+    pub(crate) fn pretend_up(&self, steer: bool) {
+        self.inner().up = true;
+        self.0.steer.store(steer, std::sync::atomic::Ordering::Relaxed);
+    }
+
     pub fn start_thread(&self, settings: &Settings) -> String {
         let id = uuid::Uuid::new_v4().to_string();
         self.inner().threads.insert(id.clone(), Thread { settings: settings.clone(), started: false, fork_from: None, session_id: None });
