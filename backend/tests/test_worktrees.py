@@ -28,7 +28,9 @@ def prepared(api, gh):
                 c.execute(f'ALTER TABLE task_links ADD COLUMN {name} {kind}')
         c.execute("UPDATE runners SET readiness_json=? WHERE id='r1'", (json.dumps({'schema_version': 1, 'bots': {}, 'worktrees': True}),))
         task = H.task_create(c, 'human:ana', 'Build product', 'Implement product', 'bot:cmo')
+        c.execute("UPDATE tasks SET status='doing' WHERE status='open'")  # a started task gets a worktree
         other = H.task_create(c, 'human:ana', 'Other work', 'Implement docs', 'bot:cpo')
+        c.execute("UPDATE tasks SET status='doing' WHERE status='open'")  # a started task gets a worktree
         until = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
         c.execute("INSERT INTO messages(id,from_actor,to_actor,kind,body,created) VALUES('m1','human:ana','bot:cmo','say','Work',?)", (H.now(),))
         job = c.execute("SELECT id FROM jobs WHERE message_id='m1'").fetchone()[0]
@@ -445,6 +447,7 @@ def test_a_ready_setup_clears_a_failed_restore_and_the_health_monitor_follows(pr
     monkeypatch.setattr(watchers, 'deliver', lambda *args: True)
     with api.app_state.store.transaction() as c:
         second = H.task_create(c, 'human:ana', 'More product', 'Implement more', 'bot:cmo')['id']
+        c.execute("UPDATE tasks SET status='doing' WHERE status='open'")  # a started task gets a worktree
     links = [post(api, f'tasks/{task}/worktrees', {'repo': 'Acme/product'}).json() for task in (tid, second)]
     failed = 'Worktree action failed; history kept. Restore path already exists and is not a worktree'
     beat = {'version': '0.3.46', 'platform': 'linux', 'readiness': {'schema_version': 1, 'worktrees': True},
@@ -796,3 +799,102 @@ def test_a_finished_task_pr_never_releases_a_tree_whose_own_commits_no_pr_carrie
         c.execute("UPDATE task_links SET branch=? WHERE id=?", (link['branch'], merged['id']))
     actions = post(api, 'runners/heartbeat', body, 'runner-test').json()['worktree_actions']
     assert [a['release'] for a in actions] == [True]
+
+
+# Dev 265 part b: a tree starts only for work that can run, obsolete reservations end, a fix-forward keeps its tree,
+# and every release says why.
+HEARTBEAT = {'version': '0.3.2', 'platform': 'linux', 'readiness': {'schema_version': 1, 'bots': {}, 'worktrees': True}}
+
+
+def released_events(api, tid):
+    with api.app_state.store.read() as c:
+        return [json.loads(r[0]) for r in c.execute("SELECT detail_json FROM events WHERE action='worktree.released' "
+                                                     "AND target=? ORDER BY ts", (tid,))]
+
+
+def test_a_new_worktree_starts_only_for_work_a_coding_step_can_run_on(prepared):
+    api, tid, other = prepared
+    path = f'tasks/{tid}/worktrees'
+    for status, words in (('open', 'move it to In Progress first'), ('done', 'finished task'),
+                          ('declined', 'finished task')):
+        with api.app_state.store.transaction() as c:
+            c.execute('UPDATE tasks SET status=? WHERE id=?', (status, tid))
+        refused = post(api, path, {'repo': 'Acme/product'}, 'bot-test')
+        assert refused.status_code == 409 and refused.json()['error']['code'] == 'worktree_start', refused.text
+        assert words in refused.json()['error']['detail']
+    with api.app_state.store.transaction() as c:
+        c.execute("UPDATE tasks SET status='doing' WHERE id=?", (tid,))
+        c.execute("INSERT INTO task_relations(from_task,to_task,kind,created) VALUES(?,?,'blocks',?)", (other, tid, H.now()))
+    refused = post(api, path, {'repo': 'Acme/product'}, 'bot-test')
+    assert refused.status_code == 409 and 'blocked by' in refused.json()['error']['detail']
+    assert 'Other work' in refused.json()['error']['detail']
+    with api.app_state.store.transaction() as c:
+        c.execute("UPDATE tasks SET status='done' WHERE id=?", (other,))      # a done blocker blocks nothing
+    for status in ('doing', 'review', 'waiting'):                          # a fix-forward or review fix at any step
+        with api.app_state.store.transaction() as c:
+            c.execute('UPDATE tasks SET status=? WHERE id=?', (status, tid))
+        assert post(api, path, {'repo': 'Acme/product'}, 'bot-test').status_code == 200
+
+
+def test_an_obsolete_pending_reservation_is_cancelled_without_touching_a_checkout(prepared):
+    api, tid, _ = prepared
+    link = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test').json()
+    assert link['state'] == 'pending' and link['checkout_state'] == 'queued'
+    with api.app_state.store.transaction() as c:
+        H.task_link(c, 'bot:cmo', tid, 'https://github.com/Acme/product/pull/1')
+        c.execute("UPDATE task_links SET state='merged' WHERE kind='pr'")
+    # Nothing was checked out: the place frees on the server, no computer is asked to remove anything.
+    actions = post(api, 'runners/heartbeat', {**HEARTBEAT, 'worktrees': []}, 'runner-test').json()['worktree_actions']
+    assert actions == []
+    with api.app_state.store.read() as c:
+        row = c.execute('SELECT state,detail_json FROM task_links WHERE id=?', (link['link_id'],)).fetchone()
+    assert row['state'] == 'removed' and json.loads(row['detail_json'])['removed_by'] == 'cancelled'
+    assert [e['reason'] for e in released_events(api, tid)] == ['pending cancelled']
+
+
+def test_a_pending_tree_with_a_checkout_on_disk_is_removed_the_normal_way_when_its_task_closes(prepared):
+    api, tid, _ = prepared
+    link = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test').json()
+    report = {'link_id': link['link_id'], 'state': 'pending', 'checkout_state': 'checkout_ready',
+              'branch': link['branch'], 'last_commit': 'c' * 40}
+    with api.app_state.store.transaction() as c:
+        c.execute("UPDATE tasks SET status='closed' WHERE id=?", (tid,))
+    actions = post(api, 'runners/heartbeat', {**HEARTBEAT, 'worktrees': [report]}, 'runner-test').json()['worktree_actions']
+    assert [a['action'] for a in actions] == ['remove']        # the computer keeps any unsaved work, as always
+    report['state'] = 'removed'
+    post(api, 'runners/heartbeat', {**HEARTBEAT, 'worktrees': [report]}, 'runner-test')
+    assert [e['reason'] for e in released_events(api, tid)] == ['task finished']
+
+
+def test_a_fix_forward_keeps_its_tree_while_a_turn_runs_or_the_branch_moved_past_the_merged_head(prepared):
+    api, tid, _ = prepared
+    link = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test').json()
+    assert mark_ready(api, tid, link['link_id']).status_code == 200
+    report = {'link_id': link['link_id'], 'state': 'present', 'checkout_state': 'ready', 'branch': link['branch'],
+              'last_commit': 'd' * 40, 'ahead': 0}
+    body = {**HEARTBEAT, 'worktrees': [report]}
+    with api.app_state.store.transaction() as c:
+        pr = H.task_link(c, 'bot:cmo', tid, 'https://github.com/Acme/product/pull/7')
+        c.execute("UPDATE task_links SET state='merged',branch=?,detail_json=? WHERE id=?",
+                  (link['branch'], json.dumps({'head_sha': 'e' * 40}), pr['id']))
+        c.execute("UPDATE tasks SET carried_by='a1' WHERE id=?", (tid,))     # the bot's turn on this task is running
+
+    def held():
+        with api.app_state.store.read() as c:
+            return {w['link_id']: w for w in W.holdings(c, 'bot:cmo')}[link['link_id']].get('kept')
+    # A live turn: held, whatever the branch says.
+    assert post(api, 'runners/heartbeat', body, 'runner-test').json()['worktree_actions'] == []
+    assert held() == 'held: live turn'
+    # The turn ended, but the pushed branch has commits past the merged pull request's head: held.
+    with api.app_state.store.transaction() as c:
+        c.execute("UPDATE tasks SET carried_by=NULL WHERE id=?", (tid,))
+    assert post(api, 'runners/heartbeat', body, 'runner-test').json()['worktree_actions'] == []
+    assert held() == 'held: new commits since PR #7'
+    # The branch is where the merged pull request left it: released, and the release says why once removed.
+    report['last_commit'] = 'e' * 40
+    actions = post(api, 'runners/heartbeat', body, 'runner-test').json()['worktree_actions']
+    assert [(a['action'], a.get('release')) for a in actions] == [('remove', True)]
+    report['state'] = 'removed'
+    post(api, 'runners/heartbeat', body, 'runner-test')
+    post(api, 'runners/heartbeat', body, 'runner-test')
+    assert released_events(api, tid) == [{'link': link['link_id'], 'path': link['path'], 'reason': 'pull request merged'}]

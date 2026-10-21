@@ -24,6 +24,7 @@ def setup_wait(api, tid, readiness=READY):
         c.execute("UPDATE runners SET readiness_json=? WHERE id='r1'", (json.dumps(readiness),))
         turn_on(c, tid)
         filler = H.task_create(c, 'human:ana', 'Earlier work', 'Older worktrees', 'bot:cmo')
+        c.execute("UPDATE tasks SET status='doing' WHERE status='open'")  # a started task gets a worktree
         links = []
         for i in range(W.LIMIT):
             link = uuid.uuid4().hex
@@ -91,6 +92,7 @@ def test_only_the_limit_for_the_turns_own_task_records_a_wait(prepared):
     # Another task of the same bot, a person's request, an attach and another refusal never make one.
     with api.app_state.store.transaction() as c:
         third = H.task_create(c, 'human:ana', 'Third', 'More', 'bot:cmo')['id']
+        c.execute("UPDATE tasks SET status='doing' WHERE status='open'")  # a started task gets a worktree
     assert 'wait' not in post(api, f'tasks/{third}/worktrees', {'repo': 'Acme/product'}, 'bot-test').json()['error']
     person = post(api, f'tasks/{third}/worktrees', {'repo': 'Acme/product'})
     assert person.status_code == 409 and 'wait' not in person.json()['error']
@@ -99,6 +101,7 @@ def test_only_the_limit_for_the_turns_own_task_records_a_wait(prepared):
     put(api, 'bots/cmo/repositories', {'mode': 'all', 'all_access': 'read'})
     with api.app_state.store.transaction() as c:
         fourth = H.task_create(c, 'human:ana', 'Fourth', 'More', 'bot:cmo')['id']
+        c.execute("UPDATE tasks SET status='doing' WHERE status='open'")  # a started task gets a worktree
         turn_on(c, fourth)
     assert post(api, f'tasks/{fourth}/worktrees', {'repo': 'Acme/product'}, 'bot-test').status_code == 403
     assert len(rows(api, 'SELECT * FROM worktree_waits')) == 1
@@ -150,6 +153,7 @@ def test_waiters_are_served_oldest_first_without_double_booking(prepared):
     filler, links = setup_wait(api, tid)
     with api.app_state.store.transaction() as c:
         younger = H.task_create(c, 'human:ana', 'Younger', 'Later work', 'bot:cmo')['id']
+        c.execute("UPDATE tasks SET status='doing' WHERE status='open'")  # a started task gets a worktree
     post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test')
     with api.app_state.store.transaction() as c:
         turn_on(c, younger)
@@ -172,6 +176,7 @@ def test_one_broken_wait_ends_alone_and_the_heartbeat_still_frees_places(prepare
     filler, links = setup_wait(api, tid)
     with api.app_state.store.transaction() as c:
         younger = H.task_create(c, 'human:ana', 'Younger', 'Later work', 'bot:cmo')['id']
+        c.execute("UPDATE tasks SET status='doing' WHERE status='open'")  # a started task gets a worktree
     post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test')
     with api.app_state.store.transaction() as c:
         turn_on(c, younger)
@@ -258,6 +263,7 @@ def test_close_reassign_revoke_and_stop_end_the_wait_without_touching_other_task
     with api.app_state.store.transaction() as c:
         for title in ('Second', 'Third', 'Fourth'):
             tasks.append(H.task_create(c, 'human:ana', title, 'Work', 'bot:cmo')['id'])
+            c.execute("UPDATE tasks SET status='doing' WHERE status='open'")  # a started task gets a worktree
     for task in tasks:
         with api.app_state.store.transaction() as c:
             turn_on(c, task)
@@ -279,6 +285,7 @@ def test_close_reassign_revoke_and_stop_end_the_wait_without_touching_other_task
     put(api, 'bots/cmo/repositories', {'mode': 'all', 'all_access': 'write'})
     with api.app_state.store.transaction() as c:
         fifth = H.task_create(c, 'human:ana', 'Fifth', 'Work', 'bot:cmo')['id']
+        c.execute("UPDATE tasks SET status='doing' WHERE status='open'")  # a started task gets a worktree
         turn_on(c, fifth)
         c.execute("INSERT INTO worktree_waits VALUES('other',?,'bot:cmo','Acme/docs',1,'a9','waiting',NULL,'',?,?,NULL)",
                   (tasks[3], H.now(), H.now()))
@@ -329,3 +336,19 @@ def test_the_cli_exits_with_its_own_status_for_a_wait(monkeypatch, capsys):
     monkeypatch.setattr(remotecli, 'run', lambda *_: (_ for _ in ()).throw(
         APIError('worktree_limit', 'Clean one up first.', 409)))
     assert remotecli.main(args) == 2
+
+
+
+def test_a_wait_whose_task_got_blocked_is_cancelled_not_served(prepared):
+    api, tid, _ = prepared
+    filler, links = setup_wait(api, tid)
+    assert 'wait' in post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test').json()['error']
+    with api.app_state.store.transaction() as c:
+        blocker = H.task_create(c, 'human:ana', 'Blocker', 'First this', 'bot:cpo')['id']
+        c.execute("UPDATE tasks SET status='doing' WHERE id=?", (blocker,))
+        c.execute("INSERT INTO task_relations(from_task,to_task,kind,created) VALUES(?,?,'blocks',?)",
+                  (blocker, tid, H.now()))
+    free(api, filler, links[0])
+    wait = rows(api, 'SELECT * FROM worktree_waits WHERE task_id=?', (tid,))[0]
+    assert wait['state'] == 'cancelled' and 'blocked by' in wait['reason'] and wait['link_id'] is None
+    assert not wakes(api, tid)
