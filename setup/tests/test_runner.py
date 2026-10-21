@@ -140,3 +140,25 @@ def test_a_failed_docker_download_stops_the_bootstrap_and_the_ssh_step(tmp_path,
     assert "| sh" not in cmd
     p = subprocess.run([shell, "-c", cmd], env=env, capture_output=True, text=True)
     assert p.returncode == 1, p.stdout + p.stderr  # was 0: systemctl ran after an empty install
+
+
+def test_aws_runner_reuses_its_exact_name_boundary_and_private_join(monkeypatch):
+    from setup import aws
+    monkeypatch.setenv('TICO_ENROLL_CODE', CODE)
+    ec2, iam, ssm, clients = fakes.aws_clients()
+    ssm.get_command_invocation = lambda **kw: {'Status':'Success','ResponseCode':0,
+        'StandardOutputContent':'Up 3 seconds\n','StandardErrorContent':''}
+    d = fakes.deps()
+    d.aws_clients = clients
+    argv = ['runner','--cloud','aws','--aws-region','us-east-2','--aws-instance-type','m8i-flex.xlarge',
+            '--name','pv-bot','--aws-permissions-boundary','arn:aws:iam::123456789012:policy/boundary',
+            '--server-url','https://acme.tico.dev','--label','pv-bot','--runner-tag','v0.3.71',
+            '--non-interactive','--yes']
+    for _ in range(2):
+        code, out = go(argv, d)
+        assert code == 0, out
+        assert CODE not in out
+    assert len(ec2.called('run_instances')) == 1
+    assert iam.called('create_role')[0]['PermissionsBoundary'].endswith(':policy/boundary')
+    assert state.load_runners()[0]['name'] == 'pv-bot'
+    assert any('cloud-init status --wait' in command for command in ssm.commands)
