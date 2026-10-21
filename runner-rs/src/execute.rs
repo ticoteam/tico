@@ -76,7 +76,7 @@ impl From<String> for Fail {
 
 /// What a turn spent (runner/usage.py Meter): the sum of each `tokens` event's `usage` increment. A host that learns
 /// the model from its harness (Muse Code) puts it on the event; it names the run's model when the config does not.
-/// A host that sees each model request (Claude) lists them as `requests`, so the server can price each on its own; a
+/// A host that sees each model request (Claude, pi) lists them as `requests`, so the server can price each on its own; a
 /// fourth count, when the host sends one, is 1 for the bot's own request and 0 for a subagent's.
 #[derive(Default)]
 pub(crate) struct Meter {

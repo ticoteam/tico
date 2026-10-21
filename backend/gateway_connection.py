@@ -1,7 +1,7 @@
 """The Tico AI Gateway connection in Settings > Computers: one gateway key and the Gateway's URL.
 
 It is the one key for everything the app asks the Gateway (clients/gateway.py): Decide's questions and the bots that run
-on Tico Cheap, Mid and Power 1.0. The server's environment may set it (`TICO_GATEWAY_KEY`, `TICO_GATEWAY_URL`), which
+on Tico's models (Tico Cheap, Mid and Power). The server's environment may set it (`TICO_GATEWAY_KEY`, `TICO_GATEWAY_URL`), which
 wins and shows as connected; otherwise the owner saves it here. The saved key is sealed with the credential vault's
 data key (backend/credentials.py `CredentialCipher.seal`), like the storage and Slack secrets: no read returns it, only
 a preview of its first and last three characters, and no event or log line carries it.
