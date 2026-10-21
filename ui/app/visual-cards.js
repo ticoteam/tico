@@ -14,8 +14,8 @@ const VISUAL_INLINE_MAX = 4;
 const VISUAL_BODY = {}, VISUAL_WIRE = {}, VISUAL_EXPAND = {}, VISUAL_SPACE = {}, VISUAL_MOVED = {};
 
 // The address a card shows from: 1/4's signed, sign-in-free `src` on /visuals/<token> (backend/visuals.py). Never
-// the signed-in /api/v2/files address and never a blob: URL. No `src` (inline serving off, or a file this reader can
-// no longer open): no card, the file is a chip.
+// the signed-in /api/v2/files address and never a blob: URL. No `src` (a file this reader can no longer open, or a
+// page or SVG without a visual address, an Open card): no picture.
 function visualSrc(f, field = 'src') {
   const raw = f && typeof f[field] === 'string' ? f[field] : '';
   if (!raw) return null;
@@ -37,11 +37,21 @@ function nativeVisualRepaint() {
     taskCommentsRender(TASK_CHAT, TASK_CHAT.data);
 }
 const visualRef = f => `${f.file_id}@${Number(f.version)}`;
+// Without a separate visual address (Visuals always on, backend/visuals.py mode) a page or SVG is never served from
+// the app's own address: the server sends `open` and no `src`, and it is a card with its title, its still preview
+// when it has one, and Open, which shows it in the file viewer.
+const VISUAL_OPEN_KINDS = new Set(['page', 'svg']);
 // A card, or null for a chip.
 function visualState(f) {
   if (!f || typeof f !== 'object' || !f.file_id || !Number.isInteger(Number(f.version)) || !VISUAL_BODY[f.kind]) return null;
   if (f.removed) return 'removed';
-  return visualSrc(f) ? 'ready' : null;
+  if (visualSrc(f)) return 'ready';
+  return f.open === true && VISUAL_OPEN_KINDS.has(f.kind) ? 'open' : null;
+}
+function visualOpenBody(f) {
+  const preview = visualSrc(f, 'preview_url');
+  return `<div class="vcard-open">${preview ? `<img class="vcard-preview" src="${esc(preview)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" draggable="false">` : ''}
+    <button type="button" class="ghost vcard-open-btn" data-vcard-act="open">Open</button></div>`;
 }
 function visualSpace(f) {
   const w = Number(f.width), h = Number(f.height);
@@ -57,10 +67,11 @@ function visualCardHTML(f, key, state) {
   const expand = state === 'ready' && VISUAL_EXPAND[f.kind] ? `<button type="button" role="menuitem" data-vcard-act="expand">Expand</button>` : '';
   const menu = state === 'removed' ? '' : `<details class="vcard-menu"><summary aria-label="More for ${esc(title)}" title="More"><span class="nav-icon" aria-hidden="true">more_horiz</span></summary>
       <div class="vcard-menu-list" role="menu">${expand}<button type="button" role="menuitem" data-vcard-act="open">Open in file viewer</button><a role="menuitem" href="${API}/v2/files/${encodeURIComponent(fid)}?v=${n}" download="${esc(f.name || title)}">Download</a></div></details>`;
-  const body = state === 'removed' ? '<div class="vcard-note">This visual was removed</div>' : VISUAL_BODY[f.kind](f);
+  const body = state === 'removed' ? '<div class="vcard-note">This visual was removed</div>'
+    : state === 'open' ? visualOpenBody(f) : VISUAL_BODY[f.kind](f);
   return `<figure class="vcard" data-visual-key="${esc(key)}" data-kind="${esc(f.kind)}" data-state="${state}" data-file="${esc(fid)}" data-version="${n}"${
     current > n ? ` data-current="${current}"` : ''} data-name="${esc(f.name || title)}"${state === 'ready' ? ` data-fresh-src="${esc(visualSrc(f))}"` : ''}>
-    <div class="vcard-body" style="${esc(state === 'removed' ? '' : visualSpace(f))}">${body}</div>
+    <div class="vcard-body" style="${esc(state === 'ready' ? visualSpace(f) : '')}">${body}</div>
     <figcaption class="vcard-cap"><span class="vcard-title">${esc(title)}</span>${newer}${menu}</figcaption></figure>`;
 }
 // The cards for `files` (a message's refs.attachments) and, after them, `chips(rest, shown)` for everything else:

@@ -1123,8 +1123,8 @@ def create_app(settings=None):
         return task_views(page, c, who, visible_sql), offset + limit if has_more else None
 
     def visual_view(c, who, rows):
-        """Messages with each visual as this reader sees it now: fresh addresses on /visuals (backend/visuals.py), or
-        none at all while inline display is off (a file chip)."""
+        """Messages with each visual as this reader sees it now: fresh addresses on /visuals (backend/visuals.py), on the
+        visual address or, in the fallback, the app's own (pictures, video and audio only)."""
         return visuals.for_reader(app, settings, c, who, rows)
 
     def visual_key():
@@ -1139,7 +1139,7 @@ def create_app(settings=None):
         """A visual for inline display, apart from the app's sign-in: the signed token is the only credential, and
         the reader it names is checked again on every request (each range request too)."""
         return visuals.serve(request, store, auth, app.state.files, app.state.blobs, visual_key(),
-                             visual_ancestors(), token, on=visuals.inline_on(settings))
+                             visual_ancestors(), token, full=visuals.mode(settings) == "full")
 
     def check_refs(c, who, refs):
         # Validate referenced objects rather than trusting an arbitrary ID in a payload.

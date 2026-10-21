@@ -1,0 +1,175 @@
+"""Visuals always on 1/3 (Dev 313): without a separate visual address, pictures, video and audio still show inline,
+served from the app's own address as media only; pages and SVG are cards that open the file viewer, and are never
+served from the app's own address. No visual response ever sets a cookie. Spec tests 1-4 and 7 (Product roadmap
+"Visuals always on"); the UI half is ui/tests/visual-fallback.cjs."""
+import base64
+
+import pytest
+
+from backend import visuals as V
+from backend.tests.test_api import api, headers, post  # noqa: F401  (fixtures)
+from backend.tests.test_files import publish, turn
+from backend.tests.test_visuals import PNG, VISUALS, bot_reply, task_with_file, wav
+
+SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><rect width="10" height="10"/></svg>'
+CLIP = bytes(range(256)) * 8
+
+
+@pytest.fixture
+def fallback(api, monkeypatch):
+    """A company with no visual address: the app's own (production-like) address only."""
+    settings = api.app.state.store.settings
+    monkeypatch.setattr(settings, "visual_origin", "")
+    monkeypatch.setattr(settings, "public_url", "https://tico.example")
+    return settings
+
+
+def media_reply(api):
+    """A bot's chat reply with a PNG, a video and an audio clip, as the reader reads it back."""
+    _, attempt = turn(api)
+    refs = []
+    for name, data in (("chart.png", PNG), ("clip.mp4", CLIP), ("note.wav", wav())):
+        made = publish(api, attempt, name=name, text=None, content_base64=base64.b64encode(data).decode())
+        assert made.status_code == 200, made.text
+        refs.append({"ref": made.json()["file"]["id"] + "@1", "title": name})
+    sent = bot_reply(api, attempt, attachments=refs)
+    assert sent.status_code == 200, sent.text
+    return api.get("/api/v2/messages/" + sent.json()["id"], headers=headers("ben-test")).json()
+
+
+def page_and_svg_comment(api):
+    tid, page, _ = task_with_file(api, private=False, name="funnel.html", text="<p>funnel</p>")
+    svg = api.post(f"/api/v2/tasks/{tid}/files", json={"name": "logo.svg", "text": SVG}, headers=headers("ben-test"))
+    assert svg.status_code == 200, svg.text
+    r = api.post(f"/api/v2/tasks/{tid}/comments", json={"text": "Both", "attachments": [
+        {"ref": f"{page}@1", "title": "Funnel"}, {"ref": svg.json()["file_id"] + "@1", "title": "Logo"}]},
+        headers=headers("ben-test"))
+    assert r.status_code == 200, r.text
+    return tid, r.json()["comment"]
+
+
+def comment_items(api, tid, comment):
+    listed = api.get(f"/api/v2/tasks/{tid}/comments", headers=headers("ben-test")).json()["comments"]
+    return next(m for m in listed if m["id"] == comment["id"])["refs"]["attachments"]
+
+
+def test_without_a_visual_address_pictures_video_and_audio_show_inline_from_the_apps_own_address(api, fallback):
+    """Spec 1 and 3: each gets an address on the app's own /visuals route, served with its own media type, nosniff,
+    a content policy that runs no script, inline, and no cookie."""
+    items = media_reply(api)["refs"]["attachments"]
+    assert [(a["kind"], a["src"][:9]) for a in items] == [("image", "/visuals/"), ("video", "/visuals/"),
+                                                          ("audio", "/visuals/")]
+    for a, mime in zip(items, ("image/png", "video/mp4", "audio/wav")):
+        assert "open" not in a
+        r = api.get(a["src"])
+        assert r.status_code == 200, a
+        assert r.headers["content-type"].split(";")[0] == mime
+        assert r.headers["x-content-type-options"] == "nosniff"
+        rule = r.headers["content-security-policy"]
+        assert "default-src 'none'" in rule and "sandbox" in rule and "script-src" not in rule
+        assert "allow-scripts" not in rule
+        assert r.headers["content-disposition"] == "inline"
+        assert "set-cookie" not in r.headers
+    part = api.get(items[1]["src"], headers={"Range": "bytes=0-1"})
+    assert part.status_code == 206 and part.content == CLIP[:2]           # video still seeks
+
+
+def test_without_a_visual_address_a_page_and_an_svg_are_open_cards_never_served_from_the_app(api, fallback):
+    """Spec 2 and 3: no `src` and `open` true (a card with Open, which shows the file viewer); the route refuses a
+    page or SVG on the app's own address even with a token signed for it, and the file viewer's address stays."""
+    tid, comment = page_and_svg_comment(api)
+    for a in comment_items(api, tid, comment):
+        assert a["kind"] in ("page", "svg") and a["src"] is None and a["open"] is True, a
+        assert a["title"] in ("Funnel", "Logo") and "preview_url" not in a
+        assert a["url"] == f"/api/v2/files/{a['file_id']}?v={a['version']}"
+        token = V.mint(api.app.state.visual_key, "human:ben", a["file_id"], a["version"])
+        for method in (api.get, api.head):
+            r = method("/visuals/" + token)
+            assert r.status_code == 404 and not r.content and "set-cookie" not in r.headers
+            assert r.headers["content-disposition"] == "attachment"
+
+
+def test_a_page_with_a_still_preview_shows_it_and_the_preview_is_only_ever_a_picture(api, fallback):
+    """Spec 2: "the still preview when one exists". The preview is served as a picture; one that is not a raster
+    picture (an SVG or a page stored as the preview) is refused."""
+    tid, comment = page_and_svg_comment(api)
+    page = comment_items(api, tid, comment)[0]
+    blobs = api.app.state.blobs
+    store = api.app.state.store
+
+    def preview(data, mime):
+        digest = blobs.put(data, mime)
+        with store.transaction() as c:
+            blob = c.execute("INSERT INTO blobs(id,owner,digest,size,name,content_type,created) VALUES "
+                             "(lower(hex(randomblob(16))),'human:ben',?,?,?,?,'2026-10-21') RETURNING id",
+                             (digest, len(data), "preview", mime)).fetchone()[0]
+            c.execute("UPDATE bot_file_versions SET thumb_blob_id=? WHERE file_id=? AND version=?",
+                      (blob, page["file_id"], page["version"]))
+        [a, _] = comment_items(api, tid, comment)
+        return a
+
+    a = preview(PNG, "image/png")
+    assert a["src"] is None and a["preview_url"].startswith("/visuals/")
+    r = api.get(a["preview_url"])
+    assert r.status_code == 200 and r.content == PNG and r.headers["content-type"] == "image/png"
+    assert r.headers["content-disposition"] == "inline" and "set-cookie" not in r.headers
+    for data, mime in ((SVG.encode(), "image/svg+xml"), (b"<p>x</p>", "text/html")):
+        a = preview(data, mime)
+        assert api.get(a["preview_url"]).status_code == 404
+
+
+def test_with_a_visual_address_all_five_kinds_show_inline_there(api, monkeypatch):
+    """Spec 4: a working visual address keeps Visual replies as they are: every kind has a `src` on that address."""
+    monkeypatch.setattr(api.app.state.store.settings, "visual_origin", VISUALS)
+    items = media_reply(api)["refs"]["attachments"]
+    tid, comment = page_and_svg_comment(api)
+    items += comment_items(api, tid, comment)
+    assert [a["kind"] for a in items] == ["image", "video", "audio", "page", "svg"]
+    for a in items:
+        assert a["src"].startswith(VISUALS + "/visuals/") and "open" not in a, a
+        r = api.get(a["src"])
+        assert r.status_code == 200 and r.headers["content-disposition"] == "inline" and "set-cookie" not in r.headers
+
+
+def test_no_visual_response_ever_sets_a_cookie(api, monkeypatch):
+    """No cookie on a ticofiles.com host until the Public Suffix listing is live: every response on the visual route,
+    in either mode, found or not, GET or HEAD, with the app's own cookie sent along, carries no Set-Cookie."""
+    settings = api.app.state.store.settings
+    message, (tid, comment), seen = media_reply(api), page_and_svg_comment(api), 0
+    for origin in (VISUALS, ""):
+        monkeypatch.setattr(settings, "visual_origin", origin)
+        items = api.get("/api/v2/messages/" + message["id"], headers=headers("ben-test")).json()["refs"]["attachments"]
+        srcs = [a["src"] for a in items]
+        for a in comment_items(api, tid, comment):
+            srcs.append(a["src"] or "/visuals/" + V.mint(api.app.state.visual_key, "human:ben", a["file_id"], 1))
+        srcs += ["/visuals/nonsense", "/visuals/" + V.mint(api.app.state.visual_key, "human:ben", "nofile", 1)]
+        for src in srcs:
+            for method in ("GET", "HEAD"):
+                for extra in ({}, {"Range": "bytes=0-1"}, {"Cookie": "tico_session=synthetic"}):
+                    r = api.request(method, src, headers=extra)
+                    seen += 1
+                    assert "set-cookie" not in r.headers, (method, src, extra, r.status_code)
+    assert seen == 2 * 7 * 2 * 3
+
+
+def test_only_pictures_video_and_audio_are_ever_inline_in_a_response():
+    """Spec 3: anything else the route could name is an attachment."""
+    for mime in ("image/png", "image/jpeg", "image/gif", "image/webp", "video/mp4", "audio/wav", "audio/mpeg"):
+        assert V.disposition(mime) == "inline", mime
+    for mime in ("image/svg+xml", "text/html", "application/pdf", "application/octet-stream", "", "text/plain"):
+        assert V.disposition(mime) == "attachment", mime
+
+
+def test_there_is_no_switch_the_setup_alone_decides(monkeypatch, tmp_path):
+    """Spec 7 (server half): the old opt-in that served pages from the app's own address is not read any more, and a
+    loopback install without a visual address is the fallback like any other."""
+    from backend.config import Settings
+    monkeypatch.setenv("TICO_VISUAL_SAME_ORIGIN", "1")
+    monkeypatch.delenv("TICO_VISUAL_ORIGIN", raising=False)
+    monkeypatch.setenv("TICO_DB", str(tmp_path / "hub.db"))
+    settings = Settings.from_env()
+    assert not hasattr(settings, "visual_same_origin")
+    assert settings.loopback and V.mode(settings) == "media" and settings.environment()["visuals"] == "media"
+    monkeypatch.setenv("TICO_VISUAL_ORIGIN", "https://files.acme.example")
+    full = Settings.from_env()
+    assert V.mode(full) == "full" and full.environment()["visuals"] == "full"

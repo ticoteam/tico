@@ -6,6 +6,8 @@ import pathlib
 import re
 from dataclasses import replace
 
+import pytest
+
 from backend import visuals as V
 from backend.tests.test_api import api, assign, claim, headers, post, ready, runner  # noqa: F401  (fixtures)
 from backend.tests.test_files import publish, turn
@@ -13,6 +15,15 @@ from backend.tests.test_events import live  # noqa: F401  (fixture)
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
 DOT = "data:image/png;base64," + base64.b64encode(PNG).decode()
+VISUALS = "http://visuals.localhost:9001"
+
+
+@pytest.fixture(autouse=True)
+def full(request, monkeypatch):
+    """Visual replies show in full on a separate visual address; the fallback tests (test_visuals_fallback.py) and
+    the ones here that need none take it away again."""
+    if "api" in request.fixturenames:
+        monkeypatch.setattr(request.getfixturevalue("api").app.state.store.settings, "visual_origin", VISUALS)
 
 
 def png(api, attempt, name="chart.png", data=PNG):
@@ -41,7 +52,7 @@ def test_a_bots_chat_reply_carries_a_titled_versioned_visual_and_reading_returns
         assert (item["file_id"], item["version"], item["title"], item["kind"]) == (fid, 1, "Weekly signups", "image")
         assert (item["name"], item["content_type"], item["size"]) == ("chart.png", "image/png", len(PNG))
         assert item["url"] == f"/api/v2/files/{fid}?v=1" and item["current_version"] == 1 and not item["removed"]
-        assert item["src"].startswith("/visuals/")
+        assert item["src"].startswith(VISUALS + "/visuals/")
     with api.app.state.store.read() as c:
         row = c.execute("SELECT scope FROM bot_files WHERE id=?", (fid,)).fetchone()
     assert row["scope"] == "conversation:" + message["conversation_id"]
@@ -128,7 +139,7 @@ def test_six_attachments_come_back_all_in_order(api):
     for read in (r.json()["comment"], comment):
         items = read["refs"]["attachments"]
         assert [(a["ref"], a["title"], a["kind"]) for a in items] == wanted
-        assert all(a["src"].startswith("/visuals/") for a in items)
+        assert all(a["src"].startswith(VISUALS + "/visuals/") for a in items)
 
 
 # ---------------------------------------------------------------------------------------------- access (18, 19)
@@ -210,7 +221,7 @@ def test_a_chat_visual_is_refused_to_everyone_outside_the_chat(api):
 def test_the_public_roadmap_never_shows_a_private_tasks_visual(api):
     """Spec 19: nothing of a private task's visual (file id, title, address) reaches a public roadmap response."""
     tid, fid, comment = visual_on_task(api, private=True)
-    assert comment["refs"]["attachments"][0]["src"].startswith("/visuals/")     # a reader does see it
+    assert comment["refs"]["attachments"][0]["src"].startswith(VISUALS + "/visuals/")     # a reader does see it
     from backend import public_roadmaps
     from backend.store import H
     with api.app.state.store.transaction() as c:
@@ -386,7 +397,9 @@ def test_actual_config_projects_visual_origin_only_after_api_auth_without_privat
     settings = api.app.state.store.settings
     for path in ("/api/me", "/api/v2/config"):
         assert api.get(path).status_code == 401
-    assert api.get("/api/v2/config", headers=headers()).json()["visual_origin"] == ""
+    monkeypatch.setattr(settings, "visual_origin", "")
+    config = api.get("/api/v2/config", headers=headers()).json()
+    assert (config["visual_origin"], config["visuals"]) == ("", "media")
     monkeypatch.setattr(settings, "visual_origin", replace(settings, visual_origin="https://visuals.acme-files.example/").visual_origin)
     monkeypatch.setattr(settings, "oidc_client_secret", "synthetic-private-oidc-secret")
     monkeypatch.setattr(settings, "gateway_key", "synthetic-private-gateway-key")
@@ -395,7 +408,7 @@ def test_actual_config_projects_visual_origin_only_after_api_auth_without_privat
         response = api.get(path, headers=headers("ben-test"))
         assert response.status_code == 200
         config = response.json()["config"] if path == "/api/me" else response.json()
-        assert config["visual_origin"] == "https://visuals.acme-files.example"
+        assert (config["visual_origin"], config["visuals"]) == ("https://visuals.acme-files.example", "full")
         assert "synthetic-private-" not in response.text
         assert not {"oidc_client_secret", "gateway_key", "screen_relay_key", "visual_key"} & config.keys()
 
@@ -410,35 +423,11 @@ def test_visual_projection_hides_legacy_credentials_and_bad_hosts_without_changi
         response = api.get("/api/v2/config", headers=headers())
         assert response.status_code == 200 and response.json()["visual_origin"] == ""
         assert "synthetic-visual-password" not in response.text
-        assert settings.visual_origin == legacy and V.inline_on(settings)
+        assert settings.visual_origin == legacy and V.mode(settings) == "full"
     local = replace(settings, visual_origin="http://localhost:9001/").visual_origin
     monkeypatch.setattr(settings, "visual_origin", local)
     assert api.get("/api/v2/config", headers=headers()).json()["visual_origin"] == "http://localhost:9001"
-    assert settings.visual_origin == local and V.inline_on(settings)
-
-
-def test_production_without_a_visual_origin_shows_chips_and_serves_nothing(api, monkeypatch):
-    """Lead decision: a production server with no separate visual origin still starts, but inline display is off:
-    no src, no poster, /visuals refuses. The same-origin sandbox runs only on loopback or with an explicit opt-in."""
-    tid, fid, comment = visual_on_task(api, private=False)
-    token = comment["refs"]["attachments"][0]["src"].rsplit("/", 1)[1]
-    settings = api.app.state.store.settings
-    monkeypatch.setattr(settings, "public_url", "https://tico.example")
-
-    def read():
-        listed = api.get(f"/api/v2/tasks/{tid}/comments", headers=headers("ben-test")).json()["comments"]
-        [item] = next(m for m in listed if m["id"] == comment["id"])["refs"]["attachments"]
-        return item
-
-    item = read()
-    assert item["src"] is None and "poster_url" not in item
-    assert (item["file_id"], item["kind"], item["url"]) == (fid, "page", f"/api/v2/files/{fid}?v=1")   # the chip
-    assert api.get("/visuals/" + token).status_code == 404
-    monkeypatch.setattr(settings, "visual_same_origin", True)          # a self-hoster's explicit opt-in
-    assert read()["src"].startswith("/visuals/") and api.get("/visuals/" + token).status_code == 200
-    monkeypatch.setattr(settings, "visual_same_origin", False)
-    monkeypatch.setattr(settings, "visual_origin", "https://visuals.example")
-    assert read()["src"].startswith("https://visuals.example/visuals/")
+    assert settings.visual_origin == local and V.mode(settings) == "full"
 
 
 def test_a_persons_chat_upload_is_a_titled_versioned_visual_too(api):
@@ -448,7 +437,7 @@ def test_a_persons_chat_upload_is_a_titled_versioned_visual_too(api):
     assert r.status_code == 200, r.text
     message = r.json()["message"]
     [now] = message["refs"]["attachments"]                                    # the upload's own response
-    assert now["src"].startswith("/visuals/") and (now["current_version"], now["removed"]) == (1, False)
+    assert now["src"].startswith(VISUALS + "/visuals/") and (now["current_version"], now["removed"]) == (1, False)
     read = api.get("/api/v2/messages/" + message["id"], headers=headers("ben-test")).json()
     [item] = read["refs"]["attachments"]
     assert item["url"] == "/api/v2/files/" + item["id"]                     # unchanged for today's chips
@@ -515,4 +504,4 @@ def test_a_wav_already_stored_or_sent_as_audio_vnd_wave_still_plays_inline(api):
                  files={"files": ("note.wav", wav(), "audio/vnd.wave")}, headers=headers("ben-test", "k-visual-wav"))
     assert r.status_code == 200, r.text
     [item] = r.json()["message"]["refs"]["attachments"]
-    assert item["kind"] == "audio" and item["src"].startswith("/visuals/")
+    assert item["kind"] == "audio" and item["src"].startswith(VISUALS + "/visuals/")

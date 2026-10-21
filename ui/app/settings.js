@@ -2,6 +2,14 @@
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
+// How visuals show (Visuals always on): decided by the setup, so a line to read, never a switch. "full" with a
+// separate visual address; otherwise pictures, video and audio only (backend/visuals.py mode).
+function settingsVisualsLine() {
+  const full = S.config?.visuals === 'full';
+  return `${full ? 'Visuals: full' : 'Visuals: pictures, video and audio only (no separate visual address)'}
+    <a href="${GH}/blob/main/docs/visuals.md#self-hosting" target="_blank" rel="noopener noreferrer">How visuals show</a>`;
+}
+
 // ----------------------------------------------------------------- settings
 // People stay deliberately compact. Bot ownership, model, and physical placement are separate
 // controls because changing who can use a bot must never silently move its runtime (or vice versa).
@@ -80,7 +88,8 @@ function pageSettings() {
             <button type="button" class="ghost" id="settings-team-icon-change">Choose icon</button>
             <p id="settings-team-icon-status" class="settings-cell-note" role="status"></p>
           </div>
-        </div>` : ''}</section>` : ''}
+        </div>` : ''}
+        <p class="settings-cell-note" id="settings-visuals">${settingsVisualsLine()}</p></section>` : ''}
       <section class="card" id="settings-assistant-pane"><header><h2>${esc(assistantName())}</h2><div class="row">
         <a class="ghost" href="${ASSISTANT}">Open chat</a>
         ${settingsCanManageBot((S.emps || []).find(e => e.name === assistantBot())) ? `<a class="ghost" href="#/bot/${encodeURIComponent(assistantBot())}/more">Bot settings</a>` : ''}

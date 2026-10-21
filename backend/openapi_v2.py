@@ -645,6 +645,10 @@ SCHEMAS = {
                    "public_url": "s", "owner_email": "s", "version": "s",
                    "visual_origin": {"type": "string", "description": "Configured non-secret visual origin, or empty "
                                      "when absent or invalid; grants no native IPC permission."},
+                   "visuals": {"type": "string", "enum": ["full", "media"],
+                               "description": "How visuals show, from the setup (no switch): full with a separate "
+                                              "visual address; media without one (pictures, video and audio inline, "
+                                              "pages and SVG open in the file viewer)."},
                    "s3_view_urls": {"type": "object", "additionalProperties": {"type": "string"},
                                     "description": "Signed-in callers: bucket -> https base an s3://bucket/key opens at "
                                                    "(base + '/' + key, each segment URL-encoded; TICO_S3_VIEW_URLS)"}},
