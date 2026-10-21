@@ -435,6 +435,10 @@ def run(args, who=None):
                 body["ask"] = ask
             if getattr(args, "needs_action", False):
                 body["needs_action"] = True
+            if getattr(args, "public", None):
+                body["public"] = True
+            if getattr(args, "approval_id", None):
+                body["approval_id"] = args.approval_id
             links = s3links.apply(client, body, ("text",))
             result = s3links.annotate(post(f"tasks/{args.id}/comments", body, delegate=asked), links)
             return {**result, "visuals_local": local} if local and isinstance(result, dict) else result
@@ -442,6 +446,8 @@ def run(args, who=None):
             return client.get(f"tasks/{args.id}/answers")
         if sub == "comment-edit":
             body = {"text": args.text}
+            if getattr(args, "approval_id", None):
+                body["approval_id"] = args.approval_id
             links = s3links.apply(client, body, ("text",))
             return s3links.annotate(post(f"tasks/{args.id}/comments/{args.comment_id}", body), links)
         if sub == "comment-delete":
