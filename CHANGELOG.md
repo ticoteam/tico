@@ -20,6 +20,10 @@ All notable changes to Tico are recorded here. The format follows
   cap table moves from the Corporate Secretary's description to the Equity Manager's. A whole model chart is over the
   8 KB the installer can carry today, so `setup` asks for it to be imported in the app until the plan-bucket
   transport lands.
+- **Hosted bot computers.** Hosting can run bots on a separate computer, keeping their work away from the Tico
+  server. Settings > Computers offers **Hosted computer (we run it)**. The installer supports server-only installs,
+  bounded AWS runner recovery and the same 4- and 8-core sizes on both machines, with 100 and 200 GB disks.
+  HQ registers only a join code's hash through scoped SSM; no owner token or join secret crosses that control plane.
 
 ### Changed
 - **Tico AI Gateway: Tico Cheap 1.1 replaces Cheap 1.0** in every model list. It costs the same for a prompt up to
@@ -31,15 +35,22 @@ All notable changes to Tico are recorded here. The format follows
   each one at its own rate.
 
 ### Fixed
+- **A bot's message to a bot says when it was held.** A plain message or task comment from one bot to another waits
+  for that bot's next run; the send now answers `woke: false` with a `held` reason, and `hub` prints it: held for
+  that bot's next run, add `--needs-action` to wake it now. Before, a held escalation read as delivered.
 - **Goals from a setup company file land on Goals.** Importing the file from tico.team/setup (in the app or from a
-  Hosted install) no longer sets its goals aside: the owner's goals become company goals, each bot's goal sits under
-  that bot, and a goal's measure becomes a KPI with the file's baseline and target. The file carries no readings, so
-  a new KPI starts with no history.
-- **Gateway turns retry when their rate window resets.** The computer carries the Gateway's requested wait back to
-  the server, so a busy minute does not hold starter bots for an hour or claim their address sent refused keys.
+  Hosted install) no longer sets its goals aside: the owner's goals and any goal for a built-in bot such as the
+  Assistant become company goals, each other bot's goal sits under that bot, and a goal's measure becomes a KPI with
+  the file's baseline and target. The file carries no readings, so a new KPI starts with no history.
 - **No "Claude login required" while the Tico AI Gateway runs the bot.** Under the recommended choice a bot whose
   Claude or ChatGPT is not signed in yet shows as ready, its card says "Using Tico AI Gateway; sign in to Claude to use
   your subscription", and its model check and chat no longer ask for a login. With no Gateway either, it still does.
+
+## [0.3.71] - 2026-10-21
+
+### Fixed
+- **Gateway turns retry when their rate window resets.** The computer carries the Gateway's requested wait back to
+  the server, so a busy minute does not hold starter bots for an hour or claim their address sent refused keys.
 
 ## [0.3.70] - 2026-10-21
 
@@ -4052,7 +4063,8 @@ First public release.
 - Hosting: local only on a Mac, or self-hosted, including a reference AWS stack under `infra/ec2/`
   with Litestream backups.
 
-[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.70...HEAD
+[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.71...HEAD
+[0.3.71]: https://github.com/ticoteam/tico/compare/v0.3.70...v0.3.71
 [0.3.70]: https://github.com/ticoteam/tico/compare/v0.3.69...v0.3.70
 [0.3.69]: https://github.com/ticoteam/tico/compare/v0.3.68...v0.3.69
 [0.3.68]: https://github.com/ticoteam/tico/compare/v0.3.67...v0.3.68

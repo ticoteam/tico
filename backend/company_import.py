@@ -94,18 +94,20 @@ def plan(onboarding, c, who, text):
                "employees": [{"id": slug, "template": choice.template, "title": choice.display_name,
                               "reports_to": choice.reports_to, "start": "later" if slug in later else "now"}
                              for slug, choice in selected.items()],
-               "goals": [{"id": goal["id"], "title": goal_title(goal), "owner": goal_owner(goal, owner_id, ids)}
+               "goals": [{"id": goal["id"], "title": goal_title(goal), "owner": goal_owner(goal, owner_id, ids, required)}
                          for goal in draft["goals"]],
                "builtins": sorted(required), "deferred": deferred}
     return body, saved, later, summary
 
 
-def goal_owner(goal, owner_id, ids):
+def goal_owner(goal, owner_id, ids, builtins):
     """Who owns an imported goal on Goals. The file names the company's owner for a company goal (setup's
     recruiting/goals.py gives every company goal to the owner) and keeps no level or parent, so the owner's goals are
     the company's. Any other owner is a bot on the imported chart; check() has already given a goal whose owner left
-    the chart to the owner."""
-    return G.COMPANY if goal["owner"] == owner_id or goal["owner"] not in ids else "bot:" + ids[goal["owner"]]
+    the chart to the owner. The built-in bots own no goals (Goals keeps them out of its tree), so a goal the file gives
+    one, the Assistant's in a starter plan, is the company's too."""
+    slug = ids.get(goal["owner"])
+    return G.COMPANY if goal["owner"] == owner_id or slug is None or slug in builtins else "bot:" + slug
 
 
 def goal_title(goal):
