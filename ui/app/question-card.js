@@ -35,6 +35,27 @@ function qcardSub(it) {
 // The picks ticked when the card opens: the recommended ones.
 const qcardRecommended = q => new Set((q.options || []).map((o, i) => o.recommended ? i : -1).filter(i => i >= 0));
 const qcardThen = text => text ? `<span class="qc-then">${esc(text)}</span>` : '';
+// A button's "what happens" line: the asker's own, else what is true of every answer, that the asker hears it (a
+// Yes / No asked with no options, or a person's question, has none of its own).
+const qcardOutcome = (o, bot) => String(o.then || '').trim() || `${bot} hears "${o.label}"`;
+// An option's picture from the task's files (task-files.js tfNorm), the same in Decide and on the task page; a box
+// that fills in once the files load when they haven't yet.
+function qcardPicture(files, o) {
+  const [fid, n] = String(o.file || '').split('@');
+  const f = fid && (files || []).find(x => x.id === fid);
+  if (!f) return fid ? `<span class="dc-pic tf-skel" data-qc-pic="${esc(o.file)}"></span>` : '';
+  const v = tfVersion(f, n), kind = tfKind(f.name, v.mime || f.mime);
+  const src = kind === 'image' && Number(v.size || 0) <= TF_INLINE_IMAGE ? v.url : tfPicture(v, kind);
+  return src ? `<span class="dc-pic tf-skel"><img alt="" data-tf-src="${esc(src)}"></span>`
+    : `<span class="dc-pic dc-glyph">${esc(tfGlyph(kind, f.name))}</span>`;
+}
+// The task's files arrived: fill in the pictures drawn before they did.
+function qcardPaintPictures(root, files) {
+  for (const el of root?.querySelectorAll?.('[data-qc-pic]') || []) {
+    const html = qcardPicture(files, {file: el.dataset.qcPic});
+    if (html && !html.includes('data-qc-pic')) el.outerHTML = html;
+  }
+}
 const qcardDesc = o => o.description ? `<span class="dc-desc">${esc(o.description)}</span>` : '';
 
 // The question, its why line and its picks. `attr` names the data attribute its buttons carry (Decide's `dc`, the
@@ -44,16 +65,16 @@ function qcardBodyHTML(it, q, {attr = 'qc', ticked = qcardRecommended(q), pic = 
   let picks = '';
   if (q.multi) {
     picks = `<ul class="qc-picks">${q.options.map((o, i) => `<li><label class="qc-pick${o.recommended ? ' rec' : ''}">
-      <input type="checkbox" data-qc-tick="${i}"${ticked.has(i) ? ' checked' : ''}><span class="qc-pl"><span class="qc-l"><b class="tnum">${i + 1}.</b> ${esc(o.label)}${o.recommended
+      <input type="checkbox" data-qc-tick="${i}"${ticked.has(i) ? ' checked' : ''}>${pic(o)}<span class="qc-pl"><span class="qc-l"><b class="tnum">${i + 1}.</b> ${esc(o.label)}${o.recommended
         ? ' <span class="qc-rec">(recommended)</span>' : ''}</span>${qcardThen(o.then)}${qcardDesc(o)}</span></label></li>`).join('')}</ul>`;
   } else {
-    const pics = q.options.some(o => o.file);
+    const pics = q.options.some(o => o.file), bot = qcardAsker(it.ask?.from_actor);
     if (q.options.length === 2 && pics) picks = `<div class="dc-pair">${q.options.map((o, i) =>
-      `<button type="button" class="dc-opt" data-${attr}="pick" data-i="${i}" aria-label="${esc(o.label)}">${pic(o)}<span class="dc-l">${esc(o.label)}</span>${qcardThen(o.then)}${qcardDesc(o)}</button>`).join('')}</div>`;
+      `<button type="button" class="dc-opt" data-${attr}="pick" data-i="${i}" aria-label="${esc(o.label)}">${pic(o)}<span class="dc-l">${esc(o.label)}</span>${qcardThen(qcardOutcome(o, bot))}${qcardDesc(o)}</button>`).join('')}</div>`;
     else if (q.options.length === 2) picks = q.options.some(o => o.description)
       ? `<ul class="dc-descs">${q.options.map(o => `<li><b>${esc(o.label)}</b>${qcardDesc(o)}</li>`).join('')}</ul>` : '';
     else picks = `<div class="dc-tiles">${q.options.map((o, i) =>
-      `<button type="button" class="dc-tile${o.file ? ' pic' : ''}" data-${attr}="pick" data-i="${i}">${o.file ? pic(o) : ''}<span class="dc-tl"><b class="tnum">${i + 1}</b><span class="dc-l">${esc(o.label)}</span></span>${o.then ? `<span class="qc-then dc-tthen">${esc(o.then)}</span>` : ''}${qcardDesc(o)}</button>`).join('')}</div>`;
+      `<button type="button" class="dc-tile${o.file ? ' pic' : ''}" data-${attr}="pick" data-i="${i}">${o.file ? pic(o) : ''}<span class="dc-tl"><b class="tnum">${i + 1}</b><span class="dc-l">${esc(o.label)}</span></span><span class="qc-then dc-tthen">${esc(qcardOutcome(o, bot))}</span>${qcardDesc(o)}</button>`).join('')}</div>`;
   }
   return `<p class="dc-q">${esc(q.question)}</p>${why ? `<p class="dc-ctx qc-why">Why it matters: ${esc(plainActors(why))}</p>` : ''}${picks}`;
 }
@@ -75,7 +96,7 @@ function qcardActionsHTML(it, q, {attr = 'qc', ticked = qcardRecommended(q), key
   return (qcardYesNo(q) ? [1, 0] : [0, 1]).map((i, pos) => {
     const o = q.options[i];
     const key = qcardYesNo(q) ? String(o.label)[0].toUpperCase() : i + 1;
-    return btn(pos && String(o.label).toLowerCase() === 'yes' ? 'primary' : '', 'pick', `${esc(o.label)}${k(key)}`, o.then, ` data-i="${i}"`);
+    return btn(pos && String(o.label).toLowerCase() === 'yes' ? 'primary' : '', 'pick', `${esc(o.label)}${k(key)}`, qcardOutcome(o, bot), ` data-i="${i}"`);
   }).join('');
 }
 
@@ -136,6 +157,18 @@ function qcardRetick(root, it, q, ticked, attr) {
 }
 
 // ---- the task page's Needs you box: the same card, from the same Needs you item.
+// What the person has ticked and typed on a task's card, kept while the page redraws it (the task's details landing,
+// a property saved). Keyed by the ask and the question as asked, so a question the bot rewords starts afresh.
+const QC_DRAFTS = new Map();
+const qcardDraftKey = (it, q) => JSON.stringify([it.id, it.ask?.id, q.id, q.question, (q.options || []).map(o => o.label)]);
+function qcardDraft(box) {
+  const found = qcardItem({id: box.dataset.qcard});
+  if (!found) return;
+  for (const k of QC_DRAFTS.keys()) if (JSON.parse(k)[0] === found.it.id) QC_DRAFTS.delete(k);   // a reworded question's draft goes
+  QC_DRAFTS.set(qcardDraftKey(found.it, found.q), {
+    ticked: new Set([...box.querySelectorAll('[data-qc-tick]:checked')].map(x => Number(x.dataset.qcTick))),
+    note: box.querySelector('.qc-note')?.value || ''});
+}
 function qcardItem(t) {
   const it = (S.v2?.needs || []).find(x => String(x.id) === String(t?.id) && ['question', 'waiting', 'task'].includes(x.kind));
   const q = it && qcardQuestion(it);
@@ -144,12 +177,17 @@ function qcardItem(t) {
 function qcardBoxHTML(t) {
   const found = qcardItem(t);
   if (!found) return '';
-  const {it, q} = found, ticked = qcardRecommended(q);
+  const {it, q} = found, key = qcardDraftKey(it, q), draft = QC_DRAFTS.get(key);
+  // A draft made on wording the bot has since replaced isn't sent on the new question: say so once, and start afresh.
+  const stale = [...QC_DRAFTS.keys()].filter(k => k !== key && JSON.parse(k)[0] === it.id);
+  stale.forEach(k => QC_DRAFTS.delete(k));
+  const ticked = draft ? new Set(draft.ticked) : qcardRecommended(q), files = TF_CACHE.get(String(t.id));
   return `<section class="task-ask qcard" data-qcard="${esc(it.id)}" aria-label="Needs you">
     <div class="qc-head"><span class="lbl">Needs you</span> <b class="qc-who">${esc(qcardAsker(it.ask.from_actor))}</b><span class="qc-sub"> · ${esc(qcardSub(it))}</span></div>
-    ${qcardBodyHTML(it, q, {attr: 'qc', ticked})}
+    ${stale.length ? '<p class="qc-changed muted">The question changed, so your earlier ticks and note were cleared.</p>' : ''}
+    ${qcardBodyHTML(it, q, {attr: 'qc', ticked, pic: o => qcardPicture(files, o)})}
     <div class="qc-actions">${qcardActionsHTML(it, q, {attr: 'qc', ticked})}</div>
-    <textarea class="qc-note" rows="1" maxlength="4000" aria-label="Note" placeholder="Add a note"></textarea>
+    <textarea class="qc-note" rows="1" maxlength="4000" aria-label="Note" placeholder="Add a note">${esc(draft?.note || '')}</textarea>
     <div class="qc-foot">${qcardFallbackHTML(it)}${qcardDetailsHTML(it, q, {link: false})}</div>
   </section>`;
 }
@@ -160,6 +198,11 @@ document.addEventListener('change', ev => {
   if (!found) return;
   const ticked = new Set([...box.querySelectorAll('[data-qc-tick]:checked')].map(x => Number(x.dataset.qcTick)));
   qcardRetick(box, found.it, found.q, ticked, 'qc');
+  qcardDraft(box);
+});
+document.addEventListener('input', ev => {
+  const box = ev.target.closest?.('.qcard[data-qcard]');
+  if (box && ev.target.matches('.qc-note')) qcardDraft(box);
 });
 document.addEventListener('click', async ev => {
   const b = ev.target.closest?.('.qcard[data-qcard] [data-qc]');
@@ -174,6 +217,7 @@ document.addEventListener('click', async ev => {
   box.querySelectorAll('button, input, textarea').forEach(x => { x.disabled = true; });
   try {
     for (const w of qcardWrites(it, q, labels, note)) await post(w.path, w.body, newRequestId());
+    QC_DRAFTS.delete(qcardDraftKey(it, q));
     toast(qcardSaid(it, q, labels));
     void v2Refresh();
   } catch (e) {

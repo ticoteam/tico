@@ -35,6 +35,12 @@ def test_a_pick_question_without_its_picks_or_what_happens_or_with_ids_is_refuse
                         options=[{"label": "Retry", "then": "It runs again"}, {"label": "Stop", "then": "It stays stopped"}]))
     assert all(x in ids for x in ('has an id or hash: "8719e1a6"', 'has a file path: "reports/plan.md"',
                                   '"why it matters" line (why) has error output: "ValueError"'))
+    # Every visible part of a pick keeps the rule too: its label and its description sit above Details.
+    option_text = _refused(_ask(api, token, "d2", question="Which plan?", options=[
+        {"label": "Small", "then": "Costs less", "description": "ValueError: bad date in reports/plan.md (8719e1a6)"},
+        {"label": "Retry 8719e1a6", "then": "It runs again"}]))
+    assert all(x in option_text for x in ('the description of "Small" has error output: "ValueError"',
+                                          'option "Retry 8719e1a6" has an id or hash: "8719e1a6"'))
     unmarked = _refused(_ask(api, token, "e", question="Website sales chat: go with these picks?", multi=True,
                              options=[{k: v for k, v in o.items() if k != "recommended"} for o in PICKS]))
     assert "none marked recommended" in unmarked
@@ -43,7 +49,7 @@ def test_a_pick_question_without_its_picks_or_what_happens_or_with_ids_is_refuse
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM tasks WHERE waiting_on='human:ana'").fetchone()[0] == 0
         # A writing refusal: recorded, but never toward a quarantine.
-        assert c.execute("SELECT count(*) FROM refusals WHERE actor='bot:ops' AND rule='lint'").fetchone()[0] == 5
+        assert c.execute("SELECT count(*) FROM refusals WHERE actor='bot:ops' AND rule='lint'").fetchone()[0] == 6
     # Yes / No needs no options, and a clean pick question goes through with its card fields kept.
     assert _ask(api, token, "f", question="Archive the September drafts?").status_code == 200
     ok = _ask(api, token, "g", question="Website sales chat: go with these picks?", why="Engineering can't start until these are set.",
@@ -62,6 +68,11 @@ def test_a_comment_question_from_a_bot_to_a_person_keeps_the_rules_and_a_person_
     r = api.post(f"/api/v2/tasks/{task['id']}/comments", json={"text": "Which logo?", "ask": ask},
                  headers=headers(attempt["token"], "c1"))
     assert 'options "Blue", "Red" have no "what happens" line' in _refused(r)
+    ask["questions"][0]["options"] = [{"label": "Blue", "then": "Goes on the site", "description": "see logos/blue.svg"},
+                                      {"label": "Red", "then": "Goes on the site"}]
+    r = api.post(f"/api/v2/tasks/{task['id']}/comments", json={"text": "Which logo?", "ask": ask},
+                 headers=headers(attempt["token"], "c2"))
+    assert 'the description of "Blue" has a file path: "logos/blue.svg"' in _refused(r)
     # A person asking a bot is not a card for a person: no rule to keep.
     ask["who"] = "bot:ops"
     assert api.post(f"/api/v2/tasks/{task['id']}/comments", json={"text": "Which logo?", "ask": ask},
@@ -107,7 +118,7 @@ def test_the_card_says_what_it_holds_up_and_decide_puts_a_building_item_first(ap
     items = {i["id"]: i for i in get(api, "needs-you")["items"]}
     card, other = items[building["task"]["id"]], items[old["task"]["id"]]
     assert card["holds_up"] == {"id": item["id"], "title": "Website sales chat build", "kind": "roadmap", "step": "Building",
-                                "due": None}
+                                "due": None, "soonest": None}
     assert other["holds_up"]["title"] == "Tidy the drafts folder" and other["holds_up"]["kind"] == "task"
     assert (card["tier"], other["tier"]) == (1, 2)
     # The why line never carries the body's ids, paths or errors; a plain first paragraph is one.
@@ -123,3 +134,18 @@ def test_due_or_going_ahead_within_two_working_days_comes_first_and_weekends_do_
              "holds_up": {"kind": "roadmap", "step": "Approved"}}
     shipped = {"kind": "question", "ask": {"refs": {}}, "holds_up": {"kind": "roadmap", "step": "Shipped"}}
     assert [views.decide_tier(x, friday) for x in (soon, later, shipped)] == [0, 1, 2]
+
+
+def test_a_dated_task_under_an_undated_building_item_keeps_its_urgency(api):
+    """The header names the roadmap item, but the nearest due date of the work held up still puts the card first."""
+    _, _, attempt = setup_attempt(api)
+    item = post(api, "tasks", {"owner": "bot:ops", "title": "Website sales chat build", "body": "Spec.",
+                               "type": "Product roadmap", "step": "Building"})
+    tomorrow = H.shift(H.now(), hours=24)
+    ticket = post(api, "tasks", {"owner": "bot:ops", "title": "Build the chat widget", "body": "x", "due": tomorrow,
+                                 "relations": [{"task": item["id"], "kind": "parent"}]})
+    asked = _ask(api, attempt["token"], "u1", question="Website sales chat: go with these picks?", multi=True,
+                 options=PICKS, parent=ticket["id"]).json()
+    card = next(i for i in get(api, "needs-you")["items"] if i["id"] == asked["task"]["id"])
+    assert card["holds_up"]["kind"] == "roadmap" and card["holds_up"]["due"] is None
+    assert card["holds_up"]["soonest"] == tomorrow and card["tier"] == 0

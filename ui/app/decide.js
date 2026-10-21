@@ -243,15 +243,7 @@ function decideActionsPlain(c, k) {
   return `<button type="button" data-dc="skip">Skip${k('S')}</button><button type="button" class="primary" data-dc="done">Done${k('D')}</button>`;
 }
 // An option's picture, large: the image itself when small enough, else its thumb.
-function decidePicture(st, c, o) {
-  const [fid, n] = String(o.file || '').split('@');
-  const f = fid && (st.data.get(c.it.id)?.files || []).find(x => x.id === fid);
-  if (!f) return fid ? '<span class="dc-pic tf-skel"></span>' : '';
-  const v = tfVersion(f, n), kind = tfKind(f.name, v.mime || f.mime);
-  const src = kind === 'image' && Number(v.size || 0) <= TF_INLINE_IMAGE ? v.url : tfPicture(v, kind);
-  return src ? `<span class="dc-pic tf-skel"><img alt="" data-tf-src="${esc(src)}"></span>`
-    : `<span class="dc-pic dc-glyph">${esc(tfGlyph(kind, f.name))}</span>`;
-}
+const decidePicture = (st, c, o) => qcardPicture(st.data.get(c.it.id)?.files, o);
 function decidePickHTML(st, c) {
   return qcardBodyHTML(c.it, c.q, {attr: 'dc', ticked: decideTicked(st, c), pic: o => decidePicture(st, c, o)})
     + qcardFallbackHTML(c.it) + qcardDetailsHTML(c.it, c.q);

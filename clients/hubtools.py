@@ -744,8 +744,8 @@ def task_ask(api, args):
       "options (an option may carry an image or file) or, with no options, Yes / No. The task is yours and waits on "
       "them; asked from a run on one of your tasks it is filed under that task. Their answer wakes you and you mark it "
       "done. One decision per task; write the question so it makes sense on its own. Each option says what happens "
-      "if it is picked (`then`); several picks (`multi`) mark the ones you recommend; the question, `why` and the then "
-      "lines carry no ids, paths, tool names or error output (put those in `body`, shown under Details), or the ask is "
+      "if it is picked (`then`); several picks (`multi`) mark the ones you recommend; the question, `why` and each option's "
+      "label, description and then line carry no ids, paths, tool names or error output (put those in `body`, shown under Details), or the ask is "
       "refused with what to fix. One open question per topic: "
       "asked again while your earlier one on the same topic (same `topic`, else the same parent task) still waits on "
       "them, it updates that one (`folded: true`) instead of adding a second; give a different decision its own topic.",

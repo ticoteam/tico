@@ -1512,7 +1512,7 @@ def lint_question(question):
     """The problems with one question a bot puts to a person, as a card shows it (ui/app/question-card.js), empty
     when it passes. Its picks are options, each saying what happens when it is chosen (`then`); several picks
     (`multi`) mark the ones the bot recommends; and the question, its "why it matters" line and each `then` line
-    carry nothing that belongs under Details (lint_plain). A question with no options is a yes/no or a written
+    carry nothing that belongs under Details (lint_plain), nor does any pick's label or description. A question with no options is a yes/no or a written
     answer, unless it lists picks in its words or is several picks. Deterministic, so a bot fixes it in one retry."""
     q = question if isinstance(question, dict) else question.model_dump()
     text, options, problems = str(q.get("question") or ""), q.get("options") or [], []
@@ -1525,6 +1525,9 @@ def lint_question(question):
         problems.append(f'option{"s" if len(missing) > 1 else ""} {", ".join(chr(34) + str(m) + chr(34) for m in missing)} '
                         f'{"have" if len(missing) > 1 else "has"} no "what happens" line (then)')
     for o in options:
+        # Every visible part of a pick sits above Details, so it keeps the same plain rule as the question.
+        problems += [f'option "{o.get("label")}" {p}' for p in lint_plain(o.get("label"))]
+        problems += [f'the description of "{o.get("label")}" {p}' for p in lint_plain(o.get("description"))]
         problems += [f'the "what happens" line of "{o.get("label")}" {p}' for p in lint_plain(o.get("then"))]
     if q.get("multi") and options and not any(o.get("recommended") for o in options):
         problems.append("is several picks with none marked recommended: mark the ones you recommend")
@@ -1546,9 +1549,9 @@ def question_refusal(person, questions):
         return ""
     return (f"Your question to {actor_id(person)} can't be shown as a clear card: {'; '.join(problems)}. The rule: a "
             f"question with picks gives each pick as an option with a short \"what happens\" line (then); several "
-            f"picks (multi) mark the recommended ones (recommended); the question, its why line and the then lines "
-            f"have no ids, hashes, file paths, tool names or error output. Put those in the task body or a comment, "
-            f"which the card keeps under Details. Example: {QUESTION_EXAMPLE}")
+            f"picks (multi) mark the recommended ones (recommended); the question, its why line and each pick's "
+            f"label, description and then line have no ids, hashes, file paths, tool names or error output. Put "
+            f"those in the task body or a comment, which the card keeps under Details. Example: {QUESTION_EXAMPLE}")
 
 
 def require_plain_question(conn, actor, person, questions):

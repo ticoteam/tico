@@ -1264,24 +1264,33 @@ def business_days_ahead(start, days):
 def holds_up(c, row, readable):
     """What answering a card on task `row` lets move, for its header: the roadmap item its task works toward (the task,
     an ancestor, or a task either of them blocks), else its parent task. {id, title, kind: "roadmap" or "task", step,
-    due}, or None. Only a task `readable(id)` says the person may read is named."""
+    due, soonest}, or None. `soonest` is the nearest due date of any open work it holds up, whichever title the header
+    names, so a dated task under an undated roadmap item keeps its urgency. Only a task `readable(id)` says the person
+    may read is named or dated."""
     from . import roadmap_flow
     product = roadmap_flow.role_type(c, roadmap_flow.PRODUCT)
     chain = [row["id"], *TR.ancestors(c, row["id"])]
-    seen = set()
+    seen, roadmap, dues = set(), None, []
     for tid in [*chain, *(b for t in chain for b in TR.blocked_ids(c, t))]:
         if tid in seen:
             continue
         seen.add(tid)
         t = H.task(c, tid) if tid != row["id"] else row
-        if t and product and t.get("type_id") == product and t["status"] not in ("closed", "declined") and readable(tid):
+        if not t or t["status"] in ("closed", "declined", "done") or not readable(tid):
+            continue
+        if t.get("due"):
+            dues.append(t["due"])
+        if roadmap is None and product and t.get("type_id") == product:
             step = c.execute("SELECT name FROM task_steps WHERE id=?", (t.get("step_id"),)).fetchone()
-            return {"id": tid, "title": t["title"], "kind": "roadmap", "step": step[0] if step else None,
-                    "due": t.get("due")}
+            roadmap = {"id": tid, "title": t["title"], "kind": "roadmap", "step": step[0] if step else None,
+                       "due": t.get("due")}
+    held = roadmap
     parent = H.task(c, chain[1]) if len(chain) > 1 else None
-    if parent and readable(parent["id"]):
-        return {"id": parent["id"], "title": parent["title"], "kind": "task", "step": None, "due": parent.get("due")}
-    return None
+    if held is None and parent and readable(parent["id"]):
+        held = {"id": parent["id"], "title": parent["title"], "kind": "task", "step": None, "due": parent.get("due")}
+    if held is not None:
+        held["soonest"] = min(dues) if dues else None
+    return held
 
 
 def decide_tier(item, now=None):
@@ -1291,7 +1300,7 @@ def decide_tier(item, now=None):
     soon = business_days_ahead(now or H.now(), SOON_BUSINESS_DAYS)
     ask, held = item.get("ask") or {}, item.get("holds_up") or {}
     dates = [ask.get("goes_ahead_at"), ((ask.get("refs") or {}).get("if_no_answer") or {}).get("by"), held.get("due"),
-             deadline(item)]
+             held.get("soonest"), deadline(item)]
     if any(d and str(d) <= soon for d in dates):
         return 0
     return 1 if held.get("kind") == "roadmap" and held.get("step") in ROADMAP_LIVE_STEPS else 2

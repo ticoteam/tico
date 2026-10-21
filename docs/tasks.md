@@ -225,11 +225,13 @@ Tico refuses a bot's question to a person, saying why and with an example, when:
 - it lists picks in its words, or is `--multi`, but gives no options;
 - an option has no "what happens" line (`then`; `--option "LABEL -> WHAT HAPPENS"`);
 - it is `--multi` with none marked recommended (`--recommend LABEL`);
-- the question or the why line has an id, hash, file path, tool name or error text.
+- the question, the why line or a pick's label, description or outcome has an id, hash, file path, tool name or
+  error text.
 
-A yes-or-no question needs no options. The refusal is a writing refusal: it never counts toward a quarantine.
+A yes-or-no question needs no options; its Yes and No buttons say the bot hears that answer. The refusal is a writing refusal: it never counts toward a quarantine.
 
-Decide puts first a card due, or going ahead on its own, within 2 working days; then one holding up a roadmap item
+Decide puts first a card that is, or holds up work, due or going ahead on its own within 2 working days (the nearest
+date of anything it holds up, not only the item the header names); then one holding up a roadmap item
 at Approved or Building; then the rest, newest first. Waiting longer never moves a card up.
 
 ### When nobody answers a bot's ask

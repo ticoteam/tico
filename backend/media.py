@@ -533,7 +533,7 @@ def install_media(app, store, auth, mutate, send_message, task_create):
             decoded.append((data, option.file.name, guessed_type(option.file.name) or "application/octet-stream"))
         question = body.question.strip()
         asked = {"question": question, "why": body.why, "multi": body.multi,
-                 "options": [o.model_dump(include={"label", "then", "recommended"}) for o in body.options]}
+                 "options": [o.model_dump(include={"label", "description", "then", "recommended"}) for o in body.options]}
         if body.topic is not None and not H.question_topic(body.topic):
             # A key given but empty once compared would silently mean "no topic" and join the task's unkeyed question.
             raise Problem("validation", "A question's topic needs at least one letter or digit", 422)

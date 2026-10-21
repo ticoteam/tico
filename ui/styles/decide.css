@@ -136,6 +136,9 @@
 .qc-pick{display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border:1px solid var(--line);border-radius:12px;background:var(--bg);cursor:pointer}
 .qc-pick:has(input:checked){border-color:var(--accent)}
 .qc-pick input{flex:none;margin:3px 0 0;width:18px;height:18px;accent-color:var(--accent)}
+.qc-pick .dc-pic{flex:none;width:64px;min-height:48px;border-radius:8px;overflow:hidden}
+.qc-pick .dc-pic img{max-height:64px;object-fit:cover}
+.qc-changed{margin:0 0 6px;font-size:13px}
 .qc-pl{display:flex;flex-direction:column;gap:2px;min-width:0}
 .qc-l{font-weight:600;font-size:var(--t-md);overflow-wrap:anywhere}
 .qc-l b{color:var(--muted);font-weight:600}

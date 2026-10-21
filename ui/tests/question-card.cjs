@@ -29,6 +29,19 @@ const stuck = {id: 't-stuck', kind: 'question', title: 'Is this still moving?', 
     refs: {questions: [{id: 'stuck', header: 'Stuck', question: 'Keep going or stop?', multi: false, other: true,
       options: [{label: 'Keep going', then: 'The bot is woken again'}, {label: 'Stop', then: 'The task is closed'}]}]}}};
 
+// The same question asked another way: `qs` replaces its question.
+const asked = (id, q) => { const x = question(id); x.ask.refs.questions = [{id: 'decision', header: '', other: true, why: '', ...q}]; return x; };
+const BANNERS = [{label: 'Banner A', file: 'f-a@1', then: 'Banner A goes up'}, {label: 'Banner B', file: 'f-b@1', then: 'Banner B goes up'}];
+const pair = id => asked(id, {question: 'Which banner?', multi: false, options: BANNERS});
+const several = id => asked(id, {question: 'Which banners go up?', multi: true,
+  options: [...BANNERS.map(o => ({...o, recommended: true})), {label: 'Banner C', file: 'f-c@1', then: 'Banner C goes up'}]});
+// A Yes / No asked with no options: the server gives it Yes and No with no "what happens" lines of their own.
+const yesNo = id => asked(id, {question: 'Archive the September drafts?', multi: false, options: [{label: 'Yes', description: '', then: ''},
+  {label: 'No', description: '', then: ''}]});
+const FILES = ['a', 'b', 'c'].map(x => ({id: `f-${x}`, name: `banner-${x}.png`, current_version: 1, versions: [{n: 1, size: 68, mime: 'image/png'}]}));
+const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=', 'base64');
+const pictures = root => [...document.querySelectorAll(`${root} img[data-tf-src]`)].map(i => new URL(i.dataset.tfSrc, location.href).pathname + new URL(i.dataset.tfSrc, location.href).search);
+
 const card = () => ({
   who: document.querySelector('.decide .dc-who-name')?.textContent.trim(),
   sub: document.querySelector('.decide .dc-who-sub')?.textContent.trim(),
@@ -44,7 +57,7 @@ const card = () => ({
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
     let items = [question('t-four'), stuck];
-    const {page, errors} = await open(browser, {viewport: {width: 390, height: 900}, hash: '#/tasks', extraTasks: [...items, question('t-page')].map(x => ({...x}))});
+    const {page, errors} = await open(browser, {viewport: {width: 390, height: 900}, hash: '#/tasks', extraTasks: [...items, question('t-page'), question('t-draft'), pair('t-pair'), several('t-several'), yesNo('t-yn')].map(x => ({...x}))});
     const answers = [];
     await page.route('**/api/v2/needs-you*', route => route.fulfill({contentType: 'application/json', body: JSON.stringify({items})}));
     await page.route('**/api/v2/tasks/*/comments', route => route.fulfill({contentType: 'application/json', body: '{"comments":[]}'}));
@@ -142,6 +155,60 @@ const card = () => ({
     await box.locator('[data-qc="ticked"]').click();
     for (let i = 0; i < 100 && !answers.length; i++) await page.waitForTimeout(20);
     assert.deepEqual(answers.shift(), {task: 't-page', target: {comment: 'q-t-page'}, answers: {decision: ['Visitor notes', 'Spend cap']}});
+
+    // A redraw while the person is mid-answer keeps their ticks and note: the task's details land after they started.
+    items = [question('t-draft')];
+    let release;
+    const held = new Promise(r => { release = r; });
+    await page.route(url => url.pathname.endsWith('/api/v2/tasks/t-draft'), async route => { await held; await route.fallback(); });
+    await page.evaluate(async () => { location.hash = '#/tasks'; await v2Refresh(); location.hash = '#/task/t-draft'; });
+    const draft = page.locator('.qcard[data-qcard="t-draft"]');
+    await draft.waitFor();
+    await draft.locator('[data-qc-tick="0"]').uncheck();
+    await draft.locator('[data-qc-tick="2"]').check();
+    await draft.locator('.qc-note').fill('Calls once the phone line is in.');
+    const before = await draft.elementHandle();
+    release();
+    await page.waitForFunction(el => !el.isConnected, before);            // the dialog was drawn again
+    const kept = () => page.locator('.qcard[data-qcard="t-draft"]').evaluate(el => ({
+      ticked: [...el.querySelectorAll('[data-qc-tick]:checked')].map(x => Number(x.dataset.qcTick)),
+      note: el.querySelector('.qc-note').value, count: el.querySelector('.qc-count').textContent}));
+    assert.deepEqual(await kept(), {ticked: [1, 2, 3], note: 'Calls once the phone line is in.', count: '3'});
+    // Any other redraw of the box (a property saved) keeps them too.
+    await page.evaluate(() => { const el = document.querySelector('.qcard[data-qcard="t-draft"]'); el.outerHTML = qcardBoxHTML({id: 't-draft'}); });
+    assert.deepEqual(await kept(), {ticked: [1, 2, 3], note: 'Calls once the phone line is in.', count: '3'});
+    await page.locator('.qcard[data-qcard="t-draft"] [data-qc="ticked"]').click();
+    for (let i = 0; i < 100 && !answers.length; i++) await page.waitForTimeout(20);
+    assert.deepEqual(answers.shift(), {task: 't-draft', target: {comment: 'q-t-draft'},
+      answers: {decision: ['Visitor notes', 'Pages', 'Spend cap']}, other: 'Calls once the phone line is in.'});
+
+    // Picks with pictures show the same pictures in Decide and on the task page, several picks included; a Yes / No
+    // asked with no options still says what each button does.
+    await page.route('**/api/v2/tasks/*/files', route => route.fulfill({contentType: 'application/json', body: JSON.stringify({files: FILES})}));
+    await page.route('**/api/v2/files/**', route => route.fulfill({contentType: 'image/png', body: PNG}));
+    const seen = {};
+    for (const id of ['t-pair', 't-several', 't-yn']) {
+      items = [id === 't-pair' ? pair(id) : id === 't-several' ? several(id) : yesNo(id)];
+      await page.evaluate(async () => { location.hash = '#/tasks'; await v2Refresh(); location.hash = DECIDE; });
+      await page.locator(`.decide .dc-card[data-key="task:${id}"]`).waitFor();
+      if (id !== 't-yn') await page.waitForFunction(() => document.querySelectorAll('.decide .dc-body img[data-tf-src]').length >= 2);
+      const decide = await page.evaluate(([pictures]) => ({pics: eval(pictures)('.decide .dc-body'),
+        thens: [...document.querySelectorAll('.decide .dc-body .qc-then, .decide .dc-actions .qc-then')].map(x => x.textContent.trim())}), [pictures.toString()]);
+      await page.evaluate(id => { location.hash = '#/tasks'; location.hash = `#/task/${id}`; }, id);
+      const box = page.locator(`.qcard[data-qcard="${id}"]`);
+      await box.waitFor();
+      if (id !== 't-yn') await page.waitForFunction(id => document.querySelectorAll(`.qcard[data-qcard="${id}"] img[data-tf-src]`).length >= 2, id);
+      const task = await page.evaluate(([pictures, id]) => ({pics: eval(pictures)(`.qcard[data-qcard="${id}"]`),
+        thens: [...document.querySelectorAll(`.qcard[data-qcard="${id}"] .qc-then`)].map(x => x.textContent.trim())}), [pictures.toString(), id]);
+      seen[id] = {decide, task};
+    }
+    const pics = n => ['f-a', 'f-b', 'f-c'].slice(0, n).map(f => `/api/v2/files/${f}?v=1`);
+    assert.deepEqual(seen['t-pair'].decide.pics.map(u => u.replace(/^.*(\/api\/)/, '/api/')), pics(2));
+    assert.deepEqual(seen['t-pair'].task.pics, seen['t-pair'].decide.pics);
+    assert.deepEqual(seen['t-several'].decide.pics.map(u => u.replace(/^.*(\/api\/)/, '/api/')), pics(3));
+    assert.deepEqual(seen['t-several'].task.pics, seen['t-several'].decide.pics);
+    assert.deepEqual(seen['t-yn'].decide.thens, ['Writer hears "No"', 'Writer hears "Yes"']);
+    assert.deepEqual(seen['t-yn'].task.thens, seen['t-yn'].decide.thens);
     assert.deepEqual(errors, []);
     console.log('Question card: four picks ticked by recommendation, Send ticked and Yes to all, what-happens lines, '
       + 'asker/age/holds up, Tico for checks, fallback at the foot, ids under Details, same card on the task page');
