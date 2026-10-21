@@ -21,6 +21,11 @@ All notable changes to Tico are recorded here. The format follows
   paid, never the key. The other three choices, and a team that never picks one, keep working
   as before ([Tico AI Gateway](docs/ai-gateway.md#choose-how-bots-get-their-models)).
 
+### Fixed
+- **Company file: numbered bot ids are no longer blanked as keys**: a long id made from a numbered title, such as
+  `accounts-receivable-specialist-2`, read as a random key once it carried a number, was replaced with `[removed]` and
+  the draft was refused. Lowercase ids of words and numbers now pass; real key shapes are still removed.
+
 ## [0.3.68] - 2026-10-20
 
 ### Added
