@@ -50,12 +50,14 @@ pub fn usage_tokens(stats: &Value) -> (i64, i64, i64) {
     (inp, out, if total != 0 { total } else { inp + out })
 }
 
-/// The settings.json the CLI reads from this host's home: API-key auth, the effort's thinking level, and the
-/// bot's declared remote MCP servers. The file keeps their `${VAR}` placeholders, which the CLI expands from
+/// The settings.json the CLI reads from this host's home: API-key auth, the effort's thinking level, no
+/// `save_memory` tool (it writes a GEMINI.md in this home, out of the owner's sight; a bot remembers in its repository's
+/// memory/, Dev 301), and the bot's declared remote MCP servers. The file keeps their `${VAR}` placeholders, which the CLI expands from
 /// the turn's environment; the home is this host's own, so the operator's servers are not here.
 pub fn settings_file(model: &str, effort: Option<&str>, servers: &[Value]) -> Value {
     let mut file = json!({
         "experimental": {"dynamicModelConfiguration": true},
+        "tools": {"exclude": ["save_memory"]},
         "security": {"auth": {"selectedType": "gemini-api-key", "enforcedType": "gemini-api-key"}},
         "modelConfigs": {"customOverrides": [{
             "match": {"model": model},
@@ -565,6 +567,7 @@ mod tests {
         }
         let written: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("home/settings.json")).unwrap()).unwrap();
         assert_eq!(written, settings_file("gemini-3.8-flash", Some("low"), &[]));
+        assert_eq!(written["tools"]["exclude"], json!(["save_memory"]), "no GEMINI.md memory in the host's home");
         let declared = [json!({"name": "linear", "transport": "http", "url": "https://mcp.linear.app/mcp", "headers": {"Authorization": "Bearer ${LINEAR_KEY}"}})];
         assert_eq!(settings_file("m", None, &declared)["mcpServers"], json!({"linear": {"httpUrl": "https://mcp.linear.app/mcp", "headers": {"Authorization": "Bearer ${LINEAR_KEY}"}}}));
         assert_eq!(std::fs::read_to_string(dir.join("args.log.prompt")).unwrap(), "hello");

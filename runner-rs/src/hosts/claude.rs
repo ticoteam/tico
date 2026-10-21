@@ -1079,13 +1079,12 @@ pub fn error_text(result: Option<&Value>, rc: i32, stderr: &str) -> String {
     format!("claude exited {rc}")
 }
 
-/// The turn's environment (hosts/claude.py _env): the given one, else this process's; a bot with branches keeps
-/// no auto memory, and no turn loads the claude.ai connectors.
+/// The turn's environment (hosts/claude.py _env): the given one, else this process's. No turn keeps Claude's auto
+/// memory: what a bot remembers lives in its repository's memory/, where its owner sees and edits it (Dev 301), never
+/// in a MEMORY.md under this computer's ~/.claude. No turn loads the claude.ai connectors.
 fn turn_env(settings: &Settings) -> crate::env::Env {
     let mut env: crate::env::Env = if settings.env.is_empty() { std::env::vars().collect() } else { settings.env.clone() };
-    if settings.shared {
-        env.insert("CLAUDE_CODE_DISABLE_AUTO_MEMORY".into(), "1".into());
-    }
+    env.insert("CLAUDE_CODE_DISABLE_AUTO_MEMORY".into(), "1".into());
     // Belt and braces: `--strict-mcp-config` already skips the claude.ai connectors.
     env.insert("ENABLE_CLAUDEAI_MCP_SERVERS".into(), "false".into());
     // The login and the session files live under HOME; a trimmed environment must keep it.
@@ -1167,7 +1166,10 @@ mod tests {
         assert_ne!(config["mcpServers"]["hub"]["command"], "stale");
         let env = turn_env(&settings);
         assert_eq!(env["ENABLE_CLAUDEAI_MCP_SERVERS"], "false");
-        assert!(!env.contains_key("CLAUDE_CODE_DISABLE_AUTO_MEMORY"));
+        // Every bot's turn, with branches or not, and over an inherited setting that would turn it on.
+        assert_eq!(env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"], "1");
+        settings.env.insert("CLAUDE_CODE_DISABLE_AUTO_MEMORY".into(), "0".into());
+        assert_eq!(turn_env(&settings)["CLAUDE_CODE_DISABLE_AUTO_MEMORY"], "1");
         assert_eq!(turn_env(&Settings { shared: true, ..settings })["CLAUDE_CODE_DISABLE_AUTO_MEMORY"], "1");
         std::fs::remove_dir_all(dir).unwrap();
     }

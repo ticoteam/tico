@@ -8,7 +8,23 @@ button counts the updates since you last opened it.
 Each update shows its commit subject, who made it and when, a link to the commit on GitHub, the files it
 changed and, once the commit has been pushed, its diff. When the run that made it is known, the
 update links to its source: the task, or the message in the chat, that the bot was working on. Two
-more views show the current `learnings.md` and `decisions.md`.
+more views show the current `learnings.md` and `decisions.md`, its working rules first (a `## ` section whose
+heading says rules), then the newest entries: sections by the date in their heading, and dated `- ` entries by their
+`added:` or leading date. An undated part stays under the dated one above it.
+
+## One memory, in the repository
+
+What a bot remembers between turns is its repository's `memory/`, which you read here and can edit. Each turn's
+prompt tells the bot to read the working rules at the top of `memory/learnings.md`, follow them, save a rule it is
+given there, and add other learnings at the top of the log. The runner turns off each harness's own memory on the
+computer, so nothing steers a bot from outside its repository: Claude Code's auto memory
+(`CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` on every turn, not only for bots with branches), Codex's memories
+(`features.memories = false` on every thread) and the Gemini CLI's `save_memory` tool. Memory a bot saved there
+before is not read again. Before a bot's first turn on a computer after this change, the runner copies what it saved
+in Claude's memory there (`~/.claude/projects/<its checkout>/memory/`) into a "Working rules from Claude's memory on
+this computer" section at the top of its `memory/learnings.md`, once (a `.tico-moved` file in the old folder records
+it), and the turn's memory commit keeps it. The old folder is left in place, unread
+(`runner-rs/src/harness_memory.rs`).
 
 ## Where it comes from
 

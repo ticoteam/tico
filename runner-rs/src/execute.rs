@@ -955,6 +955,18 @@ impl Runner {
             mark("placed", &aid);
             execution_path = p.execution_path.clone();
             memory_before = redact::head(&execution_path);
+            if p.has_checkout() {
+                // What the bot kept in Claude's own memory on this computer moves into its repository, once
+                // (crate::harness_memory); the post-turn commit keeps it.
+                let home = env.get("HOME").filter(|h| !h.is_empty()).cloned().or_else(|| std::env::var("HOME").ok()).unwrap_or_default();
+                let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                let day: String = text_of(&crate::util::iso(&json!(secs))).chars().take(10).collect();
+                match crate::harness_memory::migrate(Path::new(&home), &p.main_path, &execution_path, &day) {
+                    Ok(0) => {}
+                    Ok(n) => log(&format!("Tico runner: {bot}: copied {n} memories from Claude's memory on this computer into memory/learnings.md")),
+                    Err(e) => log(&format!("Tico runner: {bot}: could not copy Claude's memory into memory/learnings.md: {e}")),
+                }
+            }
             if redactor.is_some() {
                 started_at = memory_before.clone();
             }
