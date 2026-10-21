@@ -34,6 +34,14 @@ All notable changes to Tico are recorded here. The format follows
   paid, never the key. The other three choices, and a team that never picks one, keep working
   as before ([Tico AI Gateway](docs/ai-gateway.md#choose-how-bots-get-their-models)).
 
+### Changed
+- **The setup chart has no seat limit you will meet.** The setup chat, the company file and the first screen's
+  company YAML import now take up to 300 bots and 300 people (was 60 bots and 40 people, and 150 bots on import),
+  with no limit message below that. Past 300 the chat says plainly "A chart can have at most 300 bots." (or people);
+  that guard is there only against abuse. A company YAML file may be up to 512 KB (was 128 KB). A plan carried by
+  `tico setup --company-file` into a cloud install still has to fit AWS Parameter Store's 8 KB, about 40 bots; a
+  larger one is imported on the first setup screen instead.
+
 ### Fixed
 - A goal's automatic colour follows its worst KPI: red takes priority over yellow and green, and yellow over green.
   The note explains that KPI; a colour set by a person stays in place until handed back to the Goal Manager.

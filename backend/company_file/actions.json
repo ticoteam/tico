@@ -175,8 +175,8 @@
   ]
  },
  "limits": {
-  "bots": 60,
-  "people": 40,
+  "bots": 300,
+  "people": 300,
   "goals": 20,
   "removed": 20,
   "pending": 10,
@@ -196,7 +196,7 @@
   "chat_text": 4000,
   "number": 1000000000000,
   "seq": 1000000,
-  "draft_bytes": 300000
+  "draft_bytes": 1000000
  },
  "actions": [
   {

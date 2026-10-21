@@ -289,7 +289,7 @@ def add_person(draft, name, role, owner=False):
     me = name.strip().lower() in ("me", "myself", "i")
     name = "You" if me else re.sub(r"\b\w", lambda m: m.group(0).upper(), name.strip())
     if len(draft["people"]) >= D.LIMITS["people"]:
-        raise Refusal("The team has the most people a plan can hold (%d)." % D.LIMITS["people"])
+        raise Refusal("A chart can have at most %d people." % D.LIMITS["people"])
     if _person_named(draft, name):
         raise Refusal("%s is already on the team." % name)
     base = D.slugify(name)[:D.LIMITS["id"] - 8]
@@ -443,7 +443,7 @@ def bot_add(draft, args, today, notes):
     if _title_taken(draft, title):
         raise Refusal("There's already a %s on the chart. Give the new one another title, or change that one." % title)
     if len(draft["bots"]) >= D.LIMITS["bots"]:
-        raise Refusal("The chart has the most bots a plan can hold (%d)." % D.LIMITS["bots"])
+        raise Refusal("A chart can have at most %d bots." % D.LIMITS["bots"])
     reason = _text(args, "reason", D.LIMITS["reason"])
     bot = _make_bot(draft, role, title, reason, args.get("start") == "now" or role["core"])
     draft["bots"].append(bot)
@@ -631,7 +631,7 @@ def agent_set(draft, args, today, notes):
         agent.update(fields, isNew=True)
         return "Updated your %s." % agent["title"]
     if len(draft["bots"]) >= D.LIMITS["bots"]:
-        raise Refusal("The chart has the most bots a plan can hold (%d)." % D.LIMITS["bots"])
+        raise Refusal("A chart can have at most %d bots." % D.LIMITS["bots"])
     draft["bots"].append({"id": next_id(draft, runtime), "template": None, "lead": False, "core": False, "start": True,
                           "routine": "", "tools": [], "existing": True, "isNew": True, **fields})
     return "Added your %s, now on the chart with a manager." % fields["title"]
