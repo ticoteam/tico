@@ -2946,7 +2946,8 @@ def _set_status(conn, actor, row, status=None, type=None, step=None, note=""):
             # A done task asks its requester to accept what it delivered only after this, so that question stays.
             supersede_asks(conn, row["id"])
             for below in descendants(conn, row["id"]):
-                supersede_asks(conn, below["id"], why=f"A task above it was {TASK_ENDED[effective]}")
+                why = f"A task above it was {TASK_ENDED[effective]}"
+                drop_asked_waits(conn, below["id"], supersede_asks(conn, below["id"], why=why), why)
             # ...and so is a yes it was waiting for: nothing will act on it now.
             withdraw_task_approvals(conn, row["id"], f"Its task was {TASK_ENDED[effective]}.")
     from .roadmap_flow import changed as roadmap_changed
@@ -3010,6 +3011,25 @@ def supersede_asks(conn, task_id, *, from_actor=None, to_actor=None, keep=None, 
         _task_event(conn, task_id, KEEPER, "asks_superseded", None, str(len(ids)),
                     why or ("Replaced by a newer question" if keep else "The task finished"))
     return ids
+
+
+def drop_asked_waits(conn, task_id, ask_ids, why):
+    """A task left waiting on a person for asks that were just superseded (`ask_ids`) waits on nobody once none of its
+    questions to them is open: it leaves their Needs you with its questions."""
+    if not ask_ids:
+        return
+    row = task(conn, task_id)
+    person = (row or {}).get("waiting_on")
+    if not person or row["status"] != "waiting":
+        return
+    marks = ",".join("?" * len(ask_ids))
+    if not conn.execute(f"SELECT 1 FROM messages WHERE id IN ({marks}) AND to_actor=?", (*ask_ids, person)).fetchone():
+        return
+    if any(a["to_actor"] == person for a in open_task_asks(conn, row)):
+        return
+    conn.execute("UPDATE tasks SET waiting_on=NULL WHERE id=?", (task_id,))
+    _task_event(conn, task_id, KEEPER, "waiting_on", person, None, why)
+    _recount(conn, person)
 
 
 def _step_end(conn, step_id, task_id, top=False):

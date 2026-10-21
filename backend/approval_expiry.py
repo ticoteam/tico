@@ -51,12 +51,14 @@ def sweep(conn, at=None):
                 return True
         return False
 
-    asks = [r["id"] for r in rows
-            if (r["status"] in ENDED and not r["acceptance"]) or ended_above(r["task_id"])
+    gone = [r for r in rows if (r["status"] in ENDED and not r["acceptance"]) or ended_above(r["task_id"])
             or (r["stuck"] and r["from_actor"] == H.KEEPER)]
+    asks = [r["id"] for r in gone]
     if asks:
         conn.executemany("UPDATE messages SET superseded_at=? WHERE id=? AND superseded_at IS NULL",
                          [(at, mid) for mid in asks])
+        for r in gone:
+            H.drop_asked_waits(conn, r["task_id"], [r["id"]], "Its question to them was withdrawn")
         for person in {r[0] for r in conn.execute(
                 f"SELECT DISTINCT to_actor FROM messages WHERE id IN ({','.join('?' * len(asks))})", asks)}:
             H._recount(conn, person)

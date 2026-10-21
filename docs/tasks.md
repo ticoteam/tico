@@ -221,8 +221,9 @@ Oct 16, so Writer goes ahead with what it said it would do: Yes", which wakes th
 spending money or a delete never goes ahead without an answer: the card says the bot waits. The owner turns this off,
 or changes the days, in Settings > Humans (**Bots go ahead on their recommendation**).
 
-A send, a spend, a delete, or any default when the owner turned going ahead off, never goes ahead, but its question
-still closes on its `by` date: the bot is told nothing went ahead and decides without it. A question with no date that
+A send, a spend, a delete, any default when the owner turned going ahead off, and any default once the person has
+written since the ask (a comment, a Clarify tap) never goes ahead, but its question still closes on its date: the bot is
+told nothing went ahead and decides without it. A question with no date that
 is unanswered after two business days (Monday to Friday, Pacific) leaves the person's Needs you at the next weekday
 morning's batch (8:00): each asking bot gets one "Still needed?" wake listing all of its questions that crossed the line,
 and asks again (a fresh question with a new clock) or drops them (`backend/still_needed.py`). A question also closes
@@ -230,10 +231,8 @@ when its task or any task above it is done, closed or declined (a done task keep
 requester to accept the result, asked once it is done), when the person replies to it or writes on its task to the bot
 that asked, and when the bot asks them a newer question on the same task.
 
-An ask to a person with no word from them in 14 days expires: the bot goes ahead on its default when the rule above
-allows it, or is told to drop the work or ask again. A task a bot handed a person (they own it, the bot asked for it)
-that they have not touched in 14 days closes the same way, unless it is due later or waits on someone else, and the
-bot hears why. Hourly, `backend/ask_deadlines.py`.
+A task a bot handed a person (they own it, the bot asked for it) that they have not touched in 14 days closes, unless it
+is due later or waits on someone else, and the bot hears why. Hourly, `backend/ask_deadlines.py`.
 
 ## Snoozing a task
 
