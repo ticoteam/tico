@@ -89,6 +89,29 @@ async function offlineRetry(browser) {
   });
   assert.deepEqual(clear,{coarse:true,clear:true},'on touch the copy target covers no reply text, so a trailing link stays tappable');
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true,'no mobile overflow');
+  // The bot switcher over the chat bar: a round menu button sits left of Search and opens the side menu in one tap.
+  await page.locator('.p-bot').tap();
+  const menu=page.locator('#org-fan [data-org-menu]');
+  await menu.waitFor();
+  const row=await menu.evaluate(el=>{const m=el.getBoundingClientRect(),s=el.nextElementSibling.getBoundingClientRect();
+    return {next:el.nextElementSibling.dataset.orgSearch,left:m.right<=s.left,row:Math.abs((m.top+m.bottom)-(s.top+s.bottom))<2,round:Math.abs(m.width-m.height)<2,
+      label:el.getAttribute('aria-label'),controls:el.getAttribute('aria-controls'),icon:el.textContent.trim(),tab:el.tabIndex};});
+  assert.deepEqual(row,{next:'',left:true,row:true,round:true,label:'Open menu',controls:'side',icon:'menu',tab:0});
+  await menu.tap();
+  await page.locator('body.drawer').waitFor();
+  assert.equal(await page.locator('#org-fan').isHidden(),true,'the switcher closes');
+  assert.equal(await page.locator('#side .side-scroll').isVisible(),true,'the side menu is open');
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(()=>!document.body.classList.contains('drawer'));
+  assert.equal(await page.evaluate(()=>document.activeElement.classList.contains('p-bot')),true,'closing returns to the bot icon');
+  // From the keyboard too: Enter on the focused menu button opens the menu.
+  await page.locator('.p-bot').click();
+  await menu.focus();
+  await page.keyboard.press('Enter');
+  await page.locator('body.drawer').waitFor();
+  await page.locator('.side-close').click();
+  await page.waitForFunction(()=>!document.body.classList.contains('drawer'));
+  assert.deepEqual(errors,[]);
   console.log('chat offline retry and touch copy: ok');
 }
 
