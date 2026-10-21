@@ -19,7 +19,7 @@ type Slot<T> = Arc<tokio::sync::Mutex<T>>;
 #[derive(Default)]
 struct HarnessRelay {
     relay: Option<crate::harness_tools::Relay>,
-    default_runtime: String,
+    config: Value,
     default_at: Option<Instant>,
 }
 
@@ -131,22 +131,20 @@ pub fn poll(runner: &Arc<Runner>) {
         tokio::spawn(async move {
             let tools = crate::harness_tools::init(&me.config);
             let result = async {
-                // Install on demand: what this computer's bots run on (primary and fallback), plus what the owner
-                // turned on here; a computer with no bots yet takes the company's default runtime.
+                // Install what this computer's bots run on and the optional defaults, including the Gateway
+                // before subscription sign-in. A computer with no bots yet also takes the company default.
                 let changed = CONFIG_CHANGED.swap(false, std::sync::atomic::Ordering::SeqCst);
                 if changed || harness.default_at.is_none_or(|t| t.elapsed().as_secs_f64() >= 60.0) {
                     harness.default_at = Some(Instant::now());
                     if let Ok(c) = me.client.get("config").await {
                         crate::fallback::remember(&c);
-                        if let Some(value) = c["default_runtime"].as_str() {
-                            harness.default_runtime = value.to_string();
-                        }
+                        harness.config = c;
                     }
                     if let Ok(rows) = me.client.get("runners/assignments").await {
                         let rows = rows.as_array().cloned().unwrap_or_default();
-                        let runtimes: Vec<String> = harness_runtimes(&rows).into_iter().collect();
-                        let default: Vec<&str> =
-                            if runtimes.is_empty() && !harness.default_runtime.is_empty() { vec![&harness.default_runtime] } else { vec![] };
+                        let runtimes = harness_runtimes(&rows);
+                        let default = harness_defaults(&runtimes, &harness.config, crate::isolation::enabled());
+                        let runtimes: Vec<String> = runtimes.into_iter().collect();
                         tools.lock().unwrap().want(&runtimes, &default);
                     }
                 }
@@ -159,6 +157,23 @@ pub fn poll(runner: &Arc<Runner>) {
             note("harness", result, "harness step");
         });
     }
+}
+
+/// Optional computer defaults: the first bot's runtime and the Gateway runtime the company chose.
+/// Only isolated computers can run Gateway turns. Passing these as defaults keeps the owner's off
+/// choice effective, while a bot's explicit primary/fallback still makes its harness required.
+pub fn harness_defaults(runtimes: &HashSet<String>, config: &Value, isolated: bool) -> Vec<String> {
+    let mut defaults = vec![];
+    if runtimes.is_empty() {
+        defaults.push(text_of(&config["default_runtime"]));
+    }
+    if isolated {
+        defaults.push(text_of(&config["gateway_runtime"]));
+    }
+    defaults.retain(|r| !r.is_empty());
+    defaults.sort();
+    defaults.dedup();
+    defaults
 }
 
 /// The runtimes this computer's bots run on (service.harness_runtimes): each assigned bot's and its fallback's.

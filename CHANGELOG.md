@@ -30,6 +30,12 @@ All notable changes to Tico are recorded here. The format follows
   paid, never the key. The other three choices, and a team that never picks one, keep working
   as before ([Tico AI Gateway](docs/ai-gateway.md#choose-how-bots-get-their-models)).
 
+### Fixed
+- **A bot is no longer handed a picture link for a chat's file that never opens.** The visual route checks a bot's
+  link as the bot without its run, which cannot see a chat's files, so those links always answered "not found". A bot
+  reading a chat visual now gets the file itself (its file link, no picture address); people's links and a bot's
+  links for task files are unchanged.
+
 ## [0.3.69] - 2026-10-21
 
 ### Added
