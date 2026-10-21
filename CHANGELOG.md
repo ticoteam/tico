@@ -7,6 +7,16 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **Wait for a milestone, not the whole task**: `hub task wait <id> --on pr:<url>` waits until that pull request
+  merges, `--on release:v0.3.64` until that release is published (`task:<id>` is blocked_by). The owner gets one wake
+  when it happens, while the task it came from keeps its own step (In QA, a release watch). A wait made after the
+  merge, or a merge that arrived while the server was down, is woken once by the minute sweep; a replayed webhook
+  never wakes it twice. The task page shows it under Related ("Waits for PR #943 to merge"). MCP `hub_task_wait`.
+- **Relation writes read back their direction**: `hub task relate`, `hub_task_relate`, task create with relations and
+  `hub task wait` answer with what was stored, from both ends ("#237 waits for #233" / "#233 blocks #237"), so a
+  reversed link is visible in the reply.
+
 ### Changed
 - **Tico AI Gateway: Tico Cheap 1.1 replaces Cheap 1.0** in every model list. It costs the same for a prompt up to
   100,000 tokens; above that the whole request is $0.75 per 1M input, $0.075 cached and $3.75 output, and Usage
@@ -37,14 +47,6 @@ All notable changes to Tico are recorded here. The format follows
 ## [0.3.70] - 2026-10-21
 
 ### Added
-- **Wait for a milestone, not the whole task**: `hub task wait <id> --on pr:<url>` waits until that pull request
-  merges, `--on release:v0.3.64` until that release is published (`task:<id>` is blocked_by). The owner gets one wake
-  when it happens, while the task it came from keeps its own step (In QA, a release watch). A wait made after the
-  merge, or a merge that arrived while the server was down, is woken once by the minute sweep; a replayed webhook
-  never wakes it twice. The task page shows it under Related ("Waits for PR #943 to merge"). MCP `hub_task_wait`.
-- **Relation writes read back their direction**: `hub task relate`, `hub_task_relate`, task create with relations and
-  `hub task wait` answer with what was stored, from both ends ("#237 waits for #233" / "#233 blocks #237"), so a
-  reversed link is visible in the reply.
 - **A menu button left of Search in a chat's bot switcher on a phone.** In a bot's chat the bottom bar is hidden;
   tapping the bot's icon by the chat bar now shows a round menu button beside Search that opens the side menu in one
   tap, the same menu More opens, and it closes the same way.
