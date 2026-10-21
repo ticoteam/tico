@@ -41,6 +41,7 @@ TAGS = {
             "evidence and a quality, never edited; a correction supersedes the old one.",
     "Usage": "Estimated model spend per bot (docs/usage.md): tokens counted by each run's computer, priced at list price.",
     "Health": "Whether the installation is working.",
+    "Server updates": "Server release status, automatic release following and the standard updater.",
     "Live events": "One server-sent event stream for a person's pages (docs/custom-frontend.md, Live events): tasks, "
                    "messages, runs, bots and Needs you as they change, resumable from a change number.",
 }
@@ -100,6 +101,17 @@ STABLE = [
     ("/api/v2/service-keys/{key_id}/revoke", "post", "Session", "revokeServiceKey", "Revoke a service key", None),
     ("/api/v2/openapi.json", "get", "Session", "getOpenApi", "This document", None),
     ("/api/v2/config", "get", "Team", "getConfig", "Team and app names, version, setup state", "Config"),
+    ("/api/v2/system/update", "get", "Server updates", "getServerUpdate",
+     "Updater progress, running release, computer release counts and automatic update policy (owner or update key)", None),
+    ("/api/v2/system/update", "put", "Server updates", "setServerUpdatePolicy",
+     "Enable or disable automatic stable-release updates (owner or update key). Disabling cancels an idle-waiting request; "
+     "an update already sent to Docker must settle", None),
+    ("/api/v2/system/update", "post", "Server updates", "startServerUpdate",
+     "Update to a release through the standard updater (owner or update key). when_idle waits for running turns while "
+     "holding new claims; automatic enables/disables release following atomically with that request. "
+     "Repeated requests for the same pending version are harmless", None),
+    ("/api/v2/system/update/check", "post", "Server updates", "checkServerUpdate",
+     "Refresh the public release check, at most once per minute (owner or update key)", None),
     ("/api/v2/org", "get", "Team chart", "getOrg",
      "Humans, the bots the caller can see and reports_to; ?can=read|write keeps the bots they can read or write to", "Org"),
     ("/api/v2/humans/{pid}", "post", "Team chart", "updatePerson", "Edit a person's profile or reports_to", None),
@@ -1230,16 +1242,21 @@ def spec(app):
                 responses[code] = {**ERROR, 'description': detail}
         op["responses"] = dict(sorted(responses.items()))
         inbound = path == "/api/v2/inbound/tasks"
+        server_update = path.startswith("/api/v2/system/update")
         granola = path.startswith("/api/v2/meetings/granola")
         if inbound:
             op["security"] = [{"serviceKey": []}]
+        if server_update:
+            op["security"] = [{"bearer": []}, {"cookie": []}, {"serviceKey": []}]
         if method in ("post", "patch", "delete") and path.startswith("/api/v2/"):
             parameters = op.setdefault("parameters", [])
             parameters[:] = [p for p in parameters if (p.get("name"), p.get("in")) != ("Idempotency-Key", "header")]
             parameters.append({
-                "name": "Idempotency-Key", "in": "header", "required": not (inbound or granola or connection), "schema": {"type": "string"},
+                "name": "Idempotency-Key", "in": "header", "required": not (inbound or granola or connection or server_update), "schema": {"type": "string"},
                 "description": ("Not needed: the pair (service key, `key`) makes a repeated call harmless, and the header "
                                 "is ignored." if inbound else
+                                "Optional; update controls do not use idempotency receipts. when_idle requests deduplicate by target version."
+                                if server_update else
                                 'Optional. Retry the same action and code; HQ rechecks the current grant, role, session and original expiry without readoption.' if connection else
                                 "Optional. Sync uses a two-minute debounce; connecting starts a new device sign-in."
                                 if granola else

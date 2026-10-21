@@ -7,6 +7,12 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **Hosted servers keep Tico updated automatically.** They follow stable releases through the normal updater,
+  holding new turns until running work finishes and the new server passes its health check. Computers then follow
+  the server as usual. The owner or an update key can see progress, turn following off, or queue a named release;
+  rollback releases the hold and does not automatically retry the failed version.
+
 ### Changed
 - **Tico AI Gateway: Tico Cheap 1.1 replaces Cheap 1.0** in every model list. It costs the same for a prompt up to
   100,000 tokens; above that the whole request is $0.75 per 1M input, $0.075 cached and $3.75 output, and Usage

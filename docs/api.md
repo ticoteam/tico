@@ -44,6 +44,7 @@ The operation groups below are generated from the committed spec's tags. After r
 | KPIs | Measures that stand on their own: a goal links to them and carries the target. Readings are facts with a period, evidence and a quality, never edited; a correction supersedes the old one. |
 | Usage | Estimated model spend per bot ([guide](usage.md)): tokens counted by each run's computer, priced at list price. |
 | Health | Whether the installation is working. |
+| Server updates | Server release status, automatic release following and the standard updater. |
 | Live events | One server-sent event stream for a person's pages (docs/custom-frontend.md, Live events): tasks, messages, runs, bots and Needs you as they change, resumable from a change number. |
 | Tags | Tags, metadata, markdown checklists and reusable templates. |
 | Roadmaps | Company roadmap settings, internal requesters, and anonymous publication ([guide](roadmaps.md)). |

@@ -3,8 +3,8 @@
 A key has one scope. A `tasks` key (the default) lets a product backend put work in front of a person
 when something happens there (a weekly report is ready for its account manager to review) and take it
 away when the work is done there: one route, POST /api/v2/inbound/tasks. An `update` key lets a release
-bot on another install update this one: check for updates, start an update to a named release and read
-how it stands (the owner's "Update now", UPDATE_ROUTES). A person's own token would carry everything
+bot on another install update this one: check for updates, configure automatic following, start an update to a named
+release and read how it stands (the owner's "Update now", UPDATE_ROUTES). A person's own token would carry everything
 that person may do; `Auth.authenticate` refuses a key on every route outside its scope. It is stored as a
 hash, shown once, and lasts until it is revoked; the owner and the bot administrators make, list and
 revoke keys, and only the owner makes an `update` key, since only the owner updates the install. A key made with
@@ -32,7 +32,8 @@ UPDATE_PATH = "/api/v2/system/update"
 # The (method, path) pairs each scope reaches. /healthz needs no key at all.
 ROUTES = {
     "tasks": {("POST", INBOUND_PATH)},
-    "update": {("GET", UPDATE_PATH), ("POST", UPDATE_PATH), ("POST", UPDATE_PATH + "/check")},
+    "update": {("GET", UPDATE_PATH), ("POST", UPDATE_PATH), ("PUT", UPDATE_PATH),
+               ("POST", UPDATE_PATH + "/check")},
 }
 FIELDS = ("id", "label", "scope", "created", "created_by", "last_used", "revoked_at", "revoked_by", "made_with_token")
 
@@ -51,7 +52,7 @@ def token_ended(c, token_id):
 
 def refusal(scope):
     if scope == "update":
-        return "An update key only checks for updates, starts one and reads its status (" + UPDATE_PATH + ")"
+        return "An update key only controls server updates (" + UPDATE_PATH + ")"
     return "A service key only files tasks, with POST " + INBOUND_PATH
 
 
