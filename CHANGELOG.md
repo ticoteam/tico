@@ -8,6 +8,10 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Fixed
+- **Goals from a setup company file land on Goals.** Importing the file from tico.team/setup (in the app or from a
+  Hosted install) no longer sets its goals aside: the owner's goals become company goals, each bot's goal sits under
+  that bot, and a goal's measure becomes a KPI with the file's baseline and target. The file carries no readings, so
+  a new KPI starts with no history.
 - **Gateway turns retry when their rate window resets.** The computer carries the Gateway's requested wait back to
   the server, so a busy minute does not hold starter bots for an hour or claim their address sent refused keys.
 
