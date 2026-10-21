@@ -435,6 +435,10 @@ def run(args, who=None):
                 body["ask"] = ask
             if getattr(args, "needs_action", False):
                 body["needs_action"] = True
+            if getattr(args, "public", None):
+                body["public"] = True
+            if getattr(args, "approval_id", None):
+                body["approval_id"] = args.approval_id
             links = s3links.apply(client, body, ("text",))
             result = s3links.annotate(post(f"tasks/{args.id}/comments", body, delegate=asked), links)
             return {**result, "visuals_local": local} if local and isinstance(result, dict) else result
@@ -442,6 +446,8 @@ def run(args, who=None):
             return client.get(f"tasks/{args.id}/answers")
         if sub == "comment-edit":
             body = {"text": args.text}
+            if getattr(args, "approval_id", None):
+                body["approval_id"] = args.approval_id
             links = s3links.apply(client, body, ("text",))
             return s3links.annotate(post(f"tasks/{args.id}/comments/{args.comment_id}", body), links)
         if sub == "comment-delete":
@@ -474,7 +480,10 @@ def run(args, who=None):
                 for x in one.split(","):
                     if x.strip() and x.strip().lower() not in labels:
                         labels.append(x.strip().lower())
-            return post("tasks/" + args.id, {"version": current["version"], "labels": labels}, delegate=asked)
+            body = {"version": current["version"], "labels": labels}
+            if getattr(args, "approval_id", None):
+                body["approval_id"] = args.approval_id
+            return post("tasks/" + args.id, body, delegate=asked)
         if sub == "attach":
             path = Path(args.file)
             from clients.task_review import ask_from_args
