@@ -30,7 +30,8 @@ All notable changes to Tico are recorded here. The format follows
   turn's lease, the runner woke to the hub refusing the lease and dropped the answer the model had already finished,
   so the person saw "No reply" and the run ended interrupted. The runner now reads out what the model already said
   for up to ten seconds after that refusal and hands it in completed; the hub settles it as before (Dev 242). A model
-  still working is not waited for.
+  still working is not waited for, and nothing new starts in that window. A person's Stop still stands: a late answer
+  from a stopped turn is kept on its run, not posted.
 - A goal's automatic colour follows its worst KPI: red takes priority over yellow and green, and yellow over green.
   The note explains that KPI; a colour set by a person stays in place until handed back to the Goal Manager.
 

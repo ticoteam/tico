@@ -315,6 +315,17 @@ impl ClaudeHost {
         self.0.steer.store(steer, std::sync::atomic::Ordering::Relaxed);
     }
 
+    /// Claude's running turn on `thread`, as tests set it; Claude itself never says (crate::hosts::Host::active_turn).
+    #[cfg(test)]
+    pub(crate) fn running_turn(&self, thread: &str) -> Option<String> {
+        self.inner().turn.clone().filter(|(t, _)| t == thread).map(|(_, u)| u)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pretend_turn(&self, thread: &str, turn: &str) {
+        self.inner().turn = Some((thread.into(), turn.into()));
+    }
+
     pub fn start_thread(&self, settings: &Settings) -> String {
         let id = uuid::Uuid::new_v4().to_string();
         self.inner().threads.insert(id.clone(), Thread { settings: settings.clone(), started: false, fork_from: None, session_id: None });
