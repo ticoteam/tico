@@ -1030,6 +1030,8 @@ def main(args, who=None):
                 print("hub: stored: " + str(line), file=sys.stderr)
         if isinstance(result, dict) and result.get("warning"):     # saved, but a person should know why it waits
             print("hub: " + str(result["warning"]), file=sys.stderr)
+        if isinstance(result, dict) and result.get("held"):        # a bot's message to a bot waits for its next run
+            print("hub: " + str(result["held"]), file=sys.stderr)
         return 0
     except APIError as exc:
         if exc.code == "worktree_limit" and isinstance(exc.extra.get("wait"), dict):

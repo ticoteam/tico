@@ -275,7 +275,9 @@ class SettingsAdmin:
         if not choice:
             raise Problem("model", "Choose a Team default in Settings > Computers" if not body.model
                           else "Choose one of the supported models", 422)
-        self.refuse_retired(choice)
+        if body.model:
+            # A Team default saved before its model retired still makes bots: only a fresh pick is refused.
+            self.refuse_retired(choice)
         effort = self._effort(choice, body.effort or default.get("effort") or None)
         harness = self._harness(choice, getattr(body, "harness", None))
         self._parent(c, body.slug, body.reports_to)
