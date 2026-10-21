@@ -7,6 +7,12 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- **Gateway turns retry when their rate window resets.** The computer carries the Gateway's requested wait back to
+  the server, so a busy minute does not hold starter bots for an hour or claim their address sent refused keys.
+
+## [0.3.70] - 2026-10-21
+
 ### Added
 - **A menu button left of Search in a chat's bot switcher on a phone.** In a bot's chat the bottom bar is hidden;
   tapping the bot's icon by the chat bar now shows a round menu button beside Search that opens the side menu in one
@@ -25,8 +31,9 @@ All notable changes to Tico are recorded here. The format follows
   as before ([Tico AI Gateway](docs/ai-gateway.md#choose-how-bots-get-their-models)).
 
 ### Fixed
-- **Gateway turns retry when their rate window resets.** The computer carries the Gateway's requested wait back to
-  the server, so a busy minute does not hold starter bots for an hour or claim their address sent refused keys.
+- **Recommended starter bots install their Gateway runtime before subscription sign-in.** An isolated computer
+  now prepares the Gateway runtime chosen in AI providers even when automatic quota fallback is off, so starter
+  jobs can run before Claude and ChatGPT are signed in. An explicit owner opt-out stays effective.
 - **A bot is no longer handed a picture link for a chat's file that never opens.** The visual route checks a bot's
   link as the bot without its run, which cannot see a chat's files, so those links always answered "not found". A bot
   reading a chat visual now gets the file itself (its file link, no picture address); people's links and a bot's
@@ -4015,7 +4022,8 @@ First public release.
 - Hosting: local only on a Mac, or self-hosted, including a reference AWS stack under `infra/ec2/`
   with Litestream backups.
 
-[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.69...HEAD
+[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.70...HEAD
+[0.3.70]: https://github.com/ticoteam/tico/compare/v0.3.69...v0.3.70
 [0.3.69]: https://github.com/ticoteam/tico/compare/v0.3.68...v0.3.69
 [0.3.68]: https://github.com/ticoteam/tico/compare/v0.3.67...v0.3.68
 [0.3.67]: https://github.com/ticoteam/tico/compare/v0.3.66...v0.3.67
