@@ -144,6 +144,8 @@ CREATE TABLE IF NOT EXISTS runner_harness_choices(
 CREATE TABLE IF NOT EXISTS enrollments(
  code_hash TEXT PRIMARY KEY, operator TEXT NOT NULL REFERENCES humans(id),
  expires TEXT NOT NULL, consumed_at TEXT, runner_id TEXT);
+CREATE TABLE IF NOT EXISTS hosting_enrollments(
+ request_id TEXT PRIMARY KEY, code_hash TEXT NOT NULL UNIQUE, label TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS human_tokens(
  id TEXT PRIMARY KEY, human TEXT NOT NULL REFERENCES humans(id), label TEXT NOT NULL,
  token_hash TEXT NOT NULL UNIQUE, created TEXT NOT NULL, created_by TEXT NOT NULL,

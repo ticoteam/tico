@@ -27,7 +27,8 @@ flags for this mode: `--target ssh|aws|command`, `--ssh`, `--ssh-port`, `--ssh-i
 
 ### The AWS server
 
-`t4g.small` (2 GiB) is enough for the server. Ubuntu 24.04 or Amazon Linux 2023 on arm64, a 30 GiB encrypted disk,
+`t4g.small` (2 GiB) is enough for the server. Ubuntu 24.04 or Amazon Linux 2023 on arm64, a 30 GiB encrypted disk
+(100 GiB on `m8i-flex.xlarge` or 200 GiB on `m8i-flex.2xlarge`, both x86_64),
 a security group with only 80 and 443 for Caddy (nothing for a tunnel), IMDSv2 with hop limit 1 (containers cannot
 reach the instance role), an Elastic IP for Caddy, and SSM instead of SSH. The `.env` is stored as an SSM SecureString
 that the instance reads at boot, so it is not in the user-data. Every resource is tagged `ManagedBy=tico-setup` and

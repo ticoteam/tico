@@ -932,6 +932,9 @@ class Execution:
         self.refuse_in_rehearsal("Enrolments")
         with self.store.transaction() as c:
             row = c.execute("SELECT * FROM enrollments WHERE code_hash=?", (digest(body.code),)).fetchone()
+            hosted = c.execute("SELECT label FROM hosting_enrollments WHERE code_hash=?", (digest(body.code),)).fetchone()
+            if hosted and hosted['label'] != body.label:
+                raise Problem("enrollment", "Enrollment is for another computer", 403)
             if not row or row["expires"] <= H.now():
                 raise Problem("enrollment", "Enrollment code is invalid or expired", 401)
             # Deterministic credential makes a lost enrollment response safely retryable.
