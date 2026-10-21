@@ -7,6 +7,8 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.3.72] - 2026-10-21
+
 ### Added
 - **Hosted bot computers.** Hosting can run bots on a separate computer, keeping their work away from the Tico
   server. Settings > Computers offers **Hosted computer (we run it)**. The installer supports server-only installs,
@@ -4051,7 +4053,8 @@ First public release.
 - Hosting: local only on a Mac, or self-hosted, including a reference AWS stack under `infra/ec2/`
   with Litestream backups.
 
-[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.71...HEAD
+[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.72...HEAD
+[0.3.72]: https://github.com/ticoteam/tico/compare/v0.3.71...v0.3.72
 [0.3.71]: https://github.com/ticoteam/tico/compare/v0.3.70...v0.3.71
 [0.3.70]: https://github.com/ticoteam/tico/compare/v0.3.69...v0.3.70
 [0.3.69]: https://github.com/ticoteam/tico/compare/v0.3.68...v0.3.69
