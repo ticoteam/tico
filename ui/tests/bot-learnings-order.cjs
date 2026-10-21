@@ -42,6 +42,13 @@ assert.deepEqual(order(fenced).split('\n'), ['# L', '## 2026-10-09 — Later', '
 const short = ['# L', '## 2026-10-05 — A', '## Granola is per-person (Oct 13)', '## Tasks close on merge (Chris, Oct 14)', '## 2026-10-18 — B'].join('\n');
 assert.deepEqual(headings(short), ['# L', '## 2026-10-18 — B', '## Tasks close on merge (Chris, Oct 14)', '## Granola is per-person (Oct 13)', '## 2026-10-05 — A']);
 
+// A flat log, as the employee template starts one: no `## `, entries appended at the bottom, newest first here.
+const flat = ['# Learnings', 'Durable facts. Date each entry.', '', '- 2026-10-01: first', '  more on first', '- 2026-10-20: latest', '- 2026-10-09: middle'].join('\n');
+assert.deepEqual(order(flat).split('\n'), ['# Learnings', 'Durable facts. Date each entry.', '', '- 2026-10-20: latest', '- 2026-10-09: middle', '- 2026-10-01: first', '  more on first']);
+// Intro entries ahead of sections: rules first, then the intro's entries newest first, then the dated sections.
+const mixed = ['# L', '- 2026-10-02: a', '- 2026-10-03: b', '## 2026-10-04 — C', '- c', '## Working rules', '- r'].join('\n');
+assert.deepEqual(headings(mixed), ['# L', '## Working rules', '- r', '- 2026-10-03: b', '- 2026-10-02: a', '## 2026-10-04 — C', '- c']);
+
 // No dates at all, or nothing: file order.
 const plain = '# Decisions\n## Alpha\n- x\n## Beta\n- y';
 assert.equal(order(plain), plain);

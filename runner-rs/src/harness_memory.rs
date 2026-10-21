@@ -1,14 +1,25 @@
-//! One memory per bot, in its repository (docs/learnings.md, One memory). No turn keeps Claude Code's auto memory any
-//! more (hosts/claude.rs turn_env), so what a bot saved there before, a MEMORY.md and one file per memory under the
-//! turn's HOME (`.claude/projects/<the bot's checkout, every other character a dash>/memory/`), is copied once into
-//! the turn's `memory/learnings.md` as a working-rules section; the turn reads it and the post-turn commit keeps it.
-//! The old folder is left as it is, with a `.tico-moved` file saying where its memories went, and never read again.
+//! One memory per bot, in its repository (docs/learnings.md, One memory). No turn reads a harness's own memory any
+//! more (hosts/claude.rs turn_env, hosts/codex.rs, hosts/gemini.rs), so what a bot saved there before is copied into
+//! the turn's `memory/learnings.md` as a working-rules section: Claude's auto memory (a MEMORY.md and one file per
+//! memory under the turn's HOME, `.claude/projects/<the bot's checkout, every other character a dash>/memory/`) and
+//! the Gemini CLI's saved memory (its home's `.gemini/GEMINI.md`, set aside unread by hosts/gemini.rs).
+//!
+//! Every entry carries its source (`claude-memory/<file>`), so a retry adds only what the checkout lacks. The turn's
+//! memory commit keeps the copy; the move is done (`done` in the runner's state for the bot) only once the copy is in
+//! the repository's committed history, the upstream's when there is one. Until then a claim names the checkout that
+//! copied, so another lane does not copy the same entries again; a claim older than CLAIM_SECS is taken over. The old
+//! files are left as they are.
 
-use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
 
-pub const MOVED: &str = ".tico-moved";
 pub const HEADING: &str = "## Working rules from Claude's memory on this computer";
+const CLAIM_SECS: u64 = 6 * 3600;
+
+pub struct Entry {
+    pub tag: String,
+    pub text: String,
+}
 
 /// Claude's auto-memory folder for a checkout, under `home`: the path with each character that is not a letter or a
 /// digit made a dash, as Claude names its project folders.
@@ -17,15 +28,33 @@ pub fn claude_dir(home: &Path, checkout: &Path) -> PathBuf {
     home.join(".claude").join("projects").join(name).join("memory")
 }
 
-/// The memories in `dir`, by file name: (file, name, description, body). MEMORY.md, the index, is not one of them.
-fn memories(dir: &Path) -> Vec<(String, String, String, String)> {
-    let mut files: Vec<PathBuf> = std::fs::read_dir(dir).into_iter().flatten().flatten().map(|e| e.path())
-        .filter(|p| p.is_file() && p.extension().is_some_and(|e| e == "md") && p.file_name().is_some_and(|n| n != "MEMORY.md"))
-        .collect();
+/// One entry: a line naming it, the source tag, and its text indented under it, so no line of it reads as a heading or
+/// as an entry of its own. Blank lines are kept as empty indented lines.
+fn entry(tag: String, title: &str, body: &str, day: &str) -> Entry {
+    let mut lines = vec![format!("- {title} [source: {tag}; added: {day}]")];
+    lines.extend(body.trim().lines().map(|l| if l.trim().is_empty() { String::new() } else { format!("  {l}") }));
+    Entry { tag, text: lines.join("\n") }
+}
+
+/// The memories in Claude's folder: one entry per memory file, then what MEMORY.md says beyond its links to those
+/// files. An unreadable file is an error: nothing is copied from a set that cannot be read whole.
+pub fn claude_entries(dir: &Path, day: &str) -> std::io::Result<Vec<Entry>> {
+    if !dir.is_dir() {
+        return Ok(vec![]);
+    }
+    let mut files: Vec<PathBuf> = vec![];
+    for e in std::fs::read_dir(dir)? {
+        let p = e?.path();
+        if p.is_file() && p.extension().is_some_and(|e| e == "md") && p.file_name().is_some_and(|n| n != "MEMORY.md") {
+            files.push(p);
+        }
+    }
     files.sort();
-    files.iter().filter_map(|p| {
-        let text = std::fs::read_to_string(p).ok()?;
-        let file = p.file_name()?.to_string_lossy().to_string();
+    let mut out = vec![];
+    let mut names = vec![];
+    for p in &files {
+        let text = std::fs::read_to_string(p)?;
+        let file = p.file_name().unwrap_or_default().to_string_lossy().to_string();
         let (mut name, mut description, mut body) = (String::new(), String::new(), text.trim().to_string());
         if let Some(rest) = text.strip_prefix("---\n") {
             if let Some(end) = rest.find("\n---") {
@@ -37,83 +66,173 @@ fn memories(dir: &Path) -> Vec<(String, String, String, String)> {
             }
         }
         if name.is_empty() { name = file.trim_end_matches(".md").to_string(); }
-        Some((file, name, description, body))
-    }).collect()
-}
-
-/// The index lines (`- ...`) that name no memory file: a memory written straight into MEMORY.md.
-fn index_only(dir: &Path, files: &[String]) -> Vec<String> {
-    let text = std::fs::read_to_string(dir.join("MEMORY.md")).unwrap_or_default();
-    text.lines().filter(|l| l.starts_with("- ") && !files.iter().any(|f| l.contains(&format!("({f})")))).map(String::from).collect()
-}
-
-/// The section for `memory/learnings.md`: each memory one entry, its text indented under it so no line of it reads
-/// as a heading or as an entry of its own.
-pub fn section(dir: &Path, day: &str) -> Option<(String, usize)> {
-    let found = memories(dir);
-    let files: Vec<String> = found.iter().map(|m| m.0.clone()).collect();
-    let loose = index_only(dir, &files);
-    if found.is_empty() && loose.is_empty() {
-        return None;
+        let title = if description.is_empty() { format!("**{name}**") } else { format!("**{name}**: {description}") };
+        out.push(entry(format!("claude-memory/{file}"), &title, &body, day));
+        names.push(file);
     }
-    let mut out = vec![HEADING.to_string(), format!(
-        "Moved here by Tico on {day} from Claude's own memory on the computer this bot ran on, which no turn reads any more. Edit or remove them like any other line here.")];
-    for (file, name, description, body) in &found {
-        let head = if description.is_empty() { format!("- **{name}**") } else { format!("- **{name}**: {description}") };
-        out.push(format!("{head} [source: {file}; added: {day}]"));
-        out.extend(body.lines().filter(|l| !l.trim().is_empty()).map(|l| format!("  {l}")));
-    }
-    out.extend(loose.iter().cloned());
-    Some((out.join("\n") + "\n", found.len() + loose.len()))
-}
-
-/// Puts the section in `learnings` (created if missing): after its title and intro, ahead of its first `## ` section.
-pub fn insert(learnings: &str, section: &str) -> String {
-    if learnings.trim().is_empty() {
-        return format!("# Learnings\n\n{section}");
-    }
-    let mut at = learnings.len();
-    let mut offset = 0;
-    for line in learnings.split_inclusive('\n') {
-        if line.starts_with("## ") {
-            at = offset;
-            break;
+    let index = dir.join("MEMORY.md");
+    if index.exists() {
+        // Only a line that is just a link to a copied file (and its one-line hook) is left out: it is that entry.
+        let text = std::fs::read_to_string(&index)?;
+        let rest: Vec<&str> = text.lines().filter(|l| {
+            let t = l.trim_start();
+            !(t.starts_with("- [") && names.iter().any(|f| t.contains(&format!("]({f})"))))
+        }).collect();
+        let rest = rest.join("\n");
+        if rest.lines().any(|l| !l.trim().is_empty() && !l.trim_start().starts_with('#')) {
+            out.push(entry("claude-memory/MEMORY.md".into(), "**MEMORY.md** (what the index said beyond the memories above)", &rest, day));
         }
-        offset += line.len();
     }
-    let (before, after) = learnings.split_at(at);
-    let gap = if before.ends_with("\n\n") || before.is_empty() { "" } else if before.ends_with('\n') { "\n" } else { "\n\n" };
-    let tail = if after.is_empty() { String::new() } else { format!("\n{after}") };
-    format!("{before}{gap}{section}{tail}")
+    Ok(out)
 }
 
-/// Copies the bot's Claude memories for `main` (its own checkout, the folder Claude named them by) into
-/// `checkout/memory/learnings.md` once: the number copied, 0 when there were none or another turn already took them.
-pub fn migrate(home: &Path, main: &Path, checkout: &Path, day: &str) -> std::io::Result<usize> {
-    let dir = claude_dir(home, main);
-    if !dir.is_dir() || dir.join(MOVED).exists() {
-        return Ok(0);
+/// The Gemini CLI's saved memory in its home, one entry: what hosts/gemini.rs set aside unread, then a GEMINI.md not
+/// yet set aside. One tag for both, so setting it aside between two turns never copies it twice.
+pub fn gemini_entries(home: &Path, day: &str) -> std::io::Result<Vec<Entry>> {
+    let mut parts = vec![];
+    for name in [crate::hosts::gemini::MEMORY_UNREAD, "GEMINI.md"] {
+        match std::fs::read_to_string(home.join(".gemini").join(name)) {
+            Ok(t) if !t.trim().is_empty() => parts.push(t.trim().to_string()),
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e),
+        }
     }
-    let Some((text, count)) = section(&dir, day) else { return Ok(0) };
-    // Claimed first, so two turns of one bot never both copy them.
-    let mut claim = match std::fs::OpenOptions::new().write(true).create_new(true).open(dir.join(MOVED)) {
-        Ok(f) => f,
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => return Ok(0),
+    Ok(if parts.is_empty() { vec![] } else { vec![entry("gemini-memory/GEMINI.md".into(), "**Gemini saved memory**", &parts.join("\n\n"), day)] })
+}
+
+fn has(text: &str, tag: &str) -> bool {
+    text.contains(&format!("[source: {tag};"))
+}
+
+/// Puts `entries` in `learnings` (created if missing): at the end of the moved-rules section when there is one, else as
+/// that section after the title and intro, ahead of the first `## ` section or log entry.
+pub fn insert(learnings: &str, entries: &[&Entry], day: &str) -> String {
+    let body = entries.iter().map(|e| e.text.as_str()).collect::<Vec<_>>().join("\n") + "\n";
+    let lines: Vec<&str> = learnings.split_inclusive('\n').collect();
+    let offset = |i: usize| lines[..i].iter().map(|l| l.len()).sum::<usize>();
+    let (at, text) = if let Some(h) = lines.iter().position(|l| l.trim_end() == HEADING) {
+        let end = lines.iter().skip(h + 1).position(|l| l.starts_with("## ")).map_or(lines.len(), |i| h + 1 + i);
+        let mut end = end;
+        // Back over the blank lines before the next section, so the new entries follow the last one.
+        while end > h + 1 && lines[end - 1].trim().is_empty() {
+            end -= 1;
+        }
+        (offset(end), body)
+    } else {
+        let section = format!("{HEADING}\nMoved here by Tico on {day} from the AI tool's own memory on the computer this bot ran on, \
+which no turn reads any more. Edit or remove them like any other line here.\n{body}");
+        if learnings.trim().is_empty() {
+            return format!("# Learnings\n\n{section}");
+        }
+        let first = lines.iter().enumerate().skip(1).find(|(_, l)| {
+            l.starts_with("## ") || l.starts_with("- ") || l.starts_with("* ") || l.split_once(". ").is_some_and(|(n, _)| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
+        }).map_or(lines.len(), |(i, _)| i);
+        // Ahead of a flat log's first entry, that log gets a heading of its own, or its entries would read as the
+        // moved rules.
+        let entry = first < lines.len() && !lines[first].starts_with("## ");
+        (offset(first), if entry { section + "\n## Log\n" } else { section + "\n" })
+    };
+    let (before, after) = learnings.split_at(at);
+    let gap = if before.is_empty() || before.ends_with("\n\n") || (before.ends_with('\n') && text.starts_with("- ")) { "" } else if before.ends_with('\n') { "\n" } else { "\n\n" };
+    format!("{before}{gap}{text}{after}")
+}
+
+/// memory/learnings.md as the repository has committed it: at the upstream when the checkout tracks one, else at HEAD.
+fn committed(checkout: &Path) -> Option<String> {
+    for rev in ["@{upstream}", "HEAD"] {
+        let out = std::process::Command::new("git")
+            .args(["-c", "safe.directory=*", "show", &format!("{rev}:memory/learnings.md")])
+            .current_dir(checkout)
+            .stderr(std::process::Stdio::null())
+            .output()
+            .ok()?;
+        if out.status.success() {
+            return Some(String::from_utf8_lossy(&out.stdout).to_string());
+        }
+        let known = std::process::Command::new("git").args(["-c", "safe.directory=*", "rev-parse", "--verify", "-q", rev])
+            .current_dir(checkout).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status().ok()?;
+        if known.success() {
+            return Some(String::new()); // that revision has no learnings.md yet
+        }
+    }
+    None
+}
+
+fn write_atomic(path: &Path, text: &str) -> std::io::Result<()> {
+    let dir = path.parent().ok_or_else(|| std::io::Error::other("no parent"))?;
+    std::fs::create_dir_all(dir)?;
+    let tmp = dir.join(format!(".{}.tico-{}", path.file_name().unwrap_or_default().to_string_lossy(), uuid::Uuid::new_v4().simple()));
+    let wrote = std::fs::write(&tmp, text).and_then(|_| std::fs::File::open(&tmp)?.sync_all()).and_then(|_| std::fs::rename(&tmp, path));
+    if wrote.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    wrote
+}
+
+#[derive(Debug, PartialEq)]
+pub enum Moved {
+    /// Nothing to copy, or the copy is already in the repository's history.
+    Done,
+    /// This many entries were copied into the checkout now (0: already there, waiting for the turn's commit).
+    Copied(usize),
+    /// Another checkout copied them and its commit has not landed yet.
+    Elsewhere,
+}
+
+/// Before a turn in `checkout`, a git checkout of the bot whose own checkout is `main`: copies the entries the checkout
+/// lacks. `state` is the runner's folder for this bot's move (`done`, `claim`).
+pub fn before_turn(entries: std::io::Result<Vec<Entry>>, checkout: &Path, state: &Path, day: &str, now: SystemTime) -> std::io::Result<Moved> {
+    if state.join("done").exists() {
+        return Ok(Moved::Done);
+    }
+    let entries = entries?;
+    let finish = |why: &str| -> std::io::Result<Moved> {
+        write_atomic(&state.join("done"), &format!("{why}\n"))?;
+        let _ = std::fs::remove_file(state.join("claim"));
+        Ok(Moved::Done)
+    };
+    if entries.is_empty() {
+        return finish("no harness memory");
+    }
+    if let Some(text) = committed(checkout) {
+        if entries.iter().all(|e| has(&text, &e.tag)) {
+            return finish(&format!("{} entries in the repository's history", entries.len()));
+        }
+    }
+    let target = checkout.join("memory").join("learnings.md");
+    let current = match std::fs::read_to_string(&target) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
         Err(e) => return Err(e),
     };
-    let target = checkout.join("memory").join("learnings.md");
-    let wrote = (|| {
-        std::fs::create_dir_all(target.parent().unwrap())?;
-        let current = std::fs::read_to_string(&target).unwrap_or_default();
-        std::fs::write(&target, insert(&current, &text))
-    })();
-    if let Err(e) = wrote {
-        drop(claim);
-        let _ = std::fs::remove_file(dir.join(MOVED));
-        return Err(e);
+    let missing: Vec<&Entry> = entries.iter().filter(|e| !has(&current, &e.tag)).collect();
+    if missing.is_empty() {
+        return Ok(Moved::Copied(0));
     }
-    let _ = writeln!(claim, "{count} memories copied on {day} into {}", target.display());
-    Ok(count)
+    let here = checkout.display().to_string();
+    if let Ok(claim) = std::fs::read_to_string(state.join("claim")) {
+        let (secs, path) = claim.split_once(' ').unwrap_or(("0", ""));
+        let at = SystemTime::UNIX_EPOCH + Duration::from_secs(secs.trim().parse().unwrap_or(0));
+        let fresh = now.duration_since(at).map_or(true, |age| age.as_secs() < CLAIM_SECS);
+        if fresh && path.trim() != here {
+            return Ok(Moved::Elsewhere);
+        }
+    }
+    let secs = now.duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs();
+    write_atomic(&state.join("claim"), &format!("{secs} {here}\n"))?;
+    write_atomic(&target, &insert(&current, &missing, day))?;
+    Ok(Moved::Copied(missing.len()))
+}
+
+/// The caller's step (execute.rs, after placement): the bot's Claude memory for its own checkout `main` and its Gemini
+/// home's saved memory, into the turn's checkout.
+pub fn move_for_turn(home: &Path, main: &Path, checkout: &Path, gemini_home: &Path, state: &Path, day: &str) -> std::io::Result<Moved> {
+    if state.join("done").exists() {
+        return Ok(Moved::Done);
+    }
+    let entries = claude_entries(&claude_dir(home, main), day).and_then(|mut e| { e.extend(gemini_entries(gemini_home, day)?); Ok(e) });
+    before_turn(entries, checkout, state, day, SystemTime::now())
 }
 
 #[cfg(test)]
@@ -126,45 +245,67 @@ mod tests {
         dir
     }
 
-    #[test]
-    fn a_bots_claude_memories_move_into_its_learnings_once() {
-        let root = temp();
-        let (home, main, session) = (root.join("home"), root.join("work/emp-acme"), root.join("work/sessions/acme/t1"));
-        std::fs::create_dir_all(&session).unwrap();
-        let dir = claude_dir(&home, &main);
-        assert!(dir.ends_with(format!(".claude/projects/{}/memory", main.display().to_string().replace(['/', '.', '_'], "-"))));
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("MEMORY.md"), "- [Ask first](ask-first.md) — ask before you spec\n- Never deploy on Fridays\n").unwrap();
+    fn seed(dir: &Path) {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(dir.join("MEMORY.md"), "# Memory\n- [Ask first](ask-first.md) — ask before you spec\n\nAsk Chris before publishing.\n* Never deploy on Fridays\n- Release only when approved\n  Approval must name the exact version.\n").unwrap();
         std::fs::write(dir.join("ask-first.md"), "---\nname: ask-first\ndescription: Ask 3-5 questions before a spec\nmetadata:\n  type: feedback\n---\n\nAsk first.\n## Not a heading\n- not an entry\n\n**Why:** Chris said so.\n").unwrap();
         std::fs::write(dir.join("plain.md"), "Merge only at the reviewed head.\n").unwrap();
-        std::fs::create_dir_all(session.join("memory")).unwrap();
-        std::fs::write(session.join("memory/learnings.md"), "# Learnings\nDate each entry.\n\n## 2026-10-05 — Old\n- old\n").unwrap();
+    }
 
-        assert_eq!(migrate(&home, &main, &session, "2026-10-21").unwrap(), 3);
-        let got = std::fs::read_to_string(session.join("memory/learnings.md")).unwrap();
-        assert_eq!(got, format!("# Learnings\nDate each entry.\n\n{HEADING}\nMoved here by Tico on 2026-10-21 from Claude's own memory on the computer this bot ran on, which no turn reads any more. Edit or remove them like any other line here.\n\
-- **ask-first**: Ask 3-5 questions before a spec [source: ask-first.md; added: 2026-10-21]\n  Ask first.\n  ## Not a heading\n  - not an entry\n  **Why:** Chris said so.\n\
-- **plain** [source: plain.md; added: 2026-10-21]\n  Merge only at the reviewed head.\n\
-- Never deploy on Fridays\n\n## 2026-10-05 — Old\n- old\n"));
-        // Once: a second turn, here or in another checkout, copies nothing; the old folder stays, marked.
-        assert_eq!(migrate(&home, &main, &main, "2026-10-22").unwrap(), 0);
-        assert!(!main.join("memory/learnings.md").exists());
-        assert!(dir.join("ask-first.md").exists() && std::fs::read_to_string(dir.join(MOVED)).unwrap().starts_with("3 memories copied"));
+    #[test]
+    fn every_line_of_claude_memory_is_copied_once_and_nothing_is_marked_done_before_it_is_committed() {
+        let root = temp();
+        let (dir, checkout, state) = (root.join("mem"), root.join("work"), root.join("state"));
+        seed(&dir);
+        std::fs::create_dir_all(checkout.join("memory")).unwrap();
+        std::fs::write(checkout.join("memory/learnings.md"), "# Learnings\nDate each entry.\n- 2026-10-05: old\n- 2026-10-09: newer\n").unwrap();
+        let now = SystemTime::now();
+        let got = before_turn(claude_entries(&dir, "2026-10-21"), &checkout, &state, "2026-10-21", now).unwrap();
+        assert_eq!(got, Moved::Copied(3));
+        let text = std::fs::read_to_string(checkout.join("memory/learnings.md")).unwrap();
+        // Rules go ahead of a flat log; every rule and qualification is there; the link line is the file's entry.
+        assert!(text.starts_with(&format!("# Learnings\nDate each entry.\n\n{HEADING}\n")), "{text}");
+        assert!(text.ends_with("\n\n## Log\n- 2026-10-05: old\n- 2026-10-09: newer\n"), "{text}");
+        for line in ["Ask Chris before publishing.", "* Never deploy on Fridays", "- Release only when approved", "    Approval must name the exact version.",
+                     "  ## Not a heading", "  - not an entry", "  **Why:** Chris said so.", "Merge only at the reviewed head.",
+                     "- **ask-first**: Ask 3-5 questions before a spec [source: claude-memory/ask-first.md; added: 2026-10-21]"] {
+            assert!(text.contains(line), "{line}\n{text}");
+        }
+        assert!(!text.contains("[Ask first](ask-first.md)"));
+        assert!(!state.join("done").exists(), "not committed anywhere yet (no git here)");
+        // A retry, as after a restart, adds nothing; another checkout defers to the fresh claim.
+        assert_eq!(before_turn(claude_entries(&dir, "2026-10-22"), &checkout, &state, "2026-10-22", now).unwrap(), Moved::Copied(0));
+        assert_eq!(std::fs::read_to_string(checkout.join("memory/learnings.md")).unwrap(), text);
+        let other = root.join("other");
+        assert_eq!(before_turn(claude_entries(&dir, "d"), &other, &state, "d", now).unwrap(), Moved::Elsewhere);
+        assert!(!other.join("memory").exists());
+        // A claim left by a turn that died before writing: the same checkout copies; a stale one is taken over.
+        std::fs::write(checkout.join("memory/learnings.md"), "# Learnings\n").unwrap();
+        assert_eq!(before_turn(claude_entries(&dir, "d"), &checkout, &state, "d", now).unwrap(), Moved::Copied(3));
+        let later = now + Duration::from_secs(CLAIM_SECS + 1);
+        assert_eq!(before_turn(claude_entries(&dir, "d"), &other, &state, "d", later).unwrap(), Moved::Copied(3));
+        // A source that cannot be read copies nothing and claims nothing.
+        let (bad, fresh) = (root.join("bad"), root.join("fresh"));
+        seed(&bad);
+        std::fs::write(bad.join("broken.md"), [0xff, 0xfe, 0x00]).unwrap();
+        let state2 = root.join("state2");
+        assert!(before_turn(claude_entries(&bad, "d"), &fresh, &state2, "d", now).is_err());
+        assert!(!fresh.join("memory").exists() && !state2.join("claim").exists() && !state2.join("done").exists());
+        // No memory at all: done at once, nothing written.
+        let state3 = root.join("state3");
+        assert_eq!(before_turn(claude_entries(&root.join("none"), "d"), &fresh, &state3, "d", now).unwrap(), Moved::Done);
+        assert!(!fresh.join("memory").exists() && state3.join("done").exists());
         std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
-    fn no_claude_memory_changes_nothing_and_a_new_file_gets_a_title() {
-        let root = temp();
-        let (home, main) = (root.join("home"), root.join("emp-acme"));
-        assert_eq!(migrate(&home, &main, &main, "2026-10-21").unwrap(), 0);
-        std::fs::create_dir_all(claude_dir(&home, &main)).unwrap();
-        assert_eq!(migrate(&home, &main, &main, "2026-10-21").unwrap(), 0, "an empty folder");
-        assert!(!claude_dir(&home, &main).join(MOVED).exists() && !main.join("memory").exists());
-        std::fs::write(claude_dir(&home, &main).join("MEMORY.md"), "- One rule\n").unwrap();
-        assert_eq!(migrate(&home, &main, &main, "2026-10-21").unwrap(), 1);
-        assert!(std::fs::read_to_string(main.join("memory/learnings.md")).unwrap().starts_with(&format!("# Learnings\n\n{HEADING}\n")));
-        assert_eq!(insert("# L\nintro", "S\n"), "# L\nintro\n\nS\n");
-        std::fs::remove_dir_all(root).unwrap();
+    fn a_new_learnings_file_gets_a_title_and_a_second_copy_joins_the_moved_section() {
+        let e = |t: &str| Entry { tag: format!("claude-memory/{t}"), text: format!("- {t} [source: claude-memory/{t}; added: d]") };
+        let one = insert("", &[&e("a.md")], "d");
+        assert!(one.starts_with(&format!("# Learnings\n\n{HEADING}\n")));
+        let with_log = format!("{one}\n## 2026-10-01 — Old\n- old\n");
+        let two = insert(&with_log, &[&e("b.md")], "d");
+        assert!(two.contains("- a.md [source: claude-memory/a.md; added: d]\n- b.md [source: claude-memory/b.md; added: d]\n\n## 2026-10-01"), "{two}");
+        assert_eq!(insert("# L\nintro", &[&e("c.md")], "d").matches(HEADING).count(), 1);
     }
 }

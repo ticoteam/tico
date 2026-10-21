@@ -72,15 +72,19 @@ function learnNewestFirst(text) {
     groups.sort((a, b) => b.d.localeCompare(a.d));                // stable: same-day groups keep file order
     return lead.concat(...groups.map(g => g.items));
   };
-  const entries = rows => {
+  const dateOf = item => (item.join('\n').match(/added:\s*(20\d\d-\d\d-\d\d)/) || [])[1] || when(item[0].match(/^[-*]\s+\W{0,3}(.{0,12})/)[1]);
+  const split = rows => {                                         // [prose ahead of the first entry, entries newest first]
     const [head, ...items] = blocks(rows, l => /^[-*] /.test(l));
-    const dateOf = item => (item.join('\n').match(/added:\s*(20\d\d-\d\d-\d\d)/) || [])[1] || when(item[0].match(/^[-*]\s+\W{0,3}(.{0,12})/)[1]);
-    return head.concat(...newest(items, dateOf));
+    return [head, [].concat(...newest(items, dateOf))];
   };
+  const entries = rows => [].concat(...split(rows));
+  // A flat log (the template's `# Learnings`, a line of intro, then entries) has no `## ` at all: its entries are
+  // the intro's, sorted too, and they follow the rules.
   const [intro, ...sections] = blocks(lines, l => /^## /.test(l));
+  const [title, flat] = split(intro);
   const rules = sections.filter(s => !when(s[0]) && /\brules?\b/i.test(s[0]));
   const log = newest(sections.filter(s => !rules.includes(s)), s => when(s[0]));
-  return intro.concat(...rules, ...log.map(entries)).join('\n');
+  return title.concat(...rules, flat, ...log.map(entries)).join('\n');
 }
 
 function learnSource(u) {

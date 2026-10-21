@@ -21,6 +21,8 @@ use crate::util::{log, text_of};
 pub const STREAM_ARGS: &[&str] = &["--output-format", "stream-json", "--approval-mode", "yolo", "--skip-trust"];
 pub const DEFAULT_MODEL: &str = "gemini-3.8-flash";
 pub const MODELS: &[&str] = &["gemini-3.8-flash"];
+/// Where the host's saved Gemini memory goes, in its home's `.gemini`, once no turn reads it (set_aside_memory).
+pub const MEMORY_UNREAD: &str = "GEMINI.unread.md";
 const STOP_TIMEOUT: Duration = Duration::from_secs(10);
 const STDERR_TAIL: usize = 2000;
 const RESTORING: &str = "Saved provider session is unavailable; restoring this conversation's context.";
@@ -68,6 +70,27 @@ pub fn settings_file(model: &str, effort: Option<&str>, servers: &[Value]) -> Va
         file["mcpServers"] = Value::Object(crate::mcp::gemini_config(servers));
     }
     file
+}
+
+/// The CLI loads `<home>/.gemini/GEMINI.md` into every prompt: the memory `save_memory` kept, out of the owner's sight.
+/// Before each turn it moves to MEMORY_UNREAD beside it, added to what is there, which the CLI never loads and
+/// crate::harness_memory copies into the bot's repository.
+pub fn set_aside_memory(home: &Path) -> std::io::Result<()> {
+    let dir = home.join(".gemini");
+    let saved = dir.join("GEMINI.md");
+    let text = match std::fs::read_to_string(&saved) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e),
+    };
+    if !text.trim().is_empty() {
+        let unread = dir.join(MEMORY_UNREAD);
+        let before = std::fs::read_to_string(&unread).unwrap_or_default();
+        let joined = if before.trim().is_empty() { text } else { format!("{}\n\n{text}", before.trim_end()) };
+        let tmp = dir.join(format!(".{MEMORY_UNREAD}.{}", uuid::Uuid::new_v4().simple()));
+        std::fs::write(&tmp, joined).and_then(|_| std::fs::rename(&tmp, &unread)).inspect_err(|_| { let _ = std::fs::remove_file(&tmp); })?;
+    }
+    std::fs::remove_file(saved)
 }
 
 /// True when a bot's primary or fallback harness is the Gemini CLI, which needs GEMINI_API_KEY.
@@ -236,6 +259,7 @@ impl GeminiHost {
             crate::isolation::adopt(&[self.0.home.clone()]);
         }
         std::fs::set_permissions(&self.0.home, std::fs::Permissions::from_mode(0o700))?;
+        set_aside_memory(&self.0.home)?;
         let tmp = self.0.home.join(format!("settings-{}.json", uuid::Uuid::new_v4().simple()));
         let written = (|| {
             let mut f = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&tmp)?;
@@ -571,6 +595,30 @@ mod tests {
         let declared = [json!({"name": "linear", "transport": "http", "url": "https://mcp.linear.app/mcp", "headers": {"Authorization": "Bearer ${LINEAR_KEY}"}})];
         assert_eq!(settings_file("m", None, &declared)["mcpServers"], json!({"linear": {"httpUrl": "https://mcp.linear.app/mcp", "headers": {"Authorization": "Bearer ${LINEAR_KEY}"}}}));
         assert_eq!(std::fs::read_to_string(dir.join("args.log.prompt")).unwrap(), "hello");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_saved_gemini_memory_never_reaches_a_turn() {
+        let dir = std::env::temp_dir().join(format!("fake-gemini-{}", uuid::Uuid::new_v4().simple()));
+        let home = dir.join("home");
+        std::fs::create_dir_all(home.join(".gemini")).unwrap();
+        std::fs::write(home.join(".gemini/GEMINI.md"), "## Gemini Added Memories\n- SENTINEL-OLD\n").unwrap();
+        std::fs::write(home.join(".gemini").join(MEMORY_UNREAD), "- SENTINEL-OLDER\n").unwrap();
+        // The fake CLI copies the global memory it would load into the turn into a log, then plays a turn.
+        let path = dir.join("gemini");
+        crate::util::write_script(&path, "#!/bin/sh\ncat \"$GEMINI_CLI_HOME/.gemini/GEMINI.md\" >> \"$ARGS_LOG.loaded\" 2>/dev/null\ncat >/dev/null\ncat \"$FIXTURE\"\n");
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let host = GeminiHost::new("acme", &home, vec![path.display().to_string()], tx);
+        host.start();
+        let thread = host.start_thread(&settings(&dir, &crate::hosts::fixtures::dir("gemini").join("turn.jsonl")));
+        host.start_turn(&thread, "hello", None).unwrap();
+        assert!(turn_events(&mut rx).await.iter().any(|e| e["kind"] == "turn_completed"), "the turn ran");
+        host.stop().await;
+        assert!(!std::fs::read_to_string(dir.join("args.log.loaded")).unwrap_or_default().contains("SENTINEL"));
+        assert!(!home.join(".gemini/GEMINI.md").exists());
+        let unread = std::fs::read_to_string(home.join(".gemini").join(MEMORY_UNREAD)).unwrap();
+        assert!(unread.contains("SENTINEL-OLDER") && unread.contains("SENTINEL-OLD\n"), "kept, unread: {unread}");
         std::fs::remove_dir_all(dir).unwrap();
     }
 

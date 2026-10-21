@@ -955,16 +955,18 @@ impl Runner {
             mark("placed", &aid);
             execution_path = p.execution_path.clone();
             memory_before = redact::head(&execution_path);
-            if p.has_checkout() {
-                // What the bot kept in Claude's own memory on this computer moves into its repository, once
-                // (crate::harness_memory); the post-turn commit keeps it.
+            // What the bot kept in its AI tool's own memory moves into its repository, in whichever checkout the
+            // turn runs: the bot's own or a task's worktree (crate::harness_memory).
+            if execution_path.join(".git").exists() {
                 let home = env.get("HOME").filter(|h| !h.is_empty()).cloned().or_else(|| std::env::var("HOME").ok()).unwrap_or_default();
                 let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
                 let day: String = text_of(&crate::util::iso(&json!(secs))).chars().take(10).collect();
-                match crate::harness_memory::migrate(Path::new(&home), &p.main_path, &execution_path, &day) {
-                    Ok(0) => {}
-                    Ok(n) => log(&format!("Tico runner: {bot}: copied {n} memories from Claude's memory on this computer into memory/learnings.md")),
-                    Err(e) => log(&format!("Tico runner: {bot}: could not copy Claude's memory into memory/learnings.md: {e}")),
+                let moved = crate::harness_memory::move_for_turn(Path::new(&home), &p.main_path, &execution_path,
+                    &self.state.directory.join("gemini").join(&bot), &self.state.directory.join("harness-memory").join(&bot), &day);
+                match moved {
+                    Ok(crate::harness_memory::Moved::Copied(n)) if n > 0 => log(&format!("Tico runner: {bot}: copied {n} memories from its AI tool's own memory on this computer into memory/learnings.md")),
+                    Ok(_) => {}
+                    Err(e) => log(&format!("Tico runner: {bot}: could not copy its AI tool's own memory into memory/learnings.md: {e}")),
                 }
             }
             if redactor.is_some() {
