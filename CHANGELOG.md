@@ -13,7 +13,8 @@ All notable changes to Tico are recorded here. The format follows
   SVG is a card with its title, a still preview when there is one, and **Open**, which shows it in the file viewer;
   pages and SVG are never served inline from the app's own address. There is no switch: Settings › General shows one
   read-only line, "Visuals: full" or "Visuals: pictures, video and audio only (no separate visual address)".
-  `TICO_VISUAL_SAME_ORIGIN` is no longer read, and a local install uses the same fallback.
+  `TICO_VISUAL_SAME_ORIGIN` is no longer read, and a local install uses the same fallback. A `TICO_VISUAL_ORIGIN` on
+  the app's own hostname, with any scheme or port, now stops the server; without it such a setup gets the fallback.
 - **A menu button left of Search in a chat's bot switcher on a phone.** In a bot's chat the bottom bar is hidden;
   tapping the bot's icon by the chat bar now shows a round menu button beside Search that opens the side menu in one
   tap, the same menu More opens, and it closes the same way.

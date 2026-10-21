@@ -352,20 +352,18 @@ def origin_of(url):
     return f"{parts.scheme}://{parts.netloc}" if parts.scheme and parts.netloc else ""
 
 
-def origin_key(url):
-    """An origin as a browser compares it: scheme, lowercase hostname and effective port, or None when `url` has none.
-    So https://Tico.example:443 and https://tico.example are the same origin."""
-    parts = urlsplit(url or "")
-    if not parts.scheme or not parts.hostname:
-        return None
-    scheme = parts.scheme.lower()
-    return scheme, parts.hostname.lower(), parts.port or {"https": 443, "http": 80}.get(scheme)
+def hostname(url):
+    """The lowercase hostname of `url`, or "" when it has none. So https://Tico.example:443/ and http://tico.example:8443
+    share one hostname: whatever the scheme or port, a browser sends that host's cookies to both."""
+    return (urlsplit(url or "").hostname or "").lower()
 
 
 def check_origin(settings):
-    """A separate visual origin must really be separate: the app's own origin there would put visuals next to its
-    cookies. A value that is not a URL at all (a stray bracket, a port that is not a number) counts as unset, so
-    visuals take the fallback (mode): like a missing setting, it never stops the server."""
+    """A separate visual origin must really be separate: on the app's own hostname, in any scheme or with any port,
+    visuals would sit next to its cookies, and a request there could not be told from one to the app. Such a setup
+    stops the server; leaving TICO_VISUAL_ORIGIN unset gives the fallback instead. A value that is not a URL at all (a
+    stray bracket, a port that is not a number) counts as unset, so visuals take the fallback (mode): like a missing
+    setting, it never stops the server."""
     value = getattr(settings, "visual_origin", "")
     try:
         urlsplit(value or "").port
@@ -374,8 +372,8 @@ def check_origin(settings):
         logging.getLogger("tico.visuals").warning(
             "TICO_VISUAL_ORIGIN is not a valid URL; visuals show pictures, video and audio only until it is fixed")
         return ""
-    if visual and origin_key(visual) == origin_key(settings.public_url):
-        raise ValueError("TICO_VISUAL_ORIGIN must differ from the app's own address (TICO_PUBLIC_URL)")
+    if visual and hostname(visual) == hostname(settings.public_url):
+        raise ValueError("TICO_VISUAL_ORIGIN must differ from the app's own hostname (TICO_PUBLIC_URL), whatever the scheme or port")
     return visual
 
 

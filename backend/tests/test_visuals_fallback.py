@@ -3,6 +3,7 @@ served from the app's own address as media only; pages and SVG are cards that op
 served from the app's own address. No visual response ever sets a cookie. Spec tests 1-4 and 7 (Product roadmap
 "Visuals always on"); the UI half is ui/tests/visual-fallback.cjs."""
 import base64
+from dataclasses import replace
 
 import pytest
 
@@ -239,15 +240,22 @@ def test_there_is_no_switch_the_setup_alone_decides(monkeypatch, tmp_path):
     assert V.mode(full) == "full" and full.environment()["visuals"] == "full"
 
 
-def test_a_visual_address_the_browser_treats_as_the_apps_own_is_refused(monkeypatch, tmp_path):
-    """Origins compare as a browser compares them: scheme, hostname in any case and the effective port. A visual
-    address that only spells the app's own address differently is still the app's own and stops the server; a really
-    separate one is kept as given."""
+def test_a_visual_address_on_the_apps_own_hostname_is_refused_whatever_the_scheme_or_port(monkeypatch, tmp_path):
+    """A visual address on the app's own hostname is refused whatever its scheme or port: cookies do not separate by
+    port, and a request to the app's https address must never be taken for one to a visual http address on the same
+    host (or the reverse). Spelling the app's own address differently (case, default port, a path) is refused too. It
+    stops the server, in check_origin and in Settings; a separate hostname is kept as given."""
     from backend.config import Settings
     monkeypatch.setenv("TICO_DB", str(tmp_path / "hub.db"))
+    monkeypatch.delenv("TICO_PUBLIC_URL", raising=False)
+    monkeypatch.delenv("TICO_VISUAL_ORIGIN", raising=False)
+    local = Settings.from_env()
     for app, same in (("https://tico.example", "https://tico.example:443"), ("https://tico.example", "https://TICO.example"),
                       ("https://tico.example:443", "HTTPS://Tico.Example/"), ("http://tico.example", "http://tico.example:80"),
-                      ("https://Tico.example/app", "https://tico.EXAMPLE:443/visuals")):
+                      ("https://Tico.example/app", "https://tico.EXAMPLE:443/visuals"),
+                      ("https://acme.example", "http://acme.example"), ("http://acme.example", "https://acme.example"),
+                      ("https://acme.example", "http://acme.example:443"), ("https://tico.example", "https://tico.example:8443"),
+                      ("https://tico.example:8443", "https://tico.example"), ("http://tico.example:8080", "https://Tico.example:9443/")):
         class S:
             public_url, visual_origin = app, same
         with pytest.raises(ValueError, match="must differ"):
@@ -256,7 +264,9 @@ def test_a_visual_address_the_browser_treats_as_the_apps_own_is_refused(monkeypa
         monkeypatch.setenv("TICO_VISUAL_ORIGIN", same)
         with pytest.raises(ValueError, match="must differ"):
             Settings.from_env()
-    for app, apart in (("https://tico.example", "https://files.tico.example"), ("https://tico.example:8080", "https://visuals.tico.example:8080")):
+    for app, apart in (("https://tico.example", "https://files.tico.example"), ("https://tico.example:8080", "https://visuals.tico.example:8080"),
+                       ("https://acme.example", "http://visuals.acme-files.example")):
         class S:
             public_url, visual_origin = app, apart
         assert V.check_origin(S) == apart
+        assert replace(local, public_url=app, visual_origin=apart).visual_origin == apart
