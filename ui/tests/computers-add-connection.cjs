@@ -195,6 +195,16 @@ const shot = async (locator, name) => { if (SHOTS) await locator.screenshot({pat
     assert.equal(await detail.locator('[data-add-connection]:enabled, [data-connection-remove]:enabled, .computer-conn-rename').count(), 0);
     assert.equal(await detail.locator('[data-connection="profile:acme:codex"] [data-connection-remove]').getAttribute('title'), 'Computer is offline');
 
+    await page.keyboard.press('Escape');
+    // Hosted enrollment leaves the browser with no code or installer command.
+    await page.evaluate(() => { window.hostedOpened = []; window.open = (...args) => window.hostedOpened.push(args); });
+    await page.locator('#machine-kind').selectOption('hosted');
+    const beforeHosted = writes.length;
+    await page.locator('#register-machine').click();
+    const opened = await page.evaluate(() => window.hostedOpened);
+    assert.match(opened[0][0], /^https:\/\/app\.tico\.dev\/hosting\?workspace=/);
+    assert.equal(opened[0][2], 'noopener');
+    assert.equal(writes.length, beforeHosted);
     assert.deepEqual(errors, []);
     console.log('PASS: Add connection (tool, subscription, name, sign-in in one pop-up, chip without restart), Rename, Remove (bots first, server refusal, removed), offline');
   } finally { await browser.close(); }

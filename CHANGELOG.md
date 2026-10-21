@@ -8,6 +8,12 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Hosted bot computers.** Hosting can run bots on a separate computer, keeping their work away from the Tico
+  server. Settings > Computers offers **Hosted computer (we run it)**. The installer supports server-only installs,
+  bounded AWS runner recovery and the same 4- and 8-core sizes on both machines. HQ registers only a join code's
+  hash through scoped SSM; no owner token or join secret crosses that control plane.
+
+### Added
 - **A menu button left of Search in a chat's bot switcher on a phone.** In a bot's chat the bottom bar is hidden;
   tapping the bot's icon by the chat bar now shows a round menu button beside Search that opens the side menu in one
   tap, the same menu More opens, and it closes the same way.

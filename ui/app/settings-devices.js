@@ -502,7 +502,7 @@ function renderSettingsMachines() {
   if (!el.querySelector('.machine-enroll')) el.innerHTML = `<div data-machines-list></div>
     <div class="machine-enroll"><select class="settings-inline-select" id="machine-operator" aria-label="Computer owner">
       ${people.map(person => `<option value="${esc(person.id)}" ${person.id === S.me?.id ? 'selected' : ''}>${esc(person.name || person.id)}</option>`).join('')}</select>
-      <select class="settings-inline-select" id="machine-kind" aria-label="Kind of computer"><option value="mac">Mac</option><option value="linux">Linux or cloud server</option><option value="windows">Windows PC (WSL 2${betaFeature('windows') ? ', Beta' : ''})</option></select>
+      <select class="settings-inline-select" id="machine-kind" aria-label="Kind of computer"><option value="hosted">Hosted computer (we run it)</option><option value="mac" selected>Mac</option><option value="linux">Linux or cloud server</option><option value="windows">Windows PC (WSL 2${betaFeature('windows') ? ', Beta' : ''})</option></select>
       <input id="machine-label" type="text" autocomplete="off" aria-label="Computer name" placeholder="Computer name" value="${esc(settingsPersonName(people.find(person => person.id === S.me?.id)?.id || people[0]?.id) + "'s Mac")}">
       <button class="primary" type="button" id="register-machine">Add computer</button>
       <div class="machine-enroll-status" id="machine-enroll-status"></div></div>`;
@@ -514,6 +514,10 @@ function renderSettingsMachines() {
   $('#machine-operator').onchange = () => { $('#machine-label').value = machineDefaultLabel(); };
   $('#machine-kind').onchange = () => { $('#machine-label').value = machineDefaultLabel(); };
   $('#register-machine').onclick = async event => {
+    if ($('#machine-kind').value === 'hosted') {
+      window.open('https://app.tico.dev/hosting?workspace=' + encodeURIComponent(location.hostname), '_blank', 'noopener');
+      return;
+    }
     const operator = $('#machine-operator').value, label = $('#machine-label').value.trim();
     if (!label) { toast('Give this computer a recognizable name', true); return; }
     event.target.disabled = true;

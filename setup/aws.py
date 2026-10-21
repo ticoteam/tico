@@ -21,8 +21,10 @@ AMI_PARAMS = {
     "al2023": "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64",
 }
 # us-east-1 on-demand list prices in USD/hour, approximate; the wizard says so.
-HOURLY = {"t4g.small": 0.0168, "t4g.medium": 0.0336, "t4g.large": 0.0672}
-MEMORY_GIB = {"t4g.small": 2, "t4g.medium": 4, "t4g.large": 8}
+HOURLY = {"t4g.small": 0.0168, "t4g.medium": 0.0336, "t4g.large": 0.0672,
+          "m8i-flex.xlarge": 0.2011, "m8i-flex.2xlarge": 0.4022}
+MEMORY_GIB = {"t4g.small": 2, "t4g.medium": 4, "t4g.large": 8,
+              "m8i-flex.xlarge": 16, "m8i-flex.2xlarge": 32}
 EBS_GB_MONTH, PUBLIC_IPV4_HOUR, HOURS = 0.08, 0.005, 730
 
 
@@ -63,7 +65,7 @@ class AwsPlan:
         sg = ("inbound TCP " + ", ".join(map(str, self.ports)) + " (and UDP 443) from anywhere") if self.ports \
             else "no inbound rules at all"
         return [
-            f"EC2 {self.instance_type} ({MEMORY_GIB[self.instance_type]} GiB), {'Ubuntu 24.04' if self.os_family == 'ubuntu' else 'Amazon Linux 2023'} arm64, "
+            f"EC2 {self.instance_type} ({MEMORY_GIB[self.instance_type]} GiB), {'Ubuntu 24.04' if self.os_family == 'ubuntu' else 'Amazon Linux 2023'} {'x86_64' if self.instance_type.startswith('m8i-') else 'arm64'}, "
             f"{VOLUME_GIB} GiB encrypted gp3, region {self.region}",
             f"Security group tico-{self.name}: {sg}",
             "Instance metadata: IMDSv2 required, hop limit 1 (containers and bots cannot reach the instance role)",
@@ -224,7 +226,10 @@ class Deployer:
         return ok[0]["SubnetId"]
 
     def launch(self, user_data: str, profile: str, sg: str, subnet: str = "") -> str:
-        ami = self.ssm.get_parameter(Name=AMI_PARAMS[self.p.os_family])["Parameter"]["Value"]
+        parameter = AMI_PARAMS[self.p.os_family]
+        if self.p.instance_type.startswith('m8i-'):
+            parameter = parameter.replace('arm64', 'amd64' if self.p.os_family == 'ubuntu' else 'x86_64')
+        ami = self.ssm.get_parameter(Name=parameter)["Parameter"]["Value"]
         n = f"tico-{self.p.name}"
         args = dict(
             ImageId=ami, InstanceType=self.p.instance_type, MinCount=1, MaxCount=1, UserData=user_data,

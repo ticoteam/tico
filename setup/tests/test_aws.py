@@ -73,3 +73,22 @@ def test_existing_untagged_role_is_never_reused():
 NAT = {"DestinationCidrBlock": "0.0.0.0/0", "GatewayId": "nat-1"}
 IGW = {"DestinationCidrBlock": "0.0.0.0/0", "GatewayId": "igw-1"}
 
+
+
+def test_hosted_runner_sizes_use_matching_images_and_boundary_without_ingress():
+    for size, arch in (('t4g.medium','arm64'),('m8i-flex.xlarge','amd64'),('m8i-flex.2xlarge','amd64')):
+        ec2, iam, ssm, _ = aws_clients()
+        p = aws.plan_aws(domain='https://acme.tico.dev', front_door='none', region='us-east-2',
+            instance_type=size, name='pv-bot', role='runner', boundary='arn:aws:iam::123456789012:policy/boundary')
+        d = deployer(p, ec2, iam, ssm)
+        names = []
+        original = ssm.get_parameter
+        def get_parameter(**kw):
+            names.append(kw['Name'])
+            return original(**kw)
+        ssm.get_parameter = get_parameter
+        d.launch_or_reuse(d.prepare(), '#!/bin/bash\n')
+        assert arch in names[0]
+        assert iam.called('create_role')[0]['PermissionsBoundary'] == p.boundary
+        assert ec2.called('run_instances')[0]['InstanceType'] == size
+        assert not ec2.called('authorize_security_group_ingress')
