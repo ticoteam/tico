@@ -13,6 +13,7 @@ A Tico model runs only on a computer that runs bots as their own user (runner-rs
 reports it as `isolated` in its readiness. A runner that does not say so counts as not isolated, so no Gateway turn is
 handed to it and the bot waits for a sign-in instead (it never fails for it).
 """
+import json
 
 RECOMMENDED = "subscriptions-gateway"
 PRESETS = (RECOMMENDED, "subscriptions", "gateway", "own-keys")
@@ -101,6 +102,38 @@ def fallback_row(record):
 
 # What the person calls a subscription login, in Health's plain wording under the two Gateway choices.
 LOGIN_NAMES = {"claude": "Claude", "codex": "ChatGPT"}
+
+
+def gateway_line(c, bot, ready, settings=None, config=None):
+    """What runs `bot`'s turns while its subscription is not signed in on the computer `ready` describes, in a
+    person's words, or '' when the Gateway does not take them (`waiting`, the claim's own rule:
+    backend/execution.py claim_refusal). `config` is the runtime and model asked about (the model picker's); the
+    bot's own, filled from the company's choice, when not given. A bot on its own subscription waits for that login,
+    and a computer without the Gateway's own runtime holds the turn (both as the claim does)."""
+    from .providers import fill, load
+    from .subscriptions import effective
+    if effective(c, bot)[0] or ((ready.get("runtimes") or {}).get(GATEWAY_RUNTIME) or {}).get("installed") is not True:
+        return ""
+    record = load(c, settings)
+    if config is None:
+        row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
+        config = fill(record, json.loads(row[0] or "{}") if row else {})
+    if not waiting(record, ready, config):
+        return ""
+    return "Using Tico AI Gateway; sign in to " + LOGIN_NAMES.get(config["runtime"], config["runtime"]) \
+        + " to use your subscription"
+
+
+def as_served(c, bot, ready, check, settings=None):
+    """The bot's readiness row from its computer (`check`) as a person reads it: while the Gateway runs its turns
+    because its subscription is not signed in there, the missing sign-in is not a problem and `gateway` says what
+    runs instead. What the claim still holds such a turn for (its checkout, its settings, the Gateway's own runtime)
+    keeps the row as reported. The route itself is chosen at the claim, never here."""
+    if (not isinstance(check, dict) or check.get("ready") is True or check.get("repository_present") is not True
+            or check.get("configuration_valid") is not True):
+        return check
+    line = gateway_line(c, bot, ready, settings)
+    return {**check, "ready": True, "problems": [], "gateway": line} if line else check
 
 
 def computer_of(c, bot):
