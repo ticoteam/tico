@@ -132,6 +132,12 @@ stuck or unavailable, the diagnostic goes to the human requester, or the team's 
 bot-requested work. An unresolved diagnostic is reused on later days. Health warns when repeated
 runs have escalated a public task without progress; an explicit run is still available.
 
+A task blocked by its own subtask is allowed (a question for a person in a subtask works that way),
+but relating it returns a warning: a subtask kept open until its parent finishes, such as a hold or
+an acknowledgement, never clears. When every blocker is such a subtask, owned by a bot, quiet five
+minutes and waiting on nothing of its own, the task counts as stalled even while `waiting`: its bot
+is woken with the way out, under the same limits, and BotOps's stuck list shows it with `own_blockers`.
+
 Task worktrees have a separate lifecycle. The 50-worktree limit stays in effect, and cleanup
 waits until the owning bot is idle so it cannot remove a checkout in use. A supported cleanup
 request continues to occupy its slot until the runner removes it. For merged work that is still

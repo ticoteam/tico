@@ -10,6 +10,9 @@ All notable changes to Tico are recorded here. The format follows
 ### Fixed
 - **Gateway turns retry when their rate window resets.** The computer carries the Gateway's requested wait back to
   the server, so a busy minute does not hold starter bots for an hour or claim their address sent refused keys.
+- **A task blocked only by its own quiet subtask no longer waits silently.** Relating a subtask as its parent's
+  blocker returns a warning, and when that subtask (a bot's hold or acknowledgement) goes quiet waiting on nothing
+  else, the parent counts as stalled even while waiting: its bot is woken with the way out, and BotOps sees it stuck.
 
 ## [0.3.70] - 2026-10-21
 

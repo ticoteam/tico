@@ -5617,15 +5617,40 @@ def next_run_tasks_by(conn, bots):
     return out
 
 
+def own_stuck_blockers(conn, row, at=None):
+    """The blockers of `row` when every one is its own subtask that nothing visible will finish, else [].
+
+    Such a subtask belongs to a bot, has gone quiet, and waits on no task and no person's answer of its own:
+    what it waits for, if anything, is its parent, which waits on it. A hold kept open until its
+    parent's window is released is the case seen; a question for a person in a subtask is not (it
+    belongs to the person). Being blocked by these does not hold `row` back from the stall watcher."""
+    at = at or now()
+    blockers = TR.live_blockers(conn, row["id"], ACTIVE_STATUSES)
+    if not blockers:
+        return []
+    quiet = shift(at, seconds=-STALL_MINUTES * 60)
+    for block in blockers:
+        if (not is_bot(block["owner"]) or block["updated"] >= quiet or not TR.is_descendant(conn, row["id"], block["id"])
+                or TR.live_blocker(conn, block["id"], ACTIVE_STATUSES) or unanswered_ask(conn, block)):
+            return []
+    return [block["id"] for block in blockers]
+
+
 def stuck_tasks(conn, hours=STUCK_HOURS, hidden=()):
     """Open work on an active bot that has not moved in `hours` and is waiting on nobody: no person
     owes an answer, no open task blocks it, it is not a quiet task, and no run for its bot is queued
-    or going. One BotOps sweep finds these instead of a daily run per bot."""
-    cutoff = shift(now(), seconds=-hours * 3600)
+    or going. One BotOps sweep finds these instead of a daily run per bot.
+
+    Also, at any age and even `waiting`, a task held only by its own quiet subtasks (own_stuck_blockers):
+    that wait never ends by itself. Those carry `own_blockers`."""
+    at = now()
+    cutoff = shift(at, seconds=-hours * 3600)
     rows = _rows(conn.execute(
         "SELECT t.* FROM tasks t JOIN bots b ON t.owner='bot:'||b.slug WHERE b.state='active' "
-        "AND t.status IN ('open','doing','ready') AND coalesce(t.next_run,0)=0 AND t.updated<? "
-        "ORDER BY t.updated", (cutoff,)))
+        "AND (t.status IN ('open','doing','ready') AND coalesce(t.next_run,0)=0 AND t.updated<? "
+        f"OR t.status IN ({','.join(repr(x) for x in ACTIVE_STATUSES)}) AND t.updated<? "
+        "AND EXISTS (SELECT 1 FROM task_relations r WHERE r.to_task=t.id AND r.kind='blocks')) "
+        "ORDER BY t.updated", (cutoff, shift(at, seconds=-STALL_MINUTES * 60))))
     try:
         busy = {r["bot"] for r in conn.execute(
             "SELECT DISTINCT bot FROM jobs WHERE state IN ('queued','leased','running')")}
@@ -5634,14 +5659,18 @@ def stuck_tasks(conn, hours=STUCK_HOURS, hidden=()):
     out = []
     for row in rows:
         slug = actor_id(row["owner"])
-        if slug in hidden or slug in busy or unanswered_ask(conn, row):
+        if slug in hidden or unanswered_ask(conn, row):
             continue
-        if not_yet_due(row, now()):     # parked until its due date, like the stall watcher
+        if not_yet_due(row, at):     # parked until its due date, like the stall watcher
             continue
-        if TR.live_blocker(conn, row["id"], ACTIVE_STATUSES):
+        own = own_stuck_blockers(conn, row, at)
+        if not own and (row["status"] not in ("open", "doing", "ready") or row.get("next_run")
+                        or row["updated"] >= cutoff or slug in busy
+                        or TR.live_blocker(conn, row["id"], ACTIVE_STATUSES)):
             continue
         out.append({"id": row["id"], "short_id": row["id"][:8], "title": row["title"], "owner": row["owner"], "status": row["status"],
-                    "requester": row["requester"], "updated": row["updated"], "note": row.get("note") or ""})
+                    "requester": row["requester"], "updated": row["updated"], "note": row.get("note") or "",
+                    **({"own_blockers": own} if own else {})})
     return out
 
 
@@ -5699,11 +5728,14 @@ def setup_hold(conn, actor):
 
 def stalled_tasks(conn, at=None):
     """Bot tasks nothing is going to move, with how long they have been quiet (minutes). A task whose bot is
-    still in setup carries `held`: waking it would only queue another run that never starts."""
+    still in setup carries `held`: waking it would only queue another run that never starts. A task held only
+    by its own quiet subtasks (own_stuck_blockers) counts too, even `waiting`, and carries `own_blockers`."""
     at = at or now()
     rows = _rows(conn.execute(
         "SELECT t.* FROM tasks t JOIN bots b ON t.owner='bot:'||b.slug WHERE b.state='active' "
-        "AND t.status IN ('open','doing') AND coalesce(t.private,1)=0 AND t.updated<? ORDER BY t.updated",
+        "AND (t.status IN ('open','doing') OR t.status='waiting' AND EXISTS "
+        "(SELECT 1 FROM task_relations r WHERE r.to_task=t.id AND r.kind='blocks')) "
+        "AND coalesce(t.private,1)=0 AND t.updated<? ORDER BY t.updated",
         (shift(at, seconds=-STALL_MINUTES * 60),)))
     if not rows:
         return []
@@ -5736,10 +5768,12 @@ def stalled_tasks(conn, at=None):
             continue
         if row.get("resume_json"):
             continue        # a run said when to pick it up (backend/quiet_work.py): that brings it back
-        if TR.live_blocker(conn, row["id"], ACTIVE_STATUSES):
+        own = own_stuck_blockers(conn, row, at)
+        if not own and (row["status"] == "waiting" or TR.live_blocker(conn, row["id"], ACTIVE_STATUSES)):
             continue
         quiet = int((base - parse_ts(row["updated"])).total_seconds() // 60)
-        out.append({**row, "quiet_minutes": quiet, **({"held": "needs_setup"} if slug in parked else {})})
+        out.append({**row, "quiet_minutes": quiet, **({"held": "needs_setup"} if slug in parked else {}),
+                    **({"own_blockers": own} if own else {})})
     return out
 
 
@@ -5999,11 +6033,18 @@ def wake_stalled(conn, at=None):
                 continue
             if row.get("next_run"):
                 conn.execute("UPDATE tasks SET next_run=0 WHERE id=?", (row["id"],))
-            _wake(conn, row, row["owner"],
-                  f"Stalled {row['quiet_minutes']} min: {row['title']}. Nothing is set to move it. Carry it on now, "
-                  f"or, when someone else must act, file a subtask for them (hub task create --parent {row['id']} "
-                  "--owner <bot or person>) and set this waiting; finishing the subtask wakes it.",
-                  {"wake": "stalled"}, trigger="stall_check")
+            if row.get("own_blockers"):
+                own = ", ".join(row["own_blockers"])
+                text = (f"Stalled {row['quiet_minutes']} min: {row['title']}. It is blocked only by its own subtask "
+                        f"{own}, which has gone quiet and waits on nothing else. If that subtask waits for this task "
+                        "(a hold or an acknowledgement kept open until this one finishes), neither can move: read its "
+                        f"comments, then take the block off (hub task relate {row['id']} {row['own_blockers'][0]} "
+                        "--kind blocked_by --remove) and carry this on.")
+            else:
+                text = (f"Stalled {row['quiet_minutes']} min: {row['title']}. Nothing is set to move it. Carry it on now, "
+                        f"or, when someone else must act, file a subtask for them (hub task create --parent {row['id']} "
+                        "--owner <bot or person>) and set this waiting; finishing the subtask wakes it.")
+            _wake(conn, row, row["owner"], text, {"wake": "stalled"}, trigger="stall_check")
             event(conn, KEEPER, "task.stall_wake", row["id"],
                   {"bot": actor_id(row["owner"]), "quiet_minutes": row["quiet_minutes"], "wake": count + 1})
             woke.append(row["id"])

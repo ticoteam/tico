@@ -188,3 +188,34 @@ def test_a_bot_still_in_setup_holds_work_from_bots_in_sight_and_is_not_busy_for_
     post(api, "bots/finance/onboarded", {})
     with store.read() as c:
         assert H.task(c, reminder[0]["id"])["status"] == "done"
+
+
+def test_a_task_held_only_by_its_own_quiet_subtask_is_flagged_woken_and_shown_stuck(api):
+    """A hold kept open until its parent's window is released, set as that parent's blocker, never clears. The
+    writer is warned, and once both are quiet the parent's bot is woken on it and BotOps sees it stuck, even
+    while it is `waiting`. A question for a person in a subtask still holds its task as before."""
+    from backend.tests.test_api import post
+    store = api.app.state.store
+    with store.transaction() as c:
+        window = H.task_create(c, H.human_actor("ana"), "Open the deploy window", "Post OPEN, then RELEASED.", "bot:ops")
+        hold = H.task_create(c, "bot:ops", "Hold merges until RELEASED", "Keep this open until RELEASED.",
+                             "bot:finance", parent_id=window["id"])
+        asked = H.task_create(c, H.human_actor("ana"), "Pick a vendor", "", "bot:ops")
+        card = H.task_create(c, "bot:ops", "Which vendor?", "", H.human_actor("ana"), parent_id=asked["id"], lint=False)
+        H.TR.relate(c, "bot:ops", asked["id"], card["id"], "blocked_by")
+    flagged = post(api, f"tasks/{window['id']}/relations", {"task": hold["id"], "kind": "blocked_by"})
+    assert hold["id"] in flagged["warning"] and "neither can ever move" in flagged["warning"]
+    with store.transaction() as c:
+        H.task_update(c, "bot:ops", window["id"], status="waiting", note="Waiting on the hold's ack.")
+        c.execute("UPDATE jobs SET state='completed'")
+        for t in (window, hold, asked, card):
+            aged(c, t["id"], 6)
+        woken = H.wake_stalled(c)["woke"]
+        assert window["id"] in woken and asked["id"] not in woken
+        woke = c.execute("SELECT body FROM messages WHERE to_actor='bot:ops' AND refs_json LIKE ? "
+                         "AND refs_json LIKE '%stalled%'", (f'%{window["id"]}%',)).fetchall()
+        assert len(woke) == 1 and "blocked only by its own subtask" in woke[0][0] and hold["id"] in woke[0][0]
+        assert c.execute("SELECT count(*) FROM jobs WHERE bot='ops' AND state='queued'").fetchone()[0] >= 1
+        # The question for a person is not a stuck block: its task is left alone.
+        stuck = {t["id"]: t for t in H.stuck_tasks(c)}
+        assert stuck[window["id"]]["own_blockers"] == [hold["id"]] and asked["id"] not in stuck
