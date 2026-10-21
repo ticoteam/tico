@@ -38,6 +38,8 @@ All notable changes to Tico are recorded here. The format follows
   link as the bot without its run, which cannot see a chat's files, so those links always answered "not found". A bot
   reading a chat visual now gets the file itself (its file link, no picture address); people's links and a bot's
   links for task files are unchanged.
+- **Questions the CEO Bot merged no longer show again in Tasks > Needs you.** The merged item names the questions it
+  stands for, and the Tasks page leaves them out, as the server's Needs you already did.
 - `hub task comment --public --approval-id` and `hub task comment-edit --approval-id` now send the public flag
   and the approval, so a bot can post or edit a public reply once a person approves its publish request. Before, the
   command dropped both: the reply went out as an internal comment, and an edit of a public reply was refused.
@@ -45,6 +47,9 @@ All notable changes to Tico are recorded here. The format follows
   label once a person approves its publish request. Before, the command dropped the approval and was refused.
 - A goal's automatic colour follows its worst KPI: red takes priority over yellow and green, and yellow over green.
   The note explains that KPI; a colour set by a person stays in place until handed back to the Goal Manager.
+- **Company file: numbered bot ids are no longer blanked as keys**: a long id made from a numbered title, such as
+  `accounts-receivable-specialist-2`, read as a random key once it carried a number, was replaced with `[removed]` and
+  the draft was refused. Lowercase ids of words and numbers now pass; real key shapes are still removed.
 
 ## [0.3.68] - 2026-10-20
 
