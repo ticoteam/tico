@@ -14,6 +14,9 @@ All notable changes to Tico are recorded here. The format follows
   pages and SVG are never served inline from the app's own address. There is no switch: Settings › General shows one
   read-only line, "Visuals: full" or "Visuals: pictures, video and audio only (no separate visual address)".
   `TICO_VISUAL_SAME_ORIGIN` is no longer read, and a local install uses the same fallback.
+- **A menu button left of Search in a chat's bot switcher on a phone.** In a bot's chat the bottom bar is hidden;
+  tapping the bot's icon by the chat bar now shows a round menu button beside Search that opens the side menu in one
+  tap, the same menu More opens, and it closes the same way.
 - **How bots get their models**, at the top of Settings > AI providers and the first setup step: **Your Claude and
   ChatGPT subscriptions, plus Tico Gateway** (recommended, and what Tico's installer sets with
   `TICO_MODELS_PRESET=subscriptions-gateway`), subscriptions only, Tico Gateway only, or your company's plans or API
