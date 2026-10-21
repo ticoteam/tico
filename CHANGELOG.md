@@ -20,6 +20,9 @@ All notable changes to Tico are recorded here. The format follows
 - **A task blocked only by its own quiet subtask no longer waits silently.** Relating a subtask as its parent's
   blocker returns a warning, and when that subtask (a bot's hold or acknowledgement) goes quiet waiting on nothing
   else, the parent counts as stalled even while waiting: its bot is woken with the way out, and BotOps sees it stuck.
+- **A bot's message to a bot says when it was held.** A plain message or task comment from one bot to another waits
+  for that bot's next run; the send now answers `woke: false` with a `held` reason, and `hub` prints it: held for
+  that bot's next run, add `--needs-action` to wake it now. Before, a held escalation read as delivered.
 - **Goals from a setup company file land on Goals.** Importing the file from tico.team/setup (in the app or from a
   Hosted install) no longer sets its goals aside: the owner's goals become company goals, each bot's goal sits under
   that bot, and a goal's measure becomes a KPI with the file's baseline and target. The file carries no readings, so
