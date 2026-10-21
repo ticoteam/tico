@@ -227,6 +227,38 @@ def test_a_bot_creates_no_task_with_a_public_roadmap_label_and_is_told_the_way_t
         "roadmap", "area-search"]
 
 
+def test_the_cli_carries_the_approval_id_when_a_bot_adds_a_public_roadmap_label(api, monkeypatch):
+    """`hub task label --add roadmap --approval-id`: the way through a refused create names this command."""
+    from clients import remotecli
+    from clients.hubcli import parser
+    public_setup(api)
+    token = bot_token(api, "cpo")
+
+    class Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def get(self, path, **params):
+            return get(api, path, token=token)
+
+        def post(self, path, body, key=None):
+            r = api.post("/api/v2/" + path, json=body, headers=headers(token))
+            if r.status_code != 200:
+                raise SystemExit(r.text)
+            return r.json()
+    monkeypatch.setattr(remotecli, "Client", Client)
+    monkeypatch.setenv("HUB_API_URL", "https://example.com")
+    item = post(api, "tasks", {"owner": "cpo", "title": "Research search", "body": "x", "type": "Product roadmap",
+                               "labels": ["area-search"]}, token=token)
+    preview = post(api, "tasks/" + item["id"] + "/publication-preview", {"labels": ["area-search", "roadmap"]}, token=token)
+    approval = post(api, "approvals", {"kind": "publish", "task_id": item["id"], "payload": preview["payload"]}, token=token)
+    post(api, "approvals/" + approval["id"], {"decision": "approved"})
+    remotecli.run(parser().parse_args(["task", "label", item["id"], "--add", "roadmap", "--approval-id", approval["id"]]))
+    assert get(api, "tasks/" + item["id"])["task"]["labels"] == ["area-search", "roadmap"]
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT consumed_at FROM approvals WHERE id=?", (approval["id"],)).fetchone()[0]
+
+
 def test_a_mover_and_the_keeper_create_a_task_with_any_label_as_before(api):
     public_setup(api)
     made = post(api, "tasks", {"owner": "cmo", "title": "Draft the newsletter", "body": "x",
