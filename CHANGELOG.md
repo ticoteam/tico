@@ -7,6 +7,8 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.3.72] - 2026-10-21
+
 ### Changed
 - **Tico AI Gateway: Tico Cheap 1.1 replaces Cheap 1.0** in every model list. It costs the same for a prompt up to
   100,000 tokens; above that the whole request is $0.75 per 1M input, $0.075 cached and $3.75 output, and Usage
@@ -4042,7 +4044,8 @@ First public release.
 - Hosting: local only on a Mac, or self-hosted, including a reference AWS stack under `infra/ec2/`
   with Litestream backups.
 
-[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.71...HEAD
+[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.72...HEAD
+[0.3.72]: https://github.com/ticoteam/tico/compare/v0.3.71...v0.3.72
 [0.3.71]: https://github.com/ticoteam/tico/compare/v0.3.70...v0.3.71
 [0.3.70]: https://github.com/ticoteam/tico/compare/v0.3.69...v0.3.70
 [0.3.69]: https://github.com/ticoteam/tico/compare/v0.3.68...v0.3.69
