@@ -614,6 +614,9 @@ def claim_refusal(c, settings, runner, bot, config_json, draining, ready, held_b
     lanes, every bot with a running turn. `ready` is the computer's readiness document."""
     from .repositories import metadata
     from .subscriptions import context, covers, effective, refusal
+    from .server_updates import holding
+    if holding(c):
+        return "server_update", None
     if draining:
         return "draining", None
     if bot in held_bots:
@@ -1440,6 +1443,13 @@ class Execution:
         # this was recorded, the next wake compared itself against a heartbeat from before the
         # sleep, read the gap as one long stretch of presence, and took the work.
         awake_since = self.stamp(c, who, runner, now)
+        # The selected candidate can predate the update request. Check again in
+        # the same write transaction that would lease it, and keep reporting the
+        # runner's real busy work while new claims are held.
+        from .server_updates import holding
+        note_claim(runner["id"], body)
+        if holding(c):
+            return {"attempt": None}
         # An initial task notice can sit in the queue while another turn finishes
         # that task. Suppress only this obsolete wake, never a later human follow-up.
         obsolete = c.execute("SELECT j.id,j.message_id,t.id AS task_id FROM assignments x "

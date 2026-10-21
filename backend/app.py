@@ -50,7 +50,7 @@ from . import updates
 from . import gateway_connection
 from . import providers as Providers
 from . import access as Access
-from . import releases, runner_versions, ui_bundle
+from . import releases, runner_versions, server_updates, ui_bundle
 from .bot_rows import BotRows
 from .census import Census
 from .harnesses import HARNESS_CATALOG, resolve_harness, runtime_of
@@ -199,6 +199,7 @@ def create_app(settings=None):
                     # The release check (and the anonymous count that rides on it) runs even when nobody has the
                     # page open; it is a no-op until its six hours are up.
                     await asyncio.to_thread(releases.notice)
+                    await asyncio.to_thread(server_updates.tick, store)
                     from .repositories import daily
                     daily(app.state.github_app)
                     # A bot waiting for its GitHub repository finishes once a person has made it or granted the permission.
@@ -1288,6 +1289,7 @@ def create_app(settings=None):
         # What this server really ran: the updater's `from` only knows in-app updates.
         with store.read() as c:
             ran = releases.history(c)
+            result["automatic"] = server_updates.view(c, settings)
         result["running"] = releases.version()
         result["previous"] = ran[-2]["version"] if len(ran) > 1 else ""
         result["history"] = ran[-5:]
@@ -1337,19 +1339,26 @@ def create_app(settings=None):
     # sees a final state after a start; a marker row keeps it to one event per update.
     def record_update_outcome(result):
         with store.transaction() as c:
-            row = c.execute("SELECT value_json FROM registry_metadata WHERE key='update-pending'").fetchone()
-            if not row:
-                return
-            pending = json.loads(row[0])
-            c.execute("DELETE FROM registry_metadata WHERE key='update-pending'")
-            H.event(c, pending["actor"], "system.update.finished", pending["to"],
-                    {"outcome": result["state"], "from": pending["from"], "to": pending["to"],
-                     "message": result.get("message", "")})
+            server_updates.record_outcome(c, result)
+
+    @app.put("/api/v2/system/update")
+    def system_update_policy(request: Request, body: M.ServerUpdatePolicy):
+        who = request.state.identity
+        updater_only(who, "changes automatic updates")
+        with store.transaction() as c:
+            return server_updates.configure(c, settings, body.enabled, who.actor)
 
     @app.post("/api/v2/system/update")
     def system_update(request: Request, body: M.SystemUpdate):
         who = request.state.identity
         updater_only(who, "updates the installation")
+        if body.automatic is not None and not body.when_idle:
+            raise Problem("invalid", "automatic is set with an idle-aware update request", 422)
+        if body.when_idle:
+            with store.transaction() as c:
+                if body.automatic is not None:
+                    server_updates.configure(c, settings, body.automatic, who.actor)
+                return server_updates.request(c, settings, body.version, who.actor)
         result = releases.start(body.version)
         target = str(body.version).lstrip("v")
         with store.transaction() as c:

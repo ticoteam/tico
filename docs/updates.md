@@ -40,6 +40,28 @@ The same history is available to signed-in users through the stable API and MCP:
 - CLI: `hub changelog list --unread`, `hub changelog list --since-version 0.3.0`, and
   `hub changelog mark-read release-0.3.0`.
 
+## Automatic hosted server updates
+
+Hosted installs (`TICO_HOSTED=own` or `invited`) follow stable releases automatically. Self-hosted installs keep
+manual updates unless the owner enables this policy. The existing release check runs at startup and at most every
+six hours; once it finds a newer stable release, the server holds new claims and waits for leased/running turns and
+the computers' recently reported busy work to finish. Queued work stays queued. It then uses the same updater,
+verified bundle, pre-update snapshot, health check and rollback as **Update now**. The claim hold survives the
+restart and stays until the updater confirms the target is healthy; missing status keeps that hold. Computers
+follow the updated server through their existing idle-aware update path.
+
+The owner or an update service key reads `automatic` in `GET /api/v2/system/update` and sets the policy with
+`PUT /api/v2/system/update` and `{"enabled":true}` or `false`. Turning it off cancels a request still waiting for
+idle; an update already sent to Docker must finish or roll back. A failed/rolled-back release releases the claim
+hold and is not automatically tried again; a different release can proceed. Updater outages keep the pending
+request and retry after 15 minutes. Rehearsal installs never apply updates.
+
+`POST /api/v2/system/update` with `{"version":"X.Y.Z","when_idle":true}` requests the same idle-aware path for a
+specific stable release. Include `"automatic":true` to enable the policy atomically with that request. An explicit
+request can retry a failed release once; automatic following never retries that failed release on its own.
+The default without `when_idle` remains the owner's immediate **Update now** action.
+These controls require a release containing automatic server updates; older servers expose only the immediate path.
+
 ## Manual server update
 
 From the install directory, run the installer for the release you want:

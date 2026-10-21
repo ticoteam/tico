@@ -88,7 +88,9 @@ owner's **Check for updates** and **Update now** use, and nothing else:
 |---|---|
 | `POST /api/v2/system/update/check` | Look for a new release now (at most once a minute); answers `current`, `latest`, `available` |
 | `POST /api/v2/system/update` `{"version": "X.Y.Z"}` | Start the update to that release through the install's updater |
-| `GET /api/v2/system/update` | How the update stands (`state`, `from`, `to`, `message`), the release `running`, and `computers`: online computers counted by state (`current`, `updating`, `needs_update`, `incompatible`, `unknown`) |
+| `POST /api/v2/system/update` `{"version": "X.Y.Z", "when_idle": true}` | Hold new claims, wait for running turns, then use the same updater |
+| `PUT /api/v2/system/update` `{"enabled": true}` | Enable automatic stable-release updates; `false` disables them and cancels a request still waiting for idle |
+| `GET /api/v2/system/update` | How the update stands (`state`, `from`, `to`, `message`), the release `running`, `automatic` policy/progress, and `computers`: online computers counted by state (`current`, `updating`, `needs_update`, `incompatible`, `unknown`) |
 
 `GET /healthz` needs no key; its `release` is the release the server runs. Every other route answers `403`, the task
 routes included, and a tasks key answers `403` on these. The update is recorded as started by the key
@@ -103,7 +105,7 @@ as made by Tico.
 
 ## Security
 
-- A tasks key works on `POST /api/v2/inbound/tasks` only, an update key on the three update routes only. Anywhere else that needs a sign-in it is refused with `403`, the
+- A tasks key works on `POST /api/v2/inbound/tasks` only, an update key on the update controls above only. Anywhere else that needs a sign-in it is refused with `403`, the
   SQL page, MCP and the service key routes included. It returns only a task id and write flags; task contents, comments, links and attachments are never returned.
 - A task marked private is refused with `403` before any update, reopen or close, even when this key filed it.
 - Tico keeps a hash of the key, never the key; SQL cannot read either.

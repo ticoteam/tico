@@ -1598,6 +1598,12 @@ class ProvidersUpdate(Contract):
 
 class SystemUpdate(Contract):
     version: str = Field(min_length=1, max_length=64)
+    when_idle: bool = False
+    automatic: bool | None = None
+
+
+class ServerUpdatePolicy(Contract):
+    enabled: bool
 
 
 class UsageCount(Contract):
