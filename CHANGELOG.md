@@ -14,6 +14,10 @@ All notable changes to Tico are recorded here. The format follows
   shows in its Learnings panel and an edit there reaches its next turn. The panel's Learnings and Decisions views open
   on the working rules, then the newest entries ([Learnings](docs/learnings.md#one-memory-in-the-repository)).
 
+### Fixed
+- **Gateway turns retry when their rate window resets.** The computer carries the Gateway's requested wait back to
+  the server, so a busy minute does not hold starter bots for an hour or claim their address sent refused keys.
+
 ## [0.3.70] - 2026-10-21
 
 ### Added

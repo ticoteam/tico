@@ -1381,7 +1381,11 @@ impl Runner {
             completion.insert("limited".into(), json!(true));
             // The provider's own reset, so the bot resumes then; only a server that takes the field is sent it.
             let reset = segments.last().and_then(|s| {
-                crate::profiles::limit_reset(s.profile.as_deref().unwrap_or_default(), &text_of(&s.config["runtime"]), crate::util::epoch_s())
+                if crate::hosts::pi::is_gateway(s.config["model"].as_str()) {
+                    vault.relay.as_ref().and_then(|relay| relay.limit_reset())
+                } else {
+                    crate::profiles::limit_reset(s.profile.as_deref().unwrap_or_default(), &text_of(&s.config["runtime"]), crate::util::epoch_s())
+                }
             });
             if let Some(at) = reset.filter(|_| crate::follow::feature("limit_resets_at")) {
                 completion.insert("limit_resets_at".into(), json!(at));
