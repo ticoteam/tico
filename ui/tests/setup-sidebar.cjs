@@ -121,7 +121,7 @@ async function wizard(browser, theme) {
 
   const phone = await open(browser, {theme, phone: true, needed: true, route: '#/welcome'});
   await phone.page.locator('#onb-company').waitFor();
-  assert.deepEqual(await shown(phone.page, '#mobile-nav > *'), ['org', 'mobile-menu', 'search', 'mobile-support', 'more']);
+  assert.deepEqual(await shown(phone.page, '#mobile-nav > *'), ['org', 'search', 'mobile-support', 'more']);
   await noNotice(phone);
   await shot(phone.page, `wizard-phone-${theme}`);
   await phone.page.locator('#mobile-more').click();

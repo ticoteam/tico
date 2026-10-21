@@ -35,8 +35,7 @@ function setDrawer(open, returnFocus = false, trigger = null) {
   // whatever a desktop session folded away (not saved, so the desktop keeps its choice).
   if (open && navCollapsed.size) { navCollapsed.clear(); renderNavSections(); }
   document.body.classList.toggle('drawer', open);
-  // Menu (left of Search) and More both open this drawer; each says whether it is open.
-  for (const b of document.querySelectorAll('#mobile-nav [aria-controls="side"]')) b.setAttribute('aria-expanded', String(open));
+  $('#mobile-more').setAttribute('aria-expanded', String(open));
   $('#side-backdrop').hidden = !open;
   if (drawerMedia.matches) {
     $('#side').setAttribute('aria-hidden', String(!open));
