@@ -1,5 +1,6 @@
 """A picker export creates the selected team through normal owner-only onboarding."""
 import copy
+import re
 
 import pytest
 from fastapi.testclient import TestClient
@@ -265,3 +266,54 @@ def imported_goals_on_goals_page(api, text):
     again = api.post("/api/v2/onboarding/company/import",
                      json={"company_yaml": text, "fingerprint": record["fingerprint"]}, headers=signed_in())
     assert again.status_code == 200 and len(rows(api, "SELECT id FROM goals")) == 5
+
+
+@pytest.mark.parametrize("bootstrap", [False, True], ids=["owner-api", "installer-bootstrap"])
+def test_imported_goals_follow_a_renamed_assistant_and_an_untitled_unmeasured_goal_gets_no_kpi(tmp_path, environment,
+                                                                                               bootstrap):
+    draft = C.from_yaml(company_text())
+    draft["goals"] = [
+        {"id": "g-week", "title": "Run the week", "owner": "coo", "measure": "Weekly reviews held", "unit": "",
+         "direction": "up", "target": None, "baseline": None, "deadline": None},
+        {"id": "g-blank", "title": "", "owner": "coo", "measure": "", "unit": "", "direction": "up", "target": None,
+         "baseline": None, "deadline": None}]
+    text = C.to_yaml(draft)
+    owners = [("Run the week", "bot:ace"), ("Untitled goal", "bot:ace")]
+    if bootstrap:
+        from clients.environments import seed_registry
+        registry = seed_registry(tmp_path, "Owner", OWNER_EMAIL,
+                                 {"company_name": "Acme Finance", "app_name": "Tico", "assistant_name": "Assistant"})
+        for name in ("employees.yaml", "people.yaml"):      # an installer run with TICO_ASSISTANT_BOT=ace
+            path = registry / name
+            path.write_text(re.sub(r"\bcoo\b", "ace", path.read_text()))
+        settings = settings_for(tmp_path, assistant_bot="ace")
+        app = create_app(settings)
+        app.state.store.initialize()
+        app.state.store.seed()
+        settings.company_file_data, settings.sample_company = starter.pack(text), True
+        with TestClient(create_app(settings)) as api:
+            renamed_assistant_goals_on_goals_page(api, owners)
+    else:
+        api = environment(seed_roster=False, assistant_bot="ace")
+        seed = {"ace": {"name": "ace", "status": "planned", "template": "assistant"},
+                "botops": {"name": "botops", "status": "planned", "template": "botops"}}
+        with api.app.state.store.transaction() as c:
+            H.sync_registry(c, seed, PEOPLE)
+            for slug, config in seed.items():
+                c.execute("INSERT INTO bot_config(bot,config_json,operator,repo) VALUES(?,?,?,?)",
+                          (slug, encode(config), "owner", "bot-" + slug))
+        preview = api.post("/api/v2/onboarding/company/preview", json={"company_yaml": text}, headers=signed_in()).json()
+        assert [(g["title"], g["owner"]) for g in preview["goals"]] == owners
+        done = api.post("/api/v2/onboarding/company/import", json={"company_yaml": text, "fingerprint": preview["fingerprint"]},
+                        headers=signed_in())
+        assert done.status_code == 200, done.text
+        renamed_assistant_goals_on_goals_page(api, owners)
+
+
+def renamed_assistant_goals_on_goals_page(api, owners):
+    goals = {g["title"]: g for g in api.get("/api/v2/goals/tree", headers=signed_in()).json()["goals"]}
+    assert sorted((title, g["owner"]) for title, g in goals.items()) == owners
+    week, = goals["Run the week"]["kpis"]
+    assert rows(api, "SELECT owner FROM kpis WHERE id=?", (week["id"],)) == [{"owner": "bot:ace"}]
+    assert goals["Untitled goal"]["kpis"] == []
+    assert not rows(api, "SELECT id FROM goals WHERE owner='bot:coo'")
