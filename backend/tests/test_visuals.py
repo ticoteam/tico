@@ -472,3 +472,79 @@ def test_a_file_from_one_chat_cannot_be_posted_into_another_by_someone_who_can_r
     moved = api.post("/api/v2/chat/cpo", json={"text": "Look", "attachments": [f"{fid}@1"]},
                      headers=headers("ben-test", "k-visual-3"))
     assert moved.status_code == 404, moved.text
+
+
+def wav():
+    import io
+    import wave
+    out = io.BytesIO()
+    with wave.open(out, "wb") as w:
+        w.setnchannels(1), w.setsampwidth(2), w.setframerate(8000), w.writeframes(b"\x00\x01" * 800)
+    return out.getvalue()
+
+
+def test_a_wav_on_a_task_is_an_audio_player_whatever_python_calls_its_type(api, monkeypatch):
+    """QA d1c1857a: Python 3.15 guesses .wav as audio/vnd.wave, which was a file chip. JSON and multipart uploads
+    store it as audio/wav, the comment shows an audio card, and the visual route serves it by range."""
+    import mimetypes
+    guess = mimetypes.guess_type      # the machine's own MIME tables vary; pin the guess QA saw on the shipped build
+    monkeypatch.setattr(mimetypes, "guess_type", lambda name, *a, **k: ("audio/vnd.wave", None)
+                        if str(name).lower().endswith(".wav") else guess(name, *a, **k))
+    data = wav()
+    task = post(api, "tasks", {"owner": "ops", "title": "Voice note", "body": "x", "private": True}, "ben-test")
+    tid = task["id"]
+    by_json = api.post(f"/api/v2/tasks/{tid}/files", json={"name": "private.wav",
+                       "content_base64": base64.b64encode(data).decode()}, headers=headers("ben-test"))
+    by_form = api.post(f"/api/v2/tasks/{tid}/files", data={"name": "second.wav"},
+                       files={"file": ("second.wav", data, "application/octet-stream")}, headers=headers("ben-test"))
+    for made in (by_json, by_form):
+        assert made.status_code == 200, made.text
+        r = api.post(f"/api/v2/tasks/{tid}/comments", json={"text": "Listen",
+                     "attachments": [f"{made.json()['file_id']}@{made.json()['version']}"]}, headers=headers("ben-test"))
+        assert r.status_code == 200, r.text
+        [item] = r.json()["comment"]["refs"]["attachments"]
+        assert (item["kind"], item["content_type"]) == ("audio", "audio/wav"), item
+        part = api.get(item["src"], headers={"Range": "bytes=0-3"})
+        assert part.status_code == 206 and part.content == b"RIFF" and part.headers["content-type"] == "audio/wav"
+
+
+def test_a_wav_already_stored_or_sent_as_audio_vnd_wave_still_plays_inline(api):
+    """Versions stored before the fix, and a browser that sends audio/vnd.wave, keep the audio card."""
+    assert V.kind_of("audio/vnd.wave", 1000) == "audio" and V.stored_type("audio/vnd.wave") == "audio/wav"
+    r = api.post("/api/v2/uploads/chat/ops", data={"text": "My voice note"},
+                 files={"files": ("note.wav", wav(), "audio/vnd.wave")}, headers=headers("ben-test", "k-visual-wav"))
+    assert r.status_code == 200, r.text
+    [item] = r.json()["message"]["refs"]["attachments"]
+    assert item["kind"] == "audio" and item["src"].startswith("/visuals/")
+
+
+def test_a_bot_is_never_handed_a_visual_address_the_visual_route_refuses(api):
+    """Dev 319: the visual route rebuilds a bot reader without its run, so it cannot see a chat's files. A bot reading
+    its chat reply gets the file chip (no address) rather than a link that always 404s; the person keeps theirs, and
+    a bot's address for a task file still opens."""
+    _, attempt = turn(api)
+    fid, _ = png(api, attempt)
+    made = publish(api, attempt, name="clip.mp4", text=None, content_base64=base64.b64encode(bytes(range(256))).decode())
+    assert made.status_code == 200, made.text
+    clip = made.json()["file"]["id"]
+    with api.app.state.store.transaction() as c:              # a video with its poster ready, as file_metadata leaves it
+        c.execute("UPDATE bot_file_versions SET poster_blob_id=(SELECT blob_id FROM bot_file_versions WHERE file_id=?) "
+                  "WHERE file_id=?", (fid, clip))
+    sent = bot_reply(api, attempt, attachments=[f"{fid}@1", f"{clip}@1"])
+    assert sent.status_code == 200, sent.text
+    message = sent.json()
+    for read in (message, api.get("/api/v2/messages/" + message["id"], headers=headers(attempt["token"])).json()):
+        picture, video = read["refs"]["attachments"]
+        assert (picture["file_id"], video["file_id"], video["kind"]) == (fid, clip, "video")
+        for item in (picture, video):
+            assert not item["removed"] and item["current_version"] == 1
+            assert item.get("src") is None and item.get("poster_url") is None, item
+    picture, video = api.get("/api/v2/messages/" + message["id"], headers=headers("ben-test")).json()["refs"]["attachments"]
+    for address in (picture["src"], video["src"], video["poster_url"]):  # the person's addresses are unchanged
+        assert api.get(address).status_code in (200, 206), address
+
+    tid, task_fid, comment = visual_on_task(api, private=False)
+    listed = api.get(f"/api/v2/tasks/{tid}/comments", headers=headers(attempt["token"]))
+    assert listed.status_code == 200, listed.text
+    [item] = next(m for m in listed.json()["comments"] if m["id"] == comment["id"])["refs"]["attachments"]
+    assert item["file_id"] == task_fid and api.get(item["src"]).status_code == 200

@@ -13,7 +13,7 @@ from .keys import scrub_all
 
 FORMAT = "0.2"
 HEADER = ("# tico.company.yaml", "# Made with Tico setup at https://tico.team/setup",
-          "# Format 0.2. Importing this file into Tico is coming soon.",
+          "# Format 0.2. Import in Tico's first-run setup or with tico setup --company-file.",
           "# No passwords, keys or credentials are stored here; tools are connected on your own install.")
 NOT_SET = "# not set yet: which number, and by when?"
 # YAML 1.1 reads these bare words as booleans or null, and a leading digit can read as a number or a date.

@@ -42,16 +42,29 @@ COUNT = re.compile(r"(?i)token\W*$")
 QUOTES = ('\\"', '"', "'")
 # A long run of token characters with letters and digits mixed, and close to random.
 TOKEN = re.compile(r"[A-Za-z0-9_+/=-]{32,}")
+# An id made from a title ("accounts-receivable-specialist-2", or a path of them) reads as random once it is long and
+# carries a number, but is not a key: lowercase words and numbers joined by hyphens, with a real word of four letters
+# and at most two short mixed words ("b2b", "2nd"). A key's runs mix case, or letters and digits at length (a UUID's
+# "3f9a2b7c"), and a code of short mixed groups ("k3j-9x2-q8p") is mostly mixed words.
+SLUG_WORD = re.compile(r"[a-z]+|[0-9]+|[a-z0-9]{1,3}")
 
 
 def _random(word):
-    if not (re.search(r"[A-Za-z]", word) and re.search(r"[0-9]", word)):
+    if not (re.search(r"[A-Za-z]", word) and re.search(r"[0-9]", word)) or _slug(word):
         return False
     counts = {}
     for char in word:
         counts[char] = counts.get(char, 0) + 1
     entropy = -sum(n / len(word) * math.log2(n / len(word)) for n in counts.values())
     return entropy >= 3.5
+
+
+def _slug(word):
+    parts = re.split(r"[-/]", word)
+    if not all(SLUG_WORD.fullmatch(part) for part in parts):
+        return False
+    mixed = sum(1 for part in parts if not (part.isalpha() or part.isdigit()))
+    return mixed <= 2 and any(part.isalpha() and len(part) >= 4 for part in parts)
 
 
 def _labelled(match):

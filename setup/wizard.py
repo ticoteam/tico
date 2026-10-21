@@ -76,6 +76,32 @@ def host_of(ssh: str) -> str:
 
 # --- 1. answers ------------------------------------------------------------------------------------------
 
+def gather_company_file(args, s):
+    """Validate before any cloud or DNS writes; retries preserve the private plan."""
+    path = getattr(args, "company_file", None)
+    if not path and not s.company_file_data:
+        return
+    from backend.company_file import DraftError, starter
+    try:
+        if path:
+            with Path(path).expanduser().open("rb") as stream:
+                raw = stream.read(starter.MAX_BYTES + 1)
+            if len(raw) > starter.MAX_BYTES:
+                raise DraftError("the company file is too large")
+            s.company_file_data = starter.pack(raw.decode("utf-8"))
+        plan = starter.unpack(s.company_file_data)
+    except ImportError:
+        raise MissingInput("--company-file needs PyYAML: install python3-yaml or run python3 -m pip install PyYAML") from None
+    except (OSError, UnicodeError):
+        raise MissingInput("Cannot read --company-file; use a readable UTF-8 company YAML file") from None
+    except DraftError as exc:
+        raise MissingInput(str(exc)) from None
+    explicit = getattr(args, "company", None)
+    if explicit and explicit != plan["company"]["name"]:
+        raise MissingInput("--company must match the name in --company-file; edit the file or omit --company")
+    s.company = plan["company"]["name"]
+
+
 def gather(io: IO, args, s: Settings, dry: bool) -> Settings:
     a = Asker(io, args, s, dry)
     a.get("target", "Where should Tico run?", choices=st.TARGETS, default="aws")
@@ -147,7 +173,8 @@ def gather_identity(io: IO, args, s: Settings, dry: bool) -> None:
         a.get("client_secret", f"{p.label} client secret (hidden)", secret=True, env="TICO_OIDC_CLIENT_SECRET")
         a.get("allowed_domain", "Only allow sign-in from this email domain (blank for anyone on the roster)", required=False,
               flag="--allowed-domain")
-    a.get("company", "Team/Company name", default="Sample Co" if s.preset else "Acme")
+    if not s.company_file_data:
+        a.get("company", "Team/Company name", default="Sample Co" if s.preset else "Acme")
     a.get("owner_email", "Owner email (must be the account you will sign in with)", validate=lambda v: bool(st.EMAIL_RE.match(v)))
     a.get("decisions_provider", "Model key for the server's own decisions (openai, anthropic, gemini; blank to skip)", required=False,
           choices=None, flag="--decisions-provider")
@@ -410,6 +437,7 @@ def run(args, io: IO, deps: Deps) -> int:
     # Long-lived server settings stay in the private .env on retries without fresh operator input.
     s.inbound_key = os.environ.get("TICO_INBOUND_KEY", "") or s.inbound_key
     s.inbound_url = os.environ.get("TICO_INBOUND_URL", "") or s.inbound_url
+    gather_company_file(args, s)
     io.say("tico setup" + (" (dry run: nothing will be created or changed)" if dry else ""))
     io.say(USAGE_NOTICE + " Details: PRIVACY.md in the Tico repository.")
     if saved:
@@ -430,6 +458,8 @@ def run(args, io: IO, deps: Deps) -> int:
         io.say(f"  {zone.name}: {zone.provider.name}  ({', '.join(zone.nameservers)})")
     gather_runner_host(io, args, s, zone, dry)
     st.gather_runtime(args, s, final=True)
+    if s.target == "aws" and s.company_file_data and len(envfile.render(s.to_env()).encode()) > 8000:
+        raise MissingInput("The starter plan and install settings exceed AWS Parameter Store's 8 KB limit; shorten the plan or import it in the app")
     if s.target == "ssh" and s.front_door == "caddy":
         default_ip = ""
         try:
@@ -514,9 +544,10 @@ def run(args, io: IO, deps: Deps) -> int:
             io.say("\nDNS")
             live = ensure_dns(io, s, deps, zone, records, timeout=timeout, skip_wait=args.skip_dns_wait, cf=cf)
     elif s.target == "aws":
-        runner = _aws(io, args, s, deps, zone, records, cf, env_text, compose, url, timeout)
-        if runner is None:
+        res = _aws(io, args, s, deps, zone, records, cf, env_text, compose, url, timeout)
+        if res is None:
             return 1
+        runner, records = res
     elif s.target in cloudmod.PROVIDERS:
         res = _cloud(io, args, s, deps, zone, cf, env_text, timeout)
         if isinstance(res, int):
@@ -569,12 +600,12 @@ def _tunnel(io: IO, args, s: Settings, deps: Deps, zone, cf: Cloudflare | None) 
     return s.tunnel_id
 
 
-def _aws(io, args, s, deps, zone, records, cf, env_text, compose, url, timeout) -> remote.Shell | None:
+def _aws(io, args, s, deps, zone, records, cf, env_text, compose, url, timeout) -> tuple[remote.Shell, list[dnsmod.Record]] | None:
     plan = aws_plan(s)
     io.say("\nAWS")
     ec2, iam, ssm, account = deps.aws_clients(s.aws_region, s.aws_profile)
     d = awsmod.Deployer(plan, ec2, iam, ssm, account, say=io.say, sleep=deps.sleep)
-    d.put_env(env_text)
+    d.put_env(env_text, company_file=bool(s.company_file_data))
     prep = d.prepare()
     ip = prep["public_ip"]
     if s.front_door == "caddy":
@@ -611,7 +642,7 @@ def _aws(io, args, s, deps, zone, records, cf, env_text, compose, url, timeout) 
         if res.returncode:
             io.say(envfile.scrub(res.stderr[-400:], s.secrets()))
             return None
-    return runner
+    return runner, records
 
 
 def _cloud(io: IO, args, s: Settings, deps: Deps, zone, cf, env_text: str, timeout: float):

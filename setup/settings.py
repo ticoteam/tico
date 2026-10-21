@@ -5,7 +5,7 @@ import ipaddress
 import os
 import re
 import urllib.parse
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass, field, fields
 
 from . import contract, envfile
 from .ui import IO, MissingInput
@@ -34,7 +34,7 @@ INVITE_RE = re.compile(r"[A-Za-z0-9_-]{8,200}")
 
 # Not persisted to state.json: they live in the private .env copy or come from the environment.
 SECRET_FIELDS = ("client_secret", "decisions_key", "cf_token", "tunnel_token", "backup_secret", "gateway_invite",
-                 "inbound_key", "inbound_url", "visual_secret")
+                 "inbound_key", "inbound_url", "visual_secret", "company_file_data")
 # This run's only, never saved: a re-run without the flag must not inherit permission to repoint a record.
 TRANSIENT_FIELDS = ("runner_given",)
 # Only these named settings migrate from the private env; never copy ambient or arbitrary keys.
@@ -58,6 +58,7 @@ class Settings:
     front_door: str = "caddy"
     updater: bool = True
     company: str = ""
+    company_file_data: str = field(default="", repr=False)
     owner_email: str = ""
     auth: str = "google"
     tenant: str = ""
@@ -183,6 +184,8 @@ class Settings:
             # The same choices as scripts/install.sh --recommended, read on the server's first start.
             e.update(TICO_INSTALL_PRESET="recommended", TICO_SAMPLE_COMPANY="on", TICO_MODELS_PRESET="subscriptions-gateway",
                      TICO_SUPPORT=self.support or "on", TICO_GATEWAY_INVITE=self.gateway_invite)
+        if self.company_file_data:
+            e.update(TICO_COMPANY_FILE_B64=self.company_file_data, TICO_SAMPLE_COMPANY="off")
         if self.inbound_key:
             e["TICO_INBOUND_KEY"] = self.inbound_key
         if self.inbound_url:
@@ -196,7 +199,7 @@ class Settings:
 
     def secrets(self) -> list[str]:
         return [v for v in (self.client_secret, self.decisions_key, self.cf_token, self.tunnel_token, self.backup_secret,
-                            self.gateway_invite, self.inbound_key, self.inbound_url, self.visual_secret) if v]
+                            self.gateway_invite, self.inbound_key, self.inbound_url, self.visual_secret, self.company_file_data) if v]
 
 
 def default_runner_host(domain: str, zone: str = "") -> str:
@@ -219,6 +222,7 @@ def from_saved(saved: dict, env_text: str) -> Settings:
     s.inbound_key = e.get("TICO_INBOUND_KEY", "")
     s.inbound_url = e.get("TICO_INBOUND_URL", "")
     s.visual_secret = e.get("TICO_VISUAL_SECRET", "")
+    s.company_file_data = e.get("TICO_COMPANY_FILE_B64", "")
     for name, key in RUNTIME_ENV.items():
         # Empty public values are durable clears, even when an older private copy still has a value.
         if name not in saved:

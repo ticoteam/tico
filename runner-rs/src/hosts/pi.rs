@@ -98,9 +98,7 @@ pub(crate) fn gateway_agent_dir(settings: &Settings, env: &Env) -> Option<PathBu
     let body = serde_json::to_vec_pretty(&gateway_models_json(env.get(GATEWAY_URL_ENV).map(String::as_str).unwrap_or_default())).ok()?;
     std::fs::write(dir.join("models.json"), body).ok()?;
     crate::isolation::chown(&dir.join("models.json"));
-    // pi retries any 429 or 5xx within seconds, and never waits for Retry-After. The Gateway's `rate_limited` asks for
-    // an hour (more refused keys from this address extend it), so a Gateway turn does not retry in pi: the server
-    // retries by the Gateway's code instead (backend/execution.py).
+    // Gateway retries belong to the server; the relay carries Retry-After into the turn's completion.
     // pi's bash tool hands its commands pi's whole environment: each command starts by unsetting GATEWAY_KEY_ENV. It
     // holds only the turn's token for the runner's relay, never the Gateway's key (gateway_relay.rs); a command can
     // still read pi's /proc environ, so this only keeps the token out of ordinary tool output.
@@ -172,7 +170,7 @@ pub fn plain_error(text: &str) -> String {
         "cap_reached" => "Gateway cap reached: this gateway key has used its monthly spend limit (cap_reached)".into(),
         // One plain message for both: a person can't tell a revoked key from a mistyped one, and needn't.
         "revoked_key" | "unknown_key" => format!("Tico AI Gateway: key not recognised (api key invalid: {code})"),
-        "rate_limited" => "Tico AI Gateway: rate limited after too many refused keys from this address; wait an hour (rate_limited)".into(),
+        "rate_limited" => "Tico AI Gateway: rate limited; retrying after the Gateway's requested wait (rate_limited)".into(),
         "unknown_model" => {
             let names: Vec<&str> =
                 GATEWAY_MODELS.iter().filter(|(id, _)| !GATEWAY_RETIRED.contains(id)).map(|(_, name)| *name).collect();
@@ -590,7 +588,7 @@ mod tests {
             (429, "cap_reached", "The Tico AI Gateway's monthly cap is reached.", "Gateway cap reached: this gateway key has used its monthly spend limit (cap_reached)"),
             (401, "revoked_key", "This gateway key was revoked.", "Tico AI Gateway: key not recognised (api key invalid: revoked_key)"),
             (401, "unknown_key", "Unknown gateway key.", "Tico AI Gateway: key not recognised (api key invalid: unknown_key)"),
-            (429, "rate_limited", "Too many refused keys from this address. Try again later.", "Tico AI Gateway: rate limited after too many refused keys from this address; wait an hour (rate_limited)"),
+            (429, "rate_limited", "Too many refused keys from this address. Try again later.", "Tico AI Gateway: rate limited; retrying after the Gateway's requested wait (rate_limited)"),
             (400, "unknown_model", "Unknown model. Tico models: tico-cheap-1.0, tico-mid-1.0, tico-power-1.0.", "Tico AI Gateway: this model isn't offered. Tico models: Tico Cheap 1.1, Tico Mid 1.0, Tico Power 1.0 (unknown_model)"),
             (400, "unsupported_field", "Tico models here take text and tools only: no images, audio, files or more than one choice.", "Tico AI Gateway refused the request as sent: Tico models here take text and tools only: no images, audio, files or more than one choice. (unsupported_field)"),
             (400, "bad_request", "The request is not a chat completion the gateway can send.", "Tico AI Gateway refused the request as sent: The request is not a chat completion the gateway can send. (bad_request)"),

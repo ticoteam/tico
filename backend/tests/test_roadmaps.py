@@ -478,6 +478,54 @@ def test_bot_public_text_and_comment_need_exact_single_use_approval(api):
                                                 'approval_id': approval['id']}, token=token, expected=422)
 
 
+def test_the_cli_carries_public_and_the_approval_id_on_a_comment_and_its_edit(api, monkeypatch):
+    """`hub task comment --public --approval-id` and `hub task comment-edit --approval-id` reach the server's gate."""
+    from clients import remotecli
+    from clients.hubcli import parser
+    from backend.tests.test_tasks_board import bot_token
+    token = bot_token(api, 'cpo')
+
+    class Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def get(self, path, **params):
+            return get(api, path, token=token)
+
+        def post(self, path, body, key=None):
+            r = api.post('/api/v2/' + path, json=body, headers=headers(token))
+            if r.status_code != 200:
+                raise SystemExit(r.text)
+            return r.json()
+    monkeypatch.setattr(remotecli, 'Client', Client)
+    monkeypatch.setenv('HUB_API_URL', 'https://example.com')
+
+    def cli(*argv):
+        return remotecli.run(parser().parse_args(['task', *argv]))
+
+    def approved(payload):
+        approval = post(api, 'approvals', {'kind': 'publish', 'task_id': task['id'], 'payload': payload}, token=token)
+        post(api, 'approvals/' + approval['id'], {'decision': 'approved'})
+        return approval['id']
+
+    def consumed(approval):
+        with api.app.state.store.read() as c:
+            return c.execute('SELECT consumed_at FROM approvals WHERE id=?', (approval,)).fetchone()[0]
+    task = public_setup(api)
+    with pytest.raises(SystemExit, match='approv'):
+        cli('comment', task['id'], 'Now available', '--public')
+    first = approved(post(api, 'tasks/' + task['id'] + '/publication-preview', {'comment': 'Now available'},
+                          token=token)['payload'])
+    comment = cli('comment', task['id'], 'Now available', '--public', '--approval-id', first)['comment']
+    assert comment['public'] == 1 and consumed(first)
+    with pytest.raises(SystemExit, match='approv'):
+        cli('comment-edit', task['id'], comment['id'], 'Now available to all')
+    second = approved(post(api, 'tasks/' + task['id'] + '/publication-preview', {'comment': 'Now available to all'},
+                           token=token)['payload'])
+    edited = cli('comment-edit', task['id'], comment['id'], 'Now available to all', '--approval-id', second)['comment']
+    assert edited['body'] == 'Now available to all' and edited['public'] == 1 and consumed(second)
+
+
 def public_setup(api, limit=10):
     post(api, 'tags', {'key': 'roadmap'})
     post(api, 'tags', {'key': 'internal'})

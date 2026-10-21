@@ -74,6 +74,10 @@ anything. Each computer installs only:
 - the harness of every bot assigned to it, and of each bot's fallback (`fallback.harness`);
 - with no bot yet, the harness of the company's default model (`default_runtime` in `GET /api/v2/config`), so the
   first computer can be signed in before its first bot arrives;
+- on a computer that isolates bot processes, the Gateway runtime selected by the company's models choice
+  (`gateway_runtime` in the runner's `GET /api/v2/config`), so recommended starter turns can run before
+  subscription sign-in. This also applies when automatic quota fallback is off. The owner can turn this
+  optional install off; an explicit bot primary or fallback still makes its harness required;
 - any harness the owner turned on for that computer (see [Choosing what a computer installs](#choosing-what-a-computer-installs)).
 
 A runner whose team has no provider yet installs nothing and still joins and goes online.

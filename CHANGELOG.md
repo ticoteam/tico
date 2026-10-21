@@ -7,6 +7,79 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- **Gateway turns retry when their rate window resets.** The computer carries the Gateway's requested wait back to
+  the server, so a busy minute does not hold starter bots for an hour or claim their address sent refused keys.
+
+## [0.3.70] - 2026-10-21
+
+### Added
+- **A menu button left of Search in a chat's bot switcher on a phone.** In a bot's chat the bottom bar is hidden;
+  tapping the bot's icon by the chat bar now shows a round menu button beside Search that opens the side menu in one
+  tap, the same menu More opens, and it closes the same way.
+- **How bots get their models**, at the top of Settings > AI providers and the first setup step: **Your Claude and
+  ChatGPT subscriptions, plus Tico Gateway** (recommended, and what Tico's installer sets with
+  `TICO_MODELS_PRESET=subscriptions-gateway`), subscriptions only, Tico Gateway only, or your company's plans or API
+  keys. Under the recommended choice bots do their main work on your Claude and ChatGPT subscriptions; until you sign
+  in they run on Tico Mid 1.0 through the Gateway and move over on their next turn once you do, and a used-up plan
+  finishes on the Gateway, last. Decide and update drafts run on the Gateway. The owner sees one Needs you item, "Sign
+  in to Claude and ChatGPT, or add API keys", until both are signed in; where no computer runs bots as their own user
+  (a Mac), bots wait for the sign-in instead, the item says why, and the model list marks Tico models "not on this
+  computer". A bot on a Tico model waits there too, with Health saying why, rather than stopping. Health says
+  plainly when a used-up login has bots on the Gateway. Gateway usage records keep which gateway key and install
+  paid, never the key. The other three choices, and a team that never picks one, keep working
+  as before ([Tico AI Gateway](docs/ai-gateway.md#choose-how-bots-get-their-models)).
+
+### Fixed
+- **Recommended starter bots install their Gateway runtime before subscription sign-in.** An isolated computer
+  now prepares the Gateway runtime chosen in AI providers even when automatic quota fallback is off, so starter
+  jobs can run before Claude and ChatGPT are signed in. An explicit owner opt-out stays effective.
+- **A bot is no longer handed a picture link for a chat's file that never opens.** The visual route checks a bot's
+  link as the bot without its run, which cannot see a chat's files, so those links always answered "not found". A bot
+  reading a chat visual now gets the file itself (its file link, no picture address); people's links and a bot's
+  links for task files are unchanged.
+
+## [0.3.69] - 2026-10-21
+
+### Added
+- **Bots read the runs of the bots that report to them.** A bot above another in `reports_to` (at any depth) now
+  sees that bot's chat-room runs too, such as the wake-ups the hub posts there, in `hub_run_list` and their steps, so
+  a manager like a Product Manager can score its monitors' cost per catch. A human's own chat with a report stays
+  theirs, private tasks stay private, and peers and reports never read a manager's chat-room runs.
+
+### Changed
+- **The setup chart has no seat limit you will meet.** The setup chat, the company file and the first screen's
+  company YAML import now take up to 300 bots and 300 people (was 60 bots and 40 people, and 150 bots on import),
+  with no limit message below that. Past 300 the chat says plainly "A chart can have at most 300 bots." (or people);
+  that guard is there only against abuse. A company YAML file may be up to 512 KB (was 128 KB). A plan carried by
+  `tico setup --company-file` into a cloud install still has to fit AWS Parameter Store's 8 KB, about 40 bots; a
+  larger one is imported on the first setup screen instead.
+
+### Fixed
+- **Questions the CEO Bot merged no longer show again in Tasks > Needs you.** The merged item names the questions it
+  stands for, and the Tasks page leaves them out, as the server's Needs you already did.
+- `hub task comment --public --approval-id` and `hub task comment-edit --approval-id` now send the public flag
+  and the approval, so a bot can post or edit a public reply once a person approves its publish request. Before, the
+  command dropped both: the reply went out as an internal comment, and an edit of a public reply was refused.
+- `hub task label --approval-id` now sends the approval with the label change, so a bot can add a public roadmap
+  label once a person approves its publish request. Before, the command dropped the approval and was refused.
+- A goal's automatic colour follows its worst KPI: red takes priority over yellow and green, and yellow over green.
+  The note explains that KPI; a colour set by a person stays in place until handed back to the Goal Manager.
+- **Company file: numbered bot ids are no longer blanked as keys**: a long id made from a numbered title, such as
+  `accounts-receivable-specialist-2`, read as a random key once it carried a number, was replaced with `[removed]` and
+  the draft was refused. Lowercase ids of words and numbers now pass; real key shapes are still removed.
+
+## [0.3.68] - 2026-10-20
+
+### Added
+- **Start with your selected company chart**: the first setup screen previews and imports a company YAML file,
+  keeping its selected catalog employees, titles, reporting lines and paused-later choices alongside Tico's built-ins.
+  `tico setup --company-file PATH` carries the same plan privately into a self-hosted or cloud install and applies it
+  once on first startup. Imports refuse to replace an existing team; goals, routines, first jobs, tool connections
+  and model choices are retained and listed for later setup. ([Setup](docs/onboarding.md))
+
+## [0.3.67] - 2026-10-20
+
 ### Added
 - **Roadmap items move with their Dev tickets by rule**: a Product roadmap item counts the Dev tickets linked to
   it as children and as blocked by alike. Linking alone moves nothing: it is **Building** once the first ticket is In
@@ -21,18 +94,9 @@ All notable changes to Tico are recorded here. The format follows
   Atomic generated configuration and a private health check remove stale visual listeners when settings change.
   The updater recreates an existing Caddy service after server health on updates and rollback; external CDNs and
   the default app proxy work without opting in. ([Install](docs/install.md#caddy-and-a-separate-visual-site))
-- **How bots get their models**, at the top of Settings > AI providers and the first setup step: **Your Claude and
-  ChatGPT subscriptions, plus Tico Gateway** (recommended, and what Tico's installer sets with
-  `TICO_MODELS_PRESET=subscriptions-gateway`), subscriptions only, Tico Gateway only, or your company's plans or API
-  keys. Under the recommended choice bots do their main work on your Claude and ChatGPT subscriptions; until you sign
-  in they run on Tico Mid 1.0 through the Gateway and move over on their next turn once you do, and a used-up plan
-  finishes on the Gateway, last. Decide and update drafts run on the Gateway. The owner sees one Needs you item, "Sign
-  in to Claude and ChatGPT, or add API keys", until both are signed in; where no computer runs bots as their own user
-  (a Mac), bots wait for the sign-in instead, the item says why, and the model list marks Tico models "not on this
-  computer". A bot on a Tico model waits there too, with Health saying why, rather than stopping. Health says
-  plainly when a used-up login has bots on the Gateway. Gateway usage records keep which gateway key and install
-  paid, never the key. The other three choices, and a team that never picks one, keep working
-  as before ([Tico AI Gateway](docs/ai-gateway.md#choose-how-bots-get-their-models)).
+- **Connect an existing Inbox to a portal company**: in Settings > More > Email & Phone, a workspace owner or admin
+  can preview the company chosen in the customer portal and connect the workspace's existing Inbox to it, after
+  agreeing to share Inbox both ways. The screen explains what history and local copies stay after a disconnect.
 
 ### Changed
 - **Tico AI Gateway: Tico Cheap 1.1 replaces Cheap 1.0** in every model list. It costs the same for a prompt up to
@@ -44,8 +108,16 @@ All notable changes to Tico are recorded here. The format follows
   each one at its own rate.
 
 ### Fixed
+- **A WAV file attached to a task plays inline again**: on servers running Python 3.15 a WAV uploaded to a task
+  showed as a plain file instead of an audio player. Tico now stores it as `audio/wav`, and WAV files already stored
+  under the other name show the player too.
 - Inbox waits over MCP honor the full requested wait, up to 120 seconds, through both the local and HTTP transports.
   An internal request that exceeds its deadline is cancelled and returns a retryable tool error.
+- The desktop app keeps signed visuals from a workspace's separate visual site inline (pages, images, audio and
+  video) instead of opening them in the browser. If the app cannot confirm the site, visuals stay available as file
+  links. Signing out or switching workspace clears the allowance.
+- Running Tico's installer again keeps the install's domain settings (aliases, public, CORS and HQ origins, and
+  visual serving) instead of rebuilding them from an older list. Clearing a setting still clears it.
 
 ## [0.3.66] - 2026-10-20
 
@@ -3959,7 +4031,11 @@ First public release.
 - Hosting: local only on a Mac, or self-hosted, including a reference AWS stack under `infra/ec2/`
   with Litestream backups.
 
-[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.66...HEAD
+[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.70...HEAD
+[0.3.70]: https://github.com/ticoteam/tico/compare/v0.3.69...v0.3.70
+[0.3.69]: https://github.com/ticoteam/tico/compare/v0.3.68...v0.3.69
+[0.3.68]: https://github.com/ticoteam/tico/compare/v0.3.67...v0.3.68
+[0.3.67]: https://github.com/ticoteam/tico/compare/v0.3.66...v0.3.67
 [0.3.66]: https://github.com/ticoteam/tico/compare/v0.3.65...v0.3.66
 [0.3.65]: https://github.com/ticoteam/tico/compare/v0.3.64...v0.3.65
 [0.3.64]: https://github.com/ticoteam/tico/compare/v0.3.63...v0.3.64
