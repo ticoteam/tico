@@ -14,7 +14,8 @@ from . import contract, remote
 
 MANAGED_TAG = ("ManagedBy", "tico-setup")
 NAME_TAG = "tico-setup-name"
-VOLUME_GIB = 30
+# The offered Hosting sizes include larger disks on both servers and bot computers.
+VOLUME_GIB = {"m8i-flex.xlarge": 100, "m8i-flex.2xlarge": 200}
 
 AMI_PARAMS = {
     "ubuntu": "/aws/service/canonical/ubuntu/server/24.04/stable/current/arm64/hvm/ebs-gp3/ami-id",
@@ -53,20 +54,24 @@ class AwsPlan:
     boundary: str = ""      # the permissions boundary the IAM role is created under, when the account requires one
 
     @property
+    def volume_gib(self) -> int:
+        return VOLUME_GIB.get(self.instance_type, 30)
+
+    @property
     def marker(self) -> str:
         return (contract.REMOTE_DIR if self.role == "server" else contract.RUNNER_DIR) + "/.bootstrapped"
 
     @property
     def monthly_usd(self) -> float:
         ipv4 = PUBLIC_IPV4_HOUR * HOURS  # every public IPv4 is billed, elastic or not
-        return round(HOURLY[self.instance_type] * HOURS + VOLUME_GIB * EBS_GB_MONTH + ipv4, 2)
+        return round(HOURLY[self.instance_type] * HOURS + self.volume_gib * EBS_GB_MONTH + ipv4, 2)
 
     def lines(self) -> list[str]:
         sg = ("inbound TCP " + ", ".join(map(str, self.ports)) + " (and UDP 443) from anywhere") if self.ports \
             else "no inbound rules at all"
         return [
             f"EC2 {self.instance_type} ({MEMORY_GIB[self.instance_type]} GiB), {'Ubuntu 24.04' if self.os_family == 'ubuntu' else 'Amazon Linux 2023'} {'x86_64' if self.instance_type.startswith('m8i-') else 'arm64'}, "
-            f"{VOLUME_GIB} GiB encrypted gp3, region {self.region}",
+            f"{self.volume_gib} GiB encrypted gp3, region {self.region}",
             f"Security group tico-{self.name}: {sg}",
             "Instance metadata: IMDSv2 required, hop limit 1 (containers and bots cannot reach the instance role)",
             "Shell access through SSM (IAM role tico-%s with AmazonSSMManagedInstanceCore); no SSH key, no port 22" % self.name,
@@ -236,7 +241,7 @@ class Deployer:
             IamInstanceProfile={"Name": profile}, SecurityGroupIds=[sg],
             MetadataOptions={"HttpTokens": "required", "HttpPutResponseHopLimit": 1, "HttpEndpoint": "enabled"},
             BlockDeviceMappings=[{"DeviceName": "/dev/sda1" if self.p.os_family == "ubuntu" else "/dev/xvda",
-                                  "Ebs": {"VolumeSize": VOLUME_GIB, "VolumeType": "gp3", "Encrypted": True, "DeleteOnTermination": True}}],
+                                  "Ebs": {"VolumeSize": self.p.volume_gib, "VolumeType": "gp3", "Encrypted": True, "DeleteOnTermination": True}}],
             TagSpecifications=[{"ResourceType": rt, "Tags": tags(self.p.name, n)} for rt in ("instance", "volume", "network-interface")])
         if subnet:
             args["SubnetId"] = subnet

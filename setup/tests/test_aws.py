@@ -76,7 +76,7 @@ IGW = {"DestinationCidrBlock": "0.0.0.0/0", "GatewayId": "igw-1"}
 
 
 def test_hosted_runner_sizes_use_matching_images_and_boundary_without_ingress():
-    for size, arch in (('t4g.medium','arm64'),('m8i-flex.xlarge','amd64'),('m8i-flex.2xlarge','amd64')):
+    for size, arch, disk in (('t4g.medium','arm64',30),('m8i-flex.xlarge','amd64',100),('m8i-flex.2xlarge','amd64',200)):
         ec2, iam, ssm, _ = aws_clients()
         p = aws.plan_aws(domain='https://acme.tico.dev', front_door='none', region='us-east-2',
             instance_type=size, name='pv-bot', role='runner', boundary='arn:aws:iam::123456789012:policy/boundary')
@@ -91,4 +91,7 @@ def test_hosted_runner_sizes_use_matching_images_and_boundary_without_ingress():
         assert arch in names[0]
         assert iam.called('create_role')[0]['PermissionsBoundary'] == p.boundary
         assert ec2.called('run_instances')[0]['InstanceType'] == size
+        assert ec2.called('run_instances')[0]['BlockDeviceMappings'][0]['Ebs']['VolumeSize'] == disk
+        assert f'{disk} GiB encrypted gp3' in p.lines()[0]
+        assert p.monthly_usd == round(aws.HOURLY[size] * aws.HOURS + disk * aws.EBS_GB_MONTH + aws.PUBLIC_IPV4_HOUR * aws.HOURS, 2)
         assert not ec2.called('authorize_security_group_ingress')
