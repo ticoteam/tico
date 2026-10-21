@@ -1,8 +1,4 @@
-// A bot's Screen row in More: always there, with its status, and when the screen is not ready, why and what to do.
-// One bot per state (ready, off, not offered on Linux, a Mac, offline, no computer, someone who may not open it).
-// The header's Screen button shows only for the ready one. Turn on (Control) is offered to the operator or an admin
-// only; it saves control, as a new computer starts, and the row (and the header button) become ready. A normal refresh redraws both, even with
-// Settings' older copy of the computer loaded. Someone who may only see a bot is told its computer isn't shown.
+// Screen permissions, setup and reverse states in the bot’s Info and Settings tabs.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -16,6 +12,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     const visit = async me => {
       const page = await browser.newPage({viewport: {width: 1280, height: 800}, serviceWorkers: 'block'});
       page.setDefaultTimeout(t(5000));
+      await page.emulateMedia({reducedMotion: 'reduce'});
       const errors = [], writes = [];
       page.on('pageerror', error => errors.push(error.message));
       const base = {host: 'keeper', status: 'active', state: 'active', can_chat: true, can_manage: true, operator: 'sam',
@@ -55,9 +52,10 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
         if (p === '/api/v2/operations') return json({machines: bots.filter(b => b.machine).map(b => ({id: b.machine.runner_id, label: b.machine.label,
           operator: b.machine.operator, online: b.online, platform: b.machine.platform, screen: b.machine.screen, screen_available: b.machine.screen_available})), services: []});
         if (p === '/api/v2/conversations') return json({conversations: []});
-        if (p === '/api/v2/computers/c-off/screen') {
+        if (/^\/api\/v2\/computers\/[^/]+\/screen$/.test(p)) {
           const body = JSON.parse(request.postData()); writes.push(body);
-          bots[1].machine.screen = body.mode;
+          const machine = bots.find(b => b.machine?.runner_id === p.split('/')[4])?.machine;
+          if (machine) machine.screen = body.mode;
           return json({screen: body.mode, screen_available: true});
         }
         if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
@@ -80,100 +78,79 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
       return {page, errors, writes, open, rowText, bots};
     };
 
-    // Ana is an admin (the owner): every state, and the header button only for the ready one.
     const admin = await visit({id: 'ana', name: 'Ana', role: 'owner'});
-    let row = await admin.open('ready');
-    assert.equal(row.state, 'ready');
-    assert.match(row.text, /^Open · Control$/);
-    assert.equal(row.header, 1);
-    assert.equal(await admin.page.locator('#bot-screen-row a.bot-screen-open').getAttribute('href'), '#/computers/c-ready/screen');
-    assert.equal(await admin.page.locator('#bot-screen-row').evaluate(el => el.previousElementSibling.textContent), 'Screen');
+    await admin.open('ready');
+    assert.equal(await admin.page.locator('#bot-top #bot-screen').count(), 1);
+    assert.deepEqual(await admin.page.locator('[data-bot-detail-tab]').allTextContents(), ['Info', 'Instructions', 'History', 'Settings']);
+    assert.equal(await admin.page.locator('#sess-card').count(), 0);
+    await admin.page.locator('[data-bot-detail-tab=settings]').click();
+    await admin.page.locator('#bot-editor form').waitFor();
+    assert.equal(await admin.page.locator('dialog#bot-editor').count(), 0);
+    assert.equal(await admin.page.locator('[data-screen-toggle]').isChecked(), true);
+    await admin.page.locator('[data-screen-toggle]').uncheck();
+    await admin.page.waitForFunction(() => document.querySelector('[data-screen-toggle]')?.disabled === false);
+    assert.deepEqual(admin.writes, [{mode: 'off'}]);
+    assert.equal(await admin.page.locator('[data-screen-toggle]').isChecked(), false);
+    await admin.page.locator('[data-screen-toggle]').check();
+    await admin.page.locator('[data-screen-mode]').waitFor();
+    await admin.page.locator('[data-screen-mode]').selectOption('view');
+    await admin.page.waitForFunction(() => document.querySelector('[data-screen-mode]')?.disabled === false);
+    assert.deepEqual(admin.writes, [{mode: 'off'}, {mode: 'control'}, {mode: 'view'}]);
 
-    row = await admin.open('linux');
-    assert.deepEqual([row.state, row.header], ['not_offered', 0]);
-    // Docker's main step is live (no restart); the .env fallback says it cuts off a running turn and when it is needed.
-    assert.match(row.text, /^This computer's screen isn't turned on\. Docker: .* turn it on live\. Nothing restarts, so no running turn is cut off:/);
-    assert.match(row.text, /If the runner is too old for that command, or its \.env says TICO_SCREEN=0 \(which wins over it\), .*once the computer is idle: this restarts the runner and cuts off a running turn\./);
-    assert.deepEqual(await admin.page.locator('#bot-screen-row [data-screen-copy]').evaluateAll(els => els.map(el => el.dataset.screenCopy)),
-      ['sudo docker compose -f runner.compose.yaml $([ -f runner.override.yaml ] && echo -f runner.override.yaml) exec runner tico-runner --config /home/runner/runner.json screen on',
-       "sudo sed -i '/^TICO_SCREEN=/d' .env && echo TICO_SCREEN=1 | sudo tee -a .env >/dev/null && sudo docker compose -f runner.compose.yaml $([ -f runner.override.yaml ] && echo -f runner.override.yaml) up -d runner",
-       'scripts/tico screen on']);
-    assert.equal(await admin.page.locator('#bot-screen-row a[href$="docs/install.md#screen"]').count(), 1);
-    await admin.page.evaluate(() => { window.__copied = []; navigator.clipboard.writeText = async value => { window.__copied.push(value); }; });
-    await admin.page.locator('#bot-screen-row [data-screen-copy="scripts/tico screen on"]').click();
-    await admin.page.waitForFunction(() => window.__copied?.[0] === 'scripts/tico screen on');
-
-    row = await admin.open('mac');
-    assert.deepEqual([row.state, row.text, row.header], ['linux_only', 'Screen is Linux only for now.', 0]);
-    row = await admin.open('offline');
-    assert.deepEqual([row.state, row.text, row.header], ['offline', "This computer is offline. Screen works when it's back.", 0]);
-    row = await admin.open('none');
-    assert.deepEqual([row.state, row.text, row.header], ['none', 'This bot has no computer yet.', 0]);
-
-    // Off: the operator or an admin turns it on (Control) right here; the row and the header button become ready.
-    row = await admin.open('off');
-    assert.deepEqual([row.state, row.header], ['off', 0]);
-    assert.match(row.text, /^Screen is off for this computer\. Turn on \(Control\) View is a choice in Settings > Computers\.$/);
-    await admin.page.locator('#bot-screen-row [data-screen-on]').click();
-    await admin.page.locator('#bot-screen-row[data-screen-state=ready]').waitFor();
-    assert.deepEqual(admin.writes, [{mode: 'control'}]);
-    assert.equal(await admin.rowText(), 'Open · Control');
-    assert.equal(await admin.page.locator('#bot-top #bot-screen').getAttribute('href'), '#/computers/c-off/screen');
-    assert.equal(await admin.page.locator('#bot-screen-row').evaluate(el => el.previousElementSibling.textContent), 'Screen');
-
-    // Settings was read while c-flip's screen was not offered. Then, with no navigation, normal refreshes: it is
-    // offered (ready, header button), then the computer goes offline (no header button).
-    await admin.page.goto('https://tico-ui.test/#/settings');
-    await admin.page.waitForFunction(() => SETTINGS_DATA.machines?.some(m => m.id === 'c-flip' && m.screen_available === false));
-    row = await admin.open('flip');
-    assert.deepEqual([row.state, row.header], ['not_offered', 0]);
-    const flip = admin.bots.find(b => b.name === 'flip');
-    flip.machine.screen_available = true;
+    // An unavailable screen reveals one primary command only after the operator asks to enable it.
+    await admin.open('linux');
+    assert.equal(await admin.page.locator('[data-screen-copy]:visible').count(), 0);
+    await admin.page.locator('[data-bot-detail-tab=settings]').click();
+    await admin.page.locator('[data-screen-toggle]').check();
+    assert.equal(await admin.page.locator('[data-screen-copy]:visible').count(), 1);
+    assert.equal(await admin.page.locator('[data-screen-toggle]').isChecked(), true);
+    const linux = admin.bots.find(b => b.name === 'linux'); linux.machine.screen_available = true;
     await admin.page.evaluate(() => refresh());
-    await admin.page.locator('#bot-screen-row[data-screen-state=ready]').waitFor();
-    assert.equal(await admin.rowText(), 'Open · View');
-    assert.equal(await admin.page.locator('#bot-top #bot-screen').getAttribute('href'), '#/computers/c-flip/screen');
-    flip.online = false;
-    await admin.page.evaluate(() => refresh());
-    await admin.page.locator('#bot-screen-row[data-screen-state=offline]').waitFor();
-    assert.equal(await admin.rowText(), "This computer is offline. Screen works when it's back.");
-    assert.equal(await admin.page.locator('#bot-top #bot-screen').count(), 0);
+    await admin.page.locator('[data-screen-mode]').waitFor();
+    assert.equal(await admin.page.locator('[data-screen-copy]').count(), 0);
+    assert.equal(admin.writes.at(-1).mode, 'control');
+
+    // Draft settings survive navigation, and Instructions stays inline.
+    await admin.page.locator('#bot-editor [name=description]').fill('Unsaved draft');
+    await admin.page.locator('[data-bot-detail-tab=instructions]').click();
+    await admin.page.locator('#bot-instructions-changes').fill('Clarify the review checklist.');
+    await admin.page.locator('[data-bot-detail-tab=history]').click();
+    await admin.page.locator('#bot-runs-card').waitFor();
+    assert.equal(await admin.page.locator('#sess-turns').count(), 0);
+    await admin.page.locator('[data-bot-detail-tab=settings]').click();
+    assert.equal(await admin.page.locator('#bot-editor [name=description]').inputValue(), 'Unsaved draft');
+    await admin.page.setViewportSize({width: 390, height: 844});
+    await admin.page.evaluate(() => setDrawer(false));
+    assert.equal(await admin.page.locator('[data-bot-detail-tab=settings]').isVisible(), true);
+    assert.equal(await admin.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    if (process.env.TICO_SCREENSHOTS) {
+      await admin.page.screenshot({path: '/tmp/tico-bot-settings-mobile.png'});
+      await admin.page.locator('[data-bot-detail-tab=info]').click();
+      await admin.page.locator('#bot-setup-card').waitFor();
+      await admin.page.screenshot({path: '/tmp/tico-bot-info-mobile.png'});
+      await admin.page.setViewportSize({width: 1280, height: 800});
+      await admin.page.screenshot({path: '/tmp/tico-bot-info-desktop.png'});
+    }
+    await admin.page.locator('[data-bot-detail-tab=instructions]').click();
+    assert.equal(await admin.page.locator('#bot-instructions-changes').inputValue(), 'Clarify the review checklist.');
     assert.deepEqual(admin.errors, []);
     await admin.page.close();
 
-    // Sam operates these computers and is not an admin: Turn on (Control) is theirs too.
-    const operator = await visit({id: 'sam', name: 'Sam', role: 'member'});
-    row = await operator.open('off');
-    assert.match(row.text, /^Screen is off for this computer\. Turn on \(Control\)/);
-    await operator.page.locator('#bot-screen-row [data-screen-on]').click();
-    await operator.page.locator('#bot-screen-row[data-screen-state=ready]').waitFor();
-    assert.deepEqual(operator.writes, [{mode: 'control'}]);
-    assert.equal(await operator.rowText(), 'Open · Control');
-    assert.equal(await operator.page.locator('#bot-top #bot-screen').getAttribute('href'), '#/computers/c-off/screen');
-    assert.deepEqual(operator.errors, []);
-    await operator.page.close();
-
-    // Bo is a member, not the operator: told who may, never offered Turn on, never shown the computer's steps.
+    // A bot manager cannot enable someone else's computer screen.
     const member = await visit({id: 'bo', name: 'Bo', role: 'member'});
-    row = await member.open('ready');
-    assert.deepEqual([row.state, row.text, row.header], ['not_allowed', 'Only Sam and admins can open this computer\'s screen.', 0]);
-    row = await member.open('off');
-    assert.deepEqual([row.state, row.text, row.header], ['off', 'Screen is off for this computer. Ask Sam or an admin to turn it on in Settings > Computers.', 0]);
-    assert.equal(await member.page.locator('[data-screen-on]').count(), 0);
-    row = await member.open('linux');
-    assert.deepEqual([row.state, row.text], ['not_offered', "This computer's screen isn't turned on. Ask Sam or an admin to turn it on on the computer."]);
-    assert.equal(await member.page.locator('[data-screen-copy]').count(), 0);
-    // A computer with no operator names admins alone.
-    row = await member.open('unowned');
-    assert.deepEqual([row.state, row.text], ['not_allowed', "Only admins can open this computer's screen."]);
-    // Bo may only see 'seen': no claim it has no computer, nothing to open or turn on, no computer named.
-    row = await member.open('seen');
-    assert.deepEqual([row.state, row.text, row.header], ['hidden', "You can see this bot but not its activity, so its computer and screen aren't shown to you.", 0]);
-    assert.equal(await member.page.locator('#bot-screen-row a, #bot-screen-row button').count(), 0);
-    assert.doesNotMatch(row.text, /no computer|offline|Sam/);
+    const row = await member.open('ready');
+    assert.equal(row.state, 'not_allowed');
+    assert.equal(row.header, 0);
+    await member.page.locator('[data-bot-detail-tab=settings]').click();
+    await member.page.locator('#bot-editor form').waitFor();
+    assert.equal(await member.page.locator('[data-screen-toggle]').count(), 0);
+    await member.open('seen');
+    assert.deepEqual(await member.page.locator('[data-bot-detail-tab]').allTextContents(), ['Info']);
+    assert.equal(await member.page.locator('#bot-editor').count(), 0);
+    assert.equal(await member.page.locator('[data-screen-toggle]').count(), 0);
     assert.deepEqual(member.writes, []);
     assert.deepEqual(member.errors, []);
     await member.page.close();
-    console.log('PASS: Screen row in More for each state; header button only when ready; Turn on (Control) for operator/admin only; refresh redraws; see-only told it is not shown');
+    console.log('PASS: inline bot tabs preserve drafts and privacy; screen setup, off/view/control and operator permissions');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

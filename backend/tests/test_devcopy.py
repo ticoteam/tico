@@ -29,7 +29,7 @@ def source_db(tmp_path):
         c.execute("INSERT INTO conversations(id) VALUES('cv')")
         for mid, at in (("old", OLD), ("new", now), ("ran", now), ("ran-long-ago", OLD)):
             c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,created) "
-                      "VALUES(?,'cv','human:morgan','bot:sales','ask','hi',?)", (mid, at))   # the trigger queues a job
+                      "VALUES(?,'cv','human:morgan','bot:sales','ask',?,?)", (mid, "Request " + mid, at))   # the trigger queues a job
         c.execute("UPDATE jobs SET state='completed' WHERE id IN ('ran','ran-long-ago')")
         # A run in progress, a finished run in the window, and a finished run from long ago.
         for aid, job, state, at, finished in (("live", "new", "running", now, None), ("done", "ran", "completed", now, now),

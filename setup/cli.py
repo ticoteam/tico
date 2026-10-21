@@ -53,7 +53,8 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--server-ip", help="public IPv4 the domain should point at (caddy; ssh and command targets)")
     p.add_argument("--aws-region")
     p.add_argument("--aws-profile")
-    p.add_argument("--aws-instance-type", choices=["t4g.small", "t4g.medium", "t4g.large"], help="server default t4g.small; runner default t4g.medium")
+    p.add_argument("--aws-instance-type", choices=["t4g.small", "t4g.medium", "t4g.large", "m8i-flex.xlarge", "m8i-flex.2xlarge"], help="server default t4g.small; runner default t4g.medium")
+    p.add_argument("--server-computer", choices=["same", "none"], default="same", help="run: where bots run")
     p.add_argument("--aws-os", choices=["ubuntu", "al2023"])
     p.add_argument("--aws-permissions-boundary", metavar="ARN", help="AWS: the IAM policy ARN set as the permissions boundary of "
                    "the server's role when it is created, for an account that only lets setup make roles under one")

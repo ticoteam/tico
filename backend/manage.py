@@ -159,6 +159,13 @@ def main(argv=None):
     p.add_argument("--projects", type=Path, default=ROOT.parent)
     p.add_argument("--queue-legacy-backlog", action="store_true",
                    help="Explicitly make old undelivered bot messages claimable after import")
+    p = sub.add_parser("hosting-enrollment")
+    p.add_argument("database", type=Path)
+    p.add_argument("--owner", required=True)
+    p.add_argument("--request-id", required=True)
+    p.add_argument("--code-hash", required=True)
+    p.add_argument("--label", required=True)
+    p.add_argument("--status", action="store_true")
     p = sub.add_parser("enrollment")
     p.add_argument("database", type=Path)
     owner = p.add_mutually_exclusive_group(required=True)
@@ -213,6 +220,10 @@ def main(argv=None):
         report = {"database": str(args.database), "bots": len(entries)}
         with store.read() as c:
             report["bots_by_operator"] = bots_by_operator(c)
+    elif args.command == "hosting-enrollment":
+        from .hosting_enrollment import enrollment
+        store = Store(Settings(db_path=args.database, registry_dir=registry_dir()))
+        report = enrollment(store, Auth(store), args.request_id, args.code_hash, args.label, args.owner, args.status)
     elif args.command == "enrollment":
         from .models import EnrollmentRequest
         store = Store(Settings(db_path=args.database, registry_dir=registry_dir()))

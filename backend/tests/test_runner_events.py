@@ -9,7 +9,7 @@ import pytest
 
 from backend import events as E
 from backend import hubdb as H
-from backend.tests.test_api import api, assign, post, ready, runner  # noqa: F401
+from backend.tests.test_api import api, assign, post, put, ready, runner  # noqa: F401
 from backend.tests.test_credential_sharing import JIRA, jira, local
 from backend.tests.test_events import live, topic  # noqa: F401
 
@@ -41,6 +41,27 @@ def test_work_and_credentials_reach_only_the_computer_they_concern_without_value
         sent = told(api, computer, cursor)[0]
         assert [data["kind"] for _, data in sent] == ["credentials"]
         assert JIRA not in json.dumps(sent) and set(sent[0][1]) == {"seq", "kind", "bots"}
+
+
+def test_subscription_changes_refresh_only_the_assigned_computer_without_values(api):
+    a, b = runner(api, label="A"), runner(api, label="B")
+    assign(api, a, "ops")
+    assign(api, b, "cpo")
+    cursor = newest(api)
+    for profile in ("private-first", "private-second", None):
+        put(api, "subscriptions", {"scope": "bot", "target": "ops", "profile": profile})
+        sent, after, reset, _ = told(api, a, cursor)
+        assert [data["kind"] for _, data in sent] == ["assignments", "work"]
+        assert not reset and all(data["bots"] == ["ops"] for _, data in sent)
+        assert all(set(data) == {"seq", "kind", "bots"} for _, data in sent)
+        assert "private-" not in json.dumps(sent)
+        assert told(api, b, cursor)[0] == []
+        cursor = after
+    # Retired group choices remain stored for compatibility, but no longer select a connection.
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO subscription_assignments VALUES(?,?,?,?,?)",
+                  ("group", "ops", "private-retired", H.now(), "human:ana"))
+    assert told(api, a, cursor)[0] == told(api, b, cursor)[0] == []
 
 
 def test_resume_sends_only_what_came_since_and_a_client_past_the_log_is_reset(api):
