@@ -135,7 +135,8 @@ runs have escalated a public task without progress; an explicit run is still ava
 A task blocked by its own subtask is allowed (a question for a person in a subtask works that way),
 but relating it returns a warning: a subtask kept open until its parent finishes, such as a hold or
 an acknowledgement, never clears. When every blocker is such a subtask, owned by a bot, quiet five
-minutes and waiting on nothing of its own, the task counts as stalled even while `waiting`: its bot
+minutes and waiting on nothing of its own (no blocker, no unanswered question, no future due date,
+snooze or stored resume), the task counts as stalled even while `waiting`: its bot
 is woken with the way out, under the same limits, and BotOps's stuck list shows it with `own_blockers`.
 
 Task worktrees have a separate lifecycle. The 50-worktree limit stays in effect, and cleanup

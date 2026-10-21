@@ -5620,10 +5620,12 @@ def next_run_tasks_by(conn, bots):
 def own_stuck_blockers(conn, row, at=None):
     """The blockers of `row` when every one is its own subtask that nothing visible will finish, else [].
 
-    Such a subtask belongs to a bot, has gone quiet, and waits on no task and no person's answer of its own:
-    what it waits for, if anything, is its parent, which waits on it. A hold kept open until its
+    Such a subtask belongs to a bot, has gone quiet, and waits on no task, no person's answer and no time of
+    its own: what it waits for, if anything, is its parent, which waits on it. A hold kept open until its
     parent's window is released is the case seen; a question for a person in a subtask is not (it
-    belongs to the person). Being blocked by these does not hold `row` back from the stall watcher."""
+    belongs to the person), nor is a subtask with a future due date, a snooze or a stored resume (each brings
+    it back by itself; once the date or snooze has passed, it is quiet again). Being blocked by these does
+    not hold `row` back from the stall watcher."""
     at = at or now()
     blockers = TR.live_blockers(conn, row["id"], ACTIVE_STATUSES)
     if not blockers:
@@ -5631,7 +5633,8 @@ def own_stuck_blockers(conn, row, at=None):
     quiet = shift(at, seconds=-STALL_MINUTES * 60)
     for block in blockers:
         if (not is_bot(block["owner"]) or block["updated"] >= quiet or not TR.is_descendant(conn, row["id"], block["id"])
-                or TR.live_blocker(conn, block["id"], ACTIVE_STATUSES) or unanswered_ask(conn, block)):
+                or TR.live_blocker(conn, block["id"], ACTIVE_STATUSES) or unanswered_ask(conn, block)
+                or due_later(block, at) or TS.snoozed(block, at) or block.get("resume_json")):
             return []
     return [block["id"] for block in blockers]
 
@@ -5697,8 +5700,11 @@ def not_yet_due(row, at):
     """A task with a future due date, or snoozed until a later moment, says when to look again: the
     scheduler's "Due:" or "Snooze over" notice wakes its owner then. Legacy dates without an offset
     read as Pacific."""
-    if TS.snoozed(row, at):
-        return True
+    return TS.snoozed(row, at) or due_later(row, at)
+
+
+def due_later(row, at):
+    """Whether this task's due date is still ahead of `at`."""
     due = parse_ts(row.get("due")) if row.get("due") else None
     if due and due.tzinfo is None:
         from zoneinfo import ZoneInfo

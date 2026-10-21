@@ -219,3 +219,73 @@ def test_a_task_held_only_by_its_own_quiet_subtask_is_flagged_woken_and_shown_st
         # The question for a person is not a stuck block: its task is left alone.
         stuck = {t["id"]: t for t in H.stuck_tasks(c)}
         assert stuck[window["id"]]["own_blockers"] == [hold["id"]] and asked["id"] not in stuck
+
+
+def held_window(c, hold_parent=True):
+    """Today's shape: a waiting window task blocked by a bot's hold that stays open until RELEASED."""
+    window = H.task_create(c, H.human_actor("ana"), "Open the deploy window", "Post OPEN, then RELEASED.", "bot:ops")
+    hold = H.task_create(c, "bot:ops", "Hold merges until RELEASED", "Keep this open until RELEASED.",
+                         "bot:finance", parent_id=window["id"] if hold_parent else None)
+    H.TR.relate(c, "bot:ops", window["id"], hold["id"], "blocked_by")
+    H.task_update(c, "bot:ops", window["id"], status="waiting", note="Waiting on the hold's ack.")
+    return window, hold
+
+
+def flagged(c, window, *tasks, minutes=6):
+    """(parent woken, parent on BotOps's stuck list) once the parent has been quiet six minutes and `tasks` `minutes`."""
+    c.execute("UPDATE jobs SET state='completed'")
+    aged(c, window["id"], 6)
+    for t in tasks:
+        aged(c, t["id"], minutes)
+    return window["id"] in H.wake_stalled(c)["woke"], window["id"] in {t["id"] for t in H.stuck_tasks(c)}
+
+
+def test_todays_hold_with_no_date_snooze_or_resume_still_wakes_its_parent_and_is_stuck(api):
+    with api.app.state.store.transaction() as c:
+        window, hold = held_window(c)
+        H.task_comment(c, "bot:finance", hold["id"], "Checkpoint: holding services merges until RELEASED.", wake=False)
+        row = H.task(c, hold["id"])
+        assert not row["due"] and not row["snoozed_until"] and not row["resume_json"]
+        assert flagged(c, window, hold) == (True, True)
+
+
+def _later(c, task_id, column, hours):
+    c.execute(f"UPDATE tasks SET {column}=? WHERE id=?", (H.shift(H.now(), seconds=hours * 3600), task_id))
+
+
+@pytest.mark.parametrize("wait", ["due", "snooze", "resume"])
+def test_a_hold_with_its_own_timed_wait_does_not_stall_its_parent_until_that_time_passes(api, wait):
+    column = {"due": "due", "snooze": "snoozed_until", "resume": "resume_json"}[wait]
+    with api.app.state.store.transaction() as c:
+        window, hold = held_window(c)
+        if wait == "resume":
+            c.execute("UPDATE tasks SET resume_json=? WHERE id=?", (json.dumps({"after": "ci"}), hold["id"]))
+        else:
+            _later(c, hold["id"], column, 24)
+        assert flagged(c, window, hold) == (False, False)
+        if wait != "resume":         # a passed date or snooze is no exemption
+            _later(c, hold["id"], column, -1)
+            assert flagged(c, window, hold) == (True, True)
+
+
+@pytest.mark.parametrize("case", ["fresh", "not_a_subtask", "mixed", "hold_blocked", "hold_asked"])
+def test_a_blocker_that_can_still_move_does_not_stall_its_parent(api, case):
+    with api.app.state.store.transaction() as c:
+        window, hold = held_window(c, hold_parent=case != "not_a_subtask")
+        other = H.task_create(c, "bot:ops", "Run the migration", "", "bot:finance")
+        if case == "mixed":
+            H.TR.relate(c, "bot:ops", window["id"], other["id"], "blocked_by")
+        if case == "hold_blocked":
+            H.TR.relate(c, "bot:finance", hold["id"], other["id"], "blocked_by")
+        if case == "hold_asked":
+            H.task_ask(c, "bot:finance", hold["id"], "Which window do you mean?")
+        assert flagged(c, window, hold, other, minutes=2 if case == "fresh" else 6) == (False, False)
+
+
+def test_a_parent_held_by_two_quiet_holds_of_its_own_lists_both(api):
+    with api.app.state.store.transaction() as c:
+        window, hold = held_window(c)
+        second = H.task_create(c, "bot:ops", "Hold deploys until RELEASED", "", "bot:finance", parent_id=window["id"])
+        H.TR.relate(c, "bot:ops", window["id"], second["id"], "blocked_by")
+        assert flagged(c, window, hold, second) == (True, True)
+        assert {t["id"]: t for t in H.stuck_tasks(c)}[window["id"]]["own_blockers"] == [hold["id"], second["id"]]
