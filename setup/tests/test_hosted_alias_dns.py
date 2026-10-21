@@ -52,6 +52,15 @@ def test_public_domain_tls_callback_and_owner_link_stay_public_while_only_origin
     assert f"{DOMAIN} resolves correctly" in out and f"{PUBLIC} resolves correctly" in out
 
 
+def test_aws_final_dns_check_uses_the_allocated_ip_for_the_public_hostname(monkeypatch):
+    d, ec2, iam, ssm, r53 = alias_world()
+    monkeypatch.setattr(verify, "run_all", lambda **kw: [verify.check_dns(kw["domain"], kw["records"], kw["resolvers"])])
+    code, out = go(create(), d)
+    assert code == 0, out
+    assert f"[ok] DNS: {PUBLIC} resolves correctly" in out
+    assert state.load(PUBLIC)[0]["server_ip"] == "203.0.113.9"
+
+
 @pytest.mark.parametrize("flag,value", [("--dns-name", "*.preview.example"), ("--dns-name", "https://pv-x.preview.example"),
                                        ("--dns-name", "pv-x.other.example"), ("--dns-zone", "preview.example/path"),
                                        ("--dns-name", "pv-x.preview.example\n")])
