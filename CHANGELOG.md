@@ -21,6 +21,9 @@ All notable changes to Tico are recorded here. The format follows
   paid, never the key. The other three choices, and a team that never picks one, keep working
   as before ([Tico AI Gateway](docs/ai-gateway.md#choose-how-bots-get-their-models)).
 
+### Changed
+- A bot's Slack DM about a task names the task and links to it in its last line: `(sent from Ops on #19332 …)`.
+
 ## [0.3.68] - 2026-10-20
 
 ### Added
@@ -273,7 +276,6 @@ All notable changes to Tico are recorded here. The format follows
   disk, so accounts whose launch role requires tagged network interfaces (the Hosting preview role) can launch.
 
 ### Changed
-- A bot's Slack DM about a task names the task and links to it in its last line: `(sent from Ops on #19332 …)`.
 - **Topic changed counts a chat as warm only when the cache did most of the work**: the topic check is skipped for a
   chat under 100k tokens only when its last turn read at least half its input from the prompt cache, within that
   harness's cache lifetime (5 minutes for Claude Code, Codex and the rest, from each provider's docs). A small
