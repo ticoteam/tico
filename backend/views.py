@@ -311,8 +311,11 @@ def machine(c, bot):
     # Online is contact; awake is contact that has lasted. A machine waking for a few seconds
     # is online and takes no work, so say which of the two a queued request is waiting for.
     awake = online and Execution.awake(row["awake_since"], now)
-    # The declared access has its own route, behind the bot's visibility (backend/bot_tools.py).
+    # The declared access has its own route, behind the bot's visibility (backend/bot_tools.py). A missing
+    # subscription sign-in the Gateway covers meanwhile is no problem (backend/models_preset.py as_served).
+    from .models_preset import as_served
     detail = {k: v for k, v in bot_readiness(row["readiness_json"], bot).items() if k != "tools"}
+    detail = as_served(c, bot, readiness_document(row["readiness_json"]), detail)
     return {"online": online, "awake": awake, "ready": online and detail.get("ready") is True,
             "readiness": detail,
             "machine": {**{k: row[k] for k in ("runner_id", "generation", "label", "operator", "last_seen",

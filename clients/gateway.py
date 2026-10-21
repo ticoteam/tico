@@ -60,7 +60,7 @@ MESSAGES = {
 # What a bot says when the Gateway answered its model call with 404: no chat endpoint there (yet), or a wrong URL.
 NOT_SERVED = "The Tico AI Gateway doesn't serve Tico models at its URL yet"
 NOT_FOUND = "not_found"
-# How long the Gateway's `rate_limited` asks a caller to wait (its Retry-After): more refused keys extend the block.
+# Conservative wait when a runner cannot report Retry-After; refused keys can extend an address block.
 RETRY_AFTER = 3600
 UNAVAILABLE = "upstream_unavailable"
 # A Tico model on a runner that runs bots as itself (runner-rs/src/gateway_relay.rs NOT_ISOLATED): it never asks.
@@ -72,7 +72,7 @@ FINAL = ("unknown_model", "unsupported_field", "bad_request", "upstream_refused"
 # (runner-rs/src/hosts/pi.rs `plain_error`).
 CODES = (CAP_REACHED, REVOKED_KEY, UNKNOWN_KEY, RATE_LIMITED, "unknown_model", "unsupported_field", "bad_request",
          "upstream_refused", "no_route", UNAVAILABLE, NOT_ISOLATED)
-TICO_MODELS = "Tico Cheap 1.0, Tico Mid 1.0, Tico Power 1.0"
+TICO_MODELS = "Tico Cheap 1.1, Tico Mid 1.0, Tico Power 1.0"
 # How an install gets its own key (the contract's "enroll" and "rotate"), and how it names a bot to the Gateway.
 ENROLL, ROTATE = "/enroll", "/rotate"
 BOT_HEADER = "X-Tico-Bot"
@@ -275,7 +275,7 @@ def run_status(code, text=""):
 
 
 def rate_limited(text):
-    """Whether a model error is the Gateway's `rate_limited` (too many refused keys from this address)."""
+    """Whether a model error is the Gateway's key or address rate limit."""
     return f"({RATE_LIMITED})" in str(text or "") and LABEL in str(text or "")
 
 
