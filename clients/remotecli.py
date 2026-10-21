@@ -472,7 +472,10 @@ def run(args, who=None):
                 for x in one.split(","):
                     if x.strip() and x.strip().lower() not in labels:
                         labels.append(x.strip().lower())
-            return post("tasks/" + args.id, {"version": current["version"], "labels": labels}, delegate=asked)
+            body = {"version": current["version"], "labels": labels}
+            if getattr(args, "approval_id", None):
+                body["approval_id"] = args.approval_id
+            return post("tasks/" + args.id, body, delegate=asked)
         if sub == "attach":
             path = Path(args.file)
             from clients.task_review import ask_from_args

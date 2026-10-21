@@ -22,6 +22,8 @@ All notable changes to Tico are recorded here. The format follows
   as before ([Tico AI Gateway](docs/ai-gateway.md#choose-how-bots-get-their-models)).
 
 ### Fixed
+- `hub task label --approval-id` now sends the approval with the label change, so a bot can add a public roadmap
+  label once a person approves its publish request. Before, the command dropped the approval and was refused.
 - A goal's automatic colour follows its worst KPI: red takes priority over yellow and green, and yellow over green.
   The note explains that KPI; a colour set by a person stays in place until handed back to the Goal Manager.
 
