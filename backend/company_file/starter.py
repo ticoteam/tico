@@ -13,7 +13,7 @@ from . import draft as D
 from .keys import scrub_all
 from .yamlfile import from_yaml, to_yaml
 
-MAX_BYTES = 131072
+MAX_BYTES = 524288          # a 300-seat plan, normalized, with room (about 180 KB at 300 bots)
 MAX_PACKED = 7168
 
 

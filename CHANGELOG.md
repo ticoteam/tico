@@ -8,6 +8,10 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Bots read the runs of the bots that report to them.** A bot above another in `reports_to` (at any depth) now
+  sees that bot's chat-room runs too, such as the wake-ups the hub posts there, in `hub_run_list` and their steps, so
+  a manager like a Product Manager can score its monitors' cost per catch. A human's own chat with a report stays
+  theirs, private tasks stay private, and peers and reports never read a manager's chat-room runs.
 - **How bots get their models**, at the top of Settings > AI providers and the first setup step: **Your Claude and
   ChatGPT subscriptions, plus Tico Gateway** (recommended, and what Tico's installer sets with
   `TICO_MODELS_PRESET=subscriptions-gateway`), subscriptions only, Tico Gateway only, or your company's plans or API
@@ -21,10 +25,20 @@ All notable changes to Tico are recorded here. The format follows
   paid, never the key. The other three choices, and a team that never picks one, keep working
   as before ([Tico AI Gateway](docs/ai-gateway.md#choose-how-bots-get-their-models)).
 
+### Changed
+- **The setup chart has no seat limit you will meet.** The setup chat, the company file and the first screen's
+  company YAML import now take up to 300 bots and 300 people (was 60 bots and 40 people, and 150 bots on import),
+  with no limit message below that. Past 300 the chat says plainly "A chart can have at most 300 bots." (or people);
+  that guard is there only against abuse. A company YAML file may be up to 512 KB (was 128 KB). A plan carried by
+  `tico setup --company-file` into a cloud install still has to fit AWS Parameter Store's 8 KB, about 40 bots; a
+  larger one is imported on the first setup screen instead.
+
 ### Fixed
 - `hub task comment --public --approval-id` and `hub task comment-edit --approval-id` now send the public flag
   and the approval, so a bot can post or edit a public reply once a person approves its publish request. Before, the
   command dropped both: the reply went out as an internal comment, and an edit of a public reply was refused.
+- `hub task label --approval-id` now sends the approval with the label change, so a bot can add a public roadmap
+  label once a person approves its publish request. Before, the command dropped the approval and was refused.
 - A goal's automatic colour follows its worst KPI: red takes priority over yellow and green, and yellow over green.
   The note explains that KPI; a colour set by a person stays in place until handed back to the Goal Manager.
 
