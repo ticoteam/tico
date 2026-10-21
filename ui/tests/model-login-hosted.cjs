@@ -94,6 +94,22 @@ const {unrouted} = require('./support/routes.cjs');
     }
     const login = page => page.locator('dialog.model-login:not(.model-logout)');
 
+    // A duplicate connection is refused by the shared API, and its existing dialog shows how to change accounts.
+    {
+      const {page, errors, signIn} = await open('own');
+      const detail = 'Claude Code is already connected or signing in on Server. Use Switch account on the existing connection to change it';
+      await page.route('**/api/v2/computers/box/logins', route => route.fulfill({status: 409,
+        contentType: 'application/json', body: JSON.stringify({error: {code: 'subscription_exists', detail}})}));
+      await signIn('claude').click();
+      const dialog = login(page);
+      await dialog.locator('[data-status]', {hasText: detail}).waitFor();
+      assert.equal(await dialog.getByRole('button', {name: 'Try again', exact: true}).count(), 0);
+      await dialog.getByRole('button', {name: 'Close', exact: true}).last().click();
+      await dialog.waitFor({state: 'detached'});
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+
     // ---- Hosted: Claude Code. The dialog starts the sign-in itself; waiting, it shows no CLI lines and no terminal.
     {
       const {page, writes, errors, signIn, last} = await open('own');

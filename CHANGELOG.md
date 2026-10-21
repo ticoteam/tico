@@ -7,7 +7,16 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **Hosted bot computers.** Hosting can run bots on a separate computer, keeping their work away from the Tico
+  server. Settings > Computers offers **Hosted computer (we run it)**. The installer supports server-only installs,
+  bounded AWS runner recovery and the same 4- and 8-core sizes on both machines, with 100 and 200 GB disks.
+  HQ registers only a join code's hash through scoped SSM; no owner token or join secret crosses that control plane.
+
 ### Changed
+- **One new subscription per AI tool on each computer.** Adding a second subscription for the same tool is refused
+  with a Switch account message, including while the first sign-in is pending. Different tools and computers stay
+  independent; existing connections and API keys are kept.
 - **Tico AI Gateway: Tico Cheap 1.1 replaces Cheap 1.0** in every model list. It costs the same for a prompt up to
   100,000 tokens; above that the whole request is $0.75 per 1M input, $0.075 cached and $3.75 output, and Usage
   estimates it that way. Cheap 1.0 is retired: bots and a default model already on it keep it and keep running at its
@@ -20,13 +29,18 @@ All notable changes to Tico are recorded here. The format follows
 - **A task blocked only by its own quiet subtask no longer waits silently.** Relating a subtask as its parent's
   blocker returns a warning, and when that subtask (a bot's hold or acknowledgement) goes quiet waiting on nothing
   else, the parent counts as stalled even while waiting: its bot is woken with the way out, and BotOps sees it stuck.
+- Choosing a bot's model connection refreshes its computer's readiness and queued work immediately, including
+  when the previous connection is signed out.
+- **Recovering an AWS bot computer waits for Systems Manager.** Resuming an interrupted install waits up to five
+  minutes for its agent before sending recovery, tolerates a registration race and keeps the same computer on
+  failure. An accepted recovery command is never sent again by that wait.
 - **A bot's message to a bot says when it was held.** A plain message or task comment from one bot to another waits
   for that bot's next run; the send now answers `woke: false` with a `held` reason, and `hub` prints it: held for
   that bot's next run, add `--needs-action` to wake it now. Before, a held escalation read as delivered.
 - **Goals from a setup company file land on Goals.** Importing the file from tico.team/setup (in the app or from a
-  Hosted install) no longer sets its goals aside: the owner's goals become company goals, each bot's goal sits under
-  that bot, and a goal's measure becomes a KPI with the file's baseline and target. The file carries no readings, so
-  a new KPI starts with no history.
+  Hosted install) no longer sets its goals aside: the owner's goals and any goal for a built-in bot such as the
+  Assistant become company goals, each other bot's goal sits under that bot, and a goal's measure becomes a KPI with
+  the file's baseline and target. The file carries no readings, so a new KPI starts with no history.
 - **No "Claude login required" while the Tico AI Gateway runs the bot.** Under the recommended choice a bot whose
   Claude or ChatGPT is not signed in yet shows as ready, its card says "Using Tico AI Gateway; sign in to Claude to use
   your subscription", and its model check and chat no longer ask for a login. With no Gateway either, it still does.

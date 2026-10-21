@@ -21,7 +21,7 @@ phone). All four are managed in **Settings > Bots**; they stay out of the team c
 Its name, the mark for the harness it runs on, up to three tool icons and its goal across the top, the chat below,
 and a rail down the right: **Active** tasks first, then its latest **Updates** (all of them behind the small icon),
 **Files** and **Routines** (a row opens the routine to read or edit), with **Assigned to others** and **Done** folded at the foot. A section with
-nothing in it is left out. **More** holds its setup, Tools, goals, access, routines and runs. On a phone, Chat and
+nothing in it is left out. **Info** holds its compact summary, Tools, goals and routines. **Instructions** shows its instructions and working notes, **History** holds updates, status changes and runs, and **Settings** edits its configuration directly, without an edit popup. On a phone, Chat and
 Tasks are one tab each.
 
 **How do I ask a bot a question?**
@@ -35,7 +35,7 @@ your email) gives it a token and Tico's MCP ([Connect an external agent](connect
 The conversation goes *Saved — queued* → *Starting* → *Working* → the reply. When the bot marks
 a task done, the task shows under **Tasks → Done** with the bot's note.
 Every run is under **Settings → History → Runs** (the owner also sees **Changes**, the bot settings history), and
-on the bot's **More** tab with its files and routines.
+on the bot’s **History** tab.
 
 **What does *waiting* mean, and the other states?**
 *Waiting*: the bot is parked on something — a bot, a child task, or an answer from you.
@@ -84,18 +84,18 @@ title, a cron (five fields, America/Los_Angeles by default) or a Tico event, and
 is told each time. A bot can set up its own with `hub routine set`. Details: [Routines](routines.md).
 
 **How do I change what a bot does?**
-Open **Bot → More → Instructions → Edit Instructions**, describe the change, and choose
-**Ask BotOps to change**. BotOps updates the Instructions, commits and pushes the result; the
+Open **Bot → Instructions**, describe the change in **Request instruction changes**, and choose
+**Send changes to BotOps**. BotOps updates the Instructions, commits and pushes the result; the
 bot reads it at its next run once its computer's checkout has the update. An older app may show
-the Instructions card under **Docs**. See [Creating bots](creating-bots.md#edit-instructions).
+the **Instructions** tab. See [Creating bots](creating-bots.md#edit-instructions).
 
 For a manual edit, change `AGENT.md` in `bot-<slug>` (playbooks and `knowledge/` for methods and
 facts), commit and push. The computer pulls before the next run; if you maintain its checkout by
 hand, pull the update there too. Model, effort, computer, owners and status are changed in
-**Settings → Bots**. One-off requests are tasks, not edits.
+**Bot → Settings**. One-off requests are tasks, not edits.
 
-How often a bot wakes for routine news is its **Wakes** row in **Settings → Bots**: **Token saver** (the default for
-new bots) or **Performance**. Under **Subscribe to updates** in the bot editor you choose whether it hears about
+How often a bot wakes for routine news is its **Wakes** row in **Bot → Settings**: **Token saver** (the default for
+new bots) or **Performance**. Under **Subscribe to updates** in its Settings tab you choose whether it hears about
 template changes and Tico releases. See [Creating bots](creating-bots.md#subscribe-to-updates).
 
 **How do I contact the Tico team?**

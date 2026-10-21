@@ -62,15 +62,15 @@ const {fakeVnc, exposeRoutedSockets} = require('./support/fake-vnc.cjs');
     // In each computer's pop-up.
     await page.locator('#set-machines .machine-name[data-computer-open=c2]').click();
     await page.locator('#set-machines dialog[open] [data-detail-section=screen]').waitFor();
-    assert.equal(await page.locator('[data-computer-screen=c2]').count(), 0);
+    assert.equal(await page.locator('[data-screen-toggle=c2]').count(), 1);
+    assert.equal(await page.locator('[data-screen-copy]').count(), 0);
     await page.keyboard.press('Escape');
     await page.locator('#set-machines .machine-name[data-computer-open=c1]').click();
     // All three stay choices here; the bot page's Turn on picks Control only.
-    assert.deepEqual(await page.locator('[data-computer-screen=c1] input').evaluateAll(els => els.map(el => el.value)), ['off', 'view', 'control']);
-    await page.locator('[data-computer-screen=c1] label:has(input[value=control])').click();
+    await page.locator('[data-screen-toggle=c1]').check();
     await page.waitForFunction(() => SETTINGS_DATA.machines[0].screen === 'control');
     assert.deepEqual(writes, [{mode: 'control'}]);
-    await page.locator('#set-machines a.machine-screen').click();
+    await page.locator('#set-machines .bot-screen-open').click();
     // The viewer at Control: a control session first, the picture drawn, and a click reaches the computer at once.
     await page.waitForFunction(() => document.querySelector('#scr-state')?.textContent === 'Control');
     assert.deepEqual(sessions, [{control: true}]);
@@ -102,9 +102,9 @@ const {fakeVnc, exposeRoutedSockets} = require('./support/fake-vnc.cjs');
     answer = true;
     await page.locator('[data-settings-tab=devices]').click();
     await page.locator('#set-machines .machine-name[data-computer-open=c1]').click();
-    await page.locator('[data-computer-screen=c1] label:has(input[value=view])').click();
+    await page.locator('[data-screen-mode=c1]').selectOption('view');
     await page.waitForFunction(() => SETTINGS_DATA.machines[0].screen === 'view');
-    await page.locator('#set-machines a.machine-screen').click();
+    await page.locator('#set-machines .bot-screen-open').click();
     await page.waitForFunction(() => document.querySelector('#scr-state')?.textContent === 'View');
     assert.deepEqual(sessions.at(-1), {control: false});
     assert.equal(await page.locator('#scr-mode').isVisible(), false);

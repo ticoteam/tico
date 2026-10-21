@@ -112,12 +112,19 @@ def plan_lines(s: Settings, label: str) -> list[str]:
 
 def _aws_plan(s: Settings, label: str) -> awsmod.AwsPlan:
     return awsmod.plan_aws(domain=s.server_url, front_door="none", region=s.aws_region, instance_type=s.aws_instance_type,
-                           os_family=s.aws_os, name=f"runner-{awsmod.slug(label)}", role="runner")
+                           os_family=s.aws_os, name=s.aws_name or f"runner-{awsmod.slug(label)}", role="runner",
+                           boundary=s.aws_permissions_boundary)
 
 
 def run_runner(args, io: IO, deps: Deps) -> int:
     dry = args.dry_run
     s = Settings(aws_instance_type="t4g.medium")
+    s.aws_name = getattr(args, 'name', None) or ''
+    s.aws_permissions_boundary = getattr(args, 'aws_permissions_boundary', None) or ''
+    if s.aws_name and not awsmod.NAME_RE.fullmatch(s.aws_name):
+        raise MissingInput('Invalid --name')
+    if s.aws_permissions_boundary and not awsmod.POLICY_ARN_RE.fullmatch(s.aws_permissions_boundary):
+        raise MissingInput('Invalid --aws-permissions-boundary')
     a = Asker(io, args, s, dry)
     io.say("tico setup runner" + (" (dry run: nothing will be created or changed)" if dry else ""))
     domain = (args.domain or "").lower()
@@ -190,12 +197,25 @@ def run_runner(args, io: IO, deps: Deps) -> int:
         existing = d.find_instance()
         if existing:
             io.say(f"  {existing['InstanceId']} already exists for this name; not creating a second one.")
-        else:
-            d.put_env(join_env(s.server_url, get_code(), label))
+        d.put_env(join_env(s.server_url, get_code(), label))
         prep = d.prepare()
         script = bootstrap_script(os_family=s.aws_os, tag=s.runner_tag, env_param=(d.param_name, s.aws_region), rejoin=args.rejoin,
                                   screen=screen)
         iid, _ = d.launch_or_reuse(prep, script)
+        state.save_runner(plan.name, {"server_url": s.server_url, "label": label, "target": "aws", "aws_region": s.aws_region,
+                                      "aws_profile": s.aws_profile, "instance_id": iid, "name": plan.name})
+        if existing:
+            # SSM may still be registering after EC2 reports running. Wait before replay,
+            # then let cloud-init finish before recovering an incomplete boot.
+            # join_lines leaves an existing runner and its durable identity alone.
+            shell = remote.SSMShell(ssm, iid, deps.sleep)
+            result = shell.run('cloud-init status --wait >/dev/null 2>&1 || true; bash -c ' + shlex.quote(script),
+                               ready_timeout=300)
+            if result.returncode:
+                reason = ('Runner recovery timed out waiting for Systems Manager' if result.returncode == 124
+                          else 'Runner setup did not finish')
+                io.say(f'{reason}; the computer is kept for recovery.')
+                return 1
         io.say("\nWaiting for the box to install Docker and start the runner (a few minutes) ...")
         if not d.wait_ready():
             io.say("The box did not report ready in time. Log: /var/log/tico-setup.log (via SSM Session Manager).")

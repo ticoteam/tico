@@ -661,12 +661,24 @@ def test_a_bot_on_a_subscription_profile_runs_in_that_profiles_home(api, live, t
 @pytest.mark.parametrize("harness", ["codex"])
 @pytest.mark.parametrize("setup", [{"env": {"FAKE_CODEX_LOGIN": "file"}}])
 def test_a_subscription_signed_in_from_the_browser_counts_without_a_restart(api, computer):
-    (Path(computer.env["CODEX_HOME"]) / "auth.json").write_text("{}")      # the computer's own login
+    own_auth = Path(computer.env["CODEX_HOME"]) / "auth.json"
+    own_auth.write_text("{}")
     computer.start()
     rid = computer.registration["runner_id"]
+    # The runner starts ready on its own login. A named connection needs that slot free, as after signing out.
+    own_auth.unlink()
+    until(lambda: runtime_row(api, computer).get("authenticated") == "missing",
+          "the computer login signed out, in the heartbeat", timeout=40)
     signed = lambda name: computer.profiles().get(name, {}).get("codex", {}).get("signed_in")  # noqa: E731
     state = lambda login: get(api, f"runners/{rid}/logins/{login['id']}")["state"]  # noqa: E731
     assert computer.profiles() == {}
+    # A failed unsigned profile does not consume the slot; keep it to test heartbeat removal below.
+    failed = post(api, f"runners/{rid}/logins", {"runtime": "codex", "profile": "spare"})
+    until(lambda: state(failed) == "waiting", "the failed sign-in's link and code")
+    (computer.config.parent / "profiles" / "spare" / "codex" / "deny").write_text("")
+    until(lambda: state(failed) == "failed", "the failed sign-in's verdict")
+    until(lambda: signed("spare") is False, "the failed profile, not signed in")
+
     login = post(api, f"runners/{rid}/logins", {"runtime": "codex", "profile": "chris-chatgpt"})
     home = computer.config.parent / "profiles" / "chris-chatgpt" / "codex"
     until(lambda: state(login) == "waiting", "the sign-in's link and code")
@@ -681,11 +693,8 @@ def test_a_subscription_signed_in_from_the_browser_counts_without_a_restart(api,
     assert computer.prompts()[-1]["env"]["CODEX_HOME"] == str(home)
     assert until(lambda: computer.attempts()[-1]["result"], "the completion")["profile_used"] == "chris-chatgpt"
 
-    failed = post(api, f"runners/{rid}/logins", {"runtime": "codex", "profile": "spare"})
-    until(lambda: state(failed) == "waiting", "the second sign-in's link and code")
-    (computer.config.parent / "profiles" / "spare" / "codex" / "deny").write_text("")
-    until(lambda: state(failed) == "failed", "the failed sign-in's verdict")
-    until(lambda: signed("spare") is False, "the failed profile, not signed in")
+    denied = post(api, f"runners/{rid}/logins", {"runtime": "codex", "profile": "spare"}, expected=409)
+    assert denied["error"]["code"] == "subscription_exists"
 
     registration = json.loads(computer.config.read_text())
     del registration["profiles"]["spare"]
