@@ -57,7 +57,7 @@ const card = () => ({
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
     let items = [question('t-four'), stuck];
-    const {page, errors} = await open(browser, {viewport: {width: 390, height: 900}, hash: '#/tasks', extraTasks: [...items, question('t-page'), question('t-draft'), pair('t-pair'), several('t-several'), yesNo('t-yn')].map(x => ({...x}))});
+    const {page, errors} = await open(browser, {viewport: {width: 390, height: 900}, hash: '#/tasks', extraTasks: [...items, question('t-page'), question('t-draft'), question('t-swap'), pair('t-pair'), several('t-several'), yesNo('t-yn')].map(x => ({...x}))});
     const answers = [];
     await page.route('**/api/v2/needs-you*', route => route.fulfill({contentType: 'application/json', body: JSON.stringify({items})}));
     await page.route('**/api/v2/tasks/*/comments', route => route.fulfill({contentType: 'application/json', body: '{"comments":[]}'}));
@@ -181,6 +181,40 @@ const card = () => ({
     for (let i = 0; i < 100 && !answers.length; i++) await page.waitForTimeout(20);
     assert.deepEqual(answers.shift(), {task: 't-draft', target: {comment: 'q-t-draft'},
       answers: {decision: ['Visitor notes', 'Pages', 'Spend cap']}, other: 'Calls once the phone line is in.'});
+
+    // The bot rewords its question while the old box is still open (the Needs you data refreshes on its own): the old
+    // answer is never sent against the new question, nor put back into it, and the box says the question changed.
+    items = [question('t-swap')];
+    await page.evaluate(async () => { location.hash = '#/tasks'; await v2Refresh(); location.hash = '#/task/t-swap'; });
+    const swap = () => page.locator('.qcard[data-qcard="t-swap"]');
+    await swap().waitFor();
+    await swap().locator('[data-qc-tick="2"]').check();
+    await swap().locator('.qc-note').fill('Old answer');
+    const reword = label => page.evaluate(label => {
+      const q = S.v2.needs.find(x => x.id === 't-swap').ask.refs.questions[0];
+      q.options = [...q.options].reverse().map(o => o.label === 'Pages' || o.label === 'Docs pages' ? {...o, label} : o);
+    }, label);
+    const fresh = () => swap().evaluate(el => ({warned: !!el.querySelector('.qc-changed'), note: el.querySelector('.qc-note').value,
+      ticked: [...el.querySelectorAll('[data-qc-tick]:checked')].map(x => x.closest('.qc-pick').querySelector('.qc-l').textContent.trim())}));
+    const NEW_TICKS = ['1. Spend cap (recommended)', '3. Visitor notes (recommended)', '4. Calls (recommended)'];
+    // Sent before any redraw: refused here, and the box is drawn again from the new question.
+    await reword('Docs pages');
+    await swap().locator('.qc-note').type('!');
+    await swap().locator('[data-qc="ticked"]').click();
+    await page.waitForTimeout(100);
+    assert.equal(answers.length, 0);
+    assert.deepEqual(await fresh(), {warned: true, note: '', ticked: NEW_TICKS});
+    // Typed into, then redrawn: the old draft is dropped, not carried into the newer wording.
+    await swap().locator('[data-qc-tick="1"]').check();
+    await swap().locator('.qc-note').fill('Second try');
+    await reword('Pages');
+    await swap().locator('.qc-note').type('?');
+    await page.evaluate(() => { const el = document.querySelector('.qcard[data-qcard="t-swap"]'); el.outerHTML = qcardBoxHTML({id: 't-swap'}); });
+    // (Reworded back to the first order, so the recommended picks sit where they first were.)
+    assert.deepEqual(await fresh(), {warned: true, note: '', ticked: ['1. Calls (recommended)', '2. Visitor notes (recommended)', '4. Spend cap (recommended)']});
+    await swap().locator('[data-qc="ticked"]').click();
+    for (let i = 0; i < 100 && !answers.length; i++) await page.waitForTimeout(20);
+    assert.deepEqual(answers.shift(), {task: 't-swap', target: {comment: 'q-t-swap'}, answers: {decision: ['Calls', 'Visitor notes', 'Spend cap']}});
 
     // Picks with pictures show the same pictures in Decide and on the task page, several picks included; a Yes / No
     // asked with no options still says what each button does.

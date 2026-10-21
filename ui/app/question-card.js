@@ -161,13 +161,24 @@ function qcardRetick(root, it, q, ticked, attr) {
 // a property saved). Keyed by the ask and the question as asked, so a question the bot rewords starts afresh.
 const QC_DRAFTS = new Map();
 const qcardDraftKey = (it, q) => JSON.stringify([it.id, it.ask?.id, q.id, q.question, (q.options || []).map(o => o.label)]);
+// A draft belongs to the question the box shows (its `data-qc-key`), never to a newer one the Needs you data holds:
+// if the bot rewords while the old box is open, the next draw finds the draft stale and says so.
 function qcardDraft(box) {
-  const found = qcardItem({id: box.dataset.qcard});
-  if (!found) return;
-  for (const k of QC_DRAFTS.keys()) if (JSON.parse(k)[0] === found.it.id) QC_DRAFTS.delete(k);   // a reworded question's draft goes
-  QC_DRAFTS.set(qcardDraftKey(found.it, found.q), {
+  const key = box.dataset.qcKey;
+  if (!key) return;
+  for (const k of QC_DRAFTS.keys()) if (JSON.parse(k)[0] === JSON.parse(key)[0]) QC_DRAFTS.delete(k);
+  QC_DRAFTS.set(key, {
     ticked: new Set([...box.querySelectorAll('[data-qc-tick]:checked')].map(x => Number(x.dataset.qcTick))),
     note: box.querySelector('.qc-note')?.value || ''});
+}
+// The question a box shows, or null when the Needs you data now holds a different one (or none) for its task.
+function qcardShown(box) {
+  const found = qcardItem({id: box.dataset.qcard});
+  return found && qcardDraftKey(found.it, found.q) === box.dataset.qcKey ? found : null;
+}
+// Draw a box again from the current question: a stale draft is dropped there, with its explanation.
+function qcardRedraw(box) {
+  box.outerHTML = qcardBoxHTML({id: box.dataset.qcard});
 }
 function qcardItem(t) {
   const it = (S.v2?.needs || []).find(x => String(x.id) === String(t?.id) && ['question', 'waiting', 'task'].includes(x.kind));
@@ -182,7 +193,7 @@ function qcardBoxHTML(t) {
   const stale = [...QC_DRAFTS.keys()].filter(k => k !== key && JSON.parse(k)[0] === it.id);
   stale.forEach(k => QC_DRAFTS.delete(k));
   const ticked = draft ? new Set(draft.ticked) : qcardRecommended(q), files = TF_CACHE.get(String(t.id));
-  return `<section class="task-ask qcard" data-qcard="${esc(it.id)}" aria-label="Needs you">
+  return `<section class="task-ask qcard" data-qcard="${esc(it.id)}" data-qc-key="${esc(key)}" aria-label="Needs you">
     <div class="qc-head"><span class="lbl">Needs you</span> <b class="qc-who">${esc(qcardAsker(it.ask.from_actor))}</b><span class="qc-sub"> · ${esc(qcardSub(it))}</span></div>
     ${stale.length ? '<p class="qc-changed muted">The question changed, so your earlier ticks and note were cleared.</p>' : ''}
     ${qcardBodyHTML(it, q, {attr: 'qc', ticked, pic: o => qcardPicture(files, o)})}
@@ -194,11 +205,11 @@ function qcardBoxHTML(t) {
 document.addEventListener('change', ev => {
   const box = ev.target.closest?.('.qcard[data-qcard]');
   if (!box || !ev.target.matches('[data-qc-tick]')) return;
-  const found = qcardItem({id: box.dataset.qcard});
-  if (!found) return;
+  qcardDraft(box);
+  const found = qcardShown(box);
+  if (!found) { qcardRedraw(box); return; }
   const ticked = new Set([...box.querySelectorAll('[data-qc-tick]:checked')].map(x => Number(x.dataset.qcTick)));
   qcardRetick(box, found.it, found.q, ticked, 'qc');
-  qcardDraft(box);
 });
 document.addEventListener('input', ev => {
   const box = ev.target.closest?.('.qcard[data-qcard]');
@@ -207,8 +218,14 @@ document.addEventListener('input', ev => {
 document.addEventListener('click', async ev => {
   const b = ev.target.closest?.('.qcard[data-qcard] [data-qc]');
   if (!b || b.disabled) return;
-  const box = b.closest('.qcard'), found = qcardItem({id: box.dataset.qcard});
-  if (!found) return;
+  const box = b.closest('.qcard'), found = qcardShown(box);
+  if (!found) {
+    // The question changed under this box: never send its answer against the new one.
+    qcardDraft(box);
+    qcardRedraw(box);
+    toast('The question changed. Check it again before you answer.', true);
+    return;
+  }
   const {it, q} = found;
   const ticked = new Set([...box.querySelectorAll('[data-qc-tick]:checked')].map(x => Number(x.dataset.qcTick)));
   const labels = qcardLabels(q, b.dataset.qc, Number(b.dataset.i), ticked);
