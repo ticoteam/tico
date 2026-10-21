@@ -184,7 +184,7 @@ function taskItems(state, view = state.view) {
     if (view === 'board' && pipelineSelectedType(state)) return true;
     if (view === 'done') return it.col === 'done';
     if (it.col === 'done') return false;
-    return view === 'foryou' ? (taskNeedsViewer(it.task) && !needsFolded(it.id)) || taskOlderAsk(it.task) : true;
+    return view === 'foryou' ? (taskNeedsViewer(it.task) || taskOlderAsk(it.task)) && !needsFolded(it.id) : true;
   });
   state.memo?.set(view, out);
   return out;

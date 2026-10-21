@@ -544,9 +544,10 @@ def run(args, io: IO, deps: Deps) -> int:
             io.say("\nDNS")
             live = ensure_dns(io, s, deps, zone, records, timeout=timeout, skip_wait=args.skip_dns_wait, cf=cf)
     elif s.target == "aws":
-        runner = _aws(io, args, s, deps, zone, records, cf, env_text, compose, url, timeout)
-        if runner is None:
+        res = _aws(io, args, s, deps, zone, records, cf, env_text, compose, url, timeout)
+        if res is None:
             return 1
+        runner, records = res
     elif s.target in cloudmod.PROVIDERS:
         res = _cloud(io, args, s, deps, zone, cf, env_text, timeout)
         if isinstance(res, int):
@@ -599,7 +600,7 @@ def _tunnel(io: IO, args, s: Settings, deps: Deps, zone, cf: Cloudflare | None) 
     return s.tunnel_id
 
 
-def _aws(io, args, s, deps, zone, records, cf, env_text, compose, url, timeout) -> remote.Shell | None:
+def _aws(io, args, s, deps, zone, records, cf, env_text, compose, url, timeout) -> tuple[remote.Shell, list[dnsmod.Record]] | None:
     plan = aws_plan(s)
     io.say("\nAWS")
     ec2, iam, ssm, account = deps.aws_clients(s.aws_region, s.aws_profile)
@@ -641,7 +642,7 @@ def _aws(io, args, s, deps, zone, records, cf, env_text, compose, url, timeout) 
         if res.returncode:
             io.say(envfile.scrub(res.stderr[-400:], s.secrets()))
             return None
-    return runner
+    return runner, records
 
 
 def _cloud(io: IO, args, s: Settings, deps: Deps, zone, cf, env_text: str, timeout: float):
