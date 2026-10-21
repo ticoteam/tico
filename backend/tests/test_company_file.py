@@ -200,6 +200,41 @@ def test_7_show_me_everything_switches_the_chart_to_the_everything_model():
         assert results[0]["ok"] and len(switched["bots"]) == SPEC_COUNTS[key] + held, key
 
 
+def test_a_held_seat_renamed_in_another_case_survives_a_model_switch_and_keeps_its_reporting_line():
+    draft, _ = first_chart("We do a bit of everything.", ["small_team"])
+    seat = lambda d, template: next(b for b in d["bots"] if b["template"] == template)
+    draft, results = run(draft, ("person_set", {"name": "me", "role": "Founder"}),
+                         ("seat_fill", {"seat": "Controller", "name": "Ben"}),
+                         ("bot_rename", {"bot": seat(draft, "controller")["id"], "title": "controller"}),
+                         ("model_use", {"model": "software"}))
+    assert all(r["ok"] for r in results), results
+    bookkeeper = seat(draft, "bookkeeping")
+    draft, results = run(draft, ("seat_fill", {"seat": bookkeeper["title"], "name": "Ana"}),
+                         ("bot_rename", {"bot": bookkeeper["id"], "title": bookkeeper["title"].lower()}),
+                         ("model_use", {"model": "everything"}))
+    assert all(r["ok"] for r in results), results
+    names = [b["title"].lower() for b in draft["bots"]]
+    assert len(names) == len(set(names)), "no seat twice in another case"
+    controller = seat(draft, "controller")
+    assert controller["title"] == "controller" and controller["person"] == "ben"
+    assert seat(draft, "bookkeeping")["person"] == "ana"
+    # The held lowercase Controller still heads the seats under it, kept and new alike.
+    assert seat(draft, "bookkeeping")["reports_to"] == controller["id"]
+    assert seat(draft, "accounts-payable")["reports_to"] == controller["id"]
+
+
+def test_filling_a_seat_on_an_empty_team_keeps_the_visitor_the_owner():
+    draft, _ = first_chart("SaaS.", ["sells_software"])
+    assert draft["people"] == []
+    after, results = run(draft, ("seat_fill", {"seat": "Equity Manager", "name": "Ana"}))
+    assert results[0]["ok"], results
+    owner = D.owner(after)
+    assert owner["name"] == "You" and owner["id"] != "ana"
+    assert not next(p for p in after["people"] if p["name"] == "Ana")["owner"]
+    doc = yaml.safe_load(C.to_yaml(after, CREATED))
+    assert [p["name"] for p in doc["people"] if p.get("owner")] == ["You"]
+
+
 def test_8_a_company_no_model_fits_starts_from_everything():
     draft, line = first_chart("We do a bit of everything.", ["small_team"])
     assert len(draft["bots"]) == 73

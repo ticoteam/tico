@@ -42,6 +42,42 @@ def test_a_seat_with_no_bot_yet_makes_no_bot_and_the_bots_under_it_report_one_st
     assert employees["bookkeeping"]["reports_to"] == "finance-lead"
 
 
+def test_people_who_hold_seats_come_along_in_the_plan_and_make_no_bot(environment):
+    api = environment()
+    draft = C.blank()
+    draft["company"]["signals"] = ["sells_services"]
+    draft = C.Turn(draft).finish()
+    keep = ("coo", "botops", "finance-lead", "bookkeeping", "controller")
+    draft["bots"] = [b for b in draft["bots"] if b["template"] in keep]
+    seat = {b["template"]: b["title"] for b in draft["bots"]}
+    turn = C.Turn(draft)
+    for name, args in (("company_set", {"name": "Acme Finance", "about": "We help small firms manage their books."}),
+                       ("person_set", {"name": "me", "role": "Founder"}),
+                       ("seat_fill", {"seat": seat["bookkeeping"], "name": "Ana"}),
+                       ("seat_fill", {"seat": seat["controller"], "name": "Ben"})):
+        assert turn.apply(name, args)["ok"], name
+    text = C.to_yaml(turn.finish())
+    assert "held_by: ana" in text and "held_by: ben" in text
+    body = {"company_yaml": text}
+    preview = api.post("/api/v2/onboarding/company/preview", json=body, headers=signed_in())
+    assert preview.status_code == 200, preview.text
+    summary = preview.json()
+    # Ana's seat has a template and Ben's has none yet: a person holds each, so neither makes a bot.
+    assert {e["template"] for e in summary["employees"]} == {"assistant", "botops", "finance-lead"}
+    assert {"open_seats", "coworkers"} <= set(summary["deferred"])
+    body["fingerprint"] = summary["fingerprint"]
+    done = api.post("/api/v2/onboarding/company/import", json=body, headers=signed_in())
+    assert done.status_code == 200, done.text
+    assert not rows(api, "SELECT slug FROM bots WHERE slug IN ('bookkeeping','controller')")
+    saved = rows(api, "SELECT value_json FROM registry_metadata WHERE key='onboarding.company_file'")[0]["value_json"]
+    assert '"person":"ana"' in saved and '"person":"ben"' in saved
+    # A coworker who holds no seat still joins in Tico, not by import.
+    loose = C.from_yaml(text)
+    loose["people"].append({"id": "cara", "name": "Cara", "role": "Designer", "dept": None, "owner": False, "isNew": True})
+    with pytest.raises(C.DraftError, match="add other coworkers in Tico"):
+        starter.load(C.to_yaml(loose))
+
+
 def test_import_preserves_selected_team_builtins_and_later_choice_across_retry_and_runner_enrollment(environment):
     api = environment()
     body = {"company_yaml": company_text()}

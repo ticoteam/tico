@@ -357,11 +357,12 @@ def _lay_out(draft, model, reason):
         bot = _make_bot(draft, role, title, reason, False)
         bot["dept"] = row["team"]  # a model may seat a role in another team: the store's Pricing Analyst is in Finance
         draft["bots"].append(bot)
-    titles = {b["title"]: b["id"] for b in draft["bots"]}
+    by_title = {b["title"].lower(): b for b in draft["bots"]}  # the same case-blind match as `_title_taken`
     for row in model["seats"]:
-        if row.get("under") in titles:
-            bot = next(b for b in draft["bots"] if b["title"] == (row.get("title") or BY_SLUG[row["template"]]["name"]))
-            bot.setdefault("reports_to", titles[row["under"]])
+        boss = by_title.get(str(row.get("under", "")).lower())
+        bot = by_title.get((row.get("title") or BY_SLUG[row["template"]]["name"]).lower())
+        if boss and bot and bot is not boss:
+            bot.setdefault("reports_to", boss["id"])
 
 
 def _core(draft):
@@ -688,7 +689,12 @@ def seat_fill(draft, args, today, notes):
     bot = find_bot(draft, args["seat"])
     if bot["core"] or bot["existing"]:
         raise Refusal("%s isn't a seat a person can hold." % bot["title"])
-    person = _person_named(draft, args["name"]) or add_person(draft, args["name"], bot["title"])
+    person = _person_named(draft, args["name"])
+    if not person:
+        if not draft["people"] and str(args["name"]).strip().lower() not in ("me", "myself", "i"):
+            # The visitor owns the company, not the first coworker who holds a seat.
+            add_person(draft, "me", "Owner", owner=True)
+        person = add_person(draft, args["name"], bot["title"])
     if person["dept"] is None:
         person["dept"] = bot["dept"]
     for other in draft["bots"]:

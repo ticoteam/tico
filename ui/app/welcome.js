@@ -204,7 +204,8 @@ function onbSampleHTML(state, done) {
     <button class="ghost" type="button" id="onb-sample">Start with a sample company</button></div>`;
 }
 const onbImportPending = fields => (fields || []).map(field => ({goals: 'goals', tool_connections: 'tool connections',
-  first_jobs: 'first jobs', model_choices: 'model choices', routines: 'routines'}[field] || field)).join(', ');
+  first_jobs: 'first jobs', model_choices: 'model choices', routines: 'routines',
+  open_seats: 'open seats', coworkers: 'coworkers'}[field] || field)).join(', ');
 function onbCompanyFileHTML(state, done) {
   if (done) {
     const imported = state.record.company_import;
