@@ -26,6 +26,10 @@ All notable changes to Tico are recorded here. The format follows
   each one at its own rate.
 
 ### Fixed
+- **A rate-limited bot can be moved to another model.** Settings > Bots refused the change with "Wait for the
+  current bot turn to finish" whenever a retry was running, so the bot stayed stuck on its spent model. The change now
+  applies at once and takes effect from the next turn; the limit lifts, and a turn still running on the old model no
+  longer puts the limit back on the new one.
 - **Muse Code turns work again on a Docker computer that runs bots as their own user.** Each Muse login now keeps
   its sessions in a folder of Tico's own (per subscription profile too), so a turn, including an automatic fallback
   to Muse, no longer fails at once with "failed to create session lock directory ... Permission denied". If that

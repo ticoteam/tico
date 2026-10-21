@@ -153,6 +153,14 @@ def bump_bot_session_epoch(c, bot):
               "epoch=epoch+1,updated=excluded.updated", (bot, H.now()))
 
 
+def model_changed_since(c, bot, since):
+    """Whether a person moved the bot to another model after `since`, a turn's lease. That turn runs on the model its
+    claim handed it, so what it meets (a usage limit, a provider thread) is the old model's, not the bot's now
+    (Dev 334: a rate-limited bot can be moved off the spent model while a turn is out)."""
+    return c.execute("SELECT 1 FROM bot_transitions WHERE bot=? AND kind='model' AND state='applied' AND applied_at>? "
+                     "LIMIT 1", (bot, since)).fetchone() is not None
+
+
 # The room messages a claim hands its turn (the runner forwards only what arrived since the session last answered).
 HISTORY_PAGE = 50
 
@@ -1888,10 +1896,12 @@ class Execution:
         from .shared_bots import follow
         config = follow(c, row["bot"], json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot=?", (row["bot"],)).fetchone()[0]))
         runtime, model = providers.bot_choice(c, self.store.settings, config)
-        c.execute("INSERT INTO bot_sessions(bot,runtime,model,thread_id,runner_id,tokens_in,updated) "
-                  "VALUES(?,?,?,?,?,0,?) ON CONFLICT(bot,runtime,model) DO UPDATE SET "
-                  "thread_id=excluded.thread_id,runner_id=excluded.runner_id,updated=excluded.updated",
-                  (row["bot"], runtime, model, body.thread_id, who.runner_id, H.now()))
+        if not model_changed_since(c, row["bot"], row["created"]):
+            # A turn leased before a model change started the old model's thread: it is not the new model's.
+            c.execute("INSERT INTO bot_sessions(bot,runtime,model,thread_id,runner_id,tokens_in,updated) "
+                      "VALUES(?,?,?,?,?,0,?) ON CONFLICT(bot,runtime,model) DO UPDATE SET "
+                      "thread_id=excluded.thread_id,runner_id=excluded.runner_id,updated=excluded.updated",
+                      (row["bot"], runtime, model, body.thread_id, who.runner_id, H.now()))
         msg = c.execute("SELECT message_id FROM jobs WHERE id=?", (row["job_id"],)).fetchone()[0]
         H.task_session_started(c, row["bot"], row["lane"], msg, body.thread_id, runtime)
         H.mark_delivered(c, H.KEEPER, msg)
@@ -2308,6 +2318,8 @@ class Execution:
         runtime, model = providers.bot_choice(c, self.store.settings, json.loads(config[0]) if config else {})
         if check:
             runtime, model = check["runtime"], check["model"]
+        # The bot was moved to another model while this turn ran on the old one: its limit is not the new model's login.
+        superseded = not check and model_changed_since(c, row["bot"], row["created"])
         if row["thread_id"] and body.tokens_in is not None:
             c.execute("UPDATE bot_sessions SET tokens_in=?,updated=? WHERE bot=? AND runtime=? AND model=? AND thread_id=?",
                       (int(body.tokens_in), H.now(), row["bot"], runtime, model, row["thread_id"]))
@@ -2315,7 +2327,7 @@ class Execution:
         # The Tico AI Gateway's cap and address block are the company key's, not a provider login's: they keep their
         # own waits (reset_cooldown).
         gateway_wait = tico_code == gateway.RATE_LIMITED or any(gateway.cap_reached(e) for e in limit_errors(c, aid))
-        if not check and not stopped and not gateway_wait and (limited or body.outcome == "completed"):
+        if not check and not superseded and not stopped and not gateway_wait and (limited or body.outcome == "completed"):
             from .subscriptions import effective
             login_hold = login_holds.after_turn(c, row["runner_id"], row["bot"], effective(c, row["bot"])[0] or "",
                                                 runtime, body, aid, H.now())
@@ -2366,6 +2378,12 @@ class Execution:
             H.event(c, H.KEEPER, "attempt.check_limited", aid,
                     {"bot": row["bot"], "job_id": row["job_id"], "task_id": check_task, "runtime": runtime,
                      "retry_after": retry})
+        elif limited and superseded:
+            # Its work goes back in the queue and runs on the model the bot was moved to, which is not held.
+            settle_status(c, row["bot"], "idle", f"The previous model hit its usage limit at {H.now()[11:16]}; "
+                          "queued work runs on the new model", claimed=row["created"])
+            H.event(c, H.KEEPER, "attempt.limited_superseded", aid,
+                    {"bot": row["bot"], "job_id": row["job_id"], "runtime": runtime})
         elif limited:
             streak = limit_streak(c, row["bot"])
             hit = H.now()
