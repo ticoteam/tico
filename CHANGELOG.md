@@ -8,10 +8,9 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
-- **Bots read the runs of the bots that report to them.** A bot above another in `reports_to` (at any depth) now
-  sees that bot's chat-room runs too, such as the wake-ups the hub posts there, in `hub_run_list` and their steps, so
-  a manager like a Product Manager can score its monitors' cost per catch. A human's own chat with a report stays
-  theirs, private tasks stay private, and peers and reports never read a manager's chat-room runs.
+- **A menu button left of Search in a chat's bot switcher on a phone.** In a bot's chat the bottom bar is hidden;
+  tapping the bot's icon by the chat bar now shows a round menu button beside Search that opens the side menu in one
+  tap, the same menu More opens, and it closes the same way.
 - **How bots get their models**, at the top of Settings > AI providers and the first setup step: **Your Claude and
   ChatGPT subscriptions, plus Tico Gateway** (recommended, and what Tico's installer sets with
   `TICO_MODELS_PRESET=subscriptions-gateway`), subscriptions only, Tico Gateway only, or your company's plans or API
@@ -24,6 +23,14 @@ All notable changes to Tico are recorded here. The format follows
   plainly when a used-up login has bots on the Gateway. Gateway usage records keep which gateway key and install
   paid, never the key. The other three choices, and a team that never picks one, keep working
   as before ([Tico AI Gateway](docs/ai-gateway.md#choose-how-bots-get-their-models)).
+
+## [0.3.69] - 2026-10-21
+
+### Added
+- **Bots read the runs of the bots that report to them.** A bot above another in `reports_to` (at any depth) now
+  sees that bot's chat-room runs too, such as the wake-ups the hub posts there, in `hub_run_list` and their steps, so
+  a manager like a Product Manager can score its monitors' cost per catch. A human's own chat with a report stays
+  theirs, private tasks stay private, and peers and reports never read a manager's chat-room runs.
 
 ### Changed
 - **The setup chart has no seat limit you will meet.** The setup chat, the company file and the first screen's
@@ -4004,7 +4011,8 @@ First public release.
 - Hosting: local only on a Mac, or self-hosted, including a reference AWS stack under `infra/ec2/`
   with Litestream backups.
 
-[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.68...HEAD
+[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.69...HEAD
+[0.3.69]: https://github.com/ticoteam/tico/compare/v0.3.68...v0.3.69
 [0.3.68]: https://github.com/ticoteam/tico/compare/v0.3.67...v0.3.68
 [0.3.67]: https://github.com/ticoteam/tico/compare/v0.3.66...v0.3.67
 [0.3.66]: https://github.com/ticoteam/tico/compare/v0.3.65...v0.3.66
