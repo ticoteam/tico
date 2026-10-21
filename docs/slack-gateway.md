@@ -180,7 +180,8 @@ and its digest says so.
 When a routed bot's reply (`say`, `ask` or `answer` to the human) lands in a mapped
 conversation, the gateway posts it once in the thread with `chat.postMessage`: `username` is
 the bot's display name, `icon_emoji`/`icon_url` come from `slack_icon`/`slack_icon_url` in the
-bot's registry entry when set, and the last line is `(sent from <display name>)`. Slack still
+bot's registry entry when set, and the last line is `(sent from <display name>)`, or
+`(sent from <display name> on #<number> <task title>)` linked to the task when the reply is about one. Slack still
 shows the APP badge. Without the `chat:write.customize` scope the post goes out as Tico with the
 footer alone, and the log says so once.
 

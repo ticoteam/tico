@@ -1290,9 +1290,11 @@ class Gateway:
     def rendered(self, c, post):
         """What Slack shows: the reply, then the footer that names the bot even where customize is not honoured."""
         message = H.message(c, post["message_id"]) or {}
+        about = None
         if post["bot"]:
             conv = H.conversation(c, message["conversation_id"]) if message.get("conversation_id") else None
-            line = visuals.elsewhere(self.settings.public_url, message, H.message_task_id(message, conv))
+            about = H.message_task_id(message, conv)
+            line = visuals.elsewhere(self.settings.public_url, message, about)
         else:
             # A task-done notice carries no visuals of its own: the line is the result's, linked to that comment.
             result = completion_result(c, message)
@@ -1309,7 +1311,15 @@ class Gateway:
         text = str(post["text"] or "").strip()
         if len(text) > POST_CHARS:
             text = text[:POST_CHARS].rstrip() + " …"
-        return {"text": slack_escape(text) + ("\n" + seen if seen else "") + f"\n\n(sent from {name})", "username": name,
+        # A reply about a task names it and links to it, so the DM makes sense on its own.
+        task = H.task(c, about) if about else None
+        if task:
+            label = (f"#{task['number']} " if task.get("number") is not None else "") + str(task.get("title") or "").strip()
+            url = self.settings.public_url + "/#/task/" + urllib.parse.quote(task["id"], safe="")
+            footer = f"(sent from {name} on <{slack_escape(url)}|{slack_escape(label[:80])}>)"
+        else:
+            footer = f"(sent from {name})"
+        return {"text": slack_escape(text) + ("\n" + seen if seen else "") + "\n\n" + footer, "username": name,
                 "icon_emoji": str(config.get("slack_icon") or "") or None,
                 "icon_url": str(config.get("slack_icon_url") or "") or None}
 
