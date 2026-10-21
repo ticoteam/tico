@@ -73,6 +73,12 @@ pub async fn runtime_readiness(runtime: &str, sign: &SignIn, client: &Client, as
             state
         }
     };
+    // Signed in but unable to save a session (Muse Code's data folder): no turn could run, so not ready, and no
+    // fallback hop picks it.
+    let (authenticated, detail) = match crate::hosts::data_problem(runtime, profile) {
+        Some(problem) if authenticated == "ready" => ("failed", problem),
+        _ => (authenticated, detail),
+    };
     let models: Vec<String> = if caps.model_list == "host" { crate::hosts::models(runtime, profile) } else { vec![] };
     let mut row = Map::new();
     // Which key signs the computer's own login in, by name and where it is kept; never its value.
