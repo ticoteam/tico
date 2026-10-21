@@ -405,9 +405,9 @@ def seed(draft):
         draft["bots"].append(_make_bot(draft, role, role["name"], "Fits what you said about how the company works.", False))
         matched.append(role["name"])
     if key == "everything":
-        line = "Nothing you said points to one kind of company, so I started from the Everything model"
+        line = "Nothing you said points to one kind of company, so we started from the Everything model"
     else:
-        line = "This looks like %s, so I started from the %s model" % (MODEL_WORDS[key], model["name"])
+        line = "This looks like %s, so we started from the %s model" % (MODEL_WORDS[key], model["name"])
     added = (["the %s" % _join(heads)] if heads else []) + (["%s" % _join(matched)] if matched else [])
     return line + (" and added %s." % " and ".join(added) if added else ".")
 

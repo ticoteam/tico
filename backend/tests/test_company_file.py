@@ -105,7 +105,7 @@ def test_the_first_chart_comes_from_the_model_the_company_s_signals_pick():
     # Services has no Support, Legal or Leadership head of its own: Everything's are added. No Product or Engineering.
     added = [b["title"] for b in draft["bots"] if b["reason"] == "Every chart has a head for each department."]
     assert added == ["Head of Customer Support", "General Counsel"]
-    assert line == ("This looks like a services firm, so I started from the Services firm model and added the "
+    assert line == ("This looks like a services firm, so we started from the Services firm model and added the "
                     "Head of Customer Support and General Counsel.")
     assert not {"product", "engineering"} & set(depts(draft))
     assert "undo" not in draft, "the model is where the chart starts, not a change to undo"
@@ -131,7 +131,7 @@ def test_a_signal_about_how_the_company_works_adds_the_roles_that_do_that_work()
 
 def test_2_a_saas_for_dentists_starts_from_the_software_company_model():
     draft, line = first_chart("We build a SaaS app for dentists.", ["sells_software", "sells_to_businesses"])
-    assert line.startswith("This looks like a software company, so I started from the Software company model")
+    assert line.startswith("This looks like a software company, so we started from the Software company model")
     assert len(draft["bots"]) >= 50
     counts = depts(draft)
     assert all(counts.get(team, 0) >= 1 for team in ("legal", "hr", "finance", "operations")), counts
@@ -140,7 +140,7 @@ def test_2_a_saas_for_dentists_starts_from_the_software_company_model():
 
 def test_3_a_house_cleaning_company_starts_from_the_local_service_business_model():
     draft, line = first_chart("We're a house-cleaning company with 40 cleaners.", ["onsite_jobs", "sells_to_consumers"])
-    assert line.startswith("This looks like a local service business, so I started from the Local service business model")
+    assert line.startswith("This looks like a local service business, so we started from the Local service business model")
     counts = depts(draft)
     assert not {"product", "engineering"} & set(counts)
     assert counts["operations"] == max(counts.values()), counts
@@ -203,7 +203,7 @@ def test_7_show_me_everything_switches_the_chart_to_the_everything_model():
 def test_8_a_company_no_model_fits_starts_from_everything():
     draft, line = first_chart("We do a bit of everything.", ["small_team"])
     assert len(draft["bots"]) == 73
-    assert line == "Nothing you said points to one kind of company, so I started from the Everything model."
+    assert line == "Nothing you said points to one kind of company, so we started from the Everything model."
 
 
 def test_9_the_cap_table_belongs_to_the_equity_manager_only():
