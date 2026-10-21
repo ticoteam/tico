@@ -22,6 +22,8 @@ All notable changes to Tico are recorded here. The format follows
   as before ([Tico AI Gateway](docs/ai-gateway.md#choose-how-bots-get-their-models)).
 
 ### Fixed
+- A goal's automatic colour follows its worst KPI: red takes priority over yellow and green, and yellow over green.
+  The note explains that KPI; a colour set by a person stays in place until handed back to the Goal Manager.
 - **Company file: numbered bot ids are no longer blanked as keys**: a long id made from a numbered title, such as
   `accounts-receivable-specialist-2`, read as a random key once it carried a number, was replaced with `[removed]` and
   the draft was refused. Lowercase ids of words and numbers now pass; real key shapes are still removed.
