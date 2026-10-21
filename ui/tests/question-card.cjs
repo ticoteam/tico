@@ -204,17 +204,27 @@ const card = () => ({
     await page.waitForTimeout(100);
     assert.equal(answers.length, 0);
     assert.deepEqual(await fresh(), {warned: true, note: '', ticked: NEW_TICKS});
-    // Typed into, then redrawn: the old draft is dropped, not carried into the newer wording.
-    await swap().locator('[data-qc-tick="1"]').check();
-    await swap().locator('.qc-note').fill('Second try');
+    // Ticked, with no redraw and no Send: the tick on the old box redraws it from the new question, its new labels
+    // and recommended ticks, with the changed line and an empty note, and sends nothing.
+    await swap().locator('.qc-note').fill('Third try');
     await reword('Pages');
+    await swap().locator('[data-qc-tick="1"]').check();             // the old box's unticked "Docs pages"
+    await page.waitForTimeout(100);
+    assert.equal(answers.length, 0);
+    assert.deepEqual(await fresh(), {warned: true, note: '', ticked: ['1. Calls (recommended)', '2. Visitor notes (recommended)', '4. Spend cap (recommended)']});
+    assert.deepEqual(await swap().evaluate(el => [...el.querySelectorAll('.qc-pick .qc-l')].map(x => x.textContent.trim())),
+      ['1. Calls (recommended)', '2. Visitor notes (recommended)', '3. Pages', '4. Spend cap (recommended)']);
+
+    // Typed into, then redrawn: the old draft is dropped, not carried into the newer wording.
+    await swap().locator('[data-qc-tick="1"]').uncheck();
+    await swap().locator('.qc-note').fill('Second try');
+    await reword('Docs pages');
     await swap().locator('.qc-note').type('?');
     await page.evaluate(() => { const el = document.querySelector('.qcard[data-qcard="t-swap"]'); el.outerHTML = qcardBoxHTML({id: 't-swap'}); });
-    // (Reworded back to the first order, so the recommended picks sit where they first were.)
-    assert.deepEqual(await fresh(), {warned: true, note: '', ticked: ['1. Calls (recommended)', '2. Visitor notes (recommended)', '4. Spend cap (recommended)']});
+    assert.deepEqual(await fresh(), {warned: true, note: '', ticked: NEW_TICKS});
     await swap().locator('[data-qc="ticked"]').click();
     for (let i = 0; i < 100 && !answers.length; i++) await page.waitForTimeout(20);
-    assert.deepEqual(answers.shift(), {task: 't-swap', target: {comment: 'q-t-swap'}, answers: {decision: ['Calls', 'Visitor notes', 'Spend cap']}});
+    assert.deepEqual(answers.shift(), {task: 't-swap', target: {comment: 'q-t-swap'}, answers: {decision: ['Spend cap', 'Visitor notes', 'Calls']}});
 
     // Picks with pictures show the same pictures in Decide and on the task page, several picks included; a Yes / No
     // asked with no options still says what each button does.
