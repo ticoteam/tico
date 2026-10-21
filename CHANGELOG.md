@@ -8,6 +8,9 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Two Intel sizes on AWS**: `--aws-instance-type m8i-flex.xlarge` (4 cores, 16 GiB) and `m8i-flex.2xlarge`
+  (8 cores, 32 GiB), for the Hosting preview's 4-core and 8-core servers. They launch on the x86_64 Ubuntu or Amazon
+  Linux image; the t4g sizes stay on arm64. The plan says which CPU it uses.
 - **How bots get their models**, at the top of Settings > AI providers and the first setup step: **Your Claude and
   ChatGPT subscriptions, plus Tico Gateway** (recommended, and what Tico's installer sets with
   `TICO_MODELS_PRESET=subscriptions-gateway`), subscriptions only, Tico Gateway only, or your company's plans or API

@@ -16,13 +16,19 @@ MANAGED_TAG = ("ManagedBy", "tico-setup")
 NAME_TAG = "tico-setup-name"
 VOLUME_GIB = 30
 
+# The machine image for each OS and CPU: t4g is Graviton (arm64), m8i-flex is Intel (x86_64). The images are built
+# for both.
 AMI_PARAMS = {
-    "ubuntu": "/aws/service/canonical/ubuntu/server/24.04/stable/current/arm64/hvm/ebs-gp3/ami-id",
-    "al2023": "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64",
+    ("ubuntu", "arm64"): "/aws/service/canonical/ubuntu/server/24.04/stable/current/arm64/hvm/ebs-gp3/ami-id",
+    ("al2023", "arm64"): "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64",
+    ("ubuntu", "x86_64"): "/aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id",
+    ("al2023", "x86_64"): "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64",
 }
 # us-east-1 on-demand list prices in USD/hour, approximate; the wizard says so.
-HOURLY = {"t4g.small": 0.0168, "t4g.medium": 0.0336, "t4g.large": 0.0672}
-MEMORY_GIB = {"t4g.small": 2, "t4g.medium": 4, "t4g.large": 8}
+HOURLY = {"t4g.small": 0.0168, "t4g.medium": 0.0336, "t4g.large": 0.0672,
+          "m8i-flex.xlarge": 0.2116, "m8i-flex.2xlarge": 0.4232}
+MEMORY_GIB = {"t4g.small": 2, "t4g.medium": 4, "t4g.large": 8, "m8i-flex.xlarge": 16, "m8i-flex.2xlarge": 32}
+ARCH = {name: "arm64" if name.startswith("t4g.") else "x86_64" for name in HOURLY}
 EBS_GB_MONTH, PUBLIC_IPV4_HOUR, HOURS = 0.08, 0.005, 730
 
 
@@ -63,7 +69,7 @@ class AwsPlan:
         sg = ("inbound TCP " + ", ".join(map(str, self.ports)) + " (and UDP 443) from anywhere") if self.ports \
             else "no inbound rules at all"
         return [
-            f"EC2 {self.instance_type} ({MEMORY_GIB[self.instance_type]} GiB), {'Ubuntu 24.04' if self.os_family == 'ubuntu' else 'Amazon Linux 2023'} arm64, "
+            f"EC2 {self.instance_type} ({MEMORY_GIB[self.instance_type]} GiB), {'Ubuntu 24.04' if self.os_family == 'ubuntu' else 'Amazon Linux 2023'} {ARCH[self.instance_type]}, "
             f"{VOLUME_GIB} GiB encrypted gp3, region {self.region}",
             f"Security group tico-{self.name}: {sg}",
             "Instance metadata: IMDSv2 required, hop limit 1 (containers and bots cannot reach the instance role)",
@@ -80,7 +86,7 @@ def plan_aws(*, domain: str, front_door: str, region: str, instance_type: str = 
              os_family: str = "ubuntu", name: str = "", role: str = "server", boundary: str = "") -> AwsPlan:
     if instance_type not in HOURLY:
         raise ValueError(f"instance type must be one of {', '.join(HOURLY)}")
-    if os_family not in AMI_PARAMS:
+    if os_family not in {family for family, _ in AMI_PARAMS}:
         raise ValueError("os must be ubuntu or al2023")
     p = AwsPlan(name or slug(domain), region, instance_type, os_family, front_door, domain,
                 ports=[80, 443] if front_door == "caddy" else [], elastic_ip=front_door == "caddy", role=role, boundary=boundary)
@@ -224,7 +230,7 @@ class Deployer:
         return ok[0]["SubnetId"]
 
     def launch(self, user_data: str, profile: str, sg: str, subnet: str = "") -> str:
-        ami = self.ssm.get_parameter(Name=AMI_PARAMS[self.p.os_family])["Parameter"]["Value"]
+        ami = self.ssm.get_parameter(Name=AMI_PARAMS[self.p.os_family, ARCH[self.p.instance_type]])["Parameter"]["Value"]
         n = f"tico-{self.p.name}"
         args = dict(
             ImageId=ami, InstanceType=self.p.instance_type, MinCount=1, MaxCount=1, UserData=user_data,

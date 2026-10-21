@@ -73,3 +73,43 @@ def test_existing_untagged_role_is_never_reused():
 NAT = {"DestinationCidrBlock": "0.0.0.0/0", "GatewayId": "nat-1"}
 IGW = {"DestinationCidrBlock": "0.0.0.0/0", "GatewayId": "igw-1"}
 
+
+
+@pytest.mark.parametrize("instance_type, arch, image", [
+    ("t4g.medium", "arm64", "/aws/service/canonical/ubuntu/server/24.04/stable/current/arm64/hvm/ebs-gp3/ami-id"),
+    ("m8i-flex.xlarge", "x86_64", "/aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id"),
+    ("m8i-flex.2xlarge", "x86_64", "/aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id"),
+])
+def test_each_size_launches_on_an_image_for_its_cpu(instance_type, arch, image):
+    """Hosting preview v6 (tico-services Dev 295): Starter t4g.medium, 4 cores m8i-flex.xlarge, 8 cores
+    m8i-flex.2xlarge. The Intel sizes need the x86_64 image, never the arm64 one."""
+    ec2, iam, ssm, _ = aws_clients()
+    p = plan("caddy", instance_type=instance_type)
+    d = deployer(p, ec2, iam, ssm)
+    d.launch_or_reuse(d.prepare(), "#!/bin/bash\n")
+    (run,) = ec2.called("run_instances")
+    assert run["InstanceType"] == instance_type and ssm.asked == [image]
+    assert f"Ubuntu 24.04 {arch}," in p.lines()[0]
+
+
+def test_amazon_linux_on_an_intel_size_uses_the_x86_64_image():
+    ec2, iam, ssm, _ = aws_clients()
+    d = deployer(plan("caddy", instance_type="m8i-flex.xlarge", os_family="al2023"), ec2, iam, ssm)
+    d.launch_or_reuse(d.prepare(), "#!/bin/bash\n")
+    assert ssm.asked == ["/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64"]
+
+
+def test_the_intel_sizes_are_priced_and_any_other_size_is_refused():
+    assert (aws.MEMORY_GIB["m8i-flex.xlarge"], aws.MEMORY_GIB["m8i-flex.2xlarge"]) == (16, 32)
+    assert plan("caddy", instance_type="m8i-flex.2xlarge").monthly_usd > plan("caddy", instance_type="m8i-flex.xlarge").monthly_usd
+    with pytest.raises(ValueError):
+        plan("caddy", instance_type="m8i-flex.4xlarge")
+
+
+def test_the_cli_takes_the_intel_sizes():
+    from setup import cli
+    parser = cli.parser()
+    for size in ("m8i-flex.xlarge", "m8i-flex.2xlarge"):
+        assert parser.parse_args(["--aws-instance-type", size]).aws_instance_type == size
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--aws-instance-type", "m8i-flex.4xlarge"])

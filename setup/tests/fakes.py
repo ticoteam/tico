@@ -185,6 +185,7 @@ class FakeSSM:
         return [kw for n, kw in self.calls if n == name]
 
     def get_parameter(self, Name):
+        self.asked = [*getattr(self, "asked", []), Name]
         return {"Parameter": {"Value": "ami-123"}}
 
     def put_parameter(self, **kw):
