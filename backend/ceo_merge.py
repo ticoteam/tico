@@ -77,8 +77,22 @@ def hidden(c, person):
     """Ids of the tasks the CEO Bot merged for this person that stay out of their Needs you: while the merged item is
     open and the original still waits on them as it did when merged, and once its answer was passed on until a bot
     asks them something new there. Anything else on the original is back in their Needs you."""
+    return {link["original"] for link in _hidden_links(c, person)}
+
+
+def hidden_by_item(c, person):
+    """{merged item id: [ids of its originals out of the person's Needs you]} while each merged item is open. The
+    Tasks page lists Needs you from its own copy of the tasks, so the merged item names what it stands for."""
+    out = {}
+    for link in _hidden_links(c, person):
+        if link["state"] == "merged":
+            out.setdefault(link["merged_into"], []).append(link["original"])
+    return out
+
+
+def _hidden_links(c, person):
     marks = ",".join("?" * len(H.ACTIVE_STATUSES))
-    out = set()
+    out = []
     for link in H._rows(c.execute(
             "SELECT m.* FROM ceo_merges m JOIN tasks t ON t.id=m.merged_into JOIN tasks o ON o.id=m.original "
             f"WHERE m.person=? AND o.status IN ({marks}) AND "
@@ -87,7 +101,7 @@ def hidden(c, person):
         row = H.task(c, link["original"])
         if link["state"] == "merged" and _current(c, link, row) or \
                 link["state"] == "answered" and not _asked_again(c, link, row):
-            out.add(link["original"])
+            out.append(link)
     return out
 
 

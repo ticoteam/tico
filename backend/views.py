@@ -1253,6 +1253,8 @@ def needs_items(c, auth, who, task_view, older=None):
     H.hydrate_task_tags(c, raw["tasks"] + raw["waiting"] + raw["declined"])
     from . import ask_deadlines, team_rules
     rules = team_rules.load(c)
+    from . import ceo_merge
+    merged = ceo_merge.hidden_by_item(c, who.actor)
     items = []
     for kind in ("tasks", "waiting", "declined"):
         for row in raw[kind]:
@@ -1272,6 +1274,9 @@ def needs_items(c, auth, who, task_view, older=None):
                                     else person_origin(c, row, visible, who.actor))}
             item["person_ask"], item["ask_missing"] = person_ask(row, item["kind"], who.actor, ask)
             item["recommend"] = next((r for a in open_asks if (r := recommendation(a, who.actor))), None)
+            if row["id"] in merged:
+                # The CEO Bot's merged item: the originals it stands for, which the Tasks page leaves out of Needs you.
+                item["merged"] = [t for t in merged[row["id"]] if _readable(auth, c, who, t)]
             if (item["kind"] == "question" and row["owner"] != who.actor and H.ask_older(ask)
                     and not any(a["to_actor"] == who.actor and not H.ask_older(a) for a in open_asks)):
                 ask["older"] = True
