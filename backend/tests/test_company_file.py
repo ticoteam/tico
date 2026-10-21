@@ -233,7 +233,9 @@ def test_10_numbered_ids_from_titles_survive_a_turn_the_file_and_the_import():
     assert [b["id"] for b in back["bots"] if b["title"] in titles] == ids
     for key in ("3f9a2b7c-1d4e-4a5b-9c8d-7e6f5a4b3c2d", "k3j-9x2-q8p-m4z-w1r-t6y-b7n-c5v-h2g",
                 "team-k3j-9x2-q8p-m4z-w1r-t6y-b7n-c5v", "qwe-831-zxc-476-rty-920-uio-153-pas",
-                "x7Gk2pQ9vL4mN8rT1wY6zB3cD5fH0jKs"):
+                "x7Gk2pQ9vL4mN8rT1wY6zB3cD5fH0jKs",
+                # word-shaped beside a key: mixed case, or one long mixed run after a word
+                "Accounts-Receivable-Specialist-2-Northwest-Zq9", "billing-x7gk2pq9vl4mn8rt1wy6zb3cd5fh"):
         assert C.scrub("id " + key) == ("id [removed]", True), key
 
 # Every label the scrubber knows, each value length a pasted password can have, in each way a value is written.
