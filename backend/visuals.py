@@ -466,7 +466,10 @@ def decorate(c, who, files, key, base, messages, full=True):
     fallback a page or SVG gets no `src`: it is a card with `open` true, its title and, when the file has one, a still
     preview (`preview_url`, a picture), and Open shows it in the file viewer."""
     from . import task_privacy as privacy
-    cache, rows = {}, {}
+    cache, rows, served = {}, {}, {}
+    # The visual route rebuilds a bot reader without its run (serve, token_reader), so a file this run sees but that
+    # bare bot does not, a chat's file among them, gets no address: a file chip, not a link that always 404s.
+    route = token_reader(c, files.auth, privacy.actor(who)) if who.role == "bot" else who
     for message in messages:
         items = ((message or {}).get("refs") or {}).get("attachments") or []
         if not any(isinstance(a, dict) and a.get("kind") in INLINE for a in items):
@@ -487,17 +490,18 @@ def decorate(c, who, files, key, base, messages, full=True):
                     "current_version": None if removed else row["current_version"]}
             if v is not None:
                 actor = privacy.actor(who)
+                here = base if route is who or (route and files.visible(c, route, row, served)) else None
                 inline = full or a["kind"] in MEDIA
-                view["src"] = base + "/visuals/" + mint(key, actor, fid, number) if inline else None
+                view["src"] = here + "/visuals/" + mint(key, actor, fid, number) if inline and here is not None else None
                 if not inline:
                     view["open"] = True
-                    if v["thumb_blob_id"]:
-                        view["preview_url"] = base + "/visuals/" + mint(key, actor, fid, number, "preview")
+                    if v["thumb_blob_id"] and here is not None:
+                        view["preview_url"] = here + "/visuals/" + mint(key, actor, fid, number, "preview")
                 for field in ("width", "height", "duration_ms"):
                     if v[field] is not None:
                         view[field] = v[field]
-                if a["kind"] == "video" and v["poster_blob_id"]:
-                    view["poster_url"] = base + "/visuals/" + mint(key, actor, fid, number, "poster")
+                if a["kind"] == "video" and v["poster_blob_id"] and here is not None:
+                    view["poster_url"] = here + "/visuals/" + mint(key, actor, fid, number, "poster")
             fresh.append(view)
         message["refs"] = {**message["refs"], "attachments": fresh}
     return messages
@@ -549,14 +553,25 @@ def on_host(request, origin):
         return False
 
 
+def token_reader(c, auth, actor):
+    """The reader the visual route checks a token's actor as: a person as they are now, a bot as itself without any
+    run (a token outlives the turn it was minted in), or None when neither exists."""
+    from .auth import Identity
+    from .store import H, Problem
+    try:
+        if actor.startswith("human:"):
+            return auth.identity_for_actor(c, actor)
+        return Identity(actor, "bot") if actor.startswith("bot:") and H.bot(c, H.actor_id(actor)) else None
+    except Problem:
+        return None
+
+
 def serve(request, store, auth, files, blobs, key, ancestors, token, full=True, visual_origin=""):
     """GET /visuals/<token>: one visual for the reader the token names, checked again on every request. The route
     answers on every host the server does, the app's own included, so a page or SVG is served only to a request that
     came in on the visual address (`visual_origin`, in full mode); anywhere else, the app's own address and the whole
     fallback (`full` False), the route serves media only. A poster or preview that is not a picture is refused."""
     from fastapi.responses import Response
-    from .auth import Identity
-    from .store import H, Problem
     from .file_delivery import serve as deliver
     gone = Response(status_code=404, headers=_headers("default-src 'none'; sandbox", "attachment"))
     found = read(key, token)
@@ -564,11 +579,7 @@ def serve(request, store, auth, files, blobs, key, ancestors, token, full=True, 
         return gone
     actor, fid, number, part = found
     with store.read() as c:
-        try:
-            who = auth.identity_for_actor(c, actor) if actor.startswith("human:") else \
-                Identity(actor, "bot") if actor.startswith("bot:") and H.bot(c, H.actor_id(actor)) else None
-        except Problem:
-            who = None
+        who = token_reader(c, auth, actor)
         row = c.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone()
         if not who or not row or row["archived"] or row["locator"] != "tico_blob" or not files.visible(c, who, row, {}):
             return gone

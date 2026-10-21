@@ -505,3 +505,35 @@ def test_a_wav_already_stored_or_sent_as_audio_vnd_wave_still_plays_inline(api):
     assert r.status_code == 200, r.text
     [item] = r.json()["message"]["refs"]["attachments"]
     assert item["kind"] == "audio" and item["src"].startswith(VISUALS + "/visuals/")
+
+
+def test_a_bot_is_never_handed_a_visual_address_the_visual_route_refuses(api):
+    """Dev 319: the visual route rebuilds a bot reader without its run, so it cannot see a chat's files. A bot reading
+    its chat reply gets the file chip (no address) rather than a link that always 404s; the person keeps theirs, and
+    a bot's address for a task file still opens."""
+    _, attempt = turn(api)
+    fid, _ = png(api, attempt)
+    made = publish(api, attempt, name="clip.mp4", text=None, content_base64=base64.b64encode(bytes(range(256))).decode())
+    assert made.status_code == 200, made.text
+    clip = made.json()["file"]["id"]
+    with api.app.state.store.transaction() as c:              # a video with its poster ready, as file_metadata leaves it
+        c.execute("UPDATE bot_file_versions SET poster_blob_id=(SELECT blob_id FROM bot_file_versions WHERE file_id=?) "
+                  "WHERE file_id=?", (fid, clip))
+    sent = bot_reply(api, attempt, attachments=[f"{fid}@1", f"{clip}@1"])
+    assert sent.status_code == 200, sent.text
+    message = sent.json()
+    for read in (message, api.get("/api/v2/messages/" + message["id"], headers=headers(attempt["token"])).json()):
+        picture, video = read["refs"]["attachments"]
+        assert (picture["file_id"], video["file_id"], video["kind"]) == (fid, clip, "video")
+        for item in (picture, video):
+            assert not item["removed"] and item["current_version"] == 1
+            assert item.get("src") is None and item.get("poster_url") is None, item
+    picture, video = api.get("/api/v2/messages/" + message["id"], headers=headers("ben-test")).json()["refs"]["attachments"]
+    for address in (picture["src"], video["src"], video["poster_url"]):  # the person's addresses are unchanged
+        assert api.get(address).status_code in (200, 206), address
+
+    tid, task_fid, comment = visual_on_task(api, private=False)
+    listed = api.get(f"/api/v2/tasks/{tid}/comments", headers=headers(attempt["token"]))
+    assert listed.status_code == 200, listed.text
+    [item] = next(m for m in listed.json()["comments"] if m["id"] == comment["id"])["refs"]["attachments"]
+    assert item["file_id"] == task_fid and api.get(item["src"]).status_code == 200

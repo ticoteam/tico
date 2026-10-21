@@ -76,6 +76,41 @@ def test_before_sign_in_a_bot_runs_on_the_gateway_only_where_bots_run_as_their_o
     assert models_preset.main_config(record, ready, providers.fill(record, CLAUDE))["model"] == CLAUDE["model"]
 
 
+def test_a_new_computer_prepares_the_gateway_before_its_first_subscription_turn(api, monkeypatch):
+    from backend.tests.test_api import get
+    from backend.tests.test_gateway_connection import delete
+    connected(api, monkeypatch)
+    choose(api, models_preset.RECOMMENDED)
+    # Before-sign-in main work still needs its runtime when quota fallback is switched off.
+    with api.app.state.store.transaction() as c:
+        record = providers.load(c, api.app.state.store.settings)
+        providers.save(c, "human:ana", {"auto_fallback": False, "expected_revision": record["revision"]},
+                       "2026-10-19T00:00:00Z")
+    on_claude(api, "ops")
+    machine = runner(api)
+    assign(api, machine, "ops")
+    config = get(api, "config", machine["token"])
+    assert config["gateway_runtime"] == "pi" and config["fallback_models"] == []
+    waiting_heartbeat(api, machine, "no pi")
+    post(api, "chat/ops", {"text": "Use only the synthetic fixture"})
+    assert post(api, "jobs/claim", {"bot": "ops"}, token=machine["token"])["attempt"] is None
+    # The managed installer can now request Pi. Once installed, missing subscription sign-in no longer
+    # holds the work, and a normal runner can claim and complete it without changing the bot's model.
+    waiting_heartbeat(api, machine, "only the sign-in")
+    attempt = claim(api, machine, "ops")
+    assert attempt["config"]["runtime"] == config["gateway_runtime"]
+    post(api, f"attempts/{attempt['id']}/started", {"thread_id": "synthetic"}, machine["token"])
+    post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "last_seq": 0, "text": "Done."},
+         machine["token"])
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT state FROM attempts WHERE id=?", (attempt["id"],)).fetchone()[0] == "completed"
+    choose(api, "subscriptions")
+    assert get(api, "config", machine["token"])["gateway_runtime"] == ""
+    choose(api, models_preset.RECOMMENDED)
+    delete(api, "providers/gateway")
+    assert get(api, "config", machine["token"])["gateway_runtime"] == ""
+
+
 @pytest.mark.parametrize("preset", models_preset.PRESETS + ("",))
 def test_only_the_two_gateway_choices_put_the_gateway_last_and_spend_its_key(api, monkeypatch, preset):
     connected(api, monkeypatch)
