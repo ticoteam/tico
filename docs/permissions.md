@@ -47,6 +47,11 @@ Whatever the audiences say, these callers can see, read and write to a bot:
 - an **admin**, and the bot's **owners** (its creator and any others added). This is the same rule that lets
   them change the bot's settings, so being able to edit who has access and having access always go together.
 
+A bot above another in the `reports_to` chain also reads that bot's runs (`hub_run_list`, with each run's tokens and
+estimated cost) and their steps: its task and routine runs, and the wake-ups the hub posts into its chat room. A run a
+human started by chatting with the bot stays with that chat, and private tasks stay with their parties. Peers and
+the bots below keep the usual conversation rule, so they never read a manager's chat-room runs.
+
 ## Roles, and what a member may do
 
 Every human on the team has one role:
@@ -64,6 +69,12 @@ Settings > Humans (owners and admins) shows each human on one row: their role (t
 - **Can add humans** (`add_people`): on by default for coworkers, that is humans whose email is in the team's domain. A
   member with it on may add a human whose email is in the team's domain. Adding anyone outside it needs an owner or an admin,
   whatever the capability says.
+
+Connecting a workspace Inbox to a portal company requires a direct signed-in owner or admin in both places.
+The workspace previews the named company before confirmation. Members, bots, runners, support sessions, personal
+API tokens and delegated Assistant/BotOps actions cannot link it. This grants shared Inbox access only; it does not
+grant Hosting, Billing, Gateway or Support access. Every company agent can continue reading messages without consuming
+them, but the eight Inbox agent tools carry no company-linking authority.
 
 The **team's domain** is the domain(s) the owner allows to sign in (Settings > Humans, **Anyone at <domain> can sign in**); when
 none is set it is the owner's own email domain. When that is a public email service such as gmail.com, it is the team email domain the
@@ -90,7 +101,7 @@ The product favours getting going fast, and the owner tightens it later. Setting
 | Rule | On (default) | Off |
 | --- | --- | --- |
 | **Assistant acts without asking** | the Assistant makes tasks for bots, comments on tasks no other human is on, and messages bots directly, and does the task actions the human asks for in their Assistant chat; a card is for anything else ([Assistant](assistant.md)) | the Assistant acts directly only on the human's own tasks; a task, message or comment involving a bot, and a task action they asked for, is a card |
-| **People may let their Assistant decide their approvals** | each person may turn on "My assistant can decide approvals for me" in Settings > Assistant; their own Assistant then approves or declines approvals addressed to them on their words in its chat, recorded and undoable ([Assistant](assistant.md#letting-it-decide-your-approvals)) | approving is the person's click on a card again, whatever their own setting |
+| **People may let their Assistant decide their approvals** | each person may turn on "My assistant can decide approvals for me" in Settings > General; their own Assistant then approves or declines approvals addressed to them on their words in its chat, recorded and undoable ([Assistant](assistant.md#letting-it-decide-your-approvals)) | approving is the person's click on a card again, whatever their own setting |
 | **BotOps changes providers and limits without asking** | Legacy setting kept for compatibility; BotOps uses the requester's rights directly | BotOps still uses the requester's rights directly |
 | **BotOps manages every bot** (`botops_manages_bots`) | in its own runs (the daily update, or a routine the owner set for BotOps) BotOps manages every bot but the built-in ones: their Tools, repositories, contact and Instructions, with write access to each bot's repository in its GitHub token (below) | BotOps in its own runs changes only itself |
 | **Admins store credentials** | Admins are credential administrators | only the owner (and `TICO_CREDENTIAL_ADMINS`) stores credentials |
@@ -509,7 +520,10 @@ tickets), and only when it can already read the task. Two kinds of tag keep thei
 both to add and to remove: a tag on a public roadmap (Settings → Public roadmap) needs the bot's
 exact approved publish approval, as public text does ([Roadmaps](roadmaps.md)), or a mover when the
 team does not ask bots for one; `goal:on` and `goal:off` change how Tico runs the task, so only a
-mover changes them. A refusal says which tags need a person or an approval and why; an approval that is
+mover changes them. The same holds when a bot creates a task: it may give the new task classification
+tags, but a task created with `goal:on`, `goal:off` or a public roadmap tag is refused and nothing is
+created. A publish approval is for a task that exists, so the bot creates the task without the roadmap
+tag and then adds it with the approval, or asks a mover. A refusal says which tags need a person or an approval and why; an approval that is
 not decided yet, already used or for other tags is the same refusal. It counts
 toward the bot's quarantine once per task an hour, so retrying it cannot quarantine the bot; any
 other refusal counts as before. Lane and number stay a mover's, and nothing here makes a bot a

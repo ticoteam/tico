@@ -8,6 +8,7 @@
 mod applog;
 mod config;
 mod hub;
+mod visual_origin;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -64,6 +65,7 @@ impl Saved {
 
 struct AppState {
     connection: Mutex<Option<Config>>,
+    visual_origin: Mutex<Option<visual_origin::VisualOrigin>>,
     status: Mutex<HubStatus>,
     // Set while the shell itself places the window, so that placement is not saved as the person's.
     applying_frame: AtomicBool,
@@ -75,6 +77,7 @@ fn main() {
     applog::init();
     let state = AppState {
         connection: Mutex::new(None),
+        visual_origin: Mutex::new(None),
         status: Mutex::new(HubStatus::default()),
         applying_frame: AtomicBool::new(false),
     };
@@ -102,7 +105,7 @@ fn main() {
                 app.add_capability(server_capability(&config.hub).to_string())?;
             }
             let state: State<AppState> = app.state();
-            *state.connection.lock().unwrap() = config;
+            select_connection(&state, config);
             if connection(app.handle()).is_some() { build_window(app.handle())?; }
             else { build_server_window(app.handle())?; }
             build_menu(app.handle())?;
@@ -163,6 +166,15 @@ fn connection(app: &App) -> Option<Config> {
     app.state::<AppState>().connection.lock().unwrap().clone()
 }
 
+fn select_connection(state: &AppState, config: Option<Config>) {
+    // Bridge updates and navigation use this same lock order, so an old Hub cannot restore trust
+    // while its connection is being replaced. No visual origin survives a connection selection.
+    let mut connection = state.connection.lock().unwrap();
+    let mut visual = state.visual_origin.lock().unwrap();
+    *connection = config;
+    *visual = None;
+}
+
 fn log_dir(app: &App) -> Option<std::path::PathBuf> {
     app.path().app_log_dir().ok()
 }
@@ -200,6 +212,7 @@ async fn connect_server(app: App, address: String) -> Result<(), String> {
         .map_err(|_| "Could not save the server address. Check free disk space and folder permissions.")?;
     // Runtime capabilities are additive. Restart so only the newly selected origin
     // receives permissions, and no permissions from the previous connection survive.
+    select_connection(&app.state::<AppState>(), None);
     app.request_restart();
     Ok(())
 }
@@ -237,7 +250,10 @@ mod capability_tests {
             assert!(matcher.test(&url::Url::parse(address).unwrap()));
             for other in ["https://accounts.google.com/", "https://team.cloudflareaccess.com/",
                           "https://other.example.com/", "https://team.example.com:8443/",
-                          "http://team.example.com:8080/", "http://localhost:8766/"] {
+                          "http://team.example.com:8080/", "http://localhost:8766/",
+                          "https://team.files.example.com/visuals/payload.mac", "https://team.example.com.evil.example/",
+                          "https://team.example.com@evil.example/", "about:blank", "data:text/html,hi",
+                          "blob:https://team.example.com/opaque"] {
                 assert!(!matcher.test(&url::Url::parse(other).unwrap()), "{pattern} accepted {other}");
             }
             assert_eq!(capability["windows"], serde_json::json!(["main"]));
@@ -245,6 +261,104 @@ mod capability_tests {
         }
         let config: Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
         assert_eq!(config["app"]["security"]["capabilities"], serde_json::json!(["server"]));
+    }
+}
+
+#[cfg(test)]
+mod visual_bridge_tests {
+    use super::*;
+
+    const HUB: &str = "https://team.example.com/tico/";
+    const ASSETS: &str = "https://team.files.example.com";
+
+    fn state() -> AppState {
+        AppState {
+            connection: Mutex::new(Some(Config::new(url::Url::parse(HUB).unwrap()))),
+            visual_origin: Mutex::new(None),
+            status: Mutex::new(HubStatus::default()),
+            applying_frame: AtomicBool::new(false),
+        }
+    }
+
+    #[test]
+    fn visual_allowance_never_grants_bridge_or_log_authority() {
+        let state = state();
+        let hub = url::Url::parse(HUB).unwrap();
+        let body = serde_json::json!({"origin": ASSETS});
+        assert_eq!(set_visual_origin(&state, "main", Some(&hub), Some(&body)), Ok(true));
+        let visual = url::Url::parse(&format!("{ASSETS}/visuals/payload.{}", "A".repeat(43))).unwrap();
+        assert!(state.visual_origin.lock().unwrap().as_ref().unwrap().permits(Some(&hub), &visual));
+        for document in [visual, url::Url::parse("https://team.example.com.evil.example/").unwrap(),
+                         url::Url::parse("about:blank").unwrap(), url::Url::parse("data:text/html,hi").unwrap(),
+                         url::Url::parse("blob:https://team.example.com/opaque").unwrap()] {
+            // Both bridge and app_log use this guard, including after a visual becomes top-level.
+            assert!(!server_document(Some(&hub), "main", Some(&document)), "{document}");
+            assert!(set_visual_origin(&state, "main", Some(&document), Some(&body)).is_err());
+        }
+        assert!(server_document(Some(&hub), "main", Some(&hub)));
+        assert!(!server_document(Some(&hub), "meeting-1", Some(&hub)));
+        assert!(!server_document(Some(&hub), "main", None));
+        assert!(set_visual_origin(&state, "meeting-1", Some(&hub), Some(&body)).is_err());
+    }
+
+    #[test]
+    fn malformed_updates_clear_and_old_connection_updates_are_refused() {
+        let state = state();
+        let hub = url::Url::parse(HUB).unwrap();
+        let valid = serde_json::json!({"origin": ASSETS});
+        for body in [None, Some(Value::Null), Some(Value::String(ASSETS.into())),
+                     Some(serde_json::json!({})), Some(serde_json::json!({"origin": false})),
+                     Some(serde_json::json!({"origin": ASSETS, "other": true})),
+                     Some(serde_json::json!({"origin": ""})), Some(serde_json::json!({"origin": "http://team.files.example.com"}))] {
+            assert_eq!(set_visual_origin(&state, "main", Some(&hub), Some(&valid)), Ok(true));
+            assert_eq!(set_visual_origin(&state, "main", Some(&hub), body.as_ref()), Ok(false));
+            assert!(state.visual_origin.lock().unwrap().is_none());
+        }
+        assert_eq!(set_visual_origin(&state, "main", Some(&hub), Some(&valid)), Ok(true));
+        let old = state.visual_origin.lock().unwrap().clone().unwrap();
+        select_connection(&state, None);
+        assert!(state.visual_origin.lock().unwrap().is_none());
+        assert!(set_visual_origin(&state, "main", Some(&hub), Some(&valid)).is_err());
+        let next = url::Url::parse("https://other.example.com/").unwrap();
+        select_connection(&state, Some(Config::new(next.clone())));
+        assert!(set_visual_origin(&state, "main", Some(&hub), Some(&valid)).is_err());
+        let visual = url::Url::parse(&format!("{ASSETS}/visuals/payload.{}", "A".repeat(43))).unwrap();
+        assert!(!old.permits(Some(&next), &visual));
+    }
+
+    #[test]
+    fn visual_navigation_neither_starts_nor_ends_a_sign_in() {
+        let state = state();
+        let hub = url::Url::parse(HUB).unwrap();
+        let body = serde_json::json!({"origin": ASSETS});
+        let url = url::Url::parse(&format!("{ASSETS}/visuals/payload.{}", "A".repeat(43))).unwrap();
+        assert!(state.visual_origin.lock().unwrap().is_none());
+        for active in [false, true] {
+            assert_eq!(set_visual_origin(&state, "main", Some(&hub), Some(&body)), Ok(true));
+            let signing_in = AtomicBool::new(active);
+            assert!(follow_window(&state, &signing_in, true, &url));
+            assert_eq!(signing_in.load(Ordering::Relaxed), active);
+            top_level_window(&state, &signing_in, true, &url);
+            assert_eq!(signing_in.load(Ordering::Relaxed), active);
+            assert!(state.visual_origin.lock().unwrap().is_some());
+        }
+        let signing_in = AtomicBool::new(false);
+        assert!(!follow_window(&state, &signing_in, false, &url));
+        top_level_window(&state, &signing_in, false, &hub);
+        assert!(state.visual_origin.lock().unwrap().is_some(), "another window cannot clear main's allowance");
+        for boundary in ["https://team.example.com/api/v2/logout", "https://team.example.com/tico/auth/logout",
+                         "https://team.cloudflareaccess.com/cdn-cgi/access/logout", "https://team.example.com/tico/auth/login",
+                         "https://team.cloudflareaccess.com/cdn-cgi/access/login/team.example.com"] {
+            assert_eq!(set_visual_origin(&state, "main", Some(&hub), Some(&body)), Ok(true));
+            follow_window(&state, &signing_in, true, &url::Url::parse(boundary).unwrap());
+            assert!(state.visual_origin.lock().unwrap().is_none(), "{boundary}");
+        }
+        for top in [HUB, "https://accounts.google.com/ServiceLogin"] {
+            assert_eq!(set_visual_origin(&state, "main", Some(&hub), Some(&body)), Ok(true));
+            top_level_window(&state, &signing_in, true, &url::Url::parse(top).unwrap());
+            assert!(state.visual_origin.lock().unwrap().is_none(), "{top}");
+        }
+        assert!(!session_exit(Some(&hub), &url::Url::parse("https://other.example.com/api/v2/logout").unwrap()));
     }
 }
 
@@ -263,7 +377,7 @@ fn build_window(app: &App) -> tauri::Result<()> {
         .on_new_window(new_window_handler(app));
     // A sign-in's whole redirect chain stays in this web view, so the resulting cookie belongs to the
     // app, not the browser.
-    builder = follow_sign_in(app, builder);
+    builder = follow_sign_in(app, builder, true);
     #[cfg(target_os = "macos")]
     {
         // The native title bar drags the window on every page, including sign-in pages that are
@@ -280,36 +394,70 @@ fn build_window(app: &App) -> tauri::Result<()> {
 /// browser. Each window keeps its own `signing_in`. Embedded frames navigate through the same handler
 /// with nothing to tell them apart, so only the top-level page ends a sign-in, by committing on the hub
 /// origin; and only the hub's own logins start one.
-fn follow_sign_in<'a>(app: &App, builder: WebviewWindowBuilder<'a, tauri::Wry, App>) -> WebviewWindowBuilder<'a, tauri::Wry, App> {
+fn follow_sign_in<'a>(app: &App, builder: WebviewWindowBuilder<'a, tauri::Wry, App>, visuals: bool) -> WebviewWindowBuilder<'a, tauri::Wry, App> {
     let signing_in = Arc::new(AtomicBool::new(false));
     let (opener, page, committed) = (app.clone(), app.clone(), signing_in.clone());
     builder
-        .on_navigation(move |url| stays_in_app(&opener, &signing_in, url))
+        .on_navigation(move |url| stays_in_app(&opener, &signing_in, visuals, url))
         // `Started` is the top-level page committing, with its address; frames never send it.
         .on_page_load(move |_, payload| {
             if matches!(payload.event(), tauri::webview::PageLoadEvent::Started) {
-                top_level_page(connection(&page).map(|c| c.hub).as_ref(), &committed, payload.url());
+                top_level_window(&page.state::<AppState>(), &committed, visuals, payload.url());
             }
         })
 }
 
-fn stays_in_app(opener: &App, signing_in: &AtomicBool, url: &url::Url) -> bool {
-    let hub = connection(opener).map(|c| c.hub);
-    let stays = follow(hub.as_ref(), signing_in, url);
+fn stays_in_app(opener: &App, signing_in: &AtomicBool, visuals: bool, url: &url::Url) -> bool {
+    let stays = follow_window(&opener.state::<AppState>(), signing_in, visuals, url);
     if !stays {
         let _ = opener.opener().open_url(url.as_str(), None::<&str>);
     }
     stays
 }
 
+fn follow_window(state: &AppState, signing_in: &AtomicBool, visuals: bool, url: &url::Url) -> bool {
+    let connection = state.connection.lock().unwrap();
+    let hub = connection.as_ref().map(|c| &c.hub);
+    let mut visual = state.visual_origin.lock().unwrap();
+    let allowed = if visuals { visual.as_ref() } else { None };
+    let stays = follow(hub, allowed, signing_in, url);
+    if visuals && (navigation(hub, false, url) == Navigation::Start || session_exit(hub, url)) {
+        *visual = None;
+    }
+    stays
+}
+
+fn top_level_window(state: &AppState, signing_in: &AtomicBool, visuals: bool, url: &url::Url) {
+    let connection = state.connection.lock().unwrap();
+    let hub = connection.as_ref().map(|c| &c.hub);
+    if visuals {
+        let mut visual = state.visual_origin.lock().unwrap();
+        // A new top-level Hub page must authenticate and send its config again. A permitted
+        // visual commit changes neither its allowance nor sign-in state.
+        if !visual.as_ref().is_some_and(|visual| visual.permits(hub, url)) {
+            *visual = None;
+        }
+    }
+    top_level_page(hub, signing_in, url);
+}
+
 /// Whether the window follows a navigation, from any frame; a sign-in's start sets `signing_in`.
-fn follow(hub: Option<&url::Url>, signing_in: &AtomicBool, url: &url::Url) -> bool {
-    match navigation(hub, signing_in.load(Ordering::Relaxed), url) {
+fn follow(hub: Option<&url::Url>, visual: Option<&visual_origin::VisualOrigin>, signing_in: &AtomicBool, url: &url::Url) -> bool {
+    let destination = if visual.is_some_and(|visual| visual.permits(hub, url)) { Navigation::Stay }
+        else { navigation(hub, signing_in.load(Ordering::Relaxed), url) };
+    match destination {
         Navigation::Start => signing_in.store(true, Ordering::Relaxed),
         Navigation::Stay => {}
         Navigation::Browser => return false,
     }
     true
+}
+
+fn session_exit(hub: Option<&url::Url>, url: &url::Url) -> bool {
+    let own = hub.is_some_and(|hub| url.origin() == hub.origin());
+    (own && (url.path().ends_with("/api/v2/logout") || url.path().ends_with("/auth/logout")))
+        || ((own || url.host_str().is_some_and(|host| host.ends_with(".cloudflareaccess.com")))
+            && url.path().ends_with("/cdn-cgi/access/logout"))
 }
 
 /// The top-level page committed at `url`: back on the hub origin, a sign-in is over. Another port or
@@ -409,7 +557,7 @@ fn open_hub_window(app: &App, url: url::Url) {
         .inner_size(1000.0, 800.0)
         .min_inner_size(MIN_WIDTH as f64, MIN_HEIGHT as f64)
         .user_agent(USER_AGENT)
-        .on_new_window(new_window_handler(app)));
+        .on_new_window(new_window_handler(app)), false);
     // A file the web view cannot show (Word, Excel, zip) downloads, leaving this window empty: save
     // it to Downloads, show it there and close the window. Only the file this window opened on
     // counts, so a window that showed its file stays open for later downloads from it. Not on
@@ -494,7 +642,7 @@ mod new_window_tests {
     fn run(signing_in: &AtomicBool, events: &[Event]) -> Vec<bool> {
         let hub = url::Url::parse(HUB).unwrap();
         events.iter().filter_map(|event| match event {
-            Event::Nav(address) => Some(follow(Some(&hub), signing_in, &url::Url::parse(address).unwrap())),
+            Event::Nav(address) => Some(follow(Some(&hub), None, signing_in, &url::Url::parse(address).unwrap())),
             Event::Top(address) => { top_level_page(Some(&hub), signing_in, &url::Url::parse(address).unwrap()); None }
         }).collect()
     }
@@ -626,7 +774,7 @@ fn open_meeting_window(app: &App, id: &str) {
         .resizable(true)
         .user_agent(USER_AGENT)
         .on_new_window(new_window_handler(app));
-    let _ = follow_sign_in(app, builder).build();
+    let _ = follow_sign_in(app, builder, false).build();
 }
 
 /// The page's side of the bridge: `window.ticoNative(name).postMessage(body)`, which
@@ -640,7 +788,7 @@ const BRIDGE_SCRIPT: &str = r#"
   window.ticoNative = name => ({postMessage: body => invoke('bridge', {name, body: body === undefined ? null : body})});
   // What this build's bridge answers beyond the first three, so a page never posts into a
   // shell too old to hear it.
-  window.ticoNativeFeatures = ['openWindow', 'checkForUpdates', 'showLog', 'appLog'];
+  window.ticoNativeFeatures = ['openWindow', 'checkForUpdates', 'showLog', 'appLog', 'visualOrigin'];
   // The shell's version and the end of its log ({version, lines}), for Support diagnostics.
   window.ticoNativeLog = () => invoke('app_log');
 })();
@@ -848,16 +996,39 @@ fn reload(app: &App) {
 // ----------------------------------------------------------------------------- bridge
 /// Generic builds accept any server; only the selected origin's page in the main window may call the shell.
 fn from_server(app: &App, window: &WebviewWindow) -> bool {
-    let Some(config) = connection(app) else { return false };
-    window.label() == "main" && window.url().map(|u| u.origin() == config.hub.origin()).unwrap_or(false)
+    let document = window.url().ok();
+    let state = app.state::<AppState>();
+    let connection = state.connection.lock().unwrap();
+    server_document(connection.as_ref().map(|c| &c.hub), window.label(), document.as_ref())
+}
+
+fn server_document(hub: Option<&url::Url>, label: &str, document: Option<&url::Url>) -> bool {
+    label == "main" && hub.zip(document).is_some_and(|(hub, document)| {
+        matches!(document.scheme(), "http" | "https") && document.username().is_empty()
+            && document.password().is_none() && document.origin() == hub.origin()
+    })
+}
+
+fn set_visual_origin(state: &AppState, label: &str, document: Option<&url::Url>, body: Option<&Value>) -> Result<bool, String> {
+    let connection = state.connection.lock().unwrap();
+    let hub = connection.as_ref().map(|c| &c.hub);
+    if !server_document(hub, label, document) {
+        return Err("Only the selected server's page may configure visuals.".into());
+    }
+    let mut visual = state.visual_origin.lock().unwrap();
+    let raw = body.and_then(Value::as_object).filter(|object| object.len() == 1)
+        .and_then(|object| object.get("origin")).and_then(Value::as_str);
+    *visual = hub.zip(raw).and_then(|(hub, raw)| visual_origin::VisualOrigin::new(hub, raw));
+    Ok(visual.is_some())
 }
 
 /// What the page posts: `openWindow` ({meeting: id}). Older pages also post `windowMode`, which is
 /// ignored now that the window has one mode.
 #[tauri::command]
-fn bridge(app: App, window: WebviewWindow, name: String, body: Option<Value>) {
-    if !from_server(&app, &window) { return; }
+fn bridge(app: App, window: WebviewWindow, name: String, body: Option<Value>) -> Result<Value, String> {
+    if !from_server(&app, &window) { return Err("Only the selected server's page may call the app.".into()); }
     match name.as_str() {
+        "visualOrigin" => return set_visual_origin(&app.state::<AppState>(), window.label(), window.url().ok().as_ref(), body.as_ref()).map(Value::Bool),
         "openWindow" => {
             // `recording` is what an older page called it.
             let id = body.as_ref().and_then(|b| b.get("meeting").or_else(|| b.get("recording"))).and_then(Value::as_str);
@@ -871,6 +1042,7 @@ fn bridge(app: App, window: WebviewWindow, name: String, body: Option<Value>) {
         "showLog" => show_log(&app),
         _ => {}
     }
+    Ok(Value::Null)
 }
 
 fn show_log(app: &App) {

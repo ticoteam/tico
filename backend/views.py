@@ -84,7 +84,7 @@ def failed_attempts(c, who, auth, bot=None, since=None, limit=200):
         if not message:
             continue
         try:
-            auth.conversation(c, who, message["conversation_id"])
+            auth.run_conversation(c, who, row["bot"], message)
             privacy.require_message(c, who, message)
             privacy.require_attempt(c, who, row["id"])
         except Problem:
@@ -311,8 +311,11 @@ def machine(c, bot):
     # Online is contact; awake is contact that has lasted. A machine waking for a few seconds
     # is online and takes no work, so say which of the two a queued request is waiting for.
     awake = online and Execution.awake(row["awake_since"], now)
-    # The declared access has its own route, behind the bot's visibility (backend/bot_tools.py).
+    # The declared access has its own route, behind the bot's visibility (backend/bot_tools.py). A missing
+    # subscription sign-in the Gateway covers meanwhile is no problem (backend/models_preset.py as_served).
+    from .models_preset import as_served
     detail = {k: v for k, v in bot_readiness(row["readiness_json"], bot).items() if k != "tools"}
+    detail = as_served(c, bot, readiness_document(row["readiness_json"]), detail)
     return {"online": online, "awake": awake, "ready": online and detail.get("ready") is True,
             "readiness": detail,
             "machine": {**{k: row[k] for k in ("runner_id", "generation", "label", "operator", "last_seen",
@@ -401,35 +404,43 @@ def operation_issues(c, who, auth):
                 last = last_limit(c, slug)
                 hold = login_holds.for_attempt(c, last["id"]) if last else {}
                 billing = bool(BILLING_LIMIT_RE.search(hold.get("error") or "")) if hold else billing_limit(c, slug)
+                own = runtime
                 if hold:
                     runtime = hold["runtime"] + (f" (the {hold['profile']} login)" if hold.get("profile") else "")
+                if last:
+                    # Named from what the turn kept when it finished, not the bot's runtime or the login's hold now:
+                    # a fallback's quota must not read as the primary's, nor a past limit as a newly chosen provider's.
+                    result = json.loads((c.execute("SELECT result_json FROM attempts WHERE id=?", (last["id"],))
+                                         .fetchone() or ["{}"])[0] or "{}")
+                    src = login_holds.recorded(c, last["id"], result, own)
+                    runtime, billing = login_holds.label(src), src["billing"]
                 streak = hold.get("streak", 0) if hold else limit_streak(c, slug)
                 reset = hold.get("reset") if hold else bool(last and provider_reset(last, H.parse_ts(last["finished"])))
                 if billing:
                     retry = H.shift(status["since"], seconds=cooldown)
                     add("bot", bot["display_name"] + " needs attention",
-                        f"{runtime} API quota or billing limit; queued work waits until {retry[:10]} {retry[11:16]} UTC, "
+                        f"{runtime}; queued work waits until {retry[:10]} {retry[11:16]} UTC, "
                         "check the API key's plan and billing", bot=slug, needs_person=False,
                         **({} if streak >= LIMIT_STRIKES else {"severity": "warning"}),
                         action="Check the API key's plan and billing, or set a fallback harness in Settings → Bots.")
                 elif cooldown > LIMIT_COOLDOWN_LONG:
                     retry = H.shift(status["since"], seconds=cooldown)
                     add("bot", bot["display_name"] + " needs attention",
-                        f"{runtime} subscription quota exhausted; queued work waits until {retry[:10]} "
+                        f"{runtime}: subscription quota exhausted; queued work waits until {retry[:10]} "
                         f"{retry[11:16]} UTC", bot=slug, severity="warning", needs_person=False,
                         action="Wait for the subscription reset, or set a fallback harness in Settings → Bots.")
                 # A reported reset says when the limit lifts, so a streak is no reason to check the subscription.
                 elif streak >= LIMIT_STRIKES and not reset:
                     retry = H.shift(status["since"], seconds=cooldown)
                     add("bot", bot["display_name"] + " needs attention",
-                        f"{runtime} usage limit three times in a row; queued work waits until {retry[11:16]} UTC, "
+                        f"{runtime}, three times in a row; queued work waits until {retry[11:16]} UTC, "
                         "check the subscription or the API-key fallback on its Mac", bot=slug,
                         needs_person=False,
                         action="Check the subscription or set a fallback harness in Settings → Bots.")
                 else:
                     retry = H.shift(status["since"], seconds=cooldown)
                     add("bot", bot["display_name"] + " needs attention",
-                        f"{runtime} usage limit; resumes at {retry[11:16]} UTC", bot=slug,
+                        f"{runtime}; resumes at {retry[11:16]} UTC", bot=slug,
                         severity="warning", needs_person=False)
         queued = privacy.job_count(c, who, slug)
         if location.get("agent"):
@@ -1245,6 +1256,8 @@ def needs_items(c, auth, who, task_view, older=None):
     H.hydrate_task_tags(c, raw["tasks"] + raw["waiting"] + raw["declined"])
     from . import ask_deadlines, team_rules
     rules = team_rules.load(c)
+    from . import ceo_merge
+    merged = ceo_merge.hidden_by_item(c, who.actor)
     items = []
     for kind in ("tasks", "waiting", "declined"):
         for row in raw[kind]:
@@ -1264,6 +1277,9 @@ def needs_items(c, auth, who, task_view, older=None):
                                     else person_origin(c, row, visible, who.actor))}
             item["person_ask"], item["ask_missing"] = person_ask(row, item["kind"], who.actor, ask)
             item["recommend"] = next((r for a in open_asks if (r := recommendation(a, who.actor))), None)
+            if row["id"] in merged:
+                # The CEO Bot's merged item: the originals it stands for, which the Tasks page leaves out of Needs you.
+                item["merged"] = [t for t in merged[row["id"]] if _readable(auth, c, who, t)]
             if (item["kind"] == "question" and row["owner"] != who.actor and H.ask_older(ask)
                     and not any(a["to_actor"] == who.actor and not H.ask_older(a) for a in open_asks)):
                 ask["older"] = True
@@ -1866,6 +1882,9 @@ def install_views(app, store, auth, mutate, task_view):
             result = json.loads(attempt["result_json"]) if attempt and attempt["result_json"] else {}
             if result.get("fallback"):
                 lines.append("Fallback: " + str(result["fallback"]) + " (primary harness unavailable; the turn ran on the fallback)")
+            if result.get("limited"):
+                from . import login_holds
+                lines.append("Limit: " + login_holds.label(login_holds.recorded(c, run_id, result, "")))
             lines += ["", "Request:", message["body"]]
             if events:
                 lines.extend(["", "Persisted runtime events:"])

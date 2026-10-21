@@ -1,7 +1,8 @@
-// Settings > AI providers' Tico AI Gateway card against a fake server: the key is typed once, sent once and never
+// Settings > Computers > Models' Tico AI Gateway card against a fake server: the key is typed once, sent once and never
 // shown again (only its preview); the Tico models appear only while the connection has a key, by their Tico names
 // with what runs underneath; the Gateway's 80% warning, "Gateway cap reached" and a revoked key read plainly to the
-// owner; members see only whether it is connected.
+// owner; members see only whether it is connected. An install invited by its install command says it connected
+// automatically, with no key to paste, and can be turned back on after its key is cleared.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -21,8 +22,8 @@ const {unrouted} = require('./support/routes.cjs');
       models: [
         {id: 'opus-5-5', label: 'opus 5.5', runtime: 'claude', provider: 'anthropic',
           efforts: ['low', 'high'], default_effort: 'high', harnesses: ['claude']},
-        tico('tico-cheap-1.0', 'Tico Cheap 1.0', 'Haiku'), tico('tico-mid-1.0', 'Tico Mid 1.0', 'Sonnet'),
-        tico('tico-power-1.0', 'Tico Power 1.0', 'Opus'),
+        tico('tico-cheap-1.1', 'Tico Cheap 1.1', 'Haiku'), tico('tico-mid-1.0', 'Tico Mid 1.0', 'Sonnet'),
+        tico('tico-power-1.0', 'Tico Power 1.0', 'Opus'), {...tico('tico-cheap-1.0', 'Tico Cheap 1.0', 'Haiku'), deprecated: true},
       ],
       harnesses: [{id: 'claude', label: 'Claude Code (Anthropic)', runtime: 'claude'}, {id: 'pi', label: 'pi', runtime: 'pi'}],
       default: {runtime: 'claude', model: 'opus-5-5'},
@@ -33,7 +34,8 @@ const {unrouted} = require('./support/routes.cjs');
       const base = {label: 'Tico AI Gateway', connected: gateway.connected, source: gateway.source,
         url: 'https://updates.tico.team/v1/gateway', default_url: 'https://updates.tico.team/v1/gateway', editable: true};
       return owner ? {...base, preview: gateway.connected ? 'tgw…def' : '', revision: gateway.revision, state: gateway.state,
-        working: gateway.working, message: gateway.message, used: gateway.used ?? null} : base;
+        working: gateway.working, message: gateway.message, used: gateway.used ?? null, automatic: !!gateway.automatic,
+        auto_off: !!gateway.auto_off} : {...base, automatic: !!gateway.automatic};
     };
     const enabled = () => ['anthropic', ...(gateway.connected ? ['tico'] : [])];
     const sent = [];
@@ -68,6 +70,12 @@ const {unrouted} = require('./support/routes.cjs');
         }
         return json(shown(true));
       }
+      if (p === '/api/v2/providers/gateway/automatic') {
+        sent.push({method: 'AUTOMATIC'});
+        gateway = {connected: true, source: 'settings', revision: gateway.revision + 1, state: 'connected', working: true,
+          message: 'Connected.', automatic: true};
+        return json(shown(true));
+      }
       if (p === '/api/v2/providers/gateway/check') { sent.push({method: 'CHECK'}); return json(shown(true)); }
       if (p === '/api/v2/usage/limits') return json({bots: {}});
       if (p === '/api/v2/settings/history') return json({changes: [], transitions: []});
@@ -77,7 +85,7 @@ const {unrouted} = require('./support/routes.cjs');
     const card = page.locator('#set-gateway');
     const open = async () => {
       await page.evaluate(() => loadSettings());
-      await page.locator('[data-settings-tab=providers]').click();
+      await page.locator('[data-settings-tab=devices]').click();
       await page.evaluate(() => renderSettingsProviders());
       await card.waitFor();
     };
@@ -100,7 +108,11 @@ const {unrouted} = require('./support/routes.cjs');
     assert.ok(!(await page.content()).includes(KEY), 'the key is nowhere on the page');
     // Connected: the Tico models are offered by their Tico names, saying what runs underneath.
     const tic = (await modelOptions()).filter(o => o.value.startsWith('tico-'));
-    assert.deepEqual(tic.map(o => o.text), ['Tico Cheap 1.0', 'Tico Mid 1.0', 'Tico Power 1.0']);
+    assert.deepEqual(tic.map(o => o.text), ['Tico Cheap 1.1', 'Tico Mid 1.0', 'Tico Power 1.0'], 'retired Cheap 1.0 is not offered');
+    // A default saved as retired Cheap 1.0 stays offered, marked, so saving something else never moves it.
+    assert.deepEqual(await page.evaluate(models => providersModels({providers: [], default: {model: 'tico-cheap-1.0'}},
+      models, ['tico']).map(row => row.label), catalog.models),
+      ['Tico Cheap 1.1', 'Tico Mid 1.0', 'Tico Power 1.0', 'Tico Cheap 1.0 (retired)']);
     assert.equal(tic.find(o => o.value === 'tico-mid-1.0').title, 'Claude Sonnet 5.5 underneath');
     assert.equal(await page.evaluate(() => settingsModelPickName('tico-mid-1.0')), 'Tico Mid 1.0 (Claude Sonnet 5.5 underneath)',
       "a bot's model list says what runs underneath");
@@ -138,6 +150,19 @@ const {unrouted} = require('./support/routes.cjs');
     await card.locator('[data-gateway-clear]').click();
     await page.locator('#set-gateway [data-gateway-state=none]').waitFor();
     assert.ok(!(await modelOptions()).some(o => o.value.startsWith('tico-')), 'Tico models go with the key');
+    // An automatic key: the card says so, and nobody is asked for a code or a key.
+    gateway = {connected: true, source: 'settings', revision: gateway.revision + 1, state: 'connected', working: true,
+      message: 'Connected.', automatic: true};
+    await open();
+    assert.equal(await card.locator('[data-gateway-automatic]').innerText(), 'Tico AI Gateway: connected automatically');
+    assert.ok(!/invite|code/i.test(await card.innerText()), 'no invite code is asked for');
+    // Cleared on purpose, it stays off until the owner turns it back on.
+    gateway = {connected: false, source: '', revision: gateway.revision + 1, state: 'none', working: false,
+      message: 'No gateway key saved.', auto_off: true};
+    await open();
+    await card.locator('[data-gateway-automatic-on]').click();
+    await page.locator('#set-gateway [data-gateway-automatic]').waitFor();
+    assert.ok(sent.some(row => row.method === 'AUTOMATIC'), 'Connect automatically asks the server');
     assert.deepEqual(errors, []);
     console.log('ok');
   } finally { await browser.close(); }

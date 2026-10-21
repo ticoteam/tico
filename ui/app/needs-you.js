@@ -13,8 +13,9 @@ function needsIndex() {
   const list = S.v2?.needs || [];
   if (NEEDS_MEMO?.list !== list) {
     const byId = new Map(list.map((it, i) => [String(it.id), {it, i}]));
-    // A bot's task folded into the card that asks the person the same thing is not listed again.
-    const folded = new Set(list.flatMap(it => (it.folded || []).map(f => String(f.id))));
+    // A bot's task folded into the card that asks the person the same thing is not listed again, nor a task the CEO
+    // Bot merged into an item of its own (backend/ceo_merge.py): the server leaves both out of Needs you.
+    const folded = new Set(list.flatMap(it => [...(it.folded || []).map(f => String(f.id)), ...(it.merged || []).map(String)]));
     NEEDS_MEMO = {list, byId, folded};
   }
   return NEEDS_MEMO;

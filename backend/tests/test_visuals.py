@@ -4,6 +4,7 @@ import base64
 import hashlib
 import pathlib
 import re
+from dataclasses import replace
 
 from backend import visuals as V
 from backend.tests.test_api import api, assign, claim, headers, post, ready, runner  # noqa: F401  (fixtures)
@@ -381,6 +382,41 @@ def test_a_visual_origin_equal_to_the_app_origin_is_refused():
         raise AssertionError("the app's own origin was accepted as the visual origin")
 
 
+def test_actual_config_projects_visual_origin_only_after_api_auth_without_private_settings(api, monkeypatch):
+    settings = api.app.state.store.settings
+    for path in ("/api/me", "/api/v2/config"):
+        assert api.get(path).status_code == 401
+    assert api.get("/api/v2/config", headers=headers()).json()["visual_origin"] == ""
+    monkeypatch.setattr(settings, "visual_origin", replace(settings, visual_origin="https://visuals.acme-files.example/").visual_origin)
+    monkeypatch.setattr(settings, "oidc_client_secret", "synthetic-private-oidc-secret")
+    monkeypatch.setattr(settings, "gateway_key", "synthetic-private-gateway-key")
+    monkeypatch.setattr(settings, "screen_relay_key", "synthetic-private-screen-key")
+    for path in ("/api/me", "/api/v2/config"):
+        response = api.get(path, headers=headers("ben-test"))
+        assert response.status_code == 200
+        config = response.json()["config"] if path == "/api/me" else response.json()
+        assert config["visual_origin"] == "https://visuals.acme-files.example"
+        assert "synthetic-private-" not in response.text
+        assert not {"oidc_client_secret", "gateway_key", "screen_relay_key", "visual_key"} & config.keys()
+
+
+def test_visual_projection_hides_legacy_credentials_and_bad_hosts_without_changing_runtime(api, monkeypatch):
+    settings = api.app.state.store.settings
+    for configured in ("https://synthetic-user:synthetic-visual-password@visuals.acme-files.example/",
+                       "https://@visuals.acme-files.example/", "https://bad_host.acme.example/",
+                       "https://visuals.acme-files.example:"):
+        legacy = replace(settings, visual_origin=configured).visual_origin
+        monkeypatch.setattr(settings, "visual_origin", legacy)
+        response = api.get("/api/v2/config", headers=headers())
+        assert response.status_code == 200 and response.json()["visual_origin"] == ""
+        assert "synthetic-visual-password" not in response.text
+        assert settings.visual_origin == legacy and V.inline_on(settings)
+    local = replace(settings, visual_origin="http://localhost:9001/").visual_origin
+    monkeypatch.setattr(settings, "visual_origin", local)
+    assert api.get("/api/v2/config", headers=headers()).json()["visual_origin"] == "http://localhost:9001"
+    assert settings.visual_origin == local and V.inline_on(settings)
+
+
 def test_production_without_a_visual_origin_shows_chips_and_serves_nothing(api, monkeypatch):
     """Lead decision: a production server with no separate visual origin still starts, but inline display is off:
     no src, no poster, /visuals refuses. The same-origin sandbox runs only on loopback or with an explicit opt-in."""
@@ -436,3 +472,79 @@ def test_a_file_from_one_chat_cannot_be_posted_into_another_by_someone_who_can_r
     moved = api.post("/api/v2/chat/cpo", json={"text": "Look", "attachments": [f"{fid}@1"]},
                      headers=headers("ben-test", "k-visual-3"))
     assert moved.status_code == 404, moved.text
+
+
+def wav():
+    import io
+    import wave
+    out = io.BytesIO()
+    with wave.open(out, "wb") as w:
+        w.setnchannels(1), w.setsampwidth(2), w.setframerate(8000), w.writeframes(b"\x00\x01" * 800)
+    return out.getvalue()
+
+
+def test_a_wav_on_a_task_is_an_audio_player_whatever_python_calls_its_type(api, monkeypatch):
+    """QA d1c1857a: Python 3.15 guesses .wav as audio/vnd.wave, which was a file chip. JSON and multipart uploads
+    store it as audio/wav, the comment shows an audio card, and the visual route serves it by range."""
+    import mimetypes
+    guess = mimetypes.guess_type      # the machine's own MIME tables vary; pin the guess QA saw on the shipped build
+    monkeypatch.setattr(mimetypes, "guess_type", lambda name, *a, **k: ("audio/vnd.wave", None)
+                        if str(name).lower().endswith(".wav") else guess(name, *a, **k))
+    data = wav()
+    task = post(api, "tasks", {"owner": "ops", "title": "Voice note", "body": "x", "private": True}, "ben-test")
+    tid = task["id"]
+    by_json = api.post(f"/api/v2/tasks/{tid}/files", json={"name": "private.wav",
+                       "content_base64": base64.b64encode(data).decode()}, headers=headers("ben-test"))
+    by_form = api.post(f"/api/v2/tasks/{tid}/files", data={"name": "second.wav"},
+                       files={"file": ("second.wav", data, "application/octet-stream")}, headers=headers("ben-test"))
+    for made in (by_json, by_form):
+        assert made.status_code == 200, made.text
+        r = api.post(f"/api/v2/tasks/{tid}/comments", json={"text": "Listen",
+                     "attachments": [f"{made.json()['file_id']}@{made.json()['version']}"]}, headers=headers("ben-test"))
+        assert r.status_code == 200, r.text
+        [item] = r.json()["comment"]["refs"]["attachments"]
+        assert (item["kind"], item["content_type"]) == ("audio", "audio/wav"), item
+        part = api.get(item["src"], headers={"Range": "bytes=0-3"})
+        assert part.status_code == 206 and part.content == b"RIFF" and part.headers["content-type"] == "audio/wav"
+
+
+def test_a_wav_already_stored_or_sent_as_audio_vnd_wave_still_plays_inline(api):
+    """Versions stored before the fix, and a browser that sends audio/vnd.wave, keep the audio card."""
+    assert V.kind_of("audio/vnd.wave", 1000) == "audio" and V.stored_type("audio/vnd.wave") == "audio/wav"
+    r = api.post("/api/v2/uploads/chat/ops", data={"text": "My voice note"},
+                 files={"files": ("note.wav", wav(), "audio/vnd.wave")}, headers=headers("ben-test", "k-visual-wav"))
+    assert r.status_code == 200, r.text
+    [item] = r.json()["message"]["refs"]["attachments"]
+    assert item["kind"] == "audio" and item["src"].startswith("/visuals/")
+
+
+def test_a_bot_is_never_handed_a_visual_address_the_visual_route_refuses(api):
+    """Dev 319: the visual route rebuilds a bot reader without its run, so it cannot see a chat's files. A bot reading
+    its chat reply gets the file chip (no address) rather than a link that always 404s; the person keeps theirs, and
+    a bot's address for a task file still opens."""
+    _, attempt = turn(api)
+    fid, _ = png(api, attempt)
+    made = publish(api, attempt, name="clip.mp4", text=None, content_base64=base64.b64encode(bytes(range(256))).decode())
+    assert made.status_code == 200, made.text
+    clip = made.json()["file"]["id"]
+    with api.app.state.store.transaction() as c:              # a video with its poster ready, as file_metadata leaves it
+        c.execute("UPDATE bot_file_versions SET poster_blob_id=(SELECT blob_id FROM bot_file_versions WHERE file_id=?) "
+                  "WHERE file_id=?", (fid, clip))
+    sent = bot_reply(api, attempt, attachments=[f"{fid}@1", f"{clip}@1"])
+    assert sent.status_code == 200, sent.text
+    message = sent.json()
+    for read in (message, api.get("/api/v2/messages/" + message["id"], headers=headers(attempt["token"])).json()):
+        picture, video = read["refs"]["attachments"]
+        assert (picture["file_id"], video["file_id"], video["kind"]) == (fid, clip, "video")
+        for item in (picture, video):
+            assert not item["removed"] and item["current_version"] == 1
+            assert item.get("src") is None and item.get("poster_url") is None, item
+    picture, video = api.get("/api/v2/messages/" + message["id"], headers=headers("ben-test")).json()["refs"]["attachments"]
+    for address in (picture["src"], video["src"], video["poster_url"]):  # the person's addresses are unchanged
+        assert api.get(address).status_code in (200, 206), address
+
+    tid, task_fid, comment = visual_on_task(api, private=False)
+    listed = api.get(f"/api/v2/tasks/{tid}/comments", headers=headers(attempt["token"]))
+    assert listed.status_code == 200, listed.text
+    [item] = next(m for m in listed.json()["comments"] if m["id"] == comment["id"])["refs"]["attachments"]
+    assert item["file_id"] == task_fid and api.get(item["src"]).status_code == 200

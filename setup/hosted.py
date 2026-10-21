@@ -26,8 +26,17 @@ _EXEC_ENV = f"-e TICO_REGISTRY_DIR={contract.DATA_DIR}/registry"
 _DOCKER = 'if docker info >/dev/null 2>&1; then dk=docker; else dk="sudo -n docker"; fi'
 
 
+def check_dns_identity(args, dns_name: str, dns_zone: str) -> None:
+    """Keep cleanup tied to the operational DNS identity saved by this install."""
+    for field, saved in (("dns_name", dns_name), ("dns_zone", dns_zone)):
+        explicit = getattr(args, field, None)
+        if saved and explicit and explicit.lower() != saved.lower():
+            raise MissingInput(f"--{field.replace('_', '-')} conflicts with saved DNS identity; omit it or use {saved}")
+
+
 def gather(args, s: Settings, dry: bool) -> None:
     """Our operator's flags, checked before anything is asked or created. A self-hosted install leaves all of it unset."""
+    check_dns_identity(args, s.dns_name, s.dns_zone)
     hosted = (getattr(args, "hosted", None) or s.hosted or "").strip().lower()
     preset = (getattr(args, "preset", None) or s.preset or "").strip().lower()
     auth = getattr(args, "auth", None) or ""
@@ -46,6 +55,15 @@ def gather(args, s: Settings, dry: bool) -> None:
         raise MissingInput("--preset recommended is for a server Tico hosts (--hosted); on your own server run "
                            "scripts/install.sh --recommended")
     s.hosted, s.preset = hosted, preset
+    dns_name = (getattr(args, "dns_name", None) or s.dns_name or "").lower()
+    dns_zone = (getattr(args, "dns_zone", None) or s.dns_zone or "").lower()
+    if dns_name or dns_zone:
+        if not (hosted and s.target == "aws" and s.front_door == "caddy"):
+            raise MissingInput("--dns-name/--dns-zone require --hosted with AWS and Caddy")
+        if not (st.DOMAIN_RE.fullmatch(dns_name) and st.DOMAIN_RE.fullmatch(dns_zone)
+                and dns_name.endswith("." + dns_zone)):
+            raise MissingInput("--dns-name must be an exact hostname beneath --dns-zone (both are required)")
+        s.dns_name, s.dns_zone = dns_name, dns_zone
     if not hosted:
         return
     s.auth = "oidc" if auth == "oidc" else st.OWNER_LINK
@@ -84,7 +102,8 @@ def plan_lines(s: Settings) -> list[str]:
                f"{link_file(s.domain)} (0600) for our team only; never printed, and not for the ready email. Hosted install: "
                f"{s.hosted}, under {s.hosted_zone}"]
     if s.preset:
-        out.append("Recommended setup: the sample company, your Claude and ChatGPT subscriptions plus Tico Gateway, "
+        team = "the selected company file" if s.company_file_data else "the sample company"
+        out.append(f"Recommended setup: {team}, your Claude and ChatGPT subscriptions plus Tico Gateway, "
                    f"Tico Support {s.support or 'on'}, and a computer on the server (the Docker runner). "
                    + ("The Gateway invite is in the environment; it connects on the first start."
                       if s.gateway_invite else "No Gateway invite in the environment (TICO_GATEWAY_INVITE): the Gateway is not set up by this run."))

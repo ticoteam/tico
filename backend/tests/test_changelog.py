@@ -26,6 +26,7 @@ REVISED = {
     "0.2.15": "e6e2b8544f1d8548e4181932e60b6e0fcd3f4aa3",
     "0.3.24": "8d55fe27e343e06a5661cb7b074efba1b81c956c",
     "0.3.58": "95018df598f1d5305f0bdfb094b150ec87958b2a",
+    "0.3.64": "bea6bd0adaa4856422b44119370878d3dceb79c2",
 }
 
 NOTES = """# Changelog

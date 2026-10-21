@@ -159,10 +159,17 @@ def main(argv=None):
     p.add_argument("--projects", type=Path, default=ROOT.parent)
     p.add_argument("--queue-legacy-backlog", action="store_true",
                    help="Explicitly make old undelivered bot messages claimable after import")
+    p = sub.add_parser("hosting-enrollment")
+    p.add_argument("database", type=Path)
+    p.add_argument("--owner", required=True)
+    p.add_argument("--request-id", required=True)
+    p.add_argument("--code-hash", required=True)
+    p.add_argument("--label", required=True)
+    p.add_argument("--status", action="store_true")
     p = sub.add_parser("enrollment")
     p.add_argument("database", type=Path)
     owner = p.add_mutually_exclusive_group(required=True)
-    owner.add_argument("--owner", dest="operator", help="the human who owns the computer")
+    owner.add_argument("--owner", dest="operator", help="the roster ID or email of the human who owns the computer")
     owner.add_argument("--operator", dest="operator", help=argparse.SUPPRESS)      # the old spelling, hidden for one release
     p.add_argument("--out", type=Path, required=True, help="New private file for the enrollment code")
     p = sub.add_parser("delete-tasks", help="Move tasks made by mistake, with their conversations, to the "
@@ -213,6 +220,10 @@ def main(argv=None):
         report = {"database": str(args.database), "bots": len(entries)}
         with store.read() as c:
             report["bots_by_operator"] = bots_by_operator(c)
+    elif args.command == "hosting-enrollment":
+        from .hosting_enrollment import enrollment
+        store = Store(Settings(db_path=args.database, registry_dir=registry_dir()))
+        report = enrollment(store, Auth(store), args.request_id, args.code_hash, args.label, args.owner, args.status)
     elif args.command == "enrollment":
         from .models import EnrollmentRequest
         store = Store(Settings(db_path=args.database, registry_dir=registry_dir()))
@@ -220,8 +231,13 @@ def main(argv=None):
         execution = Execution(store, auth)
         with store.transaction() as c:
             auth.sync_access(c)   # the owner is stored in the database; an offline command has no request to load it
+            operator = args.operator
+            if "@" in operator:
+                row = c.execute("SELECT id FROM humans WHERE lower(email)=?", (operator.strip().lower(),)).fetchone()
+                if row:
+                    operator = row["id"]
             # The offline command acts as the environment owner, never as an ambient superuser.
-            code = execution.issue_enrollment(c, auth.owner_identity(c), EnrollmentRequest(operator=args.operator))
+            code = execution.issue_enrollment(c, auth.owner_identity(c), EnrollmentRequest(operator=operator))
             # Never print a credential into the operator's shared logs.
             fd = os.open(args.out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             with os.fdopen(fd, "w") as stream:

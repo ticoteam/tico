@@ -1,4 +1,4 @@
-"""Settings > AI providers > Tico AI Gateway (backend/gateway_connection.py), against a fake Gateway on localhost."""
+"""Settings > Computers > Tico AI Gateway (backend/gateway_connection.py), against a fake Gateway on localhost."""
 
 import json
 import logging
@@ -234,15 +234,62 @@ def test_tico_models_are_on_only_while_a_key_is_set(api, monkeypatch):
         put(api, "providers", {"enabled": ["anthropic"], "model": "tico-mid-1.0", "expected_revision": view["revision"]})
         view = get(api, "providers")
         assert view["default"] == {"runtime": "pi", "model": "tico-mid-1.0"} and "tico" in view["enabled"]
-        rows = {m["id"]: m for m in get(api, "models")["models"] if m["provider"] == "tico"}
+        rows = {m["id"]: m for m in get(api, "models")["models"] if m["provider"] == "tico" and not m.get("deprecated")}
         assert [(rows[m]["label"], rows[m]["description"]) for m in sorted(rows)] == [
-            ("Tico Cheap 1.0", "Claude Haiku 5.5 underneath"), ("Tico Mid 1.0", "Claude Sonnet 5.5 underneath"),
+            ("Tico Cheap 1.1", "Claude Haiku 5.5 underneath"), ("Tico Mid 1.0", "Claude Sonnet 5.5 underneath"),
             ("Tico Power 1.0", "Claude Opus 5.5 underneath")]
         delete(api, "providers/gateway")
         assert "tico" not in get(api, "providers")["enabled"]
         with api.app.state.store.read() as c:
             stored = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='providers'").fetchone()[0])
         assert "tico" not in stored["enabled"]
+
+
+def new_bot(api, slug, expected=200, **choice):
+    return post(api, "bots", {"slug": slug, "display_name": slug.title(), "description": "A test bot.",
+                              "status": "active", "repo": "emp-" + slug, "thread_mode": "personal",
+                              "operator": "ana", "owners": ["ana"], "runner_id": None, **choice}, expected=expected)
+
+
+def test_cheap_1_1_replaces_1_0_and_a_default_or_bot_already_on_1_0_keeps_it(api, monkeypatch):
+    setup(api, monkeypatch)
+    with fake_gateway() as fake:
+        fake.active(KEY, 0.1)
+        save(api, fake)
+        view = get(api, "providers")
+        refused = put(api, "providers", {"enabled": ["anthropic"], "model": "tico-cheap-1.0",
+                                         "expected_revision": view["revision"]}, expected=422)
+        assert "retired" in json.dumps(refused)
+        # A default saved as Cheap 1.0 before 1.1 shipped.
+        put(api, "providers", {"enabled": ["anthropic"], "model": "tico-mid-1.0", "expected_revision": view["revision"]})
+        with api.app.state.store.transaction() as c:
+            stored = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='providers'").fetchone()[0])
+            c.execute("UPDATE registry_metadata SET value_json=? WHERE key='providers'",
+                      (json.dumps({**stored, "runtime": "pi", "model": "tico-cheap-1.0"}),))
+        # Saving something else keeps it, and a bot that names no model is made on it.
+        view = get(api, "providers")
+        put(api, "providers", {"enabled": ["anthropic", "openai"], "model": "tico-cheap-1.0",
+                               "expected_revision": view["revision"]})
+        assert get(api, "providers")["default"] == {"runtime": "pi", "model": "tico-cheap-1.0"}
+        new_bot(api, "scout")
+        with api.app.state.store.read() as c:
+            assert json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='scout'").fetchone()[0])[
+                "model"] == "tico-cheap-1.0"
+        # Choosing it fresh is refused: for a new bot, and as a default once the company has moved off it.
+        new_bot(api, "scribe", expected=422, model="tico-cheap-1.0", harness="pi", effort="low")
+        view = get(api, "providers")
+        put(api, "providers", {"enabled": ["anthropic"], "model": "tico-cheap-1.1", "expected_revision": view["revision"]})
+        view = get(api, "providers")
+        put(api, "providers", {"enabled": ["anthropic"], "model": "tico-cheap-1.0", "expected_revision": view["revision"]},
+            expected=422)
+        # A bot already on it still runs there.
+        put_bot_on(api, "ops", "tico-cheap-1.0")
+        machine = runner(api)
+        assign(api, machine, "ops")
+        ready(api, machine, ["ops"])
+        post(api, "chat/ops", {"text": "Use only the synthetic fixture"})
+        config = claim(api, machine, "ops")["config"]
+        assert (config["runtime"], config["model"]) == ("pi", "tico-cheap-1.0")
 
 
 def test_openrouter_never_serves_a_tico_model_and_no_default_fallback_spends_the_key(api, monkeypatch):
@@ -630,10 +677,12 @@ def ended(api, attempt):
         return H.status(c, "ops"), job
 
 
-def test_a_rate_limited_gateway_waits_its_retry_after_and_is_not_called_a_cap(api, monkeypatch):
+@pytest.mark.parametrize("reported", [False, True])
+def test_a_rate_limited_gateway_waits_its_retry_after_and_is_not_called_a_cap(api, monkeypatch, reported):
     machine, attempt = tico_run(api, monkeypatch)
     finish(api, machine, attempt, "Tico AI Gateway: rate limited after too many refused keys from this address; wait "
-           "an hour (rate_limited)", limited=True)
+           "an hour (rate_limited)", limited=True,
+           **({"limit_resets_at": H.shift(H.now(), seconds=3600)} if reported else {}))
     status, job = ended(api, attempt)
     assert status["state"] == "limited" and job == "queued"
     assert status["focus"].startswith("Tico AI Gateway rate limited at ") and "cap" not in status["focus"]
@@ -642,6 +691,26 @@ def test_a_rate_limited_gateway_waits_its_retry_after_and_is_not_called_a_cap(ap
         from backend.execution import limit_cooldown
         assert limit_cooldown(c, "ops") >= G.RETRY_AFTER
     assert claim(api, machine, "ops") is None
+
+
+def test_gateway_work_resumes_after_the_reported_rate_window(api, monkeypatch):
+    machine, attempt = tico_run(api, monkeypatch)
+    wait = 42
+    at = H.now()
+    monkeypatch.setattr(H, "now", lambda: at)
+    reset = H.shift(at, seconds=wait)
+    finish(api, machine, attempt, "Tico AI Gateway: rate limited; retrying after the Gateway's requested wait "
+           "(rate_limited)", limited=True, limit_resets_at=reset)
+    status, job = ended(api, attempt)
+    assert job == "queued" and "refused keys" not in status["focus"]
+    with api.app.state.store.read() as c:
+        from backend.execution import limit_cooldown
+        assert wait <= limit_cooldown(c, "ops") <= wait + 1
+    assert claim(api, machine, "ops") is None
+    at = H.shift(at, seconds=wait + 2)
+    ready(api, machine, ["ops"])
+    retried = claim(api, machine, "ops")
+    assert retried and retried["job_id"] == attempt["job_id"] and retried["id"] != attempt["id"]
 
 
 @pytest.mark.parametrize("code", ["revoked_key", "unknown_key"])
@@ -657,8 +726,8 @@ REFUSED = "Tico AI Gateway refused the request as sent: {message} ({code})"
 
 # What the runner ends a refused Tico run with (runner-rs/src/hosts/pi.rs `plain_error`), and what the bot says.
 @pytest.mark.parametrize("code,error,focus", [
-    ("unknown_model", "Tico AI Gateway: this model isn't offered. Tico models: Tico Cheap 1.0, Tico Mid 1.0, Tico "
-     "Power 1.0 (unknown_model)", "The Tico AI Gateway doesn't offer this model. Tico models: Tico Cheap 1.0, Tico Mid "
+    ("unknown_model", "Tico AI Gateway: this model isn't offered. Tico models: Tico Cheap 1.1, Tico Mid 1.0, Tico "
+     "Power 1.0 (unknown_model)", "The Tico AI Gateway doesn't offer this model. Tico models: Tico Cheap 1.1, Tico Mid "
      "1.0, Tico Power 1.0"),
     ("unsupported_field", REFUSED, "The Tico AI Gateway refused the request as sent: " + ERRORS["unsupported_field"][1]),
     ("bad_request", REFUSED, "The Tico AI Gateway refused the request as sent: " + ERRORS["bad_request"][1]),
@@ -869,7 +938,7 @@ def test_a_gateway_with_no_chat_endpoint_yet_reads_plainly(api, monkeypatch, act
     with api.app.state.store.read() as c:
         focus = H.status(c, "ops")["focus"]
     assert focus == ("The Tico AI Gateway doesn't serve Tico models at its URL yet; check the Gateway URL in "
-                     "Settings > AI providers. This run is saved for later"), focus
+                     "Settings > Computers. This run is saved for later"), focus
 
 
 def test_a_404_on_another_model_is_not_blamed_on_the_gateway(api, monkeypatch):

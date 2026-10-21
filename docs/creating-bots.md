@@ -583,7 +583,7 @@ Levers set in **Settings → Bots**, not in the repository:
   `grok`, `cursor` / Cursor Agent, `musecode` / Muse Code, `pi`). A harness whose provider is off still
   shows in the picker, greyed out, with where to turn it on. **Model**: the latest model in that family (Sol, Astra, Grok 4.6, Gemini Flash,
   Claude Opus 5, Claude Fable 5.1). While the [Tico AI Gateway](ai-gateway.md) is connected, `pi` also offers
-  Tico Cheap, Mid and Power 1.0, each listed with what runs underneath. Search the picker: `grok` shows `grok/grok 4.6` at every
+  Tico Cheap 1.1, Mid 1.0 and Power 1.0, each listed with what runs underneath. Search the picker: `grok` shows `grok/grok 4.6` at every
   effort; `sol` shows `openai/gpt 5.6 sol`. The same levers set the built-in BotOps bot: it may
   run on any harness and model here, limited in practice to the providers the company enabled
   and what its computer is signed in to.
@@ -592,7 +592,7 @@ Levers set in **Settings → Bots**, not in the repository:
   the runtime refused). **None (fail)** is the default. A pick is saved with **Apply** next to it or with
   **Save bot** ([harnesses.md](harnesses.md#choosing-a-harness-model-and-effort)). The hop starts a fresh session. OpenRouter
   is not a bot harness. With none set, a usage limit still moves the turn to another provider signed in on
-  the bot's computer unless the owner turned that off in **Settings → AI providers** (docs/how-it-works.md).
+  the bot's computer unless the owner turned that off in **Settings → Computers → Models** (docs/how-it-works.md).
 - **Connection**: the login the bot runs on: **Computer's login** (the default) or one of the subscriptions on its
   computer, listed first, then those on other computers. A line under **Model** says "Runs on *tool* · *connection* on
   *computer*". The bot's computer operator, owners and admins choose it; groups no longer give their bots one
@@ -724,7 +724,7 @@ is supplied. Leave `slug` out: Tico picks a free one from `name` (else the templ
 reserved slugs, and returns it. Restore an archived bot only when asked.
 Use `build: false` to register only the record,
 for example when building it yourself on a Computer. BotOps defaults to record-only registration.
-An empty model in Add from template also inherits the Team default; choose one in Settings > AI providers
+An empty model in Add from template also inherits the Team default; choose one in Settings > Computers > Models
 if none is saved. `hub_template_list` includes Setup questions, first-routine output and draft-only status,
 and the example result. Unknown templates are refused before creating a record. To correct an existing
 record, update its `template` through the definition API or `hub_bot_update`; this changes metadata,

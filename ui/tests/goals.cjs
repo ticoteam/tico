@@ -176,15 +176,15 @@ const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence:
     assert.equal(await page.locator('[data-gm-thread] .bubble.you').count(),1,'human message remains beside live reply');
     assert.equal(await page.locator('[data-gm-live] script').count(),0,'live Markdown is sanitized');
     gmLive = false;
-    // With no AI provider the question waits: the panel says so and links to Settings > AI providers.
+    // With no AI provider the question waits: the panel says so and links to Models on Settings > Computers.
     gmQueued = true;
     await page.reload();
     await page.locator('[data-gm-provider]').waitFor();
-    assert.equal(await page.locator('[data-gm-provider] a').getAttribute('data-gs-tab'), 'providers');
+    assert.equal(await page.locator('[data-gm-provider] a').getAttribute('data-gs-tab'), 'models');
     if (screenshotDir) await page.screenshot({animations: 'disabled', path: path.join(screenshotDir, 'goals-gm-no-provider-test.png')});
     await page.locator('[data-gm-provider] a').click();
-    await page.locator('#settings-tabs [data-settings-tab=providers][aria-selected=true]').waitFor();
-    assert.equal(await page.locator('#settings-providers').isVisible(), true, 'the link lands on Settings > AI providers');
+    await page.locator('#settings-tabs [data-settings-tab=devices][aria-selected=true]').waitFor();
+    assert.equal(await page.locator('#settings-models').isVisible(), true, 'the link lands on Models');
     gmQueued = false;
     await page.goto('http://tico-ui.test/#/goals');
     await page.reload();

@@ -26,7 +26,7 @@ from . import repo_waits
 from . import built_on
 from . import agents, app_delivery, batch, external_sync, inbox_isolation, mcp_oauth, harness_actions, model_login, oidc, personal_tokens, views
 from . import owner_link
-from . import check_models, run_triggers, team_rules, update_feeds, topic_change, usage_limits, wake_presets, visuals, wake_rules, quiet_work
+from . import check_models, run_triggers, team_rules, update_feeds, topic_change, usage_limits, bot_to_bot, wake_presets, visuals, wake_rules, quiet_work
 from . import task_privacy as privacy
 from . import task_relations as TR
 from . import task_roles as TRo
@@ -117,7 +117,11 @@ def create_app(settings=None):
         company_storage.startup(store, app.state.vault, app.state.blobs)
         asyncio.get_running_loop().run_in_executor(None, auth.warm)   # Cloudflare's keys, before anyone signs in
         # TICO_SAMPLE_COMPANY=on: a new company starts as the sample company, once (backend/sample_company.py).
-        if settings.sample_company:
+        if settings.company_file_data:
+            from . import company_import
+            with store.transaction() as c:
+                company_import.load_on_start(onboarding, c)
+        elif settings.sample_company:
             try:
                 from . import sample_company
                 with store.transaction() as c:
@@ -161,6 +165,8 @@ def create_app(settings=None):
             telemetry.capture("support_access", exc)
         telemetry.start()
         stop = asyncio.Event()
+        # Always runs: local 90-day retention must not depend on the inbound key or HQ (sync itself stays off).
+        inbound_task = asyncio.create_task(app.state.inbound.loop(stop))
         screen_relay_task = None
         if settings.screen_relay_url:
             await asyncio.to_thread(screen_sessions.start)
@@ -247,6 +253,8 @@ def create_app(settings=None):
             yield
         finally:
             stop.set()
+            if inbound_task:
+                await inbound_task
             if screen_relay_task:
                 await screen_relay_task
             else:
@@ -1226,16 +1234,17 @@ def create_app(settings=None):
                         kind=body.kind, refs=refs, in_reply_to=body.in_reply_to, wait_s=body.wait_s)
         from .chat_goals import current as current_chat_goal
         goal = current_chat_goal(c, message["conversation_id"])
+        # Added to the stored references, so the marks H.say set (a bot_to_bot hold, quiet) stay (Dev 328).
         if goal and goal["status"] == "active":
-            refs["goal_context"] = {"id": goal["id"], "updated_at": goal["updated_at"]}
-            c.execute("UPDATE messages SET refs_json=? WHERE id=?", (encode(refs), message["id"]))
+            stored = {**(message.get("refs") or {}), "goal_context": {"id": goal["id"], "updated_at": goal["updated_at"]}}
+            c.execute("UPDATE messages SET refs_json=? WHERE id=?", (encode(stored), message["id"]))
             message = H.message(c, message["id"])
         if body.attachments:
             # The visuals go on the message it was sent as: versions of files in this conversation (backend/visuals.py).
             attached, report = visuals.attach(c, who, app.state.files, app.state.blobs, body.attachments,
                                               conversation_id=message["conversation_id"])
-            refs["attachments"] = attached
-            c.execute("UPDATE messages SET refs_json=? WHERE id=?", (encode(refs), message["id"]))
+            stored = {**(message.get("refs") or {}), "attachments": attached}
+            c.execute("UPDATE messages SET refs_json=? WHERE id=?", (encode(stored), message["id"]))
             message = {**visual_view(c, who, [H.message(c, message["id"])])[0], "visuals": report}
         if who.role == "bot":
             conv = H.conversation(c, message["conversation_id"])
@@ -1246,6 +1255,8 @@ def create_app(settings=None):
         if note := (H.held_note(c, to) or usage_limits.warning(c, to)
                     or (None if H.is_human(who.actor) else H.setup_hold(c, to))):
             message = {**message, "warning": note}
+        if held := bot_to_bot.held_reason(message):
+            message = {**message, "woke": False, "held": held}
         return message
 
     @app.get("/healthz")
@@ -1404,6 +1415,18 @@ def create_app(settings=None):
         auth.domain(who)
         with store.transaction() as c:
             gateway_connection.clear(c, who, H.now(), settings)
+            return gateway_connection.view(c, settings, manage=True)
+
+    @app.post("/api/v2/providers/gateway/automatic")
+    def gateway_automatic(request: Request):
+        """Connect automatically again after the owner cleared the install's automatic key: the install enrolls with
+        its own secret on the next check, which starts now."""
+        who = request.state.identity
+        auth.domain(who)
+        with store.transaction() as c:
+            gateway_connection.automatic_on(c, who, H.now())
+        gateway_connection.check_later(store, app.state.vault, settings)
+        with store.read() as c:
             return gateway_connection.view(c, settings, manage=True)
 
     @app.post("/api/v2/providers/gateway/check")
@@ -1600,11 +1623,16 @@ def create_app(settings=None):
 
     @app.get("/api/v2/ceo-bot")
     def ceo_bot_switch(request: Request):
-        """The CEO Bot rollout switch (backend/ceo_bot.py)."""
-        auth.domain(request.state.identity)
+        """The CEO Bot rollout switch and its level (backend/ceo_bot.py). How many items it put in each person's Needs
+        you today is the owner's, an admin's and the CEO Bot's to read; anyone else sees only their own count."""
+        who = request.state.identity
+        auth.domain(who)
         from . import ceo_bot
         with store.read() as c:
-            return ceo_bot.view(c)
+            value = ceo_bot.named(c, ceo_bot.view(c))
+        if who.actor != "bot:" + ceo_bot.SLUG and auth.company_role(who) not in ("owner", "admin"):
+            value["asked_today"] = {k: n for k, n in value["asked_today"].items() if k == who.actor}
+        return value
 
     @app.post("/api/v2/ceo-bot")
     def ceo_bot_switch_set(request: Request, body: M.CeoBotSwitch):
@@ -1612,7 +1640,7 @@ def create_app(settings=None):
         who = request.state.identity
         admin_only(who, "turns the CEO Bot on or off")
         from . import ceo_bot
-        return mutate(request, body, lambda c: ceo_bot.set_on(c, who.actor, body.on))
+        return mutate(request, body, lambda c: ceo_bot.named(c, ceo_bot.set_on(c, who.actor, body.on)))
 
     @app.post("/api/v2/goal-manager/turn-on")
     def turn_on_goal_manager(request: Request, body: M.Empty):
@@ -1650,6 +1678,18 @@ def create_app(settings=None):
     def onboarding_complete(request: Request, body: M.Empty):
         who = request.state.identity
         return mutate(request, body, lambda c: onboarding.complete(c, who))
+
+    @app.post("/api/v2/onboarding/company/preview")
+    def onboarding_company_preview(request: Request, body: M.OnboardingCompanyFile):
+        from . import company_import
+        with store.read() as c:
+            return company_import.preview(onboarding, c, request.state.identity, body.company_yaml)
+
+    @app.post("/api/v2/onboarding/company/import")
+    def onboarding_company_import(request: Request, body: M.OnboardingCompanyImport):
+        from . import company_import
+        return mutate(request, body, lambda c: company_import.apply(
+            onboarding, c, request.state.identity, body.company_yaml, body.fingerprint))
 
     @app.post("/api/v2/onboarding/sample")
     def onboarding_sample(request: Request, body: M.Empty):
@@ -3265,9 +3305,11 @@ def create_app(settings=None):
             comments = visual_view(c, who, H.task_comments(c, task_id, actor=privacy.actor(request.state.identity)))
             msg = next(m for m in comments if m["id"] == msg["id"])
             held = H.held_note(c, msg.get("to_actor"))
+            waits = bot_to_bot.held_reason(msg)
             return {"comment": msg, "comments": comments,
                     "woke": bool(wake) and not ({"can_wait", wake_rules.MARK} & set(msg.get("refs") or {})),
-                    **({"warning": held} if held else {}), **({"visuals": report} if report else {})}
+                    **({"warning": held} if held else {}), **({"held": waits} if waits else {}),
+                    **({"visuals": report} if report else {})}
         result = mutate(request, body, work)
         if body.attachments:
             app.state.file_metadata.wake.set()   # a chat file shared here is a new task copy: preview it now
@@ -3493,7 +3535,7 @@ def create_app(settings=None):
         who = request.state.identity
         auth.domain(who)
         if key.startswith("assistant."):
-            raise Problem("forbidden", "Your Assistant's settings are set in Settings > " + settings.assistant_name, 403)
+            raise Problem("forbidden", "Your Assistant's settings are set in Settings > General", 403)
         if key == "meetings.auto_share":
             views.human_only(who)
             if not isinstance(body.value, bool):
@@ -3555,7 +3597,7 @@ def create_app(settings=None):
         """The person takes back what their Assistant decided for them, before anything acted on it. Their own click."""
         who = request.state.identity
         if who.via:
-            raise Problem("forbidden", "Only the person undoes this, in Settings > " + settings.assistant_name, 403)
+            raise Problem("forbidden", "Only the person undoes this, in Settings > General", 403)
         def work(c):
             auth.approval(c, who, aid, decide=True)
             return H.approval_undo(c, who.actor, aid)
@@ -4251,7 +4293,7 @@ def create_app(settings=None):
                 if not msg:
                     continue
                 try:
-                    auth.conversation(c, who, msg["conversation_id"])
+                    auth.run_conversation(c, who, bot, msg)
                     privacy.require_message(c, who, msg)
                     privacy.require_attempt(c, who, turn["id"])
                 except Problem:
@@ -5474,6 +5516,8 @@ def create_app(settings=None):
     install_report_order(app, store, auth, mutate)
     from .support import install as install_support
     install_support(app, store, settings, census)
+    from .inbound import install as install_inbound
+    install_inbound(app, store, settings, auth)
     from .support_access import install as install_support_access
     install_support_access(app, store, settings, auth)
     from .watchers import install as install_watchers

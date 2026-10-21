@@ -37,7 +37,8 @@ CHECKIN_DAYS = 21                         # a check-in colours a goal for three 
 TASK_DAYS = 14                            # no task done for two weeks, on a goal at least that old: yellow
 SOURCES = ("measured", "estimate")        # legacy names of a reading's quality; a connector name is a source
 # goal_why: the CEO Bot's one line tying a goal to the company's vision (backend/company.py).
-PROPOSALS = ("goal_wording", "goal_kpi", "kpi_definition", "kpi_target", "flag", "goal_why")
+# recovery: the CEO Bot's bot-task changes to get a red or stalled goal back on track, at level 2 (backend/ceo_suggest.py).
+PROPOSALS = ("goal_wording", "goal_kpi", "kpi_definition", "kpi_target", "flag", "goal_why", "recovery")
 FLAGS = ("vague", "duplicate", "unmeasured")
 
 
@@ -506,7 +507,7 @@ def score(conn, row, at=None):
     views = K.goal_link_status(conn, row["id"], at)
     judged = [v for v in views if v["status"] in COLOURS]
     if judged:
-        worst = min(judged, key=lambda v: COLOURS[::-1].index(v["status"]))
+        worst = min(judged, key=lambda v: COLOURS.index(v["status"]))
         others = len(judged) - 1
         return {"status": worst["status"], "basis": "kpis",
                 "reason": worst["reason"] + (f" (+{others} more)" if others and worst["status"] != "green" else "")}
@@ -613,7 +614,7 @@ def checkin_add(conn, actor, goal_id, body, signal=None, source_actor=None, kpi_
 # ----------------------------------------------------------------------------- proposals
 def _payload_error(conn, kind, goal_id, kpi_id, payload):
     """What is wrong with a proposal's payload, in a sentence, or None."""
-    if kind in ("goal_wording", "goal_kpi", "flag", "goal_why") and not goal(conn, goal_id):
+    if kind in ("goal_wording", "goal_kpi", "flag", "goal_why", "recovery") and not goal(conn, goal_id):
         return "name the goal this is about"
     if kind in ("kpi_definition", "kpi_target") and (not kpi_id or not kpi(conn, kpi_id)
                                                       or (kind == "kpi_definition" and K.auto(kpi_id))):
@@ -651,6 +652,9 @@ def _payload_error(conn, kind, goal_id, kpi_id, payload):
         elif kind == "goal_why":
             from . import company as C
             return C.why_payload_error(payload)
+        elif kind == "recovery":
+            from . import ceo_suggest
+            return ceo_suggest.payload_error(conn, goal_id, payload)
     except ValueError as exc:
         return str(exc)
     return None
@@ -666,6 +670,14 @@ def propose(conn, actor, kind, goal_id=None, kpi_id=None, payload=None, reason="
     payload = payload if isinstance(payload, dict) else {}
     if kind not in PROPOSALS:
         H.refuse(conn, actor, "kind", f"a proposal is {'|'.join(PROPOSALS)}, not {kind}")
+    if kind == "recovery":
+        from . import ceo_suggest
+        if actor != ceo_suggest.CEO:
+            H.refuse(conn, actor, "identity", f"Only the {ceo_bot.name(conn)} proposes a recovery")
+        if not ceo_suggest.suggests(conn):
+            H.refuse(conn, actor, "state", f"The {ceo_bot.name(conn)} suggests recoveries at level 2 or 3; the owner "
+                                           "chooses the level in Settings")
+        kpi_id = None
     error = _payload_error(conn, kind, goal_id, kpi_id, payload)
     if error:
         H.refuse(conn, actor, "lint", error)
@@ -694,9 +706,10 @@ def proposal(conn, proposal_id):
     return _proposal_view(H._one(conn, "SELECT * FROM goal_proposals WHERE id=?", (proposal_id,)))
 
 
-def decide(conn, actor, proposal_id, decision, note="", why=None):
+def decide(conn, actor, proposal_id, decision, note="", why=None, option=None):
     """The owner confirms (the change is made, as them) or rejects. Only a pending proposal is decided, once.
-    A Why may be confirmed as edited: `why` is the line they kept."""
+    A Why may be confirmed as edited: `why` is the line they kept. A recovery is confirmed with one of its options
+    (`option`, the CEO Bot's pick when None), made as the CEO Bot (backend/ceo_suggest.py)."""
     H._writer(conn, actor)
     row = proposal(conn, proposal_id)
     if not row:
@@ -709,7 +722,17 @@ def decide(conn, actor, proposal_id, decision, note="", why=None):
         H.refuse(conn, actor, "kind", f"a decision is confirm|reject, not {decision}")
     if why is not None and (row["kind"] != "goal_why" or decision != "confirm"):
         H.refuse(conn, actor, "kind", "only a Why proposal is confirmed with an edited line")
+    if option is not None and (row["kind"] != "recovery" or decision != "confirm"):
+        H.refuse(conn, actor, "kind", "only a recovery is confirmed with one of its options")
     result = None
+    if row["kind"] == "recovery" and decision == "confirm":
+        from . import ceo_suggest
+        if not ceo_suggest.suggests(conn):
+            H.refuse(conn, actor, "state", f"The {ceo_bot.name(conn)} is at level 1 now, where it changes no tasks")
+        pick = row["payload"]["pick"]
+        chosen = pick if option is None else option
+        if not isinstance(chosen, int) or not 0 <= chosen < len(row["payload"]["options"]):
+            H.refuse(conn, actor, "lint", f"choose option 0 to {len(row['payload']['options']) - 1}")
     if decision == "confirm":
         payload, goal_id, kpi_id = row["payload"], row["goal_id"], row["kpi_id"]
         if row["kind"] == "goal_wording":
@@ -737,6 +760,12 @@ def decide(conn, actor, proposal_id, decision, note="", why=None):
                 H.refuse(conn, actor, "lint", "an accepted Why is one line; reject the proposal to leave it out")
             C.set_why(conn, actor, goal_id, kept, settled_by=proposal_id)
             result = {"why": kept, "edited": kept != proposed}
+        elif row["kind"] == "recovery":
+            applied = ceo_suggest.apply(conn, actor, row, chosen)
+            # Settled before its follow-up is filed: a retry of a retry is a new proposal, not this one found again.
+            conn.execute("UPDATE goal_proposals SET status='confirmed' WHERE id=?", (proposal_id,))
+            again = ceo_suggest.follow_up(conn, row, applied["left"])
+            result = {"option": chosen, "unchanged": chosen == pick, **applied, "follow_up": again and again["id"]}
     conn.execute("UPDATE goal_proposals SET status=?, decided_by=?, decided_at=?, decision_note=?, result_json=? "
                  "WHERE id=?", ("confirmed" if decision == "confirm" else "rejected", actor, H.now(),
                                 str(note or "").strip()[:1000], H._dump(result) if result else None, proposal_id))

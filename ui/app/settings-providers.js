@@ -1,18 +1,21 @@
-/* ui/app/settings-providers.js — Settings > AI providers
+/* ui/app/settings-providers.js — Settings > Computers > Models
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
-// ----------------------------------------------------------------- AI providers
+// ----------------------------------------------------------------- Models
 // Which model vendors this team uses and the default model (backend/providers.py). One form
 // serves the first-run step and Settings; the server derives the runtime from the model.
 function providersModels(view, models, enabled) {
   const labels = Object.fromEntries((view.providers || []).map(row => [row.id, row.label]));
   const gateway = providersGatewayIds(view);
-  return (models || []).filter(model => !model.deprecated && enabled.includes(model.provider))
+  // The saved default stays offered after its model retires, so a save about something else never moves it.
+  const saved = view.default?.model || '';
+  return (models || []).filter(model => (!model.deprecated || model.id === saved) && enabled.includes(model.provider))
     .map(model => ({id: model.id,
                     // A Tico model says what runs underneath it ("Claude Sonnet 5.5 underneath").
                     description: gateway.includes(model.provider) ? model.description || '' : '',
-                    label: modelWords(model.id) || `${labels[model.provider] || model.provider} · ${model.label}`,
+                    label: (modelWords(model.id) || `${labels[model.provider] || model.provider} · ${model.label}`)
+                      + (model.deprecated ? ' (retired)' : ''),
                     recommended: (view.providers || []).some(row => row.recommended === model.id)}));
 }
 // The Tico AI Gateway's provider is on while its connection has a key, never ticked (backend/gateway_connection.py).
@@ -110,6 +113,7 @@ async function renderSettingsProviders() {
       ${gateway ? gatewayHTML(gateway, owner) : ''}`;
     providersWire($('#set-prov'), view, SETTINGS_DATA.models);
     if (gateway) gatewayWire(gateway);
+    settingsReveal('#settings-models');
     const save = $('#set-prov-save');
     if (save) save.onclick = async () => {
       const chosen = providersCollect($('#set-prov')), status = $('#set-prov-status');
@@ -118,7 +122,7 @@ async function renderSettingsProviders() {
         const saved = await providersSave(view, chosen);
         applyConfig({...S.config, providers_configured: !!saved.enabled?.length, default_runtime: saved.default?.runtime || ''});
         SETTINGS_DATA.enabledProviders = saved.enabled; SETTINGS_DATA.defaultModel = saved.default?.model || '';
-        toast('AI providers saved');
+        toast('Models saved');
         await renderSettingsProviders();
       } catch (error) { status.innerHTML = `<span class="err">${esc(error.message)}</span>`; save.disabled = false; }
     };
@@ -137,16 +141,20 @@ function gatewayHTML(gateway, owner) {
         : state === 'not_ready' ? 'Not ready' : 'Connected')}</span>`
     : '<span class="pill" data-gateway-state="none">Not connected</span>';
   const head = `<h3 class="prov-gateway-title">Tico AI Gateway ${badge}</h3>
-    <p class="muted">Tico's own models, Tico Cheap, Mid and Power 1.0, and Decide, with one gateway key from Tico.</p>`;
+    <p class="muted">Tico's own models, Tico Cheap 1.1, Mid 1.0 and Power 1.0, and Decide, with one gateway key from Tico.</p>`;
   if (!owner) return `<div class="prov-gateway" id="set-gateway">${head}</div>`;
   const message = gateway.message ? `<p class="${gateway.working === false || state === 'cap_reached' ? 'err' : 'muted'}" data-gateway-message>${esc(gateway.message)}</p>` : '';
+  // An install the install command invited gets its own key from Tico: nothing to paste, and a pasted key still wins.
+  const automatic = gateway.automatic ? '<p data-gateway-automatic>Tico AI Gateway: connected automatically</p>'
+    : gateway.auto_off ? `<p class="muted">This install can connect to the Tico AI Gateway by itself.</p>
+      <div class="onb-actions"><button class="ghost" type="button" data-gateway-automatic-on>Connect automatically</button></div>` : '';
   if (!gateway.editable) {
     return `<div class="prov-gateway" id="set-gateway">${head}
       <p class="muted">Set by the server's environment (${esc(gateway.env || 'TICO_GATEWAY_KEY')}); change it there.</p>${message}
       <div class="onb-actions"><button class="ghost" type="button" data-gateway-check>Check now</button></div></div>`;
   }
-  return `<div class="prov-gateway" id="set-gateway">${head}
-    <label class="onb-field"><span class="k">Gateway key</span><input type="password" autocomplete="off" spellcheck="false"
+  return `<div class="prov-gateway" id="set-gateway">${head}${automatic}
+    <label class="onb-field"><span class="k">${gateway.automatic ? 'Use your own gateway key instead' : 'Gateway key'}</span><input type="password" autocomplete="off" spellcheck="false"
       data-gateway-key placeholder="${gateway.connected ? esc(`Saved (${gateway.preview || '••••••'}). Leave empty to keep it`) : 'Paste the gateway key Tico gave you'}"></label>
     <label class="onb-field"><span class="k">Gateway URL</span><input type="url" data-gateway-url
       value="${esc(gateway.url && gateway.url !== gateway.default_url ? gateway.url : '')}" placeholder="${esc(gateway.default_url || '')}"></label>
@@ -173,6 +181,8 @@ function gatewayWire(gateway) {
   };
   const check = root.querySelector('[data-gateway-check]');
   if (check) check.onclick = () => run(check, 'Checking…', () => post('/v2/providers/gateway/check', {}), shown => shown.message || 'Checked');
+  const automaticOn = root.querySelector('[data-gateway-automatic-on]');
+  if (automaticOn) automaticOn.onclick = () => run(automaticOn, 'Connecting…', () => post('/v2/providers/gateway/automatic', {}), () => 'Connecting automatically');
   const clear = root.querySelector('[data-gateway-clear]');
   if (clear) clear.onclick = () => {
     if (!confirm('Clear the gateway key? Bots on Tico models stop until a key is saved again.')) return;
@@ -189,11 +199,13 @@ function providersNextHTML(view, owner) {
     const ready = machine.readiness?.runtimes?.[runtime]?.installed;
     return `<li>${esc(machine.label)} · ${esc(runtime)}${owner && online && ready && harnessCaps(runtime).browser_sign_in
       ? ` <button class="ghost" type="button" data-model-login data-runner="${esc(machine.id)}" data-runtime="${esc(runtime)}" data-machine="${esc(machine.label)}">Sign in</button>`
-      : ' · <a href="#/settings" data-provider-computers>Open computer</a>'}</li>`;
+      : ' · <button class="linkish" type="button" data-provider-computer="${esc(machine.id)}">Open computer</button>'}</li>`;
   }));
   return `<div class="provider-next"><p>Sign in on each computer, or <a href="${CREDENTIALS}">use an API key</a> in Credentials and share it with every computer.</p>
-    ${machines.length ? (rows.length ? `<ul>${rows.join('')}</ul>` : '<p class="muted">Computers are signed in.</p>') : '<p><a href="#/settings" data-provider-computers>Add computer</a></p>'}</div>`;
+    ${machines.length ? (rows.length ? `<ul>${rows.join('')}</ul>` : '<p class="muted">Computers are signed in.</p>') : ''}</div>`;
 }
+// The computers list is just above: open that computer's pop-up.
 document.addEventListener('click', event => {
-  if (event.target.closest('[data-provider-computers]')) settingsShow('devices');
+  const link = event.target.closest('[data-provider-computer]');
+  if (link) $(`#set-machines [data-computer-open="${CSS.escape(link.dataset.providerComputer)}"]`)?.click();
 });

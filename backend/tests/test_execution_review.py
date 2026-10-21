@@ -173,11 +173,11 @@ def test_usage_limited_turn_requeues_and_cools_off_longer_after_a_third_strike(a
     with api.app.state.store.read() as c:
         assert c.execute('SELECT state FROM jobs WHERE id=?', (attempt['job_id'],)).fetchone()[0] == 'queued'
         status = H.status(c, 'ops')
-        assert status['state'] == 'limited' and status['focus'].startswith('fake usage limit at ')
+        assert status['state'] == 'limited' and status['focus'].startswith('Primary fake plan usage limit at ')
         assert c.execute("SELECT count(*) FROM events WHERE action='attempt.limited' AND target=?", (attempt['id'],)).fetchone()[0] == 1
     issues = api.get('/api/status', headers=headers()).json()['health_issues']
     issue = next(i for i in issues if i['kind'] == 'bot' and i['bot'] == 'ops')
-    assert issue['detail'].startswith('fake usage limit; resumes at ')
+    assert issue['detail'].startswith('Primary fake plan usage limit; resumes at ')
     assert get(api, 'bots/ops/execution-review')['jobs'] == []
     # Inside the hold nothing is handed out; after it the same job comes back. Each limit in a row on the login
     # holds longer: 30, then 60, then 120 minutes (backend/login_holds.py BACKOFF).
@@ -204,7 +204,7 @@ def test_usage_limited_turn_requeues_and_cools_off_longer_after_a_third_strike(a
         assert status['state'] == 'limited' and 'third in a row' in status['focus']
     assert get(api, 'bots/ops/execution-review')['jobs'] == []
     issue = next(i for i in api.get('/api/status', headers=headers()).json()['health_issues'] if i['kind'] == 'bot' and i['bot'] == 'ops')
-    assert issue['detail'].startswith('fake usage limit three times in a row; queued work waits until ')
+    assert issue['detail'].startswith('Primary fake plan usage limit, three times in a row; queued work waits until ')
     assert claim(api, machine) is None
     age_limit(api, 3601)
     assert claim(api, machine) is None                      # an hour is not enough this time

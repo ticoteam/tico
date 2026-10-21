@@ -1,8 +1,10 @@
 """Explicit service configuration; importing the backend never opens the live Hub DB."""
 
+import ipaddress
 import json
 import logging
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlparse
@@ -28,6 +30,35 @@ def _release_origin():
         return {}
     return {"release_commit": str(manifest.get("commit") or ""), "release_repo": str(manifest.get("repository") or "")}
 LOOPBACK = ("127.0.0.1", "localhost", "::1")
+
+
+def _client_visual_origin(value):
+    """Public metadata only; keep credentials and malformed legacy values private.
+
+    The visual runtime keeps its existing normalization/validation. HTTP/local
+    origins remain representable here; a desktop navigation policy independently
+    requires HTTPS and does not acquire IPC authority from this field.
+    """
+    if not isinstance(value, str) or not value.isascii() or any(ch.isspace() or ord(ch) < 32 or ord(ch) == 127 for ch in value):
+        return ""
+    try:
+        origin = urlparse(value)
+        host, port = origin.hostname or "", origin.port
+        if origin.scheme not in ("http", "https") or not host or origin.username is not None or origin.password is not None \
+                or origin.path or origin.params or origin.query or origin.fragment or port == 0 or "%" in host:
+            return ""
+        authority = ("[" + host + "]" if ":" in host else host) + (":" + str(port) if port is not None else "")
+        if origin.netloc.lower() != authority:
+            return ""
+        try:
+            ipaddress.ip_address(host)
+        except ValueError:
+            if len(host) > 253 or not any(ch in "abcdefghijklmnopqrstuvwxyz" for ch in host) \
+                    or not all(re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label) for label in host.split(".")):
+                return ""
+        return value
+    except ValueError:
+        return ""
 
 
 def _secret(env, arn_env, path):
@@ -252,6 +283,7 @@ class Settings:
     # docs/sample-company.md), loaded once on the first start whose owner is on the roster. A set-up company is never
     # touched. Only `on` turns it on (the recommended install's contract); unset or any other value leaves it off.
     sample_company: bool = False
+    company_file_data: str = field(default="", repr=False)
     # First-boot seed for the owner's AI provider choice (backend/providers.py). Once the
     # database holds a choice, these are never read again.
     enabled_providers: tuple[str, ...] = ()
@@ -354,13 +386,14 @@ class Settings:
         return bool(self.local_owner_token_file)
 
     def environment(self):
-        """What a client needs to render this environment: names, links and sign-in mode."""
+        """Non-secret rendering metadata; HTTP callers enforce their own authentication boundary."""
         return {"environment_id": self.environment_id, "company_name": self.company_name,
                 # No TICO_TEAM_NAME: "Company" is a stand-in, so the first-run wizard leaves its name field empty.
                 "company_name_default": self.company_name == DEFAULT_COMPANY_NAME,
                 "app_name": self.app_name, "assistant_name": self.assistant_name,
                 "assistant_bot": self.assistant_bot, "public_url": self.public_url,
-                "runner_url": self.runner_url, "github_owner": self.github_owner,
+                "runner_url": self.runner_url, "visual_origin": _client_visual_origin(self.visual_origin),
+                "github_owner": self.github_owner,
                 "compose_project": self.compose_project, "server_network": self.server_network,
                 "local": self.local_signin, "hosted": self.hosted, "release": self.release_id,
                 "owner_email": self.owner_email, "owner_name": self.owner_name, "demo": self.demo, "rehearsal": self.rehearsal}
@@ -485,6 +518,7 @@ class Settings:
             decisions_jev_usd_per_mtok_output=max(0.0, float(os.environ.get("TICO_DECISIONS_JEV_USD_PER_MTOK_OUTPUT", "") or 0)),
             decisions_idea_triage=not rehearsal and os.environ.get("TICO_DECISIONS_IDEA_TRIAGE", "0") == "1",
             sample_company=not rehearsal and os.environ.get("TICO_SAMPLE_COMPANY", "").strip().lower() == "on",
+            company_file_data="" if rehearsal else os.environ.get("TICO_COMPANY_FILE_B64", "").strip(),
             enabled_providers=tuple(part.strip().lower() for part in
                                     os.environ.get("TICO_ENABLED_PROVIDERS", "").split(",") if part.strip()),
             default_runtime=os.environ.get("TICO_DEFAULT_RUNTIME", "").strip().lower(),

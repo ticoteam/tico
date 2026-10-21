@@ -261,6 +261,7 @@ def load(c):
             "assigned_to": stored.get("assigned_to") or None,
             # When the company started as the sample company (backend/sample_company.py): when, by whom, what it made.
             "sample": stored.get("sample") or None,
+            "company_import": stored.get("company_import") or None,
             "updated": stored.get("updated") or "", "updated_by": stored.get("updated_by") or ""}
 
 
@@ -309,6 +310,11 @@ def config_view(c, settings, who=None):
         # Where a runner sends a turn whose subscription hit its limit, when the bot names no fallback.
         value["fallback_models"] = providers.default_fallbacks(chosen)
         if getattr(who, "runner_id", None):
+            # The Gateway also runs turns before subscription sign-in under the recommended choice,
+            # even when automatic quota fallback is off. Its harness must be installed before a claim
+            # can pass readiness; it is an optional computer default, not the bot's saved runtime.
+            from . import models_preset
+            value["gateway_runtime"] = (models_preset.fallback_row(chosen) or {}).get("runtime", "")
             # This computer's logins a usage limit holds (backend/login_holds.py): a runner that restarted, and so
             # forgot the limits it met, still skips them in its fallback choice until they end.
             from . import login_holds

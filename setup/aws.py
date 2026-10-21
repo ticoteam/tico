@@ -14,15 +14,18 @@ from . import contract, remote
 
 MANAGED_TAG = ("ManagedBy", "tico-setup")
 NAME_TAG = "tico-setup-name"
-VOLUME_GIB = 30
+# The offered Hosting sizes include larger disks on both servers and bot computers.
+VOLUME_GIB = {"m8i-flex.xlarge": 100, "m8i-flex.2xlarge": 200}
 
 AMI_PARAMS = {
     "ubuntu": "/aws/service/canonical/ubuntu/server/24.04/stable/current/arm64/hvm/ebs-gp3/ami-id",
     "al2023": "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64",
 }
 # us-east-1 on-demand list prices in USD/hour, approximate; the wizard says so.
-HOURLY = {"t4g.small": 0.0168, "t4g.medium": 0.0336, "t4g.large": 0.0672}
-MEMORY_GIB = {"t4g.small": 2, "t4g.medium": 4, "t4g.large": 8}
+HOURLY = {"t4g.small": 0.0168, "t4g.medium": 0.0336, "t4g.large": 0.0672,
+          "m8i-flex.xlarge": 0.2011, "m8i-flex.2xlarge": 0.4022}
+MEMORY_GIB = {"t4g.small": 2, "t4g.medium": 4, "t4g.large": 8,
+              "m8i-flex.xlarge": 16, "m8i-flex.2xlarge": 32}
 EBS_GB_MONTH, PUBLIC_IPV4_HOUR, HOURS = 0.08, 0.005, 730
 
 
@@ -51,20 +54,24 @@ class AwsPlan:
     boundary: str = ""      # the permissions boundary the IAM role is created under, when the account requires one
 
     @property
+    def volume_gib(self) -> int:
+        return VOLUME_GIB.get(self.instance_type, 30)
+
+    @property
     def marker(self) -> str:
         return (contract.REMOTE_DIR if self.role == "server" else contract.RUNNER_DIR) + "/.bootstrapped"
 
     @property
     def monthly_usd(self) -> float:
         ipv4 = PUBLIC_IPV4_HOUR * HOURS  # every public IPv4 is billed, elastic or not
-        return round(HOURLY[self.instance_type] * HOURS + VOLUME_GIB * EBS_GB_MONTH + ipv4, 2)
+        return round(HOURLY[self.instance_type] * HOURS + self.volume_gib * EBS_GB_MONTH + ipv4, 2)
 
     def lines(self) -> list[str]:
         sg = ("inbound TCP " + ", ".join(map(str, self.ports)) + " (and UDP 443) from anywhere") if self.ports \
             else "no inbound rules at all"
         return [
-            f"EC2 {self.instance_type} ({MEMORY_GIB[self.instance_type]} GiB), {'Ubuntu 24.04' if self.os_family == 'ubuntu' else 'Amazon Linux 2023'} arm64, "
-            f"{VOLUME_GIB} GiB encrypted gp3, region {self.region}",
+            f"EC2 {self.instance_type} ({MEMORY_GIB[self.instance_type]} GiB), {'Ubuntu 24.04' if self.os_family == 'ubuntu' else 'Amazon Linux 2023'} {'x86_64' if self.instance_type.startswith('m8i-') else 'arm64'}, "
+            f"{self.volume_gib} GiB encrypted gp3, region {self.region}",
             f"Security group tico-{self.name}: {sg}",
             "Instance metadata: IMDSv2 required, hop limit 1 (containers and bots cannot reach the instance role)",
             "Shell access through SSM (IAM role tico-%s with AmazonSSMManagedInstanceCore); no SSH key, no port 22" % self.name,
@@ -135,8 +142,13 @@ class Deployer:
         found = [i for res in r["Reservations"] for i in res["Instances"] if is_ours(i.get("Tags"), self.p.name)]
         return found[0] if found else None
 
-    def put_env(self, env_text: str) -> None:
-        self.ssm.put_parameter(Name=self.param_name, Value=env_text, Type="SecureString", Overwrite=True)
+    def put_env(self, env_text: str, *, company_file=False) -> None:
+        # The normalized team stays with the encrypted env, under the existing
+        # instance role. Explicit Advanced avoids an attempted downgrade on retry.
+        tier = {"Tier": "Advanced"} if company_file else {}
+        if company_file and len(env_text.encode()) > 8192:
+            raise SystemExit("The starter plan and install settings exceed AWS Parameter Store's 8 KB limit")
+        self.ssm.put_parameter(Name=self.param_name, Value=env_text, Type="SecureString", Overwrite=True, **tier)
         self.ssm.add_tags_to_resource(ResourceType="Parameter", ResourceId=self.param_name, Tags=tags(self.p.name))
 
     def ensure_role(self) -> str:
@@ -219,15 +231,18 @@ class Deployer:
         return ok[0]["SubnetId"]
 
     def launch(self, user_data: str, profile: str, sg: str, subnet: str = "") -> str:
-        ami = self.ssm.get_parameter(Name=AMI_PARAMS[self.p.os_family])["Parameter"]["Value"]
+        parameter = AMI_PARAMS[self.p.os_family]
+        if self.p.instance_type.startswith('m8i-'):
+            parameter = parameter.replace('arm64', 'amd64' if self.p.os_family == 'ubuntu' else 'x86_64')
+        ami = self.ssm.get_parameter(Name=parameter)["Parameter"]["Value"]
         n = f"tico-{self.p.name}"
         args = dict(
             ImageId=ami, InstanceType=self.p.instance_type, MinCount=1, MaxCount=1, UserData=user_data,
             IamInstanceProfile={"Name": profile}, SecurityGroupIds=[sg],
             MetadataOptions={"HttpTokens": "required", "HttpPutResponseHopLimit": 1, "HttpEndpoint": "enabled"},
             BlockDeviceMappings=[{"DeviceName": "/dev/sda1" if self.p.os_family == "ubuntu" else "/dev/xvda",
-                                  "Ebs": {"VolumeSize": VOLUME_GIB, "VolumeType": "gp3", "Encrypted": True, "DeleteOnTermination": True}}],
-            TagSpecifications=[{"ResourceType": rt, "Tags": tags(self.p.name, n)} for rt in ("instance", "volume")])
+                                  "Ebs": {"VolumeSize": self.p.volume_gib, "VolumeType": "gp3", "Encrypted": True, "DeleteOnTermination": True}}],
+            TagSpecifications=[{"ResourceType": rt, "Tags": tags(self.p.name, n)} for rt in ("instance", "volume", "network-interface")])
         if subnet:
             args["SubnetId"] = subnet
         for attempt in range(8):  # a new instance profile takes a few seconds to be usable

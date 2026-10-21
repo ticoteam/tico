@@ -25,13 +25,22 @@ KINDS = {"image/png": "image", "image/jpeg": "image", "image/gif": "image", "ima
          "image/svg+xml": "svg", "text/html": "page",
          "video/mp4": "video", "video/webm": "video", "video/quicktime": "video", "video/x-m4v": "video",
          "audio/mpeg": "audio", "audio/mp4": "audio", "audio/x-m4a": "audio", "audio/wav": "audio",
-         "audio/x-wav": "audio", "audio/wave": "audio", "audio/ogg": "audio", "audio/aac": "audio"}
+         "audio/x-wav": "audio", "audio/wave": "audio", "audio/vnd.wave": "audio", "audio/ogg": "audio",
+         "audio/aac": "audio"}
+# Python 3.15's mimetypes names .wav audio/vnd.wave; browsers know audio/wav. A type the server picks is stored as the
+# common name, and versions already stored under the other still show inline (KINDS above).
+ALIASES = {"audio/vnd.wave": "audio/wav"}
 MB = 1024 * 1024
 # A page or SVG is read whole by the viewer (ui/app/viewer.js caps it at 10 MB); video and audio stream by range.
 LIMITS = {"image": 25 * MB, "svg": 10 * MB, "page": 10 * MB, "video": 2048 * MB, "audio": 2048 * MB}
 MAGIC = {"image/png": (b"\x89PNG\r\n\x1a\n",), "image/jpeg": (b"\xff\xd8\xff",), "image/gif": (b"GIF87a", b"GIF89a")}
 TITLE_MAX = 200
 LIFE = 2 * 3600          # lead, Oct 19: two hours, every request re-checked
+
+
+def stored_type(mime):
+    """The type to store for a type the server guessed from a file name: the common name for an alias, else as is."""
+    return ALIASES.get(mime, mime) if mime else mime
 
 
 def kind_of(mime, size, head=b""):
@@ -451,7 +460,10 @@ def decorate(c, who, files, key, base, messages):
     its size in pixels, and fresh addresses on the visual route (the picture and, for a video, its poster). With
     `base` None inline display is off (inline_on): `src` and `poster_url` are null and the reader sees a file chip."""
     from . import task_privacy as privacy
-    cache, rows = {}, {}
+    cache, rows, served = {}, {}, {}
+    # The visual route rebuilds a bot reader without its run (serve, token_reader), so a file this run sees but that
+    # bare bot does not, a chat's file among them, gets no address: a file chip, not a link that always 404s.
+    route = token_reader(c, files.auth, privacy.actor(who)) if who.role == "bot" else who
     for message in messages:
         items = ((message or {}).get("refs") or {}).get("attachments") or []
         if not any(isinstance(a, dict) and a.get("kind") in INLINE for a in items):
@@ -472,12 +484,13 @@ def decorate(c, who, files, key, base, messages):
                     "current_version": None if removed else row["current_version"]}
             if v is not None:
                 actor = privacy.actor(who)
-                view["src"] = None if base is None else base + "/visuals/" + mint(key, actor, fid, number)
+                here = base if route is who or (route and files.visible(c, route, row, served)) else None
+                view["src"] = None if here is None else here + "/visuals/" + mint(key, actor, fid, number)
                 for field in ("width", "height", "duration_ms"):
                     if v[field] is not None:
                         view[field] = v[field]
-                if a["kind"] == "video" and v["poster_blob_id"] and base is not None:
-                    view["poster_url"] = base + "/visuals/" + mint(key, actor, fid, number, "poster")
+                if a["kind"] == "video" and v["poster_blob_id"] and here is not None:
+                    view["poster_url"] = here + "/visuals/" + mint(key, actor, fid, number, "poster")
             fresh.append(view)
         message["refs"] = {**message["refs"], "attachments": fresh}
     return messages
@@ -518,12 +531,23 @@ def for_reader(app, settings, c, who, messages):
 
 
 # ---------------------------------------------------------------------------------------------- serve
+def token_reader(c, auth, actor):
+    """The reader the visual route checks a token's actor as: a person as they are now, a bot as itself without any
+    run (a token outlives the turn it was minted in), or None when neither exists."""
+    from .auth import Identity
+    from .store import H, Problem
+    try:
+        if actor.startswith("human:"):
+            return auth.identity_for_actor(c, actor)
+        return Identity(actor, "bot") if actor.startswith("bot:") and H.bot(c, H.actor_id(actor)) else None
+    except Problem:
+        return None
+
+
 def serve(request, store, auth, files, blobs, key, ancestors, token, on=True):
     """GET /visuals/<token>: one visual for the reader the token names, checked again on every request. Refused
     outright while inline display is off (`on`, inline_on)."""
     from fastapi.responses import Response
-    from .auth import Identity
-    from .store import H, Problem
     from .file_delivery import serve as deliver
     gone = Response(status_code=404, headers=_headers("default-src 'none'; sandbox"))
     found = read(key, token) if on else None
@@ -531,11 +555,7 @@ def serve(request, store, auth, files, blobs, key, ancestors, token, on=True):
         return gone
     actor, fid, number, part = found
     with store.read() as c:
-        try:
-            who = auth.identity_for_actor(c, actor) if actor.startswith("human:") else \
-                Identity(actor, "bot") if actor.startswith("bot:") and H.bot(c, H.actor_id(actor)) else None
-        except Problem:
-            who = None
+        who = token_reader(c, auth, actor)
         row = c.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone()
         if not who or not row or row["archived"] or row["locator"] != "tico_blob" or not files.visible(c, who, row, {}):
             return gone

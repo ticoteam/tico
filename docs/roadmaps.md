@@ -1,7 +1,7 @@
 # Public roadmaps
 
 Roadmaps use tasks, types, labels, comments and parent relations. The Product roadmap type runs
-Suggested → Exploring → Spec → Approved → Building → Shipped (or Declined); Engineering (or an existing Dev tickets
+Suggested → Exploring → Spec → Approved → Building → Ready to ship → Shipped (or Declined); Engineering (or an existing Dev tickets
 type, as in [The software factory](software-factory.md)) uses the development flow. Tico knows these types by their
 role (`role` in `hub task types`: `product-roadmap` and `engineering`), not by the bot that manages them, so archiving
 that bot or handing the type to another keeps the roadmap and its Approved → Building → Shipped sync working. A type
@@ -149,13 +149,29 @@ and the existing outbound send switch.
 
 The PM gathers requests and comments, researches and drafts a spec, and proposes graduation as an
 existing Decide card. After approval, it moves the roadmap task to Approved and files Engineering
-children through Head of Engineering. The server moves Approved/Building/Shipped between Building
-and Shipped as engineering children open, finish or reopen. Done, closed and declined children count
-as finished, and Shipped requires at least one child that shipped: one at a done step, one closed straight from
-it (accepting finished work closes it), or a closed one whose type has no done step (the default Engineering
-type's Done; there every close counts, since that type has no other closed step). A Dev ticket closed from any
-other step, such as a duplicate or one declined first, did not ship. When every child finished without shipping,
-the item returns to Approved. With no Engineering children, manual steps remain unchanged. Requesters remain on the roadmap task.
+children through Head of Engineering. The server moves an item between Approved, Building, Ready to ship and Shipped by its Dev tickets: its
+engineering children and the engineering tickets it is blocked by count alike, each once. Linking alone moves
+nothing. The item is at Building once one ticket is past its first step (In Progress or later), at Ready to ship
+once every ticket is at Pending Release or later (on a type without that step, a step with the ready status), and
+at Shipped once every ticket shipped: at a done step, closed straight from it (accepting finished work closes it),
+or closed on a type with no done step (the default Engineering type's Done; there every close counts, since that
+type has no other closed step). A ticket closed from any other step, such as a duplicate or one declined first,
+and a declined one count for nothing; when no ticket counts, the item is at Approved. Steps decide, not statuses:
+Review 1 and Pending Release are both review. On every change the item takes the step its tickets call for, back
+as well as forward: a ticket that reopens takes a Shipped item back to Building. An item at Suggested, Exploring, Spec
+or Declined is left alone, and with no Dev tickets manual steps remain unchanged. A Dev ticket that finishes
+stays linked to the item it blocked, so the item still counts it.
+
+Ready to ship sits right after Building with status doing. It is added to an existing Product roadmap once, on
+upgrade, with Building's public name, so publicly nothing changes until Shipped; a team that removes it does not get
+it back, and without it an item goes from Building straight to Shipped.
+
+Each Dev ticket also leaves a quiet line when it first starts, gets a blocker that is still open, or reaches done:
+`Started: #143 Title. Step: In Progress. PR: <url>.`, `Blocked: #143 Title. Step: In Progress. Waits on #139 Title
+(On Deck). PR: <url>.`, `Done: #143 Title. Step: Done. PR: <url>.` (`PR: none.` without one). It goes to each
+roadmap item the ticket delivers, addressed to the item's bot, else to the ticket's requester on the ticket (not
+when they made the change themselves); a private ticket's line stays on the ticket. It is quiet: no run is queued
+and nothing reaches Slack. Requesters remain on the roadmap task.
 
 
 ## Client addresses behind a proxy

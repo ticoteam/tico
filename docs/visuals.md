@@ -199,3 +199,11 @@ their visuals, so they show once you set it.
 
 `TICO_VISUAL_ORIGIN`'s host must reach the same Tico server as the app: visual addresses are
 `<TICO_VISUAL_ORIGIN>/visuals/<token>`, and the server answers that path.
+
+Desktop builds that support a separate visual origin learn its exact HTTPS
+address from the signed-in server configuration before showing cross-origin
+visuals. They accept only that address's signed visual paths; the visual origin
+is not granted native command or app-log permissions. Signing out or changing servers
+clears the allowance. If the address cannot be confirmed, the app shows file
+links while the rest of the page remains usable. The server still checks each
+visual token and the reader's current access on every request.

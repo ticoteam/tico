@@ -28,6 +28,14 @@ pub const STREAM_WINDOW: Duration = Duration::from_millis(50);
 const RENEW_INTERVAL: Duration = Duration::from_secs(10);
 const OWN_INTERRUPT: &[&str] = &["Lease expired", "Execution interrupted after stop"];
 
+fn run_clock() -> Instant {
+    #[cfg(test)]
+    if let Some(now) = tests::RUN_CLOCK.with(|clock| clock.borrow_mut().pop_front()) {
+        return now;
+    }
+    Instant::now()
+}
+
 /// Why a turn stopped early: the Python exception's type name and text, kept for the diagnostic line.
 #[derive(Debug)]
 pub struct Fail {
@@ -68,7 +76,7 @@ impl From<String> for Fail {
 
 /// What a turn spent (runner/usage.py Meter): the sum of each `tokens` event's `usage` increment. A host that learns
 /// the model from its harness (Muse Code) puts it on the event; it names the run's model when the config does not.
-/// A host that sees each model request (Claude) lists them as `requests`, so the server can price each on its own; a
+/// A host that sees each model request (Claude, pi) lists them as `requests`, so the server can price each on its own; a
 /// fourth count, when the host sends one, is 1 for the bot's own request and 0 for a subagent's.
 #[derive(Default)]
 pub(crate) struct Meter {
@@ -582,6 +590,19 @@ impl Runner {
         let _ = self.state.append(aid, "diagnostic", &json!({"text": text}));
     }
 
+    fn run_deadline(&self, aid: &str, config: &Value, relay: Option<&crate::gateway_relay::Relay>) -> Result<Instant, Fail> {
+        let minutes = config["max_run_minutes"].as_f64().or_else(|| text_of(&config["max_run_minutes"]).parse().ok()).unwrap_or(60.0);
+        let requested = run_clock() + Duration::from_secs_f64(60.0 * minutes);
+        let limit = relay.map_or(requested, |r| r.limit(requested));
+        if limit < requested {
+            self.diagnose(aid, "Tico Gateway limits this attempt to just under 24 hours from when it received its key, including any fallback, so the key remains valid after rotation.");
+        }
+        if limit <= run_clock() {
+            return Err(Fail::runtime("Tico Gateway run time limit reached; start a new attempt to continue with its current key"));
+        }
+        Ok(limit)
+    }
+
     /// publish_history with the turn's token, logged when it changes (service.py publish).
     /// After a completed turn: its reports and artifacts as Tico files, and its memory commits (service.py).
     async fn after_completed(&self, attempt: &Value, root: &Path, pushed: bool, skipped: &[String], memory_before: &str, own_turn: bool) {
@@ -627,6 +648,10 @@ impl Runner {
     /// The host for `runtime` on this turn: Claude Code runs the installed (or tools-dir) `claude`, Codex its app
     /// server on the profile's CODEX_HOME, a bot delivered through a Mac app the app driver (`config`).
     fn make_host(&self, bot: &str, runtime: &str, config: &Value, env: &Env, profile: Option<&Profile>, tx: hosts::Events) -> Result<Host, Fail> {
+        #[cfg(test)]
+        if let Some(command) = tests::HOST_COMMAND.with(|command| command.borrow().clone()) {
+            return Ok(Host::Pi(crate::hosts::pi::PiHost::new(bot, command, tx)));
+        }
         if let Some(delivery) = crate::appdriver::delivery(config) {
             let app = crate::appdriver::label(&delivery.app);
             if !cfg!(target_os = "macos") {
@@ -801,6 +826,10 @@ impl Runner {
         let mut place: Option<crate::sessions::Place> = None;
         let mut skipped: Vec<String> = vec![];
         let mut vault = Vault::default();
+        #[cfg(test)]
+        {
+            vault.relay = tests::RUN_RELAY.with(|relay| relay.borrow_mut().take());
+        }
         let mut env: Env = Env::new();
         let mut base_env: Option<Env> = None;
         let mut host: Option<Host> = None;
@@ -937,8 +966,7 @@ impl Runner {
                 }
             }
             let previous = self.state.session(&bot, &conv, &session_runtime)?;
-            let minutes = config["max_run_minutes"].as_f64().or_else(|| text_of(&config["max_run_minutes"]).parse().ok()).unwrap_or(60.0);
-            let limit = Instant::now() + Duration::from_secs_f64(60.0 * minutes);
+            let limit = self.run_deadline(&aid, &config, vault.relay.as_ref())?;
             prepared = true;
             if busy.is_some() || held.is_some() {
                 return Ok(()); // the fallback takes the turn below; this harness never starts
@@ -1054,7 +1082,7 @@ impl Runner {
         let turn_env = base_env.clone().unwrap_or_default();
         if pending.is_none() && (hit_limit || held.is_some()) && !native_control && prepared {
             // Out of quota with no fallback of its own: another provider signed in on this computer runs the turn
-            // once (Settings > AI providers can turn this off for the company).
+            // once (Settings > Computers can turn this off for the company).
             let choices = self.default_fallbacks().await;
             pending = crate::fallback::default_choice(&config, &choices, &turn_env, |rt| self.fallback_ready(rt, selected.as_ref()));
         }
@@ -1131,6 +1159,7 @@ impl Runner {
                 if let Some(c) = &capture {
                     h.set_capture(c);
                 }
+                let limit = self.run_deadline(&aid, &config, vault.relay.as_ref())?;
                 h.start().await?;
                 let settings = Settings {
                     cwd: execution_path.display().to_string(),
@@ -1162,8 +1191,6 @@ impl Runner {
                 let text = format!("{}\n\n{}", crate::prompt::replayed(&attempt, &names, None, false, &replay), crate::fallback::prompt_note(&because, &primary, &hop));
                 let t = h.start_turn(&th, &text, hop.reasoning_effort.as_deref()).await?;
                 turn = Some(t.clone());
-                let minutes = config["max_run_minutes"].as_f64().or_else(|| text_of(&config["max_run_minutes"]).parse().ok()).unwrap_or(60.0);
-                let limit = Instant::now() + Duration::from_secs_f64(60.0 * minutes);
                 let d = Drive {
                     aid: &aid,
                     host: h,
@@ -1340,7 +1367,11 @@ impl Runner {
             completion.insert("limited".into(), json!(true));
             // The provider's own reset, so the bot resumes then; only a server that takes the field is sent it.
             let reset = segments.last().and_then(|s| {
-                crate::profiles::limit_reset(s.profile.as_deref().unwrap_or_default(), &text_of(&s.config["runtime"]), crate::util::epoch_s())
+                if crate::hosts::pi::is_gateway(s.config["model"].as_str()) {
+                    vault.relay.as_ref().and_then(|relay| relay.limit_reset())
+                } else {
+                    crate::profiles::limit_reset(s.profile.as_deref().unwrap_or_default(), &text_of(&s.config["runtime"]), crate::util::epoch_s())
+                }
             });
             if let Some(at) = reset.filter(|_| crate::follow::feature("limit_resets_at")) {
                 completion.insert("limit_resets_at".into(), json!(at));
@@ -1527,6 +1558,25 @@ impl Runner {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
+    use std::collections::VecDeque;
+
+    thread_local! {
+        pub(super) static RUN_CLOCK: RefCell<VecDeque<Instant>> = const { RefCell::new(VecDeque::new()) };
+        pub(super) static RUN_RELAY: RefCell<Option<crate::gateway_relay::Relay>> = const { RefCell::new(None) };
+        pub(super) static HOST_COMMAND: RefCell<Option<Vec<String>>> = const { RefCell::new(None) };
+    }
+
+    struct RunControls;
+
+    impl Drop for RunControls {
+        fn drop(&mut self) {
+            RUN_CLOCK.with(|clock| clock.borrow_mut().clear());
+            RUN_RELAY.with(|relay| relay.borrow_mut().take());
+            HOST_COMMAND.with(|command| command.borrow_mut().take());
+            hosts::TEST_STARTS.with(|starts| starts.set(0));
+        }
+    }
 
     #[test]
     fn the_shared_bot_thread_moves_with_the_bots_epoch_and_any_other_with_its_conversations() {
@@ -1712,6 +1762,68 @@ mod tests {
             }
         });
         (url, seen, server)
+    }
+
+    async fn expired_gateway_harness_is_not_started(fallback: bool) {
+        let _controls = RunControls;
+        let dir = std::env::temp_dir().join(format!("tico-gateway-deadline-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(dir.join("projects")).unwrap();
+        let (url, seen, server) = recording_server().await;
+        let path = dir.join("runner.json");
+        std::fs::write(&path, json!({"url": url, "token": "synthetic", "runner_id": "r1", "projects_dir": dir.join("projects")}).to_string()).unwrap();
+        let config = crate::config::Config::load(&path).unwrap();
+        let client = crate::client::Client::new(&config.url(), &config.token(), 5, 0).unwrap();
+        let runner = Arc::new(Runner::new(config, client, crate::state::State::open(&dir.join("state")).unwrap()));
+        // Pin a real relay before orchestration, then move only this test's clock. No isolation or provider is used.
+        let before = Instant::now();
+        let relay = crate::gateway_relay::start("http://127.0.0.1:9/v1/gateway", "synthetic".into(), None).await.unwrap();
+        RUN_RELAY.with(|slot| *slot.borrow_mut() = Some(relay));
+        let after = before + Duration::from_secs(48 * 60 * 60);
+        let times = if fallback { vec![before, before, after, after] } else { vec![after, after] };
+        RUN_CLOCK.with(|clock| *clock.borrow_mut() = times.into());
+        // A faulty guard can only start this harmless shell, never a real installed provider harness.
+        HOST_COMMAND.with(|command| *command.borrow_mut() = Some(vec!["/bin/sh".into(), "-c".into(), "exit 1".into()]));
+        hosts::TEST_STARTS.with(|starts| starts.set(0));
+        let mut turn_config = json!({"runtime": "pi", "harness": "pi", "model": "synthetic-primary",
+                                     "max_run_minutes": 2 * 24 * 60,
+                                     "fallback": {"harness": "pi", "model": "synthetic-fallback"}});
+        if fallback {
+            // Preparation reaches the primary's clamp but its held login leaves execution to the fallback.
+            turn_config["primary_held"] = json!("2099-01-01T00:00:00Z");
+        }
+        let attempt = json!({"id": "a-deadline", "job_id": "j1", "bot": "ops", "token": "synthetic-turn", "lease_seconds": 120,
+                             "conversation": {"id": "c1"}, "message": {"refs": {}}, "config": turn_config});
+        let result = tokio::time::timeout(Duration::from_secs(10), runner.clone().execute(attempt)).await;
+        server.abort();
+        assert!(result.is_ok(), "execution did not settle");
+        result.unwrap().unwrap();
+        let events: Vec<(String, String)> = runner.state.with(|c| {
+            c.prepare("SELECT kind,payload FROM events WHERE attempt_id='a-deadline' ORDER BY seq")?
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect()
+        }).unwrap();
+        let diagnostics: Vec<Value> = events.iter().filter(|(kind, _)| kind == "diagnostic")
+            .map(|(_, payload)| serde_json::from_str(payload).unwrap()).collect();
+        assert!(diagnostics.iter().any(|d| text_of(&d["text"]).contains("24 hours from when it received its key")), "missing clamp diagnostic: {events:?}");
+        if fallback {
+            assert!(diagnostics.iter().any(|d| d["fallback"] == "pi"), "fallback branch was not reached: {events:?}");
+            assert!(diagnostics.iter().any(|d| text_of(&d["text"]).contains("fallback harness interrupted")), "missing fallback refusal: {events:?}");
+        } else {
+            assert!(events.iter().any(|(_, p)| p.contains("Tico Gateway run time limit reached")), "missing primary expiry refusal: {events:?}");
+        }
+        assert!(RUN_CLOCK.with(|clock| clock.borrow().is_empty()), "a primary/fallback deadline check was skipped");
+        assert_eq!(hosts::TEST_STARTS.with(|starts| starts.get()), 0, "expired work reached Host::start");
+        assert!(!seen.lock().unwrap().iter().any(|(_, p, _)| p.ends_with("/attempts/a-deadline/started")), "expired work was acknowledged as started");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn an_expired_gateway_primary_is_refused_before_its_harness_starts() {
+        expired_gateway_harness_is_not_started(false).await;
+    }
+
+    #[tokio::test]
+    async fn an_expired_gateway_fallback_is_refused_before_its_harness_starts() {
+        expired_gateway_harness_is_not_started(true).await;
     }
 
     #[tokio::test(flavor = "multi_thread")]

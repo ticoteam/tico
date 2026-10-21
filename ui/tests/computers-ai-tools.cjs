@@ -1,8 +1,8 @@
-// Settings > Computers: one compact row per computer (name, Tico version, operator, bots, AI tool chips, status) and the
+// Settings > Computers: one compact row per computer (name, status, operator and Tico version; AI tool chips and Add) and the
 // pop-up a row opens (Connections, Screen, Bots on this computer, Versions and updates, Settings). A chip only for a
-// connection that was added, usage as "% left" with the reset and age on hover, a red dot only when bots depend on a
+// connection that was added, usage as "% left" with the reset on hover, a red dot only when bots depend on a
 // broken one; the computer's own login merged with a subscription on the same account; each bot's actual connection,
-// read-only; the Installed and Enabled headers apart at 1024 px; no connection, offline, waiting, revoked, and a
+// read-only; the Tool and Version headers apart at 1024 px; no connection, offline, waiting, revoked, and a
 // member who may change nothing; a desktop app's state and a sign-in several bots take turns on. Every request is
 // intercepted.
 const {chromium} = require('playwright');
@@ -93,34 +93,32 @@ const {unrouted} = require('./support/routes.cjs');
     await row('box').waitFor();
     const cells = async locator => (await locator.locator('td').allInnerTexts()).map(t => t.replace(/\s+/g, ' ').trim());
 
-    // 1. Six facts per row, and nothing else inline: no tool table, sign-in rows or menu.
+    // 1. Two cells per row, and nothing else inline: no bots, tool table, sign-in rows or menu.
     assert.deepEqual(await page.locator('#set-machines thead th').allInnerTexts().then(a => a.map(t => t.toLowerCase())),
-      ['computer', 'tico', 'operator', 'bots', 'ai tools', 'status']);
-    const boxCells = await cells(row('box'));
-    assert.deepEqual([boxCells[0], boxCells[1], boxCells[2], boxCells[3], boxCells[5]],
-      ['Team box', '0.3.52 Update', 'Ana', '3 bots · Helper, Ops, Writer', 'online']);
-    assert.equal((await cells(row('empty')))[1], '0.3.53', 'Update only when one waits');
+      ['computer', 'ai tools']);
+    assert.equal((await cells(row('box')))[0], 'Team box online Ana · Tico 0.3.52 Update');
+    assert.equal((await cells(row('empty')))[0].endsWith('Tico 0.3.53'), true, 'Update only when one waits');
     assert.equal(await page.locator('#set-machines table [role=table], #set-machines table .people-more, #set-machines table [data-model-login]').count(), 0);
 
     // 4, 5, 8, 9. A chip per connection: tool, thin bar and % left; hover says the rest; a red dot only where bots are stuck.
-    const chips = row('box').locator('.machine-chip');
+    const chips = row('box').locator('.machine-chip:not(.machine-chip-add)');
     assert.deepEqual(await chips.allInnerTexts().then(a => a.map(t => t.replace(/\s+/g, ' ').trim())), ['Claude Code', 'Codex 33%', 'Codex', 'Muse Code']);
     assert.deepEqual(await chips.evaluateAll(list => list.map(c => [c.querySelector('meter')?.value ?? null, !!c.querySelector('.machine-chip-dot')])),
       [[null, false], [33, false], [null, true], [null, true]]);
-    assert.match(await chips.nth(1).getAttribute('title'), /^Codex · Acme Pro \(Computer's login\) · 33% left · resets \w{3} \d{1,2}:\d{2}\s?[AP]M · as of 2m ago$/);
+    assert.match(await chips.nth(1).getAttribute('title'), /^Codex · Acme Pro \(Computer's login\) · 33% left · resets \w{3} \d{1,2}:\d{2}\s?[AP]M$/);
     assert.match(await chips.nth(2).getAttribute('title'), /^Codex · beta · Signed out; bots use it · No usage reading yet$/);
     assert.match(await chips.nth(3).getAttribute('title'), /Login expired or rejected/);
     // Nothing for a tool a login was never meant for (Acme's Claude Code and Muse Code slots), nor for an unused tool.
     assert.doesNotMatch(await row('box').innerText(), /Cursor|Grok|signed out/i);
 
     // 24. No connection; never reported yet; revoked hidden.
-    assert.equal((await cells(row('empty')))[4], 'No AI connection');
+    assert.equal((await cells(row('empty')))[1], 'No AI connection + Add');
     assert.equal(await row('empty').locator('.machine-chip.attention .machine-chip-dot').count(), 1);
-    assert.equal((await cells(row('fresh')))[4], 'Waiting for Fresh Mac');
+    assert.equal((await cells(row('fresh')))[1], 'Waiting for Fresh Mac');
     assert.equal(await row('old').count(), 0);
 
     // 10. A click on the row opens the pop-up, sections in order.
-    await row('box').locator('td[data-label=Operator]').click();
+    await row('box').locator('.machine-facts').click();
     const dialog = page.locator('#set-machines dialog.computer-detail[open]');
     await dialog.waitFor();
     assert.deepEqual(await dialog.locator('section h3').allInnerTexts().then(a => a.map(t => t.toLowerCase())),
@@ -164,15 +162,14 @@ const {unrouted} = require('./support/routes.cjs');
     assert.equal(await bots.locator('select, input').count(), 0);
     assert.equal(await bots.locator('a[data-computer-bots=box]').innerText(), 'Assign on the Bots page');
 
-    // 12. Installed and Enabled have their own room at 1024 px and wide.
+    // 12. Tool and Version have their own room at 1024 px and wide.
     for (const width of [1440, 1024]) {
       await page.setViewportSize({width, height: 900});
-      const [first, installed, enabled] = await dialog.locator('[role=columnheader]').evaluateAll(list => list.map(h => h.getBoundingClientRect()).map(r => [r.left, r.right]));
-      assert.ok(first[1] <= installed[0] && installed[1] <= enabled[0], `headers apart at ${width}px: ${JSON.stringify([first, installed, enabled])}`);
+      const [first, version] = await dialog.locator('.machine-tools-2 [role=columnheader]').evaluateAll(list => list.map(h => h.getBoundingClientRect()).map(r => [r.left, r.right]));
+      assert.ok(first[1] <= version[0], `headers apart at ${width}px: ${JSON.stringify([first, version])}`);
     }
     const version = dialog.locator('[data-machine-tool=cursor] .machine-tool-version');
     assert.ok(await version.evaluate(el => el.scrollWidth > el.clientWidth), 'a long version is cut off, the full one in its title');
-    assert.equal(await dialog.locator('[data-machine-tool=grok] .machine-tool-enabled').innerText(), 'Off');
 
     // Settings: inbox-only saves; Revoke is here and not on the row.
     await dialog.locator('[data-inbox-only=box]').check();
@@ -191,8 +188,8 @@ const {unrouted} = require('./support/routes.cjs');
     // 23. Offline: last seen on the row, chips keep their reading, actions wait for the computer.
     box.last_seen = at(-3 * 3600000);
     await page.evaluate(() => loadSettings());
-    await row('box').locator('td[data-label=Status]', {hasText: 'offline'}).waitFor();
-    assert.equal((await cells(row('box')))[5], 'offline · last seen 3h ago');
+    await row('box').locator('[data-machine-status]', {hasText: 'offline'}).waitFor();
+    assert.equal(await row('box').locator('[data-machine-status]').innerText(), 'offline 3h ago');
     assert.equal(await row('box').locator('.machine-chip meter').first().evaluate(m => m.value), 33);
     await row('box').locator('.machine-name').click();
     await dialog.locator('[data-computer-offline]').waitFor();
@@ -233,7 +230,7 @@ const {unrouted} = require('./support/routes.cjs');
     // 25. Revoked computers on request; Revoke lives in the pop-up only.
     await page.locator('#set-machines [data-show-revoked-computers]').check();
     await row('old').waitFor();
-    assert.equal((await cells(row('old')))[5], 'revoked');
+    assert.equal(await row('old').locator('[data-machine-status]').innerText(), 'revoked');
     assert.equal(await page.locator('#set-machines table [data-computer-remove]').count(), 0);
 
     // 22. A member who is neither admin nor operator sees everything and can change nothing. The server sends them no

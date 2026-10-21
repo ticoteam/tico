@@ -89,6 +89,29 @@ async function offlineRetry(browser) {
   });
   assert.deepEqual(clear,{coarse:true,clear:true},'on touch the copy target covers no reply text, so a trailing link stays tappable');
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true,'no mobile overflow');
+  // The bot switcher over the chat bar: a round menu button sits left of Search and opens the side menu in one tap.
+  await page.locator('.p-bot').tap();
+  const menu=page.locator('#org-fan [data-org-menu]');
+  await menu.waitFor();
+  const row=await menu.evaluate(el=>{const m=el.getBoundingClientRect(),s=el.nextElementSibling.getBoundingClientRect();
+    return {next:el.nextElementSibling.dataset.orgSearch,left:m.right<=s.left,row:Math.abs((m.top+m.bottom)-(s.top+s.bottom))<2,round:Math.abs(m.width-m.height)<2,
+      label:el.getAttribute('aria-label'),controls:el.getAttribute('aria-controls'),icon:el.textContent.trim(),tab:el.tabIndex};});
+  assert.deepEqual(row,{next:'',left:true,row:true,round:true,label:'Open menu',controls:'side',icon:'menu',tab:0});
+  await menu.tap();
+  await page.locator('body.drawer').waitFor();
+  assert.equal(await page.locator('#org-fan').isHidden(),true,'the switcher closes');
+  assert.equal(await page.locator('#side .side-scroll').isVisible(),true,'the side menu is open');
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(()=>!document.body.classList.contains('drawer'));
+  assert.equal(await page.evaluate(()=>document.activeElement.classList.contains('p-bot')),true,'closing returns to the bot icon');
+  // From the keyboard too: Enter on the focused menu button opens the menu.
+  await page.locator('.p-bot').click();
+  await menu.focus();
+  await page.keyboard.press('Enter');
+  await page.locator('body.drawer').waitFor();
+  await page.locator('.side-close').click();
+  await page.waitForFunction(()=>!document.body.classList.contains('drawer'));
+  assert.deepEqual(errors,[]);
   console.log('chat offline retry and touch copy: ok');
 }
 
@@ -177,7 +200,7 @@ async function liveReply(browser) {
   assert.match(pending.text,/no AI provider is chosen/);
   assert.match(pending.text,/Add an AI provider/);
   assert.equal(pending.href,'#/settings');
-  assert.equal(pending.tab,'providers');
+  assert.equal(pending.tab,'models');
   assert.match(pending.legacy,/No reply after 20 minutes/);
   // A provider is chosen but the bot's computer is not signed in to its model: the same place says so, with Sign in and Health.
   const signIn = await page.evaluate(() => {
@@ -666,7 +689,7 @@ async function settingsLinks(browser) {
     if(p==='/api/v2/support/tickets')return json({enabled:false});
     return json(unrouted(p));
   });
-  for (const [why, name, tab] of [['missing_provider', 'Add an AI provider', 'providers'],
+  for (const [why, name, tab] of [['missing_provider', 'Add an AI provider', 'devices'],   // Models is on Computers
     ['model_sign_in', 'Sign in on Settings > Computers', 'devices']]) {
     reason=why;
     // Settings was last left on another tab, which a plain link to #/settings would reopen.

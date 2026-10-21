@@ -451,6 +451,37 @@ def other_services():
     return [n for n in names if n not in (SERVICE, "updater")]
 
 
+def selected_caddy():
+    """Only reconcile an existing install's front door; naming a profiled service in `up` would enable it."""
+    if MODE != "server" or "caddy" not in compose("config", "--services").split():
+        return False
+    return any(not oneoff for oneoff, _ in containers_of_service("caddy").values())
+
+
+def reconcile_caddy(tag):
+    """The healthy server has prepared its config. Replace the front door from this exact bundle, even when only
+    volume contents changed. A restored pre-feature bundle runs its old direct proxy, not the new supervisor or
+    the stale asset config an old server cannot clear. New supervisors must report their applied generation healthy."""
+    before = set(containers_of_service("caddy"))
+    set_status(front_door="restarting")
+    compose("up", "-d", "--no-deps", "--force-recreate", "--pull", "never", "--wait",
+            "--wait-timeout", str(HEALTH_SECONDS), "caddy", tag=tag, timeout=HEALTH_SECONDS + INSPECT_SECONDS)
+    now = {cid: state for cid, (oneoff, state) in containers_of_service("caddy").items() if not oneoff}
+    if len(now) != 1 or next(iter(now)) in before or next(iter(now.values())) != "running":
+        raise Unsettled("Caddy recreate did not confirm one fresh running container")
+    state = inspect(next(iter(now)))
+    if not state.get("State", {}).get("Running") or state["State"].get("Restarting"):
+        raise RuntimeError("Caddy stopped after its recreate")
+    health = state.get("State", {}).get("Health", {}).get("Status")
+    if health == "healthy":
+        set_status(front_door="healthy")
+    elif health is None and (state.get("Config", {}).get("Cmd") or [])[:2] == ["caddy", "reverse-proxy"]:
+        # Old direct proxies have no healthcheck or local asset listener. Running is not asset readiness.
+        set_status(front_door="legacy_running")
+    else:
+        raise RuntimeError("Caddy did not report its applied configuration healthy")
+
+
 SNAPSHOT_SCRIPT = """
 import glob, os, sqlite3, sys
 folder, name, keep = sys.argv[1], sys.argv[2], int(sys.argv[3])
@@ -573,17 +604,17 @@ def load_status():
                              daemon=True).start()
 
 
-def containers_of_service():
+def containers_of_service(service=SERVICE):
     """{id: (one-off, state)} for every container of the service. `compose ps -a` lists `compose run` one-offs too
     (the snapshot restore is one); their oneoff label tells them apart."""
-    ids = compose("ps", "-a", "-q", SERVICE, timeout=INSPECT_SECONDS).split()
+    ids = compose("ps", "-a", "-q", service, timeout=INSPECT_SECONDS).split()
     if not ids:
         return {}
     result = docker_run(["docker", "inspect", "--format",
                          '{{.Id}} {{.State.Status}} {{index .Config.Labels "com.docker.compose.oneoff"}}', *ids],
                         capture_output=True, text=True, timeout=INSPECT_SECONDS)
     if result.returncode:   # one went away between ps and inspect (a --rm one-off ending): ask again later
-        raise RuntimeError("could not read the %s containers" % SERVICE)
+        raise RuntimeError("could not read the %s containers" % service)
     found = {}
     for line in result.stdout.splitlines():
         cid, state, oneoff = (line.split(" ", 2) + [""])[:3]
@@ -617,18 +648,26 @@ def settle(tag, outcome):
     snapshot restore), then a recreate of the service that did report back, and exactly one container for it, made
     by that recreate. An earlier request can act only on the containers it was given, and that recreate removed
     them. Until then this keeps trying, saying why."""
+    caddy = status.get("settle_caddy") if MODE == "server" else False
     set_status(state="uncertain", settle_tag=tag, settle_outcome=outcome,
                message="Not settled: %s. Holding new work until Docker confirms the %s on %s." % (outcome, SERVICE, tag))
     save_status()
     while True:
         try:
+            if caddy is None:   # an older updater's saved outcome has no front-door selection
+                caddy = selected_caddy()
+                set_status(settle_caddy=caddy)
             if one_offs_done(outcome):
                 before = {cid for cid, (oneoff, _) in containers_of_service().items() if not oneoff}
                 compose("up", "-d", "--no-deps", "--force-recreate", "--pull", "never", SERVICE, tag=tag)
                 now = [cid for cid, (oneoff, _) in containers_of_service().items() if not oneoff]
                 if len(now) == 1 and now[0] not in before:
                     back = healthy(HEALTH_SECONDS)
-                    set_status(state="rolled_back" if back else "failed", settle_tag="", settle_outcome="",
+                    if caddy:
+                        if not back:
+                            raise RuntimeError("the restored server is not healthy; Caddy settlement remains pending")
+                        reconcile_caddy(tag)
+                    set_status(state="rolled_back" if back else "failed", settle_tag="", settle_outcome="", settle_caddy=False,
                                message="%s. Docker then confirmed the %s on %s%s." % (
                                    outcome, SERVICE, tag, "" if back else ", but it did not come up healthy"))
                     save_status()
@@ -794,6 +833,7 @@ def update(version, running=""):
     staging = None
     bundled = False
     snapshot, switched = "", False
+    caddy = False
     unsettled = False   # a command that changes containers did not report back: settle() before any outcome
     try:
         try:
@@ -803,7 +843,8 @@ def update(version, running=""):
             return
         if not release_name(previous) and release_name(running):
             previous = release_name(running)   # an untagged or `latest` image: the server knows which release it is
-        set_status(state="pulling", **{"from": release_name(running) or previous, "to": version}, message="", snapshot="", restored=False)
+        set_status(state="pulling", **{"from": release_name(running) or previous, "to": version}, message="", snapshot="", restored=False,
+                   front_door="", settle_caddy=False)
         target = release_name(version)
         # Everything that can refuse the update happens here, before any file or container changes.
         try:
@@ -824,12 +865,18 @@ def update(version, running=""):
                 set_status(state="failed", message="Not updated: %s." % exc)
                 return
             target = release_name(release)
+        caddy = selected_caddy()
+        set_status(settle_caddy=caddy)
         if BUNDLE != "never":
             apply_bundle(files, release)
             bundled = True
         try:
             if PULL != "never":
                 compose("pull", SERVICE, tag=version)
+                if caddy:
+                    # The verified target bundle may pin a new front-door image.
+                    # Stage it before switching; rollback/settle use local images.
+                    compose("pull", "caddy", tag=version)
             if MODE == "server":
                 # Last thing before the switch, so little is lost if it is undone: a new version may migrate the
                 # schema and then fail its health check, and the old image cannot read a newer schema.
@@ -851,6 +898,8 @@ def update(version, running=""):
             if not healthy(HEALTH_SECONDS):
                 raise RuntimeError(("the runner" if MODE == "runner" else "the server") + " did not come up healthy within %d seconds" % HEALTH_SECONDS)
             check_switched(version, target)
+            if caddy:
+                reconcile_caddy(version)
         except (RuntimeError, subprocess.SubprocessError) as exc:
             unsettled = isinstance(exc, Unsettled)
             restoring = False
@@ -878,13 +927,16 @@ def update(version, running=""):
                 if not restoring:   # else settle() starts the old server once no restore can still act
                     compose("up", "-d", "--no-deps", "--pull", "never", SERVICE, tag=previous)
                     back = healthy(HEALTH_SECONDS)
+                    if back and caddy and not unsettled:
+                        reconcile_caddy(previous)
             except (RuntimeError, OSError, subprocess.SubprocessError) as rollback_exc:
                 unsettled = unsettled or isinstance(rollback_exc, Unsettled)
                 back = False
+                restored += " Could not confirm rollback (%s)." % rollback_exc
             if unsettled:
                 settle(previous, str(exc) + restored)
                 return
-            set_status(state="rolled_back" if back else "failed", settle_tag="", settle_outcome="",
+            set_status(state="rolled_back" if back else "failed", settle_tag="", settle_outcome="", settle_caddy=False,
                        message=str(exc) + (". Went back to " + previous + "." if back else ". The old version did not start either.") + restored)
             return
         remember(version)
@@ -893,11 +945,13 @@ def update(version, running=""):
         if bundled and MODE == "server":
             # Slack, the front door and anything new follow the new compose file; the updater itself stays put.
             for name in other_services():
+                if name == "caddy":   # selected existing Caddy was explicitly reconciled; do not enable another profile
+                    continue
                 try:
                     compose("up", "-d", "--no-deps", name, tag=version)
                 except RuntimeError as exc:
                     message = "Updated, but %s did not restart: %s" % (name, exc)
-        set_status(state="healthy", message=message, settle_tag="", settle_outcome="")
+        set_status(state="healthy", message=message, settle_tag="", settle_outcome="", settle_caddy=False)
         save_status()
         note = replace_updater(version)   # last: this container may be gone a moment after it starts the helper
         if note:

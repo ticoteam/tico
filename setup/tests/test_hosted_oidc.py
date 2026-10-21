@@ -134,3 +134,13 @@ def test_hosted_gather_keeps_owner_link_alone_without_auth():
     s = st.Settings(domain=DOMAIN)
     hosted.gather(Args, s, dry=False)
     assert s.auth == st.OWNER_LINK
+
+
+def test_separate_bot_computer_does_not_enroll_a_runner_on_the_server(monkeypatch):
+    monkeypatch.setenv('TICO_GATEWAY_INVITE', INVITE)
+    def unexpected(*args):
+        raise AssertionError('server-only install must not enroll a computer')
+    monkeypatch.setattr(hosted, 'add_server_computer', unexpected)
+    code, out = go(['--target','ssh','--ssh','root@203.0.113.7','--yes','--hosted','invited',
+                    '--preset','recommended','--server-computer','none',*OIDC,*HOSTED], deps=over_ssh(FakeShell()))
+    assert code == 0, out

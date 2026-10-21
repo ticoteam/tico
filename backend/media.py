@@ -150,6 +150,11 @@ def replay_upload(store, request, payload):
     return result
 
 
+def guessed_type(name):
+    """The stored type for a file name, or None: mimetypes' guess under its common name (visuals.stored_type)."""
+    return visuals.stored_type(mimetypes.guess_type(name)[0])
+
+
 async def form(request, model, blobs, store):
     upload_key(request)
     raw = await request.body()
@@ -525,7 +530,7 @@ def install_media(app, store, auth, mutate, send_message, task_create):
             total += len(data)
             if not data or total > 10_000_000:
                 raise Problem("validation", "Option files are at least one byte and at most 10 MB together", 422)
-            decoded.append((data, option.file.name, mimetypes.guess_type(option.file.name)[0] or "application/octet-stream"))
+            decoded.append((data, option.file.name, guessed_type(option.file.name) or "application/octet-stream"))
         question = body.question.strip()
         if body.topic is not None and not H.question_topic(body.topic):
             # A key given but empty once compared would silently mean "no topic" and join the task's unkeyed question.
@@ -663,7 +668,7 @@ def install_media(app, store, auth, mutate, send_message, task_create):
                     fields["ask"] = json.loads(fields["ask"])
                 body = TaskFile.model_validate(fields)
                 supplied_type = upload["mime"].lower().split(";", 1)[0].strip()
-                content_type = mimetypes.guess_type(body.name)[0] or (supplied_type if re.fullmatch(r"[a-z0-9!#$&^_.+-]+/[a-z0-9!#$&^_.+-]+", supplied_type) else "application/octet-stream")
+                content_type = guessed_type(body.name) or (supplied_type if re.fullmatch(r"[a-z0-9!#$&^_.+-]+/[a-z0-9!#$&^_.+-]+", supplied_type) else "application/octet-stream")
                 size = upload["size"]
                 if who.role == "bot":
                     try:
@@ -704,7 +709,7 @@ def install_media(app, store, auth, mutate, send_message, task_create):
             size = len(data)
             if not data or size > 10_000_000:
                 raise Problem("validation", "A file is at least one byte and at most 10 MB", 422)
-            content_type = mimetypes.guess_type(body.name)[0] or ("text/plain" if body.text is not None else "application/octet-stream")
+            content_type = guessed_type(body.name) or ("text/plain" if body.text is not None else "application/octet-stream")
             if who.role == "bot":
                 try:
                     BF.check_name(body.name)

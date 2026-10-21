@@ -2,10 +2,10 @@
 
 A computer runs your bots. Each one signs in to the AI tools its bots use (Codex, Claude Code and others), and
 **Settings → Computers** shows every computer, the logins and keys it runs on, and how much of each plan is left.
-To add a computer, see [Install](install.md#add-computers-to-run-your-bots). Team-wide model settings (which providers
-are on, the default model, **Fall back when a plan runs out**, **Check model**) stay on **Settings → AI providers**,
-which says "Logins and keys are now on each computer · Computers". Subscriptions used to be on AI providers; old links
-to them open Computers.
+To add a computer, see [Install](install.md#add-computers-to-run-your-bots). Below the computers, **Models** holds the
+team-wide model settings: the models choice, which providers are on, the default model, **Fall back when a plan runs
+out**, **Check model** and the [Tico AI Gateway](ai-gateway.md) key. The owner changes them; everyone else sees them.
+These used to be a separate AI providers tab, and Subscriptions before that; old links to either open Computers.
 
 ## Connections
 
@@ -44,8 +44,8 @@ listed computers** ([Shared keys](#api-keys-on-a-computer)).
    profile, if one is set there).
 
 Groups no longer choose a subscription. The bot editor shows the result as "Runs on *tool* · *connection* on
-*computer*", using the names on this page. When a plan runs out, a bot can move to its fallback model; that is set on
-AI providers and per bot ([How it works](how-it-works.md)), not here.
+*computer*", using the names on this page. When a plan runs out, a bot can move to its fallback model; that is set in
+Models and per bot ([How it works](how-it-works.md)), not here.
 
 ### Bots sharing one ChatGPT sign-in take turns
 

@@ -422,7 +422,7 @@ def test_asking_in_chat_never_decides_an_approval_while_the_setting_is_off(api):
             refused = asked(api, "approvals/" + aid, {"decision": "approved"}, token, ref, expected=403)
             # The one sentence for the person: where to turn it on.
             assert refused["error"]["code"] == "approve_setting_off"
-            assert "“My assistant can decide approvals for me” in Settings > Assistant" in refused["error"]["detail"]
+            assert "“My assistant can decide approvals for me” in Settings > General" in refused["error"]["detail"]
         with api.app.state.store.read() as c:
             assert H.approval(c, aid)["decision"] is None
     # The person's own decision still works, as today.

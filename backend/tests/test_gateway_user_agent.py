@@ -94,13 +94,25 @@ def write(base):
 
 
 def check(base):
-    """Settings > AI providers checking the key (backend/gateway_connection.py)."""
+    """Settings > Computers checking the key (backend/gateway_connection.py)."""
     assert G.check(KEY, base)["state"] == "connected"
     return "GET", "/v1/gateway/key"
 
 
+def enrol(base):
+    """Connecting automatically: the install asks for its own key (backend/gateway_connection.py, Dev 210)."""
+    assert G.enroll(base, "gi_" + "0" * 24, "gis_" + "s" * 43, "tgi_" + "i" * 32)[0] == 200
+    return "POST", "/v1/gateway/enroll"
+
+
+def turn(base):
+    """Rotating the automatic key before it is due (backend/gateway_connection.py, Dev 210)."""
+    assert G.rotate(base, KEY)[0] == 200
+    return "POST", "/v1/gateway/rotate"
+
+
 # Every request the app sends the Gateway. A new one is added here, and to HQ_CLIENTS below when it is a new module.
-CALLS = {"decisions": decide, "chat completions": write, "key check": check}
+CALLS = {"decisions": decide, "chat completions": write, "key check": check, "enroll": enrol, "rotate": turn}
 
 
 @pytest.mark.parametrize("call", list(CALLS))
@@ -132,7 +144,9 @@ HQ_NAMES = re.compile(r"updates\.tico\.team|TICO_HQ_URL|hq_url\(|DEFAULT_HQ|TICO
 SENDS = re.compile(r"urllib\.request|httpx|\brequests\.|aiohttp|http\.client")
 # Each module that sends to HQ or the Gateway, and how it names its user agent.
 HQ_CLIENTS = {
+    "backend/inbound.py": '"User-Agent": user_agent()',
     "backend/recruit.py": '"User-Agent": "tico"',
+    "backend/billing_check.py": '"User-Agent": "tico-billing-check"',
     "backend/releases.py": '"User-Agent": "tico-update-check"',
     "backend/support.py": '"User-Agent": "tico-support"',
     "backend/support_access.py": '"User-Agent": "tico-support-access"',

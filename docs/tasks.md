@@ -174,7 +174,7 @@ suggestions cover the quiet week.
 Stale ticket review finds open tasks that look finished or forgotten and suggests what to do with
 them. It only suggests: nothing changes unless the task's owner accepts.
 
-**Turn it on.** Go to **Settings > Team** and switch on **Stale ticket review**. It is off by
+**Turn it on.** Go to **Settings > General** and switch on **Stale ticket review**. It is off by
 default, and an owner or an admin can turn it on or off. (A server started with
 `TICO_STALE_REVIEW=1` has it on by default; a choice saved in Settings wins.)
 
@@ -299,6 +299,9 @@ Labels are a mover's, with one exception for bots: a bot adds and removes classi
 `manager`), whatever the type's `bots` setting. A public roadmap label needs its exact approved
 publish approval (`hub task publication-preview <id> --label ...` for the labels the task keeps,
 then `hub task label <id> --add roadmap --approval-id <id>`), and `goal:on`/`goal:off` need a mover.
+The same goes for a task a bot creates: it may carry classification labels, but one created with a
+public roadmap label or `goal:on`/`goal:off` is refused before anything is written; create it without
+the label, then add it on the task as above.
 Lane and number are a mover's alone ([Permissions](permissions.md#tags)).
 A bot's comment is a message to the people on the task, under the usual rules for reaching them.
 
@@ -403,10 +406,20 @@ using `tasks.type_id` and `tasks.step_id`; the task visibility rules still apply
 
 ## Subtasks and PRs
 
-Subtasks can nest to any depth. Whoever files a subtask, person or bot, is its requester: it
-shows them as asking, and they receive its completion notice. A bot that filed one may close it
-explicitly; until then a completed subtask stays Done. The parent's requester still hears when
-the parent finishes.
+Subtasks can nest to any depth. Whoever files a subtask, person or bot, is its requester. When a
+worker finishes a subtask under a bot-owned task, its result returns directly to the immediate
+parent's owning bot, in that parent's task session. An active turn takes it as an input; otherwise
+the parent's next turn resumes there. There is no requester delivery session on the completed
+subtask and no relay or `hub task run` needed. The worker keeps its own independent task session.
+A bot that filed the subtask may close it explicitly; until then it stays Done. The parent's
+requester hears when the parent itself finishes, so a manager's task → builder task → review
+subtask sends the review back to the builder, and the completed build back to the manager.
+
+A review verdict on a subtask's comment or final reply takes the same direct path. Its comment,
+Done note and final reply are one delivery for that verdict and review cycle; reopening the
+subtask permits a new review. Completed or closed parents record late results quietly. Private
+subtask text returns on the parent only when that parent's readers may receive it; otherwise the
+requester receives it on the private subtask as before. Ask and answer messages keep their own routing.
 Subtasks never inherit a human's delegation anchor from a bot's request. BotOps acts with the
 filing bot's rights when that bot asks it to work on a subtask.
 
@@ -418,7 +431,8 @@ and cycles are refused.
 A parent may be marked Done or closed, by a bot or a person, while subtasks are still open. The
 subtasks stay open, and the parent's history and its Finished or Closed notice end with
 "Still open:" and their titles. Finishing or moving away the last open subtask wakes the
-parent's owner with “All subtasks done”, unless that owner made the change (a bot finishing a subtask it filed
+immediate parent's owner with “All subtasks done”, unless its result already resumed that parent or
+that owner made the change (a bot finishing a subtask it filed
 for itself, which runs in its own session, still wakes the parent).
 Closing a parent cancels it; later subtask completion does not wake its owner.
 Done, Closed and Declined count as finished. Open descendants under a finished subtask do not
@@ -501,7 +515,7 @@ hub task child <parent-id> --check-model codex:gpt-6.1-sol --title "Check the mi
 ```
 
 `--check-model` takes a runtime (its provider's recommended model) or `runtime:model`. With no value (`auto` in the
-API) it takes the company's check model (Settings > AI providers, [How it works](how-it-works.md)): the first in its
+API) it takes the company's check model (Settings > Computers > Models, [How it works](how-it-works.md)): the first in its
 order from a provider other than the parent's authors and runnable on the bot's computer. The authors are every
 maker on the parent's finished runs (a fallback counts) and the provider its owner runs on; with no other provider it
 is refused, never run on an author's own. `--role` is `review` or `check` (the default). The API takes `check_model` and `check_role` on task create; the MCP tool is
@@ -512,7 +526,7 @@ is refused, never run on an author's own. `--role` is `review` or `check` (the d
   or files in its body. Its turns carry none of the bot's next-run tasks or notes.
 - Only the runtime, model, harness and effort change. The bot's repository, tools, credentials and isolation are
   its own, so a check never runs with more than the bot has.
-- Only a provider the company has enabled (Settings > AI providers) and a current model can be named, and the
+- Only a provider the company has enabled (Settings > Computers > Models) and a current model can be named, and the
   bot's computer must not report that runtime missing or signed out. A computer that reports it signed out is not
   handed the subtask's turns.
 - Task detail shows the subtask's `check_model`, and the run's provenance (`ran_on` on the task's runs) names the
@@ -525,7 +539,7 @@ is refused, never run on an author's own. `--role` is `review` or `check` (the d
   declined, its held turn is let go instead of retrying after each reset; a person's message on it stays queued.
 - When the limit is on the computer's default login (no subscription) and Health already marks that login out of
   quota (`default_login_limited`, docs/health-monitor.md), the check does not wait: its next turn runs at once on
-  the next check model in the company's order (Settings > AI providers) that is not from a provider whose work it
+  the next check model in the company's order (Settings > Computers > Models) that is not from a provider whose work it
   checks, not on another login out of quota there, and that the bot's computer can run. The task's history and the
   bot's status say where it moved. It goes back to the model it asked for once a turn on that login completes or
   the provider's reset passes, or once the bot moves to another computer or gets a subscription for that tool. With

@@ -1,10 +1,11 @@
 """The Hosting preview's installer flags (tico-services Dev 268): HQ creates a 7-day preview server with --name pv-<id>
 under DevOps's permissions boundary, and on day 7 runs destroy --dns. Fake AWS and Route 53 only."""
 import json
+import stat
 
 import pytest
 
-from setup import aws, cli, dns, route53, verify
+from setup import aws, cli, dns, envfile, route53, state, verify
 from setup.tests import fakes
 from setup.tests.fakes import CaptureIO, FakeEC2, FakeIAM, FakeRoute53, FakeSSM, aws_clients
 
@@ -60,12 +61,49 @@ def test_the_preview_create_command_names_everything_after_its_name_under_the_bo
     assert "TICO_INSTALL_PRESET=recommended" in param["Value"]
     (run,) = ec2.called("run_instances")
     assert run["InstanceType"] == "t4g.medium" and run["IamInstanceProfile"] == {"Name": f"tico-{NAME}"}
-    assert {"Key": "Name", "Value": f"tico-{NAME}"} in run["TagSpecifications"][0]["Tags"]
-    assert all(t in run["TagSpecifications"][0]["Tags"] for t in OURS)
+    # The instance, its disk and its network interface are each tagged in the launch call: DevOps's role refuses a
+    # launch whose network interface lacks them (it attaches the address only to a tagged interface).
+    specs = {s["ResourceType"]: s["Tags"] for s in run["TagSpecifications"]}
+    assert set(specs) == {"instance", "volume", "network-interface"}
+    assert all({"Key": "Name", "Value": f"tico-{NAME}"} in t and all(o in t for o in OURS) for t in specs.values())
     assert ec2.called("create_security_group")[0]["GroupName"] == f"tico-{NAME}"
     (change,) = r53.called("change_resource_record_sets")
     assert change["ChangeBatch"]["Changes"][0]["ResourceRecordSet"]["ResourceRecords"] == [{"Value": "203.0.113.9"}]
     assert "client-SECRET" not in out and "inv_SECRET" not in out
+
+
+def test_inbox_settings_stay_private_through_aws_bootstrap_and_a_retry(monkeypatch):
+    key, url = "tin_private-0123456789abcdefghijklmnopqrstuv", "https://inbox.private.example"
+    monkeypatch.setenv("TICO_INBOUND_KEY", key)
+    monkeypatch.setenv("TICO_INBOUND_URL", url)
+    d, ec2, iam, ssm, r53 = world()
+    code, plan = go(["--dry-run", *CREATE], d)
+    assert code == 0 and key not in plan and url not in plan
+    assert "TICO_INBOUND_KEY=********" in plan and "TICO_INBOUND_URL=********" in plan
+    code, out = go(CREATE, d)
+    assert code == 0, out
+    first = ssm.called("put_parameter")[-1]
+    private = envfile.parse(first["Value"])
+    assert first["Type"] == "SecureString"
+    assert (private["TICO_INBOUND_KEY"], private["TICO_INBOUND_URL"]) == (key, url)
+    saved, local_env = state.load(DOMAIN)
+    assert "inbound_key" not in saved and "inbound_url" not in saved
+    assert envfile.parse(local_env)["TICO_INBOUND_KEY"] == key
+    assert envfile.parse(local_env)["TICO_INBOUND_URL"] == url
+    assert stat.S_IMODE((state.home() / DOMAIN / "env").stat().st_mode) == 0o600
+    # Startup fetches the server's existing SecureString; neither user-data nor Run Command carries its values.
+    bootstrap = ec2.called("run_instances")[0]["UserData"]
+    assert f"--name /tico/{NAME}/env --with-decryption" in bootstrap
+    for value in (key, url):
+        assert value not in out + json.dumps(saved) + bootstrap + "\n".join(ssm.commands)
+    monkeypatch.delenv("TICO_INBOUND_KEY")
+    monkeypatch.delenv("TICO_INBOUND_URL")
+    code, retry_out = go(CREATE, d)
+    assert code == 0, retry_out
+    assert len(ec2.called("run_instances")) == 1  # reuse, not a second server or identity
+    assert ssm.called("put_parameter")[-1]["Value"] == first["Value"]
+    assert private["TICO_OIDC_CLIENT_SECRET"] == "client-SECRET-0123456789abcdef"
+    assert key not in retry_out and url not in retry_out
 
 
 def test_without_a_boundary_or_name_the_role_is_as_before():

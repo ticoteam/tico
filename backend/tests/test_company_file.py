@@ -15,6 +15,7 @@ import yaml
 from backend import company_file as C
 from backend.company_file import actions as A
 from backend.company_file import draft as D
+from backend.company_file import starter
 
 TODAY = dt.date(2026, 10, 17)
 CREATED = dt.datetime(2026, 10, 17, 9, 30, tzinfo=dt.timezone.utc)
@@ -214,6 +215,28 @@ def test_10_key_shaped_strings_never_reach_the_draft_or_the_file():
             assert C.scrub(role[field]) == (role[field], False), (role["slug"], field)
     assert C.scrub("The token is optional; the api key is set on your install.")[1] is False
 
+
+
+def test_10_numbered_ids_from_titles_survive_a_turn_the_file_and_the_import():
+    """A long id made from a numbered title is a name, not a key; real key shapes beside it still go."""
+    titles = ["Accounts Receivable Specialist 2", "Senior Customer Success Manager 12", "B2B Enterprise Account Executive 3",
+              "2nd Line Customer Support Specialist 4"]
+    templates = ["ar-followup", "customer-success", "account-manager", "customer-success"]
+    turn = C.Turn(started(), TODAY)
+    turn.apply("company_set", {"name": "Acme Collections"})
+    for title, template in zip(titles, templates):
+        turn.apply("bot_add", {"template": template, "title": title, "reason": "Our chart has " + title})
+    out = turn.finish()
+    ids = [b["id"] for b in out["bots"] if b["title"] in titles]
+    assert "accounts-receivable-specialist-2" in ids and len(ids) == 4 and turn.keys_removed is False
+    back = starter.load(C.to_yaml(out, CREATED))
+    assert [b["id"] for b in back["bots"] if b["title"] in titles] == ids
+    for key in ("3f9a2b7c-1d4e-4a5b-9c8d-7e6f5a4b3c2d", "k3j-9x2-q8p-m4z-w1r-t6y-b7n-c5v-h2g",
+                "team-k3j-9x2-q8p-m4z-w1r-t6y-b7n-c5v", "qwe-831-zxc-476-rty-920-uio-153-pas",
+                "x7Gk2pQ9vL4mN8rT1wY6zB3cD5fH0jKs",
+                # word-shaped beside a key: mixed case, or one long mixed run after a word
+                "Accounts-Receivable-Specialist-2-Northwest-Zq9", "billing-x7gk2pq9vl4mn8rt1wy6zb3cd5fh"):
+        assert C.scrub("id " + key) == ("id [removed]", True), key
 
 # Every label the scrubber knows, each value length a pasted password can have, in each way a value is written.
 LABELS = ["password", "passwd", "passcode", "pwd", "PWD", "secret", "token", "api_key", "api key", "API-Key", "access_key",
@@ -495,3 +518,72 @@ def test_the_copy_tico_hq_serves_runs_the_same_engine(tmp_path):
     finally:
         for name in [n for n in sys.modules if n == spec.name or n.startswith(spec.name + ".")]:
             del sys.modules[name]
+
+
+# ------------------------------------------------------------------------------- seat guard (Org chart models 2/7)
+def tag(i):
+    """A title suffix without digits: a title like "Account Manager 7" slugs to an id the key scrubber can cut."""
+    return "".join("ABCDEFGHIJKLMNOPQRSTUVWXYZ"[d] for d in (i // 26, i % 26))
+
+
+def chart(bots, people=1):
+    """The starter chart grown (or cut) to `bots` bots and `people` people, through the chat's own actions."""
+    draft = started()
+    draft["bots"] = draft["bots"][:bots]
+    roles = [r for r in C.ROLES if not r["core"]]                          # built-ins stay one each
+    turn = C.Turn(draft, TODAY)
+    for i in range(bots - len(turn.draft["bots"])):
+        role = roles[i % len(roles)]
+        result = turn.apply("bot_add", {"template": role["slug"], "title": "%s %s" % (role["name"], tag(i)),
+                                        "reason": "The owner asked for one more."})
+        assert result["ok"], result
+    for i in range(people - len(turn.draft["people"])):
+        assert turn.apply("person_set", {"name": "Person %s" % tag(i), "role": "Account Manager"})["ok"]
+    draft = turn.finish()
+    assert (len(draft["bots"]), len(draft["people"])) == (bots, people)
+    return draft
+
+
+@pytest.mark.parametrize("seat", [61, 100, 300])
+def test_4_the_chat_adds_a_61st_100th_and_300th_bot_with_no_limit_message(seat):
+    draft, (result,) = run(chart(seat - 1), ("bot_add", {"template": "bookkeeping", "title": "Extra Bookkeeper",
+                                                          "reason": "More invoices."}))
+    assert result["ok"] and len(draft["bots"]) == seat and "Extra Bookkeeper" in titles(draft)
+    assert not any(word in result["said"].lower() for word in ("limit", "most", "plan can hold"))
+    assert C.Turn(draft, TODAY).finish()["bots"] == draft["bots"]          # and the page can send it back
+
+
+def test_the_301st_seat_is_refused_with_a_plain_error_and_a_301_bot_draft_is_refused():
+    full = chart(300)
+    for name, args in (("bot_add", {"template": "bookkeeping", "title": "Extra Bookkeeper", "reason": "x"}),
+                       ("agent_set", {"runtime": "codex", "job": "Writes our code."})):
+        turn = C.Turn(full, TODAY)
+        result = turn.apply(name, args)
+        assert result == {"ok": False, "refused": "A chart can have at most 300 bots."} and len(turn.draft["bots"]) == 300
+    extra = {**full["bots"][-1], "id": "one-too-many", "title": "One Too Many"}
+    with pytest.raises(C.DraftError, match="bots has more than 300 entries"):
+        C.Turn({**full, "bots": full["bots"] + [extra]}, TODAY)
+
+
+def test_a_41st_person_joins_and_the_301st_is_refused_plainly():
+    draft, (result,) = run(chart(24, people=40), ("person_set", {"name": "Ana Lima", "role": "Head of sales"}))
+    assert result["ok"] and len(draft["people"]) == 41 and "limit" not in result["said"].lower()
+    full = chart(24, people=300)
+    turn = C.Turn(full, TODAY)
+    assert turn.apply("person_set", {"name": "Ana Lima"}) == {"ok": False, "refused": "A chart can have at most 300 people."}
+    extra = {**full["people"][-1], "id": "one-too-many", "name": "One Too Many"}
+    with pytest.raises(C.DraftError, match="people has more than 300 entries"):
+        C.Turn({**full, "people": full["people"] + [extra]}, TODAY)
+
+
+def test_a_full_300_seat_chart_with_its_undo_and_chat_fits_the_draft_and_the_company_file():
+    draft, _ = run(chart(300, people=300), ("bot_rename", {"bot": "bookkeeping", "title": "Books"}))
+    draft["chat"] = [{"who": "me" if i % 2 else "bot", "text": "x" * D.LIMITS["chat_text"]} for i in range(D.LIMITS["chat"])]
+    assert len(draft["undo"]["bots"]) == 300
+    assert C.Turn(draft, TODAY).finish()["bots"] == draft["bots"]
+    text = C.to_yaml(draft, CREATED)
+    back = C.from_yaml(text)
+    assert len(back["bots"]) == 300 and len(back["people"]) == 300
+    # The starter import takes the owner and the bots: all 300 of them.
+    owner_only = {**draft, "company": {**draft["company"], "name": "Acme"}, "people": [p for p in draft["people"] if p["owner"]]}
+    assert len(starter.load(C.to_yaml(owner_only, CREATED))["bots"]) == 300

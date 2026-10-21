@@ -20,7 +20,21 @@ function visualSrc(f, field = 'src') {
   const raw = f && typeof f[field] === 'string' ? f[field] : '';
   if (!raw) return null;
   let url; try { url = new URL(raw, location.href); } catch { return null; }
+  // New shells wait for the authenticated config's native ACK, including while
+  // live messages arrive during a config refresh. Until then these stay chips.
+  if ((window.ticoNativeFeatures || []).includes('visualOrigin') && url.origin !== location.origin) {
+    if (url.origin !== NATIVE_VISUAL_ORIGIN || url.protocol !== 'https:' || /[\x00-\x20\x7f\\%?#@]/.test(raw)
+      || /\/\.{1,2}(?:\/|$)/.test(raw) || url.username || url.password
+      || !/^\/visuals\/[A-Za-z0-9_-]+\.[A-Za-z0-9_-]{43}$/.test(url.pathname)) return null;
+  }
   return /^https?:$/.test(url.protocol) && /^\/visuals\/[A-Za-z0-9_.-]+$/.test(url.pathname) && !url.search ? url.href : null;
+}
+// An ACK can arrive after a live snapshot painted chips. Reuse only the open
+// threads' cached authorized data; no new read, draft reset or whole-page refresh.
+function nativeVisualRepaint() {
+  if (typeof V2C !== 'undefined' && V2C) v2ChatRender(V2C);
+  if (typeof TASK_CHAT !== 'undefined' && TASK_CHAT?.data && taskChatCurrent(TASK_CHAT))
+    taskCommentsRender(TASK_CHAT, TASK_CHAT.data);
 }
 const visualRef = f => `${f.file_id}@${Number(f.version)}`;
 // A card, or null for a chip.

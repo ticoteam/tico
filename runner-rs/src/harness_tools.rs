@@ -906,7 +906,7 @@ impl Harnesses {
 
     /// Install the harnesses these runtimes (this computer's bots, primary and fallback) run on, plus the ones
     /// the owner turned on here. The company's other providers are not installed. `default` (the company
-    /// default, for a computer with no bots yet) is installed unless the owner turned it off. Called once the
+    /// defaults, including the Gateway runtime) is installed unless the owner turned it off. Called once the
     /// bots have been read from the server; only after that is anything removed.
     pub fn want<S: AsRef<str>, D: AsRef<str>>(&mut self, runtimes: &[S], default: &[D]) -> HashSet<String> {
         (self.needed, self.default, self.loaded) = (self.ids(runtimes), self.ids(default), true);
@@ -1692,6 +1692,29 @@ mod tests {
         h.step(&HashSet::new());
         assert!(!dir.join("tools").join("cursor-agent").exists());
         assert!(std::fs::symlink_metadata(h.bin_dir().join(&cursor.executable)).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn gateway_turns_prepare_their_harness_without_installing_other_company_providers() {
+        let dir = std::env::temp_dir().join(format!("tico-harness-{}", uuid::Uuid::new_v4().simple()));
+        let mut h = Harnesses::new(dir.join("tools"), dir.join("harnesses.json"), built_in());
+        let rows = vec![json!({"config": {"runtime": "claude"}})];
+        let runtimes = crate::relays::harness_runtimes(&rows);
+        let company = json!({"default_runtime": "codex", "gateway_runtime": "pi", "enabled_providers": ["gemini"]});
+        let defaults = crate::relays::harness_defaults(&runtimes, &company, true);
+        let required: Vec<String> = runtimes.iter().cloned().collect();
+        assert_eq!(h.want(&required, &defaults), HashSet::from(["claude-code".into(), "pi".into()]));
+        // Missing Pi becomes an install job, before any bot can claim its Gateway turn.
+        h.manifests.retain(|id, _| id == "pi");
+        h.manifests.get_mut("pi").unwrap().executable = format!("tico-missing-{}", uuid::Uuid::new_v4().simple());
+        let job = h.next().unwrap();
+        assert_eq!((job.kind.as_str(), job.harness.as_str()), ("install", "pi"));
+        h.choose(json!({"pi": false}).as_object().unwrap());
+        assert!(!h.wanted.contains("pi"));
+        assert!(crate::relays::harness_defaults(&runtimes, &company, false).is_empty());
+        assert!(crate::relays::harness_defaults(&runtimes, &json!({}), true).is_empty());
+        assert_eq!(crate::relays::harness_defaults(&HashSet::new(), &company, true), vec!["codex", "pi"]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
