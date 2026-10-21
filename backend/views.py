@@ -84,7 +84,7 @@ def failed_attempts(c, who, auth, bot=None, since=None, limit=200):
         if not message:
             continue
         try:
-            auth.conversation(c, who, message["conversation_id"])
+            auth.run_conversation(c, who, row["bot"], message)
             privacy.require_message(c, who, message)
             privacy.require_attempt(c, who, row["id"])
         except Problem:

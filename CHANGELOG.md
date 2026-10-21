@@ -8,6 +8,10 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Bots read the runs of the bots that report to them.** A bot above another in `reports_to` (at any depth) now
+  sees that bot's chat-room runs too, such as the wake-ups the hub posts there, in `hub_run_list` and their steps, so
+  a manager like a Product Manager can score its monitors' cost per catch. A human's own chat with a report stays
+  theirs, private tasks stay private, and peers and reports never read a manager's chat-room runs.
 - **How bots get their models**, at the top of Settings > AI providers and the first setup step: **Your Claude and
   ChatGPT subscriptions, plus Tico Gateway** (recommended, and what Tico's installer sets with
   `TICO_MODELS_PRESET=subscriptions-gateway`), subscriptions only, Tico Gateway only, or your company's plans or API
@@ -30,6 +34,12 @@ All notable changes to Tico are recorded here. The format follows
   regular checks (which the owner can now turn off), its name and the Company section are the owner's only; an admin
   no longer changes them. An install at level 1 lands on Passive at upgrade
   ([Your CEO Bot](docs/ceo-bot.md)).
+- **The setup chart has no seat limit you will meet.** The setup chat, the company file and the first screen's
+  company YAML import now take up to 300 bots and 300 people (was 60 bots and 40 people, and 150 bots on import),
+  with no limit message below that. Past 300 the chat says plainly "A chart can have at most 300 bots." (or people);
+  that guard is there only against abuse. A company YAML file may be up to 512 KB (was 128 KB). A plan carried by
+  `tico setup --company-file` into a cloud install still has to fit AWS Parameter Store's 8 KB, about 40 bots; a
+  larger one is imported on the first setup screen instead.
 
 ### Fixed
 - A goal's automatic colour follows its worst KPI: red takes priority over yellow and green, and yellow over green.
