@@ -898,3 +898,29 @@ def test_a_fix_forward_keeps_its_tree_while_a_turn_runs_or_the_branch_moved_past
     post(api, 'runners/heartbeat', body, 'runner-test')
     post(api, 'runners/heartbeat', body, 'runner-test')
     assert released_events(api, tid) == [{'link': link['link_id'], 'path': link['path'], 'reason': 'pull request merged'}]
+
+
+def test_a_checkout_stuck_past_the_deadline_fails_once_owned_and_retries_on_the_same_link(prepared):
+    api, tid, _ = prepared
+    link = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test').json()
+    old = H.shift(H.now(), hours=-(W.PENDING_HOURS + 1))
+    with api.app_state.store.transaction() as c:
+        c.execute('UPDATE task_links SET updated=? WHERE id=?', (old, link['link_id']))
+
+    def told():
+        with api.app_state.store.read() as c:
+            return c.execute("SELECT count(*) FROM messages WHERE to_actor='bot:cmo' AND body LIKE '%Setup did not finish%'"
+                             ).fetchone()[0]
+    for _ in range(2):
+        assert post(api, 'runners/heartbeat', {**HEARTBEAT, 'worktrees': []}, 'runner-test').json()['worktree_actions'] == []
+    assert told() == 1
+    with api.app_state.store.read() as c:
+        held = {w['link_id']: w for w in W.holdings(c, 'bot:cmo')}
+        assert W.current_error('pending', json.loads(c.execute('SELECT detail_json FROM task_links WHERE id=?',
+                                                               (link['link_id'],)).fetchone()[0]))
+    assert link['link_id'] in held                                   # it keeps its place, visibly
+    again = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test').json()
+    assert (again['link_id'], again['path'], again['branch']) == (link['link_id'], link['path'], link['branch'])
+    with api.app_state.store.read() as c:
+        detail = json.loads(c.execute('SELECT detail_json FROM task_links WHERE id=?', (link['link_id'],)).fetchone()[0])
+    assert detail['checkout_state'] == 'queued' and 'pending_expired' not in detail

@@ -352,3 +352,19 @@ def test_a_wait_whose_task_got_blocked_is_cancelled_not_served(prepared):
     wait = rows(api, 'SELECT * FROM worktree_waits WHERE task_id=?', (tid,))[0]
     assert wait['state'] == 'cancelled' and 'blocked by' in wait['reason'] and wait['link_id'] is None
     assert not wakes(api, tid)
+
+
+def test_two_freed_places_and_repeated_passes_give_one_reservation_and_one_wake(prepared):
+    api, tid, _ = prepared
+    filler, links = setup_wait(api, tid)
+    assert 'wait' in post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test').json()['error']
+    free(api, filler, links[0])
+    free(api, filler, links[1])
+    waits.tick(api.app_state.store, 'Acme', force=True)
+    reserved = rows(api, "SELECT * FROM task_links WHERE task_id=? AND kind='worktree'", (tid,))
+    assert len(reserved) == 1
+    assert finish_setup(api, tid, reserved[0]['id']).status_code == 200
+    for _ in range(2):
+        beat(api)
+        waits.tick(api.app_state.store, 'Acme', force=True)
+    assert len(wakes(api, tid)) == 1

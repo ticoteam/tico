@@ -40,7 +40,8 @@ def current_error(state, detail):
     """The worktree's failure still in force. A failed restore or prepare is over once the worktree is set up and
     acknowledged ready, though a computer keeps repeating its last action error until another action succeeds; a
     refused removal stays while removal is asked, and a failure seen when inspecting the tree is always current."""
-    error = str(detail.get('error') or '')
+    error = str(detail.get('error') or '') or (str(detail['pending_expired'])
+                                               if state == 'pending' and detail.get('pending_expired') else '')
     if error.startswith(ACTION_FAILED) and ready(state, detail) and not any(detail.get(key) for key in REMOVAL):
         return ''
     return error
@@ -139,6 +140,7 @@ def supported(c):
 
 LIMIT = 50            # live worktrees per bot; the computer's free-disk floor can stop it sooner
 CLEANUP_TRIES = 6     # a refused worktree cleanup is asked again after 2, 4, ... 64 minutes, then left
+PENDING_HOURS = 6     # a checkout or setup with no progress this long has failed; its owner is told and may retry
 
 
 def live_turn(c, task_id, owner):
@@ -188,6 +190,21 @@ def cancel_pending(c, row, detail, reason):
     if wait := waits.preparing(c, row['id']):
         waits._finish(c, wait, 'cancelled', reason)
     released_event(c, row, detail)
+
+
+def expire_pending(c, row, detail):
+    """A checkout or setup that made no progress for PENDING_HOURS has failed: it would otherwise hold a place
+    forever. The tree keeps its place and says why, its computer stops preparing it, a reserved wait ends, and its
+    owner is told once how to try again on the same worktree."""
+    reason = f'Setup did not finish within {PENDING_HOURS} h'
+    detail['pending_expired'] = reason
+    if wait := waits.preparing(c, row['id']):
+        waits._finish(c, wait, 'failed', reason)
+    if row.get('bot_state', 'active') == 'active':
+        H._wake(c, H.task(c, row['task_id']), row['owner'],
+                f"Tico stopped preparing this task's {row['repo'] or ''} worktree at {row['path']}: {reason}. Its place "
+                f"stays this task's; run `hub task worktree add {row['repo'] or ''}` to try again on the same worktree.",
+                trigger='other', source=row['id'])
 
 
 def held_reason(c, row, detail):
@@ -270,6 +287,7 @@ def preparable(c, row, detail):
     """A worktree reserved for a waiting task (backend/worktree_waits.py): its computer checks it out and runs setup
     while the bot is idle, then reports it present. A failed attempt is not repeated; the task is told instead."""
     return (row['state'] == 'pending' and bool(detail.get('wait_id')) and not detail.get('error')
+            and not detail.get('pending_expired')
             and detail.get('checkout_state') in ('queued', 'initializing', 'checkout_ready', 'setup_running')
             and bool(waits.preparing(c, row['id'])))
 
@@ -395,6 +413,7 @@ def heartbeat(c, who, reports, capable, default_org=""):
         if (state, row['branch'] or branch, detail) != before:
             c.execute('UPDATE task_links SET state=?,branch=coalesce(branch,?),detail_json=?,updated=? WHERE id=?',
                       (state, branch, json.dumps(detail), H.now(), row['id']))
+            row['updated'] = H.now()
         row['state'] = state
         row['detail_json'] = json.dumps(detail)
         if branch:
@@ -438,6 +457,11 @@ def heartbeat(c, who, reports, capable, default_org=""):
                 and not (detail.get('current_branch') or detail.get('last_commit'))):   # nothing reported on disk
             cancel_pending(c, row, detail, 'No longer needed: ' + reason)
             continue
+        if (row['state'] == 'pending' and not closed and not detail.get('pending_expired')
+                and detail.get('checkout_state') != 'setup_failed'
+                and H.shift(row['updated'] or row['created'], hours=PENDING_HOURS) < H.now()
+                and not live_turn(c, row['task_id'], row['owner'])):
+            expire_pending(c, row, detail)
         if released and not detail.get('release_requested'):
             detail['release_requested'] = True
             for key in ('cleanup_attempts', 'cleanup_retry_at', 'cleanup_gave_up'):
@@ -532,6 +556,17 @@ def provision(c, who, task, repo, path=None, branch=None, default_org='', brief=
             raise Problem('worktree_path', 'This worktree belongs to another task', 409)
         if existing['state'] != 'removed':
             detail = json.loads(existing['detail_json'] or '{}')
+            if existing['state'] == 'pending' and detail.get('pending_expired'):
+                # A retry after the deadline starts the same worktree over: same link, path and branch.
+                if why := start_refusal(c, task):
+                    raise Problem('worktree_start', why, 409)
+                for key in ('pending_expired', 'error', *IDENTITY):
+                    detail.pop(key, None)
+                if detail.get('checkout_state') != 'attached_pending':
+                    detail.update(checkout_state='queued', setup_pending=True)
+                now = detail['record_changed'] = H.now()
+                c.execute('UPDATE task_links SET detail_json=?,updated=? WHERE id=?',
+                          (json.dumps(detail), now, existing['id']))
             return {'link_id': existing['id'], 'branch': existing['branch'], 'path': existing['path'],
                     'state': existing['state'],
                     'checkout_state': detail.get('checkout_state'), 'setup_pending': detail.get('setup_pending', False),
