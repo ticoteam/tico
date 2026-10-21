@@ -148,9 +148,12 @@ MODEL_CATALOG = tuple(attach_harnesses(row) for row in (
      "recommended": True, "efforts": ("low", "high"), "default_effort": "low"},
     {"id": "devstral-2512", "label": "devstral 2512", "runtime": "pi", "provider": "mistral",
      "efforts": ("low", "high"), "default_effort": "low"},
-    # The Tico AI Gateway's lineup 1.0 (Head of Product, 2026-10-18), on pi through the Gateway's OpenAI-chat endpoint
-    # (runner-rs/src/hosts/pi.rs). Bots see Tico names; `description` says what runs underneath.
-    {"id": "tico-cheap-1.0", "label": "Tico Cheap 1.0", "runtime": "pi", "provider": "tico",
+    # The Tico AI Gateway's lineup (Head of Product, 2026-10-18), on pi through the Gateway's OpenAI-chat endpoint
+    # (runner-rs/src/hosts/pi.rs). Bots see Tico names; `description` says what runs underneath. A new price is a new
+    # version: Cheap 1.1 replaced Cheap 1.0, which the Gateway still serves for the bots already on it.
+    {"id": "tico-cheap-1.1", "label": "Tico Cheap 1.1", "runtime": "pi", "provider": "tico",
+     "description": "Claude Haiku 5.5 underneath", "efforts": ("low", "high", "max"), "default_effort": "low"},
+    {"id": "tico-cheap-1.0", "label": "Tico Cheap 1.0", "runtime": "pi", "provider": "tico", "deprecated": True,
      "description": "Claude Haiku 5.5 underneath", "efforts": ("low", "high", "max"), "default_effort": "low"},
     {"id": "tico-mid-1.0", "label": "Tico Mid 1.0", "runtime": "pi", "provider": "tico", "recommended": True,
      "description": "Claude Sonnet 5.5 underneath", "efforts": ("low", "high", "max"), "default_effort": "high"},
@@ -213,7 +216,8 @@ PRICES = {
     "deepseek-v4-pro": (0.955, 0.080, 1.911),
     "kimi-k3": (3.0, 0.30, 15.0),
     "kimi-k2.7-code": (0.671, 0.18, 3.35),
-    # The Tico AI Gateway's price, lineup 1.0 (fixed per version; cached input at 10% of input).
+    # The Tico AI Gateway's price (fixed per version; cached input at 10% of input). Cheap 1.1 has a long-prompt rate.
+    "tico-cheap-1.1": (0.15, 0.015, 0.75),
     "tico-cheap-1.0": (0.15, 0.015, 0.75),
     "tico-mid-1.0": (2.50, 0.25, 12.50),
     "tico-power-1.0": (5.0, 0.50, 25.0),
@@ -227,9 +231,11 @@ PRICES = {
 # above that) in the same units as PRICES. A request's prompt is all its input, cache reads and cache writes
 # included, and each request is priced on its own. Anthropic's pricing page ("Long context pricing"), read
 # 2026-10-17: only Claude Haiku 5.5; Claude 4.6 and later models bill their whole context at the standard rate.
+# Tico Cheap 1.1's comes from the Tico AI Gateway's own price (lineup 1.1), not Anthropic's page.
 LONG_PROMPT_AS_OF = "2026-10-17"
 LONG_PROMPT = {
     "claude-haiku-5-5": (100_000, (0.50, 0.05, 2.50)),
+    "tico-cheap-1.1": (100_000, (0.75, 0.075, 3.75)),
 }
 
 
@@ -330,11 +336,12 @@ def normalize_enabled(value):
     return enabled
 
 
-def complete_choice(enabled, runtime="", model=""):
+def complete_choice(enabled, runtime="", model="", kept=""):
     """Validate an owner's choice and fill what they left out.
 
     A model implies its runtime; a runtime alone means that provider's recommended model; nothing
-    at all means the first enabled provider's recommended model. Returns (runtime, model).
+    at all means the first enabled provider's recommended model. Returns (runtime, model). `kept` is the
+    model already saved: it may stay after it retires, so a save about something else never forces a move.
     """
     enabled = normalize_enabled(enabled)
     runtime, model = str(runtime or "").strip(), str(model or "").strip()
@@ -348,7 +355,7 @@ def complete_choice(enabled, runtime="", model=""):
             raise ProviderError("model", f"Unknown default model {model!r}", 422)
         if runtime and runtime != row["runtime"]:
             raise ProviderError("model", f"{model} runs on {row['runtime']}, not {runtime}", 422)
-        if row.get("deprecated"):
+        if row.get("deprecated") and model != kept:
             raise ProviderError("model", f"{row['label']} is retired; choose a current model", 422)
         runtime = row["runtime"]
     elif runtime:
@@ -452,7 +459,7 @@ def save(c, actor, body, now):
         raise ProviderError("conflict", "The provider choice changed since you opened it; reload and try again", 409)
     gateway = [name for name in before["enabled"] if PROVIDER_BY_ID[name].get("gateway")]
     enabled = with_gateway({"enabled": normalize_enabled(body.get("enabled"))}, bool(gateway))["enabled"]
-    runtime, model = complete_choice(enabled, body.get("runtime"), body.get("model"))
+    runtime, model = complete_choice(enabled, body.get("runtime"), body.get("model"), kept=before["model"])
     auto, checks = body.get("auto_fallback"), body.get("check_models")
     preset = before["preset"] if body.get("preset") is None else models_preset.normalize(body.get("preset"))
     if body.get("preset") not in (None, "") and not preset:

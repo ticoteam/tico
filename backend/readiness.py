@@ -21,6 +21,7 @@ Callers refuse only on can_run False; None never blocks.
 """
 import json
 
+from . import models_preset
 from .harnesses import EXTERNAL_HARNESSES, bot_key, harness_caps, resolve_harness, runtime_of
 from .store import H, readiness_document
 
@@ -67,7 +68,7 @@ def can_run(c, bot, runtime, runner=None, harness="", model=""):
     online = bool(row["last_seen"] and row["last_seen"] > H.shift(H.now(), seconds=-ONLINE_SECONDS))
     readiness = readiness_document(row["readiness_json"])
     detail = readiness.get("bots", {}).get(bot)
-    detail = detail if isinstance(detail, dict) else {}
+    detail = models_preset.as_served(c, bot, readiness, detail) if isinstance(detail, dict) else {}
     out = {"applicable": True, "computer": {"id": row["id"], "label": row["label"]}, "online": online, "runtime": runtime,
            "bot_ready": detail.get("ready") is True, "bot_problems": list(detail.get("problems") or [])[:5],
            "reported": (str(detail.get("runtime") or "") == str(runtime or "")
@@ -143,6 +144,11 @@ def can_run(c, bot, runtime, runner=None, harness="", model=""):
     shared = (state.get("profiles") or {}).get("") or state
     signed = str(shared.get("authenticated") or "unknown")
     if signed == "ready":
+        return verdict(True)
+    if signed in SIGNED_OUT and (line := models_preset.gateway_line(
+            c, bot, readiness, config={"runtime": runtime, "model": model or config.get("model")})):
+        # Its turns run on the Gateway until it is signed in (backend/models_preset.py): say so, never "login required".
+        out["gateway"] = line
         return verdict(True)
     if signed in SIGNED_OUT:
         return verdict(False, shared.get("detail") or (str(runtime) + " is not signed in on " + label),

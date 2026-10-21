@@ -35,6 +35,8 @@ function tipHTML(slug) {
   } else if (S.me?.cloud && e) {
     rows.push(['Computer', esc(e.machine?.label || 'Not registered')]);
     rows.push(['Status', e.online ? (e.ready ? 'Online · ready' : 'Online · setup needed') : 'Offline']);
+    // Its turns run on the Tico AI Gateway until its subscription is signed in (backend/models_preset.py as_served).
+    if (e.online && e.readiness?.gateway) rows.push(['Model', esc(e.readiness.gateway)]);
     if (e.machine?.last_seen) rows.push(['Last seen', esc(ago(e.machine.last_seen))]);
   }
   return `<div class="tip-head">${avatar(slug, 18, stateOf(slug))}<strong>${empName(slug)}</strong></div>
