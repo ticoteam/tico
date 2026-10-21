@@ -225,7 +225,8 @@ def test_a_300_bot_company_file_imports_and_a_301_bot_file_is_refused_plainly(en
     assert len(starter.canonical(starter.load(text)).encode()) > 131072      # past the old 128 KB plan limit
     preview = api.post("/api/v2/onboarding/company/preview", json={"company_yaml": text}, headers=signed_in())
     assert preview.status_code == 200, preview.text
-    assert len(preview.json()["employees"]) == 300
+    seats = sum(b["template"] in {s["slug"] for s in C.SEATS} for b in draft["bots"])  # no bot yet: no employee
+    assert seats and len(preview.json()["employees"]) == 300 - seats
     done = api.post("/api/v2/onboarding/company/import", json={"company_yaml": text, "fingerprint": preview.json()["fingerprint"]},
                     headers=signed_in())
     assert done.status_code == 200, done.text

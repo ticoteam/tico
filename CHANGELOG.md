@@ -16,7 +16,10 @@ All notable changes to Tico are recorded here. The format follows
   actions switch the chart to a model (`model_use`; "show me everything" is Everything) and put a person in a seat
   (`seat_fill`, "Ana runs our cap table"). Controller, Equity Manager, Fundraising Manager, Scheduling & Bookings and
   Quality & Inspections are seats with no bot yet: a person can hold one, and importing the company file makes no bot
-  for it. The cap table moves from the Corporate Secretary's description to the Equity Manager's.
+  for it or for any seat a person holds (the coworkers who hold seats stay in the saved plan; they join in Tico). The
+  cap table moves from the Corporate Secretary's description to the Equity Manager's. A whole model chart is over the
+  8 KB the installer can carry today, so `setup` asks for it to be imported in the app until the plan-bucket
+  transport lands.
 - **Bots read the runs of the bots that report to them.** A bot above another in `reports_to` (at any depth) now
   sees that bot's chat-room runs too, such as the wake-ups the hub posts there, in `hub_run_list` and their steps, so
   a manager like a Product Manager can score its monitors' cost per catch. A human's own chat with a report stays

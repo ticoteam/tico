@@ -41,13 +41,6 @@ def titles(draft):
     return [b["title"] for b in draft["bots"]]
 
 
-@pytest.fixture(autouse=True)
-def _room_for_every_model(monkeypatch):
-    """Everything has 73 seats. Org chart models 2/7 lifts the 60-bot limit on main; until it lands this gives the
-    engine the room the spec asks for, and after it this changes nothing."""
-    monkeypatch.setitem(D.LIMITS, "bots", max(D.LIMITS["bots"], 300))
-
-
 def first_chart(about, signals):
     """The chart the first turn lays out for a company with these signals, and BotOps's line about it."""
     draft = C.blank()
@@ -675,7 +668,6 @@ def test_the_copy_tico_hq_serves_runs_the_same_engine(tmp_path):
     sys.modules[spec.name] = H
     try:
         spec.loader.exec_module(H)
-        H.draft.LIMITS["bots"] = D.LIMITS["bots"]  # the room _room_for_every_model gives, until 2/7 lands
         draft = started()
         assert H.to_yaml(draft, CREATED) == C.to_yaml(draft, CREATED)
         assert H.SPEC == C.SPEC and H.MODELS == C.MODELS and H.SEATS == C.SEATS and H.ROLES == C.ROLES
