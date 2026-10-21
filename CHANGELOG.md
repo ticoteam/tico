@@ -8,6 +8,9 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- **A menu button left of Search in a chat's bot switcher on a phone.** In a bot's chat the bottom bar is hidden;
+  tapping the bot's icon by the chat bar now shows a round menu button beside Search that opens the side menu in one
+  tap, the same menu More opens, and it closes the same way.
 - **How bots get their models**, at the top of Settings > AI providers and the first setup step: **Your Claude and
   ChatGPT subscriptions, plus Tico Gateway** (recommended, and what Tico's installer sets with
   `TICO_MODELS_PRESET=subscriptions-gateway`), subscriptions only, Tico Gateway only, or your company's plans or API
@@ -30,6 +33,12 @@ All notable changes to Tico are recorded here. The format follows
   morning a bot gets one "Still needed?" wake listing all of them, and asks again or drops them; until then it stays in
   Needs you, marked stale, rather than moving to Older questions. A stuck check never asks a person: the bot is retried
   once, then BotOps gets a task to find why, and open "no progress" questions to people close at the next hourly sweep.
+
+### Fixed
+- **A bot is no longer handed a picture link for a chat's file that never opens.** The visual route checks a bot's
+  link as the bot without its run, which cannot see a chat's files, so those links always answered "not found". A bot
+  reading a chat visual now gets the file itself (its file link, no picture address); people's links and a bot's
+  links for task files are unchanged.
 
 ## [0.3.69] - 2026-10-21
 
