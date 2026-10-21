@@ -174,12 +174,13 @@ def start_refusal(c, task):
 
 def released_event(c, row, detail):
     """One `worktree.released` event per tree, with why: the task's run history and Health read it."""
-    data = {'link': row['id'], 'path': row['path'], 'reason': detail.get('release_reason') or 'cleanup'}
-    if detail.get('stale_push_cleared'):
-        data['reason'] += f" (stale push {detail['stale_push_cleared'][:12]} cleared)"
-    if data['reason'] == 'task finished' and (detail.get('dirty_files') or detail.get('ahead')) \
+    reason = detail.get('release_reason') or 'cleanup'
+    data = {'link': row['id'], 'path': row['path'], 'reason': reason}
+    if reason == 'task finished' and (detail.get('dirty_files') or detail.get('ahead')) \
             and not detail.get('snapshot_skipped'):
         data['wip_branch'] = 'wip/' + row['task_id'][:8] + '-' + row['id'][:6]     # runner/worktrees.py wip_branch
+    if detail.get('stale_push_cleared'):
+        data['reason'] += f" (stale push {detail['stale_push_cleared'][:12]} cleared)"
     H.event(c, H.KEEPER, 'worktree.released', row['task_id'], data)
 
 

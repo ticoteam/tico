@@ -959,6 +959,45 @@ def test_a_retry_after_the_deadline_keeps_the_setup_phase_and_names_the_register
     assert row['state'] == 'present' and 'pending_expired' not in json.loads(row['detail_json'])
 
 
+def test_the_registered_setup_retry_after_the_deadline_clears_the_failure_at_its_first_report(prepared):
+    api, tid, _ = prepared
+    link = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test').json()
+    proof = {'expected_head': 'a' * 40, 'checkout_target': 'refs/remotes/origin/main', 'expected_base': 'b' * 64}
+    route = f'/api/v2/tasks/{tid}/links/{link["link_id"]}'
+
+    def patch(**fields):
+        return api.patch(route, json=fields, headers={**auth('runner-test'), 'Idempotency-Key': uuid.uuid4().hex})
+
+    def stored():
+        with api.app_state.store.read() as c:
+            row = c.execute('SELECT state,detail_json FROM task_links WHERE id=?', (link['link_id'],)).fetchone()
+        return row['state'], json.loads(row['detail_json'])
+    for fields in ({'state': 'pending', 'checkout_state': 'initializing', 'setup_pending': True, **proof},
+                   {'state': 'pending', 'checkout_state': 'setup_running', 'setup_pending': True}):
+        assert patch(**fields).status_code == 200
+    with api.app_state.store.transaction() as c:
+        c.execute('UPDATE task_links SET updated=? WHERE id=?',
+                  (H.shift(H.now(), hours=-(W.PENDING_HOURS + 1)), link['link_id']))
+    post(api, 'runners/heartbeat', {**HEARTBEAT, 'worktrees': []}, 'runner-test')
+    state, detail = stored()        # expired, with the phase and proof the setup command resumes from
+    assert state == 'pending' and detail['pending_expired'] and detail['checkout_state'] == 'setup_running'
+    assert {k: detail[k] for k in proof} == proof
+    # `hub task worktree setup` straight away, no add: its first progress report clears the failure.
+    assert patch(state='pending', checkout_state='setup_running', setup_pending=True, **proof).status_code == 200
+    state, detail = stored()
+    assert state == 'pending' and 'pending_expired' not in detail and detail['checkout_state'] == 'setup_running'
+    assert patch(state='present', checkout_state='ready', setup_pending=False, **proof).status_code == 200
+    assert stored()[0] == 'present'
+
+
+def test_a_finished_task_with_unsaved_work_names_its_wip_branch_even_when_a_stale_push_was_cleared(prepared):
+    api, tid, _ = prepared
+    with api.app_state.store.transaction() as c:
+        W.released_event(c, {'id': 'l' * 36, 'path': 'p', 'task_id': tid},
+                         {'release_reason': 'task finished', 'stale_push_cleared': 'a' * 40, 'dirty_files': 2})
+    assert released_events(api, tid)[-1]['wip_branch'] == f"wip/{tid[:8]}-llllll"
+
+
 def test_a_delayed_old_push_clears_on_the_next_clean_report_and_a_real_fix_forward_push_holds(prepared):
     api, tid, _ = prepared
     link = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test').json()
