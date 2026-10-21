@@ -14,6 +14,8 @@ All notable changes to Tico are recorded here. The format follows
   HQ registers only a join code's hash through scoped SSM; no owner token or join secret crosses that control plane.
 
 ### Changed
+- **Long runs of task updates in a bot's chat fold.** Four or more task status rows in a row show the oldest, a
+  "...N more..." line with the exact number hidden, and the newest. Three or fewer show as before; a message starts a new run.
 - **One new subscription per AI tool on each computer.** Adding a second subscription for the same tool is refused
   with a Switch account message, including while the first sign-in is pending. Different tools and computers stay
   independent; existing connections and API keys are kept.
