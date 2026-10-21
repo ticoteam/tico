@@ -81,6 +81,34 @@ def goal_of(api, goal_id, token="ana-test"):
     return get(api, f"goals/{goal_id}", token)["goal"]
 
 
+def test_a_goals_worst_kpi_sets_its_colour_and_reason_without_overriding_a_person(api):
+    goal, activation = goal_with_kpi(api, {"kind": "maintain", "min": 40, "max": 60})
+    alarms = post(api, "kpis", {"name": "False alarms", "unit": "alarms", "direction": "down",
+                  "cadence": "daily", "goal_id": goal["id"], "kind": "maintain", "max": 1})["kpi"]
+    # A missing reading is gray and must not hide a fresh KPI's colour.
+    post(api, "kpis", {"name": "Unreported measure", "goal_id": goal["id"], "kind": "maintain", "min": 1})
+    log(api, activation["id"], 50, period_end=H.now())
+    log(api, alarms["id"], 3, period_end=H.now())
+    red = goal_of(api, goal["id"])
+    assert red["status"] == "red"
+    assert red["status_note"] == "False alarms 3 above max 1 alarms (+1 more)"
+
+    post(api, f"goals/{goal['id']}/status", {"status": "green", "note": "A temporary exception."})
+    post(api, "goals/refresh", {})
+    overridden = goal_of(api, goal["id"])
+    assert (overridden["status"], overridden["status_source"], overridden["suggest_status"]) == ("green", "person", "red")
+    assert post(api, f"goals/{goal['id']}/status/auto", {})["goal"]["status"] == "red"
+
+    # Once the red KPI recovers, yellow still takes priority over green.
+    log(api, alarms["id"], 0, period_end=H.now())
+    log(api, activation["id"], 41, period_end=H.now())
+    yellow = goal_of(api, goal["id"])
+    assert yellow["status"] == "yellow"
+    assert yellow["status_note"] == "Activation 41% in range 40–60% (+1 more)"
+    log(api, activation["id"], 50, period_end=H.now())
+    assert goal_of(api, goal["id"])["status"] == "green"
+
+
 def test_archive_restore_preserves_kpi_history_and_hides_it_from_active_views(api):
     goal, kpi = goal_with_kpi(api)
     logged = log(api, kpi["id"], 52, evidence="https://bi.example/activation", note="September", period_end=H.now())

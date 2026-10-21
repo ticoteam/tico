@@ -29,6 +29,10 @@ All notable changes to Tico are recorded here. The format follows
   `tico setup --company-file` into a cloud install still has to fit AWS Parameter Store's 8 KB, about 40 bots; a
   larger one is imported on the first setup screen instead.
 
+### Fixed
+- A goal's automatic colour follows its worst KPI: red takes priority over yellow and green, and yellow over green.
+  The note explains that KPI; a colour set by a person stays in place until handed back to the Goal Manager.
+
 ## [0.3.68] - 2026-10-20
 
 ### Added
