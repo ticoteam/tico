@@ -29,8 +29,11 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub task ask <id> "<question>"
     hub task update <id> --status waiting --on <person> --note "<plain ask>"
                                            ask a person on your task: one small subtask for them, yours stays blocked
-    hub task question "<question>" --on <person> [--option A=<file> --option B=<file>]
-                                           one decision under your task, waiting on them; none for Yes / No
+    hub task question "<question>" --on <person> [--why "<why it matters>"]
+                    [--option "A -> what happens" --option "B=<file> -> what happens"] [--multi --recommend A]
+                                           one decision under your task, waiting on them; none for Yes / No.
+                                           Every option says what happens (->); several picks (--multi) mark
+                                           the recommended ones; no ids, paths or errors above --body
                     [--if-no-answer "Yes" --default-kind reversible|send|spend|delete] [--by D]
                                            what you do if they don't answer: a reversible step goes ahead
                                            after the team's days (3); asks expire after 14 days
@@ -867,7 +870,13 @@ def parser():
     s = task.add_parser("question", help="put one decision to a person as its own task: a pick or Yes / No")
     s.add_argument("question")
     s.add_argument("--on", required=True, help="the person who decides")
-    s.add_argument("--option", action="append", help="LABEL or LABEL=FILE (an image shows with it); repeat, 2 to 6; none for Yes / No")
+    s.add_argument("--option", action="append",
+                   help="\"LABEL -> WHAT HAPPENS\" or \"LABEL=FILE -> WHAT HAPPENS\" (an image shows with it); repeat, 2 to 6; "
+                        "none for Yes / No. The what-happens line is required")
+    s.add_argument("--why", help="one plain line on why it matters, shown under the question")
+    s.add_argument("--multi", action="store_true", default=None,
+                   help="several picks: the person ticks the ones they want; unticked ones come back as \"not this one\"")
+    s.add_argument("--recommend", action="append", metavar="LABEL", help="an option you recommend (pre-ticked); repeat")
     s.add_argument("--title")
     s.add_argument("--body")
     s.add_argument("--parent")
@@ -924,7 +933,8 @@ def parser():
                    help="the caption for each --visual, in the same order")
     choices = s.add_mutually_exclusive_group()
     choices.add_argument("--ask", help="JSON file containing structured questions")
-    choices.add_argument("--choices", help="comma-separated option labels")
+    choices.add_argument("--choices", help="comma-separated options, each \"LABEL -> WHAT HAPPENS\" (a question to a "
+                                           "person needs the what-happens line)")
     s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
     s.add_argument("--needs-action", dest="needs_action", action="store_true", help="a bot's message to a bot waits for that bot's next run; this wakes it now")
     s.set_defaults(fn="task comment")
@@ -1024,7 +1034,8 @@ def parser():
     s.add_argument("--note", help="short note on this version (at most 500 characters)")
     choices = s.add_mutually_exclusive_group()
     choices.add_argument("--ask", help="JSON file containing structured questions")
-    choices.add_argument("--choices", help="comma-separated option labels")
+    choices.add_argument("--choices", help="comma-separated options, each \"LABEL -> WHAT HAPPENS\" (a question to a "
+                                           "person needs the what-happens line)")
     s.set_defaults(fn="task attach")
     s = task.add_parser("answers", help="list the task's structured answers, oldest first")
     s.add_argument("id")

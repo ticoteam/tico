@@ -10,15 +10,9 @@ let DEC = null;                 // the open Decide page's state, null elsewhere
 const DEC_UNDO_MS = 4000;
 
 // ---- which cards, in which order (GET /v2/needs-you items)
-// A question answered in the card: one pick-one question with 2 to 6 options, put to this person by someone else.
-// Several questions or a multi-select is a task card that links to the task.
-function decideQuestion(it) {
-  const ask = it.ask, qs = ask?.refs?.questions;
-  if (!ask || !Array.isArray(qs) || qs.length !== 1) return null;
-  const q = qs[0], n = (q.options || []).length;
-  if (q.multi || n < 2 || n > 6 || ask.to_actor !== myActor() || ask.from_actor === myActor()) return null;
-  return q;
-}
+// A question answered in the card (question-card.js): one question with 2 to 6 options, a pick or several picks, put
+// to this person by someone else. Several questions in one ask are a task card that links to the task.
+const decideQuestion = it => qcardQuestion(it);
 // The plain ask a task card leads with, from the server's read alone (so a card's buttons never wait on its
 // comments): an open question to me, else the ask the bot wrote in its waiting note or its task's first paragraph.
 const decideAskText = it => String((it.ask?.to_actor === myActor() && it.ask.from_actor !== myActor() ? it.ask.body : '')
@@ -42,18 +36,15 @@ function decideCards(items) {
     if (q) asks.push({key: 'task:' + it.id, type: 'pick', it, q, at: it.ask.created || it.created});
     // A card still waiting for its bot to say what it needs goes last, as the server orders it.
     else (it.ask_missing ? unexplained : it.owner === me && it.kind === 'task' && it.waiting_on !== me ? mine : waiting)
-      .push({key: 'task:' + it.id, type: 'task', it, at: it.created, yn: !it.ask_missing && decideYesNoAsk(decideAskText(it))});
+      .push({key: 'task:' + it.id, type: 'task', it, at: (it.ask?.to_actor === me && it.ask.created) || it.created, yn: !it.ask_missing && decideYesNoAsk(decideAskText(it))});
   }
   const old = (a, b) => String(a.at || '').localeCompare(String(b.at || ''));
-  const all = [...asks.sort(old), ...approvals.sort(old), ...waiting.sort(old), ...mine.sort(old)];
-  // One group at a time, by what it takes (all the decisions in one sitting, then paying, signing in, reviewing,
-  // doing); within each, what is due first, soonest first, then what a person asked for (the server's needs_order)
-  // and a bot's item that presses: due, or old.
-  const first = c => !!(c.it.from_person || c.it.pressing);
-  const ordered = [...all.filter(first), ...all.filter(c => !first(c))];
-  const due = c => decideDue(c.it)?.at ?? Infinity;
-  ordered.sort((a, b) => (NEED_RANK[a.it.need] ?? 4) - (NEED_RANK[b.it.need] ?? 4) || due(a) - due(b));
-  return [...ordered, ...unexplained.sort(old)];
+  // The server's tier (backend/views.py decide_tier): what holds up something due, or going ahead on its own, within
+  // two working days; then what holds up a roadmap item at Approved or Building; then the rest. Newest first within
+  // each: how old a card is never moves it up.
+  const tier = c => c.it.tier ?? 2;
+  const all = [...asks, ...approvals, ...waiting, ...mine].sort((a, b) => tier(a) - tier(b) || old(b, a));
+  return [...all, ...unexplained.sort(old)];
 }
 // A card's deadline: a person's task's due date (a bot's own task's due is only when it looks again).
 const decideDue = it => { const d = it.kind === 'approval' ? null : taskDueInfo(it); return d?.kind === 'deadline' ? d : null; };
@@ -91,9 +82,10 @@ function pageDecide() {
     <p class="dc-keys" aria-hidden="true">1–6 pick · Y / N approve · R do what it recommends · D done · S skip · C comment</p>
     <div class="dc-toast" role="status" hidden><span></span><button type="button" data-dc="undo">Undo</button></div>
   </section>`;
-  const st = DEC = {queue: [], cards: new Map(), handled: new Set(), pending: null, data: new Map(), off: []};
+  const st = DEC = {queue: [], cards: new Map(), handled: new Set(), pending: null, data: new Map(), ticks: new Map(), off: []};
   const root = $('.decide', main);
   root.addEventListener('click', ev => decideClick(st, ev));
+  root.addEventListener('change', ev => { if (ev.target.matches('[data-qc-tick]')) decideTick(st, Number(ev.target.dataset.qcTick), ev.target.checked); });
   root.addEventListener('input', ev => {
     const box = ev.target.closest('.dc-note textarea');
     if (!box) return;
@@ -190,13 +182,15 @@ function decideRender(st, enter = false) {
     : (c.it.waiting_on === myActor() || c.it.kind === 'waiting') && String(c.it.owner).startsWith('bot:') ? c.it.owner
     : c.it.requester || c.it.owner;
   const decide = decideDecision(c);
-  const name = actorLabel(from) || 'Tico', chat = decideChatHref(from), origin = decideFromPerson(c.it, from);
+  // Who really asks: Tico for its own checks, never the assistant's name; a question card says no "You asked".
+  const name = from === 'keeper' ? 'Tico' : actorLabel(from) || 'Tico', chat = decideChatHref(from);
+  const origin = c.type === 'pick' ? '' : decideFromPerson(c.it, from);
   // A bot's face and name open the bot, as the side rail does; the face is a second way in for the pointer, the name the one for keys.
   const face = chat ? `<a class="dc-who-face" href="${esc(chat)}" tabindex="-1" aria-hidden="true">${actorFace(from, 32)}</a>` : actorFace(from, 32);
   stage.innerHTML = `<article class="dc-card${enter ? ' in' : ''}" data-key="${esc(c.key)}">
     <div class="dc-who">${face}
       <div class="dc-who-text"><div class="dc-who-name">${chat ? `<a class="dc-who-link" href="${esc(chat)}" title="${esc(`Open ${name}`)}">${esc(name)}</a>` : esc(name)}${origin ? `<span class="dc-origin"> · ${esc(origin)}</span>` : ''}</div>
-        <div class="dc-who-sub">${esc(c.type !== 'task' ? plainActors(c.it.title || '') : decideMeta(c.it))}</div></div>
+        <div class="dc-who-sub">${esc(c.type === 'pick' ? qcardSub(c.it) : c.type !== 'task' ? plainActors(c.it.title || '') : decideMeta(c.it))}</div></div>
       ${decideDue(c.it) ? `<span class="tl-due${decideDue(c.it).late ? ' late' : ''}">${esc(decideDue(c.it).words)}</span>` : ''}
       <span class="pill ${decide ? 'needs' : ''}">${esc(needLabel(c.it.need || (decide ? 'decide' : 'do')))}</span></div>
     <div class="dc-body"></div>
@@ -229,27 +223,21 @@ function decideClarifyHTML(c) {
   const bot = actorLabel(c.it.ask.from_actor) || 'the bot';
   return `<button type="button" class="ghost dc-clarify" data-dc="clarify" title="Ask ${esc(bot)} whether this still matters, in clearer words">Ask ${esc(bot)} to clarify</button>`;
 }
-const decideTwo = c => c.type === 'pick' && c.q.options.length === 2;
+const decideTwo = c => c.type === 'pick' && !c.q.multi && c.q.options.length === 2;
 // Yes / No reads No, Yes like an approval: the affirmative on the right.
 const decideYesNo = c => decideTwo(c) && c.q.options.map(o => String(o.label).toLowerCase()).join() === 'yes,no';
-function decideOrder(c) {
-  return decideYesNo(c) ? [1, 0] : [0, 1];
-}
 function decideActionsHTML(c) {
   const k = key => `<kbd>${key}</kbd>`;
   // The bot said what it would do: taking that is the main button, across the row, and the card's own answers stay
   // below it.
-  const rec = c.type !== 'approve' && c.it.recommend?.ask
+  // A question card's fallback is a small line at its foot, never a recommendation (question-card.js).
+  const rec = c.type === 'task' && c.it.recommend?.ask
     ? `<button type="button" class="primary dc-rec" data-dc="recommend" title="${esc(c.it.recommend.do)}">Do what you recommend${k('R')}</button>` : '';
   if (rec) return rec + decideActionsPlain(c, k).replace(/ class="primary"/g, '');
   return decideActionsPlain(c, k);
 }
 function decideActionsPlain(c, k) {
-  if (decideTwo(c)) return decideOrder(c).map((i, n) => {
-    const o = c.q.options[i];
-    const yn = decideYesNo(c) ? String(o.label)[0].toUpperCase() : i + 1;
-    return `<button type="button" class="${n && String(o.label).toLowerCase() === 'yes' ? 'primary' : ''}" data-dc="pick" data-i="${i}">${esc(o.label)}${k(yn)}</button>`;
-  }).join('');
+  if (c.type === 'pick' && (c.q.multi || decideTwo(c))) return qcardActionsHTML(c.it, c.q, {attr: 'dc', ticked: decideTicked(DEC, c), keys: true});
   if (c.type === 'pick') return `<button type="button" data-dc="skip">Skip${k('S')}</button><button type="button" disabled>Pick one</button>`;
   if (c.type === 'approve' || c.yn) return `<button type="button" data-dc="no">No${k('N')}</button><button type="button" class="primary" data-dc="yes">Yes${k('Y')}</button>`;
   return `<button type="button" data-dc="skip">Skip${k('S')}</button><button type="button" class="primary" data-dc="done">Done${k('D')}</button>`;
@@ -265,27 +253,21 @@ function decidePicture(st, c, o) {
     : `<span class="dc-pic dc-glyph">${esc(tfGlyph(kind, f.name))}</span>`;
 }
 function decidePickHTML(st, c) {
-  const it = c.it, q = c.q, line = (it.first_line || '').trim();
-  const context = line && ![q.question, it.title].includes(line) ? `<p class="dc-ctx">${esc(plainActors(line))}</p>` : '';
-  const pics = q.options.some(o => o.file);
-  const desc = o => o.description ? `<span class="dc-desc">${esc(o.description)}</span>` : '';
-  let opts = '';
-  if (q.options.length === 2 && pics) opts = `<div class="dc-pair">${q.options.map((o, i) =>
-    `<button type="button" class="dc-opt" data-dc="pick" data-i="${i}" aria-label="${esc(o.label)}">${decidePicture(st, c, o)}<span class="dc-l">${esc(o.label)}</span>${desc(o)}</button>`).join('')}</div>`;
-  else if (q.options.length === 2) opts = q.options.some(o => o.description)
-    ? `<ul class="dc-descs">${q.options.map(o => `<li><b>${esc(o.label)}</b>${desc(o)}</li>`).join('')}</ul>` : '';
-  else opts = `<div class="dc-tiles">${q.options.map((o, i) =>
-    `<button type="button" class="dc-tile${o.file ? ' pic' : ''}" data-dc="pick" data-i="${i}">${o.file ? decidePicture(st, c, o) : ''}<span class="dc-tl"><b class="tnum">${i + 1}</b><span class="dc-l">${esc(o.label)}</span></span>${desc(o)}</button>`).join('')}</div>`;
-  return `<p class="dc-q">${esc(q.question)}</p>${context}${decideDefault(c)}${opts}`;
+  return qcardBodyHTML(c.it, c.q, {attr: 'dc', ticked: decideTicked(st, c), pic: o => decidePicture(st, c, o)})
+    + qcardFallbackHTML(c.it) + qcardDetailsHTML(c.it, c.q);
 }
-// What the bot does if nobody answers (backend/ask_deadlines.py): on its own by a date, or only with an answer.
-function decideDefault(c) {
-  const ask = c.it.ask, d = ask?.refs?.if_no_answer;
-  if (!d?.do) return '';
-  const bot = actorLabel(ask.from_actor), at = ask.goes_ahead_at ? new Date(ask.goes_ahead_at) : null;
-  const when = at && !isNaN(at) ? at.toLocaleDateString(undefined, {weekday: 'short', month: 'short', day: 'numeric'}) : '';
-  return `<p class="dc-ctx dc-default">${esc(when ? `If you don't answer by ${when}, ${bot} goes ahead: ${d.do}`
-    : `${bot} recommends: ${d.do}. It waits for your answer.`)}</p>`;
+// Several picks: the ones ticked on this card, the recommended ones until the person changes them.
+function decideTicked(st, c) {
+  if (!st || c?.type !== 'pick' || !c.q.multi) return new Set();
+  if (!st.ticks.has(c.key)) st.ticks.set(c.key, qcardRecommended(c.q));
+  return st.ticks.get(c.key);
+}
+function decideTick(st, i, on) {
+  const c = decideCurrent(st), ticked = decideTicked(st, c);
+  if (!c?.q?.multi || !(i >= 0 && i < c.q.options.length)) return;
+  if (on) ticked.add(i); else ticked.delete(i);
+  const box = $(`.decide [data-qc-tick="${i}"]`); if (box) box.checked = on;
+  qcardRetick($('.decide .dc-actions'), c.it, c.q, ticked, 'dc');
 }
 const DEC_APPROVAL_Q = {send: 'Send this email?', spend: 'Approve this spend?', publish: 'Publish this?', merge: 'Merge this?',
   support: 'Send this to Tico support?'};
@@ -375,13 +357,10 @@ function decideWrite(c, what, i, note) {
 function decideWriteBody(c, what, i, note) {
   const shown = DEC?.data.get(c.it.id)?.version;
   const id = encodeURIComponent(c.it.id), to = decideBot(c);
-  if (what === 'pick') {
-    const ask = c.it.ask, q = c.q, o = q.options[i], t = ask.refs?.target;
-    const target = t?.file ? {file: t.file, version: Number(t.version)} : {comment: ask.id};
-    const other = note && q.other !== false;
-    const writes = [{path: `/v2/tasks/${id}/answers`, body: {target, answers: {[q.id]: [o.label]}, ...(other ? {other: note} : {})}}];
-    if (note && !other) writes.push({path: `/v2/tasks/${id}/comments`, body: {text: note}});
-    return {writes, label: `Picked ${o.label} · sent to ${to}`};
+  if (['pick', 'all', 'ticked'].includes(what)) {
+    // One pick, Yes to all, or the ticked picks (the rest go to the bot as "not this one"): question-card.js.
+    const labels = qcardLabels(c.q, what, i, decideTicked(DEC, c));
+    return {writes: qcardWrites(c.it, c.q, labels, note), label: qcardSaid(c.it, c.q, labels)};
   }
   if (what === 'clarify') {
     const who = c.it.ask?.from_actor ? actorLabel(c.it.ask.from_actor) : to;
@@ -424,6 +403,7 @@ function decideAct(st, what, i, shown = st.shown) {
     return;
   }
   if (what === 'comment' && !note) { box?.focus(); return; }
+  if (what === 'ticked' && !decideTicked(st, c).size) return;
   const write = decideWrite(c, what, i, note);
   void decideCommit(st);                       // the previous action goes now
   st.queue.shift();
@@ -567,7 +547,7 @@ function decideClick(st, ev) {
 }
 function decideKey(st, ev) {
   if (DEC !== st || ev.repeat || ev.metaKey || ev.ctrlKey || ev.altKey || document.querySelector('dialog[open]')) return;
-  if (ev.target.matches?.('textarea, input, select, [contenteditable]')) {
+  if (ev.target.matches?.('textarea, input:not([type=checkbox]), select, [contenteditable]')) {   // a ticked pick keeps the keys
     if (ev.key === 'Escape') { ev.preventDefault(); ev.target.blur(); }
     return;
   }
@@ -575,7 +555,15 @@ function decideKey(st, ev) {
   if (!c) return;
   let what = null, i;
   if (k === 's') what = 'skip';
-  else if (k === 'r' && c.type !== 'approve' && c.it.recommend?.ask) what = 'recommend';
+  else if (c.type === 'pick' && c.q.multi) {
+    // Several picks: a number ticks or unticks one; A says yes to all, T sends the ticked ones.
+    if (/^[1-6]$/.test(k) && Number(k) <= c.q.options.length) {
+      ev.preventDefault(); const n = Number(k) - 1; decideTick(st, n, !decideTicked(st, c).has(n)); return;
+    }
+    if (k === 'a') what = 'all';
+    else if (k === 't') what = 'ticked';
+  }
+  else if (k === 'r' && c.type === 'task' && c.it.recommend?.ask) what = 'recommend';
   else if (k === 'c') { ev.preventDefault(); $('.decide .dc-note textarea')?.focus(); return; }
   else if ((c.type === 'approve' || c.yn) && (k === 'y' || k === 'n')) what = k === 'y' ? 'yes' : 'no';
   else if (decideYesNo(c) && (k === 'y' || k === 'n')) { what = 'pick'; i = k === 'y' ? 0 : 1; }

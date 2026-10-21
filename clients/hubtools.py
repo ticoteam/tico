@@ -743,14 +743,24 @@ def task_ask(api, args):
 @tool("hub_task_question", "Put one decision to a person as a small task, in one call: a pick between 2 to 6 "
       "options (an option may carry an image or file) or, with no options, Yes / No. The task is yours and waits on "
       "them; asked from a run on one of your tasks it is filed under that task. Their answer wakes you and you mark it "
-      "done. One decision per task; write the question so it makes sense on its own. One open question per topic: "
+      "done. One decision per task; write the question so it makes sense on its own. Each option says what happens "
+      "if it is picked (`then`); several picks (`multi`) mark the ones you recommend; the question, `why` and the then "
+      "lines carry no ids, paths, tool names or error output (put those in `body`, shown under Details), or the ask is "
+      "refused with what to fix. One open question per topic: "
       "asked again while your earlier one on the same topic (same `topic`, else the same parent task) still waits on "
       "them, it updates that one (`folded: true`) instead of adding a second; give a different decision its own topic.",
       {"question": _s("The question, readable with no other context", maxLength=300),
        "on": _s("The person who decides: their id"),
+       "why": _s("One plain line on why it matters, shown under the question", maxLength=200),
+       "multi": {"type": "boolean", "description": "Several picks: the person ticks the ones they want (Yes to all, "
+                 "or Send ticked); each unticked one comes back to you as \"not this one\". Mark recommended ones"},
        "options": {"type": "array", "minItems": 2, "maxItems": 6, "description": "The choices; omit for Yes / No",
-                   "items": {"type": "object", "additionalProperties": False, "required": ["label"], "properties": {
+                   "items": {"type": "object", "additionalProperties": False, "required": ["label", "then"], "properties": {
                        "label": _s("A short label", maxLength=60),
+                       "then": _s("What happens if it is picked, in a few plain words (\"engineering starts "
+                                  "building\"): required", maxLength=120),
+                       "recommended": {"type": "boolean", "description": "You recommend it: pre-ticked among several "
+                                       "picks (multi needs at least one)"},
                        "description": _s("One line more about it", maxLength=200),
                        "path": _s("A local image or file shown with this option (on the computer that runs you)")}}},
        "title": _s("Task title; defaults to the question"),
@@ -773,9 +783,13 @@ def task_ask(api, args):
       required=("question", "on"), writes=True)
 def task_question(api, args):
     options = [dict(o) for o in args.get("options") or []]
-    for item in args.get("option") or []:            # the CLI's --option LABEL[=FILE], repeatable
-        label, _, path = str(item).partition("=")
-        options.append({"label": label.strip(), **({"path": path.strip()} if path.strip() else {})})
+    recommend = {str(x).strip() for x in args.get("recommend") or []}
+    for item in args.get("option") or []:            # the CLI's --option "LABEL[=FILE] -> WHAT HAPPENS", repeatable
+        head, _, then = str(item).partition("->")
+        label, _, path = head.partition("=")
+        options.append({"label": label.strip(), **({"then": then.strip()} if then.strip() else {}),
+                        **({"recommended": True} if label.strip() in recommend else {}),
+                        **({"path": path.strip()} if path.strip() else {})})
     if options and not 2 <= len(options) <= 6:
         raise ValueError("A question has 2 to 6 options, or none for Yes / No")
     if any(o.get("path") for o in options) and not hasattr(api, "post_multipart"):
@@ -787,7 +801,7 @@ def task_question(api, args):
             local, _ = BF.local_file(BF.checkout_root(), path)
             option["file"] = {"name": Path(path).name, "content_base64": base64.b64encode(local.read_bytes()).decode()}
     body = {"question": args["question"], "on": args["on"], "options": options}
-    for field in ("title", "body", "parent", "private", "topic"):
+    for field in ("title", "body", "parent", "private", "topic", "why", "multi"):
         if args.get(field) is not None:
             body[field] = args[field]
     default = args.get("if_no_answer")

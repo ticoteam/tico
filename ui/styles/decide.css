@@ -128,3 +128,32 @@
   .dc-toast{bottom:calc(144px + env(safe-area-inset-bottom))}
 }
 @media (prefers-reduced-motion:reduce){.dc-card{transition:none}}
+
+/* the question card (ui/app/question-card.js), the same in Decide and the task page's Needs you box: several picks
+   are checkboxes, every pick and button has its "what happens" line, the fallback is a small line at the foot */
+.qc-why{color:var(--ink)}
+.qc-picks{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+.qc-pick{display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border:1px solid var(--line);border-radius:12px;background:var(--bg);cursor:pointer}
+.qc-pick:has(input:checked){border-color:var(--accent)}
+.qc-pick input{flex:none;margin:3px 0 0;width:18px;height:18px;accent-color:var(--accent)}
+.qc-pl{display:flex;flex-direction:column;gap:2px;min-width:0}
+.qc-l{font-weight:600;font-size:var(--t-md);overflow-wrap:anywhere}
+.qc-l b{color:var(--muted);font-weight:600}
+.qc-rec{color:var(--accent);font-weight:500;font-size:var(--t-sm)}
+.qc-then{display:block;color:var(--muted);font-size:var(--t-sm);font-weight:400;overflow-wrap:anywhere}
+.dc-tile .qc-then{padding:0 14px 12px 34px;margin-top:-6px}
+.dc-opt .qc-then{padding:0 10px 8px}
+.dc-actions .qc-btn,.qc-actions .qc-btn{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;height:auto;min-height:52px;padding:6px 10px;white-space:normal;text-align:center}
+.qc-btn .qc-then{color:inherit;opacity:.8;font-size:var(--t-xs);line-height:1.25}
+.qc-fallback{margin:0;color:var(--muted);font-size:var(--t-xs);font-weight:400}
+.qcard{display:flex;flex-direction:column;gap:10px}
+.qcard .dc-q{font-size:var(--t-lg)}
+.qc-head{font-size:var(--t-sm)}
+.qc-sub{color:var(--muted)}
+.qc-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.qc-actions:empty{display:none}
+.qc-actions .qc-btn{border:1px solid var(--line);border-radius:12px;background:var(--surface2);color:var(--ink);font:600 var(--t-md) var(--sans);cursor:pointer}
+.qc-actions .qc-btn.primary{background:var(--accent);border-color:transparent;color:var(--accent-ink)}
+.qc-actions .qc-btn:disabled{opacity:.5;cursor:default}
+.qc-note{width:100%;box-sizing:border-box;resize:vertical;font:inherit}
+.qc-foot{display:flex;flex-direction:column;gap:8px}

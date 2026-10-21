@@ -532,6 +532,8 @@ def install_media(app, store, auth, mutate, send_message, task_create):
                 raise Problem("validation", "Option files are at least one byte and at most 10 MB together", 422)
             decoded.append((data, option.file.name, guessed_type(option.file.name) or "application/octet-stream"))
         question = body.question.strip()
+        asked = {"question": question, "why": body.why, "multi": body.multi,
+                 "options": [o.model_dump(include={"label", "then", "recommended"}) for o in body.options]}
         if body.topic is not None and not H.question_topic(body.topic):
             # A key given but empty once compared would silently mean "no topic" and join the task's unkeyed question.
             raise Problem("validation", "A question's topic needs at least one letter or digit", 422)
@@ -588,7 +590,9 @@ def install_media(app, store, auth, mutate, send_message, task_create):
                 private = bool(body.private or privacy.private_execution(c, who) or H.private_tasks_default(c, who.actor)
                                or parent and H.task_private(c, parent))
                 readable_by(c, person, private, parent)
-        stored = [blobs.put(item[0], item[2]) if item else None for item in decoded]
+        # A question the asking rules refuse stores no bytes: the write below refuses it first.
+        plain = not H.is_bot(who.actor) or not H.question_refusal(body.on, [asked])
+        stored = [blobs.put(item[0], item[2]) if item and plain else None for item in decoded]
 
         def work(c):
             person, parent = checked(c)
@@ -614,9 +618,13 @@ def install_media(app, store, auth, mutate, send_message, task_create):
                 auth.task_row(c, auth.identity_for_actor(c, person), H.task(c, tid))
             except Problem as exc:
                 raise unreadable(person) from exc
+            # The asking rules (hubdb.lint_question) on the question as the bot wrote it: no options is a Yes / No.
+            H.require_plain_question(c, who.actor, person, [asked])
             choices = []
             for option, item, digest in zip(options, decoded, stored):
-                choice = {"label": option.label, **({"description": option.description} if option.description else {})}
+                choice = {"label": option.label, **({"description": option.description} if option.description else {}),
+                          **({"then": option.then} if option.then else {}),
+                          **({"recommended": True} if option.recommended else {})}
                 if item:
                     data, name, kind = item
                     blob = register(c, who, digest, len(data), name, kind)
@@ -628,8 +636,8 @@ def install_media(app, store, auth, mutate, send_message, task_create):
                 choices.append(choice)
             from .task_review import check_ask
             ask = check_ask(c, tid, M.ReviewAsk(questions=[M.ReviewQuestion(
-                id="decision", header="", question=question, options=choices)], who=person,
-                if_no_answer=body.if_no_answer), auth, who)
+                id="decision", header="", question=question, why=body.why.strip(), options=choices,
+                multi=body.multi)], who=person, if_no_answer=body.if_no_answer), auth, who, lint=False)
             if topic:
                 ask["topic"] = topic
             if found:
