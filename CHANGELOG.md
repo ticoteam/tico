@@ -16,6 +16,10 @@ All notable changes to Tico are recorded here. The format follows
 - **Relation writes read back their direction**: `hub task relate`, `hub_task_relate`, task create with relations and
   `hub task wait` answer with what was stored, from both ends ("#237 waits for #233" / "#233 blocks #237"), so a
   reversed link is visible in the reply.
+- **Bots read the runs of the bots that report to them.** A bot above another in `reports_to` (at any depth) now
+  sees that bot's chat-room runs too, such as the wake-ups the hub posts there, in `hub_run_list` and their steps, so
+  a manager like a Product Manager can score its monitors' cost per catch. A human's own chat with a report stays
+  theirs, private tasks stay private, and peers and reports never read a manager's chat-room runs.
 - **How bots get their models**, at the top of Settings > AI providers and the first setup step: **Your Claude and
   ChatGPT subscriptions, plus Tico Gateway** (recommended, and what Tico's installer sets with
   `TICO_MODELS_PRESET=subscriptions-gateway`), subscriptions only, Tico Gateway only, or your company's plans or API
@@ -28,6 +32,10 @@ All notable changes to Tico are recorded here. The format follows
   plainly when a used-up login has bots on the Gateway. Gateway usage records keep which gateway key and install
   paid, never the key. The other three choices, and a team that never picks one, keep working
   as before ([Tico AI Gateway](docs/ai-gateway.md#choose-how-bots-get-their-models)).
+
+### Fixed
+- A goal's automatic colour follows its worst KPI: red takes priority over yellow and green, and yellow over green.
+  The note explains that KPI; a colour set by a person stays in place until handed back to the Goal Manager.
 
 ## [0.3.68] - 2026-10-20
 

@@ -354,14 +354,16 @@ def annotate(c, auth, who, messages):
 def install(app, store, auth):
     @app.get("/api/v2/turns/{aid}/steps")
     def turn_steps(request: Request, aid: str):
-        """A turn's work, one line per step. Readable by whoever can read the room it answered."""
+        """A turn's work, one line per step. Readable by whoever can read the room it answered, and by the bots
+        above its bot on the org chart (`Auth.run_conversation`)."""
         who = request.state.identity
         with store.read() as c:
-            row = c.execute("SELECT a.*,m.conversation_id FROM attempts a JOIN jobs j ON j.id=a.job_id "
+            row = c.execute("SELECT a.*,j.message_id FROM attempts a JOIN jobs j ON j.id=a.job_id "
                             "JOIN messages m ON m.id=j.message_id WHERE a.id=?", (aid,)).fetchone()
-            if not row:
+            message = row and H.message(c, row["message_id"])
+            if not message:
                 raise Problem("not_found", "Turn not found", 404)
-            auth.conversation(c, who, row["conversation_id"])
+            auth.run_conversation(c, who, row["bot"], message)
             privacy.require_attempt(c, who, aid)
             auth.require_read(c, who, row["bot"])
             events = [(r["kind"], json.loads(r["payload_json"]), r["created"]) for r in c.execute(

@@ -3194,7 +3194,8 @@ def status_history(api, args):
     return api.get(f"bots/{args['bot']}/history", since=args.get("since"))
 
 
-@tool("hub_run_list", "A bot's recent runs and failed or expired attempts, with attempt ids and reasons.",
+@tool("hub_run_list", "A bot's recent runs and failed or expired attempts, with attempt ids, reasons, tokens and "
+      "estimated cost (`est_cost_usd`). Yours, and those of the bots that report to you.",
       {"bot": _s("Bot slug"), "since": _s("Window like `24h` or an ISO timestamp")}, required=("bot",))
 def turns(api, args):
     return api.get(f"bots/{args['bot']}/turns", since=args.get("since"))

@@ -4336,7 +4336,7 @@ def create_app(settings=None):
                 if not msg:
                     continue
                 try:
-                    auth.conversation(c, who, msg["conversation_id"])
+                    auth.run_conversation(c, who, bot, msg)
                     privacy.require_message(c, who, msg)
                     privacy.require_attempt(c, who, turn["id"])
                 except Problem:
