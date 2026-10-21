@@ -17,6 +17,9 @@ All notable changes to Tico are recorded here. The format follows
   each one at its own rate.
 
 ### Fixed
+- **A bot's message to a bot says when it was held.** A plain message or task comment from one bot to another waits
+  for that bot's next run; the send now answers `woke: false` with a `held` reason, and `hub` prints it: held for
+  that bot's next run, add `--needs-action` to wake it now. Before, a held escalation read as delivered.
 - **Gateway turns retry when their rate window resets.** The computer carries the Gateway's requested wait back to
   the server, so a busy minute does not hold starter bots for an hour or claim their address sent refused keys.
 

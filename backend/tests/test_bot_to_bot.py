@@ -235,3 +235,71 @@ def test_needs_action_wakes_the_owner_of_a_snoozed_task_where_a_plain_comment_do
     with api.app.state.store.transaction() as c:
         direct = H.task_comment(c, "bot:ops", t["id"], "Still blocked.", wake=False, extra_refs={"needs_action": True})
         assert not direct["refs"].get("quiet")
+
+
+def test_a_held_message_or_comment_tells_its_sender_how_to_wake_the_bot_now(api):
+    # Dev 328: on Oct 21 Support's escalations to DevOps were held (no needs_action) and read as delivered.
+    r = setup(api)
+    token = ops_token(api, r)
+    with api.app.state.store.transaction() as c:
+        t = H.task_create(c, "bot:ops", "Open the window", "x", "bot:cpo")
+        c.execute("DELETE FROM jobs WHERE bot='cpo'")
+    dm = post(api, "messages", {"to": "cpo", "text": "Deadline 14:10Z"}, token=token)
+    comment = post(api, f"tasks/{t['id']}/comments", {"text": "Deadline 14:10Z"}, token=token)
+    for sent in (dm, comment):
+        assert sent["woke"] is False and jobs(api, "cpo") == 0
+        assert "held for cpo's next run" in sent["held"] and "--needs-action" in sent["held"]
+    flagged = post(api, "messages", {"to": "cpo", "text": "Deadline 14:10Z", "needs_action": True}, token=token)
+    woke = post(api, f"tasks/{t['id']}/comments", {"text": "Deadline 14:10Z", "needs_action": True}, token=token)
+    assert "held" not in flagged and "held" not in woke and woke["woke"] is True
+    assert "held" not in post(api, "messages", {"to": "cpo", "text": "Morning"})     # a person's always wakes
+
+
+def test_the_cli_prints_why_a_message_was_held(monkeypatch, capsys):
+    from types import SimpleNamespace
+    from clients import remotecli
+    held = "held for cpo's next run; nothing runs it now. Add --needs-action ..."
+    monkeypatch.setattr(remotecli, "run", lambda *_: {"id": "m1", "woke": False, "held": held})
+    assert remotecli.main(SimpleNamespace(cmd="message", fn="message send")) == 0
+    assert capsys.readouterr().err.strip() == "hub: " + held
+
+
+# Guards, not the fails-first test (Dev 328 C): they pass on main. Escalations that ask for action reach a bot whose
+# task waits on a blocked_by relation: each starts a run that bot can claim.
+def waiting_on_a_hold(api):
+    with api.app.state.store.transaction() as c:
+        hold = H.task_create(c, "bot:ops", "Hold: no merges until released", "x", "bot:ops")
+        t = H.task_create(c, "bot:ops", "Open the window", "x", "bot:cpo")
+    post(api, "tasks/" + t["id"] + "/relations", {"task": hold["id"], "kind": "blocked_by"})
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET status='waiting' WHERE id=?", (t["id"],))
+        c.execute("DELETE FROM jobs WHERE bot='cpo'")
+    return t
+
+
+def test_guard_needs_action_comment_wakes_a_bot_waiting_on_a_blocked_by(api):
+    r = setup(api)
+    token = ops_token(api, r)
+    t = waiting_on_a_hold(api)
+    out = post(api, f"tasks/{t['id']}/comments", {"text": "Deadline 14:10Z", "needs_action": True}, token=token)
+    assert out["woke"] is True and jobs(api, "cpo") == 1
+    attempt = claim(api, r, "cpo")
+    assert attempt and attempt["task"]["id"] == t["id"]
+
+
+def test_guard_needs_action_message_wakes_a_bot_waiting_on_a_blocked_by(api):
+    r = setup(api)
+    token = ops_token(api, r)
+    t = waiting_on_a_hold(api)
+    post(api, "messages", {"to": "cpo", "text": "Deadline 14:10Z", "needs_action": True, "refs": {"task": t["id"]}},
+         token=token)
+    assert jobs(api, "cpo") == 1 and claim(api, r, "cpo")
+
+
+def test_guard_a_tracked_ask_wakes_a_bot_waiting_on_a_blocked_by(api):
+    r = setup(api)
+    token = ops_token(api, r)
+    t = waiting_on_a_hold(api)
+    post(api, "messages", {"to": "cpo", "text": "Is the window open?", "kind": "ask", "wait_s": 30,
+                           "refs": {"task": t["id"]}}, token=token)
+    assert jobs(api, "cpo") == 1 and claim(api, r, "cpo")

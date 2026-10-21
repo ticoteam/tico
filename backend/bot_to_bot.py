@@ -47,6 +47,18 @@ def can_wait(conn, actor, target, kind, refs, body, in_reply_to=None):
         return False
 
 
+def held_reason(msg):
+    """What the sender reads when its message was held for the recipient's next run (Dev 328), else None. On
+    Oct 21 Support's escalations to DevOps were held like this and read as delivered: say it plainly."""
+    refs = msg.get("refs") if isinstance(msg.get("refs"), dict) else {}
+    if refs.get(MARK) != RULE:
+        return None
+    from . import hubdb as H
+    bot = H.actor_id(msg.get("to_actor") or "")
+    return (f"held for {bot}'s next run; nothing runs it now. Add --needs-action (needs_action: true) to wake "
+            f"{bot} now, or ask with `hub question ask`.")
+
+
 def hold(conn, msg, task_row=None):
     """The quiet note that takes a waiting message to the recipient's next run, whatever starts it."""
     from . import hubdb as H
