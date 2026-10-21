@@ -28,7 +28,8 @@ computer" section near the top of `memory/learnings.md`: each Claude memory with
 `MEMORY.md` says beyond its links to them, and Gemini's saved memory. Each entry names its source, so a retry never
 copies twice; if a source can't be read, nothing is copied. A flat log after it gets a `## Log` heading. The turn's
 memory commit keeps the copy, and the move is finished once the repository's pushed history has it; after that an
-edit or removal there stands. The old files are left in place, unread (`runner-rs/src/harness_memory.rs`).
+edit or removal there stands. The runner reads and writes these files as the bot, never with its own rights, and skips a memory file
+that is a link. The old files are left in place, unread (`runner-rs/src/harness_memory.rs`).
 
 ## Where it comes from
 

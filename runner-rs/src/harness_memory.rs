@@ -9,6 +9,10 @@
 //! the repository's committed history, the upstream's when there is one. Until then a claim names the checkout that
 //! copied, so another lane does not copy the same entries again; a claim older than CLAIM_SECS is taken over. The old
 //! files are left as they are.
+//!
+//! The checkout, Claude's folder under the bot's HOME and the Gemini home's `.gemini` are the bot's to change, so the
+//! runner never opens a file there itself: it reads, lists and writes them as the bot (crate::isolation), and skips a
+//! memory file that is a link. A link the bot planted reaches only what the bot could, and what is written is the bot's.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
@@ -19,6 +23,57 @@ const CLAIM_SECS: u64 = 6 * 3600;
 pub struct Entry {
     pub tag: String,
     pub text: String,
+}
+
+fn as_bot(script: &str, args: &[&Path], input: Option<&str>) -> std::io::Result<std::process::Output> {
+    use std::io::Write;
+    let mut cmd = crate::isolation::std_command("/bin/sh");
+    cmd.arg("-c").arg(script).arg("sh").args(args).env_clear().env("PATH", "/usr/bin:/bin")
+        .stdin(if input.is_some() { std::process::Stdio::piped() } else { std::process::Stdio::null() })
+        .stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped());
+    let mut child = cmd.spawn()?;
+    if let Some(text) = input {
+        child.stdin.take().ok_or_else(|| std::io::Error::other("no stdin"))?.write_all(text.as_bytes())?;
+    }
+    child.wait_with_output()
+}
+
+fn failed(what: &str, path: &Path, out: &std::process::Output) -> std::io::Error {
+    std::io::Error::other(format!("{what} {}: {}", path.display(), String::from_utf8_lossy(&out.stderr).trim()))
+}
+
+/// A file's text, read as the bot: None when it is missing or is a link (a memory is never a link).
+pub fn bot_read(path: &Path) -> std::io::Result<Option<String>> {
+    let out = as_bot(r#"if [ -L "$1" ] || [ ! -e "$1" ]; then exit 3; fi; exec cat -- "$1""#, &[path], None)?;
+    match out.status.code() {
+        Some(0) => String::from_utf8(out.stdout).map(Some).map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, format!("{} is not text", path.display()))),
+        Some(3) => Ok(None),
+        _ => Err(failed("could not read", path, &out)),
+    }
+}
+
+/// The `.md` files in a folder that are plain files, listed as the bot; None when there is no such folder.
+fn bot_list(dir: &Path) -> std::io::Result<Option<Vec<String>>> {
+    let out = as_bot(r#"[ -d "$1" ] || exit 3; cd -- "$1" || exit 1; for f in *.md; do if [ -f "$f" ] && [ ! -L "$f" ]; then printf '%s\n' "$f"; fi; done"#, &[dir], None)?;
+    match out.status.code() {
+        Some(0) => Ok(Some(String::from_utf8_lossy(&out.stdout).lines().map(String::from).collect())),
+        Some(3) => Ok(None),
+        _ => Err(failed("could not list", dir, &out)),
+    }
+}
+
+/// Replaces a file with `text` as the bot: a new file beside it, renamed over it, so a link there is replaced and
+/// never written through, and a reader sees the old text or the new, never part of it.
+pub fn bot_write(path: &Path, text: &str) -> std::io::Result<()> {
+    let out = as_bot(r#"set -e; d=$(dirname -- "$1"); mkdir -p -- "$d"; if [ -d "$1" ]; then echo "is a folder" >&2; exit 4; fi
+t=$(mktemp "$d/.tico-memory.XXXXXX"); trap 'rm -f -- "$t"' EXIT; cat > "$t"; mv -f -- "$t" "$1""#, &[path], Some(text))?;
+    if out.status.success() { Ok(()) } else { Err(failed("could not write", path, &out)) }
+}
+
+/// Removes a file (a link itself, not what it names) as the bot.
+pub fn bot_remove(path: &Path) -> std::io::Result<()> {
+    let out = as_bot(r#"rm -f -- "$1""#, &[path], None)?;
+    if out.status.success() { Ok(()) } else { Err(failed("could not remove", path, &out)) }
 }
 
 /// Claude's auto-memory folder for a checkout, under `home`: the path with each character that is not a letter or a
@@ -39,22 +94,13 @@ fn entry(tag: String, title: &str, body: &str, day: &str) -> Entry {
 /// The memories in Claude's folder: one entry per memory file, then what MEMORY.md says beyond its links to those
 /// files. An unreadable file is an error: nothing is copied from a set that cannot be read whole.
 pub fn claude_entries(dir: &Path, day: &str) -> std::io::Result<Vec<Entry>> {
-    if !dir.is_dir() {
-        return Ok(vec![]);
-    }
-    let mut files: Vec<PathBuf> = vec![];
-    for e in std::fs::read_dir(dir)? {
-        let p = e?.path();
-        if p.is_file() && p.extension().is_some_and(|e| e == "md") && p.file_name().is_some_and(|n| n != "MEMORY.md") {
-            files.push(p);
-        }
-    }
+    let Some(mut files) = bot_list(dir)? else { return Ok(vec![]) };
+    files.retain(|f| f != "MEMORY.md");
     files.sort();
     let mut out = vec![];
     let mut names = vec![];
-    for p in &files {
-        let text = std::fs::read_to_string(p)?;
-        let file = p.file_name().unwrap_or_default().to_string_lossy().to_string();
+    for file in files {
+        let Some(text) = bot_read(&dir.join(&file))? else { continue };
         let (mut name, mut description, mut body) = (String::new(), String::new(), text.trim().to_string());
         if let Some(rest) = text.strip_prefix("---\n") {
             if let Some(end) = rest.find("\n---") {
@@ -70,10 +116,8 @@ pub fn claude_entries(dir: &Path, day: &str) -> std::io::Result<Vec<Entry>> {
         out.push(entry(format!("claude-memory/{file}"), &title, &body, day));
         names.push(file);
     }
-    let index = dir.join("MEMORY.md");
-    if index.exists() {
+    if let Some(text) = bot_read(&dir.join("MEMORY.md"))? {
         // Only a line that is just a link to a copied file (and its one-line hook) is left out: it is that entry.
-        let text = std::fs::read_to_string(&index)?;
         let rest: Vec<&str> = text.lines().filter(|l| {
             let t = l.trim_start();
             !(t.starts_with("- [") && names.iter().any(|f| t.contains(&format!("]({f})"))))
@@ -91,11 +135,8 @@ pub fn claude_entries(dir: &Path, day: &str) -> std::io::Result<Vec<Entry>> {
 pub fn gemini_entries(home: &Path, day: &str) -> std::io::Result<Vec<Entry>> {
     let mut parts = vec![];
     for name in [crate::hosts::gemini::MEMORY_UNREAD, "GEMINI.md"] {
-        match std::fs::read_to_string(home.join(".gemini").join(name)) {
-            Ok(t) if !t.trim().is_empty() => parts.push(t.trim().to_string()),
-            Ok(_) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(e),
+        if let Some(t) = bot_read(&home.join(".gemini").join(name))?.filter(|t| !t.trim().is_empty()) {
+            parts.push(t.trim().to_string());
         }
     }
     Ok(if parts.is_empty() { vec![] } else { vec![entry("gemini-memory/GEMINI.md".into(), "**Gemini saved memory**", &parts.join("\n\n"), day)] })
@@ -141,17 +182,17 @@ which no turn reads any more. Edit or remove them like any other line here.\n{bo
 /// memory/learnings.md as the repository has committed it: at the upstream when the checkout tracks one, else at HEAD.
 fn committed(checkout: &Path) -> Option<String> {
     for rev in ["@{upstream}", "HEAD"] {
-        let out = std::process::Command::new("git")
+        let out = crate::isolation::std_command("git")
             .args(["-c", "safe.directory=*", "show", &format!("{rev}:memory/learnings.md")])
-            .current_dir(checkout)
+            .current_dir(checkout).env_clear().env("PATH", "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin")
             .stderr(std::process::Stdio::null())
             .output()
             .ok()?;
         if out.status.success() {
             return Some(String::from_utf8_lossy(&out.stdout).to_string());
         }
-        let known = std::process::Command::new("git").args(["-c", "safe.directory=*", "rev-parse", "--verify", "-q", rev])
-            .current_dir(checkout).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status().ok()?;
+        let known = crate::isolation::std_command("git").args(["-c", "safe.directory=*", "rev-parse", "--verify", "-q", rev])
+            .current_dir(checkout).env_clear().env("PATH", "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin").stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status().ok()?;
         if known.success() {
             return Some(String::new()); // that revision has no learnings.md yet
         }
@@ -201,11 +242,10 @@ pub fn before_turn(entries: std::io::Result<Vec<Entry>>, checkout: &Path, state:
         }
     }
     let target = checkout.join("memory").join("learnings.md");
-    let current = match std::fs::read_to_string(&target) {
-        Ok(t) => t,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
-        Err(e) => return Err(e),
-    };
+    if std::fs::symlink_metadata(&target).is_ok_and(|m| m.file_type().is_symlink()) {
+        return Err(std::io::Error::other(format!("{} is a link; memory is copied only into a file", target.display())));
+    }
+    let current = bot_read(&target)?.unwrap_or_default();
     let missing: Vec<&Entry> = entries.iter().filter(|e| !has(&current, &e.tag)).collect();
     if missing.is_empty() {
         return Ok(Moved::Copied(0));
@@ -221,7 +261,7 @@ pub fn before_turn(entries: std::io::Result<Vec<Entry>>, checkout: &Path, state:
     }
     let secs = now.duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs();
     write_atomic(&state.join("claim"), &format!("{secs} {here}\n"))?;
-    write_atomic(&target, &insert(&current, &missing, day))?;
+    bot_write(&target, &insert(&current, &missing, day))?;
     Ok(Moved::Copied(missing.len()))
 }
 
@@ -295,6 +335,32 @@ mod tests {
         let state3 = root.join("state3");
         assert_eq!(before_turn(claude_entries(&root.join("none"), "d"), &fresh, &state3, "d", now).unwrap(), Moved::Done);
         assert!(!fresh.join("memory").exists() && state3.join("done").exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn links_in_the_bots_folders_are_never_followed() {
+        let root = temp();
+        let (dir, checkout, state, outside) = (root.join("mem"), root.join("work"), root.join("state"), root.join("supervisor"));
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("runner.json"), "SECRET-TOKEN\n").unwrap();
+        seed(&dir);
+        // A memory file that is a link to a file the bot should not read is not a memory.
+        std::os::unix::fs::symlink(outside.join("runner.json"), dir.join("planted.md")).unwrap();
+        let entries = claude_entries(&dir, "d").unwrap();
+        assert!(entries.iter().all(|e| !e.text.contains("SECRET-TOKEN") && !e.tag.contains("planted")));
+        // A learnings.md that is a link is refused, and what it names is untouched.
+        std::fs::create_dir_all(checkout.join("memory")).unwrap();
+        std::os::unix::fs::symlink(outside.join("runner.json"), checkout.join("memory/learnings.md")).unwrap();
+        assert!(before_turn(Ok(entries), &checkout, &state, "d", SystemTime::now()).is_err());
+        assert_eq!(std::fs::read_to_string(outside.join("runner.json")).unwrap(), "SECRET-TOKEN\n");
+        assert!(!state.join("claim").exists());
+        // A write replaces a link that appears at the leaf; it never writes through it.
+        let leaf = root.join("leaf.md");
+        std::os::unix::fs::symlink(outside.join("runner.json"), &leaf).unwrap();
+        bot_write(&leaf, "mine\n").unwrap();
+        assert_eq!(std::fs::read_to_string(outside.join("runner.json")).unwrap(), "SECRET-TOKEN\n");
+        assert!(!std::fs::symlink_metadata(&leaf).unwrap().file_type().is_symlink());
         std::fs::remove_dir_all(root).unwrap();
     }
 

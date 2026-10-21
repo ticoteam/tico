@@ -76,21 +76,21 @@ pub fn settings_file(model: &str, effort: Option<&str>, servers: &[Value]) -> Va
 /// Before each turn it moves to MEMORY_UNREAD beside it, added to what is there, which the CLI never loads and
 /// crate::harness_memory copies into the bot's repository.
 pub fn set_aside_memory(home: &Path) -> std::io::Result<()> {
+    // As the bot (crate::harness_memory): the CLI writes `.gemini` as the bot, so a link there must reach nothing more.
+    use crate::harness_memory::{bot_read, bot_remove, bot_write};
     let dir = home.join(".gemini");
     let saved = dir.join("GEMINI.md");
-    let text = match std::fs::read_to_string(&saved) {
-        Ok(t) => t,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(e) => return Err(e),
-    };
-    if !text.trim().is_empty() {
+    if let Some(text) = bot_read(&saved)?.filter(|t| !t.trim().is_empty()) {
         let unread = dir.join(MEMORY_UNREAD);
-        let before = std::fs::read_to_string(&unread).unwrap_or_default();
+        let before = bot_read(&unread)?.unwrap_or_default();
         let joined = if before.trim().is_empty() { text } else { format!("{}\n\n{text}", before.trim_end()) };
-        let tmp = dir.join(format!(".{MEMORY_UNREAD}.{}", uuid::Uuid::new_v4().simple()));
-        std::fs::write(&tmp, joined).and_then(|_| std::fs::rename(&tmp, &unread)).inspect_err(|_| { let _ = std::fs::remove_file(&tmp); })?;
+        bot_write(&unread, &joined)?;
     }
-    std::fs::remove_file(saved)
+    // A link is removed, never followed: what it names is not the bot's memory.
+    if std::fs::symlink_metadata(&saved).is_ok() {
+        bot_remove(&saved)?;
+    }
+    Ok(())
 }
 
 /// True when a bot's primary or fallback harness is the Gemini CLI, which needs GEMINI_API_KEY.
