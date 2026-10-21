@@ -185,24 +185,19 @@ a.bot-goal-main:hover{text-decoration:none}a.bot-goal-main:hover .bot-goal-title
 .bot-more-top>:empty,.bot-more-top:not(:has(>:not(:empty):not([hidden]))){display:none!important}   /* nothing to show yet: no gap, no margin */
 @media (max-width:760px){
   #pane-more:not([hidden]){display:flex;flex-direction:column}
-  #pane-more>#bot-goals-card{order:1}
+  #pane-more>#bot-goals-card{order:6}
   #pane-more>.bot-more-top{order:2;display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:0 0 12px}
   #pane-more>#bot-quarantine-host{order:3}
-  #pane-more>#bot-setup-card{order:4}
+  #pane-more>#bot-setup-card{order:1}
   #pane-more>#bot-tools-card{order:5}
   #pane-more>#bot-access-card{order:6;margin-bottom:22px}
   #pane-more>#bot-routines{order:7}
-  #pane-more>#bot-updates-card{order:8;margin-bottom:22px}
-  #pane-more>#bot-status-card{order:9}
-  #pane-more>#bot-runs-card{order:10}
-  #pane-more>#sess-card{order:11}
   .bot-more-top>#bot-branches{flex:1 1 100%}
-  :is(#pane-more,#pane-docs) section.card{padding:12px 14px;margin-bottom:10px;border-radius:12px}
-  :is(#pane-more,#pane-docs) section.card>header{margin-bottom:6px;align-items:center}
-  :is(#pane-more,#pane-docs) section.card>header h2{font-size:var(--t-label);font-weight:600;text-transform:uppercase;letter-spacing:var(--track-caps);color:var(--muted)}
-  :is(#pane-more,#pane-docs) section.card>header :is(.ghost,.linkish){margin-left:auto;font-size:var(--t-base);padding:3px 8px}
+  :is(#pane-more,#pane-docs,#pane-history,#pane-settings) section.card{padding:12px 14px;margin-bottom:10px;border-radius:12px}
+  :is(#pane-more,#pane-docs,#pane-history,#pane-settings) section.card>header{margin-bottom:6px;align-items:center}
+  :is(#pane-more,#pane-docs,#pane-history,#pane-settings) section.card>header h2{font-size:var(--t-label);font-weight:600;text-transform:uppercase;letter-spacing:var(--track-caps);color:var(--muted)}
+  :is(#pane-more,#pane-docs,#pane-history,#pane-settings) section.card>header :is(.ghost,.linkish){margin-left:auto;font-size:var(--t-base);padding:3px 8px}
   #bot-goals-card .bot-goal-row{padding:6px 0}
-  #sess-turns{max-height:none}
   /* tables as one line a row, no column heads */
   :is(#bot-recent-runs,#bot-access-card) .scroll{overflow:visible}
   :is(#bot-recent-runs,#bot-access-card) :is(table,tbody){display:block;width:100%}
@@ -217,3 +212,37 @@ a.bot-goal-main:hover{text-decoration:none}a.bot-goal-main:hover .bot-goal-title
   #bot-access-card td:nth-child(5){display:none}
   #bot-access-card .acc-summary{font-size:var(--t-sm);margin-bottom:6px}
 }
+
+/* Configuration tabs remain visible at every width; their panes retain unsaved edits while switching. */
+.bot-detail-tabs{position:sticky;top:0;z-index:5;background:var(--bg);display:flex;gap:4px;overflow-x:auto;flex-wrap:nowrap;margin:0 0 16px;border-bottom:1px solid var(--line)}
+.bot-detail-tabs button{flex:none;white-space:nowrap;padding:10px 14px}
+#bot-details{min-width:0}
+.bot-editor.bot-editor-inline{width:100%;max-height:none;box-shadow:none;border-radius:0;overflow:visible}
+.bot-editor-inline .tmodal-head{position:static;padding:0 0 12px}
+.bot-editor-inline .bot-editor-body{padding:12px 0}
+.bot-editor-inline .bot-editor-foot{position:static;padding:12px 0 0}
+.bot-editor-inline .sb-rows{background:none}
+.bot-role summary{cursor:pointer;line-height:1.5}
+.bot-role[open] summary{font-size:0}
+.bot-role-less{display:none}
+.bot-role[open] .bot-role-more{display:none}
+.bot-role[open] .bot-role-less{display:inline;font-size:var(--t-sm)}
+.bot-role>div{white-space:pre-wrap;line-height:1.5;margin-top:4px}
+.bot-instructions-form{display:grid;gap:10px;margin-top:20px;padding-top:16px;border-top:1px solid var(--line)}
+.bot-instructions-form textarea{width:100%;min-height:140px;resize:vertical}
+.bot-instructions-form p{margin:0;font-size:var(--t-sm)}
+.screen-control{display:flex;flex-wrap:wrap;align-items:center;gap:10px;min-width:0}
+.screen-toggle{display:inline-flex;align-items:center;gap:8px;cursor:pointer}
+.screen-control>.settings-inline-select{width:auto;max-width:150px}
+.screen-control>.bot-screen-steps{flex:1 1 100%;min-width:0;font-size:var(--t-sm)}
+.bot-screen-steps details{margin-top:8px}
+@media(max-width:760px){
+  .bot-detail-tabs{gap:0;margin-bottom:12px}
+  .bot-detail-tabs button{flex:1;padding:9px 8px;font-size:var(--t-sm)}
+}
+
+.bot-settings-panel:is(.owner-picker,.access-editor){width:100%;max-width:none;max-height:none;padding:0;box-shadow:none;margin-top:18px;border:1px solid var(--line);border-radius:10px;background:var(--surface);color:var(--ink)}
+.bot-settings-panel .tmodal-head{position:static;padding:12px 14px;border-bottom:1px solid var(--line)}
+.bot-settings-panel :is(.owner-picker-body,.access-body){padding:14px}
+
+.bot-settings-panel .access-body{max-height:none;overflow:visible}

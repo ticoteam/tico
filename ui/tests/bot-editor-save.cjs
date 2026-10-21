@@ -81,6 +81,9 @@ const {unrouted} = require('./support/routes.cjs');
       // After a Save the page reloads settings; open on the bot as the server now has it.
       await page.waitForFunction(revision => S.emps.find(e => e.name === 'helper')?.revision === revision, helper.revision);
       await page.evaluate(() => settingsEditBot('helper'));
+      await page.locator('#pane-settings').waitFor();
+      await page.waitForFunction(() => !!document.querySelector('#bot-editor [data-bot-status]'));
+      await page.evaluate(() => settingsEditBot('helper', true));
       await row('fallback').locator('[data-choice-harness]').waitFor();
       calls = [];
     };
@@ -88,7 +91,7 @@ const {unrouted} = require('./support/routes.cjs');
       await row(kind).locator('[data-choice-harness]').selectOption(harness);
       if (id) await row(kind).locator('[data-choice-model]').selectOption(id);
     };
-    const closed = () => page.waitForFunction(() => !document.querySelector('#bot-editor').open).catch(async error => {
+    const closed = () => page.waitForFunction(() => document.querySelector('#bot-editor [data-bot-status]')?.textContent === 'Saved').catch(async error => {
       throw new Error(`the editor stayed open: ${await editor.locator('[data-bot-status]').innerText().catch(() => '')} (${JSON.stringify(calls)})`, {cause: error}); });
     const statusText = () => editor.locator('[data-bot-status]').innerText();
     const save = () => editor.locator('button[type=submit]').click();
@@ -122,12 +125,12 @@ const {unrouted} = require('./support/routes.cjs');
     await save();
     await editor.locator('[data-bot-status] .err').waitFor();
     assert.match(await statusText(), /Choose one of the supported models/, 'the refusal is shown in the editor');
-    assert.equal(await editor.evaluate(d => d.open), true, 'the editor stays open');
+    assert.equal(await editor.isVisible(), true, 'the editor stays open');
     assert.deepEqual(calls.map(c => c.what), ['fallback'], 'nothing else is saved');
     assert.equal(calls[0].body.fallback, null, 'None is sent as no fallback');
     assert.equal(await editor.locator('button[type=submit]').isEnabled(), true, 'Save can be pressed again');
     refuseFallback = false;
-    await page.evaluate(() => document.querySelector('#bot-editor').close());
+    await page.evaluate(() => settingsEditBot('helper', true));
 
     // The fallback saves but the definition is refused: the editor stays open, and Save again does not resend it.
     await open();
@@ -150,7 +153,7 @@ const {unrouted} = require('./support/routes.cjs');
     await editor.locator('[data-bot-status] .err').waitFor();
     assert.match(await statusText(), /Fallback change not applied: finish choosing it, or reset it/);
     assert.deepEqual(calls, [], 'nothing is saved');
-    await page.evaluate(() => document.querySelector('#bot-editor').close());
+    await page.evaluate(() => settingsEditBot('helper', true));
 
     // 2. A Model picked but not Applied: Save opens its transition dialog. Cancel saves nothing and says why.
     await open();
@@ -163,7 +166,7 @@ const {unrouted} = require('./support/routes.cjs');
     await transition.locator('[data-confirm-cancel]').last().click();
     await editor.locator('[data-bot-status] .err').waitFor();
     assert.match(await statusText(), /Model change not applied: press Apply next to Model, or reset it/);
-    assert.equal(await editor.evaluate(d => d.open), true, 'no definition-only close');
+    assert.equal(await editor.isVisible(), true, 'no definition-only close');
     assert.deepEqual(calls, [], 'Cancel saves nothing');
     assert.equal(await row('model').locator('[data-choice-model]').inputValue(), 'gpt-6-1-sol', 'the pick is still there');
     // Prepare change: the definition, then the model transition from the revision the definition made.
@@ -203,7 +206,7 @@ const {unrouted} = require('./support/routes.cjs');
     await row('fallback').locator('[data-choice-apply]').click();
     await page.waitForFunction(() => S.emps.find(e => e.name === 'helper')?.fallback?.model === 'gpt-6-luna');
     assert.deepEqual(calls, [{what: 'fallback', body: {fallback: {harness: 'codex', model: 'gpt-6-luna', effort: 'high'}, expected_revision: 13}}]);
-    assert.equal(await editor.evaluate(d => d.open), true);
+    assert.equal(await editor.isVisible(), true);
     calls = [];
     await save();
     await closed();
