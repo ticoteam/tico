@@ -15,6 +15,7 @@ import yaml
 from backend import company_file as C
 from backend.company_file import actions as A
 from backend.company_file import draft as D
+from backend.company_file import starter
 
 TODAY = dt.date(2026, 10, 17)
 CREATED = dt.datetime(2026, 10, 17, 9, 30, tzinfo=dt.timezone.utc)
@@ -214,6 +215,26 @@ def test_10_key_shaped_strings_never_reach_the_draft_or_the_file():
             assert C.scrub(role[field]) == (role[field], False), (role["slug"], field)
     assert C.scrub("The token is optional; the api key is set on your install.")[1] is False
 
+
+
+def test_10_numbered_ids_from_titles_survive_a_turn_the_file_and_the_import():
+    """A long id made from a numbered title is a name, not a key; real key shapes beside it still go."""
+    titles = ["Accounts Receivable Specialist 2", "Senior Customer Success Manager 12", "B2B Enterprise Account Executive 3",
+              "2nd Line Customer Support Specialist 4"]
+    templates = ["ar-followup", "customer-success", "account-manager", "customer-success"]
+    turn = C.Turn(started(), TODAY)
+    turn.apply("company_set", {"name": "Acme Collections"})
+    for title, template in zip(titles, templates):
+        turn.apply("bot_add", {"template": template, "title": title, "reason": "Our chart has " + title})
+    out = turn.finish()
+    ids = [b["id"] for b in out["bots"] if b["title"] in titles]
+    assert "accounts-receivable-specialist-2" in ids and len(ids) == 4 and turn.keys_removed is False
+    back = starter.load(C.to_yaml(out, CREATED))
+    assert [b["id"] for b in back["bots"] if b["title"] in titles] == ids
+    for key in ("3f9a2b7c-1d4e-4a5b-9c8d-7e6f5a4b3c2d", "k3j-9x2-q8p-m4z-w1r-t6y-b7n-c5v-h2g",
+                "team-k3j-9x2-q8p-m4z-w1r-t6y-b7n-c5v", "qwe-831-zxc-476-rty-920-uio-153-pas",
+                "x7Gk2pQ9vL4mN8rT1wY6zB3cD5fH0jKs"):
+        assert C.scrub("id " + key) == ("id [removed]", True), key
 
 # Every label the scrubber knows, each value length a pasted password can have, in each way a value is written.
 LABELS = ["password", "passwd", "passcode", "pwd", "PWD", "secret", "token", "api_key", "api key", "API-Key", "access_key",
