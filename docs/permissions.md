@@ -47,6 +47,11 @@ Whatever the audiences say, these callers can see, read and write to a bot:
 - an **admin**, and the bot's **owners** (its creator and any others added). This is the same rule that lets
   them change the bot's settings, so being able to edit who has access and having access always go together.
 
+A bot above another in the `reports_to` chain also reads that bot's runs (`hub_run_list`, with each run's tokens and
+estimated cost) and their steps: its task and routine runs, and the wake-ups the hub posts into its chat room. A run a
+human started by chatting with the bot stays with that chat, and private tasks stay with their parties. Peers and
+the bots below keep the usual conversation rule, so they never read a manager's chat-room runs.
+
 ## Roles, and what a member may do
 
 Every human on the team has one role:

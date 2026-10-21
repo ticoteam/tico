@@ -124,6 +124,7 @@ function onbRender(state) {
       `<li class="${i < state.step ? 'done' : i === state.step ? 'cur' : ''}"${i === state.step ? ' aria-current="step"' : ''}><span>${esc(ONB_SHORT[step])}</span></li>`).join('')}</ol>
       <p class="onb-count sr-only" id="onb-count">Step ${state.step + 1} of ${state.steps.length}</p>`}
     ${onbSampleHTML(state, done)}
+    ${onbCompanyFileHTML(state, done)}
     <section class="card${key === 'org' ? ' ob-host' : ''}" id="onb-step" data-onb-step="${key}">${onbStepHTML(state, key)}</section>`;
   onbWire(state, key);
 }
@@ -201,6 +202,60 @@ function onbSampleHTML(state, done) {
   return `<div class="onb-sample" id="onb-sample-box"><p><strong>Just trying Tico?</strong>
     <span class="muted">Start with a made-up company: five bots, each with a short first task that ends by asking you to approve it. Nothing is sent outside.</span></p>
     <button class="ghost" type="button" id="onb-sample">Start with a sample company</button></div>`;
+}
+const onbImportPending = fields => (fields || []).map(field => ({goals: 'goals', tool_connections: 'tool connections',
+  first_jobs: 'first jobs', model_choices: 'model choices', routines: 'routines'}[field] || field)).join(', ');
+function onbCompanyFileHTML(state, done) {
+  if (done) {
+    const imported = state.record.company_import;
+    return imported ? `<section class="card"><p>Your selected starter team was imported.</p>${imported.deferred?.length
+      ? `<p class="muted">Saved for later setup: ${esc(onbImportPending(imported.deferred))}.</p>` : ''}</section>` : '';
+  }
+  if (state.step !== 0 || state.record.completed) return '';
+  const preview = state.companyImport?.preview;
+  return `<section class="onb-sample" id="onb-company-file-box"><p><strong>Already chose your team?</strong>
+    Import the company YAML you downloaded from Tico setup.</p>
+    <label class="onb-field"><span class="k">Company YAML file</span><input type="file" id="onb-company-file" accept=".yaml,.yml"></label>
+    <p id="onb-company-file-status" role="status">${esc(state.companyImportError || '')}</p>
+    ${preview ? `<h3>${esc(preview.company_name)}</h3><ul>${preview.employees.map(bot =>
+      `<li>${esc(bot.title)}${bot.start === 'later' ? ' — starts paused' : ''}</li>`).join('')}</ul>
+      <p class="muted">Tico includes its required built-in roles once.</p>
+      ${preview.deferred.length ? `<p>These choices are saved for later setup: ${esc(onbImportPending(preview.deferred))}.</p>` : ''}
+      <button class="primary" type="button" id="onb-company-file-use">Use this team</button>` : ''}</section>`;
+}
+async function onbReadCompanyFile(state, file) {
+  if (!file || state.busy || state.completing) return;
+  const generation = state.companyImportGeneration = (state.companyImportGeneration || 0) + 1;
+  state.companyImport = null;
+  state.companyImportError = '';
+  try {
+    if (file.size > 524288) throw new Error('Choose a company YAML file smaller than 512 KB.');
+    const text = await file.text();
+    const preview = await post('/v2/setup/company/preview', {company_yaml: text});
+    if (ONB !== state || generation !== state.companyImportGeneration) return;
+    state.companyImport = {text, preview};
+  } catch (error) {
+    if (ONB !== state || generation !== state.companyImportGeneration) return;
+    state.companyImportError = error.message;
+  }
+  onbRender(state);
+}
+async function onbUseCompanyFile(state) {
+  if (state.busy || state.completing || !state.companyImport) return;
+  state.completing = true;
+  onbBusy(state, true, 'Creating your selected team…');
+  try {
+    const {text, preview} = state.companyImport;
+    const record = await post('/v2/setup/company/import', {company_yaml: text, fingerprint: preview.fingerprint});
+    if (ONB !== state) return;
+    onbAdopt(state, record);
+    onbApplyNames(state);
+    await onbCompleted(state, record);
+  } catch (error) {
+    state.completing = false;
+    if (ONB !== state) return;
+    onbBusy(state, false, onbSaveError(error));
+  }
 }
 // The UI never learns the environment slug the Mac was created with, so it stays literal here.
 // The label is the one the setup file was written with, so the command and the file agree.
@@ -339,6 +394,10 @@ function onbWire(state, key) {
   if (finish) finish.onclick = () => void onbFinish(state);
   const sample = $('#onb-sample');
   if (sample) sample.onclick = () => void onbSample(state);
+  const companyFile = $('#onb-company-file');
+  if (companyFile) companyFile.onchange = () => void onbReadCompanyFile(state, companyFile.files?.[0]);
+  const useCompanyFile = $('#onb-company-file-use');
+  if (useCompanyFile) useCompanyFile.onclick = () => void onbUseCompanyFile(state);
   const tasks = $('#onb-tasks');
   if (tasks) tasks.onclick = () => { location.hash = TASKS; };
   const connect = $('#onb-connect');
@@ -363,7 +422,7 @@ function onbCollect(state, key) {
 }
 function onbBusy(state, busy, message) {
   state.busy = busy;
-  for (const id of ['#onb-next', '#onb-back', '#onb-finish', '#onb-sample']) { const el = $(id); if (el) el.disabled = busy; }
+  for (const id of ['#onb-next', '#onb-back', '#onb-finish', '#onb-sample', '#onb-company-file', '#onb-company-file-use']) { const el = $(id); if (el) el.disabled = busy; }
   const status = $('#onb-status');
   if (status) status.innerHTML = message === undefined ? '' : message;
 }

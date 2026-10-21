@@ -117,7 +117,11 @@ def create_app(settings=None):
         company_storage.startup(store, app.state.vault, app.state.blobs)
         asyncio.get_running_loop().run_in_executor(None, auth.warm)   # Cloudflare's keys, before anyone signs in
         # TICO_SAMPLE_COMPANY=on: a new company starts as the sample company, once (backend/sample_company.py).
-        if settings.sample_company:
+        if settings.company_file_data:
+            from . import company_import
+            with store.transaction() as c:
+                company_import.load_on_start(onboarding, c)
+        elif settings.sample_company:
             try:
                 from . import sample_company
                 with store.transaction() as c:
@@ -1671,6 +1675,18 @@ def create_app(settings=None):
     def onboarding_complete(request: Request, body: M.Empty):
         who = request.state.identity
         return mutate(request, body, lambda c: onboarding.complete(c, who))
+
+    @app.post("/api/v2/onboarding/company/preview")
+    def onboarding_company_preview(request: Request, body: M.OnboardingCompanyFile):
+        from . import company_import
+        with store.read() as c:
+            return company_import.preview(onboarding, c, request.state.identity, body.company_yaml)
+
+    @app.post("/api/v2/onboarding/company/import")
+    def onboarding_company_import(request: Request, body: M.OnboardingCompanyImport):
+        from . import company_import
+        return mutate(request, body, lambda c: company_import.apply(
+            onboarding, c, request.state.identity, body.company_yaml, body.fingerprint))
 
     @app.post("/api/v2/onboarding/sample")
     def onboarding_sample(request: Request, body: M.Empty):
@@ -4272,7 +4288,7 @@ def create_app(settings=None):
                 if not msg:
                     continue
                 try:
-                    auth.conversation(c, who, msg["conversation_id"])
+                    auth.run_conversation(c, who, bot, msg)
                     privacy.require_message(c, who, msg)
                     privacy.require_attempt(c, who, turn["id"])
                 except Problem:

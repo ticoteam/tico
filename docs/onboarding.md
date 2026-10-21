@@ -22,6 +22,18 @@ first other page you open (for example Tasks), and counting starts only once it 
 The first screen also offers **Start with a sample company**, which skips the wizard and starts a made-up five-bot
 team instead ([The sample company](sample-company.md)).
 
+If you already chose a team on the public setup page, the first screen also accepts its **Company YAML file**.
+Choose the file, check the company and employee preview, then press **Use this team**. Tico uses the selected
+templates, names and reporting lines, includes its current required built-ins once, and starts employees marked
+`later` paused. Resume those employees from their normal controls when ready. Import retries do not duplicate the
+team or setup tasks, and an import cannot replace a company whose setup is complete.
+
+This starter import supports one owner and catalog AI employees with the default rules. The signed-in owner remains
+the owner; a file does not add sign-in accounts. Additional people, existing external agents and custom rules are
+refused with an explanation. Goals, first jobs, routines, model choices and tool connections are saved for later setup and
+listed in the preview; the team uses its currently configured AI providers. Bots follow their normal setup and
+computer-enrollment flow after import.
+
 The implementation is `backend/onboarding.py` (the record, creating the team), `backend/recruit.py` and `backend/recruit_rank.py`
 (the team builder's templates and suggestions), `ui/org-builder.js` (the team chart screen), `ui/first-run.js` (who reports to whom, the review
 and the screen after Create), Tico HQ's `POST /v1/recruit` ([its API](tico-hq.md), for HQ's suggestions), `clients/catalog.py` (turning a template into a repository),

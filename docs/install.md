@@ -46,6 +46,23 @@ Computers > Server computer > Sign in**, to Claude and to ChatGPT.
 
 ## Quick start on your own computer
 
+To use a team selected in the org-chart picker, export `tico.company.yaml` and pass it to the setup wizard:
+
+```
+python3 -m pip install PyYAML
+python3 -m setup --company-file ./tico.company.yaml
+```
+
+Choose this server, an existing SSH server, or AWS; the wizard configures the usual sign-in, DNS and HTTPS.
+The same flag works with the non-interactive cloud setup. It validates the file before provisioning, uses its
+company name, and carries the normalized plan privately to the server. On first startup the app creates the selected
+AI employees and reporting lines, adds its built-in roles once, and leaves employees marked **later** paused.
+It preserves the plan across retries and refuses to replace an existing company. A selected file takes precedence
+over the recommended sample company. AWS stores this plan with the encrypted install settings in an Advanced
+Parameter Store parameter (charges apply); settings and compressed plan must fit its 8 KB limit.
+See [Finish setup](onboarding.md) for file support and choices saved for later. For a larger file, import it on the
+app's first setup screen instead.
+
 Nothing to set up first: no domain, no DNS, no sign-in provider. Tico runs on this computer only, at
 `http://127.0.0.1:8765`, and you sign in as the owner with a token kept on this computer. Add a domain and sign-in
 later, when other people need in. It takes about two minutes and needs Docker: on a Mac or a Windows PC, open Docker Desktop

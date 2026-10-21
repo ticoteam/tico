@@ -79,6 +79,7 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--access-issuer")
     p.add_argument("--access-audience")
     p.add_argument("--company")
+    p.add_argument("--company-file", metavar="PATH", help="start with the company YAML exported by the org-chart picker")
     p.add_argument("--owner-email")
     p.add_argument("--decisions-provider", choices=["openai", "anthropic", "gemini"],
                    help="the model provider whose API key the server uses for decisions (optional)")

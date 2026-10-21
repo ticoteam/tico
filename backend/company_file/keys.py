@@ -44,10 +44,15 @@ QUOTES = ('\\"', '"', "'")
 TOKEN = re.compile(r"[A-Za-z0-9_+/=-]{32,}")
 # 32 or more letters and digits in a row, inside a longer run that is not random as a whole ("...-", "..._", "...=").
 RUN = re.compile(r"[A-Za-z0-9]{32,}")
+# An id made from a title ("accounts-receivable-specialist-2", or a path of them) reads as random once it is long and
+# carries a number, but is not a key: lowercase words and numbers joined by hyphens, with a real word of four letters
+# and at most two short mixed words ("b2b", "2nd"). A key's runs mix case, or letters and digits at length (a UUID's
+# "3f9a2b7c"), and a code of short mixed groups ("k3j-9x2-q8p") is mostly mixed words.
+SLUG_WORD = re.compile(r"[a-z]+|[0-9]+|[a-z0-9]{1,3}")
 
 
 def _random(word):
-    if not (re.search(r"[A-Za-z]", word) and re.search(r"[0-9]", word)):
+    if not (re.search(r"[A-Za-z]", word) and re.search(r"[0-9]", word)) or _slug(word):
         return False
     if word.isalnum():
         return True                     # 32 or more letters and digits, however regular: no word or number is that
@@ -63,6 +68,14 @@ def _token(match):
     if _random(word):
         return MARK
     return RUN.sub(lambda run: MARK if _random(run.group(0)) else run.group(0), word)
+
+
+def _slug(word):
+    parts = re.split(r"[-/]", word)
+    if not all(SLUG_WORD.fullmatch(part) for part in parts):
+        return False
+    mixed = sum(1 for part in parts if not (part.isalpha() or part.isdigit()))
+    return mixed <= 2 and any(part.isalpha() and len(part) >= 4 for part in parts)
 
 
 def _labelled(match):

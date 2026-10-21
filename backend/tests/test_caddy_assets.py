@@ -9,17 +9,20 @@ from pathlib import Path
 import re
 import socket
 import subprocess
+import sys
 import threading
 import time
 
 import pytest
 
 from backend import caddy_assets as assets
+from backend.config import ROOT
 
 
 APP, VISUAL, RUNNER = "acme.example", "files.acme.example", "runner.acme.example"
 TOKEN = "c3ludGhldGljLWZpbGU" + "." + "a" * 43
 SIGNED_PATH = "/visuals/" + TOKEN
+ENTRYPOINT = ROOT / "docker" / "entrypoint.sh"
 
 
 def hosts(config):
@@ -89,6 +92,61 @@ def test_absent_optional_mount_is_inert_but_explicit_serving_needs_required_conf
     with pytest.raises(ValueError, match="app_hostname_required"):
         assets.prepare({"TICO_CADDY_DIR": str(tmp_path), "TICO_CADDY_VISUALS": "1"})
     assert not list(tmp_path.iterdir())
+
+
+def test_unwritable_unmounted_directory_is_inert_while_off_but_refuses_explicit_serving(tmp_path):
+    # An older compose mounts no volume, so the image's directory sits under the read-only root.
+    directory = tmp_path / "caddy-generated"
+    directory.mkdir()
+    directory.chmod(0o555)
+    try:
+        assert not os.access(directory, os.W_OK)
+        for env in ({"TICO_CADDY_DIR": str(directory)},
+                    {"TICO_CADDY_DIR": str(directory), "TICO_DOMAIN": APP, "TICO_CADDY_VISUALS": "0"}):
+            assert assets.prepare(env) == {"written": False, "path": None, "generation": None,
+                                           "serve_visuals": False, "reason": None}
+        with pytest.raises(RuntimeError, match="^caddy_config_write_failed$"):
+            assets.prepare({"TICO_CADDY_DIR": str(directory), "TICO_DOMAIN": APP, "TICO_CADDY_VISUALS": "1",
+                            "TICO_VISUAL_ORIGIN": "https://" + VISUAL})
+        assert not list(directory.iterdir())
+        # The entrypoint runs under set -euo pipefail, so its exit status decides whether the server starts.
+        run = {**os.environ, "PATH": f"{Path(sys.executable).parent}:{os.environ['PATH']}",
+               "PYTHONPATH": str(ROOT), "TICO_CADDY_DIR": str(directory), "TICO_DOMAIN": APP}
+        run.pop("TICO_CADDY_VISUALS", None)
+        assert subprocess.run(["bash", str(ENTRYPOINT), "caddy-config"], env=run, capture_output=True,
+                              timeout=60).returncode == 0
+        refused = subprocess.run(["bash", str(ENTRYPOINT), "caddy-config"], env={**run, "TICO_CADDY_VISUALS": "1"},
+                                 capture_output=True, text=True, timeout=60)
+        assert refused.returncode != 0 and "caddy_config_write_failed" in refused.stderr
+        assert not list(directory.iterdir())
+    finally:
+        directory.chmod(0o755)
+    result = assets.prepare({"TICO_CADDY_DIR": str(directory), "TICO_DOMAIN": APP})
+    assert result["written"] and result["path"] == str(directory / "caddy.json")
+    assert hosts(json.loads((directory / "caddy.json").read_bytes())) == [APP]
+    # An old generation that serves visuals cannot be retired from an unwritable directory, so off must refuse.
+    assets.prepare({"TICO_CADDY_DIR": str(directory), "TICO_DOMAIN": APP, "TICO_CADDY_VISUALS": "1",
+                    "TICO_VISUAL_ORIGIN": "https://" + VISUAL})
+    old = (directory / "caddy.json").read_bytes()
+    assert hosts(json.loads(old)) == [APP, VISUAL]
+    directory.chmod(0o555)
+    try:
+        with pytest.raises(RuntimeError, match="^caddy_config_write_failed$"):
+            assets.prepare({"TICO_CADDY_DIR": str(directory), "TICO_DOMAIN": APP})
+        assert subprocess.run(["bash", str(ENTRYPOINT), "caddy-config"], env=run, capture_output=True,
+                              timeout=60).returncode != 0
+        assert (directory / "caddy.json").read_bytes() == old
+        # Unable to look is not absence: an uninspectable directory or parent must not hide that generation.
+        for unreadable, refusal in ((directory, RuntimeError), (directory.parent, ValueError)):
+            unreadable.chmod(0o000)
+            try:
+                with pytest.raises(refusal, match="^caddy_config_(write_failed|directory_invalid)$"):
+                    assets.prepare({"TICO_CADDY_DIR": str(directory), "TICO_DOMAIN": APP})
+            finally:
+                unreadable.chmod(0o555 if unreadable == directory else 0o755)
+        assert (directory / "caddy.json").read_bytes() == old
+    finally:
+        directory.chmod(0o755)
 
 
 def test_runner_collision_validation_preserves_canonical_runner_and_refuses_ambiguous_optional_url(tmp_path, caplog):

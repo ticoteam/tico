@@ -1753,7 +1753,15 @@ class OnboardingSelection(Contract):
 class OnboardingDraft(Contract):
     names: OnboardingNames = Field(default_factory=OnboardingNames)
     answers: OnboardingAnswers = Field(default_factory=OnboardingAnswers)
-    selected: dict[Slug, OnboardingSelection] = Field(default_factory=dict, max_length=150)
+    selected: dict[Slug, OnboardingSelection] = Field(default_factory=dict, max_length=300)   # the chart's 300-seat guard
+
+
+class OnboardingCompanyFile(Contract):
+    company_yaml: str = Field(min_length=1, max_length=524288)
+
+
+class OnboardingCompanyImport(OnboardingCompanyFile):
+    fingerprint: str = Field(pattern=r"^[a-f0-9]{64}$")
 
 
 class Recruit(Contract):

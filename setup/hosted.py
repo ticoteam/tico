@@ -102,7 +102,8 @@ def plan_lines(s: Settings) -> list[str]:
                f"{link_file(s.domain)} (0600) for our team only; never printed, and not for the ready email. Hosted install: "
                f"{s.hosted}, under {s.hosted_zone}"]
     if s.preset:
-        out.append("Recommended setup: the sample company, your Claude and ChatGPT subscriptions plus Tico Gateway, "
+        team = "the selected company file" if s.company_file_data else "the sample company"
+        out.append(f"Recommended setup: {team}, your Claude and ChatGPT subscriptions plus Tico Gateway, "
                    f"Tico Support {s.support or 'on'}, and a computer on the server (the Docker runner). "
                    + ("The Gateway invite is in the environment; it connects on the first start."
                       if s.gateway_invite else "No Gateway invite in the environment (TICO_GATEWAY_INVITE): the Gateway is not set up by this run."))

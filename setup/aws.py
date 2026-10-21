@@ -135,8 +135,13 @@ class Deployer:
         found = [i for res in r["Reservations"] for i in res["Instances"] if is_ours(i.get("Tags"), self.p.name)]
         return found[0] if found else None
 
-    def put_env(self, env_text: str) -> None:
-        self.ssm.put_parameter(Name=self.param_name, Value=env_text, Type="SecureString", Overwrite=True)
+    def put_env(self, env_text: str, *, company_file=False) -> None:
+        # The normalized team stays with the encrypted env, under the existing
+        # instance role. Explicit Advanced avoids an attempted downgrade on retry.
+        tier = {"Tier": "Advanced"} if company_file else {}
+        if company_file and len(env_text.encode()) > 8192:
+            raise SystemExit("The starter plan and install settings exceed AWS Parameter Store's 8 KB limit")
+        self.ssm.put_parameter(Name=self.param_name, Value=env_text, Type="SecureString", Overwrite=True, **tier)
         self.ssm.add_tags_to_resource(ResourceType="Parameter", ResourceId=self.param_name, Tags=tags(self.p.name))
 
     def ensure_role(self) -> str:

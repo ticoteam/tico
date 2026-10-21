@@ -283,6 +283,7 @@ class Settings:
     # docs/sample-company.md), loaded once on the first start whose owner is on the roster. A set-up company is never
     # touched. Only `on` turns it on (the recommended install's contract); unset or any other value leaves it off.
     sample_company: bool = False
+    company_file_data: str = field(default="", repr=False)
     # First-boot seed for the owner's AI provider choice (backend/providers.py). Once the
     # database holds a choice, these are never read again.
     enabled_providers: tuple[str, ...] = ()
@@ -517,6 +518,7 @@ class Settings:
             decisions_jev_usd_per_mtok_output=max(0.0, float(os.environ.get("TICO_DECISIONS_JEV_USD_PER_MTOK_OUTPUT", "") or 0)),
             decisions_idea_triage=not rehearsal and os.environ.get("TICO_DECISIONS_IDEA_TRIAGE", "0") == "1",
             sample_company=not rehearsal and os.environ.get("TICO_SAMPLE_COMPANY", "").strip().lower() == "on",
+            company_file_data="" if rehearsal else os.environ.get("TICO_COMPANY_FILE_B64", "").strip(),
             enabled_providers=tuple(part.strip().lower() for part in
                                     os.environ.get("TICO_ENABLED_PROVIDERS", "").split(",") if part.strip()),
             default_runtime=os.environ.get("TICO_DEFAULT_RUNTIME", "").strip().lower(),
