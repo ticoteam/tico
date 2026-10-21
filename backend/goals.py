@@ -507,7 +507,7 @@ def score(conn, row, at=None):
     views = K.goal_link_status(conn, row["id"], at)
     judged = [v for v in views if v["status"] in COLOURS]
     if judged:
-        worst = min(judged, key=lambda v: COLOURS[::-1].index(v["status"]))
+        worst = min(judged, key=lambda v: COLOURS.index(v["status"]))
         others = len(judged) - 1
         return {"status": worst["status"], "basis": "kpis",
                 "reason": worst["reason"] + (f" (+{others} more)" if others and worst["status"] != "green" else "")}
