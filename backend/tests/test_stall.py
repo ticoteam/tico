@@ -107,6 +107,7 @@ def test_a_chat_task_gets_its_own_room_reports_once_and_a_quiet_session_is_check
     from backend.tests.test_api import headers, post
     room = post(api, "chat/finance", {"text": "Can you look at cash?"})["conversation_id"]
     with api.app.state.store.transaction() as c:
+        c.execute("INSERT OR IGNORE INTO bots(slug,display_name,state) VALUES('botops','BotOps','active')")
         lines = lambda: [(r[0], json.loads(r[1])) for r in c.execute(
             "SELECT body,refs_json FROM messages WHERE conversation_id=? AND from_actor=? ORDER BY created", (room, H.KEEPER))]
         task = H.task_create(c, H.human_actor("ana"), "Recheck the cash warning", "Before the deadline.", "bot:finance",
@@ -123,13 +124,20 @@ def test_a_chat_task_gets_its_own_room_reports_once_and_a_quiet_session_is_check
         out = H.wake_stalled(c)
         assert out["checked"] == [task["id"]] and out["woke"] == [] and out["stuck"] == []
         assert H.wake_stalled(c)["checked"] == []                       # once per quiet stretch
-        # Half an hour after the check, still nothing: reported stuck in the main chat, and Ana is asked.
+        # Half an hour after the check, still nothing: its bot is retried once.
         c.execute("UPDATE events SET ts=? WHERE action='task.stall_wake' AND target=?",
+                  (H.shift(H.now(), seconds=-1900), task["id"]))
+        out = H.wake_stalled(c)
+        assert out["retried"] == [task["id"]] and out["stuck"] == []
+        assert H.wake_stalled(c)["retried"] == [] and H.wake_stalled(c)["stuck"] == []     # once, then it waits
+        # Half an hour after the retry, still nothing: reported stuck in the main chat, and BotOps (not Ana) finds why.
+        c.execute("UPDATE events SET ts=? WHERE action='task.stuck_retry' AND target=?",
                   (H.shift(H.now(), seconds=-1900), task["id"]))
         assert H.wake_stalled(c)["stuck"] == [task["id"]]
         assert lines()[-1][1]["task_report"] == "stuck" and lines()[-1][0].startswith("Recheck the cash warning: stuck.")
-        assert c.execute("SELECT count(*) FROM messages WHERE kind='ask' AND to_actor='human:ana' "
-                         "AND refs_json LIKE '%stuck%'").fetchone()[0] == 1
+        assert c.execute("SELECT count(*) FROM messages WHERE kind='ask' AND to_actor LIKE 'human:%'").fetchone()[0] == 0
+        diagnostic = c.execute("SELECT owner,body FROM tasks WHERE requester='keeper' AND title LIKE 'Find why %'").fetchall()
+        assert [(d[0], task["id"] in d[1]) for d in diagnostic] == [("bot:botops", True)]
         assert H.wake_stalled(c)["stuck"] == []
         # Done: one report line; the same state is not reported twice.
         H.task_update(c, "bot:finance", task["id"], status="done", note="Cash is fine.")
