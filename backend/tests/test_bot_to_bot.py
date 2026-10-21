@@ -255,6 +255,28 @@ def test_a_held_message_or_comment_tells_its_sender_how_to_wake_the_bot_now(api)
     assert "held" not in post(api, "messages", {"to": "cpo", "text": "Morning"})     # a person's always wakes
 
 
+def test_a_held_message_with_a_file_keeps_its_hold_and_tells_its_sender(api):
+    # Dev 328 Review 1: adding the file rewrote the message's references and dropped the hold mark.
+    import base64
+    from backend.tests.test_files import publish
+    r = setup(api)
+    token = ops_token(api, r)
+    with api.app.state.store.transaction() as c:
+        c.execute("DELETE FROM jobs WHERE bot='cpo'")
+    first = post(api, "messages", {"to": "cpo", "text": "Chart follows"}, token=token)
+    made = publish(api, {"token": token}, name="chart.png", text=None,
+                   content_base64=base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"\x00" * 64).decode())
+    assert made.status_code == 200, made.text
+    fid = made.json()["file"]["id"]
+    with api.app.state.store.transaction() as c:   # a file of the ops-cpo conversation
+        c.execute("UPDATE bot_files SET scope=? WHERE id=?", ("conversation:" + first["conversation_id"], fid))
+    sent = post(api, "messages", {"to": "cpo", "text": "Deadline 14:10Z", "conversation_id": first["conversation_id"],
+                                  "attachments": [{"ref": f"{fid}@1", "title": "Window"}]}, token=token)
+    assert sent["refs"]["attachments"] and jobs(api, "cpo") == 0
+    assert sent["woke"] is False and "held for cpo's next run" in sent["held"] and "--needs-action" in sent["held"]
+    assert sent["refs"].get(B.MARK) == B.RULE and sent["refs"].get("quiet") is True
+
+
 def test_the_cli_prints_why_a_message_was_held(monkeypatch, capsys):
     from types import SimpleNamespace
     from clients import remotecli
