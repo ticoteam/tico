@@ -352,6 +352,16 @@ def origin_of(url):
     return f"{parts.scheme}://{parts.netloc}" if parts.scheme and parts.netloc else ""
 
 
+def origin_key(url):
+    """An origin as a browser compares it: scheme, lowercase hostname and effective port, or None when `url` has none.
+    So https://Tico.example:443 and https://tico.example are the same origin."""
+    parts = urlsplit(url or "")
+    if not parts.scheme or not parts.hostname:
+        return None
+    scheme = parts.scheme.lower()
+    return scheme, parts.hostname.lower(), parts.port or {"https": 443, "http": 80}.get(scheme)
+
+
 def check_origin(settings):
     """A separate visual origin must really be separate: the app's own origin there would put visuals next to its
     cookies. A value that is not a URL at all (a stray bracket, a port that is not a number) counts as unset, so
@@ -364,7 +374,7 @@ def check_origin(settings):
         logging.getLogger("tico.visuals").warning(
             "TICO_VISUAL_ORIGIN is not a valid URL; visuals show pictures, video and audio only until it is fixed")
         return ""
-    if visual and visual == origin_of(settings.public_url):
+    if visual and origin_key(visual) == origin_key(settings.public_url):
         raise ValueError("TICO_VISUAL_ORIGIN must differ from the app's own address (TICO_PUBLIC_URL)")
     return visual
 

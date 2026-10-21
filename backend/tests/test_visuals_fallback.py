@@ -9,7 +9,7 @@ import pytest
 from backend import visuals as V
 from backend.tests.test_api import api, headers, post  # noqa: F401  (fixtures)
 from backend.tests.test_files import publish, turn
-from backend.tests.test_visuals import PNG, VISUALS, bot_reply, task_with_file, wav
+from backend.tests.test_visuals import PNG, VISUALS, bot_reply, task_with_file, visual_on_task, wav
 
 SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><rect width="10" height="10"/></svg>'
 CLIP = bytes(range(256)) * 8
@@ -53,6 +53,16 @@ def comment_items(api, tid, comment):
     return next(m for m in listed if m["id"] == comment["id"])["refs"]["attachments"]
 
 
+def give_preview(api, fid, version, data=PNG, mime="image/png"):
+    """A still preview stored for this file version (thumb_blob_id), as file_metadata leaves it."""
+    digest = api.app.state.blobs.put(data, mime)
+    with api.app.state.store.transaction() as c:
+        blob = c.execute("INSERT INTO blobs(id,owner,digest,size,name,content_type,created) VALUES "
+                         "(lower(hex(randomblob(16))),'human:ben',?,?,?,?,'2026-10-21') RETURNING id",
+                         (digest, len(data), "preview", mime)).fetchone()[0]
+        c.execute("UPDATE bot_file_versions SET thumb_blob_id=? WHERE file_id=? AND version=?", (blob, fid, version))
+
+
 def test_without_a_visual_address_pictures_video_and_audio_show_inline_from_the_apps_own_address(api, fallback):
     """Spec 1 and 3: each gets an address on the app's own /visuals route, served with its own media type, nosniff,
     a content policy that runs no script, inline, and no cookie."""
@@ -94,17 +104,9 @@ def test_a_page_with_a_still_preview_shows_it_and_the_preview_is_only_ever_a_pic
     picture (an SVG or a page stored as the preview) is refused."""
     tid, comment = page_and_svg_comment(api)
     page = comment_items(api, tid, comment)[0]
-    blobs = api.app.state.blobs
-    store = api.app.state.store
 
     def preview(data, mime):
-        digest = blobs.put(data, mime)
-        with store.transaction() as c:
-            blob = c.execute("INSERT INTO blobs(id,owner,digest,size,name,content_type,created) VALUES "
-                             "(lower(hex(randomblob(16))),'human:ben',?,?,?,?,'2026-10-21') RETURNING id",
-                             (digest, len(data), "preview", mime)).fetchone()[0]
-            c.execute("UPDATE bot_file_versions SET thumb_blob_id=? WHERE file_id=? AND version=?",
-                      (blob, page["file_id"], page["version"]))
+        give_preview(api, page["file_id"], page["version"], data, mime)
         [a, _] = comment_items(api, tid, comment)
         return a
 
@@ -116,6 +118,39 @@ def test_a_page_with_a_still_preview_shows_it_and_the_preview_is_only_ever_a_pic
     for data, mime in ((SVG.encode(), "image/svg+xml"), (b"<p>x</p>", "text/html")):
         a = preview(data, mime)
         assert api.get(a["preview_url"]).status_code == 404
+
+
+def test_a_bot_reading_its_chat_gets_page_and_svg_open_cards_without_a_preview_address_the_route_refuses(api, fallback):
+    """The visual route rebuilds a bot reader without its run (Dev 319), so it cannot see a chat's files: a bot
+    reading its own chat reply gets the Open card (Open uses the file viewer, not the route) and no preview address,
+    even when the file has a preview. The person in the chat keeps a working preview, and so does a bot on a task."""
+    _, attempt = turn(api)
+    refs = []
+    for name, text in (("funnel.html", "<p>funnel</p>"), ("logo.svg", SVG)):
+        made = publish(api, attempt, name=name, text=text)
+        assert made.status_code == 200, made.text
+        give_preview(api, made.json()["file"]["id"], 1)
+        refs.append({"ref": made.json()["file"]["id"] + "@1", "title": name})
+    sent = bot_reply(api, attempt, attachments=refs)
+    assert sent.status_code == 200, sent.text
+    message = sent.json()
+    for read in (message, api.get("/api/v2/messages/" + message["id"], headers=headers(attempt["token"])).json()):
+        items = read["refs"]["attachments"]
+        assert [a["kind"] for a in items] == ["page", "svg"]
+        for a in items:
+            assert a["open"] is True and not a["removed"] and a["src"] is None, a
+            assert a.get("preview_url") is None, a
+    for a in api.get("/api/v2/messages/" + message["id"], headers=headers("ben-test")).json()["refs"]["attachments"]:
+        r = api.get(a["preview_url"])                         # the person's preview is unchanged
+        assert r.status_code == 200 and r.content == PNG and r.headers["content-type"] == "image/png", a
+
+    tid, fid, comment = visual_on_task(api, private=False)
+    give_preview(api, fid, 1)
+    listed = api.get(f"/api/v2/tasks/{tid}/comments", headers=headers(attempt["token"]))
+    assert listed.status_code == 200, listed.text
+    [item] = next(m for m in listed.json()["comments"] if m["id"] == comment["id"])["refs"]["attachments"]
+    assert item["file_id"] == fid and item["open"] is True and item["src"] is None
+    assert api.get(item["preview_url"]).status_code == 200                  # a bot's task preview still opens
 
 
 def test_with_a_visual_address_all_five_kinds_show_inline_there(api, monkeypatch):
@@ -139,13 +174,25 @@ def test_with_a_visual_address_the_apps_own_address_still_serves_media_only(api,
     tid, comment = page_and_svg_comment(api)
     for a in comment_items(api, tid, comment):
         path = a["src"].removeprefix(VISUALS)
-        assert api.get(a["src"]).status_code == 200                                     # on the visual address
-        for host in ("testserver", "tico.example", "visuals.localhost", "visuals.localhost:9002", "bad host:x"):
-            r = api.get("http://" + host.split(" ")[0] + path, headers={"Host": host})
-            assert r.status_code == 404 and not r.content, (a["kind"], host)
-    for a in media:
-        r = api.get(a["src"].removeprefix(VISUALS), headers={"Host": "tico.example"})
-        assert r.status_code == 200 and r.headers["content-disposition"] == "inline", a["kind"]
+        for method in ("GET", "HEAD"):
+            on = api.request(method, a["src"])                                          # on the visual address
+            assert on.status_code == 200 and on.headers["content-disposition"] == "inline", (a["kind"], method)
+            for host in ("testserver", "tico.example", "visuals.localhost", "visuals.localhost:9002", "bad host:x"):
+                r = api.request(method, "http://" + host.split(" ")[0] + path, headers={"Host": host})
+                assert r.status_code == 404 and not r.content, (a["kind"], method, host)
+        give_preview(api, a["file_id"], a["version"])                    # its raster preview plays on the app host
+        token = V.mint(api.app.state.visual_key, "human:ben", a["file_id"], a["version"], "preview")
+        r = api.get("/visuals/" + token, headers={"Host": "tico.example"})
+        assert r.status_code == 200 and r.content == PNG and r.headers["content-disposition"] == "inline"
+    video = media[1]
+    with api.app.state.store.transaction() as c:                         # a video with its poster ready
+        c.execute("UPDATE bot_file_versions SET poster_blob_id=(SELECT thumb_blob_id FROM bot_file_versions WHERE "
+                  "thumb_blob_id IS NOT NULL LIMIT 1) WHERE file_id=?", (video["file_id"],))
+    poster = V.mint(api.app.state.visual_key, "human:ben", video["file_id"], video["version"], "poster")
+    for a, path in [(a, a["src"].removeprefix(VISUALS)) for a in media] + [(video, "/visuals/" + poster)]:
+        for method in ("GET", "HEAD"):
+            r = api.request(method, path, headers={"Host": "tico.example"})
+            assert r.status_code == 200 and r.headers["content-disposition"] == "inline", (a["kind"], method, path)
 
 
 def test_no_visual_response_ever_sets_a_cookie(api, monkeypatch):
@@ -190,3 +237,26 @@ def test_there_is_no_switch_the_setup_alone_decides(monkeypatch, tmp_path):
     monkeypatch.setenv("TICO_VISUAL_ORIGIN", "https://files.acme.example")
     full = Settings.from_env()
     assert V.mode(full) == "full" and full.environment()["visuals"] == "full"
+
+
+def test_a_visual_address_the_browser_treats_as_the_apps_own_is_refused(monkeypatch, tmp_path):
+    """Origins compare as a browser compares them: scheme, hostname in any case and the effective port. A visual
+    address that only spells the app's own address differently is still the app's own and stops the server; a really
+    separate one is kept as given."""
+    from backend.config import Settings
+    monkeypatch.setenv("TICO_DB", str(tmp_path / "hub.db"))
+    for app, same in (("https://tico.example", "https://tico.example:443"), ("https://tico.example", "https://TICO.example"),
+                      ("https://tico.example:443", "HTTPS://Tico.Example/"), ("http://tico.example", "http://tico.example:80"),
+                      ("https://Tico.example/app", "https://tico.EXAMPLE:443/visuals")):
+        class S:
+            public_url, visual_origin = app, same
+        with pytest.raises(ValueError, match="must differ"):
+            V.check_origin(S)
+        monkeypatch.setenv("TICO_PUBLIC_URL", app)
+        monkeypatch.setenv("TICO_VISUAL_ORIGIN", same)
+        with pytest.raises(ValueError, match="must differ"):
+            Settings.from_env()
+    for app, apart in (("https://tico.example", "https://files.tico.example"), ("https://tico.example:8080", "https://visuals.tico.example:8080")):
+        class S:
+            public_url, visual_origin = app, apart
+        assert V.check_origin(S) == apart
