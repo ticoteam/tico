@@ -88,8 +88,9 @@ the `openrouter` provider offers every such model; enabling one vendor offers th
 
 ### The Tico AI Gateway
 
-Tico Cheap, Mid and Power 1.0 (`tico-cheap-1.0`, `tico-mid-1.0`, `tico-power-1.0`; Claude Haiku, Sonnet and Opus 5.5
-underneath) run on pi through Tico's own Gateway, not OpenRouter. Their provider, `tico`, is never ticked: it is on
+Tico Cheap 1.1, Mid 1.0 and Power 1.0 (`tico-cheap-1.1`, `tico-mid-1.0`, `tico-power-1.0`; Claude Haiku, Sonnet and
+Opus 5.5 underneath) run on pi through Tico's own Gateway, not OpenRouter. `tico-cheap-1.0` is retired (`deprecated`):
+no picker offers it, but pi's `models.json` still lists it, so a bot already on it keeps running. Their provider, `tico`, is never ticked: it is on
 exactly while the **Tico AI Gateway** connection in Settings > Computers > Models has a key (`backend/gateway_connection.py`),
 and OpenRouter's catch-all does not offer them. The key is the one Decide uses; the server's `TICO_GATEWAY_KEY` and
 `TICO_GATEWAY_URL` win over a saved one and show as connected. A saved key is sealed and never read back, only a

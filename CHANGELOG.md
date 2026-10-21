@@ -13,6 +13,13 @@ All notable changes to Tico are recorded here. The format follows
   follow the working rules at the top of its `memory/learnings.md` and to save what it learns there, so what steers it
   shows in its Learnings panel and an edit there reaches its next turn. The panel's Learnings and Decisions views open
   on the working rules, then the newest entries ([Learnings](docs/learnings.md#one-memory-in-the-repository)).
+- **Tico AI Gateway: Tico Cheap 1.1 replaces Cheap 1.0** in every model list. It costs the same for a prompt up to
+  100,000 tokens; above that the whole request is $0.75 per 1M input, $0.075 cached and $3.75 output, and Usage
+  estimates it that way. Cheap 1.0 is retired: bots and a default model already on it keep it and keep running at its
+  old price, and Settings > Computers > Models still saves a default left on it, but nothing new can pick it
+  ([Tico AI Gateway](docs/ai-gateway.md)). The web app's Add bot form preselects a current model when the team
+  default is Cheap 1.0, since a new bot is a new pick. The pi runner now reports each model request, so Usage prices
+  each one at its own rate.
 
 ### Fixed
 - **Gateway turns retry when their rate window resets.** The computer carries the Gateway's requested wait back to

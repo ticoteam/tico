@@ -8,11 +8,14 @@
 function providersModels(view, models, enabled) {
   const labels = Object.fromEntries((view.providers || []).map(row => [row.id, row.label]));
   const gateway = providersGatewayIds(view);
-  return (models || []).filter(model => !model.deprecated && enabled.includes(model.provider))
+  // The saved default stays offered after its model retires, so a save about something else never moves it.
+  const saved = view.default?.model || '';
+  return (models || []).filter(model => (!model.deprecated || model.id === saved) && enabled.includes(model.provider))
     .map(model => ({id: model.id,
                     // A Tico model says what runs underneath it ("Claude Sonnet 5.5 underneath").
                     description: gateway.includes(model.provider) ? model.description || '' : '',
-                    label: modelWords(model.id) || `${labels[model.provider] || model.provider} · ${model.label}`,
+                    label: (modelWords(model.id) || `${labels[model.provider] || model.provider} · ${model.label}`)
+                      + (model.deprecated ? ' (retired)' : ''),
                     recommended: (view.providers || []).some(row => row.recommended === model.id)}));
 }
 // The Tico AI Gateway's provider is on while its connection has a key, never ticked (backend/gateway_connection.py).
@@ -138,7 +141,7 @@ function gatewayHTML(gateway, owner) {
         : state === 'not_ready' ? 'Not ready' : 'Connected')}</span>`
     : '<span class="pill" data-gateway-state="none">Not connected</span>';
   const head = `<h3 class="prov-gateway-title">Tico AI Gateway ${badge}</h3>
-    <p class="muted">Tico's own models, Tico Cheap, Mid and Power 1.0, and Decide, with one gateway key from Tico.</p>`;
+    <p class="muted">Tico's own models, Tico Cheap 1.1, Mid 1.0 and Power 1.0, and Decide, with one gateway key from Tico.</p>`;
   if (!owner) return `<div class="prov-gateway" id="set-gateway">${head}</div>`;
   const message = gateway.message ? `<p class="${gateway.working === false || state === 'cap_reached' ? 'err' : 'muted'}" data-gateway-message>${esc(gateway.message)}</p>` : '';
   // An install the install command invited gets its own key from Tico: nothing to paste, and a pasted key still wins.

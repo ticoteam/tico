@@ -72,7 +72,7 @@ FINAL = ("unknown_model", "unsupported_field", "bad_request", "upstream_refused"
 # (runner-rs/src/hosts/pi.rs `plain_error`).
 CODES = (CAP_REACHED, REVOKED_KEY, UNKNOWN_KEY, RATE_LIMITED, "unknown_model", "unsupported_field", "bad_request",
          "upstream_refused", "no_route", UNAVAILABLE, NOT_ISOLATED)
-TICO_MODELS = "Tico Cheap 1.0, Tico Mid 1.0, Tico Power 1.0"
+TICO_MODELS = "Tico Cheap 1.1, Tico Mid 1.0, Tico Power 1.0"
 # How an install gets its own key (the contract's "enroll" and "rotate"), and how it names a bot to the Gateway.
 ENROLL, ROTATE = "/enroll", "/rotate"
 BOT_HEADER = "X-Tico-Bot"
