@@ -1,0 +1,10 @@
+{
+ "about": "Seats with no bot yet: roles the company models place before Tico has a template for them. A seat shows \"No bot yet\" and a person can hold it; it never becomes a bot until its template exists.",
+ "seats": [
+  {"slug": "controller", "name": "Controller", "department": "finance", "summary": "Runs the month-end close: the close checklist and calendar, review of the books and the reconciliations. Never pays or approves a payment."},
+  {"slug": "equity-manager", "name": "Equity Manager", "department": "finance", "summary": "Keeps the cap table: option grants and vesting schedules, the option pool left, 409A and board-approval dates, the cap table change log and scenario tables for a new round. Never issues shares, signs, or gives legal or tax advice."},
+  {"slug": "fundraising-manager", "name": "Fundraising Manager", "department": "finance", "summary": "Runs the raise: the investor pipeline, the data room checklist, the raise tracker (target, committed, closed), meeting prep and follow-up drafts. Never sends to investors without a person or promises terms."},
+  {"slug": "scheduling-bookings", "name": "Scheduling & Bookings", "department": "operations", "summary": "Keeps the booking rules and the schedule, handles reschedules and drafts no-show follow-ups. Never changes prices or sends without a person."},
+  {"slug": "quality-inspections", "name": "Quality & Inspections", "department": "operations", "summary": "Keeps the inspection checklists, tracks re-dos and scores quality per crew. Never disciplines staff."}
+ ]
+}

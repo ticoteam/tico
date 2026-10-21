@@ -12,10 +12,12 @@ from backend.store import H, Problem, encode
 from backend.tests.test_sample_company import OWNER_EMAIL, PEOPLE, SEED, environment, machine, rows, settings_for, signed_in
 
 
-def company_text(reverse_builtins=False, through_new_parent=False):
-    draft = C.Turn(C.blank()).finish()
+def company_text(reverse_builtins=False, through_new_parent=False, keep=("coo", "botops", "finance-lead", "bookkeeping")):
+    draft = C.blank()
+    draft["company"]["signals"] = ["sells_services"]
+    draft = C.Turn(draft).finish()
     draft["company"].update(name="Acme Finance", about="We help small firms manage their books.")
-    draft["bots"] = [b for b in draft["bots"] if b["template"] in {"coo", "botops", "finance-lead", "bookkeeping"}]
+    draft["bots"] = [b for b in draft["bots"] if b["template"] in set(keep)]
     for bot in draft["bots"]:
         bot["start"] = bot["template"] != "bookkeeping"
         if bot["template"] == "bookkeeping":
@@ -26,6 +28,18 @@ def company_text(reverse_builtins=False, through_new_parent=False):
         if through_new_parent and bot["template"] in ("coo", "finance-lead"):
             bot["reports_to"] = "finance-lead" if bot["template"] == "coo" else "botops"
     return C.to_yaml(draft) + "models:\n  source: gateway\n  by_department:\n    finance: mid\n"
+
+
+def test_a_seat_with_no_bot_yet_makes_no_bot_and_the_bots_under_it_report_one_step_up(environment):
+    api = environment()
+    text = company_text(keep=("coo", "botops", "finance-lead", "controller", "bookkeeping"))
+    assert "no_bot_yet: true" in text
+    preview = api.post("/api/v2/onboarding/company/preview", json={"company_yaml": text}, headers=signed_in())
+    assert preview.status_code == 200, preview.text
+    summary = preview.json()
+    employees = {e["template"]: e for e in summary["employees"]}
+    assert "controller" not in employees and "open_seats" in summary["deferred"]
+    assert employees["bookkeeping"]["reports_to"] == "finance-lead"
 
 
 def test_import_preserves_selected_team_builtins_and_later_choice_across_retry_and_runner_enrollment(environment):

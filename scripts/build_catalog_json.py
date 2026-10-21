@@ -12,7 +12,7 @@ at the latest published Tico release tag):
                           templates/catalog/*/card.yaml, built with backend/recruit_rank.py `build()`, the same
                           function the Tico server uses for its own catalog
     DIR/onboarding-actions.json
-                          the engine's actions, vocabulary and limits, the role catalogue and the starter pack, in one
+                          the engine's actions, vocabulary and limits, the role catalogue and the company models, in one
                           file for the setup page's browser planner
     DIR/recruit_rank.py   a copy of backend/recruit_rank.py, the local recommender both sides fall back to
     DIR/company_file/     a copy of backend/company_file, the draft engine (its scrubber is keys.py)
@@ -98,7 +98,10 @@ def planner(role_list):
     """onboarding-actions.json: what the browser planner needs to make the same edits as the engine."""
     spec = json.loads((ENGINE / "actions.json").read_text())
     return json.dumps({"format": spec["format"], "vocabulary": spec["vocabulary"], "limits": spec["limits"],
-                       "actions": spec["actions"], "starter_pack": json.loads((ENGINE / "starter_pack.json").read_text()),
+                       "actions": spec["actions"],
+                       "models": {path.stem[len("model_"):]: json.loads(path.read_text())
+                                  for path in sorted(ENGINE.glob("model_*.json"))},
+                       "seats": json.loads((ENGINE / "seats.json").read_text())["seats"],
                        "roles": json.loads(role_list)["roles"]}, indent=1, ensure_ascii=False) + "\n"
 
 

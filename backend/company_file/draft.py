@@ -22,7 +22,14 @@ def _load(name):
 SPEC = _load("actions.json")
 ROLES = _load("roles.json")["roles"]
 TEMPLATES = {role["slug"] for role in ROLES}
-PACK = _load("starter_pack.json")
+# Seats the company models place before Tico has a template for them: "No bot yet", and a person can hold one.
+SEATS = _load("seats.json")["seats"]
+OPEN_SEATS = {seat["slug"] for seat in SEATS}
+# The company models a chart starts from (model_<key>.json), in the order the setup chat tries them: the first whose
+# `picks_when` signal the company has, else Everything. On-site work comes before services, so a cleaning company that
+# also sells its hours is a local service business.
+MODEL_ORDER = ("software", "local", "services", "store", "everything")
+MODELS = {key: _load("model_%s.json" % key) for key in MODEL_ORDER}
 LIMITS = SPEC["limits"]
 VOCAB = SPEC["vocabulary"]
 STEPS = tuple(VOCAB["steps"])
@@ -41,7 +48,7 @@ SERVER_FIELDS = ("undo", "chat", "removed", "pending")
 TOP = ("step", "company", "people", "bots", "goals", "rules", "tools", "seq")
 BOT_FIELDS = ("id", "template", "title", "dept", "lead", "core", "reason", "start", "routine", "tools", "about", "runtime",
               "existing")
-BOT_OPTIONAL = ("isNew", "reports_to", "first_job")
+BOT_OPTIONAL = ("isNew", "reports_to", "first_job", "person")
 PERSON_FIELDS = ("id", "name", "role", "dept", "owner")
 # A goal's measure, as the page keeps it (format 0.2): up or down toward a target by a deadline, or a range to stay in.
 # `measure` "" is not set yet.
@@ -222,10 +229,12 @@ def _bot(raw, at):
         raise DraftError(field + ".dept is not a department")
     if bot["existing"] and bot["runtime"] not in HARNESSES:
         raise DraftError(field + ".runtime is not an agent Tico knows")
-    if not bot["existing"] and bot["template"] not in TEMPLATES:
+    if not bot["existing"] and bot["template"] not in TEMPLATES | OPEN_SEATS:
         raise DraftError(field + ".template is not one of Tico's role templates")
     if raw.get("reports_to") is not None:
         bot["reports_to"] = _id(raw["reports_to"], field + ".reports_to")
+    if raw.get("person") is not None and not bot["existing"]:
+        bot["person"] = _id(raw["person"], field + ".person")
     if raw.get("first_job") and not bot["existing"]:
         bot["first_job"] = _text(raw["first_job"], field + ".first_job", LIMITS["first_job"])
     if bot["existing"]:
@@ -331,6 +340,14 @@ def check(raw, snapshot=False):
     for bot in draft["bots"]:
         if bot.get("reports_to") is not None and (bot["reports_to"] not in known or bot["reports_to"] == bot["id"]):
             del bot["reports_to"]
+    # A seat a person holds keeps that person while they are on the team, and one person holds one seat.
+    people, held = {p["id"] for p in draft["people"]}, set()
+    for bot in draft["bots"]:
+        if "person" in bot:
+            if bot["person"] not in people or bot["person"] in held:
+                del bot["person"]
+            else:
+                held.add(bot["person"])
     if loops(draft):
         raise DraftError("a bot's reporting line comes back to itself")
     for goal in draft["goals"]:

@@ -509,7 +509,7 @@
    "department": "legal",
    "lead": false,
    "core": false,
-   "summary": "Keeps the team's corporate records in order: board and shareholder meeting packs, draft minutes and written consents for counsel, the entity register and a cap table change log. Summaries for a human, not legal advice; it never signs.",
+   "summary": "Keeps the team's corporate records in order: board and shareholder meeting packs, draft minutes and written consents for counsel, the entity register and the minute book. Summaries for a human, not legal advice; it never signs.",
    "when": "A team with a board, investors or more than one legal entity, where minutes, consents and entity records fall behind between fundraises.",
    "tags": [
     "legal",
@@ -517,8 +517,7 @@
     "governance",
     "entities",
     "minutes",
-    "fundraising",
-    "cap-table"
+    "fundraising"
    ],
    "pains": [
     "our board minutes are months behind",

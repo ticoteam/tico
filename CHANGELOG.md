@@ -8,6 +8,15 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Five company models for the setup org chart** replace the one 22-bot starter pack: Everything (73 seats), Software
+  company (51), Services firm (38), Local service business (40) and Online store (39), with Legal, People, Operations
+  and Leadership and bigger Finance, Sales, Marketing and Support teams. The first chart starts from the model the
+  company's signals point to (new signals: sells services, on-site jobs, sells products; none of them is Everything),
+  adds every department head it lacks and the roles that fit what the visitor said, and drops nothing. New setup
+  actions switch the chart to a model (`model_use`; "show me everything" is Everything) and put a person in a seat
+  (`seat_fill`, "Ana runs our cap table"). Controller, Equity Manager, Fundraising Manager, Scheduling & Bookings and
+  Quality & Inspections are seats with no bot yet: a person can hold one, and importing the company file makes no bot
+  for it. The cap table moves from the Corporate Secretary's description to the Equity Manager's.
 - **How bots get their models**, at the top of Settings > AI providers and the first setup step: **Your Claude and
   ChatGPT subscriptions, plus Tico Gateway** (recommended, and what Tico's installer sets with
   `TICO_MODELS_PRESET=subscriptions-gateway`), subscriptions only, Tico Gateway only, or your company's plans or API
