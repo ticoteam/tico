@@ -212,6 +212,21 @@ def test_three_bots_asking_the_same_thing_are_one_item_and_the_answer_reaches_ea
         assert not any(H.open_task_asks(c, H.task(c, t)) for t in again)
 
 
+def test_a_merged_item_names_only_the_originals_its_reader_may_read(api):
+    """The merged item's list of originals is the reader's: one Ana can no longer read is left out of it."""
+    ceo = switched_on(api)
+    asked = ask_ana(api, "ops", "Ship the pricing page")
+    with api.app.state.store.transaction() as c:
+        filed = H.task_create(c, "bot:finance", "Pick the pricing page to launch", "Which one?", OWNER)["id"]
+    level(api, 2)
+    item = post(api, "ceo-bot/merge", {"person": OWNER, "title": "Which pricing page first?", "question": "Which one?",
+                                        "tasks": [asked, filed]}, token=ceo)["task"]
+    with api.app.state.store.transaction() as c:      # Ops' task becomes its own private task, out of Ana's reach
+        c.execute("UPDATE tasks SET private=1, requester='bot:ops', guest=NULL WHERE id=?", (asked,))
+    page = test_goal_asks.get(api, "needs-you", "ana-test")["items"]
+    assert next(i for i in page if i["id"] == item["id"])["merged"] == [filed]
+
+
 def test_a_merged_answer_never_settles_a_question_asked_after_the_merge(api):
     """Ana answers one original where it was asked, and that bot asks her something else; her answer on the merged
     item reaches the other bot only, and the new question stays open in her Needs you."""
