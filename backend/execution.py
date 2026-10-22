@@ -467,6 +467,63 @@ def release_limits(c):
         H.event(c, H.KEEPER, "limit.released", row["bot"], {"since": row["since"]})
 
 
+def _field(result, name):
+    return result.get(name) if isinstance(result, dict) else getattr(result, name, None)
+
+
+def hop_failed(c, attempt_id, result, began, ended):
+    """Whether a turn ended on a usage limit its fallback could not take over: the bot's own runtime hit its limit
+    (`primary_limited`), the runner moved the turn to a fallback, and the fallback failed before it did anything
+    (after the hop only errors, notes and status, and soon: Claude and Codex never report their tool calls, so
+    silence counts only with speed, as for `silent`). Nothing ran on either, so it is the limit's to wait out, not a
+    stopped run for a person: on Oct 21 27 of Reviewer 2's turns hopped to a fallback that could not start and each
+    was held until a person dismissed it."""
+    if not (_field(result, "primary_limited") and _field(result, "fallback") and not _field(result, "limited")
+            and _field(result, "outcome") == "failed" and _field(result, "auth_rejected") is None):
+        return False
+    began, ended = H.parse_ts(began), H.parse_ts(ended)
+    if not began or not ended or (ended - began).total_seconds() > NO_EFFECT_WITHIN:
+        return False
+    hop, after = None, set()
+    for row in c.execute("SELECT seq,kind,payload_json FROM attempt_events WHERE attempt_id=? ORDER BY seq",
+                         (attempt_id,)):
+        if hop is not None:
+            after.add(row["kind"])
+        elif row["kind"] == "diagnostic" and ((p := json.loads(row["payload_json"] or "{}") or {}).get("fallback")
+                                               or login_holds._HOP_RE.search(str(p.get("text") or ""))):
+            hop = row["seq"]
+        elif row["kind"] == "tool":
+            return False
+    return hop is not None and after <= SILENT_KINDS
+
+
+def fallback_mark(config):
+    """The fallback a bot names, as a hold remembers it failed (login_holds.after_turn `hopped`): naming another
+    one, or none, lets the bot try again."""
+    return json.dumps((config or {}).get("fallback") if isinstance(config, dict) else None, sort_keys=True)
+
+
+def limit_lifted(c, settings, bot, attempt_id, finished):
+    """Why a run a usage limit stopped (hop_failed) may run again now, or None: the bot was moved to another model
+    since ("model"), its own limit is over ("reset": no cooldown, no hold on its login, and no reset named in the
+    limit's notice still ahead), or a fallback it names is ready here and has not failed in this hold ("fallback")."""
+    if model_changed_since(c, bot, finished):
+        return "model"
+    now = H.now()
+    hold = own_login_hold(c, settings, bot)
+    named = [login_holds.reset_from_text(error, finished) for error in limit_errors(c, attempt_id)]
+    if (not cooling_off(c, bot) and (hold.get("until") or "") <= now
+            and not any(at and login_holds._iso(at) > now for at in named)):
+        return "reset"
+    row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    config = json.loads(row[0] or "{}") if row else {}
+    place = c.execute("SELECT runner_id FROM assignments WHERE bot=?", (bot,)).fetchone()
+    if (isinstance(config.get("fallback"), dict) and config["fallback"].get("harness") and place and place["runner_id"]
+            and fallback_choice(c, settings, place["runner_id"], bot, config)):
+        return "fallback"
+    return None
+
+
 def person_wrote_since(c, bot, since):
     """Whether a person's message to the bot is queued from after its latest usage limit. A person
     who writes to a limited bot has often just renewed the plan, so the bot tries once now; a
@@ -731,7 +788,8 @@ def fallback_choice(c, settings, runner_id, bot, config, job_id=None, ctx=None):
     if named.get("off"):
         return None
     _, own, primary = login_key(c, settings, runner_id, bot, config, ctx)
-    if bot in login_holds.get(c, runner_id, own, primary).get("stuck", []):
+    hold = login_holds.get(c, runner_id, own, primary)
+    if bot in hold.get("stuck", []) or (hold.get("failed_fallback") or {}).get(bot) == fallback_mark(config):
         return None
     row = c.execute("SELECT readiness_json FROM runners WHERE id=?", (runner_id,)).fetchone()
     ready = readiness_document(row["readiness_json"]) if row else {}
@@ -2215,6 +2273,14 @@ class Execution:
         # A turn a person stopped is over by their choice: nothing to retry and nothing to review.
         stopped = bool(row["stop_requested"]) and body.outcome != "completed"
         limited = body.outcome != "completed" and body.limited and not stopped
+        # A limit its fallback could not take over is the limit's too (hop_failed): queued again to wait for the reset,
+        # never held for a person, and recorded as a limit so the cooldown and the login's hold read it.
+        hopped = (not limited and not stopped and not check
+                  and hop_failed(c, aid, body, row["started"] or row["created"], H.now()))
+        if hopped:
+            limited = True
+            c.execute("UPDATE attempts SET result_json=json_set(result_json,'$.limited',json('true'),"
+                      "'$.fallback_failed',json('true')) WHERE id=?", (aid,))
         # Same reasoning, different cause: the runner reports `retryable` when the runtime was
         # refused before the turn began because it could not renew its own sign-in, and only
         # when that turn produced no message and used no tool. Nothing happened, so requeue it
@@ -2374,7 +2440,9 @@ class Execution:
         if not check and not superseded and not stopped and not gateway_wait and (limited or body.outcome == "completed"):
             from .subscriptions import effective
             login_hold = login_holds.after_turn(c, row["runner_id"], row["bot"], effective(c, row["bot"])[0] or "",
-                                                runtime, body, aid, H.now())
+                                                runtime, body, aid, H.now(),
+                                                hopped=fallback_mark(json.loads(config[0] or "{}") if config else {})
+                                                if hopped else None)
         if rejected:
             self.mark_rejected(c, row["runner_id"], body.auth_rejected.runtime, body.auth_rejected.reason, body.profile_used)
             H.event(c, H.KEEPER, "attempt.auth_rejected", aid,
@@ -2479,6 +2547,7 @@ class Execution:
             H.event(c, H.KEEPER, "attempt.limited", aid,
                     {"bot": row["bot"], "job_id": row["job_id"], "runtime": runtime, "streak": streak,
                      "retry_after": retry, "provider_reset": bool(body.limit_resets_at),
+                     **({"fallback_failed": body.fallback} if hopped else {}),
                      **({"source": {k: v for k, v in src.items() if k != "notice"}} if src else {})})
         elif rejected and any(gateway.key_refused(error) for error in limit_errors(c, aid)):
             settle_status(c, row["bot"], "idle" if requeue else "crashed",
@@ -2769,8 +2838,8 @@ class Execution:
         is how a bot once opened the same request eighteen times.
         """
         cutoff = H.shift(H.now(), seconds=-STALL_MAX)
-        decided = []
-        rows = c.execute("SELECT j.*, a.started, a.finished, a.state AS attempt_state, "
+        decided, limit_said = [], {}
+        rows = c.execute("SELECT j.*, a.started, a.finished, a.state AS attempt_state, a.result_json, "
                          "coalesce(a.finished, j.created) <= ? AS aged "
                          "FROM jobs j LEFT JOIN attempts a ON a.id=j.attempt_id "
                          "WHERE j.state='uncertain' AND (coalesce(a.finished, j.created) <= ? "
@@ -2812,6 +2881,30 @@ class Execution:
                     decided.append(self._decide(c, row, row['attempt_id'], 'dismiss', note, H.KEEPER,
                                                 action='job.auto_reconcile'))
                     continue
+                if row['attempt_id'] and hop_failed(c, row['attempt_id'], json.loads(row['result_json'] or '{}'),
+                                                    row['started'], row['finished']):
+                    # Stopped on a usage limit before it did anything (held before Tico read such a turn as the limit's):
+                    # never BotOps' to review. All of them go back together, oldest first in the queue: the claim holds
+                    # a task's queued work while any run on it is still held (unfenced_sql).
+                    said = limit_said.setdefault(row['bot'], {'resume': 0, 'dismiss': 0})
+                    if self._covered(c, row, msg, task_id):
+                        note = ("Dismissed automatically: this run stopped on a usage limit, and a later run of this bot "
+                                "on the same work has finished since, so its work is covered.")
+                        decided.append(self._decide(c, row, row['attempt_id'], 'dismiss', note, H.KEEPER,
+                                                    action='job.auto_reconcile'))
+                        said['dismiss'] += 1
+                        continue
+                    why = limit_lifted(c, self.store.settings, row['bot'], row['attempt_id'], row['finished'])
+                    if why:
+                        because = {"model": "the bot has moved to another model",
+                                   "fallback": "the fallback it names is ready",
+                                   "reset": "the limit has reset"}[why]
+                        note = (f"Resumed automatically: this run stopped on a usage limit before it did anything, and "
+                                f"{because}, so it runs again.")
+                        decided.append(self._decide(c, row, row['attempt_id'], 'resume', note, H.KEEPER,
+                                                    action='job.auto_reconcile'))
+                        said['resume'] += 1
+                    continue
                 # Only runs that started count: a claim that lapsed before its run began (a computer offline, the
                 # hub unreachable) says nothing about the request itself.
                 if started > 1:
@@ -2843,7 +2936,46 @@ class Execution:
                         "earlier partial work, check what already happened, then continue from there.")
                 decided.append(self._decide(c, row, row['attempt_id'], 'resume', note, H.KEEPER,
                                             action='job.auto_reconcile'))
+        for bot, said in limit_said.items():
+            with isolated(c, "auto_reconcile", bot):
+                self._say_settled(c, bot, said)
         return decided
+
+    @staticmethod
+    def _covered(c, row, msg, task_id):
+        """Whether a turn of the bot on the same task (or, for a chat outside any task, in the same chat) finished
+        after this run stopped: it read what this request asked, so running the request again would do that twice."""
+        since = row['finished'] or row['created']
+        if task_id:
+            return c.execute("SELECT 1 FROM attempts a JOIN turns t ON t.id=a.id WHERE a.bot=? AND t.task_id=? "
+                             "AND a.state='completed' AND a.started>? LIMIT 1",
+                             (row['bot'], task_id, since)).fetchone() is not None
+        conv = H.conversation(c, msg['conversation_id'])
+        for found in c.execute("SELECT m.id FROM attempts a JOIN jobs j ON j.id=a.job_id JOIN messages m "
+                               "ON m.id=j.message_id WHERE a.bot=? AND m.conversation_id=? AND a.state='completed' "
+                               "AND a.started>?", (row['bot'], msg['conversation_id'], since)).fetchall():
+            if H.message_task_id(H.message(c, found['id']), conv) is None:
+                return True
+        return False
+
+    @staticmethod
+    def _say_settled(c, bot, said):
+        """One plain line in the bot's activity for the runs a usage limit held that the sweep settled. It names no
+        task: the bot's status is read more widely than its private tasks."""
+        parts = []
+        if said['resume']:
+            parts.append(f"resumed {said['resume']} run{'s' if said['resume'] > 1 else ''} held by a usage limit")
+        if said['dismiss']:
+            parts.append(f"dismissed {said['dismiss']} held run{'s' if said['dismiss'] > 1 else ''} "
+                         "a later run already covered")
+        if not parts:
+            return
+        line = "Tico " + " and ".join(parts)
+        status = H.status(c, bot) or {}
+        if status.get("state") == "limited" and status.get("focus"):
+            line = f"{status['focus'].split('. Tico ')[0]}. {line}"
+        H.status_set(c, H.KEEPER, bot, focus=line, reason="Held runs settled")
+        H.event(c, H.KEEPER, "limit.held_settled", bot, dict(said))
 
     def _hand_to_maintainer(self, c, row, msg, task, acted):
         """One open BotOps task per bot to review its held runs: BotOps, not a person, recovers a stopped run."""

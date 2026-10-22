@@ -370,12 +370,14 @@ def label(src, at="", primary_until=""):
     return said
 
 
-def after_turn(c, runner_id, bot, profile, runtime, body, attempt_id, hit):
+def after_turn(c, runner_id, bot, profile, runtime, body, attempt_id, hit, hopped=None):
     """Save or clear the logins' holds a finished turn shows, and return the hold that keeps the bot waiting, or {}.
     `profile` and `runtime` are the bot's own login. Every login the turn met a usage limit on is held, with the reset
     its own notice names, whatever the turn's outcome: an intermediate fallback that ran out stays held after a later
     one finishes the turn. A login the turn completed on is cleared, but only by a turn claimed after its hold began:
-    a lane leased before the limit says nothing about the login now."""
+    a lane leased before the limit says nothing about the login now. `hopped` is the bot's fallback (execution.fallback_mark)
+    when it met the limit and could not start the turn (execution.hop_failed): the bot waits out its own hold rather than
+    being sent there again, until it names another fallback."""
     # Sent away from its held login, no fallback ran it (none was ready, or it failed before it acknowledged the
     # turn): the turn ran nowhere, so no login met a limit; the hop its notes name only failed to start.
     unstarted = body.primary_held and body.limited and not body.fallback
@@ -413,4 +415,10 @@ def after_turn(c, runner_id, bot, profile, runtime, body, attempt_id, hit):
         if hold:
             _save(c, {**hold, "stuck": sorted({*hold.get("stuck", []), bot})})
             kept = get(c, runner_id, own, runtime)
-    return kept if body.limited else {}
+    if hopped is not None:
+        own = canonical(c, runner_id, profile, runtime)
+        hold = get(c, runner_id, own, runtime)
+        if hold:
+            _save(c, {**hold, "failed_fallback": {**(hold.get("failed_fallback") or {}), bot: hopped}})
+            kept = get(c, runner_id, own, runtime)
+    return kept if body.limited or hopped is not None else {}

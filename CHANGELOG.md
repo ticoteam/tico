@@ -96,6 +96,14 @@ All notable changes to Tico are recorded here. The format follows
   each one at its own rate.
 
 ### Fixed
+- **A usage limit no longer leaves runs waiting for a person.** When a bot's own model hit its limit and the fallback
+  Tico moved the turn to failed before it did anything, the run was held as "saved a stopped run for later" until
+  someone resumed or dismissed it (Reviewer 2 had 27 at once on Oct 21). Such a turn now counts as the limit's: it goes
+  back in the queue, the bot shows it is limited until the reset, and it is not sent to that same fallback again in
+  this hold (naming another fallback lets it run there at once). Runs already held this way resume on their own,
+  oldest first, once the limit resets or the bot moves to another model or a ready fallback; one whose task is done
+  or closed, or whose work a later run already finished, is dismissed with a one-line reason. The bot's activity says
+  so in plain words ("Tico resumed 2 runs held by a usage limit").
 - **The scheduler no longer blocks the server for seconds at a time on a busy hub.** Its 10-second pass used to run
   in one write transaction and read every task to find due dates, so on a hub with many tasks and routines requests
   waited behind it and runners saw 503s. Each step, routine and batch of due-date reminders now commits on its own,
