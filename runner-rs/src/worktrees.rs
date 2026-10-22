@@ -981,6 +981,49 @@ async fn count(path: &Path, env: &Env, args: &[&str]) -> R<i64> {
     Ok(git(path, env, args, true).await?.stdout.trim().parse::<i64>().unwrap_or(0))
 }
 
+/// The pushes a turn made from its task's worktrees since `since` (unix seconds), as `{"path", "count"}` per
+/// worktree that pushed, `path` as its link records it: Tico never sees a push, so the run's result reports them
+/// (backend/run_triggers.py). A push leaves `update by push` in the reflog of the remote-tracking ref of the branch
+/// it sent, and a fetch or pull leaves something else. Only each worktree's own branch is read: worktrees of one
+/// base clone share remote-tracking refs, and git checks a branch out in one worktree at a time, so another task's
+/// push is never counted here.
+pub async fn pushes(workspace: &Path, links: &[Value], since: i64, env: &Env) -> Vec<Value> {
+    let mut out = vec![];
+    let mut seen: HashSet<PathBuf> = HashSet::new();
+    for link in links {
+        let recorded = text_of(&link["path"]);
+        let Ok(path) = safe_path(workspace, &recorded) else { continue };
+        if !path.join(".git").is_file() || !seen.insert(path.clone()) {
+            continue;
+        }
+        let Ok(branch) = git(&path, env, &["symbolic-ref", "--short", "-q", "HEAD"], false).await else { continue };
+        let branch = branch.stdout.trim().to_string();
+        if branch.is_empty() {
+            continue; // detached: no branch of its own to have pushed
+        }
+        let mut refs = vec![format!("refs/remotes/origin/{branch}")];
+        if let Ok(up) = git(&path, env, &["rev-parse", "--symbolic-full-name", "@{upstream}"], false).await {
+            let up = up.stdout.trim().to_string();
+            if up.starts_with("refs/remotes/") && !refs.contains(&up) {
+                refs.push(up);
+            }
+        }
+        let mut n = 0;
+        for r in &refs {
+            let Ok(log) = git(&path, env, &["log", "-g", "--date=unix", "--format=%gd%x09%gs", r, "--"], false).await else { continue };
+            n += log.stdout.lines().filter(|line| {
+                let (at, subject) = line.split_once('\t').unwrap_or((line, ""));
+                let ts = at.rsplit_once("@{").and_then(|(_, t)| t.trim_end_matches('}').parse::<i64>().ok());
+                subject == "update by push" && ts.is_some_and(|t| t >= since)
+            }).count();
+        }
+        if n > 0 {
+            out.push(json!({"path": recorded, "count": n.min(1000)}));
+        }
+    }
+    out
+}
+
 /// A remove or restore (worktrees._act). `still_closed` is asked again just before the tree goes.
 /// A field of an action's row, "" when it has none (a Map index would panic).
 fn own(row: &Map<String, Value>, key: &str) -> String {

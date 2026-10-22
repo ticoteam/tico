@@ -1853,6 +1853,11 @@ class SubscriptionUnavailable(Contract):
     problem: str = Field(min_length=1, max_length=500)
 
 
+class RunPush(Contract):
+    path: str = Field(min_length=1, max_length=1000)  # the worktree, as its task link records it
+    count: int = Field(ge=1, le=1000)
+
+
 class Completion(Contract):
     subscription_unavailable: SubscriptionUnavailable | None = None
     profile_used: str | None = Field(default=None, max_length=80)
@@ -1873,6 +1878,9 @@ class Completion(Contract):
     # Inputs this run took from `attempts/{aid}/inputs` but never gave the runtime (the turn ended between
     # the poll and the steer). They go back to the queue whatever the outcome, not settled with the run.
     undelivered: list[ID] = Field(default_factory=list, max_length=100)
+    # Git pushes the run made from its task's worktrees (runner-rs/src/worktrees.rs pushes): writes Tico sees no
+    # other way. Counted in its `writes` (backend/run_triggers.py).
+    pushes: list[RunPush] = Field(default_factory=list, max_length=50)
 
 
 class Retry(Contract):

@@ -26,6 +26,9 @@ All notable changes to Tico are recorded here. The format follows
   each one at its own rate.
 
 ### Fixed
+- **A run whose only work was a git push counts as acting.** The computer reports the pushes a run made from its
+  task's worktrees with its result, so in `hub sql` the run reads `acted` with `did_nothing` 0 instead of
+  `no_change`. Pushes from another task's worktree are not counted, and older runs read as before.
 - **Muse Code turns work again on a Docker computer that runs bots as their own user.** Each Muse login now keeps
   its sessions in a folder of Tico's own (per subscription profile too), so a turn, including an automatic fallback
   to Muse, no longer fails at once with "failed to create session lock directory ... Permission denied". If that
