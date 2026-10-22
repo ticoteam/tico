@@ -1,6 +1,7 @@
 """A bot's last run that ended without finishing is said plainly, never as a bare "Crashed" (Oct 22: BotOps showed a
 red Crashed for a run its computer took and never started, with nothing lost and nothing to do)."""
 from backend.tests.test_api import api, claim, expire, get, post, ready, setup_attempt  # noqa: F401 (fixture)
+from backend.store import H
 from backend.tests.test_execution_review import interrupted
 
 
@@ -48,7 +49,7 @@ def test_the_line_clears_when_the_run_that_did_not_start_is_no_longer_waiting(ap
 
 
 def test_a_computer_hands_back_a_run_it_could_not_start_at_once(api):
-    from backend.execution import HANDED_BACK
+    from backend.execution import HAND_BACK_WAIT, HANDED_BACK
     machine, _, attempt = setup_attempt(api)
     post(api, f"attempts/{attempt['id']}/events", {"events": [{"seq": 1, "kind": "diagnostic", "payload": {
         "text": "APIError: execution interrupted (Tico could not confirm this request); inspect local runner"}}]},
@@ -61,8 +62,53 @@ def test_a_computer_hands_back_a_run_it_could_not_start_at_once(api):
     line = status(api)
     assert line["state"] == "idle" and line["last_stop"]["tone"] == "soft"
     assert line["last_stop"]["reason"].startswith(HANDED_BACK)
+    # Back in seconds, not at the lease's 90: a short wait, then the same job again.
     ready(api, machine, ["ops"])
-    assert claim(api, machine)["job_id"] == attempt["job_id"]     # no 90 s wait for the lease
+    assert claim(api, machine) is None
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE attempts SET finished=? WHERE id=?", (H.shift(H.now(), seconds=-HAND_BACK_WAIT - 1), attempt["id"]))
+    assert claim(api, machine)["job_id"] == attempt["job_id"]
+
+
+def test_quick_hand_backs_wait_between_tries_and_do_not_fail_the_run(api, monkeypatch):
+    """A runner claims every quarter second: a step that fails fast before every start must not spend every pre-start
+    try in a few seconds and fail the run."""
+    from backend import execution
+    monkeypatch.setattr(execution, "PRE_START_TRIES", 3)
+    machine, _, attempt = setup_attempt(api)
+    for _ in range(20):                           # a minute of claims, each handed straight back
+        if attempt:
+            post(api, f"attempts/{attempt['id']}/complete", {"outcome": "failed", "last_seq": 0, "text": ""},
+                 machine["token"])
+        ready(api, machine, ["ops"])
+        attempt = claim(api, machine)
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM attempts").fetchone()[0] == 1
+        job = c.execute("SELECT id,state FROM jobs").fetchone()
+        assert job["state"] == "queued"
+        waits = []
+        for n in (1, 2, 3):                       # the wait doubles with each hand-back, up to its cap
+            c.execute("UPDATE attempts SET finished=? WHERE job_id=?", (H.now(), job["id"]))
+            until = execution.handed_back_until(c, dict(c.execute("SELECT * FROM jobs").fetchone()))
+            waits.append(round((H.parse_ts(until) - H.parse_ts(H.now())).total_seconds()))
+            if n < 3:
+                c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created,"
+                          "finished,final_text) SELECT ?,job_id,bot,runner_id,generation,?,state,lease_until,created,"
+                          "finished,final_text FROM attempts WHERE job_id=? LIMIT 1", (f"x{n}", f"h{n}", job["id"]))
+    assert [w - waits[0] for w in waits] == [0, execution.HAND_BACK_WAIT, 3 * execution.HAND_BACK_WAIT]
+
+
+def test_a_stop_before_the_start_and_a_completed_report_are_not_hand_backs(api):
+    machine, _, attempt = setup_attempt(api)
+    # Only a run that started can finish.
+    post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "last_seq": 0, "text": "Done."},
+         machine["token"], expected=409)
+    # A person's Stop keeps the lapse it always had, and the line says it was stopped.
+    post(api, "bots/ops/stop", {"attempt_id": attempt["id"]})
+    post(api, f"attempts/{attempt['id']}/complete", {"outcome": "interrupted", "last_seq": 0, "text": ""},
+         machine["token"], expected=409)
+    lapse(api, attempt)
+    assert status(api)["last_stop"]["text"] == "Last run was stopped before it started. Nothing ran."
 
 
 def test_a_run_that_stopped_partway_says_so_and_offers_the_review(api):

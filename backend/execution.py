@@ -248,7 +248,7 @@ def last_stop(c, bot, status):
         return None
     from .repositories import metadata
     mark = metadata(c, LAST_STOP + bot)
-    attempt = (c.execute("SELECT id,job_id,state,started,finished,final_text FROM attempts WHERE id=?",
+    attempt = (c.execute("SELECT id,job_id,state,started,finished,final_text,stop_requested FROM attempts WHERE id=?",
                          (mark["attempt_id"],)).fetchone() if mark.get("attempt_id") else None)
     at = (attempt["finished"] if attempt else None) or status.get("since")
     held = (c.execute("SELECT id,attempt_id FROM jobs WHERE bot=? AND state='uncertain' ORDER BY created DESC LIMIT 1",
@@ -274,6 +274,11 @@ def last_stop(c, bot, status):
         if not job or job["state"] != "queued":        # taken again, or no longer waiting: nothing to explain
             return None
         returned = (attempt["final_text"] or "").startswith(HANDED_BACK)
+        if attempt["stop_requested"]:
+            return {"kind": "not_started", "tone": "soft", "needs_person": False, "action": None, "at": at,
+                    "attempt_id": attempt["id"], "text": "Last run was stopped before it started. Nothing ran.",
+                    "reason": "It was stopped before its computer started it, so nothing ran. The request is back "
+                              "in the queue and runs again shortly."}
         return {"kind": "not_started", "tone": "soft", "needs_person": False, "action": None, "at": at,
                 "attempt_id": attempt["id"], "text": NOT_STARTED,
                 "reason": (f"{attempt['final_text']} " if returned else
@@ -875,7 +880,27 @@ def job_refusal(c, job, followed, ready, busy, lanes, roots, live=frozenset()):
     if ((job["bot"], job_lane(c, job["bot"], config, message, conversation, lanes, roots)) in busy
             or (job["bot"], task_id) in live):
         return "lane_held"
+    if (until := handed_back_until(c, job)) and until > H.now():
+        return "handed_back"
     return None
+
+
+HAND_BACK_WAIT = 15          # seconds before a handed-back job is handed out again, doubled for each hand-back
+HAND_BACK_MAX = 300
+
+
+def handed_back_until(c, job):
+    """When a job its computer last handed back before starting (Execution.hand_back) may be claimed again, or None.
+    A runner claims every quarter second, so without this wait a step that fails fast before every start would spend
+    all PRE_START_TRIES in seconds and fail a run over a short hiccup; with it, ten hand-backs take about half an
+    hour, as ten lapsed leases used to take about fifteen minutes."""
+    last = (c.execute("SELECT state,started,finished,final_text FROM attempts WHERE id=?", (job["attempt_id"],)).fetchone()
+            if job["attempt_id"] else None)
+    if not last or last["started"] or last["state"] != "expired" or not (last["final_text"] or "").startswith(HANDED_BACK):
+        return None
+    count = c.execute("SELECT count(*) FROM attempts WHERE job_id=? AND started IS NULL AND state='expired' "
+                      "AND substr(final_text,1,?)=?", (job["id"], len(HANDED_BACK), HANDED_BACK)).fetchone()[0]
+    return H.shift(last["finished"], seconds=min(HAND_BACK_WAIT * 2 ** max(count - 1, 0), HAND_BACK_MAX))
 
 
 def bot_refusal(c, settings, runner_id, bot):
