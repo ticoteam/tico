@@ -34,7 +34,11 @@ def plan(onboarding, c, who, text):
     by_name = {name: card for card in cards for name in (card["template"], card["slug"])}
     required = {onboarding._bot_slug(card["slug"]): card["template"] for card in cards if card["required"]}
     ids, picked = {}, {}
+    # A seat with no template yet, or one a person holds, makes no bot: the chart keeps it as a seat.
+    seats = [bot for bot in draft["bots"] if bot["template"] in D.OPEN_SEATS or bot.get("person")]
     for bot in draft["bots"]:
+        if bot in seats:
+            continue
         card = by_name.get(bot["template"])
         if card is None:
             raise Problem("company_file", "An employee's template is not installed in this Tico catalog", 422)
@@ -48,11 +52,17 @@ def plan(onboarding, c, who, text):
     selected, later = {}, []
     try:
         names = M.OnboardingNames(company_name=draft["company"]["name"],
-                                  owner_name=(draft["people"][0]["name"] if draft["people"] else ""))
+                                  owner_name=(D.owner(draft) or {"name": ""})["name"])
         display = O.display_names(onboarding.settings, {"names": names.model_dump()})
         for slug, (bot, card) in picked.items():
             parent = D.manager_of(draft, bot)
-            parent = home if parent == owner_id else ids.get(parent)
+            # Under a seat that makes no bot (the Controller, until its template exists), the bot reports one step up.
+            skipped = {seat["id"]: seat for seat in seats}
+            while parent in skipped:
+                parent = D.manager_of(draft, skipped.pop(parent))
+            # A coworker on the chart is no one in Tico yet: a bot under them reports to the owner.
+            coworker = any(p["id"] == parent for p in draft["people"])
+            parent = home if parent == owner_id or coworker else ids.get(parent)
             if parent is None or parent == slug:
                 raise Problem("company_file", "An employee's reporting line cannot be applied", 422)
             instructions = O.render(card, display, bot["title"])["instructions"]
@@ -70,6 +80,10 @@ def plan(onboarding, c, who, text):
     deferred = []
     if "models" in saved:
         deferred.append("model_choices")
+    if seats:
+        deferred.append("open_seats")
+    if len(draft["people"]) > 1:
+        deferred.append("coworkers")
     if tool_list(draft):
         deferred.append("tool_connections")
     if any(b.get("first_job") for b in draft["bots"]):

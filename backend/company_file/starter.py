@@ -29,8 +29,10 @@ def load(source):
         raise D.DraftError("the starter plan must be a company file")
     if any(b["existing"] for b in draft["bots"]):
         raise D.DraftError("Connect existing agents in Tico after importing the starter team")
-    if len(draft["people"]) > 1:
-        raise D.DraftError("This import supports the owner and AI employees; add coworkers in Tico first")
+    # A coworker comes along only as the person who holds a seat; they join the team in Tico, never by import.
+    holders = {b.get("person") for b in draft["bots"]}
+    if any(not p["owner"] and p["id"] not in holders for p in draft["people"]):
+        raise D.DraftError("This import supports the owner, AI employees and the people who hold seats; add other coworkers in Tico first")
     if draft["rules"]["mode"] != "defaults":
         raise D.DraftError("Review custom rules in Tico; this starter import uses the default rules")
     # Match the app's setup fields before a cloud installer creates anything.

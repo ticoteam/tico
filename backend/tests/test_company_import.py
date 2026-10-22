@@ -13,10 +13,12 @@ from backend.store import H, Problem, encode
 from backend.tests.test_sample_company import OWNER_EMAIL, PEOPLE, SEED, environment, machine, rows, settings_for, signed_in
 
 
-def company_text(reverse_builtins=False, through_new_parent=False):
-    draft = C.Turn(C.blank()).finish()
+def company_text(reverse_builtins=False, through_new_parent=False, keep=("coo", "botops", "finance-lead", "bookkeeping")):
+    draft = C.blank()
+    draft["company"]["signals"] = ["sells_services"]
+    draft = C.Turn(draft).finish()
     draft["company"].update(name="Acme Finance", about="We help small firms manage their books.")
-    draft["bots"] = [b for b in draft["bots"] if b["template"] in {"coo", "botops", "finance-lead", "bookkeeping"}]
+    draft["bots"] = [b for b in draft["bots"] if b["template"] in set(keep)]
     for bot in draft["bots"]:
         bot["start"] = bot["template"] != "bookkeeping"
         if bot["template"] == "bookkeeping":
@@ -27,6 +29,62 @@ def company_text(reverse_builtins=False, through_new_parent=False):
         if through_new_parent and bot["template"] in ("coo", "finance-lead"):
             bot["reports_to"] = "finance-lead" if bot["template"] == "coo" else "botops"
     return C.to_yaml(draft) + "models:\n  source: gateway\n  by_department:\n    finance: mid\n"
+
+
+def test_a_seat_with_no_bot_yet_makes_no_bot_and_the_bots_under_it_report_one_step_up(environment):
+    api = environment()
+    text = company_text(keep=("coo", "botops", "finance-lead", "controller", "bookkeeping"))
+    assert "no_bot_yet: true" in text
+    preview = api.post("/api/v2/onboarding/company/preview", json={"company_yaml": text}, headers=signed_in())
+    assert preview.status_code == 200, preview.text
+    summary = preview.json()
+    employees = {e["template"]: e for e in summary["employees"]}
+    assert "controller" not in employees and "open_seats" in summary["deferred"]
+    assert employees["bookkeeping"]["reports_to"] == "finance-lead"
+
+
+def test_people_who_hold_seats_come_along_in_the_plan_and_make_no_bot(environment):
+    api = environment()
+    draft = C.blank()
+    draft["company"]["signals"] = ["sells_services"]
+    draft = C.Turn(draft).finish()
+    keep = ("coo", "botops", "finance-lead", "bookkeeping", "controller")
+    draft["bots"] = [b for b in draft["bots"] if b["template"] in keep]
+    seat = {b["template"]: b["title"] for b in draft["bots"]}
+    turn = C.Turn(draft)
+    for name, args in (("company_set", {"name": "Acme Finance", "about": "We help small firms manage their books."}),
+                       ("person_set", {"name": "me", "role": "Founder"}),
+                       ("seat_fill", {"seat": seat["bookkeeping"], "name": "Ana"}),
+                       ("seat_fill", {"seat": seat["controller"], "name": "Ben"}),
+                       ("goal_add", {"title": "Close the books by day 5", "owner": seat["controller"]}),
+                       ("goal_add", {"title": "Clean ledgers", "owner": "Ana"})):
+        assert turn.apply(name, args)["ok"], name
+    draft = turn.finish()
+    # A bot under a coworker reports to the owner: the coworker is no one in Tico yet.
+    next(b for b in draft["bots"] if b["template"] == "finance-lead")["reports_to"] = "ana"
+    text = C.to_yaml(draft)
+    assert "held_by: ana" in text and "held_by: ben" in text
+    body = {"company_yaml": text}
+    preview = api.post("/api/v2/onboarding/company/preview", json=body, headers=signed_in())
+    assert preview.status_code == 200, preview.text
+    summary = preview.json()
+    # Ana's seat has a template and Ben's has none yet: a person holds each, so neither makes a bot.
+    assert {e["template"] for e in summary["employees"]} == {"assistant", "botops", "finance-lead"}
+    assert next(e for e in summary["employees"] if e["template"] == "finance-lead")["reports_to"].startswith("human:")
+    assert {"open_seats", "coworkers"} <= set(summary["deferred"])
+    # A goal owned by a seat with no bot, or by a coworker, is no bot's in Tico: it goes to the company.
+    assert {g["title"]: g["owner"] for g in summary["goals"]} == {"Close the books by day 5": "company", "Clean ledgers": "company"}
+    body["fingerprint"] = summary["fingerprint"]
+    done = api.post("/api/v2/onboarding/company/import", json=body, headers=signed_in())
+    assert done.status_code == 200, done.text
+    assert not rows(api, "SELECT slug FROM bots WHERE slug IN ('bookkeeping','controller')")
+    saved = rows(api, "SELECT value_json FROM registry_metadata WHERE key='onboarding.company_file'")[0]["value_json"]
+    assert '"person":"ana"' in saved and '"person":"ben"' in saved
+    # A coworker who holds no seat still joins in Tico, not by import.
+    loose = C.from_yaml(text)
+    loose["people"].append({"id": "cara", "name": "Cara", "role": "Designer", "dept": None, "owner": False, "isNew": True})
+    with pytest.raises(C.DraftError, match="add other coworkers in Tico"):
+        starter.load(C.to_yaml(loose))
 
 
 def test_import_preserves_selected_team_builtins_and_later_choice_across_retry_and_runner_enrollment(environment):
@@ -176,7 +234,8 @@ def test_a_300_bot_company_file_imports_and_a_301_bot_file_is_refused_plainly(en
     assert len(starter.canonical(starter.load(text)).encode()) > 131072      # past the old 128 KB plan limit
     preview = api.post("/api/v2/onboarding/company/preview", json={"company_yaml": text}, headers=signed_in())
     assert preview.status_code == 200, preview.text
-    assert len(preview.json()["employees"]) == 300
+    seats = sum(b["template"] in {s["slug"] for s in C.SEATS} for b in draft["bots"])  # no bot yet: no employee
+    assert seats and len(preview.json()["employees"]) == 300 - seats
     done = api.post("/api/v2/onboarding/company/import", json={"company_yaml": text, "fingerprint": preview.json()["fingerprint"]},
                     headers=signed_in())
     assert done.status_code == 200, done.text
