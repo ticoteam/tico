@@ -457,8 +457,14 @@ def operation_issues(c, who, auth):
             # A stopped run is held so an automatic retry cannot repeat an outside action. It is
             # useful in Settings, but age alone never turns it into an interruption for a person.
             from .execution import held_back, held_runs, isolation_refused, left_by_keeper
-            named = "; ".join(f"\"{h['title']}\" (owner {h['owner_name']})" for h in held_runs(c, who, auth, slug))
+            runs = held_runs(c, who, auth, slug)
+            named = "; ".join(f"\"{h['title']}\" (owner {h['owner_name']})" for h in runs)
             held_note = f" Held: {named}." if named else ""
+            # Needs you says only what stopped and what it holds up; the review card says what to do (Chris, Oct 22).
+            # Names stop at three and skip runs this reader may not read, so the rest are counted.
+            more = uncertain - len(runs)
+            what = (named + (f" and {more} more" if more > 0 else "") if named
+                    else "A run" if uncertain == 1 else f"{uncertain} runs")
             waiting, waiting_on = held_back(c, who, auth, slug)
             left = left_by_keeper(c, who, slug)
             if isolation_refused(c, who, auth, slug):
@@ -473,11 +479,10 @@ def operation_issues(c, who, auth):
                 # it: only a review lets it go, so this one is a person's now, not a later look (Dev 280).
                 wakes = f"{waiting} queued request{' waits' if waiting == 1 else 's wait'}"
                 on = " on " + ", ".join(f"\"{t}\"" for t in waiting_on) if waiting_on else ""
-                behind = (f" {wakes}{on} until it is reviewed." if waiting else
-                          " Tico settled the rest of that run but could not decide this safely.")
+                behind = (f" {wakes}{on} until you decide." if waiting else
+                          " Tico can't safely decide it on its own.")
                 add("uncertain_work", f"{bot['display_name']} has {uncertain} stopped {noun} holding up work",
-                    f"The bot stopped before returning an answer, so Tico will not repeat it on its own.{held_note}"
-                    f"{behind} Review it to let the work run.",
+                    f"{what} stopped partway.{behind} Choose Try again or Don't retry.",
                     bot=slug, action="review", held_back=waiting, held_tasks=waiting_on)
             else:
                 add("uncertain_work", f"{bot['display_name']} saved {uncertain} stopped {noun} for later",

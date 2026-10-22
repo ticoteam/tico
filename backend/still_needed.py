@@ -42,7 +42,8 @@ def crossed_at(asked_ts):
 
 
 def batch_due(at):
-    """Whether this sweep is a weekday morning's batch: on or after MORNING, Monday to Friday, and the first today."""
+    """Whether it is a weekday morning's batch time: on or after MORNING, Monday to Friday. `sweep` runs it once a day
+    (_ran_today)."""
     local = _local(at)
     return local.weekday() < 5 and local.time() >= MORNING
 
@@ -82,10 +83,9 @@ def send_back(conn, bot, items):
         if task:
             H._task_event(conn, task["id"], H.KEEPER, "asks_superseded", None, "1",
                           "No answer in two business days: back to the bot that asked, as still needed?")
-            if task.get("waiting_on") == person:
-                # The wait was for this answer: the next move is the bot's, and the task leaves the person's Needs you.
-                conn.execute("UPDATE tasks SET waiting_on=NULL WHERE id=?", (task["id"],))
-                H._task_event(conn, task["id"], H.KEEPER, "waiting_on", person, None, "Still needed? went to the bot")
+            # The wait was for this answer: the next move is the bot's, and the task leaves the person's Needs you,
+            # unless another question to them is still open on it.
+            H.drop_asked_waits(conn, task["id"], [asked["id"]], "Still needed? went to the bot")
     lines = [_line(asked, task) for asked, task in items[:LISTED]]
     if len(items) > LISTED:
         lines.append(f"- and {len(items) - LISTED} more")
