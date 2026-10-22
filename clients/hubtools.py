@@ -46,6 +46,7 @@ def release_version():
 SERVER_INFO = {"name": "tico", "title": "Tico", "version": release_version()}
 ASK_WAIT_MAX = 300
 TASK_STATUSES = ("open", "doing", "waiting", "review", "ready", "done", "closed", "declined")
+TASK_UPDATE_STATUSES = tuple(status for status in TASK_STATUSES if status != "closed")
 APPROVAL_KINDS = ("send", "spend", "publish", "merge", "support")
 GOAL_STATUSES = ("red", "yellow", "green", "done", "dropped")     # what a person or bot sets by hand
 GOAL_FILTERS = GOAL_STATUSES + ("gray",)                        # gray is the automatic "no data"
@@ -826,7 +827,7 @@ def task_question(api, args):
        "public_summary": _s("Public summary, separate from internal body"),
        "approval_id": _s("Exact publish approval for bot public edits"), "size": {"type": "number", "minimum": 0},
        "title": _s("A new title; it is checked as a new task's title would be"),
-       "status": {"type": "string", "enum": ["open", "doing", "waiting", "review", "done", "declined"]},
+       "status": {"type": "string", "enum": list(TASK_UPDATE_STATUSES)},
        "type": _s("Task type id or name"),
        "step": _s("Step id or name within the task type; sets status. An empty string clears it"),
        "step_rank": {"type": "number", "description": "Its place within its step, lower first"},

@@ -143,6 +143,9 @@ All notable changes to Tico are recorded here. The format follows
   ([GitHub App](docs/github-app.md#permissions-and-why)).
 
 ### Fixed
+- **Task status help matches the API.** `hub task update` no longer offers `closed`; passing it gives a local hint to
+  use `hub task close <id>` without making an API call. Listing closed tasks still works, and MCP task updates now
+  offer the API's `ready` status too.
 - **The hub and MCP model change also moves a rate-limited bot while a turn runs.** `hub bot model` and the MCP
   model tool refused with "Wait for the current run to finish before changing models"; they now follow the Settings
   rule: the change applies at once, from the next turn, and lifts the old model's limit. A move onto a model that uses
