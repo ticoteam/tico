@@ -3094,7 +3094,16 @@ def supersede_asks(conn, task_id, *, from_actor=None, to_actor=None, keep=None, 
         conn.executemany("UPDATE messages SET superseded_at=? WHERE id=?", [(now(), mid) for mid in ids])
         _task_event(conn, task_id, KEEPER, "asks_superseded", None, str(len(ids)),
                     why or ("Replaced by a newer question" if keep else "The task finished"))
+        recount(conn, asking_actors(conn, ids))     # each asking bot's needs_human counts its open asks
     return ids
+
+
+def asking_actors(conn, ask_ids):
+    """Who sent these asks."""
+    if not ask_ids:
+        return []
+    return [r[0] for r in conn.execute(
+        f"SELECT DISTINCT from_actor FROM messages WHERE id IN ({','.join('?' * len(ask_ids))})", list(ask_ids))]
 
 
 def drop_asked_waits(conn, task_id, ask_ids, why):
@@ -3113,7 +3122,7 @@ def drop_asked_waits(conn, task_id, ask_ids, why):
         return
     conn.execute("UPDATE tasks SET waiting_on=NULL WHERE id=?", (task_id,))
     _task_event(conn, task_id, KEEPER, "waiting_on", person, None, why)
-    _recount(conn, person)
+    _recount(conn, row["owner"])            # its owner's needs_human counted this wait
 
 
 def _step_end(conn, step_id, task_id, top=False):
@@ -6126,9 +6135,12 @@ def wake_stalled(conn, at=None):
                         retried_ids.append(row["id"])
                         continue
                     if retried <= shift(at, seconds=-SPOT_STUCK_MINUTES * 60):
-                        _report_stuck(conn, spot, 2)
+                        woken = conn.execute("SELECT count(*) FROM events WHERE action='task.stall_wake' AND target=? "
+                                             "AND ts>?", (row["id"], shift(at, seconds=-86400))).fetchone()[0] or 0
+                        _report_stuck(conn, spot, woken + 1)    # the stall wakes today and the retry
                         stuck.append(row["id"])
-                        continue
+                    # Between the retry and the report the retry is its wake: no stall wake on top of it.
+                    continue
             # A status note must not buy another round of retries. Cap automatic wakes
             # over the whole day; busy work is excluded above and explicit runs remain available.
             since = shift(at, seconds=-86400)
