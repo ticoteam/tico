@@ -60,8 +60,20 @@ button.nav-librarian{border:0;background:none;cursor:pointer;padding:0}
 .tree ul.node-sources a:hover,.tree ul.node-sources a.cur{color:var(--ink)}
 .side-footer{flex:none;border-top:1px solid var(--line);padding:3px 0 max(3px,env(safe-area-inset-bottom))}
 .side-utility{display:flex;align-items:center;gap:var(--s2);padding:6px 10px;min-width:0}
-#heartbeat{display:flex;align-items:center;flex:none}
-#heartbeat-alert{font-size:var(--t-sm);padding:0 10px 5px}
+/* The account button's one status dot, left of the name, and the lines that say why (ui/app/heartbeat.js) */
+.account-dot{width:8px;height:8px;flex:none;border-radius:50%}.account-dot[hidden]{display:none}
+.account-dot[data-level="bad"]{background:var(--fail)}.account-dot[data-level="warn"]{background:var(--wait)}
+.account-status[hidden]{display:none}
+.account-status ul{list-style:none;margin:0;padding:0;display:grid;gap:2px}
+.account-status-line{display:flex;align-items:flex-start;gap:8px;padding:4px 8px;font-size:var(--t-sm);color:var(--ink)}
+.account-status-line::before{content:'';width:7px;height:7px;flex:none;margin-top:6px;border-radius:50%;background:var(--wait)}
+.account-status-line.bad::before{background:var(--fail)}
+.account-status-text{flex:1;min-width:0;white-space:normal;overflow-wrap:anywhere}
+.account-status-line :is(a,button){flex:none;align-self:center;padding:2px 8px;font-size:var(--t-sm);color:var(--ink);text-decoration:none;border:1px solid var(--line);border-radius:6px;background:none}
+#account-menu .account-status{width:0;min-width:100%;white-space:normal;padding-bottom:var(--s1);margin-bottom:var(--s1);border-bottom:1px solid var(--line)}
+/* With lines to show, the menu takes the sidebar's width (it cannot overflow it: #side clips) so each line reads whole. */
+#account-menu:has(#account-status:not([hidden])){min-width:calc(var(--rail-left) - 36px)}
+#account-status-pop{position:absolute;bottom:calc(100% + 8px);left:0;width:calc(var(--rail-left) - 36px);box-sizing:border-box;padding:var(--s1);background:var(--surface);border:1px solid var(--line);border-radius:var(--r-pop);box-shadow:0 6px 24px rgba(0,0,0,.16);z-index:22}
 .new-version{position:relative;padding:0 10px}
 #changelog-notice{display:flex;align-items:center;gap:8px;margin:0 10px;padding:6px 8px;border-radius:6px;color:var(--muted);font-size:var(--t-sm);text-decoration:none}
 #changelog-notice:hover{background:var(--surface2);color:var(--ink)}

@@ -63,6 +63,13 @@ All notable changes to Tico are recorded here. The format follows
   HQ registers only a join code's hash through scoped SSM; no owner token or join secret crosses that control plane.
 
 ### Changed
+- **One status dot on the account button.** The sidebar's account button showed up to three red dots (left of the
+  name, right of it, and on Settings in its menu), none saying what was wrong. Now one dot sits left of the name: red
+  when something is broken and needs you, amber for a warning or something that clears by itself (a lost connection, a
+  computer's Tico update), none when all is clear. Opening the menu, or hovering the dot, lists each problem on one
+  plain line with a Fix that goes to where it is fixed. The lines come from Settings > Health (its warnings and
+  problems, update available among them), what needs a person in Needs you, and the scheduler and connection. The
+  red "N things need you" line under the sidebar is gone; the Health tab inside Settings keeps its own dot.
 - **The stopped-run card is now just the decision.** Each stopped run shows one line on what stopped ("Stopped 8:12
   AM after using Bash."), one recommendation, and two buttons with the recommended one first: **Try again** leads
   only for a run Tico's own retry rule calls safe (it only read, on a host that reports every call, first stop);

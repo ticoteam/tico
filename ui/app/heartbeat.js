@@ -1,4 +1,4 @@
-/* ui/app/heartbeat.js — Heartbeat, the Needs-you strip, account menu label, download link
+/* ui/app/heartbeat.js — The account status dot and its lines, Needs you, account menu label, download link
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -9,25 +9,80 @@ const needsYouKey = issue => [issue.kind, issue.bot || '', issue.machine || '', 
 const NEEDS_YOU_KEY = 'tico.needsYou';
 function needsYouMemory() { try { return JSON.parse(localStorage.getItem(NEEDS_YOU_KEY) || '{}'); } catch { return {}; } }
 function needsYouRemember(patch) { try { localStorage.setItem(NEEDS_YOU_KEY, JSON.stringify({...needsYouMemory(), ...patch})); } catch {} }
-function renderHeartbeat() {
-  const st = S.status, hb = $('#heartbeat');
-  const issues = st?.health_issues || [];
-  const urgent = issues.filter(needsPerson);
-  const problem = !st ? (S.statusPending ? '' : 'Tico unreachable') : !st.keeper_alive ? (st.cloud ? 'Cloud scheduler needs attention' : 'Computer stopped')
-    : urgent.length ? `${urgent.length} ${urgent.length === 1 ? 'thing needs' : 'things need'} you · click to handle` : '';
-  const label = problem || (!st ? 'Connecting' : st.cloud ? 'Cloud backend connected' : 'Computer running');
+// One status dot, left of the person's name in the account button (Chris, Oct 22): coloured by the worst line,
+// red when something is broken and needs the person, amber for a warning or something that clears by itself.
+// The same lines head the account menu and a hover card on the dot, one plain line each with its fix. No line, no dot.
+const ACCOUNT_HEALTH = '<a class="ghost" href="#/settings" data-gs-tab="health" title="Open Health in Settings">Fix</a>';
+const firstSentence = text => { const s = String(text || '').trim(); const m = s.match(/^.*?[.!?](?=\s|$)/); return (m ? m[0] : s).replace(/[.]$/, ''); };
+function accountIssueFix(issue) {
+  if (issue.kind === 'uncertain_work' && issue.bot) return `<button class="ghost" type="button" data-account-review="${esc(issue.bot)}">Review</button>`;
+  if (issue.restart && issue.machine) return '<button class="ghost" type="button" data-account-needs-you>Restart</button>';
+  if (issue.bot) return `<a class="ghost" href="#/bot/${esc(issue.bot)}/more" title="Open the bot">Fix</a>`;
+  return '<button class="ghost" type="button" data-account-needs-you>Fix</button>';
+}
+function accountStatusLines() {
+  const st = S.status, lines = [];
+  if (!st) {
+    // A lost connection comes back by itself, so it is a warning, never red.
+    if (!S.statusPending) lines.push({level: 'warn', text: "Can't reach Tico. Trying again", fix: '<button class="ghost" type="button" data-account-retry>Retry</button>'});
+  } else if (!st.keeper_alive) {
+    lines.push({level: 'bad', text: st.cloud ? "Bots aren't running: the cloud scheduler stopped" : "Tico stopped on this computer, so bots aren't running", fix: ACCOUNT_HEALTH});
+  }
+  for (const issue of (st?.health_issues || []).filter(needsPerson)) {
+    lines.push({level: issue.severity === 'warning' ? 'warn' : 'bad', text: [issue.title, firstSentence(issue.detail)].filter(Boolean).join(': '), fix: accountIssueFix(issue)});
+  }
+  for (const check of window.hlAttention?.() || []) {
+    const fix = check.fixes?.[0];
+    lines.push({level: check.status === 'bad' ? 'bad' : 'warn', text: [check.label, firstSentence(check.summary)].filter(Boolean).join(': '),
+      fix: fix ? window.hlFixHtml({...fix, label: 'Fix'}).replace(/^<(a|button) /, `<$1 title="${esc(fix.label)}" `) : ACCOUNT_HEALTH});
+  }
+  return lines.sort((a, b) => (a.level === 'bad' ? 0 : 1) - (b.level === 'bad' ? 0 : 1));
+}
+function renderAccountStatus() {
+  const hb = $('#heartbeat');
+  if (!hb) return;
+  const st = S.status, lines = accountStatusLines();
+  const level = lines.some(line => line.level === 'bad') ? 'bad' : lines.length ? 'warn' : '';
+  const label = lines.length === 1 ? lines[0].text : lines.length ? `${lines.length} things to look at`
+    : !st ? 'Connecting' : st.cloud ? 'Cloud backend connected' : 'Computer running';
   hb.title = label;
   hb.setAttribute('aria-label', label);
-  hb.innerHTML = `<span class="dot ${problem ? 'failed' : ''}" ${!problem && st ? 'style="background:var(--ok)"' : ''} aria-hidden="true"></span>`;
-  const alert = $('#heartbeat-alert');
-  alert.textContent = problem;
-  alert.hidden = !problem;
-  alert.classList.toggle('err', !!problem);
-  alert.classList.remove('muted');
-  alert.onclick = st && urgent.length ? () => needsYou() : null;
-  alert.style.cursor = st && urgent.length ? 'pointer' : '';
-  needsYouAutoOpen(urgent);
+  hb.dataset.level = level;
+  hb.hidden = !level;
+  const html = lines.map(line => `<li class="account-status-line ${line.level}" data-level="${line.level}"><span class="account-status-text" title="${esc(line.text)}">${esc(line.text)}</span>${line.fix}</li>`).join('');
+  for (const box of [$('#account-status'), $('#account-status-pop')]) {
+    if (!box) continue;
+    box.innerHTML = html ? `<ul>${html}</ul>` : '';
+    if (!html) box.hidden = true;
+    else if (box.id === 'account-status') box.hidden = false;
+  }
 }
+function renderHeartbeat() {
+  renderAccountStatus();
+  needsYouAutoOpen((S.status?.health_issues || []).filter(needsPerson));
+}
+// Desktop: hovering the dot shows the lines without opening the menu. A tap opens the menu, which starts with them.
+(() => {
+  const wrap = $('.account-wrap'), pop = $('#account-status-pop');
+  if (!wrap || !pop) return;
+  let hide = 0;
+  const canHover = () => window.matchMedia('(hover: hover)').matches;
+  wrap.addEventListener('mouseover', ev => {
+    if (!canHover() || !ev.target.closest('#heartbeat, #account-status-pop') || !$('#account-menu').hidden || !pop.innerHTML) return;
+    clearTimeout(hide); pop.hidden = false;
+  });
+  wrap.addEventListener('mouseout', ev => {
+    if (ev.relatedTarget?.closest?.('#heartbeat, #account-status-pop')) return;
+    clearTimeout(hide); hide = setTimeout(() => { pop.hidden = true; }, 200);
+  });
+  wrap.addEventListener('click', () => { pop.hidden = true; });
+})();
+document.addEventListener('click', ev => {
+  if (ev.target.closest('[data-account-retry]')) { void refresh(false); return; }
+  if (ev.target.closest('[data-account-needs-you]')) { needsYou(); return; }
+  const review = ev.target.closest('[data-account-review]');
+  if (review) executionReview(review.dataset.accountReview);
+});
 // The first time a new issue that needs a person shows up, it opens in front of them, wherever
 // they are in the app. Closing it is remembered per issue, and Snooze quiets everything for an
 // hour, so a person is asked once, not on every poll.
@@ -88,10 +143,10 @@ function needsYou() {
 function renderAccount() {
   const el = $('#account'), me = S.me;
   if (!el) return;
-  if (!me) { el.innerHTML = '<span class="account-email">Not signed in</span>'; return; }
+  if (!me) { el.querySelector('.account-email').textContent = 'Not signed in'; return; }
   el.title = `Signed in as ${me.email}${me.local ? ' (local app)' : ''}`;
-  el.innerHTML = `<span class="account-email">${esc(me.email || 'Not signed in')}</span><span class="hl-alert" data-hl-alert hidden></span>`;
-  window.hlNav?.();
+  el.querySelector('.account-email').textContent = me.email || 'Not signed in';
+  renderAccountStatus();
   $('#connect-agent').hidden = !settingsCanMakeTokens();
   renderInboxNav();
   renderNewVersion();

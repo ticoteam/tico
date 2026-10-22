@@ -135,16 +135,17 @@
       <div id="new-version-pop" role="dialog" aria-label="New version" hidden></div>
     </div>
     <div class="side-utility">
-      <div id="heartbeat" role="status" aria-label="Connecting" title="Connecting"><span class="dot" aria-hidden="true"></span></div>
       <div class="account-wrap">
-        <button id="account" type="button" aria-expanded="false" aria-controls="account-menu" title="Account navigation"><span class="account-email">Signing in…</span><span class="hl-alert" data-hl-alert hidden></span></button>
+        <button id="account" type="button" aria-expanded="false" aria-controls="account-menu" title="Account navigation"><span id="heartbeat" class="account-dot" role="status" aria-label="Connecting" title="Connecting"></span><span class="account-email">Signing in…</span></button>
+        <div id="account-status-pop" class="account-status" hidden></div>
         <nav id="account-menu" aria-label="Account navigation" hidden>
+          <div id="account-status" class="account-status" hidden></div>
           <a class="nav-link" href="#/integrations" data-nav="integrations" id="nav-integrations"><span class="nav-icon" aria-hidden="true">api</span>Tools</a>
           <a class="nav-link" href="#/replay" data-nav="replay"><span class="nav-icon" aria-hidden="true">history</span>Replay</a>
           <a class="nav-link" href="#/learnings" data-nav="learnings"><span class="nav-icon" aria-hidden="true">psychology</span>Learnings</a>
           <a class="nav-link" href="#/usage" data-nav="usage"><span class="nav-icon" aria-hidden="true">paid</span>Usage</a>
           <a class="nav-link" href="#/changelog" data-nav="changelog"><span class="nav-icon" aria-hidden="true">dynamic_feed</span>Changelog<span id="changelog-badge" class="pill" hidden></span></a>
-          <a class="nav-link" href="#/settings" data-nav="settings"><span class="nav-icon" aria-hidden="true">settings</span>Settings<span class="hl-alert" data-hl-alert hidden></span></a>
+          <a class="nav-link" href="#/settings" data-nav="settings"><span class="nav-icon" aria-hidden="true">settings</span>Settings</a>
           <button class="nav-link" id="account-tour" type="button" data-gs-tour><span class="nav-icon" aria-hidden="true">tour</span>Take the tour</button>
           <a class="nav-link" id="sign-out" href="/api/v2/logout" hidden><span class="nav-icon" aria-hidden="true">logout</span>Sign out</a>
           <a class="nav-link" id="download-app" href="/download/mac" hidden><span class="nav-icon" aria-hidden="true">download</span>Download the app</a>
@@ -153,7 +154,6 @@
       <button class="help-link" id="connect-agent" type="button" hidden aria-label="Connect an external agent" title="Connect an external agent: Grok, Dots, Muse or any MCP agent"><span class="nav-icon" aria-hidden="true">power</span></button>
       <button class="help-link" id="help-open" type="button" aria-haspopup="dialog" aria-label="Support" title="Support">?</button>
     </div>
-    <div id="heartbeat-alert" class="err" hidden></div>
   </footer>
 </aside>
 <dialog id="search-modal" class="tmodal search-modal" aria-label="Search">

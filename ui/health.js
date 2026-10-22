@@ -1,6 +1,6 @@
 /* Settings > Health: what needs attention right now (backend/health.py). Everything shown is what
-   GET /api/v2/health computed; the only local state is which page is open. The attention dot sits on
-   the way into Settings, never in the main navigation. */
+   GET /api/v2/health computed; the only local state is which page is open. What needs looking at also shows as
+   lines under the account button's one status dot (ui/app/heartbeat.js), never in the main navigation. */
 'use strict';
 let HL = null;
 let HL_LOAD = 0;
@@ -31,21 +31,22 @@ async function hlRefresh() {
   return HL;
 }
 
-// The dot follows the way in: the account button, the Settings entry and the Health tab.
+// What Health says needs looking at, for the account button's one status dot and its lines (ui/app/heartbeat.js).
+// Inside Settings, the Health tab keeps its own dot.
+window.hlAttention = () => (HL?.checks || []).filter(check => check.status === 'warn' || check.status === 'bad');
 window.hlNav = function hlNav() {
   const attention = HL?.attention || 0;
   document.querySelectorAll('[data-hl-alert]').forEach(dot => { dot.hidden = !attention; });
-  const label = attention ? `Settings, ${attention} to look at in Health` : '';
-  const setting = document.querySelector('#account-menu [data-nav="settings"]');
-  if (setting) { if (label) setting.setAttribute('aria-label', label); else setting.removeAttribute('aria-label'); }
   const tab = document.querySelector('[data-settings-tab="health"]');
   if (tab) { if (attention) tab.setAttribute('aria-label', `Health, ${attention} to look at`); else tab.removeAttribute('aria-label'); }
+  window.renderAccountStatus?.();
 };
 
 const HL_ICONS = {ok: 'check_circle', warn: 'warning', bad: 'error', info: 'radio_button_unchecked', unknown: 'help'};
 let HL_CHECKING = false;
 let HL_CHECK_MSG = null;   // {text, error}: what the last "Check for updates" said, kept across redraws
 
+window.hlFixHtml = hlFixHtml;
 function hlFixHtml(fix) {
   if (fix.login) return `<button class="ghost" type="button" data-model-login data-runner="${esc(fix.login.runner_id)}" data-runtime="${esc(fix.login.runtime)}" data-machine="${esc(fix.login.computer)}">${esc(fix.label)}</button>`;
   if (fix.move) return `<button class="ghost" type="button" data-stuck-move="${esc(fix.move.bot)}" data-runner="${esc(fix.move.runner_id)}" data-machine="${esc(fix.move.computer)}">${esc(fix.label)}</button>`;
