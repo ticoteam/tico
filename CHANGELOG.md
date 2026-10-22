@@ -7,6 +7,8 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.3.74] - 2026-10-22
+
 ### Added
 - **System routines in Settings > Routines**: a read-only System section above the bot routines lists every job Tico
   runs on its own timers, in four groups (Checks that suggest, Learning, Reminders and deadlines, Housekeeping), each
@@ -57,10 +59,6 @@ All notable changes to Tico are recorded here. The format follows
   `hub task wait` answer with what was stored, from both ends ("#237 waits for #233" / "#233 blocks #237"), so a
   reversed link is visible in the reply. `hub task wait --on task:<subtask>` warns about blocking a task on its own
   subtask, as `relate` and create do.
-- **Hosted bot computers.** Hosting can run bots on a separate computer, keeping their work away from the Tico
-  server. Settings > Computers offers **Hosted computer (we run it)**. The installer supports server-only installs,
-  bounded AWS runner recovery and the same 4- and 8-core sizes on both machines, with 100 and 200 GB disks.
-  HQ registers only a join code's hash through scoped SSM; no owner token or join secret crosses that control plane.
 
 ### Changed
 - **The stopped-run card is now just the decision.** Each stopped run shows one line on what stopped ("Stopped 8:12
@@ -98,16 +96,6 @@ All notable changes to Tico are recorded here. The format follows
   morning a bot gets one "Still needed?" wake listing all of them, and asks again or drops them; until then it stays in
   Needs you, marked stale, rather than moving to Older questions. A stuck check never asks a person: the bot is retried
   once, then BotOps gets a task to find why, and open "no progress" questions to people close at the next hourly sweep.
-- **One new subscription per AI tool on each computer.** Adding a second subscription for the same tool is refused
-  with a Switch account message, including while the first sign-in is pending. Different tools and computers stay
-  independent; existing connections and API keys are kept.
-- **Tico AI Gateway: Tico Cheap 1.1 replaces Cheap 1.0** in every model list. It costs the same for a prompt up to
-  100,000 tokens; above that the whole request is $0.75 per 1M input, $0.075 cached and $3.75 output, and Usage
-  estimates it that way. Cheap 1.0 is retired: bots and a default model already on it keep it and keep running at its
-  old price, and Settings > Computers > Models still saves a default left on it, but nothing new can pick it
-  ([Tico AI Gateway](docs/ai-gateway.md)). The web app's Add bot form preselects a current model when the team
-  default is Cheap 1.0, since a new bot is a new pick. The pi runner now reports each model request, so Usage prices
-  each one at its own rate.
 
 ### Fixed
 - **Questions that close on their own leave every count right.** The hourly sweep closes each leftover question on
@@ -151,11 +139,6 @@ All notable changes to Tico are recorded here. The format follows
   to Muse, no longer fails at once with "failed to create session lock directory ... Permission denied". If that
   folder is there but the bot user can't write it, Settings > Computers marks Muse Code and names the folder, rather
   than asking you to sign in. Muse sessions from before this change start fresh.
-- Choosing a bot's model connection refreshes its computer's readiness and queued work immediately, including
-  when the previous connection is signed out.
-- **Recovering an AWS bot computer waits for Systems Manager.** Resuming an interrupted install waits up to five
-  minutes for its agent before sending recovery, tolerates a registration race and keeps the same computer on
-  failure. An accepted recovery command is never sent again by that wait.
 - **Worktrees start only for work that can run, and stuck or obsolete ones free themselves.** A new task worktree is
   refused, with the reason, for a task not started yet, one blocked by an open task (named) or a finished one; a task
   waiting for room is checked again before its tree is reserved or prepared. A `pending` worktree whose pull requests
@@ -163,6 +146,37 @@ All notable changes to Tico are recorded here. The format follows
   progress for 6 hours fails visibly, tells its owner once and retries on the same worktree. A fix-forward after a merge
   keeps its tree while its bot's turn runs or its branch has commits past the merged head ("held: ..."). Each release
   records why, and Health lists them ([Task worktrees](docs/worktrees.md)).
+- **A rate-limited bot can be moved to another model.** Settings > Bots refused the change with "Wait for the
+  current bot turn to finish" whenever a retry was running, so the bot stayed stuck on its spent model. The change now
+  applies at once and takes effect from the next turn; the limit lifts, and a turn still running on the old model no
+  longer puts the limit back on the new one.
+
+## [0.3.73] - 2026-10-21
+
+### Added
+- **Hosted bot computers.** Hosting can run bots on a separate computer, keeping their work away from the Tico
+  server. Settings > Computers offers **Hosted computer (we run it)**. The installer supports server-only installs,
+  bounded AWS runner recovery and the same 4- and 8-core sizes on both machines, with 100 and 200 GB disks.
+  HQ registers only a join code's hash through scoped SSM; no owner token or join secret crosses that control plane.
+
+### Changed
+- **One new subscription per AI tool on each computer.** Adding a second subscription for the same tool is refused
+  with a Switch account message, including while the first sign-in is pending. Different tools and computers stay
+  independent; existing connections and API keys are kept.
+- **Tico AI Gateway: Tico Cheap 1.1 replaces Cheap 1.0** in every model list. It costs the same for a prompt up to
+  100,000 tokens; above that the whole request is $0.75 per 1M input, $0.075 cached and $3.75 output, and Usage
+  estimates it that way. Cheap 1.0 is retired: bots and a default model already on it keep it and keep running at its
+  old price, and Settings > Computers > Models still saves a default left on it, but nothing new can pick it
+  ([Tico AI Gateway](docs/ai-gateway.md)). The web app's Add bot form preselects a current model when the team
+  default is Cheap 1.0, since a new bot is a new pick. The pi runner now reports each model request, so Usage prices
+  each one at its own rate.
+
+### Fixed
+- Choosing a bot's model connection refreshes its computer's readiness and queued work immediately, including
+  when the previous connection is signed out.
+- **Recovering an AWS bot computer waits for Systems Manager.** Resuming an interrupted install waits up to five
+  minutes for its agent before sending recovery, tolerates a registration race and keeps the same computer on
+  failure. An accepted recovery command is never sent again by that wait.
 - **A bot's message to a bot says when it was held.** A plain message or task comment from one bot to another waits
   for that bot's next run; the send now answers `woke: false` with a `held` reason, and `hub` prints it: held for
   that bot's next run, add `--needs-action` to wake it now. Before, a held escalation read as delivered.
@@ -173,10 +187,6 @@ All notable changes to Tico are recorded here. The format follows
 - **No "Claude login required" while the Tico AI Gateway runs the bot.** Under the recommended choice a bot whose
   Claude or ChatGPT is not signed in yet shows as ready, its card says "Using Tico AI Gateway; sign in to Claude to use
   your subscription", and its model check and chat no longer ask for a login. With no Gateway either, it still does.
-- **A rate-limited bot can be moved to another model.** Settings > Bots refused the change with "Wait for the
-  current bot turn to finish" whenever a retry was running, so the bot stayed stuck on its spent model. The change now
-  applies at once and takes effect from the next turn; the limit lifts, and a turn still running on the old model no
-  longer puts the limit back on the new one.
 
 ## [0.3.71] - 2026-10-21
 
@@ -4195,7 +4205,9 @@ First public release.
 - Hosting: local only on a Mac, or self-hosted, including a reference AWS stack under `infra/ec2/`
   with Litestream backups.
 
-[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.71...HEAD
+[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.74...HEAD
+[0.3.74]: https://github.com/ticoteam/tico/compare/v0.3.73...v0.3.74
+[0.3.73]: https://github.com/ticoteam/tico/compare/v0.3.71...v0.3.73
 [0.3.71]: https://github.com/ticoteam/tico/compare/v0.3.70...v0.3.71
 [0.3.70]: https://github.com/ticoteam/tico/compare/v0.3.69...v0.3.70
 [0.3.69]: https://github.com/ticoteam/tico/compare/v0.3.68...v0.3.69
