@@ -2312,16 +2312,20 @@ def create_app(settings=None):
         ids = list(dict.fromkeys(ids))
         if not ids:
             return ids
-        readable = update_visible(c, who)
-        rows = c.execute("SELECT id, bot FROM updates WHERE id IN (" + ",".join("?" * len(ids)) + ")",
+        readable, meetings = update_visible(c, who), updates.meeting_reader(who)
+        rows = c.execute("SELECT id, bot, meetings FROM updates WHERE id IN (" + ",".join("?" * len(ids)) + ")",
                           ids).fetchall()
-        if len(rows) != len(ids) or any(row["bot"] not in readable for row in rows):
+        if len(rows) != len(ids) or any(row["bot"] not in readable or (row["meetings"] and not meetings)
+                                        for row in rows):
             raise Problem("not_found", "Update not found", 404)
         return ids
 
     def require_update(c, who, row):
         """A bot's update takes the bot's own gate (404 unseen, 403 seen without Read); a person's
-        is for everyone on the chart, so anyone else gets 404."""
+        is for everyone on the chart, so anyone else gets 404. One flagged `meetings` is not found for
+        anyone but a meeting reader (`updates.meeting_reader`)."""
+        if updates.withheld(c, who, row["id"]):
+            raise Problem("not_found", "Update not found", 404)
         if not updates.is_person(row["bot"]):
             auth.require_read(c, who, row["bot"], "Update not found")
         elif row["bot"] not in update_visible(c, who):
@@ -2338,7 +2342,8 @@ def create_app(settings=None):
         with store.read() as c:
             return updates.listing(c, who.actor, update_visible(c, who, mine, update_scope(scope)), kind=kind, bot=bot, unread=unread,
                                    before=before, limit=max(1, min(limit, 100)), archive=archive,
-                                   include_archive=include_archive, may_read=update_visible(c, who))
+                                   include_archive=include_archive, may_read=update_visible(c, who),
+                                   meetings=updates.meeting_reader(who))
 
     @app.get("/api/v2/updates/unread")
     def updates_unread(request: Request, mine: bool = False, scope: str | None = None):
@@ -2346,7 +2351,8 @@ def create_app(settings=None):
         auth.domain(who)
         with store.read() as c:
             from .meetings import pending_count
-            return {"unread": updates.count_unread(c, who.actor, update_visible(c, who, mine, update_scope(scope))),
+            return {"unread": updates.count_unread(c, who.actor, update_visible(c, who, mine, update_scope(scope)),
+                                                   meetings=updates.meeting_reader(who)),
                     "meetings_pending": pending_count(c, who)}
 
     @app.get("/api/v2/updates/tree")
@@ -2361,7 +2367,8 @@ def create_app(settings=None):
         if day and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day):
             raise Problem("day", "day is YYYY-MM-DD", 422)
         with store.read() as c:
-            return updates.tree(c, who.actor, update_visible(c, who), kind, day or None, scope or None)
+            return updates.tree(c, who.actor, update_visible(c, who), kind, day or None, scope or None,
+                                meetings=updates.meeting_reader(who))
 
     @app.get("/api/v2/updates/{uid}")
     def update_show(request: Request, uid: str):
@@ -2385,7 +2392,7 @@ def create_app(settings=None):
                         rooms_ok[cid] = False
                 return rooms_ok[cid]
             thread = [m for m in updates.thread(c, uid) if readable(m)]
-            row = updates.with_inputs(c, row, update_visible(c, who))
+            row = updates.with_inputs(c, row, update_visible(c, who), updates.meeting_reader(who))
             return {"update": {**row, "read": bool(read), "archived": updates.archived(c, who.actor, uid)},
                     "thread": thread}
 
@@ -2423,7 +2430,8 @@ def create_app(settings=None):
             views.human_only(who)
             if body.all:
                 visible = update_visible(c, who)
-                ids = updates.inbox_ids(c, who.actor, visible, created_after=H.shift(H.now(), days=-30))
+                ids = updates.inbox_ids(c, who.actor, visible, created_after=H.shift(H.now(), days=-30),
+                                        meetings=updates.meeting_reader(who))
             else:
                 ids = readable_update_ids(c, who, body.ids)
             return {"marked": updates.mark(c, who.actor, ids, read=body.read), "read": body.read}
@@ -2440,7 +2448,8 @@ def create_app(settings=None):
             for uid in ids:
                 H.event(c, who.actor, "update.archive" if body.archived else "update.restore", uid, {})
             return {"updated": len(ids), "archived": body.archived,
-                    "unread": updates.count_unread(c, who.actor, update_visible(c, who))}
+                    "unread": updates.count_unread(c, who.actor, update_visible(c, who),
+                                                   meetings=updates.meeting_reader(who))}
         return mutate(request, body, work)
 
     @app.post("/api/v2/updates/{uid}/reply")
