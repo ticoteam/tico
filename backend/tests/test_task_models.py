@@ -318,3 +318,29 @@ def test_a_task_model_limit_without_fallback_usage_keeps_own_model_work_availabl
         status = H.status(c, "ops")
     assert status["state"] == "idle", status
     assert "task model" in status["focus"], status
+
+
+def test_a_cheaper_task_model_on_a_bot_that_sends_warns_in_plain_words_and_still_saves_and_runs(api):
+    """Spec test 11 (task 7a9b30d4): warn, never refuse; the run says it was below the minimum."""
+    machine = ops_on_sonnet(api)
+    # Not high-stakes yet: no warning for the same cheaper pick.
+    assert set_task_model(api, HAIKU)["warning"] == ""
+    set_task_model(api, None)
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO approvals(id,kind,requested_by,created) VALUES('ap-1','send','bot:ops',?)", (H.now(),))
+    saved = set_task_model(api, HAIKU)
+    assert saved["task_model"]["model"] == "claude-haiku-5-5", "it still saves"
+    assert saved["warning"] == ("This bot sends messages for you. Haiku 5.5 is a cheaper model than its own Sonnet 5.5, "
+                                "and may word things badly. It still saves, and its tasks run on it.")
+    task, turn = task_turn(api, machine)
+    assert turn["config"]["model"] == "claude-haiku-5-5", "it still runs"
+    finish(api, machine, turn, HAIKU_RAN)
+    note = get(api, "tasks/" + task["id"])["runs"][0]["ran_on"]["task_model"]["note"]
+    assert note.startswith("Ran on the bot's task model claude-haiku-5-5 (low), below the minimum for this bot")
+    with api.app.state.store.read() as c:
+        assert [r[0] for r in c.execute("SELECT note FROM task_events WHERE task_id=? AND field='task_model'",
+                                        (task["id"],))] == [note]
+    # A pick of the same tier or dearer, or another provider's, is not below the minimum.
+    set_task_model(api, None)
+    assert set_task_model(api, {"harness": "claude", "model": "claude-opus-5-5", "effort": "high"})["warning"] == ""
+    assert set_task_model(api, {"harness": "grok", "model": "grok-4.6", "effort": "low"})["warning"] == ""

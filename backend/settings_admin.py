@@ -1119,7 +1119,9 @@ class SettingsAdmin:
                       (who.actor, H.now(), undo_change_id))
         H.event(c, who.actor, "bot.task_model_changed", bot, {"before": before, "after": after})
         readiness = task_models.readiness(c, bot, after) if after else None
-        return {"bot": bot, "task_model": after, "revision": config["revision"] + 1, "readiness": readiness}
+        warning = task_models.warning(c, self.settings, bot, declared, after) if after else ""
+        return {"bot": bot, "task_model": after, "revision": config["revision"] + 1, "readiness": readiness,
+                "warning": warning}
 
     def set_compact_at(self, c, who, bot, body):
         """Where the bot's conversation compacts. The runner passes it every turn, so unlike a model change the

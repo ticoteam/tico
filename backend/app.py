@@ -5283,7 +5283,8 @@ def create_app(settings=None):
     @app.post("/api/v2/bots/{bot}/task-model")
     def bot_task_model(request: Request, bot: str, body: M.BotTaskModel):
         """The harness, model and effort the bot's tasks run on, or null for the same as the bot
-        (backend/task_models.py). The bot's own model (POST .../model) never changes it, and this never changes that."""
+        (backend/task_models.py). The bot's own model (POST .../model) never changes it, and this never changes that.
+        `warning` is plain words for a cheaper pick on a bot that sends, spends, publishes or writes; it still saves."""
         return mutate(request, body, lambda c: settings_admin.set_task_model(
             c, request.state.identity, bot, body))
 
