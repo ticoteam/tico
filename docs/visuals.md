@@ -5,7 +5,8 @@ page, a video or an audio clip, with a title. This page is the reference: when a
 a conversation, how to attach one, what Tico does to a page when it is attached, the types and limits, who can see
 it, and what a reader sees outside Tico.
 
-Pictures, SVG and visual pages show inline as cards. Video and audio play inside their card.
+Pictures, SVG and visual pages show inline as cards. Video and audio play inside their card. Without a separate
+visual address, pages and SVG are cards with **Open** instead ([details](#with-and-without-a-visual-address)).
 
 ## When a bot adds a visual
 
@@ -54,9 +55,22 @@ On a task, **Open in file viewer** and **Newer version** open the task's own fil
 A visual shows as a file chip instead of a card only when its type or size isn't one that shows inline (see
 [Types and limits](#types-and-limits)).
 
-**Without a visual address** (see [Self-hosting](#self-hosting)), pictures, video and audio still show inline as
-above. A visual page or an SVG shows as a card with its title, a still preview when the file has one, and **Open**,
-which shows it in the file viewer. There is no setting for this: Tico decides from the setup.
+### With and without a visual address
+
+Visuals are always on. What a conversation shows depends on whether your Tico has a working separate visual address
+(see [Self-hosting](#self-hosting)). You don't turn anything on or off.
+
+| Visual | With a visual address | Without one |
+|---|---|---|
+| Picture (PNG, JPEG, GIF, WebP) | Inline card | Inline card |
+| Video, audio | Plays in its card | Plays in its card |
+| Visual page, SVG | Inline card, as above | Card with its title, a still preview when the file has one, and **Open**. **Open** shows it in the file viewer. |
+
+Without a visual address, Tico shows pictures, video and audio from the app's own address, as media only. It never
+shows a page or an SVG from there, so they open in the file viewer instead of in the conversation. The card's menu
+(**Open in file viewer**, **Download**) works as above; there is no **Expand** for a page or SVG. If the still
+preview can't load, the card keeps its title and **Open**. Set up a visual address and the same messages show
+inline: nothing is lost in between.
 
 ### Video and audio
 
@@ -200,8 +214,8 @@ Without `TICO_VISUAL_ORIGIN` (a local install included), visuals use the fallbac
 pictures (PNG, JPEG, GIF, WebP), video and audio as media only, each with its own type, `X-Content-Type-Options:
 nosniff` and a content policy that runs no script. Pages and SVG are never served inline from the app's own address;
 they show as cards that open in the file viewer. Set `TICO_VISUAL_ORIGIN` and they show inline too: messages keep
-their visuals. **Settings › General** shows which applies: "Visuals: full" or "Visuals: pictures, video and audio
-only (no separate visual address)". `TICO_VISUAL_SAME_ORIGIN` is no longer read. No response on the visual route sets
+their visuals. **Settings › General** shows admins which applies, as one read-only line: "Visuals: full" or "Visuals: pictures, video and audio
+only (no separate visual address)", with a link to this section. `TICO_VISUAL_SAME_ORIGIN` is no longer read. No response on the visual route sets
 a cookie.
 
 `TICO_VISUAL_ORIGIN`'s host must reach the same Tico server as the app: visual addresses are

@@ -73,8 +73,9 @@ pub fn settings_file(model: &str, effort: Option<&str>, servers: &[Value]) -> Va
 }
 
 /// The CLI loads `<home>/.gemini/GEMINI.md` into every prompt: the memory `save_memory` kept, out of the owner's sight.
-/// Before each turn it moves to MEMORY_UNREAD beside it, added to what is there, which the CLI never loads and
-/// crate::harness_memory copies into the bot's repository.
+/// Before each turn it moves to MEMORY_UNREAD beside it, added to what is there unless that already holds it (two
+/// first turns at once set the same file aside), which the CLI never loads and crate::harness_memory copies into the
+/// bot's repository.
 pub fn set_aside_memory(home: &Path) -> std::io::Result<()> {
     // As the bot (crate::harness_memory): the CLI writes `.gemini` as the bot, so a link there must reach nothing more.
     use crate::harness_memory::{bot_read, bot_remove, bot_write};
@@ -83,8 +84,10 @@ pub fn set_aside_memory(home: &Path) -> std::io::Result<()> {
     if let Some(text) = bot_read(&saved)?.filter(|t| !t.trim().is_empty()) {
         let unread = dir.join(MEMORY_UNREAD);
         let before = bot_read(&unread)?.unwrap_or_default();
-        let joined = if before.trim().is_empty() { text } else { format!("{}\n\n{text}", before.trim_end()) };
-        bot_write(&unread, &joined)?;
+        if !before.contains(text.trim()) {
+            let joined = if before.trim().is_empty() { text } else { format!("{}\n\n{text}", before.trim_end()) };
+            bot_write(&unread, &joined)?;
+        }
     }
     // A link is removed, never followed: what it names is not the bot's memory.
     if std::fs::symlink_metadata(&saved).is_ok() {
@@ -619,6 +622,10 @@ mod tests {
         assert!(!home.join(".gemini/GEMINI.md").exists());
         let unread = std::fs::read_to_string(home.join(".gemini").join(MEMORY_UNREAD)).unwrap();
         assert!(unread.contains("SENTINEL-OLDER") && unread.contains("SENTINEL-OLD\n"), "kept, unread: {unread}");
+        // A second turn that finds the same GEMINI.md (two first turns at once) sets nothing aside twice.
+        std::fs::write(home.join(".gemini/GEMINI.md"), "## Gemini Added Memories\n- SENTINEL-OLD\n").unwrap();
+        set_aside_memory(&home).unwrap();
+        assert_eq!(std::fs::read_to_string(home.join(".gemini").join(MEMORY_UNREAD)).unwrap(), unread);
         std::fs::remove_dir_all(dir).unwrap();
     }
 

@@ -72,7 +72,7 @@ tags, suggest level, one-sentence summary and head flag (no instructions), made 
 and a copy of that recommender. The Tico server builds its own template list with the same function, so the two agree on
 `catalog_version` for that release. At the release's tag, `python3 scripts/build_catalog_json.py --out DIR` writes into DIR
 `catalog.json`, `onboarding-actions.json` (the setup page's browser planner: the draft engine's actions, vocabulary and
-limits, the role list and the starter pack), `recruit_rank.py` and `company_file/` (the draft engine, whose `keys.py` is the
+limits, the role list and the five company models), `recruit_rank.py` and `company_file/` (the draft engine, whose `keys.py` is the
 scrubber for setup-website attachments); `--out DIR --check` exits 1 when DIR is stale.
 
 ## The setup page: `/v1/onboarding`

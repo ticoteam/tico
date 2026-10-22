@@ -26,9 +26,10 @@ What a bot saved there before is not lost. Before each turn, in whichever checko
 worktree), the runner copies what the checkout lacks of it into a "Working rules from Claude's memory on this
 computer" section near the top of `memory/learnings.md`: each Claude memory with its whole text, whatever
 `MEMORY.md` says beyond its links to them, and Gemini's saved memory. Each entry names its source, so a retry never
-copies twice; if a source can't be read, nothing is copied. A flat log after it gets a `## Log` heading. The turn's
-memory commit keeps the copy, and the move is finished once the repository's pushed history has it; after that an
-edit or removal there stands. The runner reads and writes these files as the bot, never with its own rights, and skips a memory file
+copies twice, while a same-named memory with other text, from another computer the bot ran on, is still copied; if
+a source can't be read, nothing is copied. A flat log after it gets a `## Log` heading. A task turn's closing commit
+keeps the copy; in the bot's own checkout its next memory commit does. The move is finished once the repository's
+pushed history has it; after that an edit or removal there stands. The runner reads and writes these files as the bot, never with its own rights, and skips a memory file
 that is a link. The old files are left in place, unread (`runner-rs/src/harness_memory.rs`).
 
 ## Where it comes from
