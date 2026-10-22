@@ -4,15 +4,21 @@
 // ends in "Not confirmed ... still here" with Retry, which resends under the same request id, also when the answer's
 // headers came but its body stalled. A slow or failed send leaves
 // one console line with numbers only, never the message text.
-const {chromium} = require('playwright');
+const {chromium, webkit} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
-const launch = () => chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+const launch = {
+  chromium: () => chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined}),
+  // The bug was seen in mobile Safari: the hosted job installs WebKit, so the abort path gets a Safari-engine receipt.
+  webkit: () => webkit.launch({headless: true}),
+};
+// TICO_UI_ENGINES=chromium runs one engine where WebKit's system libraries are missing.
+const engines = (process.env.TICO_UI_ENGINES || 'chromium,webkit').split(',');
 
-(async () => {
-  const browser = await launch();
+async function check(engine) {
+  const browser = await launch[engine]();
   try {
     const page = await browser.newPage({viewport: {width: 1200, height: 800}, serviceWorkers: 'block'});
     const errors = [], sends = [], keys = [], warnings = [];
@@ -111,7 +117,23 @@ const launch = () => chromium.launch({headless: true, channel: process.env.TICO_
       finally { window.fetch = real; }
     });
     assert.deepEqual(bodyStall, {timedOut: true, kept: true}, 'a stalled body times out and keeps its request id');
+
+    // A timed-out "yes" that did land, a cleared box, and "yes" again later: a new request id, so it reaches the bot
+    // instead of replaying the first answer.
+    await page.evaluate(() => { CHAT_SEND.timeout = 1500; document.querySelectorAll('.toast').forEach(t => t.remove()); });
+    answer = 'stall';
+    await box.fill('yes'); await page.keyboard.press('Enter');
+    await toast.waitFor({timeout: 6000});
+    const yesKey = keys.at(-1);
+    answer = 'ok';
+    await page.evaluate(() => { CHAT_SEND.timeout = 30000; });
+    await box.fill('');
+    assert.equal(await page.evaluate(() => BOT_PILL.unconfirmed), null, 'clearing the box forgets the kept id');
+    await box.fill('yes'); await page.keyboard.press('Enter');
+    await page.waitForFunction(() => !document.querySelector('#chat-composer textarea').value && !BOT_PILL.sending);
+    assert.notEqual(keys.at(-1), yesKey, 'the later "yes" is a new send');
+    assert.equal(sends.at(-1), 'yes');
     assert.deepEqual(errors, []);
-    console.log('ok');
   } finally { await browser.close(); }
-})().catch(e => { console.error(e); process.exit(1); });
+}
+(async () => { for (const engine of engines) await check(engine); console.log('ok'); })().catch(e => { console.error(e); process.exit(1); });

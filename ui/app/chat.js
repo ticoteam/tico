@@ -736,6 +736,7 @@ async function v2ChatSend(P, text, slug = P.slug, extraRefs = {}, extra = {}) {
     await P.sent;
     if ((pq(P, '.p-text')?.value || '').trim() !== (text || '').trim() || !text && !P.files.length) return false;
   }
+  chatForgetUnconfirmed(P);
   P.sending = true;
   let sent; P.sent = new Promise(done => sent = done);
   const files = P.files.slice();
@@ -760,6 +761,7 @@ async function v2ChatSend(P, text, slug = P.slug, extraRefs = {}, extra = {}) {
     watch.end(e.timedOut ? 'timeout' : e.unconfirmed ? 'network' : 'refused', e.status);
     // A send with no answer in time ends here, with the draft still in the box and one press to try again. The page
     // cannot know whether it landed, so it says so; Retry of the same text keeps its request id, so it is not saved twice.
+    if (e.timedOut) P.unconfirmed = {text: (text || '').trim(), signature: e.signature, at: Date.now()};
     if (e.timedOut) toast(`Not confirmed: ${e.message} It may still arrive. Your message is still here; Retry sends it without a duplicate.`, true, {label: 'Retry', run: () => pillSend(P)});
     else if (e.unconfirmed) chatRetryLater(P, text, slug, extraRefs, extra); else toast(`Not sent: ${e.message}`, true);
     return false;
@@ -795,6 +797,15 @@ function chatSendWatch(P, fileCount) {
         console.warn(`chat send ${outcome} after ${ms} ms, ${retries} retries, last status ${code || status || 'none'}, ${fileCount} files`);
     },
   };
+}
+// A timed-out send keeps its request id so Retry cannot save it twice. Once the box no longer holds that text (the
+// person cleared or edited it, or it is minutes later), the id is forgotten: a send that did land must not swallow
+// the same short reply ("yes") sent again later, which would otherwise replay the old answer and reach no one.
+const CHAT_UNCONFIRMED_KEEP_MS = 5 * 60000;
+function chatForgetUnconfirmed(P) {
+  const u = P.unconfirmed; if (!u) return;
+  if ((pq(P, '.p-text')?.value || '').trim() === u.text && Date.now() - u.at < CHAT_UNCONFIRMED_KEEP_MS) return;
+  pendingWrites.delete(u.signature); P.unconfirmed = null;
 }
 // "see if anything was disconnected ... and trigger retries automatically". A
 // message that never reached the hub (the network dropped) sends itself when the connection is

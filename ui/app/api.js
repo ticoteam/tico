@@ -70,7 +70,8 @@ const newRequestId = () => globalThis.crypto?.randomUUID?.() || 'xxxxxxxx-xxxx-4
 // `opts.timeout` caps the whole write, retries included: a stalled connection ends as {timedOut, unconfirmed}
 // instead of waiting for the browser to give up, and the request id is kept so a retry is never saved twice.
 // `opts.onRetry` hears each retry (attempt, status), so a slow send can say it is trying again.
-const writeTimedOut = ms => Object.assign(new Error(`No answer from the server in ${Math.round(ms / 1000)} seconds.`), {unconfirmed: true, timedOut: true});
+// The error names the write's signature, so the caller can forget the kept request id once the person moves on.
+const writeTimedOut = (ms, signature) => Object.assign(new Error(`No answer from the server in ${Math.round(ms / 1000)} seconds.`), {unconfirmed: true, timedOut: true, signature});
 const writeRequestOnce = async (method, p, body={}, operationId, opts={}) => {
   if (SESSION.out) throw signedOutError(true);
   getForget();
@@ -80,7 +81,7 @@ const writeRequestOnce = async (method, p, body={}, operationId, opts={}) => {
   const deadline = opts.timeout ? performance.now() + opts.timeout : Infinity;
   for (let attempt = 0; attempt < 3; attempt++) {
     const left = deadline - performance.now();
-    if (left <= 0) throw writeTimedOut(opts.timeout);
+    if (left <= 0) throw writeTimedOut(opts.timeout, signature);
     const abort = new AbortController(), timer = left < Infinity ? setTimeout(() => abort.abort(), left) : 0;
     let status = 0;
     try {
@@ -94,7 +95,7 @@ const writeRequestOnce = async (method, p, body={}, operationId, opts={}) => {
       if (!r.ok) { signInRedirect(r, j); throw apiFailure(j, r); }
       return j;
     } catch (error) {
-      if (abort.signal.aborted) throw writeTimedOut(opts.timeout);
+      if (abort.signal.aborted) throw writeTimedOut(opts.timeout, signature);
       if (!(error instanceof TypeError)) throw error;
       // A proxy that signed the person out answered before Tico saw the write, so nothing was saved.
       if (await sessionProbe()) throw signedOutError(true);
