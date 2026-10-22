@@ -942,13 +942,15 @@ def check_day(c, bot, day):
 
 
 def post(c, bot, body, kind=None, day=None, slides=None, drafted_by=None, inputs=None, replace_draft=False,
-         meetings=False):
+         meetings=False, reader=True):
     """Store an update by `bot` (a bot slug or `human:<id>`). A daily is its bullets; a week in review
     is its slides, with the goal KPIs added, and a markdown copy in `body`. `headline` keeps one line,
     for places that show one (MCP summaries). `drafted_by` posts a draft for a person; the person
     posting over it is an edit of that draft, or with `replace_draft` their own words. A draft never
     lands over or beside words the person wrote or edited that day, in either kind. `meetings` flags a draft
-    written from meeting summaries (`draft_facts`); an edit keeps the draft's flag, their own words clear it."""
+    written from meeting summaries (`draft_facts`); an edit keeps the draft's flag, their own words clear it.
+    `reader` is whether the person posting is a meeting reader (`meeting_reader`): one who is not was never shown a
+    flagged draft, so what they post over it is their own words, and their reply links no flagged input."""
     day = day or today()
     kind = kind or ("weekly" if slides else kind_for(day))
     if kind not in KINDS:
@@ -982,7 +984,7 @@ def post(c, bot, body, kind=None, day=None, slides=None, drafted_by=None, inputs
     inputs_json = json.dumps(list(inputs)) if inputs else None
     if drafted_by:
         draft, edited, flagged = drafted_by, None, int(bool(meetings))
-    elif existing and existing["drafted_by"] and not replace_draft:
+    elif existing and existing["drafted_by"] and not replace_draft and (reader or not existing["meetings"]):
         draft, edited, flagged = existing["drafted_by"], bot, existing["meetings"]
     else:
         draft, edited, flagged = None, None, 0
@@ -1007,7 +1009,7 @@ def post(c, bot, body, kind=None, day=None, slides=None, drafted_by=None, inputs
             c.execute("DELETE FROM update_archive_overrides WHERE state='restored' AND update_id IN "
                       "(SELECT id FROM updates WHERE bot=? AND kind=? AND day<?)", (bot, kind, day))
     H.event(c, H.bot_actor(drafted_by) if drafted_by else author_actor(bot), "update.post", uid, {"kind": kind, "day": day, **({"warning": problem} if problem else {})})
-    posted = with_inputs(c, one(c, uid), meetings=is_person(bot))
+    posted = with_inputs(c, one(c, uid), meetings=is_person(bot) and reader)
     return {**posted, "warning": problem} if problem else posted
 
 

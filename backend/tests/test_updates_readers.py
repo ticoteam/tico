@@ -126,3 +126,28 @@ def test_the_migration_flags_every_existing_assistant_drafted_person_update(tmp_
               "VALUES('n','human:dan','daily','n','h','- b','t','t','coo',0)")
     updates.ensure_schema(c)
     assert c.execute("SELECT meetings FROM updates WHERE id='n'").fetchone()[0] == 0, "it runs once, not on every start"
+
+
+def test_a_member_with_no_email_posts_over_a_flagged_draft_in_their_own_words(api, monkeypatch):
+    """They were never shown the flagged draft, so what they post is theirs: unflagged, readable by them, and the
+    reply links no flagged input. The chart opens on the latest day they may read, not a later flagged one."""
+    monkeypatch.setattr(updates, "today", lambda at=None: DAY)
+    monkeypatch.setitem(api.app.state.auth.settings.test_identities, "cara-test", Identity("human:cara", "human", ""))
+    monkeypatch.setattr(updates, "direct_reports",
+                        lambda c, author, chart=None: ["human:ben"] if author == "human:cara" else [])
+    store = api.app.state.store
+    with store.transaction() as c:
+        ben = updates.post(c, "human:ben", "- Synthetic flagged report", day=DAY, drafted_by="coo", meetings=True)
+        cara = updates.post(c, "human:cara", "- Synthetic carried draft", day=DAY, drafted_by="coo", meetings=True)
+    get(api, "updates/" + cara["id"], token="cara-test", expected=404)
+    mine = post(api, "updates", {"body": "- Synthetic words from Cara"}, token="cara-test")["update"]
+    assert mine["id"] == cara["id"] and flag(store, cara["id"]) == 0 and mine["inputs"] == []
+    assert get(api, "updates/" + cara["id"], token="cara-test")["update"]["body"] == "- Synthetic words from Cara"
+    assert ben["id"] not in json.dumps(mine)
+    post(api, "updates", {"body": "- Synthetic edit from Ben"}, token="ben-test")
+    assert flag(store, ben["id"]) == 1, "a meeting reader's edit keeps the flag"
+
+    with store.transaction() as c:
+        updates.post(c, "human:ben", "- Synthetic later flagged", day="2026-09-30", drafted_by="coo", meetings=True)
+    assert get(api, "updates/tree?scope=all", token="cara-test")["day"] == DAY
+    assert get(api, "updates/tree?scope=all", token="ana-test")["day"] == "2026-09-30"

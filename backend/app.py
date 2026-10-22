@@ -2407,7 +2407,8 @@ def create_app(settings=None):
             slides = body.slides.model_dump(exclude_none=True) if body.slides else None
             updates.check_day(c, author, body.day)
             return {"update": updates.post(c, author, body.body, kind=body.kind, day=body.day, slides=slides,
-                                           replace_draft=body.replace_draft)}
+                                           replace_draft=body.replace_draft,
+                                           reader=updates.meeting_reader(who))}
         return mutate(request, body, work)
 
     @app.post("/api/v2/updates/redo")
