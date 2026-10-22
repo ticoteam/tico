@@ -1061,7 +1061,7 @@ def create_app(settings=None):
             if tid in asks:
                 continue            # the newest readable open ask is the one shown
             message["refs"] = H._json(message.get("refs_json"), {}) or {}
-            message["older"] = H.ask_older(message)
+            message["stale"] = H.ask_older(message)     # it stays until the weekday batch sends it back (still_needed)
             asks[tid] = message
 
         origins = {}
@@ -3123,14 +3123,16 @@ def create_app(settings=None):
             c.execute("UPDATE tasks SET request_id=? WHERE id=?", (inherited_request or request_id, row["id"]))
         for url in body.links:
             H.task_link(c, who.actor, row["id"], url, mover=True)
+        own_subtask = None
         for other, kind in others:
             TR.relate(c, who.actor, row["id"], other, kind, mover=mover(c, who) or None)
+            own_subtask = own_subtask or TR.own_subtask_warning(c, row["id"], other, kind)
         if body.roles:
             try:
                 TRo.set_roles(c, who.actor, row["id"], body.roles, mover=mover(c, who) or None)
             except ValueError as exc:
                 raise Problem("roles", str(exc), 422)
-        note = usage_limits.warning(c, owner) or H.setup_hold(c, owner)
+        note = " ".join(filter(None, (usage_limits.warning(c, owner) or H.setup_hold(c, owner), own_subtask)))
         return {"task": task_view(H.task(c, row["id"]), c, visible_sql=auth.task_sql(c, who), who=who),
                 **({"warning": note} if note else {}), **({"warnings": row["warnings"]} if row.get("warnings") else {})}
 
@@ -3528,7 +3530,9 @@ def create_app(settings=None):
             auth.task(c, who, task_id)
             auth.task(c, who, other_id)
             TR.relate(c, who.actor, task_id, other_id, body.kind, remove=body.remove, mover=mover(c, who) or None)
-            return {"task": task_view(H.task(c, task_id), c, visible_sql=auth.task_sql(c, who), who=who)}
+            note = None if body.remove else TR.own_subtask_warning(c, task_id, other_id, body.kind)
+            return {"task": task_view(H.task(c, task_id), c, visible_sql=auth.task_sql(c, who), who=who),
+                    **({"warning": note} if note else {})}
         return mutate(request, body, work)
 
     @app.get("/api/v2/preferences/{key}")
