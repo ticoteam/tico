@@ -1561,6 +1561,12 @@ class BotFallback(Contract):
     expected_revision: int = Field(ge=1)
 
 
+class BotTaskModel(Contract):
+    task_model: BotFallbackChoice | None = Field(None, description="Harness, model and effort for the bot's tasks; "
+                                                 "null is the same as the bot")
+    expected_revision: int = Field(ge=1)
+
+
 class BotCompactAt(Contract):
     compact_at: Literal[150_000, 250_000, 400_000, 600_000, 1_000_000]
     expected_revision: int = Field(ge=1)

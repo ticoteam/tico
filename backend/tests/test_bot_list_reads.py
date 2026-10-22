@@ -4,7 +4,7 @@ as reading them one bot at a time, and about the same number of statements for 7
 import collections
 import json
 
-from backend import agents, rooms, update_feeds, views, wake_presets
+from backend import agents, rooms, update_feeds, views, task_models, wake_presets
 from backend import task_privacy as privacy
 from backend.chat_goals import readable_active
 from backend.harnesses import resolve_harness
@@ -53,6 +53,7 @@ def per_bot_view(c, settings, auth, bot, level, access, registry_roster, registr
                     "shared_from": str(declared.get("shared_from") or ""),
                     "temp": bool(declared.get("temp")),
                     "compact_at": compact_at_of(declared),
+                    "task_model": task_models.of(declared),
                     "wake": wake_presets.effective(declared),
                     "thread_mode": config["thread_mode"] or rooms.thread_mode(c, bot["slug"])})
     configured = json.loads(config["owner_ids_json"]) if config and config["owner_ids_json"] else None

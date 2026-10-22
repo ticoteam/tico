@@ -8,6 +8,12 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- **A bot's tasks can run on another model.** A bot now has a task model (harness, model and effort) beside its own,
+  set with `POST /api/v2/bots/{bot}/task-model` (null clears it back to "same as the bot"). A turn in a task's own
+  session runs on it; chat with the bot stays on the bot's model, and changing the bot's model leaves the task model
+  alone. A review or check subtask keeps its check model. When the task model can't run (retired, its provider off,
+  not signed in on the bot's computer), the task runs on the bot's own model and effort instead of waiting, and the
+  task's history says so and why. A task's Runs now show the effort beside each model, and the note on what ran.
 - **Visuals show without a visual address.** A company with no separate visual address now sees pictures, video and
   audio inline in chat and task conversations, served from the app's own address as media only. A visual page or an
   SVG is a card with its title, a still preview when there is one, and **Open**, which shows it in the file viewer;

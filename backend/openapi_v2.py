@@ -711,7 +711,12 @@ SCHEMAS = {
                                "applies; read in full"}},
                     required=["tasks", "next_offset", "cursor"], actors=ACTORS),
     "TaskResult": obj({"task": ref("Task")}),
-    "RanOn": obj({"segments": items(obj({"model": "n", "provider": "n", "runtime": "n", "harness": "n", "family": "n"})),
+    "RanOn": obj({"segments": items(obj({"model": "n", "provider": "n", "runtime": "n", "harness": "n", "effort": "n",
+                                         "family": "n"})),
+                  "task_model": {"type": ["object", "null"], "description": "For a turn in a task's own session on a bot "
+                                 "with a task model: `source` is task (it ran on the task model), fallback (the task "
+                                 "model could not run, so the bot's own model did) or check (a check subtask kept its "
+                                 "check model), and `note` says it in plain words"},
                   "fallback": {"type": ["string", "null"], "description": "The fallback harness that ran the turn, if any"},
                   "family": {"type": ["string", "null"], "description": "The maker of the model that did the work, from "
                              "the model catalog, when every counted segment agrees; null is unknown (mixed, Cursor "

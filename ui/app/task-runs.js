@@ -57,10 +57,10 @@ function runAttemptHTML(a, open) {
   const shells = (a.background || []).length ? `<div class="truns-sub"><div class="lbl">Background</div><ul class="truns-list">${a.background.map(runShellHTML).join('')}</ul></div>` : '';
   return `<details class="truns-try${a.state === 'running' || a.state === 'leased' ? ' live' : ''}"${open ? ' open' : ''} data-run="${esc(a.run)}">
     <summary><span>${esc(head)}</span><span class="muted tnum" title="${esc(fmt(a.started || a.created))}">${esc(ago(a.started || a.created))}</span></summary>
-    ${woke}${a.reason ? `<p class="truns-reason">${esc(a.reason)}</p>` : ''}${[a.waiting, a.moved].filter(Boolean).map(t =>
+    ${woke}${a.reason ? `<p class="truns-reason">${esc(a.reason)}</p>` : ''}${[a.waiting, a.moved, ranOnNote(a.ran_on)].filter(Boolean).map(t =>
       `<p class="muted truns-moved">${esc(t)}</p>`).join('')}${runReportHTML(a)}${lease ? `<ul class="truns-list truns-lease">${lease}</ul>` : ''}${nxt}
-    ${runAgentsHTML(a.subagents || [], model)}${shells}
-    ${(a.subagents || []).length || shells || nxt || a.reason || a.waiting || a.moved ? '' : '<p class="muted truns-empty">No subagents or background work.</p>'}</details>`;
+    ${runAgentsHTML(a.subagents || [], ranOn(a.ran_on, false))}${shells}
+    ${(a.subagents || []).length || shells || nxt || a.reason || a.waiting || a.moved || ranOnNote(a.ran_on) ? '' : '<p class="muted truns-empty">No subagents or background work.</p>'}</details>`;
 }
 function taskRunsHTML(v) {
   const attempts = v.attempts || [], cp = v.checkpoint;

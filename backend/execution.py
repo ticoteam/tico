@@ -9,7 +9,7 @@ from datetime import timezone
 
 from clients import gateway, sessions
 
-from . import app_delivery, check_models, gateway_connection, inbox_isolation, login_holds, models_preset, providers, quiet_work, routines, run_triggers, runner_versions, screen, usage_limits, wake_presets
+from . import app_delivery, check_models, gateway_connection, inbox_isolation, login_holds, models_preset, providers, quiet_work, routines, run_triggers, runner_versions, screen, task_models, usage_limits, wake_presets
 from . import task_privacy as privacy
 from .auth import Identity
 from .batch_work import isolated
@@ -1510,8 +1510,14 @@ class Execution:
             c.execute("SELECT config_json FROM bot_config WHERE bot=?", (row["bot"],)).fetchone()[0]))
         # A check subtask's turns run on its own model, in its own session (backend/check_models.py).
         check = check_models.of(c, task["id"], row["bot"]) if task else None
-        followed = check_models.apply(followed, check)
         roots, lanes = roots_on(runner), lanes_on(runner)
+        # A turn in a task's own session runs on the bot's task model when it has one, or on its own model when that
+        # cannot run here; a check keeps its check model (backend/task_models.py).
+        followed, model_record = task_models.pick(
+            c, self.store.settings, row["bot"], followed, task["id"] if task else None,
+            session_task_id(c, row["bot"], followed, task["id"], roots) if task else None, conv["id"],
+            readiness_document(runner["readiness_json"]), check)
+        followed = check_models.apply(followed, check)
         lane = job_lane(c, row["bot"], followed, msg, conv, lanes, roots)
         token = secrets.token_urlsafe(32)
         until = H.shift(H.now(), seconds=self.store.settings.lease_seconds)
@@ -1528,6 +1534,7 @@ class Execution:
         job = c.execute("SELECT wake_preset,wake_class,hold_until FROM jobs WHERE id=?", (row["id"],)).fetchone()
         c.execute("UPDATE attempts SET wake_json=? WHERE id=?", (json.dumps(wake_presets.record(c, job, msg)), aid))
         c.execute("INSERT OR IGNORE INTO attempt_conversations VALUES(?,?)", (aid, conv["id"]))
+        task_models.handed(c, aid, task["id"] if task else None, model_record)
         held = None
         if check:
             check_models.handed(c, aid, task["id"], check)
@@ -2362,6 +2369,8 @@ class Execution:
         runtime, model = providers.bot_choice(c, self.store.settings, json.loads(config[0]) if config else {})
         if check:
             runtime, model = check["runtime"], check["model"]
+        elif ran := task_models.handed_out(c, aid):
+            runtime, model = ran["runtime"], ran["model"]
         # The bot was moved to another model while this turn ran on the old one: its limit is not the new model's login.
         superseded = not check and model_changed_since(c, row["bot"], row["created"])
         if row["thread_id"] and body.tokens_in is not None:
