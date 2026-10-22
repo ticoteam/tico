@@ -141,13 +141,19 @@ def test_nightly_learnings_has_an_off_switch_on_by_default_and_off_means_no_run_
     assert rows(api)["learnings"]["on"] is True
     put(api, "system-routines/learnings", {"on": False}, token="ben-test")
     assert L.nightly(server, night) is None and started == []
+    post(api, "learnings/run", {}, token="ben-test", expected=409)        # the Learnings API's run obeys the switch too
     with store.read() as c:
         assert c.execute("SELECT count(*) FROM learning_runs").fetchone()[0] == 0
     put(api, "system-routines/learnings", {"on": True, "at": "04:00"}, token="ben-test")
     assert L.nightly(server, night) is None, "before its chosen time"
     assert L.nightly(server, night + timedelta(minutes=31)) and len(started) == 1
     assert rows(api)["learnings"]["schedule"] == "Nightly at 04:00"
-    post(api, "learnings/run", {}, token="ben-test", expected=409)        # an admin may start it; tonight's already ran
+    with store.transaction() as c:
+        c.execute("DELETE FROM learning_runs")                         # the route claims the real clock's night
+    post(api, "learnings/run", {}, token="ben-test")                     # an admin starts it, as in Settings > Routines
+    assert len(started) == 2
+    following = H.parse_ts(rows(api)["learnings"]["next"])
+    assert following > datetime.now(timezone.utc) + timedelta(minutes=1), "tonight has run: the next is tomorrow's"
 
 
 def test_run_now_on_stale_review_makes_at_most_30_decide_calls_and_the_row_shows_the_result(api, monkeypatch):

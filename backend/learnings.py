@@ -742,10 +742,13 @@ def install(app, store, auth, mutate):
     @app.post("/api/v2/learnings/run")
     def run_now(request: Request, body: M.Empty):
         """Tonight's learning run, now: who may press Run now on Nightly learnings in Settings > Routines (an owner or
-        an admin). 409 when tonight's has already started."""
+        an admin), and refused, as there, while it is switched off. 409 when tonight's has already started."""
         from . import system_routines
         who = request.state.identity
         system_routines.may_change(auth, who, "learnings")
+        with store.read() as c:
+            if not system_routines.config_of(c, "learnings")["on"]:
+                raise Problem("conflict", "Nightly learnings is off. Switch it on to run it.", 409)
 
         def work(c):
             return {"id": claim_tonight(c), "night": night_of(datetime.now(timezone.utc))}

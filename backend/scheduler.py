@@ -263,9 +263,14 @@ class Scheduler:
         # transaction, so a failure here never holds back the routines above.
         # A person's draft is written by the company's model in a background thread, so the call never
         # holds the write lock; its row stays out until the thread posts it (or gives up on it).
-        with self.store.read() as c:
-            cfgs = SR.config(c)
-            last = SR.last_started(c, list(SR.QUICK_KEYS))
+        try:
+            # The controlled jobs' saved settings; if they cannot be read, only those jobs wait for the next tick.
+            with self.store.read() as c:
+                cfgs = SR.config(c)
+                last = SR.last_started(c, list(SR.QUICK_KEYS))
+        except Exception as exc:
+            cfgs = None
+            failures.append({"system_routines": type(exc).__name__})
         with SR.recording(self.store, "updates", failures) as run:
             from . import updates
             settings = self.store.settings
@@ -322,7 +327,7 @@ class Scheduler:
         # The controlled jobs, each on its saved preset (Settings > Routines): KPI stale asks, the Health Monitor's scan
         # (hourly by default), Still wanted? (daily) and ask go-ahead.
         for key, run in QUICK.items():
-            if self.due(key, at, cfgs, last):
+            if cfgs and self.due(key, at, cfgs, last):
                 run(self.store, self.execution.auth, at, failures)
         if self.gateway_checked is None or at - self.gateway_checked >= timedelta(hours=1):
             # Every hour, while a gateway key or an invite is set: the Tico AI Gateway's word on it (revoked, 80% of the month's cap,

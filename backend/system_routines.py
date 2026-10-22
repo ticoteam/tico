@@ -290,6 +290,8 @@ def may_change(auth, who, key):
 
 
 def can_change(auth, who, key):
+    if getattr(who, "support", None) == "app":
+        return False            # Tico support reads as an admin but its app tier writes none of these (support_access)
     try:
         may_change(auth, who, key)
         return True
@@ -520,6 +522,8 @@ def next_at(job, last, now, settings=None, c=None, cfg=None):
     if cfg is not None:
         if not cfg["on"]:
             return None
+        if job.key == "learnings" and c is not None:
+            return next_night(c, cfg, now)
         return next_due(cfg, H.parse_ts(last["started"]) if last else None, now)
     every = job.every
     if job.key == "directory_sync" and c is not None:
@@ -530,6 +534,18 @@ def next_at(job, last, now, settings=None, c=None, cfg=None):
         return None
     started = H.parse_ts(last["started"])
     return max(started + timedelta(seconds=every), now)
+
+
+def next_night(c, cfg, now):
+    """Nightly learnings runs once per company night (backend/learnings.py `nightly`), not once after each time: tonight's
+    start while tonight has no run (or one that is tried again), else tomorrow's, whenever its last run started."""
+    from . import learnings
+    hour, minute = (int(x) for x in (cfg.get("at") or "03:00").split(":"))
+    start = now.astimezone(zone()).replace(hour=hour, minute=minute, second=0, microsecond=0)
+    found = c.execute("SELECT status FROM learning_runs WHERE night=?", (learnings.night_of(now),)).fetchone()
+    if found and found["status"] not in ("unconfigured", "capped", "failed"):
+        return start + timedelta(days=1)
+    return max(start, now)
 
 
 def directory_minutes(c):

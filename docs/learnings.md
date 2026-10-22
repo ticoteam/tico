@@ -63,7 +63,8 @@ branch's history and reaches their next run after the repository syncs.
 
 ## Nightly learning run
 
-Once a night, at or after 3:00 (Pacific, the same clock as daily updates), Tico reads the day's
+Once a night, at or after 3:00 (Pacific, the same clock as daily updates; an owner or admin moves the time or
+switches it off in Settings > Routines), Tico reads the day's
 activity once and hands each recipient what is relevant to it (`backend/learnings.py`). No bot reads
 Slack or mail for this itself.
 
