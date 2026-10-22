@@ -126,7 +126,7 @@ def test_a_task_model_that_cannot_run_falls_back_to_the_bots_model_and_says_why(
     ran = get(api, "tasks/" + task["id"])["runs"][0]["ran_on"]
     assert ran["task_model"]["source"] == "fallback"
     assert ran["task_model"]["note"] == ("Ran on the bot's model claude-sonnet-5-5 (high): task model grok-4.6 (low) "
-                                         "could not run (grok is not signed in on this bot's computer)")
+                                         "could not run (grok is not signed in on Test Mac)")
     with api.app.state.store.read() as c:
         events = c.execute("SELECT old,new,note FROM task_events WHERE task_id=? AND field='task_model'",
                            (task["id"],)).fetchall()
@@ -209,3 +209,13 @@ def test_a_limit_on_the_task_model_holds_the_task_models_login_not_the_bots(api)
     with api.app.state.store.read() as c:
         held = {rt: login_holds.get(c, rid, login_holds.canonical(c, rid, "", rt), rt) for rt in ("grok", "claude")}
     assert held["grok"] and not held["claude"]
+    with api.app.state.store.read() as c:
+        status = H.status(c, "ops")
+    assert status["state"] != "limited" and "task model" in status["focus"], "the task model's limit is not the bot's"
+    # Its queued work goes on at once, on the bot's own model: the task's own retry falls back, saying why.
+    again = claim(api, machine)
+    assert again is not None and (again["config"]["model"], again["config"]["reasoning_effort"]) == \
+        ("claude-sonnet-5-5", "high")
+    with api.app.state.store.read() as c:
+        record = json.loads(c.execute("SELECT model_json FROM attempts WHERE id=?", (again["id"],)).fetchone()[0])
+    assert record["source"] == "fallback" and record["why"].startswith("grok is at its usage limit until ")

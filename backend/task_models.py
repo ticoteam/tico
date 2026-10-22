@@ -12,7 +12,7 @@ from clients import sessions
 from . import hubdb as H
 from . import providers
 from .harnesses import runtime_of
-from .readiness import SIGNED_OUT, can_run
+from .readiness import can_run
 
 KEY = "task_model"
 
@@ -44,9 +44,12 @@ def task_keyed(config, bot, task_id, session_task_id, conversation_id):
                                                   conversation_id).startswith("task:")
 
 
-def why_not(c, settings, bot, choice, ready):
-    """Why the task model cannot run this turn on `bot`'s computer, or "" when it can. `ready` is the claiming
-    computer's readiness document."""
+def why_not(c, settings, bot, choice, runner_id, job_id=None):
+    """Why the task model cannot run this turn on `bot`'s computer `runner_id`, or "" when it can. Its sign-in is
+    `can_run`'s to judge (the bot's own profile, the Gateway preset); a login a usage limit holds, or that another job
+    is probing after one, is a reason too, so the task runs on the bot's model rather than wait on it."""
+    from . import login_holds
+    from .subscriptions import effective
     row = providers.MODEL_BY_ID.get(choice["model"])
     if not row:
         return f"{choice['model']} is not a model Tico knows any more"
@@ -56,12 +59,15 @@ def why_not(c, settings, bot, choice, ready):
         providers.complete_choice(providers.load(c, settings)["enabled"], choice["runtime"], choice["model"])
     except providers.ProviderError as exc:
         return str(exc).replace("default model", "task model")
-    state = (ready.get("runtimes") or {}).get(choice["runtime"]) if isinstance(ready, dict) else None
-    if isinstance(state, dict) and str(state.get("authenticated") or "unknown") in SIGNED_OUT:
-        return f"{choice['runtime']} is not signed in on this bot's computer"
-    can = can_run(c, bot, choice["runtime"], harness=choice["harness"], model=choice["model"])
+    can = can_run(c, bot, choice["runtime"], runner=runner_id, harness=choice["harness"], model=choice["model"])
     if can.get("can_run") is False:
         return can.get("problem") or f"{choice['runtime']} cannot run on this bot's computer"
+    login = login_holds.canonical(c, runner_id, effective(c, bot)[0] or "", choice["runtime"])
+    held = login_holds.holding(c, runner_id, login, choice["runtime"], job_id)
+    if held:
+        until = str(login_holds.get(c, runner_id, login, choice["runtime"]).get("until") or "")
+        return (f"{choice['runtime']} is at its usage limit until {until[:10]} {until[11:16]} UTC" if held == "held"
+                and until else f"{choice['runtime']} is being retried after its usage limit")
     return ""
 
 
@@ -77,7 +83,7 @@ def apply(config, choice):
     return out
 
 
-def pick(c, settings, bot, followed, task_id, session_task_id, conversation_id, ready, check=None):
+def pick(c, settings, bot, followed, task_id, session_task_id, conversation_id, runner_id, job_id=None, check=None):
     """(config, record) for a claimed turn. `record` is None for a turn the task model does not cover; otherwise it
     says what the turn was handed and why: `task` (the task model), `fallback` (the task model could not run; the bot's
     own model ran), or `check` (a check subtask kept its check model over the task model)."""
@@ -89,7 +95,7 @@ def pick(c, settings, bot, followed, task_id, session_task_id, conversation_id, 
         return followed, {"source": "check", "asked": asked,
                           "note": f"Kept the check model ({check['runtime']}:{check['model']}) over the bot's task "
                                   f"model {label(choice)}"}
-    why = why_not(c, settings, bot, choice, ready)
+    why = why_not(c, settings, bot, choice, runner_id, job_id)
     if why:
         own = providers.bot_choice(c, settings, followed)[1] or "the bot's own model"
         effort = followed.get("reasoning_effort") or ""
