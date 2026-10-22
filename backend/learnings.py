@@ -741,10 +741,11 @@ def readable(c, auth, who, item, mailboxes):
 def install(app, store, auth, mutate):
     @app.post("/api/v2/learnings/run")
     def run_now(request: Request, body: M.Empty):
-        """Owner only: tonight's learning run, now. 409 when tonight's has already started."""
+        """Tonight's learning run, now: who may press Run now on Nightly learnings in Settings > Routines (an owner or
+        an admin). 409 when tonight's has already started."""
+        from . import system_routines
         who = request.state.identity
-        if who.role != "owner":
-            raise Problem("forbidden", "Only the owner starts the learning run", 403)
+        system_routines.may_change(auth, who, "learnings")
 
         def work(c):
             return {"id": claim_tonight(c), "night": night_of(datetime.now(timezone.utc))}

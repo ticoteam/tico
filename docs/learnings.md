@@ -103,7 +103,7 @@ open) and Market (its market changes then), each change with its source and diff
 only to readers who may read that bot. A packet's text shows only when the reader may read the source
 today (the chat, the task, the mailbox, the meeting); anything else is counted as private.
 
-- `POST /api/v2/learnings/run` (owner): tonight's run now; 409 when it is running or already ran.
+- `POST /api/v2/learnings/run` (owner or admin, the same as Run now on Nightly learnings in Settings > Routines): tonight's run now; 409 when it is running or already ran.
 - `GET /api/v2/learnings?before=&limit=`: nights, newest first.
 - `GET /api/v2/learnings/{id}`: one night's sections.
 - `GET /api/v2/learnings/{id}/packets/{bot}`: one recipient's packet.

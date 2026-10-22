@@ -57,6 +57,7 @@ def test_a_member_sees_the_list_with_nothing_to_change_and_the_server_refuses_th
     put(api, "system-routines/stale_review", {"on": True}, token="cara-test", expected=403)
     put(api, "system-routines/kpi_asks", {"preset": "4h"}, token="cara-test", expected=403)
     post(api, "system-routines/kpi_asks/run", {}, token="cara-test", expected=403)
+    post(api, "learnings/run", {}, token="cara-test", expected=403)      # the Learnings API's run is the same run
 
 
 def test_health_scan_is_owner_only_an_admin_reads_it_and_the_owner_changes_it(api):
@@ -146,6 +147,7 @@ def test_nightly_learnings_has_an_off_switch_on_by_default_and_off_means_no_run_
     assert L.nightly(server, night) is None, "before its chosen time"
     assert L.nightly(server, night + timedelta(minutes=31)) and len(started) == 1
     assert rows(api)["learnings"]["schedule"] == "Nightly at 04:00"
+    post(api, "learnings/run", {}, token="ben-test", expected=409)        # an admin may start it; tonight's already ran
 
 
 def test_run_now_on_stale_review_makes_at_most_30_decide_calls_and_the_row_shows_the_result(api, monkeypatch):
