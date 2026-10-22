@@ -60,7 +60,8 @@ AI employees and reporting lines, adds its built-in roles once, and leaves emplo
 It preserves the plan across retries and refuses to replace an existing company. A selected file takes precedence
 over the recommended sample company. AWS stores this plan with the encrypted install settings in an Advanced
 Parameter Store parameter (charges apply); settings and compressed plan must fit its 8 KB limit.
-See [Finish setup](onboarding.md) for file support and choices saved for later. For a larger file, import it on the
+See [Finish setup](onboarding.md) for file support and choices saved for later. A chart can have up to 300 bots and
+300 people, and the file up to 512 KB. For a file too large for the 8 KB limit (about 40 bots), import it on the
 app's first setup screen instead.
 
 Nothing to set up first: no domain, no DNS, no sign-in provider. Tico runs on this computer only, at
