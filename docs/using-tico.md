@@ -19,9 +19,11 @@ phone). All four are managed in **Settings > Bots**; they stay out of the team c
 
 **What is on a bot's page?**
 Its name, the mark for the harness it runs on, up to three tool icons and its goal across the top, the chat below,
-and a rail down the right: **Active** tasks first, then its latest **Updates** (all of them behind the small icon),
-**Files** and **Routines** (a row opens the routine to read or edit), with **Assigned to others** and **Done** folded at the foot. A section with
-nothing in it is left out. **Info** holds its compact summary, Tools, goals and routines. **Instructions** shows its instructions and working notes, **History** holds updates, status changes and runs, and **Settings** edits its configuration directly, without an edit popup. On a phone, Chat and
+and a rail down the right. The rail opens with one **Tasks** section with four tabs, each with a count:
+**Needs You** (what the bot needs from you; it opens first while it has rows), **Doing** (every open task the bot holds, of every type, newest first),
+**Blocked** (each task says who or what it waits on) and **Done Recently** (finished in the last 14 days). An empty tab says so.
+Below it come **Assigned to others**, the latest **Updates** (all of them behind the small icon), **Files** and **Routines** (a row opens the routine to read or edit);
+a section with nothing in it is left out. **Info** holds its compact summary, Tools, goals and routines. **Instructions** shows its instructions and working notes, **History** holds updates, status changes and runs, and **Settings** edits its configuration directly, without an edit popup. On a phone, Chat and
 Tasks are one tab each.
 
 **How do I ask a bot a question?**
