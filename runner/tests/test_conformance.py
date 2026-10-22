@@ -1268,10 +1268,15 @@ def test_a_muse_data_folder_the_bot_cannot_write_is_a_readiness_problem_naming_i
         with computer.output.open("a") as out:
             computer.process = subprocess.Popen([str(computer.binary), "--config", str(computer.config), "run"], cwd=ROOT,
                                                 env=computer.env, stdout=out, stderr=subprocess.STDOUT, start_new_session=True)
-        row = until(lambda: computer.readiness().get("ops") or computer.died(), "the runner's first heartbeat")
+        # The folder is named apart from the sign-in once the runner has read the server's config (it takes the field).
+        row = until(lambda: (computer.readiness().get("ops") or {}).get("data_problem") and computer.readiness()["ops"]
+                    or computer.died(), "a heartbeat naming the data folder")
         assert not computer.died(), computer.output.read_text()[-3000:]
         assert row["ready"] is False and row["sign_in"] == "failed", row
         assert any(str(sessions) in p and "can't write" in p for p in row["problems"]), row["problems"]
+        # Named apart from a sign-in, so the Computers page shows the folder instead of "Signed out" (QA, Dev 329).
+        assert str(sessions) in row.get("data_problem", ""), row
+        assert not any("sign" in p.lower() for p in row["problems"]), row["problems"]
     finally:
         sessions.chmod(0o755)
         computer.stop()
