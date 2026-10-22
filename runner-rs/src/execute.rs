@@ -975,7 +975,7 @@ impl Runner {
             memory_before = redact::head(&execution_path);
             // What the bot kept in its AI tool's own memory moves into its repository, in whichever checkout the
             // turn runs: the bot's own or a task's worktree (crate::harness_memory).
-            if execution_path.join(".git").exists() {
+            if crate::harness_memory::is_checkout(&execution_path) {
                 let home = env.get("HOME").filter(|h| !h.is_empty()).cloned().or_else(|| std::env::var("HOME").ok()).unwrap_or_default();
                 let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
                 let day: String = text_of(&crate::util::iso(&json!(secs))).chars().take(10).collect();
