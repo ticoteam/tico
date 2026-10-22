@@ -29,6 +29,7 @@ mod gitrun;
 mod gittests;
 mod files_publish;
 mod gitcred;
+mod harness_memory;
 mod harness_tools;
 mod goals;
 mod hosts;

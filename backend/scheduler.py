@@ -93,8 +93,12 @@ class Scheduler:
                                            (row["id"], when)).fetchone()
                         if not exists:
                             from . import routines
-                            existing, skip = routines.latest_task(c, row["id"]), None
-                            if existing:
+                            from . import ceo_bot
+                            existing = routines.latest_task(c, row["id"])
+                            # Regular checks off: no new KPI pass and no wake to continue an unfinished one.
+                            if skip := ceo_bot.held_routine(c, row):
+                                tid, outcome = None, "skipped"
+                            elif existing:
                                 tid, outcome = existing["id"], "coalesced_into_existing_task"
                                 # An absorbed occurrence still wakes the owner, or an open task
                                 # would swallow every later run in silence; a waiting task is
@@ -133,6 +137,10 @@ class Scheduler:
             # Quiet tasks a run deferred to a time that has come get their run (backend/quiet_work.py).
             from . import quiet_work
             quiet_work.due(c, stamp(at), failures)
+            # A milestone wait whose pull request merged or release was published, while the server was down or
+            # before its wake was written, gets its one wake (backend/milestone_waits.py).
+            from . import milestone_waits
+            milestone_waits.reconcile(c, failures)
             for row in H.tasks_due_for_bots(c, stamp(at + timedelta(days=1))[:10]):
                 with isolated(c, "reminder", row["id"], failures):
                     due = H.parse_ts(row.get("due"))
@@ -216,7 +224,7 @@ class Scheduler:
             except Exception as exc:
                 failures.append({"goal_asks": type(exc).__name__})
             try:
-                # The CEO Bot's Monday note, started once on an install whose switch was already on (backend/ceo_bot.py).
+                # The CEO Bot's Monday note: started once above Passive, paused at Passive (backend/ceo_bot.py `reconcile`).
                 from . import ceo_bot
                 with self.store.transaction() as c:
                     ceo_bot.reconcile(c)
@@ -333,4 +341,12 @@ class Scheduler:
                     approval_expiry.sweep(c, stamp(at))
             except Exception as exc:
                 failures.append({"approval_expiry": type(exc).__name__})
+            # ...and each weekday morning, questions unanswered two business days go back to their bots, one wake per
+            # bot (backend/still_needed.py).
+            try:
+                from . import still_needed
+                with self.store.transaction() as c:
+                    still_needed.sweep(c, stamp(at))
+            except Exception as exc:
+                failures.append({"still_needed": type(exc).__name__})
         return {"fired": fired, "failures": failures}

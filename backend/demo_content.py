@@ -396,7 +396,7 @@ INSIGHTS = [
      "", "We switched from Fernwood, the reports were too slow.", "low"),
 ]
 
-# key, title, owner, parent key, colour a person set (None: the Goal Manager's colour from the KPIs), why,
+# key, title, owner, parent key, colour a person set (None: the CEO Bot's colour from the KPIs), why,
 # [(kpi name, unit, target, readings oldest first, days until the target is due)]
 GOALS = [
     ("grow", "Grow to 200 paying studios by December", "company", None, None,

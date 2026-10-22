@@ -556,6 +556,9 @@ impl CodexHost {
             cfg.insert("mcp_servers".into(), Value::Object(servers));
         }
         cfg.insert("model_auto_compact_token_limit".into(), json!(super::compact_at(&settings.compact_at)));
+        // No memory under this computer's CODEX_HOME, even where the operator's config.toml turns it on: a bot
+        // remembers in its repository's memory/ (Dev 301).
+        cfg.insert("features.memories".into(), json!(false));
         let mut params = json!({"cwd": settings.cwd, "approvalPolicy": "never", "sandbox": "danger-full-access"});
         if let Some(m) = settings.model.as_ref().filter(|m| !m.is_empty()) {
             params["model"] = json!(m);
@@ -685,5 +688,11 @@ mod tests {
         let env: Env = [("PWD", "/x"), ("ACME_KEY", "v"), ("BIG", &"x".repeat(9000)[..])].iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
         assert_eq!(Value::Object(env_for_config(&env)), json!({"ACME_KEY": "v"}));
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn no_thread_keeps_a_codex_memory_outside_the_repository() {
+        let host = CodexHost::on_home(Env::new(), tokio::sync::mpsc::unbounded_channel().0, None);
+        assert_eq!(host.thread_params(&Settings::default())["config"]["features.memories"], json!(false));
     }
 }

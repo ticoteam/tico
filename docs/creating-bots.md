@@ -21,7 +21,7 @@ Finish setup, and the wizard uses the same templates. A starter is created parke
 materializes the repository, and **Set up** opens its first conversation. Answer its questions and review its first draft.
 For another template, a task goes to BotOps to build the repository, apply the reviewed Instructions and check readiness.
 You can also ask BotOps for a custom bot in chat; it takes the bot through placement and setup as you.
-Assistant, BotOps, Librarian and Goal Manager are the four Built-in bots; they cannot be archived or deleted.
+Assistant, BotOps, Librarian and CEO Bot are the four Built-in bots; they cannot be archived or deleted.
 
 The 93 templates, in nine groups with a Leadership extra and one message bot, are described in
 [Starter bots](starter-bots.md), with the card fields and the quality bar this page's advice is
@@ -33,9 +33,8 @@ are in [Finish setup](onboarding.md).
 
 ## Edit Instructions
 
-Open the bot's **More → Instructions → Edit Instructions**, or **Bot settings → Edit Instructions**.
-The Instructions card may be under **Docs** in an older app.
-Describe the change and choose **Ask BotOps to change**. BotOps receives your request in its chat and updates
+Open the bot’s **Instructions** tab and use the inline **Request instruction changes** form.
+Describe the change and choose **Send changes to BotOps**. BotOps receives your request in its chat and updates
 `AGENT.md` on the bot's computer. Description is separate: it summarizes the bot on the roster.
 The app displays the Instructions from the latest repository snapshot; refresh after BotOps finishes.
 New repositories default to `bot-<slug>`.
@@ -45,7 +44,7 @@ New bots start with their own repository unless the team selected all ticked rep
 ## Subscribe to updates
 
 A bot can hear about changes that may matter to it, as information only. In the bot editor (**Settings → Bots →
-Edit**, or **Bot settings** on the bot's Setup card), under **Subscribe to updates**, people who manage the bot tick
+Edit**, which opens the bot’s **Settings** tab), under **Subscribe to updates**, people who manage the bot tick
 either, both or neither:
 
 - **Default employee settings**: changes to the template the bot was made from (its `template`), read from that
@@ -512,7 +511,7 @@ A run's MCP servers are `hub`, the `mcp:` tools above and the repository's `.mcp
 
 Beside a bot's name at the top of its page, after the mark for the harness it runs on, is one small
 stack of up to three overlapping tool icons and "+N" for the rest (a phone leaves it out of its short top
-line). Clicking it lists the tools, one line each, and **Manage** opens **Tools** under the bot's **More**
+line). Clicking it lists the tools, one line each, and **Manage** opens **Tools** under the bot’s **Info**
 tab: every tool the bot uses, with its details. It is how a human learns what a bot can reach without opening its repository.
 
 - **Where it comes from.** The list starts with the model and harness the bot runs on (for example
@@ -527,7 +526,7 @@ tab: every tool the bot uses, with its details. It is how a human learns what a 
   Calendar, PostHog, MongoDB, PostgreSQL, MySQL, OpenAI, Anthropic, Notion, Linear, Stripe, AWS,
   Cloudflare, Zoom) and the first two letters of the name in a tinted circle for everything else.
   A red dot means the tool has a problem.
-- **The Tools list** under More is one line a tool: its icon, name, key values (the model and effort, who it
+- **The Tools list** under Info is one line a tool: its icon, name, key values (the model and effort, who it
   acts as and what it may do, or a problem in red) and its status, with the rest in the line's tooltip. Two
   or more GitHub repositories share one line, "GitHub · N repositories" with their access added up, which
   opens to a short line each. Opening a line gives the tool's details: the service's name, the identity it acts as
@@ -603,8 +602,8 @@ Levers set in **Settings → Bots**, not in the repository:
   nonblocking news (a request it asked for finished, review comments, a failing check nobody waits on) and
   sends it as one wake at most every 30 minutes. It also runs an enabled routine, or a stall check on a task,
   at most every 2 hours. **Performance** coalesces the same news for 1 minute and runs those sweeps at most
-  every 15 minutes. **Current behaviour**, which every bot made before presets keeps until someone picks
-  one, wakes on each piece of news as it arrives. In every preset, these wake the bot at once, and only once
+  every 15 minutes. Existing bots without a preset, including the former Current behaviour setting,
+  move to Performance. In every preset, these wake the bot at once, and only once
   when the same event repeats before its run is over: a person's message, an assignment, a question, something it waits on
   resolving, a blocker, and a review or QA request. A preset turns on no routine, hook, subscription or
   permission, and leaves Compact at alone. The line under the picker shows what the bot runs on. Each run

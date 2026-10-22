@@ -1,7 +1,7 @@
-# The Goal Manager. Installed with every environment: it keeps the KPIs and sets the goals' automatic colours.
+# The CEO Bot. Installed with every environment: it keeps the KPIs and sets the goals' automatic colours.
 template: goal-manager
 slug: goal-manager
-name: Goal Manager
+name: CEO Bot
 required: true
 bootstrap: true
 icon: target

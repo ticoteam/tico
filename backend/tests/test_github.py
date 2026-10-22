@@ -47,7 +47,7 @@ def post(api, path, body, expected=200):
     r = api.post("/api/v2/" + path, json=body, headers=headers())
     assert r.status_code == expected, r.text
     data = r.json()
-    return data["task"] if isinstance(data, dict) and set(data) == {"task"} else data
+    return data["task"] if isinstance(data, dict) and "task" in data and set(data) <= {"task", "readback"} else data
 
 
 def get(api, path):
@@ -109,10 +109,10 @@ def test_a_pull_request_never_moves_its_task_through_merge_and_deploy(api):
         assert sorted(G.ship_deployed(c, api.app.state.store.settings)) == sorted(before)
         assert c.execute("SELECT count(*) FROM events WHERE action='github.shipped'").fetchone()[0] == 2
     assert all(l["state"] == "shipped" for l in unmoved())
-    # a tag push or a published release records nothing and moves nothing
+    # a tag push or a published release moves nothing; a release only wakes tasks waiting for it (test_milestone_waits)
     hook(api, "push", {"ref": "refs/tags/v1.2.3", "repository": {"full_name": "ticoteam/tico"}, "after": "d" * 40})
-    hook(api, "release", {"action": "published", "repository": {"full_name": "ticoteam/tico"},
-                          "release": {"tag_name": "v1.2.3", "target_commitish": "d" * 40}}, expected=204)
+    assert hook(api, "release", {"action": "published", "repository": {"full_name": "ticoteam/tico"},
+                                 "release": {"tag_name": "v1.2.3", "target_commitish": "d" * 40}})["woken"] == []
     unmoved()
 
 
@@ -153,18 +153,17 @@ def test_webhook_burst_is_durable_and_sends_one_specific_wake(api):
         hook(api, 'check_run', {'repository': {'full_name': 'ticoteam/tico'}, 'check_run': {
             'name': name, 'conclusion': 'failure', 'pull_requests': [{'number': 412}]}})
     with api.app.state.store.transaction() as c:
-        assert G.flush_wakes(c) == []
-        assert c.execute('SELECT count(*) FROM messages').fetchone()[0] == before
         key = 'github-task-wake:' + task['id']
         burst = R.metadata(c, key)
         assert len(burst['items']) == 2
-        burst['due'] = H.shift(H.now(), seconds=-1)
-        R.save_metadata(c, key, burst)
+        # Performance owns the delay at enqueue time; GitHub adds no second debounce.
         assert G.flush_wakes(c) == [task['id']]
         assert G.flush_wakes(c) == []
         assert c.execute('SELECT count(*) FROM messages').fetchone()[0] == before + 1
         message = c.execute('SELECT body FROM messages ORDER BY created DESC LIMIT 1').fetchone()[0]
         assert 'Unit tests' in message and 'Lint' in message and 'tico#412' in message
+        job = c.execute("SELECT held,wake_preset FROM jobs WHERE bot='cpo' ORDER BY rowid DESC LIMIT 1").fetchone()
+        assert job['held'] and job['wake_preset'] == 'performance'
 
 
 def test_each_merged_pr_ships_once_the_release_contains_it(api):

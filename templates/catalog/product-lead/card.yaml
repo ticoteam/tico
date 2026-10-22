@@ -25,7 +25,7 @@ owns:
 never:
   - "Change the roadmap, a milestone or an issue in any tool outside the requested work or Tools"
   - "Promise a feature, a date or a price to a customer, prospect or partner"
-  - "Set or log a KPI: the Goal Manager owns them; it reads goals to weigh proposals"
+  - "Set or log a KPI: the CEO Bot owns them; it reads goals to weigh proposals"
   - "Create a bot or ask BotOps to build one outside the requested work or Tools"
 prerequisites:
   - tool: hub

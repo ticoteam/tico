@@ -124,7 +124,7 @@ def merge(c, actor, person, title, question, task_ids):
         raise H.Refused("identity", f"Only the {ceo_bot.name(c)} merges the asks waiting on a person")
     if not ceo_suggest.suggests(c):
         raise H.Refused("state", f"The {ceo_bot.name(c)} merges asks at level 2 or 3; it is at level "
-                                 f"{ceo_bot.level(c)} or switched off here")
+                                 f"{ceo_bot.level(c)} here")
     if not H.is_human(person) or not H.human(c, H.actor_id(person)):
         raise H.Refused("reach", "merge asks waiting on a person on the roster")
     ids = list(dict.fromkeys(str(t or "").strip() for t in task_ids or [] if str(t or "").strip()))
@@ -148,7 +148,7 @@ def merge(c, actor, person, title, question, task_ids):
             raise H.Refused("duplicate", f'"{row["title"]}" is already merged into another item')
         found.append((row, how))
     if ceo_bot.room_today(c, person) == 0:
-        raise H.Refused("cap", f"The {ceo_bot.NAME} already put {ceo_bot.DAILY_CAP} items in this person's Needs you "
+        raise H.Refused("cap", f"The {ceo_bot.name(c)} already put {ceo_bot.DAILY_CAP} items in this person's Needs you "
                                "today; keep the rest for tomorrow, most important first")
     who = "\n".join(f'- {_name(c, how[1])}: "{row["title"]}"' for row, how in found)
     body = (f"{question}\n\n{len(found)} bots asked you this; it is one item instead of {len(found)}:\n{who}\n"

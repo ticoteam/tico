@@ -454,7 +454,7 @@ class SettingsAdmin:
         return {**self.definition(c, body.slug), "owners": self._people(c, body.owners)[0], "assignment": None}
 
     def archive(self, c, who, bot, body):
-        # The assistant, BotOps, the Librarian and the Goal Manager are built in: nobody archives them, the owner included.
+        # The assistant, BotOps, the Librarian and the CEO Bot are built in: nobody archives them, the owner included.
         if bot in (self.settings.assistant_bot, "botops", "librarian", "goal-manager"):
             raise Problem("system_bot", (self.settings.assistant_name if bot == self.settings.assistant_bot
                                          else "BotOps" if bot == "botops" else "The Librarian" if bot == "librarian"
@@ -1090,15 +1090,14 @@ class SettingsAdmin:
             raise Problem("version_conflict", "Bot configuration changed; refresh before saving", 409)
         before = self.snapshot(c, bot, "wake_preset")
         declared = _json(config["config_json"], {}) or {}
-        if body.wake_preset == wake_presets.CURRENT:
-            declared.pop("wake_preset", None)
-        else:
-            declared["wake_preset"] = body.wake_preset
+        # Old clients may still send `current`; it now selects Performance.
+        chosen = wake_presets.preset_of({"wake_preset": body.wake_preset})
+        declared["wake_preset"] = chosen
         c.execute("UPDATE bot_config SET config_json=?,revision=revision+1 WHERE bot=?", (encode(declared), bot))
         wake_presets.replan(c, bot)
-        self.record(c, who.actor, bot, "wake_preset", before, body.wake_preset)
-        H.event(c, who.actor, "bot.wake_preset_changed", bot, {"before": before, "after": body.wake_preset})
-        return {"bot": bot, "wake_preset": body.wake_preset, "wake": wake_presets.effective(declared),
+        self.record(c, who.actor, bot, "wake_preset", before, chosen)
+        H.event(c, who.actor, "bot.wake_preset_changed", bot, {"before": before, "after": chosen})
+        return {"bot": bot, "wake_preset": chosen, "wake": wake_presets.effective(declared),
                 "revision": config["revision"] + 1}
 
 
