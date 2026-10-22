@@ -323,6 +323,27 @@ def reports_tools(c, attempt_id, config):
     return reports_tool_calls(config, config.get('runtime'))
 
 
+
+def retry_facts(c, job, started, finished):
+    """What a held run did, judged once for both the sweep that retries a safe one by itself (`auto_reconcile`) and
+    the review card that recommends a person's choice (`review_jobs`), so the two can never disagree: its recorded
+    calls, the ones that can change things, approvals it used up, whether its host's silence proves anything, how
+    many times it has started, and `safe` for a run that only read on a host that reports every call."""
+    config = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (job['bot'],)).fetchone()
+    declared = json.loads(config[0]) if config else {}
+    calls = recorded_tools(c, job['attempt_id'])
+    acted = sorted({call['tool'] for call in calls if call['tool'] not in READ_ONLY_TOOLS})
+    window = (started or job['created'], finished or H.now())
+    consumed = c.execute("SELECT count(*) FROM approvals WHERE requested_by=? AND consumed_at IS NOT NULL "
+                         "AND consumed_at BETWEEN ? AND ?", ('bot:' + job['bot'], *window)).fetchone()[0]
+    reported = reports_tools(c, job['attempt_id'], declared)
+    # A message folded into another job's run counts that run as one of its own starts.
+    starts = c.execute("SELECT count(*) FROM attempts WHERE started IS NOT NULL AND (job_id=? OR id IN "
+                       "(SELECT attempt_id FROM attempt_inputs WHERE message_id=?))",
+                       (job['id'], job['message_id'])).fetchone()[0]
+    return {'calls': calls, 'acted': acted, 'consumed': consumed, 'reported': reported, 'starts': starts,
+            'safe': reported and not acted and not consumed}
+
 # Tool calls that only read: a run that made nothing else repeats nothing when it runs again. Claude's and Codex's
 # own names. A subagent's launch is listed because its own calls are reported and judged one by one. A shell command
 # never counts, whatever its program: `cat` can be piped into anything.
@@ -2688,23 +2709,39 @@ class Execution:
             output = [{'seq': e['seq'], 'kind': e['kind'],
                        'text': str(json.loads(e['payload_json']).get('text', ''))[:4000]}
                       for e in reversed(events)]
-            calls = recorded_tools(c, row['attempt_id'])
-            acted = sorted({call['tool'] for call in calls if call['tool'] not in READ_ONLY_TOOLS})
+            facts = retry_facts(c, row, attempt['started'] if attempt else None, attempt['finished'] if attempt else None)
+            calls, acted = facts['calls'], facts['acted']
+            # `stopped` is what the review card leads with (ui/app/settings.js executionReview), by the same rule the
+            # sweep retries by: only a run `auto_reconcile` would call safe, on its first start, is 'read'.
             if acted:
+                stopped = 'changed'
                 reason = (f"The run stopped after using a tool that can change things ({', '.join(acted)}). Tico "
                           "cannot tell whether it finished, so retrying automatically could repeat the action.")
-            elif calls:
-                reason = "The run stopped after only reading, so trying it again repeats nothing."
-            else:
+            elif facts['consumed']:
+                stopped = 'changed'
+                reason = ("The run stopped after using an approval. Tico cannot tell whether the approved action "
+                          "finished, so retrying automatically could repeat it.")
+            elif not facts['reported']:
+                stopped = 'unknown'
                 reason = ("The run stopped before it returned an answer. Its runner did not record "
                           "enough detail for Tico to prove that retrying automatically is safe.")
+            elif facts['starts'] > 1:
+                stopped = 'twice'
+                reason = "The run only read, but it stopped the same way more than once, so Tico won't run it again."
+            else:
+                stopped = 'read'
+                reason = ("The run stopped after only reading, so trying it again repeats nothing." if calls else
+                          "The run stopped before it used any tool, so trying it again repeats nothing.")
             jobs.append({'id':row['id'], 'attempt_id':row['attempt_id'], 'readable':readable,
                          'task':{'id':task['id'],'title':task['title'],'status':task['status'],'owner':task['owner'],
                                  'owner_name':owner_name(c, task['owner'])} if task and readable else None,
                          'request':message['body'] if readable else '',
                          'attempt':(dict(attempt) if readable else
                                     {**dict(attempt), 'final_text': ''}) if attempt else None,
-                         'output':output if readable else [], 'tools':calls if readable else [], 'reason':reason})
+                         'output':output if readable else [], 'tools':calls if readable else [], 'reason':reason,
+                         # `acted` names tools only, as `reason` always has, so a reader of none of the run's words
+                         # still sees why it is held.
+                         'stopped':stopped, 'acted':acted})
         return {'jobs':jobs}
 
     def reconcile_job(self, c, who, job_id, body):
@@ -2907,19 +2944,10 @@ class Execution:
                 held = row['attempt_id'] and c.execute("SELECT 1 FROM events WHERE action='job.held' AND target=?",
                                                        (row['attempt_id'],)).fetchone()
                 calls, acted, safe = [], [], False
+                facts = retry_facts(c, row, row['started'], row['finished'])
                 if not held:
-                    config = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (row['bot'],)).fetchone()
-                    declared = json.loads(config[0]) if config else {}
-                    calls = recorded_tools(c, row['attempt_id'])
-                    acted = sorted({call['tool'] for call in calls if call['tool'] not in READ_ONLY_TOOLS})
-                    window = (row['started'] or row['created'], row['finished'] or H.now())
-                    consumed = c.execute("SELECT count(*) FROM approvals WHERE requested_by=? AND consumed_at IS NOT NULL "
-                                         "AND consumed_at BETWEEN ? AND ?", ('bot:' + row['bot'], *window)).fetchone()[0]
-                    safe = reports_tools(c, row['attempt_id'], declared) and not acted and not consumed
-                # A message folded into another job's run counts that run as one of its own starts.
-                started = c.execute("SELECT count(*) FROM attempts WHERE started IS NOT NULL AND (job_id=? OR id IN "
-                                    "(SELECT attempt_id FROM attempt_inputs WHERE message_id=?))",
-                                    (row['id'], row['message_id'])).fetchone()[0]
+                    calls, acted, safe = facts['calls'], facts['acted'], facts['safe']
+                started = facts['starts']
                 if not row['aged'] and not (safe and started <= 1):
                     continue  # the usual wait: a person may look first
                 msg = H.message(c, row['message_id'])

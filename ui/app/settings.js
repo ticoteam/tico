@@ -397,6 +397,20 @@ function renderSettingsIssues() {
   });
   bindRunnerRestart(el);
 }
+// The stopped-run card is the decision only (Chris, Oct 22: "remove 80%, give me clear action items"): one line
+// on what stopped, one recommendation with its button first, the rest under Details. `stopped` comes from
+// backend/execution.py review_jobs, by the rule its sweep retries by (retry_facts): a run that only read, on a host
+// that reports every call, is safe to try again; one that may have acted, left no full record or keeps stopping is
+// not retried unless the person knows better.
+const STOPPED_PICK = {
+  read: {retry: true, what: () => 'before changing anything', say: () => 'Try again: it only read, so nothing repeats.'},
+  changed: {retry: false, what: tools => `after using ${tools || 'an approval or a tool that can change things'}`,
+    say: tools => `Don’t retry unless you know ${tools || 'that action'} didn’t finish. It could run twice.`},
+  twice: {retry: false, what: () => 'the same way more than once',
+    say: () => 'Don’t retry: it keeps stopping. Check the task first.'},
+  unknown: {retry: false, what: () => 'before answering',
+    say: () => 'Don’t retry unless you know it did nothing. Tico has no record of what it did.'},
+};
 // `after` redraws the page it was opened from once a run is decided: Settings, or the bot's own header.
 async function executionReview(bot, after = loadSettings) {
   const dialog = document.createElement('dialog'); dialog.className = 'tmodal';
@@ -407,18 +421,26 @@ async function executionReview(bot, after = loadSettings) {
   const host = dialog.querySelector('[data-review]');
   try {
     const {jobs} = await get(`/v2/bots/${encodeURIComponent(bot)}/execution-review`);
-    host.innerHTML = jobs.length ? jobs.map(job => `<form data-job="${esc(job.id)}">
+    host.innerHTML = jobs.length ? jobs.map(job => {
+      const saved = job.attempt?.final_text || job.output.map(event=>event.text).filter(Boolean).join('\n');
+      const pick = STOPPED_PICK[job.stopped] || STOPPED_PICK.unknown, retry = pick.retry;
+      const tools = (job.acted || []).join(', ');
+      const button = (decision, label) => `<button type="submit" name="decision" value="${decision}"${(decision === 'resume') === retry ? '' : ' class="ghost"'}>${label}</button>`;
+      return `<form data-job="${esc(job.id)}" class="stopped-run">
       <h3>${esc(job.task?.title || 'Interrupted conversation')}</h3>
-      <p class="muted">Stopped ${esc(fmt(job.attempt?.started || job.attempt?.created))}${job.task ? ` · task ${esc(job.task.status)}${job.task.owner_name ? `, owner ${esc(job.task.owner_name)}` : ''}` : ''}</p>
-      <p><strong>Why Tico paused this request</strong><br>${esc(job.reason)}</p>
-      <details><summary>Original request</summary><div style="white-space:pre-wrap;overflow-wrap:anywhere">${esc(job.request)}</div></details>
-      <details${job.attempt?.final_text || job.output.some(event=>event.text) ? ' open' : ''}><summary>${job.attempt?.final_text || job.output.some(event=>event.text) ? 'What the run saved' : 'No answer was saved'}</summary><div style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px;overflow:auto">${esc(job.attempt?.final_text || job.output.map(event=>event.text).filter(Boolean).join('\n') || 'The run ended without saving an answer.')}</div></details>
-      ${job.tools?.length ? `<details open><summary>Tool calls it made (${job.tools.length})</summary><ul class="review-tools">${job.tools.map(call => `<li${call.nested ? ' class="nested"' : ''}><code>${esc(call.tool)}</code>${call.summary ? ` ${esc(call.summary)}` : ''}${call.status ? ` <span class="muted">· ${esc(call.status)}</span>` : ''}</li>`).join('')}</ul></details>` : ''}
-      <p><strong>Did an outside action finish?</strong><br>If not, Tico can retry. If it did or you are unsure, it stays stopped.</p>
-      <label>Anything Tico should know? <span class="muted">Optional</span><textarea name="note" aria-label="Details for Tico" maxlength="4000" placeholder="For example: the draft exists, but nothing was sent."></textarea></label>
-      <div class="row"><button type="submit" name="decision" value="resume">Nothing happened — try again</button><button type="submit" name="decision" value="dismiss" class="ghost">Done or unsure — don’t retry</button></div>
+      <p data-stopped>Stopped ${esc(fmt(job.attempt?.started || job.attempt?.created))} ${esc(pick.what(tools))}.</p>
+      <p data-pick><strong>${esc(pick.say(tools))}</strong></p>
+      <div class="row">${retry ? button('resume', 'Try again') + button('dismiss', 'Don’t retry') : button('dismiss', 'Don’t retry') + button('resume', 'Try again')}</div>
       <p data-result role="status"></p>
-    </form>`).join('') : '<p>No stopped runs remain.</p>';
+      <details data-details><summary>Details</summary>
+        ${job.task ? `<p class="muted">Task ${esc(job.task.status)}${job.task.owner_name ? `, owner ${esc(job.task.owner_name)}` : ''}</p>` : ''}
+        <p class="muted">${esc(job.reason)}</p>
+        <details><summary>Original request</summary><div style="white-space:pre-wrap;overflow-wrap:anywhere">${esc(job.request)}</div></details>
+        <details><summary>${saved ? 'What the run saved' : 'No answer was saved'}</summary><div style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px;overflow:auto">${esc(saved || 'The run ended without saving an answer.')}</div></details>
+        ${job.tools?.length ? `<details><summary>Tool calls (${job.tools.length})</summary><ul class="review-tools">${job.tools.map(call => `<li${call.nested ? ' class="nested"' : ''}><code>${esc(call.tool)}</code>${call.summary ? ` ${esc(call.summary)}` : ''}${call.status ? ` <span class="muted">· ${esc(call.status)}</span>` : ''}</li>`).join('')}</ul></details>` : ''}
+        <label>Note for the bot <span class="muted">Optional</span><textarea name="note" aria-label="Details for Tico" maxlength="4000" placeholder="For example: the draft exists, but nothing was sent."></textarea></label>
+      </details>
+    </form>`; }).join('') : '<p>No stopped runs remain.</p>';
     host.querySelectorAll('form').forEach(form => form.onsubmit = async event => {
       event.preventDefault();
       const job = jobs.find(row=>row.id === form.dataset.job), decision = event.submitter?.value;
@@ -433,7 +455,7 @@ async function executionReview(bot, after = loadSettings) {
           attempt_id:job.attempt_id, decision, note:detail ? `${note} Details: ${detail}` : note,
           acknowledge_uncertain_effects:true
         });
-        form.innerHTML = `<p role="status">${decision === 'resume' ? 'Got it. Tico will try this request again.' : 'Got it. Tico will not retry this delivery.'}</p>`;
+        form.innerHTML = `<p role="status">${decision === 'resume' ? 'Got it. Tico will try this request again.' : 'Got it. Tico won’t retry it; the task stays as it is.'}</p>`;
         await after();
       } catch(error) {
         form.querySelector('[data-result]').textContent=error.message;
