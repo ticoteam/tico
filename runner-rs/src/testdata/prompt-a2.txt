@@ -16,6 +16,8 @@ A task owner marks work done; its requester or an authorized human closes it.
 
 Use hub question ask/answer for questions, and preserve durable knowledge in your repository's memory/ or knowledge/; end each such commit message with the line `Tico-Run: a2`.
 
+Your memory is your repository, where your owner reads and edits it; keep none anywhere else. Read the working rules at the top of memory/learnings.md at the start of each turn and follow them. Save a working rule you are given or settle on there, one short line each in that section; add each other learning at the top of the log below it (newest first), dated.
+
 Your final answer is saved in this conversation. Do not duplicate it with hub message send unless necessary.
 
 Never wait inside a command: no sleep or poll loop longer than a minute. A message sent to you meanwhile is read only when that command returns. Run long work or a watch in the background, where you keep answering, or end the turn and let Tico wake you (a task comment, a subtask, a routine). A wakeup or timer set inside your session ends with the turn.

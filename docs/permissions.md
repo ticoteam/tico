@@ -109,7 +109,7 @@ The product favours getting going fast, and the owner tightens it later. Setting
 | **Admins see SQL** | Admins open the SQL page | the SQL page is the owner's |
 | **Members make personal tokens** | any human makes a personal API token, which sees what they see | the owner and the Admins do |
 | **Owners and admins may let Tico support in** (`support_access`) | an owner or admin may open a time-limited support session from their own request ([below](#tico-support)) | nobody can, and a live session ends |
-| **Bots go ahead on their recommendation** (`bots_go_ahead`, days in `go_ahead_days`, 3) | a bot's ask with a reversible, internal default goes ahead when nobody answers in that many days (or by the date the bot gave); sends, spending and deletes still wait ([Tasks](tasks.md#when-nobody-answers-a-bots-ask)) | every ask waits for its answer, until it expires after 14 days |
+| **Bots go ahead on their recommendation** (`bots_go_ahead`, days in `go_ahead_days`, 3) | a bot's ask with a reversible, internal default goes ahead when nobody answers in that many days (or by the date the bot gave); sends, spending and deletes never go ahead: their question closes on its date and the bot decides without it ([Tasks](tasks.md#when-nobody-answers-a-bots-ask)) | no ask goes ahead on its own; one with a date still closes on it, and one without leaves **Needs you** after two business days |
 
 Only the Owner changes them, directly in Settings or by asking BotOps to act with the Owner's rights.
 

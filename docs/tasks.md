@@ -225,7 +225,7 @@ answer by Fri, Oct 16, Writer goes ahead: Yes". When that step is reversible and
 nothing by then (the team's days after the ask, 3 by default, or its later `by`; `by` is at most 14 days away and
 `--default-kind` is required with `--if-no-answer`), Tico answers for them with "No answer from Ana by
 Oct 16, so Writer goes ahead with what it said it would do: Yes", which wakes the bot with that choice. A send,
-spending money or a delete never goes ahead without an answer: the card says the bot waits. The owner turns this off,
+spending money or a delete never goes ahead without an answer: the card says so, and on its date the question closes and the bot decides without it. The owner turns this off,
 or changes the days, in Settings > Humans (**Bots go ahead on their recommendation**).
 
 A send, a spend, a delete, any default when the owner turned going ahead off, and any default once the person has
