@@ -4,7 +4,8 @@
 //! memory under the turn's HOME, `.claude/projects/<the bot's checkout, every other character a dash>/memory/`) and
 //! the Gemini CLI's saved memory (its home's `.gemini/GEMINI.md`, set aside unread by hosts/gemini.rs).
 //!
-//! Every entry carries its source (`claude-memory/<file>`), so a retry adds only what the checkout lacks. The turn's
+//! Every entry carries its source (`claude-memory/<file>`) and its whole text, so a retry adds only what the checkout
+//! lacks, and a same-named memory with other text (from another computer the bot ran on) is still copied. The turn's
 //! memory commit keeps the copy; the move is done (`done` in the runner's state for the bot) only once the copy is in
 //! the repository's committed history, the upstream's when there is one. Until then a claim names the checkout that
 //! copied, so another lane does not copy the same entries again; a claim older than CLAIM_SECS is taken over. The old
@@ -142,8 +143,15 @@ pub fn gemini_entries(home: &Path, day: &str) -> std::io::Result<Vec<Entry>> {
     Ok(if parts.is_empty() { vec![] } else { vec![entry("gemini-memory/GEMINI.md".into(), "**Gemini saved memory**", &parts.join("\n\n"), day)] })
 }
 
-fn has(text: &str, tag: &str) -> bool {
-    text.contains(&format!("[source: {tag};"))
+/// True when `text` holds this entry: its source tag and its text below the naming line, whatever day it was added.
+fn has(text: &str, e: &Entry) -> bool {
+    let body = e.text.split_once('\n').map_or("", |(_, b)| b);
+    text.contains(&format!("[source: {};", e.tag)) && text.contains(body)
+}
+
+/// True when a turn's checkout is a git checkout, a task worktree's `.git` file included: the move runs only there.
+pub fn is_checkout(path: &Path) -> bool {
+    path.join(".git").exists()
 }
 
 /// Puts `entries` in `learnings` (created if missing): at the end of the moved-rules section when there is one, else as
@@ -237,7 +245,7 @@ pub fn before_turn(entries: std::io::Result<Vec<Entry>>, checkout: &Path, state:
         return finish("no harness memory");
     }
     if let Some(text) = committed(checkout) {
-        if entries.iter().all(|e| has(&text, &e.tag)) {
+        if entries.iter().all(|e| has(&text, e)) {
             return finish(&format!("{} entries in the repository's history", entries.len()));
         }
     }
@@ -246,7 +254,7 @@ pub fn before_turn(entries: std::io::Result<Vec<Entry>>, checkout: &Path, state:
         return Err(std::io::Error::other(format!("{} is a link; memory is copied only into a file", target.display())));
     }
     let current = bot_read(&target)?.unwrap_or_default();
-    let missing: Vec<&Entry> = entries.iter().filter(|e| !has(&current, &e.tag)).collect();
+    let missing: Vec<&Entry> = entries.iter().filter(|e| !has(&current, e)).collect();
     if missing.is_empty() {
         return Ok(Moved::Copied(0));
     }
@@ -361,6 +369,35 @@ mod tests {
         bot_write(&leaf, "mine\n").unwrap();
         assert_eq!(std::fs::read_to_string(outside.join("runner.json")).unwrap(), "SECRET-TOKEN\n");
         assert!(!std::fs::symlink_metadata(&leaf).unwrap().file_type().is_symlink());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn claudes_folder_is_named_like_claude_names_it_and_only_a_git_checkout_moves() {
+        let dir = claude_dir(Path::new("/home/runner"), Path::new("/home/runner/workspace/acme_bot.v2"));
+        assert_eq!(dir, Path::new("/home/runner/.claude/projects/-home-runner-workspace-acme-bot-v2/memory"));
+        let root = temp();
+        assert!(!is_checkout(&root));
+        std::fs::write(root.join(".git"), "gitdir: /elsewhere/.git/worktrees/t\n").unwrap();
+        assert!(is_checkout(&root), "a task worktree's .git is a file");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_same_named_memory_with_other_text_is_still_copied() {
+        let root = temp();
+        let (a, b, checkout) = (root.join("a"), root.join("b"), root.join("work"));
+        for (dir, text) in [(&a, "Rule from the first computer.\n"), (&b, "Rule from the second computer.\n")] {
+            std::fs::create_dir_all(dir).unwrap();
+            std::fs::write(dir.join("rule.md"), text).unwrap();
+        }
+        let now = SystemTime::now();
+        assert_eq!(before_turn(claude_entries(&a, "d1"), &checkout, &root.join("s1"), "d1", now).unwrap(), Moved::Copied(1));
+        // The same memory a day later is already there; the other computer's text under the same name is not.
+        assert_eq!(before_turn(claude_entries(&a, "d2"), &checkout, &root.join("s2"), "d2", now).unwrap(), Moved::Copied(0));
+        assert_eq!(before_turn(claude_entries(&b, "d2"), &checkout, &root.join("s3"), "d2", now).unwrap(), Moved::Copied(1));
+        let text = std::fs::read_to_string(checkout.join("memory/learnings.md")).unwrap();
+        assert!(text.contains("first computer") && text.contains("second computer"), "{text}");
         std::fs::remove_dir_all(root).unwrap();
     }
 
