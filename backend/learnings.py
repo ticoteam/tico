@@ -278,13 +278,17 @@ class Tally:
     def __init__(self, engine):
         self.engine, self.lock = engine, threading.Lock()
         self.calls, self.fallbacks, self.models = 0, 0, Counter()
-        self.usage, self.cost = Counter(), 0.0
+        self.usage, self.cost, self.routes, self.fallback = Counter(), 0.0, Counter(), None
 
     def __call__(self, state, questions, label=None):
         result = self.engine(state, questions, label)
         with self.lock:
             self.calls += 1
             self.fallbacks += bool(result.get("fallback"))
+            from .stale_review import route_of
+            self.routes[route_of(result)] += 1
+            if result.get("fallback") and not self.fallback:
+                self.fallback = {"code": result["fallback"], "from": route_of({"provider": result.get("fallback_from")})}
             self.models[str(result.get("model") or "")] += 1
             self.usage.update({k: v for k, v in (result.get("usage") or {}).items()
                                if isinstance(v, int) and not isinstance(v, bool)})
@@ -477,7 +481,8 @@ def run(store, run_id):
             engine = Tally(engine)
             failed = route(engine, qset, items, team)
             chosen = packets(items, qset)
-            detail.update({"failed": failed, "route_ms": round((time.monotonic() - routed_at) * 1000)})
+            detail.update({"failed": failed, "route_ms": round((time.monotonic() - routed_at) * 1000),
+                           "routes": dict(engine.routes), "fallback": engine.fallback, "cost_usd": round(engine.cost, 6)})
         capped = bool(failed.get("spend_cap"))
         with store.transaction() as c:
             if c.execute("SELECT status FROM learning_runs WHERE id=?", (run_id,)).fetchone()["status"] != "running":
@@ -505,9 +510,36 @@ def run(store, run_id):
         finish(store, run_id, "failed", {**detail, "error": type(exc).__name__})
 
 
+RUN_WORDS = {"capped": "Skipped: Decide is at the team's monthly spend cap", "unconfigured": "Skipped: no decision model"}
+
+
+def recorded(store, run_id):
+    """`run`, then its System routines record (backend/system_routines.py): what was read and sent, the route, the cost."""
+    from . import system_routines as SR
+    record = SR.Run("learnings")
+    run(store, run_id)
+    with store.read() as c:
+        row = c.execute("SELECT status,started,read_count,routed_count,detail_json FROM learning_runs WHERE id=?",
+                        (run_id,)).fetchone()
+    if not row:
+        return
+    detail = json.loads(row["detail_json"] or "{}")
+    record.started = row["started"]
+    if row["status"] == "failed":
+        record.error = "Failed: " + SR.FAILURE_WORDS.get(detail.get("error") or "", "unexpected error")
+    elif row["status"] in RUN_WORDS:
+        record.did(RUN_WORDS[row["status"]])
+    else:
+        sent = detail.get("deliveries") or 0
+        record.did(f"{row['read_count']} read, {SR.count_words(sent, 'bot')} sent learnings")
+    if detail.get("routes"):
+        record.ai(detail["routes"], detail.get("fallback"), detail.get("cost_usd"))
+    SR.write(store, record)
+
+
 def start(store, run_id):
     """In the background: the decision model's calls take seconds, and nothing may wait on them."""
-    thread = threading.Thread(target=run, args=(store, run_id), name="learnings", daemon=True)
+    thread = threading.Thread(target=recorded, args=(store, run_id), name="learnings", daemon=True)
     thread.start()
     return thread
 
