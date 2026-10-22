@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from . import aws as awsmod, backup as bk, cloud as cloudmod, cloudinit, contract, dns as dnsmod, envfile, remote, route53, settings as st, signin, state, support, verify
+from . import aws as awsmod, backup as bk, cloud as cloudmod, cloudinit, contract, dns as dnsmod, envfile, hosted, remote, route53, settings as st, signin, state, support, verify
 from .cloudflare import DASHBOARD_STEPS, RUNNER_DASHBOARD_STEP, TOKEN_URL, Cloudflare, CloudflareError
 from .settings import Asker, Settings
 from .ui import IO, USAGE_NOTICE, MissingInput
@@ -76,6 +76,32 @@ def host_of(ssh: str) -> str:
 
 # --- 1. answers ------------------------------------------------------------------------------------------
 
+def gather_company_file(args, s):
+    """Validate before any cloud or DNS writes; retries preserve the private plan."""
+    path = getattr(args, "company_file", None)
+    if not path and not s.company_file_data:
+        return
+    from backend.company_file import DraftError, starter
+    try:
+        if path:
+            with Path(path).expanduser().open("rb") as stream:
+                raw = stream.read(starter.MAX_BYTES + 1)
+            if len(raw) > starter.MAX_BYTES:
+                raise DraftError("the company file is too large")
+            s.company_file_data = starter.pack(raw.decode("utf-8"))
+        plan = starter.unpack(s.company_file_data)
+    except ImportError:
+        raise MissingInput("--company-file needs PyYAML: install python3-yaml or run python3 -m pip install PyYAML") from None
+    except (OSError, UnicodeError):
+        raise MissingInput("Cannot read --company-file; use a readable UTF-8 company YAML file") from None
+    except DraftError as exc:
+        raise MissingInput(str(exc)) from None
+    explicit = getattr(args, "company", None)
+    if explicit and explicit != plan["company"]["name"]:
+        raise MissingInput("--company must match the name in --company-file; edit the file or omit --company")
+    s.company = plan["company"]["name"]
+
+
 def gather(io: IO, args, s: Settings, dry: bool) -> Settings:
     a = Asker(io, args, s, dry)
     a.get("target", "Where should Tico run?", choices=st.TARGETS, default="aws")
@@ -92,6 +118,14 @@ def gather(io: IO, args, s: Settings, dry: bool) -> Settings:
               choices={k: k for k in awsmod.HOURLY}, default="t4g.small")
         a.get("aws_os", "Operating system", flag="--aws-os", choices={"ubuntu": "Ubuntu 24.04", "al2023": "Amazon Linux 2023"}, default="ubuntu")
         a.get("aws_profile", "AWS profile (blank for the default credentials)", flag="--aws-profile", required=False)
+        s.aws_name = (getattr(args, "name", None) or s.aws_name or "").strip().lower()
+        if s.aws_name and not awsmod.NAME_RE.fullmatch(s.aws_name):
+            raise MissingInput("--name is 1 to 40 lowercase letters, digits and dashes, starting and ending with a letter or digit")
+        s.aws_permissions_boundary = (getattr(args, "aws_permissions_boundary", None) or s.aws_permissions_boundary or "").strip()
+        if s.aws_permissions_boundary and not awsmod.POLICY_ARN_RE.fullmatch(s.aws_permissions_boundary):
+            raise MissingInput("--aws-permissions-boundary is an IAM policy ARN (arn:aws:iam::<account>:policy/<name>)")
+    elif getattr(args, "name", None) or getattr(args, "aws_permissions_boundary", None):
+        raise MissingInput("--name and --aws-permissions-boundary are for a server on AWS (--cloud aws)")
     if s.target in cloudmod.PROVIDERS:
         pv = cloudmod.PROVIDERS[s.target]
         a.get("cloud_location", f"{pv.label} location", flag="--cloud-location", choices=pv.locations, default=pv.default_location)
@@ -102,14 +136,20 @@ def gather(io: IO, args, s: Settings, dry: bool) -> Settings:
 
 def gather_identity(io: IO, args, s: Settings, dry: bool) -> None:
     a = Asker(io, args, s, dry)
-    a.get("auth", "How should people sign in?", flag="--auth", choices=st.AUTHS, default="google")
-    if s.auth == "cloudflare":
+    if s.auth != st.OWNER_LINK and not s.hosted:   # hosted.gather sets it for a server Tico hosts, never asked
+        a.get("auth", "How should people sign in?", flag="--auth", choices=st.AUTHS, default="google")
+    for flag in ("issuer", "signin_label"):
+        if getattr(args, flag, None) and s.auth != "oidc":
+            raise MissingInput(f"--{flag.replace('_', '-')} is for --auth oidc")
+    if s.auth == st.OWNER_LINK:
+        pass                            # the owner's sign-in link: no provider to set up
+    elif s.auth == "cloudflare":
         if s.front_door != "cloudflared":
             raise MissingInput("Cloudflare Access needs --front-door cloudflared")
         a.get("access_issuer", "Access team URL (https://<team>.cloudflareaccess.com)")
         a.get("access_audience", "Access application audience tag")
     else:
-        p = signin.PROVIDERS[s.auth]
+        p = signin.provider(s.auth)
         uri = signin.redirect_uri(s.domain)
         need_client = not (getattr(args, "client_id", None) or s.client_id)
         if need_client and io.interactive and not dry:
@@ -117,16 +157,24 @@ def gather_identity(io: IO, args, s: Settings, dry: bool) -> None:
             for i, step in enumerate(p.steps, 1):
                 io.say(f"  {i}. {step}")
             io.say(f"\n  Redirect URI to paste, exactly:  {uri}\n")
-            io.open_url(p.console_url)
+            if p.console_url:
+                io.open_url(p.console_url)
         elif not io.interactive or dry:
-            io.say(f"Sign-in: create a {p.label} OAuth client at {p.console_url}\n  with redirect URI exactly {uri}")
+            io.say(f"Sign-in: create a {p.label} OAuth client" + (f" at {p.console_url}" if p.console_url else "")
+                   + f"\n  with redirect URI exactly {uri}")
         if s.auth == "microsoft":
             a.get("tenant", "Directory (tenant) ID or domain")
+        if s.auth == "oidc":
+            a.get("issuer", "Issuer URL (https://..., the provider's OpenID Connect address)", validate=signin.valid_issuer)
+            s.issuer = s.issuer.rstrip("/") if not s.issuer.startswith("<") else s.issuer
+            a.get("signin_label", "Name on the sign-in button, \"Sign in with ...\" (blank: straight to the provider)",
+                  required=False, flag="--signin-label", validate=lambda v: len(v) <= 40 and not any(c in v for c in "<>\n\r"))
         a.get("client_id", f"{p.label} client ID")
         a.get("client_secret", f"{p.label} client secret (hidden)", secret=True, env="TICO_OIDC_CLIENT_SECRET")
         a.get("allowed_domain", "Only allow sign-in from this email domain (blank for anyone on the roster)", required=False,
               flag="--allowed-domain")
-    a.get("company", "Team/Company name", default="Acme")
+    if not s.company_file_data:
+        a.get("company", "Team/Company name", default="Sample Co" if s.preset else "Acme")
     a.get("owner_email", "Owner email (must be the account you will sign in with)", validate=lambda v: bool(st.EMAIL_RE.match(v)))
     a.get("decisions_provider", "Model key for the server's own decisions (openai, anthropic, gemini; blank to skip)", required=False,
           choices=None, flag="--decisions-provider")
@@ -144,14 +192,18 @@ def gather_runner_host(io: IO, args, s: Settings, zone: dnsmod.Zone | None, dry:
         if given and given != "none":
             raise MissingInput("--runner-hostname needs --front-door cloudflared: with Caddy, computers connect to the domain itself")
         s.runner_host = ""
+        if given == "none":
+            s.runner_url = ""
         return
-    if s.auth == "cloudflare" or given:
+    if (s.auth == "cloudflare" or given) and not (s.runner_url and getattr(args, "runner_host", None) is None):
         default = "" if s.domain.startswith("<") else st.default_runner_host(s.domain, zone.name if zone else "")
         Asker(io, args, s, dry).get("runner_host", "Runner hostname, served without Access for computers and outside agents ('none' to skip)",
                                     flag="--runner-hostname", required=False, default=default,
                                     validate=lambda v: v.lower() == "none" or bool(st.DOMAIN_RE.match(v.lower())))
     s.runner_host = s.runner_host.lower()
     s.runner_given = bool(given) and given != "none"
+    if getattr(args, "runner_host", None) is not None:
+        s.runner_url = f"https://{s.runner()}" if s.runner() else ""
     host = s.runner()
     if host == s.domain:
         raise MissingInput("--runner-hostname must differ from --domain")
@@ -191,7 +243,7 @@ def provision_backup(io: IO, s: Settings, deps: Deps, cf: Cloudflare | None) -> 
         if s.backup == "aws":
             _, iam, _, account = deps.aws_clients(s.aws_region, s.aws_profile)
             values = bk.create_s3(deps.aws_s3(s.aws_region, s.aws_profile), iam, domain=s.domain, region=s.aws_region,
-                                  account_id=account, name=awsmod.slug(s.domain), say=io.say)
+                                  account_id=account, name=s.aws_name or awsmod.slug(s.domain), say=io.say)
         else:
             account_id = s.cf_account_id
             if not account_id:
@@ -218,8 +270,8 @@ def provision_backup(io: IO, s: Settings, deps: Deps, cf: Cloudflare | None) -> 
 # --- 2. plan ---------------------------------------------------------------------------------------------
 
 def aws_plan(s: Settings) -> awsmod.AwsPlan:
-    return awsmod.plan_aws(domain=s.domain, front_door=s.front_door, region=s.aws_region,
-                           instance_type=s.aws_instance_type, os_family=s.aws_os)
+    return awsmod.plan_aws(domain=s.domain, front_door=s.front_door, region=s.aws_region, instance_type=s.aws_instance_type,
+                           os_family=s.aws_os, name=s.aws_name, boundary=s.aws_permissions_boundary)
 
 
 def cloudname(s: Settings) -> str:
@@ -273,10 +325,18 @@ def plan_lines(s: Settings, zone: dnsmod.Zone | None, records: list[dnsmod.Recor
     for r in records:
         L.append(f"       {r.type} {r.name} -> {r.value}" + (" (proxied)" if r.proxied else ""))
     add("Wait until public resolvers (8.8.8.8, 1.1.1.1, 9.9.9.9) answer with those records, before anything asks for a certificate")
-    if s.auth == "cloudflare":
+    if s.auth == st.OWNER_LINK:
+        for line in hosted.plan_lines(s):
+            add(line)
+    elif s.auth == "cloudflare":
         add("Sign-in: Cloudflare Access (issuer and audience you gave)")
     else:
-        add(f"Sign-in: {signin.PROVIDERS[s.auth].label} OIDC; OAuth client redirect URI must be exactly {signin.redirect_uri(s.domain)}")
+        add(f"Sign-in: {signin.provider(s.auth).label} OIDC" + (f" at {s.issuer}" if s.auth == "oidc" else "")
+            + (f", button \"Sign in with {s.signin_label}\"" if s.auth == "oidc" and s.signin_label else "")
+            + f"; OAuth client redirect URI must be exactly {signin.redirect_uri(s.domain)}")
+        if s.hosted:
+            for line in hosted.plan_lines(s):
+                add(line)
     if s.backup == "aws":
         add("Backups: create the backup storage on AWS")
         L += [f"       - {x}" for x in bk.aws_plan_lines(s.domain, s.aws_region)]
@@ -330,7 +390,7 @@ def ensure_dns(io: IO, s: Settings, deps: Deps, zone: dnsmod.Zone | None, record
     if skip_wait:
         return True
     io.say("  Waiting for public DNS ...")
-    return dnsmod.wait_until_live(s.domain, records, deps.public_resolvers(), timeout=timeout, say=io.say, sleep=deps.sleep)
+    return dnsmod.wait_until_live(s.dns(), records, deps.public_resolvers(), timeout=timeout, say=io.say, sleep=deps.sleep)
 
 
 def _route53(io: IO, s: Settings, deps: Deps, zone: dnsmod.Zone, records) -> bool:
@@ -374,21 +434,32 @@ def run(args, io: IO, deps: Deps) -> int:
     s = st.from_saved(saved, saved_env) if saved else Settings()
     s.cf_token = os.environ.get("CLOUDFLARE_API_TOKEN", "")
     s.tunnel_token = os.environ.get("CLOUDFLARE_TUNNEL_TOKEN", "") or s.tunnel_token
+    # Long-lived server settings stay in the private .env on retries without fresh operator input.
+    s.inbound_key = os.environ.get("TICO_INBOUND_KEY", "") or s.inbound_key
+    s.inbound_url = os.environ.get("TICO_INBOUND_URL", "") or s.inbound_url
+    gather_company_file(args, s)
     io.say("tico setup" + (" (dry run: nothing will be created or changed)" if dry else ""))
     io.say(USAGE_NOTICE + " Details: PRIVACY.md in the Tico repository.")
     if saved:
         io.say(f"Resuming from the last run for {domain_hint} (secrets kept in {state.home() / domain_hint}).")
     gather(io, args, s, dry)
+    hosted.gather(args, s, dry)
+    st.gather_runtime(args, s)
     gather_identity(io, args, s, dry)
     gather_backup(io, args, s, dry)
     s.updater = not args.no_updater
     s.compose_ref = args.compose_ref
 
     io.say("\nLooking up who serves DNS for the domain ...")
-    zone = dnsmod.detect_zone(s.domain, deps.resolver)
+    zone = dnsmod.detect_zone(s.dns(), deps.resolver)
+    if s.dns_zone and (not zone or zone.name != s.dns_zone or zone.provider.key != "route53"):
+        raise MissingInput("--dns-zone must match the detected authoritative Route 53 zone for --dns-name")
     if zone:
         io.say(f"  {zone.name}: {zone.provider.name}  ({', '.join(zone.nameservers)})")
     gather_runner_host(io, args, s, zone, dry)
+    st.gather_runtime(args, s, final=True)
+    if s.target == "aws" and s.company_file_data and len(envfile.render(s.to_env()).encode()) > 8000:
+        raise MissingInput("The starter plan and install settings exceed AWS Parameter Store's 8 KB limit; shorten the plan or import it in the app")
     if s.target == "ssh" and s.front_door == "caddy":
         default_ip = ""
         try:
@@ -412,7 +483,7 @@ def run(args, io: IO, deps: Deps) -> int:
 
     tunnel_id = s.tunnel_id or tunnel_id_from_token(s.tunnel_token)
     ip = "<elastic-ip>" if s.target == "aws" else "<reserved-ip>" if s.target in cloudmod.PROVIDERS else s.server_ip
-    records = dnsmod.plan_records(s.domain, s.front_door, ipv4=ip if s.front_door == "caddy" else "", tunnel_id=tunnel_id,
+    records = dnsmod.plan_records(s.dns(), s.front_door, ipv4=ip if s.front_door == "caddy" else "", tunnel_id=tunnel_id,
                                   runner_host=s.runner())
 
     io.say("\nPlan")
@@ -438,6 +509,10 @@ def run(args, io: IO, deps: Deps) -> int:
         tunnel_id = _tunnel(io, args, s, deps, zone, cf) or tunnel_id
         records = dnsmod.plan_records(s.domain, s.front_door, tunnel_id=tunnel_id, runner_host=s.runner())
 
+    if s.hosted and not s.owner_link_hash:
+        # The first link (break-glass beside --auth oidc), made here; a re-run keeps it (the server only takes one when it
+        # has none).
+        s.owner_link_hash = hosted.new_link(s)
     env_text = envfile.render(s.to_env())
     state.save(s.domain, s.public(), env_text)
     scrub = lambda t: envfile.scrub(t, s.secrets())
@@ -469,9 +544,10 @@ def run(args, io: IO, deps: Deps) -> int:
             io.say("\nDNS")
             live = ensure_dns(io, s, deps, zone, records, timeout=timeout, skip_wait=args.skip_dns_wait, cf=cf)
     elif s.target == "aws":
-        runner = _aws(io, args, s, deps, zone, records, cf, env_text, compose, url, timeout)
-        if runner is None:
+        res = _aws(io, args, s, deps, zone, records, cf, env_text, compose, url, timeout)
+        if res is None:
             return 1
+        runner, records = res
     elif s.target in cloudmod.PROVIDERS:
         res = _cloud(io, args, s, deps, zone, cf, env_text, timeout)
         if isinstance(res, int):
@@ -504,11 +580,16 @@ def _tunnel(io: IO, args, s: Settings, deps: Deps, zone, cf: Cloudflare | None) 
         if not z:
             raise SystemExit("That Cloudflare token cannot see a zone for this domain (needs Zone > DNS > Edit on it).")
         tid, token = cf.ensure_tunnel(z["account_id"], f"tico-{awsmod.slug(s.domain)}")
-        cf.configure_tunnel(z["account_id"], tid, s.domain, s.runner())
+        cf.configure_tunnel(z["account_id"], tid, s.domain, s.effective_runner_host(),
+                            aliases=st.aliases(s.domain_aliases, s.domain), visual_origin=s.visual_origin)
         s.tunnel_token, s.tunnel_id = token, tid
         io.say(f"  tunnel {tid} ready, routing {s.domain} to http://server:8765"
                + (f", and {s.runner()} for /api/v2 and /download" if s.runner() else ""))
         return tid
+    from .cloudflare import ingress_config
+    io.say("\nRequired tunnel configuration in the dashboard (including removal of old routes):")
+    io.say(json.dumps(ingress_config(s.domain, s.effective_runner_host(), aliases=st.aliases(s.domain_aliases, s.domain),
+                                   visual_origin=s.visual_origin), indent=2))
     if not s.tunnel_token:
         io.say("\nCloudflare tunnel (dashboard steps)")
         steps = DASHBOARD_STEPS + ([RUNNER_DASHBOARD_STEP] if s.runner() else [])
@@ -519,17 +600,17 @@ def _tunnel(io: IO, args, s: Settings, deps: Deps, zone, cf: Cloudflare | None) 
     return s.tunnel_id
 
 
-def _aws(io, args, s, deps, zone, records, cf, env_text, compose, url, timeout) -> remote.Shell | None:
+def _aws(io, args, s, deps, zone, records, cf, env_text, compose, url, timeout) -> tuple[remote.Shell, list[dnsmod.Record]] | None:
     plan = aws_plan(s)
     io.say("\nAWS")
     ec2, iam, ssm, account = deps.aws_clients(s.aws_region, s.aws_profile)
     d = awsmod.Deployer(plan, ec2, iam, ssm, account, say=io.say, sleep=deps.sleep)
-    d.put_env(env_text)
+    d.put_env(env_text, company_file=bool(s.company_file_data))
     prep = d.prepare()
     ip = prep["public_ip"]
     if s.front_door == "caddy":
         s.server_ip = ip
-        records = dnsmod.plan_records(s.domain, "caddy", ipv4=ip)
+        records = dnsmod.plan_records(s.dns(), "caddy", ipv4=ip)
         io.say(f"\nDNS (Elastic IP {ip})")
         ensure_dns(io, s, deps, zone, records, timeout=0, skip_wait=True, cf=cf)
     script = remote.bootstrap_script(os_family=s.aws_os, domain=s.domain, front_door=s.front_door, compose=compose, compose_url=url,
@@ -540,7 +621,12 @@ def _aws(io, args, s, deps, zone, records, cf, env_text, compose, url, timeout) 
     runner = remote.SSMShell(ssm, iid, deps.sleep)
     if s.front_door == "caddy" and not args.skip_dns_wait:
         io.say("\nWaiting for public DNS (the server holds back Caddy until this is true) ...")
+        if s.dns_name and not dnsmod.wait_until_live(s.dns(), records, deps.public_resolvers(), timeout=timeout,
+                                                    say=io.say, sleep=deps.sleep):
+            return None
         if not dnsmod.wait_until_live(s.domain, records, deps.public_resolvers(), timeout=timeout, say=io.say, sleep=deps.sleep):
+            if s.dns_name:
+                return None
             io.say("The server keeps waiting for DNS for about 20 minutes after boot; if you fix DNS later, run "
                    "`tico setup doctor` (or re-run `tico setup`).")
     elif s.front_door == "cloudflared":
@@ -556,7 +642,7 @@ def _aws(io, args, s, deps, zone, records, cf, env_text, compose, url, timeout) 
         if res.returncode:
             io.say(envfile.scrub(res.stderr[-400:], s.secrets()))
             return None
-    return runner
+    return runner, records
 
 
 def _cloud(io: IO, args, s: Settings, deps: Deps, zone, cf, env_text: str, timeout: float):
@@ -650,16 +736,30 @@ HTTPS_WAIT_SECONDS = 180
 
 def finish(io: IO, s: Settings, deps: Deps, records, runner: remote.Shell | None, args=None) -> int:
     io.say("\nChecking it works")
-    checks = verify.run_all(domain=s.domain, provider=s.auth, client_id=s.client_id, front_door=s.front_door,
+    checks = verify.run_all(domain=s.domain, provider=s.auth, client_id=s.client_id, issuer=s.issuer, front_door=s.front_door,
                             records=records, resolvers=deps.public_resolvers(), shell=runner, runner_host=s.runner(),
                             wait_https=HTTPS_WAIT_SECONDS, sleep=deps.sleep, say=io.say)
     show(io, checks)
     if all(c.ok for c in checks):
-        io.say(f"\nDone. Open https://{s.domain} and sign in as {s.owner_email}.")
+        computer = (s.preset == "recommended" and getattr(args, 'server_computer', 'same') == 'same'
+                    and hosted.add_server_computer(io, s, runner))
+        if s.auth == st.OWNER_LINK:
+            io.say(f"\nDone. The owner's sign-in link is in {hosted.link_file(s.domain)} (0600): send it to {s.owner_email}. "
+                   "It works once, for a week; `python3 -m setup owner-link --domain " + s.domain + "` makes a new one.")
+        elif s.hosted:
+            io.say(f"\nDone. Open https://{s.domain} and press \"Sign in with {s.signin_label or 'your provider'}\" as "
+                   f"{s.owner_email}, the owner.")
+            io.say(f"Break-glass, for our team only (not for the ready email): the owner's sign-in link is in "
+                   f"{hosted.link_file(s.domain)} (0600), for when the issuer is down.")
+        else:
+            io.say(f"\nDone. Open https://{s.domain} and sign in as {s.owner_email}.")
         if not s.backup_url:
             io.say(f"\nNote: {bk.LOCAL_WARNING}")
-        io.say("The in-app checklist continues from there. Next, add the computer that runs your bots: your Mac via "
-               "Settings > Computers > Add computer, or a Linux box with `python3 -m setup runner`.")
+        if computer:
+            io.say("The one step left is in the app: Settings > Computers > Server computer > Sign in, to Claude and to ChatGPT.")
+        else:
+            io.say("The in-app checklist continues from there. Next, add the computer that runs your bots: your Mac via "
+                   "Settings > Computers > Add computer, or a Linux box with `python3 -m setup runner`.")
         return 0
     io.say("\nNot everything passed. Fix the hints above and run `python3 -m setup doctor --domain " + s.domain + "`.")
     offer_support(io, args, s, f"tico setup ({s.target})", checks)
@@ -700,7 +800,7 @@ def doctor(args, io: IO, deps: Deps) -> int:
         _, _, ssm, _ = deps.aws_clients(s.aws_region, s.aws_profile)
         runner = remote.SSMShell(ssm, s.aws_instance_id, deps.sleep)
     io.say(f"tico setup doctor for {domain}")
-    checks = verify.run_all(domain=domain, provider=s.auth, client_id=s.client_id, front_door=s.front_door,
+    checks = verify.run_all(domain=domain, provider=s.auth, client_id=s.client_id, issuer=s.issuer, front_door=s.front_door,
                             records=records, resolvers=deps.public_resolvers(), shell=runner, runner_host=s.runner())
     show(io, checks)
     ok = all(c.ok for c in checks)
@@ -729,6 +829,7 @@ def _destroy_hint(io: IO, saved: dict) -> int:
 
 def destroy(args, io: IO, deps: Deps) -> int:
     saved, _ = state.load((args.domain or "").lower()) if args.domain else ({}, "")
+    hosted.check_dns_identity(args, saved.get("dns_name", ""), saved.get("dns_zone", ""))
     if saved.get("target") in cloudmod.PROVIDERS:
         return _destroy_hint(io, saved)
     name = args.name or saved.get("aws_name") or (awsmod.slug(args.domain) if args.domain else "")
@@ -744,6 +845,12 @@ def destroy(args, io: IO, deps: Deps) -> int:
     for kind, ids in found.items():
         for i in ids:
             io.say(f"  {kind}: {i}")
+    records = None
+    if getattr(args, "dns", False):
+        records = _dns_to_delete(io, args, saved, deps, awsmod.addresses(ec2, name))
+        if records is None:
+            io.say("Nothing was deleted: run it again, or without --dns and remove the DNS record yourself.")
+            return 1
     io.say("The server's data (the tico-data volume) is deleted with the instance. Back it up first if you need it.")
     io.say(f"The backup bucket and its IAM user (tico-backup-{name}) are left alone: they hold the copy you would restore from.")
     if args.dry_run:
@@ -752,5 +859,48 @@ def destroy(args, io: IO, deps: Deps) -> int:
     if not args.yes and not (io.interactive and io.ask(f"Type {name} to delete these") == name):
         io.say("Not confirmed; nothing was deleted.")
         return 1
-    awsmod.destroy(ec2, iam, ssm, found, say=io.say, sleep=deps.sleep)
+    if records and records[2]:
+        client, zid, sets = records
+        route53.delete(client, zid, sets)       # first: the name never points at an address AWS may give someone else
+        io.say("  DNS records deleted.")
+    awsmod.destroy(ec2, iam, ssm, found, say=io.say, sleep=deps.sleep, dns_done=records is not None)
     return 0
+
+
+def _dns_to_delete(io: IO, args, saved: dict, deps: Deps, ours: set[str]):
+    """destroy --dns: (client, zone id, the record sets to delete) for the domain's A and AAAA records that still point at
+    this server; None when Route 53 can't be read, so nothing at all is deleted and a re-run tries again."""
+    domain = (getattr(args, "dns_name", None) or saved.get("dns_name") or args.domain or "").lower()
+    dns_zone = (getattr(args, "dns_zone", None) or saved.get("dns_zone") or "").lower()
+    if (getattr(args, "dns_name", None) or dns_zone) and not (
+            st.DOMAIN_RE.fullmatch(domain) and st.DOMAIN_RE.fullmatch(dns_zone)
+            and domain.endswith("." + dns_zone)):
+        raise MissingInput("--dns-name must be an exact hostname beneath --dns-zone (both are required)")
+    if not domain:
+        raise MissingInput("--dns needs --domain: the name whose record points at the server")
+    zone = dnsmod.detect_zone(domain, deps.resolver)
+    if dns_zone and (not zone or zone.name != dns_zone):
+        io.say("--dns-zone does not match the detected authoritative zone; nothing was deleted.")
+        return None
+    if not zone or zone.provider.key != "route53":
+        io.say(f"--dns deletes records in Route 53, and {domain} is not served from there "
+               f"({zone.provider.name if zone else 'no nameservers found'}).")
+        return None
+    profile = args.aws_profile or saved.get("aws_profile", "")
+    try:
+        client = deps.route53_client(profile) if deps.route53_client else _r53_client(profile)
+        zid, status = route53.find_zone(client, zone)
+        if status != "authoritative":
+            io.say(f"No Route 53 zone in this account serves {zone.name}.")
+            return None
+        sets, other = route53.pointing_at(client, zid, domain, ours)
+    except Exception as e:
+        io.say(f"Could not read Route 53 ({type(e).__name__}).")
+        return None
+    for rs in sets:
+        io.say(f"  dns: {rs['Type']} {domain} -> {', '.join(v['Value'] for v in rs['ResourceRecords'])}")
+    for rs in other:
+        io.say(f"  Left alone: {rs['Type']} {domain} no longer points only at this server.")
+    if not sets and not other:
+        io.say(f"  No A or AAAA record for {domain} in Route 53.")
+    return client, zid, sets

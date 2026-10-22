@@ -46,8 +46,6 @@ FEATURES = (
     Feature("listening", "Listening", (("listening.md", None),),
             lambda c, s, shell: _rows(c, "SELECT 1 FROM bots WHERE slug='listening' AND state='active'"),
             {"templates": ["listening"]}),
-    Feature("market", "Market", (("librarian.md", "Setting up the market"),),
-            lambda c, s, shell: _rows(c, "SELECT 1 FROM market_entities LIMIT 1")),
     Feature("live_meetings", "Live Meetings API and Recorder", (("live-meetings-api.md", None),),
             lambda c, s, shell: _rows(c, "SELECT 1 FROM live_meetings LIMIT 1")),
     Feature("computer_screen", "Computer screen (View and Control)",

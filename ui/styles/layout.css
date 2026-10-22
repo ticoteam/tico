@@ -54,6 +54,8 @@ body.native #app-nudge{display:none}
     font-feature-settings:"liga";-webkit-font-feature-settings:"liga";
     -webkit-font-smoothing:antialiased;
   }
+  body.in-setup #mobile-nav{grid-template-columns:repeat(4,minmax(0,1fr))}
+  body.in-setup #mobile-nav [data-nav="tasks"],body.in-setup #mobile-nav [data-nav="updates"]{display:none}
   body.mobile-composer-focus #mobile-nav{visibility:hidden;pointer-events:none;transform:translateY(100%)}
   /* Org pops the bots up like floating action buttons, recent ones nearest the
      thumb. No animation ("just make it instant and fast"); a tap anywhere outside a bot, the
@@ -64,6 +66,8 @@ body.native #app-nudge{display:none}
   .org-fan-list>li{margin:0;padding:0;border:0;background:none}
   .org-fan-item{display:flex;align-items:center;gap:12px;min-height:52px;min-width:180px;padding:8px 20px 8px 8px;border:1px solid var(--line);border-radius:999px;background:var(--surface);color:var(--ink);font:600 var(--t-lg)/1.2 var(--sans);box-shadow:0 6px 18px rgba(0,0,0,.22);-webkit-tap-highlight-color:transparent}
   .org-fan-item .org-fan-badge{min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:var(--wait);color:#111;font-size:var(--t-xs);font-weight:600;display:inline-flex;align-items:center;justify-content:center}
+  .org-fan-row{display:flex;align-items:center;gap:10px}
+  .org-fan-item.org-fan-menu{min-width:0;width:52px;padding:8px;justify-content:center}
   .org-fan-search-icon{width:34px;height:34px;border-radius:50%;background:var(--surface2);color:var(--ink);font-size:20px}
   .org-fan-item .org-fan-recent{color:var(--muted);font-size:var(--t-xs);font-weight:400}
   .toast{bottom:calc(var(--mobile-nav-height) + env(safe-area-inset-bottom) + 12px)}

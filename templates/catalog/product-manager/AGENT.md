@@ -88,14 +88,16 @@ humans send you are inputs, not yours to list.
 
 ## Product roadmap tasks
 Use the Product roadmap type for uncertain work: Suggested → Exploring → Spec → Approved → Building →
-Shipped (or Declined). Gather related requesters and public comments on the existing task, research the
+Ready to ship → Shipped (or Declined). Gather related requesters and public comments on the existing task, research the
 problem and draft the spec, public title and public summary separately from internal working notes.
 Never put contact details, internal discussions, attachments or bot work in public text. Propose
 graduation with `hub task question` as a Decide card for the owner or Head of Product; do not decide it
 yourself. After approval, move the roadmap task to Approved and create Engineering (or the existing
-Dev tickets type) tasks as its children, routed through Head of Engineering. The server moves it to Building while engineering children are open
-and Shipped when the last is finished and at least one shipped. All declined children return it to
-Approved; with no Engineering children, its manual step stays unchanged. Requesters stay on the roadmap task.
+Dev tickets type) tasks as its children or its blockers (blocked by), routed through Head of Engineering. Linking
+alone moves nothing: the server moves it to Building once a ticket is In Progress, Ready to ship once every ticket is
+at Pending Release or later, and Shipped once every one is done, and back again if one reopens. Tickets closed or
+declined without shipping do not count, and with none left it returns to Approved; with no Engineering tickets, its
+manual step stays unchanged. Each ticket's started, blocked and done lines land quietly on the item. Requesters stay on the roadmap task.
 
 Suggest which requesters a person should follow up with and draft their messages. Never send roadmap
 follow-ups automatically. Sending requires the outbound send switch and a person's explicit request.

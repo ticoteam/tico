@@ -92,11 +92,15 @@ pub struct Capabilities {
     /// "" | computer | bot
     pub api_keys: String,
     pub api_key_login: Vec<String>,
+    /// A command that asks the provider about the key in its environment, in a home with no login (Switch to API key).
+    pub api_key_check: Vec<String>,
     pub api_key_in_turn: bool,
     pub subscription_marker: String,
     pub subscription_profiles: bool,
     pub profile_home: String,
     pub profile_dirs: Vec<String>,
+    /// Variables the CLI reads ahead of `profile_home` (Claude Code: CLAUDE_CONFIG_DIR); a profile's environment drops them.
+    pub profile_home_overrides: Vec<String>,
     pub own_config_home: bool,
     /// "" | refresh | turns | manual
     pub weekly_usage: String,
@@ -111,6 +115,8 @@ pub struct Capabilities {
     pub persistent_session: bool,
     pub goal_runs_across_turns: bool,
     pub serial_cold_start: bool,
+    /// A subscription login serves one turn at a time on this computer (crate::login_turns); a key login does not.
+    pub one_turn_per_login: bool,
     pub compaction: bool,
     pub resume_command: String,
     /// "" | host | command
@@ -128,11 +134,13 @@ impl Default for Capabilities {
             terminal_login: vec![],
             api_keys: String::new(),
             api_key_login: vec![],
+            api_key_check: vec![],
             api_key_in_turn: false,
             subscription_marker: String::new(),
             subscription_profiles: false,
             profile_home: String::new(),
             profile_dirs: vec![],
+            profile_home_overrides: vec![],
             own_config_home: false,
             weekly_usage: String::new(),
             account: String::new(),
@@ -144,6 +152,7 @@ impl Default for Capabilities {
             persistent_session: false,
             goal_runs_across_turns: false,
             serial_cold_start: false,
+            one_turn_per_login: false,
             compaction: false,
             resume_command: String::new(),
             model_list: String::new(),
@@ -463,11 +472,13 @@ fn parse_capabilities(raw: Option<&toml::Value>, at: &str) -> Result<Capabilitie
             "terminal_login" => c.terminal_login = list(k, v)?,
             "api_keys" => c.api_keys = choice(k, v, &["computer", "bot"])?,
             "api_key_login" => c.api_key_login = list(k, v)?,
+            "api_key_check" => c.api_key_check = list(k, v)?,
             "api_key_in_turn" => c.api_key_in_turn = flag(k, v)?,
             "subscription_marker" => c.subscription_marker = text(k, v)?,
             "subscription_profiles" => c.subscription_profiles = flag(k, v)?,
             "profile_home" => c.profile_home = text(k, v)?,
             "profile_dirs" => c.profile_dirs = list(k, v)?,
+            "profile_home_overrides" => c.profile_home_overrides = list(k, v)?,
             "own_config_home" => c.own_config_home = flag(k, v)?,
             "weekly_usage" => c.weekly_usage = choice(k, v, &["refresh", "turns", "manual"])?,
             "account" => c.account = choice(k, v, &["status-json", "app-server"])?,
@@ -484,6 +495,7 @@ fn parse_capabilities(raw: Option<&toml::Value>, at: &str) -> Result<Capabilitie
             "persistent_session" => c.persistent_session = flag(k, v)?,
             "goal_runs_across_turns" => c.goal_runs_across_turns = flag(k, v)?,
             "serial_cold_start" => c.serial_cold_start = flag(k, v)?,
+            "one_turn_per_login" => c.one_turn_per_login = flag(k, v)?,
             "compaction" => c.compaction = flag(k, v)?,
             "resume_command" => c.resume_command = text(k, v)?,
             "model_list" => c.model_list = choice(k, v, &["host", "command"])?,
@@ -894,7 +906,7 @@ impl Harnesses {
 
     /// Install the harnesses these runtimes (this computer's bots, primary and fallback) run on, plus the ones
     /// the owner turned on here. The company's other providers are not installed. `default` (the company
-    /// default, for a computer with no bots yet) is installed unless the owner turned it off. Called once the
+    /// defaults, including the Gateway runtime) is installed unless the owner turned it off. Called once the
     /// bots have been read from the server; only after that is anything removed.
     pub fn want<S: AsRef<str>, D: AsRef<str>>(&mut self, runtimes: &[S], default: &[D]) -> HashSet<String> {
         (self.needed, self.default, self.loaded) = (self.ids(runtimes), self.ids(default), true);
@@ -1680,6 +1692,29 @@ mod tests {
         h.step(&HashSet::new());
         assert!(!dir.join("tools").join("cursor-agent").exists());
         assert!(std::fs::symlink_metadata(h.bin_dir().join(&cursor.executable)).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn gateway_turns_prepare_their_harness_without_installing_other_company_providers() {
+        let dir = std::env::temp_dir().join(format!("tico-harness-{}", uuid::Uuid::new_v4().simple()));
+        let mut h = Harnesses::new(dir.join("tools"), dir.join("harnesses.json"), built_in());
+        let rows = vec![json!({"config": {"runtime": "claude"}})];
+        let runtimes = crate::relays::harness_runtimes(&rows);
+        let company = json!({"default_runtime": "codex", "gateway_runtime": "pi", "enabled_providers": ["gemini"]});
+        let defaults = crate::relays::harness_defaults(&runtimes, &company, true);
+        let required: Vec<String> = runtimes.iter().cloned().collect();
+        assert_eq!(h.want(&required, &defaults), HashSet::from(["claude-code".into(), "pi".into()]));
+        // Missing Pi becomes an install job, before any bot can claim its Gateway turn.
+        h.manifests.retain(|id, _| id == "pi");
+        h.manifests.get_mut("pi").unwrap().executable = format!("tico-missing-{}", uuid::Uuid::new_v4().simple());
+        let job = h.next().unwrap();
+        assert_eq!((job.kind.as_str(), job.harness.as_str()), ("install", "pi"));
+        h.choose(json!({"pi": false}).as_object().unwrap());
+        assert!(!h.wanted.contains("pi"));
+        assert!(crate::relays::harness_defaults(&runtimes, &company, false).is_empty());
+        assert!(crate::relays::harness_defaults(&runtimes, &json!({}), true).is_empty());
+        assert_eq!(crate::relays::harness_defaults(&HashSet::new(), &company, true), vec!["codex", "pi"]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

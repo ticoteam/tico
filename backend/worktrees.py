@@ -137,7 +137,7 @@ def supported(c):
     return 'computer_id' in {r[1] for r in c.execute('PRAGMA table_info(task_links)')}
 
 
-LIMIT = 30            # live worktrees per bot; the computer's free-disk floor can stop it sooner
+LIMIT = 50            # live worktrees per bot; the computer's free-disk floor can stop it sooner
 CLEANUP_TRIES = 6     # a refused worktree cleanup is asked again after 2, 4, ... 64 minutes, then left
 
 
@@ -193,6 +193,8 @@ def holdings(c, owner):
                 'pull_requests': [{'url': p['url'], 'state': p['state']} for p in prs]}
         if detail.get('error') and (detail.get('cleanup_requested') or detail.get('release_requested')):
             item['kept'] = detail['error']
+        elif detail.get('held') or detail.get('pr_error'):
+            item['kept'] = detail.get('held') or detail['pr_error']
         out.append(item)
     order = {'merged': 0, 'closed': 1, 'task_finished': 2, 'merge_ready': 3, 'in_progress': 4}
     return sorted(out, key=lambda w: order[w['clear']])
@@ -346,6 +348,13 @@ def heartbeat(c, who, reports, capable, default_org=""):
         # something else (a release, an acceptance): it is released so it stops counting against the bot's limit.
         # The computer removes it only while the bot is idle and only when it is clean and pushed (runner/worktrees.py).
         released = not closed and bool(prs) and finished and row['state'] == 'present'
+        # Its own branch's commits with no pull request linked are nobody's yet: the tree stays and says why.
+        unlinked = released and any(m['link_id'] == row['id'] for m in H.unlinked_pushes(c, row['task_id']))
+        if unlinked:
+            released = False
+            detail['held'] = f"held: commits on {row['branch']} with no pull request linked"
+        else:
+            detail.pop('held', None)
         if released and not detail.get('release_requested'):
             detail['release_requested'] = True
             for key in ('cleanup_attempts', 'cleanup_retry_at', 'cleanup_gave_up'):

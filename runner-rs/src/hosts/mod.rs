@@ -26,6 +26,11 @@ use regex::Regex;
 use serde_json::{json, Map, Value};
 use tokio::sync::mpsc::UnboundedSender;
 
+#[cfg(test)]
+thread_local! {
+    pub(crate) static TEST_STARTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 use crate::env::Env;
 
 pub type Events = UnboundedSender<Value>;
@@ -350,6 +355,8 @@ impl Host {
     }
 
     pub async fn start(&self) -> Result<(), HostError> {
+        #[cfg(test)]
+        TEST_STARTS.with(|starts| starts.set(starts.get() + 1));
         match self {
             Host::Claude(h) => h.start().await,
             Host::Codex(h) => h.start().await,
@@ -392,6 +399,23 @@ impl Host {
             Host::Cursor(h) => h.stop().await,
             Host::Grok(h) => h.stop().await,
             Host::AppDriver(h) => h.stop().await,
+        }
+    }
+
+    /// Whether the host's process may still be running. Codex, the one CLI that serves one turn per login
+    /// (crate::login_turns), says until its process is reaped; the others say `alive`.
+    pub fn running(&self) -> bool {
+        match self {
+            Host::Codex(h) => h.running(),
+            _ => self.alive(),
+        }
+    }
+
+    /// `stop`, and for Codex wait until its process has been reaped, even after an earlier stop was cut off.
+    pub async fn stop_and_reap(&self) {
+        match self {
+            Host::Codex(h) => h.stop_and_reap().await,
+            _ => self.stop().await,
         }
     }
 
@@ -667,9 +691,18 @@ pub fn use_own_config_home(runtime: &str, profile: Option<&crate::profiles::Prof
         "musecode" => {
             env.remove("MUSE_AUTH_PATH");
             env.insert("XDG_CONFIG_HOME".into(), musecode::config_home(profile).display().to_string());
+            env.insert("XDG_DATA_HOME".into(), musecode::data_home(profile).display().to_string());
             true
         }
         _ => false,
+    }
+}
+
+/// A folder the host's turns write that the bot user cannot (Muse Code's data home), as a readiness problem.
+pub fn data_problem(runtime: &str, profile: Option<&crate::profiles::Profile>) -> Option<String> {
+    match runtime {
+        "musecode" => musecode::data_problem(&musecode::data_home(profile)),
+        _ => None,
     }
 }
 

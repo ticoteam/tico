@@ -33,7 +33,12 @@ def tick(api, when):
         # The creates above computed next_due from the real clock; the tests run at AT.
         c.execute("UPDATE schedules SET next_due=NULL, last_fired=? WHERE next_due IS NOT NULL",
                   (AT.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),))
-    return scheduler(api).tick(when)
+    result = scheduler(api).tick(when)
+    # A routine starts held under Performance. The next planner pass releases a first occurrence immediately.
+    from backend import wake_presets
+    with api.app.state.store.transaction() as c:
+        wake_presets.tick(c, H.now())
+    return result
 
 
 def setup(api):
@@ -121,6 +126,10 @@ def test_delete_keeps_history_closes_unclaimed_work_and_leaves_running_work(api)
     # A routine whose task a machine already holds is removed without touching that attempt.
     post(api, "routines/ops:weekly", {"enabled": False})
     assert len(tick(api, datetime(2026, 9, 21, 14, tzinfo=timezone.utc))["fired"]) == 1
+    # The occurrence clock moved a week; advance the wake planner too, beyond the earlier unclaimed sweep.
+    from backend import wake_presets
+    with api.app.state.store.transaction() as c:
+        wake_presets.tick(c, H.shift(H.now(), days=7))
     attempt = claim(api, r)
     post(api, "routines/ops:audit/delete", {})
     with api.app.state.store.read() as c:

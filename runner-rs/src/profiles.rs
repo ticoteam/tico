@@ -75,12 +75,24 @@ impl Profile {
         (!self.share_operator).then(|| self.directory.join(runtime))
     }
 
-    /// `env` with `runtime`'s home pointed at this profile.
+    /// `env` with `runtime`'s home pointed at this profile, and nothing inherited that points it elsewhere.
     pub fn environment(&self, runtime: &str, env: &Env) -> Env {
         let mut env = env.clone();
         if let (Some(home), Some(var)) = (self.home(runtime), home_var(runtime)) {
             env.insert(var, home.display().to_string());
+            // Variables the CLI reads ahead of that home (`profile_home_overrides`) would sign it in and run it on some
+            // other folder's login.
+            for key in crate::harness_tools::caps(runtime, "").profile_home_overrides {
+                env.remove(&key);
+            }
         }
+        env
+    }
+
+    /// What `tico-runner profile login` signs `runtime` in with: `process` on this profile, plus the manifest's [env].
+    pub fn login_environment(&self, runtime: &str, process: &Env) -> Env {
+        let mut env = self.environment(runtime, process);
+        env.extend(crate::harness_tools::env_for(runtime));
         env
     }
 
@@ -294,6 +306,49 @@ pub fn add_profile(config: &Config, name: &str) -> Result<Value, String> {
     stored.save()?;
     forget_report();
     Ok(entry)
+}
+
+/// Whether `profile`'s folder is one Tico made for it: `<config dir>/profiles/<name>`, not on the operator's own logins.
+/// Only such a folder is ever emptied or deleted by Remove.
+pub fn tico_made(config: &Config, profile: &Profile) -> bool {
+    let root = config.path.parent().unwrap_or(Path::new(".")).join("profiles");
+    !profile.share_operator
+        && std::fs::canonicalize(&root).ok().zip(std::fs::canonicalize(&profile.directory).ok())
+            .is_some_and(|(root, dir)| dir.parent() == Some(root.as_path()) && dir.file_name().is_some_and(|f| f == profile.name.as_str()))
+}
+
+/// Take a subscription off this computer (Remove, runner-rs/src/login.rs run_remove): out of runner.json, with any
+/// local bot assignment to it, then its folder deleted when Tico made it (tico_made). A folder elsewhere is only
+/// unlisted. Ok(true) when the folder is gone; a folder that could not be deleted is logged and left, unlisted.
+pub fn remove_profile(config: &Config, name: &str) -> Result<bool, String> {
+    let mut stored = Config::load(&config.path)?;
+    let Some(entry) = stored.data.get("profiles").and_then(|p| p.get(name)).cloned() else {
+        return Err(format!("Subscription {name} is not on this computer"));
+    };
+    if stored.data.get("default_profile").map(text_of).as_deref() == Some(name) {
+        return Err(format!("Subscription {name} is this computer's own login; sign it out instead"));
+    }
+    let profile = Profile::new(name, &text_of(&entry["dir"]), truthy(entry.get("share_operator")));
+    let ours = tico_made(config, &profile);
+    if let Some(map) = stored.data.get_mut("profiles").and_then(|p| p.as_object_mut()) {
+        map.remove(name);
+    }
+    if let Some(map) = stored.data.get_mut("bot_profiles").and_then(|p| p.as_object_mut()) {
+        map.retain(|_, v| text_of(v) != name);
+    }
+    stored.save()?;
+    forget_report();
+    if !ours {
+        return Ok(false);
+    }
+    // A link in place of the folder is never followed: remove_dir_all removes the link itself.
+    match std::fs::remove_dir_all(&profile.directory) {
+        Ok(()) => Ok(true),
+        Err(e) => {
+            crate::util::log(&format!("Tico runner: subscription {name} removed; its folder {} stays ({:?})", profile.directory.display(), e.kind()));
+            Ok(false)
+        }
+    }
 }
 
 /// The `profile` subcommand: add, list, assign (runner/__main__.py profile_command). Writes runner.json the
@@ -565,8 +620,35 @@ pub fn sha256_hex(data: &[u8]) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+
+    #[test]
+    fn a_removed_profile_leaves_runner_json_and_its_folder_but_not_the_default_or_a_foreign_folder() {
+        let dir = std::env::temp_dir().join(format!("tico-remove-profile-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("profiles/acme/codex")).unwrap();
+        std::fs::create_dir_all(dir.join("elsewhere/beta")).unwrap();
+        std::fs::write(dir.join("profiles/acme/codex/auth.json"), "{}").unwrap();
+        let path = dir.join("runner.json");
+        std::fs::write(&path, serde_json::to_string(&json!({"server": "x", "default_profile": "own",
+            "profiles": {"acme": {"dir": dir.join("profiles/acme").display().to_string()},
+                         "beta": {"dir": dir.join("elsewhere/beta").display().to_string()},
+                         "own": {"dir": dir.join("profiles/own").display().to_string()}},
+            "bot_profiles": {"sales": "acme", "ops": "own"}})).unwrap()).unwrap();
+        let config = Config::load(&path).unwrap();
+        assert!(remove_profile(&config, "own").unwrap_err().contains("own login"));
+        assert_eq!(remove_profile(&config, "acme"), Ok(true));
+        assert!(!dir.join("profiles/acme").exists());
+        let stored = Config::load(&path).unwrap();
+        assert!(stored.data["profiles"].get("acme").is_none() && stored.data["profiles"].get("own").is_some());
+        assert_eq!(stored.data["bot_profiles"], json!({"ops": "own"}));
+        // Not a folder Tico made: unlisted, never deleted.
+        assert_eq!(remove_profile(&config, "beta"), Ok(false));
+        assert!(dir.join("elsewhere/beta").is_dir());
+        assert!(remove_profile(&config, "beta").unwrap_err().contains("not on this computer"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn selection_follows_the_registration() {
@@ -584,6 +666,39 @@ mod tests {
         assert_eq!(acme.environment("claude", &Env::new())["HOME"], "/p/acme/claude");
         assert!(select(c, Some("sales"), None).unwrap().environment("claude", &Env::new()).is_empty());
         assert_eq!(missing(c, "gone"), "profile gone not on this computer");
+    }
+
+    /// A stand-in `claude` that signs in where Claude Code would: CLAUDE_CONFIG_DIR when set, else `$HOME/.claude`.
+    pub const FAKE_CLAUDE_LOGIN: &str =
+        "#!/bin/sh\ndir=\"${CLAUDE_CONFIG_DIR:-$HOME/.claude}\"\nmkdir -p \"$dir\" && echo '{}' > \"$dir/.credentials.json\"\n";
+
+    #[test]
+    fn an_inherited_claude_config_dir_never_reaches_a_profiles_claude() {
+        let root = std::env::temp_dir().join(format!("tico-profile-config-dir-{}", uuid::Uuid::new_v4().simple()));
+        let outside = root.join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("sentinel"), "x").unwrap();
+        crate::util::write_script(&root.join("claude"), FAKE_CLAUDE_LOGIN);
+        let process: Env = [("PATH", "/usr/bin:/bin"), ("HOME", &root.display().to_string()), ("CLAUDE_CONFIG_DIR", &outside.display().to_string())]
+            .into_iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+        let acme = Profile::new("acme", &root.join("acme").display().to_string(), false);
+        let home = root.join("acme/claude");
+        for env in [acme.environment("claude", &process), acme.login_environment("claude", &process)] {
+            assert_eq!(env["HOME"], home.display().to_string());
+            assert!(!env.contains_key("CLAUDE_CONFIG_DIR"), "{env:?}");
+        }
+        // `profile login` runs the CLI with exactly this environment: the login lands in the profile and nowhere else.
+        let ran = std::process::Command::new(root.join("claude")).env_clear().envs(acme.login_environment("claude", &process)).status().unwrap();
+        assert!(ran.success());
+        assert!(home.join(".claude/.credentials.json").is_file());
+        let left: Vec<_> = std::fs::read_dir(&outside).unwrap().flatten().map(|e| e.file_name()).collect();
+        assert_eq!(left, vec![std::ffi::OsString::from("sentinel")]);
+        // The operator's own logins and other runtimes are left as they are.
+        let shared = Profile::new("beta", "/p/beta", true);
+        assert_eq!(shared.environment("claude", &process)["CLAUDE_CONFIG_DIR"], outside.display().to_string());
+        assert_eq!(acme.environment("codex", &process)["CLAUDE_CONFIG_DIR"], outside.display().to_string());
+        assert_eq!(acme.environment("codex", &process)["CODEX_HOME"], root.join("acme/codex").display().to_string());
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

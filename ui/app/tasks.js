@@ -125,7 +125,8 @@ function taskMatches(it, query) {
 }
 
 // A task’s state is written in words; its owner and dependencies remain separate properties.
-// A question over three days old (the server marks it `older`) no longer counts: it waits under Older questions.
+// A question the server marks `older` no longer counts: it waits under Older questions. Since questions unanswered for two
+// business days go back to their bot instead (backend/still_needed.py), servers no longer mark any.
 function taskNeedsViewer(t) {
   const me = myActor();
   return !!me && !!t && !taskFinished(t) && (t.owner === me || (t.ask?.to_actor === me && !t.ask?.older) || taskWaitingOn(t) === me
@@ -161,18 +162,10 @@ function ageShort(iso) {
   if (s < 86400 * 7) return `${Math.round(s / 86400)}d`;
   return new Date(t).toLocaleDateString(undefined, {month: 'short', day: 'numeric'});
 }
-// A row reads how long its task has been open (since created) and, when it has sat
-// untouched for a meaningfully shorter time, how long it has been quiet (since updated):
-// "open 3d · quiet 60m". A task that just moved reads only its open age, so it never
-// looks stale; one never touched since creation reads the same.
-function taskOpenQuiet(t) {
-  const open = ageShort(t?.created), quiet = ageShort(t?.updated);
-  if (!open) return quiet;
-  if (!quiet || quiet === 'now' || quiet === open) return `open ${open}`;
-  return `open ${open} · quiet ${quiet}`;
-}
-// The exact dates behind taskOpenQuiet, for a row's tooltip.
-function taskOpenQuietTitle(t) {
+// A row reads one short age: how long since the task last moved ("2h"), so a stale one stands out without a second
+// number on every row. The tooltip has when it was opened and last updated.
+const taskAge = t => ageShort(t?.updated || t?.created);
+function taskAgeTitle(t) {
   return [t?.created ? `Open ${fmt(t.created)}` : '',
     t?.updated || t?.created ? `Updated ${fmt(t.updated || t.created)}` : ''].filter(Boolean).join(' · ');
 }

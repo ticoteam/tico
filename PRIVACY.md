@@ -3,6 +3,7 @@
 What a Tico install sends outside your own server, and what the receiving side keeps: the anonymous usage count, the
 suggestions while you build your team chart, and, only when you press Send, a support ticket. Each has its own switch.
 The setup page on tico.team, which you use before installing, has its own section ([below](#the-setup-page-on-ticoteam)).
+Ask Tico, the chat on tico.team's pages, has its own section too ([below](#ask-tico-the-chat-on-ticoteam)).
 Separately, the server calls AI model providers with your own keys for a few features ([below](#the-servers-own-model-calls)). Bots you set to use Tico Cheap, Mid or Power send their model calls through Tico HQ to OpenRouter ([below](#tico-cheap-mid-and-power-through-tico-hq)). Tico's source is available, so you can read the code that
 sends them (`backend/census.py`, `backend/releases.py`, `backend/recruit.py`, `backend/support.py`). The service that receives them,
 Tico HQ, is run by the Tico team from a separate, private repository; its code is not published. What it is sent and what it keeps is described in [docs/tico-hq.md](docs/tico-hq.md).
@@ -35,8 +36,8 @@ IP address is unavoidably seen by any server you connect to (GitHub sees it toda
 ### When
 
 Only while counting is on, only from a real install (never in demo mode, never from a source checkout that reports
-`dev`), and only after the owner has been shown the notice. A new install shows it in the installer, in the setup
-wizard and once in the web app; an existing install shows it in the web app when it updates to 0.2.15, and nothing is
+`dev`), and only after the owner has been shown the notice. A new install shows it in the installer and once in the web app, on the
+first page after the setup wizard (never over the wizard or the screen after **Create**); an existing install shows it in the web app when it updates to 0.2.15, and nothing is
 sent before the owner has seen it.
 
 ### What HQ stores
@@ -78,12 +79,12 @@ Tico's goal of 100 teams trying it and 100 still using it after 30 days.
 Any one of these is enough. When counting is off, the update check still works: it asks GitHub directly, exactly as
 before, with no ID and no flags.
 
-1. **In the app:** Settings > Privacy, switch off "Help count active installs" (the owner).
+1. **In the app:** Settings > General, switch off "Help count active installs" (the owner).
 2. **Environment:** `TICO_TELEMETRY=off` in your `.env`.
 3. **The standard:** `DO_NOT_TRACK=1` in your environment ([consoledonottrack.com](https://consoledonottrack.com/)).
 4. **The command line:** `docker compose exec server python -m backend.manage usage-count /data/hub.sqlite off`.
 
-Other controls: **Reset install ID** in Settings > Privacy (or `... usage-count /data/hub.sqlite reset-id`) makes a new
+Other controls: **Reset install ID** in Settings > General (or `... usage-count /data/hub.sqlite reset-id`) makes a new
 random ID, so the old one no longer connects to your install; do it when you clone a server. `TICO_UPDATE_CHECK=off`
 stops the update check altogether, and with it the count. `TICO_HQ_URL` points the check at your own HQ.
 
@@ -211,6 +212,48 @@ session cost. No message text.
 - **Retention:** a session row is deleted 13 months after its day, by the daily job.
 - The Tico team reads daily totals only (sessions, sessions with 2 or more messages, how many of those downloaded the file, downloads, cost), never a session's row.
 
+## Ask Tico, the chat on tico.team
+
+**Ask Tico** is the chat panel on tico.team's pages (not on /setup). It answers questions about Tico and suggests one
+way to use it: Tico Open Core, Tico Services or Fully managed. It runs in your browser and calls Tico HQ at
+`https://updates.tico.team/v1/sdr`. No install is involved. It has no tools: it cannot look anything up about you, act
+for you or reach a Tico server you run. Only `https://tico.team` may call these routes from a page.
+
+### What is sent, and to whom
+
+- **To Tico HQ:** each message you type (up to 2,000 characters; a longer one is refused and sent nowhere) with a
+  random ID the panel makes for this chat (`crypto.randomUUID()`), and nothing else: the panel adds no name, email
+  address, page history or cookie. Anything you type yourself, a name or an email address included, is part of the
+  message.
+- **To TypeSafe** (api.typesafe.ai, the provider of the Jev decision model), only when the Tico team has set Ask
+  Tico's screening key on HQ (`HQ_SDR_DECIDE_KEY`): your current message as you wrote it, and nothing else (no chat
+  ID, no earlier messages), once, to check whether it is spam, abuse, an attempt to instruct the chat, or off-topic
+  before the model sees it. A message it judges so is answered with a fixed line and sent nowhere else. If TypeSafe
+  does not answer within 3 seconds, or is not sure, the message goes on unchecked. With no key set, nothing is sent to
+  TypeSafe.
+- **To OpenRouter** (openrouter.ai), which passes it to a provider that serves the model (Inception's Mercury 3 today;
+  the Tico team can change it): a fixed instruction, Tico's sales brief, up to four excerpts of Tico's public manual
+  that match your message, your current message and up to 20 previous messages from this chat, as you wrote them.
+  HQ adds nothing about you (not the chat ID, your IP address or any other detail): anything personal in the call is
+  what you typed. HQ calls OpenRouter with one of its own OpenRouter keys (Ask Tico's own key, or HQ's shared one
+  when that is not set; either way OpenRouter receives the same call) and the same two filters on every call, which
+  are not a setting: no provider that may keep or train on data (`data_collection: deny`), and only endpoints
+  OpenRouter classes as zero data retention (`zdr: true`). If no provider meets them, the call is refused and the
+  chat rests; it is never sent again with looser filters. OpenRouter's policy does not count a provider's in-memory
+  prompt caching as retention
+  ([OpenRouter: zero data retention](https://openrouter.ai/docs/guides/features/zdr#caching)).
+
+### What HQ keeps
+
+- **The chat, in memory only,** under a salted hash of its ID, so the next message has the conversation. It is
+  erased 30 minutes after its last message, and a restart or deploy of HQ erases every chat. Nothing of the chat is
+  written to HQ's database, and no message text is logged.
+- **No counts** of Ask Tico chats are kept yet, except how many messages the screening passed, refused or could not
+  check, in memory until HQ restarts: numbers only, never the text, the chat ID or TypeSafe's answer.
+- **No IP addresses are stored or logged.** HQ uses your address in memory only, as a salted hash, for the limit of
+  60 requests an hour every HQ route has.
+- **No cookie or tracker** is set by HQ.
+
 ## The server's own model calls
 
 Bots call their models from the computers they run on. The server itself calls a model for a few things, only with keys
@@ -218,9 +261,10 @@ you set on the server, and never in rehearsal mode. Each provider keeps what it 
 
 | What | What is sent | To whom |
 |---|---|---|
-| **Decisions** (`POST /api/v2/decisions`, `hub_decision_ask`, scoring saved listening posts, live-meeting routing, the nightly learning run) | The JSON state and the typed questions the caller sends: whatever it puts there, which can be a mail's subject and body or a stretch of a transcript. The nightly learning run sends each of the day's items (chat and task text, Slack channel messages, mail and meeting excerpts) with the profiles of the bots it may reach | In this order, each one only when the one before is not set up or fails: the Tico AI Gateway on Tico HQ (Tico Decide 1.0, which asks TypeSafe's Jev; HQ keeps the label, counts, tokens, latency and cost per gateway key, never the state or the questions) when the server holds a gateway key (`TICO_GATEWAY_KEY`); TypeSafe (api.typesafe.ai, the Jev model) directly when you set your own `TYPESAFE_API_KEY`; the team's own provider from Settings > AI providers whose key the server holds: Anthropic, OpenAI, Google (Gemini), xAI or OpenRouter (which also serves the DeepSeek, Kimi, Llama and Mistral models). With none of them nothing is sent |
+| **Decisions** (`POST /api/v2/decisions`, `hub_decision_ask`, scoring saved listening posts, live-meeting routing, the nightly learning run) | The JSON state and the typed questions the caller sends: whatever it puts there, which can be a mail's subject and body or a stretch of a transcript. The nightly learning run sends each of the day's items (chat and task text, Slack channel messages, mail and meeting excerpts) with the profiles of the bots it may reach | In this order, each one only when the one before is not set up or fails: the Tico AI Gateway on Tico HQ (Tico Decide 1.0, which asks TypeSafe's Jev; HQ keeps the label, counts, tokens, latency and cost per gateway key, never the state or the questions) when the server holds a gateway key (`TICO_GATEWAY_KEY`); TypeSafe (api.typesafe.ai, the Jev model) directly when you set your own `TYPESAFE_API_KEY`; the team's own provider from Settings > Computers > Models whose key the server holds: Anthropic, OpenAI, Google (Gemini), xAI or OpenRouter (which also serves the DeepSeek, Kimi, Llama and Mistral models). With none of them nothing is sent |
 | **Slack routing** (`backend/slack_gateway.py`, when the Slack gateway is on) | The message's text; the sender's name, roster id, team and the bots they are primary for; the channel's name and registry purpose; the last twelve exchanges in the thread and their previous routing; and the active roster (each bot's name, team, description and manager) | The same decision model as above |
-| **Market ask** (`POST /api/v2/market/ask`) | The question, and up to about seventeen excerpts from the market graph that match it: entity names, aliases and summaries, evidence quotes and our reads, and the start of matching market pages | Google's Gemini API (generativelanguage.googleapis.com, `gemini-3.7-flash`) with the server's `GEMINI_API_KEY`, whatever Settings > AI providers says. Without a key nothing is sent and the pulled excerpts are the answer |
+| **Topic changed** (`backend/topic_change.py`, when Settings > General > **Start fresh when the topic changes** is on) | Before a message in a person's direct chat with a bot is sent, and only when the chat is long or idle: the chat's last 3 turns since its last clear (what the person said and what the bot answered, each cut to about 1,500 characters) and the new message. Task lines, task chats, group chats and shared bots' rooms are never sent. The audit keeps the answer, never the text | The same decision model as above |
+| **Market ask** (`POST /api/v2/market/ask`) | The question, and up to about seventeen excerpts from the market graph that match it: entity names, aliases and summaries, evidence quotes and our reads, and the start of matching market pages | Google's Gemini API (generativelanguage.googleapis.com, `gemini-3.7-flash`) with the server's `GEMINI_API_KEY`, whatever Settings > Computers > Models says. Without a key nothing is sent and the pulled excerpts are the answer |
 
 What the server keeps of each call is an audit event, never the text that was sent: `judge.call` (the label, the number of
 questions, the value and confidence per answer, the model, token usage and latency; Slack routing adds the Slack event id)
@@ -229,8 +273,8 @@ these calls (`TICO_DECISIONS_DAILY_CALLS_OWNER`, `_HUMAN`, `_BOT`; README.md).
 
 ## Tico Cheap, Mid and Power through Tico HQ
 
-Only when your team has a Tico AI Gateway key (Settings > AI providers, or `TICO_GATEWAY_KEY`) and a bot is set to
-Tico Cheap, Mid or Power 1.0. That bot's computer then sends each of its model calls, with the gateway key, to Tico HQ
+Only when your team has a Tico AI Gateway key (Settings > Computers > Models, or `TICO_GATEWAY_KEY`) and a bot is set to
+a Tico model (Tico Cheap, Mid or Power). That bot's computer then sends each of its model calls, with the gateway key, to Tico HQ
 (`https://updates.tico.team/v1/gateway/chat/completions`), and HQ sends it on to **OpenRouter** (openrouter.ai) with
 HQ's own OpenRouter key. OpenRouter passes it to a provider that serves the Claude model behind that Tico model (Haiku,
 Sonnet or Opus). Without a gateway key, or with the bot on another model, nothing goes this way.
@@ -406,3 +450,24 @@ A Tico from before this feature, or a server whose updater is not the Docker one
 from the programs' own messages, which avoid task and message text, and go through the same redactor as everything else. The
 redactor is a filter, not a guarantee: read the preview, and untick the box if you would rather not send it. The Tico team's Support
 bot reads the bundle before the ticket. It is kept with the ticket until the ticket is deleted; there is no separate expiry.
+
+### Optional company Email & Phone inboxes
+
+When an owner configures `TICO_INBOUND_KEY`, Tico HQ receives inbound email and SMS for the
+company's allocated addresses and rented numbers. This is separate from connected human Google
+mail, tico.dev login/transactional mail and the provider-profile magic-link service. No outbound
+email or SMS is sent by this feature. Textverified handles monthly-or-longer physical-SIM US
+number rentals; SES handles the allocated `@tico.team` email namespace.
+
+HQ holds the message content to deliver it to this company's server. Normalized content remains
+seven days after acknowledgment, at most thirty days without acknowledgment. Raw email objects
+are deleted once all routed deliveries are acknowledged or expire, with a 35-day storage backstop.
+Delivery tombstones and record-only usage estimates remain thirteen months. HQ staff endpoints
+return health and usage counts, never bodies, codes, subjects or recipient addresses. Supplier
+credentials stay at HQ. Each company's server keeps its own inbound key; HQ stores only its hash.
+
+The company server keeps bodies and extracted codes for 90 days, then leaves metadata and an
+explicit retention marker. Every current company member and agent can read the company inbox;
+reading does not hide a message. Each body/code read is audited by identity and message id, with
+no content in the audit. Attachments are not downloaded to the install, remote content is not
+loaded, and messages are rendered as text. Demo and rehearsal modes never call this service.

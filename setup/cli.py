@@ -6,21 +6,23 @@ import sys
 from . import backup as bk, settings as st
 from .ui import IO, MissingInput
 from .runner_setup import run_runner
-from . import aws as awsmod, support
+from . import aws as awsmod, hosted, support
 from .wizard import Deps, destroy, doctor, run
 
-COMMANDS = ("run", "doctor", "destroy", "runner", "backup-storage", "support")
+COMMANDS = ("run", "doctor", "destroy", "runner", "backup-storage", "support", "owner-link")
 
 
 def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="tico setup", description="Set up Tico on one Docker server, from a domain to a signed-in app.",
                                 epilog="Secrets are never taken as flags: set TICO_OIDC_CLIENT_SECRET, CLOUDFLARE_API_TOKEN, "
-                                       "CLOUDFLARE_TUNNEL_TOKEN or OPENAI_API_KEY (ANTHROPIC_/GEMINI_) in the environment.")
+                                       "CLOUDFLARE_TUNNEL_TOKEN, TICO_INBOUND_KEY or OPENAI_API_KEY (ANTHROPIC_/GEMINI_) "
+                                       "in the environment. Optional server endpoint: TICO_INBOUND_URL.")
     p.add_argument("command", nargs="?", choices=COMMANDS, default="run",
                    help="run (default): set up the server; runner: add a Linux computer that runs bots; doctor: re-run the checks; "
                         "destroy: remove what setup created on AWS; backup-storage: from a laptop with AWS credentials, create the "
                         "backup bucket and its key for a server that has none (then install with --backup existing); support: "
-                        "what scripts/install.sh runs when it fails, to offer sending the error to Tico support")
+                        "what scripts/install.sh runs when it fails, to offer sending the error to Tico support; owner-link: on a "
+                        "server Tico hosts, a new owner sign-in link in place of the old one (--sign-out also ends the owner's sessions)")
     p.add_argument("--dry-run", action="store_true", help="print the plan and change nothing")
     p.add_argument("--non-interactive", action="store_true", help="never prompt; missing values are errors")
     p.add_argument("--yes", "-y", action="store_true", help="do not ask for confirmation")
@@ -31,7 +33,16 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--cloud-ssh-key", help="name (hetzner) or id/fingerprint (digitalocean) of an SSH key already in your account")
     p.add_argument("--tico-version", help="release to install, such as v1.2.3 (cloud targets: default the latest release; local: what scripts/install.sh pins)")
     p.add_argument("--domain")
+    p.add_argument("--dns-name", help="hosted AWS/Caddy: exact operational Route 53 hostname; defaults to --domain")
+    p.add_argument("--dns-zone", help="hosted AWS/Caddy: authoritative zone of --dns-name; no public URL or certificate change")
     p.add_argument("--front-door", choices=list(st.FRONT_DOORS))
+    p.add_argument("--domain-aliases", help="cloudflared: comma-separated full-app hosts; empty clears saved aliases")
+    p.add_argument("--public-url", help="canonical HTTPS origin on --domain; empty clears the saved override")
+    p.add_argument("--cors-origins", help="explicit comma-separated app origins; empty clears, never adds visual trust")
+    p.add_argument("--hq-url", help="public HQ HTTPS origin; omitted keeps the saved/default endpoint")
+    p.add_argument("--visual-origin", help="isolated HTTPS visual origin; empty clears, without acquiring DNS authority")
+    p.add_argument("--visual-same-origin", choices=("0", "1"), help="explicitly retain or disable legacy same-origin visuals")
+    p.add_argument("--caddy-visuals", choices=("0", "1"), help="explicit local Caddy visual serving; default off")
     p.add_argument("--runner-hostname", dest="runner_host", metavar="HOST",
                    help="cloudflared: a hostname without Access where computers and outside agents connect (only /api/v2 and "
                         "/download are routed there); default with --auth cloudflare: runner.<domain>, or <name>-runner.<zone> "
@@ -42,16 +53,34 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--server-ip", help="public IPv4 the domain should point at (caddy; ssh and command targets)")
     p.add_argument("--aws-region")
     p.add_argument("--aws-profile")
-    p.add_argument("--aws-instance-type", choices=["t4g.small", "t4g.medium", "t4g.large"], help="server default t4g.small; runner default t4g.medium")
+    p.add_argument("--aws-instance-type", choices=["t4g.small", "t4g.medium", "t4g.large", "m8i-flex.xlarge", "m8i-flex.2xlarge"], help="server default t4g.small; runner default t4g.medium")
+    p.add_argument("--server-computer", choices=["same", "none"], default="same", help="run: where bots run")
     p.add_argument("--aws-os", choices=["ubuntu", "al2023"])
-    p.add_argument("--name", help="destroy: the tico-setup-name tag value (default: derived from --domain)")
-    p.add_argument("--auth", choices=list(st.AUTHS))
+    p.add_argument("--aws-permissions-boundary", metavar="ARN", help="AWS: the IAM policy ARN set as the permissions boundary of "
+                   "the server's role when it is created, for an account that only lets setup make roles under one")
+    p.add_argument("--name", help="AWS: the server's name: its resources are tico-<name>, tagged tico-setup-name=<name>, and its "
+                   "settings are in /tico/<name>/env (default: derived from --domain); destroy: the tico-setup-name tag value")
+    p.add_argument("--dns", action="store_true", help="destroy: also delete the domain's A and AAAA records in Route 53, only "
+                   "while they still point at this server (needs --domain)")
+    p.add_argument("--auth", choices=[*st.AUTHS, st.OWNER_LINK],
+                   help="owner-link: a single-use sign-in link for the owner, only with --hosted")
+    p.add_argument("--hosted", metavar="own|invited", help="a server Tico hosts: own (our team) or invited (an invited company); "
+                   "writes TICO_HOSTED and signs the owner in with a sign-in link written to a private file, never printed")
+    p.add_argument("--hosted-zone", metavar="ZONE", help="with --hosted: our DNS zone; the domain must be a name under it")
+    p.add_argument("--preset", metavar="recommended", help="with --hosted: the recommended setup (sample company, subscriptions "
+                   "plus Tico Gateway from TICO_GATEWAY_INVITE in the environment, Tico Support, a computer on the server)")
+    p.add_argument("--sign-out", action="store_true", help="owner-link: also sign the owner out everywhere")
     p.add_argument("--tenant", help="Microsoft tenant id or domain")
     p.add_argument("--client-id")
+    p.add_argument("--issuer", help="with --auth oidc: the provider's issuer URL (https); the client secret comes only "
+                   "from TICO_OIDC_CLIENT_SECRET in the environment")
+    p.add_argument("--signin-label", metavar="NAME", help="with --auth oidc: the name on the sign-in button, "
+                   "\"Sign in with NAME\" (for example \"Tico account\"); without it, sign-in goes straight to the provider")
     p.add_argument("--allowed-domain", help="only this email domain may sign in")
     p.add_argument("--access-issuer")
     p.add_argument("--access-audience")
     p.add_argument("--company")
+    p.add_argument("--company-file", metavar="PATH", help="start with the company YAML exported by the org-chart picker")
     p.add_argument("--owner-email")
     p.add_argument("--decisions-provider", choices=["openai", "anthropic", "gemini"],
                    help="the model provider whose API key the server uses for decisions (optional)")
@@ -105,7 +134,8 @@ def main(argv: list[str] | None = None, deps: Deps | None = None, io: IO | None 
     deps = deps or Deps()
     try:
         return {"run": run, "doctor": doctor, "destroy": destroy, "runner": run_runner,
-                "backup-storage": backup_storage, "support": lambda a, i, _: support.from_installer(a, i)}[args.command](args, io, deps)
+                "backup-storage": backup_storage, "support": lambda a, i, _: support.from_installer(a, i),
+                "owner-link": hosted.rotate}[args.command](args, io, deps)
     except KeyboardInterrupt:
         io.say("\nInterrupted. Re-run `tico setup`; it resumes.")
         return 130

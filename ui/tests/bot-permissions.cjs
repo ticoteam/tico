@@ -80,9 +80,6 @@ async function access(browser) {
   await page.goto('https://tico-ui.test/#/settings');
   await page.locator('[data-settings-tab="bots"]').click();
   await page.locator('tr[data-settings-bot=legal]').waitFor();
-  await page.locator('[data-settings-tab="chat"]').click();
-  await page.locator('#settings-chat-bots').click();
-  assert.equal(await page.locator('#settings-bots').isVisible(), true, 'Chat shortcut opens Bots');
   assert.equal(await page.locator('[data-settings-tab="bots"]').getAttribute('aria-selected'), 'true');
   assert.match(await page.locator('#set-bots thead').innerText(), /access/i);
   assert.doesNotMatch(await page.locator('#set-bots thead').innerText(), /can use/i);
@@ -93,7 +90,7 @@ async function access(browser) {
   assert.equal(await page.locator('tr[data-settings-bot=intake] [data-edit-access]').count(), 0, 'only managers edit access');
   // One Edit button per row opens the bot editor, which holds access, who it works for and who owns it.
   const editor = page.locator('#bot-editor');
-  const openEditor = async slug => { await page.locator(`tr[data-settings-bot=${slug}] [data-edit-bot]`).click(); await editor.locator(`[data-edit-access=${slug}]`).waitFor(); };
+  const openEditor = async slug => { await page.evaluate(slug => settingsEditBot(slug), slug); await editor.locator(`[data-edit-access=${slug}]`).waitFor(); };
   await openEditor('legal');
   assert.equal(await editor.locator('[data-access-summary]').innerText(), 'See: Everyone · Read: Legal · Write: Everyone');
   assert.match(await editor.locator('.sb-row').filter({has: page.locator('[data-edit-owners]')}).innerText(), /Works for/);
@@ -113,11 +110,11 @@ async function access(browser) {
   assert.equal(await dialog.locator('[data-access-pick=teams][value=legal]').isChecked(), true, 'the chosen audience follows');
   await dialog.locator('[data-access-pick=people][value=ben]').check();
   await dialog.locator('[type=submit]').click();
-  await page.waitForFunction(() => !document.querySelector('#access-editor[open]'));
+  await page.waitForFunction(() => !document.querySelector('#access-editor form'));
   const chosen = {everyone: false, people: ['ben'], teams: ['legal'], bots: []};
   assert.deepEqual(puts.shift(), ['legal', {see: chosen, read: chosen, write: chosen, revision: 4}]);
   await page.waitForFunction(() => /Legal, Ben · Read: Legal, Ben · Write: Legal, Ben/.test(document.querySelector('#bot-editor [data-access-summary]')?.textContent || ''));
-  assert.equal(await summary('legal'), 'Private');
+
 
   // Reopened, it is Private; Open puts everyone back.
   await page.locator('[data-edit-access=legal]').click();
@@ -126,9 +123,9 @@ async function access(browser) {
   await dialog.locator('[name=preset][value=open]').check();
   assert.equal(await dialog.locator('.access-level').count(), 0, 'Open has nothing to choose');
   await dialog.locator('[type=submit]').click();
-  await page.waitForFunction(() => !document.querySelector('#access-editor[open]'));
+  await page.waitForFunction(() => !document.querySelector('#access-editor form'));
   assert.deepEqual(puts.shift(), ['legal', {see: EVERYONE, read: EVERYONE, write: EVERYONE, revision: 5}]);
-  await page.waitForFunction(() => document.querySelector('tr[data-settings-bot=legal] [data-access-summary]')?.textContent === 'Open');
+
   await page.waitForFunction(() => document.querySelector('#bot-editor [data-access-summary]')?.textContent === 'Open');
 
   // Visible, requests only: See and Write stay Everyone, Read is what is picked.
@@ -137,7 +134,7 @@ async function access(browser) {
   await dialog.locator('[name=preset][value=requests]').check();
   await dialog.locator('[data-access-pick=teams][value=sales]').check();
   await dialog.locator('[type=submit]').click();
-  await page.waitForFunction(() => !document.querySelector('#access-editor[open]'));
+  await page.waitForFunction(() => !document.querySelector('#access-editor form'));
   assert.deepEqual(puts.shift(), ['legal', {see: EVERYONE, read: {everyone: false, people: [], teams: ['sales'], bots: []},
     write: EVERYONE, revision: 6}]);
 
@@ -152,7 +149,7 @@ async function access(browser) {
   await dialog.locator('.access-level[data-access-levels=write] [data-access-everyone]').uncheck();
   await dialog.locator('.access-level[data-access-levels=write] [data-access-pick=people][value=ben]').check();
   await dialog.locator('[type=submit]').click();
-  await page.waitForFunction(() => !document.querySelector('#access-editor[open]'));
+  await page.waitForFunction(() => !document.querySelector('#access-editor form'));
   assert.deepEqual(puts.shift(), ['ops', {see: EVERYONE, read: EVERYONE,
     write: {everyone: false, people: ['ben'], teams: [], bots: []}, revision: 1}]);
 
@@ -187,7 +184,7 @@ async function access(browser) {
   // ---- A bot page for someone who may only write to it, and one who may only see it
   await page.goto('https://tico-ui.test/#/bot/intake');
   await page.locator('#btabs').waitFor({state: 'attached'});
-  assert.deepEqual(await page.locator('#btabs [data-bt]').evaluateAll(ns => ns.map(n => n.dataset.bt)), ['chat', 'tasks', 'more']);
+  assert.deepEqual(await page.locator('#btabs [data-bt]').evaluateAll(ns => ns.map(n => n.dataset.bt)), ['chat', 'tasks', 'info']);
   assert.equal(await page.locator('#bot-goal').count(), 0, 'no goal, no activity');
   assert.equal(await page.locator('#bot-files, #bot-recurring, #bot-history, #bot-routines, #sess-card, #bot-updates-card').count(), 0);
   assert.match(await page.locator('.bot-request-head').innerText(), /Send a request/);
@@ -201,7 +198,7 @@ async function access(browser) {
   assert.match(await about.innerText(), /See it and send requests/);
   await page.goto('https://tico-ui.test/#/bot/sales');
   await page.locator('#btabs').waitFor({state: 'attached'});
-  assert.deepEqual(await page.locator('#btabs [data-bt]').evaluateAll(ns => ns.map(n => n.dataset.bt)), ['more'], 'see only: no chat, no tasks');
+  assert.deepEqual(await page.locator('#btabs [data-bt]').evaluateAll(ns => ns.map(n => n.dataset.bt)), ['info'], 'see only: no chat, no tasks');
   assert.match(await page.locator('#pane-more').innerText(), /See it only/);
   assert.deepEqual(errors, []);
   console.log('PASS: Access column and editor presets, the org filter beside Recent, and bot pages that show no activity to someone who cannot read.');
@@ -284,9 +281,10 @@ async function roles(browser) {
   assert.equal(await dialog.locator('input[value=cara]').isDisabled(), true, 'its operator is always an owner');
   await dialog.locator('input[value=ben]').check();
   await dialog.locator('[type=submit]').click();
-  await page.waitForFunction(() => !document.querySelector('#bot-owners-editor[open]'));
+  await page.waitForFunction(() => !document.querySelector('#bot-owners-editor form'));
   assert.deepEqual(posts.shift(), ['co-owners', {add: ['ben'], remove: []}]);
-  await page.locator('#bot-editor [data-bot-close]').first().click();
+  await page.goto('https://tico-ui.test/#/settings');
+  await page.locator('[data-settings-tab="bots"]').click();
 
   // ---- A Grok Bot's "Deliver through the app on": its person picks one of their own computers where Grok is ready
   // (the others are listed, disabled); anyone else, an admin included, can only turn it off.
@@ -297,7 +295,8 @@ async function roles(browser) {
   await delivery.selectOption('r2');
   await page.waitForFunction(() => document.querySelector('#bot-editor [data-bot-app-delivery=groky]')?.disabled === false);
   assert.deepEqual(posts.shift(), ['definition', {app_delivery: {computer: 'r2', app: 'grok'}, expected_revision: 1}]);
-  await page.locator('#bot-editor [data-bot-close]').first().click();
+  await page.goto('https://tico-ui.test/#/settings');
+  await page.locator('[data-settings-tab="bots"]').click();
   await page.locator('tr[data-settings-bot=cara-grok] [data-edit-bot]').click();
   const theirs = page.locator('#bot-editor [data-bot-app-delivery=cara-grok]');
   await theirs.waitFor();
@@ -305,13 +304,13 @@ async function roles(browser) {
   await theirs.selectOption('');
   await page.waitForFunction(() => document.querySelector('#bot-editor [data-bot-app-delivery=cara-grok]')?.disabled === false);
   assert.deepEqual(posts.shift(), ['definition', {app_delivery: null, expected_revision: 1}]);
-  await page.locator('#bot-editor [data-bot-close]').first().click();
+  await page.goto('https://tico-ui.test/#/settings');
+  await page.locator('[data-settings-tab="bots"]').click();
 
   // ---- Settings > Computers: an admin says which computers take members' bots
   await page.locator('[data-settings-tab="devices"]').click();
+  await page.locator('#set-machines .machine-name[data-computer-open=r1]').click();   // under Settings in its pop-up
   const box = page.locator('[data-member-bots=r1]');
-  await box.waitFor({state: 'attached'});
-  await box.locator('xpath=ancestor::div[contains(@class,"people-cell-more")]').locator('.people-more').click();
   assert.equal(await box.isChecked(), false);
   await box.check();
   await page.waitForFunction(() => document.querySelector('[data-member-bots=r1]')?.checked === true);

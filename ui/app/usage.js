@@ -4,7 +4,8 @@
 
 // ----------------------------------------------------------------- usage
 // GET /api/v2/usage (backend/usage.py, docs/usage.md): tokens each run used, priced at list price. Days are UTC.
-// A run on a ChatGPT or Claude sign-in is not spend: its figure is "API-equivalent" and stays apart.
+// Every figure shown is API-equivalent: billed spend (API keys, Tico Gateway) plus what subscription runs would have cost
+// at list price. Billed spend alone is in the hover, since a bot's limits count only that.
 const USE_RANGES = [['today', 'Today'], ['7d', '7 days'], ['30d', '30 days'], ['month', 'This month'], ['custom', 'Custom']];
 const USE_DIMENSIONS = [['harness', 'Harness'], ['model', 'Model'], ['effort', 'Effort'], ['subscription', 'Subscription']];
 let USE = null;
@@ -27,19 +28,22 @@ function useCount(n) {
   n = n || 0;
   if (n < 1000) return String(n);
   if (n < 1e6) return (n / 1e3).toFixed(n < 1e4 ? 1 : 0).replace(/\.0$/, '') + 'K';
-  return (n / 1e6).toFixed(n < 1e7 ? 2 : 1).replace(/\.?0+$/, '') + 'M';
+  // 5.42B, not 5418.5M: each step past a million is its own unit.
+  const [unit, size] = n < 1e9 ? ['M', 1e6] : n < 1e12 ? ['B', 1e9] : ['T', 1e12];
+  const v = n / size;
+  return v.toFixed(v < 10 ? 2 : 1).replace(/\.?0+$/, '') + unit;
 }
 const useTokens = r => (r.input_tokens || 0) + (r.cached_tokens || 0) + (r.output_tokens || 0);
 const useSpend = r => (r.est_cost_usd || 0) + (r.subscription_equiv_usd || 0);
-const useRuns = n => `${n} run${n === 1 ? '' : 's'}`;
+const useRuns = n => `${(n || 0).toLocaleString()} run${n === 1 ? '' : 's'}`;
 // Runs on a model whose long prompts cost more, without each request's tokens, were priced at the lower rate.
 const useLowWhy = n => `${useRuns(n)} on a model that charges more for long prompts did not report each request's tokens, so they are priced at the lower rate`;
 const useLow = r => r.low_estimate_runs > 0 ? `<span class="use-sub use-low" title="${esc(useLowWhy(r.low_estimate_runs))}">estimate, may be low</span>` : '';
-// The estimate, or a dash for tokens on a model with no list price; a subscription's figure beside it, never in it.
+// API-equivalent, or a dash for tokens on a model with no list price and no subscription runs.
+const useEquiv = r => r.est_cost_usd == null && !(r.subscription_equiv_usd > 0) ? null : useSpend(r);
+const useBilled = r => r.est_cost_usd > 0 ? `${useMoney(r.est_cost_usd)} billed on API keys or Tico Gateway; the rest ran on subscriptions` : 'All on subscriptions';
 function useCost(r) {
-  const sub = r.subscription_equiv_usd > 0 ? `<span class="use-sub">≈ ${useMoney(r.subscription_equiv_usd)} API-equivalent</span>` : '';
-  const est = r.est_cost_usd == null ? '—' : r.est_cost_usd > 0 || !sub ? useMoney(r.est_cost_usd) : '';
-  return (est ? `<span class="use-est">${est}</span>` : '') + sub + useLow(r);
+  return `<span class="use-est" title="${esc(useBilled(r))}">${useMoney(useEquiv(r))}</span>${useLow(r)}`;
 }
 function useSaved() {
   try { return JSON.parse(localStorage.getItem('tico.usage') || '{}') || {}; } catch { return {}; }
@@ -64,7 +68,7 @@ function pageUsage() {
     </div>
     <div class="use-bar-row">
       <label>Group by <select id="use-group">${[['bot', 'Bot'], ...USE_DIMENSIONS].map(([key, label]) => `<option value="${key}">${label}</option>`).join('')}</select></label>
-      <label>Sort by <select id="use-sort"><option value="cost">Estimated cost</option><option value="tokens">Tokens</option><option value="runs">Runs</option><option value="name">Name</option></select></label>
+      <label>Sort by <select id="use-sort"><option value="cost">Cost</option><option value="tokens">Tokens</option><option value="runs">Runs</option><option value="name">Name</option></select></label>
       ${USE_DIMENSIONS.map(([key, label]) => `<label>${label} <select data-use-filter="${key}" aria-label="Filter ${label}"><option value="">All</option></select></label>`).join('')}
     </div>
     <p class="muted">Historical details not reported by a runner remain unknown. A run using a fallback can appear in more than one group.</p>
@@ -150,9 +154,7 @@ function usePaint() {
   if (!rows.length) { body.innerHTML = '<div class="empty">No usage yet.</div>'; return; }
   const t = data.totals;
   const top = Math.max(...rows.map(useSpend), 0);
-  body.innerHTML = `<div class="use-total"><span class="use-note">Estimated</span>
-      <strong id="use-total">${t.est_cost_usd == null ? '—' : useMoney(t.est_cost_usd)}</strong> · ${useRuns(t.runs)}
-      ${t.subscription_equiv_usd > 0 ? `<div class="use-sub">≈ ${useMoney(t.subscription_equiv_usd)} API-equivalent on subscriptions</div>` : ''}
+  body.innerHTML = `<div class="use-total"><strong id="use-total" title="${esc(useBilled(t))}">${useMoney(useEquiv(t))}</strong> <span class="use-note">API-equivalent</span> · ${useRuns(t.runs)}
       ${t.low_estimate_runs > 0 ? `<div class="use-sub use-low">Estimate, may be low: ${esc(useLowWhy(t.low_estimate_runs))}.</div>` : ''}</div>
     <ul class="use-list">${rows.map(r => `<li class="use-row" data-bot="${esc(r.bot)}">
       ${state.group === 'bot' ? useLimitButton(r.bot, r.name, r.limit) : '<span class="use-limit"></span>'}
@@ -189,18 +191,14 @@ async function useDetail(slug) {
   if (USE !== state || state.open !== slug) return;
   state.detail = data;
   const days = data.daily || [], peak = Math.max(...days.map(useSpend), 0);
-  const both = days.some(d => d.subscription_equiv_usd > 0) && days.some(d => d.est_cost_usd > 0);
   const bars = days.map(d => {
-    const api = d.est_cost_usd || 0, sub = d.subscription_equiv_usd || 0;
-    const h = v => peak ? (100 * v / peak).toFixed(1) : 0;
-    const tip = `${d.day} · ${useMoney(api + sub || (d.est_cost_usd == null ? null : 0))} · ${useRuns(d.runs)}`;
-    return `<span class="use-col" title="${esc(tip)}" data-day="${esc(d.day)}">${api ? `<i class="use-api" style="height:${h(api)}%"></i>` : ''}${sub ? `<i class="use-subs" style="height:${h(sub)}%"></i>` : ''}</span>`;
+    const v = useSpend(d), tip = `${d.day} · ${useMoney(useEquiv(d))} · ${useRuns(d.runs)}`;
+    return `<span class="use-col" title="${esc(tip)}" data-day="${esc(d.day)}">${v ? `<i class="use-api" style="height:${(100 * v / peak).toFixed(1)}%"></i>` : ''}</span>`;
   }).join('');
   const routines = (data.routines || []).filter(r => r.runs);
-  host.innerHTML = `<div class="use-chart" role="img" aria-label="Daily estimated spend, ${esc(days[0]?.day || '')} to ${esc(days[days.length - 1]?.day || '')}">${bars}</div>
+  host.innerHTML = `<div class="use-chart" role="img" aria-label="Daily API-equivalent cost, ${esc(days[0]?.day || '')} to ${esc(days[days.length - 1]?.day || '')}">${bars}</div>
     <div class="use-axis"><span>${esc(days[0]?.day || '')}</span><span>${peak ? useMoney(peak) + ' a day at most' : ''}</span><span>${esc(days[days.length - 1]?.day || '')}</span></div>
-    ${both ? `<div class="use-key"><span><i class="use-api"></i>Spend</span><span><i class="use-subs"></i>API-equivalent</span></div>` : ''}
-    <table class="use-routines"><thead><tr><th>Routine</th><th>Runs</th><th>Estimate</th></tr></thead><tbody>${routines.map(r =>
+    <table class="use-routines"><thead><tr><th>Routine</th><th>Runs</th><th>Cost</th></tr></thead><tbody>${routines.map(r =>
       `<tr><td>${esc(r.title)}</td><td class="tnum">${r.runs}</td><td class="tnum"><span class="use-cost">${useCost(r)}</span></td></tr>`).join('')
       || '<tr><td colspan="3" class="muted">No routines.</td></tr>'}</tbody></table>
     <button type="button" class="ghost" data-use-csv>Export CSV</button>`;

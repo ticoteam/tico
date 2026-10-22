@@ -23,7 +23,7 @@ TAGS = {
     "Team": "This installation's names and settings.",
     "Repositories": "Team repositories, product-repository creation (the Owner, or a bot with Create product repositories), "
                     "and bot repository access.",
-    "Subscriptions": "Named provider logins on Computers and defaults for groups and bots.",
+    "Subscriptions": "Named provider logins on Computers and the one each bot runs on.",
     "Team chart": "Humans and bots, and who reports to whom.",
     "Bots": "The bots a person can see, and their live status.",
     "Conversations": "Chats with bots: send, list, and stream replies.",
@@ -365,6 +365,34 @@ STABLE = [
      "The Assistant only: post the list of approvals it is about to approve for you in your chat; only those may then "
      "be approved on your yes", None),
     # Goals and KPIs (docs/goals-and-kpis.md)
+    ("/api/v2/ceo-bot", "get", "Goals", "getCeoBotSwitch",
+     "Whether this install has the CEO Bot switch on (the Goal Manager shown as the CEO Bot, at the top of the chart), "
+     "how much it does (its level, with each level's sentence and who changed it when), and how many items it put in "
+     "each person's Needs you today against its cap of 5 (everyone's for the owner, admins and the CEO Bot; your own "
+     "for anyone else)", "CeoBotView"),
+    ("/api/v2/ceo-bot", "post", "Goals", "setCeoBotSwitch",
+     "Owners and admins: turn the CEO Bot switch on or off for this install; no bot may. Only names and the chart change",
+     "CeoBotView"),
+    ("/api/v2/ceo-bot/level", "post", "Goals", "setCeoBotLevel",
+     "Settings > CEO Bot, \"How much your CEO Bot does\": the owner or an admin picks level 1, 2 or 3 on their own "
+     "click, logged with who and when. No bot may, the CEO Bot included. 409 while the switch is off",
+     "CeoBotView"),
+    ("/api/v2/ceo-bot/merge", "post", "Goals", "mergeCeoBotAsks",
+     "The CEO Bot only, at level 2 or 3: one item in a person's Needs you for 2 to 10 tasks where bots ask them the "
+     "same thing. The originals leave their Needs you while it is open; their one answer goes to each bot that asked, "
+     "and an item that ends unanswered puts the originals back. Counts toward its 5 a day", "CeoBotMergeResult"),
+    ("/api/v2/ceo-bot/level3-offer", "post", "Goals", "recordCeoBotLevel3Offer",
+     "The CEO Bot only: record that its Monday note offered level 3. Refused (422) unless level3_offer.due: 10 "
+     "recoveries approved in a row with its pick unchanged, and no offer in 30 days. It never raises its own level",
+     "CeoBotLevel3OfferResult"),
+    ("/api/v2/company", "get", "Goals", "getCompany",
+     "The company's Vision and Description (the Company section at the top of Goals where the CEO Bot switch is on), "
+     "and whether the caller may edit them", "CompanyResult"),
+    ("/api/v2/company", "post", "Goals", "updateCompany",
+     "The owner or an admin, on their own click: change the Vision and/or the Description; never a bot, the CEO Bot "
+     "included. Each change is kept with who and when", "CompanyResult"),
+    ("/api/v2/company/history", "get", "Goals", "getCompanyHistory",
+     "Every change to the Vision and the Description, newest first, with who made it and when", "CompanyHistory"),
     ("/api/v2/goal-manager/turn-on", "post", "Goals", "turnOnGoalManager",
      "Owner only: add the Goal Manager from the catalog or restore it, and activate it", None),
     ("/api/v2/goals", "get", "Goals", "listGoals",
@@ -390,6 +418,9 @@ STABLE = [
      "name, until a person hands it back", "GoalResult"),
     ("/api/v2/goals/{gid}/status/auto", "post", "Goals", "handBackGoalStatus",
      "\"Let Goal Manager set it\": end a colour set by hand; the automatic colour is worked out at once", "GoalResult"),
+    ("/api/v2/goals/{gid}/why", "post", "Goals", "setGoalWhy",
+     "A person who may edit the goal writes its Why (one line tying it to the vision) or clears it; a bot proposes one "
+     "instead (kind goal_why)", "GoalResult"),
     ("/api/v2/goals/{gid}/checkins", "get", "Goals", "listGoalCheckins", "A goal's check-ins, newest first", "GoalCheckins"),
     ("/api/v2/goals/{gid}/checkins", "post", "Goals", "addGoalCheckin",
      "The owner's own words on how it is going, with an optional signal; it colours a goal that has no KPI", "GoalCheckinResult"),
@@ -402,9 +433,13 @@ STABLE = [
     ("/api/v2/proposals", "get", "Goals", "listGoalProposals",
      "Proposals (pending by default; status=confirmed|rejected|all), each saying whether the caller may decide it", "GoalProposalList"),
     ("/api/v2/proposals", "post", "Goals", "createGoalProposal",
-     "Propose a change the caller may not make: goal wording, a KPI for a goal, a definition, a target, or a flag", "GoalProposalResult"),
+     "Propose a change the caller may not make: goal wording, a KPI for a goal, a definition, a target, or a flag; "
+     "the CEO Bot at level 2 or 3, a recovery for a red or stalled goal (evidence, options of bot-task changes, its pick)",
+     "GoalProposalResult"),
     ("/api/v2/proposals/{pid}/decide", "post", "Goals", "decideGoalProposal",
-     "A person's own decision, made by whoever owns the goal or KPI: confirm makes the change as them, reject drops it", "GoalProposalResult"),
+     "A person's own decision, made by whoever owns the goal or KPI: confirm makes the change as them, reject drops it. "
+     "A recovery applies exactly the chosen option (`option`, else the CEO Bot's pick) in the CEO Bot's name; what "
+     "can't be done comes back as a new recovery saying why", "GoalProposalResult"),
     ("/api/v2/kpis", "get", "KPIs", "listKpis",
      "The KPIs the caller may see; archived KPIs are omitted unless include_archived=true; goal_id, owner, unlinked=true narrow it; auto_for=<bot> is that bot's five automatic KPIs", "KpiList"),
     ("/api/v2/kpis", "post", "KPIs", "createKpi",
@@ -495,9 +530,9 @@ SCHEMAS = {
     "SubscriptionRefreshResult": obj({"id": "s", "profile": "s", "runtime": "s",
         "state": {"enum": ["requested", "succeeded", "unavailable", "failed", "expired"]},
         "requested_at": "s", "updated_at": "s", "expires_at": "s"}),
-    "SubscriptionAssignmentResult": obj({"scope": {"enum": ["group", "bot"]}, "target": "s", "profile": "n"}),
-    "BotSubscription": obj({"profile": "n", "id": "s", "display_name": "s", "source": "s", "computer": {"anyOf": [obj({"runner_id": "s", "label": "s"}), {"type": "null"}]},
-                            "signed_in": {"type": ["boolean", "null"]}, "problem": "s"}),
+    "SubscriptionAssignmentResult": obj({"scope": {"enum": ["bot"]}, "target": "s", "profile": "n"}),
+    "BotSubscription": obj({"profile": "n", "id": "s", "display_name": "s", "source": {"enum": ["bot", "computer"]}, "computer": {"anyOf": [obj({"runner_id": "s", "label": "s"}), {"type": "null"}]},
+                            "runtime": "s", "harness": "s", "signed_in": {"type": ["boolean", "null"]}, "problem": "s"}),
     "ChatGoal": obj({"id": "s", "conversation_id": "s", "bot": "s", "objective": "s", "status": "s",
                      "note": "s", "set_by": "s", "set_at": "s", "updated_at": "s", "ended_at": "n"},
                     required=["id", "conversation_id", "bot", "objective", "status", "note", "set_by", "set_at", "updated_at", "ended_at"]),
@@ -521,7 +556,10 @@ SCHEMAS = {
                    ask=ref("TaskReviewAskView"),
                    answer=ref("ReviewAnswer"),
                    answers=items({"oneOf": [{"type": "string"}, ref("ReviewAnswer")]}) | {
-                       "description": "On a structured ask: all review answers, oldest first. On a bot reply: handled message ids"}),
+                       "description": "On a structured ask: all review answers, oldest first. On a bot reply: handled message ids"},
+                   woke={"type": "boolean", "description": "On a send: false when the message was held (see `held`)"},
+                   held={"type": "string", "description": "On a send: a bot's message to a bot held for that bot's next "
+                         "run, and how to wake it now (backend/bot_to_bot.py)"}),
     "Execution": obj({"job_id": "s", "message_id": "s", "bot": "s", "attempt_id": "n", "state": "s", "label": "s", "text": "s"},
                      required=["job_id", "message_id", "bot", "attempt_id", "state", "label", "text", "parts"],
                      parts=items(obj({"kind": {"enum": ["progress", "reply", "tool"]}, "text": "s", "at": "s"})) | {
@@ -608,6 +646,8 @@ SCHEMAS = {
     "Me": obj({"actor": "s", "role": "s", "email": "s"}),
     "Config": obj({"company_name": "s", "app_name": "s", "assistant_name": "s", "assistant_bot": "s",
                    "public_url": "s", "owner_email": "s", "version": "s",
+                   "visual_origin": {"type": "string", "description": "Configured non-secret visual origin, or empty "
+                                     "when absent or invalid; grants no native IPC permission."},
                    "s3_view_urls": {"type": "object", "additionalProperties": {"type": "string"},
                                     "description": "Signed-in callers: bucket -> https base an s3://bucket/key opens at "
                                                    "(base + '/' + key, each segment URL-encoded; TICO_S3_VIEW_URLS)"}},
@@ -698,7 +738,9 @@ SCHEMAS = {
     "TaskAnswerResult": obj({"comment": ref("Message"), "answer": ref("ReviewAnswer"),
                              "comments": items(ref("Message")), "woke": "b"}),
     # `warning`: the bot it went to is paused or quarantined; the comment is kept and runs when it is back.
-    "CommentResult": obj({"comment": ref("Message"), "comments": items(ref("Message")), "woke": "b", "warning": "s"},
+    # `held`: a bot's comment to a bot waits for that bot's next run; it says how to wake it now.
+    "CommentResult": obj({"comment": ref("Message"), "comments": items(ref("Message")), "woke": "b", "warning": "s",
+                          "held": "s"},
                          required=["comment", "comments", "woke"]),
     "InboundTaskResult": obj({"task": {"oneOf": [obj({"id": "s"}), {"type": "null"}]}, "created": "b", "changed": "b"}),
     "UpdateList": obj({"updates": "a", "unread": "i", "next_before": "n"}, required=["updates", "unread"]),
@@ -784,10 +826,10 @@ SCHEMAS = {
                          "Bots with queued work that is not starting, or left in setup for over a day (the caller may "
                          "read them): bot, name, queued, oldest, computer, reason (not_ready, computer_offline, no_computer, "
                          "slow, limit, updating, restarting, setup, or a reason the claim holds the work: draining, maintaining, "
-                         "lane_held, uncertain, cooling_off, readiness_unknown, sign_in_rejected, profile, config, "
-                         "check_model, unreadable), why, since (setup only: when the bot was added), and fix (label plus "
-                         "href/tab, login, move or finish; null unless the caller administers bots, or for setup may "
-                         "manage the bot: finish is POST /api/v2/bots/{bot}/onboarded)"},
+                         "lane_held, uncertain, cooling_off, readiness_unknown, sign_in_rejected, not_isolated, "
+                         "isolation_unknown, profile, config, check_model, unreadable), why, since (setup only: when the "
+                         "bot was added), and fix (label plus href/tab, login, move or finish; null unless the caller "
+                         "administers bots, or for setup may manage the bot: finish is POST /api/v2/bots/{bot}/onboarded)"},
                   on_fallback={"type": "array", "items": {"type": "object"}, "description":
                                "Bots whose latest run in the last day ran on a fallback harness (the caller may read "
                                "them): bot, harness, since (when the unbroken run of fallback turns began)"},
@@ -842,7 +884,9 @@ SCHEMAS = {
                  "suggest_note": "n", "suggest_at": "n", "rank": {"type": ["integer", "null"]}, "created": "s", "created_by": "s", "updated": "s"},
                 required=["id", "title", "owner", "parent_id", "body", "status", "status_note", "status_by", "status_at", "status_source",
                           "rank", "created", "created_by", "updated"],
-                owner_name={"type": "string"}, status_by_name={"type": "string"}),
+                owner_name={"type": "string"}, status_by_name={"type": "string"},
+                why={"type": "string", "description": "One line tying it to the company's vision; empty: not tied to the vision"},
+                why_by={"type": ["string", "null"]}, why_at={"type": ["string", "null"]}),
     "KpiLink": obj({"id": "s", "goal_id": "s", "kind": {"enum": ["none", "improve", "maintain"]}, "baseline": NUM_N, "baseline_at": "n",
                     "target": NUM_N, "deadline": {"type": ["string", "null"], "description": "YYYY-MM-DD"}, "min": NUM_N, "max": NUM_N},
                    required=["goal_id", "kind"]),
@@ -872,7 +916,7 @@ SCHEMAS = {
                         "signal": {"type": ["string", "null"], "enum": ["on_track", "at_risk", "off_track", None]}},
                        required=["id", "goal_id", "ts", "author", "source_actor", "body", "signal"],
                        author_name={"type": "string"}, source_actor_name={"type": "string"}),
-    "GoalProposalView": obj({"id": "s", "kind": {"enum": ["goal_wording", "goal_kpi", "kpi_definition", "kpi_target", "flag"]},
+    "GoalProposalView": obj({"id": "s", "kind": {"enum": ["goal_wording", "goal_kpi", "kpi_definition", "kpi_target", "flag", "goal_why"]},
                          "goal_id": "n", "kpi_id": "n", "payload": "o", "reason": "s", "proposed_by": "s", "proposed_at": "s",
                          "status": {"enum": ["pending", "confirmed", "rejected"]}, "decided_by": "n", "decided_at": "n",
                          "decision_note": "s", "result": {"type": ["object", "null"]}},
@@ -883,6 +927,12 @@ SCHEMAS = {
                     kpis=items(ref("Kpi")), children=items(ref("Goal")), chain=items(ref("Goal")), tasks=items({"type": "object"}),
                     events=items({"type": "object"}), checkins=items(ref("GoalCheckinView")), proposals=items(ref("GoalProposalView"))),
     "GoalResult": obj({"goal": {}}),
+    "CompanyResult": obj({"company": obj({"vision": "s", "description": "s", "updated": "n", "updated_by": "n",
+                                          "updated_by_name": "s"}),
+                          "on": {"type": "boolean", "description": "Whether the CEO Bot switch is on: the section shows only then"},
+                          "may_edit": {"type": "boolean", "description": "The owner or an admin, never a bot"}}),
+    "CompanyHistory": obj({"events": items(obj({"id": "s", "ts": "s", "actor": "s", "actor_name": "s",
+                                                "field": {"enum": ["vision", "description"]}, "old": "s", "new": "s"}))}),
     "GoalList": obj({"goals": items(ref("Goal"))}, required=["goals"], owner={"type": "string"},
                     chain=items(ref("Goal")), reports=items(ref("Goal")), company=items(ref("Goal"))),
     "GoalTreeRow": obj({}, required=["kpis", "open_tasks"], kpis=items(ref("Kpi")), open_tasks={"type": "integer"},
@@ -892,9 +942,31 @@ SCHEMAS = {
                      "unaligned": {"type": "object", "description": "{actor: open tasks that serve no goal}"},
                      "other_kpis": items(ref("Kpi")), "proposals": items(ref("GoalProposalView"))},
                     required=["goals", "owners", "unaligned", "other_kpis", "proposals"]),
+    "CeoBotView": obj({"on": "b", "name": "s", "changed_by": "s", "changed_at": "s",
+                       "level": {"type": "integer", "enum": [1, 2, 3]},
+                       "levels": items(obj({"level": "i", "name": "s", "sentence": "s", "ready": "b"},
+                                           required=["level", "name", "sentence", "ready"])),
+                       "level_changed_by": "s", "level_changed_by_name": "s", "level_changed_at": "s",
+                       "level_history": items(obj({"level": "i", "was": "i", "by": "s", "by_name": "s", "at": "s"},
+                                                  required=["level", "was", "by", "at"])),
+                       "daily_cap": "i", "asked_today": {"type": "object", "additionalProperties": {"type": "integer"},
+                                                         "description": "{person actor: items the CEO Bot put in their Needs you today (UTC)}"},
+                       "level3_offer": ref("CeoBotLevel3Offer")},
+                      required=["on", "name", "level", "levels", "daily_cap"]),
+    "CeoBotLevel3Offer": obj({"streak": "i", "needed": "i", "due": "b", "last_offered_at": "s"},
+                             required=["streak", "needed", "due"]),
+    "CeoBotLevel3OfferResult": obj({"level3_offer": ref("CeoBotLevel3Offer")}),
+    "CeoBotMergeResult": obj({"task": {"type": "object", "description": "The merged item: the CEO Bot's task, waiting on the person"},
+                              "originals": items(obj({"task_id": "s", "title": "s", "asker": "s", "asker_name": "s",
+                                                      "state": "s", "note": "s"}, required=["task_id", "asker", "state"]))}),
     "GoalsNeedsYou": obj({"actor": "s", "items": items({
         "type": "object", "required": ["kind"], "additionalProperties": True,
-        "properties": {"kind": {"enum": ["kpi_red", "kpi_stale", "proposal"]}, "goal_id": {"type": "string"},
+        "properties": {"kind": {"enum": ["vision", "kpi_red", "recovery", "why", "proposal", "kpi_stale"]},
+                       "goal_id": {"type": "string"},
+                       "options": {"type": "array", "description": "kind recovery: each option in plain words, "
+                                   "{label, pick, actions: [{text, note}]}", "items": {"type": "object"}},
+                       "goals": {"type": "array", "description": "kind why: the goals whose proposed Why lines wait on you",
+                                 "items": {"type": "object"}},
                        "goal_title": {"type": ["string", "null"]}, "kpi_id": {"type": "string"}, "kpi_name": {"type": ["string", "null"]},
                        "reason": {"type": "string"}, "freshness": {"type": "string"}, "proposal": {"type": "object"},
                        "task": {"type": "object", "required": ["id"], "properties": {
@@ -1039,6 +1111,36 @@ SCHEMAS['TaskType']['properties'].update({'default_visibility': {'enum': ['publi
                                          'role': {'type': ['string', 'null'], 'enum': ['product-roadmap', 'engineering', None],
                                                   'description': 'The Product roadmap or Dev tickets type, whoever manages it'}})
 
+TAGS['Inbound'] = 'Shared company inbound email and SMS for people and agents; reads never consume messages.'
+STABLE.extend([
+    ('/api/v2/inbound/company-connection','post','Inbound','connectInboundCompany','A direct human owner or admin previews and connects Inbox to a portal company','InboundCompanyConnection'),
+    ('/api/v2/inbound/inboxes','get','Inbound','listInboundInboxes','Company email and phone inboxes','InboundInboxes'),
+    ('/api/v2/inbound/inboxes','post','Inbound','createInboundInbox','Create a free email inbox; SMS creation requires a phone approval request',None),
+    ('/api/v2/inbound/inboxes/{ident}','patch','Inbound','editInboundInbox','Rename an inbox across connected interfaces and save local dependencies',None),
+    ('/api/v2/inbound/inboxes/{ident}/release','post','Inbound','releaseInboundInbox','An admin retires email or cancels phone renewal',None),
+    ('/api/v2/inbound/phone-quote','get','Inbound','quoteInboundPhone','A current monthly US mobile rental quote',None),
+    ('/api/v2/inbound/phone-requests','get','Inbound','listInboundPhoneRequests','An owner or admin lists phone approval requests','InboundPhoneRequests'),
+    ('/api/v2/inbound/phone-requests','post','Inbound','requestInboundPhone','An owner or admin requests a monthly mobile rental; no purchase',None),
+    ('/api/v2/inbound/phone-requests/{ident}/accept','post','Inbound','acceptInboundPhoneQuote','An owner or admin accepts an exact quote for TICO review; no purchase',None),
+    ('/api/v2/inbound/phone-requests/{ident}/cancel','post','Inbound','cancelInboundPhoneRequest','An owner or admin cancels a phone approval request',None),
+    ('/api/v2/inbound/cursor','get','Inbound','getInboundCursor','Capture a cursor before requesting a code','InboundCursor'),
+    ('/api/v2/inbound/messages','get','Inbound','listInboundMessages','Search one, many or all company inboxes','InboundMessages'),
+    ('/api/v2/inbound/messages/{ident}','get','Inbound','readInboundMessage','Untrusted message text, up to 32 KB per page',None),
+    ('/api/v2/inbound/messages/{ident}/code','get','Inbound','readInboundCode','Extracted code for a specific message',None),
+    ('/api/v2/inbound/wait','post','Inbound','waitInboundMessages','Non-consuming wait after a cursor','InboundMessages'),
+])
+SCHEMAS.update({
+    'InboundConnectionCompany': {**obj({'company_id':{'type':'string','format':'uuid'},'name':{'type':'string','minLength':1,'maxLength':100}}),'additionalProperties':False},
+    'InboundCompanyConnection': {'oneOf':[
+        {**obj({'connected':{'enum':[False]},'scope':{'enum':['inbox']},'company':{'$ref':'#/components/schemas/InboundConnectionCompany'},'expires_at':{'type':'number'}}),'additionalProperties':False},
+        {**obj({'connected':{'enum':[True]},'scope':{'enum':['inbox']},'company':{'$ref':'#/components/schemas/InboundConnectionCompany'}}),'additionalProperties':False},
+    ]},
+    'InboundCursor': obj({'cursor':'i'}),
+    'InboundInboxes': obj({'inboxes':items({'type':'object'}),'configured':'b','last_sync':NUM_N,'error':'s','gaps':items({'type':'object'})}),
+    'InboundMessages': obj({'messages':items({'type':'object'}),'next':{'type':['integer','null']},'cursor':'i'}),
+    'InboundPhoneRequests': obj({'phone_requests':items({'type':'object'}),'next':{'type':['string','null']}}),
+})
+
 ANSWERS = SCHEMAS
 
 # Documentation for the two sign-in routes whose bodies the handlers read by hand.
@@ -1060,7 +1162,8 @@ DESCRIPTION = (
     "never removed or renamed, and a breaking change is a new /api/v3. Routes not listed are internal. "
     "Public roadmap writes require an allowlisted Origin; reads permit server-side requests. No sign-in or idempotency key (docs/roadmaps.md). "
     "Granola connection and sync writes do not require an idempotency key, nor does POST /api/v2/inbound/tasks, whose "
-    "own `key` is its idempotency. Other writes need an `Idempotency-Key` header (1-200 characters; a retry with the same "
+    "own `key` is its idempotency. Inbox company connection actions reconcile the same short-lived code under current grant checks. "
+    "Other writes need an `Idempotency-Key` header (1-200 characters; a retry with the same "
     "key and body returns the first answer). Errors are `{\"error\": {code, detail, retryable}}`. See docs/custom-frontend.md.")
 
 
@@ -1105,6 +1208,22 @@ def spec(app):
             op["requestBody"] = TOKEN_REQUEST
             op["security"] = []
             responses["400"] = {"description": "invalid_grant, or the request is malformed", **ERROR}
+        connection = path == '/api/v2/inbound/company-connection'
+        if connection:
+            op['requestBody'] = {'required':True,'content':{'application/json':{'schema':{
+                'type':'object','additionalProperties':False,'required':['action','code'],'properties':{
+                    'action':{'type':'string','enum':['preview','connect']},
+                    'code':{'type':'string','minLength':43,'maxLength':43,'pattern':'^[A-Za-z0-9_-]{43}$','writeOnly':True},
+                }}}}}
+            op['description'] = ('Direct signed-in human owner/admin only; no personal tokens, support or delegated agents. '
+                'Preview shows the target company before explicit consent to share Inbox in both directions. '
+                'The server supplies its private key and existing reported installation identity; neither belongs in this body. '
+                'Requests are limited to 2 KiB; code validation errors never echo supplied values. '
+                'Disconnect in the portal stops future access, preserving merged history and existing local copies.')
+            for code,detail in [('403','Direct human management or portal authorization required'),
+                                ('409','Missing saved identity, expired code or conflicting connection'),
+                                ('503','Inbox connection unavailable; reconcile the same code in its original lifetime')]:
+                responses[code] = {**ERROR,'description':detail}
         if path in ("/healthz", "/auth/login"):
             op["security"] = []
         if path.startswith('/public/roadmaps/'):
@@ -1123,9 +1242,10 @@ def spec(app):
             parameters = op.setdefault("parameters", [])
             parameters[:] = [p for p in parameters if (p.get("name"), p.get("in")) != ("Idempotency-Key", "header")]
             parameters.append({
-                "name": "Idempotency-Key", "in": "header", "required": not (inbound or granola), "schema": {"type": "string"},
+                "name": "Idempotency-Key", "in": "header", "required": not (inbound or granola or connection), "schema": {"type": "string"},
                 "description": ("Not needed: the pair (service key, `key`) makes a repeated call harmless, and the header "
                                 "is ignored." if inbound else
+                                'Optional. Retry the same action and code; HQ rechecks the current grant, role, session and original expiry without readoption.' if connection else
                                 "Optional. Sync uses a two-minute debounce; connecting starts a new device sign-in."
                                 if granola else
                                 "1-200 characters. Reusing a key with the same body replays the first answer.")})

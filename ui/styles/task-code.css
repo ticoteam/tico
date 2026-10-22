@@ -1,8 +1,9 @@
 /* ui/styles/task-code.css — The task modal's right rail (Code, Subtasks) and the small PR badge on task rows.
    Dense, like the bot page's rail: thin dividers, small headings, one line per item. */
-/* The task's side column: Properties, then Code, then Subtasks (one column under the details on a phone, and in the peek) */
+/* The task's side column: Properties, then Code, then Subtasks (one column under the details on a phone, and in the peek).
+   It spans both rows; the conversation's row takes its extra height, so no gap opens above the conversation. */
 #task-modal:has(.task-layout){width:min(980px,calc(100vw - 32px))}
-.tmodal-body.task-layout{display:grid;grid-template-columns:minmax(0,1fr) 284px;grid-template-areas:"main side" "chat side";column-gap:20px;align-items:start}
+.tmodal-body.task-layout{display:grid;grid-template-columns:minmax(0,1fr) 284px;grid-template-rows:auto 1fr;grid-template-areas:"main side" "chat side";column-gap:20px;align-items:start}
 .task-layout>.tmodal-main{grid-area:main;min-width:0}
 .task-layout>.task-chat{grid-area:chat;min-width:0}
 .task-side{grid-area:side;position:sticky;top:0;min-width:0;padding-left:16px;border-left:1px solid var(--line);font-size:var(--t-sm)}

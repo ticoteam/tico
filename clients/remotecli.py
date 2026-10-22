@@ -22,10 +22,26 @@ def tool_name(fn):
     return "hub_" + fn.replace(" ", "_").replace("-", "_")
 
 
+def visuals_from_args(args):
+    """`--visual` values with their `--title`s, in order: a file in the checkout, or ID@VERSION already in Tico."""
+    paths, titles = list(getattr(args, "visual", None) or []), list(getattr(args, "visual_title", None) or [])
+    if len(titles) > len(paths):
+        raise APIError("validation", "Each --title goes with a --visual", 422)
+    out = []
+    for index, value in enumerate(paths):
+        title = titles[index] if index < len(titles) else ""
+        known = re.fullmatch(r"[^/@\s]+@[1-9][0-9]*", value) and not os.path.exists(value)
+        out.append({"file" if known else "path": value, "title": title})
+    return out
+
+
 def via_tool(client, args, **more):
     """Run the tool of the command's own name with the command's flags as its arguments."""
     from clients import hubtools
-    fields = {k: v for k, v in vars(args).items() if k not in ("cmd", "sub", "subsub", "fn") and v is not None}
+    fields = {k: v for k, v in vars(args).items() if k not in ("cmd", "sub", "subsub", "fn", "visual", "visual_title")
+              and v is not None}
+    if getattr(args, "visual", None):
+        fields["visuals"] = visuals_from_args(args)
     fields["operation_id"] = os.environ.get("HUB_OPERATION_ID")
     fields.update(more)
     return hubtools.BY_NAME[tool_name(args.fn)]["fn"](client, fields)
@@ -76,8 +92,10 @@ def run(args, who=None):
     if who:
         raise APIError("identity", "Remote identity comes from authentication; --human is unavailable")
     # A query may run for 20 s on the server before it is stopped, a decision's providers 25 s; leave room for that.
-    client = Client(os.environ["HUB_API_URL"], os.environ.get("HUB_TOKEN", ""), timeout=30 if args.cmd in ("sql", "decision") else 120 if args.cmd == "listening" or args.fn == "market import" else 15)
+    client = Client(os.environ["HUB_API_URL"], os.environ.get("HUB_TOKEN", ""), timeout=30 if args.cmd in ("sql", "decision") else 120 if args.cmd == "listening" or args.fn == "market import" else 130 if args.cmd == "inbound" else 15)
     fn = args.fn
+    if args.cmd == "inbound":
+        return via_tool(client,args)
     if fn == "team icon":
         with Path(args.file).open("rb") as source:
             return client.post_bytes("team/icon", source)
@@ -293,7 +311,9 @@ def run(args, who=None):
         from clients import hubtools
         return hubtools.BY_NAME["hub_message_send"]["fn"](client, {
             "to": args.to, "text": args.text, "fyi": args.fyi, "conversation_id": args.conversation,
-            "refs": args.ref or [], "steer": getattr(args, "steer", False), "operation_id": key})
+            "refs": args.ref or [], "steer": getattr(args, "steer", False),
+            "needs_action": getattr(args, "needs_action", False), "operation_id": key,
+            **({"visuals": visuals_from_args(args)} if getattr(args, "visual", None) else {})})
     if fn == "question answer":
         return post(f"messages/{args.message_id}/answer", {"text": args.text or args.unknown,
                     "unknown": bool(args.unknown)}, delegate=getattr(args, "on_behalf_of", None) or False)
@@ -385,6 +405,9 @@ def run(args, who=None):
             return client.get("tasks/" + ids[0])
         if sub == "run":
             return post(f"tasks/{args.id}/run-now", {})
+        if sub == "defer":
+            return post(f"tasks/{args.id}/defer", {"after": args.after, "at": args.at,
+                                                   "next_run": bool(args.next_run), "handled": bool(args.handled)})
         if sub in ("list", "snooze", "unsnooze"):
             return via_tool(client, args)
         if sub == "ask":
@@ -398,17 +421,33 @@ def run(args, who=None):
             for index, path in enumerate(getattr(args, "attach", None) or []):
                 made = post(f"tasks/{args.id}/files", attachment(path), suffix=f":attachment:{index}")
                 references.append(f"{made['file_id']}@{made['version']}")
+            local = []
+            if getattr(args, "visual", None):
+                from clients import hubtools
+                visuals, local = hubtools._visuals(client, visuals_from_args(args), lambda index, name, data: hubtools._uploaded(
+                    hubtools._posted_file(client, f"tasks/{args.id}/files", name, data,
+                                          (key + ":visual:" + index) if key else None)))
+                references.extend(visuals)
             body = {"text": args.text}
             if references:
                 body["attachments"] = references
             if ask is not None:
                 body["ask"] = ask
+            if getattr(args, "needs_action", False):
+                body["needs_action"] = True
+            if getattr(args, "public", None):
+                body["public"] = True
+            if getattr(args, "approval_id", None):
+                body["approval_id"] = args.approval_id
             links = s3links.apply(client, body, ("text",))
-            return s3links.annotate(post(f"tasks/{args.id}/comments", body, delegate=asked), links)
+            result = s3links.annotate(post(f"tasks/{args.id}/comments", body, delegate=asked), links)
+            return {**result, "visuals_local": local} if local and isinstance(result, dict) else result
         if sub == "answers":
             return client.get(f"tasks/{args.id}/answers")
         if sub == "comment-edit":
             body = {"text": args.text}
+            if getattr(args, "approval_id", None):
+                body["approval_id"] = args.approval_id
             links = s3links.apply(client, body, ("text",))
             return s3links.annotate(post(f"tasks/{args.id}/comments/{args.comment_id}", body), links)
         if sub == "comment-delete":
@@ -439,7 +478,10 @@ def run(args, who=None):
                 for x in one.split(","):
                     if x.strip() and x.strip().lower() not in labels:
                         labels.append(x.strip().lower())
-            return post("tasks/" + args.id, {"version": current["version"], "labels": labels}, delegate=asked)
+            body = {"version": current["version"], "labels": labels}
+            if getattr(args, "approval_id", None):
+                body["approval_id"] = args.approval_id
+            return post("tasks/" + args.id, body, delegate=asked)
         if sub == "attach":
             path = Path(args.file)
             from clients.task_review import ask_from_args
@@ -983,6 +1025,8 @@ def main(args, who=None):
             print(json.dumps(result, indent=2))
         if isinstance(result, dict) and result.get("warning"):     # saved, but a person should know why it waits
             print("hub: " + str(result["warning"]), file=sys.stderr)
+        if isinstance(result, dict) and result.get("held"):        # a bot's message to a bot waits for its next run
+            print("hub: " + str(result["held"]), file=sys.stderr)
         return 0
     except APIError as exc:
         if exc.code == "worktree_limit" and isinstance(exc.extra.get("wait"), dict):

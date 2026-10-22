@@ -38,12 +38,12 @@ EMPTY = (
     "schedules", "schedule_config", "schedule_occurrences", "triggers", "trigger_deliveries", "watcher_runs", "watcher_items", "watcher_refs",
     "watcher_pending", "watcher_triage",    # support triage: tickets waiting for their check (customer text), and its verdicts
     # runner and bot sessions
-    "enrollments", "assignments", "agent_pairings", "bot_sessions", "session_epochs", "bot_session_epochs", "model_logins", "model_login_cleared", "computer_keys",
+    "enrollments", "hosting_enrollments", "assignments", "agent_pairings", "bot_sessions", "session_epochs", "bot_session_epochs", "model_logins", "model_login_cleared", "computer_keys", "model_login_key_off",
     "computer_profiles", "subscription_assignments", "runner_harness_actions", "runner_harness_choices",
     "runner_versions",
     # human sign-in and service keys
     "human_tokens", "oidc_sessions", "oidc_codes", "oauth_grants", "oauth_clients", "service_keys",
-    "service_key_tasks",
+    "service_key_tasks", "owner_links",
     # credentials
     "credentials", "credential_keys", "credential_grants", "credential_requests", "credential_imports",
     "directory_credentials", "company_storage",
@@ -51,6 +51,8 @@ EMPTY = (
     "mail_mailboxes", "bot_mail_settings", "google_connects", "google_mail_holders", "slack_credentials", "slack_posts", "slack_events", "slack_threads",
     "github_app", "github_app_states", "granola_connections", "meeting_importers", "live_meeting_bots",
     "support_tickets", "support_access", "support_access_log",
+    # Agent inbox bodies/codes and delivery cursors never enter a rehearsal copy.
+    "inbound_inboxes", "inbound_messages", "inbound_sync",
     "usage_alerts", "task_requesters", "roadmap_actions",
     # raw provider streams: customer text, and whatever the secret scrub missed
     "attempt_captures", "attempt_capture_drops",
@@ -67,8 +69,8 @@ KEEP = frozenset((
     "attempt_inputs", "backup_verified_blobs", "batches", "blob_locations", "blob_media", "blobs",
     "bot_agent_instructions", "bot_config", "bot_control", "bot_file_activity", "bot_file_versions", "bot_files",
     "bot_memory_documents", "bot_memory_seen", "bot_memory_updates", "bot_repo_access", "bot_status",
-    "bot_tool_requests", "bot_transition_checkpoints", "bot_transitions", "bots", "changes", "chat_goals",
-    "cloud_migrations", "connector_snapshots", "conversations", "doc_sources", "doc_versions", "docs",
+    "bot_tool_requests", "bot_transition_checkpoints", "bot_transitions", "bots", "ceo_merges", "changes", "chat_goals",
+    "cloud_migrations", "company_events", "company_profile", "connector_snapshots", "conversations", "doc_sources", "doc_versions", "docs",
     "document_versions", "documents", "external_documents", "external_sections", "external_snapshot_docs",
     "external_snapshots", "external_versions", "feed_sources", "feed_updates", "flight_db", "flight_events",
     "flight_process", "flight_requests",

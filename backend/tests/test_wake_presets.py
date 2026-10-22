@@ -61,24 +61,36 @@ def employee(api, bot):
     return {e["name"]: e for e in api.get("/api/employees", headers=headers()).json()}[bot]
 
 
-def test_an_existing_bot_keeps_current_behaviour_and_a_new_bot_starts_on_token_saver(api):
+def test_existing_bots_use_performance_and_new_bots_start_on_token_saver(api):
     view = get(api, "bots/ops")["wake"]
-    assert view["preset"] == "current" and not view["chosen"] and view["summary"].startswith("Current behaviour")
+    assert view["preset"] == "performance" and view["batch_seconds"] == 60
     task = new_task(api, "existing")
     notice(api, task, "Finished: a request", wake_batch="completion")
-    assert [(j["state"], j["held"]) for j in jobs(api)] == [("queued", 0), ("queued", 0)]
+    assert [(j["state"], j["held"]) for j in jobs(api)] == [("queued", 0), ("queued", 1)]
     made = post(api, "bots", {"slug": "scout", "display_name": "Scout", "description": "A test bot.", "status": "active",
                               "repo": "emp-scout", "thread_mode": "personal", "model": "hermes-profile",
                               "effort": "as-configured", "harness": "hermes", "operator": "ana", "owners": ["ana"],
                               "runner_id": None})
     assert made["wake"]["preset"] == "token_saver"
     listed = {b["slug"]: b for b in get(api, "bots")}
-    assert listed["scout"]["wake"]["batch_seconds"] == 1800 and listed["ops"]["wake"]["preset"] == "current"
-    assert employee(api, "scout")["wake"]["preset"] == "token_saver" and employee(api, "ops")["wake"]["preset"] == "current"
+    assert listed["scout"]["wake"]["batch_seconds"] == 1800 and listed["ops"]["wake"]["preset"] == "performance"
+    assert employee(api, "scout")["wake"]["preset"] == "token_saver" and employee(api, "ops")["wake"]["preset"] == "performance"
     preset(api, "ops", "performance")
     assert employee(api, "ops")["wake"]["summary"].startswith("Performance")
-    preset(api, "ops", "current")                                        # current behaviour can be picked again
-    assert employee(api, "ops")["wake"]["preset"] == "current"
+    preset(api, "ops", "current")                                        # older clients select Performance through the legacy alias
+    assert employee(api, "ops")["wake"]["preset"] == "performance"
+
+
+def test_legacy_wake_migration_is_idempotent_and_preserves_other_settings(api):
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.wake_preset','current','$.compact_at',400000) WHERE bot='ops'")
+        before = c.execute("SELECT revision FROM bot_config WHERE bot='ops'").fetchone()[0]
+        W.ensure(c)
+        row = c.execute("SELECT config_json,revision FROM bot_config WHERE bot='ops'").fetchone()
+        assert json.loads(row[0])["wake_preset"] == "performance"
+        assert json.loads(row[0])["compact_at"] == 400000 and row[1] == before + 1
+        W.ensure(c)
+        assert c.execute("SELECT revision FROM bot_config WHERE bot='ops'").fetchone()[0] == before + 1
 
 
 @pytest.mark.parametrize("name", ["token_saver", "performance"])
@@ -132,8 +144,10 @@ def test_a_subordinates_ordinary_edits_do_not_wake_its_manager(api, name):
         H.task_update(c, "bot:ops", task["id"], note="Half way")
         assert c.execute("SELECT count(*) FROM jobs WHERE bot='coo'").fetchone()[0] == before
         H.task_update(c, "bot:ops", task["id"], status="done", note="Drafted")
-    [done] = [j for j in jobs(api, "coo") if j["body"].startswith("Finished")]
-    assert done["held"] == 1 and done["wake_class"] == "completion"     # news it was not waiting on
+        [done] = c.execute("SELECT j.held,m.refs_json FROM jobs j JOIN messages m ON m.id=j.message_id "
+                           "WHERE j.bot='coo' AND json_extract(m.refs_json,'$.subtask')=?", (task["id"],))
+        assert done["held"] == 0                       # a delegated result continues the parent's work immediately
+        assert json.loads(done["refs_json"])["task"] == parent["id"]
 
 
 def test_token_saver_gives_three_notices_in_its_window_one_wake(api):
@@ -208,13 +222,13 @@ def test_switching_presets_changes_only_the_preset(api):
             return config, row[1], [c.execute(f"SELECT count(*) FROM {t}").fetchone()[0] for t in tables]
         before = state()
     for name in ("performance", "token_saver", "current"):
-        assert preset(api, "ops", name)["wake"]["preset"] == name
+        assert preset(api, "ops", name)["wake"]["preset"] == ("performance" if name == "current" else name)
         with api.app.state.store.read() as c:
             assert state() == before
     assert get(api, "bots/ops")["compact_at"] == 400000
     with api.app.state.store.read() as c:
         assert [r[0] for r in c.execute("SELECT after_json FROM settings_changes WHERE bot='ops' AND field='wake_preset' "
-                                        "ORDER BY created")] == ['"performance"', '"token_saver"', '"current"']
+                                        "ORDER BY created")] == ['"token_saver"', '"performance"']
 
 
 def test_a_usage_limit_with_a_known_reset_waits_for_it_under_a_preset(api, monkeypatch):

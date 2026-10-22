@@ -32,17 +32,29 @@ services:
       TICO_ALB_ARN:
       TICO_ALB_REGION:
       TICO_DOMAIN:
+      TICO_DOMAIN_ALIASES:
       TICO_PORT: ${TICO_PORT:-8765}
       TICO_PUBLIC_URL:
+      # Visuals in replies (backend/visuals.py): a separate site of their own; unset in production = file chips.
+      TICO_VISUAL_ORIGIN:
+      TICO_VISUAL_SECRET:
+      TICO_VISUAL_SAME_ORIGIN:
+      # Local Caddy serving is a separate opt-in; a visual origin may belong to an external CDN.
+      TICO_CADDY_VISUALS:
       TICO_RUNNER_URL:
       TICO_COMPOSE_PROJECT: ${COMPOSE_PROJECT_NAME:-tico}
       TICO_SERVER_NETWORK: ${TICO_SERVER_NETWORK:-${COMPOSE_PROJECT_NAME:-tico}_default}
+      # A Tico our team runs for a company (own or invited); unset is self-hosted (backend/config.py).
+      TICO_HOSTED:
       TICO_ENVIRONMENT_ID:
       TICO_AUTH_PROXY:
+      # TICO_AUTH_PROXY=owner-link: the hash of the hosted owner's first sign-in link (backend/owner_link.py).
+      TICO_OWNER_LINK_HASH:
       TICO_OIDC_ISSUER:
       TICO_OIDC_CLIENT_ID:
       TICO_OIDC_CLIENT_SECRET:
       TICO_OIDC_ALLOWED_DOMAINS:
+      TICO_OIDC_LABEL:
       TICO_CORS_ORIGINS:
       TICO_CLIENT_IP_HEADER:
       # Forwarded client addresses are believed only from loopback (the server's own relay) and the two front doors'
@@ -81,6 +93,12 @@ services:
       TICO_GATEWAY_KEY:
       TICO_GATEWAY_SECRET_ARN:
       TICO_GATEWAY_URL:
+      # The recommended setup's choices (scripts/install.sh --recommended), read on the server's first start.
+      TICO_GATEWAY_INVITE:
+      TICO_INSTALL_PRESET:
+      TICO_SAMPLE_COMPANY:
+      TICO_COMPANY_FILE_B64:
+      TICO_MODELS_PRESET:
       TYPESAFE_API_KEY:
       TICO_TYPESAFE_SECRET_ARN:
       TICO_DECISIONS_DAILY_CALLS_OWNER:
@@ -91,6 +109,7 @@ services:
       TICO_DECISIONS_JEV_USD_PER_MTOK_OUTPUT:
       TICO_DECISIONS_IDEA_TRIAGE:
       TICO_STALE_REVIEW:
+      TICO_TOPIC_FRESH:
       TICO_UPDATER_URL:
       TICO_UPDATE_CHECK:
       TICO_SUPPORT:
@@ -98,6 +117,10 @@ services:
       DO_NOT_TRACK:
       TICO_TELEMETRY_DEBUG:
       TICO_HQ_URL:
+      TICO_INBOUND_KEY:
+      TICO_INBOUND_URL:
+      # HQ's read-only staff key, on the Tico team's own server only: its Health page shows HQ's nightly billing check.
+      TICO_HQ_STAFF_READ_KEY:
       TICO_GITHUB_REVIEW_ROLE:
       TICO_TITLE_LINT:
       # Naming, a mounted integrations folder, the AWS region (KMS, Secrets Manager, S3) and the AWS identity the server
@@ -117,6 +140,8 @@ services:
       - tico-backups:/backups
       # The Cloudflare tunnel's route for TICO_DOMAIN, written at every start for the cloudflared service below.
       - tico-tunnel:/tunnel
+      # Complete Caddy generations and its supervisor, produced before the server becomes healthy.
+      - tico-caddy:/caddy-generated
     # Loopback only: for health checks and TICO_AUTH_PROXY=none test installs.
     ports: ["127.0.0.1:${TICO_PORT:-8765}:8765"]
     networks: [default, edge]
@@ -149,13 +174,18 @@ services:
       TICO_RUNNER_URL:
       TICO_COMPOSE_PROJECT: ${COMPOSE_PROJECT_NAME:-tico}
       TICO_SERVER_NETWORK: ${TICO_SERVER_NETWORK:-${COMPOSE_PROJECT_NAME:-tico}_default}
+      # A Tico our team runs for a company (own or invited); unset is self-hosted (backend/config.py).
+      TICO_HOSTED:
       # Sign-in settings: the gateway loads the same settings as the server and refuses to start when the
       # selected proxy (oidc, cloudflare) is missing its own.
       TICO_AUTH_PROXY:
+      # TICO_AUTH_PROXY=owner-link: the hash of the hosted owner's first sign-in link (backend/owner_link.py).
+      TICO_OWNER_LINK_HASH:
       TICO_OIDC_ISSUER:
       TICO_OIDC_CLIENT_ID:
       TICO_OIDC_CLIENT_SECRET:
       TICO_OIDC_ALLOWED_DOMAINS:
+      TICO_OIDC_LABEL:
       TICO_ACCESS_ISSUER:
       TICO_ACCESS_AUDIENCE:
       TICO_REHEARSAL:
@@ -200,12 +230,15 @@ services:
     depends_on:
       server: {condition: service_healthy}
 
-  # Front door 1: automatic HTTPS for TICO_DOMAIN (Let's Encrypt). Needs ports 80 and 443 open.
+  # Front door 1: automatic HTTPS for the app and an explicitly enabled restricted visual origin.
+  # A private supervisor validates each generated snapshot and removes stale sites before replacing it.
   caddy:
     <<: *hardening
     profiles: [caddy]
     image: caddy:2-alpine@sha256:6aeddd44c3078b0f9a35206472a11420648a79c184603ef95957d0a20044cb2b
-    command: caddy reverse-proxy --from ${TICO_DOMAIN:-} --to server:8765
+    entrypoint: ["/bin/sh", "/generated/supervisor.sh"]
+    command: []
+    tmpfs: [/tmp]
     cap_add: [NET_BIND_SERVICE]
     ports: ["80:80", "443:443", "443:443/udp"]
     networks:
@@ -213,6 +246,14 @@ services:
     volumes:
       - caddy-data:/data
       - caddy-config:/config
+      - tico-caddy:/generated:ro
+    healthcheck:
+      test: ["CMD", "/bin/sh", "/generated/supervisor.sh", "health"]
+      interval: 10s
+      timeout: 3s
+      start_period: 10s
+      start_interval: 1s
+      retries: 3
     depends_on:
       server: {condition: service_healthy}
 
@@ -274,5 +315,6 @@ volumes:
   tico-backups:
   tico-control:
   tico-tunnel:
+  tico-caddy:
   caddy-data:
   caddy-config:

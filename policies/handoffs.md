@@ -43,7 +43,7 @@ refuses it once the rule is enforced; `hub task create --dry-run` shows what it 
 - What you are waiting on, when it is another task: link it as a child and mark the parent
   `waiting` with the child ID in its note. On your own task also record it with
   `hub task relate <task-id> <child-id> --kind blocked_by`; do not retry a refused relation. Tico wakes the parent
-  owner when the child closes.
+  owner in the parent's task session when the child finishes.
 - What you are waiting on, when it is your linked pull request's checks, review or release: arm one wake with
   `hub task link <task-id> <pr url> --wake-once`, set the task `waiting` with that in its note, and end the turn
   instead of polling. Tico wakes you once, in this task, when the checks finish, it is approved or gets changes
@@ -64,15 +64,17 @@ Files are scoped to their task's participants. Attach the packet needed for revi
 the child with `hub task attach <child-id> <file>`; a bot assigned to the child may not be able to
 download a file attached only to the parent. Keep a parent copy if the original requester needs it.
 
-Do not poll the other bot. Tico wakes the requester when the child is done and wakes the parent
-owner when the child closes. Read the child's result, incorporate it, and continue the parent.
+Do not poll the other bot. Tico returns the child's result directly to the immediate parent's
+task session, as an input to its active turn or a continuation there. Read the result, incorporate
+it, and continue the parent. Create review tasks under the implementation task: review one and
+review two each return to the builder there. Complete the implementation task when it is ready
+to return to its manager; review progress does not need a separate manager update or relay turn.
 When the improvement belongs in another bot's repository, assign the task to that bot with the
 observed problem and expected outcome. Its owner implements, tests and merges its own change.
 
-`--parent` and the `waiting` status are what make that wake happen. A task you file and then go
-on working past is not something you are waiting for: its result still reaches you, but Tico does
-not spend a run of yours telling you it finished. Use the parent link when you genuinely cannot
-continue without the answer, and not otherwise.
+`--parent` makes the result return to the task that needs it; `waiting` records why you stopped.
+Work filed without a parent keeps the requester's ordinary completion notices. Use the parent
+link when its result is needed to continue the current task.
 
 ## Work that can wait for the other bot's next run
 
@@ -85,7 +87,10 @@ hub task create --owner <slug> --title "<verb-first title>" --body "<what and wh
 
 It does not wake the bot. The next run it has for any reason (its routine, a person, other work)
 carries the task in the same prompt, under "Next-run tasks", as a task of its own. Handle each one
-in that run and mark it done or declined like any other. Until a run carries it, closing it is a
+in that run and mark it done or declined like any other. When the run that carries it is not the
+time to do it, store when it is: `hub task defer <id> --after <task>` (when that task is done),
+`--at <time>` or `--next-run`; it then gets a run of its own. A run that neither works it nor
+defers it hands it back to the next run. Until a run carries it, closing it is a
 cancel and wakes nobody. Only a bot has a next run; a task for a person is always an ordinary one.
 
 ## Quiet notes: telling a bot something without waking it

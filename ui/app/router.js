@@ -4,6 +4,16 @@
 
 let LAST_ROUTE = '';
 function route() {
+  if (location.hash.startsWith('#/settings?recruit=')) {
+    try {
+      const raw = new URLSearchParams(location.hash.split('?')[1]).get('recruit');
+      if (raw && raw.length <= 5000) {
+        const value = JSON.parse(raw);
+        if (value && typeof value.title === 'string' && typeof value.brief === 'string') RECRUIT_HANDOFF = value;
+      }
+    } catch { /* A malformed external handoff never changes a bot. */ }
+    SETTINGS_TAB = 'bots'; location.replace(SETTINGS); return;
+  }
   overviewStop();
   GOAL_MANAGER_STOP?.();
   $('#main').classList.remove('overview-layout');
@@ -74,9 +84,11 @@ function route() {
   else if (S.route === '#/repositories') { SETTINGS_TAB = 'repos'; location.replace(SETTINGS); return; }   // Settings > Repositories
   else if (S.route === '#/triggers') { SETTINGS_TAB = 'triggers'; location.replace(SETTINGS); return; }   // Settings > Triggers
   else if (S.route === '#/health') { SETTINGS_TAB = 'health'; location.replace(SETTINGS); return; }   // Health moved into Settings
+  else if (['#/settings/company-inbox', '#/settings/email-phone'].includes(S.route)) { SETTINGS_TAB = 'inbound'; location.replace(SETTINGS); return; }
   else if (S.route === '#/settings/inbox') { SETTINGS_TAB = 'inbox'; location.replace(SETTINGS); return; }   // Google's sign-in returns here
   else if (S.route === '#/settings/roadmap') { SETTINGS_TAB = 'tasks'; ROADMAP_SETTINGS_REVEAL = true; location.replace(SETTINGS); return; }   // Health's roadmap suggestions fix
   else if (S.route === '#/settings/storage') { SETTINGS_TAB = 'storage'; location.replace(SETTINGS); return; }   // Health's Set up S3
+  else if (['#/settings/subscriptions', '#/subscriptions', '#/settings/computers'].includes(S.route)) { SETTINGS_TAB = 'devices'; location.replace(SETTINGS); return; }   // Subscriptions moved to Computers
   else if (S.route === CREDENTIALS) pageCredentials();
   else if (S.route === SQL_PAGE) pageSql();
   else if (S.route === MAIL || S.route.startsWith(MAIL + '?')) pageMail();
@@ -90,7 +102,7 @@ function route() {
   }
   else if (S.route === DOCS || S.route.startsWith(DOCS + '/') || S.route.startsWith(DOCS + '?')) pageCompanyDocs();
   else if (S.route === INTEGRATIONS || S.route.startsWith(INTEGRATIONS + '/')) pageIntegrations();
-  else if (S.route === '#/runs') pageRuns();
+  else if (S.route === '#/runs') { SETTINGS_TAB = 'runs'; location.replace(SETTINGS); return; }   // Runs moved into Settings > History
   else if (S.route === LEARNINGS || S.route.startsWith(LEARNINGS + '?')) pageLearnings();
   else if (S.route === '#/usage') pageUsage();
   else if (S.route === '#/replay' || S.route.startsWith('#/replay?')) pageReplay();

@@ -6,6 +6,7 @@ its turn: a member is refused what only an owner may do, an owner is not.
 """
 import json
 import time
+from uuid import uuid4
 
 import pytest
 
@@ -438,7 +439,8 @@ def test_every_botops_tool_uses_requester_rights_by_default(api, botops, monkeyp
                 H.task_create(c, "bot:ops", "Review the QA fixture", "Review the fixture.", "bot:botops", lint=False)
             else:
                 conv = H.open_conversation(c, "bot:ops", ["bot:ops", "bot:botops"], kind="chat")
-                H.say(c, "bot:ops", "bot:botops", "Review the QA fixture", conversation_id=conv["id"])
+                H.say(c, "bot:ops", "bot:botops", "Review the QA fixture", conversation_id=conv["id"],
+              refs={"needs_action": True})
         attempt = claim(api, botops, "botops")
         expected = {"actor": "bot:ops", "role": "bot"}
     else:
@@ -506,7 +508,8 @@ def test_bot_requester_receives_only_its_granted_credentials_and_personal_tokens
         assert response.status_code == 200, response.text
     with api.app.state.store.transaction() as c:
         conv = H.open_conversation(c, "bot:ops", ["bot:ops", "bot:botops"], kind="chat")
-        H.say(c, "bot:ops", "bot:botops", "Review the QA fixture", conversation_id=conv["id"])
+        H.say(c, "bot:ops", "bot:botops", "Review the QA fixture", conversation_id=conv["id"],
+              refs={"needs_action": True})
     attempt = claim(api, botops, "botops")
     result = api.get("/api/v2/credential-runtime", headers=headers(attempt["token"]))
     assert result.status_code == 200, result.text
@@ -619,7 +622,7 @@ def test_bot_filed_subtask_never_borrows_its_parents_human_rights(api, botops, l
 def _wake(api, machine):
     """A run the keeper starts with no task (a daily-update request): nobody's request is attached."""
     with api.app.state.store.transaction() as c:
-        H.say(c, H.KEEPER, "bot:botops", "Time for your daily update.", kind="notice", refs={"wake": "update"})
+        H.say(c, H.KEEPER, "bot:botops", "Time for your daily update.", kind="notice", refs={"wake": "update", "event": str(uuid4())})
     return claim(api, machine, "botops")
 
 

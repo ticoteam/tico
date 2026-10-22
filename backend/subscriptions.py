@@ -1,10 +1,10 @@
-"""Subscription defaults for bots and nested groups."""
+"""Which named subscription each bot runs on: its own choice, else its computer's own login."""
 import json
 from datetime import datetime, timedelta, timezone
 
 from fastapi import Request
 
-from . import groups as G, hubdb as H, models as M
+from . import hubdb as H, models as M
 from .execution import readiness_document
 from .subscription_identity import identity
 from .store import Problem, encode
@@ -73,6 +73,19 @@ def may_see_accounts(auth, who, runner):
     return who.role in ('human', 'owner') and (auth.bot_admin(who) or runner['operator'] == H.actor_id(who.actor))
 
 
+def same_account(own, profiles):
+    """{runtime: profile}: the named subscription signed in to the same account as the computer's own login."""
+    def email(state):
+        return str(((state or {}).get('account') or {}).get('email') or '').strip().lower() if isinstance(state, dict) else ''
+    out = {}
+    for runtime, state in own.items():
+        mine = isinstance(state, dict) and state.get('authenticated') == 'ready' and email(state)
+        match = mine and next((p['name'] for p in profiles if email(p['runtimes'].get(runtime)) == mine), None)
+        if match:
+            out[runtime] = match
+    return out
+
+
 def without_accounts(runtimes, windows=False):
     """Take the accounts out; with `windows`, the own login's usage windows on readiness runtime rows too."""
     for state in runtimes.values():
@@ -94,10 +107,9 @@ def computer_profiles(c, runner, accounts):
 
 
 def context(c, settings=None):
-    result = {'groups': G._roster(c)['org_groups'],
-              'teams': {r['bot']: r['team'] for r in c.execute('SELECT bot,team FROM bot_config')},
-              'assignments': {(r['scope'], r['target']): r['profile']
-                              for r in c.execute('SELECT * FROM subscription_assignments')}}
+    # Group rows from before groups stopped choosing a subscription stay in the table and are never read.
+    result = {'assignments': {r['target']: r['profile'] for r in c.execute(
+        "SELECT target,profile FROM subscription_assignments WHERE scope='bot'")}}
     if settings is not None:
         from . import providers
         result['providers'] = providers.load(c, settings)
@@ -105,21 +117,10 @@ def context(c, settings=None):
 
 
 def effective(c, bot, ctx=None):
+    """A bot runs on its own connection, else on its computer's default: that computer's own login for its tool."""
     ctx = ctx if ctx is not None else context(c)
-    assignments = ctx['assignments']
-    if ('bot', bot) in assignments:
-        return assignments['bot', bot], 'bot'
-    gid = ctx['teams'].get(bot)
-    seen = set()
-    while gid and gid not in seen:
-        seen.add(gid)
-        group = ctx['groups'].get(gid)
-        if not group:
-            break
-        if ('group', gid) in assignments:
-            return assignments['group', gid], 'group:' + group['name']
-        gid = group.get('parent')
-    return None, 'computer'
+    profile = ctx['assignments'].get(bot)
+    return (profile, 'bot') if profile else (None, 'computer')
 
 
 def covers(config):
@@ -195,24 +196,27 @@ def listing(c, auth, who, computer_rows):
         computers.append({'runner_id': runner['id'], 'label': runner['label'],
                           'profiles': computer_profiles(c, runner, accounts)})
     access = auth.bot_accesses(c, who)
-    assignments = [dict(row) for row in c.execute('SELECT * FROM subscription_assignments ORDER BY scope,target')
-                   if row['scope'] == 'group' or (access.get(row['target']) or {}).get('see')]
+    assignments = [dict(row) for row in c.execute("SELECT * FROM subscription_assignments WHERE scope='bot' ORDER BY target")
+                   if (access.get(row['target']) or {}).get('see')]
     return {'profiles_by_computer': computers, 'assignments': assignments}
 
 
 def assign(c, auth, who, body):
-    if body.scope == 'group':
-        G._may_change(auth, who)
-        if body.target not in G._roster(c)['org_groups']:
-            raise Problem('not_found', 'Group not found', 404)
-    else:
-        if not H.bot(c, body.target):
-            raise Problem('not_found', 'Bot not found', 404)
-        if not (auth.bot_admin(who) or (who.role == 'human' and c.execute(
-                'SELECT 1 FROM assignments a JOIN runners r ON r.id=a.runner_id '
-                'WHERE a.bot=? AND r.operator=? AND r.revoked_at IS NULL',
-                (body.target, H.actor_id(who.actor))).fetchone())):
-            raise Problem('forbidden', 'You cannot change this bot', 403)
+    if not H.bot(c, body.target):
+        raise Problem('not_found', 'Bot not found', 404)
+    if not (auth.bot_admin(who) or (who.role == 'human' and c.execute(
+            'SELECT 1 FROM assignments a JOIN runners r ON r.id=a.runner_id '
+            'WHERE a.bot=? AND r.operator=? AND r.revoked_at IS NULL',
+            (body.target, H.actor_id(who.actor))).fetchone())):
+        raise Problem('forbidden', 'You cannot change this bot', 403)
+    runner = c.execute('SELECT r.id,r.label FROM assignments a JOIN runners r ON r.id=a.runner_id WHERE a.bot=? '
+                       'AND r.revoked_at IS NULL', (body.target,)).fetchone()
+    from .model_login import removing
+    # A removal checked the bots once when asked for, and checks again before it deletes anything; between the two
+    # no bot comes onto it from here.
+    if runner and removing(c, runner['id'], body.profile):
+        raise Problem('state', f"{body.profile} is being removed from {runner['label']}; choose another "
+                      'connection', 409)
     if body.profile is None:
         c.execute('DELETE FROM subscription_assignments WHERE scope=? AND target=?', (body.scope, body.target))
     else:
@@ -224,40 +228,45 @@ def assign(c, auth, who, body):
 
 
 def bot_subscription(c, bot, settings, ctx=None):
+    """The connection a bot runs on: {profile, source ('bot' or 'computer'), computer, runtime, harness, signed_in,
+    problem}. With no profile it is its computer's own login for `runtime`."""
     ctx = ctx if ctx is not None else context(c, settings)
+    line, config = _bot_line(c, bot, ctx)
+    return {**line, 'runtime': config.get('runtime') or '', 'harness': config.get('harness') or ''}
+
+
+def _bot_line(c, bot, ctx):
+    """The connection without its tool, and the bot's filled-in configuration that names the tool."""
     profile, source = effective(c, bot, ctx)
     runner = c.execute('SELECT r.* FROM assignments a JOIN runners r ON r.id=a.runner_id WHERE a.bot=? '
                        'AND r.revoked_at IS NULL', (bot,)).fetchone()
-    signed_in, problem, runtime = None, '', ''
+    signed_in, problem = None, ''
     computer = {'runner_id': runner['id'], 'label': runner['label']} if runner else None
     from . import providers
     from .shared_bots import follow
     row = c.execute('SELECT config_json FROM bot_config WHERE bot=?', (bot,)).fetchone()
     config = providers.fill(ctx['providers'], follow(c, bot, json.loads(row[0] or '{}') if row else {}))
     runtime = config.get('runtime')
+    line = {'profile': profile, 'source': source, 'computer': computer}
     if profile and not covers(config):
-        return {'profile': profile, 'source': source, 'computer': computer, 'signed_in': False,
-                'problem': f"Subscription {profile} doesn't cover {runtime}", 'detail': {'runtime': runtime}}
+        return {**line, 'signed_in': False, 'problem': f"Subscription {profile} doesn't cover {runtime}",
+                'detail': {'runtime': runtime}}, config
     if runner:
         report = readiness_document(runner['readiness_json'])
         bot_report = report.get('bots', {}).get(bot, {})
         if source == 'computer':
-            profile = bot_report.get('profile') or None
+            line['profile'] = bot_report.get('profile') or None
             state = bot_report.get('sign_in') or report.get('runtimes', {}).get(runtime, {}).get('authenticated')
             signed_in = True if state == 'ready' else False if state in ('missing', 'failed', 'rejected') else None
         else:
             blocked = refusal(c, runner['id'], bot)
             if (blocked.get('profile') == profile and blocked.get('primary_runtime') == runtime
                   and blocked.get('primary_harness') == config.get('harness')):
-                problem = blocked['problem']
-                signed_in = False
-            if problem:
-                return {'profile': profile, 'source': source, 'computer': computer, 'signed_in': signed_in,
-                        'problem': problem, 'detail': {'runtime': blocked.get('runtime', runtime)}}
+                return {**line, 'signed_in': False, 'problem': blocked['problem'],
+                        'detail': {'runtime': blocked.get('runtime', runtime)}}, config
             from .repositories import metadata
             if not metadata(c, 'computer-profiles:' + runner['id']).get('reported'):
-                return {'profile': profile, 'source': source, 'computer': computer, 'signed_in': None,
-                        'problem': f'Update {runner["label"]} to use subscriptions'}
+                return {**line, 'signed_in': None, 'problem': f'Update {runner["label"]} to use subscriptions'}, config
             row = c.execute('SELECT runtimes_json FROM computer_profiles WHERE runner_id=? AND profile=?',
                             (runner['id'], profile)).fetchone()
             if row:
@@ -267,8 +276,23 @@ def bot_subscription(c, bot, settings, ctx=None):
             else:
                 signed_in = False
                 problem = f"Subscription {profile} isn't on {runner['label']}"
-    return {'profile': profile, 'source': source, 'computer': computer, 'signed_in': signed_in, 'problem': problem,
-            **({'detail': {'runtime': runtime}} if problem else {})}
+    return {**line, 'signed_in': signed_in, 'problem': problem,
+            **({'detail': {'runtime': runtime}} if problem else {})}, config
+
+
+def connections(c, runner_id, settings, ctx=None):
+    """Each bot on a computer with the connection it actually runs on. The Computers pop-up and the bot editor both
+    read bot_subscription, so they name a connection alike."""
+    ctx = ctx if ctx is not None else context(c, settings)
+    rows = []
+    for row in c.execute("SELECT a.bot FROM assignments a JOIN bots b ON b.slug=a.bot "
+                         "WHERE a.runner_id=? AND b.state<>'archived' ORDER BY a.bot", (runner_id,)):
+        line = bot_subscription(c, row['bot'], settings, ctx)
+        if line['profile'] and line['computer']:
+            line.update(identity(c, line['computer']['runner_id'], line['profile']))
+        line.pop('computer', None)
+        rows.append({'bot': row['bot'], **line})
+    return rows
 
 
 def install(app, store, auth, mutate, settings, computer_rows):

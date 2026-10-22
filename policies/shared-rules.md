@@ -21,12 +21,14 @@ These sit alongside `handoffs.md` and `approvals.md`.
   picks the work back up after a failure. A one-line question you answer at once needs no task.
   There is no daily open-tasks run per bot: BotOps sweeps every bot's stuck
   work once a day (`hub task list --stuck`) and starts or unblocks it.
-- **Design and video come from their bots**. Any bot may ask for visual work
-  (graphics, ad and social images, landing-page visuals, icons, brand assets) by filing a task
-  for `designer` (Design), and for video (scripts, edits, cuts, captions, clips) by filing one for
-  `video-producer` (Video Producer): `hub task create --owner bot:designer --title ... --body ...`.
+- **Visuals in replies.** Add a visual (chart, table, diagram, mockup, screenshot, clip or recording)
+  to a reply when it makes the answer clearer, never for a plain answer, and keep the text answer
+  complete on its own. Attach it with `--visual <file>` and `--title <caption>` on your reply or comment.
+- **Design and video come from their bots**. For brand assets, designed graphics (ad and social
+  images, landing-page visuals, icons) or edited video (scripts, edits, cuts, captions), file a task
+  for `designer` (Design) or `video-producer` (Video Producer): `hub task create --owner bot:designer --title ... --body ...`.
   Say what it is for, the size or format, and the deadline; attach or link the source. The result
-  comes back under `<slug>/deliverables/<task>/`. Do not make these assets yourself or buy them.
+  comes back under `<slug>/deliverables/<task>/`. Do not buy them.
 - **Keep live copy accurate.** Edit, test and publish requested copy with your Tools. Public copy stays a draft until `outbound_send` is on. See `documentation.md`.
 - **Name the model that actually did the work.** A turn can run on a fallback model when the configured one hits a limit; your prompt says so when yours does. When a review must come from a different model family, read each implementing run's `ran_on` in `hub task show <task>` (`runs`), never a bot's configured model or harness label. A `family` of null (mixed, Cursor auto, nothing counted) is unknown and does not count as different.
 - **Speak as the owner only in the owner's own accounts.** Keep messages to outsiders as drafts until `outbound_send` is on; then follow the requested work and standing instructions.
@@ -76,8 +78,11 @@ makes sense on its own: `hub task question "<question>" --on <person> [--option 
 (MCP: `hub_task_question`) files it, waits on them and wakes you with the answer; then mark it done.
 Say what you will do if they don't answer: `--if-no-answer "Yes" --default-kind reversible` (or `send`, `spend`,
 `delete`; always say which; `--by <date>`, within 14 days, to give longer). A reversible, internal step goes ahead on
-its own after the team's days (3 unless the owner changed it) or your later `--by`, and you are woken with that answer; a send, spending or a delete waits. An ask
-nobody answers in 14 days expires, and you are told to go ahead on your default or drop the work.
+its own after the team's days (3 unless the owner changed it) or your later `--by`, and you are woken with that answer; a send, spending or a delete
+does not go ahead, but its question still closes on its `--by` date and you decide without it. Aim for questions a person
+can answer within 24 hours. One with no date that is unanswered after two business days leaves their list, and the next
+weekday morning you get one "Still needed?" listing all such questions: ask again as a fresh question, or drop it.
+A question also closes when its task or any task above it ends, or when the person answers in chat on the task.
 When a person asks you for something only BotOps can do (repository access, a Tool, a setting), hand it on with
 their own message: `hub task create --owner botops ... --request-id turn` (or that message's id). BotOps does the
 work for them, or puts the change to them as one Confirm card; never ask them to message BotOps themselves.

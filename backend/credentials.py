@@ -619,7 +619,9 @@ def install_credentials(app,store,delegate=None,propose=None):
             people=[dict(r) for r in c.execute('SELECT id,name,email FROM humans ORDER BY name')] if admin else []
             bots=[dict(r) for r in c.execute('SELECT b.slug AS id,b.display_name AS name,bc.operator FROM bots b JOIN bot_config bc ON bc.bot=b.slug ORDER BY b.display_name')
                   if admin or r['operator']==H.actor_id(who.actor) or (added and vault.manages_bot(c,who,'bot:'+r['id']))]
-            return {'credentials':rows,'can_manage':admin,'people':people,'bots':bots,'configured':vault.configured,'key_storage':vault.cipher.storage}
+            # The computers a model key is shared with by name (Settings > Computers, "Shared with"), named on its grants.
+            computers=[dict(r) for r in c.execute("SELECT id,label FROM runners ORDER BY lower(label),id")] if admin else []
+            return {'credentials':rows,'can_manage':admin,'people':people,'bots':bots,'computers':computers,'configured':vault.configured,'key_storage':vault.cipher.storage}
 
     @app.post('/api/v2/credentials')
     def create(request:Request,body:CredentialWrite):
@@ -702,7 +704,25 @@ def install_credentials(app,store,delegate=None,propose=None):
             for row in c.execute('SELECT * FROM credentials ORDER BY id'):
                 if row['ciphertext'] is not None and row['id'] in held:
                     values.append({'id':row['id'],'name':row['name'],'env':row['env'],'kind':row['kind'],**vault.reveal(c,who,row['id'])})
+            # Never the Tico AI Gateway's key: a run reaches it through its runner (runner-gateway-credentials below).
             return {'credentials':values}
+
+    @app.get('/api/v2/runner-gateway-credentials')
+    def gateway_credentials(request:Request,attempt:str):
+        """The Tico AI Gateway's key and URL for a run on a Tico model, to the computer running it and to nothing else.
+        The run itself never holds the key; its runner relays its calls (runner-rs/src/gateway_relay.rs)."""
+        who=request.state.identity
+        if who.role!='runner':raise Problem('forbidden','Only a registered computer may ask for this',403)
+        with store.transaction() as c:
+            if not c.execute('SELECT 1 FROM runners WHERE id=? AND revoked_at IS NULL',(who.runner_id,)).fetchone():
+                raise Problem('forbidden','Only a registered computer may ask for this',403)
+            row=c.execute('SELECT runner_id,state FROM attempts WHERE id=?',(attempt,)).fetchone()
+            if not row or row['runner_id']!=who.runner_id:
+                raise Problem('forbidden','That run is not on this Computer',403)
+            if row['state'] not in ('leased','running'):
+                raise Problem('stale_lease','That run has ended',409)
+            from .gateway_connection import run_credentials_for
+            return {'credentials':run_credentials_for(c,vault,store.settings,who,attempt)}
 
     @app.get('/api/v2/runner-watcher-credentials')
     def watcher_credentials(request:Request,bot:str):

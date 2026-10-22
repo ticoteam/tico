@@ -35,6 +35,8 @@ class Scheduler:
         self.goals_checked = None
         self.go_lives_checked = None
         self.health_scanned = None
+        self.gateway_checked = None
+        self.billing_checked = None
         self.stale_checked = None
 
     def tick(self, at=None):
@@ -128,6 +130,9 @@ class Scheduler:
             # Snoozes whose date came: back on every list, and one notice to the owner bot (backend/task_snooze.py).
             from . import task_snooze
             task_snooze.wake_ended(c, stamp(at), failures)
+            # Quiet tasks a run deferred to a time that has come get their run (backend/quiet_work.py).
+            from . import quiet_work
+            quiet_work.due(c, stamp(at), failures)
             for row in H.tasks_due_for_bots(c, stamp(at + timedelta(days=1))[:10]):
                 with isolated(c, "reminder", row["id"], failures):
                     due = H.parse_ts(row.get("due"))
@@ -161,7 +166,7 @@ class Scheduler:
             from . import updates
             settings = self.store.settings
             with self.store.transaction() as c:
-                write = updates.writer_for(c, settings)
+                write = updates.writer_for(c, settings, self.store)
                 sent = updates.dispatch(c, at, settings.assistant_bot if write else None)
             if sent and updates.is_person(sent):
                 threading.Thread(target=updates.write_draft, args=(self.store, sent, write, settings.assistant_bot),
@@ -210,6 +215,13 @@ class Scheduler:
                     goal_asks.sync(c, self.execution.auth.owner_id(c), at)
             except Exception as exc:
                 failures.append({"goal_asks": type(exc).__name__})
+            try:
+                # The CEO Bot's Monday note, started once on an install whose switch was already on (backend/ceo_bot.py).
+                from . import ceo_bot
+                with self.store.transaction() as c:
+                    ceo_bot.reconcile(c)
+            except Exception as exc:
+                failures.append({"ceo_bot": type(exc).__name__})
         if self.health_scanned is None or at - self.health_scanned >= timedelta(hours=1):
             # Every hour, only while the owner has it on: the Health Monitor's scan (backend/health_monitor.py). Plain
             # code; it wakes the bot only for a finding the last scan did not have.
@@ -220,6 +232,33 @@ class Scheduler:
                     health_monitor.scan(c, self.execution.auth, self.store.settings)
             except Exception as exc:
                 failures.append({"health_monitor": type(exc).__name__})
+        if self.gateway_checked is None or at - self.gateway_checked >= timedelta(hours=1):
+            # Every hour, while a gateway key or an invite is set: the Tico AI Gateway's word on it (revoked, 80% of the month's cap,
+            # the cap reached), for Settings and Health. On its own thread: a tick never waits on the Gateway.
+            self.gateway_checked = at
+            try:
+                from . import gateway_connection
+                from .credentials import Vault
+                with self.store.read() as c:
+                    # An install command's invite, or the identity a first sign-up gave the install, also makes it
+                    # due: the install enrolls for its own key, at start and hourly until it has one, and rotates it
+                    # when the Gateway says.
+                    due = gateway_connection.connected(c, self.store.settings) or gateway_connection.maintained(
+                        c, self.store.settings)
+                if due:
+                    gateway_connection.check_soon(self.store, Vault(self.store), self.store.settings)
+            except Exception as exc:
+                failures.append({"gateway": type(exc).__name__})
+        if self.billing_checked is None or at - self.billing_checked >= timedelta(hours=1):
+            # Every hour, while this server holds HQ's read-only staff key (the Tico team's own install only): HQ's
+            # nightly billing check for the owner's Health page (backend/billing_check.py). On its own thread.
+            self.billing_checked = at
+            try:
+                from . import billing_check
+                if billing_check.env_key(self.store.settings):
+                    billing_check.read_later(self.store, self.store.settings)
+            except Exception as exc:
+                failures.append({"billing_check": type(exc).__name__})
         if self.stale_checked is None or at - self.stale_checked >= timedelta(minutes=5):
             # Stale ticket review (backend/stale_review.py), while the team has it on: the watermark makes it hourly;
             # the Decide calls run on the pass's own thread, never under this lock.
@@ -294,4 +333,12 @@ class Scheduler:
                     approval_expiry.sweep(c, stamp(at))
             except Exception as exc:
                 failures.append({"approval_expiry": type(exc).__name__})
+            # ...and each weekday morning, questions unanswered two business days go back to their bots, one wake per
+            # bot (backend/still_needed.py).
+            try:
+                from . import still_needed
+                with self.store.transaction() as c:
+                    still_needed.sweep(c, stamp(at))
+            except Exception as exc:
+                failures.append({"still_needed": type(exc).__name__})
         return {"fired": fired, "failures": failures}

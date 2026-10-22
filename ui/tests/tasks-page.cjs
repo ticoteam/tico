@@ -87,7 +87,7 @@ const BOTS = [['engineer', 'Engineer', 'engineering'], ['support', 'Support', 's
   ({name, display_name, team, host: 'keeper', status: 'active', state: 'active', can_chat: true}));
 
 async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'dark', hash = '#/issues', failIds = [], prefs = null, mover = true,
-  types = [], local = {}, people = null, baseTasks = null, extraTasks = [], byNeed = false} = {}) {
+  types = [], local = {}, people = null, baseTasks = null, extraTasks = [], byNeed = false, clock = null} = {}) {
   const tasks = [...(baseTasks ?? fixtures()), ...extraTasks];
   // These scripts read Needs you grouped by who asks; `byNeed` keeps the default, What it takes.
   if (!byNeed && !('hub.tasks.layout' in local)) local = {...local, 'hub.tasks.layout': JSON.stringify({group: {foryou: 'requester'}})};
@@ -186,6 +186,7 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
     if (p.endsWith('/messages')) return json({messages: []});
     return json(unrouted(p));
   });
+  if (clock) await page.clock.install({time: clock});     // the page's timers too, so a test moves time on
   await page.goto('https://tico-ui.test/' + hash);
   await page.waitForFunction(() => TASKS_ST && !TASKS_ST.loading && document.querySelector('#task-body .tl-row, #task-body .bcard, #task-body .tl-empty'))
     .catch(e => { throw new Error(`${e.message}\npage errors: ${errors.join(' | ')}`); });
@@ -618,7 +619,7 @@ async function properties(browser) {
   await peek.locator('.task-subs .sub-bar').waitFor();
   const rows = await props.locator('.prop').evaluateAll(rs => rs.map(r => [r.querySelector('.prop-k').textContent,
     [...r.querySelectorAll('.prop-txt, .tlabel > [data-tag-key]')].map(x => x.textContent.trim()).join(' ')]));
-  assert.deepEqual(rows, [['Status', 'Waiting'], ['Owner', 'Engineer'], ['Asked by', 'You'], ['Private', ''], ['Due', 'Add due date'], ['Tags', 'checkout'],
+  assert.deepEqual(rows, [['Status', 'Waiting'], ['Owner', 'Engineer'], ['Asked by', 'You'], ['Private', 'Everyone'], ['Due', 'Add due date'], ['Tags', 'checkout'],
     ['Part of', 'Add parent']]);
   assert.match(await props.locator('[data-prop="status"]').innerText(), /Waiting/);
   // Detail names the status; the status-grouped list uses its heading. "blocked" is a small chip.
@@ -632,7 +633,9 @@ async function properties(browser) {
   assert.equal(await peek.locator('.tmodal-head button:not([data-task-finish])').count(), 2);
   assert.deepEqual(await peek.locator('.tmodal-head [data-task-finish]').evaluateAll(bs => bs.map(b => b.dataset.taskFinish)), ['close']);
   assert.match(await peek.locator('.tmodal-head .peek-pos').innerText(), /^\d+ \/ \d+$/);
-  assert.match(await peek.locator('.tmeta').innerText(), /^Added by you · /);
+  // Who added it and when is the age's tooltip, not a line under the title; the owner is a property, not in the header.
+  assert.match(await peek.locator('.tmodal-age').getAttribute('title'), /^Added by you .* · Updated /);
+  assert.equal(await peek.locator('.tmeta, .tmodal-head .tmodal-owner').count(), 0);
   const top = await props.boundingBox(), main = await peek.locator('.tmodal-main').boundingBox();
   assert.ok(top.y < main.y, 'properties first in the peek');
   assert.equal(await peek.locator('.tmodal-main select, [data-task-props] select, [data-modal-task], .tcontrols').count(), 0, 'no boxed form, no Done/Close links');
@@ -847,6 +850,32 @@ async function snoozing(browser) {
   console.log('snoozing: ok');
   await page.close();
 }
+async function quietWork(browser) {
+  // Dev 257: a quiet (next-run) task says where it stands: deferred until something (and by which run), eligible for
+  // the bot's next run, or queued with a run of its own. An ordinary task says nothing.
+  const base = fixtures().find(x => x.id === 't-digest');
+  const quiet = (id, title, q) => ({...base, id, title, next_run: q.state !== 'queued', quiet: q});
+  const {page, errors} = await open(browser, {extraTasks: [
+    quiet('t-q-deferred', 'Quiet deferred', {state: 'delivered', run: 'edec5d00-0000', at: at(120),
+      resume: {kind: 'task', task: 't-idem'}, words: 'Picked up again after Add idempotency keys to the payments API is done.'}),
+    quiet('t-q-eligible', 'Quiet eligible', {state: 'eligible', words: "The bot's next run carries it."}),
+    quiet('t-q-queued', 'Quiet queued', {state: 'queued', job: 'j1', run: null, words: 'A run of its own is waiting.'})]});
+  const line = async (key, title) => {
+    await page.locator(`[data-task-key="${key}"] .tl-title`).click();
+    await peekTitle(page, title);
+    const found = page.locator('#task-peek [data-task-quiet]');
+    return (await found.count()) ? {state: await found.getAttribute('data-task-quiet'), text: (await found.textContent()).trim()} : null;
+  };
+  const deferred = await line('tt-q-deferred', 'Quiet deferred');
+  assert.equal(deferred.state, 'deferred');
+  assert.match(deferred.text, /^Quiet work: Deferred Picked up again after Add idempotency keys to the payments API is done\. \(run edec5d00, handed over 2h ago\)$/);
+  assert.deepEqual(await line('tt-q-eligible', 'Quiet eligible'), {state: 'eligible', text: "Quiet work: Eligible The bot's next run carries it."});
+  assert.deepEqual(await line('tt-q-queued', 'Quiet queued'), {state: 'queued', text: 'Quiet work: Queued A run of its own is waiting.'});
+  assert.equal(await line('tt-digest', 'Weekly metrics digest'), null, 'an ordinary task has no quiet line');
+  assert.deepEqual(errors, []);
+  console.log('quiet work: ok');
+  await page.close();
+}
 async function views(browser) {
   // Needs you: what waits on you, grouped by what it takes, or by who asks. A bot's heading has a visible Chat link; a
   // person's has none.
@@ -934,9 +963,7 @@ async function donePagination(browser) {
 }
 
 async function ages(browser) {
-  // Every open row reads how long its task has been open (since created) and, when it has
-  // sat untouched, how long it has been quiet (since updated). A task that just moved
-  // reads only its open age, so it never looks stale.
+  // Every open row reads one short age, since it last moved; the tooltip has when it was opened and updated.
   const base = {...fixtures().find(x => x.id === 't-copy')};
   const extraTasks = [
     {...base, id: 't-stale', title: 'Stale vendor contract', created: at(60 * 30), updated: at(65)},
@@ -945,13 +972,13 @@ async function ages(browser) {
   ];
   const {page, errors} = await open(browser, {hash: '#/tasks', extraTasks});
   const age = key => page.locator(`[data-task-key="${key}"] .tl-age`);
-  assert.equal(await age('tt-stale').innerText(), 'open 1d · quiet 1h', 'a long-quiet item reads as stale');
+  assert.equal(await age('tt-stale').innerText(), '1h');
   assert.match(await age('tt-stale').getAttribute('title'), /^Open .* · Updated /);
-  assert.equal(await age('tt-fresh').innerText(), 'open 1d', 'a just-moved item shows only its open age');
-  assert.equal(await age('tt-untouched').innerText(), 'open 3h', 'an untouched item reads its open age once');
+  assert.equal(await age('tt-fresh').innerText(), 'now', 'a just-moved item never looks stale');
+  assert.equal(await age('tt-untouched').innerText(), '3h');
   assert.deepEqual(errors, []);
   await page.close();
-  console.log('open/quiet ages: ok');
+  console.log('ages: ok');
 }
 async function polling(browser) {
   // The 30-second poll reloads the list: a changed row redraws, the others stay the same nodes, the focus and the
@@ -1255,7 +1282,7 @@ if (require.main === module) (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
     const only = process.env.TASKS_ONLY ? process.env.TASKS_ONLY.split(',') : null;
-    for (const [name, run] of Object.entries({listAndTabs, typeSelection, filters, carriedOver, peekAndKeys, properties, snoozing, bulk, views, waitingOnYou, donePagination, ages, polling, phone, recheckSaves, recheckLists, recheckPhone, recheckFinal}))
+    for (const [name, run] of Object.entries({listAndTabs, typeSelection, filters, carriedOver, peekAndKeys, properties, snoozing, quietWork, bulk, views, waitingOnYou, donePagination, ages, polling, phone, recheckSaves, recheckLists, recheckPhone, recheckFinal}))
       if (!only || only.includes(name)) await run(browser);
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

@@ -36,6 +36,7 @@ def ensure_schema(c):
     H.add_column(c, "runner_versions", "outdated_since", "TEXT")
     H.add_column(c, "runner_versions", "nudged", "TEXT NOT NULL DEFAULT ''")
     H.add_column(c, "runner_versions", "outdated_for", "TEXT NOT NULL DEFAULT ''")
+    H.add_column(c, "runner_versions", "update_since", "TEXT")
 
 
 def clean(value):
@@ -88,12 +89,14 @@ def record(c, runner_id, body):
     """Store what a heartbeat reported. Called only when the runner sent a release."""
     release = clean(body.release)
     update = body.update
+    since = update_since(c, runner_id, update.state if update else "")
     c.execute("INSERT INTO runner_versions(runner_id,release,kind,update_state,update_target,update_error,reported,commit_sha) "
               "VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(runner_id) DO UPDATE SET release=excluded.release,"
               "kind=excluded.kind,update_state=excluded.update_state,update_target=excluded.update_target,"
               "update_error=excluded.update_error,reported=excluded.reported,commit_sha=excluded.commit_sha",
               (runner_id, release, body.kind or "", update.state if update else "", update.target if update else "",
                update.error if update else "", H.now(), body.commit or ""))
+    c.execute("UPDATE runner_versions SET update_since=? WHERE runner_id=?", (since, runner_id))
     if body.checkout is None:   # it follows the server's release now, not main: an old "behind main" note is stale
         c.execute("UPDATE runners SET checkout_json=NULL WHERE id=?", (runner_id,))
     nudge(c, runner_id)
@@ -130,6 +133,38 @@ def nudge(c, runner_id, server=None):
              f"turns; when it stays behind, Settings > Computers says why.{why}")
     H.event(c, H.KEEPER, "runner.outdated", "runner:" + runner_id, {"release": row["release"], "server": server})
     return True
+
+
+# runner-rs/src/follow.rs DRAIN_S: how long a computer due an update keeps claiming while its turns run.
+UPDATE_DRAIN_S = 20 * 60
+
+
+def update_since(c, runner_id, state):
+    """When this computer's reported update state began, as the runner keeps its own `pending_since`: a `waiting`
+    that goes on (even for a newer target) keeps its start, and any other state starts the clock again, so a retry
+    after a failed update waits its full drain time. An update that follows a drain already past holds from the
+    drain's end, so Health's duration covers the whole hold."""
+    row = c.execute("SELECT update_state,update_since FROM runner_versions WHERE runner_id=?", (runner_id,)).fetchone()
+    now = H.now()
+    if row and row["update_state"] == state and row["update_since"]:
+        return row["update_since"]
+    if row and state == "updating" and (held := holding_since(c, runner_id)):
+        return held
+    return now
+
+
+def holding_since(c, runner_id):
+    """Since when this computer has taken no new work because it is updating, or None while it still takes work.
+    A computer due an update keeps claiming for UPDATE_DRAIN_S, then claims nothing until its running turns end and it
+    updates (follow.rs blocks_claims); one that reports `updating` claims nothing, whatever release it is on (a Docker
+    update still settling reports it on the new release)."""
+    row = c.execute("SELECT update_state,update_since FROM runner_versions WHERE runner_id=?", (runner_id,)).fetchone()
+    if not row or row["update_state"] not in ("waiting", "updating") or not row["update_since"]:
+        return None
+    if row["update_state"] == "updating":
+        return row["update_since"]
+    since = H.shift(row["update_since"], seconds=UPDATE_DRAIN_S)
+    return since if since <= H.now() else None
 
 
 def paused(c, runner_id):

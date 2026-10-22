@@ -128,6 +128,99 @@ It does five things:
 Its routines start paused, like a starter bot's first routine. Because it is built in, Tico starts its daily KPI pass once
 the first KPI exists, once: a human who pauses it afterwards is not overruled.
 
+### The CEO Bot switch
+
+Each install has a CEO Bot switch, off by default. With it on, the Goal Manager is named **CEO Bot** in Settings > Bots,
+on the team chart, on Goals (its panel, **Let CEO Bot set it**) and in its messages. On the chart and in the Goals tree
+it sits under the owner, with the Heads (in their departments' groups) and the bots that report to no one under it
+([Team chart](org-chart.md)). It keeps its slug, `goal-manager`, so its KPI readings, goal history and old messages stay
+its own.
+
+Only the picture moves. Nobody's `reports_to` changes and the CEO Bot gets no new access: it does the five things above
+and proposes each goal's [Why](#a-goals-why), nothing more.
+
+An owner or admin turns it on or off; a bot cannot, the Goal Manager included:
+
+```
+hub api POST ceo-bot '{"on": true}'
+```
+
+or `POST /api/v2/ceo-bot` with `{"on": true}` or `{"on": false}`. `GET /api/v2/ceo-bot` shows whether it is on, and who
+changed it last and when. Turning it off gives back the name **Goal Manager** and the chart as they were. A name someone
+gave the bot while the switch was on stays.
+
+With the switch on, Goals also opens with the [Company section](#the-company-section) and each goal gets a
+[Why line](#a-goals-why).
+
+### How much your CEO Bot does
+
+With the switch on, **Settings > CEO Bot** has three levels: 1 Goals and tracking (where every company starts), 2 Suggests
+actions and 3 Acts on its own. Level 3 does what level 2 does until it arrives in a later release. Only the owner
+or an admin changes the level, and the CEO Bot puts at most 5 items a day in one person's **Needs you**. The levels, who
+changes them and what stays yours are on [Your CEO Bot](ceo-bot.md).
+
+#### Recoveries and merged asks
+
+At level 2 or 3, a red or stalled goal gets a **recovery** in its owner's Needs you, in place of "check why it is off
+track": the evidence, up to 4 options and the CEO Bot's pick. Each option is a few changes to bots' tasks only: a new
+task for a bot, a bot's task moved to the top of its queue, or a clash between two bots' tasks settled. **Approve** on
+an option applies exactly that option, in the CEO Bot's name; **Reject** drops them all. Where part of an option
+can't be done (a bot is paused, a task finished meanwhile, or you may not reorder bots' queues), it says why in plain
+words, and what wasn't done comes back as a new recovery. Nothing is dropped. Lowering the level below 2 withdraws
+the recoveries waiting.
+
+When several bots ask you the same thing, the CEO Bot can make them **one item** (`POST /api/v2/ceo-bot/merge`).
+Their tasks leave your Needs you while it is open, and your one answer goes to every bot that asked. If the item ends
+without an answer, they come back as they were. A merged item counts toward the 5 a day.
+
+After 10 recoveries in a row approved with its pick unchanged, the Monday note offers level 3 once, and at most once
+a month (`level3_offer` in `GET /api/v2/ceo-bot`). The CEO Bot never raises its own level.
+
+### The Company section
+
+Only with the [CEO Bot switch](#the-ceo-bot-switch) on, the top of Goals is a **Company** section with two fields:
+
+- **Vision**: one or two sentences on where the company is going, up to 400 characters, on one line.
+- **Description**: a short paragraph on what the company does and for whom, up to 2000 characters.
+
+While both are empty, the section says "Tell your CEO Bot what this company is for." and shows the two fields to
+the owner and admins. Once something is saved, they change it with **Edit**. Everyone else signed in reads it and
+cannot change it.
+
+**History** lists every change to either field, newest first: which field, who changed it, when, the new words and
+what they replaced. Saving the same words again adds nothing.
+
+Only a person who is the owner or an admin writes the Vision and the Description, on their own click. No bot can,
+the CEO Bot included, and neither can the Assistant acting for someone.
+
+### A goal's Why
+
+Only with the switch on, each goal in its owner's panel has a **Why** line: one sentence, up to 200 characters, on
+how the goal serves the vision. Hover a goal in the tree to see its Why in the tooltip.
+
+The CEO Bot proposes a Why. It shows under the goal as "CEO Bot proposes" with the line and its reason. A person
+who may change the goal (see [Permissions](#permissions)) then chooses:
+
+- **Accept**: the line becomes the goal's Why.
+- **Edit**: change the words, then **Save** to accept your version.
+- **Reject**: the proposal closes and the goal keeps the Why it had.
+
+They can also write one themselves with **Write a Why**, or change an accepted one with **Edit**. Saving an empty
+line clears it. Each change is in the goal's history.
+
+A goal has one waiting Why at a time. When the CEO Bot proposes a new line, it replaces the one waiting. If you
+accept a line that was replaced while you read it, Tico refuses and shows the new one. Setting a Why closes any
+other Why still waiting on that goal.
+
+A goal with no accepted Why shows "Not tied to the vision". That is a note, not an error.
+
+Bots, the CEO Bot included, only propose a Why. They can never accept one or write one directly. A waiting Why
+shows on its goal, and all the Why lines waiting on one person are one item in their **Needs you**, "These goals need
+a Why line", never one per goal. It closes by itself once every one is settled.
+
+With the switch off, the Company section and the Why lines are hidden, and every write to them answers `409`.
+What was saved is kept and shows again when the switch is turned back on.
+
 ### Proposals
 
 A proposal is what a caller makes when they may not make the change themselves. The owner confirms it (and only a human, on
@@ -140,8 +233,12 @@ their own click) or rejects it; confirming makes the change as that human.
 | `kpi_definition` | any of `name`, `definition`, `unit`, `direction`, `cadence`, `source_note` | the KPI's owner |
 | `kpi_target` | the target fields, with `goal_id` | the goal's owner or the KPI's |
 | `flag` | `issue`: `vague`, `duplicate` or `unmeasured`, and a `note` | the goal's owner |
+| `goal_why` | `why`: one line, up to 200 characters ([A goal's Why](#a-goals-why)); only with the CEO Bot switch on | whoever may change the goal |
+| `recovery` | `evidence`, 1 to 4 `options` (`label`, 1 to 6 `actions`: `create`, `reorder` or `settle` on bots' tasks), `pick`; only the CEO Bot at level 2 or 3 ([Recoveries](#recoveries-and-merged-asks)) | the goal's owner; `{"decision": "confirm", "option": n}` approves another option than the pick |
 
-Pending proposals appear under **Needs you** on the Goals page for the human who decides them.
+Pending proposals appear under **Needs you** on the Goals page for the human who decides them, except a Why, which
+waits on its goal. To confirm a Why with your own words, send `why` with the decision:
+`{"decision": "confirm", "why": "..."}`.
 
 ### What needs a person is a task
 
@@ -194,7 +291,8 @@ One tree, built like the team chart: the team on top, then every human and every
 under whoever they report to, whether or not they have a goal. Each is one line: the avatar and name, then the goal's
 colour dot and its title (cut short; the whole title is in the tooltip) and its KPIs as small chips, a dot and the latest
 value each (a count when there is no room). More goals follow on lines of their own under the first. The built-in bots (the
-Assistant, BotOps, the Librarian and the Goal Manager) stay out of this tree and its goal owner choices.
+Assistant, BotOps, the Librarian and the Goal Manager) stay out of this tree and its goal owner choices; with the
+[CEO Bot switch](#the-ceo-bot-switch) on, the Goal Manager is in the tree as the CEO Bot.
 New teams get no default goals for built-in bots. Existing built-in goals are hidden here and kept in storage.
 Message bots such as Inbox Manager follow separately under **Message bots**.
 
@@ -203,7 +301,9 @@ words, what it supports and its colour (or **Let Goal Manager set it**). Under e
 check-in and **Add KPI**; tapping a KPI shows its history (a chart and the readings with their evidence), its definition
 and version, its owner, its targets and the Goal Manager's latest check-in, with a way back. **Add goal** and **Add KPI**
 (a KPI no goal uses yet) are at the bottom, owned by whoever was tapped, and the KPIs no goal uses are listed there too.
-Someone with no goal opens on a new one; the team line opens the team goal. **Needs you** is a short strip at the
+Someone with no goal opens on a new one; the team line opens the team goal. With the CEO Bot switch on, the
+[Company section](#the-company-section) sits above everything, and each goal in a panel shows its
+[Why](#a-goals-why). **Needs you** is a short strip at the
 top, shown only when something waits: red KPIs on goals you own, stale data on KPIs you own, and definitions and targets
 waiting for your confirmation. Each line links to its task. Initial page load makes two requests, the tree and Needs you; the Goal Manager panel and
 the historical KPI view load only when opened.
@@ -212,6 +312,8 @@ from active KPIs; a KPI's detail panel offers **Restore KPI** to return it to ac
 
 ## Permissions
 
+- With the CEO Bot switch on, everyone signed in reads the Company section and its history. Only the owner and
+  admins edit it, on their own click.
 - Team goals and team KPIs are visible to everyone signed in. A bot's goals and KPIs, and its automatic KPIs, are
   visible to whoever may Read the bot.
 - A goal's owner, the owner of the goal it supports and anyone above the owner on the team chart set its colour, edit it and
@@ -263,6 +365,9 @@ The stable v2 routes are in [openapi/v2.json](openapi/v2.json):
 | `GET/POST /api/v2/kpis/{id}/readings` | the readings (`?effective=true` leaves out corrected ones); post one |
 | `GET /api/v2/bots/{bot}/kpis` | a bot's automatic KPIs |
 | `GET/POST /api/v2/proposals`, `POST .../{id}/decide` | list, propose, confirm or reject |
+| `GET/POST /api/v2/company` | read the Vision and Description (with `on` and whether you may edit); save them (owner or admin) |
+| `GET /api/v2/company/history` | every change to the Vision and Description, newest first, with who and when |
+| `POST /api/v2/goals/{id}/why` | set a goal's Why (`{"why": "..."}`; empty clears it); a person who may change the goal |
 
 A goal's KPI on any of these answers has `latest`, `freshness`, `spark`, and, under a goal, `link`, `target_label`, `status`
 (`green`, `yellow`, `red`, `gray` or `none`) and `reason`.

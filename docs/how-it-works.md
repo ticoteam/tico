@@ -58,6 +58,9 @@ Words are defined in the [Glossary](glossary.md).
 - **Approval** — a human's yes or no to one exact action. Kinds: `send`, `spend`, `publish`,
   `merge`. A bot may request one when uncertain about a specific action; authorized work needs no separate
   approval. Only a human decides; an approval is spent once and does not turn outbound sending on. Rules: `policies/approvals.md`.
+  Each one records when its exact payload was ready (`ready_since`, when the request passed its checks) and whose decision
+  it is (`decision_owner`, the person it was sent to); reads add `age_s`, and its card says "Ready 2 h 10 min, waiting on
+  Sam". A release's publish approval waiting over an hour is a [Health Monitor](health-monitor.md) finding.
 - **Routine** — a cron schedule owned by a bot: `id`, `title`, `cron`, `timezone`, `template`
   (a playbook file) or inline `instructions`, `labels`. Each occurrence becomes a task.
 - **Goal** — what a human or a bot is for: a title, an owner (`company`, a human or a bot), the goal it
@@ -113,7 +116,7 @@ reply back under that bot's name, and stores everything else said in the channel
 in so that each channel's readers see it within the hour (`docs/slack-gateway.md`).
 Pages: **Tasks** (where the app opens), **Meetings** (imported transcripts, source sync status, Import, and each meeting's
 action items), **Docs**,
-**Tools**, **Changelog**, the **Team** tree, and under your email **Runs** and **Settings**
+**Tools**, **Changelog**, the **Team** tree, and under your email **Settings**
 and, for the owner and admins, **SQL**. Tasks has List, Board and Done; Routines are in **Settings → Routines**.
 Credentials are in **Tools → Credentials**. See [Navigation](navigation.md). A bot's page has **Chat**,
 **Tasks**, **Docs** and **More**. The assistant (Tico, `coo`), BotOps, the Librarian and the Goal Manager are built in and cannot be archived or deleted (`409 system_bot`); the assistant
@@ -269,18 +272,30 @@ bot, wherever it runs, sees Resume bot beside the warning by its name and a Paus
 refused text (credential values masked) and its task; one click releases that pause and the checks stay on.
 
 **A subscription usage limit.** A run that hits one fails with `limited` set; it did nothing, so
-the job stays queued however often this happens (it is never *Interrupted*), the bot shows
-*limited* and the cloud claims it again after 30 minutes. A third limit in a row waits two hours
-and says so in **Settings → Health**, with the retry time. A person's message to the bot written
-after the limit lets it try once at once; a run that hits the limit again goes back to the
-cooldown. **Try now**, beside the warning on the bot's page and in its chat line for anyone who
+the job stays queued however often this happens (it is never *Interrupted*) and the bot shows
+*limited*. The limit holds the provider login, not just the bot: that runtime's sign-in on that computer (or the
+bot's own subscription connection), saved on the server so it outlasts a restart of the runner or the server. It holds
+until the reset the provider names (Claude's "resets 2:40am (UTC)" included, even days away), or when none is named
+or the named time has passed, 30 minutes, then 60, then two hours for each limit in a row on that login. While it
+holds, no bot starts a run on that login: a bot whose fallback (its own, or the company's default) is signed in on
+that computer and not held itself runs there at once, and the runner never tries the held login (the run's note says
+*claude login held (usage limit) until 02:40 UTC; running this turn on codex*); only a bot with no such fallback
+waits. A fallback that turns out not to be ready, or fails before it starts, ends the run unstarted: the run goes back
+to the queue, the bot waits out the hold instead of being sent there again, and that fallback is not held, since it
+never ran. Every login a turn ran out on is held, an intermediate fallback's too, even when a later one finished the
+turn; a subscription profile that shares the computer's own sign-in counts as that one login; and only a run claimed
+after a hold began can end it by working, so a run that started earlier and finishes later does not. When it ends, one queued run goes first; the others on the login wait for
+its result, so a login sees one try per window however many runs wait. **Settings → Health** says whose login it is
+and when it resumes. A person's message to the bot written after the limit lets it try once at once (**Try now** also works while
+only the bot's own login is held and its work goes on on a fallback); a run that
+hits the limit again goes back to the hold. **Try now**, beside the warning on the bot's page and in its chat line for anyone who
 manages the bot (`POST /api/v2/bots/{bot}/limit/retry`, BotOps as the person who asked), ends the
-cooldown for that bot and every bot limited on the same runtime on the same computer, which share
+hold for that bot and every bot limited on the same runtime on the same computer, which share
 the subscription (`limit.cleared` in the event log). If the bot has a fallback
 harness in **Settings → Bots**, the runner reruns that run at once on the fallback (fresh
 session, given the conversation's latest messages, up to about 16,000 tokens, marked as history; never a
 person's private Assistant chat) and
-reports `fallback` as that harness, which **Runs** shows in the Session column.
+reports `fallback` as that harness, which **Settings → History → Runs** shows beside the model.
 Tico is seeded with Gemini CLI as its fallback from Antigravity, so a usage limit uses
 a stored `GEMINI_API_KEY` Credential granted to the bot. **None (fail)** means no hop:
 the cloud cooldown applies.
@@ -294,16 +309,34 @@ A login on that computer that failed a turn on its usage limit is skipped until 
 30 minutes when the provider gives none, and the next provider in the list takes the turn (a subscription profile
 that shares the computer's own logins counts as that login; a bot's own key is never shared with another bot). When the fallback itself
 hits its limit, the same turn moves on to the next signed-in provider instead of ending. With no ready provider
-the run is limited as above. Every turn tries the bot's own provider first, so the
-bot moves back on its own once the limit resets. The owner turns this off in **Settings → AI providers**
+the run is limited as above. A limit is named by the login that returned it: the bot's status, its run log and
+Health say *Primary* or *Fallback*, the provider and login, and whether it was an API key's quota or billing refusal
+or the plan's usage limit (with its 5-hour or weekly window when the provider says so), for example *Fallback codex
+API quota or billing limit; primary claude not limited*. Each login keeps its own hold and retry time: a fallback's
+quota never holds or extends the bot's own login, nor the reverse. Every turn tries the bot's own provider first, so the
+bot moves back on its own once the limit resets. The owner turns this off in **Settings → Computers → Models**
 (*Fall back when a plan runs out*, `auto_fallback`). Overview lists how many bots are on a fallback and
 since when, and how many are limited.
+
+<a id="one-turn-per-chatgpt-login"></a>**One turn per ChatGPT login.** OpenAI lets a Codex ChatGPT sign-in serve
+one job stream at a time, so the runner gives a ChatGPT login (`one_turn_per_login` in the harness manifest) to one
+turn at a time, from before the turn's Codex process starts until it stops. A turn from another bot, or from another
+task lane of the same bot, that wants the same login waits its turn in order. While it waits, its run streams a
+`status` event `{"waiting", "login", "holder"}`, and the chat, the task and **Runs** show *Waiting for <login> to be
+free (busy with <bot>)*. A waiting run counts toward the computer's capacity and is not failed. If the bot has a fallback
+of its own that is ready, the turn runs there instead of waiting. Its diagnostic says *ChatGPT login busy with
+<bot>; running this turn on <harness>*, and the run reports `fallback` as with a usage limit. A command or an active
+native goal always waits. The company's default fallback is not used for a busy login, because the login is
+free again within one turn. To run two Codex bots side by side on a ChatGPT plan, put each on its own subscription
+profile login ([Subscription profiles](environments.md#subscription-profiles)). Codex on an API key is never held, and neither are other harnesses. Only
+people who can see the holding bot see its name; others read "another bot". The lock lives in the runner, so a
+runner restart frees every login.
 **Settings → Health** counts this company fallback: a limited bot covered by it gets no "has no fallback
 model" finding. When a computer's default login (no subscription) keeps stopping on a usage limit, Health
 says so once per computer and tool, e.g. "Team box's default Codex login is out of quota", until a turn on
 it completes or the reset time passes ([Health Monitor](health-monitor.md), `default_login_limited`).
 
-The company's **check model** (*Check model* in **Settings → AI providers**, `check_models` on
+The company's **check model** (*Check model* in **Settings → Computers → Models**, `check_models` on
 `/api/v2/providers`) is what review and check subtasks run on when they name no model: an ordered list such as
 `grok, codex`, each entry a runtime or `runtime:model`. The other enabled providers follow it, in their order. The
 pick is the first from a provider other than the one the work was written on; with none, it is refused rather than
@@ -348,7 +381,7 @@ down, into another column, or between lanes; everyone else sees the board and co
 **A bot finishes.** It commits its repository, marks the task `done` with a note, and the reply is
 saved in the conversation. The task shows under **Tasks → Done** with the bot's note; a bot that
 requested it gets a *Finished: <title>* message (`/api/v2/messages?unread=1`) and may choose Close.
-Done stays Done until someone authorized closes it. Every run is listed under **Runs** and on
+Done stays Done until someone authorized closes it. Every run is listed under **Settings → History → Runs** and on
 the bot's **More** tab.
 
 **You change a bot's Instructions.** Open **Bot → More → Instructions → Edit Instructions**
@@ -441,7 +474,7 @@ options, and their missing repositories do not count as readiness or Health fail
 Task types add named steps above the existing status contract. General is built in and backfilled
 onto existing tasks. Every status write maps to a compatible step, or clears the step when the
 type has none, so older runners and scripts keep working. Movers manage definitions
-in Settings → Types; the board's type filter uses steps as columns. See [Tasks](tasks.md).
+in Settings → Tasks; the board's type filter uses steps as columns. See [Tasks](tasks.md).
 
 ## On computers
 

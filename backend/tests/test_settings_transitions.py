@@ -3,7 +3,7 @@ import json
 
 from backend.store import encode
 
-from backend.tests.test_api import api, assign, get, post, ready, runner  # noqa: F401
+from backend.tests.test_api import api, assign, claim, get, post, ready, runner  # noqa: F401
 
 
 def _report(api, machine, bots):
@@ -75,6 +75,29 @@ def test_resume_and_restore_check_the_repository_before_activating(api):
     assert pending["state"] == "active" and pending["building"] and pending["setup_started"] is False
     with api.app.state.store.read() as c:
         assert c.execute("SELECT runner_id FROM assignments WHERE bot='coo'").fetchone()[0] == r["runner_id"]
+
+
+def test_settings_resume_clears_a_control_pause_but_keeps_an_active_deploy_drain(api):
+    machine = runner(api)
+    assign(api, machine, "ops")
+    ready(api, machine, ["ops"])
+    revision = get(api, "bots/ops")["revision"]
+    post(api, "bots/ops/control", {"action": "pause", "expected_revision": revision})
+    message = post(api, "chat/ops", {"text": "Continue the existing work."})
+    assert claim(api, machine, "ops") is None
+
+    post(api, "bots/ops/definition", {"status": "active", "expected_revision": get(api, "bots/ops")["revision"]})
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT draining FROM bot_control WHERE bot='ops'").fetchone()[0] == 0
+        assert c.execute("SELECT state FROM bot_status WHERE bot='ops'").fetchone()[0] == "idle"
+    attempt = claim(api, machine, "ops")
+    assert attempt and attempt["message"]["id"] == message["id"]
+
+    post(api, "bots/ops/control", {"action": "drain", "expected_revision": get(api, "bots/ops")["revision"]})
+    post(api, "bots/ops/definition", {"status": "active", "description": "Updated description",
+                                      "expected_revision": get(api, "bots/ops")["revision"]})
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT draining FROM bot_control WHERE bot='ops'").fetchone()[0] == 1
 
 
 # ------------------------------------------------------------------ go-live for a bot its computer has not cloned yet

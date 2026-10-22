@@ -42,6 +42,7 @@ import time
 from fastapi import Request
 from fastapi.responses import StreamingResponse
 
+from . import visuals as V
 from .store import H, Problem, encode
 
 TOPICS = ("tasks", "messages", "runs", "bots", "needs")
@@ -278,6 +279,13 @@ RUNNER_TRIGGERS = [
      _tell("assignments", "SELECT OLD.runner_id AS rid", "OLD.bot")),
     ("changes_runner_bot_config_update", "UPDATE", "bot_config", _changed("config_json", "operator", "team", "onboarding_state"),
      _bot_runner("assignments", "NEW.bot")),
+    # A bot's selected connection changes its assignment and readiness even while its old login is signed out.
+    ("changes_runner_subscription_insert", "INSERT", "subscription_assignments", "NEW.scope='bot'",
+     _bot_runner("assignments", "NEW.target") + _bot_runner("work", "NEW.target")),
+    ("changes_runner_subscription_update", "UPDATE", "subscription_assignments", f"NEW.scope='bot' AND {_changed('profile')}",
+     _bot_runner("assignments", "NEW.target") + _bot_runner("work", "NEW.target")),
+    ("changes_runner_subscription_delete", "DELETE", "subscription_assignments", "OLD.scope='bot'",
+     _bot_runner("assignments", "OLD.target") + _bot_runner("work", "OLD.target")),
     # The names of the credentials its bots are granted, and the one-time move of secrets files.
     ("changes_runner_credential_grants_insert", "INSERT", "credential_grants", None, _tell("credentials", _ALL_RUNNERS)),
     ("changes_runner_credential_grants_update", "UPDATE", "credential_grants", _changed("revoked", "subject"),
@@ -814,7 +822,7 @@ def _needs_list(view, rows, task_view, held=None):
 
 
 def read(c, auth, who, after, *, topics=TOPICS, conversations=(), bots=(), task_views=None, task_view=None,
-         limit=BATCH, needs_held=None):
+         limit=BATCH, needs_held=None, visuals=None):
     """What `who` may be sent after change `after`: (events, cursor, reset, more). Each event is
     (seq, topic, data). `cursor` moves past every row read, sent or not, so a resume starts after
     what this viewer could not see. `more` when a full batch was read and more waits. `needs_held`
@@ -850,7 +858,10 @@ def read(c, auth, who, after, *, topics=TOPICS, conversations=(), bots=(), task_
         if by_topic.get("tasks"):
             picked += [("tasks", r, e) for r, e in _tasks(view, by_topic["tasks"], task_views)]
         if by_topic.get("messages"):
-            picked += [("messages", r, e) for r, e in _messages(view, by_topic["messages"])]
+            found = _messages(view, by_topic["messages"])
+            if visuals:                 # a visual on a new message carries this reader's own address (backend/visuals.py)
+                visuals(c, who, [e["message"] for _, e in found if "message" in e])
+            picked += [("messages", r, e) for r, e in found]
         if by_topic.get("runs"):
             picked += [("runs", r, e) for r, e in _runs(view, by_topic["runs"])]
         if by_topic.get("bots"):
@@ -944,7 +955,8 @@ def install(app, store, auth, task_views, task_view):
             auth.authenticate(request.headers)
             with store.read() as c:
                 return read(c, auth, who, cursor, topics=wanted, conversations=conversations, bots=bots,
-                            task_views=task_views, task_view=task_view, needs_held=held)
+                            task_views=task_views, task_view=task_view, needs_held=held,
+                            visuals=lambda c, who, rows: V.for_reader(app, auth.settings, c, who, rows))
 
         now_seq = await asyncio.to_thread(start)
         doorbell.observe(now_seq)

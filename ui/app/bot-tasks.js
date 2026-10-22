@@ -24,12 +24,12 @@ function actorAvatarOnly(a) {
 function v2TaskRow(t, slug, showStatus = true) {
   // On a bot's page the other party is whoever is not the bot; on a person's page (no slug) it is the requester.
   const other = slug && actorSlug(taskRequester(t)) === slug ? t.owner : taskRequester(t);
-  const age = taskOpenQuiet(t);
+  const age = taskAge(t);
   return `<div class="trow${showStatus ? '' : ' status-in-heading'}" data-task-detail="${esc(t.id)}" data-task-version="${esc(t.version || '')}"><div class="trow-head">
       ${showStatus ? `<span class="pill ${V2_PILL[t.status] ?? ''}">${esc({open: !actorPerson(t.owner) ? 'Doing · starting' : actorPerson(t.owner) === S.me?.id ? 'Needs you' : 'To do', waiting: 'Waiting', doing: 'Doing'}[t.status] || t.status || '')}</span>${taskStatusText(t)}` : ''}
       <a class="ttl" data-task-detail-open href="#/task/${encodeURIComponent(t.id)}" title="${esc(`${t.title || ''} · ${taskStateLabel(t)} · ${age}`)}">${esc(t.title || '')}</a>${prStateBadge(t.pr_state)}
       <span class="tags">${actorChip(other)}</span>${actorAvatarOnly(t.owner)}
-      <span class="muted tnum" title="${esc(taskOpenQuietTitle(t))}">${esc(age)}</span></div></div>`;
+      <span class="muted tnum" title="${esc(taskAgeTitle(t))}">${esc(age)}</span></div></div>`;
 }
 // The rail and person rows open the same complete task as the manager; actor links keep their own destination.
 document.addEventListener('click', ev => {

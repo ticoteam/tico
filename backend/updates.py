@@ -560,14 +560,26 @@ def draft_instructions(kind):
                                  'one JSON object and nothing else: {"body": "- first bullet\\n- second bullet"}.')
 
 
-def writer_for(c, settings):
-    """The model a person's draft is written with: the company's own provider, or None (no drafts)."""
+def writer_for(c, settings, store=None, vault=None):
+    """The model a person's draft is written with: Tico Mid 1.0 on the Tico AI Gateway under the two Gateway models
+    choices (backend/models_preset.py) while it is connected, else the company's own provider, or None (no drafts).
+    The gateway key is read from `store` at the call, never held by the writer."""
     if settings.rehearsal:
         return None
-    from clients import judge as J
-    from . import providers
+    from clients import gateway as G, judge as J
+    from . import gateway_connection, models_preset, providers
     from .judge import fallback_model
-    found = fallback_model(providers.load(c, settings))
+    record = providers.load(c, settings)
+    if store is not None and models_preset.spends_gateway(record) and gateway_connection.connected(c, settings):
+        base = G.chat_base(gateway_connection.url(c, settings))
+
+        def key_of():
+            from .credentials import Vault
+            keys = vault or Vault(store)
+            with store.read() as c:
+                return gateway_connection.key(c, keys, settings) if keys.configured or gateway_connection.env_key(settings) else ""
+        return J.gateway_writer(key_of, base, models_preset.WAITING_MODEL)
+    found = fallback_model(record)
     return J.llm_writer(*found) if found else None
 
 
@@ -1119,7 +1131,8 @@ def tree(c, actor, readable, kind, day=None, scope=None):
     """One day's updates nested by the org chart, for the Updates page: each person and bot the
     caller may read, its update or none, and the ones below it. `scope` below starts at the caller
     (the default when someone reports to them), all at the top of the chart. Only direct reports
-    are `direct`, the one level that alerts; `unread` counts just those."""
+    are `direct`, the one level that alerts; `unread` counts just those. Archived updates are left out as
+    in the Inbox, so an explicit past `day` shows only that day's cards a newer day has not replaced."""
     from . import people as P
     from . import report_order
     roster, entries, archived = _chart(c)
@@ -1141,9 +1154,13 @@ def tree(c, actor, readable, kind, day=None, scope=None):
     marks = ",".join("?" * len(authors)) or "''"
     if not day:
         day = c.execute(f"SELECT max(day) FROM updates WHERE kind=? AND bot IN ({marks})", (kind, *authors)).fetchone()[0] or today()
+    # The same per-reader archive filter as the feed: a card this person archived stays off its node,
+    # and the node keeps its reports below it.
     rows = {r["bot"]: r for r in c.execute(
         f"SELECT u.*, r.read_at FROM updates u LEFT JOIN update_reads r ON r.update_id=u.id AND r.actor=? "
-        f"WHERE u.kind=? AND u.day=? AND u.bot IN ({marks})", (actor, kind, day, *authors))}
+        "LEFT JOIN update_archive_overrides ao ON ao.update_id=u.id AND ao.actor=? "
+        f"WHERE u.kind=? AND u.day=? AND u.bot IN ({marks}) AND NOT {_is_archived_sql()}",
+        (actor, actor, kind, day, *authors))}
     direct = set(direct_reports(c, author_of(actor))) & set(authors)
     children = {}
     for key, node in nodes.items():

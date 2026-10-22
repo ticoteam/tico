@@ -13,7 +13,7 @@ function goalActorName(actor) {
   if (!actor) return '';
   if (actor === 'keeper') return S.config?.app_name || 'Tico';
   const info = goalOwnerInfo(actor);
-  return actor === GOAL_MANAGER_ACTOR && info.name === 'goal-manager' ? 'Goal Manager' : info.name;
+  return actor === GOAL_MANAGER_ACTOR && (ceoBotOn() || info.name === 'goal-manager') ? goalManagerName() : info.name;
 }
 
 // A status dot: green, yellow, red, gray (stale, missing or no data) or a ring (fresh, no target to judge by).
@@ -140,12 +140,14 @@ function kpiTargetKinds(form) {
 }
 
 function kpiProposalLine(p) {
-  const what = {goal_wording: 'New wording', goal_kpi: 'Add a KPI', kpi_definition: 'New definition', kpi_target: 'New target', flag: 'Flag'}[p.kind] || p.kind;
+  const what = {goal_wording: 'New wording', goal_kpi: 'Add a KPI', kpi_definition: 'New definition', kpi_target: 'New target', flag: 'Flag', goal_why: 'A Why', recovery: 'A recovery'}[p.kind] || p.kind;
   const pl = p.payload || {};
   const detail = p.kind === 'goal_wording' ? (pl.title || pl.body || '')
     : p.kind === 'kpi_definition' ? (pl.definition || pl.name || Object.keys(pl).join(', '))
     : p.kind === 'kpi_target' ? (pl.kind === 'maintain' ? `range ${pl.min ?? ''}–${pl.max ?? ''}` : pl.kind === 'improve' ? `→ ${pl.target} by ${kpiDay(pl.deadline + 'T00:00:00Z')}` : 'no target')
     : p.kind === 'goal_kpi' ? (pl.kpi?.name || 'existing KPI')
+    : p.kind === 'goal_why' ? (pl.why || '')
+    : p.kind === 'recovery' ? (pl.options?.[pl.pick || 0]?.label || '')
     : `${pl.issue || ''}${pl.note ? ': ' + pl.note : ''}`;
   return {what, detail, reason: p.reason || ''};
 }
@@ -158,7 +160,9 @@ function proposalHtml(p, extra = '') {
 function bindProposals(root, after) {
   for (const li of root.querySelectorAll('[data-proposal]')) for (const b of li.querySelectorAll('[data-decide]')) b.onclick = async () => {
     b.disabled = true;
-    try { await post(`/v2/proposals/${encodeURIComponent(li.dataset.proposal)}/decide`, {decision: b.dataset.decide}); await after(); }
+    // A recovery's Approve buttons carry their option: approving applies exactly that one.
+    const body = {decision: b.dataset.decide, ...(b.dataset.option ? {option: Number(b.dataset.option)} : {})};
+    try { await post(`/v2/proposals/${encodeURIComponent(li.dataset.proposal)}/decide`, body); await after(); }
     catch (e) { toast(e.message || 'Could not decide', true); b.disabled = false; }
   };
 }
@@ -428,7 +432,7 @@ function goalTreeShape() {
   const keys = new Set([...(S.orgGroups || []).map(g => 'g:' + g.id), ...people.map(p => 'p:' + p.id), ...placed.map(e => 'b:' + e.name)]);
   const byParent = {}, groupOf = orgGroupOf(people, placed);
   const put = (parent, node) => (byParent[keys.has(parent) ? parent : ''] ||= []).push(node);
-  for (const g of (S.orgGroups || [])) put(g.parent ? 'g:' + g.parent : '', {kind: 'group', id: g.id, name: g.name, order: g.order || 0});
+  for (const g of (S.orgGroups || [])) put(orgGroupParent(g, keys), {kind: 'group', id: g.id, name: g.name, order: g.order || 0});
   for (const p of people) put(orgHang('p:' + p.id, orgBossKey({kind: 'person', person: p}), groupOf), {kind: 'person', id: p.id, person: p});
   for (const e of placed) {
     // A bot under a built-in or message bot (or a bot that is gone) hangs from the next one up, else its owner.
@@ -468,7 +472,7 @@ function goalStatusNote(g) {
 function goalTreeRows(actor, depth, goals, loose, standing = '') {
   const info = goalOwnerInfo(actor);
   const av = actor === GOAL_COMPANY ? `<span class="av gt-co-av" aria-hidden="true">${esc(String(info.name || 'C').trim()[0] || 'C').toUpperCase()}</span>` : info.avatar;
-  const goalCell = g => `<span class="gt-goal" title="${esc(g.title)}">${gdot(g.status, goalStatusNote(g))}<span class="gt-title">${esc(g.title)}</span></span>`;
+  const goalCell = g => `<span class="gt-goal" title="${esc(g.title + (ceoBotOn() ? ' · Why: ' + (g.why || GOAL_NOT_TIED) : ''))}">${gdot(g.status, goalStatusNote(g))}<span class="gt-title">${esc(g.title)}</span></span>`;
   const row = (cls, goal, inner) => `<li class="gt-row${cls}" data-owner="${esc(actor)}"${goal ? ` data-goal="${esc(goal.id)}"` : ''} style="--d:${depth}" tabindex="0" role="button">`
     + `<span class="gt-ind" aria-hidden="true"></span>${inner}</li>`;
   const first = goals[0], words = String(standing || '').trim();
@@ -478,9 +482,154 @@ function goalTreeRows(actor, depth, goals, loose, standing = '') {
   return row(actor === GOAL_COMPANY ? ' gt-co' : '', first, `<span class="gt-av">${av}</span><span class="gt-name"><span>${esc(info.name)}</span></span>${lead}`)
     + goals.slice(1).map(g => row(' gt-cont', g, goalCell(g) + `<span class="gt-kpis">${goalChips(g.kpis)}</span>`)).join('');
 }
+// ---------------------------------------------------------------- the company
+// Where the CEO Bot switch is on (ui/app/state.js ceoBotOn), the top of Goals is the company itself: its Vision and its
+// Description (backend/company.py). The owner and admins edit them; everyone else reads them. Every change is kept with
+// who and when, behind History.
+const GOAL_COMPANY_PROMPT = 'Tell your CEO Bot what this company is for.';
+function goalCompanyHtml(state) {
+  const C = state.company;
+  if (!ceoBotOn() || !C?.data?.company) return '';
+  const {company: co, may_edit: may} = C.data;
+  const empty = !co.vision && !co.description;
+  const editing = may && (C.editing || empty);
+  // What they have typed and not saved survives a redraw (a reply, a live update).
+  const draft = C.draft || {vision: co.vision, description: co.description};
+  const fields = editing
+    ? `<form class="gco-form" data-gco-form novalidate>
+        <label class="goal-f"><span>Vision</span><textarea name="vision" rows="2" maxlength="400" placeholder="One or two sentences: where the company is going">${esc(draft.vision)}</textarea></label>
+        <label class="goal-f"><span>Description</span><textarea name="description" rows="4" maxlength="2000" placeholder="A short paragraph: what the company does, and for whom">${esc(draft.description)}</textarea></label>
+        <div class="goal-actions"><button class="primary" type="submit"${C.saving ? ' disabled' : ''}>Save</button>${empty ? '' : '<button class="ghost" type="button" data-gco-cancel>Cancel</button>'}</div></form>`
+    : `<dl class="gco-fields"><dt>Vision</dt><dd data-gco-vision>${co.vision ? esc(co.vision) : '<span class="muted">Not written yet</span>'}</dd>
+        <dt>Description</dt><dd data-gco-description>${co.description ? esc(co.description) : '<span class="muted">Not written yet</span>'}</dd></dl>`;
+  const events = C.events;
+  const history = C.history ? `<div class="gco-history"><h3 class="kpi-h">History</h3>${
+    !events ? '<p class="muted">Loading history…</p>' : events.error ? '<p class="err">Could not load the history.</p>'
+      : events.length ? `<ul class="gco-events">${events.map(e => `<li data-gco-event><span><b>${e.field === 'vision' ? 'Vision' : 'Description'}</b> changed by ${esc(e.actor_name || goalActorName(e.actor))} · <time datetime="${esc(e.ts)}" title="${esc(new Date(e.ts).toLocaleString())}">${esc(ago(e.ts))}</time></span>
+          <span class="gco-new">${e.new ? esc(e.new) : '<span class="muted">Cleared</span>'}</span>${e.old ? `<span class="muted gco-old">Was: ${esc(e.old)}</span>` : ''}</li>`).join('')}</ul>`
+      : '<p class="muted">No changes yet.</p>'}</div>` : '';
+  return `<section class="gco" id="goal-company" aria-labelledby="gco-h">
+      <div class="gco-head"><h2 id="gco-h">Company</h2><span class="spacer"></span>
+        ${may && !editing ? '<button class="ghost" type="button" data-gco-edit>Edit</button>' : ''}
+        <button class="linkish" type="button" data-gco-history aria-expanded="${C.history ? 'true' : 'false'}">${C.history ? 'Hide history' : 'History'}</button></div>
+      ${empty ? `<p class="gco-prompt">${esc(GOAL_COMPANY_PROMPT)}</p>` : ''}${fields}${history}</section>`;
+}
+function bindGoalCompany(state, root) {
+  const C = state.company, el = root.querySelector('#goal-company');
+  if (!el || !C) return;
+  const redraw = () => goalsRender(state);
+  const edit = el.querySelector('[data-gco-edit]');
+  if (edit) edit.onclick = () => { C.editing = true; redraw(); el.ownerDocument.querySelector('#goal-company textarea')?.focus(); };
+  const cancel = el.querySelector('[data-gco-cancel]');
+  if (cancel) cancel.onclick = () => { C.editing = false; C.draft = null; redraw(); };
+  const toggle = el.querySelector('[data-gco-history]');
+  if (toggle) toggle.onclick = async () => {
+    C.history = !C.history;
+    if (C.history) C.events = null;
+    redraw();
+    if (!C.history) return;
+    const r = await v2Get('/v2/company/history');
+    if (GOALS_ST !== state || state.company !== C || !C.history) return;
+    C.events = r ? r.events || [] : {error: true};
+    redraw();
+  };
+  const form = el.querySelector('[data-gco-form]');
+  if (form) form.oninput = () => { C.draft = {vision: form.elements.vision.value, description: form.elements.description.value}; };
+  if (form) form.onsubmit = async ev => {
+    ev.preventDefault();
+    if (C.saving) return;
+    C.saving = true;
+    try {
+      C.data = await post('/v2/company', {vision: form.elements.vision.value.trim(), description: form.elements.description.value.trim()});
+      C.editing = false; C.draft = null;
+      if (C.history) C.events = (await v2Get('/v2/company/history'))?.events || C.events;
+      toast('Saved');
+    } catch (e) { toast(e.message || 'Could not save the company', true); }
+    C.saving = false;
+    if (GOALS_ST === state) redraw();
+  };
+}
+
+// ---------------------------------------------------------------- a goal's Why
+// One line tying a goal to the vision (backend/company.py). The CEO Bot proposes it; a person who may edit the goal
+// accepts it, edits it or writes their own. A goal with none is "Not tied to the vision": a note, not an error.
+const GOAL_NOT_TIED = 'Not tied to the vision';
+const goalWhyProposal = (state, g) => state.proposals.find(p => p.kind === 'goal_why' && p.goal_id === g.id);
+function goalWhyHtml(state, g, may) {
+  if (!ceoBotOn()) return '';
+  const P = state.panel, p = goalWhyProposal(state, g), why = String(g.why || '');
+  const editing = P?.why === g.id ? (P.whyFrom || 'own') : '';
+  if (editing) {
+    const start = P.whyDraft ?? (editing === 'proposal' && p ? p.payload?.why || '' : why);
+    return `<form class="goal-why-ed" data-why-form="${esc(g.id)}" data-why-from="${esc(editing)}"${p ? ` data-why-prop="${esc(p.id)}"` : ''} novalidate>
+        <input type="text" name="why" maxlength="200" autocomplete="off" value="${esc(start)}" aria-label="Why: how this goal serves the vision" placeholder="One line: how this goal serves the vision">
+        <button class="primary" type="submit">Save</button><button class="ghost" type="button" data-why-cancel>Cancel</button></form>`;
+  }
+  const line = why
+    ? `<div class="goal-why" data-why="${esc(g.id)}"><span class="goal-why-k">Why</span> <span data-why-text>${esc(why)}</span>${may ? ` <button class="linkish" type="button" data-why-edit="${esc(g.id)}">Edit</button>` : ''}</div>`
+    : `<div class="goal-why goal-why-none" data-why="${esc(g.id)}"><span data-why-none>${GOAL_NOT_TIED}</span>${may && !p ? ` <button class="linkish" type="button" data-why-edit="${esc(g.id)}">Write a Why</button>` : ''}</div>`;
+  const proposed = p ? `<div class="goal-why-prop" data-why-prop="${esc(p.id)}"><span class="kpi-prop-main"><span><b>${esc(goalActorName(p.proposed_by))} proposes</b> <span data-why-proposed>${esc(p.payload?.why || '')}</span></span>${p.reason ? `<span class="muted kpi-prop-why">${esc(p.reason)}</span>` : ''}</span>
+      ${p.may_decide ? `<span class="kpi-prop-do"><button class="primary" type="button" data-why-accept>Accept</button><button class="ghost" type="button" data-why-edit="${esc(g.id)}" data-why-from="proposal">Edit</button><button class="ghost" type="button" data-why-reject>Reject</button></span>` : ''}</div>` : '';
+  return line + proposed;
+}
+// The CEO Bot switch flipped with a goal panel open (goalsFollowSwitch): only its Why lines are drawn again, so a goal
+// being edited there keeps its words.
+function goalPanelWhySync(state) {
+  const dlg = document.getElementById('goal-panel'), P = state.panel;
+  if (!dlg?.open || !P || P.kpi || dlg._state !== state) return;
+  for (const slot of dlg.querySelectorAll('[data-why-slot]')) {
+    const g = state.goals.find(x => x.id === slot.dataset.whySlot);
+    slot.innerHTML = g ? goalWhyHtml(state, g, goalMayEdit(g, state.goals)) : '';
+  }
+  bindGoalWhy(state, dlg.querySelector('.gp-body') || dlg, () => goalsReload(state));
+}
+function bindGoalWhy(state, root, reload) {
+  const P = state.panel, redraw = () => goalPanelRender(state);
+  for (const b of root.querySelectorAll('[data-why-edit]')) b.onclick = () => { P.why = b.dataset.whyEdit; P.whyFrom = b.dataset.whyFrom || 'own'; P.whyDraft = null; redraw(); };
+  const decide = async (b, body) => {
+    const id = b.closest('[data-why-prop]').dataset.whyProp;
+    b.disabled = true;
+    // Refused (the CEO Bot replaced the line meanwhile): draw the panel again, so they read the line now waiting.
+    try { await post(`/v2/proposals/${encodeURIComponent(id)}/decide`, body); await reload(); }
+    catch (e) { toast(e.message || 'Could not decide', true); b.disabled = false; await reload(); }
+  };
+  for (const b of root.querySelectorAll('[data-why-accept]')) b.onclick = () => decide(b, {decision: 'confirm'});
+  for (const b of root.querySelectorAll('[data-why-reject]')) b.onclick = () => decide(b, {decision: 'reject'});
+  const form = root.querySelector('[data-why-form]');
+  if (!form) return;
+  const input = form.elements.why, done = () => { P.why = ''; P.whyFrom = ''; P.whyDraft = null; redraw(); };
+  form.querySelector('[data-why-cancel]').onclick = done;
+  form.onkeydown = ev => { if (ev.key === 'Escape') { ev.preventDefault(); done(); } };
+  form.onsubmit = async ev => {
+    ev.preventDefault();
+    const text = input.value.trim(), gid = form.dataset.whyForm;
+    if (P.whySaving) return;
+    P.whySaving = true;
+    try {
+      if (form.dataset.whyFrom === 'proposal' && form.dataset.whyProp) {
+        if (!text) { toast('Write the Why, or reject the proposal', true); P.whySaving = false; return; }
+        await post(`/v2/proposals/${encodeURIComponent(form.dataset.whyProp)}/decide`, {decision: 'confirm', why: text});
+      } else await post(`/v2/goals/${encodeURIComponent(gid)}/why`, {why: text});
+      P.why = ''; P.whyFrom = ''; P.whyDraft = null;
+      await reload();
+    } catch (e) {
+      // Refused: what they typed stays in the form, which is drawn again against whatever is waiting now.
+      toast(e.message || 'Could not save the Why', true);
+      P.whyDraft = text;
+      await reload();
+    } finally { P.whySaving = false; }
+  };
+  input.focus();
+}
+
+// What the tree is drawn from in the roster, so a refresh redraws it only when that changed (goalsFollowRoster).
+const goalTreeKey = () => JSON.stringify([ceoBotOn(), goalManagerName(),
+  (S.emps || []).map(e => [e.name, e.display_name, e.org_parent, e.team, e.status]),
+  (S.people || []).map(p => [p.id, p.org_parent, p.team, p.hidden]), (S.orgGroups || []).map(g => [g.id, g.parent, g.org_parent])]);
 function goalsRender(state) {
   const body = $('#goal-body');
   if (!body || !state.loaded) return;
+  state.shape = goalTreeKey();
   const owned = {}, loose = {};
   for (const g of state.goals.filter(goalLive)) (owned[g.owner] ||= []).push(g);
   for (const list of Object.values(owned)) list.sort(goalRank);
@@ -501,8 +650,13 @@ function goalsRender(state) {
   ].map(([name, members]) => members.length ? `<li class="gt-sep">${name}</li>` + members.map(e => rows('bot:' + e.name, 0)).join('') : '').join('');
   // Anyone else with goals (someone gone from the roster) still shows, at the end.
   const rest = Object.keys(owned).filter(a => !seen.has(a)).map(a => rows(a, 0)).join('');
-  body.innerHTML = goalNeedsHtml(state.needs) + `<ul class="gt" id="goal-tree" aria-label="Goals">${tree}${rest}`
+  const focus = document.activeElement?.closest?.('#goal-company') && document.activeElement.name
+    ? {name: document.activeElement.name, start: document.activeElement.selectionStart, end: document.activeElement.selectionEnd} : null;
+  body.innerHTML = goalCompanyHtml(state) + goalNeedsHtml(state.needs) + `<ul class="gt" id="goal-tree" aria-label="Goals">${tree}${rest}`
     + help + '</ul>';
+  bindGoalCompany(state, body);
+  const again = focus && body.querySelector(`#goal-company [name="${focus.name}"]`);
+  if (again) { again.focus(); try { again.setSelectionRange(focus.start, focus.end); } catch { /* not a text field */ } }
   for (const li of body.querySelectorAll('.gt-row')) {
     const open = () => goalPanelOpen(state, li.dataset.owner, {tapped: li.dataset.goal || ''});
     li.onclick = open;
@@ -511,6 +665,21 @@ function goalsRender(state) {
   const needs = body.querySelector('#goal-needs');
   if (needs) {
     bindKpiLines(needs); bindProposals(needs, () => goalsReload(state));
+    const vision = () => {
+      const section = body.querySelector('#goal-company');
+      section?.scrollIntoView({block: 'nearest'});
+      (section?.querySelector('textarea[name="vision"]') || section?.querySelector('[data-gco-edit]'))?.focus();
+    };
+    const why = id => {
+      const goal = (state.goals || []).find(g => g.id === id);
+      if (goal) goalPanelOpen(state, goal.owner, {tapped: goal.id});
+    };
+    for (const li of needs.querySelectorAll('[data-need-vision], [data-need-why]')) {
+      const open = () => li.dataset.needWhy !== undefined ? why(li.dataset.needWhy) : vision();
+      li.onclick = open;
+      li.onkeydown = ev => { if (ev.target === li && (ev.key === 'Enter' || ev.key === ' ')) { ev.preventDefault(); open(); } };
+    }
+    for (const b of needs.querySelectorAll('[data-need-why-goal]')) b.onclick = ev => { ev.stopPropagation(); why(b.dataset.needWhyGoal); };
     // The task link opens the task, not the KPI its row opens.
     for (const a of needs.querySelectorAll('[data-need-task]')) { a.onclick = ev => ev.stopPropagation(); a.onkeydown = ev => ev.stopPropagation(); }
   }
@@ -555,7 +724,7 @@ function goalPanelOpen(state, owner, {goal = '', tapped = ''} = {}) {
   if (!goal && !live.length && goalMayEdit({owner}, state.goals)) goal = 'new';
   if (!goal && owner === GOAL_COMPANY && live.length === 1) goal = live[0].id;
   state.panel = {owner, goal, kpiAdd: '', kpi: '', standing: false, tapped, history: false, historyKpis: null,
-    historyLoading: false, historyError: false};
+    historyLoading: false, historyError: false, why: '', whyFrom: '', whyDraft: null};
   history.replaceState(null, '', goal && goal !== 'new' ? GOALS + '/' + encodeURIComponent(goal) : GOALS);
   const dlg = goalPanelDialog(state);
   delete dlg.dataset.kpi;
@@ -575,9 +744,11 @@ function goalPanelHtml(state) {
   const av = actor === GOAL_COMPANY ? `<span class="av gt-co-av" aria-hidden="true">${esc((String(info.name || 'C').trim()[0] || 'C').toUpperCase())}</span>` : info.avatar;
   const item = g => {
     const mayG = goalMayEdit(g, state.goals);
-    const head = P.goal === g.id ? goalFormHtml(g, state.goals)
-      : `<button class="gp-gline" type="button" data-gp-edit="${esc(g.id)}" title="${esc(g.title)}">${gdot(g.status, goalStatusNote(g))}<span>${esc(g.title)}</span></button>${goalNoteHtml(g, mayG)}`;
-    const props = state.proposals.filter(p => p.goal_id === g.id);
+    // The Why stays in view while the goal is being edited: beside its form, not in it, as it saves on its own.
+    const head = (P.goal === g.id ? goalFormHtml(g, state.goals)
+      : `<button class="gp-gline" type="button" data-gp-edit="${esc(g.id)}" title="${esc(g.title)}">${gdot(g.status, goalStatusNote(g))}<span>${esc(g.title)}</span></button>${goalNoteHtml(g, mayG)}`)
+      + `<div class="goal-why-slot" data-why-slot="${esc(g.id)}">${goalWhyHtml(state, g, mayG)}</div>`;
+    const props = state.proposals.filter(p => p.goal_id === g.id && p.kind !== 'goal_why');
     return `<li class="gp-goal" data-gp-goal="${esc(g.id)}">${head}${kpiLinesHtml(g.kpis, {goal: g.id})}
       ${props.length ? `<ul class="kpi-props">${props.map(p => proposalHtml(p)).join('')}</ul>` : ''}
       ${g.checkin ? `<div data-gp-checkins="${esc(g.id)}">${goalCheckinHtml(g.checkin)}</div><button class="linkish" type="button" data-gp-more="${esc(g.id)}">Check-ins</button>` : ''}
@@ -639,6 +810,7 @@ function goalPanelRender(state) {
   };
   bindKpiLines(body);
   bindProposals(body, reload);
+  bindGoalWhy(state, body, reload);
   for (const b of body.querySelectorAll('[data-gp-kpi-add]')) b.onclick = () => { P.kpiAdd = b.dataset.gpKpiAdd; P.goal = ''; redraw(); };
   const newGoal = body.querySelector('[data-gp-goal-new]'), newKpi = body.querySelector('[data-gp-kpi-new]');
   if (newGoal) newGoal.onclick = () => setGoal('new');
@@ -694,10 +866,31 @@ function goalPanelRender(state) {
 // ---------------------------------------------------------------- Needs you
 // Each item is a Goal Manager task for the caller (backend/goal_asks.py), the same one Tasks and Decide show: linked.
 const needTaskLink = it => it.task ? `<a class="need-task muted" href="#/task/${esc(it.task.id)}" data-need-task>Task</a>` : '';
+// The CEO Bot's recovery for a red or stalled goal (level 2): the evidence, each option in plain words with its pick
+// marked, one Approve per option and one Reject for them all. A part that can't happen now says why.
+function recoveryHtml(it) {
+  const p = it.proposal || {}, pl = p.payload || {}, name = esc(goalManagerName());
+  const options = (it.options || []).map((o, n) => `<li class="rec-opt${o.pick ? ' rec-pick' : ''}"><div class="rec-opt-h"><b>${esc(o.label)}</b>${o.pick ? `<span class="muted"> · the ${name}'s pick</span>` : ''}</div>
+    <ul class="rec-acts">${o.actions.map(a => `<li>${esc(a.text)}${a.note ? `<span class="muted"> · ${esc(a.note)}; this part would come back to you</span>` : ''}</li>`).join('')}</ul>
+    <button class="${o.pick ? 'primary' : 'ghost'}" type="button" data-decide="confirm" data-option="${n}">Approve${(it.options || []).length > 1 ? ` option ${n + 1}` : ''}</button></li>`).join('');
+  return `<li class="kpi-prop rec" data-proposal="${esc(p.id)}"><div class="kpi-prop-main"><span><b>A recovery</b> <span class="muted">· ${esc(it.goal_title || '')}</span></span>
+    <span class="kpi-prop-detail">${esc(pl.evidence || '')}</span>${p.reason ? `<span class="muted kpi-prop-why">${esc(p.reason)} · ${name}</span>` : ''}
+    <ol class="rec-opts">${options}</ol></div>
+    <div class="kpi-prop-do"><button class="ghost" type="button" data-decide="reject">Reject</button></div>${needTaskLink(it)}</li>`;
+}
 function goalNeedsHtml(items) {
   if (!items?.length) return '';
   const rows = items.map(it => {
+    if (it.kind === 'recovery') return recoveryHtml(it);
     if (it.kind === 'proposal') return proposalHtml({...it.proposal, may_decide: true}, it.kpi_name || it.goal_title || '').replace(/<\/li>$/, `${needTaskLink(it)}</li>`);
+    // Where the CEO Bot is on: the vision, written in the Company section above, and the Why lines waiting on this
+    // person, one row for all of them, each goal opening its panel where the Why is accepted or edited.
+    if (it.kind === 'vision') return `<li class="need-row" data-need-vision tabindex="0" role="button">${gdot('gray')}<span class="need-text"><b>Tell your ${esc(goalManagerName())} what this company is for</b><span class="muted">: write the Vision in the Company section above</span></span>${needTaskLink(it)}</li>`;
+    if (it.kind === 'why') {
+      const goals = it.goals || [];
+      return `<li class="need-row" data-need-why="${esc(goals[0]?.goal_id || '')}" tabindex="0" role="button">${gdot('gray')}<span class="need-text"><b>These goals need a Why line</b><span class="muted">: </span>${goals.map(g =>
+        `<button class="linkish" type="button" data-need-why-goal="${esc(g.goal_id)}">${esc(g.goal_title)}</button>`).join('<span class="muted">, </span>')}</span>${needTaskLink(it)}</li>`;
+    }
     const red = it.kind === 'kpi_red';
     return `<li class="need-row" data-kpi="${esc(it.kpi_id)}" tabindex="0" role="button">${gdot(red ? 'red' : 'gray')}<span class="need-text"><b>${esc(it.kpi_name)}</b>${red ? ` on ${esc(it.goal_title)}` : ''}<span class="muted">: ${esc(it.reason)}</span></span>${needTaskLink(it)}</li>`;
   }).join('');

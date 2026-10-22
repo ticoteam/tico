@@ -199,7 +199,7 @@ async function desktop(browser) {
     host.innerHTML = taskCodeLineHTML({id: 'w9', kind: 'worktree', url: 'worktree:1', repo: null, branch: 'tico/t-check-misc', state: 'present'}, true, [{kind: 'pr', repo: 'acme/web'}]);
     document.querySelector('#task-modal [data-task-rail]').append(host);
     const repo = host.querySelector('.code-repo');
-    const out = {text: host.innerText, cls: repo.className, color: getComputedStyle(repo).color, muted: getComputedStyle(document.querySelector('#task-modal .tmeta')).color};
+    const out = {text: host.innerText, cls: repo.className, color: getComputedStyle(repo).color, muted: getComputedStyle(document.querySelector('#task-modal .tmodal-age')).color};
     host.remove();
     return out;
   });

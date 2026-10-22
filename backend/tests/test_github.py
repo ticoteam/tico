@@ -5,6 +5,7 @@ import hmac
 import json
 import uuid
 from types import SimpleNamespace
+from urllib.parse import quote
 
 import pytest
 from fastapi.testclient import TestClient
@@ -152,18 +153,17 @@ def test_webhook_burst_is_durable_and_sends_one_specific_wake(api):
         hook(api, 'check_run', {'repository': {'full_name': 'ticoteam/tico'}, 'check_run': {
             'name': name, 'conclusion': 'failure', 'pull_requests': [{'number': 412}]}})
     with api.app.state.store.transaction() as c:
-        assert G.flush_wakes(c) == []
-        assert c.execute('SELECT count(*) FROM messages').fetchone()[0] == before
         key = 'github-task-wake:' + task['id']
         burst = R.metadata(c, key)
         assert len(burst['items']) == 2
-        burst['due'] = H.shift(H.now(), seconds=-1)
-        R.save_metadata(c, key, burst)
+        # Performance owns the delay at enqueue time; GitHub adds no second debounce.
         assert G.flush_wakes(c) == [task['id']]
         assert G.flush_wakes(c) == []
         assert c.execute('SELECT count(*) FROM messages').fetchone()[0] == before + 1
         message = c.execute('SELECT body FROM messages ORDER BY created DESC LIMIT 1').fetchone()[0]
         assert 'Unit tests' in message and 'Lint' in message and 'tico#412' in message
+        job = c.execute("SELECT held,wake_preset FROM jobs WHERE bot='cpo' ORDER BY rowid DESC LIMIT 1").fetchone()
+        assert job['held'] and job['wake_preset'] == 'performance'
 
 
 def test_each_merged_pr_ships_once_the_release_contains_it(api):
@@ -757,3 +757,315 @@ def test_change_kept_reads_a_merge_commit_against_main_and_ignores_cut_tests():
     # Reverting the merge commit (against main, its first parent) undoes it; the other side's change stays.
     revert = h.commit('revert', [cut], {**h.commits[cut][1], 'app/price.py': code})
     assert G.change_kept(get, 'ticoteam/tico', merge, revert) is False
+
+
+def _worktree(api, task_id, repo, branch, state='present', **detail):
+    with api.app.state.store.transaction() as c:
+        link = uuid.uuid4().hex
+        c.execute("INSERT INTO task_links(id,task_id,kind,url,title,state,added_by,created,repo,branch,path,updated,"
+                  "detail_json) VALUES(?,?,'worktree',?,?,?,'bot:cpo',?,?,?,?,?,?)",
+                  (link, task_id, 'worktree:' + link, repo, state, H.now(), repo, branch,
+                   f'tasks/{task_id[:8]}/{repo.replace("/", "__")}', H.now(), json.dumps({'owner': 'bot:cpo', **detail})))
+    return link
+
+
+def _branch_pr(number, branch, repo='ticoteam/tico', head_repo=None, **over):
+    return {'html_url': f'https://github.com/{repo}/pull/{number}', 'number': number, 'state': 'open', 'draft': False,
+            'merged': False, 'merge_commit_sha': None, 'merged_at': None,
+            'head': {'ref': branch, 'sha': 'b' * 40, 'repo': {'full_name': head_repo or repo}}, **over}
+
+
+def _prs(api, task_id):
+    """The task's PR links as stored; a task GET would start its own GitHub refresh."""
+    with api.app.state.store.read() as c:
+        return {l['number']: {**l, 'detail': json.loads(l['detail_json'] or '{}')} for l in H._rows(c.execute(
+            "SELECT * FROM task_links WHERE task_id=? AND kind='pr'", (task_id,)))}
+
+
+def _worktree_detail(api, link):
+    with api.app.state.store.read() as c:
+        return json.loads(c.execute("SELECT detail_json FROM task_links WHERE id=?", (link,)).fetchone()[0])
+
+
+def _reconciler(api, monkeypatch, fetch, mint=None):
+    """The background pass against a fake GitHub; `run()` makes one pass and waits for it."""
+    import threading
+    service = api.app.state.github_app
+    with service.store.transaction() as c:
+        for repo in ('ticoteam/tico', 'ticoteam/tico-services'):
+            c.execute("INSERT INTO repositories(full_name,reachable,enabled,added_by,updated,default_branch) "
+                      "VALUES(?,1,1,?,?,'main')", (repo, 'human:ana', H.now()))
+    monkeypatch.setattr(service, 'row', lambda c=None: {'slug': 'test-app', 'org': 'ticoteam'})
+    monkeypatch.setattr(service, 'mint', mint or (lambda *args, **kw: ('test-token', 'later')))
+    monkeypatch.setattr(service, '_call', fetch)
+
+    def run(fresh=False):
+        if fresh:
+            service.worktree_reconcile_next = 0
+            service.__dict__.get('worktree_reconcile_cache', {}).clear()
+        G.reconcile_worktree_prs(service)
+        for worker in threading.enumerate():
+            if worker.name == 'tico-worktree-pr-reconcile':
+                worker.join(5)
+    return service, run
+
+
+def test_a_pr_from_a_worktree_branch_registers_itself_on_both_repos_and_never_from_a_fork(api):
+    """A bot that opens a PR and never links it still gets the link its worktree's release waits on."""
+    _app(api)
+    task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Gateway key per install', 'body': 'x'})
+    branch = f"tico/{task['id'][:8]}-gateway-key-per-install"
+    _worktree(api, task['id'], 'ticoteam/tico', branch)
+    _worktree(api, task['id'], 'ticoteam/tico-services', branch)
+    _worktree(api, task['id'], 'otherorg/tico', branch)
+    other = post(api, 'tasks', {'owner': 'cpo', 'title': 'Unrelated', 'body': 'x'})
+    _worktree(api, other['id'], 'ticoteam/tico', f"tico/{other['id'][:8]}-unrelated")
+
+    # Never from a fork, a head repository GitHub does not name, or another organization than the App's.
+    hook(api, 'pull_request', {'action': 'opened', 'pull_request': _branch_pr(984, branch, head_repo='someone/tico')})
+    gone = _branch_pr(984, branch)
+    gone['head']['repo'] = None
+    hook(api, 'pull_request', {'action': 'opened', 'pull_request': gone})
+    hook(api, 'pull_request', {'action': 'opened', 'pull_request': _branch_pr(5, branch, 'otherorg/tico')})
+    assert _prs(api, task['id']) == {}
+    hook(api, 'pull_request', {'action': 'opened', 'pull_request': _branch_pr(984, branch)})
+    hook(api, 'pull_request', {'action': 'closed', 'pull_request': _branch_pr(
+        16, branch, 'ticoteam/tico-services', state='closed', merged=True, merge_commit_sha='c' * 40)})
+    prs = {(l['repo'], l['number']): l for l in _prs(api, task['id']).values()}
+    assert set(prs) == {('ticoteam/tico', 984), ('ticoteam/tico-services', 16)}
+    assert prs[('ticoteam/tico', 984)]['state'] == 'open' and prs[('ticoteam/tico-services', 16)]['state'] == 'merged'
+    assert all(l['added_by'] == 'keeper' and l['branch'] == branch for l in prs.values())
+    assert _prs(api, other['id']) == {}
+    # Registered once: later events on the same PR update that link, and registering wakes nobody.
+    hook(api, 'pull_request', {'action': 'synchronize', 'pull_request': _branch_pr(984, branch)})
+    assert len(_prs(api, task['id'])) == 2
+    assert _burst(api, task['id']) == []
+
+
+def test_reconcile_heals_stale_and_unregistered_prs_on_a_declined_task_nobody_reads(api, monkeypatch):
+    _app(api)
+    task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Org chart order', 'body': 'x',
+                               'links': ['https://github.com/ticoteam/tico/pull/746']})
+    branch = f"tico/{task['id'][:8]}-org-chart-order"
+    _worktree(api, task['id'], 'ticoteam/tico', branch)
+    _worktree(api, task['id'], 'ticoteam/tico', 'tico/' + task['id'][:8] + '-fix-forward')
+    pushed = 'tico/' + task['id'][:8] + '-first-push'
+    _worktree(api, task['id'], 'ticoteam/tico', pushed)
+    # The first push asks for a draft PR; the push itself (and the checks it starts) is never held back.
+    assert hook(api, 'push', {'ref': 'refs/heads/' + pushed, 'repository': {'full_name': 'ticoteam/tico'},
+                              'after': 'f' * 40, 'head_commit': {'id': 'f' * 40}})['commits'] == 0
+    calls = []
+    def fetch(method, path, headers=None, params=None, json=None):
+        calls.append((method, path))
+        if method == 'POST':
+            assert json['head'] == pushed and json['draft'] is True and json['title'] == 'Org chart order'
+            return SimpleNamespace(status_code=201, json=lambda: _branch_pr(991, pushed, draft=True))
+        if path.endswith('/pulls/746'):
+            return SimpleNamespace(status_code=200, json=lambda: _branch_pr(746, branch, state='closed', merged=True,
+                                                                             merge_commit_sha='d' * 40))
+        if '/compare/' in path:
+            # Only the pushed branch has commits of its own; a branch nobody pushed is not on GitHub.
+            return (SimpleNamespace(status_code=200, json=lambda: {'ahead_by': 1}) if path.endswith(quote(pushed, safe=''))
+                    else SimpleNamespace(status_code=404, json=lambda: {}))
+        if params and params['head'] == 'ticoteam:tico/' + task['id'][:8] + '-fix-forward':
+            return SimpleNamespace(status_code=200, json=lambda: [_branch_pr(990, params['head'].split(':')[1])])
+        return SimpleNamespace(status_code=200, json=lambda: [])
+    service, run = _reconciler(api, monkeypatch, fetch)
+    with service.store.transaction() as c:
+        c.execute("UPDATE tasks SET status='declined' WHERE id=?", (task['id'],))
+    run()
+    prs = _prs(api, task['id'])
+    assert prs[746]['state'] == 'merged' and prs[990]['state'] == 'open' and prs[990]['added_by'] == 'keeper'
+    assert prs[991]['state'] == 'draft' and prs[991]['branch'] == pushed
+    assert [c for c in calls if c[0] == 'POST'] == [('POST', '/repos/ticoteam/tico/pulls')]
+    # Bounded: a second pass inside three minutes reads nothing.
+    before = len(calls)
+    run()
+    assert len(calls) == before and not service.worktree_reconcile_running
+
+
+def test_reconcile_shares_its_reads_so_a_branch_behind_twenty_open_prs_still_gets_its_draft(api, monkeypatch):
+    """Twenty open PRs never take every read: a worktree branch whose push webhook was missed is found on GitHub
+    and drafted in the same pass, a never-pushed one gets nothing, and each is asked again on its own schedule."""
+    _app(api)
+    busy = post(api, 'tasks', {'owner': 'cpo', 'title': 'Busy', 'body': 'x',
+                               'links': [f'https://github.com/ticoteam/tico/pull/{n}' for n in range(100, 120)]})
+    _worktree(api, busy['id'], 'ticoteam/tico', f"tico/{busy['id'][:8]}-busy")
+    missed = post(api, 'tasks', {'owner': 'cpo', 'title': 'Missed push', 'body': 'x'})
+    branch = f"tico/{missed['id'][:8]}-missed-push"
+    # Only the computer's report says the work is on GitHub: a new head with nothing unpushed.
+    tree = _worktree(api, missed['id'], 'ticoteam/tico', branch, expected_head='a' * 40, last_commit='e' * 40, ahead=0)
+    idle = post(api, 'tasks', {'owner': 'cpo', 'title': 'Never pushed', 'body': 'x'})
+    _worktree(api, idle['id'], 'ticoteam/tico', f"tico/{idle['id'][:8]}-never-pushed")
+    calls = []
+    def fetch(method, path, headers=None, params=None, json=None):
+        calls.append((method, path))
+        if method == 'POST':
+            assert json['head'] == branch
+            return SimpleNamespace(status_code=201, json=lambda: _branch_pr(200, branch, draft=True))
+        if '/compare/' in path:
+            return (SimpleNamespace(status_code=200, json=lambda: {'ahead_by': 2}) if path.endswith(quote(branch, safe=''))
+                    else SimpleNamespace(status_code=404, json=lambda: {}))
+        if '/pulls/' in path:
+            return SimpleNamespace(status_code=200, json=lambda: _branch_pr(int(path.rsplit('/', 1)[1]), 'feature'))
+        return SimpleNamespace(status_code=200, json=lambda: [])
+    service, run = _reconciler(api, monkeypatch, fetch)
+    with service.store.transaction() as c:
+        c.execute("UPDATE task_links SET updated=? WHERE task_id=? AND kind='pr'", ('2026-01-01T00:00:00.000000Z', busy['id']))
+    run()
+    assert _prs(api, missed['id'])[200]['state'] == 'draft' and _prs(api, idle['id']) == {}
+    assert [c for c in calls if c[0] == 'POST'] == [('POST', '/repos/ticoteam/tico/pulls')]
+    read = [int(p.rsplit('/', 1)[1]) for m, p in calls if '/pulls/' in p]
+    assert len(read) == 17 and _worktree_detail(api, tree)['remote']['ahead'] == 2
+    cache = service.worktree_reconcile_cache
+    schedule = {'pr' if key[0] == 'pr' else key[2].split('-', 1)[1]: round(e['next'] - e['last']) for key, e in cache.items()}
+    assert schedule == {'pr': 180, 'busy': 900, 'never-pushed': 900, 'missed-push': 180}
+    # The next pass reads the three PRs the first one had no room for and the new draft, nothing it read already.
+    calls.clear()
+    service.worktree_reconcile_next = 0
+    run()
+    assert sorted(int(p.rsplit('/', 1)[1]) for m, p in calls if '/pulls/' in p) == sorted(set(range(100, 120)) - set(read)) + [200]
+
+
+def test_a_webhook_during_branch_discovery_keeps_its_newer_facts(api, monkeypatch):
+    """A webhook that registers and merges the PR while the pass is still reading the branch wins over the older
+    open state the read brings back."""
+    _app(api)
+    task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Race', 'body': 'x'})
+    branch = f"tico/{task['id'][:8]}-race"
+    _worktree(api, task['id'], 'ticoteam/tico', branch)
+    other = post(api, 'tasks', {'owner': 'cpo', 'title': 'Same branch', 'body': 'x'})
+    _worktree(api, other['id'], 'ticoteam/tico', branch)
+    def fetch(method, path, headers=None, params=None, json=None):
+        assert method == 'GET' and params['head'] == 'ticoteam:' + branch
+        with api.app.state.store.transaction() as c:
+            G.pull_request(c, {'action': 'closed', 'pull_request': _branch_pr(
+                7, branch, state='closed', merged=True, merge_commit_sha='c' * 40, head={
+                    'ref': branch, 'sha': 'n' * 40, 'repo': {'full_name': 'ticoteam/tico'}})})
+        return SimpleNamespace(status_code=200, json=lambda: [_branch_pr(7, branch)])
+    _, run = _reconciler(api, monkeypatch, fetch)
+    run()
+    for task_id in (task['id'], other['id']):
+        link = _prs(api, task_id)[7]
+        assert link['state'] == 'merged' and link['detail']['head_sha'] == 'n' * 40
+
+
+def test_draft_failures_stay_visible_until_the_branch_pr_is_linked(api, monkeypatch):
+    """A refused token, no answer, and a draft opened but not linked each leave a reason on the tree, and finding
+    the PR by any path clears it. Synthetic: no real GitHub call."""
+    _app(api)
+    task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Faults', 'body': 'x'})
+    branch = f"tico/{task['id'][:8]}-faults"
+    tree = _worktree(api, task['id'], 'ticoteam/tico', branch)
+    hook(api, 'push', {'ref': 'refs/heads/' + branch, 'repository': {'full_name': 'ticoteam/tico'},
+                       'after': 'f' * 40, 'head_commit': {'id': 'f' * 40}})
+    fault = {'mint': True, 'post': None, 'listed': []}
+    def mint(repos, permissions):
+        if permissions.get('pull_requests') == 'write' and fault['mint']:
+            raise RuntimeError('permission refused')
+        return 'test-token', 'later'
+    def fetch(method, path, headers=None, params=None, json=None):
+        if method == 'POST':
+            if fault['post']:
+                raise fault['post']
+            return SimpleNamespace(status_code=201, json=lambda: _branch_pr(8, branch, draft=True))
+        if '/compare/' in path:
+            return SimpleNamespace(status_code=200, json=lambda: {'ahead_by': 1})
+        return SimpleNamespace(status_code=200, json=lambda: fault['listed'])
+    _, run = _reconciler(api, monkeypatch, fetch, mint)
+    run()
+    assert _worktree_detail(api, tree)['pr_error'].endswith('failed (no GitHub token for it)')
+    fault.update(mint=False, post=ConnectionError('reset'))
+    run(fresh=True)
+    assert _worktree_detail(api, tree)['pr_error'].endswith('failed (GitHub did not answer)')
+    fault['post'] = None
+    real = G.pull_request
+    monkeypatch.setattr(G, 'pull_request', lambda *a, **kw: (_ for _ in ()).throw(RuntimeError('database locked')))
+    run(fresh=True)
+    assert 'linking it to the task failed' in _worktree_detail(api, tree)['pr_error'] and _prs(api, task['id']) == {}
+    monkeypatch.setattr(G, 'pull_request', real)
+    fault['listed'] = [_branch_pr(8, branch, draft=True)]
+    run(fresh=True)
+    assert _prs(api, task['id'])[8]['state'] == 'draft' and 'pr_error' not in _worktree_detail(api, tree)
+
+
+def test_a_hand_off_refuses_a_pushed_worktree_branch_no_pr_carries_until_it_is_linked(api):
+    """Any move to a review step, or to done, with pushed work no pull request carries would orphan the worktree; a
+    link, by hand or by the branch's own PR, lets it through. A branch only moved to newer main is no such work."""
+    _app(api)
+    with api.app.state.store.transaction() as c:
+        dev = H.type_create(c, H.KEEPER, 'Dev tickets', [
+            {'name': 'In Progress', 'status': 'doing'}, {'name': 'Waiting', 'status': 'waiting'},
+            {'name': 'Review 1', 'status': 'review'}, {'name': 'Review 2', 'status': 'review'},
+            {'name': 'Done', 'status': 'done'}])
+    task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Gateway key per install', 'body': 'x'})
+    branch = f"tico/{task['id'][:8]}-gateway-key-per-install"
+    repos = ('ticoteam/tico', 'ticoteam/tico-services')
+    for repo in repos:
+        _worktree(api, task['id'], repo, branch, expected_head='a' * 40)
+
+    def move(**change):
+        try:
+            with api.app.state.store.transaction() as c:
+                return H.task_update(c, 'human:ana', task['id'], **change)['status']
+        except H.Refused as refused:
+            return str(refused)
+    assert move(type=dev['id'], step='In Progress') == 'doing'
+    # Moved to newer main and nothing more: no commit of the task's own, so nothing to refuse.
+    with api.app.state.store.transaction() as c:
+        for repo in repos:
+            c.execute("INSERT INTO main_pushes(sha,repo,pushed_at) VALUES(?,?,?)", (repo[-1] * 40, repo, H.now()))
+            c.execute("UPDATE task_links SET detail_json=json_set(detail_json,'$.last_commit',?,'$.ahead',0) "
+                      "WHERE task_id=? AND kind='worktree' AND repo=?", (repo[-1] * 40, task['id'], repo))
+    assert move(step='Review 1') == 'review'
+    # A push counts the moment its webhook lands, before any computer reports it, in both repositories.
+    for repo in repos:
+        hook(api, 'push', {'ref': 'refs/heads/' + branch, 'repository': {'full_name': repo},
+                           'after': 'e' * 40, 'head_commit': {'id': 'e' * 40}})
+    refused = move(step='Review 2')
+    assert all(f'{repo} branch {branch}' in refused for repo in repos)
+    assert move(note='still working') == 'review'
+    assert move(step='Waiting') == 'waiting'
+    assert 'ticoteam/tico branch' in move(step='Review 1')
+    hook(api, 'pull_request', {'action': 'opened', 'pull_request': _branch_pr(984, branch)})
+    still = move(step='Done')
+    assert 'ticoteam/tico-services branch' in still and 'ticoteam/tico branch' not in still
+    post(api, 'tasks/' + task['id'] + '/links', {'url': 'https://github.com/ticoteam/tico-services/pull/16'})
+    assert move(step='Review 2') == 'review' and move(step='Done') == 'done'
+
+
+def test_a_hand_off_waits_for_a_branch_check_when_a_push_left_no_webhook_and_no_report(api, monkeypatch):
+    """A push GitHub never announced and no computer reported is on GitHub only: until the background pass has read
+    the branch since its last known head, a hand-off is held; the pass drafts the PR (or finds nothing) and frees
+    it. A head reported while unpushed is read again once it is reported pushed. Synthetic: no real GitHub call."""
+    _app(api)
+    pushed = post(api, 'tasks', {'owner': 'cpo', 'title': 'Silent push', 'body': 'x'})
+    branch = f"tico/{pushed['id'][:8]}-silent-push"
+    _worktree(api, pushed['id'], 'ticoteam/tico', branch, expected_head='a' * 40)
+    quiet = post(api, 'tasks', {'owner': 'cpo', 'title': 'Quiet', 'body': 'x'})
+    local = _worktree(api, quiet['id'], 'ticoteam/tico', f"tico/{quiet['id'][:8]}-quiet", expected_head='a' * 40,
+                      last_commit='e' * 40, ahead=1)
+    def fetch(method, path, headers=None, params=None, json=None):
+        if method == 'POST':
+            return SimpleNamespace(status_code=201, json=lambda: _branch_pr(31, branch, draft=True))
+        if '/compare/' in path:
+            # Only the silent push's branch is on GitHub; the quiet one has its commit on the computer only.
+            return (SimpleNamespace(status_code=200, json=lambda: {'ahead_by': 1}) if path.endswith(quote(branch, safe=''))
+                    else SimpleNamespace(status_code=404, json=lambda: {}))
+        return SimpleNamespace(status_code=200, json=lambda: [])
+    _, run = _reconciler(api, monkeypatch, fetch)
+
+    def review(task):
+        try:
+            with api.app.state.store.transaction() as c:
+                return H.task_update(c, 'human:ana', task['id'], status='review')['status']
+        except H.Refused as refused:
+            return str(refused)
+    assert all('not checked on GitHub' in review(task) for task in (pushed, quiet))
+    run()
+    assert _prs(api, pushed['id'])[31]['state'] == 'draft' and review(pushed) == 'review'
+    assert _worktree_detail(api, local)['remote']['absent'] and review(quiet) == 'review'
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET status='doing' WHERE id=?", (quiet['id'],))
+        c.execute("UPDATE task_links SET detail_json=json_set(detail_json,'$.ahead',0) WHERE id=?", (local,))
+    assert 'has commits with no pull request linked' in review(quiet)

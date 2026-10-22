@@ -1,7 +1,7 @@
 # Task types and steps
 
 Every task starts on **General**, with the same statuses and behavior as before. To give work a
-pipeline such as Marketing, a mover makes a type in **Settings → Types**, adds named steps, and
+pipeline such as Marketing, a mover makes a type in **Settings → Tasks**, adds named steps, and
 chooses the status each step means. Types belong to the whole team. General keeps one step for
 each standard status.
 
@@ -82,6 +82,16 @@ task when no `--parent` is given. The answer follows the blocker link, so a prog
 doesn't lose it, and a declined or closed card no longer blocks the task. The note says the person answered only when they
 finished the card; when someone else closed it, it names who did.
 
+One open question per topic. A bot's `hub task question` to a person while its earlier one on the same topic still
+waits on them (unanswered, the task not finished) updates that one instead of filing a second: the same topic is the
+same `--topic` key under any task, or, with no key, the same parent task. The person keeps one card with the latest
+wording and options, its body lists the earlier asks under "Asked before", and nothing new is sent: no second Needs
+you item, no Slack line, no run. The ask's clock restarts, so a default goes ahead only after the team's days from
+the latest wording. The reply says `folded: true`. A different decision on the same task takes its own `--topic`;
+once the question is answered, declined or closed, the next one on the topic opens a new card. An answer picked on
+the earlier wording is refused ("reworded"), so the person answers what the card says now. A key is compared by its
+letters and digits in any script, case folded; one with none is refused.
+
 The note must be a plain ask: one or two sentences, at most 40 words, with no ids, hashes, file paths, `s3://` links
 or tool names. Without one the update is refused, saying what failed. A task with an open structured question to
 the person (`hub task question`) is already the card: it waits on them as itself, and its note is only warned
@@ -122,7 +132,14 @@ stuck or unavailable, the diagnostic goes to the human requester, or the team's 
 bot-requested work. An unresolved diagnostic is reused on later days. Health warns when repeated
 runs have escalated a public task without progress; an explicit run is still available.
 
-Task worktrees have a separate lifecycle. The 30-worktree limit stays in effect, and cleanup
+A task blocked by its own subtask is allowed (a question for a person in a subtask works that way),
+but relating it returns a warning: a subtask kept open until its parent finishes, such as a hold or
+an acknowledgement, never clears. When every blocker is such a subtask, owned by a bot, quiet five
+minutes and waiting on nothing of its own (no blocker, no unanswered question, no future due date,
+snooze or stored resume), the task counts as stalled even while `waiting`: its bot
+is woken with the way out, under the same limits, and BotOps's stuck list shows it with `own_blockers`.
+
+Task worktrees have a separate lifecycle. The 50-worktree limit stays in effect, and cleanup
 waits until the owning bot is idle so it cannot remove a checkout in use. A supported cleanup
 request continues to occupy its slot until the runner removes it. For merged work that is still
 awaiting release, request cleanup of the worktree link rather than marking the task Done or Closed
@@ -164,7 +181,7 @@ suggestions cover the quiet week.
 Stale ticket review finds open tasks that look finished or forgotten and suggests what to do with
 them. It only suggests: nothing changes unless the task's owner accepts.
 
-**Turn it on.** Go to **Settings > Team** and switch on **Stale ticket review**. It is off by
+**Turn it on.** Go to **Settings > General** and switch on **Stale ticket review**. It is off by
 default, and an owner or an admin can turn it on or off. (A server started with
 `TICO_STALE_REVIEW=1` has it on by default; a choice saved in Settings wins.)
 
@@ -211,10 +228,18 @@ Oct 16, so Writer goes ahead with what it said it would do: Yes", which wakes th
 spending money or a delete never goes ahead without an answer: the card says the bot waits. The owner turns this off,
 or changes the days, in Settings > Humans (**Bots go ahead on their recommendation**).
 
-An ask to a person with no word from them in 14 days expires: the bot goes ahead on its default when the rule above
-allows it, or is told to drop the work or ask again. A task a bot handed a person (they own it, the bot asked for it)
-that they have not touched in 14 days closes the same way, unless it is due later or waits on someone else, and the
-bot hears why. Hourly, `backend/ask_deadlines.py`.
+A send, a spend, a delete, any default when the owner turned going ahead off, and any default once the person has
+written since the ask (a comment, a Clarify tap) never goes ahead, but its question still closes on its date: the bot is
+told nothing went ahead and decides without it. A question with no date that
+is unanswered after two business days (Monday to Friday, Pacific) leaves the person's Needs you at the next weekday
+morning's batch (8:00): each asking bot gets one "Still needed?" wake listing all of its questions that crossed the line,
+and asks again (a fresh question with a new clock) or drops them (`backend/still_needed.py`). A question also closes
+when its task or any task above it is done, closed or declined (a done task keeps only the structured question asking its
+requester to accept the result, asked once it is done), when the person replies to it or writes on its task to the bot
+that asked, and when the bot asks them a newer question on the same task.
+
+A task a bot handed a person (they own it, the bot asked for it) that they have not touched in 14 days closes, unless it
+is due later or waits on someone else, and the bot hears why. Hourly, `backend/ask_deadlines.py`.
 
 ## Snoozing a task
 
@@ -272,7 +297,7 @@ duplicates are still refused.
 ## Types bots work on
 
 Every bot can read company-visible tasks subject to existing bot activity restrictions. Types
-control additional permission to comment, file subtasks or change work in **Settings → Types**,
+control additional permission to comment, file subtasks or change work in **Settings → Tasks**,
 with `bots` on the task-types routes or `hub task type update "Dev ticket" --bots work`.
 
 | `bots` | Additional permission for unrelated bots |
@@ -289,6 +314,9 @@ Labels are a mover's, with one exception for bots: a bot adds and removes classi
 `manager`), whatever the type's `bots` setting. A public roadmap label needs its exact approved
 publish approval (`hub task publication-preview <id> --label ...` for the labels the task keeps,
 then `hub task label <id> --add roadmap --approval-id <id>`), and `goal:on`/`goal:off` need a mover.
+The same goes for a task a bot creates: it may carry classification labels, but one created with a
+public roadmap label or `goal:on`/`goal:off` is refused before anything is written; create it without
+the label, then add it on the task as above.
 Lane and number are a mover's alone ([Permissions](permissions.md#tags)).
 A bot's comment is a message to the people on the task, under the usual rules for reaching them.
 
@@ -393,10 +421,20 @@ using `tasks.type_id` and `tasks.step_id`; the task visibility rules still apply
 
 ## Subtasks and PRs
 
-Subtasks can nest to any depth. Whoever files a subtask, person or bot, is its requester: it
-shows them as asking, and they receive its completion notice. A bot that filed one may close it
-explicitly; until then a completed subtask stays Done. The parent's requester still hears when
-the parent finishes.
+Subtasks can nest to any depth. Whoever files a subtask, person or bot, is its requester. When a
+worker finishes a subtask under a bot-owned task, its result returns directly to the immediate
+parent's owning bot, in that parent's task session. An active turn takes it as an input; otherwise
+the parent's next turn resumes there. There is no requester delivery session on the completed
+subtask and no relay or `hub task run` needed. The worker keeps its own independent task session.
+A bot that filed the subtask may close it explicitly; until then it stays Done. The parent's
+requester hears when the parent itself finishes, so a manager's task → builder task → review
+subtask sends the review back to the builder, and the completed build back to the manager.
+
+A review verdict on a subtask's comment or final reply takes the same direct path. Its comment,
+Done note and final reply are one delivery for that verdict and review cycle; reopening the
+subtask permits a new review. Completed or closed parents record late results quietly. Private
+subtask text returns on the parent only when that parent's readers may receive it; otherwise the
+requester receives it on the private subtask as before. Ask and answer messages keep their own routing.
 Subtasks never inherit a human's delegation anchor from a bot's request. BotOps acts with the
 filing bot's rights when that bot asks it to work on a subtask.
 
@@ -408,7 +446,8 @@ and cycles are refused.
 A parent may be marked Done or closed, by a bot or a person, while subtasks are still open. The
 subtasks stay open, and the parent's history and its Finished or Closed notice end with
 "Still open:" and their titles. Finishing or moving away the last open subtask wakes the
-parent's owner with “All subtasks done”, unless that owner made the change (a bot finishing a subtask it filed
+immediate parent's owner with “All subtasks done”, unless its result already resumed that parent or
+that owner made the change (a bot finishing a subtask it filed
 for itself, which runs in its own session, still wakes the parent).
 Closing a parent cancels it; later subtask completion does not wake its owner.
 Done, Closed and Declined count as finished. Open descendants under a finished subtask do not
@@ -466,7 +505,7 @@ its session, with each repo's AGENTS.md (else CLAUDE.md) in the prompt as rules 
 new owner's session replaces it, and the old one stays as an alternate. Anyone with link rights can add other sessions to track:
 a thread URL, a `claude --resume <id>` or `codex resume <id>` command, or another reference
 (`hub task link <id> <value> --session`, `hub_task_link` with `kind: session`, or Sessions + on the task).
-They are for tracking only: task chat and comments always go to the owning bot.
+They are for tracking only: task chat and comments go to the owning bot, or to the bot that asked when a person owns the task.
 
 A subtask someone else files for a bot under its task does not get a session of its own. A turn on a task runs in its
 **session root**: Tico walks up the parents the same bot owns (up to 20) and takes the topmost, so the bot's turns on
@@ -491,7 +530,7 @@ hub task child <parent-id> --check-model codex:gpt-6.1-sol --title "Check the mi
 ```
 
 `--check-model` takes a runtime (its provider's recommended model) or `runtime:model`. With no value (`auto` in the
-API) it takes the company's check model (Settings > AI providers, [How it works](how-it-works.md)): the first in its
+API) it takes the company's check model (Settings > Computers > Models, [How it works](how-it-works.md)): the first in its
 order from a provider other than the parent's authors and runnable on the bot's computer. The authors are every
 maker on the parent's finished runs (a fallback counts) and the provider its owner runs on; with no other provider it
 is refused, never run on an author's own. `--role` is `review` or `check` (the default). The API takes `check_model` and `check_role` on task create; the MCP tool is
@@ -502,7 +541,7 @@ is refused, never run on an author's own. `--role` is `review` or `check` (the d
   or files in its body. Its turns carry none of the bot's next-run tasks or notes.
 - Only the runtime, model, harness and effort change. The bot's repository, tools, credentials and isolation are
   its own, so a check never runs with more than the bot has.
-- Only a provider the company has enabled (Settings > AI providers) and a current model can be named, and the
+- Only a provider the company has enabled (Settings > Computers > Models) and a current model can be named, and the
   bot's computer must not report that runtime missing or signed out. A computer that reports it signed out is not
   handed the subtask's turns.
 - Task detail shows the subtask's `check_model`, and the run's provenance (`ran_on` on the task's runs) names the
@@ -515,7 +554,7 @@ is refused, never run on an author's own. `--role` is `review` or `check` (the d
   declined, its held turn is let go instead of retrying after each reset; a person's message on it stays queued.
 - When the limit is on the computer's default login (no subscription) and Health already marks that login out of
   quota (`default_login_limited`, docs/health-monitor.md), the check does not wait: its next turn runs at once on
-  the next check model in the company's order (Settings > AI providers) that is not from a provider whose work it
+  the next check model in the company's order (Settings > Computers > Models) that is not from a provider whose work it
   checks, not on another login out of quota there, and that the bot's computer can run. The task's history and the
   bot's status say where it moved. It goes back to the model it asked for once a turn on that login completes or
   the provider's reset passes, or once the bot moves to another computer or gets a subscription for that tool. With
@@ -550,21 +589,27 @@ not at all. A runner from before lanes (`task_lanes_v2`) still reads the whole r
 The task's page shows that room as a chat with the task's session, under **Conversation**, in place of a list of
 comments. The bot's updates and replies are messages, and each reply opens to the steps of the run behind it. What
 people say shows on the right under their names, as in a bot's chat with several people; your own line has no name.
-Changes to status, type, owner and the like are one-line markers between the messages. While the owner's run works, a
-**Working…** line shows its newest step and opens to the steps so far. Whoever manages the bot gets **Stop** beside
-it, the same stop as in the bot's chat (`POST /v2/bots/{slug}/stop`). The box at the foot is the chat's composer, and
-what you type there is a comment: it wakes the bot as before. `GET /v2/tasks/{id}` carries this view: each bot reply in
-`comments` has its `run`, and `execution` is the owning bot's newest run in the task's own room, shaped as in a
-conversation snapshot. A task still in a chat room (a person's task, or one filed into a chat before task rooms) has
-no `execution`: that room's runs belong to the chat.
+Changes to status, type, owner and the like are one-line markers between the messages. Under a message you send, the
+line from the bot's chat shows what happens to it: **Sent**, **Queued** (and why, when the bot is busy or at a limit),
+**Starting**, then **<Bot> is working…** with its newest step, opening to the steps so far, until the reply, or
+**Reply failed** when the turn errors. It follows the bot your message went to, which on a task you own that a bot
+asked is that bot, and the owner's own runs as before; a bot's message to another bot does not take it. Whoever
+manages the bot gets **Stop** beside it, the same stop as in the bot's chat (`POST /v2/bots/{slug}/stop`). The box at
+the foot is the chat's composer, and what you type there is a comment: it wakes the bot as before. Before you send,
+the box says when no bot will get the message (everyone on the task is a person), or when it waits for the bot's next
+run on the task; an @mention of the bot that asked wakes it, and the note goes. `GET /v2/tasks/{id}` carries this
+view: each bot reply in `comments` has its `run`; `execution` is the owning bot's newest run in the task's own room,
+or a newer one for a person's message there, shaped as in a conversation snapshot with `from_person`; and
+`comment_to` (`bot`, `wakes`, `mention`) is who your next comment reaches. A task still in a chat room (one filed into
+a chat before task rooms) has no `execution`: that room's runs belong to the chat.
 `hub task comment`, `hub_task_comment` and `POST /v2/tasks/{id}/comments` are unchanged.
 
 Tico spot-checks running work. A bot's open or doing task whose own session ran in the last day (or runs now) and
 that has made no progress for 30 minutes (no checkpoint, comment, status change, message from its bot or finished
 turn) gets one "Status check: checkpoint where you are, or mark it blocked or done." in its session. Thirty minutes
-later with still no progress it is reported stuck in the main chat, and when a person asked for it they get a
-question on it in Needs you, whose answer wakes the bot; the question is withdrawn when the task is done. These share the stall watcher's spacing and its cap of three
-a day, after which BotOps gets a task to find out why.
+later with still no progress its bot is retried once; thirty minutes after that, still with no progress, it is reported
+stuck in the main chat and BotOps gets a task to find out why. A stuck check never goes to a person as a question. These
+share the stall watcher's spacing and its cap of three a day, after which BotOps gets a task to find out why.
 
 `task_goal: on` on a bot (`hub bot update <slug> --task-goal on`, `hub_bot_update`, or the bot definition API; off by
 default) works each task it owns as a goal: the turn carries `task.goal` (the title and its acceptance criteria), and
@@ -732,7 +777,11 @@ tab, and SVG, HTML and other files offer a download. The `v1 · v2 · v3` switch
 **Compare** shows two versions side by side, or a line diff for text. Each version shows who added
 it, when, its note and its question. Esc or the tile again closes it.
 
-A comment that carried files shows a small thumbnail for an image and a chip for anything else;
+A comment's pictures, SVG, visual pages, video and audio (up to 4) show under its text as cards; see
+[Visuals in replies](visuals.md#in-a-chat-or-task-conversation). A visual on a comment is a normal versioned file on
+the task, listed in the **Files** strip. Its card shows the version the comment was posted with; when the file has a
+newer one, **Newer version** opens the newest. **Open in file viewer** in the card's menu opens the file's tile here
+at the posted version. The comment's other files show a small thumbnail for an image and a chip for anything else;
 either opens that file's tile at that version.
 
 A question (on a comment or a file version) shows its options as buttons. One question that takes

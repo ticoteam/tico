@@ -45,8 +45,8 @@ function pageTasks(forced, openId = '') {
           <button type="button" class="linkish tl-clear" id="task-filter-clear" hidden>Clear</button></div>
         <span class="spacer"></span>
         <a class="tl-decide tl-decide-bar" href="${DECIDE}" hidden></a>
-        ${S.me?.role === 'bot' ? '' : `<button type="button" class="tl-addf" id="task-stats" aria-label="Task stats" title="Task stats">${TL_ICON.chart}<span>Stats</span></button>`}
-        <button type="button" class="tl-addf tl-pin" id="task-pin" aria-pressed="false">Pin</button>
+        ${S.me?.role === 'bot' ? '' : `<button type="button" class="tl-addf tl-ic" id="task-stats" aria-label="Task stats" title="Task stats">${TL_ICON.chart}</button>`}
+        <button type="button" class="tl-addf tl-ic tl-pin" id="task-pin" aria-pressed="false" aria-label="Pin to the sidebar" title="Pin to the sidebar">${TL_ICON.pin}</button>
         <button type="button" class="tl-addf tl-selmode" id="task-select-mode" aria-pressed="false" hidden>Select</button>
         <span class="tl-groupby" id="task-group-wrap"></span>
       </div>
@@ -482,18 +482,44 @@ function companyNeedGroups(items) {
 function tasksTabsPaint(state) { tasksPaint($('#task-view'), tasksTabsHTML(state)); }
 // The body redraws on every load (the 30-second poll reloads the list): only rows that changed are replaced, so the
 // focus, the scroll, the cursor, the selection and the open peek all stay. A hidden row leaves the selection.
+// A `data-patch-key` node keeps what the person did in it (opened, typed) through redraws. With a `data-patch-sig` its
+// content can still change (the Stale tickets card): a new sig patches it in place, and a <details> stays open or
+// shut as the person left it.
 function tasksPatchNode(live, next) {
   if (live.nodeType !== next.nodeType || live.nodeName !== next.nodeName
       || (live.nodeType === 1 && (live.dataset.taskKey || '') !== (next.dataset.taskKey || ''))) { live.replaceWith(next); return; }
   if (live.nodeType === 3) { if (live.data !== next.data) live.data = next.data; return; }
   if (live.nodeType !== 1) return;
-  if (live.dataset.patchKey || next.dataset.patchKey) { if (live.dataset.patchKey !== next.dataset.patchKey) live.replaceWith(next); return; }
+  const keep = !!live.dataset.patchKey && live.nodeName === 'DETAILS';
+  if (live.dataset.patchKey || next.dataset.patchKey) {
+    if (live.dataset.patchKey !== next.dataset.patchKey) { live.replaceWith(next); return; }
+    if ((live.dataset.patchSig || '') === (next.dataset.patchSig || '')) return;
+  }
   if (live.dataset.taskKey) { if (!next.dataset.sig || live.dataset.sig !== next.dataset.sig) live.replaceWith(next); return; }   // a row: whole, or not at all
-  for (const {name} of [...live.attributes]) if (!next.hasAttribute(name)) live.removeAttribute(name);
-  for (const {name, value} of [...next.attributes]) if (live.getAttribute(name) !== value) live.setAttribute(name, value);
+  for (const {name} of [...live.attributes]) if (!next.hasAttribute(name) && !(keep && name === 'open')) live.removeAttribute(name);
+  for (const {name, value} of [...next.attributes]) if (live.getAttribute(name) !== value && !(keep && name === 'open')) live.setAttribute(name, value);
   const a = [...live.childNodes], b = [...next.childNodes];
+  if (tasksPatchKeyed(live, a, b)) return;
   if (a.length !== b.length) { live.replaceChildren(...b); return; }
   a.forEach((node, i) => tasksPatchNode(node, b[i]));
+}
+// Children that all carry a `data-patch-key` (the Stale tickets card's rows) are matched by key: a row that went is
+// removed, a new one inserted, and one that stayed is patched where it is, so focus on it is not lost, also when
+// one row goes and another comes in the same redraw.
+function tasksPatchKeyed(live, a, b) {
+  const keyed = n => n.nodeType === 1 && !!n.dataset.patchKey;
+  if (!a.length || !b.length || !a.every(keyed) || !b.every(keyed)) return false;
+  const old = new Map(a.map(n => [n.dataset.patchKey, n]));
+  if (old.size !== a.length || new Set(b.map(n => n.dataset.patchKey)).size !== b.length) return false;
+  const want = new Set(b.map(n => n.dataset.patchKey));
+  for (const n of a) if (!want.has(n.dataset.patchKey)) n.remove();
+  b.forEach((n, i) => {
+    const o = old.get(n.dataset.patchKey), at = live.childNodes[i] || null;
+    if (!o) { live.insertBefore(n, at); return; }
+    if (o !== at) live.insertBefore(o, at);
+    tasksPatchNode(o, n);
+  });
+  return true;
 }
 function tasksPatch(el, html) {
   const next = document.createElement('div');

@@ -5,6 +5,8 @@ import json
 import os
 from pathlib import Path
 
+from .contract import SERVER_ONLY_KEYS
+
 
 def home() -> Path:
     return Path(os.environ.get("TICO_SETUP_HOME") or Path.home() / ".config" / "tico-setup")
@@ -25,7 +27,13 @@ def write_private(path: Path, data: str) -> None:
 def save(domain: str, settings: dict, env_text: str | None = None) -> None:
     write_private(_dir(domain) / "state.json", json.dumps(settings, indent=2, sort_keys=True))
     if env_text is not None:
-        write_private(_dir(domain) / "env", env_text)
+        write_private(_dir(domain) / "env", _local_copy(env_text))
+
+
+def _local_copy(env_text: str) -> str:
+    """The .env as this computer keeps it: without the values only the server should hold (contract.SERVER_ONLY_KEYS)."""
+    lines = [line for line in env_text.splitlines() if line.partition("=")[0].strip() not in SERVER_ONLY_KEYS]
+    return "\n".join(lines) + ("\n" if lines else "")
 
 
 def load(domain: str) -> tuple[dict, str]:

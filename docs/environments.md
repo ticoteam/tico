@@ -115,8 +115,8 @@ correctly. `restart` and `update` wait for runs in flight before bouncing the bo
 ## Subscription profiles
 
 A profile is a named directory holding one provider login. Bots that name the same profile share a
-subscription; a bot with its own profile has its own. Credentials stay on the Computer. Tico stores profile names, sign-in state and group or bot assignments.
-See [Subscriptions](subscriptions.md) for assignments and browser sign-in.
+subscription; a bot with its own profile has its own. Credentials stay on the Computer. Tico stores profile names, sign-in state and which bots chose one.
+See [Computers](computers.md) for connections, which one a bot runs on, and browser sign-in.
 
 ```bash
 scripts/tico -e acme profile add acme                 # first one added becomes the default
@@ -142,7 +142,7 @@ do not enforce file isolation between groups.
 | Runtime | How the profile moves its login |
 |---|---|
 | `codex` | `CODEX_HOME` points at `<profile>/codex` |
-| `claude` | `HOME` points at `<profile>/claude`, keeping the existing login layout |
+| `claude` | `HOME` points at `<profile>/claude`, keeping the existing login layout; an inherited `CLAUDE_CONFIG_DIR` is dropped, since Claude Code would read it ahead of `HOME` |
 | `grok` | `HOME` points at `<profile>/grok`. Grok Build 1.0.30 also honours `GROK_HOME` (probed 2026-09-15), but one rule for both keeps a profile a single directory |
 | `gemini` | No variable in the run's environment: the Gemini host is handed `<profile>/gemini` and sets `GEMINI_CLI_HOME` and `GEMINI_CLI_SYSTEM_SETTINGS_PATH` itself |
 

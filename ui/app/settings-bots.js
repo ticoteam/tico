@@ -22,6 +22,11 @@ const settingsChoiceLabel = (harness, model, effort) => {
   const row = settingsModel(model), own = row?.harnesses?.[0] || row?.runtime || harness;
   return modelChoiceWords(model, settingsEffortName(effort), harness, own) || settingsModelName(model);
 };
+// In the model list a Tico model says what runs underneath it: "Tico Mid 1.0 (Claude Sonnet 5.5 underneath)".
+const settingsModelPickName = id => {
+  const row = settingsModel(id);
+  return /^tico-/.test(id) && row?.description ? `${settingsModelName(id)} (${row.description})` : settingsModelName(id);
+};
 // A bot with no model of its own follows the team default; say which one it resolves to.
 function settingsDefaultLabel(e) {
   if (e.model || !e.resolved_model) return 'not set';
@@ -37,7 +42,7 @@ function settingsAllChoices() {
     (model.harnesses || [model.runtime]).flatMap(harness =>
       (model.efforts?.length ? model.efforts : [model.default_effort || '']).map(effort => {
         const label = settingsChoiceLabel(harness, model.id, effort);
-        const search = [harness, settingsHarnessName(harness), model.id, model.label, effort, label].join(' ').toLowerCase();
+        const search = [harness, settingsHarnessName(harness), model.id, model.label, model.description || '', effort, label].join(' ').toLowerCase();
         return {harness, model: model.id, effort, label, search, value: settingsChoiceValue(harness, model.id, effort)};
       })));
 }
@@ -53,11 +58,11 @@ function settingsOffHarnesses(choices) {
       !model.deprecated && model.provider && !enabled.includes(model.provider) &&
       (model.harnesses || [model.runtime]).includes(row.id)));
 }
-// One line naming what is off and where to turn it on; the AI providers page itself says only the owner can.
+// One line naming what is off and where to turn it on; the Models section itself says only the owner can.
 function settingsOffNote(off) {
   if (!off.length) return '';
   const names = off.map(row => harnessWords(row.id)).join(', ');
-  return `<p class="settings-choice-block" data-choice-off><span>${esc(names)} ${off.length === 1 ? 'is' : 'are'} off — turn on ${off.length === 1 ? 'its' : 'their'} provider in AI providers</span> <a href="#/settings" data-off-providers>Open AI providers</a></p>`;
+  return `<p class="settings-choice-block" data-choice-off><span>${esc(names)} ${off.length === 1 ? 'is' : 'are'} off — turn on ${off.length === 1 ? 'its' : 'their'} provider in Models</span> <a href="#/settings" data-off-providers>Open Models</a></p>`;
 }
 // What the bot's computer cannot run, as the server judges it (backend/readiness.py `can_run`, sent with
 // /v2/operations as `runnable`): {can_run: false, problem, short, computer, sign_in, move}. Not listed: not refused.
@@ -86,7 +91,7 @@ async function settingsMoveForModel(button) {
 document.addEventListener('click', event => {
   const move = event.target.closest('[data-choice-move]');
   if (move) void settingsMoveForModel(move);
-  if (event.target.closest('[data-off-providers]')) settingsShow('providers');
+  if (event.target.closest('[data-off-providers]')) settingsShow('models');
 });
 // Keep the three choices local until Apply, so selecting a harness cannot start a transition.
 function settingsChoiceFields(current = '', disabled = false, none = false, label = 'Model settings') {
@@ -128,7 +133,9 @@ function settingsWireChoiceFields(fields, onChange = () => {}) {
     const models = [...new Set(choices.filter(row => row.harness === picked.harness).map(row => row.model))];
     model.innerHTML = option('', 'Choose model', !picked.model, true)
       + (picked.model && !models.includes(picked.model) ? option(picked.model, `${settingsModelName(picked.model)} (current)`, true, true) : '')
-      + models.map(id => option(id, settingsModelName(id), id === picked.model)).join('');
+      // A Tico model on a computer that cannot run Gateway work (backend/views.py `runnable_choices`, under its model id).
+      + models.map(id => { const why = /^tico-/.test(id) ? block(id) : null;
+        return option(id, why ? `${settingsModelName(id)} (${why.short})` : settingsModelPickName(id), id === picked.model, !!why && id !== picked.model); }).join('');
     const efforts = choices.filter(row => row.harness === picked.harness && row.model === picked.model).map(row => row.effort);
     effort.innerHTML = (!picked.effort && efforts.length ? option('', 'Choose effort', true, true) : '')
       + (!efforts.length ? option(picked.effort, settingsEffortName(picked.effort) || 'Choose effort', true, true) : '')
@@ -139,7 +146,7 @@ function settingsWireChoiceFields(fields, onChange = () => {}) {
     effort.disabled = readonly || efforts.length <= 1;
   };
   const value = () => picked.model ? settingsChoiceValue(picked.harness, picked.model, picked.effort) : '';
-  const valid = () => (choices.some(row => row.value === value()) && !block(picked.harness)) || (!picked.harness && fields.hasAttribute('data-allow-none'));
+  const valid = () => (choices.some(row => row.value === value()) && !block(picked.harness) && !(/^tico-/.test(picked.model) && block(picked.model))) || (!picked.harness && fields.hasAttribute('data-allow-none'));
   // Whether the three fields show something other than what the bot has, finished or not.
   const changed = () => { const was = settingsChoiceFromValue(fields.dataset.current);
     return picked.harness !== was.harness || picked.model !== was.model || picked.effort !== was.effort; };
@@ -607,7 +614,7 @@ function renderSettingsBots() {
   const copyAll = $('#copy-setup-prompt');
   if (copyAll) { copyAll.onclick = () => settingsCopyPrompt(); copyAll.disabled = false; }
   const add = $('#settings-add-bot');
-  if (add) { add.onclick = () => settingsEditBot(); add.disabled = false; }
+  if (add) { add.onclick = () => void settingsRecruitFlow(); add.disabled = false; }
   const fromCatalog = $('#settings-add-catalog');
   if (fromCatalog) { fromCatalog.onclick = () => void settingsCatalogPicker(); fromCatalog.disabled = false; }
 }
@@ -706,11 +713,11 @@ async function settingsCatalogPicker() {
     } catch (error) {
       status.innerHTML = `<span class="err">${esc(error.message)}</span>`;
       if (String(error.message).includes('Team default')) {
-        const link = document.createElement('button'); link.type = 'button'; link.className = 'linkish'; link.textContent = 'AI providers';
+        const link = document.createElement('button'); link.type = 'button'; link.className = 'linkish'; link.textContent = 'Models';
         link.onclick = () => {
           dialog.close();
-          if (S.route === SETTINGS) settingsShow('providers');
-          else { SETTINGS_TAB = 'providers'; location.hash = SETTINGS; }
+          if (S.route === SETTINGS) settingsShow('models');
+          else { SETTINGS_TAB = 'models'; location.hash = SETTINGS; }
         };
         status.append(' ', link);
       }

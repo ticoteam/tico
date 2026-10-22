@@ -1,10 +1,10 @@
-// Sign out and Switch account from the app (ui/model-login.js, backend/model_login.py). On Settings > Computers a
-// signed-in Codex or Claude Code login, the computer's own or a named subscription's, offers Switch account and Sign
-// out to the computer's operator or an admin, only while the computer is online. Sign out first names the bots that
+// Sign out and Switch account from the app (ui/model-login.js, backend/model_login.py). In a computer's pop-up on
+// Settings > Computers each signed-in Codex or Claude Code connection, the computer's own login or a named subscription,
+// offers Switch account and Sign out to the computer's operator or an admin, only while the computer is online. Sign out first names the bots that
 // stop, then asks the computer and follows it to Signed out; a computer login someone signed out reads Signed out and
 // offers Sign in and Use the shared key. Switch account is the sign-in dialog, titled as a switch, posting switch: true,
-// and a cancel says the old account still works. Manage subscription offers the same for each signed-in runtime. A
-// tool without a logout in its manifest, and a plain member, see none of it. Sign out stays off until the bots are
+// and a cancel says the old account still works. A line that is both the computer's login and a subscription offers
+// each login's pair, named. A tool without a logout in its manifest, and a plain member, see none of it. Sign out stays off until the bots are
 // named, and a failed lookup offers Try again. After a change the page looks again until a heartbeat newer than the
 // change shows it (a stale one still reads the old state), redrawing Computers for a named subscription too, whose
 // row then offers Sign in. A switch past its commit point reads as finishing with no cancel, and a Mac offers no
@@ -81,7 +81,9 @@ const {unrouted} = require('./support/routes.cjs');
             if (await held) return json({detail: 'The server is busy'}, 503);
           }
           const runtime = url.searchParams.get('runtime'), profile = url.searchParams.get('profile') || '';
-          return json({runtime, profile, bots: runtime === 'codex' && !profile ? [{bot: 'writer', name: 'Writer'}, {bot: 'scout', name: 'Scout'}] : []});
+          const named = names => names.map(name => ({bot: name.toLowerCase().replace(/ /g, '-'), name}));
+          return json({runtime, profile, bots: profile ? [] : runtime === 'codex' ? named(['Writer', 'Scout'])
+            : runtime === 'claude' ? named(['Reviewer 1', 'QA', 'Scout', 'Writer']) : []});
         }
         if (p === '/api/v2/computers/box/logouts' && method === 'POST') {
           const body = req.postDataJSON(), id = `out${++seq}`; writes.push({p, body});
@@ -99,7 +101,8 @@ const {unrouted} = require('./support/routes.cjs');
           // The computer signs out on its second check: the server marks it at once, the readiness follows on the
           // next heartbeat.
           if (row.kind === 'sign_out' && ++row.polls === 2) {
-            if (!row.profile) box.signed_out = {codex: ['']};
+            // backend/model_login.py records every sign-out from Tico, the computer's own login's ('') and a subscription's.
+            box.signed_out = {...box.signed_out, [row.runtime]: [...(box.signed_out[row.runtime] || []), row.profile]};
             finish(row.id, 'signed_out', () => {
               if (row.profile) box.profiles.find(x => x.name === row.profile).runtimes[row.runtime] = {signed_in: false};
               else box.readiness.runtimes[row.runtime] = {installed: true, authenticated: 'missing'};
@@ -116,7 +119,7 @@ const {unrouted} = require('./support/routes.cjs');
         }
         if (p === '/api/v2/computers/box/logins' && method === 'POST') {
           const body = req.postDataJSON(), id = `in${++seq}`; writes.push({p, body});
-          rows[id] = {id, runtime: body.runtime, profile: body.profile || '', kind: body.switch ? 'switch' : 'sign_in', state: 'waiting',
+          rows[id] = {id, runtime: body.runtime, profile: body.profile || '', kind: body.switch ? 'switch' : body.to ? 'to_subscription' : 'sign_in', state: 'waiting',
             url: 'https://auth.openai.com/codex/device', code: 'ABCD-1234', created: new Date().toISOString(), lines: []};
           return json(rows[id]);
         }
@@ -125,18 +128,20 @@ const {unrouted} = require('./support/routes.cjs');
       });
       await page.goto('https://tico-ui.test/#/settings');
       await page.locator('[data-settings-tab=devices]').click();
-      await page.locator('#set-machines [role=table][aria-label="AI tools on Team box"]').waitFor();
+      await page.locator('#set-machines .machine-name[data-computer-open=box]').click();
+      await page.locator('#set-machines dialog.computer-detail[open] [data-connection]').first().waitFor();
       return {page, box, writes, errors, rows, finish, hold, last: () => `${['in', 'out'].find(k => rows[`${k}${seq}`])}${seq}`};
     }
 
     // ---- The operator, on Settings > Computers
     const {page, box, writes, errors, rows, finish, hold, last} = await open();
-    const table = page.locator('#set-machines [role=table][aria-label="AI tools on Team box"]');
-    const own = name => table.locator(`[data-machine-tool="${name}"]:not([data-machine-profile])`);
-    const buttons = row => row.locator('.machine-tool-signin button').allInnerTexts();
-    assert.deepEqual(await buttons(own('codex')), ['Switch account', 'Sign out']);
-    assert.deepEqual(await buttons(own('claude')), ['Switch account', 'Sign out']);
-    assert.deepEqual(await buttons(table.locator('[data-machine-profile="acme"][data-machine-tool="codex"]')), ['Switch account', 'Sign out']);
+    const table = page.locator('#set-machines dialog.computer-detail[open]');
+    const own = name => table.locator(`[data-connection="own:${name}"]`);
+    // Switch account and Sign out are icons: their name is the aria-label.
+    const buttons = row => row.locator('.computer-conn-signin button').evaluateAll(all => all.map(b => b.getAttribute('aria-label') || b.innerText));
+    assert.deepEqual(await buttons(own('codex')), ['Switch account', 'Switch to API key', 'Sign out']);
+    assert.deepEqual(await buttons(own('claude')), ['Switch account', 'Switch to API key', 'Sign out']);
+    assert.deepEqual(await buttons(table.locator('[data-connection="profile:acme:codex"]')), ['Switch account', 'Sign out']);
     assert.deepEqual(await buttons(own('gemini')), [], 'no logout in its manifest: nothing to offer');
 
     // Sign out: off while the bots that stop are looked up and when the lookup fails, which offers Try again; then
@@ -159,10 +164,19 @@ const {unrouted} = require('./support/routes.cjs');
     await confirm.locator('[data-bots]', {hasText: 'Writer'}).waitFor();
     assert.equal(await confirm.locator('[data-sign-out]').isDisabled(), false, 'on once the bots are named');
     assert.equal(await confirm.locator('h2').innerText(), 'Sign out of Codex (ChatGPT) on Team box?');
-    assert.equal(await confirm.locator('[data-bots]').innerText(), 'These 2 bots stop until someone signs in again: Writer, Scout.');
+    // The spec's words: "Reviewer 1, QA and 2 more will stop running until this is signed in again".
+    assert.equal(await confirm.locator('[data-bots]').innerText(), 'Writer and Scout will stop running until this is signed in again.');
     assert.match(await confirm.innerText(), /shared key won't sign it back in by itself/);
     await confirm.getByRole('button', {name: 'Cancel'}).click();
     await page.locator('dialog.model-logout').waitFor({state: 'detached'});   // removed on the dialog's close event, a task after the click
+    assert.deepEqual(writes, []);
+    // Four bots: the first two by name and how many more, every name on hover.
+    await own('claude').getByRole('button', {name: 'Sign out'}).click();
+    await confirm.locator('[data-bots]', {hasText: 'Reviewer 1'}).waitFor();
+    assert.equal(await confirm.locator('[data-bots]').innerText(), 'Reviewer 1, QA and 2 more will stop running until this is signed in again.');
+    assert.equal(await confirm.locator('[data-bots]').getAttribute('title'), 'Reviewer 1, QA, Scout, Writer');
+    await confirm.getByRole('button', {name: 'Cancel'}).click();
+    await page.locator('dialog.model-logout').waitFor({state: 'detached'});
     assert.deepEqual(writes, []);
 
     // Confirmed: it asks the computer and follows it to Signed out; the row then reads Signed out, with Sign in and
@@ -177,15 +191,40 @@ const {unrouted} = require('./support/routes.cjs');
     await own('codex').getByRole('button', {name: 'Use the shared key'}).waitFor({timeout: 15000});
     // Add key: a key of its own (Dev 97, ui/tests/model-keys.cjs).
     assert.deepEqual(await buttons(own('codex')), ['Sign in', 'Use the shared key', 'Add key']);
-    assert.match(await own('codex').locator('.machine-tool-signin .pill').getAttribute('title'), /shared key does not sign it back in/);
+    // "Signed out · Sign in", and the chip on the computer's row has the red dot.
+    assert.match((await own('codex').locator('.computer-conn-signin').textContent()).replace(/\s+/g, ' ').trim(), /^Signed out · Sign in/);
+    assert.equal(await own('codex').locator('.computer-conn-head .machine-chip-dot').count(), 1);
+    assert.equal(await page.locator('#set-machines [data-chip="own:codex"].attention .machine-chip-dot').count(), 1);
+    assert.match(await own('codex').locator('.computer-conn-signin .pill').getAttribute('title'), /shared key does not sign it back in/);
     await own('codex').getByRole('button', {name: 'Use the shared key'}).click();
     await page.locator('.toast', {hasText: 'shared key signs it in'}).waitFor();
     assert.deepEqual(writes.at(-1), {p: '/api/v2/computers/box/shared-key', body: {runtime: 'codex'}});
     await own('codex').getByRole('button', {name: 'Sign out'}).waitFor({timeout: 15000});
 
+    // On the shared key it runs on an API key, so it offers Switch to subscription, not Switch account (Computers part
+    // 2). It is the sign-in dialog as a switch of type: a cancel says the key is still in use; done, the line shows
+    // the subscription and offers Switch account again.
+    assert.deepEqual(await buttons(own('codex')), ['Switch to subscription', 'Sign out']);
+    const toSub = page.locator('dialog.model-login:not(.model-logout)');
+    await own('codex').getByRole('button', {name: 'Switch to subscription'}).click();
+    await toSub.locator('h2', {hasText: 'Switch Codex (ChatGPT) on Team box to a subscription'}).waitFor();
+    await toSub.locator('code', {hasText: 'ABCD-1234'}).waitFor();
+    assert.deepEqual(writes.at(-1), {p: '/api/v2/computers/box/logins', body: {runtime: 'codex', to: 'subscription'}});
+    await toSub.locator('[data-cancel]').click();
+    await toSub.locator('[data-status]', {hasText: 'cancelled'}).waitFor();
+    assert.match(await toSub.locator('[data-status]').innerText(), /The API key is still in use\./);
+    await page.keyboard.press('Escape');
+    await own('codex').getByRole('button', {name: 'Switch to subscription'}).click();
+    await toSub.locator('code', {hasText: 'ABCD-1234'}).waitFor();
+    finish(last(), 'signed_in', () => { box.readiness.runtimes.codex.account = {email: 'old@acme.example', plan: 'pro', kind: 'subscription', checked_at: new Date().toISOString()}; });
+    await toSub.locator('[data-status][data-state=signed_in]').waitFor();
+    assert.equal(await toSub.locator('[data-status]').innerText(), 'Switched. Codex (ChatGPT) on Team box now runs on the subscription; its bots keep it, and the API key is off.');
+    await toSub.getByRole('button', {name: 'Done'}).click();
+    await own('codex').getByRole('button', {name: 'Switch account'}).waitFor({timeout: 15000});
+
     // A named subscription's sign-out has no bots here and says nothing about the shared key. Done, its row on
     // Computers reads Signed out with Sign in, which signs it in again and brings Switch account back.
-    const acme = table.locator('[data-machine-profile="acme"][data-machine-tool="codex"]');
+    const acme = table.locator('[data-connection="profile:acme:codex"]');
     await acme.getByRole('button', {name: 'Sign out'}).click();
     await confirm.locator('[data-bots]', {hasText: 'No bot'}).waitFor();
     assert.equal(await confirm.locator('h2').innerText(), 'Sign out of Codex (ChatGPT) · acme on Team box?');
@@ -195,13 +234,16 @@ const {unrouted} = require('./support/routes.cjs');
     assert.deepEqual(writes.at(-1), {p: '/api/v2/computers/box/logouts', body: {runtime: 'codex', profile: 'acme'}});
     await confirm.locator('[data-actions] [data-close]').click();
     await acme.getByRole('button', {name: 'Sign in'}).waitFor({timeout: 15000});
-    assert.equal(await acme.locator('.machine-tool-signin .pill').innerText(), 'Signed out');
+    assert.equal(await acme.locator('.computer-conn-signin .pill').innerText(), 'Signed out');
+    // No bot runs on it, and it still gets the red dot: nothing signs it back in by itself.
+    assert.match((await acme.locator('.computer-conn-signin').textContent()).replace(/\s+/g, ' ').trim(), /^Signed out · Sign in/);
+    assert.match(await page.locator('#set-machines [data-chip="profile:acme:codex"].attention').getAttribute('title'), /^Codex · Acme · Signed out · /);
     assert.deepEqual(await buttons(acme), ['Sign in']);
     await acme.getByRole('button', {name: 'Sign in'}).click();
     const login = page.locator('dialog.model-login:not(.model-logout)');
     await login.locator('code', {hasText: 'ABCD-1234'}).waitFor();
     assert.deepEqual(writes.at(-1), {p: '/api/v2/computers/box/logins', body: {runtime: 'codex', profile: 'acme'}});
-    finish(last(), 'signed_in', () => { box.profiles[0].runtimes.codex = {signed_in: true, account: {email: 'dev@acme.example', plan: 'pro'}}; });
+    finish(last(), 'signed_in', () => { box.signed_out = {}; box.profiles[0].runtimes.codex = {signed_in: true, account: {email: 'dev@acme.example', plan: 'pro'}}; });
     await login.locator('[data-status][data-state=signed_in]').waitFor();
     await login.getByRole('button', {name: 'Done'}).click();
     await acme.getByRole('button', {name: 'Switch account'}).waitFor({timeout: 15000});
@@ -228,18 +270,23 @@ const {unrouted} = require('./support/routes.cjs');
     finish(last(), 'signed_in', () => { box.readiness.runtimes.claude.account = {email: 'new@acme.example', plan: 'max', checked_at: new Date().toISOString()}; });
     await login.locator('[data-status][data-state=signed_in]').waitFor();
     await login.getByRole('button', {name: 'Done'}).click();
-    await own('claude').locator('.machine-tool-signin', {hasText: 'new@acme.example'}).waitFor({timeout: 15000});
+    await own('claude').locator('.computer-conn-signin', {hasText: 'new@acme.example'}).waitFor({timeout: 15000});
 
-    // Offline: no sign-out or switch to offer.
+    // Offline: Switch account and Sign out stay, disabled, saying why; nothing can be started.
+    const online = await buttons(own('claude'));
     box.last_seen = at(-3 * 3600000);
     await page.evaluate(() => loadSettings());
-    await table.locator('[data-machine-tool="claude"] .machine-tool-signin', {hasText: 'last checked'}).first().waitFor();
-    assert.deepEqual(await buttons(own('claude')), []);
+    await own('claude').locator('.computer-conn-signin', {hasText: 'last checked'}).waitFor();
+    assert.deepEqual(await buttons(own('claude')), online);
+    assert.ok(online.includes('Sign out') && online.includes('Switch account'), online.join());
+    assert.deepEqual(await own('claude').locator('.computer-conn-signin button').evaluateAll(all => all.map(b => b.disabled && b.title)),
+      online.map(() => 'Computer is offline'));
     box.last_seen = at(-3000);
     await page.evaluate(() => loadSettings());
     await own('claude').getByRole('button', {name: 'Sign out'}).waitFor();
 
-    // A Mac: Claude Code keeps its login in the keychain there, so it offers Sign out but no Switch account.
+    // A Mac: Claude Code keeps its login in the keychain there, so it offers Sign out but no Switch account, nor Switch
+    // to API key (a logout there could not be undone).
     box.platform = 'darwin';
     await page.evaluate(() => loadSettings());
     await own('claude').getByRole('button', {name: 'Sign out'}).waitFor();
@@ -249,22 +296,23 @@ const {unrouted} = require('./support/routes.cjs');
     await page.evaluate(() => loadSettings());
     await own('claude').getByRole('button', {name: 'Switch account'}).waitFor();
 
-    // Manage subscription: the same for each signed-in runtime of the subscription.
-    await page.locator('[data-settings-tab=providers]').click();
-    const manage = page.locator('details.subs-controls[data-runner="box"][data-profile="acme"]');
-    await manage.waitFor();
-    await manage.locator('summary').click();
-    const account = manage.locator('[data-subs-account="codex"]');
-    assert.deepEqual(await account.locator('button').allInnerTexts(), ['Switch account', 'Sign out']);
-    await account.getByRole('button', {name: 'Switch account'}).click();
-    await login.locator('h2', {hasText: 'Switch account for Codex (ChatGPT) · acme on Team box'}).waitFor();
-    assert.deepEqual(writes.at(-1), {p: '/api/v2/computers/box/logins', body: {runtime: 'codex', profile: 'acme', switch: true}});
+    // The computer's own Codex login on the acme account: one line, and each login's pair named.
+    box.readiness.runtimes.codex.account = {email: 'Dev@acme.example', plan: 'pro', checked_at: new Date().toISOString()};
+    await page.evaluate(() => loadSettings());
+    const both = table.locator('[data-connection="profile:acme:codex"]');
+    await both.locator('.computer-conn-login').first().waitFor();
+    assert.equal(await own('codex').count(), 0);
+    assert.deepEqual(await both.locator('.computer-conn-login').evaluateAll(groups => groups.map(g => [g.firstChild.textContent.trim(), ...[...g.querySelectorAll('button')].map(b => b.getAttribute('aria-label') || b.innerText)].join(' '))),
+      ['Subscription Switch account Sign out', "Computer's login Switch account Switch to API key Sign out"]);
+    await both.locator('[data-login=""]').getByRole('button', {name: 'Switch account'}).click();
+    await login.locator('h2', {hasText: 'Switch account for Codex (ChatGPT) on Team box'}).waitFor();
+    assert.deepEqual(writes.at(-1), {p: '/api/v2/computers/box/logins', body: {runtime: 'codex', switch: true}});
     assert.deepEqual(errors, []);
     await page.close();
 
     // ---- A member who does not run the computer: nothing to sign out or switch.
     const other = await open('cara');
-    assert.equal(await other.page.locator('#set-machines [data-model-sign-out], #set-machines [data-model-switch]').count(), 0);
+    assert.equal(await other.page.locator('#set-machines [data-model-sign-out], #set-machines [data-model-switch], #set-machines [data-model-to-subscription]').count(), 0);
     assert.deepEqual(other.errors, []);
     console.log('PASS: sign out with the bots named, switch account, use the shared key, rights, offline, refresh on a newer heartbeat, named Sign in and Mac');
   } finally { await browser.close(); }
