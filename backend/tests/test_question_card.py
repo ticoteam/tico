@@ -161,13 +161,22 @@ def test_times_with_different_offsets_are_compared_by_when_they_are():
     assert [views.decide_tier(x, friday) for x in (inside, after, day)] == [0, 2, 0]
 
 
-def test_a_card_on_the_roadmap_item_itself_does_not_say_it_holds_itself_up(api):
+def test_a_card_on_the_roadmap_item_itself_does_not_say_it_holds_itself_up_but_keeps_its_place(api):
+    """The header never names the card's own task; Decide's order still counts its step and due date."""
     _, _, attempt = setup_attempt(api)
     tomorrow = H.shift(H.now(), hours=24)
-    item = post(api, "tasks", {"owner": "bot:ops", "title": "Website sales chat build", "body": "Spec.", "due": tomorrow,
-                               "type": "Product roadmap", "step": "Building"})
-    with api.app.state.store.read() as c:
-        assert views.holds_up(c, H.task(c, item["id"]), lambda tid: True) is None
+    dated = post(api, "tasks", {"owner": "bot:ops", "title": "Website sales chat build", "body": "Spec.", "due": tomorrow,
+                                "type": "Product roadmap", "step": "Building"})
+    undated = post(api, "tasks", {"owner": "bot:ops", "title": "Pricing page refresh", "body": "Spec.",
+                                  "type": "Product roadmap", "step": "Building"})
+    with api.app.state.store.transaction() as c:
+        for row in (dated, undated):
+            H.task_comment(c, "bot:ops", row["id"], "Ship it with the chat on Friday?", ask={"questions": [
+                {"id": "decision", "header": "", "question": "Ship it with the chat on Friday?",
+                 "options": [{"label": "Yes"}, {"label": "No"}], "multi": False, "other": False}], "who": "human:ana"})
+    items = {i["id"]: i for i in get(api, "needs-you")["items"]}
+    assert [(items[r["id"]]["holds_up"], items[r["id"]]["tier"]) for r in (dated, undated)] == [(None, 0), (None, 1)]
+
     # Under a parent, the parent is what it holds up, dated by the item's own due.
     parent = post(api, "tasks", {"owner": "bot:ops", "title": "Launch the website", "body": "x"})
     sub = post(api, "tasks", {"owner": "bot:ops", "title": "Website chat for launch", "body": "Spec.",
