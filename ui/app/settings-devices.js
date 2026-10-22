@@ -388,21 +388,6 @@ function renderSettingsMachines() {
       el.querySelector('[data-show-revoked-computers]')?.focus();
       return;
     }
-    const screenBox = event.target.closest('[data-computer-screen]');
-    if (screenBox && event.target.type === 'radio') {
-      const id = screenBox.dataset.computerScreen, before = SETTINGS_DATA.machines.find(m => m.id === id)?.screen || 'off';
-      screenBox.querySelectorAll('input').forEach(input => { input.disabled = true; });
-      try {
-        const saved = await post(`/v2/computers/${encodeURIComponent(id)}/screen`, {mode: event.target.value});
-        screenSaved(id, {screen: event.target.value, ...saved});
-        toast(event.target.value === 'off' ? 'Screen off' : `Screen: ${event.target.value}`);
-        await loadSettings();
-      } catch (error) {
-        toast(error.message, true);
-        screenBox.querySelectorAll('input').forEach(input => { input.disabled = false; input.checked = input.value === before; });
-      }
-      return;
-    }
     const choice = event.target.closest('[data-harness-choice]');
     if (choice) {
       choice.disabled = true;

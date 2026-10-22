@@ -128,6 +128,20 @@ def live_blocker(conn, task_id, statuses):
     return row[0] if row else None
 
 
+def live_blockers(conn, task_id, statuses):
+    """Every blocker still in one of `statuses`, as task rows, oldest relation first."""
+    marks = ",".join("?" * len(statuses))
+    return [dict(r) for r in conn.execute(
+        "SELECT t.* FROM task_relations r JOIN tasks t ON t.id=r.from_task "
+        f"WHERE r.to_task=? AND r.kind='blocks' AND t.status IN ({marks}) "
+        "ORDER BY r.created, r.rowid", (task_id, *statuses))]
+
+
+def is_descendant(conn, task_id, other_id):
+    """True when `other_id` sits under `task_id`, at any depth."""
+    return task_id in ancestors(conn, other_id)
+
+
 def ancestors(conn, task_id):
     """Parent, grandparent, ... nearest first; stops at a loop."""
     out, seen = [], {task_id}
@@ -202,6 +216,23 @@ def for_prompt(conn, task_id, readable):
 
 
 # ----------------------------------------------------------------------------- writes
+OWN_SUBTASK_BLOCKER = (
+    "{blocker} is a subtask of {task}, and now blocks it. If the subtask stays open until {task} finishes "
+    "(a hold, an acknowledgement, a window), neither can ever move. Say what {task} waits for with a comment or "
+    "`waiting` and a reason instead, or finish the subtask once it has answered. If both go quiet, Tico wakes "
+    "{task}'s owner about it, and BotOps sees it as stuck.")
+
+
+def own_subtask_warning(conn, task_id, other_id, kind):
+    """The warning for a relation that makes a task wait on its own subtask, or None. Such a block is allowed:
+    a question for a person in a subtask blocks its task until they answer (hubdb._ask_in_subtask). But a
+    subtask that waits for its parent to finish is never cleared, so the writer is told."""
+    from_id, to_id, kind = normalize(str(task_id or "").strip(), str(other_id or "").strip(), kind)
+    if kind != "blocks" or not is_descendant(conn, to_id, from_id):
+        return None
+    return OWN_SUBTASK_BLOCKER.format(blocker=from_id, task=to_id)
+
+
 def normalize(task_id, other_id, kind):
     """(from, to, kind) for a request; `blocked_by` reads "task is blocked by other"."""
     kind = str(kind or "related").strip().lower().replace("-", "_")
@@ -452,7 +483,8 @@ def add_blocker(conn, actor, task_id, blocker_id, mover=None, note=""):
     _check_blocker(conn, actor, row, blocker_id)
     _insert(conn, actor, blocker_id, task_id, "blocks", H.now())
     _history(conn, actor, blocker_id, task_id, "blocks", True, note)
-    H.event(conn, actor, "task.relate", task_id, {"task": blocker_id, "kind": "blocked_by"})
+    H.event(conn, actor, "task.relate", task_id, {"task": blocker_id, "kind": "blocked_by",
+                                                  **({"own_subtask": True} if is_descendant(conn, task_id, blocker_id) else {})})
     from .roadmap_flow import sync
     from .ticket_notices import blocked
     sync(conn, task_id)               # a roadmap item now waits on this Dev ticket too

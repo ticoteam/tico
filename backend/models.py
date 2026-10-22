@@ -1548,7 +1548,7 @@ class BotCompactAt(Contract):
 
 
 class BotWakePreset(Contract):
-    wake_preset: Literal["current", "token_saver", "performance"]
+    wake_preset: Literal["current", "token_saver", "performance"] = Field(description="Token saver or Performance; legacy current is accepted as an alias for Performance.")
     expected_revision: int = Field(ge=1)
 
 

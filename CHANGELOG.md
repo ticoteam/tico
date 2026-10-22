@@ -22,6 +22,9 @@ All notable changes to Tico are recorded here. The format follows
   HQ registers only a join code's hash through scoped SSM; no owner token or join secret crosses that control plane.
 
 ### Changed
+- **One new subscription per AI tool on each computer.** Adding a second subscription for the same tool is refused
+  with a Switch account message, including while the first sign-in is pending. Different tools and computers stay
+  independent; existing connections and API keys are kept.
 - **Tico AI Gateway: Tico Cheap 1.1 replaces Cheap 1.0** in every model list. It costs the same for a prompt up to
   100,000 tokens; above that the whole request is $0.75 per 1M input, $0.075 cached and $3.75 output, and Usage
   estimates it that way. Cheap 1.0 is retired: bots and a default model already on it keep it and keep running at its
@@ -31,6 +34,19 @@ All notable changes to Tico are recorded here. The format follows
   each one at its own rate.
 
 ### Fixed
+- **A task blocked only by its own quiet subtask no longer waits silently.** Relating a subtask as its parent's
+  blocker returns a warning, and when that subtask (a bot's hold or acknowledgement) goes quiet waiting on nothing
+  else, the parent counts as stalled even while waiting: its bot is woken with the way out, and BotOps sees it stuck.
+- **Muse Code turns work again on a Docker computer that runs bots as their own user.** Each Muse login now keeps
+  its sessions in a folder of Tico's own (per subscription profile too), so a turn, including an automatic fallback
+  to Muse, no longer fails at once with "failed to create session lock directory ... Permission denied". If that
+  folder is there but the bot user can't write it, Settings > Computers shows Muse as not ready and names the folder.
+  Muse sessions from before this change start fresh.
+- Choosing a bot's model connection refreshes its computer's readiness and queued work immediately, including
+  when the previous connection is signed out.
+- **Recovering an AWS bot computer waits for Systems Manager.** Resuming an interrupted install waits up to five
+  minutes for its agent before sending recovery, tolerates a registration race and keeps the same computer on
+  failure. An accepted recovery command is never sent again by that wait.
 - **A bot's message to a bot says when it was held.** A plain message or task comment from one bot to another waits
   for that bot's next run; the send now answers `woke: false` with a `held` reason, and `hub` prints it: held for
   that bot's next run, add `--needs-action` to wake it now. Before, a held escalation read as delivered.
@@ -66,6 +82,16 @@ All notable changes to Tico are recorded here. The format follows
   plainly when a used-up login has bots on the Gateway. Gateway usage records keep which gateway key and install
   paid, never the key. The other three choices, and a team that never picks one, keep working
   as before ([Tico AI Gateway](docs/ai-gateway.md#choose-how-bots-get-their-models)).
+
+### Changed
+- **Questions close on their own** (Decide cards part 1). A bot's question to a person closes when its task or any task
+  above it is done, closed or declined (pick questions too; a done task keeps only the "accept this?" question it asks
+  its requester once done), when the person replies to it or writes on its task to that bot (the reply is the answer),
+  and on its "if you don't answer by" date even when its fallback is a send, a spend or a delete (the bot is told nothing
+  went ahead). One with no date that waits two business days (Mon-Fri, Pacific) goes back to its bot: each weekday
+  morning a bot gets one "Still needed?" wake listing all of them, and asks again or drops them; until then it stays in
+  Needs you, marked stale, rather than moving to Older questions. A stuck check never asks a person: the bot is retried
+  once, then BotOps gets a task to find why, and open "no progress" questions to people close at the next hourly sweep.
 
 ### Fixed
 - **Recommended starter bots install their Gateway runtime before subscription sign-in.** An isolated computer

@@ -770,6 +770,10 @@ allowed, take control. The computer itself decides whether it offers one:
 - A Linux checkout: `sudo apt-get install xvfb x11vnc matchbox-window-manager`, then `scripts/tico screen on`
   (`screen off` and `screen status` too; a running runner follows within seconds).
 
+In **Bot → Settings → Screen**, use the switch to enable or disable screen access. If setup is needed, the switch
+reveals the command to run on the computer and shows **Waiting for computer setup** until it reports readiness.
+The same switch is in the computer’s details under **Settings → Computers**.
+
 The first time a new computer offers its screen, its **Screen** setting in **Settings > Computers** starts at
 **Control**, so its operator and admins can watch it and drive it: the screen opens in Control, with **View** one tap
 away; choose **View** there to watch only, or **Off**. No one

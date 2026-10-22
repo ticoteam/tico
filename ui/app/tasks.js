@@ -125,7 +125,8 @@ function taskMatches(it, query) {
 }
 
 // A task’s state is written in words; its owner and dependencies remain separate properties.
-// A question over three days old (the server marks it `older`) no longer counts: it waits under Older questions.
+// A question the server marks `older` no longer counts: it waits under Older questions. Since questions unanswered for two
+// business days go back to their bot instead (backend/still_needed.py), servers no longer mark any.
 function taskNeedsViewer(t) {
   const me = myActor();
   return !!me && !!t && !taskFinished(t) && (t.owner === me || (t.ask?.to_actor === me && !t.ask?.older) || taskWaitingOn(t) === me

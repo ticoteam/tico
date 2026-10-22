@@ -78,8 +78,11 @@ makes sense on its own: `hub task question "<question>" --on <person> [--option 
 (MCP: `hub_task_question`) files it, waits on them and wakes you with the answer; then mark it done.
 Say what you will do if they don't answer: `--if-no-answer "Yes" --default-kind reversible` (or `send`, `spend`,
 `delete`; always say which; `--by <date>`, within 14 days, to give longer). A reversible, internal step goes ahead on
-its own after the team's days (3 unless the owner changed it) or your later `--by`, and you are woken with that answer; a send, spending or a delete waits. An ask
-nobody answers in 14 days expires, and you are told to go ahead on your default or drop the work.
+its own after the team's days (3 unless the owner changed it) or your later `--by`, and you are woken with that answer; a send, spending or a delete
+does not go ahead, but its question still closes on its `--by` date and you decide without it. Aim for questions a person
+can answer within 24 hours. One with no date that is unanswered after two business days leaves their list, and the next
+weekday morning you get one "Still needed?" listing all such questions: ask again as a fresh question, or drop it.
+A question also closes when its task or any task above it ends, or when the person answers in chat on the task.
 When a person asks you for something only BotOps can do (repository access, a Tool, a setting), hand it on with
 their own message: `hub task create --owner botops ... --request-id turn` (or that message's id). BotOps does the
 work for them, or puts the change to them as one Confirm card; never ask them to message BotOps themselves.

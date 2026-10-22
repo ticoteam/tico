@@ -2,6 +2,24 @@
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
+// Existing bot configuration is edited in the Settings tab. Company-level controls retain their own dialogs.
+function botSettingsPanel(id, className, titleId) {
+  const host = $('#bot-settings-panels');
+  if (!host || BOT?.tab !== 'settings') return null;
+  const panel = document.createElement('div');
+  panel.id = id; panel.className = `${className} bot-settings-panel`;
+  panel.setAttribute('aria-labelledby', titleId); panel.setAttribute('role', 'region');
+  host.replaceChildren(panel);
+  return panel;
+}
+function settingsPanelClose(panel) {
+  if (panel instanceof HTMLDialogElement) panel.close(); else panel.remove();
+}
+function settingsPanelShow(panel) {
+  if (panel instanceof HTMLDialogElement) panel.showModal();
+  else { panel.scrollIntoView({block: 'start'}); panel.querySelector('input,button')?.focus({preventScroll: true}); }
+}
+
 // ----- Access: who may see, read and write to a bot (backend/bot_access.py, docs/permissions.md).
 // Each level is everyone, or humans, groups and bots. Open is all three Everyone; the owner, the bot
 // itself and the humans it reports up to always have all three.
@@ -47,7 +65,7 @@ function settingsAccessCell(e) {
 async function settingsEditBotOwners(slug) {
   const e = S.emps.find(row => row.name === slug);
   if (!e) return;
-  let dialog = $('#bot-owners-editor');
+  let dialog = botSettingsPanel('bot-owners-editor', 'owner-picker', 'bot-owners-title') || $('#bot-owners-editor');
   if (!dialog) {
     dialog = document.createElement('dialog');
     dialog.className = 'owner-picker'; dialog.id = 'bot-owners-editor'; dialog.setAttribute('aria-labelledby', 'bot-owners-title');
@@ -59,17 +77,17 @@ async function settingsEditBotOwners(slug) {
     <div class="owner-picker-body">${e.operator ? `<p class="muted">${esc(settingsPersonName(e.operator))} is responsible for this bot and always stays an owner.</p>` : ''}
       <div class="owner-options">${people.map(person => `<label class="owner-option"><input type="checkbox" name="owner" value="${esc(person.id)}" ${listed.has(person.id) || person.id === e.operator ? 'checked' : ''} ${person.id === e.operator ? 'disabled' : ''}>${personAvatar(person, 22)}<span>${esc(person.name || person.id)}</span></label>`).join('')}</div>
       <div class="row"><button class="primary" type="submit">Save</button><button class="ghost" type="button" data-owners-close>Cancel</button><span class="muted" data-owners-status role="status"></span></div></div></form>`;
-  dialog.querySelectorAll('[data-owners-close]').forEach(button => button.onclick = () => dialog.close());
+  dialog.querySelectorAll('[data-owners-close]').forEach(button => button.onclick = () => settingsPanelClose(dialog));
   dialog.querySelector('form').onsubmit = async event => {
     event.preventDefault();
     const chosen = new Set([...dialog.querySelectorAll('input[name=owner]:checked:not(:disabled)')].map(input => input.value));
     const add = [...chosen].filter(id => !listed.has(id) && id !== e.operator), remove = [...listed].filter(id => !chosen.has(id) && id !== e.operator);
     const status = dialog.querySelector('[data-owners-status]');
-    if (!add.length && !remove.length) { dialog.close(); return; }
+    if (!add.length && !remove.length) { settingsPanelClose(dialog); return; }
     dialog.querySelectorAll('button,input').forEach(control => { control.disabled = true; }); status.textContent = 'Saving…';
     try {
       await post(`/v2/bots/${encodeURIComponent(slug)}/co-owners`, {add, remove});
-      dialog.close(); await loadSettings(); toast(`Updated who owns ${e.display_name}`);
+      settingsPanelClose(dialog); await loadSettings(); toast(`Updated who owns ${e.display_name}`);
     } catch (error) {
       status.innerHTML = `<span class="err">${esc(error.message)}</span>`;
       dialog.querySelectorAll('button,input').forEach(control => { control.disabled = false; });
@@ -77,7 +95,7 @@ async function settingsEditBotOwners(slug) {
     }
   };
   dialog.onclose = () => { dialog.innerHTML = ''; };
-  dialog.showModal();
+  settingsPanelShow(dialog);
 }
 // Mail sending (backend/mail_settings.py, docs/mail.md "Turning sending on"): whether a bot sends without a
 // per-message approval and its forward targets. Held in Tico and set by a person who manages the bot; bot.yaml only asks.
@@ -96,7 +114,7 @@ async function settingsMailSummary(root, slug) {
 async function settingsEditMail(slug, after) {
   const e = S.emps.find(row => row.name === slug);
   if (!e) return;
-  let dialog = $('#bot-mail-editor');
+  let dialog = botSettingsPanel('bot-mail-editor', 'owner-picker', 'bot-mail-title') || $('#bot-mail-editor');
   if (!dialog) {
     dialog = document.createElement('dialog');
     dialog.className = 'owner-picker'; dialog.id = 'bot-mail-editor'; dialog.setAttribute('aria-labelledby', 'bot-mail-title');
@@ -111,7 +129,7 @@ async function settingsEditMail(slug, after) {
       <label class="owner-option"><input type="checkbox" name="outbound_send" ${m.outbound_send ? 'checked' : ''}><span>Send without a per-message approval</span></label>
       <label>Forward addresses<input name="forward_to" type="text" autocomplete="off" spellcheck="false" value="${esc((m.forward_to || []).join(', '))}" placeholder="me@personal.example"></label>
       <div class="row"><button class="primary" type="submit">Save</button><button class="ghost" type="button" data-mail-close>Cancel</button><span class="muted" data-mail-status role="status"></span></div></div></form>`;
-  dialog.querySelectorAll('[data-mail-close]').forEach(button => button.onclick = () => dialog.close());
+  dialog.querySelectorAll('[data-mail-close]').forEach(button => button.onclick = () => settingsPanelClose(dialog));
   dialog.querySelector('form').onsubmit = async event => {
     event.preventDefault();
     const form = event.target, status = dialog.querySelector('[data-mail-status]');
@@ -119,14 +137,14 @@ async function settingsEditMail(slug, after) {
     dialog.querySelectorAll('button,input').forEach(control => { control.disabled = true; }); status.textContent = 'Saving…';
     try {
       await post(`/v2/bots/${encodeURIComponent(slug)}/mail-settings`, {outbound_send: form.elements.outbound_send.checked, forward_to});
-      dialog.close(); toast(`Updated mail sending for ${e.display_name}`); if (after) void after();
+      settingsPanelClose(dialog); toast(`Updated mail sending for ${e.display_name}`); if (after) void after();
     } catch (error) {
       status.innerHTML = `<span class="err">${esc(error.message)}</span>`;
       dialog.querySelectorAll('button,input').forEach(control => { control.disabled = false; });
     }
   };
   dialog.onclose = () => { dialog.innerHTML = ''; };
-  dialog.showModal();
+  settingsPanelShow(dialog);
 }
 // Which preset a stored policy is: Open, Visible-requests-only (See and Write Everyone, Read chosen),
 // Private (all three the same chosen audience), else Custom.
@@ -143,7 +161,7 @@ async function settingsEditAccess(slug) {
   let data;
   try { data = await get(`/v2/bots/${encodeURIComponent(slug)}/access`); }
   catch (error) { toast(error.message, true); return; }
-  let dialog = $('#access-editor');
+  let dialog = botSettingsPanel('access-editor', 'access-editor', 'access-editor-title') || $('#access-editor');
   if (!dialog) {
     dialog = document.createElement('dialog');
     dialog.className = 'access-editor'; dialog.id = 'access-editor'; dialog.setAttribute('aria-labelledby', 'access-editor-title');
@@ -184,7 +202,7 @@ async function settingsEditAccess(slug) {
       <div class="row"><button class="primary" type="submit">Save</button><button class="ghost" type="button" data-access-close>Cancel</button><span class="muted" data-access-status role="status"></span></div></div></form>`;
   paintPickers();
   const form = dialog.querySelector('form'), status = dialog.querySelector('[data-access-status]');
-  dialog.querySelectorAll('[data-access-close]').forEach(button => button.onclick = () => dialog.close());
+  dialog.querySelectorAll('[data-access-close]').forEach(button => button.onclick = () => settingsPanelClose(dialog));
   // Read whatever the boxes on screen say back into the draft before the preset changes or the form is saved.
   const collect = () => dialog.querySelectorAll('.access-level').forEach(box => {
     const level = box.querySelector('[data-access-everyone]')?.checked ? accessEveryone() : {
@@ -212,9 +230,9 @@ async function settingsEditAccess(slug) {
     const submit = form.querySelector('[type=submit]'); submit.disabled = true; status.textContent = 'Saving…';
     try {
       await put(`/v2/bots/${encodeURIComponent(slug)}/access`, {see: draft.see, read: draft.read, write: draft.write, revision: data.revision});
-      dialog.close(); await loadSettings(); toast(`Updated access to ${e.display_name}`);
+      settingsPanelClose(dialog); await loadSettings(); toast(`Updated access to ${e.display_name}`);
     } catch (error) { status.innerHTML = `<span class="err">${esc(error.message)}</span>`; submit.disabled = false; }
   };
   dialog.onclose = () => { dialog.innerHTML = ''; };
-  dialog.showModal();
+  settingsPanelShow(dialog);
 }

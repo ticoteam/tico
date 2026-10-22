@@ -1065,7 +1065,7 @@ def create_app(settings=None):
             if tid in asks:
                 continue            # the newest readable open ask is the one shown
             message["refs"] = H._json(message.get("refs_json"), {}) or {}
-            message["older"] = H.ask_older(message)
+            message["stale"] = H.ask_older(message)     # it stays until the weekday batch sends it back (still_needed)
             asks[tid] = message
 
         origins = {}
@@ -3121,15 +3121,17 @@ def create_app(settings=None):
         # The parent it was filed under is a relation written here too, and reads back first.
         filed_under = TR.parent_of(c, row["id"])
         readback = TR.readback(c, row["id"], filed_under, "parent") if filed_under else []
+        own_subtask = None
         for other, kind in others:
             changed = TR.relate(c, who.actor, row["id"], other, kind, mover=mover(c, who) or None)
             readback += TR.readback(c, row["id"], other, kind, changed=changed)
+            own_subtask = own_subtask or TR.own_subtask_warning(c, row["id"], other, kind)
         if body.roles:
             try:
                 TRo.set_roles(c, who.actor, row["id"], body.roles, mover=mover(c, who) or None)
             except ValueError as exc:
                 raise Problem("roles", str(exc), 422)
-        note = usage_limits.warning(c, owner) or H.setup_hold(c, owner)
+        note = " ".join(filter(None, (usage_limits.warning(c, owner) or H.setup_hold(c, owner), own_subtask)))
         return {"task": task_view(H.task(c, row["id"]), c, visible_sql=auth.task_sql(c, who), who=who),
                 **({"readback": readback} if readback else {}),
                 **({"warning": note} if note else {}), **({"warnings": row["warnings"]} if row.get("warnings") else {})}
@@ -3530,8 +3532,10 @@ def create_app(settings=None):
             changed = TR.relate(c, who.actor, task_id, other_id, body.kind, remove=body.remove,
                                 mover=mover(c, who) or None)
             # The stored direction in words, from both ends (Dev 256): a reversed write shows in the reply.
+            note = None if body.remove else TR.own_subtask_warning(c, task_id, other_id, body.kind)
             return {"readback": TR.readback(c, task_id, other_id, body.kind, remove=body.remove, changed=changed),
-                    "task": task_view(H.task(c, task_id), c, visible_sql=auth.task_sql(c, who), who=who)}
+                    "task": task_view(H.task(c, task_id), c, visible_sql=auth.task_sql(c, who), who=who),
+                    **({"warning": note} if note else {})}
         return mutate(request, body, work)
 
     @app.post("/api/v2/tasks/{tid}/waits")
