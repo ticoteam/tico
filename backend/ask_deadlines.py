@@ -2,18 +2,21 @@
 
 Run hourly (backend/scheduler.py):
 
+Every ask with a date closes on it (Decide cards, Oct 21: "I can just kind of close"); one without a date goes back to its
+bot after two business days (backend/still_needed.py).
+
 1. Go ahead. A bot may say what it will do if nobody answers (`if_no_answer` on `hub task ask` and `hub task question`:
    what it does, what kind of step that is, and optionally by when). When the step is reversible and internal and the
    person has said nothing by then (`by` or `go_ahead_days` after the ask, whichever is later: the team's days are the
    least a person gets, and `by` is at most EXPIRE_DAYS away), the keeper answers the ask for them:
    "No answer from Ana by Oct 16, so the bot goes ahead: <what>". The bot wakes on that answer as on any answer. A send,
-   a payment or a delete never goes ahead on its own: it waits for an answer, then expires. The owner turns this off
-   (`bots_go_ahead`) or changes the days in Settings > Humans (backend/team_rules.py).
-2. Expire. An ask to a person that has gone EXPIRE_DAYS with no word from them closes: with its default when rule 1
-   allows it, otherwise the work is dropped. The bot is told which, and why, in the answer. A task a bot handed a person
-   (owned by the person, requested by the bot: a Needs-you task, or the small subtask an ask becomes) closes the same
-   way when the person has not touched it in EXPIRE_DAYS, unless it is due later or waits on someone else, and the bot
-   hears why when it closes.
+   a payment or a delete never goes ahead on its own, and nothing does once the person has written since the ask (a
+   comment, a Clarify tap). The owner turns this off (`bots_go_ahead`) or changes the days in Settings > Humans
+   (backend/team_rules.py). Whatever goes ahead or not, the question closes on its date: when nothing went ahead, the
+   bot is told so and decides what to do.
+2. Expire. A task a bot handed a person (owned by the person, requested by the bot: a Needs-you task, or the small
+   subtask an ask becomes) closes when the person has not touched it in EXPIRE_DAYS, unless it is due later or waits on
+   someone else, and the bot hears why when it closes.
 
 A task with nobody's ask on it is "Still wanted?" (backend/still_wanted.py), which only a person's answer closes.
 """
@@ -79,6 +82,14 @@ def deadline(asked, rules):
     return max(default.get("by") or least, least)
 
 
+def fallback_at(asked, rules):
+    """When this ask closes on its "if you don't answer by" fallback: the day it goes ahead (`deadline`), or, for a
+    fallback that never goes ahead on its own, the date it named. None when it has no date: it goes back to its bot
+    after two business days instead (backend/still_needed.py)."""
+    default = (asked.get("refs") or {}).get("if_no_answer") or {}
+    return deadline(asked, rules) or (default.get("by") if default.get("do") else None)
+
+
 def _picked(asked, default):
     """The option the default names, as a structured answer, when the ask has one question and the default is one of its
     options ("Yes"): the bot reads it exactly as if the person had picked it."""
@@ -116,7 +127,7 @@ def settle(conn, asked, task, text, outcome, *, answers=None):
 
 
 def sweep(conn, at=None):
-    """Go ahead on, or expire, every ask that is due. Returns {"went_ahead": [...], "expired": [...], "closed": [...]}:
+    """Go ahead on, or close, every dated ask whose date passed, and close tasks handed to people. Returns {"went_ahead": [...], "expired": [...], "closed": [...]}:
     ask message ids, and task ids for closed tasks."""
     at = at or H.now()
     rules = team_rules.load(conn)
@@ -128,26 +139,33 @@ def sweep(conn, at=None):
             return done
         person, bot = asked["to_actor"], asked["from_actor"]
         default = (asked.get("refs") or {}).get("if_no_answer") or {}
+        closes = fallback_at(asked, rules)
+        if not closes or closes > at:
+            # An ask with no date goes back to its bot in the weekday batch, with its bot's other such asks
+            # (backend/still_needed.py), never one by one here.
+            continue
         spoke = last_word(conn, person, asked, task)
-        due = deadline(asked, rules)
         with isolated(conn, "ask_deadlines", asked["id"]):
-            if due and due <= at and spoke == H.ask_clock(asked):
-                settle(conn, asked, task, f"No answer from {_name(conn, person)} by {_day(due)}, so "
+            if deadline(asked, rules) and spoke == H.ask_clock(asked):
+                settle(conn, asked, task, f"No answer from {_name(conn, person)} by {_day(closes)}, so "
                        f"{_name(conn, bot)} goes ahead with what it said it would do: {default['do']}",
                        "went_ahead", answers=_picked(asked, default))
                 done["went_ahead"].append(asked["id"])
-            elif spoke < expiry:
-                why = f"No answer from {_name(conn, person)} in {EXPIRE_DAYS} days, so this ask expired."
-                if due and due <= at:
-                    settle(conn, asked, task, f"{why} {_name(conn, bot)} goes ahead with what it said it would do: "
-                           f"{default['do']}", "expired", answers=_picked(asked, default))
-                else:
-                    held = WAITS.get(default.get("kind"))
-                    reason = (f" What it would have done ({default['do']}) is {held}, which never goes ahead without an "
-                              "answer." if held and default.get("do") else "")
-                    settle(conn, asked, task, f"{why}{reason} Drop the work it was for, or ask again if it still matters.",
-                           "expired")
-                done["expired"].append(asked["id"])
+                continue
+            # Its date passed with no answer, but its fallback does not go ahead on its own: the question still closes,
+            # and the bot decides what to do without it. A word from the person since the ask (a Clarify tap, a
+            # comment) is no answer, but it stops a fallback going ahead for them.
+            held = WAITS.get(default.get("kind"))
+            if held:
+                reason = f"{default['do']} is {held}, which never goes ahead without an answer"
+            elif spoke != H.ask_clock(asked):
+                reason = f"{_name(conn, person)} wrote since it was asked, so {default['do']} does not happen on its own"
+            else:
+                reason = f"the team does not let bots go ahead on their own, so {default['do']} does not happen"
+            settle(conn, asked, task, f"No answer from {_name(conn, person)} by {_day(closes)}, so this question "
+                   f"closed. What {_name(conn, bot)} said it would do: {reason}. Drop the work it was for, or ask "
+                   "again if it still matters.", "expired")
+            done["expired"].append(asked["id"])
     for task in handed_to_people(conn, expiry, at):
         if settled() >= BATCH:
             break
