@@ -48,7 +48,7 @@ a runner from this release or later; an older runner keeps resuming the old thre
 
 In a long direct chat with a bot, when you change subject, Tico may start a fresh session, as if you pressed **Clear**,
 and shows a quiet **Topic changed** line above your message. The bot no longer carries the old conversation, which keeps
-long chats cheaper and on topic. An owner or an admin turns this on or off in **Settings > Team**, **Start fresh when
+long chats cheaper and on topic. An owner or an admin turns this on or off in **Settings > Routines**, **Start fresh when
 the topic changes** (off by default). It never happens in task chats or group chats, and there is no undo. If Tico isn't
 sure, or the check takes over 1.5 seconds, nothing changes and your message goes to the same session.
 
