@@ -25,6 +25,7 @@ from . import go_live as pending_go_lives
 from . import repo_waits
 from . import built_on
 from . import agents, app_delivery, batch, external_sync, inbox_isolation, mcp_oauth, harness_actions, model_login, oidc, personal_tokens, views
+from . import outcome_stats
 from . import owner_link
 from . import check_models, run_triggers, team_rules, update_feeds, topic_change, usage_limits, bot_to_bot, wake_presets, visuals, wake_rules, quiet_work, milestone_waits
 from . import task_privacy as privacy
@@ -2552,8 +2553,12 @@ def create_app(settings=None):
         calls, median and p90 server time, typical answer size, errors. For people and BotOps, which
         tunes them."""
         who = request.state.identity
-        if who.role not in ("human", "owner") and who.actor != H.bot_actor(H.FLEET_MAINTAINER):
-            raise Problem("forbidden", "Tool-call stats are for people and BotOps", 403)
+        with store.read() as c:
+            granted = outcome_stats.may_read(c, who) and who.role == "bot"
+        if who.role not in ("human", "owner") and who.actor != H.bot_actor(H.FLEET_MAINTAINER) and not granted:
+            raise Problem("forbidden", "Tool-call stats are for people, BotOps and a bot the owner granted outcome stats", 403)
+        if granted and via:
+            raise Problem("forbidden", "A bot granted outcome stats reads the totals, not one assistant's calls", 403)
         since = H.shift(H.now(), days=-max(1, min(days, 90)))
         tools = {}
         with store.read() as c:
@@ -5509,6 +5514,7 @@ def create_app(settings=None):
     stale_review.install(app, store, auth, mutate)
     from . import system_routines
     system_routines.install(app, store, auth)
+    outcome_stats.install(app, store, auth)
     from .live_meetings import install_live_meetings
     install_live_meetings(app, store, auth, mutate)
     from .mail import install_mail

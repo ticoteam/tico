@@ -8,6 +8,7 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Outcome totals for a bot the owner names**: `hub sql` gains `assistant_action_weekly` and `mcp_call_weekly` (counts and shares by week, status, tool and bot; no row, text or person) and `hub mcp stats` opens to that bot, so it can see whether proposals held up. The owner grants and revokes it; the bot still reads no `assistant_actions` row and writes nothing.
 - **System routines in Settings > Routines**: a read-only System section above the bot routines lists every job Tico
   runs on its own timers, in four groups (Checks that suggest, Learning, Reminders and deadlines, Housekeeping), each
   with what it does, its schedule, its last run in words ("9 checked, 2 suggestions", or "Failed: <reason>" in red) and

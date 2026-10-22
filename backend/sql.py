@@ -24,6 +24,7 @@ from fastapi import Request
 from pydantic import Field
 
 from . import listening as L
+from . import outcome_stats
 from . import rooms
 from . import task_privacy as privacy
 from .privacy_index import ReadIndex
@@ -81,6 +82,39 @@ DERIVED = {
               FROM {attempts} a WHERE NOT EXISTS (SELECT 1 FROM {all_turns} t WHERE t.id = a.id))
         GROUP BY 1, 2, 3"""),
 }
+# Totals over rows the reader may not read one by one, built only for the owner and a bot the owner granted them
+# (backend/outcome_stats.py). Each groups by week and fixed names (status, route area, tool) and carries no text, no
+# id and no person: a proposal's owner, a call's person and its token label never leave the base row.
+GRANTED = {
+    # Assistant and BotOps proposals per week, by who proposed, the API area and method they would run, and how they
+    # settled (pending, running, done, failed, cancelled, expired); `share_pct` is that status's share of its group.
+    "assistant_action_weekly": (("assistant_actions",), """
+        SELECT week, proposer, area, method, status, actions,
+               round(100.0 * actions / sum(actions) OVER (PARTITION BY week, proposer, area, method), 1) AS share_pct
+        FROM (SELECT date(created, '-6 days', 'weekday 1') AS week,
+                     coalesce(proposer, proposed_via, 'assistant') AS proposer,
+                     CASE WHEN path LIKE '/api/v2/%' THEN substr(path, 9, instr(substr(path, 9) || '/', '/') - 1)
+                          ELSE 'other' END AS area,
+                     method, status, count(status) AS actions
+              FROM {all_assistant_actions} GROUP BY 1, 2, 3, 4, 5)"""),
+    # Tool calls through the MCP endpoint per week, by tool, and by bot when a bot the reader may read made them (a
+    # person's calls, and a hidden bot's, count with no `bot`). A name that is not a hub tool's counts as `other`.
+    "mcp_call_weekly": (("events", "bots"), """
+        SELECT week, bot, tool, count(*) AS calls, sum(error) AS errors,
+               round(100.0 * sum(error) / count(*), 1) AS error_pct,
+               CAST(round(avg(ms)) AS INTEGER) AS avg_ms, max(ms) AS max_ms
+        FROM (SELECT date(ts, '-6 days', 'weekday 1') AS week,
+                     CASE WHEN actor LIKE 'bot:%' AND substr(actor, 5) IN (SELECT slug FROM {bots})
+                          THEN substr(actor, 5) END AS bot,
+                     CASE WHEN target GLOB 'hub_[a-z]*' AND target NOT GLOB '*[^a-z0-9_]*' AND length(target) <= 80
+                          THEN target ELSE 'other' END AS tool,
+                     coalesce(json_extract(detail_json, '$.error'), 0) <> 0 AS error,
+                     coalesce(json_extract(detail_json, '$.ms'), 0) AS ms
+              FROM {all_events} WHERE action = 'mcp.call')
+        GROUP BY 1, 2, 3"""),
+}
+# Base tables only a GRANTED view reads, and the columns it may see of them.
+GRANTED_SOURCES = {"assistant_actions": ("created", "proposer", "proposed_via", "path", "method", "status")}
 # FTS5 reads these as main.<virtual>_* with no view context; they are not a public API.
 FTS_SHADOWS = ("_data", "_idx", "_content", "_docsize", "_config")
 STATEMENT = re.compile(r"^\s*(?:(?:--[^\n]*\n?|/\*.*?\*/)\s*)*(select|with|explain\s+query\s+plan)\b", re.I | re.S)
@@ -402,7 +436,15 @@ def connect(path, c, auth, who, trace=None):
         for table, (predicate, _) in tables.items():
             projection = "*"
             conn.execute(f'CREATE TEMP VIEW "{table}" AS SELECT {projection} FROM {inner(table)} WHERE {predicate}')
-        for name, (bases, select) in DERIVED.items():
+        # The Assistant creates its table on first use: a view over a table or column not there yet is left out.
+        granted = {name: view for name, view in GRANTED.items() if outcome_stats.may_read(c, who)
+                   and all(set(GRANTED_SOURCES.get(base, ())) <= set(columns.get(base, ())) for base in view[0])}
+        views = {**DERIVED, **granted}
+        sources = {table for bases, _ in views.values() for table in bases} & set(GRANTED_SOURCES)
+        for table in sources:
+            names = ",".join(f'"{column}"' for column in GRANTED_SOURCES[table])
+            conn.execute(f'CREATE TEMP VIEW {inner(table)} AS SELECT {names} FROM main."{table}"')
+        for name, (bases, select) in views.items():
             conn.execute(f'CREATE TEMP VIEW "{name}" AS ' + select.format(
                 **{base: f'"{base}"' for base in bases}, **{"all_" + base: inner(base) for base in bases}))
         # Older SQLite versions initialize JSON virtual tables with schema authorization calls.
@@ -416,7 +458,7 @@ def connect(path, c, auth, who, trace=None):
     except BaseException:
         conn.close()
         raise
-    inner_names = {prefix + table for table in tables}
+    inner_names = {prefix + table for table in set(tables) | sources}
 
     def fts_parent(name):
         for suffix in FTS_SHADOWS:
@@ -451,7 +493,7 @@ def connect(path, c, auth, who, trace=None):
                          "market_insights", "market_events", "listen_runs", "task_types", "task_steps"}:
                 return sqlite3.SQLITE_OK
             # A base table is read only by its own inner view, whose name is this connection's secret.
-            if table in tables and context == prefix + table:
+            if (table in tables or table in sources) and context == prefix + table:
                 return sqlite3.SQLITE_OK
             # FTS5 reads the virtual table and its shadow tables with no view
             # context. Allow that only for the owner: mail_fts is owner-only.
@@ -464,10 +506,10 @@ def connect(path, c, auth, who, trace=None):
         if schema == "temp":
             if table == visible:
                 return sqlite3.SQLITE_OK if context == "tasks" else sqlite3.SQLITE_DENY
-            if table in tables or table in DERIVED:
+            if table in tables or table in views:
                 return sqlite3.SQLITE_OK
-            if table in inner_names and context in DERIVED:
-                return sqlite3.SQLITE_OK if table[len(prefix):] in DERIVED[context][0] else sqlite3.SQLITE_DENY
+            if table in inner_names and context in views:
+                return sqlite3.SQLITE_OK if table[len(prefix):] in views[context][0] else sqlite3.SQLITE_DENY
             return sqlite3.SQLITE_OK if table in inner_names and context in tables else sqlite3.SQLITE_DENY
         return sqlite3.SQLITE_DENY
 

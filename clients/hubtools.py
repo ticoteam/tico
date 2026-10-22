@@ -3899,7 +3899,7 @@ AUDIENCE = {
     "hub_assistant_read": PEOPLE, "hub_assistant_send": PEOPLE,
     # Humans only (views.human_only and the batch routes refuse a bot); a bot's own posts are the other way round.
     "hub_brief": HUMANS_AND_ASSISTANT, "hub_bot_recent": HUMANS_AND_ASSISTANT,
-    "hub_mcp_stats": HUMANS_AND_ASSISTANT + BOTOPS,
+    "hub_mcp_stats": HUMANS_AND_ASSISTANT + BOTS,   # a bot the owner granted outcome stats; the server refuses the rest
     "hub_update_mark_read": HUMANS_AND_ASSISTANT, "hub_update_reply": PEOPLE, "hub_grokbot_sync": PEOPLE, "hub_external_sync": PEOPLE,
     "hub_changelog_list": HUMANS_AND_ASSISTANT, "hub_changelog_mark_read": HUMANS_AND_ASSISTANT,
     "hub_proposal_decide": PEOPLE,

@@ -331,3 +331,36 @@ def test_parallel_audits_share_a_commit_without_early_ack_or_lost_context(tmp_pa
         record(9)
     with store.read() as c:
         assert c.execute('SELECT count(*) FROM receipts').fetchone()[0] == 8
+
+
+def test_a_granted_bot_reads_outcome_totals_but_no_proposal_row_and_cannot_write(api, world):
+    from backend import assistant
+    with api.app.state.store.transaction() as c:
+        assistant.ensure_schema(c)
+        for n, (status, proposer) in enumerate([("done", "assistant"), ("cancelled", "assistant"), ("done", "bot:botops")]):
+            c.execute("INSERT INTO assistant_actions(id,owner,summary,method,path,body_json,status,created,proposer) "
+                      "VALUES(?,?,?,?,?,?,?,?,?)", (f"a{n}", "human:ana", "Pay Dana's invoice", "POST",
+                                                    "/api/v2/tasks/xyz/close", '{"note":"secret"}', status, H.now(), proposer))
+        H.event(c, "human:ana", "mcp.call", "hub_task_show", {"tool": "hub_task_show", "ms": 40, "via": "ana-laptop"})
+    token = world["attempt"]["token"]
+    totals = "SELECT status, sum(actions) FROM assistant_action_weekly GROUP BY status"
+    # Without the grant the bot has neither the totals nor the rows.
+    assert "no such table" in error(api, totals, token)
+    assert "prohibited" in error(api, "SELECT status FROM assistant_actions", token)
+    assert api.get("/api/v2/live/stats", headers=headers(token)).status_code == 403
+    # Only the owner, signed in, grants it; the bot cannot grant itself.
+    assert api.put("/api/v2/outcome-stats/readers/ops", json={"read": True}, headers=headers(token)).status_code == 403
+    assert api.put("/api/v2/outcome-stats/readers/ops", json={"read": True}, headers=headers("ana-test")).json() == {"readers": ["ops"]}
+    assert query(api, totals, token)["rows"] == [["cancelled", 1], ["done", 2]]
+    assert query(api, "SELECT tool, calls FROM mcp_call_weekly", token)["rows"] == [["hub_task_show", 1]]
+    stats = api.get("/api/v2/live/stats", headers=headers(token))
+    assert stats.status_code == 200 and stats.json()["tools"][0]["tool"] == "hub_task_show"
+    assert api.get("/api/v2/live/stats?via=ana-laptop", headers=headers(token)).status_code == 403
+    # Still no row: not the table, not a hidden column, not the base events the totals are built from.
+    for sql in ("SELECT * FROM assistant_actions", "SELECT summary FROM assistant_action_weekly",
+                "SELECT owner FROM assistant_action_weekly", "SELECT detail_json FROM mcp_call_weekly"):
+        assert query(api, sql, token, expected=422)
+    assert query(api, "DELETE FROM assistant_actions", token, expected=422)
+    # Another bot, without the grant, is refused; revoking takes it away at once.
+    assert api.put("/api/v2/outcome-stats/readers/ops", json={"read": False}, headers=headers("ana-test")).json() == {"readers": []}
+    assert "no such table" in error(api, totals, token)
