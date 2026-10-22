@@ -64,6 +64,8 @@ span.use-limit{display:block}
 .use-dialog label{display:flex;flex-direction:column;gap:4px;font-size:var(--t-base);color:var(--muted)}
 .use-dialog label.use-check{flex-direction:row;align-items:center;gap:var(--s2)}
 .use-dialog-row{display:flex;justify-content:flex-end;gap:var(--s2)}
+.use-fields{display:grid;grid-template-columns:1fr 1fr;gap:var(--s3)}
+.use-dialog p.muted{margin:0;font-size:var(--t-sm)}
 .sb-cell-limit{white-space:nowrap}
 @media (max-width:760px){
   .use-row{grid-template-columns:1fr}

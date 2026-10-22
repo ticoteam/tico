@@ -36,6 +36,10 @@ sensitive so it can take a while."
   summaries of shared meetings they were in, their open reports' updates). No chat, memory or tool
   is in reach, so a private Assistant chat cannot reach the company. Once they post their own words
   that day, in either kind, nothing is drafted for them.
+- Meetings are read only by the owner and people with an email on file (backend/sql.py), so a draft
+  whose facts held a meeting summary, or a report's update that did, is flagged `meetings` and read
+  only by them (`meeting_reader`): every other reader, bots included, gets it as not found and the
+  feed, tree, counts and links leave it out. An edit keeps the flag; their own words clear it.
 """
 import json
 import re
@@ -173,7 +177,8 @@ def restricted_bots(c):
 
 def team_updates(c, author, kind, day):
     """(the direct reports' updates for that day, the reports who have none) for a manager's request.
-    A person's update is read by everyone, so their restricted bot reports are left out."""
+    A person's update is read by everyone, so their restricted bot reports are left out. Each row says
+    whether it is flagged `meetings`, so a person's draft carries the flag up and a bot never gets its text."""
     reports = direct_reports(c, author)
     if is_person(author):
         hidden = restricted_bots(c)
@@ -181,7 +186,7 @@ def team_updates(c, author, kind, day):
     if not reports:
         return [], []
     rows = {r["bot"]: dict(r) for r in c.execute(
-        "SELECT id, bot, body FROM updates WHERE kind=? AND day=? AND bot IN (" + ",".join("?" * len(reports)) + ")",
+        "SELECT id, bot, body, meetings FROM updates WHERE kind=? AND day=? AND bot IN (" + ",".join("?" * len(reports)) + ")",
         (kind, day, *reports))}
     asked = {r["bot"] for r in c.execute(
         "SELECT bot FROM update_queue WHERE kind=? AND day=? AND bot IN (" + ",".join("?" * len(reports)) + ")",
@@ -299,6 +304,36 @@ def ensure_schema(c):
     H.add_column(c, "updates", "drafted_by", "TEXT")
     H.add_column(c, "updates", "edited_by", "TEXT")
     H.add_column(c, "updates", "inputs_json", "TEXT")
+    # `meetings`: a person's draft written with meeting summaries in its facts, or from a report's update that was,
+    # is read only by a meeting reader (`meeting_reader`). A draft from before the column cannot say what it used,
+    # so every one already there counts as having used them.
+    if "meetings" not in {row[1] for row in c.execute("PRAGMA table_info(updates)")}:
+        c.execute("SAVEPOINT update_meetings")
+        try:
+            H.add_column(c, "updates", "meetings", "INTEGER NOT NULL DEFAULT 0")
+            c.execute("UPDATE updates SET meetings=1 WHERE drafted_by IS NOT NULL AND bot LIKE 'human:%'")
+        except Exception:
+            c.execute("ROLLBACK TO update_meetings")
+            c.execute("RELEASE update_meetings")
+            raise
+        c.execute("RELEASE update_meetings")
+
+
+def meeting_reader(who):
+    """Whether `who` may read an update flagged `meetings`: the owner, or a person with an email on file, the
+    same callers backend/sql.py lets read meetings. No bot, restricted or not, and no member without an email."""
+    return who.role == "owner" or (who.role == "human" and bool((who.email or "").strip()))
+
+
+def withheld(c, who, uid):
+    """Whether this update is kept from `who` because it is flagged `meetings`; the caller answers as not found."""
+    return not meeting_reader(who) and c.execute(
+        "SELECT 1 FROM updates WHERE id=? AND meetings=1", (uid,)).fetchone() is not None
+
+
+def _kept(meetings, update="u"):
+    """The SQL that keeps flagged updates out for a reader who is not a meeting reader."""
+    return "1" if meetings else f"coalesce({update}.meetings,0)=0"
 
 
 def is_person(author):
@@ -425,7 +460,9 @@ def request_text(c, bot, kind, day, redo=False):
         ask.insert(1, "You manage a team: your update is your own work and what matters from theirs, naming who did it. "
                       "Sum it up in your own words; do not copy their bullets.")
         facts += ["Your team's " + ("weeks in review" if week else "updates") + " today:"]
-        facts += [f"{_label(c, u['bot'])}:\n{u['body']}" for u in team] or ["- (none yet)"]
+        # A bot may not read a flagged update: it learns that the report posted, not what.
+        facts += [f"{_label(c, u['bot'])}:\n{u['body']}" if not u["meetings"] else
+                  f"{_label(c, u['bot'])}: posted an update (not shown here)" for u in team] or ["- (none yet)"]
         if missing:
             facts.append("No update from: " + ", ".join(_label(c, a) for a in missing))
     if redo:
@@ -494,7 +531,8 @@ def draft_facts(c, author, kind, day):
     are not private and have no restricted bot as owner or requester, their goals, their decisions and
     comments on such tasks, the summaries of the shared meetings they were in, and their reports'
     updates. Each list is bounded by the day or week and capped. No chat is read here, so none can reach
-    the draft. Approvals stay out: only their owner, requester and recipient may read one."""
+    the draft. Approvals stay out: only their owner, requester and recipient may read one. Returns (the
+    facts, whether a meeting summary or a flagged report's update went in), the draft's `meetings` flag."""
     from . import people as P
     name = _label(c, author)
     week = kind == "weekly"
@@ -548,7 +586,7 @@ def draft_facts(c, author, kind, day):
         facts += [f"{_label(c, u['bot'])}:\n{u['body']}" for u in team] or ["- (none yet)"]
         if missing:
             facts.append("No update from: " + ", ".join(_label(c, a) for a in missing))
-    return "\n".join(facts)
+    return "\n".join(facts), bool(meetings) or any(u["meetings"] for u in team)
 
 
 def draft_instructions(kind):
@@ -595,7 +633,8 @@ def write_draft(store, author, write, assistant):
             return None
         own = own_words(c, author, row["day"])
         if not own:
-            system, user = draft_instructions(row["kind"]), draft_facts(c, author, row["kind"], row["day"])
+            system = draft_instructions(row["kind"])
+            user, flagged = draft_facts(c, author, row["kind"], row["day"])
     out = failed = None
     if not own:
         try:
@@ -615,7 +654,8 @@ def write_draft(store, author, write, assistant):
         c.execute("SAVEPOINT update_draft")
         try:
             posted = post(c, author, out.get("body"), kind=row["kind"], day=row["day"],
-                          slides=out.get("slides") if row["kind"] == "weekly" else None, drafted_by=assistant)
+                          slides=out.get("slides") if row["kind"] == "weekly" else None, drafted_by=assistant,
+                          meetings=flagged)
         except Exception as exc:
             # A model's answer can be any shape (slides as a string raise AttributeError): nothing of it
             # is kept, and the row is asked again rather than left out until it is given up on.
@@ -839,18 +879,21 @@ def _decode(row):
     item = dict(row)
     raw = item.pop("slides_json", None)
     item["slides"] = json.loads(raw) if raw else None
+    item.pop("meetings", None)            # read rules use it; it is not part of the card
     if "inputs_json" in item:
         inputs = item.pop("inputs_json")
         item["inputs"] = json.loads(inputs) if inputs else []
     return item
 
 
-def with_inputs(c, item, readable=None):
+def with_inputs(c, item, readable=None, meetings=False):
     """`inputs` as the reports' updates this reader may read, `[{id, author}]`, so a card links what it
-    was written from. An input by an author outside `readable` (None: the author's own view) leaves
-    nothing behind, not even its id; one since deleted drops out too."""
+    was written from. An input by an author outside `readable` (None: the author's own view), or one
+    flagged `meetings` for a reader who is not a meeting reader, leaves nothing behind, not even its id;
+    one since deleted drops out too."""
     ids = [i for i in item.get("inputs") or [] if isinstance(i, str)]
-    rows = dict(c.execute("SELECT id, bot FROM updates WHERE id IN (" + ",".join("?" * len(ids)) + ")", ids).fetchall()) if ids else {}
+    rows = dict(c.execute("SELECT id, bot FROM updates u WHERE id IN (" + ",".join("?" * len(ids)) + ") AND "
+                          + _kept(meetings), ids).fetchall()) if ids else {}
     item["inputs"] = [{"id": i, "author": rows[i]} for i in ids if i in rows and (readable is None or rows[i] in readable)]
     return item
 
@@ -898,12 +941,16 @@ def check_day(c, bot, day):
         raise Problem("day", "An update is for today, or for the day Tico asked you to redo", 422)
 
 
-def post(c, bot, body, kind=None, day=None, slides=None, drafted_by=None, inputs=None, replace_draft=False):
+def post(c, bot, body, kind=None, day=None, slides=None, drafted_by=None, inputs=None, replace_draft=False,
+         meetings=False, reader=True):
     """Store an update by `bot` (a bot slug or `human:<id>`). A daily is its bullets; a week in review
     is its slides, with the goal KPIs added, and a markdown copy in `body`. `headline` keeps one line,
     for places that show one (MCP summaries). `drafted_by` posts a draft for a person; the person
     posting over it is an edit of that draft, or with `replace_draft` their own words. A draft never
-    lands over or beside words the person wrote or edited that day, in either kind."""
+    lands over or beside words the person wrote or edited that day, in either kind. `meetings` flags a draft
+    written from meeting summaries (`draft_facts`); an edit keeps the draft's flag, their own words clear it.
+    `reader` is whether the person posting is a meeting reader (`meeting_reader`): one who is not was never shown a
+    flagged draft, so what they post over it is their own words, and their reply links no flagged input."""
     day = day or today()
     kind = kind or ("weekly" if slides else kind_for(day))
     if kind not in KINDS:
@@ -928,7 +975,7 @@ def post(c, bot, body, kind=None, day=None, slides=None, drafted_by=None, inputs
         first = body.splitlines()[0]
         headline = MD_LINK.sub(r"\1", re.sub(r"^\s*[-*•]\s+", "", first))[:200]
     now = H.now()
-    existing = c.execute("SELECT id, drafted_by, edited_by, inputs_json FROM updates WHERE bot=? AND kind=? AND day=?",
+    existing = c.execute("SELECT id, drafted_by, edited_by, inputs_json, meetings FROM updates WHERE bot=? AND kind=? AND day=?",
                          (bot, kind, day)).fetchone()
     if drafted_by and own_words(c, bot, day):
         raise Problem("own_update", "They wrote their own update today; a draft does not replace it", 409)
@@ -936,21 +983,22 @@ def post(c, bot, body, kind=None, day=None, slides=None, drafted_by=None, inputs
         inputs = [u["id"] for u in team_updates(c, bot, kind, day)[0]]
     inputs_json = json.dumps(list(inputs)) if inputs else None
     if drafted_by:
-        draft, edited = drafted_by, None
-    elif existing and existing["drafted_by"] and not replace_draft:
-        draft, edited = existing["drafted_by"], bot
+        draft, edited, flagged = drafted_by, None, int(bool(meetings))
+    elif existing and existing["drafted_by"] and not replace_draft and (reader or not existing["meetings"]):
+        draft, edited, flagged = existing["drafted_by"], bot, existing["meetings"]
     else:
-        draft, edited = None, None
+        draft, edited, flagged = None, None, 0
     if existing:
         c.execute("UPDATE updates SET headline=?, body=?, slides_json=?, updated=?, drafted_by=?, edited_by=?, "
-                  "inputs_json=? WHERE id=?", (headline, body, stored, now, draft, edited, inputs_json, existing["id"]))
+                  "inputs_json=?, meetings=? WHERE id=?",
+                  (headline, body, stored, now, draft, edited, inputs_json, flagged, existing["id"]))
         c.execute("DELETE FROM update_reads WHERE update_id=?", (existing["id"],))   # changed: unread again
         uid = existing["id"]
     else:
         uid = H.new_id()
         c.execute("INSERT INTO updates(id,bot,kind,day,headline,body,slides_json,created,updated,drafted_by,edited_by,"
-                  "inputs_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-                  (uid, bot, kind, day, headline, body, stored, now, now, draft, edited, inputs_json))
+                  "inputs_json,meetings) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                  (uid, bot, kind, day, headline, body, stored, now, now, draft, edited, inputs_json, flagged))
         # A new latest logical day supersedes updates this reader previously restored. A backdated
         # redo must not revoke a restore: there is already a newer day, and this post did not
         # supersede it. Removing just restore overrides keeps manual archives intact. Same-day
@@ -961,7 +1009,7 @@ def post(c, bot, body, kind=None, day=None, slides=None, drafted_by=None, inputs
             c.execute("DELETE FROM update_archive_overrides WHERE state='restored' AND update_id IN "
                       "(SELECT id FROM updates WHERE bot=? AND kind=? AND day<?)", (bot, kind, day))
     H.event(c, H.bot_actor(drafted_by) if drafted_by else author_actor(bot), "update.post", uid, {"kind": kind, "day": day, **({"warning": problem} if problem else {})})
-    posted = with_inputs(c, one(c, uid))
+    posted = with_inputs(c, one(c, uid), meetings=is_person(bot) and reader)
     return {**posted, "warning": problem} if problem else posted
 
 
@@ -1028,12 +1076,13 @@ def archived(c, actor, uid):
     return bool(row and row["archived"])
 
 
-def inbox_ids(c, actor, readable, created_after=None):
-    """IDs in this person's default feed, for the existing Mark all read action."""
+def inbox_ids(c, actor, readable, created_after=None, meetings=False):
+    """IDs in this person's default feed, for the existing Mark all read action. `meetings`: the reader
+    is a meeting reader (`meeting_reader`); else updates flagged `meetings` are left out, as in the feed."""
     if not readable:
         return []
     clause, values = _only(sorted(readable))
-    where = [clause, f"NOT {_is_archived_sql()}"]
+    where = [clause, f"NOT {_is_archived_sql()}", _kept(meetings)]
     args = [actor, *values]
     if created_after:
         where.append("u.created>=?"); args.append(created_after)
@@ -1061,12 +1110,13 @@ def _only(bots, column="u.bot"):
 
 
 def listing(c, actor, readable, kind=None, bot=None, unread=False, before=None, limit=40,
-            archive=False, include_archive=False, may_read=None):
+            archive=False, include_archive=False, may_read=None, meetings=False):
     """The feed, newest first, with this person's read state, reply counts, and the requests that
     ended without an update (so a silent bot shows). `readable` is the set of bots to show; `may_read`,
     all the authors they may read, decides a card's links, so My bots or direct reports narrow the
-    cards but not what a card was written from."""
-    where, args = ["1=1"], []
+    cards but not what a card was written from. Without `meetings` (`meeting_reader`), an update
+    flagged `meetings` is left out, and so is any link to one."""
+    where, args = [_kept(meetings)], []
     if not readable:
         where.append("0")
     else:
@@ -1092,7 +1142,7 @@ def listing(c, actor, readable, kind=None, bot=None, unread=False, before=None, 
         (actor, actor, *args, limit)).fetchall()
     items = []
     for row in rows:
-        item = with_inputs(c, _decode(row), readable if may_read is None else may_read)
+        item = with_inputs(c, _decode(row), readable if may_read is None else may_read, meetings)
         item["read"] = bool(item.pop("read_at"))
         item["archived"] = bool(row["archived"])
         item["replies"] = c.execute("SELECT count(*) FROM messages WHERE json_extract(refs_json,'$.update')=?",
@@ -1106,15 +1156,16 @@ def listing(c, actor, readable, kind=None, bot=None, unread=False, before=None, 
                              (row["bot"], row["kind"], row["day"])).fetchone()
             if not late and row["bot"] in readable and (not kind or row["kind"] == kind) and (not bot or row["bot"] == bot):
                 missed.append(dict(row))
-    unread_count = count_unread(c, actor, readable, kind)
+    unread_count = count_unread(c, actor, readable, kind, meetings)
     queue = c.execute("SELECT state, count(*) n FROM update_queue WHERE day=? GROUP BY state", (today(),)).fetchall()
     return {"updates": items, "missed": missed, "unread": unread_count,
             "next_before": items[-1]["created"] if len(items) >= limit else None,
             "today": {r["state"]: r["n"] for r in queue}}
 
 
-def count_unread(c, actor, readable, kind=None):
-    """How many updates of the last two weeks this person has not read (the badge)."""
+def count_unread(c, actor, readable, kind=None, meetings=False):
+    """How many updates of the last two weeks this person has not read (the badge), counted as the feed
+    shows them: without `meetings`, flagged updates are not counted."""
     if not readable:
         return 0
     clause, values = _only(sorted(readable))
@@ -1122,17 +1173,18 @@ def count_unread(c, actor, readable, kind=None):
     return c.execute("SELECT count(*) FROM updates u LEFT JOIN update_reads r ON r.update_id=u.id AND r.actor=? "
                      "LEFT JOIN update_archive_overrides ao ON ao.update_id=u.id AND ao.actor=? "
                      f"WHERE r.read_at IS NULL AND u.created>=? AND {clause} "
-                     f"AND NOT {is_archived}"
+                     f"AND NOT {is_archived} AND {_kept(meetings)}"
                      + (" AND u.kind=?" if kind else ""),
                      (actor, actor, H.shift(H.now(), days=-14), *values, *([kind] if kind else []))).fetchone()[0]
 
 
-def tree(c, actor, readable, kind, day=None, scope=None):
+def tree(c, actor, readable, kind, day=None, scope=None, meetings=False):
     """One day's updates nested by the org chart, for the Updates page: each person and bot the
     caller may read, its update or none, and the ones below it. `scope` below starts at the caller
     (the default when someone reports to them), all at the top of the chart. Only direct reports
     are `direct`, the one level that alerts; `unread` counts just those. Archived updates are left out as
-    in the Inbox, so an explicit past `day` shows only that day's cards a newer day has not replaced."""
+    in the Inbox, so an explicit past `day` shows only that day's cards a newer day has not replaced.
+    Without `meetings` (`meeting_reader`), an update flagged `meetings` is left off its node, as in the feed."""
     from . import people as P
     from . import report_order
     roster, entries, archived = _chart(c)
@@ -1153,13 +1205,14 @@ def tree(c, actor, readable, kind, day=None, scope=None):
     authors = [n["author"] for n in nodes.values()]
     marks = ",".join("?" * len(authors)) or "''"
     if not day:
-        day = c.execute(f"SELECT max(day) FROM updates WHERE kind=? AND bot IN ({marks})", (kind, *authors)).fetchone()[0] or today()
+        day = c.execute(f"SELECT max(day) FROM updates u WHERE kind=? AND bot IN ({marks}) AND {_kept(meetings)}",
+                        (kind, *authors)).fetchone()[0] or today()
     # The same per-reader archive filter as the feed: a card this person archived stays off its node,
     # and the node keeps its reports below it.
     rows = {r["bot"]: r for r in c.execute(
         f"SELECT u.*, r.read_at FROM updates u LEFT JOIN update_reads r ON r.update_id=u.id AND r.actor=? "
         "LEFT JOIN update_archive_overrides ao ON ao.update_id=u.id AND ao.actor=? "
-        f"WHERE u.kind=? AND u.day=? AND u.bot IN ({marks}) AND NOT {_is_archived_sql()}",
+        f"WHERE u.kind=? AND u.day=? AND u.bot IN ({marks}) AND NOT {_is_archived_sql()} AND {_kept(meetings)}",
         (actor, actor, kind, day, *authors))}
     direct = set(direct_reports(c, author_of(actor))) & set(authors)
     children = {}
@@ -1182,7 +1235,7 @@ def tree(c, actor, readable, kind, day=None, scope=None):
         row = rows.get(node["author"])
         update = None
         if row:
-            update = with_inputs(c, _decode(row), readable)
+            update = with_inputs(c, _decode(row), readable, meetings)
             update["read"] = bool(update.pop("read_at"))
         kids = [build(k, seen | {k}) for k in sorted(children.get(key, []), key=lambda k: rank(key, k))
                 if k not in seen]
@@ -1192,7 +1245,7 @@ def tree(c, actor, readable, kind, day=None, scope=None):
         scope = "below" if children.get(me) else "all"
     tops = [me] if scope == "below" and me in nodes else sorted(children.get("", []), key=lambda k: rank("", k))
     return {"kind": kind, "day": day, "scope": scope, "me": me, "roots": [build(k, {k}) for k in tops],
-            "unread": count_unread(c, actor, direct, kind)}
+            "unread": count_unread(c, actor, direct, kind, meetings)}
 
 
 def author_of(actor):
