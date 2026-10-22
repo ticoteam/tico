@@ -41,7 +41,7 @@ which shows you only what you may see; tables and examples in Tico `docs/hub-sql
 create --owner <human>` (a decision or a review), `hub task ask` (one question that unblocks you;
 the question is the only thing they should have to read), `hub approval request` (optional, when genuinely unsure about an exact action) or `hub message send --fyi` (fyi). Keep `hub bot status set` to one factual line as you work.
 Set a goal of your own with `hub goal create --owner me --title "..."`; it needs no parent, so never ask a
-human for one. A goal's colour is set automatically by the Goal Manager from its KPIs, so leave it; a colour you
+human for one. A goal's colour is set automatically by the CEO Bot from its KPIs, so leave it; a colour you
 set by hand with `hub goal status <id> red|yellow|green "<one sentence>"` sticks until a human hands it back. Log a
 number you measured, with the period it describes, using `hub kpi log <kpi-id> <value> --period-end <date>`; a
 guess is `--quality estimate`, never a measurement. A

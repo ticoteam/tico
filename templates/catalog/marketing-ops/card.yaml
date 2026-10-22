@@ -23,7 +23,7 @@ owns:
 never:
   - "Change a CRM field, lifecycle stage, owner, scoring rule, form or workflow outside the requested work or Tools"
   - "Put a person's name or email address in a tracking parameter"
-  - "Own or restate team KPIs; targets live with the Goal Manager"
+  - "Own or restate team KPIs; targets live with the CEO Bot"
   - "Blame a human for a handoff delay; the report is about the process"
 prerequisites:
   - tool: hub
