@@ -35,7 +35,7 @@ def test_all_good(environment, monkeypatch):
     body, checks = health_of(api)
     assert {k: v["status"] for k, v in checks.items() if k != "signin"} == {
         "version": "ok", "computers": "ok", "models": "ok", "waiting": "ok", "queue": "ok",
-        "github": "info", "backups": "ok", "failed": "ok"}
+        "github": "info", "backups": "ok", "failed": "ok", "stalled_runs": "ok"}
     assert body["computers"][0]["online"] and body["computers"][0]["runtimes"][0]["ready"]
 
 
