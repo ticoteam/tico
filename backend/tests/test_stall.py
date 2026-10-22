@@ -5,6 +5,7 @@ import json
 
 import pytest
 
+from backend import milestone_waits as MW
 from backend.store import H
 from backend.tests.test_api import api  # noqa: F401
 
@@ -261,17 +262,22 @@ def _later(c, task_id, column, hours):
     c.execute(f"UPDATE tasks SET {column}=? WHERE id=?", (H.shift(H.now(), seconds=hours * 3600), task_id))
 
 
-@pytest.mark.parametrize("wait", ["due", "snooze", "resume"])
+@pytest.mark.parametrize("wait", ["due", "snooze", "resume", "milestone"])
 def test_a_hold_with_its_own_timed_wait_does_not_stall_its_parent_until_that_time_passes(api, wait):
-    column = {"due": "due", "snooze": "snoozed_until", "resume": "resume_json"}[wait]
+    column = {"due": "due", "snooze": "snoozed_until"}.get(wait)
     with api.app.state.store.transaction() as c:
         window, hold = held_window(c)
         if wait == "resume":
             c.execute("UPDATE tasks SET resume_json=? WHERE id=?", (json.dumps({"after": "ci"}), hold["id"]))
+        elif wait == "milestone":    # Oct 22: a hold waiting for a release (or a PR merge) is woken by it
+            MW.add(c, "bot:finance", hold, "release:ticoteam/tico@v9.9.9")
         else:
             _later(c, hold["id"], column, 24)
         assert flagged(c, window, hold) == (False, False)
-        if wait != "resume":         # a passed date or snooze is no exemption
+        if wait == "milestone":      # once it has woken the hold, the wait is no exemption
+            c.execute("UPDATE task_milestone_waits SET woke_at=? WHERE task_id=?", (H.now(), hold["id"]))
+            assert flagged(c, window, hold) == (True, True)
+        elif wait != "resume":       # a passed date or snooze is no exemption
             _later(c, hold["id"], column, -1)
             assert flagged(c, window, hold) == (True, True)
 

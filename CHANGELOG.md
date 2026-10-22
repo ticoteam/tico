@@ -27,15 +27,19 @@ All notable changes to Tico are recorded here. The format follows
   when it happens, while the task it came from keeps its own step (In QA, a release watch). A wait made after the
   merge, or a merge that arrived while the server was down, is woken once by the minute sweep; a replayed webhook
   never wakes it twice. The task page shows it under Related ("Waits for PR #943 to merge"). MCP `hub_task_wait`.
+  A bot's subtask with a pending milestone wait is not a stuck hold: the task it blocks is not woken as stalled.
 - **Relation writes read back their direction**: `hub task relate`, `hub_task_relate`, task create with relations and
   `hub task wait` answer with what was stored, from both ends ("#237 waits for #233" / "#233 blocks #237"), so a
-  reversed link is visible in the reply.
+  reversed link is visible in the reply. `hub task wait --on task:<subtask>` warns about blocking a task on its own
+  subtask, as `relate` and create do.
 - **Hosted bot computers.** Hosting can run bots on a separate computer, keeping their work away from the Tico
   server. Settings > Computers offers **Hosted computer (we run it)**. The installer supports server-only installs,
   bounded AWS runner recovery and the same 4- and 8-core sizes on both machines, with 100 and 200 GB disks.
   HQ registers only a join code's hash through scoped SSM; no owner token or join secret crosses that control plane.
 
 ### Changed
+- **Long runs of task updates in a bot's chat fold.** Four or more task status rows in a row show the oldest, a
+  "...N more..." line with the exact number hidden, and the newest. Three or fewer show as before; a message starts a new run.
 - **The CEO Bot is on every install, Passive by default, and only the owner sets it up**: the Goal Manager is the CEO
   Bot everywhere, at the top of the org chart, with its KPI history and old messages kept; there is no On/Off switch
   any more. At the new default level, **Passive**, it keeps the **regular checks** running (KPI readings and the
@@ -73,6 +77,11 @@ All notable changes to Tico are recorded here. The format follows
   current bot turn to finish" whenever a retry was running, so the bot stayed stuck on its spent model. The change now
   applies at once and takes effect from the next turn; the limit lifts, and a turn still running on the old model no
   longer puts the limit back on the new one.
+- **A company out of Tico credit no longer holds its bots off Tico models for 30 minutes**: when Tico HQ's Gateway
+  pauses Tico models for want of credit (`out_of_credit`), the bot says "Tico models are paused: this company is out
+  of credit. Your bots use their other models until credit is added", runs on its fallback meanwhile, and asks the
+  Gateway again after a minute, so it is back on Tico models within about a minute of credit being added. It used to
+  show the Gateway's raw 429 JSON and hold the Tico login like a provider's usage limit.
 - **A resumed Claude session keeps reading follow-ups**: Claude answers a resumed session with an empty result
   before it reads the new prompt. The runner took that as the turn's answer and stopped reading follow-up
   messages for the rest of the turn; it now waits for the answer to the prompt. This applies to every resumed
