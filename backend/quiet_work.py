@@ -302,13 +302,17 @@ def finished(conn, done_task):
     return out
 
 
+# Read through hubdb's tasks_resume_due (TASKS_RESUME_INDEX), whose predicate is this one's, word for word.
+DUE_SQL = ("SELECT * FROM tasks WHERE resume_json IS NOT NULL AND next_run=1 "
+           "AND status='open' AND json_extract(resume_json,'$.until')<=? "
+           "ORDER BY json_extract(resume_json,'$.until'), id")
+
+
 def due(conn, at, failures=None):
     """The scheduler's pass: each open quiet task whose resume time has come gets its run. Returns their ids."""
     H = _H()
     out = []
-    for row in H._rows(conn.execute("SELECT * FROM tasks WHERE resume_json IS NOT NULL AND next_run=1 "
-                                    "AND status='open' AND json_extract(resume_json,'$.until')<=? "
-                                    "ORDER BY json_extract(resume_json,'$.until'), id", (at,))):
+    for row in H._rows(conn.execute(DUE_SQL, (at,))):
         with isolated(conn, "resume", row["id"], failures):
             resume(conn, row, "The time it was deferred to came: " + describe(conn, condition(row)) + ".", "schedule")
             out.append(row["id"])

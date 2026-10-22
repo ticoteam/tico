@@ -148,7 +148,7 @@ fill); `scripts/build-icon-font.py` adds every card's and group's icon to the su
 | `shield_person` | `privacy` | Privacy Manager | DPA reviews against your position, a data subject request log run to each legal deadline with steps per system, the subprocessor list and records of processing, and a weekly privacy desk | common | Tico only; docs and a privacy mailbox optional |
 | `copyright` | `ip-paralegal` | IP Paralegal | A trademark and domain register with every declaration, renewal and expiry date, a monthly look-alike watch, clearance notes for proposed names, and the contractor IP assignment check | niche | Public web; docs optional |
 | `fact_check` | `legal-ops` | Legal Operations Manager | The matter list with budgets, a consistent brief per new matter, each law firm invoice checked line by line against its engagement letter and billing rules, and a monthly legal spend summary | niche | Invoices and engagement letters on tasks; docs and email optional |
-| `history_edu` | `corporate-secretary` | Corporate Secretary | Board and shareholder meeting packs, draft minutes and written consents for counsel, the entity register, the minute book index and a cap table change log tying each grant to its approval | niche | Tico only; meetings, calendar and docs optional |
+| `history_edu` | `corporate-secretary` | Corporate Secretary | Board and shareholder meeting packs, draft minutes and written consents for counsel, the entity register and the minute book index | niche | Tico only; meetings, calendar and docs optional |
 
 ### HR
 
