@@ -31,6 +31,9 @@ All notable changes to Tico are recorded here. The format follows
   waited behind it and runners saw 503s. Each step, routine and batch of due-date reminders now commits on its own,
   the due-date and deferred-task lookups use new indexes (migration 61), and Health's scheduler entry shows the
   longest single hold (`hold_ms`) next to the pass's `tick_ms`.
+- **A task blocked only by its own quiet subtask no longer waits silently.** Relating a subtask as its parent's
+  blocker returns a warning, and when that subtask (a bot's hold or acknowledgement) goes quiet waiting on nothing
+  else, the parent counts as stalled even while waiting: its bot is woken with the way out, and BotOps sees it stuck.
 - **Muse Code turns work again on a Docker computer that runs bots as their own user.** Each Muse login now keeps
   its sessions in a folder of Tico's own (per subscription profile too), so a turn, including an automatic fallback
   to Muse, no longer fails at once with "failed to create session lock directory ... Permission denied". If that
@@ -76,6 +79,16 @@ All notable changes to Tico are recorded here. The format follows
   plainly when a used-up login has bots on the Gateway. Gateway usage records keep which gateway key and install
   paid, never the key. The other three choices, and a team that never picks one, keep working
   as before ([Tico AI Gateway](docs/ai-gateway.md#choose-how-bots-get-their-models)).
+
+### Changed
+- **Questions close on their own** (Decide cards part 1). A bot's question to a person closes when its task or any task
+  above it is done, closed or declined (pick questions too; a done task keeps only the "accept this?" question it asks
+  its requester once done), when the person replies to it or writes on its task to that bot (the reply is the answer),
+  and on its "if you don't answer by" date even when its fallback is a send, a spend or a delete (the bot is told nothing
+  went ahead). One with no date that waits two business days (Mon-Fri, Pacific) goes back to its bot: each weekday
+  morning a bot gets one "Still needed?" wake listing all of them, and asks again or drops them; until then it stays in
+  Needs you, marked stale, rather than moving to Older questions. A stuck check never asks a person: the bot is retried
+  once, then BotOps gets a task to find why, and open "no progress" questions to people close at the next hourly sweep.
 
 ### Fixed
 - **Recommended starter bots install their Gateway runtime before subscription sign-in.** An isolated computer
