@@ -2419,8 +2419,9 @@ class Execution:
             elif tico_code == gateway.RATE_LIMITED:
                 focus = (f"Tico AI Gateway rate limited at {hit[11:16]}; "
                          f"retrying after {retry[:10]} {retry[11:16]} UTC")
-            elif not login_hold and any(gateway.out_of_credit(error) for error in limit_errors(c, aid)):
-                # No login is held (login_holds.after_turn): the company's credit paused its Tico models.
+            elif (gateway.out_of_credit(login_hold.get("error")) if login_hold
+                  else any(gateway.out_of_credit(error) for error in limit_errors(c, aid))):
+                # The turn ended on the company's credit, not a login's limit (login_holds.after_turn): its minute.
                 focus = (f"{gateway.PAUSED_MESSAGE} at {hit[11:16]}; trying Tico models again at {retry[11:16]} UTC, "
                          "or as soon as credit is added")
             else:

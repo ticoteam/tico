@@ -253,7 +253,7 @@ def cap_reached(text):
 def out_of_credit(text):
     """Whether a model error is the Gateway pausing the company's Tico models for want of credit (`out_of_credit`), in
     the runner's plain words or, from an older runner, the Gateway's own JSON."""
-    return OUT_OF_CREDIT in str(text or "")
+    return re.search(r'[("]' + OUT_OF_CREDIT + r'[")]', str(text or "")) is not None
 
 
 def run_code(text):
