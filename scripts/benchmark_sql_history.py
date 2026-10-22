@@ -1,0 +1,92 @@
+"""Bot history reads on a disposable, production-sized synthetic database.
+
+Run explicitly with a development venv:
+python -m pytest -q -s -o addopts='' -m slow scripts/benchmark_sql_history.py
+This manual timing receipt is excluded from the ordinary and release test suites.
+"""
+import time
+
+import pytest
+
+from backend.store import H
+from backend.tests.test_api import api, assign, claim, headers, post, ready, runner  # noqa: F401
+
+
+@pytest.mark.slow
+def test_bot_history_queries_finish_within_the_existing_timeout(api):
+    machine = runner(api)
+    assign(api, machine, 'ops')
+    ready(api, machine, ['ops'])
+    post(api, 'chat/ops', {'text': 'Synthetic history benchmark'})
+    attempt = claim(api, machine)
+    count, rooms = 30_000, 5_000
+    now = H.now()
+    with api.app.state.store.transaction() as c:
+        # The synthetic credential must stay valid through all fifty timed reads.
+        c.execute('UPDATE attempts SET lease_until=? WHERE id=?',
+                  (H.shift(now, hours=1), attempt['id']))
+        # Bulk fixture loading must not queue actual runs or construct message links.
+        for trigger in ('message_links_insert', 'queue_bot_message', 'wake_preset_hold', 'message_links_update'):
+            c.execute('DROP TRIGGER IF EXISTS ' + trigger)
+        c.executemany('INSERT INTO tasks(id,title,owner,requester,private,status,created,updated) '
+                      "VALUES(?,'Synthetic task','bot:ops','human:ana',0,'done',?,?)",
+                      [(f'fixture-task-{i}', now, now) for i in range(rooms)])
+        c.executemany('INSERT INTO conversations(id,kind,task_id,participants_json,created) '
+                      "VALUES(?,'task',?,'[]',?)",
+                      [(f'fixture-room-{i}', f'fixture-task-{i}', now) for i in range(rooms)])
+
+        def copies(table, original, size, patch):
+            template = dict(c.execute(f'SELECT * FROM {table} WHERE id=?', (original,)).fetchone())
+            columns = list(template)
+            rows = []
+            for i in range(size):
+                row = {**template, 'id': f'fixture-{table}-{i}', **patch(i)}
+                assert not set(row) - set(columns), (table, set(row) - set(columns))
+                rows.append([row[key] for key in columns])
+            c.executemany(f'INSERT INTO {table} ({",".join(columns)}) '
+                          f'VALUES ({",".join("?" for _ in columns)})', rows)
+
+        mid = c.execute('SELECT message_id FROM jobs WHERE id=?', (attempt['job_id'],)).fetchone()[0]
+        copies('messages', mid, count * 5, lambda i: {
+            'conversation_id': f'fixture-room-{i % rooms}', 'refs_json': '{}', 'in_reply_to': None})
+        event = c.execute('SELECT id FROM events LIMIT 1').fetchone()[0]
+        copies('events', event, count * 15, lambda i: {})
+        copies('jobs', attempt['job_id'], count, lambda i: {
+            'message_id': f'fixture-messages-{i}', 'state': 'done', 'attempt_id': None})
+        copies('attempts', attempt['id'], count, lambda i: {
+            'job_id': f'fixture-jobs-{i}', 'token_hash': f'fixture-token-hash-{i}',
+            'state': 'done', 'lane': f'fixture-lane-{i}'})
+        copies('turns', attempt['id'], count, lambda i: {
+            'id': f'fixture-attempts-{i}', 'message_id': f'fixture-messages-{i}',
+            'task_id': f'fixture-task-{i % rooms}'})
+        print('synthetic sizes:', {table: c.execute(f'SELECT count(*) FROM {table}').fetchone()[0]
+                                   for table in ('tasks', 'conversations', 'messages', 'jobs', 'attempts', 'turns', 'events')},
+              flush=True)
+
+    queries = [
+        'SELECT id FROM turns LIMIT 1',
+        'SELECT id FROM attempts LIMIT 1',
+        "SELECT count(*) FROM turns WHERE started>=:day AND started<:tomorrow",
+        "SELECT count(*) FROM attempts WHERE created>=:day AND created<:tomorrow",
+        'SELECT count(*) FROM messages',
+    ]
+    params = {'day': now[:10], 'tomorrow': H.shift(now, hours=24)[:10]}
+    for sql in queries:
+        plan = api.post('/api/v2/sql', json={'sql': 'EXPLAIN QUERY PLAN ' + sql, 'params': params},
+                        headers=headers(attempt['token']))
+        assert plan.status_code == 200, plan.text
+        print(sql, 'plan:', plan.json()['rows'], flush=True)
+        measured = []
+        for _ in range(10):
+            start = time.monotonic()
+            response = api.post('/api/v2/sql', json={'sql': sql, 'params': params},
+                                headers=headers(attempt['token']))
+            elapsed = time.monotonic() - start
+            assert response.status_code == 200, response.text
+            result = response.json()
+            assert result['rows'] and not result['truncated'], result
+            if 'count(*)' in sql:
+                assert result['rows'] == [[count * 5 + 1 if 'messages' in sql else count + 1]], result
+            measured.append((result['ms'], round(elapsed * 1000)))
+            assert elapsed < 5, (sql, measured)
+        print(sql, 'query_ms/http_ms:', measured, flush=True)

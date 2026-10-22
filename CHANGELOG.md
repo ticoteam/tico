@@ -143,6 +143,8 @@ All notable changes to Tico are recorded here. The format follows
   ([GitHub App](docs/github-app.md#permissions-and-why)).
 
 ### Fixed
+- Bot SQL reads of run history use indexed visibility lookups, so a one-row read no longer checks every
+  message first. Task, conversation and private-content permissions and the five-second timeout stay unchanged.
 - **The hub and MCP model change also moves a rate-limited bot while a turn runs.** `hub bot model` and the MCP
   model tool refused with "Wait for the current run to finish before changing models"; they now follow the Settings
   rule: the change applies at once, from the next turn, and lifts the old model's limit. A move onto a model that uses

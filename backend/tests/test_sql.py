@@ -184,6 +184,90 @@ def test_a_bot_reads_ordinary_tasks_but_only_its_granted_rooms_and_no_private_da
                  params={"room": world["steven_room"]})["rows"] == []
 
 
+def test_history_lookups_keep_legacy_visibility_without_scanning_messages(api, world, monkeypatch):
+    from backend import sql as S
+    from backend.auth import Identity
+
+    store, auth = api.app.state.store, api.app.state.auth
+    with store.transaction() as c:
+        c.execute('UPDATE tasks SET private=1 WHERE id=?', (world['private']['id'],))
+        def clone(table, original, **patch):
+            row = dict(c.execute(f'SELECT * FROM {table} WHERE id=?', (original,)).fetchone())
+            row.update(patch)
+            c.execute(f'INSERT INTO {table} ({",".join(row)}) VALUES ({",".join("?" for _ in row)})',
+                      list(row.values()))
+
+        original = world['attempt']
+        mid = c.execute('SELECT message_id FROM jobs WHERE id=?', (original['job_id'],)).fetchone()[0]
+        for name, patch in {
+            'public': {'conversation_id': world['coo_task']['conversation_id'], 'refs_json': '{}'},
+            'private-room': {'conversation_id': world['private']['conversation_id'], 'refs_json': '{}'},
+            'private-ref': {'refs_json': json.dumps({'task': world['private']['id']})},
+            'deleted': {'deleted_at': H.now()},
+            'unknown-task': {'refs_json': json.dumps({'task': 'unknown-fixture-task'})},
+        }.items():
+            clone('messages', mid, id='message-' + name, to_actor='human:ana', **patch)
+            clone('jobs', original['job_id'], id='job-' + name, message_id='message-' + name)
+            clone('attempts', original['id'], id='attempt-' + name, job_id='job-' + name,
+                  token_hash='fixture-' + name, state='done', lane='fixture-' + name)
+            clone('turns', original['id'], id='attempt-' + name, message_id='message-' + name, task_id=None)
+
+    guarded = S.guarded
+    replacements = {
+        'EXISTS (SELECT 1 FROM messages readable WHERE readable.id=source.message_id)':
+            'message_id IN (SELECT id FROM messages)',
+        'EXISTS (SELECT 1 FROM jobs readable WHERE readable.id=source.job_id)':
+            'job_id IN (SELECT id FROM jobs)',
+        'EXISTS (SELECT 1 FROM attempts readable WHERE readable.id=source.attempt_id)':
+            'attempt_id IN (SELECT id FROM attempts)',
+        'EXISTS (SELECT 1 FROM conversations readable WHERE readable.id=source.conversation_id)':
+            'conversation_id IN (SELECT id FROM conversations)',
+    }
+
+    def legacy(*args, **kwargs):
+        rules = guarded(*args, **kwargs)
+        for table, (predicate, hidden) in rules.items():
+            for new, old in replacements.items():
+                predicate = predicate.replace(new, old)
+            rules[table] = predicate, hidden
+        return rules
+
+    callers = [Identity('human:ana', 'owner'), Identity('human:ben', 'human'),
+               Identity('bot:ops', 'bot', attempt_id=world['attempt']['id'])]
+    for who in callers:
+        answers = []
+        for rules in (legacy, guarded):
+            monkeypatch.setattr(S, 'guarded', rules)
+            with store.read() as c:
+                conn = S.connect(store.settings.db_path, c, auth, who)
+                try:
+                    answers.append({table: S.run(conn, f'SELECT id FROM {table} ORDER BY id', [], 5000, 5)['rows']
+                                    for table in ('messages', 'jobs', 'attempts', 'turns')})
+                finally:
+                    conn.close()
+        assert answers[0] == answers[1], who
+        if who.role == 'bot':
+            assert ['attempt-public'] in answers[1]['turns']
+            for name in ('private-room', 'private-ref', 'deleted', 'unknown-task'):
+                assert ['attempt-' + name] not in answers[1]['turns']
+                assert ['attempt-' + name] not in answers[1]['attempts']
+
+    # A one-row read must check only its candidate message, independent of history size.
+    checked = []
+    message = S.ReadIndex.message
+
+    def counted(index, *args):
+        checked.append(args[0])
+        return message(index, *args)
+
+    monkeypatch.setattr(S.ReadIndex, 'message', counted)
+    for table in ('turns', 'attempts'):
+        checked.clear()
+        assert query(api, f'SELECT id FROM {table} WHERE id=:id LIMIT 1', world['attempt']['token'],
+                     params={'id': 'attempt-public'})['rows'] == [['attempt-public']]
+        assert checked == ['message-public']
+
+
 def test_current_docs_and_files_follow_api_visibility(api, world):
     doc = post(api, "docs", {"title": "Release guide", "body": "Read the release notes.", "path": "release-guide.md"})["doc"]
     linked = post(api, "linked-docs", {"title": "Release reference", "url": "https://example.com/release"})["linked"]
