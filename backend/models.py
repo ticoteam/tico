@@ -269,10 +269,17 @@ class TaskTypeUpdate(Contract):
     steps_only: bool | None = None
 
 
+# What a pick says on a person's card (ui/app/question-card.js): `then` is its "what happens" line, under its button;
+# `recommended` pre-ticks it among several picks. A bot's pick to a person needs `then` (hubdb.lint_question).
+OptionThen = Annotated[StrictStr, Field(max_length=120)]
+
+
 class QuestionOption(Contract):
     label: Annotated[StrictStr, Field(min_length=1, max_length=60)]
     description: Annotated[StrictStr, Field(max_length=200)] = ""
     file: Annotated[StrictStr, Field(pattern=r"^[^@]+@[1-9][0-9]*$")] | None = None
+    then: OptionThen = ""
+    recommended: StrictBool = False
 
 
 class QuestionFile(Contract):
@@ -293,13 +300,19 @@ class QuestionChoice(Contract):
     label: Annotated[StrictStr, Field(min_length=1, max_length=60)]
     description: Annotated[StrictStr, Field(max_length=200)] = ""
     file: QuestionFile | None = None
+    then: OptionThen = ""
+    recommended: StrictBool = False
 
 
 class TaskQuestion(Contract):
     """One decision put to a person as its own task: created, asked and set waiting on them in one write."""
     question: Annotated[StrictStr, Field(min_length=1, max_length=300)]
     on: ID
+    # The card's one "why it matters" line, under the question.
+    why: Annotated[StrictStr, Field(max_length=200)] = ""
     options: list[QuestionChoice] = Field(default_factory=list, max_length=6)
+    # Several picks: each a checkbox, answered with "Yes to all" or "Send ticked".
+    multi: StrictBool = False
     title: Annotated[StrictStr, Field(min_length=1, max_length=300)] | None = None
     body: Text | None = None
     parent: ID | None = None
@@ -323,6 +336,8 @@ class ReviewQuestion(Contract):
     id: Annotated[StrictStr, Field(min_length=1, max_length=40)]
     header: Annotated[StrictStr, Field(max_length=30)]
     question: Annotated[StrictStr, Field(min_length=1, max_length=300)]
+    # The card's one "why it matters" line, under the question.
+    why: Annotated[StrictStr, Field(max_length=200)] = ""
     options: list[QuestionOption] = Field(default_factory=list, max_length=6)
     multi: StrictBool = False
     other: StrictBool = True
@@ -1802,6 +1817,19 @@ class Event(Contract):
 
 class EventBatch(Contract):
     events: list[Event] = Field(min_length=1, max_length=100)
+
+
+class BackgroundCommand(Contract):
+    description: str = Field(default="", max_length=300)
+    exit: int | None = Field(default=None, ge=-255, le=255)
+    killed: bool = False
+    ci_watch: dict[str, int] | None = None
+    tail: str = Field(default="", max_length=2000)
+
+
+class BackgroundDone(Contract):
+    """The commands a Claude turn left running when it ended on its wait, all ended (runner-rs/src/afterwatch.rs)."""
+    commands: list[BackgroundCommand] = Field(min_length=1, max_length=20)
 
 
 class StreamCapture(Contract):

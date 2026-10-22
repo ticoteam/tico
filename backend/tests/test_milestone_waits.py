@@ -172,6 +172,29 @@ def test_a_relation_write_reads_back_its_direction(api):
     assert child["readback"] == [f'{name(child["task"])} is a subtask of {a}', f'{a} is the parent of {name(child["task"])}']
 
 
+def test_every_way_to_block_a_task_on_its_own_subtask_reads_back_and_warns(api):
+    """Oct 22 (PR #1095 review): the create, relation and `wait --on task:` writes all say so."""
+    parent = post(api, "tasks", {"owner": "cpo", "title": "Release window", "body": "x"})
+    p = name(parent)
+    made = raw(api, "tasks", {"owner": "cpo", "title": "Hold merges", "body": "x",
+                              "relations": [{"task": parent["id"], "kind": "parent"},
+                                            {"task": parent["id"], "kind": "blocks"}]})
+    hold = made["task"]
+    assert made["readback"][2:] == [f"{p} waits for {name(hold)}", f"{name(hold)} blocks {p}"]
+    assert "is a subtask of" in made["warning"] and hold["id"] in made["warning"]
+    post(api, f"tasks/{parent['id']}/relations", {"task": hold["id"], "kind": "blocked_by", "remove": True})
+    waited = wait(api, parent, "task:" + hold["id"])
+    assert waited["readback"] == [f"{p} waits for {name(hold)}", f"{name(hold)} blocks {p}"]
+    assert "is a subtask of" in waited["warning"]
+    again = wait(api, parent, "task:" + hold["id"])
+    assert again["readback"][0].startswith("Already: ") and "warning" in again, "still a block on its own subtask"
+    r = api.post(f"/api/v2/tasks/{parent['id']}/waits", json={"on": "task:" + hold["id"], "remove": True},
+                 headers=headers())
+    assert r.status_code == 200 and "warning" not in r.json(), r.text
+    other = post(api, "tasks", {"owner": "cpo", "title": "Unrelated", "body": "x"})
+    assert "warning" not in wait(api, parent, "task:" + other["id"]), "only its own subtask warns"
+
+
 def test_a_milestone_wait_is_awaited_and_parks_the_task():
     from backend import wake_rules
     assert wake_rules.awaited({"milestone": "pr_merged:ticoteam/tico#412"}) == "milestone"

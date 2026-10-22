@@ -72,7 +72,7 @@ const comments = {
       await page.locator(`.decide .dc-actions [data-dc="${what}"]`).click();
     };
 
-    // What a person asked for leads, ahead of a bot's older wait on me; a bot's pressing item (due, or old) joins it.
+    // Newest first: being old or pressing never moves a card up (only the server's tier does, below).
     // The card says whose request it is when that is not the name it shows.
     assert.deepEqual(await page.evaluate(() => ({
       order: decideCards([
@@ -82,20 +82,17 @@ const comments = {
       ]).map(c => c.key),
       cue: [decideFromPerson({from_person: 'human:sam'}, 'bot:writer'), decideFromPerson({from_person: 'human:ana'}, 'bot:writer'),
         decideFromPerson({from_person: 'human:sam'}, 'human:sam'), decideFromPerson({}, 'bot:writer')],
-    })), {order: ['task:overdue', 'task:for-sam', 'task:bot-made'], cue: ['From Sam', 'You asked', '', '']});
+    })), {order: ['task:for-sam', 'task:overdue', 'task:bot-made'], cue: ['From Sam', 'You asked', '', '']});
+    // A 4-day-old question and a 1-hour-old one that holds up a roadmap item at Building: the Building one is first.
+    // Something due, or going ahead on its own, within two working days goes ahead of both (backend/views.py decide_tier).
+    assert.deepEqual(await page.evaluate(() => decideCards([
+      {id: 'old', kind: 'waiting', owner: 'bot:writer', waiting_on: 'human:ana', created: new Date(Date.now() - 96 * 3600e3).toISOString(), tier: 2},
+      {id: 'building', kind: 'waiting', owner: 'bot:writer', waiting_on: 'human:ana', created: new Date(Date.now() - 3600e3).toISOString(), tier: 1},
+      {id: 'due', kind: 'waiting', owner: 'bot:writer', waiting_on: 'human:ana', created: new Date(Date.now() - 200 * 3600e3).toISOString(), tier: 0},
+    ]).map(c => c.key)), ['task:due', 'task:building', 'task:old']);
 
-    // A stale ask leads (oldest first) and carries one-click Clarify: one tap asks the bot whether it still
-    // matters, in clearer words.
-    let c = await read('t-stale');
-    assert.equal(c.lead, 'Should the public example show the agent demo?');
-    assert.equal(c.clarify, 'Ask Writer to clarify');
-    await page.locator('.decide .dc-body [data-dc="clarify"]').click();
-    assert.equal(await page.locator('.decide .dc-toast span').textContent(), 'Asked Writer to clarify');
-    await page.waitForFunction(() => !DEC.pending && !DEC_OUTBOX.size, null, {timeout: 8000});
-    assert.deepEqual(clarified, [{ask: 'q-stale'}]);
-
-    // An open question to me leads, the title under it, smaller; the note folds under Details, closed.
-    c = await read('t-ask');
+    // The newest card leads: an open question to me, asked an hour ago (Decide is newest first). The title under it, smaller; the note folds under Details, closed.
+    let c = await read('t-ask');
     assert.match(c.sub, /^Waiting on you · /);
     assert.equal(c.lead, 'Should the public example show the agent demo, or stay static?');
     assert.equal(c.leadClass, 'dc-msg md');
@@ -108,20 +105,6 @@ const comments = {
     await shot('ask');
     await tap('skip');
 
-    // The bot's plain yes/no ask leads, with Yes and No; the rest of the body is a detail. Yes answers the bot.
-    c = await read('t-plain');
-    assert.equal(c.lead, PLAIN);
-    assert.equal(c.title, 'Run the video tool trial');
-    assert.ok(c.details.text.includes('The test plan is in the shared folder.') && !c.details.text.includes('Latest note'));
-    assert.deepEqual(c.buttons, ['no', 'yes']);
-    await page.locator('.decide .dc-details summary').click();
-    await shot('yes-no');
-    await tap('yes');
-    await page.locator('.decide .dc-card[data-key="task:t-person"]').waitFor();
-    // The pending action clears as its send starts; the outbox empties once the server has the write.
-    await page.waitForFunction(() => !DEC.pending && !DEC_OUTBOX.size, null, {timeout: 8000});
-    assert.deepEqual(sent, [{id: 't-plain', text: 'Yes.'}]);
-
     // A person's card: the request leads, and the name is plain, with no link.
     const who = () => page.locator('.decide .dc-who').evaluate(el => ({name: el.querySelector('.dc-who-name').textContent,
       links: [...el.querySelectorAll('a')].map(a => ({cls: a.className, href: a.getAttribute('href'), tab: a.tabIndex, text: a.textContent.trim()})),
@@ -132,6 +115,30 @@ const comments = {
     assert.equal(person.name, 'Sam');
     assert.deepEqual(person.links, []);
     await tap('skip');
+
+    // The bot's plain yes/no ask leads, with Yes and No; the rest of the body is a detail. Yes answers the bot.
+    c = await read('t-plain');
+    assert.equal(c.lead, PLAIN);
+    assert.equal(c.title, 'Run the video tool trial');
+    assert.ok(c.details.text.includes('The test plan is in the shared folder.') && !c.details.text.includes('Latest note'));
+    assert.deepEqual(c.buttons, ['no', 'yes']);
+    await page.locator('.decide .dc-details summary').click();
+    await shot('yes-no');
+    await tap('yes');
+    await page.locator('.decide .dc-card[data-key="task:t-stale"]').waitFor();
+    // The pending action clears as its send starts; the outbox empties once the server has the write.
+    await page.waitForFunction(() => !DEC.pending && !DEC_OUTBOX.size, null, {timeout: 8000});
+    assert.deepEqual(sent, [{id: 't-plain', text: 'Yes.'}]);
+
+    // A stale ask, the oldest, comes after the newer cards (age never moves a card up), and carries one-click Clarify: one tap asks the bot whether it still
+    // matters, in clearer words.
+    c = await read('t-stale');
+    assert.equal(c.lead, 'Should the public example show the agent demo?');
+    assert.equal(c.clarify, 'Ask Writer to clarify');
+    await page.locator('.decide .dc-body [data-dc="clarify"]').click();
+    assert.equal(await page.locator('.decide .dc-toast span').textContent(), 'Asked Writer to clarify');
+    await page.waitForFunction(() => !DEC.pending && !DEC_OUTBOX.size, null, {timeout: 8000});
+    assert.deepEqual(clarified, [{ask: 'q-stale'}]);
 
     // No plain ask: last, marked as waiting for the bot to explain, never "without saying what it needs".
     c = await read('t-blank');
