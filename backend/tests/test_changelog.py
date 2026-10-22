@@ -134,7 +134,8 @@ def test_released_changelog_sections_match_their_tags():
     edited = released_edits(ROOT) if shutil.which("git") else None
     if edited is None:
         pytest.skip("no release tags in this checkout (shallow clone or tags not fetched)")
-    assert not edited, "your CHANGELOG line landed in the released %s section; merge main and move it under ## [Unreleased]" % (
+    assert not edited, "your CHANGELOG line landed in the released %s section; merge main and move it into changes/unreleased/ " \
+        "(python scripts/changelog_fragments.py adopt)" % (
         ", ".join("[%s]" % v for v in edited))
 
 
@@ -373,6 +374,20 @@ def test_fragment_check_and_adopt(tmp_path):
     assert path.read_text() == "### Added\n- Archive tasks,\n  in bulk.\n\n### Fixed\n- Archived tasks keep their tags.\n"
     with pytest.raises(changelog_fragments.FragmentError, match="adds nothing under"):
         changelog_fragments.adopt(tmp_path)
+
+    # Mid-merge with a main that changed the same lines, adopt reads the branch's copy, not the conflict markers.
+    git("checkout", "-q", "-f", "main")
+    (tmp_path / "CHANGELOG.md").write_text(main.replace("- Already on main.\n", "- Already on main.\n- Main moved on.\n"))
+    git("commit", "-qam", "Main")
+    git("update-ref", "refs/remotes/origin/main", "HEAD")
+    git("checkout", "-q", "-b", "tico/55-pin", "HEAD~1")
+    (tmp_path / "CHANGELOG.md").write_text(main.replace("- Already on main.\n", "- Already on main.\n- Pin tasks.\n"))
+    git("commit", "-qam", "Pin")
+    assert subprocess.run(["git", "-C", str(tmp_path), "merge", "-q", "origin/main"], capture_output=True).returncode
+    path, moved = changelog_fragments.adopt(tmp_path)
+    assert moved == [("Fixed", "- Pin tasks.")] and "<<<<" not in (tmp_path / "CHANGELOG.md").read_text()
+    (tmp_path / "changes" / "notes.md").write_text("### Fixed\n- In the wrong folder.\n")
+    assert changelog_fragments.check(tmp_path) == ["changes/notes.md: compile reads only changes/unreleased/*.md"]
 
 
 def test_tag_before_its_notes_reach_main_is_not_an_edit(tmp_path):

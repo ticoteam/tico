@@ -74,6 +74,11 @@ def fragment_paths(root):
 def check(root=ROOT):
     """Each fragment's problem, as `path: message`; empty when every fragment parses."""
     problems = []
+    folder = Path(root) / FRAGMENTS.parent
+    allowed = {folder / "README.md", *fragment_paths(root)}
+    for path in sorted(folder.rglob("*")) if folder.is_dir() else []:
+        if path.is_file() and path not in allowed and path.name != ".gitkeep":
+            problems.append("%s: compile reads only %s/*.md" % (path.relative_to(root), FRAGMENTS))
     for path in fragment_paths(root):
         try:
             parse(path.read_text(), str(path.relative_to(root)))
@@ -87,9 +92,9 @@ def git(root, *args):
 
 
 def added_at(root, path):
-    """When the fragment was first committed (Unix time), 0 when git does not know it yet."""
+    """When the fragment was first committed (Unix time); one not committed yet is the newest."""
     out = git(root, "log", "--diff-filter=A", "--format=%ct", "-1", "--", str(path.relative_to(root))).stdout.split()
-    return int(out[0]) if out else 0
+    return int(out[0]) if out else float("inf")
 
 
 def unreleased_bounds(text):
@@ -124,6 +129,9 @@ def compile_release(root, version, date):
     text = changelog.read_text()
     if re.search(r"^## \[?%s\b" % re.escape(version), text, re.M):
         raise FragmentError("CHANGELOG.md already has a [%s] section" % version)
+    if not git(root, "tag", "--list", "v[0-9]*").stdout.split():
+        print("warning: no release tags in this checkout, so a newer release whose notes are not merged back cannot be "
+              "found; fetch the tags (git fetch --tags) to have that checked", file=sys.stderr)
     late = tags_without_notes(root, text)
     if late and late != ["v" + version]:
         raise FragmentError("%s is tagged but its notes are not in this CHANGELOG.md; merge them back first, or this "
@@ -185,7 +193,10 @@ def adopt(root, main="origin/main", name=None):
         return parse(body, "CHANGELOG.md [Unreleased]") if body else []
 
     before = set(unreleased(git(root, "show", base + ":CHANGELOG.md").stdout))
-    mine = [e for e in unreleased((root / "CHANGELOG.md").read_text()) if e not in before]
+    # Mid-merge with main, CHANGELOG.md holds conflict markers: this branch's own copy is the one at HEAD.
+    unmerged = git(root, "ls-files", "--unmerged", "--", "CHANGELOG.md").stdout.strip()
+    ours = git(root, "show", "HEAD:CHANGELOG.md").stdout if unmerged else (root / "CHANGELOG.md").read_text()
+    mine = [e for e in unreleased(ours) if e not in before]
     if not mine:
         raise FragmentError("this branch adds nothing under [Unreleased]")
     path = Path(root) / FRAGMENTS / ("%s.md" % (name or branch_name(root)))
