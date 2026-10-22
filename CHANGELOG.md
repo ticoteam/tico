@@ -79,6 +79,9 @@ All notable changes to Tico are recorded here. The format follows
   the due-date and deferred-task lookups use new indexes (migration 61), and Health's scheduler entry shows the
   pass's longest single hold (`hold_ms`, with `hold_step`) and its longest wait behind other writers (`wait_ms`)
   next to `tick_ms`. These cover the 10-second pass; the minute and hourly sweeps take their own transactions.
+- **No more rare empty 502s from the server.** About once in a few hundred API requests, a request reused a connection
+  to the backend just as the backend closed it for being idle, and the app or a bot got a bare 502. The server's front
+  door now drops idle connections before the backend does.
 - **A company out of Tico credit no longer holds its bots off Tico models for 30 minutes**: when Tico HQ's Gateway
   pauses Tico models for want of credit (`out_of_credit`), the bot says "Tico models are paused: this company is out
   of credit. Your bots use their other models until credit is added", runs on its fallback meanwhile, and asks the
