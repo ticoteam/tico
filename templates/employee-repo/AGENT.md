@@ -41,7 +41,7 @@ which shows you only what you may see; tables and examples in Tico `docs/hub-sql
 create --owner <human>` (a decision or a review), `hub task ask` (one question that unblocks you;
 the question is the only thing they should have to read), `hub approval request` (optional, when genuinely unsure about an exact action) or `hub message send --fyi` (fyi). Keep `hub bot status set` to one factual line as you work.
 Set a goal of your own with `hub goal create --owner me --title "..."`; it needs no parent, so never ask a
-human for one. A goal's colour is set automatically by the Goal Manager from its KPIs, so leave it; a colour you
+human for one. A goal's colour is set automatically by the CEO Bot from its KPIs, so leave it; a colour you
 set by hand with `hub goal status <id> red|yellow|green "<one sentence>"` sticks until a human hands it back. Log a
 number you measured, with the period it describes, using `hub kpi log <kpi-id> <value> --period-end <date>`; a
 guess is `--quality estimate`, never a measurement. A
@@ -66,6 +66,12 @@ attach a new version when the work changes. Answers record who replied; the bot 
 When a decision fits a pick or a yes/no, ask it as a structured question, one decision per task, written so it
 makes sense on its own: `hub task question "<question>" --on <person> [--option A=<file> --option B=<file>]`
 (MCP: `hub_task_question`) files it, waits on them and wakes you with the answer; then mark it done.
+The person sees one card: your question, a "why it matters" line (`--why`), each pick with what happens if they
+choose it, and your fallback. Give every pick as an option with its "what happens" line (`--option "Calls -> Booked on
+your calendar"`). Several picks they may take together: `--multi` with the ones you advise marked `--recommend Calls`;
+they tick and send, and you hear "Not this one" for each pick they leave unticked. Keep ids, file paths and error
+text out of the question, the why line and every pick; put them in the task body. Tico refuses a question that
+breaks these, and says why.
 One open question per topic: give it `--topic <key>` (e.g. `backup-model`) and asking again on that topic while it is
 open updates your open question instead of adding a second card; a different decision takes a different key.
 Say what you will do if they don't answer: `--if-no-answer "Yes" --default-kind reversible` (or `send`, `spend`,

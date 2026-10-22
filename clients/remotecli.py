@@ -468,6 +468,8 @@ def run(args, who=None):
                         delegate=asked)
         if sub == "relate":
             return post(f"tasks/{args.id}/relations", {"task": args.task, "kind": args.kind, "remove": args.remove})
+        if sub == "wait":
+            return post(f"tasks/{args.id}/waits", {"on": args.wait_on, "remove": args.remove})
         if sub == "label":
             current = client.get("tasks/" + args.id)["task"]
             labels = [x for x in current.get("labels") or []]
@@ -1023,6 +1025,9 @@ def main(args, who=None):
                   f"{result.get('computer')} has the repository; nothing needs to run again.")
         else:
             print(json.dumps(result, indent=2))
+        if isinstance(result, dict) and result.get("readback"):    # what a relation write stored, direction and all
+            for line in result["readback"]:
+                print("hub: stored: " + str(line), file=sys.stderr)
         if isinstance(result, dict) and result.get("warning"):     # saved, but a person should know why it waits
             print("hub: " + str(result["warning"]), file=sys.stderr)
         if isinstance(result, dict) and result.get("held"):        # a bot's message to a bot waits for its next run

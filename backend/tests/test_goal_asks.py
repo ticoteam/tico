@@ -1,8 +1,10 @@
-"""What the Goals page needs from a person is a Goal Manager task (backend/goal_asks.py): one per KPI or proposal,
-kind and person, in Tasks and Decide, closed by itself once resolved."""
+"""What the Goals page needs from a person is a CEO Bot task (backend/goal_asks.py): one per KPI or proposal, kind and
+person, in Tasks and Decide, closed by itself once resolved. Only above Passive: at Passive, the default, nobody is
+asked anything (spec: CEO Bot v3, test 20)."""
 
 from datetime import datetime, timedelta, timezone
 
+from backend import ceo_bot
 from backend import goal_asks as GA
 from backend.store import H
 from backend.tests.test_api import api, get, post  # noqa: F401
@@ -11,11 +13,19 @@ from backend.tests.test_kpis import goal_with_kpi, log
 MANAGER = "bot:goal-manager"
 
 
-def goal_manager(api):
+def goal_manager(api, level=1):
+    """The CEO Bot, at Passive unless the owner raised it (`level`)."""
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO bots(slug,display_name,runtime,model,effort,cwd,host,state,created) "
-                  "VALUES('goal-manager','Goal Manager','fake','','','','keeper','active',?)", (H.now(),))
+                  "VALUES('goal-manager','CEO Bot','fake','','','','keeper','active',?)", (H.now(),))
         c.execute("INSERT INTO bot_config(bot,config_json,team,operator) VALUES('goal-manager','{}',NULL,'ana')")
+    raise_level(api, level)
+
+
+def raise_level(api, level):
+    if level != 1:
+        with api.app.state.store.transaction() as c:
+            ceo_bot.set_level(c, "human:ana", level)
 
 
 def asks(api, owner=None):
@@ -42,9 +52,9 @@ def needs_tasks(api, token):
 
 
 def test_a_stale_kpi_is_one_task_for_its_owner_closed_by_a_fresh_reading(api):
-    goal_manager(api)
+    goal_manager(api, level=2)
     kpi = post(api, "kpis", {"name": "Unreported measure", "owner": "me", "cadence": "weekly"})["kpi"]
-    [task] = asks(api, "human:ana")
+    [task] = [a for a in asks(api, "human:ana") if a["kind"] != "vision"]     # above Passive the vision is asked too
     assert (task["kind"], task["ref"], task["status"]) == ("kpi_stale", kpi["id"], "open")
     assert task["title"] == "Log the first Unreported measure reading"
     assert task["body"].startswith(task["title"])
@@ -56,7 +66,7 @@ def test_a_stale_kpi_is_one_task_for_its_owner_closed_by_a_fresh_reading(api):
     post(api, "kpis", {"name": "Second measure", "owner": "me", "cadence": "weekly"})
     sync(api)
     assert [a["ref"] for a in asks(api, "human:ana")].count(kpi["id"]) == 1
-    # A fresh reading closes it at once, as the Goal Manager.
+    # A fresh reading closes it at once, as the CEO Bot.
     log(api, kpi["id"], 12, period_end=H.now())
     with api.app.state.store.read() as c:
         row = H.task(c, task["id"])
@@ -70,7 +80,7 @@ def test_a_stale_kpi_is_one_task_for_its_owner_closed_by_a_fresh_reading(api):
 
 
 def test_a_red_kpi_asks_the_goal_owner_and_closes_once_back_on_track(api):
-    goal_manager(api)
+    goal_manager(api, level=2)
     goal, kpi = goal_with_kpi(api, token="ben-test", owner="ben")
     log(api, kpi["id"], 10, token="ben-test", period_end=H.now())
     red = [a for a in asks(api, "human:ben") if a["kind"] == "kpi_red"]
@@ -83,7 +93,7 @@ def test_a_red_kpi_asks_the_goal_owner_and_closes_once_back_on_track(api):
 
 
 def test_a_proposal_asks_whoever_decides_it_and_closes_when_decided(api):
-    goal_manager(api)
+    goal_manager(api, level=2)
     goal, kpi = goal_with_kpi(api, token="ben-test", owner="ben")
     log(api, kpi["id"], 45, token="ben-test", period_end=H.now())
     proposal = post(api, "goal-proposals", {"kind": "kpi_target", "goal_id": goal["id"], "kpi_id": kpi["id"],
@@ -105,9 +115,9 @@ def test_a_proposal_asks_whoever_decides_it_and_closes_when_decided(api):
 
 
 def test_a_task_the_person_closed_is_not_asked_again_while_the_cause_stands(api):
-    goal_manager(api)
+    goal_manager(api, level=2)
     kpi = post(api, "kpis", {"name": "Unreported measure", "owner": "me", "cadence": "weekly"})["kpi"]
-    [task] = asks(api, "human:ana")
+    [task] = [a for a in asks(api, "human:ana") if a["kind"] != "vision"]
     with api.app.state.store.transaction() as c:
         H.task_update(c, "human:ana", task["id"], status="declined", note="Not tracking this one")
     sync(api)
@@ -116,9 +126,10 @@ def test_a_task_the_person_closed_is_not_asked_again_while_the_cause_stands(api)
 
 
 def test_an_owner_change_moves_the_ask_and_without_a_goal_manager_nothing_is_filed(api):
+    raise_level(api, 2)
     goal, kpi = goal_with_kpi(api, token="ben-test", owner="ben")
     log(api, kpi["id"], 10, token="ben-test", period_end=H.now())
-    # No Goal Manager: no task, and the Goals page still says what waits.
+    # No CEO Bot: no task, and the Goals page still says what waits.
     assert not asks(api)
     assert any(i["kind"] == "kpi_red" and "task" not in i for i in get(api, "goals/needs-you", "ben-test")["items"])
     goal_manager(api)
@@ -132,9 +143,9 @@ def test_an_owner_change_moves_the_ask_and_without_a_goal_manager_nothing_is_fil
 
 
 def test_a_task_marked_done_while_the_cause_stands_is_asked_again(api):
-    goal_manager(api)
+    goal_manager(api, level=2)
     kpi = post(api, "kpis", {"name": "Unreported measure", "owner": "me", "cadence": "weekly"})["kpi"]
-    [task] = asks(api, "human:ana")
+    [task] = [a for a in asks(api, "human:ana") if a["kind"] != "vision"]
     with api.app.state.store.transaction() as c:
         H.task_update(c, "human:ana", task["id"], status="done", note="Done")
     sync(api)
@@ -142,3 +153,25 @@ def test_a_task_marked_done_while_the_cause_stands_is_asked_again(api):
     assert again["id"] != task["id"] and again["status"] == "open"
     with api.app.state.store.read() as c:
         assert H.task(c, task["id"])["status"] == "closed"
+
+
+def test_at_passive_nobody_is_asked_anything_and_what_was_asked_still_closes(api):
+    """Spec test 20 (candidate): at Passive, a red KPI, a stale one and an empty vision file nothing and show nothing
+    in Needs you, while the colours keep updating. An ask filed before the level went down stays and closes by itself
+    once resolved."""
+    goal_manager(api)
+    goal, kpi = goal_with_kpi(api, token="ben-test", owner="ben")
+    log(api, kpi["id"], 10, token="ben-test", period_end=H.now())
+    post(api, "kpis", {"name": "Unreported measure", "owner": "me", "cadence": "weekly"})
+    assert sync(api) == {"created": [], "closed": []} and not asks(api)
+    assert get(api, "goals/needs-you", "ben-test")["items"] == [] and get(api, "goals/needs-you")["items"] == []
+    assert get(api, f"goals/{goal['id']}")["goal"]["status"] == "red"            # the regular checks still colour it
+    raise_level(api, 2)
+    sync(api)
+    [red] = [a for a in asks(api) if a["kind"] == "kpi_red"]
+    assert {a["kind"] for a in asks(api, "human:ana")} == {"vision", "kpi_stale"}
+    raise_level(api, 1)
+    post(api, "kpis", {"name": "Another measure", "owner": "me", "cadence": "weekly"})
+    assert sync(api)["created"] == []                                            # nothing new at Passive
+    log(api, kpi["id"], 100, token="ben-test", period_end=H.now())
+    assert red["id"] in {t["id"] for t in manager_tasks(api, "closed")}         # resolved: it still closes

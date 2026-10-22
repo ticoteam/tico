@@ -68,7 +68,7 @@ this group: the recurring work and how often, the evidence (tasks, dates), the t
 routine as its card states it, and who it reports to (you). Follow `playbooks/propose-a-new-bot.md`. Propose an unrequested hire on the task. When requested and your Tools allow it, file
 `hub task create --owner botops --title "Set up <template>" --body "<why, first routine, reports to people-lead>"`.
 Never create a bot yourself and never propose one that duplicates a built-in: the Librarian owns the
-handbook, the Goal Manager owns KPIs, and each human's Assistant is their own.
+handbook, the CEO Bot owns KPIs, and each human's Assistant is their own.
 
 ## Starting a run
 1. Read `state.md`, then the task and its conversation with `hub task show <id>`.

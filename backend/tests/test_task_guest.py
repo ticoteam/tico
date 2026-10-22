@@ -202,7 +202,7 @@ def test_a_run_carrying_work_the_person_cannot_read_does_not_reach_them(api):
     assert r.status_code == 403 and r.json()["error"]["code"] == "privacy", r.text
     for path, body in (("tasks", subtask(own["id"], "ben")),
                        ("task-questions", {"question": "Send the reply?", "on": "ben", "parent": own["id"],
-                                           "options": [{"label": "Yes"}, {"label": "No"}]})):
+                                           "options": [{"label": "Yes", "then": "Go with Yes"}, {"label": "No", "then": "Go with No"}]})):
         r = api.post("/api/v2/" + path, json=body, headers=headers(attempt["token"]))
         assert r.status_code == 403, (path, r.text)
     # Nothing reached Ben: no guest, no card, and the task's note is unchanged.
@@ -221,11 +221,11 @@ def test_a_question_reaches_the_guest(api):
     row = task(api, "bot:cpo", "bot:ops", "Zip triage")
     attempt = run_on(api)
     asked = post(api, "task-questions", {"question": "Ship the zip fix in the next release?", "on": "ben",
-                                         "parent": row["id"], "options": [{"label": "Yes"}, {"label": "No"}]},
+                                         "parent": row["id"], "options": [{"label": "Yes", "then": "Go with Yes"}, {"label": "No", "then": "Go with No"}]},
                  attempt["token"])
     assert asked["task"]["requester"] == "human:ben" and asked["task"]["private"]
     assert readers(api, row["id"]) == {"ben"} and readers(api, asked["task"]["id"]) == {"ben"}
     r = api.post("/api/v2/task-questions", json={"question": "Or should Cara decide?", "on": "cara",
-                                                   "parent": row["id"], "options": [{"label": "Yes"}, {"label": "No"}]},
+                                                   "parent": row["id"], "options": [{"label": "Yes", "then": "Go with Yes"}, {"label": "No", "then": "Go with No"}]},
                  headers=headers(attempt["token"]))
     assert r.status_code == 403 and "already reached ben" in r.text, r.text

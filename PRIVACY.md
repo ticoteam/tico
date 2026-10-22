@@ -28,7 +28,7 @@ GET https://updates.tico.team/v1/latest?install_id=6f1c2a9e-3b7d-4c58-9a10-2d4e8
 | `version` | The Tico release you run, for example `0.2.15`. |
 | `active_people` | `true` if at least one human used Tico in the last 7 days, otherwise `false`. |
 | `active_bots` | `true` if at least one bot run finished in the last 7 days, otherwise `false`. |
-| `first_result` | `true` once a run of one of your own bots has ever finished on this install (the built-in Assistant, BotOps, Librarian and Goal Manager do not count), otherwise `false`. It lets the project measure how long a new install takes to reach its first working bot. |
+| `first_result` | `true` once a run of one of your own bots has ever finished on this install (the built-in Assistant, BotOps, Librarian and CEO Bot do not count), otherwise `false`. It lets the project measure how long a new install takes to reach its first working bot. |
 
 That is all. No team name, domain, email address, humans, bot names, counts, content, hostnames or file names. Your
 IP address is unavoidably seen by any server you connect to (GitHub sees it today), and HQ handles it as described below.

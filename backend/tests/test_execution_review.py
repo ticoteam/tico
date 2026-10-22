@@ -667,7 +667,7 @@ def test_a_claim_that_lapsed_before_its_run_started_does_not_count_as_stopping_p
 # A finished turn whose runner stalled before handing it in (Dev 242; Oct 17-18, results 15 to 76 minutes after the
 # lease lapsed). Each shape: the model finished, the lease lapsed, something decided the job, then the result came.
 
-def finished_then_lapsed(api, machine=None, bot='ops', text='Please summarize the current work.', task=False):
+def finished_then_lapsed(api, machine=None, bot='ops', text='Please summarize the current work.', task=False, stopped=False):
     """A run that read, wrote its answer and went idle; then its lease lapsed before the result reached the hub.
     With `task`, a person filed the request as a task in its own room, and the run starts from the hub's notice."""
     from backend.tests.test_api import runner
@@ -692,6 +692,8 @@ def finished_then_lapsed(api, machine=None, bot='ops', text='Please summarize th
         {'seq': 1, 'kind': 'status', 'payload': {'state': 'active', 'tool_events': True}},
         {'seq': 2, 'kind': 'message', 'payload': {'text': 'Done: the summary is in the room.', 'final': True}},
         {'seq': 3, 'kind': 'status', 'payload': {'state': 'idle'}}]}, machine['token'])
+    if stopped:
+        post(api, f'bots/{bot}/stop', {'attempt_id': attempt['id']})       # never carried by a renewal
     expire(api, attempt['id'])
     assert claim(api, machine) is None and job_state(api, attempt['job_id']) == 'uncertain'
     return machine, message, attempt
@@ -821,6 +823,26 @@ def test_a_finished_turn_never_settles_a_job_a_later_run_took_even_once_that_run
         assert tuple(c.execute("SELECT state,attempt_id FROM jobs WHERE id=?", (first['job_id'],)).fetchone()) == before
         assert c.execute("SELECT state FROM attempts WHERE id=?", (first['id'],)).fetchone()[0] == 'expired'
     assert bot_replies(api, message) == []
+
+
+def test_a_stop_the_runner_never_heard_still_stands_over_the_answer_it_finished_late(api):
+    """Dev 242 R1: a person pressed Stop while the computer was asleep. No renewal carried it, the lease lapsed, the
+    model finished anyway and the woken runner handed the answer in as completed. It is filed on its run, not posted,
+    and the job is not settled completed, whether the job is still uncertain or the sweep has let it go."""
+    from backend.tests.test_api import runner
+    machine = runner(api, 'ana')
+    for bot, dismissed in (('ops', False), ('finance', True)):
+        assign(api, machine, bot)
+        machine, message, attempt = finished_then_lapsed(api, machine, bot, stopped=True)
+        aged(api, attempt['id'])
+        if dismissed:
+            post(api, f"jobs/{attempt['job_id']}/reconcile", {'attempt_id': attempt['id'], 'decision': 'dismiss',
+                 'note': 'Stopped; nothing left to send.', 'acknowledge_uncertain_effects': True})
+        before = job_state(api, attempt['job_id'])
+        filed = hand_in(api, machine, attempt)
+        assert filed['filed'] is True and filed['message'] is None
+        assert settled(api, attempt) == ('expired', before)
+        assert bot_replies(api, message, bot) == []
 
 
 def test_a_late_result_that_did_not_finish_after_a_dismissal_is_only_filed(api):

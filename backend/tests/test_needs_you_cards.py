@@ -38,7 +38,7 @@ def test_cards_are_titled_dated_grouped_and_one_per_blocker(api):
               conversation_id=H.task(c, pick["id"])["conversation_id"],
               refs={"task": pick["id"], "if_no_answer": {"do": "Gusto", "kind": "reversible"},
                     "questions": [{"id": "q", "question": "Which?", "multi": False, "other": False,
-                                   "options": [{"label": "Gusto"}, {"label": "Rippling"}]}]})
+                                   "options": [{"label": "Gusto", "then": "Go with Gusto"}, {"label": "Rippling", "then": "Go with Rippling"}]}]})
     page = get(api, "needs-you")
     items = {i["id"]: i for i in page["items"]}
 
@@ -110,7 +110,7 @@ def test_do_what_you_recommend_answers_a_question_on_a_file_version(api):
     _, _, finance = setup_attempt(api, "finance")
     plan = post(api, "tasks", {"title": "Review the payroll plan", "body": "x", "owner": "bot:finance"})
     question = {"questions": [{"id": "verdict", "header": "Review", "question": "Ship it?", "other": False,
-                               "options": [{"label": "Approve"}, {"label": "Request changes"}]}], "who": "ana"}
+                               "options": [{"label": "Approve", "then": "Go with Approve"}, {"label": "Request changes", "then": "Go with Request changes"}]}], "who": "ana"}
     made = post(api, f"tasks/{plan['id']}/files", {"name": "plan.md", "text": "# Plan", "ask": question},
                 token=finance["token"])
     with api.app.state.store.transaction() as c:

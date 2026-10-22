@@ -77,7 +77,7 @@ input.goal-ed-text:hover:not([readonly]){border-color:var(--line)}input.goal-ed-
 .goal-why .linkish{font-size:var(--t-sm);font-style:normal}
 .goal-why-prop{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 0 8px 19px;padding:6px 10px;border:1px solid var(--line);border-radius:var(--radius);font-size:var(--t-sm)}
 .goal-why-ed{display:flex;gap:8px;align-items:center;margin:0 0 8px 19px}.goal-why-ed input{flex:1 1 auto;min-width:0}
-/* the company, at the top of Goals where the CEO Bot switch is on */
+/* the company, at the top of Goals */
 .gco{margin:0 0 var(--s3);padding:8px 12px 10px;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius)}
 .gco-head{display:flex;align-items:center;gap:8px;min-height:32px}
 .gco-head h2{margin:0;font-size:var(--t-label);font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:var(--track-caps)}
@@ -172,9 +172,9 @@ input.goal-ed-text:hover:not([readonly]){border-color:var(--line)}input.goal-ed-
   .kpi-r{padding:9px 0}.kpi-by{margin-left:0}
 }
 
-/* Goals: the tree is the page and the Goal Manager a right rail running the page's full height beside it, like a
+/* Goals: the tree is the page and the CEO Bot a right rail running the page's full height beside it, like a
    bot page's (chat.css #main.bot-split-layout, bot-page.css .rail-sec); each column scrolls on its own. Narrower,
-   one column: the tree, then the Goal Manager under it. */
+   one column: the tree, then the CEO Bot under it. */
 #goal-body{max-width:1180px}
 @media (min-width:1100px){
   #main.goals-layout{max-width:none;display:grid;grid-template-columns:minmax(0,1fr) var(--rail-right);padding:0;height:100%;overflow:hidden}

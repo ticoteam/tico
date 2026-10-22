@@ -59,6 +59,28 @@ hub task relate <task> <blocker> --kind blocked_by
 hub task update <task> --status waiting --note "Needs the build environment"
 ```
 
+### Waiting for a milestone, not the whole task
+
+Often what a task needs is an earlier milestone of another task, not that task being done: a pull request merged
+while its ticket stays In QA, or a release published while its checklist stays open for its QA watch. Wait for the
+milestone itself:
+
+```sh
+hub task wait <task> --on pr:https://github.com/<owner>/<repo>/pull/943   # until that pull request merges
+hub task wait <task> --on pr:<other task>                                  # the one pull request linked on it
+hub task wait <task> --on release:v0.3.64                                  # until that release is published
+hub task wait <task> --on task:<other task>                                # the same as blocked_by
+hub task wait <task> --on pr:<url> --remove                                # take it off
+```
+
+The task shows it ("Waits for PR #943 to merge"). When the pull request merges or the release is published (the
+GitHub webhook), the owner gets one wake; the task it came from keeps its own step, and nothing is closed or moved.
+A wait made after the milestone is woken once by the minute sweep instead, and a merge or release whose webhook
+never arrived (the server was down) is checked with GitHub every few minutes, in repositories the GitHub App reaches. Replays and the sweep never wake it twice. `release:` takes the server's release repository unless
+named (`release:<owner>/<repo>@v0.3.64`). The MCP tool is `hub_task_wait`; the API is
+`POST /api/v2/tasks/{id}/waits` with `{"on": "pr:<url>", "remove": false}`; each task answer carries
+`milestone_waits`.
+
 When the task waits on a person to act instead (a decision, access, a host only they can fix),
 name them with `--on` and say plainly what you need in the note:
 
@@ -216,6 +238,30 @@ arrived since stays on the card.
 
 **Still wanted? questions stop.** While Stale ticket review is on, Tico doesn't send the
 **Still wanted?** questions described above: its suggestions cover the quiet week.
+
+### The question card
+
+A bot's question to a person shows as one card, the same in Decide and in the task's Needs you box. The header
+names who asked (the bot, or Tico for a check Tico runs itself, never "Assistant"), "asked 3 days ago", and what it
+holds up: the roadmap item it is under, or its parent task. Below are the question, a "why it matters" line, and the
+picks. One pick is a button; several picks that go together (`--multi`) are checkboxes, the recommended ones ticked
+and labelled, with **Yes to all** and **Send ticked (n)**. Every button says what happens. The bot hears "Not this
+one" for each pick left unticked, with any note the person adds. The fallback ("If you don't answer by ...") sits
+small at the foot, and ids, file paths and error text only in the collapsed Details.
+
+Tico refuses a bot's question to a person, saying why and with an example, when:
+
+- it lists picks in its words, or is `--multi`, but gives no options;
+- an option has no "what happens" line (`then`; `--option "LABEL -> WHAT HAPPENS"`);
+- it is `--multi` with none marked recommended (`--recommend LABEL`);
+- the question, the why line or a pick's label, description or outcome has an id, hash, file path, tool name or
+  error text.
+
+A yes-or-no question needs no options; its Yes and No buttons say the bot hears that answer. The refusal is a writing refusal: it never counts toward a quarantine.
+
+Decide puts first a card that is, or holds up work, due or going ahead on its own within 2 working days (the nearest
+date of anything it holds up, not only the item the header names); then one holding up a roadmap item
+at Approved or Building; then the rest, newest first. Waiting longer never moves a card up.
 
 ### When nobody answers a bot's ask
 
@@ -652,6 +698,9 @@ hub task relate <task-id> <other-task-id> --kind parent --remove
 
 The MCP tool is `hub_task_relate`; the API is `POST /api/v2/tasks/{id}/relations` with
 `{"task": "<other id>", "kind": "...", "remove": false}`, and task create takes `"relations": [...]`.
+Each write reads back what it stored, in words from both ends, in `readback` (the CLI prints it as `hub: stored:`):
+`#237 "…" waits for #233 "…"` and `#233 "…" blocks #237 "…"`. A `blocks` sent where `blocked_by` was meant reads
+the other way round, so check that line before reporting a dependency as fixed.
 Either task's id, prefix or number works. A parent or a blocker follows the rules those always had (the
 task's parties or a mover; a blocker is the owner's or a mover's); the other kinds need the right to
 change both tasks, as for links. Finishing a blocker takes its relation off and wakes the bot owner
@@ -720,14 +769,18 @@ not found on this task` and attaches a copy with `--attach` instead.
 
 ```json
 {"questions":[{"id":"verdict","header":"Review","question":"Is this ready?",
- "options":[{"label":"Approve"},{"label":"Request changes","description":"Say what to change"}],
+ "why":"The client sees it on Friday.",
+ "options":[{"label":"Approve","then":"It goes to the client"},
+            {"label":"Request changes","description":"Say what to change","then":"Writer redoes it"}],
  "multi":false,"other":true}],"who":null}
 ```
 
 Questions may be on a comment or a file version. An ask has one to four questions, each with
 an id (up to 40 characters), header (30), question (300), and zero to six options. Labels are up
 to 60 characters and descriptions up to 200. An option can link to a version using `file: "<id>@<n>"`.
-`multi` defaults to false; `other` defaults to true. Question ids and labels must be unique.
+`then` (up to 120) says what happens if it is picked, `recommended: true` marks the ones the asker advises, and a
+question's `why` (200) says why it matters. `multi` defaults to false; `other` defaults to true. A bot asking a person
+keeps the asking rules in [The question card](#the-question-card). Question ids and labels must be unique.
 Unknown fields are rejected. `who` names a person or bot for Needs you; otherwise the requester
 is highlighted (the owner when the requester asks). Every open ask counts in the task's
 `open_asks`, including older unanswered questions.

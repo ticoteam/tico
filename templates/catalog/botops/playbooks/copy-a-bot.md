@@ -27,7 +27,7 @@ for a copy.
   owner has to publish it, and stop; if it is some other failure, `hub support file "<what they asked, what the command said>"`.
 - `--computer` places the copy once it is made. Until GitHub has its history only this computer holds it, so another computer
   is refused (`placement.problem` says which to use): leave `--computer` out, take it live here, and move it once it is published.
-- The built-in bots (the Assistant, BotOps, the Librarian, the Goal Manager) are not copied. Explain that limit in one line and offer the nearest catalog role
+- The built-in bots (the Assistant, BotOps, the Librarian, the CEO Bot) are not copied. Explain that limit in one line and offer the nearest catalog role
   (`playbooks/build-me-a-bot.md`). Do not create it or call it a copy unless they choose it.
 
 It answers the new bot's name, its model (the original's, where they may use it, else the team's default), what it did about
