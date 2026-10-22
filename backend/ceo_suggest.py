@@ -35,13 +35,14 @@ MAX_OPTIONS = 4
 MAX_ACTIONS = 6
 STREAK_FOR_OFFER = 10
 OFFER_EVERY_DAYS = 30
-WITHDRAWN = "Withdrawn: the CEO Bot was set to level 1, where it suggests no task changes"
+WITHDRAWN = "Withdrawn: the CEO Bot was set to Passive, where it suggests no task changes"
+WITHDRAWN_BEFORE = "Withdrawn: the CEO Bot was set to level 1, where it suggests no task changes"   # before v3
 CEO = "bot:" + ceo_bot.SLUG
 
 
 def suggests(c):
-    """Whether this install's CEO Bot suggests actions: the switch on and level 2 or 3."""
-    return ceo_bot.on(c) and ceo_bot.level(c) >= 2
+    """Whether this install's CEO Bot suggests actions: level 2 or 3."""
+    return ceo_bot.level(c) >= 2
 
 
 def _text(value, limit):
@@ -288,7 +289,7 @@ def result_text(c, proposal):
 
 
 def withdraw(c, actor):
-    """Lowering the level to 1 withdraws every recovery still waiting: level 1 suggests no task changes."""
+    """Lowering the level to Passive withdraws every recovery still waiting: Passive suggests no task changes."""
     c.execute("UPDATE goal_proposals SET status='rejected', decided_by=?, decided_at=?, decision_note=? "
               "WHERE status='pending' AND kind=?", (actor, H.now(), WITHDRAWN, KIND))
 
@@ -300,7 +301,7 @@ def streak(c):
     n = 0
     for row in H._rows(c.execute("SELECT status, decided_by, decision_note, result_json FROM goal_proposals "
                                  "WHERE kind=? AND status!='pending' ORDER BY decided_at DESC", (KIND,))):
-        if row["decision_note"] == WITHDRAWN or not H.is_human(row["decided_by"] or ""):
+        if row["decision_note"] in (WITHDRAWN, WITHDRAWN_BEFORE) or not H.is_human(row["decided_by"] or ""):
             continue
         result = H._json(row["result_json"], None) or {}
         if row["status"] != "confirmed" or not result.get("unchanged"):
@@ -318,7 +319,7 @@ def offer_view(c):
     last = (_offered(c) or [""])[-1]
     stamp = H.parse_ts(last) if last else None
     recent = bool(stamp) and stamp > H.parse_ts(H.now()) - timedelta(days=OFFER_EVERY_DAYS)
-    n = streak(c) if ceo_bot.on(c) and ceo_bot.level(c) == 2 else 0
+    n = streak(c) if ceo_bot.level(c) == 2 else 0
     return {"streak": n, "needed": STREAK_FOR_OFFER, "due": n >= STREAK_FOR_OFFER and not recent,
             "last_offered_at": last or ""}
 

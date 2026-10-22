@@ -11,7 +11,7 @@ instead of building a team first. Sample Co sells Brightbook, a small booking ap
 | Support Agent | ChatGPT | Every customer question has a reply ready within a day | Draft replies to three made-up customer questions |
 | Content Marketer | ChatGPT | One useful post for salon owners drafted each week | Draft a short post on cutting no-shows |
 
-BotOps, the Librarian and the Goal Manager are built in as on every Tico, and follow the company's default model.
+BotOps, the Librarian and the CEO Bot are built in as on every Tico, and follow the company's default model.
 
 These are real bots on the person's own subscriptions, not [demo mode](demo.md). Each first task takes a few minutes,
 puts its result on the task as one comment, and then asks the owner one Yes/No question, **Approve the welcome note?**

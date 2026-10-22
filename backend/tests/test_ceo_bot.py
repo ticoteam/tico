@@ -1,9 +1,11 @@
-"""The CEO Bot rollout switch (backend/ceo_bot.py): off by default, and off nothing changes; on, the Goal Manager is
-named the CEO Bot everywhere and heads the org chart under the owner, with the Heads and the bots that report to no one
-under it. Only the chart moves: every stored `reports_to` stays as it was, and so does who may do what."""
+"""The CEO Bot on every install (backend/ceo_bot.py; spec: Head of Product, CEO Bot v3): the built-in bot that was the
+Goal Manager is named the CEO Bot everywhere and heads the org chart under the owner, with the Heads and the bots that
+report to no one under it. There is no switch a person sees. Only the chart moves: every stored `reports_to` stays as it
+was, and so does who may do what. Only the owner renames it."""
 
 import uuid
 
+from backend import ceo_bot
 from backend.auth import Identity
 from backend.store import H
 from backend.tests.test_goal_manager import BASE, with_goal_manager
@@ -46,10 +48,6 @@ def company(environment):
     return api
 
 
-def switch(api, on, headers=None):
-    return api.post("/api/v2/ceo-bot", json={"on": on}, headers=headers or signed_in())
-
-
 def chart(api, headers=None):
     view = api.get("/api/v2/org", headers=headers or signed_in()).json()
     return {b["id"]: (b["org_parent"], b["reports_to"], b["display_name"]) for b in view["bots"]}
@@ -81,32 +79,24 @@ def as_bot(api, slug):
     return {"Authorization": "Bearer " + token, "Idempotency-Key": str(uuid.uuid4())}
 
 
-def test_off_by_default_and_off_nothing_changes(environment):
-    """Spec test 17's guard: an install that never turns it on keeps the Goal Manager by that name, off the chart's
-    top, and a switch turned on and off again gives back exactly what it had."""
-    api = company(environment)
-    assert api.get("/api/v2/ceo-bot", headers=signed_in()).json()["on"] is False
-    assert api.get("/api/v2/config", headers=signed_in()).json()["ceo_bot"] is False
-    before_chart, before_people, before_stored = chart(api), employees(api), stored(api)
-    assert groups(api) == {"sales": "", "home": ""}
-    assert before_chart["goal-manager"][2] == "Goal Manager" and before_stored[1]["goal-manager"] == "Goal Manager"
-    assert before_chart["sales-lead"][0] == "p:morgan" and before_chart["scribe"][0] == "p:morgan"
-    assert switch(api, True).json()["on"] is True
-    assert switch(api, False).json() == {**switch(api, False).json(), "on": False, "name": "Goal Manager"}
-    assert chart(api) == before_chart and employees(api) == before_people and stored(api) == before_stored
-    assert groups(api) == groups(api, "/api/humans") == {"sales": "", "home": ""}
+def definition(api, body, headers=None):
+    with api.app.state.store.read() as c:
+        revision = c.execute("SELECT revision FROM bot_config WHERE bot='goal-manager'").fetchone()[0]
+    return api.post("/api/v2/bots/goal-manager/definition", json={**body, "expected_revision": revision},
+                    headers=headers or signed_in())
 
 
-def test_on_it_is_the_ceo_bot_and_heads_the_chart(environment):
-    """Spec tests 5 and 6: the name in the bot list and the chart; the Heads (with their departments) and the bots with
-    no manager under it, it under the owner, the Assistant and message bots not under it. Each stored `reports_to` is
-    untouched."""
+def test_every_install_has_the_ceo_bot_at_the_top_of_the_chart(environment):
+    """Spec tests 5, 6 and 16: the name in the bot list and the chart; the Heads (with their departments) and the bots
+    with no manager under it, it under the owner, the Assistant and message bots not under it. Each stored `reports_to`
+    is untouched. No switch is shown or can be flipped."""
     api = company(environment)
-    reports_before, _ = stored(api)
-    result = switch(api, True)
-    assert result.status_code == 200, result.text
-    assert result.json()["on"] is True and result.json()["changed_by"] == "human:morgan"
-    assert api.get("/api/v2/config", headers=signed_in()).json()["ceo_bot"] is True
+    reports_before = stored(api)[0]
+    shown = api.get("/api/v2/ceo-bot", headers=signed_in()).json()
+    assert "on" not in shown and shown["name"] == "CEO Bot" and shown["level"] == 1 and shown["regular_checks"] is True
+    assert "ceo_bot" not in api.get("/api/v2/config", headers=signed_in()).json()
+    flip = api.post("/api/v2/ceo-bot", json={"on": False}, headers=signed_in())
+    assert flip.status_code == 405, flip.text                                    # nobody turns it off, the owner included
     bots = chart(api)
     assert bots["goal-manager"][:1] == ("p:morgan",) and bots["goal-manager"][2] == "CEO Bot"
     under_ceo = {slug for slug, (parent, _, _) in bots.items() if parent == "b:goal-manager"}
@@ -124,35 +114,42 @@ def test_on_it_is_the_ceo_bot_and_heads_the_chart(environment):
     assert people["goal-manager"] == ("p:morgan", "CEO Bot") and people["eng-lead"][0] == "b:goal-manager"
 
 
-def test_on_the_ceo_bot_gains_no_access(environment):
-    """No new powers in this slice: the CEO Bot reads and writes the bots under it on the chart no more than before."""
+def test_the_ceo_bot_gains_no_access(environment):
+    """Heading the chart gives it no new powers: it reads and writes the bots under it on the chart no more than its
+    access says."""
     api = company(environment)
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bot_config SET access_json=? WHERE bot='eng-lead'",
                   ('{"see":{"everyone":true},"read":{"people":["morgan"]},"write":{"people":["morgan"]}}',))
-    before = api.get("/api/v2/org", headers=as_bot(api, "goal-manager")).json()
-    switch(api, True)
     after = api.get("/api/v2/org", headers=as_bot(api, "goal-manager")).json()
     access = {b["id"]: b["access"] for b in after["bots"]}
-    assert access == {b["id"]: b["access"] for b in before["bots"]}
-    assert access["eng-lead"]["write"] is False
+    assert access["eng-lead"]["write"] is False and access["eng-lead"]["read"] is False
 
 
-def test_only_owners_and_admins_flip_it_and_no_bot(environment):
+def test_an_install_from_before_becomes_the_ceo_bot_once_at_upgrade(environment):
+    """The migration names an install's Goal Manager the CEO Bot when the server starts, once; a name a person gave it
+    stays. Its internal flag is recorded, and running it again changes nothing."""
     api = company(environment)
-    member = switch(api, True, as_person(api, "quinn"))
-    assert member.status_code == 403
-    for bot in ("goal-manager", "botops"):
-        refused = switch(api, True, as_bot(api, bot))
-        assert refused.status_code == 403, refused.text
-    assert api.get("/api/v2/ceo-bot", headers=signed_in()).json()["on"] is False
-    assert switch(api, True, as_person(api, "riley")).json()["on"] is True        # an Admin
-    assert switch(api, False).json()["on"] is False                               # the owner
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bots SET display_name='Goal Manager' WHERE slug='goal-manager'")     # as an older release left it
+        c.execute("DELETE FROM registry_metadata WHERE key=?", (ceo_bot.KEY,))
+    from backend.app import create_app
+    from fastapi.testclient import TestClient
+    with TestClient(create_app(api.app.state.store.settings)):                   # the upgrade: a restart
+        pass
+    assert stored(api)[1]["goal-manager"] == "CEO Bot"
+    with api.app.state.store.transaction() as c:
+        assert ceo_bot._record(c)["on"] is True
+        assert ceo_bot.migrate(c) is False                                       # once
+        c.execute("UPDATE bots SET display_name='Chief' WHERE slug='goal-manager'")
+        c.execute("DELETE FROM registry_metadata WHERE key=?", (ceo_bot.KEY,))
+        assert ceo_bot.migrate(c) is True
+    assert stored(api)[1]["goal-manager"] == "Chief"                             # a person's name is theirs
 
 
 def test_the_name_sticks_and_its_history_stays_attached(environment):
     """Spec test 16's name half: same slug and actor, so its readings and messages read as the CEO Bot. A setup run
-    again or an update does not name it back, and a name a person gives it while on is theirs after off."""
+    again or an update does not name it back."""
     api = company(environment)
     kpi = api.post("/api/v2/kpis", json={"name": "Weekly signups", "owner": "company", "cadence": "weekly"},
                    headers=signed_in())
@@ -160,7 +157,6 @@ def test_the_name_sticks_and_its_history_stays_attached(environment):
     kid = kpi.json()["kpi"]["id"]
     logged = api.post(f"/api/v2/kpis/{kid}/readings", json={"value": 12}, headers=as_bot(api, "goal-manager"))
     assert logged.status_code == 200, logged.text
-    switch(api, True)
     readings = api.get(f"/api/v2/kpis/{kid}/readings", headers=signed_in()).json()["readings"]
     assert [r["actor"] for r in readings] == ["bot:goal-manager"]
     from backend import names
@@ -174,10 +170,43 @@ def test_the_name_sticks_and_its_history_stays_attached(environment):
     assert stored(api)[1]["goal-manager"] == "CEO Bot"
     refused = api.post("/api/v2/goal-manager/turn-on", json={}, headers=as_person(api, "quinn"))
     assert refused.status_code == 403 and "CEO Bot" in refused.json()["error"]["detail"]
-    with api.app.state.store.read() as c:
-        revision = c.execute("SELECT revision FROM bot_config WHERE bot='goal-manager'").fetchone()[0]
-    renamed = api.post("/api/v2/bots/goal-manager/definition",
-                       json={"display_name": "Chief", "expected_revision": revision}, headers=signed_in())
+
+
+def test_only_the_owner_renames_it_and_the_new_name_shows_everywhere(environment):
+    """Spec test 24 on the server: the owner renames it with the bot's Name field; an admin, a member and a bot are
+    refused (a built-in bot is the owner's alone, backend/auth.py `bot_manager`). The new name is what the chart, the
+    bot list, its settings and its messages say, and it survives a setup run again and an update."""
+    api = company(environment)
+    for headers in (as_person(api, "riley"), as_person(api, "quinn"), as_bot(api, "botops"), as_bot(api, "goal-manager")):
+        refused = definition(api, {"display_name": "Atlas"}, headers)
+        assert refused.status_code == 403, refused.text
+    assert stored(api)[1]["goal-manager"] == "CEO Bot"
+    renamed = definition(api, {"display_name": "Atlas"})
     assert renamed.status_code == 200, renamed.text
-    switch(api, False)
-    assert stored(api)[1]["goal-manager"] == "Chief"
+    assert chart(api)["goal-manager"][2] == "Atlas" and employees(api)["goal-manager"][1] == "Atlas"
+    assert api.get("/api/v2/ceo-bot", headers=signed_in()).json()["name"] == "Atlas"
+    from backend import names
+    with api.app.state.store.read() as c:
+        assert names.lookup(c, {"bot:goal-manager"}) == {"bot:goal-manager": "Atlas"}
+        assert ceo_bot.name(c) == "Atlas"
+    assert api.post("/api/v2/onboarding/complete", json={}, headers=signed_in()).status_code == 200
+    from backend.app import create_app
+    from fastapi.testclient import TestClient
+    with TestClient(create_app(api.app.state.store.settings)):
+        pass
+    assert stored(api)[1]["goal-manager"] == "Atlas"
+
+
+# Where the old name may still be written: the upgrade that renames it, and the UI's fallback for a roster read before it.
+OLD_NAME_ALLOWED = {"backend/ceo_bot.py", "backend/store.py", "ui/app/notices.js", "ui/app/state.js"}
+
+
+def test_the_old_name_is_nowhere_a_person_sees():
+    """v3: "Goal Manager" is gone from the app, its clients, its help and its templates. The docs are the Technical
+    Writer's sweep (docs/, README, SECURITY, PRIVACY) and the tests may name it as an install from before."""
+    import pathlib
+    import subprocess
+    root = pathlib.Path(__file__).resolve().parents[2]
+    found = subprocess.run(["git", "grep", "-l", ceo_bot.OLD_NAME, "--", "backend", "clients", "templates", "ui",
+                            "runner-rs", ":!backend/tests", ":!ui/tests"], cwd=root, capture_output=True, text=True)
+    assert set(found.stdout.split()) <= OLD_NAME_ALLOWED

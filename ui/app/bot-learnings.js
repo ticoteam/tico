@@ -1,7 +1,8 @@
 /* ui/app/bot-learnings.js — A bot's learnings history (docs/learnings.md): the commits that changed its memory/
    and knowledge/, as its computer reported them (GET /api/v2/bots/{bot}/memory). A small button beside the bot's
    name shows how many are new; it opens a panel on a desktop and a sheet on a phone with the updates, newest first,
-   and the bot's learnings.md and decisions.md. Opening it marks the updates seen. */
+   and the bot's learnings.md and decisions.md, working rules first and then newest entries first (learnNewestFirst).
+   Opening it marks the updates seen. */
 'use strict';
 
 const learnApi = slug => `/v2/bots/${encodeURIComponent(slug)}/memory`;
@@ -33,6 +34,57 @@ function learnDiff(text) {
     const kind = l[0] === '+' ? 'add' : l[0] === '-' ? 'del' : '';
     return `<span class="${kind}">${esc(l.slice(1)) || ' '}</span>`;
   }).join('').replace(/^<span class="hunk">⋯<\/span>/, '');
+}
+
+// A memory file as the panel shows it: its title and intro, then any working-rules section, then the other `## `
+// sections newest first by the date in their heading, and inside each the top-level `- ` entries newest first by
+// their `added:` or leading date (`2026-10-14`, or `Oct 14` in the year of the file's latest dated line). Bots append
+// at the bottom, so file order opens on the oldest entry. An undated
+// section or entry stays with the dated one above it; undated ones above all dated ones stay first; nothing is lost.
+function learnNewestFirst(text) {
+  const lines = String(text || '').split('\n');
+  const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+  const year = (String(text || '').match(/\b20\d\d(?=-\d\d-\d\d\b)/g) || [String(new Date().getFullYear())]).sort().pop();
+  const when = t => {                                             // the first date in t, as YYYY-MM-DD
+    const iso = t.match(/\b(20\d\d-\d\d-\d\d)\b/);
+    if (iso) return iso[1];
+    const md = t.match(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.? (\d{1,2})\b/i);
+    return md ? `${year}-${String(MONTHS.indexOf(md[1].toLowerCase()) + 1).padStart(2, '0')}-${md[2].padStart(2, '0')}` : '';
+  };
+  const blocks = (rows, starts) => {                              // [lead, ...items]: each item begins where starts() is true
+    const out = [[]];
+    let fence = false;
+    for (const l of rows) {
+      if (/^\s*(```|~~~)/.test(l)) fence = !fence;
+      if (!fence && starts(l) && !/^\s*(```|~~~)/.test(l)) out.push([]);
+      out[out.length - 1].push(l);
+    }
+    return out;
+  };
+  const newest = (items, dateOf) => {                             // groups: a dated item and the undated ones after it
+    const groups = [];
+    for (const item of items) {
+      const d = dateOf(item);
+      if (d || !groups.length) groups.push({d, items: [item]});
+      else groups[groups.length - 1].items.push(item);
+    }
+    const lead = groups.length && !groups[0].d ? groups.shift().items : [];
+    groups.sort((a, b) => b.d.localeCompare(a.d));                // stable: same-day groups keep file order
+    return lead.concat(...groups.map(g => g.items));
+  };
+  const dateOf = item => (item.join('\n').match(/added:\s*(20\d\d-\d\d-\d\d)/) || [])[1] || when(item[0].match(/^[-*]\s+\W{0,3}(.{0,12})/)[1]);
+  const split = rows => {                                         // [prose ahead of the first entry, entries newest first]
+    const [head, ...items] = blocks(rows, l => /^[-*] /.test(l));
+    return [head, [].concat(...newest(items, dateOf))];
+  };
+  const entries = rows => [].concat(...split(rows));
+  // A flat log (the template's `# Learnings`, a line of intro, then entries) has no `## ` at all: its entries are
+  // the intro's, sorted too, and they follow the rules.
+  const [intro, ...sections] = blocks(lines, l => /^## /.test(l));
+  const [title, flat] = split(intro);
+  const rules = sections.filter(s => !when(s[0]) && /\brules?\b/i.test(s[0]));
+  const log = newest(sections.filter(s => !rules.includes(s)), s => when(s[0]));
+  return title.concat(...rules, flat, ...log.map(entries)).join('\n');
 }
 
 function learnSource(u) {
@@ -73,7 +125,7 @@ function learnOpen(slug, data) {
   const body = $('#learn-body', d);
   const show = view => {
     d.querySelectorAll('[data-learn-view]').forEach(b => b.setAttribute('aria-selected', String(b.dataset.learnView === view)));
-    if (view !== 'updates') { body.innerHTML = `<div class="md">${md(docs[view])}</div>`; return; }
+    if (view !== 'updates') { body.innerHTML = `<div class="md">${md(learnNewestFirst(docs[view]))}</div>`; return; }
     body.innerHTML = updates.length
       ? `<ol class="learn-list">${updates.map(learnRow).join('')}</ol>${next ? '<button class="ghost learn-more" type="button" data-learn-more>More</button>' : ''}`
       : '<div class="empty">No memory updates yet.</div>';

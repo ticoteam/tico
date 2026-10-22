@@ -3,7 +3,7 @@
 Who may do what, in one place. Company goals and KPIs are visible to everyone signed in; a bot's own
 are visible to whoever may Read the bot (docs/permissions.md). A goal's owner, the owner of the goal
 it serves and anyone above the owner on the org chart set its colour and its KPIs. A KPI's owner (or
-anyone above them; the company owner for a company KPI) edits it and its readings. The Goal Manager,
+anyone above them; the company owner for a company KPI) edits it and its readings. The CEO Bot,
 the built-in steward of every KPI, reads all of them and writes readings and automatic colours, and
 nothing else: a change to a definition or a target it is judged against is a proposal that a
 person confirms.
@@ -29,7 +29,7 @@ def install(app, store, auth, mutate, settings):
     write = mutate
 
     def mutate(request, body, work):
-        """Every goals write, then the Goal Manager's asks brought up to date in the same transaction: a reading
+        """Every goals write, then the CEO Bot's asks brought up to date in the same transaction: a reading
         logged or a proposal decided closes its task at once, not at the next hourly pass."""
         def work_then_ask(c):
             out = work(c)
@@ -38,7 +38,7 @@ def install(app, store, auth, mutate, settings):
             except Exception as exc:          # the person's write stands; the hourly pass asks instead
                 if not c.in_transaction:
                     raise
-                GA.log.warning("Goal Manager asks not brought up to date: %s", type(exc).__name__)
+                GA.log.warning("CEO Bot asks not brought up to date: %s", type(exc).__name__)
             return out
         return write(request, body, work_then_ask)
 
@@ -49,7 +49,7 @@ def install(app, store, auth, mutate, settings):
         return roster, entries, archived
 
     def is_manager(who):
-        """The Goal Manager acting as itself."""
+        """The CEO Bot acting as itself."""
         return who.role == "bot" and who.actor == G.AUTO_ACTOR
 
     def goal_owner(c, who, value):
@@ -91,7 +91,7 @@ def install(app, store, auth, mutate, settings):
         return who.actor == record["owner"] or stands_above(c, who, record["owner"])
 
     def may_log(c, who, record):
-        """Whoever keeps the KPI, the Goal Manager, or the owner of a goal that uses it."""
+        """Whoever keeps the KPI, the CEO Bot, or the owner of a goal that uses it."""
         if is_manager(who) or may_edit_kpi(c, who, record):
             return True
         return any(may_colour(c, who, g) for g in (G.goal(c, link["goal_id"]) for link in K.links_of(c, kpi_id=record["id"])) if g)
@@ -109,7 +109,7 @@ def install(app, store, auth, mutate, settings):
 
     def readable_goals(c, who, rows):
         """A bot's goals are its work: a caller sees them only when they may Read the bot (People's goals stay the
-        company's, as before). The Goal Manager reads every goal, as it keeps every KPI."""
+        company's, as before). The CEO Bot reads every goal, as it keeps every KPI."""
         hidden = hidden_owners(c, who)
         return [row for row in rows if row["owner"] not in hidden] if hidden else list(rows)
 
@@ -157,12 +157,9 @@ def install(app, store, auth, mutate, settings):
         return by_goal or by_kpi
 
     def company_editor(who):
-        """The owner or an admin, on their own click: never a bot (the CEO Bot proposes), never someone acting for them."""
-        return who.role in ("owner", "human") and not who.via and auth.company_role(who) in ("owner", "admin")
-
-    def needs_switch(c, what):
-        if not ceo_bot.on(c):
-            raise Problem("state", f"The CEO Bot is off on this install, so there is no {what} to change", 409)
+        """The owner, on their own click: never an admin or a member, never a bot (the CEO Bot proposes), never
+        someone acting for the owner. The CEO Bot's level, its regular checks and the Company section are theirs."""
+        return who.role == "owner" and not who.via
 
     def refuse_bot_why(who):
         if who.role not in ("owner", "human") or who.via:
@@ -174,12 +171,12 @@ def install(app, store, auth, mutate, settings):
         by = record.get("updated_by")
         known = N.lookup(c, {by}) if by else {}
         return {"company": {**record, "updated_by_name": known.get(by, H.actor_id(by or "") or "")},
-                "on": ceo_bot.on(c), "may_edit": company_editor(who)}
+                "may_edit": company_editor(who)}
 
     # ------------------------------------------------------------------ the company
     @app.get("/api/v2/company")
     def company_show(request: Request):
-        """The company's Vision and Description, at the top of Goals where the CEO Bot switch is on."""
+        """The company's Vision and Description, at the top of Goals."""
         who = request.state.identity
         auth.domain(who)
         with store.read() as c:
@@ -187,14 +184,14 @@ def install(app, store, auth, mutate, settings):
 
     @app.post("/api/v2/company")
     def company_update(request: Request, body: M.CompanyUpdate):
-        """The owner or an admin writes the Vision and the Description; every change is kept with who and when."""
+        """The owner writes the Vision and the Description; every change is kept with who and when."""
         who = request.state.identity
         def work(c):
             auth.domain(who)
-            needs_switch(c, "Company section")
             if not company_editor(who):
-                raise Problem("forbidden", "Only the owner or an admin writes the company's Vision and Description, "
-                              f"on their own click; a bot, the {ceo_bot.name(c)} included, proposes", 403)
+                raise Problem("forbidden", "Only the owner writes the company's Vision and Description, on their own "
+                              f"click; an admin or a member asks them, and a bot, the {ceo_bot.name(c)} included, "
+                              "proposes", 403)
             C.update(c, who.actor, vision=body.vision, description=body.description)
             return company_view(c, who)
         return mutate(request, body, work)
@@ -202,18 +199,30 @@ def install(app, store, auth, mutate, settings):
     # ------------------------------------------------------------------ how much the CEO Bot does
     @app.post("/api/v2/ceo-bot/level")
     def ceo_bot_level(request: Request, body: M.CeoBotLevel):
-        """Settings > CEO Bot, "How much your CEO Bot does": the owner or an admin picks level 1, 2 or 3 on their own
-        click; each change is kept with who and when. A bot never does, the CEO Bot included, nor the Assistant
-        acting for someone."""
+        """Settings > CEO Bot, "How much your CEO Bot does": the owner picks Passive (1), Suggests actions (2) or Acts
+        on its own (3) on their own click; each change is kept with who and when. An admin or a member never does, nor
+        a bot, the CEO Bot included, nor the Assistant acting for the owner."""
         who = request.state.identity
         def work(c):
             auth.domain(who)
             if not company_editor(who):
-                raise Problem("forbidden", "Only the owner or an admin chooses how much the CEO Bot does, on their own "
-                              "click; no bot changes it, the CEO Bot included", 403)
-            if not ceo_bot.on(c):
-                raise Problem("state", "The CEO Bot is off on this install, so it has no level to change", 409)
+                raise Problem("forbidden", f"Only the owner chooses how much the {ceo_bot.name(c)} does, on their own "
+                              "click; no admin or bot changes it, the CEO Bot included", 403)
             ceo_bot.set_level(c, who.actor, body.level)
+            return ceo_bot.named(c, ceo_bot.view(c))
+        return mutate(request, body, work)
+
+    @app.post("/api/v2/ceo-bot/checks")
+    def ceo_bot_checks(request: Request, body: M.CeoBotChecks):
+        """Settings > CEO Bot, "Regular checks": the owner turns the KPI pass and the automatic goal colours on or off,
+        on their own click. Off, neither runs until they turn them back on; their chat with the CEO Bot still works."""
+        who = request.state.identity
+        def work(c):
+            auth.domain(who)
+            if not company_editor(who):
+                raise Problem("forbidden", f"Only the owner turns the {ceo_bot.name(c)}'s regular checks on or off, "
+                              "on their own click", 403)
+            ceo_bot.set_checks(c, who.actor, body.on)
             return ceo_bot.named(c, ceo_bot.view(c))
         return mutate(request, body, work)
 
@@ -307,17 +316,14 @@ def install(app, store, auth, mutate, settings):
             other = [K.view(r, data.get(r["id"], []), None) for r in loose]
             names.update(owner_names(c, other))
             visible = {r["id"] for r in rows}
-            # Why proposals show on their goals only where the CEO Bot switch is on (backend/company.py).
-            whys = ceo_bot.on(c)
-            pending = [p for p in G.proposals(c, "pending") if (not p["goal_id"] or p["goal_id"] in visible)
-                       and (whys or p["kind"] != "goal_why")]
+            pending = [p for p in G.proposals(c, "pending") if not p["goal_id"] or p["goal_id"] in visible]
             return {"goals": rows, "owners": names, "unaligned": unaligned, "other_kpis": other,
                     "proposals": [{**p, "may_decide": decider(c, who, p)} for p in pending]}
 
     @app.get("/api/v2/goals/needs-you")
     def goals_needs_you(request: Request):
         """What waits on the caller here: red KPIs on goals they own, stale KPIs they own, and definitions and
-        targets they are asked to confirm. For a person each is a Goal Manager task (backend/goal_asks.py), shown
+        targets they are asked to confirm. For a person each is a CEO Bot task (backend/goal_asks.py), shown
         with it; one they closed while its cause stands is left out."""
         who = request.state.identity
         auth.domain(who)
@@ -328,7 +334,7 @@ def install(app, store, auth, mutate, settings):
             items = [i for i in wanted if i["kind"] != "proposal" and i["owner"] == who.actor]
             asked = {i["ref"]: i for i in wanted if i["kind"] == "proposal"}
             for p in G.proposals(c, "pending"):
-                # A Why waits on its goal, not here: the CEO Bot asks for them as one item (spec, level 1).
+                # A Why waits on its goal, not here: the CEO Bot asks for them as one item, above Passive.
                 if p["kind"] not in ("goal_why", "recovery") and decider(c, who, p):
                     goal = G.goal(c, p["goal_id"]) if p["goal_id"] else None
                     record = K.kpi(c, p["kpi_id"]) if p["kpi_id"] else None
@@ -339,7 +345,7 @@ def install(app, store, auth, mutate, settings):
 
     @app.post("/api/v2/goals/refresh")
     def goals_refresh(request: Request, body: M.GoalRefresh):
-        """The Goal Manager's status pass: work every live goal's automatic colour out again (a goal a
+        """The CEO Bot's status pass: work every live goal's automatic colour out again (a goal a
         person set only gets a suggestion). The owner may run it too."""
         who = request.state.identity
         def work(c):
@@ -399,7 +405,7 @@ def install(app, store, auth, mutate, settings):
 
     @app.post("/api/v2/goals/{gid}/status/auto")
     def goal_status_auto(request: Request, gid: str, body: M.Empty):
-        """"Let Goal Manager set it": a person ends their override and the colour is worked out again now."""
+        """"Let CEO Bot set it": a person ends their override and the colour is worked out again now."""
         who = request.state.identity
         def work(c):
             auth.domain(who)
@@ -441,7 +447,6 @@ def install(app, store, auth, mutate, settings):
         who = request.state.identity
         def work(c):
             auth.domain(who)
-            needs_switch(c, "Why line")
             row = goal_or_404(c, gid)
             refuse_bot_why(who)
             if not may_colour(c, who, row):
@@ -464,7 +469,7 @@ def install(app, store, auth, mutate, settings):
 
     @app.post("/api/v2/goals/{gid}/checkins")
     def goal_checkin(request: Request, gid: str, body: M.GoalCheckin):
-        """The owner's own words on how it is going (a person, or the Goal Manager recording their answer)."""
+        """The owner's own words on how it is going (a person, or the CEO Bot recording their answer)."""
         who = request.state.identity
         def work(c):
             auth.domain(who)
@@ -715,8 +720,6 @@ def install(app, store, auth, mutate, settings):
         who = request.state.identity
         def work(c):
             auth.domain(who)
-            if body.kind in ("goal_why", "recovery"):
-                needs_switch(c, "Why line" if body.kind == "goal_why" else "recovery")
             goal = goal_or_404(c, body.goal_id) if body.goal_id else None
             record = kpi_or_404(c, who, body.kpi_id) if body.kpi_id else None
             if goal and not readable_goals(c, who, [goal]):
@@ -733,8 +736,6 @@ def install(app, store, auth, mutate, settings):
             item = G.proposal(c, pid)
             if not item:
                 raise Problem("not_found", "Unknown proposal", 404)
-            if item["kind"] in ("goal_why", "recovery"):
-                needs_switch(c, "Why line" if item["kind"] == "goal_why" else "recovery")
             if not decider(c, who, item):
                 raise Problem("forbidden", "Whoever owns the goal or the KPI decides, and only a person, on their own click", 403)
             return {"proposal": G.decide(c, who.actor, pid, body.decision, body.note, why=body.why, option=body.option)}

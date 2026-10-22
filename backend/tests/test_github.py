@@ -47,7 +47,7 @@ def post(api, path, body, expected=200):
     r = api.post("/api/v2/" + path, json=body, headers=headers())
     assert r.status_code == expected, r.text
     data = r.json()
-    return data["task"] if isinstance(data, dict) and set(data) == {"task"} else data
+    return data["task"] if isinstance(data, dict) and "task" in data and set(data) <= {"task", "readback"} else data
 
 
 def get(api, path):
@@ -109,10 +109,10 @@ def test_a_pull_request_never_moves_its_task_through_merge_and_deploy(api):
         assert sorted(G.ship_deployed(c, api.app.state.store.settings)) == sorted(before)
         assert c.execute("SELECT count(*) FROM events WHERE action='github.shipped'").fetchone()[0] == 2
     assert all(l["state"] == "shipped" for l in unmoved())
-    # a tag push or a published release records nothing and moves nothing
+    # a tag push or a published release moves nothing; a release only wakes tasks waiting for it (test_milestone_waits)
     hook(api, "push", {"ref": "refs/tags/v1.2.3", "repository": {"full_name": "ticoteam/tico"}, "after": "d" * 40})
-    hook(api, "release", {"action": "published", "repository": {"full_name": "ticoteam/tico"},
-                          "release": {"tag_name": "v1.2.3", "target_commitish": "d" * 40}}, expected=204)
+    assert hook(api, "release", {"action": "published", "repository": {"full_name": "ticoteam/tico"},
+                                 "release": {"tag_name": "v1.2.3", "target_commitish": "d" * 40}})["woken"] == []
     unmoved()
 
 
