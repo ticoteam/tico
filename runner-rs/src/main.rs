@@ -46,6 +46,7 @@ mod manifest;
 mod memory_history;
 mod mcp;
 mod op;
+mod panics;
 mod perbot;
 mod perf;
 mod placement;
@@ -386,6 +387,7 @@ async fn start(command: Command, config: config::Config) -> i32 {
     }
     let _lock = lock::acquire(&state_dir.join("runner.lock")).unwrap_or_else(|e| fail(&e));
     flight::init(&state_dir);
+    panics::install();
     let state = state::State::open(&state_dir).unwrap_or_else(|e| fail(&e));
     follow::record_revision(&state_dir);
     follow::init(&config.data, &state_dir);

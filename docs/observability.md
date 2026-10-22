@@ -20,7 +20,8 @@ one PostHog project between several apps by filtering on the `app` property (Tic
 | `TICO_POSTHOG_HOST` | Exactly `https://us.i.posthog.com` or `https://eu.i.posthog.com`, matching the chosen project's region |
 | `TICO_SENTRY_DSN` | Public HTTPS Sentry ingestion DSN for the Tico project; enables browser errors with the required common settings |
 | `TICO_SENTRY_SERVER_DSN` | Public HTTPS ingestion DSN for the same Tico project; enables API/scheduler errors with the environment setting |
-| `TICO_RELEASE` | Optional release label; only letters, numbers, dots, underscores and hyphens, up to 100 characters |
+| `TICO_INSTANCE_NAME` | Optional name for this install on its error reports (`instance` tag, made a lowercase slug such as `acme-co`); unset: the company name |
+| `TICO_RELEASE` | Optional release label; only letters, numbers, dots, underscores and hyphens, up to 100 characters; unset: the Tico version |
 
    Public DSNs must use a Sentry ingestion host, numeric project path, and public hexadecimal
    key; legacy password-bearing DSNs and custom/self-hosted endpoints are rejected. Only
@@ -115,13 +116,37 @@ If the project is shared, always filter by `app` and `environment` first. Sugges
   or distinguish useful reading from unproductive effort on its own.
 
 Sentry receives frontend uncaught errors/unhandled rejections, relevant API 5xx/unhandled
-exceptions and scheduler failures. Defaults, request/context capture, logs, tracing, replay,
+exceptions, scheduler failures and runner panics (see [Server and runner errors](#server-and-runner-errors)).
+Defaults, request/context capture, logs, tracing, replay,
 breadcrumbs and local/source variables are disabled. Events are reconstructed before sending:
 fixed error labels, app/environment, status/source on the server and allowlisted stack
 locations; frontend events include the same opaque identity. Exception messages, customer
 values, URLs, headers, tokens, payload bodies and arbitrary SDK enrichment are discarded.
 Server events intentionally have no person identity. Coarse error labels trade diagnostic
 richness for privacy; stack locations are the primary grouping evidence.
+
+## Server and runner errors
+
+To report one install's server and runner errors, and no other install's, set on that install only:
+`TICO_SENTRY_SERVER_DSN` (the Sentry project's public DSN), `TICO_OBSERVABILITY_ENVIRONMENT` (`production`), and
+optionally `TICO_INSTANCE_NAME`; forward them with the [compose override](#docker-configuration) and recreate the
+server. With either of the first two unset or empty, the Sentry SDK is never started and nothing is sent. Several
+installs can share one Sentry project: every event carries `release` (the Tico version, or `TICO_RELEASE`) and an
+`instance` tag. Runners need no setting: each sends the file and line of a panic to its own server with its next
+heartbeat, and the server forwards it only when reporting is on (`source` `runner`, with the runner's version).
+
+To see that reports arrive, and what they hold, send a harmless test error from the server:
+
+```bash
+docker compose exec server python -m backend.observability test   # a native install: in the server's environment
+```
+
+It prints the event id to look for in Sentry, or says reporting is off. Each event holds only: the exception's class
+(`KeyError`, `RunnerPanic`), its stack frames inside Tico's own code (file, function, line), the route's template
+(`POST /api/v2/tasks/{tid}/comments`, never the address with its values), the status, `source`, `release`,
+`instance` and environment. It never holds the exception's message, local variables, source lines, request bodies,
+headers, cookies, query strings, addresses, emails, tokens or any message, task, document or comment text: each
+event is rebuilt from those fields before the SDK sees it and again in its last hook, and breadcrumbs are off.
 
 PostHog autocapture, replay, heatmaps, dead/rage clicks, error capture, surveys, performance,
 remote flags and external dependency loading are disabled. The last-mile hook allows only
@@ -150,6 +175,7 @@ services:
       TICO_POSTHOG_HOST: ${TICO_POSTHOG_HOST:-}
       TICO_SENTRY_DSN: ${TICO_SENTRY_DSN:-}
       TICO_SENTRY_SERVER_DSN: ${TICO_SENTRY_SERVER_DSN:-}
+      TICO_INSTANCE_NAME: ${TICO_INSTANCE_NAME:-}
       TICO_RELEASE: ${TICO_RELEASE:-}
 ```
 

@@ -8,6 +8,12 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Error reports name the install and cover runners.** With server error reporting on (`TICO_SENTRY_SERVER_DSN`,
+  off unless set), each Sentry event carries the Tico version as its release and an `instance` tag
+  (`TICO_INSTANCE_NAME`, else the company name), plus the exception's class, the function of each Tico frame and the
+  route's template; messages, values and customer text are still never sent. Runner panics (file and line only) reach
+  Sentry through their server, and `python -m backend.observability test` sends a harmless test error
+  (docs/observability.md).
 - **Visuals show without a visual address.** A company with no separate visual address now sees pictures, video and
   audio inline in chat and task conversations, served from the app's own address as media only. A visual page or an
   SVG is a card with its title, a still preview when there is one, and **Open**, which shows it in the file viewer;

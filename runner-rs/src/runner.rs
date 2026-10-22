@@ -387,6 +387,7 @@ impl Runner {
                 && self.events.live()
                 && beat.as_ref().is_some_and(|(p, at)| *p == printed && at.elapsed().as_secs_f64() < HEARTBEAT_LIVE_S)
         };
+        crate::panics::report(&self.client).await;
         if !quiet {
             let began = Instant::now();
             let (beat, tries) = self.post_heartbeat(&mut body).await;
