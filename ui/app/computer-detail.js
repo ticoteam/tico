@@ -17,8 +17,10 @@ const machineReset = reset => new Date(reset).toLocaleString([], {weekday: 'shor
 const machineEmail = account => String(account?.email || '').trim().toLowerCase();
 const machineNewer = (a, b) => (Date.parse(a?.reported_at) || 0) > (Date.parse(b?.reported_at) || 0);
 
-// The computer's connections: [{key, runtime, name, profile, own, state, bots, problem, attention}]. `state` carries the
-// reading shown ({signed_in, account, weekly, five_hour, refresh}); `auth` and `value` the own login's readiness.
+// The computer's connections: [{key, runtime, name, profile, own, state, bots, problem, blocked, attention}]. `state`
+// carries the reading shown ({signed_in, account, weekly, five_hour, refresh}); `auth` and `value` the own login's
+// readiness. `blocked` is a login whose turns can't save a session (readiness `data_problem`, Muse Code's data folder):
+// signed in, but no turn runs until that folder is fixed.
 function machineConnections(machine) {
   const runtimes = machine.readiness?.runtimes || {};
   const links = machine.bot_connections || [];
@@ -29,7 +31,8 @@ function machineConnections(machine) {
       // A login folder has a slot for every tool; only a tool it is signed in to, or that bots run on, is a connection.
       if (!(state?.signed_in === true || bots.length || machineSignedOut(machine, runtime, p.name)
         || (state?.signed_in == null && (state?.account || state?.weekly)))) continue;
-      rows.push({key: `profile:${p.name}:${runtime}`, runtime, name: p.display_name || p.name, profile: p, own: false, state: {...state}, bots});
+      const blocked = runtimes[runtime]?.profiles?.[p.name]?.data_problem || '';
+      rows.push({key: `profile:${p.name}:${runtime}`, runtime, name: p.display_name || p.name, profile: p, own: false, state: {...state}, bots, blocked});
     }
   }
   // A tool a shared key serves is listed even when the computer has not reported that tool (or anything) yet.
@@ -40,6 +43,8 @@ function machineConnections(machine) {
     // A shared key that serves this computer (`shared_with`, backend/computer_keys.py serving) is a connection here
     // even before the tool reports it signed in; until it does, the line says so and claims no reading.
     const shared = machine.shared_with?.[runtime] || null;
+    // With subscriptions in use the runtime's row is the one needing attention first; the own login's is under ''.
+    const blocked = (value?.profiles && Object.keys(value.profiles).length ? value.profiles[''] : value)?.data_problem || '';
     // Signed out from Tico (Sign out) stays a line, so it can sign in again or go back to the shared key.
     if (!(auth === 'ready' || auth === 'rejected' || bots.length || machineSignedOut(machine, runtime) || shared)) continue;
     const reading = {signed_in: auth === 'ready' ? true : auth === 'rejected' || (auth === 'missing' && !shared) ? false : null,
@@ -49,11 +54,11 @@ function machineConnections(machine) {
     const email = auth === 'ready' && machineEmail(value.account), match = auth === 'ready' && machine.same_account?.[runtime];
     const same = (email || match) && rows.find(r => !r.own && r.runtime === runtime && (match ? r.profile?.name === match : machineEmail(r.state.account) === email));
     if (same) {
-      Object.assign(same, {own: true, auth, value, bots: [...new Set([...same.bots, ...bots])].sort()});
+      Object.assign(same, {own: true, auth, value, bots: [...new Set([...same.bots, ...bots])].sort(), blocked: same.blocked || blocked});
       if (machineNewer(value.weekly, same.state.weekly)) Object.assign(same.state, {weekly: value.weekly, five_hour: value.five_hour});
       continue;
     }
-    rows.push({key: `own:${runtime}`, runtime, name: shared ? 'Shared key' : "Computer's login", profile: null, own: true, auth, value, state: reading, bots, shared});
+    rows.push({key: `own:${runtime}`, runtime, name: shared ? 'Shared key' : "Computer's login", profile: null, own: true, auth, value, state: reading, bots, shared, blocked});
   }
   // Bots on a subscription this computer does not have (or that does not cover their tool).
   for (const b of links) {
@@ -67,7 +72,7 @@ function machineConnections(machine) {
     // Signed out from Tico is a red dot even with no bots on it yet: nothing signs it back in by itself.
     const cleared = r.state.signed_in === false && machineSignedOut(machine, r.runtime, r.profile?.name ?? '');
     r.keyCleared = cleared && !r.profile && machineKeyCleared(machine, r.runtime);
-    r.attention = !!((r.bots.length && r.state.signed_in === false) || cleared || r.auth === 'rejected' || (r.missing && r.bots.length));
+    r.attention = !!((r.bots.length && r.state.signed_in === false) || cleared || r.auth === 'rejected' || (r.missing && r.bots.length) || r.blocked);
     r.tool = machineToolName(machine, r.runtime);
   }
   return rows.sort((a, b) => a.tool.localeCompare(b.tool) || Number(b.own) - Number(a.own) || a.name.localeCompare(b.name));
@@ -90,6 +95,7 @@ function machineLeftWords(weekly) {
 }
 function machineAttentionWords(conn) {
   if (conn.missing) return conn.problem;
+  if (conn.blocked) return conn.blocked;
   if (conn.auth === 'rejected') return 'Login expired or rejected';
   if (!conn.attention) return '';
   const what = conn.keyCleared ? 'No key' : 'Signed out';
@@ -132,6 +138,8 @@ function machineConnectionHTML(machine, conn, online, manage) {
     conn.shared ? '<span class="pill computer-conn-shared" data-shared>Shared</span>' : ''].join('');
   let signIn;
   if (conn.missing) signIn = `<span class="pill fail">${esc(conn.problem)}</span>`;
+  // Signed in, but its turns can't save a session: the folder is named on screen, and no sign-in is offered for it.
+  else if (conn.blocked) signIn = `<span class="err machine-data-problem" data-data-problem="${esc(conn.runtime)}">${esc(conn.blocked)}</span>`;
   else if (conn.profile) signIn = machineProfileSignIn(conn.state, conn.runtime);
   // A shared key the tool has not reported signing in with yet: nothing is claimed until it has.
   else if (conn.shared && conn.auth !== 'ready' && conn.auth !== 'rejected') signIn = `<span class="muted" data-shared-waiting>Not checked on ${esc(machine.label)} yet; it is used from the computer's next key check</span>`;
@@ -141,9 +149,9 @@ function machineConnectionHTML(machine, conn, online, manage) {
   const sep = '<span class="computer-conn-sep" aria-hidden="true"> · </span>';
   // "No key · Add key" for a key cleared from here: adding one is the way back (a sign-in or the shared key also are).
   // Not on a shared key's line: Replace key / Clear key act on it there.
-  const addKey = manage && !conn.missing && !conn.profile && !conn.shared && conn.state.signed_in !== true;
+  const addKey = manage && !conn.missing && !conn.blocked && !conn.profile && !conn.shared && conn.state.signed_in !== true;
   let action = addKey && conn.keyCleared ? sep + machineKeyActions(machine, online, conn.runtime, null, false).trimStart() : '';
-  if (manage && conn.state.signed_in !== true && !conn.missing) {
+  if (manage && conn.state.signed_in !== true && !conn.missing && !conn.blocked) {
     // "Signed out · Sign in": the way back sits next to what is wrong.
     if (harnessCaps(conn.runtime).browser_sign_in) action += `${conn.state.signed_in === false && !conn.keyCleared ? sep : ' '}<button class="ghost machine-signin" type="button" data-model-login data-runner="${esc(machine.id)}" data-runtime="${esc(conn.runtime)}" data-machine="${esc(machine.label)}"${conn.profile ? ` data-profile="${esc(conn.profile.name)}"` : ''}${offline}>Sign in</button>`;
     else if (!conn.profile) action += machineTerminalSignInHTML(machine, conn.runtime);
@@ -157,10 +165,10 @@ function machineConnectionHTML(machine, conn, online, manage) {
     : !profile && signedIn && key ? machineKeyActions(machine, online, conn.runtime, conn.value.key, true)
     : machineLoginActions(machine, online, conn.runtime, profile, signedIn);
   if (conn.own && conn.profile) {
-    const sub = login(conn.profile.name, conn.state.signed_in === true), own = login('', conn.auth === 'ready');
+    const sub = login(conn.profile.name, conn.state.signed_in === true), own = login('', conn.auth === 'ready' || !!conn.blocked);
     action += [sub && `<span class="computer-conn-login" data-login="${esc(conn.profile.name)}">Subscription${sub}</span>`,
       own && '<span class="computer-conn-login" data-login="">Computer\'s login' + own + '</span>'].filter(Boolean).join('');
-  } else action += login(conn.profile ? conn.profile.name : '', conn.profile ? conn.state.signed_in === true : conn.auth === 'ready');
+  } else action += login(conn.profile ? conn.profile.name : '', conn.profile ? conn.state.signed_in === true : conn.auth === 'ready' || !!conn.blocked);
   // Add key: a key of the computer's own, for a tool that takes one (Dev 97).
   if (addKey && !conn.keyCleared) action += machineKeyActions(machine, online, conn.runtime, null, false);
   const value = conn.value || {};

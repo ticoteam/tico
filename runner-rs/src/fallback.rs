@@ -275,10 +275,26 @@ pub fn server_keeps_holds() -> bool {
     SERVER_HOLDS.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// Whether the server takes a readiness row's `data_problem` (its config says `readiness_data_problem`): an older
+/// one refuses a field it does not know, and with it the whole heartbeat.
+static SERVER_DATA_PROBLEM: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn server_takes_data_problem() -> bool {
+    SERVER_DATA_PROBLEM.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Whether a config answer has been kept since start.
+pub fn config_seen() -> bool {
+    CHOICES.lock().unwrap().is_some()
+}
+
 /// Keep `fallback_models` from a GET /api/v2/config answer (the harness relay reads it once a minute).
 pub fn remember(config: &Value) {
     if config["login_holds"].is_array() {
         SERVER_HOLDS.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    if config["readiness_data_problem"] == true {
+        SERVER_DATA_PROBLEM.store(true, std::sync::atomic::Ordering::Relaxed);
     }
     let rows = config["fallback_models"].as_array().map(|r| r.iter().filter(|v| v.is_object()).cloned().collect()).unwrap_or_default();
     *CHOICES.lock().unwrap() = Some((Instant::now(), rows));

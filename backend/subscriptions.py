@@ -254,6 +254,11 @@ def _bot_line(c, bot, ctx):
     if runner:
         report = readiness_document(runner['readiness_json'])
         bot_report = report.get('bots', {}).get(bot, {})
+        if bot_report.get('data_problem'):
+            # Signed in, but its turns can't save a session: the folder is what to fix, not a sign-in.
+            if source == 'computer':
+                line['profile'] = bot_report.get('profile') or None
+            return {**line, 'signed_in': None, 'problem': bot_report['data_problem'], 'detail': {'runtime': runtime}}, config
         if source == 'computer':
             line['profile'] = bot_report.get('profile') or None
             state = bot_report.get('sign_in') or report.get('runtimes', {}).get(runtime, {}).get('authenticated')

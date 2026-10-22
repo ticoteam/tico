@@ -195,3 +195,23 @@ def test_subscription_picker_and_claim_refuse_unmapped_runtimes(api):
         assert sub['problem'] == f"Subscription one doesn't cover {runtime}"
         assert sub['signed_in'] is False
         assert claim(api, r) is None
+
+
+def test_a_login_whose_turns_cannot_save_a_session_names_the_folder_not_a_sign_in(api):
+    """Muse Code signed in, but the bot user can't write its data folder (Dev 329): the runner says so apart from the
+    sign-in, and the bot's line names the folder instead of "Signed out"."""
+    set_runtime(api, 'musecode')
+    r = runner(api)
+    assign(api, r, 'ops')
+    assert get(api, 'config', r['token'])['readiness_data_problem'] is True
+    problem = "Muse Code can't save sessions: the bot user can't write /home/x/musecode/data/muse/sessions (read-only)"
+    post(api, 'runners/heartbeat', {'version': 'test', 'platform': 'test', 'readiness': {'schema_version': 1,
+         'runtimes': {'musecode': {'installed': True, 'authenticated': 'failed', 'detail': problem, 'data_problem': problem,
+                                   'profiles': {'': {'installed': True, 'authenticated': 'failed', 'data_problem': problem}}}},
+         'bots': {'ops': {'ready': False, 'runtime': 'musecode', 'sign_in': 'failed', 'data_problem': problem,
+                          'problems': [problem]}}}}, token=r['token'])
+    line = get(api, 'bots/ops/subscription')
+    assert (line['signed_in'], line['problem'], line['source']) == (None, problem, 'computer')
+    machine = next(m for m in get(api, 'operations')['machines'] if m['id'] == r['runner_id'])
+    assert machine['readiness']['runtimes']['musecode']['data_problem'] == problem
+    assert [(row['bot'], row['signed_in'], row['problem']) for row in machine['bot_connections']] == [('ops', None, problem)]
