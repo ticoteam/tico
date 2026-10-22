@@ -1,7 +1,7 @@
 """One-click clarify on a stale bot ask.
 
-A bot's question a person never answered goes stale after hubdb.ASK_OLDER_DAYS: it leaves their queue for the
-"Older questions" list, and a Decide card keeps showing it without a way forward. One tap on Clarify sends the
+A bot's question a person never answered goes stale after two business days (hubdb.ask_older): it stays on their
+list until the next weekday-morning batch sends it back to its bot (backend/still_needed.py). One tap on Clarify sends the
 asking bot the winning prompt of the clarifying-prompt experiment: say whether the request is still relevant, and
 if so restate it plainly. The ask itself stays open: the person has not answered, they have asked for a clearer
 question. One clarify per ask: a second tap is refused, so the bot hears it once.

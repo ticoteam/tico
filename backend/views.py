@@ -1325,8 +1325,8 @@ def card_why(item):
 
 
 def needs_items(c, auth, who, task_view, older=None):
-    """The person's queue. A task there only for a question older than H.ASK_OLDER_DAYS goes to `older` instead
-    (a list the caller passes), out of the queue and its count."""
+    """The person's queue. A question unanswered for two business days stays, marked stale, until the weekday-morning
+    batch sends it back to its bot (backend/still_needed.py); `older`, a list the caller passes, stays empty."""
     raw = H.needs_you(c, who.actor)
     visible = auth.task_sql(c, who)
     H.hydrate_task_tags(c, raw["tasks"] + raw["waiting"] + raw["declined"])
@@ -1356,12 +1356,6 @@ def needs_items(c, auth, who, task_view, older=None):
             if row["id"] in merged:
                 # The CEO Bot's merged item: the originals it stands for, which the Tasks page leaves out of Needs you.
                 item["merged"] = [t for t in merged[row["id"]] if _readable(auth, c, who, t)]
-            if (item["kind"] == "question" and row["owner"] != who.actor and H.ask_older(ask)
-                    and not any(a["to_actor"] == who.actor and not H.ask_older(a) for a in open_asks)):
-                ask["older"] = True
-                if older is not None:
-                    older.append(item)
-                continue
             if ask and ask.get("to_actor") == who.actor and H.ask_older(ask):
                 ask["stale"] = True      # its one-click Clarify (backend/clarify_asks.py) shows on the card
             items.append(item)
@@ -1377,10 +1371,7 @@ def needs_items(c, auth, who, task_view, older=None):
                 "from_person": msg["from_actor"] if H.is_human(msg["from_actor"]) else None,
                 "recommend": recommendation(ask, who.actor)}
         if H.ask_older(msg):
-            ask["older"] = True
-            if older is not None:
-                older.append(item)
-            continue
+            ask["stale"] = True
         items.append(item)
     for row in raw["approvals"]:
         msg = H.message(c, row["message_id"])
