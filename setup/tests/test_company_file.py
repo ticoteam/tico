@@ -69,7 +69,7 @@ def test_a_whole_model_chart_is_refused_plainly_before_cloud_changes_until_the_p
     draft["company"]["name"] = "Acme Books"
     path = tmp_path / "tico.company.yaml"
     path.write_text(C.to_yaml(draft))
-    with pytest.raises(MissingInput, match="import the file in the app instead"):
+    with pytest.raises(MissingInput, match="without --company-file.*Already chose your team.*Use this team"):
         wizard.gather_company_file(argparse.Namespace(company_file=str(path), company=None),
                                    settings.Settings(preset="recommended"))
 
