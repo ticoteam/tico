@@ -715,8 +715,11 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         trusted_proxies: Arc::new(gateway::trusted_proxies(
             &std::env::var("TICO_TRUSTED_PROXIES").unwrap_or_else(|_| "127.0.0.1/32,::1/128".into()),
         )?),
+        // The backend closes a keep-alive connection after 5 s idle (backend/server.py). Dropping ours first means no
+        // request is sent on a connection the backend is closing, which would come back as a bare 502.
         proxy: reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(2))
+            .pool_idle_timeout(Duration::from_secs(4))
             .redirect(reqwest::redirect::Policy::none())
             .no_proxy()
             .build()?,

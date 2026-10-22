@@ -34,6 +34,9 @@ All notable changes to Tico are recorded here. The format follows
   each one at its own rate.
 
 ### Fixed
+- **No more rare empty 502s from the server.** About once in a few hundred API requests, a request reused a connection
+  to the backend just as the backend closed it for being idle, and the app or a bot got a bare 502. The server's front
+  door now drops idle connections before the backend does.
 - **A task blocked only by its own quiet subtask no longer waits silently.** Relating a subtask as its parent's
   blocker returns a warning, and when that subtask (a bot's hold or acknowledgement) goes quiet waiting on nothing
   else, the parent counts as stalled even while waiting: its bot is woken with the way out, and BotOps sees it stuck.
