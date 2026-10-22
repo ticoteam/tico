@@ -7,6 +7,8 @@
 .vcard{margin:0;width:100%;min-width:0;border:1px solid var(--line);border-radius:10px;background:var(--surface);overflow:hidden}
 .vcard-body{position:relative;width:min(100%,var(--vcard-w,100%));max-width:100%;max-height:var(--vcard-cap);overflow:hidden;margin:0 auto}
 .vcard[data-state="ready"] .vcard-body:not(.ready){background:linear-gradient(90deg,var(--surface2) 25%,var(--line) 50%,var(--surface2) 75%);background-size:200% 100%;animation:mskel 1.2s linear infinite}
+.vcard-open{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;min-height:64px;padding:12px}
+.vcard-preview{display:block;max-width:100%;max-height:240px;border-radius:6px;object-fit:contain}
 .vcard-note{display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:6px;min-height:64px;padding:12px;color:var(--muted);font-size:13px;text-align:center}
 .vcard-cap{display:flex;align-items:center;gap:8px;min-width:0;padding:5px 6px 5px 10px;border-top:1px solid var(--line);font-size:12.5px;color:var(--muted)}
 .vcard-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

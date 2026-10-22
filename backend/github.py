@@ -703,7 +703,7 @@ def push(c, payload):
         for link in H._rows(c.execute("SELECT id,detail_json FROM task_links WHERE kind='worktree' AND lower(repo)=? "
                                        "AND branch=?", (repo.lower(), branch))):
             detail = H._json(link["detail_json"], {}) or {}
-            detail.update(pushed=head_sha, pushed_at=detail.get("pushed_at") or H.now())
+            detail.update(pushed=head_sha, pushed_at=detail.get("pushed_at") or H.now(), pushed_last_at=H.now())
             c.execute("UPDATE task_links SET detail_json=? WHERE id=?", (json.dumps(detail), link["id"]))
     if ref != "refs/heads/" + default:
         return {"ref": ref, "commits": 0}

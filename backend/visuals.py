@@ -352,30 +352,42 @@ def origin_of(url):
     return f"{parts.scheme}://{parts.netloc}" if parts.scheme and parts.netloc else ""
 
 
+def hostname(url):
+    """The lowercase hostname of `url`, or "" when it has none. So https://Tico.example:443/ and http://tico.example:8443
+    share one hostname: whatever the scheme or port, a browser sends that host's cookies to both."""
+    return (urlsplit(url or "").hostname or "").lower()
+
+
 def check_origin(settings):
-    """A separate visual origin must really be separate: the app's own origin there would put visuals next to its
-    cookies. A value that is not a URL at all (a stray bracket, a port that is not a number) counts as unset, so
-    visuals show as file chips: like a missing setting, it never stops the server."""
+    """A separate visual origin must really be separate: on the app's own hostname, in any scheme or with any port,
+    visuals would sit next to its cookies, and a request there could not be told from one to the app. Such a setup
+    stops the server; leaving TICO_VISUAL_ORIGIN unset gives the fallback instead. A value that is not a URL at all (a
+    stray bracket, a port that is not a number) counts as unset, so visuals take the fallback (mode): like a missing
+    setting, it never stops the server."""
     value = getattr(settings, "visual_origin", "")
     try:
         urlsplit(value or "").port
         visual = origin_of(value)
     except ValueError:
         logging.getLogger("tico.visuals").warning(
-            "TICO_VISUAL_ORIGIN is not a valid URL; visuals show as file chips until it is fixed")
+            "TICO_VISUAL_ORIGIN is not a valid URL; visuals show pictures, video and audio only until it is fixed")
         return ""
-    if visual and visual == origin_of(settings.public_url):
-        raise ValueError("TICO_VISUAL_ORIGIN must differ from the app's own address (TICO_PUBLIC_URL)")
+    if visual and hostname(visual) == hostname(settings.public_url):
+        raise ValueError("TICO_VISUAL_ORIGIN must differ from the app's own hostname (TICO_PUBLIC_URL), whatever the scheme or port")
     return visual
 
 
-def inline_on(settings):
-    """Whether visuals are shown inline at all. In production that needs a separate visual origin; without one they
-    are plain file chips and /visuals refuses (lead decision, Oct 19). The app's own address, with the page sandboxed,
-    serves them only on a loopback install (dev and tests) or when a self-hoster opts in with
-    TICO_VISUAL_SAME_ORIGIN=1. A missing setting never stops the server."""
-    return bool(getattr(settings, "visual_origin", "")) or settings.loopback or bool(
-        getattr(settings, "visual_same_origin", False))
+def mode(settings):
+    """How visuals show, decided from the setup alone (Visuals always on; there is no switch): "full" with a separate
+    visual address, where every inline kind is served from that address as in Visual replies; "media" without one, the
+    fallback, where pictures, video and audio are served from the app's own address as media only and pages and SVG are
+    cards that open the file viewer. A page or SVG is never served from the app's own address: not on a loopback
+    install, and TICO_VISUAL_SAME_ORIGIN, the opt-in that once did it, is no longer read."""
+    return "full" if getattr(settings, "visual_origin", "") else "media"
+
+
+# What the fallback serves from the app's own address: kinds that a browser only ever shows as media.
+MEDIA = ("image", "video", "audio")
 
 
 # ---------------------------------------------------------------------------------------------- attach
@@ -455,10 +467,12 @@ def _clean_version(c, who, files, blobs, fid, version, cleaned, mime):
 INLINE = ("image", "svg", "page", "video", "audio")
 
 
-def decorate(c, who, files, key, base, messages):
+def decorate(c, who, files, key, base, messages, full=True):
     """Each visual on these messages, as this reader sees it now: the file's current version, whether it was removed,
-    its size in pixels, and fresh addresses on the visual route (the picture and, for a video, its poster). With
-    `base` None inline display is off (inline_on): `src` and `poster_url` are null and the reader sees a file chip."""
+    its size in pixels, and fresh addresses on the visual route (the picture and, for a video, its poster). `base` is
+    the address the route is on: the visual address, or "" for the app's own (the fallback, `full` False). In the
+    fallback a page or SVG gets no `src`: it is a card with `open` true, its title and, when the file has one, a still
+    preview (`preview_url`, a picture), and Open shows it in the file viewer."""
     from . import task_privacy as privacy
     cache, rows, served = {}, {}, {}
     # The visual route rebuilds a bot reader without its run (serve, token_reader), so a file this run sees but that
@@ -485,7 +499,12 @@ def decorate(c, who, files, key, base, messages):
             if v is not None:
                 actor = privacy.actor(who)
                 here = base if route is who or (route and files.visible(c, route, row, served)) else None
-                view["src"] = None if here is None else here + "/visuals/" + mint(key, actor, fid, number)
+                inline = full or a["kind"] in MEDIA
+                view["src"] = here + "/visuals/" + mint(key, actor, fid, number) if inline and here is not None else None
+                if not inline:
+                    view["open"] = True
+                    if v["thumb_blob_id"] and here is not None:
+                        view["preview_url"] = here + "/visuals/" + mint(key, actor, fid, number, "preview")
                 for field in ("width", "height", "duration_ms"):
                     if v[field] is not None:
                         view[field] = v[field]
@@ -526,11 +545,22 @@ def key_for(app, settings):
 def for_reader(app, settings, c, who, messages):
     """decorate() for any path that hands messages to a reader: the conversation page and snapshot, a single message,
     task comments, the task page, the assistant room and the live event stream all go through here."""
-    base = settings.visual_origin if inline_on(settings) else None
-    return decorate(c, who, app.state.files, key_for(app, settings), base, messages)
+    full = mode(settings) == "full"
+    return decorate(c, who, app.state.files, key_for(app, settings), settings.visual_origin if full else "", messages,
+                    full)
 
 
 # ---------------------------------------------------------------------------------------------- serve
+def on_host(request, origin):
+    """Whether this request came in on `origin`'s host (the Host header, its default port dropped)."""
+    try:
+        want, got = urlsplit(origin or ""), urlsplit("//" + request.headers.get("host", ""))
+        default = 443 if want.scheme == "https" else 80
+        return bool(want.hostname) and (got.hostname, got.port or default) == (want.hostname, want.port or default)
+    except ValueError:                      # a malformed Host or origin is never the visual address
+        return False
+
+
 def token_reader(c, auth, actor):
     """The reader the visual route checks a token's actor as: a person as they are now, a bot as itself without any
     run (a token outlives the turn it was minted in), or None when neither exists."""
@@ -544,13 +574,15 @@ def token_reader(c, auth, actor):
         return None
 
 
-def serve(request, store, auth, files, blobs, key, ancestors, token, on=True):
-    """GET /visuals/<token>: one visual for the reader the token names, checked again on every request. Refused
-    outright while inline display is off (`on`, inline_on)."""
+def serve(request, store, auth, files, blobs, key, ancestors, token, full=True, visual_origin=""):
+    """GET /visuals/<token>: one visual for the reader the token names, checked again on every request. The route
+    answers on every host the server does, the app's own included, so a page or SVG is served only to a request that
+    came in on the visual address (`visual_origin`, in full mode); anywhere else, the app's own address and the whole
+    fallback (`full` False), the route serves media only. A poster or preview that is not a picture is refused."""
     from fastapi.responses import Response
     from .file_delivery import serve as deliver
-    gone = Response(status_code=404, headers=_headers("default-src 'none'; sandbox"))
-    found = read(key, token) if on else None
+    gone = Response(status_code=404, headers=_headers("default-src 'none'; sandbox", "attachment"))
+    found = read(key, token)
     if not found:
         return gone
     actor, fid, number, part = found
@@ -564,13 +596,19 @@ def serve(request, store, auth, files, blobs, key, ancestors, token, on=True):
             return gone
         mime = (v["mime"] or "").split(";", 1)[0].strip().lower()
         kind = kind_of(mime, v["size"])
-        if part == "poster":
-            poster = c.execute("SELECT * FROM blobs WHERE id=?", (v["poster_blob_id"],)).fetchone() \
-                if v["poster_blob_id"] else None
-            if not poster or kind != "video":
+        if part in ("poster", "preview"):
+            # A video's poster, or the still preview of a page or SVG shown as a card: always a picture.
+            blob_id = v["poster_blob_id"] if part == "poster" else v["thumb_blob_id"]
+            still = c.execute("SELECT * FROM blobs WHERE id=?", (blob_id,)).fetchone() if blob_id else None
+            if not still or (kind != "video" if part == "poster" else kind not in ("page", "svg")):
                 return gone
-            blob, kind = dict(poster), "image"
-        elif kind not in INLINE:
+            blob = dict(still)
+            mime = (blob.get("content_type") or "").split(";", 1)[0].strip().lower()
+            kind = KINDS.get(mime)
+            if kind != "image":
+                return gone
+            blob["content_type"] = mime
+        elif kind not in INLINE or (kind not in MEDIA and not (full and on_host(request, visual_origin))):
             return gone
         else:
             blob = {"digest": v["digest"], "size": v["size"], "name": v["name"], "content_type": mime}
@@ -583,11 +621,16 @@ def serve(request, store, auth, files, blobs, key, ancestors, token, on=True):
                             headers={**_headers(rule), "Content-Length": str(len(data))})
         return response
     response = deliver(request, blobs, blob, True)
-    response.headers.update(_headers(rule))
+    response.headers.update(_headers(rule, disposition(mime)))
     return response
 
 
-def _headers(rule):
+def disposition(mime):
+    """Inline only for a picture, video or audio type a browser shows as media; anything else is a download."""
+    return "inline" if KINDS.get(mime) in MEDIA else "attachment"
+
+
+def _headers(rule, how="inline"):
     return {"Content-Security-Policy": rule, "Cross-Origin-Resource-Policy": "cross-origin",
             "Referrer-Policy": "no-referrer", "X-Content-Type-Options": "nosniff",
-            "Cache-Control": "private, no-cache", "Content-Disposition": "inline"}
+            "Cache-Control": "private, no-cache", "Content-Disposition": how}

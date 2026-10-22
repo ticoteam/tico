@@ -1256,6 +1256,17 @@ def view(c, who, settings, auth, github, config):
                     f"{H.actor_id(w['owner'])}: {w['repo']}, {'setting up' if w['state'] == 'reserved' else 'no room'} "
                     f"for {age(w['created'])} ({w['reason']})" for w in waits[:3])
                     + ('.' if len(waits) <= 3 else f'; and {len(waits) - 3} more.'), [_fix('Open tasks', '#/tasks')]))
+            # What freed a place lately, and why (backend/worktrees.py released_event): finished work releasing its
+            # tree is the normal way room comes back, so it is said, not warned about.
+            since = H.shift(H.now(), hours=-24)
+            reasons = {}
+            for (reason,) in c.execute("SELECT json_extract(detail_json,'$.reason') FROM events "
+                                       "WHERE action='worktree.released' AND ts>=?", (since,)):
+                reasons[reason or 'cleanup'] = reasons.get(reason or 'cleanup', 0) + 1
+            if reasons:
+                checks.append(_check('worktrees_released', 'Worktrees released (24 h)', 'info', '; '.join(
+                    f'worktree released: {reason} ({n})' for reason, n in sorted(reasons.items())) + '.',
+                    [_fix('Open tasks', '#/tasks')]))
     if full:
         from . import task_loops
         if loops := task_loops.looping(c):

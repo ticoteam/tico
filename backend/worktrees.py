@@ -11,7 +11,7 @@ from fastapi import Request
 from pydantic import Field
 from clients import git_repository
 
-from . import hubdb as H, repositories as R, worktree_waits as waits
+from . import hubdb as H, repositories as R, task_relations as TR, worktree_waits as waits
 from .auth import validate_identity
 from .models import Contract
 from .store import Problem, readiness_document
@@ -40,7 +40,8 @@ def current_error(state, detail):
     """The worktree's failure still in force. A failed restore or prepare is over once the worktree is set up and
     acknowledged ready, though a computer keeps repeating its last action error until another action succeeds; a
     refused removal stays while removal is asked, and a failure seen when inspecting the tree is always current."""
-    error = str(detail.get('error') or '')
+    error = str(detail.get('error') or '') or (str(detail['pending_expired'])
+                                               if state == 'pending' and detail.get('pending_expired') else '')
     if error.startswith(ACTION_FAILED) and ready(state, detail) and not any(detail.get(key) for key in REMOVAL):
         return ''
     return error
@@ -139,6 +140,112 @@ def supported(c):
 
 LIMIT = 50            # live worktrees per bot; the computer's free-disk floor can stop it sooner
 CLEANUP_TRIES = 6     # a refused worktree cleanup is asked again after 2, 4, ... 64 minutes, then left
+PENDING_HOURS = 6     # a checkout or setup with no progress this long has failed; its owner is told and may retry
+
+
+def live_turn(c, task_id, owner):
+    """The owner bot is in a turn on this task now: a leased or running attempt that carries the task."""
+    if not task_id or not H.is_bot(owner or ''):
+        return False
+    from .task_privacy import attempt_tasks
+    try:
+        rows = c.execute("SELECT id FROM attempts WHERE bot=? AND state IN ('leased','running')",
+                         (H.actor_id(owner),)).fetchall()
+    except Exception:               # a local hub has no attempts table
+        return False
+    return any(task_id in attempt_tasks(c, r[0]) for r in rows)
+
+
+def start_refusal(c, task):
+    """Why no new worktree starts for this task now, or '': a coding step cannot run on a finished task, one not
+    started (On Deck, or any task still `open`) or one an open task blocks. A task being worked (`doing`), or one at a
+    review or waiting while its fix-forward or a review fix runs, gets one; so does reassigned work. No step names."""
+    if task['status'] in CLOSED:
+        return f"This task is {task['status']}: a finished task gets no new worktree."
+    if task['status'] == 'open':
+        return 'This task has not started: move it to In Progress first.'
+    blocker = TR.live_blocker(c, task['id'], H.ACTIVE_STATUSES)
+    if blocker:
+        row = H.task(c, blocker) or {}
+        name = (f"#{row['number']} " if row.get('number') else '') + (row.get('title') or blocker)
+        return f'This task is blocked by {name}: it gets a worktree once that is done.'
+    return ''
+
+
+def released_event(c, row, detail):
+    """One `worktree.released` event per tree, with why: the task's run history and Health read it."""
+    reason = detail.get('release_reason') or 'cleanup'
+    data = {'link': row['id'], 'path': row['path'], 'reason': reason}
+    if reason == 'task finished' and (detail.get('dirty_files') or detail.get('ahead')) \
+            and not detail.get('snapshot_skipped'):
+        data['wip_branch'] = 'wip/' + row['task_id'][:8] + '-' + row['id'][:6]     # runner/worktrees.py wip_branch
+    if detail.get('stale_push_cleared'):
+        data['reason'] += f" (stale push {detail['stale_push_cleared'][:12]} cleared)"
+    H.event(c, H.KEEPER, 'worktree.released', row['task_id'], data)
+
+
+def cancel_pending(c, row, detail, reason):
+    """End a `pending` worktree nothing was checked out for (queued, or an attach not yet confirmed): no computer is
+    asked, nothing on disk is touched, its place frees at once. A reserved wait for it ends once with the reason."""
+    detail = {**detail, 'removed_by': 'cancelled', 'release_reason': 'pending cancelled', 'cancelled': reason}
+    # Guarded on the stored state: serving waits and the heartbeat's own pass can both reach one reservation.
+    if not c.execute("UPDATE task_links SET state='removed',detail_json=?,updated=? WHERE id=? AND state='pending'",
+                     (json.dumps(detail), H.now(), row['id'])).rowcount:
+        return
+    if wait := waits.preparing(c, row['id']):
+        waits._finish(c, wait, 'cancelled', reason)
+    released_event(c, row, detail)
+
+
+def checked_out(detail):
+    """A pending checkout that may have a folder on disk with its recorded proof: it resumes, never starts over."""
+    return (detail.get('checkout_state') in ('initializing', 'checkout_ready', 'setup_running', 'setup_failed')
+            and all(detail.get(key) for key in IDENTITY))
+
+
+def expire_pending(c, row, detail):
+    """A checkout or setup that made no progress for PENDING_HOURS has failed: it would otherwise hold a place
+    forever. The tree keeps its place and says why, its computer stops preparing it, a reserved wait ends, and its
+    owner is told once how to try again on the same worktree."""
+    reason = f'Setup did not finish within {PENDING_HOURS} h'
+    detail['pending_expired'] = reason
+    if wait := waits.preparing(c, row['id']):
+        waits._finish(c, wait, 'failed', reason)
+    retry = ('hub task worktree setup ' if checked_out(detail) else 'hub task worktree add ') + (row['repo'] or '')
+    if row.get('bot_state', 'active') == 'active':
+        H._wake(c, H.task(c, row['task_id']), row['owner'],
+                f"Tico stopped preparing this task's {row['repo'] or ''} worktree at {row['path']}: {reason}. Its place "
+                f"stays this task's; run `{retry}` to try again on the same worktree.",
+                trigger='other', source=row['id'])
+
+
+def held_reason(c, row, detail):
+    """Why a tree whose pull requests are finished is not released yet, or '': its bot is in a turn on the task (a
+    fix-forward or review fix starting), or its pushed branch has moved past the head of the last finished pull
+    request on it (fix-forward commits after a merge). Both clear on their own: the turn ends, or a new pull request
+    carries the commits and finishes."""
+    if live_turn(c, row['task_id'], row.get('owner')):
+        return 'held: live turn'
+    last = c.execute("SELECT number,detail_json,coalesce(pr_merged_at,updated) AS finished FROM task_links WHERE task_id=? AND kind='pr' AND lower(repo)=lower(?) "
+                     f"AND branch=? AND state IN {PR_FINISHED} ORDER BY coalesce(pr_merged_at,updated,created) DESC LIMIT 1",
+                     (row['task_id'], row['repo'] or '', row['branch'] or '')).fetchone() if row['branch'] else None
+    pr_head = json.loads(last['detail_json'] or '{}').get('head_sha') if last else None
+    # The computer's committed head, once it has nothing unpushed, is the branch as it is now. A push webhook's head
+    # that differs from the merged head holds too (a push from elsewhere), but only until the computer's first report
+    # after that delivery: a clean tree with nothing unpushed at the merged head proves it stale (a delayed or
+    # replayed delivery), and it is cleared and named in the release.
+    runner = detail.get('last_commit') if detail.get('ahead') == 0 else None
+    if pr_head and runner and runner != pr_head:
+        return f"held: new commits since PR #{last['number']}"
+    pushed = detail.get('pushed')
+    if pr_head and pushed and pushed != pr_head:
+        seen = detail.get('runner_report_at') or ''
+        if (seen > (detail.get('pushed_last_at') or detail.get('pushed_at') or '') and runner == pr_head
+                and not detail.get('dirty_files')):
+            detail['stale_push_cleared'] = detail.pop('pushed')
+            return ''
+        return f"held: new commits since PR #{last['number']}"
+    return ''
 
 
 def inventory(c, computer):
@@ -204,6 +311,7 @@ def preparable(c, row, detail):
     """A worktree reserved for a waiting task (backend/worktree_waits.py): its computer checks it out and runs setup
     while the bot is idle, then reports it present. A failed attempt is not repeated; the task is told instead."""
     return (row['state'] == 'pending' and bool(detail.get('wait_id')) and not detail.get('error')
+            and not detail.get('pending_expired')
             and detail.get('checkout_state') in ('queued', 'initializing', 'checkout_ready', 'setup_running')
             and bool(waits.preparing(c, row['id'])))
 
@@ -285,6 +393,8 @@ def heartbeat(c, who, reports, capable, default_org=""):
                     H._wake(c, task, task['owner'], message + ': ' + row['path'], trigger='stall_check', source=row['id'])
                     detail[key] = True
         if report.state == 'removed' and detail.get('cleanup_requested'):
+            if row['state'] != 'removed':
+                released_event(c, row, detail)
             detail['removed_by'] = 'cleanup'
         # A stamped report is stale when the record was added, attached, re-queued or patched after the
         # computer read it; heartbeat writes don't count, or a busy worktree's reports would always be stale.
@@ -296,6 +406,8 @@ def heartbeat(c, who, reports, capable, default_org=""):
                                      exclude={'link_id', 'state', 'branch', 'checkout_state', 'record_updated',
                                               *(IDENTITY if stale else ())})
         detail.update(reported)
+        if detail.get('pushed') and (detail.get('pushed_last_at') or '') >= (detail.get('runner_report_at') or ''):
+            detail['runner_report_at'] = now        # the computer's first report after a push webhook's delivery
         if report.error is None and not refused_cleanup(report.state, detail):
             detail.pop('error', None)           # every report carries the computer's current error, if any
         legacy_present = (report.state == 'present' and report.checkout_state == 'legacy_present'
@@ -327,6 +439,7 @@ def heartbeat(c, who, reports, capable, default_org=""):
         if (state, row['branch'] or branch, detail) != before:
             c.execute('UPDATE task_links SET state=?,branch=coalesce(branch,?),detail_json=?,updated=? WHERE id=?',
                       (state, branch, json.dumps(detail), H.now(), row['id']))
+            row['updated'] = H.now()
         row['state'] = state
         row['detail_json'] = json.dumps(detail)
         if branch:
@@ -347,14 +460,34 @@ def heartbeat(c, who, reports, capable, default_org=""):
         # A worktree whose pull requests are all merged or closed has done its job even while its task waits on
         # something else (a release, an acceptance): it is released so it stops counting against the bot's limit.
         # The computer removes it only while the bot is idle and only when it is clean and pushed (runner/worktrees.py).
-        released = not closed and bool(prs) and finished and row['state'] == 'present'
+        # A `pending` one too: a reservation or checkout that never finished must not hold a place for work that is
+        # done (one sat pending for days after its pull request shipped).
+        # A tree coming back for a reopened task is new work starting: it is judged once it is present.
+        released = (not closed and bool(prs) and finished
+                    and (row['state'] == 'present' or row['state'] == 'pending' and not detail.get('restore_on_reopen')))
         # Its own branch's commits with no pull request linked are nobody's yet: the tree stays and says why.
         unlinked = released and any(m['link_id'] == row['id'] for m in H.unlinked_pushes(c, row['task_id']))
-        if unlinked:
+        held = (f"held: commits on {row['branch']} with no pull request linked" if unlinked
+                else held_reason(c, row, detail) if released else '')
+        if row['state'] == 'pending' and (released or closed) and waits.preparing(c, row['id']):
+            held = held or 'held: reserved for a waiting turn'
+        if held:
             released = False
-            detail['held'] = f"held: commits on {row['branch']} with no pull request linked"
+            detail['held'] = held
         else:
             detail.pop('held', None)
+        reason = ('task finished' if closed else
+                  'pull request merged' if any(s in ('merged', 'shipped') for s in prs) else 'pull request closed')
+        if (row['state'] == 'pending' and not held and (released or closed and (finished or detail.get('delete_requested')))
+                and detail.get('checkout_state') in ('queued', 'attached_pending')
+                and not (detail.get('current_branch') or detail.get('last_commit'))):   # nothing reported on disk
+            cancel_pending(c, row, detail, 'No longer needed: ' + reason)
+            continue
+        if (row['state'] == 'pending' and not closed and not detail.get('pending_expired')
+                and detail.get('checkout_state') != 'setup_failed'
+                and H.shift(row['updated'] or row['created'], hours=PENDING_HOURS) < H.now()
+                and not live_turn(c, row['task_id'], row['owner'])):
+            expire_pending(c, row, detail)
         if released and not detail.get('release_requested'):
             detail['release_requested'] = True
             for key in ('cleanup_attempts', 'cleanup_retry_at', 'cleanup_gave_up'):
@@ -372,6 +505,7 @@ def heartbeat(c, who, reports, capable, default_org=""):
             continue
         if action == 'remove':
             detail['cleanup_requested'] = True
+            detail['release_reason'] = reason
             # A refused cleanup (a worktree holding files it keeps) is asked again with backoff, then left for a
             # person: retried on every heartbeat it never succeeds and only churns the task (CLEANUP_TRIES).
             if detail.get('error'):
@@ -448,11 +582,32 @@ def provision(c, who, task, repo, path=None, branch=None, default_org='', brief=
             raise Problem('worktree_path', 'This worktree belongs to another task', 409)
         if existing['state'] != 'removed':
             detail = json.loads(existing['detail_json'] or '{}')
+            if existing['state'] == 'pending' and detail.get('pending_expired'):
+                # A retry after the deadline starts the same worktree over: same link, path and branch.
+                if why := start_refusal(c, task):
+                    raise Problem('worktree_start', why, 409)
+                # A folder already checked out keeps its phase and proof: the registered setup command
+                # (`hub task worktree setup`, the one the expiry names) resumes it in place. Only a checkout that
+                # never got that far is queued again.
+                for key in ('pending_expired', 'error'):
+                    detail.pop(key, None)
+                if checked_out(detail):
+                    detail['setup_pending'] = True
+                elif detail.get('checkout_state') != 'attached_pending':
+                    for key in IDENTITY:
+                        detail.pop(key, None)
+                    detail.update(checkout_state='queued', setup_pending=True)
+                now = detail['record_changed'] = H.now()
+                c.execute('UPDATE task_links SET detail_json=?,updated=? WHERE id=?',
+                          (json.dumps(detail), now, existing['id']))
             return {'link_id': existing['id'], 'branch': existing['branch'], 'path': existing['path'],
                     'state': existing['state'],
                     'checkout_state': detail.get('checkout_state'), 'setup_pending': detail.get('setup_pending', False),
                     'expected_head': detail.get('expected_head'), 'checkout_target': detail.get('checkout_target'),
                     'expected_base': detail.get('expected_base')}
+    # A new or restored tree only for work a coding step can run on now; an existing one is still answered above.
+    if why := start_refusal(c, task):
+        raise Problem('worktree_start', why, 409)
     count = c.execute("SELECT count(*) FROM task_links l JOIN tasks t ON t.id=l.task_id WHERE l.kind='worktree' AND coalesce(json_extract(l.detail_json,'$.owner'),t.owner)=? AND coalesce(l.state,'unknown')<>'removed'", (task['owner'],)).fetchone()[0]
     if count >= LIMIT and brief:
         raise Problem('worktree_limit', f'This bot already has {LIMIT} worktrees.', 409, extra={'limit': LIMIT})
@@ -595,6 +750,8 @@ def install(app, store, auth, mutate):
             if body.cleanup and who.role != 'runner':
                 raise Problem('forbidden', 'Only the computer reports cleanup', 403)
             if body.cleanup and body.state == 'removed':
+                if link['state'] != 'removed':
+                    released_event(c, dict(link), detail)
                 detail['removed_by'] = 'cleanup'
             elif body.state == 'removed':
                 detail.pop('restore_on_reopen', None)
@@ -629,6 +786,8 @@ def install(app, store, auth, mutate):
                     detail[key] = getattr(body, key)
             if not current_error(body.state or link['state'], detail):
                 detail.pop('error', None)       # a successful setup supersedes the failed action before it
+            if body.checkout_state is not None or body.state in ('present', 'removed'):
+                detail.pop('pending_expired', None)     # the retry is making progress again
             fields = body.model_dump(exclude_none=True, exclude={'cleanup', 'setup_pending', 'checkout_state', 'expected_head', 'checkout_target', 'expected_base', 'skipped_files', 'snapshot_skipped', 'restore_source'})
             now = detail['record_changed'] = H.now()
             fields['detail_json'] = json.dumps(detail)
