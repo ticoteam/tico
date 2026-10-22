@@ -572,7 +572,8 @@ def test_a_limited_primary_never_retries_its_login_as_a_fallback(api, computer, 
     else:
         assert result["limited"] and not result.get("fallback")
         status = until(lambda: get(api, "bots/ops")["status"], "the held status")
-        assert status["state"] == "limited" and "resumes" in status["focus"]
+        assert status["state"] == "limited" and "codex" in status["focus"].lower()
+        assert "retrying after" in status["focus"]   # this fake gives no reset, so the normal backoff holds it
 
 
 # TK-EKWAFWPD: the first of the company's providers is out of quota on this computer too. The hop that hits its limit
