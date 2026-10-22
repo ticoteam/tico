@@ -8,6 +8,9 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- Computers report high-level CPU load, memory, swap and running turns every minute, kept for 48 hours. Bots can
+  read the latest sample in `hub computer list`, Health flags five minutes above 90% CPU or memory, and
+  `hub run list` includes load snapshots captured at run start and finish.
 - **A bot's tasks can run on another model.** A bot now has a task model (harness, model and effort) beside its own,
   set with `POST /api/v2/bots/{bot}/task-model` (null clears it back to "same as the bot"). A turn in a task's own
   session runs on it; chat with the bot stays on the bot's model, and changing the bot's model leaves the task model

@@ -4404,7 +4404,7 @@ def create_app(settings=None):
         return {**runner_versions.desired(), "features": {"task_files_multipart": True, "runner_commit": True,
                                                           "screen_v1": True, "limit_resets_at": True,
                                                           "usage_requests": True, "usage_request_main": True,
-                                                          "run_pushes": True}}
+                                                          "run_pushes": True, "load_snapshot": True}}
 
     @app.get("/api/v2/runners/assignments")
     def assigned(request: Request):
@@ -4730,8 +4730,9 @@ def create_app(settings=None):
             return result
 
     def computer_rows(c, who):
+        from .performance import load_status
         online = {r["id"] for r in _online_runners(c)}
-        everyone = who.role == "owner" or auth.bot_admin(who)
+        everyone = who.role in ("owner", "bot") or auth.bot_admin(who)
         mine = H.actor_id(who.actor)
         readable = auth.bot_accesses(c, who)
         rows = []
@@ -4743,13 +4744,14 @@ def create_app(settings=None):
             rows.append({"id": r["id"], "label": r["label"], "online": r["id"] in online,
                          "platform": r["platform"] or "", "operator": r["operator"],
                          "accepts_member_bots": bool(r["accepts_member_bots"]), "bots": bots,
-                         **screen_listing(r), **performance_listing(r), **views.computer_details(c, r, who, auth)})
+                         **screen_listing(r), **performance_listing(r), **views.computer_details(c, r, who, auth),
+                         **load_status(c, r["id"])})
         return rows
 
     @app.get("/api/v2/computers")
     def computers(request: Request):
-        """The computers this person may put a bot on, with what runs on each: owners and admins see every one, a
-        member their own and the ones opened to members' bots."""
+        """The computers a person may put a bot on; company bots may read every computer and its load.
+        Bot names and readiness remain filtered by the reader's access."""
         who = request.state.identity
         auth.domain(who)
         with store.read() as c:

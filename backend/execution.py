@@ -1360,6 +1360,8 @@ class Execution:
             with isolated(c, "expire", row["id"]):
                 state = "queued" if row["state"] == "leased" else "uncertain"
                 c.execute("UPDATE attempts SET state='expired',finished=? WHERE id=?", (H.now(), row["id"]))
+                from .performance import stamp_attempt
+                stamp_attempt(c, row["id"], row["runner_id"], "end")
                 gateway_connection.forget(c, row["id"])
                 if row["state"] == "leased":
                     tries = c.execute("SELECT count(*) FROM attempts WHERE job_id=? AND started IS NULL "
@@ -1977,7 +1979,9 @@ class Execution:
         attempt stays `expired`, which is the true account of its lease and keeps late output
         archivable against it."""
         c.execute("UPDATE attempts SET final_text=?,result_json=? WHERE id=?",
-                  (body.text, encode(body.model_dump()), row["id"]))
+                  (body.text, encode(body.model_dump(exclude={"load_snapshot"})), row["id"]))
+        from .performance import stamp_attempt
+        stamp_attempt(c, row["id"], row["runner_id"], "end", body.load_snapshot)
         run_triggers.pushed(c, row["id"], row["runner_id"], body.pushes)
         H.turn_finish(c, H.KEEPER, row["id"], exit_code=body.outcome, tokens_in=body.tokens_in,
                       tokens_out=body.tokens_out, summary=body.text[:2000], usage=self.run_usage(c, row, body))
@@ -2037,6 +2041,8 @@ class Execution:
             raise Problem("already_started", "This attempt was already started", 409)
         c.execute("UPDATE attempts SET state='running',started=?,thread_id=? WHERE id=?",
                   (H.now(), body.thread_id, aid))
+        from .performance import stamp_attempt
+        stamp_attempt(c, aid, row["runner_id"], "start", body.load_snapshot)
         c.execute("UPDATE turns SET thread_id=? WHERE id=?", (body.thread_id, aid))
         c.execute("UPDATE jobs SET state='running' WHERE id=?", (row["job_id"],))
         from .shared_bots import follow
@@ -2355,7 +2361,9 @@ class Execution:
         check_task, check = check_models.handed_out(c, aid)
         c.execute("UPDATE attempts SET state=?,finished=?,final_text=?,result_json=? WHERE id=?",
                   (body.outcome, H.now(), body.text,
-                   encode({**body.model_dump(), **({"check": check["runtime"]} if check else {})}), aid))
+                   encode({**body.model_dump(exclude={"load_snapshot"}), **({"check": check["runtime"]} if check else {})}), aid))
+        from .performance import stamp_attempt
+        stamp_attempt(c, aid, row["runner_id"], "end", body.load_snapshot)
         # A usage-limited turn did nothing and had no effects, so the job goes back in the
         # queue however often it happens; the bot cools off (claim() honours the window) and
         # a third limit in a row waits longer and tells a person in Needs attention. Only

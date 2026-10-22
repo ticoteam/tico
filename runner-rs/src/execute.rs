@@ -1093,7 +1093,9 @@ impl Runner {
             }
             unstopped(&flags)?;
             // Acknowledge before execution. Any later crash is explicitly uncertain.
-            self.client.post(&format!("attempts/{aid}/started"), &json!({"thread_id": th}), Some(&format!("started:{aid}"))).await?;
+            let active = self.active.lock().unwrap().len();
+            let started = crate::perf::with_snapshot(json!({"thread_id": th}), active).await;
+            self.client.post(&format!("attempts/{aid}/started"), &started, Some(&format!("started:{aid}"))).await?;
             self.state.phase(&aid, "running")?;
             // A resumed thread already holds the repo rules unless they changed since it was given them.
             let digest = p.rules_digest.clone();
@@ -1257,7 +1259,9 @@ impl Runner {
                     // The primary never started (its login was busy, or held by the server), so this host
                     // acknowledges the turn instead, before it acts.
                     unstopped(&flags)?;
-                    self.client.post(&format!("attempts/{aid}/started"), &json!({"thread_id": th}), Some(&format!("started:{aid}"))).await?;
+                    let active = self.active.lock().unwrap().len();
+                    let started = crate::perf::with_snapshot(json!({"thread_id": th}), active).await;
+                    self.client.post(&format!("attempts/{aid}/started"), &started, Some(&format!("started:{aid}"))).await?;
                     self.state.phase(&aid, "running")?;
                     acked = true;
                 }
@@ -1501,6 +1505,8 @@ impl Runner {
         if let Some((rt, reason)) = auth_rejected.as_ref().filter(|_| drove.outcome == "failed") {
             completion.insert("auth_rejected".into(), json!({"runtime": rt, "reason": hosts::rejection_reason(reason)}));
         }
+        let active = self.active.lock().unwrap().len();
+        let completion = crate::perf::with_snapshot(Value::Object(completion), active).await.as_object().unwrap().clone();
         mark("finished", &aid);
         let settled: Result<(), String> = async {
             let id = aid.clone();

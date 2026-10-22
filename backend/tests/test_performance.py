@@ -191,7 +191,7 @@ def test_a_bot_the_computer_list_does_not_show_reads_any_computer_by_label_or_id
         c.execute("UPDATE runners SET revoked_at=? WHERE id=?", (H.now(), gone))
         c.execute("UPDATE runners SET accepts_member_bots=0 WHERE id=?", (rid,))    # not opened to members' bots
     bot = attempt["token"]
-    assert get(api, "computers", token=bot)["computers"] == []
+    assert rid in {x["id"] for x in get(api, "computers", token=bot)["computers"]}
     for wanted in ("Test Mac", "test mac ", rid):
         failed, seen = call(api, "hub_computer_performance", {"computer": wanted, "hours": 1}, token=bot)
         assert not failed, seen

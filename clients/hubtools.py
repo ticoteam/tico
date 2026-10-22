@@ -2517,7 +2517,8 @@ def computer_summary(row):
             "update": state, "readiness": level, "bots": len(row.get("bots") or []),
             "signed_in": sorted(name for name, r in (readiness.get("runtimes") or {}).items()
                                 if isinstance(r, dict) and r.get("authenticated") == "ready"),
-            "warnings": warnings, "errors": errors, "recent_errors": len(readiness.get("recent_errors") or [])}
+            "warnings": warnings, "errors": errors, "recent_errors": len(readiness.get("recent_errors") or []),
+            "latest_sample": row.get("latest_sample"), "overloaded": bool(row.get("overloaded"))}
 
 
 def _bounded(value, cap, text=COMPUTER_TEXT):
@@ -2600,7 +2601,7 @@ def computer_detail(row, section=None, offset=0):
                           for name, items in sections.items() if items}}
 
 
-@tool("hub_computer_list", "The computers a bot may go on, as the person who asked you, one short row each: id, label, "
+@tool("hub_computer_list", "Company computers and their latest CPU/memory/swap, running turns and overloaded flag, one short row each: id, label, "
       "online and last seen, operator, release (Tico), version (runner software), wanted release, update (current, "
       "update_available, updating, failed, incompatible or unknown), readiness (ready, warnings, not_ready or offline), "
       "how many bots run there, the AI tools signed in, and counts of warnings, errors and recent log errors; and "
@@ -2639,7 +2640,7 @@ def computers(api, args):
       {"computer": _s("The computer's label or id (hub computer list)"),
        "hours": {"type": "integer", "minimum": 1, "maximum": 336, "default": 24}}, required=("computer",))
 def computer_performance(api, args):
-    # The route takes a label or an id: the computer list shows a bot only some computers, the route every one.
+    # The route accepts either a computer label or id.
     wanted = str(args["computer"]).strip()
     seen = api.get(f"computers/{quote(wanted, safe='')}/performance?hours={int(args.get('hours') or 24)}")
     points = seen.get("points") or []
@@ -3209,7 +3210,7 @@ def status_history(api, args):
 
 
 @tool("hub_run_list", "A bot's recent runs and failed or expired attempts, with attempt ids, reasons, tokens and "
-      "estimated cost (`est_cost_usd`). Yours, and those of the bots that report to you.",
+      "estimated cost (`est_cost_usd`) and start/end load snapshots (`load_start`, `load_end`). Yours, and those of the bots that report to you.",
       {"bot": _s("Bot slug"), "since": _s("Window like `24h` or an ISO timestamp")}, required=("bot",))
 def turns(api, args):
     return api.get(f"bots/{args['bot']}/turns", since=args.get("since"))
@@ -3888,7 +3889,8 @@ AUDIENCE = {
                                     "hub_bot_resume", "hub_bot_access", "hub_bot_owners", "hub_human_add", "hub_group_update",
                                     "hub_tool_add", "hub_tool_update", "hub_tool_remove",
                                     "hub_bot_copy", "hub_bot_update_from_original", "hub_bot_suggest_to_original", "hub_skill_copy")},
-    **{name: REQUESTER_READ for name in ("hub_computer_list", "hub_credential_list", "hub_health_check")},
+    **{name: REQUESTER_READ for name in ("hub_credential_list", "hub_health_check")},
+    "hub_computer_list": KINDS,
     "hub_health_metrics": REQUESTER,
     **{name: REQUESTER for name in ("hub_bot_archive", "hub_doc_archive", "hub_file_archive", "hub_meeting_delete", "hub_meeting_granola_status", "hub_meeting_granola_sync",
                                    "hub_meeting_pending", "hub_meeting_approve", "hub_meeting_dismiss", "hub_meeting_restore")},
