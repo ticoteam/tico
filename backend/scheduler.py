@@ -2,6 +2,7 @@
 
 import threading
 import time
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -23,6 +24,55 @@ def next_due(expr, at, zone):
     # Preserve the existing keeper's AND semantics for day-of-month and day-of-week.
     return croniter(expr, at.astimezone(ZoneInfo(zone)), day_or=False).get_next(datetime)
 
+# The routines a tick looks at; `on:` routines fire from routines.emit.
+SCHEDULES_SQL = (
+    "SELECT s.*,coalesce(sc.timezone,'America/Los_Angeles') AS timezone "
+    "FROM schedules s JOIN bots b ON b.slug=s.bot LEFT JOIN schedule_config sc ON sc.schedule_id=s.id "
+    "WHERE b.state='active' AND coalesce(sc.enabled,1)=1 AND s.deleted_at IS NULL "
+    "AND s.event_name IS NULL "
+    "AND NOT EXISTS(SELECT 1 FROM bot_config bc WHERE bc.bot=s.bot "
+    "AND coalesce(json_extract(bc.config_json,'$.shared_from'),'')<>'') "
+    # a bot synced in from another platform never sees a task (hubdb._takes_tasks)
+    "AND NOT EXISTS(SELECT 1 FROM bot_config xc WHERE xc.bot=s.bot "
+    "AND json_extract(xc.config_json,'$.harness') IN (" + SYNCED_SQL + ")) "
+    # a starter bot runs nothing on its own until it says its setup is done
+    "AND NOT EXISTS(SELECT 1 FROM bot_config pc WHERE pc.bot=s.bot "
+    "AND pc.onboarding_state IN " + PARKED_SQL + ")")
+REMINDER_BATCH = 50
+
+
+def schedule_due(row, at):
+    due = H.parse_ts(row["next_due"])
+    if due and due.tzinfo is None:
+        due = due.replace(tzinfo=ZoneInfo(row["timezone"]))
+    if not due:
+        # Initialize after the last recorded fire; a new schedule starts in the future.
+        base = H.parse_ts(row["last_fired"]) or at
+        if base.tzinfo is None:
+            base = base.replace(tzinfo=ZoneInfo(row["timezone"]))
+        due = next_due(row["cron"], base, row["timezone"])
+    return due
+
+
+def waiting(row, at):
+    """A routine not yet due whose next_due is already written: the tick has nothing to write for it."""
+    due = schedule_due(row, at)
+    return due > at and stamp(due) == row["next_due"]
+
+
+def remind(c, row, at):
+    """Whether a task from H.tasks_due_for_bots gets its due-date reminder now."""
+    due = H.parse_ts(row.get("due"))
+    if due and due.tzinfo is None:
+        # Legacy rows allowed dates/local timestamps. New API writes require an
+        # offset; preserve the old machine's Pacific interpretation on migration.
+        due = due.replace(tzinfo=ZoneInfo("America/Los_Angeles"))
+    if not due or due > at or not row["owner"].startswith("bot:"):
+        return False
+    if c.execute("SELECT 1 FROM task_reminders WHERE task_id=? AND due=?", (row["id"], row["due"])).fetchone():
+        return False
+    return H.bot(c, H.actor_id(row["owner"]))["state"] == "active"
+
 
 class Scheduler:
     def __init__(self, store, execution):
@@ -41,44 +91,51 @@ class Scheduler:
 
     def tick(self, at=None):
         at = at or datetime.now(timezone.utc)
-        fired, failures = [], []
+        fired, failures, holds = [], [], []
         started = time.monotonic()
-        with self.store.transaction() as c:
-            self.execution.expire(c)
-            # Interrupted work that needs no eyes is settled here, so what a person is shown
-            # is only the runs that used tools before they stopped.
-            self.execution.auto_reconcile(c)
-            self.execution.release_deploy_drains(c)
-            self.execution.release_limits(c)           # a usage limit lifts at its reset, not at the next claim
-            from . import wake_presets
-            wake_presets.tick(c, H.now())                 # wake presets let go of the notices and sweeps now due
-            self.execution.hold_unrunnable(c)
-            placement.sweep(c, self.execution)            # an active bot with no computer gets one when one can take it
-            H.lift_cooled_quarantines(c)
-            rows = c.execute("SELECT s.*,coalesce(sc.timezone,'America/Los_Angeles') AS timezone "
-                             "FROM schedules s JOIN bots b ON b.slug=s.bot LEFT JOIN schedule_config sc ON sc.schedule_id=s.id "
-                             "WHERE b.state='active' AND coalesce(sc.enabled,1)=1 AND s.deleted_at IS NULL "
-                             "AND s.event_name IS NULL "
-                             "AND NOT EXISTS(SELECT 1 FROM bot_config bc WHERE bc.bot=s.bot "
-                             "AND coalesce(json_extract(bc.config_json,'$.shared_from'),'')<>'') "
-                             # a bot synced in from another platform never sees a task (hubdb._takes_tasks)
-                             "AND NOT EXISTS(SELECT 1 FROM bot_config xc WHERE xc.bot=s.bot "
-                             "AND json_extract(xc.config_json,'$.harness') IN (" + SYNCED_SQL + ")) "
-                             # a starter bot runs nothing on its own until it says its setup is done
-                             "AND NOT EXISTS(SELECT 1 FROM bot_config pc WHERE pc.bot=s.bot "
-                             "AND pc.onboarding_state IN " + PARKED_SQL + ")").fetchall()   # `on:` routines fire from routines.emit
-            for row in rows:
-                created = None
+
+        @contextmanager
+        def write():
+            # One short write transaction per step, per routine and per reminder batch. The pass used to be one
+            # transaction, and on a hub with many tasks and routines every request waited 20-30 s behind it
+            # (TK-RCZJXEWA). Each step is whole on its own; routines and reminders keep their dedupe rows
+            # (schedule_occurrences, task_reminders), checked under the same lock that writes them.
+            begun = time.monotonic()
+            try:
+                with self.store.transaction() as c:
+                    yield c
+            finally:
+                holds.append(time.monotonic() - begun)
+
+        from . import wake_presets
+        for step in (self.execution.expire,
+                     # Interrupted work that needs no eyes is settled here, so what a person is shown
+                     # is only the runs that used tools before they stopped.
+                     self.execution.auto_reconcile,
+                     self.execution.release_deploy_drains,
+                     self.execution.release_limits,      # a usage limit lifts at its reset, not at the next claim
+                     lambda c: wake_presets.tick(c, H.now()),   # wake presets let go of the notices and sweeps now due
+                     self.execution.hold_unrunnable,
+                     lambda c: placement.sweep(c, self.execution),   # an active bot with no computer gets one
+                     H.lift_cooled_quarantines):
+            with write() as c:
+                step(c)
+        # Routines are read without the lock; one not yet due whose next_due is already written needs no write at all.
+        with self.store.read() as c:
+            rows = c.execute(SCHEDULES_SQL).fetchall()
+        for listed in rows:
+            try:
+                if waiting(listed, at):
+                    continue
+            except Exception:
+                pass                                    # a bad cron or date is recorded by the write below
+            created = None
+            with write() as c:
+                row = c.execute(SCHEDULES_SQL + " AND s.id=?", (listed["id"],)).fetchone()
+                if row is None:                         # deleted, disabled or its bot paused since the read
+                    continue
                 with isolated(c, "schedule", row["id"], failures):
-                    due = H.parse_ts(row["next_due"])
-                    if due and due.tzinfo is None:
-                        due = due.replace(tzinfo=ZoneInfo(row["timezone"]))
-                    if not due:
-                        # Initialize after the last recorded fire; a new schedule starts in the future.
-                        base = H.parse_ts(row["last_fired"]) or at
-                        if base.tzinfo is None:
-                            base = base.replace(tzinfo=ZoneInfo(row["timezone"]))
-                        due = next_due(row["cron"], base, row["timezone"])
+                    due = schedule_due(row, at)
                     if due > at:
                         # Written only when it moves: every routine rewrote its unchanged next_due
                         # every 10 s, a steady stream of dirty pages for the WAL and Litestream.
@@ -121,43 +178,57 @@ class Scheduler:
                         c.execute("UPDATE schedules SET last_fired=?,next_due=? WHERE id=?", (when, stamp(following), row["id"]))
                     if created:
                         fired.append(created)
-            # a merged pull request whose push record arrived after the deploy still ships
-            from .github import ship_deployed
+        # a merged pull request whose push record arrived after the deploy still ships
+        from .github import ship_deployed
+        with write() as c:
             ship_deployed(c, self.store.settings)
-            from .task_loops import flag as flag_task_loops
+        from .task_loops import flag as flag_task_loops
+        with write() as c:
             with isolated(c, "task_loops", "all", failures):
                 flag_task_loops(c)
-            # Snoozes whose date came: back on every list, and one notice to the owner bot (backend/task_snooze.py).
-            from . import task_snooze
+        # Snoozes whose date came: back on every list, and one notice to the owner bot (backend/task_snooze.py).
+        from . import task_snooze
+        with write() as c:
             task_snooze.wake_ended(c, stamp(at), failures)
-            # Quiet tasks a run deferred to a time that has come get their run (backend/quiet_work.py).
-            from . import quiet_work
+        # Quiet tasks a run deferred to a time that has come get their run (backend/quiet_work.py).
+        from . import quiet_work
+        with write() as c:
             quiet_work.due(c, stamp(at), failures)
+        # Due-date reminders: candidates are read without the lock (H.TASKS_DUE_SQL, an index), and only the ones
+        # that would send are written, a batch per transaction, each checked again under the lock.
+        with self.store.read() as c:
+            ready = []
             for row in H.tasks_due_for_bots(c, stamp(at + timedelta(days=1))[:10]):
-                with isolated(c, "reminder", row["id"], failures):
-                    due = H.parse_ts(row.get("due"))
-                    if due and due.tzinfo is None:
-                        # Legacy rows allowed dates/local timestamps. New API writes require an
-                        # offset; preserve the old machine's Pacific interpretation on migration.
-                        due = due.replace(tzinfo=ZoneInfo("America/Los_Angeles"))
-                    if not due or due > at or not row["owner"].startswith("bot:"):
-                        continue
-                    if c.execute("SELECT 1 FROM task_reminders WHERE task_id=? AND due=?", (row["id"], row["due"])).fetchone():
-                        continue
-                    if H.bot(c, H.actor_id(row["owner"]))["state"] != "active":
-                        continue
-                    try:
-                        H.say(c, H.KEEPER, row["owner"], "Due: " + row["title"], kind="notice",
-                              conversation_id=row["conversation_id"],
-                              refs=run_triggers.stamp({"task": row["id"], "wake": "due"}, "schedule"))
-                    except H.Refused as exc:
-                        H.event(c, H.KEEPER, "task.reminder-refused", row["id"], {"reason": str(exc)[:300]})
-                    c.execute("INSERT INTO task_reminders VALUES(?,?,?)", (row["id"], row["due"], stamp(at)))
+                try:
+                    if remind(c, row, at):
+                        ready.append(row)
+                except Exception:
+                    ready.append(row)                   # the write below records the failure
+        for batch in range(0, len(ready), REMINDER_BATCH):
+            with write() as c:
+                for listed in ready[batch:batch + REMINDER_BATCH]:
+                    with isolated(c, "reminder", listed["id"], failures):
+                        row = c.execute("SELECT id,title,owner,due,conversation_id FROM tasks WHERE id=? AND due=? "
+                                        "AND owner=? AND snoozed_until IS NULL AND status IN (" +
+                                        ",".join("?" * len(H.ACTIVE_STATUSES)) + ")",
+                                        (listed["id"], listed["due"], listed["owner"], *H.ACTIVE_STATUSES)).fetchone()
+                        if row is None or not remind(c, dict(row), at):
+                            continue
+                        try:
+                            H.say(c, H.KEEPER, row["owner"], "Due: " + row["title"], kind="notice",
+                                  conversation_id=row["conversation_id"],
+                                  refs=run_triggers.stamp({"task": row["id"], "wake": "due"}, "schedule"))
+                        except H.Refused as exc:
+                            H.event(c, H.KEEPER, "task.reminder-refused", row["id"], {"reason": str(exc)[:300]})
+                        c.execute("INSERT INTO task_reminders VALUES(?,?,?)", (row["id"], row["due"], stamp(at)))
+        with write() as c:
             c.execute("INSERT INTO service_health VALUES('scheduler',?,?,?) ON CONFLICT(service) DO UPDATE SET "
                       "last_success=excluded.last_success,last_error=excluded.last_error,detail_json=excluded.detail_json",
                       (stamp(at), "schedule errors" if failures else None,
-                       # How long the tick held the write lock, so a slow one shows in service_health.
-                       encode({"failures": failures, "tick_ms": round((time.monotonic() - started) * 1000)})))
+                       # How long the pass took, and the longest any one of its transactions held the write lock,
+                       # so a slow one shows in service_health.
+                       encode({"failures": failures, "tick_ms": round((time.monotonic() - started) * 1000),
+                               "hold_ms": round(max(holds, default=0) * 1000), "transactions": len(holds)})))
         # Updates (backend/updates.py): today's queue, one bot asked at a time. Its own short
         # transaction, so a failure here never holds back the routines above.
         # A person's draft is written by the company's model in a background thread, so the call never

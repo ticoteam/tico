@@ -26,6 +26,11 @@ All notable changes to Tico are recorded here. The format follows
   each one at its own rate.
 
 ### Fixed
+- **The scheduler no longer blocks the server for seconds at a time on a busy hub.** Its 10-second pass used to run
+  in one write transaction and read every task to find due dates, so on a hub with many tasks and routines requests
+  waited behind it and runners saw 503s. Each step, routine and batch of due-date reminders now commits on its own,
+  the due-date and deferred-task lookups use new indexes (migration 61), and Health's scheduler entry shows the
+  longest single hold (`hold_ms`) next to the pass's `tick_ms`.
 - **Muse Code turns work again on a Docker computer that runs bots as their own user.** Each Muse login now keeps
   its sessions in a folder of Tico's own (per subscription profile too), so a turn, including an automatic fallback
   to Muse, no longer fails at once with "failed to create session lock directory ... Permission denied". If that
