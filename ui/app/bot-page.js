@@ -464,15 +464,13 @@ async function pageBot(slug, tab) {
   }
 
   // The right rail: one Tasks section with its tabs, what it assigned to others, Updates, Files, then Recurring.
-  const showTab = t => { if (t === 'done') botTaskTabShow(slug, 'done'); };
-  botTaskTabShow(slug, BOT_TASK_TAB.get(slug) || 'active');
+  botTaskTabShow(slug, BOT_TASK_TAB.get(slug) || (botNeeds(slug).length ? 'needs' : 'active'));
   // A click opens a folded section without focusing it, so its ring shows only for the keyboard.
   $('#pane-tasks').querySelectorAll('.rail-fold>summary').forEach(sum => sum.addEventListener('mousedown', ev => ev.preventDefault()));
   if (!limited) botRecurringPaint(e, slug);
   $('#pane-tasks').addEventListener('click', ev => {
     const tabButton = ev.target.closest('[data-bot-task-tab]');
-    if (tabButton) { BOT_TASK_TAB.set(slug, tabButton.dataset.botTaskTab); botTaskTabShow(slug, tabButton.dataset.botTaskTab); return; }
-    if (ev.target.dataset.tab) { ev.preventDefault(); showTab(ev.target.dataset.tab); }
+    if (tabButton) { BOT_TASK_TAB.set(slug, tabButton.dataset.botTaskTab); botTaskTabShow(slug, tabButton.dataset.botTaskTab, true); }
   });
   $('#pane-tasks .bot-task-tabs').addEventListener('keydown', ev => botTaskTabKey(slug, ev));
 

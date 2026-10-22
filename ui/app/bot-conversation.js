@@ -182,9 +182,11 @@ async function loadBotIssues(slug) {
   try {
     const list = await get(`/employees/${slug}/issues`);
     const open = list.filter(i => i.state === 'OPEN').sort((a,b) => (a.needs_human ? 0 : 1) - (b.needs_human ? 0 : 1) || (a.priority||'p9').localeCompare(b.priority||'p9'));
-    const closed = list.filter(i => i.state === 'CLOSED').sort((a,b) => b.closedAt.localeCompare(a.closedAt)).slice(0, 10);
+    // Done Recently: closed in the last 14 days, as for a Tico bot's tasks.
+    const since = new Date(Date.now() - BOT_DONE_RECENT_DAYS * 86400000).toISOString();
+    const closed = list.filter(i => i.state === 'CLOSED' && String(i.closedAt || '') >= since).sort((a,b) => b.closedAt.localeCompare(a.closedAt));
     if (!$('#t-open')) return;
-    $('#cnt-done').textContent = list.length - open.length || '';
+    $('#cnt-done').textContent = closed.length || '';
     const row = (i, when, label) => `<details class="trow"><summary>
         <span class="mono muted">#${i.number}</span><span class="ttl">${esc(i.title)}</span>
         <span class="tags">${i.state === 'OPEN' ? statusPill(i) : ''}${i.priority && i.priority !== 'p2' ? ' ' + prioPill(i) : ''}</span>
@@ -192,7 +194,7 @@ async function loadBotIssues(slug) {
       <div class="tbody">${i.last_comment ? `<div class="lbl">${label}</div><div class="q">${esc(i.last_comment)}</div>` : i.body ? `<div class="q">${esc(i.body)}</div>` : '<div class="muted">No details yet.</div>'}
         </div></details>`;
     $('#t-open').innerHTML = open.length ? open.map(i => row(i, i.updatedAt, 'Last comment')).join('') : '<div class="rail-empty">None</div>';
-    $('#t-done').innerHTML = closed.length ? closed.map(i => row(i, i.closedAt, 'Closing comment')).join('') : '<div class="rail-empty">None</div>';
+    $('#t-done').innerHTML = closed.length ? closed.map(i => row(i, i.closedAt, 'Closing comment')).join('') : '<div class="rail-empty">Nothing done in the last two weeks.</div>';
     // An Issues bot has no questions or waits in Tico: those tabs are simply empty.
     $('#t-needs').innerHTML = '<div class="rail-empty">Nothing needs you.</div>';
     $('#t-blocked').innerHTML = '<div class="rail-empty">Nothing is blocked.</div>';

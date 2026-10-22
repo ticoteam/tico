@@ -113,6 +113,19 @@ const NEEDS = [{...T.asked, kind: 'question'}, {...T.forAna, kind: 'task'}, {...
     assert.deepEqual((await rail.locator('#t-assigned .trow .ttl').allTextContents()).map(s => s.trim()), ['Run the release check']);
     assert.equal((await rail.locator('#cnt-assigned').innerText()).trim(), '1');
 
+    // A redraw keeps the picked tab while Needs You has rows, and leaves the rail scrolled where it was.
+    await tab('done').click();
+    const scrolled = await page.evaluate(() => {
+      const r = document.querySelector('#pane-tasks');
+      r.style.overflowY = 'auto'; r.style.height = '80px'; r.scrollTop = r.scrollHeight; return r.scrollTop;
+    });
+    assert.ok(scrolled > 0);
+    await page.evaluate(() => botNeedsChanged('lead'));
+    assert.equal(await page.evaluate(() => document.querySelector('#pane-tasks').scrollTop), scrolled);
+    assert.equal(await tab('done').getAttribute('aria-selected'), 'true');
+    assert.equal(await rail.locator('#bot-needs').isHidden(), true);
+    await page.evaluate(() => { const r = document.querySelector('#pane-tasks'); r.style.height = r.style.overflowY = ''; r.scrollTop = 0; });
+
     // A half-typed answer to the question outside any task survives a redraw of the list, and the picked tab stays.
     await tab('needs').click();
     const loose = rail.locator('#t-needs details[data-ask="m-loose"]');

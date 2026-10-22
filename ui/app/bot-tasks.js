@@ -141,7 +141,9 @@ const BOT_TASK_TABS = [['needs', 'Needs You', 'cnt-needs'], ['active', 'Doing', 
 const BOT_DONE_RECENT_DAYS = 14;
 // The tab a person picked on each bot's page, for this visit; until they pick, Needs You leads while it has rows.
 const BOT_TASK_TAB = new Map();
-function botTaskTabShow(slug, key) {
+// A redraw (the 30 s refresh, a live event) only re-applies the tab; a person's pick also brings the tab into view, sideways
+// within the tab bar, so neither moves the rail away from what someone is reading.
+function botTaskTabShow(slug, key, picked = false) {
   const rail = $('#pane-tasks');
   if (!rail || BOT?.slug !== slug || !BOT_TASK_TABS.some(([k]) => k === key)) return;
   for (const [k] of BOT_TASK_TABS) {
@@ -152,7 +154,10 @@ function botTaskTabShow(slug, key) {
     button.tabIndex = k === key ? 0 : -1;
     panel.hidden = k !== key;
   }
-  $('#bot-tab-t-' + key)?.scrollIntoView?.({block: 'nearest', inline: 'nearest'});
+  const tab = $('#bot-tab-t-' + key), bar = tab?.parentElement;
+  if (!picked || !bar) return;
+  if (tab.offsetLeft < bar.scrollLeft) bar.scrollLeft = tab.offsetLeft;
+  else if (tab.offsetLeft + tab.offsetWidth > bar.scrollLeft + bar.clientWidth) bar.scrollLeft = tab.offsetLeft + tab.offsetWidth - bar.clientWidth;
 }
 // Arrow keys, Home and End move between the tabs, as in any tab list.
 function botTaskTabKey(slug, ev) {
@@ -163,8 +168,8 @@ function botTaskTabKey(slug, ev) {
   ev.preventDefault();
   const key = keys[(to + keys.length) % keys.length];
   BOT_TASK_TAB.set(slug, key);
-  botTaskTabShow(slug, key);
-  $('#bot-tab-t-' + key)?.focus();
+  botTaskTabShow(slug, key, true);
+  $('#bot-tab-t-' + key)?.focus({preventScroll: true});
 }
 // What a blocked task waits on: the person or bot it names, else the first line of its note.
 function botTaskWaitsOn(t) {
