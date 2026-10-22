@@ -14,6 +14,14 @@ All notable changes to Tico are recorded here. The format follows
   route's template; messages, values and customer text are still never sent. Runner panics (file and line only) reach
   Sentry through their server, and `python -m backend.observability test` sends a harmless test error
   (docs/observability.md).
+- **Hourly and weekly spend limits, and limits for a group and the whole team.** Beside daily and monthly, a bot's limit
+  and the team default can now cap an hour (the UTC clock hour) and a week (from Monday 00:00 UTC). New pooled limits cap
+  the combined spend of every bot (Usage > **Team and group limits**) or of a group's bots, nested groups included; over
+  one, every bot it covers takes no new job until the period turns over or the limit is raised, and reads "Paused: the
+  team is over its hourly limit". The owner and administrators set them; 80% and 100% notices go to the team owner.
+  `PUT /api/v2/usage/pools/company`, `PUT /api/v2/usage/pools/groups/{group}`; `GET /api/v2/usage/limits` adds the
+  hourly and weekly fields and, for administrators, `pools`. A bot's limit saved from an older page clears its hourly
+  and weekly caps, as any field left out does.
 - **System routines in Settings > Routines**: a read-only System section above the bot routines lists every job Tico
   runs on its own timers, in four groups (Checks that suggest, Learning, Reminders and deadlines, Housekeeping), each
   with what it does, its schedule, its last run in words ("9 checked, 2 suggestions", or "Failed: <reason>" in red) and
@@ -69,6 +77,8 @@ All notable changes to Tico are recorded here. The format follows
   HQ registers only a join code's hash through scoped SSM; no owner token or join secret crosses that control plane.
 
 ### Changed
+- **Updates: per-update reader check for assistant-drafted updates.** Each drafted update is checked against its
+  reader on every read, so some drafts show to fewer readers than before.
 - **The stopped-run card is now just the decision.** Each stopped run shows one line on what stopped ("Stopped 8:12
   AM after using Bash."), one recommendation, and two buttons with the recommended one first: **Try again** leads
   only for a run Tico's own retry rule calls safe (it only read, on a host that reports every call, first stop);
@@ -116,6 +126,9 @@ All notable changes to Tico are recorded here. The format follows
   each one at its own rate.
 
 ### Fixed
+- **Milestone waits follow the blocked_by rules.** Adding or removing a wait for a pull request or release now needs
+  the same permission as a blocked_by (the task's owner, or a person on a team that moves tasks), a deleted task
+  keeps its waits and gets them back when restored, and a message held while a task waits says what it waits for.
 - **Questions that close on their own leave every count right.** The hourly sweep closes each leftover question on
   its own, so one that fails stays for the next sweep instead of undoing the rest. When questions close in bulk (a
   task above ends, the hourly sweep, the weekday "Still needed?" batch), the bot that asked them has its "needs a
