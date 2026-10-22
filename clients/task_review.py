@@ -8,11 +8,14 @@ def ask_from_args(args):
     if getattr(args, "ask", None):
         return json.loads(Path(args.ask).read_text())
     if getattr(args, "choices", None) is not None:
-        labels = [s.strip() for s in args.choices.split(",")]
+        # "LABEL -> WHAT HAPPENS, ...": a person's card shows each choice with what happens if it is picked.
+        pairs = [[x.strip() for x in s.partition("->")[::2]] for s in args.choices.split(",")]
+        labels = [label for label, _ in pairs]
         if not 1 <= len(labels) <= 6 or any(not s or len(s) > 60 for s in labels) or len(set(labels)) != len(labels):
             raise ValueError("Choices are one to six unique labels, each at most 60 characters")
         return {"questions": [{"id": "verdict", "header": "Review", "question": "What do you think?",
-                               "options": [{"label": s} for s in labels], "multi": False, "other": True}], "who": None}
+                               "options": [{"label": label, **({"then": then} if then else {})} for label, then in pairs],
+                               "multi": False, "other": True}], "who": None}
     return None
 
 
@@ -34,9 +37,13 @@ ASK_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["que
             "id": {"type": "string", "minLength": 1, "maxLength": 40},
             "header": {"type": "string", "maxLength": 30},
             "question": {"type": "string", "minLength": 1, "maxLength": 300},
+            "why": {"type": "string", "maxLength": 200, "description": "One plain line on why it matters"},
             "multi": {"type": "boolean", "default": False}, "other": {"type": "boolean", "default": True},
             "options": {"type": "array", "maxItems": 6, "items": {
                 "type": "object", "additionalProperties": False, "required": ["label"], "properties": {
                     "label": {"type": "string", "minLength": 1, "maxLength": 60},
+                    "then": {"type": "string", "maxLength": 120,
+                             "description": "What happens if it is picked; required when a bot asks a person"},
+                    "recommended": {"type": "boolean", "description": "Pre-ticked among several picks"},
                     "description": {"type": "string", "maxLength": 200},
                     "file": {"type": "string", "pattern": "^[^@]+@[1-9][0-9]*$"}}}}}}}}}
