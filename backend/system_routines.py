@@ -1,9 +1,18 @@
 """System routines: the jobs Tico runs on its own timers (backend/scheduler.py), one registry and one run record per run,
-for the read-only System section at the top of Settings > Routines (`GET /api/v2/system-routines`).
+for the one flat, searchable list in Settings > Routines (`GET /api/v2/system-routines`).
 
-`JOBS` is every built-in job: its plain name, one line on what it does, its group, its schedule in words and in seconds,
-whether it asks Tico Decide, and whether it is one of the six a person will be able to switch and reschedule (`control`;
-the controls themselves are not here). A job's run is recorded by `recording` around its block in the scheduler: start,
+`JOBS` is every built-in job: its plain name, one line on what it does, its group (now a word search finds, not a
+heading), its schedule in words and in seconds, whether it asks Tico Decide, what it does as catalog actions (`then`,
+read as "WHEN <trigger> THEN <action>"), its one department tag, and whether it is one of the six a person switches and
+reschedules (`control`). The trigger/action catalog (TRIGGERS, ACTIONS) is shared with task rules, so they read and are
+searched the same way.
+
+`CONTROLS` holds what a person may change: on/off and a schedule preset for the six jobs that use AI or reach people,
+and the Topic changed switch. Stale ticket review and Topic changed keep their on/off in the team rules
+(backend/team_rules.py), so the value they had in Settings > General carries over; the rest live here in
+`registry_metadata` CONFIG_KEY. An owner or admin changes them; Health scan only the owner. `due` is when a job's
+preset says it runs again, read by the scheduler and the job's next run alike. Run now runs a job once, through the same
+code and caps as its scheduled run. A job's run is recorded by `recording` around its block in the scheduler: start,
 finish, the result in words, or "Failed: <plain reason>", never an exception's text. A Decide job adds which route
 answered (the Gateway, the company's own key, or the company's AI provider), the first failure when the Gateway did not
 answer, and the run's cost. The Decide fallback itself is judge.py's; nothing here changes which route answers.
@@ -13,12 +22,14 @@ result as the job's last row moves that row's times forward, at most once a minu
 A month's spend is read from the `judge.spend` audit by question set (`label`), which the monthly cap already keeps, so
 pruning runs never loses it."""
 
+import json
 import logging
+import re
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
-from .store import H
+from .store import H, Problem
 
 LOG = logging.getLogger("tico.system_routines")
 
@@ -32,9 +43,11 @@ CREATE INDEX IF NOT EXISTS system_runs_job ON system_runs(job, started);
 KEEP = 50                   # rows per job
 QUIET_WRITE_SECONDS = 60    # a repeated quiet run moves its row at most this often
 
-CHECKS, LEARNING, REMINDERS, HOUSEKEEPING = "checks", "learning", "reminders", "housekeeping"
+CHECKS, LEARNING, REMINDERS, HOUSEKEEPING, CHAT = "checks", "learning", "reminders", "housekeeping", "chat"
 GROUPS = [(CHECKS, "Checks that suggest"), (LEARNING, "Learning"), (REMINDERS, "Reminders and deadlines"),
-          (HOUSEKEEPING, "Housekeeping")]
+          (HOUSEKEEPING, "Housekeeping"), (CHAT, "Chat")]
+GROUP_WORDS = dict(GROUPS)
+DEPARTMENT = "Engineering"  # a built-in's tag until departments are edited (a label only: it changes no permission)
 
 # Which route answered a Decide call, from the answering provider (judge.py's order: Gateway, own key, company AI).
 ROUTE_WORDS = {"gateway": "Gateway", "own_key": "Company key", "team_llm": "Company AI"}
@@ -58,74 +71,300 @@ class Job:
     control: bool = False       # one of the six a person will switch and reschedule
     labels: tuple = ()          # Decide question sets whose spend is this job's
     records: bool = True        # False: each connection keeps its own last run
+    then: tuple = ()            # ACTIONS keys: what it does
+    when: str = "schedule"      # a TRIGGERS key; "schedule" reads the job's schedule
+    department: str = DEPARTMENT
+
+
+# ----------------------------------------------------------------------------- the trigger/action catalog
+# A row reads "WHEN <trigger>[ AND ...] THEN <action>[ AND ...]". A trigger or an action is a key here with its words and
+# the extra words search finds it by (what it touches: "done" finds what acts on done tasks).
+TRIGGERS = {
+    "schedule": ("", ()),                    # the job's schedule in words: "every hour", "every day at 09:00"
+    "topic_changed": ("a message in a direct chat changes the topic", ("chat", "topic", "message")),
+    "directory": ("a company directory is connected", ("directory",)),
+}
+ACTIONS = {
+    "check_stale": ("check stale tickets", ("stale", "tasks", "finished", "forgotten", "done")),
+    "suggest_owner": ("suggest to each owner: mark done, close or check it",
+                      ("suggest", "done", "close", "owner", "decide")),
+    "ask_still_wanted": ("ask a task's person once whether a task idle for a week is still wanted",
+                         ("idle", "tasks", "ask", "remind")),
+    "ask_kpi_keeper": ("ask a KPI's keeper for a reading when it goes out of date", ("kpi", "ask", "remind", "goal")),
+    "ask_goal_owner": ("ask a goal's owner when a KPI goes off track", ("kpi", "goal", "ask", "remind")),
+    "check_health": ("check Tico's health", ("health", "check")),
+    "wake_health_monitor": ("wake the Health Monitor for a new finding", ("health", "wake")),
+    "read_activity": ("read yesterday's chats, tasks, Slack, mail and meetings",
+                      ("learnings", "chat", "slack", "mail", "meetings")),
+    "send_learnings": ("send each bot what it should remember", ("learnings", "memory", "send")),
+    "remind_due": ("tell a bot when one of its tasks reaches its due time", ("due", "remind", "tasks")),
+    "go_ahead": ("go ahead on a past-deadline question's default answer, or expire it",
+                 ("ask", "question", "deadline", "expire")),
+    "expire_approvals": ("take approvals and asks nobody will act on out of Needs you",
+                         ("approval", "expire", "close", "done", "needs you")),
+    "resend_questions": ("send questions unanswered for two business days back to their bots",
+                         ("question", "remind", "unanswered")),
+    "start_routines": ("start each bot routine that is due", ("routine", "start")),
+    "wake_stalled": ("wake the bot on a task nothing is moving", ("stalled", "wake", "tasks")),
+    "drop_unreadable": ("drop queued work its bot can no longer read", ("queue", "drop")),
+    "unstrand": ("send bot tasks waiting on nothing back to work", ("waiting", "tasks")),
+    "ask_to_task": ("turn a bot's plain ask to a person into a small task", ("ask", "tasks")),
+    "end_snooze": ("bring snoozed tasks back when their date comes", ("snooze", "tasks")),
+    "start_deferred": ("start deferred runs that are due", ("deferred", "runs")),
+    "end_go_live": ("end a go-live waiting for a computer that never reports", ("go-live", "computer", "expire")),
+    "goal_colours": ("work out every goal's colour again", ("goal", "colour", "color")),
+    "clean_up": ("clear old events, mail, retry keys and recorder data", ("cleanup", "delete", "old")),
+    "check_gateway": ("check this server's Gateway key and the month's cap", ("gateway", "key", "cap")),
+    "read_billing": ("read HQ's nightly billing check", ("billing",)),
+    "ask_updates": ("ask people and bots for today's updates", ("updates", "ask")),
+    "sync_github": ("catch up on pull requests, merges and releases", ("github", "pr", "merge", "release")),
+    "finish_repo_waits": ("finish a bot waiting for its repository or a worktree", ("repository", "worktree")),
+    "tell_setup_stuck": ("tell a person about a bot stuck in setup", ("setup", "remind")),
+    "check_release": ("check for a new Tico release", ("release", "update")),
+    "fetch_feeds": ("fetch subscribed updates", ("feeds", "updates")),
+    "sync_directory": ("bring people in from the company directory", ("directory", "people")),
+    "sync_meetings": ("bring in meeting notes from each person's Granola", ("meetings", "granola", "notes")),
+    "sync_docs": ("refresh linked documents from their sources", ("documents", "docs")),
+    "start_fresh": ("start a fresh session, like Clear", ("chat", "fresh", "clear", "session")),
+}
 
 
 JOBS = [
     Job("stale_review", "Stale ticket review",
         "Finds open tasks that look finished or forgotten and suggests to each owner what to do.",
-        CHECKS, "Hourly", 3600, ai=True, control=True, labels=("stale-review",)),
+        CHECKS, "Hourly", 3600, ai=True, control=True, labels=("stale-review",), then=("check_stale", "suggest_owner")),
     Job("still_wanted", "Still wanted?",
         "Asks a task's person once whether a task idle for a week is still wanted.",
-        CHECKS, "Daily", 86400, control=True),
+        CHECKS, "Daily", 86400, control=True, then=("ask_still_wanted",)),
     Job("kpi_asks", "KPI stale asks",
         "Asks a KPI's keeper for a reading when it goes out of date, and a goal's owner when a KPI goes off track.",
-        CHECKS, "Hourly", 3600, control=True),
+        CHECKS, "Hourly", 3600, control=True, then=("ask_kpi_keeper", "ask_goal_owner")),
     Job("health_scan", "Health scan",
         "Checks Tico's health and wakes the Health Monitor only for a finding the last scan did not have.",
-        CHECKS, "Hourly", 3600, control=True),
+        CHECKS, "Hourly", 3600, control=True, then=("check_health", "wake_health_monitor")),
     Job("learnings", "Nightly learnings",
         "Reads yesterday's chats, tasks, Slack, mail and meetings and sends each bot what it should remember.",
-        LEARNING, "Nightly at 03:00", ai=True, control=True, labels=("learnings-route",)),
+        LEARNING, "Nightly at 03:00", ai=True, control=True, labels=("learnings-route",), then=("read_activity", "send_learnings")),
     Job("due_reminders", "Due reminders", "Tells a bot when one of its tasks reaches its due time.",
-        REMINDERS, "Every 10 seconds", 10),
+        REMINDERS, "Every 10 seconds", 10, then=("remind_due",)),
     Job("ask_deadlines", "Ask go-ahead",
         "A bot's question past its deadline goes ahead on its default answer, or expires.",
-        REMINDERS, "Hourly", 3600, control=True),
+        REMINDERS, "Hourly", 3600, control=True, then=("go_ahead",)),
     Job("approval_expiry", "Approval expiry", "Takes approvals and asks nobody will act on out of Needs you.",
-        REMINDERS, "Hourly", 3600),
+        REMINDERS, "Hourly", 3600, then=("expire_approvals",)),
     Job("still_needed", "Unanswered questions",
         "On weekday mornings, sends questions unanswered for two business days back to their bots.",
-        REMINDERS, "Hourly", 3600),
+        REMINDERS, "Hourly", 3600, then=("resend_questions",)),
     Job("routine_timer", "Bot routine timer", "Starts each bot routine below when it is due.",
-        HOUSEKEEPING, "Every 10 seconds", 10),
+        HOUSEKEEPING, "Every 10 seconds", 10, then=("start_routines",)),
     Job("stall_checks", "Stall checks",
         "Wakes the bot on a task nothing is moving, and drops queued work its bot can no longer read.",
-        HOUSEKEEPING, "Every minute", 60),
+        HOUSEKEEPING, "Every minute", 60, then=("wake_stalled", "drop_unreadable")),
     Job("waiting_checks", "Waiting checks",
         "Sends bot tasks waiting on nothing back to work, and turns a bot's plain ask to a person into a small task.",
-        HOUSEKEEPING, "Hourly", 3600),
+        HOUSEKEEPING, "Hourly", 3600, then=("unstrand", "ask_to_task")),
     Job("snooze_ends", "Snooze ends",
         "Brings snoozed tasks back when their date comes and starts deferred runs that are due.",
-        HOUSEKEEPING, "Every 10 seconds", 10),
+        HOUSEKEEPING, "Every 10 seconds", 10, then=("end_snooze", "start_deferred")),
     Job("go_live_expiry", "Go-live expiry", "Ends a go-live waiting for a computer that never reports.",
-        HOUSEKEEPING, "Every 10 minutes", 600),
+        HOUSEKEEPING, "Every 10 minutes", 600, then=("end_go_live",)),
     Job("goal_colours", "Goal colours", "Works out every goal's colour again as its data ages.",
-        HOUSEKEEPING, "Hourly", 3600),
+        HOUSEKEEPING, "Hourly", 3600, then=("goal_colours",)),
     Job("cleanup", "Cleanup", "Clears old events, mail, retry keys and recorder data.",
-        HOUSEKEEPING, "Hourly", 3600),
+        HOUSEKEEPING, "Hourly", 3600, then=("clean_up",)),
     Job("gateway_check", "Gateway key check",
         "Asks the Tico AI Gateway whether this server's key still works and how much of the month's cap is used.",
-        HOUSEKEEPING, "Hourly", 3600),
+        HOUSEKEEPING, "Hourly", 3600, then=("check_gateway",)),
     Job("billing_check", "Billing check", "Reads HQ's nightly billing check for the owner's Health page.",
-        HOUSEKEEPING, "Hourly", 3600),
+        HOUSEKEEPING, "Hourly", 3600, then=("read_billing",)),
     Job("updates", "Updates", "Asks people and bots for today's updates, one at a time.",
-        HOUSEKEEPING, "Every 10 seconds", 10),
+        HOUSEKEEPING, "Every 10 seconds", 10, then=("ask_updates",)),
     Job("github_sync", "GitHub sync",
         "Catches up on pull requests, merges and releases whose notice from GitHub never arrived.",
-        HOUSEKEEPING, "Every 10 seconds", 10),
+        HOUSEKEEPING, "Every 10 seconds", 10, then=("sync_github",)),
     Job("repository_waits", "Repository and setup waits",
         "Finishes a bot waiting for its repository or a worktree, and tells a person about a bot stuck in setup.",
-        HOUSEKEEPING, "Every 10 seconds", 10),
+        HOUSEKEEPING, "Every 10 seconds", 10, then=("finish_repo_waits", "tell_setup_stuck")),
     Job("release_check", "Release and feed check", "Checks for a new Tico release and fetches subscribed updates.",
-        HOUSEKEEPING, "Every 10 seconds; a new release is looked for every 6 hours", 10),
+        HOUSEKEEPING, "Every 10 seconds; a new release is looked for every 6 hours", 10, then=("check_release", "fetch_feeds")),
     Job("directory_sync", "Directory sync", "Brings people in from the company directory.",
-        HOUSEKEEPING, "Hourly"),
+        HOUSEKEEPING, "Hourly", then=("sync_directory",)),
     Job("meeting_sync", "Meeting notes sync", "Brings in meeting notes from each person's connected Granola.",
-        HOUSEKEEPING, "Every 30 seconds", 30, records=False),
+        HOUSEKEEPING, "Every 30 seconds", 30, records=False, then=("sync_meetings",)),
     Job("doc_sync", "Document sync", "Refreshes linked documents from their sources.",
-        HOUSEKEEPING, "Every few seconds", 5, records=False),
+        HOUSEKEEPING, "Every few seconds", 5, records=False, then=("sync_docs",)),
+    Job("topic_fresh", "Start fresh when the topic changes",
+        "In a direct chat, a message on a new topic starts a fresh session, like Clear.",
+        CHAT, "When it happens", records=False, when="topic_changed", then=("start_fresh",)),
 ]
 BY_KEY = {job.key: job for job in JOBS}
+
+
+# ----------------------------------------------------------------------------- what a person may change
+FIFTEEN, HOURLY, FOUR_HOURS, DAILY = "15m", "hourly", "4h", "daily"
+PRESETS = {FIFTEEN: ("Every 15 minutes", 900), HOURLY: ("Hourly", 3600), FOUR_HOURS: ("Every 4 hours", 4 * 3600),
+           DAILY: ("Daily at {at}", None)}
+EVERY_PRESET = (FIFTEEN, HOURLY, FOUR_HOURS, DAILY)
+AI_PRESETS = (HOURLY, FOUR_HOURS, DAILY)        # a job that asks Decide is never offered every 15 minutes
+CONFIG_KEY = "system_routines"
+AT_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
+
+
+@dataclass(frozen=True)
+class Control:
+    rule: str | None = None     # its on/off is this team rule (backend/team_rules.py), else this registry's record
+    on: bool = True             # the default when it is not a team rule
+    presets: tuple = ()         # the schedule presets offered; () is a switch only
+    preset: str | None = None   # the default preset
+    at: str | None = None       # the default "HH:MM" (company time, updates.ZONE) for DAILY
+    owner_only: bool = False    # only the owner changes it (Health scan, as in Settings > Health)
+
+
+CONTROLS = {
+    "stale_review": Control(rule="stale_review", presets=AI_PRESETS, preset=HOURLY, at="09:00"),
+    "still_wanted": Control(presets=EVERY_PRESET, preset=DAILY, at="09:00"),
+    "kpi_asks": Control(presets=EVERY_PRESET, preset=HOURLY, at="09:00"),
+    "health_scan": Control(presets=EVERY_PRESET, preset=HOURLY, at="09:00", owner_only=True),
+    # One run a night reads the day before (backend/learnings.py claims one per night): the choice is its time.
+    "learnings": Control(presets=(DAILY,), preset=DAILY, at="03:00"),
+    "ask_deadlines": Control(presets=EVERY_PRESET, preset=HOURLY, at="09:00"),
+    "topic_fresh": Control(rule="topic_fresh"),
+}
+
+
+QUICK_KEYS = ("still_wanted", "kpi_asks", "health_scan", "ask_deadlines")   # run by backend/scheduler.py QUICK
+
+
+def zone():
+    from .updates import ZONE
+    return ZONE
+
+
+def _stored(c):
+    row = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (CONFIG_KEY,)).fetchone()
+    try:
+        stored = json.loads(row[0]) if row else {}
+    except ValueError:
+        stored = {}
+    return stored if isinstance(stored, dict) else {}
+
+
+def config(c, rules=None):
+    """{job: {"on", "preset", "at"}} for every job in CONTROLS: what was saved, else its default. A team rule's on/off is
+    the rule's value (its environment default included)."""
+    from . import team_rules
+    rules = rules if rules is not None else team_rules.load(c)
+    stored, out = _stored(c), {}
+    for key, ctl in CONTROLS.items():
+        saved = stored.get(key) if isinstance(stored.get(key), dict) else {}
+        preset = saved.get("preset") if saved.get("preset") in ctl.presets else ctl.preset
+        at = saved.get("at") if isinstance(saved.get("at"), str) and AT_RE.match(saved["at"]) else ctl.at
+        on = bool(rules[ctl.rule]) if ctl.rule else bool(saved["on"]) if isinstance(saved.get("on"), bool) else ctl.on
+        out[key] = {"on": on, "preset": preset, "at": at}
+    return out
+
+
+def config_of(c, key):
+    return config(c)[key]
+
+
+def schedule_words(key, cfg):
+    """A controlled job's schedule in words: "Every 4 hours", "Daily at 09:00"."""
+    if not cfg or not cfg.get("preset"):
+        return BY_KEY[key].schedule
+    words = PRESETS[cfg["preset"]][0].format(at=cfg.get("at") or "")
+    return "Nightly at " + cfg["at"] if key == "learnings" else words
+
+
+def may_change(auth, who, key):
+    """An owner or an admin changes a job's switch, schedule and Run now; Health scan only the owner. Raises a 403."""
+    auth.domain(who)
+    job = BY_KEY.get(key)
+    if key not in CONTROLS or not job:
+        raise Problem("not_found", "No such system routine", 404)
+    if CONTROLS[key].owner_only:
+        if who.role != "owner":
+            raise Problem("forbidden", f"Only the owner changes {job.name}", 403)
+    elif not auth.bot_admin(who):
+        raise Problem("forbidden", "Only an owner or an admin changes system routines", 403)
+
+
+def can_change(auth, who, key):
+    if getattr(who, "support", None) == "app":
+        return False            # Tico support reads as an admin but its app tier writes none of these (support_access)
+    try:
+        may_change(auth, who, key)
+        return True
+    except Problem:
+        return False
+
+
+def save_config(c, actor, key, on=None, preset=None, at=None):
+    """Set a job's switch, preset or daily time; only what is sent changes. A team rule's switch is saved as that rule.
+    Returns the job's config."""
+    from . import team_rules
+    ctl = CONTROLS[key]
+    if preset is not None and preset not in ctl.presets:
+        offered = ", ".join(PRESETS[p][0].format(at="a time") for p in ctl.presets) or "none"
+        raise Problem("invalid", f"{BY_KEY[key].name} runs on one of: {offered}", 422)
+    if at is not None and not AT_RE.match(str(at)):
+        raise Problem("invalid", "Pick a time as HH:MM, from 00:00 to 23:59", 422)
+    if (preset is not None or at is not None) and not ctl.presets:
+        raise Problem("invalid", f"{BY_KEY[key].name} has no schedule to change", 422)
+    before = config(c)[key]
+    if on is not None and ctl.rule:
+        team_rules.save(c, actor, {ctl.rule: bool(on)})
+    stored = _stored(c)
+    mine = dict(stored.get(key) or {}) if isinstance(stored.get(key), dict) else {}
+    if on is not None and not ctl.rule:
+        mine["on"] = bool(on)
+    if preset is not None:
+        mine["preset"] = preset
+    if at is not None:
+        mine["at"] = at
+    if mine:
+        stored[key] = mine
+    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+              (CONFIG_KEY, json.dumps(stored, sort_keys=True)))
+    after = config(c)[key]
+    if after != before:
+        H.event(c, actor, "system_routines.updated", key, {"before": before, "after": after})
+    return after
+
+
+# ----------------------------------------------------------------------------- when a job is due
+def _occurrence(cfg, at):
+    """The latest HH:MM (company time) at or before `at`."""
+    hour, minute = (int(x) for x in (cfg.get("at") or "00:00").split(":"))
+    local = at.astimezone(zone())
+    point = local.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    return point if point <= local else point - timedelta(days=1)
+
+
+def due(cfg, at, last):
+    """Whether a job on `cfg`'s preset runs at `at`, its last run having started at `last` (None: never). Its switch is
+    not read here."""
+    every = PRESETS.get(cfg.get("preset") or "", (None, None))[1]
+    if every:
+        return last is None or at - last >= timedelta(seconds=every)
+    return last is None or last < _occurrence(cfg, at)
+
+
+def next_due(cfg, last, now):
+    """When a job on `cfg`'s preset runs next: never in the past; None for an interval job that has not run yet."""
+    every = PRESETS.get(cfg.get("preset") or "", (None, None))[1]
+    if every:
+        return max(last + timedelta(seconds=every), now) if last else None
+    if due(cfg, now, last):
+        return now
+    return _occurrence(cfg, now) + timedelta(days=1)
+
+
+def last_started(c, keys):
+    """{job: the start of its newest run} for these jobs."""
+    marks = ",".join("?" for _ in keys)
+    rows = c.execute(f"SELECT job, max(started) FROM system_runs WHERE job IN ({marks}) GROUP BY job", tuple(keys))
+    return {job: H.parse_ts(started) for job, started in rows.fetchall() if started}
 
 
 # ----------------------------------------------------------------------------- the run record
@@ -276,15 +515,16 @@ def _stamp(at):
     return at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
-def next_at(job, last, now, settings=None, c=None):
-    """When the job runs next, from its schedule and its last run: `every` after the last start (never in the past),
-    the nightly learning run's next 03:00, the directory's own interval. None when it cannot be told."""
-    if job.key == "learnings":
-        from .learnings import HOUR, ZONE
-        local = now.astimezone(ZONE)
-        at = local.replace(hour=HOUR, minute=0, second=0, microsecond=0)
-        return at if at > local and (not last or H.parse_ts(last["started"]).astimezone(ZONE).date() < local.date()) \
-            else at + timedelta(days=1)
+def next_at(job, last, now, settings=None, c=None, cfg=None):
+    """When the job runs next, from its schedule and its last run: a controlled job by its preset (`due`), nothing while
+    it is off; another `every` after the last start (never in the past), the directory's own interval. None when it
+    cannot be told."""
+    if cfg is not None:
+        if not cfg["on"]:
+            return None
+        if job.key == "learnings" and c is not None:
+            return next_night(c, cfg, now)
+        return next_due(cfg, H.parse_ts(last["started"]) if last else None, now)
     every = job.every
     if job.key == "directory_sync" and c is not None:
         every = (directory_minutes(c) or 0) * 60
@@ -294,6 +534,18 @@ def next_at(job, last, now, settings=None, c=None):
         return None
     started = H.parse_ts(last["started"])
     return max(started + timedelta(seconds=every), now)
+
+
+def next_night(c, cfg, now):
+    """Nightly learnings runs once per company night (backend/learnings.py `nightly`), not once after each time: tonight's
+    start while tonight has no run, else tomorrow's, whenever its last run started. The scheduled claim never retries a
+    night that has a row (only Run now does), so an unconfigured, capped or failed night also waits for tomorrow."""
+    from . import learnings
+    hour, minute = (int(x) for x in (cfg.get("at") or "03:00").split(":"))
+    start = now.astimezone(zone()).replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if c.execute("SELECT 1 FROM learning_runs WHERE night=?", (learnings.night_of(now),)).fetchone():
+        return start + timedelta(days=1)
+    return max(start, now)
 
 
 def directory_minutes(c):
@@ -337,46 +589,122 @@ def last_ai_runs(c):
     return out
 
 
-def listing(c, settings, now=None):
-    """Every job by group, with its last run, next run and, for a Decide job, its route and this month's spend."""
+def departments(c):
+    """The org chart's departments: its top-level groups' names (backend/groups.py)."""
+    from .groups import _roster
+    try:
+        groups = _roster(c).get("org_groups") or {}
+    except Exception:
+        return []
+    return [g["name"] for g in groups.values() if not g.get("parent")]
+
+
+def phrase(key, schedule):
+    """A trigger's words; the schedule's own for a scheduled job ("every hour", "every day at 09:00")."""
+    if key == "schedule":
+        words = {"Hourly": "every hour", "Daily": "every day"}.get(schedule, schedule)
+        return words[:1].lower() + words[1:]
+    return TRIGGERS[key][0]
+
+
+def search_words(job, when, then, department):
+    """What search matches a row by: its name, trigger, actions, department tag, group and what they touch."""
+    extra = [w for key in job.then for w in ACTIONS[key][1]] + list(TRIGGERS.get(job.when, ("", ()))[1])
+    return " ".join([job.name, job.what, when, *then, department, GROUP_WORDS[job.group], *extra]).lower()
+
+
+def listing(c, settings, now=None, who=None, auth=None):
+    """Every job in one flat list (no headings): WHEN <trigger> THEN <actions>, its department tag, schedule, last and
+    next run, on/off and, for a Decide job, its route and this month's spend; what this viewer may change, and the words
+    search matches."""
     now = now or datetime.now(timezone.utc)
-    last, ai_last = last_runs(c), last_ai_runs(c)
-    groups = []
-    for gkey, gname in GROUPS:
-        rows = []
-        for job in (j for j in JOBS if j.group == gkey):
-            row = last.get(job.key)
-            schedule = job.schedule
-            if job.key == "directory_sync":
-                minutes = directory_minutes(c)
-                schedule = ("Off: no directory connected" if minutes is None else "Hourly" if minutes == 60
-                            else f"Every {minutes} minutes")
-            following = next_at(job, row, now, settings, c) if job.records else None
-            item = {"key": job.key, "name": job.name, "what": job.what, "schedule": schedule, "ai": job.ai,
-                    "controllable": job.control, "needed": job.group == HOUSEKEEPING, "records": job.records,
-                    "last": None, "next": _stamp(following) if following else None}
-            if row:
-                item["last"] = {"started": row["started"], "finished": row["finished"], "ok": bool(row["ok"]),
-                                "result": row["result"], "runs": row["runs"]}
-            if job.ai:
-                answered = ai_last.get(job.key)
-                item["route"] = ROUTE_WORDS.get(answered["route"], "Other") if answered else None
-                item["fallback"] = answered["fallback"] if answered else None
-                item["spent_this_month_usd"] = spent_this_month(c, job.labels, now)
-            rows.append(item)
-        groups.append({"key": gkey, "name": gname, "jobs": rows})
-    return {"groups": groups, "now": _stamp(now)}
+    last, ai_last, cfgs = last_runs(c), last_ai_runs(c), config(c)
+    chart = {name.lower(): name for name in departments(c)}
+    rows = []
+    for job in JOBS:
+        row, cfg, ctl = last.get(job.key), cfgs.get(job.key), CONTROLS.get(job.key)
+        schedule = schedule_words(job.key, cfg) if ctl and ctl.presets else job.schedule
+        when = job.when
+        if job.key == "directory_sync":
+            minutes = directory_minutes(c)
+            schedule = ("Off: no directory connected" if minutes is None else "Hourly" if minutes == 60
+                        else f"Every {minutes} minutes")
+            when = "directory" if minutes is None else "schedule"
+        timed = cfg if ctl and ctl.presets else None
+        following = next_at(job, row, now, settings, c, timed) if job.records else None
+        when_words = phrase(when, schedule)
+        then_words = [ACTIONS[key][0] for key in job.then]
+        department = chart.get(job.department.lower(), job.department)
+        item = {"key": job.key, "name": job.name, "what": job.what, "schedule": schedule, "ai": job.ai,
+                "controllable": job.control, "needed": job.group == HOUSEKEEPING, "records": job.records,
+                "group": job.group, "when": [when_words], "then": then_words,
+                "department": {"name": department, "in_chart": department.lower() in chart},
+                "switch": bool(ctl), "on": cfg["on"] if cfg else True,
+                "preset": cfg["preset"] if timed else None, "at": cfg["at"] if timed else None,
+                "presets": [{"key": p, "label": PRESETS[p][0].format(at="a time")} for p in (ctl.presets if ctl else ())],
+                "owner_only": bool(ctl and ctl.owner_only),
+                "can_change": bool(ctl and who is not None and auth is not None and can_change(auth, who, job.key)),
+                "last": None, "next": _stamp(following) if following else None}
+        item["search"] = search_words(job, when_words, then_words, department)
+        if job.key == "health_scan":
+            # Its own switch only says whether it may run; it finds nothing while the Health Monitor itself is off.
+            from .health_monitor import active
+            item["note"] = None if active(c) else "Finds nothing while the Health Monitor is off (Settings > Health)"
+        if row:
+            item["last"] = {"started": row["started"], "finished": row["finished"], "ok": bool(row["ok"]),
+                            "result": row["result"], "runs": row["runs"]}
+        if job.ai:
+            answered = ai_last.get(job.key)
+            item["route"] = ROUTE_WORDS.get(answered["route"], "Other") if answered else None
+            item["fallback"] = answered["fallback"] if answered else None
+            item["spent_this_month_usd"] = spent_this_month(c, job.labels, now)
+        rows.append(item)
+    return {"jobs": rows, "departments": list(chart.values()), "now": _stamp(now)}
 
 
-def install(app, store, auth):
+def row_of(c, settings, key, who=None, auth=None):
+    return next(job for job in listing(c, settings, who=who, auth=auth)["jobs"] if job["key"] == key)
+
+
+def install(app, store, auth, mutate):
     from fastapi import Request
+
+    from . import models as M
 
     @app.get("/api/v2/system-routines")
     def system_routines(request: Request):
-        """The jobs Tico runs on its own timers, by group: what each does, its schedule, its last and next run, and for
-        a Decide job which route answered and this month's spend. Read-only; everyone who can open Settings."""
+        """Every job Tico runs on its own, in one flat list: WHEN <trigger> THEN <actions>, its department tag, schedule,
+        last and next run, on/off, for a Decide job which route answered and this month's spend, and `can_change`: what
+        this viewer may switch, reschedule and run now. Everyone who can open Settings reads it."""
         who = request.state.identity
         auth.domain(who)
         with store.read() as c:
-            return listing(c, store.settings)
+            return listing(c, store.settings, who=who, auth=auth)
 
+    @app.put("/api/v2/system-routines/{key}")
+    def system_routine_save(key: str, request: Request, body: M.SystemRoutineUpdate):
+        """Switch a job on or off, or pick its schedule preset and daily time. An owner or an admin; Health scan only the
+        owner. Stale ticket review's and Topic changed's switch is their team rule (backend/team_rules.py)."""
+        who = request.state.identity
+        may_change(auth, who, key)
+        mutate(request, body, lambda c: save_config(c, who.actor, key, body.on, body.preset, body.at))
+        with store.read() as c:
+            return {"job": row_of(c, store.settings, key, who, auth)}
+
+    @app.post("/api/v2/system-routines/{key}/run")
+    def system_routine_run(key: str, request: Request, body: M.Empty):
+        """Run one of the six controlled jobs once, now, through the code and caps of its scheduled run (a stale ticket
+        review still makes at most its hourly Decide calls); its result lands on its row. `running` while a job that
+        asks Decide works on its own thread. 409 while it is off or already running."""
+        who = request.state.identity
+        may_change(auth, who, key)
+        job = BY_KEY[key]
+        if not job.control:
+            raise Problem("invalid", f"{job.name} has nothing to run", 422)
+        with store.read() as c:
+            if not config_of(c, key)["on"]:
+                raise Problem("conflict", f"{job.name} is off. Switch it on to run it.", 409)
+        from .scheduler import run_now
+        running = run_now(store, auth, key, who.actor)
+        with store.read() as c:
+            return {"job": row_of(c, store.settings, key, who, auth), "running": running}

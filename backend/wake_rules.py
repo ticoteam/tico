@@ -230,7 +230,8 @@ def hold(conn, msg, rule):
     task_row = H.task(conn, task_id) if task_id else None
     where = f"on task {task_row['title']} ({task_row['id']})" if task_row else "in a direct message"
     why = {"own_write": "your own write caused it", "blocked_by": "the task waits on another task (blocked by)",
-           "wake_once": "the task waits on its pull request's checks (wake once)"}.get(
+           "wake_once": "the task waits on its pull request's checks (wake once)",
+           "milestone": "the task waits for a pull request to merge or a release to be published"}.get(
         rule if rule == "own_write" else parked(conn, task_row), "the task is waiting")
     text = str(msg["body"] or "")
     if len(text) > H.NOTE_MAX - 400:
