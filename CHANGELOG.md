@@ -84,6 +84,11 @@ All notable changes to Tico are recorded here. The format follows
   each one at its own rate.
 
 ### Fixed
+- **Stop holds for a turn whose computer slept.** A Stop pressed after Tico had marked a sleeping computer's turn
+  as lapsed was refused ("not running"), and the answer the model went on to finish was posted anyway. The Stop is
+  now recorded, the late answer is kept on its run instead of posted, and the request ends stopped ("Stopped by …")
+  rather than being run again by the automatic recovery 90 minutes later. A stopped turn whose computer never
+  reports back is let go with "Stopped by …; not resumed" instead of being resumed.
 - **A run whose only work was a git push counts as acting.** The computer reports the pushes a run made from its
   task's worktrees with its result, so in `hub sql` the run reads `acted` with `did_nothing` 0 instead of
   `no_change`. Pushes from another task's worktree are not counted, and older runs read as before.
