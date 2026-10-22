@@ -84,6 +84,10 @@ All notable changes to Tico are recorded here. The format follows
   each one at its own rate.
 
 ### Fixed
+- **Worktree release follow-ups.** A stuck `pending` worktree whose pull requests finished is released without first
+  telling its bot to retry setup; only the turns of the bot that owns the task hold a finished tree; a fault reading
+  turns is raised instead of read as "no live turn"; and a new push clears the earlier "stale push cleared" note, so a
+  release no longer names an old push.
 - **A run whose only work was a git push counts as acting.** The computer reports the pushes a run made from its
   task's worktrees with its result, so in `hub sql` the run reads `acted` with `did_nothing` 0 instead of
   `no_change`. Pushes from another task's worktree are not counted, and older runs read as before.

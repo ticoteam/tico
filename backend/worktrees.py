@@ -1,6 +1,7 @@
 """Task worktree authorization and computer lifecycle reports (task_links v2 schema)."""
 import json
 import re
+import sqlite3
 import uuid
 import unicodedata
 from datetime import datetime, timezone
@@ -144,15 +145,22 @@ PENDING_HOURS = 6     # a checkout or setup with no progress this long has faile
 
 
 def live_turn(c, task_id, owner):
-    """The owner bot is in a turn on this task now: a leased or running attempt that carries the task."""
+    """The owner bot is in a turn on this task now: a leased or running attempt that carries the task. Only the turns
+    of the bot that owns both the tree and the task count: a reviewer's or another bot's turn on the task, or a turn of
+    a bot the task has since moved away from, neither holds the tree nor shields it from the setup deadline."""
     if not task_id or not H.is_bot(owner or ''):
+        return False
+    task = c.execute('SELECT owner FROM tasks WHERE id=?', (task_id,)).fetchone()
+    if not task or task[0] != owner:
         return False
     from .task_privacy import attempt_tasks
     try:
         rows = c.execute("SELECT id FROM attempts WHERE bot=? AND state IN ('leased','running')",
                          (H.actor_id(owner),)).fetchall()
-    except Exception:               # a local hub has no attempts table
-        return False
+    except sqlite3.OperationalError as exc:
+        if 'no such table' not in str(exc):
+            raise                   # a real fault is not "no live turn": the tree would be released under the turn
+        return False                # a local hub has no attempts table
     return any(task_id in attempt_tasks(c, r[0]) for r in rows)
 
 
@@ -483,7 +491,8 @@ def heartbeat(c, who, reports, capable, default_org=""):
                 and not (detail.get('current_branch') or detail.get('last_commit'))):   # nothing reported on disk
             cancel_pending(c, row, detail, 'No longer needed: ' + reason)
             continue
-        if (row['state'] == 'pending' and not closed and not detail.get('pending_expired')
+        # A tree released in this same pass is not told to retry its setup: the retry would only be removed again.
+        if (row['state'] == 'pending' and not closed and not released and not detail.get('pending_expired')
                 and detail.get('checkout_state') != 'setup_failed'
                 and H.shift(row['updated'] or row['created'], hours=PENDING_HOURS) < H.now()
                 and not live_turn(c, row['task_id'], row['owner'])):
