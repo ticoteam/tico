@@ -15,6 +15,7 @@
 //! only, a model call (`POST /chat/completions`): the key opens nothing else at the Gateway for a turn.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
@@ -60,10 +61,17 @@ pub struct Relay {
     pub token: String,
     pub dir: Option<std::path::PathBuf>,
     deadline: Instant,
+    retry_at: Arc<AtomicU64>,
     task: tokio::task::JoinHandle<()>,
 }
 
 impl Relay {
+    /// The Gateway's Retry-After, including a reset that passed while the harness was finishing.
+    pub fn limit_reset(&self) -> Option<String> {
+        let at = self.retry_at.load(Ordering::SeqCst);
+        (at != 0).then(|| text_of(&crate::util::iso(&serde_json::json!((at as f64).max(crate::util::epoch_s() + 1.0)))))
+    }
+
     /// Every harness in this attempt shares the deadline from when its key was pinned. A fallback never resets it.
     pub fn limit(&self, requested: Instant) -> Instant {
         requested.min(self.deadline)
@@ -100,6 +108,7 @@ struct Shared {
     key: String,
     token: String,
     bot: Option<String>,
+    retry_at: Arc<AtomicU64>,
 }
 
 /// `url` without a trailing slash, when the key may go there: https, or plain http only to this computer named
@@ -202,7 +211,8 @@ pub async fn start(upstream: &str, key: String, bot: Option<String>) -> Result<R
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.map_err(|e| e.to_string())?;
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
     let token = format!("tico-relay-{}{}", uuid::Uuid::new_v4().simple(), uuid::Uuid::new_v4().simple());
-    let shared = Arc::new(Shared { client, base, key, token: token.clone(), bot });
+    let retry_at = Arc::new(AtomicU64::new(0));
+    let shared = Arc::new(Shared { client, base, key, token: token.clone(), bot, retry_at: retry_at.clone() });
     let task = tokio::spawn(async move {
         let mut calls = tokio::task::JoinSet::new();
         loop {
@@ -218,7 +228,7 @@ pub async fn start(upstream: &str, key: String, bot: Option<String>) -> Result<R
             }
         }
     });
-    Ok(Relay { url: format!("http://127.0.0.1:{port}{PREFIX}"), token, dir: None, deadline, task })
+    Ok(Relay { url: format!("http://127.0.0.1:{port}{PREFIX}"), token, dir: None, deadline, retry_at, task })
 }
 
 fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
@@ -309,6 +319,12 @@ async fn serve(mut socket: TcpStream, s: &Shared) -> std::io::Result<()> {
         Err(_) => return answer(&mut socket, 502, "The Tico AI Gateway did not answer").await,
     };
     let status = response.status();
+    let wait = response.headers().get(reqwest::header::RETRY_AFTER).and_then(|v| v.to_str().ok())
+        .and_then(|v| v.trim().parse::<u64>().ok()).filter(|s| *s <= 7 * 24 * 60 * 60);
+    let at = if status.as_u16() == 429 {
+        wait.map(|s| (crate::util::epoch_s() + s.max(1) as f64).ceil() as u64).unwrap_or(0)
+    } else { 0 };
+    s.retry_at.store(at, Ordering::SeqCst);
     if status.is_redirection() {
         // The key's request went only where it was meant to; a redirect is not followed, and not handed on either.
         return answer(&mut socket, 502, "The Tico AI Gateway answered with a redirect").await;
@@ -417,6 +433,28 @@ mod tests {
 
     const KEY: &str = "tgw-synthetic-fixture-key-0042";
     const SSE: &[u8] = b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n10\r\ndata: {\"a\": 1}\n\n\r\n0\r\n\r\n";
+
+    #[tokio::test]
+    async fn gateway_retry_after_reaches_the_turn_without_inventing_an_hour() {
+        for (status, header, seconds) in [(429, "42", Some(42)), (429, "3600", Some(3600)),
+                                         (429, "99999999999999999999", None), (200, "42", None)] {
+            let body = r#"{"error":{"code":"rate_limited","message":"Too many requests."}}"#;
+            let reply = format!("HTTP/1.1 {status} Test\r\nContent-Type: application/json\r\nRetry-After: {header}\r\nContent-Length: {}\r\n\r\n{body}", body.len());
+            let (url, _) = upstream(reply.into_bytes()).await;
+            let relay = start(&url, KEY.into(), None).await.unwrap();
+            assert_eq!(relay.limit_reset(), None);
+            let before = crate::util::epoch_s();
+            let out = call(&relay, &relay.token, "/gateway/chat/completions", "{}").await;
+            assert!(out.contains(&format!("retry-after: {header}")), "the response is still passed through");
+            match seconds {
+                Some(seconds) => {
+                    let reset = crate::util::parse_iso(&relay.limit_reset().unwrap());
+                    assert!(reset >= before + seconds as f64 && reset <= crate::util::epoch_s() + seconds as f64 + 1.0);
+                }
+                None => assert_eq!(relay.limit_reset(), None),
+            }
+        }
+    }
 
     #[tokio::test]
     async fn a_turn_reaches_the_gateway_with_the_key_it_never_holds() {

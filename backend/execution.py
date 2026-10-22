@@ -431,7 +431,7 @@ def reset_cooldown(c, attempt_id, finished, cooldown, resets_at=None):
         return max(cooldown, int((gateway.month_after(finished) - finished).total_seconds()) + 1)
     reported = provider_reset({"resets_at": resets_at}, finished)
     if any(gateway.rate_limited(error) for error in errors):
-        # Its address block lasts the Gateway's Retry-After, and every early retry with a refused key extends it.
+        # Retry-After covers both the key's minute window and an address block; older runners keep the safe default.
         return reported or max(cooldown, gateway.RETRY_AFTER)
     if reported:
         return reported
@@ -932,6 +932,9 @@ class Execution:
         self.refuse_in_rehearsal("Enrolments")
         with self.store.transaction() as c:
             row = c.execute("SELECT * FROM enrollments WHERE code_hash=?", (digest(body.code),)).fetchone()
+            hosted = c.execute("SELECT label FROM hosting_enrollments WHERE code_hash=?", (digest(body.code),)).fetchone()
+            if hosted and hosted['label'] != body.label:
+                raise Problem("enrollment", "Enrollment is for another computer", 403)
             if not row or row["expires"] <= H.now():
                 raise Problem("enrollment", "Enrollment code is invalid or expired", 401)
             # Deterministic credential makes a lost enrollment response safely retryable.
@@ -2374,8 +2377,8 @@ class Execution:
                 focus = (f"{gateway.CAP_MESSAGE} at {hit[11:16]}: the gateway key has used this month's cap; "
                          f"retrying after {retry[:10]} {retry[11:16]} UTC")
             elif tico_code == gateway.RATE_LIMITED:
-                focus = (f"Tico AI Gateway rate limited at {hit[11:16]} after too many refused keys from this "
-                         f"address; retrying after {retry[:10]} {retry[11:16]} UTC")
+                focus = (f"Tico AI Gateway rate limited at {hit[11:16]}; "
+                         f"retrying after {retry[:10]} {retry[11:16]} UTC")
             else:
                 # Whose limit it was, from the turn's own notes (backend/login_holds.py source): primary or fallback,
                 # which provider and login, and an API key's quota told apart from a plan's usage window. A fallback's

@@ -741,7 +741,8 @@ def finish(io: IO, s: Settings, deps: Deps, records, runner: remote.Shell | None
                             wait_https=HTTPS_WAIT_SECONDS, sleep=deps.sleep, say=io.say)
     show(io, checks)
     if all(c.ok for c in checks):
-        computer = s.preset == "recommended" and hosted.add_server_computer(io, s, runner)
+        computer = (s.preset == "recommended" and getattr(args, 'server_computer', 'same') == 'same'
+                    and hosted.add_server_computer(io, s, runner))
         if s.auth == st.OWNER_LINK:
             io.say(f"\nDone. The owner's sign-in link is in {hosted.link_file(s.domain)} (0600): send it to {s.owner_email}. "
                    "It works once, for a week; `python3 -m setup owner-link --domain " + s.domain + "` makes a new one.")

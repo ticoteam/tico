@@ -18946,6 +18946,9 @@
           },
           "warning": {
             "type": "string"
+          },
+          "held": {
+            "type": "string"
           }
         },
         "required": [
@@ -24203,6 +24206,14 @@
               ]
             },
             "description": "On a structured ask: all review answers, oldest first. On a bot reply: handled message ids"
+          },
+          "woke": {
+            "type": "boolean",
+            "description": "On a send: false when the message was held (see `held`)"
+          },
+          "held": {
+            "type": "string",
+            "description": "On a send: a bot's message to a bot held for that bot's next run, and how to wake it now (backend/bot_to_bot.py)"
           }
         },
         "required": [

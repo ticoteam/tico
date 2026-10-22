@@ -286,6 +286,10 @@ def test_a_chat_turn_streams_completes_and_resumes_the_bot_thread(api, computer)
         sessions = {call["argv"][call["argv"].index("--session-id") + 1] for call in calls}
         assert len(calls) == 2 and len(sessions) == 1
         assert all(call["env"]["MUSE_NO_AUTO_UPDATE"] == "1" for call in calls)
+        # Sessions and their locks go to Tico's own data folder, never ~/.local/share (Dev 329).
+        data = computer.config.parent / f"state-{computer.registration['runner_id']}" / "musecode" / "data"
+        assert all(call["env"]["XDG_DATA_HOME"] == str(data) for call in calls)
+        assert (data / "muse" / "sessions").is_dir()
     else:
         starts = [c for c in calls if c.get("method") in ("thread/start", "thread/resume")]
         assert starts[-1] == {"harness": "codex", "method": "thread/resume", "thread": starts[0]["thread"]}
@@ -661,12 +665,24 @@ def test_a_bot_on_a_subscription_profile_runs_in_that_profiles_home(api, live, t
 @pytest.mark.parametrize("harness", ["codex"])
 @pytest.mark.parametrize("setup", [{"env": {"FAKE_CODEX_LOGIN": "file"}}])
 def test_a_subscription_signed_in_from_the_browser_counts_without_a_restart(api, computer):
-    (Path(computer.env["CODEX_HOME"]) / "auth.json").write_text("{}")      # the computer's own login
+    own_auth = Path(computer.env["CODEX_HOME"]) / "auth.json"
+    own_auth.write_text("{}")
     computer.start()
     rid = computer.registration["runner_id"]
+    # The runner starts ready on its own login. A named connection needs that slot free, as after signing out.
+    own_auth.unlink()
+    until(lambda: runtime_row(api, computer).get("authenticated") == "missing",
+          "the computer login signed out, in the heartbeat", timeout=40)
     signed = lambda name: computer.profiles().get(name, {}).get("codex", {}).get("signed_in")  # noqa: E731
     state = lambda login: get(api, f"runners/{rid}/logins/{login['id']}")["state"]  # noqa: E731
     assert computer.profiles() == {}
+    # A failed unsigned profile does not consume the slot; keep it to test heartbeat removal below.
+    failed = post(api, f"runners/{rid}/logins", {"runtime": "codex", "profile": "spare"})
+    until(lambda: state(failed) == "waiting", "the failed sign-in's link and code")
+    (computer.config.parent / "profiles" / "spare" / "codex" / "deny").write_text("")
+    until(lambda: state(failed) == "failed", "the failed sign-in's verdict")
+    until(lambda: signed("spare") is False, "the failed profile, not signed in")
+
     login = post(api, f"runners/{rid}/logins", {"runtime": "codex", "profile": "chris-chatgpt"})
     home = computer.config.parent / "profiles" / "chris-chatgpt" / "codex"
     until(lambda: state(login) == "waiting", "the sign-in's link and code")
@@ -681,11 +697,8 @@ def test_a_subscription_signed_in_from_the_browser_counts_without_a_restart(api,
     assert computer.prompts()[-1]["env"]["CODEX_HOME"] == str(home)
     assert until(lambda: computer.attempts()[-1]["result"], "the completion")["profile_used"] == "chris-chatgpt"
 
-    failed = post(api, f"runners/{rid}/logins", {"runtime": "codex", "profile": "spare"})
-    until(lambda: state(failed) == "waiting", "the second sign-in's link and code")
-    (computer.config.parent / "profiles" / "spare" / "codex" / "deny").write_text("")
-    until(lambda: state(failed) == "failed", "the failed sign-in's verdict")
-    until(lambda: signed("spare") is False, "the failed profile, not signed in")
+    denied = post(api, f"runners/{rid}/logins", {"runtime": "codex", "profile": "spare"}, expected=409)
+    assert denied["error"]["code"] == "subscription_exists"
 
     registration = json.loads(computer.config.read_text())
     del registration["profiles"]["spare"]
@@ -1239,3 +1252,26 @@ def test_behind_a_proxy_that_refuses_default_user_agents_the_runner_and_hub_get_
     finally:
         machine.stop()
         proxy.close()
+
+
+def test_a_muse_data_folder_the_bot_cannot_write_is_a_readiness_problem_naming_it(api, live, tmp_path, rust_binary):
+    """A Muse Code data folder already there that the turn's user cannot write (as ~/.local/share/muse was on the
+    Team box, left by turns before isolation) shows on the Computer as not ready, naming it, not as failed turns."""
+    computer = Computer(api, live, tmp_path, "musecode", rust_binary)
+    sessions = computer.config.parent / f"state-{computer.registration['runner_id']}" / "musecode" / "data" / "muse" / "sessions"
+    sessions.mkdir(parents=True)
+    sessions.chmod(0o555)
+    if os.access(sessions, os.W_OK):
+        sessions.chmod(0o755)
+        pytest.skip("root writes a read-only folder anyway")
+    try:
+        with computer.output.open("a") as out:
+            computer.process = subprocess.Popen([str(computer.binary), "--config", str(computer.config), "run"], cwd=ROOT,
+                                                env=computer.env, stdout=out, stderr=subprocess.STDOUT, start_new_session=True)
+        row = until(lambda: computer.readiness().get("ops") or computer.died(), "the runner's first heartbeat")
+        assert not computer.died(), computer.output.read_text()[-3000:]
+        assert row["ready"] is False and row["sign_in"] == "failed", row
+        assert any(str(sessions) in p and "can't write" in p for p in row["problems"]), row["problems"]
+    finally:
+        sessions.chmod(0o755)
+        computer.stop()

@@ -74,9 +74,9 @@ async function renderSettingsRuns() {
 }
 
 // ----------------------------------------------------------------- Changes
-function renderSettingsHistory() {
-  const el = $('#set-history'); if (!el) return;
-  const changes = SETTINGS_DATA.history?.changes || [], transitions = SETTINGS_DATA.history?.transitions || [];
+function renderSettingsHistory(el = $('#set-history'), history = SETTINGS_DATA.history) {
+  if (!el) return;
+  const changes = history?.changes || [], transitions = history?.transitions || [];
   const pending = transitions.filter(t => ['preparing','blocked','failed','prepared'].includes(t.state));
   const transitionById = new Map(transitions.map(t => [t.id, t]));
   const pendingRows = pending.map(t => `<div class="settings-history-row"><span>${avatar(t.bot, 24, stateOf(t.bot))}</span><div><strong>${esc(settingsBotName(t.bot))} · ${t.kind === 'model' ? 'model change' : 'computer move'}</strong><p>${esc(t.state === 'preparing' ? `Checkpointing ${t.progress.prepared} of ${t.progress.total} conversations` : t.error || t.state)}</p></div><div class="history-action"><span class="pill ${t.state === 'failed' ? 'fail' : 'waiting'}">${esc(t.state)}</span><button class="ghost" type="button" data-transition-review="${esc(t.id)}">Review</button></div></div>`).join('');
@@ -98,7 +98,7 @@ function renderSettingsHistory() {
     undo.disabled = true;
     try {
       const result = await post(`/v2/settings/history/${encodeURIComponent(undo.dataset.settingsUndo)}/undo`, {expected_revision:Number(undo.dataset.revision)});
-      if (result.id) settingsWatchTransition(result.id); else { await loadSettings(); toast('Settings change undone'); }
+      if (result.id) settingsWatchTransition(result.id); else { await loadSettings(); if (el.id === 'bot-settings-history' && BOT) await botSettingsHistoryLoad(BOT.slug); toast('Settings change undone'); }
     } catch (error) {undo.disabled = false; toast(error.message, true);}
   };
 }

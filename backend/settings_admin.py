@@ -275,7 +275,9 @@ class SettingsAdmin:
         if not choice:
             raise Problem("model", "Choose a Team default in Settings > Computers" if not body.model
                           else "Choose one of the supported models", 422)
-        self.refuse_retired(choice)
+        if body.model:
+            # A Team default saved before its model retired still makes bots: only a fresh pick is refused.
+            self.refuse_retired(choice)
         effort = self._effort(choice, body.effort or default.get("effort") or None)
         harness = self._harness(choice, getattr(body, "harness", None))
         self._parent(c, body.slug, body.reports_to)
@@ -1088,15 +1090,14 @@ class SettingsAdmin:
             raise Problem("version_conflict", "Bot configuration changed; refresh before saving", 409)
         before = self.snapshot(c, bot, "wake_preset")
         declared = _json(config["config_json"], {}) or {}
-        if body.wake_preset == wake_presets.CURRENT:
-            declared.pop("wake_preset", None)
-        else:
-            declared["wake_preset"] = body.wake_preset
+        # Old clients may still send `current`; it now selects Performance.
+        chosen = wake_presets.preset_of({"wake_preset": body.wake_preset})
+        declared["wake_preset"] = chosen
         c.execute("UPDATE bot_config SET config_json=?,revision=revision+1 WHERE bot=?", (encode(declared), bot))
         wake_presets.replan(c, bot)
-        self.record(c, who.actor, bot, "wake_preset", before, body.wake_preset)
-        H.event(c, who.actor, "bot.wake_preset_changed", bot, {"before": before, "after": body.wake_preset})
-        return {"bot": bot, "wake_preset": body.wake_preset, "wake": wake_presets.effective(declared),
+        self.record(c, who.actor, bot, "wake_preset", before, chosen)
+        H.event(c, who.actor, "bot.wake_preset_changed", bot, {"before": before, "after": chosen})
+        return {"bot": bot, "wake_preset": chosen, "wake": wake_presets.effective(declared),
                 "revision": config["revision"] + 1}
 
 

@@ -8,6 +8,63 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Hosted bot computers.** Hosting can run bots on a separate computer, keeping their work away from the Tico
+  server. Settings > Computers offers **Hosted computer (we run it)**. The installer supports server-only installs,
+  bounded AWS runner recovery and the same 4- and 8-core sizes on both machines, with 100 and 200 GB disks.
+  HQ registers only a join code's hash through scoped SSM; no owner token or join secret crosses that control plane.
+
+### Changed
+- **One new subscription per AI tool on each computer.** Adding a second subscription for the same tool is refused
+  with a Switch account message, including while the first sign-in is pending. Different tools and computers stay
+  independent; existing connections and API keys are kept.
+- **Tico AI Gateway: Tico Cheap 1.1 replaces Cheap 1.0** in every model list. It costs the same for a prompt up to
+  100,000 tokens; above that the whole request is $0.75 per 1M input, $0.075 cached and $3.75 output, and Usage
+  estimates it that way. Cheap 1.0 is retired: bots and a default model already on it keep it and keep running at its
+  old price, and Settings > Computers > Models still saves a default left on it, but nothing new can pick it
+  ([Tico AI Gateway](docs/ai-gateway.md)). The web app's Add bot form preselects a current model when the team
+  default is Cheap 1.0, since a new bot is a new pick. The pi runner now reports each model request, so Usage prices
+  each one at its own rate.
+
+### Fixed
+- **A bot's answer that finished while its computer slept now arrives.** When a computer was asleep or paused past a
+  turn's lease, the runner woke to the hub refusing the lease and dropped the answer the model had already finished,
+  so the person saw "No reply" and the run ended interrupted. The runner now reads out what the model already said
+  for up to ten seconds after that refusal and hands it in completed; the hub settles it as before (Dev 242). A model
+  still working is not waited for, and nothing new starts in that window. A person's Stop still stands: a late answer
+  from a stopped turn is kept on its run, not posted.
+- **A task blocked only by its own quiet subtask no longer waits silently.** Relating a subtask as its parent's
+  blocker returns a warning, and when that subtask (a bot's hold or acknowledgement) goes quiet waiting on nothing
+  else, the parent counts as stalled even while waiting: its bot is woken with the way out, and BotOps sees it stuck.
+- **Muse Code turns work again on a Docker computer that runs bots as their own user.** Each Muse login now keeps
+  its sessions in a folder of Tico's own (per subscription profile too), so a turn, including an automatic fallback
+  to Muse, no longer fails at once with "failed to create session lock directory ... Permission denied". If that
+  folder is there but the bot user can't write it, Settings > Computers shows Muse as not ready and names the folder.
+  Muse sessions from before this change start fresh.
+- Choosing a bot's model connection refreshes its computer's readiness and queued work immediately, including
+  when the previous connection is signed out.
+- **Recovering an AWS bot computer waits for Systems Manager.** Resuming an interrupted install waits up to five
+  minutes for its agent before sending recovery, tolerates a registration race and keeps the same computer on
+  failure. An accepted recovery command is never sent again by that wait.
+- **A bot's message to a bot says when it was held.** A plain message or task comment from one bot to another waits
+  for that bot's next run; the send now answers `woke: false` with a `held` reason, and `hub` prints it: held for
+  that bot's next run, add `--needs-action` to wake it now. Before, a held escalation read as delivered.
+- **Goals from a setup company file land on Goals.** Importing the file from tico.team/setup (in the app or from a
+  Hosted install) no longer sets its goals aside: the owner's goals and any goal for a built-in bot such as the
+  Assistant become company goals, each other bot's goal sits under that bot, and a goal's measure becomes a KPI with
+  the file's baseline and target. The file carries no readings, so a new KPI starts with no history.
+- **No "Claude login required" while the Tico AI Gateway runs the bot.** Under the recommended choice a bot whose
+  Claude or ChatGPT is not signed in yet shows as ready, its card says "Using Tico AI Gateway; sign in to Claude to use
+  your subscription", and its model check and chat no longer ask for a login. With no Gateway either, it still does.
+
+## [0.3.71] - 2026-10-21
+
+### Fixed
+- **Gateway turns retry when their rate window resets.** The computer carries the Gateway's requested wait back to
+  the server, so a busy minute does not hold starter bots for an hour or claim their address sent refused keys.
+
+## [0.3.70] - 2026-10-21
+
+### Added
 - **A menu button left of Search in a chat's bot switcher on a phone.** In a bot's chat the bottom bar is hidden;
   tapping the bot's icon by the chat bar now shows a round menu button beside Search that opens the side menu in one
   tap, the same menu More opens, and it closes the same way.
@@ -23,6 +80,15 @@ All notable changes to Tico are recorded here. The format follows
   plainly when a used-up login has bots on the Gateway. Gateway usage records keep which gateway key and install
   paid, never the key. The other three choices, and a team that never picks one, keep working
   as before ([Tico AI Gateway](docs/ai-gateway.md#choose-how-bots-get-their-models)).
+
+### Fixed
+- **Recommended starter bots install their Gateway runtime before subscription sign-in.** An isolated computer
+  now prepares the Gateway runtime chosen in AI providers even when automatic quota fallback is off, so starter
+  jobs can run before Claude and ChatGPT are signed in. An explicit owner opt-out stays effective.
+- **A bot is no longer handed a picture link for a chat's file that never opens.** The visual route checks a bot's
+  link as the bot without its run, which cannot see a chat's files, so those links always answered "not found". A bot
+  reading a chat visual now gets the file itself (its file link, no picture address); people's links and a bot's
+  links for task files are unchanged.
 
 ## [0.3.69] - 2026-10-21
 
@@ -48,12 +114,6 @@ All notable changes to Tico are recorded here. The format follows
   command dropped both: the reply went out as an internal comment, and an edit of a public reply was refused.
 - `hub task label --approval-id` now sends the approval with the label change, so a bot can add a public roadmap
   label once a person approves its publish request. Before, the command dropped the approval and was refused.
-- **A bot's answer that finished while its computer slept now arrives.** When a computer was asleep or paused past a
-  turn's lease, the runner woke to the hub refusing the lease and dropped the answer the model had already finished,
-  so the person saw "No reply" and the run ended interrupted. The runner now reads out what the model already said
-  for up to ten seconds after that refusal and hands it in completed; the hub settles it as before (Dev 242). A model
-  still working is not waited for, and nothing new starts in that window. A person's Stop still stands: a late answer
-  from a stopped turn is kept on its run, not posted.
 - A goal's automatic colour follows its worst KPI: red takes priority over yellow and green, and yellow over green.
   The note explains that KPI; a colour set by a person stays in place until handed back to the Goal Manager.
 - **Company file: numbered bot ids are no longer blanked as keys**: a long id made from a numbered title, such as
@@ -4013,7 +4073,9 @@ First public release.
 - Hosting: local only on a Mac, or self-hosted, including a reference AWS stack under `infra/ec2/`
   with Litestream backups.
 
-[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.69...HEAD
+[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.71...HEAD
+[0.3.71]: https://github.com/ticoteam/tico/compare/v0.3.70...v0.3.71
+[0.3.70]: https://github.com/ticoteam/tico/compare/v0.3.69...v0.3.70
 [0.3.69]: https://github.com/ticoteam/tico/compare/v0.3.68...v0.3.69
 [0.3.68]: https://github.com/ticoteam/tico/compare/v0.3.67...v0.3.68
 [0.3.67]: https://github.com/ticoteam/tico/compare/v0.3.66...v0.3.67

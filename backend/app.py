@@ -26,7 +26,7 @@ from . import repo_waits
 from . import built_on
 from . import agents, app_delivery, batch, external_sync, inbox_isolation, mcp_oauth, harness_actions, model_login, oidc, personal_tokens, views
 from . import owner_link
-from . import check_models, run_triggers, team_rules, update_feeds, topic_change, usage_limits, wake_presets, visuals, wake_rules, quiet_work
+from . import check_models, run_triggers, team_rules, update_feeds, topic_change, usage_limits, bot_to_bot, wake_presets, visuals, wake_rules, quiet_work
 from . import task_privacy as privacy
 from . import task_relations as TR
 from . import task_roles as TRo
@@ -1234,16 +1234,17 @@ def create_app(settings=None):
                         kind=body.kind, refs=refs, in_reply_to=body.in_reply_to, wait_s=body.wait_s)
         from .chat_goals import current as current_chat_goal
         goal = current_chat_goal(c, message["conversation_id"])
+        # Added to the stored references, so the marks H.say set (a bot_to_bot hold, quiet) stay (Dev 328).
         if goal and goal["status"] == "active":
-            refs["goal_context"] = {"id": goal["id"], "updated_at": goal["updated_at"]}
-            c.execute("UPDATE messages SET refs_json=? WHERE id=?", (encode(refs), message["id"]))
+            stored = {**(message.get("refs") or {}), "goal_context": {"id": goal["id"], "updated_at": goal["updated_at"]}}
+            c.execute("UPDATE messages SET refs_json=? WHERE id=?", (encode(stored), message["id"]))
             message = H.message(c, message["id"])
         if body.attachments:
             # The visuals go on the message it was sent as: versions of files in this conversation (backend/visuals.py).
             attached, report = visuals.attach(c, who, app.state.files, app.state.blobs, body.attachments,
                                               conversation_id=message["conversation_id"])
-            refs["attachments"] = attached
-            c.execute("UPDATE messages SET refs_json=? WHERE id=?", (encode(refs), message["id"]))
+            stored = {**(message.get("refs") or {}), "attachments": attached}
+            c.execute("UPDATE messages SET refs_json=? WHERE id=?", (encode(stored), message["id"]))
             message = {**visual_view(c, who, [H.message(c, message["id"])])[0], "visuals": report}
         if who.role == "bot":
             conv = H.conversation(c, message["conversation_id"])
@@ -1254,6 +1255,8 @@ def create_app(settings=None):
         if note := (H.held_note(c, to) or usage_limits.warning(c, to)
                     or (None if H.is_human(who.actor) else H.setup_hold(c, to))):
             message = {**message, "warning": note}
+        if held := bot_to_bot.held_reason(message):
+            message = {**message, "woke": False, "held": held}
         return message
 
     @app.get("/healthz")
@@ -3111,14 +3114,16 @@ def create_app(settings=None):
             c.execute("UPDATE tasks SET request_id=? WHERE id=?", (inherited_request or request_id, row["id"]))
         for url in body.links:
             H.task_link(c, who.actor, row["id"], url, mover=True)
+        own_subtask = None
         for other, kind in others:
             TR.relate(c, who.actor, row["id"], other, kind, mover=mover(c, who) or None)
+            own_subtask = own_subtask or TR.own_subtask_warning(c, row["id"], other, kind)
         if body.roles:
             try:
                 TRo.set_roles(c, who.actor, row["id"], body.roles, mover=mover(c, who) or None)
             except ValueError as exc:
                 raise Problem("roles", str(exc), 422)
-        note = usage_limits.warning(c, owner) or H.setup_hold(c, owner)
+        note = " ".join(filter(None, (usage_limits.warning(c, owner) or H.setup_hold(c, owner), own_subtask)))
         return {"task": task_view(H.task(c, row["id"]), c, visible_sql=auth.task_sql(c, who), who=who),
                 **({"warning": note} if note else {}), **({"warnings": row["warnings"]} if row.get("warnings") else {})}
 
@@ -3302,9 +3307,11 @@ def create_app(settings=None):
             comments = visual_view(c, who, H.task_comments(c, task_id, actor=privacy.actor(request.state.identity)))
             msg = next(m for m in comments if m["id"] == msg["id"])
             held = H.held_note(c, msg.get("to_actor"))
+            waits = bot_to_bot.held_reason(msg)
             return {"comment": msg, "comments": comments,
                     "woke": bool(wake) and not ({"can_wait", wake_rules.MARK} & set(msg.get("refs") or {})),
-                    **({"warning": held} if held else {}), **({"visuals": report} if report else {})}
+                    **({"warning": held} if held else {}), **({"held": waits} if waits else {}),
+                    **({"visuals": report} if report else {})}
         result = mutate(request, body, work)
         if body.attachments:
             app.state.file_metadata.wake.set()   # a chat file shared here is a new task copy: preview it now
@@ -3514,7 +3521,9 @@ def create_app(settings=None):
             auth.task(c, who, task_id)
             auth.task(c, who, other_id)
             TR.relate(c, who.actor, task_id, other_id, body.kind, remove=body.remove, mover=mover(c, who) or None)
-            return {"task": task_view(H.task(c, task_id), c, visible_sql=auth.task_sql(c, who), who=who)}
+            note = None if body.remove else TR.own_subtask_warning(c, task_id, other_id, body.kind)
+            return {"task": task_view(H.task(c, task_id), c, visible_sql=auth.task_sql(c, who), who=who),
+                    **({"warning": note} if note else {})}
         return mutate(request, body, work)
 
     @app.get("/api/v2/preferences/{key}")

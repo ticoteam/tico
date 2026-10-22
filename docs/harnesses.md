@@ -40,7 +40,12 @@ environment. Every run sets `MUSE_NO_AUTO_UPDATE=1` so the launcher does not upd
 Muse also loads every MCP server in its own `settings.json` and refuses to switch those off per run, so bot runs
 never use the operator's `~/.config/muse`: they run with `XDG_CONFIG_HOME` set to a Muse folder of Tico's own (a
 subscription profile's `musecode/`, else the runner's host state), and any servers in it are removed before each
-run. A bot run gets only the hub, its bot.yaml servers and the repository's own MCP config.
+run. A bot run gets only the hub, its bot.yaml servers and the repository's own MCP config. Its sessions (and each session's
+lock and log) go to a data folder of Tico's own as well, `XDG_DATA_HOME` beside that config folder (`musecode/data`
+in the runner's host state, or `musecode/profiles/<profile>/data` there for a subscription profile, outside every
+folder handed to the bot user), never `~/.local/share/muse`: on a computer that runs
+bots as their own user, that folder may belong to another user. If the data folder is there but the bot user can't
+write it, readiness shows Muse Code as not ready and names the folder.
 The download is about 340 MB. The sign-in is `muse/auth.json` in that folder (sign in from Settings; a
 profile signs in to its own); `META_API_KEY` wins over it, and a computer-wide key reaches the run. The CLI has no
 sign-in status command, so readiness reports the file being there. Version checks and sign-ins also set
@@ -74,6 +79,10 @@ anything. Each computer installs only:
 - the harness of every bot assigned to it, and of each bot's fallback (`fallback.harness`);
 - with no bot yet, the harness of the company's default model (`default_runtime` in `GET /api/v2/config`), so the
   first computer can be signed in before its first bot arrives;
+- on a computer that isolates bot processes, the Gateway runtime selected by the company's models choice
+  (`gateway_runtime` in the runner's `GET /api/v2/config`), so recommended starter turns can run before
+  subscription sign-in. This also applies when automatic quota fallback is off. The owner can turn this
+  optional install off; an explicit bot primary or fallback still makes its harness required;
 - any harness the owner turned on for that computer (see [Choosing what a computer installs](#choosing-what-a-computer-installs)).
 
 A runner whose team has no provider yet installs nothing and still joins and goes online.
@@ -84,8 +93,9 @@ the `openrouter` provider offers every such model; enabling one vendor offers th
 
 ### The Tico AI Gateway
 
-Tico Cheap, Mid and Power 1.0 (`tico-cheap-1.0`, `tico-mid-1.0`, `tico-power-1.0`; Claude Haiku, Sonnet and Opus 5.5
-underneath) run on pi through Tico's own Gateway, not OpenRouter. Their provider, `tico`, is never ticked: it is on
+Tico Cheap 1.1, Mid 1.0 and Power 1.0 (`tico-cheap-1.1`, `tico-mid-1.0`, `tico-power-1.0`; Claude Haiku, Sonnet and
+Opus 5.5 underneath) run on pi through Tico's own Gateway, not OpenRouter. `tico-cheap-1.0` is retired (`deprecated`):
+no picker offers it, but pi's `models.json` still lists it, so a bot already on it keeps running. Their provider, `tico`, is never ticked: it is on
 exactly while the **Tico AI Gateway** connection in Settings > Computers > Models has a key (`backend/gateway_connection.py`),
 and OpenRouter's catch-all does not offer them. The key is the one Decide uses; the server's `TICO_GATEWAY_KEY` and
 `TICO_GATEWAY_URL` win over a saved one and show as connected. A saved key is sealed and never read back, only a
