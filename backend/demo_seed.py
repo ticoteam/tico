@@ -221,7 +221,7 @@ class Builder:
                     G.set_status(c, who, row["id"], colour, why)
                 elif parent:
                     # A goal under another starts with no colour until the owner of the one above accepts it;
-                    # accepting it and letting the Goal Manager set it leaves it automatic.
+                    # accepting it and letting the CEO Bot set it leaves it automatic.
                     G.set_status(c, "human:ana", row["id"], "green", "Accepted")
                     G.hand_back(c, "human:ana", row["id"])
                 for name, unit, target, values, days in measures:

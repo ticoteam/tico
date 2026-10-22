@@ -59,6 +59,8 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            --note is then your ask to them, one or two plain sentences:
                                            "Approve the video tool trial on Thursday? If yes, I'll send the invite."
     hub task close <id> [--note "..."]
+    hub task wait <id> --on task:<id>|pr:<url>|release:<tag>
+                                           wait on a task, a PR merging or a release; one wake when it happens
     hub task snooze <id> --until DATE      set it aside until DATE: off the lists and quiet until then
     hub task unsnooze <id>                 bring a snoozed task back now
     hub task attach <id> <file> [--name "..."]
@@ -108,14 +110,14 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            set a goal; a parent is optional. With one, whoever owns the parent gives its first colour
     hub goal status <id> red|yellow|green|done|dropped "<one sentence>"
                                            set the colour by hand: it sticks (with your name) until handed back
-    hub goal status <id> auto              let the Goal Manager set the colour again (ends a colour set by hand)
-    hub goal refresh [--goal ID ...]       the Goal Manager's status pass: work automatic colours out again
+    hub goal status <id> auto              let the CEO Bot set the colour again (ends a colour set by hand)
+    hub goal refresh [--goal ID ...]       the CEO Bot's status pass: work automatic colours out again
     hub goal checkin <id> "<words>" [--signal on_track|at_risk|off_track] [--from X] [--kpi ID]
                                            how the owner says it is going, in their words (colours a goal with no KPI)
     hub goal checkin-list <id>             a goal's check-ins, newest first
     hub goal needs-you                     red KPIs on your goals, stale KPIs you own, proposals to confirm
     hub goal company                       the company's Vision and Description (read-only)
-    hub goal ceo-bot                       the CEO Bot switch, how much it does (level 1-3) and today's Needs you count
+    hub goal ceo-bot                       the CEO Bot: its level (1 Passive to 3), regular checks and today's Needs you count
     hub goal ceo-bot-merge <person> "<title>" "<question>" <task-id> <task-id>...
                                            the CEO Bot at level 2+: one item for several bots' same ask of a person
     hub goal ceo-bot-level3-offer          the CEO Bot: record the level-3 offer its Monday note made (when it is due)
@@ -1004,6 +1006,14 @@ def parser():
                         "follow_up: it was split off or followed up from task")
     s.add_argument("--remove", action="store_true", help="take it off instead")
     s.set_defaults(fn="task relate")
+    s = task.add_parser("wait", help="make a task wait on another task, a pull request merging or a release being "
+                                     "published; prints what was stored")
+    s.add_argument("id")
+    s.add_argument("--on", dest="wait_on", required=True,
+                   help="task:<id> (blocked_by), pr:<url> or pr:<task> (until that pull request merges), "
+                        "release:<tag> (until that release is published). The task it waits on keeps its own step.")
+    s.add_argument("--remove", action="store_true", help="take the wait off instead")
+    s.set_defaults(fn="task wait")
     s = task.add_parser("label", help="add or remove labels on a task")
     s.add_argument("id")
     s.add_argument("--add", action="append")
@@ -1117,7 +1127,7 @@ def parser():
     s.add_argument("--rank", type=int)
     s.add_argument("--top", action="store_true")
     s.set_defaults(fn="goal update")
-    s = goal.add_parser("refresh", help="the Goal Manager's status pass: work automatic colours out again")
+    s = goal.add_parser("refresh", help="the CEO Bot's status pass: work automatic colours out again")
     s.add_argument("--goal", action="append", dest="goal_ids", help="only this goal; repeatable")
     s.set_defaults(fn="goal refresh")
     s = goal.add_parser("checkin", help="how the owner says the goal is going, in their words")
@@ -1134,7 +1144,7 @@ def parser():
     s.set_defaults(fn="goal needs-you")
     s = goal.add_parser("company", help="the company's Vision and Description (read-only)")
     s.set_defaults(fn="goal company")
-    s = goal.add_parser("ceo-bot", help="the CEO Bot switch, its level and today's Needs you count per person")
+    s = goal.add_parser("ceo-bot", help="the CEO Bot: its level, regular checks and today's Needs you count per person")
     s.set_defaults(fn="goal ceo-bot")
     s = goal.add_parser("ceo-bot-merge", help="the CEO Bot at level 2+: one item for several bots' same ask of a person")
     s.add_argument("person", help="the person they all wait on (a person id)")

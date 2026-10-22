@@ -58,9 +58,9 @@ Nothing closes on its own. A task with no activity for 7 days gets one **Still w
 ## Spot checks
 
 Tico watches running tasks. A task with no progress for 30 minutes gets a status check in its session: checkpoint,
-or mark it blocked or done. Thirty minutes later, still with no progress, the main chat gets a **stuck** line and the
-requester gets a question in Needs you. These count toward the stalled-task limit of three a day; after that,
-BotOps gets a task to find out why ([Work that is waiting](tasks.md#work-that-is-waiting)).
+or mark it blocked or done. With still no progress, Tico retries the bot once. Thirty minutes later, still nothing, the
+main chat gets a **stuck** line and BotOps gets a task to find out why ([Work that is waiting](tasks.md#work-that-is-waiting)).
+Tico asks no person about a stuck bot. These count toward the stalled-task limit of three a day.
 
 ## Task goals
 

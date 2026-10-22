@@ -43,7 +43,7 @@ onboarding:
   - ask: "Can you attach the current deferred revenue schedule and last month's ledger export (revenue and deferred revenue accounts)?"
     why: "The roll-forward starts from the balance the books already show."
   - ask: "How do you define MRR or ARR: which items count, and do you count at signing or at invoice?"
-    why: "The bridge uses your definition every month, never a new one. The KPI itself belongs to the Goal Manager."
+    why: "The bridge uses your definition every month, never a new one. The KPI itself belongs to the CEO Bot."
   - ask: "By which working day of the close do you need the pack, and who posts the entries? (Default: day 2, the Bookkeeper's human.)"
     why: "Sets the routine's date and who receives the proposed entries."
 first_routine:

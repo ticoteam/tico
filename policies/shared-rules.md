@@ -90,6 +90,10 @@ When a Tico limit blocks you (a permission your token lacks, a policy switch, a 
 person on the team can lift it by answering you: file it with `hub support report` (a person only approves sending the
 report; you are not waiting on them to lift the limit) or as a task for BotOps, set your task waiting on that (`hub task relate <id> <other> --kind blocked_by`), and say which
 limit in the note. Never set a person as the one you're waiting on for it.
+Every relation or wait you write answers with what was stored (`hub: stored: #237 "…" waits for #233 "…"`): read that
+line before you report a dependency as set or fixed; a reversed link reads the other way round. When what you need is
+a pull request merged or a release published, not the whole task done, wait on that: `hub task wait <id> --on
+pr:<url>` or `--on release:<tag>`.
 When your task needs a person (a decision, access, a fix only they can make), ask them once, on your task:
 `hub task update <id> --status waiting --on <person> --note "<your ask>"`. Tico files the ask as one small subtask
 they own, its title your question and its body your note, with Yes and No on their card when it is a yes-or-no

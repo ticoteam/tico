@@ -454,7 +454,7 @@ class SettingsAdmin:
         return {**self.definition(c, body.slug), "owners": self._people(c, body.owners)[0], "assignment": None}
 
     def archive(self, c, who, bot, body):
-        # The assistant, BotOps, the Librarian and the Goal Manager are built in: nobody archives them, the owner included.
+        # The assistant, BotOps, the Librarian and the CEO Bot are built in: nobody archives them, the owner included.
         if bot in (self.settings.assistant_bot, "botops", "librarian", "goal-manager"):
             raise Problem("system_bot", (self.settings.assistant_name if bot == self.settings.assistant_bot
                                          else "BotOps" if bot == "botops" else "The Librarian" if bot == "librarian"

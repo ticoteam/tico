@@ -5,9 +5,9 @@ every message about to be written to a bot that would start one (H._write_messag
 
 - `own_write`: the bot's own write caused it. Its own comments, step moves, status changes, relations and
   checkpoints, on any of its tasks, never wake that same bot: its run already knows.
-- `parked`: it is about a task the bot owns that waits on something (an unfinished `blocked_by` task, or a pull
-  request link armed with `wake_once`), and it is not that thing arriving. A comment, a relation change or a step
-  move does not wake a parked task; its blocker finishing does.
+- `parked`: it is about a task the bot owns that waits on something (an unfinished `blocked_by` task, a pull
+  request link armed with `wake_once`, or a milestone in backend/milestone_waits.py), and it is not that thing
+  arriving. A comment, a relation change or a step move does not wake a parked task; its blocker finishing does.
 
 A skipped wake is never dropped. The message is written to its task's room as before, quietly, and a quiet note
 linked to it (the one bot_to_bot.hold leaves, carried and marked read by execution.claim) takes it to the bot's
@@ -53,6 +53,7 @@ AWAITED = (
     ("worktree", "the worktree it waited for is ready"),
     ("watcher", "something the bot watches moved or ended"),
     ("resume", "a quiet task's stored resume condition came true (backend/quiet_work.py)"),
+    ("milestone", "a pull request it waits for merged or a release it waits for was published (backend/milestone_waits.py)"),
 )
 # Only news may wait: a comment, or a task's status, step or relation moving (run_triggers.TRIGGERS). A stall or
 # status check, a schedule, a pull request's checks and anything else keep their own rules (wake presets).
@@ -120,11 +121,13 @@ def awaited(refs):
         return "watcher"
     if wake == "resume":
         return "resume"
+    if refs.get("milestone"):
+        return "milestone"
     return None
 
 
 def parked(conn, task_row):
-    """What the task waits on: 'blocked_by', 'wake_once', or None when it is not parked."""
+    """What the task waits on: 'blocked_by', 'wake_once', 'milestone', or None when it is not parked."""
     if not task_row or task_row.get("status") not in UNFINISHED:
         return None
     marks = ",".join("?" * len(UNFINISHED))
@@ -136,6 +139,9 @@ def parked(conn, task_row):
                     "AND json_extract(detail_json,'$.wake_once') IS NOT NULL LIMIT 1",
                     (task_row["id"],)).fetchone():
         return "wake_once"
+    from .milestone_waits import pending
+    if pending(conn, task_row["id"]):
+        return "milestone"
     return None
 
 
