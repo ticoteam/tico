@@ -53,13 +53,12 @@ def sweep(conn, at=None):
 
     gone = [r for r in rows if (r["status"] in ENDED and not r["acceptance"]) or ended_above(r["task_id"])
             or (r["stuck"] and r["from_actor"] == H.KEEPER)]
-    asks = [r["id"] for r in gone]
-    if asks:
-        conn.executemany("UPDATE messages SET superseded_at=? WHERE id=? AND superseded_at IS NULL",
-                         [(at, mid) for mid in asks])
-        for r in gone:
+    asks = []
+    for r in gone:
+        # One row at a time, like the approvals: a row that fails stays open for the next sweep without undoing the rest.
+        with isolated(conn, "approval_expiry", r["id"]):
+            conn.execute("UPDATE messages SET superseded_at=? WHERE id=? AND superseded_at IS NULL", (at, r["id"]))
             H.drop_asked_waits(conn, r["task_id"], [r["id"]], "Its question to them was withdrawn")
-        for person in {r[0] for r in conn.execute(
-                f"SELECT DISTINCT to_actor FROM messages WHERE id IN ({','.join('?' * len(asks))})", asks)}:
-            H._recount(conn, person)
+            H._recount(conn, r["from_actor"])
+            asks.append(r["id"])
     return {"stale": stale, "ended": ended, "asks": asks}
