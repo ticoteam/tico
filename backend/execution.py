@@ -467,10 +467,6 @@ def release_limits(c):
         H.event(c, H.KEEPER, "limit.released", row["bot"], {"since": row["since"]})
 
 
-def _field(result, name):
-    return result.get(name) if isinstance(result, dict) else getattr(result, name, None)
-
-
 def hop_failed(c, attempt_id, result, began, ended):
     """Whether a turn ended on a usage limit its fallback could not take over: the bot's own runtime hit its limit
     (`primary_limited`), the runner moved the turn to a fallback, and the fallback failed before it did anything
@@ -478,11 +474,19 @@ def hop_failed(c, attempt_id, result, began, ended):
     silence counts only with speed, as for `silent`). Nothing ran on either, so it is the limit's to wait out, not a
     stopped run for a person: on Oct 21 27 of Reviewer 2's turns hopped to a fallback that could not start and each
     was held until a person dismissed it."""
-    if not (_field(result, "primary_limited") and _field(result, "fallback") and not _field(result, "limited")
-            and _field(result, "outcome") == "failed" and _field(result, "auth_rejected") is None):
+    field = login_holds.field
+    if not (field(result, "primary_limited") and field(result, "fallback") and not field(result, "limited")
+            and field(result, "outcome") == "failed" and field(result, "auth_rejected") is None):
         return False
+    window = (began, ended)
     began, ended = H.parse_ts(began), H.parse_ts(ended)
     if not began or not ended or (ended - began).total_seconds() > NO_EFFECT_WITHIN:
+        return False
+    # A harness that never reports its tool calls can still have used an approval a person gave: running the turn
+    # again would repeat that action, so such a turn is a person's to review, as in auto_reconcile.
+    bot = (c.execute("SELECT bot FROM attempts WHERE id=?", (attempt_id,)).fetchone() or [None])[0]
+    if c.execute("SELECT 1 FROM approvals WHERE requested_by=? AND consumed_at IS NOT NULL AND consumed_at BETWEEN ? AND ? "
+                 "LIMIT 1", ("bot:" + str(bot), *window)).fetchone():
         return False
     hop, after = None, set()
     for row in c.execute("SELECT seq,kind,payload_json FROM attempt_events WHERE attempt_id=? ORDER BY seq",
@@ -490,7 +494,7 @@ def hop_failed(c, attempt_id, result, began, ended):
         if hop is not None:
             after.add(row["kind"])
         elif row["kind"] == "diagnostic" and ((p := json.loads(row["payload_json"] or "{}") or {}).get("fallback")
-                                               or login_holds._HOP_RE.search(str(p.get("text") or ""))):
+                                               or login_holds.HOP_RE.search(str(p.get("text") or ""))):
             hop = row["seq"]
         elif row["kind"] == "tool":
             return False
@@ -513,7 +517,7 @@ def limit_lifted(c, settings, bot, attempt_id, finished):
     hold = own_login_hold(c, settings, bot)
     named = [login_holds.reset_from_text(error, finished) for error in limit_errors(c, attempt_id)]
     if (not cooling_off(c, bot) and (hold.get("until") or "") <= now
-            and not any(at and login_holds._iso(at) > now for at in named)):
+            and not any(at and at > H.parse_ts(now) for at in named)):
         return "reset"
     row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
     config = json.loads(row[0] or "{}") if row else {}
@@ -2887,9 +2891,9 @@ class Execution:
                     # never BotOps' to review. All of them go back together, oldest first in the queue: the claim holds
                     # a task's queued work while any run on it is still held (unfenced_sql).
                     said = limit_said.setdefault(row['bot'], {'resume': 0, 'dismiss': 0})
-                    if self._covered(c, row, msg, task_id):
+                    if self._covered(c, row, task_id):
                         note = ("Dismissed automatically: this run stopped on a usage limit, and a later run of this bot "
-                                "on the same work has finished since, so its work is covered.")
+                                "on the same task has finished since, so its work is covered.")
                         decided.append(self._decide(c, row, row['attempt_id'], 'dismiss', note, H.KEEPER,
                                                     action='job.auto_reconcile'))
                         said['dismiss'] += 1
@@ -2942,21 +2946,13 @@ class Execution:
         return decided
 
     @staticmethod
-    def _covered(c, row, msg, task_id):
-        """Whether a turn of the bot on the same task (or, for a chat outside any task, in the same chat) finished
-        after this run stopped: it read what this request asked, so running the request again would do that twice."""
-        since = row['finished'] or row['created']
-        if task_id:
-            return c.execute("SELECT 1 FROM attempts a JOIN turns t ON t.id=a.id WHERE a.bot=? AND t.task_id=? "
-                             "AND a.state='completed' AND a.started>? LIMIT 1",
-                             (row['bot'], task_id, since)).fetchone() is not None
-        conv = H.conversation(c, msg['conversation_id'])
-        for found in c.execute("SELECT m.id FROM attempts a JOIN jobs j ON j.id=a.job_id JOIN messages m "
-                               "ON m.id=j.message_id WHERE a.bot=? AND m.conversation_id=? AND a.state='completed' "
-                               "AND a.started>?", (row['bot'], msg['conversation_id'], since)).fetchall():
-            if H.message_task_id(H.message(c, found['id']), conv) is None:
-                return True
-        return False
+    def _covered(c, row, task_id):
+        """Whether a turn of the bot on the same task finished after this run stopped: it worked the task with this
+        request in its room, so running the request again would do that twice. A chat outside any task never counts:
+        a later turn there may have answered something else, so that run resumes instead."""
+        return bool(task_id) and c.execute(
+            "SELECT 1 FROM attempts a JOIN turns t ON t.id=a.id WHERE a.bot=? AND t.task_id=? AND a.state='completed' "
+            "AND a.started>? LIMIT 1", (row['bot'], task_id, row['finished'] or row['created'])).fetchone() is not None
 
     @staticmethod
     def _say_settled(c, bot, said):

@@ -114,28 +114,50 @@ def test_runs_held_after_a_limit_resume_together_oldest_first_once_it_resets(api
     assert get(api, "bots/ops/execution-review")["jobs"] == []
 
 
-def test_a_chat_run_held_after_a_limit_is_dismissed_once_a_later_run_in_that_chat_finished(api, monkeypatch):
+def test_a_run_held_after_a_limit_is_dismissed_once_a_later_turn_on_its_task_finished_but_a_chat_run_is_not(
+        api, monkeypatch):
     machine = two_bots(api, monkeypatch)
     at(monkeypatch, "2026-10-21T19:54:13.000000Z", api)
-    post(api, "chat/ops", {"text": "Please summarize the reviews."})
+    task = post(api, "tasks", {"owner": "ops", "title": "Review PR 1", "body": "Please review it."})
     first = claim(api, machine)
     held_the_old_way(api, machine, first)
-    # A person's chat outside any task is never held behind it: they asked again and it was answered.
+    post(api, "chat/ops", {"text": "Please summarize the reviews."})
+    with api.app.state.store.transaction() as c:
+        chat = c.execute("SELECT id FROM jobs WHERE bot='ops' AND state='queued'").fetchone()[0]
+        c.execute("UPDATE jobs SET state='uncertain',attempt_id=? WHERE id=?", (first["id"], chat))
+    # Later the bot finished a turn that worked the task (from another of its rooms), and one in that chat.
     at(monkeypatch, "2026-10-21T20:00:00.000000Z", api)
     post(api, "chat/ops", {"text": "Did you get that?"})
     signed_in(api, machine, ["ops", "finance"], ["codex"])
     with api.app.state.store.transaction() as c:
         login_holds.clear(c, machine["runner_id"], "", "fake")
     later = claim(api, machine, bot="ops")
-    assert later and later["job_id"] != first["job_id"]
     post(api, f"attempts/{later['id']}/started", {"thread_id": "t-" + later["id"]}, machine["token"])
     post(api, f"attempts/{later['id']}/complete", {"outcome": "completed", "last_seq": 0, "text": "Here it is."},
          machine["token"])
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE turns SET task_id=? WHERE id=?", (task["id"], later["id"]))
     at(monkeypatch, "2026-10-21T20:30:00.000000Z", api)
-    assert [d["state"] for d in sweep(api)] == ["cancelled"]
+    assert [d["job_id"] for d in sweep(api)] == [first["job_id"]]
+    assert job_state(api, first["job_id"]) == "cancelled" and job_state(api, chat) == "uncertain"
     with api.app.state.store.read() as c:
         assert "covered" in c.execute("SELECT note FROM job_recovery WHERE job_id=?", (first["job_id"],)).fetchone()[0]
         assert H.status(c, "ops")["focus"] == "Tico dismissed 1 held run a later run already covered"
+
+
+def test_a_hop_that_used_an_approval_is_left_for_a_person(api, monkeypatch):
+    machine = two_bots(api, monkeypatch)
+    at(monkeypatch, "2026-10-21T19:54:13.000000Z", api)
+    post(api, "tasks", {"owner": "ops", "title": "Pay the invoice", "body": "Please pay it."})
+    first = claim(api, machine)
+    with api.app.state.store.transaction() as c:
+        message = c.execute("SELECT message_id FROM jobs WHERE id=?", (first["job_id"],)).fetchone()[0]
+        c.execute("INSERT INTO approvals(id,kind,message_id,requested_by,created,consumed_at) VALUES(?,?,?,?,?,?)",
+                  (H.new_id(), "spend", message, "bot:ops", H.now(), H.now()))
+    hop_fails(api, machine, first)
+    assert job_state(api, first["job_id"]) == "uncertain"
+    at(monkeypatch, "2026-10-26T20:01:00.000000Z", api)
+    assert sweep(api) == [] and job_state(api, first["job_id"]) == "uncertain"
 
 
 def test_a_run_held_after_a_limit_resumes_when_the_bot_moves_to_another_model(api, monkeypatch):
