@@ -225,13 +225,21 @@ answer by Fri, Oct 16, Writer goes ahead: Yes". When that step is reversible and
 nothing by then (the team's days after the ask, 3 by default, or its later `by`; `by` is at most 14 days away and
 `--default-kind` is required with `--if-no-answer`), Tico answers for them with "No answer from Ana by
 Oct 16, so Writer goes ahead with what it said it would do: Yes", which wakes the bot with that choice. A send,
-spending money or a delete never goes ahead without an answer: the card says the bot waits. The owner turns this off,
+spending money or a delete never goes ahead without an answer: the card says so, and on its date the question closes and the bot decides without it. The owner turns this off,
 or changes the days, in Settings > Humans (**Bots go ahead on their recommendation**).
 
-An ask to a person with no word from them in 14 days expires: the bot goes ahead on its default when the rule above
-allows it, or is told to drop the work or ask again. A task a bot handed a person (they own it, the bot asked for it)
-that they have not touched in 14 days closes the same way, unless it is due later or waits on someone else, and the
-bot hears why. Hourly, `backend/ask_deadlines.py`.
+A send, a spend, a delete, any default when the owner turned going ahead off, and any default once the person has
+written since the ask (a comment, a Clarify tap) never goes ahead, but its question still closes on its date: the bot is
+told nothing went ahead and decides without it. A question with no date that
+is unanswered after two business days (Monday to Friday, Pacific) leaves the person's Needs you at the next weekday
+morning's batch (8:00): each asking bot gets one "Still needed?" wake listing all of its questions that crossed the line,
+and asks again (a fresh question with a new clock) or drops them (`backend/still_needed.py`). A question also closes
+when its task or any task above it is done, closed or declined (a done task keeps only the structured question asking its
+requester to accept the result, asked once it is done), when the person replies to it or writes on its task to the bot
+that asked, and when the bot asks them a newer question on the same task.
+
+A task a bot handed a person (they own it, the bot asked for it) that they have not touched in 14 days closes, unless it
+is due later or waits on someone else, and the bot hears why. Hourly, `backend/ask_deadlines.py`.
 
 ## Snoozing a task
 
@@ -599,9 +607,9 @@ a chat before task rooms) has no `execution`: that room's runs belong to the cha
 Tico spot-checks running work. A bot's open or doing task whose own session ran in the last day (or runs now) and
 that has made no progress for 30 minutes (no checkpoint, comment, status change, message from its bot or finished
 turn) gets one "Status check: checkpoint where you are, or mark it blocked or done." in its session. Thirty minutes
-later with still no progress it is reported stuck in the main chat, and when a person asked for it they get a
-question on it in Needs you, whose answer wakes the bot; the question is withdrawn when the task is done. These share the stall watcher's spacing and its cap of three
-a day, after which BotOps gets a task to find out why.
+later with still no progress its bot is retried once; thirty minutes after that, still with no progress, it is reported
+stuck in the main chat and BotOps gets a task to find out why. A stuck check never goes to a person as a question. These
+share the stall watcher's spacing and its cap of three a day, after which BotOps gets a task to find out why.
 
 `task_goal: on` on a bot (`hub bot update <slug> --task-goal on`, `hub_bot_update`, or the bot definition API; off by
 default) works each task it owns as a goal: the turn carries `task.goal` (the title and its acceptance criteria), and

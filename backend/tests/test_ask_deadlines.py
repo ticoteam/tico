@@ -1,4 +1,4 @@
-"""A bot's ask to a person goes ahead on the bot's default when it is safe to, and expires after two weeks."""
+"""A bot's ask to a person goes ahead on the bot's default when it is safe to, and closes on its date."""
 from backend.tests.test_api import api, headers, post  # noqa: F401  (fixture)
 from backend import ask_deadlines, team_rules
 from backend.store import H
@@ -46,7 +46,7 @@ def test_a_reversible_default_goes_ahead_after_the_teams_days_and_a_send_waits(a
         assert ask_deadlines.sweep(c)["went_ahead"] == []
 
 
-def test_an_ask_unanswered_for_two_weeks_expires_and_a_task_handed_to_a_person_closes(api):
+def test_an_undated_ask_waits_for_the_batch_and_a_task_handed_to_a_person_closes_after_two_weeks(api):
     with api.app.state.store.transaction() as c:
         _, old = _ask(c, "Which logo do we use?", days=15)
         _, spoken = _ask(c, "Which font do we use?", days=15)
@@ -61,9 +61,10 @@ def test_an_ask_unanswered_for_two_weeks_expires_and_a_task_handed_to_a_person_c
         H.task_comment(c, "human:ana", touched["id"], "Still looking, give me a few days")
         H.task_comment(c, "human:ana", H.message_task_id(spoken), "Thinking about it")
         done = ask_deadlines.sweep(c)
-    assert done["expired"] == [old["id"]] and done["closed"] == [handed["id"]]
+    # Undated asks go back to their bot in the weekday batch (backend/still_needed.py), never one by one here.
+    assert done["expired"] == [] and done["closed"] == [handed["id"]]
     with api.app.state.store.read() as c:
-        assert "Drop the work" in _answer(c, old)["body"]
+        assert _answer(c, old) is None
         closed = H.task(c, handed["id"])
         assert closed["status"] == "closed" and "expired" in closed["note"]
         assert H.task(c, touched["id"])["status"] == "open"
@@ -81,15 +82,13 @@ def test_an_ask_unanswered_for_two_weeks_expires_and_a_task_handed_to_a_person_c
         assert back["status"] == "open" and back["note"].startswith(
             f"Tico closed the ask to {H.person_name(c, 'human:ana')}: No answer from")
 
-    # A go-ahead date after day 14 is refused when asked; here one is set anyway: at day 14 the ask expires with
-    # nothing done, rather than going ahead early.
+    # A go-ahead date after day 14 is refused when asked; here one is set anyway: the ask waits for its date, then
+    # goes ahead and closes.
     with api.app.state.store.transaction() as c:
         _, far = _ask(c, "Archive the spring drafts?",
                       {"do": "Yes", "kind": "reversible", "by": H.shift(H.now(), days=5)}, days=15)
-        done = ask_deadlines.sweep(c)
-    assert done["expired"] == [far["id"]]
-    with api.app.state.store.read() as c:
-        assert "Drop the work" in _answer(c, far)["body"]
+        assert ask_deadlines.sweep(c) == {"went_ahead": [], "expired": [], "closed": []}
+        assert ask_deadlines.sweep(c, H.shift(H.now(), days=6))["went_ahead"] == [far["id"]]
 
 
 def test_a_bot_date_never_beats_the_teams_days_and_the_cli_must_say_the_kind(api):
