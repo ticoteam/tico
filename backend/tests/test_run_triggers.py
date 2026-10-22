@@ -171,7 +171,7 @@ def test_did_nothing_and_outcome_come_from_what_the_run_wrote(api, case):
     assert row["outcome"] == ("acted" if case in WRITES else NO_WRITES[case])
     assert row["did_nothing"] == (0 if case in WRITES else 1)
     assert (row["writes"] > 0) == (case in WRITES)
-    assert (row["tokens_in"], row["cached_tokens"], row["input_tokens"], row["output_tokens"]) == (1200, 1000, 200, 30)
+    assert (row["cached_tokens"], row["input_tokens"], row["output_tokens"]) == (1000, 200, 30)
 
 
 def test_an_answer_to_a_bots_ask_in_the_final_text_counts_once(api):

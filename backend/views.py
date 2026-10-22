@@ -1573,7 +1573,8 @@ def install_views(app, store, auth, mutate, task_view):
                 "outcome": turn.get("exit"), "failure_reason": turn.get("failure_reason") or "",
                 "finished": turn.get("finished") or turn.get("started"),
                 "exit": 0 if success else 1, "duration_s": duration,
-                "output_tokens": turn.get("tokens_out"), "cost_usd": turn.get("cost"),
+                "output_tokens": turn.get("output_tokens") if turn.get("output_tokens") is not None else turn.get("tokens_out"),
+                "cost_usd": turn.get("est_cost_usd") if turn.get("est_cost_usd") is not None else turn.get("cost"),
                 "resumed": False, "fallback": made["fallback"] if made else None, "ran_on": made}
 
     def employee_rows(c, who):

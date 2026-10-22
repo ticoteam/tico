@@ -1037,6 +1037,9 @@ def migrate(conn, adopt_legacy=False):
     # its subagents': the session's context size (backend/topic_change.py). NULL when it did not; the summed columns
     # are not a context size.
     add_column(conn, "turns", "prompt_tokens", "INTEGER")
+    # Why a finished run's usage reads 0 tokens or no cost (USAGE_REASONS, turn_finish): null when its runner counted
+    # its tokens and the model has a price. NULL throughout on a run finished before it was recorded.
+    add_column(conn, "turns", "usage_reason", "TEXT")
     conn.execute("CREATE INDEX IF NOT EXISTS tasks_snoozed ON tasks(snoozed_until) WHERE snoozed_until IS NOT NULL")
     # A type whose tasks change status only by moving between its steps (`_task_state`).
     add_column(conn, "task_types", "steps_only", "INTEGER NOT NULL DEFAULT 0")
@@ -6719,24 +6722,38 @@ def turn_start(conn, actor, bot_slug, thread_id=None, trigger="message", message
     return _one(conn, "SELECT * FROM turns WHERE id=?", (row["id"],))
 
 
-def turn_finish(conn, actor, turn_id, exit_code="ok", tokens_in=None, tokens_out=None, cost=None,
-                summary=None, usage=None):
+# Why a finished run's usage says 0 tokens or no cost (`turns.usage_reason`). Usage is written on every finish, so a
+# sum over input_tokens, cached_tokens, output_tokens and est_cost_usd counts every run, failed and stopped ones too.
+USAGE_REASONS = {
+    "usage_unreported": "its runner sent a result with no token counts (the harness reported none)",
+    "usage_limited": "the runtime refused the turn on a usage limit and reported no tokens",
+    "no_result": "its runner never sent a result (the lease ran out, or a restore ended it)",
+    "cost_unpriced": "tokens were counted, but its model has no list price, so est_cost_usd is null",
+}
+NO_USAGE = {"input_tokens": 0, "cached_tokens": 0, "output_tokens": 0, "est_cost_usd": 0.0}
+
+
+def turn_finish(conn, actor, turn_id, exit_code="ok", summary=None, usage=None, usage_reason="usage_unreported"):
     """Close a turn. `exit_code` is the `exit` column (`exit` is a builtin, not a keyword here).
     `usage` is what the run cost in tokens: input_tokens, cached_tokens, output_tokens, model, provider,
-    est_cost_usd and billing (see USAGE_SCHEMA), and prompt_tokens, its newest request's prompt when known."""
+    est_cost_usd and billing (see USAGE_SCHEMA), and prompt_tokens, its newest request's prompt when known.
+    Without `usage` the run is recorded at 0 tokens and $0 with `usage_reason` (USAGE_REASONS) saying why; never
+    left blank. The legacy `tokens_in`, `tokens_out` and `cost` columns are no longer written (docs/hub-sql.md)."""
     _writer(conn, actor)
     ts = now()
-    conn.execute("UPDATE turns SET finished=?, exit=?, tokens_in=?, tokens_out=?, cost=?, summary=? "
-                 "WHERE id=?", (ts, exit_code, tokens_in, tokens_out, cost, summary, turn_id))
+    conn.execute("UPDATE turns SET finished=?, exit=?, summary=? WHERE id=?", (ts, exit_code, summary, turn_id))
     # Whether it acted, from what it wrote and its task's state as it ends (backend/run_triggers.py).
     conn.execute(f"UPDATE turns SET {RT.SETTLE_SQL} WHERE id=?", (turn_id,))
     if usage:
-        conn.execute("UPDATE turns SET input_tokens=:input_tokens, cached_tokens=:cached_tokens, "
-                     "output_tokens=:output_tokens, model=:model, provider=:provider, est_cost_usd=:est_cost_usd, "
-                     "billing=:billing, prompt_tokens=:prompt_tokens WHERE id=:id",
-                     {"input_tokens": None, "cached_tokens": None, "output_tokens": None, "model": None,
-                      "provider": None, "est_cost_usd": None, "billing": None, "prompt_tokens": None, **usage,
-                      "id": turn_id})
+        reason = "cost_unpriced" if usage.get("est_cost_usd") is None else None
+    else:
+        reason, usage = usage_reason, NO_USAGE
+    conn.execute("UPDATE turns SET input_tokens=:input_tokens, cached_tokens=:cached_tokens, "
+                 "output_tokens=:output_tokens, model=:model, provider=:provider, est_cost_usd=:est_cost_usd, "
+                 "billing=:billing, prompt_tokens=:prompt_tokens, usage_reason=:usage_reason WHERE id=:id",
+                 {"input_tokens": None, "cached_tokens": None, "output_tokens": None, "model": None,
+                  "provider": None, "est_cost_usd": None, "billing": None, "prompt_tokens": None, **usage,
+                  "usage_reason": reason, "id": turn_id})
     if usage and usage.get("segments"):
         conn.execute("DELETE FROM turn_usage_segments WHERE turn_id=?", (turn_id,))
         for position, part in enumerate(usage["segments"]):
@@ -6753,7 +6770,7 @@ def turn_finish(conn, actor, turn_id, exit_code="ok", tokens_in=None, tokens_out
         conn.execute("UPDATE bots SET last_turn_at=? WHERE slug=?", (ts, row["bot"]))
         conn.execute("UPDATE bot_status SET last_turn_at=?, updated_at=? WHERE bot=?",
                      (ts, ts, row["bot"]))
-    event(conn, actor, "turn.finish", turn_id, {"exit": exit_code, "cost": cost})
+    event(conn, actor, "turn.finish", turn_id, {"exit": exit_code, "est_cost_usd": usage.get("est_cost_usd")})
     return row
 
 

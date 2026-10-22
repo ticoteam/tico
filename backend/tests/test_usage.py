@@ -192,3 +192,28 @@ def test_a_tico_run_prices_each_request_on_its_own_tier_and_other_tico_models_ke
         expected = price(model, 6_000, 165_000, 2_800)
     assert turn(api, attempt["id"])["est_cost_usd"] == pytest.approx(expected)
     assert today(api)["low_estimate_runs"] == 0
+
+
+def test_a_failed_limited_or_expired_run_ends_with_zero_usage_and_a_reason(api):
+    r, _, attempt = setup_attempt(api)
+    complete(api, r, attempt, outcome="failed")
+    failed = turn(api, attempt["id"])
+    limited_row = None
+    # A usage-limited result with no counts, and a run whose lease runs out, are recorded the same way.
+    with api.app.state.store.transaction() as c:
+        for exit_code, reason in (("failed", "usage_limited"), ("interrupted", "no_result")):
+            t = hubdb.turn_start(c, hubdb.KEEPER, "ops")
+            hubdb.turn_finish(c, hubdb.KEEPER, t["id"], exit_code, usage_reason=reason)
+            limited_row = dict(c.execute("SELECT * FROM turns WHERE id=?", (t["id"],)).fetchone())
+            assert (limited_row["input_tokens"], limited_row["cached_tokens"], limited_row["output_tokens"],
+                    limited_row["est_cost_usd"], limited_row["usage_reason"]) == (0, 0, 0, 0, reason)
+    assert (failed["input_tokens"], failed["output_tokens"], failed["est_cost_usd"]) == (0, 0, 0)
+    assert failed["usage_reason"] == "usage_unreported"
+    assert failed["tokens_in"] is None and failed["cost"] is None    # the legacy columns are no longer written
+
+
+def test_a_measured_run_has_no_usage_reason(api):
+    r, _, attempt = setup_attempt(api)
+    complete(api, r, attempt, {"input_tokens": 10, "cached_tokens": 0, "output_tokens": 5,
+                               "model": "gpt-6-sol", "runtime": "codex", "billing": "api"})
+    assert turn(api, attempt["id"])["usage_reason"] is None

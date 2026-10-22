@@ -28,6 +28,10 @@ import statistics
 
 from . import hubdb as H
 
+# A run's tokens: the measured columns, or the legacy pair for a run finished before they were written.
+RUN_TOKENS = ("CASE WHEN t.input_tokens IS NOT NULL THEN t.input_tokens+coalesce(t.cached_tokens,0)+coalesce(t.output_tokens,0) "
+              "ELSE coalesce(t.tokens_in,0)+coalesce(t.tokens_out,0) END")
+
 CURRENT = "current"
 TOKEN_SAVER = "token_saver"
 PERFORMANCE = "performance"
@@ -425,7 +429,7 @@ def _runs(c, job_ids):
     for n in range(0, len(ids), 500):
         part = ids[n:n + 500]
         for row in c.execute("SELECT a.job_id,min(a.created) AS claimed,count(t.id) AS turns,"
-                             "coalesce(sum(coalesce(t.tokens_in,0)+coalesce(t.tokens_out,0)),0) AS tokens,"
+                             f"coalesce(sum({RUN_TOKENS}),0) AS tokens,"
                              "max(t.task_id) AS task FROM attempts a LEFT JOIN turns t ON t.id=a.id "
                              f"WHERE a.job_id IN ({','.join('?' * len(part))}) GROUP BY a.job_id", part):
             out[row["job_id"]] = dict(row)

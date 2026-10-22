@@ -437,7 +437,9 @@ def restore_snapshot(source, destination):
         c.execute("UPDATE jobs SET state='queued' WHERE state='leased'")
         c.execute("UPDATE attempts SET state='expired',finished=?,lease_until=? WHERE state IN ('leased','running')", (now, now))
         from .run_triggers import SETTLE_SQL
-        c.execute(f"UPDATE turns SET finished=?,exit='interrupted',{SETTLE_SQL} WHERE finished IS NULL", (now,))
+        # Its runner will never report these runs' tokens: 0 with the reason, as hubdb.turn_finish records it.
+        c.execute(f"UPDATE turns SET finished=?,exit='interrupted',{SETTLE_SQL},input_tokens=0,cached_tokens=0,"
+                  "output_tokens=0,est_cost_usd=0,usage_reason='no_result' WHERE finished IS NULL", (now,))
         c.execute("UPDATE assignments SET generation=generation+1,updated=?,updated_by='keeper'", (now,))
         c.execute("UPDATE runners SET revoked_at=coalesce(revoked_at,?)", (now,))
         c.execute("UPDATE enrollments SET expires=?", (now,))
