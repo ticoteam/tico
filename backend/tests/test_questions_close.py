@@ -8,14 +8,14 @@ from backend.scheduler import Scheduler
 from backend.store import H
 from backend.tests.test_tasks_board import api, get, post  # noqa: F401
 
-ANA, OPS = "human:ana", "bot:ops"
+ANA, OPS, CPO = "human:ana", "bot:ops", "bot:cpo"
 
 
-def pick(c, task_id, text="Which month should the report use?", refs=None, default=None):
+def pick(c, task_id, text="Which month should the report use?", refs=None, default=None, by=OPS):
     ask = {"questions": [{"id": "month", "header": "Month", "question": text, "multi": False, "other": True,
                           "options": [{"label": "July", "description": ""}, {"label": "August", "description": ""}]}],
            "who": ANA, **({"if_no_answer": default} if default else {})}
-    return H.task_comment(c, OPS, task_id, text, wake=False, ask=ask, extra_refs=refs)
+    return H.task_comment(c, by, task_id, text, wake=False, ask=ask, extra_refs=refs)
 
 
 def listed(c, task_id):
@@ -30,6 +30,11 @@ def needs(api):
 
 def waiting_on_ana(c, task_id):
     H.task_update(c, OPS, task_id, status="waiting", waiting_on=ANA, note="Waiting on Ana's pick.")
+
+
+def cached_matches(c):
+    """The asking bot's cached needs_human matches a fresh count."""
+    return c.execute("SELECT needs_human FROM bot_status WHERE bot='ops'").fetchone()[0] == H.status_counts(c, OPS)[1]
 
 
 def wakes(c, message_id):
@@ -117,6 +122,9 @@ def test_ending_a_task_above_also_ends_the_wait_its_question_left_on_a_task_belo
         late = H.task_create(c, OPS, "Pick the launch venue", "x", OPS, parent_id=now_["id"])
         pick(c, now_["id"])
         waiting_on_ana(c, now_["id"])
+        c.execute("INSERT INTO bot_status (bot, state, since, updated_at) VALUES ('ops', 'idle', ?, ?)", (H.now(), H.now()))
+        H._recount(c, OPS)
+        assert H.status_counts(c, OPS)[1] and cached_matches(c)
     before, count = needs(api)
     assert now_["id"] in before and count == len(before)
     with api.app.state.store.transaction() as c:
@@ -124,13 +132,13 @@ def test_ending_a_task_above_also_ends_the_wait_its_question_left_on_a_task_belo
     after, count = needs(api)
     assert now_["id"] not in after and count == len(after)
     with api.app.state.store.transaction() as c:
-        assert H.task(c, now_["id"])["waiting_on"] is None
+        assert H.task(c, now_["id"])["waiting_on"] is None and cached_matches(c)    # the bot's count follows
         # Asked under a task that already ended: the hourly sweep takes the question and its wait.
         pick(c, late["id"])
         waiting_on_ana(c, late["id"])
         assert listed(c, late["id"])
         approval_expiry.sweep(c)
-        assert not listed(c, late["id"]) and H.task(c, late["id"])["waiting_on"] is None
+        assert not listed(c, late["id"]) and H.task(c, late["id"])["waiting_on"] is None and cached_matches(c)
     assert late["id"] not in needs(api)[0]
 
 
@@ -171,3 +179,57 @@ def test_old_undated_questions_go_back_only_in_the_weekday_batch_of_the_hourly_s
     assert len(sent) == 1 and all(f"Which {t['title'][7:]}?" in sent[0] for t in tasks)
     with store.read() as c:
         assert not any(listed(c, t["id"]) for t in tasks)
+
+
+def asking(c):
+    """The asking bot's cached needs_human. CPO asks on the tasks it filed for Ops below its own part of Ana's task, so
+    closing Ana's task recounts Ana and Ops but only a recount of the asker moves this."""
+    return c.execute("SELECT needs_human FROM bot_status WHERE bot='cpo'").fetchone()[0]
+
+
+def test_bulk_closes_recount_the_asking_bot_and_one_bad_row_does_not_undo_the_sweep(api, monkeypatch):
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO bot_status(bot,state) VALUES('cpo','idle')")
+        top = H.task_create(c, ANA, "Plan the offsite", "x", OPS)
+        mid = H.task_create(c, OPS, "Book the venue", "x", CPO, parent_id=top["id"])
+        sub = H.task_create(c, CPO, "Pick the menu", "x", OPS, parent_id=mid["id"])
+        pick(c, sub["id"], by=CPO)
+        H._recount(c, CPO)
+        assert asking(c) == 1
+        H.task_close(c, ANA, top["id"])                                 # the descendant loop recounts the asker
+        assert asking(c) == 0
+        # Asked under tasks that already ended: the hourly sweep takes them one row at a time.
+        bad, good = (H.task_create(c, CPO, f"Pick the {what}", "x", OPS, parent_id=mid["id"]) for what in ("wine", "band"))
+        bad_q, good_q = pick(c, bad["id"], by=CPO), pick(c, good["id"], by=CPO)
+        H._recount(c, CPO)
+        assert asking(c) == 2
+        drop = H.drop_asked_waits
+
+        def failing(conn, task_id, *args):
+            if task_id == bad["id"]:
+                raise ValueError("bad row")
+            return drop(conn, task_id, *args)
+
+        monkeypatch.setattr(H, "drop_asked_waits", failing)
+        assert approval_expiry.sweep(c)["asks"] == [good_q["id"]]
+        assert H.message(c, good_q["id"])["superseded_at"] and not H.message(c, bad_q["id"])["superseded_at"]
+        assert asking(c) == 1
+        monkeypatch.setattr(H, "drop_asked_waits", drop)
+        assert approval_expiry.sweep(c)["asks"] == [bad_q["id"]] and asking(c) == 0
+
+
+def test_still_needed_keeps_the_wait_while_another_question_to_the_same_person_is_open(api):
+    friday = "2026-10-16T17:00:00.000000Z"
+    with api.app.state.store.transaction() as c:
+        work = H.task_create(c, ANA, "Pick a venue", "x", OPS)
+        old = pick(c, work["id"], "Which venue?")
+        c.execute("UPDATE messages SET created=? WHERE id=?", (friday, old["id"]))
+        waiting_on_ana(c, work["id"])
+        # A second bot's newer question to Ana on the same task (one bot's newer question would replace its older one).
+        fresh = H.task_comment(c, CPO, work["id"], "Which budget?", wake=False, ask={
+            "questions": [{"id": "budget", "header": "Budget", "question": "Which budget?", "multi": False,
+                           "other": True, "options": [{"label": "Low", "description": ""},
+                                                      {"label": "High", "description": ""}]}], "who": ANA})
+        c.execute("UPDATE messages SET created=? WHERE id=?", ("2026-10-21T15:00:00.000000Z", fresh["id"]))
+        assert still_needed.sweep(c, "2026-10-21T15:30:00.000000Z") == {OPS: [old["id"]]}
+        assert H.task(c, work["id"])["waiting_on"] == ANA and listed(c, work["id"])
