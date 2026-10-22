@@ -203,6 +203,8 @@ def run_view(c, auth, who, tid):
             # Waiting for its ChatGPT login, or where it ran instead of its own harness and why (backend/login_waits.py).
             "waiting": login_waits.waiting(c, r["id"], r["bot"], who, auth) if live else None,
             "moved": login_waits.moved(c, r["id"], r["bot"], who, auth),
+            # Stopped to let another turn have the shared login; its job continues next.
+            "paused": login_waits.paused(c, r["id"], r["state"], r["result_json"]),
             "next": next_step(r, job_tries, job_rows.get(r["job_id"]) or {"state": None}, decisions,
                               retries.get(r["job_id"], [])),
             "subagents": subagents, "background": background,

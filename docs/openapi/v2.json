@@ -29723,7 +29723,7 @@
           "count_subscription": {
             "type": "boolean",
             "title": "Count Subscription",
-            "default": false
+            "default": true
           }
         },
         "additionalProperties": false,
