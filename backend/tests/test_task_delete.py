@@ -221,3 +221,20 @@ def test_a_purged_tasks_number_is_never_given_out_again(api):
         H._next_number(c, "human:priya", second["id"], "t2")
         assert c.execute("SELECT number FROM tasks WHERE id=?", (second["id"],)).fetchone()[0] == 91
     assert get(api, "deleted-tasks", token="priya-test")["tasks"] == []
+
+
+def test_a_milestone_wait_takes_the_blocker_gate_and_comes_back_with_a_restored_task(api):
+    from backend.task_delete import restore_tasks
+    task = post(api, "tasks", {"owner": "ben", "title": "Cut v1.3.0", "body": "x"}, token="priya-test")
+    # A requester outside the mover teams may not park someone else's task, by a blocker or by a milestone alike.
+    refused = post(api, f"tasks/{task['id']}/waits", {"on": "release:acme/tico@v1.2.0"}, token="priya-test",
+                   expected=403)
+    assert refused["error"]["code"] == "identity"
+    post(api, f"tasks/{task['id']}/waits", {"on": "release:acme/tico@v1.2.0"}, token="ben-test")
+    store = api.app.state.store
+    with store.transaction() as c:
+        assert delete_tasks(c, [task["id"]], apply=True)["applied"] is True
+        assert c.execute("SELECT count(*) FROM task_milestone_waits WHERE task_id=?", (task["id"],)).fetchone()[0] == 0
+        restore_tasks(c, [task["id"]])
+        assert [r[0] for r in c.execute("SELECT target FROM task_milestone_waits WHERE task_id=?",
+                                        (task["id"],))] == ["acme/tico@v1.2.0"]

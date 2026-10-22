@@ -221,7 +221,8 @@ function pausedRender() {
 }
 // A bot over its spend limit (backend/usage_limits.py `over`): its status carries the limit while it holds new work.
 const overLimit = slug => v2StatusOf(slug)?.limit || null;
-const overLimitWord = limit => `Over its ${limit.period} limit`;
+// A hold by the team's or a group's limit names it: raising the bot's own limit would not lift it.
+const overLimitWord = limit => limit.scope && limit.scope !== 'bot' ? `Waiting: ${limit.name} is over its ${limit.period} limit` : `Over its ${limit.period} limit`;
 function v2StatePill(slug) {
   const s = v2StatusOf(slug);
   if (!s) return botStatePill(slug);

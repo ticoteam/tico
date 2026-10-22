@@ -232,7 +232,7 @@ function botQuarantineCard(slug) {
 function botLimitHTML(slug) {
   const limit = overLimit(slug); if (!limit) return '';
   const usd = n => '$' + Number(n || 0).toFixed(2);
-  return `<section class="bot-limit" role="status"><span aria-hidden="true">⚠</span> ${esc(overLimitWord(limit))} (${usd(limit.spent)} of ${usd(limit.limit)}). <a href="#/usage">Raise limit</a></section>`;
+  return `<section class="bot-limit" role="status"><span aria-hidden="true">⚠</span> ${esc(overLimitWord(limit))}${limit.limit != null ? ` (${usd(limit.spent)} of ${usd(limit.limit)})` : ''}. <a href="#/usage">Raise limit</a></section>`;
 }
 // The alert beside the name and the limit banner come and go with the status poll and live events.
 function botAlertDraw() {
