@@ -17,6 +17,11 @@ Every run (`turns`, same id as its attempt) records three things, all in plain c
   With no write it is `no_change` when its task is still open (it looked; nothing had moved) and
   `nothing_to_do` when there was no open task to act on (no task, or one already done, closed or declined).
 
+- `purpose`: a short stable label for the work (`review PR`, `answer person message`), so a week of runs can be
+  grouped by what they were for. The place that writes a wake may name it (`stamp(..., purpose=)`); a run nobody
+  named gets `purpose_for(bot, trigger_kind)`, the same map that fills the label on runs from before it existed. A
+  pair the map does not know reads `unknown`, and the run is still counted.
+
 `run_weekly` in `hub sql` (backend/sql.py) adds these up per week, bot and trigger. A run from before this
 was recorded reads `unknown` for both, and is still counted.
 """
@@ -25,6 +30,27 @@ TRIGGERS = ("comment", "status_or_relation", "pr_checks", "stall_check", "schedu
             "background_done", "other")
 OUTCOMES = ("acted", "no_change", "nothing_to_do")
 UNKNOWN = "unknown"
+
+# What a run is for when no caller said, by what woke it. The label is the work, not the wake, and stays short.
+TRIGGER_PURPOSES = {
+    "comment": "answer comment", "status_or_relation": "react to task change", "pr_checks": "handle PR checks",
+    "stall_check": "check stalled task", "schedule": "run routine", "person_message": "answer person message",
+    "background_done": "resume after background work",
+}
+# Bots whose work is one thing: a reviewer woken by a task change or a PR's checks is reviewing that PR.
+REVIEWERS = ("pr-reviewer", "pr-reviewer-sol", "reviewer-2")
+BOT_PURPOSES = {(bot, kind): "review PR" for bot in REVIEWERS for kind in ("status_or_relation", "pr_checks")}
+
+
+def purpose_for(bot, kind):
+    """The default purpose of a run by `bot` woken by `kind`; `unknown` for a wake the map does not name."""
+    return BOT_PURPOSES.get((str(bot), kind)) or TRIGGER_PURPOSES.get(kind) or UNKNOWN
+
+
+def clean_purpose(value):
+    """A caller's label as stored: trimmed and short, or None when there is none."""
+    text = " ".join(str(value or "").split())[:60]
+    return text or None
 
 # Events a run leaves that change nothing anyone else sees: reads, its own status line, lint and refusals.
 BOOKKEEPING = frozenset({
@@ -40,14 +66,26 @@ RUNNER_PATHS = ("/api/v2/attempts/", "/api/v2/jobs/")
 OPEN_TASK = ("open", "doing", "waiting", "review", "ready", "blocked")
 
 
-def stamp(refs, kind, source=None):
-    """The wake's refs with what woke it. Every place that writes a wake for a bot calls this."""
+def stamp(refs, kind, source=None, purpose=None):
+    """The wake's refs with what woke it, and what the run is for where the caller knows. Every place that writes a
+    wake for a bot calls this."""
     if kind not in TRIGGERS:
         raise ValueError(f"unknown trigger {kind!r}")
     out = {**(refs or {}), "trigger": kind}
     if source:
         out["trigger_source"] = str(source)
+    if clean_purpose(purpose):
+        out["purpose"] = clean_purpose(purpose)
     return out
+
+
+def backfill(conn):
+    """Give every run with no purpose the mapped default for its bot and trigger. Safe to run twice."""
+    pairs = conn.execute("SELECT DISTINCT bot, trigger_kind FROM turns WHERE purpose IS NULL").fetchall()
+    for bot, kind in pairs:
+        conn.execute("UPDATE turns SET purpose=? WHERE purpose IS NULL AND bot IS ? AND trigger_kind IS ?",
+                     (purpose_for(bot, kind), bot, kind))
+    return len(pairs)
 
 
 def of_message(msg):
@@ -62,6 +100,11 @@ def of_message(msg):
     if author.startswith("bot:"):
         return "comment", msg.get("id")
     return "other", None
+
+
+def purpose_of(msg, bot, kind):
+    """The purpose of the run a message starts: the caller's label on its refs, else the mapped default."""
+    return clean_purpose((msg.get("refs") or {}).get("purpose")) or purpose_for(bot, kind)
 
 
 def counts(action):

@@ -685,6 +685,11 @@ ALTER TABLE turns ADD COLUMN outcome TEXT;
 ALTER TABLE turns ADD COLUMN did_nothing INTEGER;
 """
 
+# What a run is for (backend/run_triggers.py); the migration fills it on every run already recorded.
+RUN_PURPOSE_SCHEMA = """
+ALTER TABLE turns ADD COLUMN purpose TEXT;
+"""
+
 # The one person a private task with no person on it may reach (hubdb.task_reach): see "a private task's guest".
 TASK_GUEST_SCHEMA = """
 ALTER TABLE tasks ADD COLUMN guest TEXT;
@@ -712,7 +717,7 @@ MIGRATIONS = [SCHEMA, MEETING_SCHEMA, MEETING_ITEMS_SCHEMA,   # index i takes us
               LIVE_MEETINGS_SCHEMA, LIVE_MEETINGS_ROUTING_LIMITS_SCHEMA,
               LIVE_MEETINGS_CHAT_ROUTING_SCHEMA, TASK_RELATIONS_SCHEMA, TRIGGERS_SCHEMA,
               TRIGGER_SIGNING_SCHEMA, CHECK_MODELS_SCHEMA, GOAL_ASKS_SCHEMA, RUN_TRIGGERS_SCHEMA,
-              TASK_GUEST_SCHEMA, CEO_MERGES_SCHEMA]
+              TASK_GUEST_SCHEMA, CEO_MERGES_SCHEMA, RUN_PURPOSE_SCHEMA]
 
 
 class Refused(Exception):
@@ -942,6 +947,9 @@ def migrate(conn, adopt_legacy=False):
                 migrate_task_privacy(conn)
             elif i == 30:
                 TR.migrate(conn)
+            elif i == 38:
+                _apply(conn, MIGRATIONS[i])
+                RT.backfill(conn)
             else:
                 _apply(conn, MIGRATIONS[i])
             conn.execute(f"PRAGMA user_version={i + 1}")
@@ -6700,9 +6708,10 @@ def rate_limits(conn):
 
 
 def turn_start(conn, actor, bot_slug, thread_id=None, trigger="message", message_id=None,
-               task_id=None, trigger_kind=None, trigger_source=None):
+               task_id=None, trigger_kind=None, trigger_source=None, purpose=None):
     """A turn on a bot's thread. Replaces the legacy dispatcher's `runs.jsonl` record.
-    `trigger_kind` is what woke it (backend/run_triggers.py TRIGGERS) and `trigger_source` the event that did."""
+    `trigger_kind` is what woke it (backend/run_triggers.py TRIGGERS) and `trigger_source` the event that did.
+    `purpose` is what the run is for; the caller names it, or the bot and trigger map in run_triggers does."""
     _writer(conn, actor)
     slug = actor_id(bot_slug) if actor_kind(bot_slug) else str(bot_slug).strip()
     if is_bot(actor) and actor_id(actor) != slug:
@@ -6710,12 +6719,14 @@ def turn_start(conn, actor, bot_slug, thread_id=None, trigger="message", message
     row = {"id": new_id(), "bot": slug, "thread_id": thread_id, "started": now(),
            "finished": None, "trigger": trigger, "message_id": message_id, "task_id": task_id,
            "exit": None, "tokens_in": None, "tokens_out": None, "cost": None, "summary": None,
-           "trigger_kind": trigger_kind or "other", "trigger_source": trigger_source}
+           "trigger_kind": trigger_kind or "other", "trigger_source": trigger_source,
+           "purpose": RT.clean_purpose(purpose) or RT.purpose_for(slug, trigger_kind or "other")}
     conn.execute("INSERT INTO turns (id, bot, thread_id, started, finished, trigger, message_id, "
-                 "task_id, exit, tokens_in, tokens_out, cost, summary, trigger_kind, trigger_source, writes) "
+                 "task_id, exit, tokens_in, tokens_out, cost, summary, trigger_kind, trigger_source, purpose, writes) "
                  "VALUES (:id, :bot, :thread_id, :started, :finished, :trigger, :message_id, :task_id, :exit, "
-                 ":tokens_in, :tokens_out, :cost, :summary, :trigger_kind, :trigger_source, 0)", row)
-    event(conn, actor, "turn.start", row["id"], {"bot": slug, "trigger": trigger, "trigger_kind": row["trigger_kind"]})
+                 ":tokens_in, :tokens_out, :cost, :summary, :trigger_kind, :trigger_source, :purpose, 0)", row)
+    event(conn, actor, "turn.start", row["id"], {"bot": slug, "trigger": trigger, "trigger_kind": row["trigger_kind"],
+                                              "purpose": row["purpose"]})
     return _one(conn, "SELECT * FROM turns WHERE id=?", (row["id"],))
 
 

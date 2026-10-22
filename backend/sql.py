@@ -58,6 +58,7 @@ DERIVED = {
     # one whose turn the caller may not read is not turnless, and is not counted.
     "run_weekly": (("turns", "attempts"), """
         SELECT date(started, '-6 days', 'weekday 1') AS week, bot, coalesce(trigger_kind, 'unknown') AS trigger,
+               coalesce(purpose, 'unknown') AS purpose,
                count(*) AS runs,
                sum(CASE WHEN input_tokens IS NOT NULL OR cached_tokens IS NOT NULL
                         THEN coalesce(input_tokens, 0) + coalesce(cached_tokens, 0)
@@ -73,13 +74,13 @@ DERIVED = {
                round(100.0 * sum(coalesce(outcome, '') = 'no_change') / count(*), 1) AS no_change_pct,
                round(100.0 * sum(coalesce(outcome, '') = 'nothing_to_do') / count(*), 1) AS nothing_to_do_pct,
                round(100.0 * sum(outcome IS NULL) / count(*), 1) AS unknown_pct
-        FROM (SELECT started, bot, trigger_kind, input_tokens, cached_tokens, tokens_in, output_tokens, tokens_out,
+        FROM (SELECT started, bot, trigger_kind, purpose, input_tokens, cached_tokens, tokens_in, output_tokens, tokens_out,
                      outcome, did_nothing
               FROM {turns} WHERE started IS NOT NULL
               UNION ALL
-              SELECT coalesce(a.started, a.created), a.bot, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
+              SELECT coalesce(a.started, a.created), a.bot, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
               FROM {attempts} a WHERE NOT EXISTS (SELECT 1 FROM {all_turns} t WHERE t.id = a.id))
-        GROUP BY 1, 2, 3"""),
+        GROUP BY 1, 2, 3, 4"""),
 }
 # FTS5 reads these as main.<virtual>_* with no view context; they are not a public API.
 FTS_SHADOWS = ("_data", "_idx", "_content", "_docsize", "_config")

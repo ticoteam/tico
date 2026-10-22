@@ -244,7 +244,8 @@ class Scheduler:
                         try:
                             H.say(c, H.KEEPER, row["owner"], "Due: " + row["title"], kind="notice",
                                   conversation_id=row["conversation_id"],
-                                  refs=run_triggers.stamp({"task": row["id"], "wake": "due"}, "schedule"))
+                                  refs=run_triggers.stamp({"task": row["id"], "wake": "due"}, "schedule",
+                                                           purpose="work task due soon"))
                         except H.Refused as exc:
                             H.event(c, H.KEEPER, "task.reminder-refused", row["id"], {"reason": str(exc)[:300]})
                         c.execute("INSERT INTO task_reminders VALUES(?,?,?)", (row["id"], row["due"], stamp(at)))

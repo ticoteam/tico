@@ -641,7 +641,7 @@ def send_request(c, row, assistant=None):
         return None
     message = H.say(c, H.KEEPER, H.bot_actor(row["bot"]), request_text(c, row["bot"], row["kind"], row["day"], redo),
                     kind="notice", refs=run_triggers.stamp({"update_request": row["id"], "wake": "update"}, "schedule",
-                                                           row["id"]))
+                                                           row["id"], purpose="write update"))
     c.execute("UPDATE update_queue SET state='sent', message_id=?, sent_at=? WHERE id=?",
               (message["id"], H.now(), row["id"]))
     return message

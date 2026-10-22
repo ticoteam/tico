@@ -1539,7 +1539,8 @@ class Execution:
         woke, source = run_triggers.of_message(msg)
         turn = H.turn_start(c, H.KEEPER, row["bot"], trigger="task" if task else msg["kind"],
                             message_id=msg["id"], task_id=task["id"] if task else None,
-                            trigger_kind=woke, trigger_source=source)
+                            trigger_kind=woke, trigger_source=source,
+                            purpose=run_triggers.purpose_of(msg, row["bot"], woke))
         aid = turn["id"]
         c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created,lane) "
                   "VALUES(?,?,?,?,?,?,'leased',?,?,?)",
