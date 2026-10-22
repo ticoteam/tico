@@ -36,6 +36,9 @@
   ],
   "signals": [
    "sells_software",
+   "sells_services",
+   "onsite_jobs",
+   "sells_products",
    "sells_to_businesses",
    "sells_to_consumers",
    "publishes_content",
@@ -216,6 +219,9 @@
        "type": "string",
        "enum": [
         "sells_software",
+        "sells_services",
+        "onsite_jobs",
+        "sells_products",
         "sells_to_businesses",
         "sells_to_consumers",
         "publishes_content",
@@ -230,10 +236,56 @@
         "small_team"
        ]
       },
-      "description": "Every signal that applies (replaces the list)"
+      "description": "Every signal that applies (replaces the list). The first chart's company model follows them: sells_software is a software company, onsite_jobs a local service business (on-site jobs, crews, bookings), sells_services a services firm (hours or projects), sells_products an online store; none of these is Everything"
      }
     },
     "required": [],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "model_use",
+   "description": "Switch the chart to one company model as it stands (the visitor picked a model, or said \"show me everything\": everything). The people, their own agents and seats people hold stay.",
+   "input_schema": {
+    "type": "object",
+    "properties": {
+     "model": {
+      "type": "string",
+      "enum": [
+       "everything",
+       "software",
+       "services",
+       "local",
+       "store"
+      ],
+      "description": "everything (Everything), software (Software company), services (Services firm), local (Local service business), store (Online store)"
+     }
+    },
+    "required": [
+     "model"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "seat_fill",
+   "description": "A person holds a seat on the chart, such as one marked \"No bot yet\" (\"Ana runs our cap table\" puts Ana in Equity Manager). Adds the person when new.",
+   "input_schema": {
+    "type": "object",
+    "properties": {
+     "seat": {
+      "type": "string",
+      "description": "The seat's id or title"
+     },
+     "name": {
+      "type": "string",
+      "description": "The person's name"
+     }
+    },
+    "required": [
+     "seat",
+     "name"
+    ],
     "additionalProperties": false
    }
   },
