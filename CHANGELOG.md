@@ -16,12 +16,33 @@ All notable changes to Tico are recorded here. The format follows
   is told which commands still run. The run's events record "Turn ended: background wait" with the minutes saved,
   and the wake counts as `background_done` in `hub sql`. On a Mac the exit code reads "unknown". A turn still
   working, or running a subagent, waits as before.
+- **Wait for a milestone, not the whole task**: `hub task wait <id> --on pr:<url>` waits until that pull request
+  merges, `--on release:v0.3.64` until that release is published (`task:<id>` is blocked_by). The owner gets one wake
+  when it happens, while the task it came from keeps its own step (In QA, a release watch). A wait made after the
+  merge, or a merge that arrived while the server was down, is woken once by the minute sweep; a replayed webhook
+  never wakes it twice. The task page shows it under Related ("Waits for PR #943 to merge"). MCP `hub_task_wait`.
+- **Relation writes read back their direction**: `hub task relate`, `hub_task_relate`, task create with relations and
+  `hub task wait` answer with what was stored, from both ends ("#237 waits for #233" / "#233 blocks #237"), so a
+  reversed link is visible in the reply.
 - **Hosted bot computers.** Hosting can run bots on a separate computer, keeping their work away from the Tico
   server. Settings > Computers offers **Hosted computer (we run it)**. The installer supports server-only installs,
   bounded AWS runner recovery and the same 4- and 8-core sizes on both machines, with 100 and 200 GB disks.
   HQ registers only a join code's hash through scoped SSM; no owner token or join secret crosses that control plane.
 
 ### Changed
+- **The CEO Bot is on every install, Passive by default, and only the owner sets it up**: the Goal Manager is the CEO
+  Bot everywhere, at the top of the org chart, with its KPI history and old messages kept; there is no On/Off switch
+  any more. At the new default level, **Passive**, it keeps the **regular checks** running (KPI readings and the
+  automatic goal colours) and otherwise acts only when you talk to it: no vision or Why asks, no asks to goal owners,
+  no Monday note. **Suggests actions** and **Acts on its own** work as before. Settings > CEO Bot, its level, its
+  regular checks (which the owner can now turn off), its name and the Company section are the owner's only; an admin
+  no longer changes them. An install at level 1 lands on Passive at upgrade
+  ([Your CEO Bot](docs/ceo-bot.md)).
+- **One memory per bot, the one you can see.** Bots no longer keep a hidden memory on the computer they run on
+  (Claude Code's auto memory, Codex memories, the Gemini CLI's saved memories): each turn tells the bot to read and
+  follow the working rules at the top of its `memory/learnings.md` and to save what it learns there, so what steers it
+  shows in its Learnings panel and an edit there reaches its next turn. The panel's Learnings and Decisions views open
+  on the working rules, then the newest entries ([Learnings](docs/learnings.md#one-memory-in-the-repository)).
 - **Questions close on their own** (Decide cards part 1). A bot's question to a person closes when its task or any task
   above it is done, closed or declined (pick questions too; a done task keeps only the "accept this?" question it asks
   its requester once done), when the person replies to it or writes on its task to that bot (the reply is the answer),

@@ -1,6 +1,6 @@
 # Goals make sense
 
-Run this weekly before the review, and when asked. Read `hub goal list --all` and `hub proposal list`.
+Run this before the weekly review (above Passive), and when the owner asks. Read `hub goal list --all` and `hub proposal list`.
 
 For each live goal:
 - **Vague**: no way to tell whether it happened ("improve the customer experience"). Propose clearer words
@@ -16,8 +16,8 @@ One proposal per problem, each with a one-sentence reason. Look at pending propo
 already has one. A rejected proposal is not made again unless the goal changed. Proposals are for the goal's owner
 to confirm; you do not edit a goal, and `playbooks/README.md` has the payload shapes.
 
-**Why lines, where the CEO Bot is on** (`hub goal ceo-bot`): read the vision with `hub goal company`. While it is
-empty, propose none (the server is already asking the owner for it). Otherwise, for each live goal whose `why` is
+**Why lines** (above Passive, or at Passive when the owner asks for them): read the vision with `hub goal company`. While it is
+empty, propose none (above Passive the server is already asking the owner for it; at Passive, tell them in chat). Otherwise, for each live goal whose `why` is
 empty and that has no pending `goal_why`, propose one line saying how the goal serves the vision, in the company's
 own words where it has them: `goal_why` with `{"why": "..."}` and a one-sentence reason. Never write a goal's Why
 yourself; the owner accepts, edits or writes their own.

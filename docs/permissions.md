@@ -34,7 +34,7 @@ appear in the settings history, where the owner can undo them, like the humans a
 
 Who may edit a bot's access: its owners (see [Bot owners](#bot-owners)): the team owner, the admins, the bot's creator
 and other owners, and the humans it reports up to on the team chart (the same humans who may change the bot's other settings).
-The Assistant, BotOps, the Librarian and the Goal Manager can have their access edited too.
+The Assistant, BotOps, the Librarian and the CEO Bot can have their access edited too.
 
 ## Always full access
 
@@ -119,9 +119,10 @@ group, or a group under another, can change who reads a bot. BotOps does this as
 on `/api/v2/groups` through `hub api`, or `hub group update`), with that person's own rights: an owner or an admin, at once; a member is
 refused. Built-in bots stay outside groups.
 
-**The built-in bots** (the Assistant, BotOps, the Librarian and the Goal Manager) act for the whole team, so only the owner changes their settings,
+**The built-in bots** (the Assistant, BotOps, the Librarian and the CEO Bot) act for the whole team, so only the owner changes their settings,
 routines, access or place, and only the owner may add them. A member cannot register a bot with the name `assistant`, `botops`,
 `librarian`, `goal-manager` or `coo`; an Admin can, and manages every other bot.
+The CEO Bot's level, regular checks and name, and the Company section on Goals, are the owner's alone: an Admin cannot change them ([Your CEO Bot](ceo-bot.md)).
 
 A member may have at most **25 active bots** by default; owners and admins have no limit. An admin changes the number in
 Settings > Humans (**Bot limit per member**). Past it, adding a bot answers `409 bot_limit` with what to do. A starter bot that is still `needs_onboarding`
@@ -168,7 +169,7 @@ is the same humans who always have full access to it. A bot owner can:
 
 - edit its configuration: instructions, model, routines, name and description, repository;
 - set its See, Read and Write access;
-- pause it, rename it, archive it (never the built-in Assistant, BotOps, Librarian or Goal Manager);
+- pause it, rename it, archive it (never the built-in Assistant, BotOps, Librarian or CEO Bot);
 - add or remove owners (`POST /api/v2/bots/{bot}/co-owners`, Settings > Bots, **Owned by**);
 - give it a stored credential they hold themselves or stored themselves, and no one else's.
 
