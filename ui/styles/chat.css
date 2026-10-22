@@ -48,6 +48,7 @@
 .chat-task-row .ct-title{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink);font-weight:500}
 .chat-task-row .ct-state{flex:none}
 .chat-task-row .chat-time{flex:none;margin-left:8px}
+.chat-task-more{cursor:default}
 .chat-side>summary{padding:5px 0;cursor:pointer;display:flex;align-items:baseline;min-width:0}
 .chat-side>summary::before{content:"▶";flex:none;width:1.6em;font-size:.72em}
 .chat-side[open]>summary::before{content:"▼"}

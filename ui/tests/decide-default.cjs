@@ -1,5 +1,6 @@
 // Decide: a bot's question that says what it will do if nobody answers shows it on the card, in plain words, with the
-// day it goes ahead (backend/ask_deadlines.py). A send waits for the answer, and the card says so.
+// day it goes ahead (backend/ask_deadlines.py), as a small line at the card's foot, never as the recommendation. A send
+// waits for the answer, and the card says so.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const {open} = require('./tasks-page.cjs');
@@ -23,13 +24,21 @@ const items = [
     await page.evaluate(async () => { await v2Refresh(); location.hash = DECIDE; });
     const line = async id => {
       await page.locator(`.decide .dc-card[data-key="task:${id}"]`).waitFor();
-      return page.locator('.decide .dc-card .dc-default').textContent();
+      return page.locator('.decide .dc-card .qc-fallback').textContent();
     };
     const day = new Date('2026-10-16T16:00:00Z').toLocaleDateString(undefined, {weekday: 'short', month: 'short', day: 'numeric'});
-    assert.equal(await line('t-archive'), `If you don't answer by ${day}, Writer goes ahead: Yes`);
+    assert.equal(await line('t-archive'), `If you don't answer by ${day}: Yes`);
+    // At the bottom of the card's words, small, and no button: Do what you recommend is not offered on a question card.
+    const foot = await page.evaluate(() => {
+      const line = document.querySelector('.decide .qc-fallback'), body = line.parentElement;
+      const after = [...body.children].slice([...body.children].indexOf(line) + 1).filter(x => !x.matches('.dc-details'));
+      return {after: after.length, small: parseFloat(getComputedStyle(line).fontSize) < parseFloat(getComputedStyle(document.querySelector('.decide .dc-q')).fontSize),
+        rec: !!document.querySelector('.decide .dc-rec'), button: line.closest('button') !== null};
+    });
+    assert.deepEqual(foot, {after: 0, small: true, rec: false, button: false});
     // A send never goes ahead on its own: the same card says the bot waits.
-    const waits = await page.evaluate(it => decideDefault({it}), items[1]);
-    assert.match(waits, />Writer recommends: Yes\. It waits for your answer\.</);
+    const waits = await page.evaluate(it => qcardFallbackHTML(it), items[1]);
+    assert.match(waits, />If you don&#39;t answer, Writer waits for you before it goes ahead \(Yes\)\.</);
     assert.deepEqual(errors, []);
     console.log('decide-default: ok');
   } finally {

@@ -3539,12 +3539,14 @@ def create_app(settings=None):
             task_id = auth.resolve_task(c, who, tid)
             row = auth.task(c, who, task_id)
             kind, _, value = body.on.partition(":")
+            note = None
             if kind.strip().lower() == "task":
                 other_id = auth.resolve_task(c, who, value.strip())
                 auth.task(c, who, other_id)
                 changed = TR.relate(c, who.actor, task_id, other_id, "blocked_by", remove=body.remove,
                                     mover=mover(c, who) or None)
                 readback = TR.readback(c, task_id, other_id, "blocked_by", remove=body.remove, changed=changed)
+                note = None if body.remove else TR.own_subtask_warning(c, task_id, other_id, "blocked_by")
             else:
                 H._writer(c, who.actor)
                 H._task_private_writer(c, who.actor, row)
@@ -3563,7 +3565,8 @@ def create_app(settings=None):
                     readback = [("" if wait["added"] else "Already: ") + f"{TR._name(c, task_id)} {wait['sentence']}"
                                 + (" (already happened: woken once)" if wait["woke_at"] else "")]
             return {"readback": readback,
-                    "task": task_view(H.task(c, task_id), c, visible_sql=auth.task_sql(c, who), who=who)}
+                    "task": task_view(H.task(c, task_id), c, visible_sql=auth.task_sql(c, who), who=who),
+                    **({"warning": note} if note else {})}
         return mutate(request, body, work)
 
     @app.get("/api/v2/preferences/{key}")
@@ -5395,6 +5398,11 @@ def create_app(settings=None):
     @app.post("/api/v2/attempts/{aid}/inputs/{mid}/ack")
     def input_ack(request: Request, aid: str, mid: str, body: M.Empty):
         return mutate(request, body, lambda c: execution.acknowledge_input(c, request.state.identity, aid, mid))
+
+    @app.post("/api/v2/attempts/{aid}/background-done")
+    def background_done(request: Request, aid: str, body: M.BackgroundDone):
+        body = scrub_attempt(aid, body)          # a secret set in this run never reaches the wake
+        return mutate(request, body, lambda c: execution.background_done(c, request.state.identity, aid, body))
 
     @app.post("/api/v2/attempts/{aid}/complete")
     def complete(request: Request, aid: str, body: M.Completion):

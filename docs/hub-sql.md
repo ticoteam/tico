@@ -169,7 +169,8 @@ Every run records what woke it (`turns.trigger_kind`), its tokens, and whether i
   subtask finished, reopened, snoozed by someone), `pr_checks` (its pull request's checks, review comments,
   merge conflict, merge or release), `stall_check` (Tico's status check or stall wake on a quiet task, a task
   not starting, a stale ask, a worktree left idle), `schedule` (a routine firing, a due date, a snooze ending,
-  a next-run task, an update request) or `other` (anything else: a Slack digest, a meeting turn, a worktree
+  a next-run task, an update request), `background_done` (background commands an earlier turn left running
+  when the runner ended it on its wait have ended) or `other` (anything else: a Slack digest, a meeting turn, a worktree
   becoming ready). `trigger_source` names the event behind it where there is one: the message itself for
   `comment` and `person_message`, the subtask, the routine, the worktree.
 - **`writes`**: the hub writes the run made with its own run token (a task change, comment, link, message,

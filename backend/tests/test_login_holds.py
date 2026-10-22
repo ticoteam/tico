@@ -552,6 +552,60 @@ def test_an_older_runners_fallback_quota_with_no_hop_note_is_still_the_fallbacks
         assert login_holds.get(c, "r2", "", "fake")["reset"] and login_holds.get(c, "r2", "", "codex")
 
 
+PAUSED = ("Tico models are paused: this company is out of credit. Your bots use their other models until credit is "
+          "added (out_of_credit)")
+
+
+def test_a_company_out_of_credit_holds_the_tico_login_a_minute_and_a_fallbacks_own_limit_as_before(api, monkeypatch):
+    """The Tico AI Gateway's out_of_credit is the company's wait, not a spent login: the Tico login is held for the
+    Gateway's minute, never the backoff, so the next turn tries Tico models again within about a minute."""
+    monkeypatch.setattr(login_holds, "limit_texts", lambda c, aid: TURNS[aid])
+    hop = ("diagnostic", "pi hit its usage limit; running this turn on codex")
+    with api.app.state.store.transaction() as c:
+        aid = attempt_with(c, [("error", PAUSED), hop])
+        kept = login_holds.after_turn(c, "r1", "ops", "", "pi", Body(outcome="completed", fallback="codex",
+                                                                     primary_limited=True), aid, HIT)
+        assert kept == {} and login_holds.get(c, "r1", "", "pi")["until"].startswith("2026-10-19T01:47:47")
+        # Its fallback ran out too: that login is held as before, with its own wait.
+        aid = attempt_with(c, [("error", PAUSED), hop, ("error", QUOTA)])
+        kept = login_holds.after_turn(c, "r2", "ops", "", "pi", Body(limited=True, fallback="codex",
+                                                                     primary_limited=True), aid, HIT)
+        assert kept["runtime"] == "codex" and kept["until"].startswith("2026-10-19T02:16:47")
+        src = login_holds.source(c, aid, "pi", Body(limited=True, fallback="codex", primary_limited=True))
+        assert login_holds.label(src) == ("Fallback codex API quota or billing limit; primary pi also limited "
+                                          "(Tico models paused, out of credit)")
+
+
+def test_a_primary_held_for_hours_with_its_tico_fallback_out_of_credit_waits_only_the_gateways_minute(
+        api, monkeypatch):
+    """A subscription bot whose last fallback is a Tico model: its own login stays held to its reset, but the turn
+    ended on the company's credit, so the bot asks again after the Gateway's minute and runs on Tico models."""
+    from backend.execution import cooling_off, limit_cooldown
+    from clients import gateway
+    at(monkeypatch, HIT)
+    machine = runner(api)
+    assign(api, machine, "ops")
+    ready(api, machine, ["ops"])
+    post(api, "tasks", {"owner": "ops", "title": "Work", "body": "Please do it."})
+    hop = "fake hit its usage limit; running this turn on pi"
+    attempt = claim(api, machine)
+    post(api, f"attempts/{attempt['id']}/started", {"thread_id": "t-" + attempt["id"]}, machine["token"])
+    seq = events(api, machine, attempt, [("error", CLAUDE), ("diagnostic", hop), ("error", PAUSED)])
+    post(api, f"attempts/{attempt['id']}/complete", {
+        "outcome": "failed", "last_seq": seq, "limited": True, "fallback": "pi", "primary_limited": True, "text": "",
+        "limit_resets_at": "2026-10-19T01:47:47.000000Z"}, machine["token"])
+    with api.app.state.store.read() as c:
+        assert login_holds.get(c, machine["runner_id"], "", "fake")["until"].startswith("2026-10-19T02:40:00")
+        assert login_holds.get(c, machine["runner_id"], "", "pi")["until"].startswith("2026-10-19T01:47:47")
+        assert limit_cooldown(c, "ops") <= gateway.OUT_OF_CREDIT_WAIT + 1
+        assert H.status(c, "ops")["focus"].startswith(gateway.PAUSED_MESSAGE + " at 01:46")
+    # After the minute the bot is free again while its own login is still held: the next turn goes to its fallback.
+    at(monkeypatch, "2026-10-19T01:48:00.000000Z", api)
+    with api.app.state.store.read() as c:
+        assert not cooling_off(c, "ops")
+        assert login_holds.get(c, machine["runner_id"], "", "fake")["until"] > H.now()
+
+
 def test_a_primary_usage_limit_names_the_primary_and_its_window(api, monkeypatch):
     at(monkeypatch, "2026-10-19T01:46:47.000000Z")
     machine = runner(api)
