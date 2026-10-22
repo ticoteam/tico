@@ -418,6 +418,16 @@ pub async fn preflight(config: &Config, assignments: &[Value], runtimes: &Map<St
             .and_then(|r| r["profiles"].get(&profile_name).cloned())
             .or_else(|| runtimes.get(&runtime).cloned())
             .unwrap_or(Value::Null);
+        // A folder its turns can't write, from this bot's own login's row only: never another login's, as the
+        // fallback above gives a bot whose subscription isn't here.
+        let data_problem = runtimes
+            .get(&runtime)
+            .and_then(|r| match r["profiles"].as_object().filter(|p| !p.is_empty()) {
+                Some(rows) => rows.get(&profile_name).cloned(),
+                None => Some(r.clone()),
+            })
+            .filter(|_| requested.is_empty() || profile.is_some())
+            .and_then(|r| r["data_problem"].as_str().map(String::from));
         let mut problems: Vec<String> = vec![];
         let mut warnings: Vec<String> = crate::readiness_extra::credential_warnings(&bot);
         if !requested.is_empty() && !profiles::covers(expected) {
@@ -464,9 +474,9 @@ pub async fn preflight(config: &Config, assignments: &[Value], runtimes: &Map<St
         } else if runtimes.get(&runtime).is_none_or(|r| r["installed"] != true) {
             let installing = crate::harness_tools::shared().and_then(|h| h.try_lock().ok()?.installing(&runtime));
             problems.push(installing.unwrap_or_else(|| "Runtime executable is not on PATH".into()));
-        } else if let Some(problem) = status["data_problem"].as_str() {
+        } else if let Some(problem) = &data_problem {
             // Signed in, but its turns can't save a session: the folder is the problem, not the sign-in.
-            problems.push(problem.to_string());
+            problems.push(problem.clone());
         } else if status["authenticated"] == "rejected" {
             problems.push(signed_out(text_of(&status["detail"])));
         } else if status["authenticated"] == "missing" || status["authenticated"] == "failed" {
@@ -513,8 +523,8 @@ pub async fn preflight(config: &Config, assignments: &[Value], runtimes: &Map<St
         row.insert("runtime".into(), json!(runtime));
         row.insert("profile".into(), json!(profile_name));
         row.insert("sign_in".into(), status.get("authenticated").cloned().unwrap_or(json!("unknown")));
-        if let Some(problem) = status.get("data_problem") {
-            row.insert("data_problem".into(), problem.clone());
+        if let Some(problem) = data_problem {
+            row.insert("data_problem".into(), json!(problem));
         }
         row.insert("model".into(), json!(text_of(&expected["model"])));
         row.insert("ready".into(), json!(problems.is_empty()));

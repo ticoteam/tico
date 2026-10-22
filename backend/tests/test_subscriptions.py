@@ -215,3 +215,13 @@ def test_a_login_whose_turns_cannot_save_a_session_names_the_folder_not_a_sign_i
     machine = next(m for m in get(api, 'operations')['machines'] if m['id'] == r['runner_id'])
     assert machine['readiness']['runtimes']['musecode']['data_problem'] == problem
     assert [(row['bot'], row['signed_in'], row['problem']) for row in machine['bot_connections']] == [('ops', None, problem)]
+    # The same on a subscription of the bot's own: its line keeps that subscription and names the folder.
+    put(api, 'subscriptions', {'target': 'ops', 'profile': 'work'})
+    post(api, 'runners/heartbeat', {'version': 'test', 'platform': 'test', 'profiles': [{'name': 'work', 'runtimes': {
+         'musecode': {'signed_in': True}}}], 'readiness': {'schema_version': 1, 'runtimes': {'musecode': {
+         'installed': True, 'authenticated': 'failed', 'data_problem': problem,
+         'profiles': {'work': {'installed': True, 'authenticated': 'failed', 'data_problem': problem}}}},
+         'bots': {'ops': {'ready': False, 'runtime': 'musecode', 'profile': 'work', 'sign_in': 'failed',
+                          'data_problem': problem, 'problems': [problem]}}}}, token=r['token'])
+    line = get(api, 'bots/ops/subscription')
+    assert (line['profile'], line['source'], line['signed_in'], line['problem']) == ('work', 'bot', None, problem)
