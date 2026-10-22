@@ -141,3 +141,66 @@ def test_a_nightly_learning_run_with_no_decision_model_is_recorded_as_skipped(ap
     jobs, _ = rows(api)
     assert jobs["learnings"]["last"]["result"] == "Skipped: no decision model"
     assert jobs["learnings"]["route"] is None, "a run that asked nothing names no route"
+
+
+def test_a_failed_directory_sync_shows_members_fixed_words_never_the_vendors_text(api, monkeypatch):
+    from backend.store import Problem
+    store = api.app.state.store
+    directory = api.app.state.directory
+    monkeypatch.setattr(type(directory), "due", lambda self, c: True)
+
+    def refused(self, *a, **k):
+        raise Problem("directory_entra", "Entra refused the request (403). AADSTS65001 tenant acme-secret app 1234", 502)
+    monkeypatch.setattr(type(directory), "run", refused)
+    directory.tick(True)
+    jobs, _ = rows(api, token="ben-test")
+    assert jobs["directory_sync"]["last"]["result"] == "Failed: Microsoft Entra refused the request (403)"
+    assert "acme-secret" not in str(jobs) and "AADSTS" not in str(jobs)
+
+
+def test_an_expired_go_live_is_recorded_as_ended_not_as_nothing(api):
+    from backend import go_live
+    from backend.store import encode
+    store = api.app.state.store
+    with store.transaction() as c:
+        c.execute("INSERT INTO registry_metadata VALUES(?,?)", (go_live.PREFIX + "ops", encode(
+            {"actor": "bot:ops", "computer": "Mac", "requested_at": H.shift(H.now(), days=-8)})))
+    Scheduler(store, api.app.state.execution).tick()
+    jobs, _ = rows(api)
+    assert jobs["go_live_expiry"]["last"]["result"] == "1 go-live ended"
+
+
+def test_a_quiet_repeat_moves_its_row_after_a_minute_and_a_busy_run_starts_a_new_one(api):
+    store = api.app.state.store
+    first = SR.Run("snooze_ends", started=H.shift(H.now(), seconds=-200)).did("Nothing due", quiet=True)
+    with store.transaction() as c:
+        rid = SR.save(c, first, finished=first.started)
+        moved = SR.Run("snooze_ends").did("Nothing due", quiet=True)
+        assert SR.save(c, moved) == rid
+        row = c.execute("SELECT runs,started FROM system_runs WHERE id=?", (rid,)).fetchone()
+        assert row["runs"] == 2 and row["started"] == moved.started, "folded and moved forward"
+        busy = SR.Run("snooze_ends").did("1 snooze ended")
+        assert SR.save(c, busy) != rid
+        assert c.execute("SELECT count(*) FROM system_runs WHERE job='snooze_ends'").fetchone()[0] == 2
+
+
+def test_each_wrapped_block_still_reports_its_old_failure_name(api, monkeypatch):
+    from backend import (approval_expiry, ask_deadlines, billing_check, go_live, goal_asks, health_monitor,
+                         still_needed)
+    from backend import goals as G
+    store = api.app.state.store
+    store.settings.gateway_key = "synthetic"
+    monkeypatch.setattr(billing_check, "env_key", lambda settings: "synthetic")
+
+    def broken(*a, **k):
+        raise RuntimeError("x")
+    for module, name in ((G, "refresh"), (goal_asks, "sync"), (health_monitor, "scan"), (go_live, "expire"),
+                         (ask_deadlines, "sweep"), (approval_expiry, "sweep"), (still_needed, "sweep"),
+                         (billing_check, "read_later"), (still_wanted, "ask_idle")):
+        monkeypatch.setattr(module, name, broken)
+    from backend import gateway_connection
+    monkeypatch.setattr(gateway_connection, "check_soon", broken)
+    failures = Scheduler(store, api.app.state.execution).tick()["failures"]
+    for name in ("goals", "goal_asks", "health_monitor", "go_live", "ask_deadlines", "approval_expiry",
+                 "still_needed", "billing_check", "still_wanted", "gateway"):
+        assert {name: "RuntimeError"} in failures, name

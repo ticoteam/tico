@@ -299,7 +299,9 @@ class Scheduler:
             with SR.recording(self.store, "stall_checks") as run:
                 with self.store.transaction() as c:
                     woke = H.wake_stalled(c, stamp(at))
-                run.did(SR.words_of(woke, "stalled task woken", "Nothing stalled"), quiet=not woke)
+                acted = {"stalled tasks woken": woke.get("woke") or [], "sent to BotOps": woke.get("escalated") or [],
+                         "retried": woke.get("retried") or [], "held for setup": woke.get("held") or []}
+                run.did(SR.words_of(acted, none="Nothing stalled"), quiet=not any(acted.values()))
                 # ...and queued jobs whose message their bot may no longer read, which no claim would ever take.
                 try:
                     with self.store.transaction() as c:
@@ -349,7 +351,10 @@ class Scheduler:
                 from . import approval_expiry
                 with self.store.transaction() as c:
                     ended = approval_expiry.sweep(c, stamp(at))
-                run.did(SR.words_of(ended, none="Nothing expired"))
+                ended = ended or {}
+                run.did(SR.words_of({"approvals expired": ended.get("stale") or [],
+                                     "approvals closed with their task": ended.get("ended") or [],
+                                     "asks cleared": ended.get("asks") or []}, none="Nothing expired"))
             # ...and each weekday morning, questions unanswered two business days go back to their bots, one wake per
             # bot (backend/still_needed.py).
             with SR.recording(self.store, "still_needed", failures) as run:
