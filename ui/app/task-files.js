@@ -114,6 +114,7 @@ async function tfLoad(d, id) {
   if (TASK_CHAT?.dialog === d && TASK_CHAT.data) { TASK_CHAT.rendered = ''; taskCommentsRender(TASK_CHAT, TASK_CHAT.data); }
 }
 function tfPaint(d) {
+  qcardPaintPictures(d, tfFiles(d));       // the Needs you card's option pictures (question-card.js)
   const el = d.tfEl;
   if (!el) return;
   const files = tfFiles(d);
