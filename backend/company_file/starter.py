@@ -71,7 +71,9 @@ def file_text(source):
 def pack(source):
     data = base64.b64encode(gzip.compress(canonical(load(source)).encode(), mtime=0)).decode("ascii")
     if len(data) > MAX_PACKED:
-        raise D.DraftError("the starter plan is too large for automatic setup; import the file in the app instead")
+        raise D.DraftError("This company file is too large for automatic setup. Run setup again without --company-file; "
+                           "then, on the first Welcome step in Tico, under \"Already chose your team?\", choose the "
+                           "file in \"Company YAML file\" and click \"Use this team\".")
     return data
 
 

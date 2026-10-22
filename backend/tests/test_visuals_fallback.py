@@ -3,6 +3,7 @@ served from the app's own address as media only; pages and SVG are cards that op
 served from the app's own address. No visual response ever sets a cookie. Spec tests 1-4 and 7 (Product roadmap
 "Visuals always on"); the UI half is ui/tests/visual-fallback.cjs."""
 import base64
+import time
 from dataclasses import replace
 
 import pytest
@@ -54,8 +55,21 @@ def comment_items(api, tid, comment):
     return next(m for m in listed if m["id"] == comment["id"])["refs"]["attachments"]
 
 
+def media_settled(api):
+    """Wait until the media worker (backend/file_metadata.py) has nothing it may still save: its save rewrites a
+    version's poster and preview, so one landing after a test sets them would clear them."""
+    from backend.file_metadata import PENDING
+    for _ in range(200):
+        with api.app.state.store.read() as c:
+            if not c.execute(PENDING, (time.time(),)).fetchone():
+                return
+        time.sleep(0.05)
+    raise AssertionError("the media worker never settled")
+
+
 def give_preview(api, fid, version, data=PNG, mime="image/png"):
     """A still preview stored for this file version (thumb_blob_id), as file_metadata leaves it."""
+    media_settled(api)
     digest = api.app.state.blobs.put(data, mime)
     with api.app.state.store.transaction() as c:
         blob = c.execute("INSERT INTO blobs(id,owner,digest,size,name,content_type,created) VALUES "
@@ -186,6 +200,7 @@ def test_with_a_visual_address_the_apps_own_address_still_serves_media_only(api,
         r = api.get("/visuals/" + token, headers={"Host": "tico.example"})
         assert r.status_code == 200 and r.content == PNG and r.headers["content-disposition"] == "inline"
     video = media[1]
+    media_settled(api)
     with api.app.state.store.transaction() as c:                         # a video with its poster ready
         c.execute("UPDATE bot_file_versions SET poster_blob_id=(SELECT thumb_blob_id FROM bot_file_versions WHERE "
                   "thumb_blob_id IS NOT NULL LIMIT 1) WHERE file_id=?", (video["file_id"],))

@@ -60,8 +60,9 @@ AI employees and reporting lines, adds its built-in roles once, and leaves emplo
 It preserves the plan across retries and refuses to replace an existing company. A selected file takes precedence
 over the recommended sample company. AWS stores this plan with the encrypted install settings in an Advanced
 Parameter Store parameter (charges apply); settings and compressed plan must fit its 8 KB limit.
-See [Finish setup](onboarding.md) for file support and choices saved for later. For a larger file, import it on the
-app's first setup screen instead.
+See [Finish setup](onboarding.md) for file support and choices saved for later. A larger file, such as any whole
+company model, is refused before anything is set up: run setup without `--company-file`, then on the first Welcome step
+in Tico, under **Already chose your team?**, choose the file in **Company YAML file** and click **Use this team**.
 
 Nothing to set up first: no domain, no DNS, no sign-in provider. Tico runs on this computer only, at
 `http://127.0.0.1:8765`, and you sign in as the owner with a token kept on this computer. Add a domain and sign-in
