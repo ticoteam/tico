@@ -758,9 +758,9 @@ async function v2ChatSend(P, text, slug = P.slug, extraRefs = {}, extra = {}) {
     return true;
   } catch (e) {
     watch.end(e.timedOut ? 'timeout' : e.unconfirmed ? 'network' : 'refused', e.status);
-    // A send with no answer in time ends here, with the draft still in the box and one press to try again; it keeps
-    // its request id, so a send that did land is not saved twice.
-    if (e.timedOut) toast(`Not sent: ${e.message} Your message is still here.`, true, {label: 'Retry', run: () => pillSend(P)});
+    // A send with no answer in time ends here, with the draft still in the box and one press to try again. The page
+    // cannot know whether it landed, so it says so; Retry of the same text keeps its request id, so it is not saved twice.
+    if (e.timedOut) toast(`Not confirmed: ${e.message} It may still arrive. Your message is still here; Retry sends it without a duplicate.`, true, {label: 'Retry', run: () => pillSend(P)});
     else if (e.unconfirmed) chatRetryLater(P, text, slug, extraRefs, extra); else toast(`Not sent: ${e.message}`, true);
     return false;
   }

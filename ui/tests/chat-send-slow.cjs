@@ -1,7 +1,8 @@
 // Offline browser regression (Dev 371): a slow chat send is visible, and a stalled one ends. While a message is out,
 // Send shows a spinner at full strength (not the dimmed look of an empty box); after a few seconds a line under the box
 // says it is still sending, and that it is trying again when the server answers 503; a send with no answer in time
-// ends in "Not sent ... still here" with Retry, which resends under the same request id. A slow or failed send leaves
+// ends in "Not confirmed ... still here" with Retry, which resends under the same request id, also when the answer's
+// headers came but its body stalled. A slow or failed send leaves
 // one console line with numbers only, never the message text.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
@@ -85,7 +86,7 @@ const launch = () => chromium.launch({headless: true, channel: process.env.TICO_
     await box.fill(stalled); await page.keyboard.press('Enter');
     const toast = page.locator('.toast.err');
     await toast.waitFor({timeout: 6000});
-    assert.match(await toast.innerText(), /Not sent: No answer from the server in 2 seconds\. Your message is still here\./);
+    assert.match(await toast.innerText(), /Not confirmed: No answer from the server in 2 seconds\. It may still arrive\. Your message is still here/);
     assert.equal(await box.inputValue(), stalled, 'the draft stays');
     assert.ok(!(await send.isDisabled()), 'Send is back');
     assert.ok(!(await send.evaluate(b => b.classList.contains('p-sending'))));
@@ -99,6 +100,17 @@ const launch = () => chromium.launch({headless: true, channel: process.env.TICO_
     assert.equal(sends.at(-1), stalled);
     assert.equal(keys.at(-1), stalledKey, 'Retry keeps the request id, so a send that did land is not saved twice');
     assert.ok(warnings.every(w => !w.includes('Secret') && !w.includes('stalled')), 'no message text in any line');
+
+    // Headers arrived, then the body stalled: still a timeout, and the request id is kept for the retry.
+    const bodyStall = await page.evaluate(async () => {
+      const real = window.fetch;
+      window.fetch = (url, init) => Promise.resolve({status: 200, ok: true, headers: new Headers(),
+        json: () => new Promise((_, fail) => init.signal.addEventListener('abort', () => fail(new DOMException('aborted', 'AbortError'))))});
+      try { await writeRequestOnce('POST', '/v2/chat/botops', {text: 'body stall'}, undefined, {timeout: 200}); return 'resolved'; }
+      catch (e) { return {timedOut: !!e.timedOut, kept: [...pendingWrites.keys()].some(k => k.includes('body stall'))}; }
+      finally { window.fetch = real; }
+    });
+    assert.deepEqual(bodyStall, {timedOut: true, kept: true}, 'a stalled body times out and keeps its request id');
     assert.deepEqual(errors, []);
     console.log('ok');
   } finally { await browser.close(); }
