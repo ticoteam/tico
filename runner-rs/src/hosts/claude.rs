@@ -1272,12 +1272,14 @@ impl ClaudeHost {
             self.emit(event("turn_completed", Some(tid), Some(turn), json!({"status": "completed", "stop_reason": stop})));
         } else {
             let error = failure.unwrap_or_else(|| error_text(result.as_ref(), rc, stderr));
-            self.emit(event(
+            let mut failure = event(
                 "turn_failed",
                 Some(tid),
                 Some(turn),
-                json!({"error": error, "exit_code": rc, "process_exit": rc < 0 || result.is_none() && rc != 0, "limit": limited || is_limit(&error), "auth_retry": is_auth_retryable(&error)}),
-            ));
+                json!({"error": error, "limit": limited || is_limit(&error), "auth_retry": is_auth_retryable(&error)}),
+            );
+            if rc < 0 || result.is_none() && rc != 0 { failure["exit_code"] = json!(rc); failure["process_exit"] = json!(true); }
+            self.emit(failure);
         }
         self.emit(event("status", Some(tid), None, json!({"state": "idle"})));
     }

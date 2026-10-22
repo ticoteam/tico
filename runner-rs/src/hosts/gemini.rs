@@ -473,7 +473,9 @@ impl GeminiHost {
             self.emit(event("turn_completed", Some(tid), Some(turn), json!({"status": "completed"})));
         } else {
             let error = if mismatch { format!("Gemini CLI used {} instead of {requested}", actual.join(", ")) } else { error_text(result.as_ref(), rc, stderr) };
-            self.emit(event("turn_failed", Some(tid), Some(turn), json!({"error": error, "exit_code": rc, "process_exit": rc < 0 || result.is_none() && rc != 0, "limit": is_limit(&error)})));
+            let mut failure = event("turn_failed", Some(tid), Some(turn), json!({"error": error, "limit": is_limit(&error)}));
+            if rc < 0 || result.is_none() && rc != 0 { failure["exit_code"] = json!(rc); failure["process_exit"] = json!(true); }
+            self.emit(failure);
         }
         self.emit(event("status", Some(tid), None, json!({"state": "idle"})));
     }
@@ -549,6 +551,7 @@ mod tests {
     async fn turn_events(rx: &mut mpsc::UnboundedReceiver<Value>) -> Vec<Value> {
         let mut got = vec![];
         while let Ok(Some(mut ev)) = tokio::time::timeout(Duration::from_secs(10), rx.recv()).await {
+            if ev.get("stderr_tail").is_some() { continue; }
             let idle = ev["kind"] == "status" && ev["state"] == "idle";
             ev.as_object_mut().unwrap().retain(|k, _| k != "thread_id" && k != "turn_id");
             got.push(ev);

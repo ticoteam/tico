@@ -362,7 +362,9 @@ impl<W: Wire> OneShot<W> {
             self.emit(event("turn_completed", Some(tid), Some(turn), json!({"status": "completed"})));
         } else {
             let error = [state.error.as_str(), stderr].into_iter().find(|t| !t.is_empty()).map(String::from).unwrap_or_else(|| format!("{} exited {rc}", W::PROGRAM));
-            self.emit(event("turn_failed", Some(tid), Some(turn), json!({"error": error, "exit_code": rc, "process_exit": rc < 0 || state.error.is_empty() && rc != 0, "limit": is_limit(&error)})));
+            let mut failure = event("turn_failed", Some(tid), Some(turn), json!({"error": error, "limit": is_limit(&error)}));
+            if rc < 0 || state.error.is_empty() && rc != 0 { failure["exit_code"] = json!(rc); failure["process_exit"] = json!(true); }
+            self.emit(failure);
         }
         self.emit(event("status", Some(tid), None, json!({"state": "idle"})));
     }
