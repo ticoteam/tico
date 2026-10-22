@@ -286,6 +286,10 @@ def test_a_chat_turn_streams_completes_and_resumes_the_bot_thread(api, computer)
         sessions = {call["argv"][call["argv"].index("--session-id") + 1] for call in calls}
         assert len(calls) == 2 and len(sessions) == 1
         assert all(call["env"]["MUSE_NO_AUTO_UPDATE"] == "1" for call in calls)
+        # Sessions and their locks go to Tico's own data folder, never ~/.local/share (Dev 329).
+        data = computer.config.parent / f"state-{computer.registration['runner_id']}" / "musecode" / "data"
+        assert all(call["env"]["XDG_DATA_HOME"] == str(data) for call in calls)
+        assert (data / "muse" / "sessions").is_dir()
     else:
         starts = [c for c in calls if c.get("method") in ("thread/start", "thread/resume")]
         assert starts[-1] == {"harness": "codex", "method": "thread/resume", "thread": starts[0]["thread"]}
@@ -1248,3 +1252,26 @@ def test_behind_a_proxy_that_refuses_default_user_agents_the_runner_and_hub_get_
     finally:
         machine.stop()
         proxy.close()
+
+
+def test_a_muse_data_folder_the_bot_cannot_write_is_a_readiness_problem_naming_it(api, live, tmp_path, rust_binary):
+    """A Muse Code data folder already there that the turn's user cannot write (as ~/.local/share/muse was on the
+    Team box, left by turns before isolation) shows on the Computer as not ready, naming it, not as failed turns."""
+    computer = Computer(api, live, tmp_path, "musecode", rust_binary)
+    sessions = computer.config.parent / f"state-{computer.registration['runner_id']}" / "musecode" / "data" / "muse" / "sessions"
+    sessions.mkdir(parents=True)
+    sessions.chmod(0o555)
+    if os.access(sessions, os.W_OK):
+        sessions.chmod(0o755)
+        pytest.skip("root writes a read-only folder anyway")
+    try:
+        with computer.output.open("a") as out:
+            computer.process = subprocess.Popen([str(computer.binary), "--config", str(computer.config), "run"], cwd=ROOT,
+                                                env=computer.env, stdout=out, stderr=subprocess.STDOUT, start_new_session=True)
+        row = until(lambda: computer.readiness().get("ops") or computer.died(), "the runner's first heartbeat")
+        assert not computer.died(), computer.output.read_text()[-3000:]
+        assert row["ready"] is False and row["sign_in"] == "failed", row
+        assert any(str(sessions) in p and "can't write" in p for p in row["problems"]), row["problems"]
+    finally:
+        sessions.chmod(0o755)
+        computer.stop()

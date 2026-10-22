@@ -14,6 +14,14 @@ All notable changes to Tico are recorded here. The format follows
   HQ registers only a join code's hash through scoped SSM; no owner token or join secret crosses that control plane.
 
 ### Changed
+- **The CEO Bot is on every install, Passive by default, and only the owner sets it up**: the Goal Manager is the CEO
+  Bot everywhere, at the top of the org chart, with its KPI history and old messages kept; there is no On/Off switch
+  any more. At the new default level, **Passive**, it keeps the **regular checks** running (KPI readings and the
+  automatic goal colours) and otherwise acts only when you talk to it: no vision or Why asks, no asks to goal owners,
+  no Monday note. **Suggests actions** and **Acts on its own** work as before. Settings > CEO Bot, its level, its
+  regular checks (which the owner can now turn off), its name and the Company section are the owner's only; an admin
+  no longer changes them. An install at level 1 lands on Passive at upgrade
+  ([Your CEO Bot](docs/ceo-bot.md)).
 - **One new subscription per AI tool on each computer.** Adding a second subscription for the same tool is refused
   with a Switch account message, including while the first sign-in is pending. Different tools and computers stay
   independent; existing connections and API keys are kept.
@@ -26,6 +34,14 @@ All notable changes to Tico are recorded here. The format follows
   each one at its own rate.
 
 ### Fixed
+- **A task blocked only by its own quiet subtask no longer waits silently.** Relating a subtask as its parent's
+  blocker returns a warning, and when that subtask (a bot's hold or acknowledgement) goes quiet waiting on nothing
+  else, the parent counts as stalled even while waiting: its bot is woken with the way out, and BotOps sees it stuck.
+- **Muse Code turns work again on a Docker computer that runs bots as their own user.** Each Muse login now keeps
+  its sessions in a folder of Tico's own (per subscription profile too), so a turn, including an automatic fallback
+  to Muse, no longer fails at once with "failed to create session lock directory ... Permission denied". If that
+  folder is there but the bot user can't write it, Settings > Computers shows Muse as not ready and names the folder.
+  Muse sessions from before this change start fresh.
 - Choosing a bot's model connection refreshes its computer's readiness and queued work immediately, including
   when the previous connection is signed out.
 - **Recovering an AWS bot computer waits for Systems Manager.** Resuming an interrupted install waits up to five
@@ -85,14 +101,6 @@ All notable changes to Tico are recorded here. The format follows
   theirs, private tasks stay private, and peers and reports never read a manager's chat-room runs.
 
 ### Changed
-- **The CEO Bot is on every install, Passive by default, and only the owner sets it up**: the Goal Manager is the CEO
-  Bot everywhere, at the top of the org chart, with its KPI history and old messages kept; there is no On/Off switch
-  any more. At the new default level, **Passive**, it keeps the **regular checks** running (KPI readings and the
-  automatic goal colours) and otherwise acts only when you talk to it: no vision or Why asks, no asks to goal owners,
-  no Monday note. **Suggests actions** and **Acts on its own** work as before. Settings > CEO Bot, its level, its
-  regular checks (which the owner can now turn off), its name and the Company section are the owner's only; an admin
-  no longer changes them. An install at level 1 lands on Passive at upgrade
-  ([Your CEO Bot](docs/ceo-bot.md)).
 - **The setup chart has no seat limit you will meet.** The setup chat, the company file and the first screen's
   company YAML import now take up to 300 bots and 300 people (was 60 bots and 40 people, and 150 bots on import),
   with no limit message below that. Past 300 the chat says plainly "A chart can have at most 300 bots." (or people);
@@ -109,7 +117,7 @@ All notable changes to Tico are recorded here. The format follows
 - `hub task label --approval-id` now sends the approval with the label change, so a bot can add a public roadmap
   label once a person approves its publish request. Before, the command dropped the approval and was refused.
 - A goal's automatic colour follows its worst KPI: red takes priority over yellow and green, and yellow over green.
-  The note explains that KPI; a colour set by a person stays in place until handed back to the CEO Bot.
+  The note explains that KPI; a colour set by a person stays in place until handed back to the Goal Manager.
 - **Company file: numbered bot ids are no longer blanked as keys**: a long id made from a numbered title, such as
   `accounts-receivable-specialist-2`, read as a random key once it carried a number, was replaced with `[removed]` and
   the draft was refused. Lowercase ids of words and numbers now pass; real key shapes are still removed.
