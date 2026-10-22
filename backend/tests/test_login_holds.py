@@ -552,6 +552,31 @@ def test_an_older_runners_fallback_quota_with_no_hop_note_is_still_the_fallbacks
         assert login_holds.get(c, "r2", "", "fake")["reset"] and login_holds.get(c, "r2", "", "codex")
 
 
+PAUSED = ("Tico models are paused: this company is out of credit. Your bots use their other models until credit is "
+          "added (out_of_credit)")
+
+
+def test_a_company_out_of_credit_holds_no_login_but_a_fallbacks_own_limit_still_does(api, monkeypatch):
+    """The Tico AI Gateway's out_of_credit is the company's wait (execution.reset_cooldown, a minute), not the Tico
+    login's: a turn its fallback finished leaves nothing held, so the next turn tries Tico models first."""
+    monkeypatch.setattr(login_holds, "limit_texts", lambda c, aid: TURNS[aid])
+    hop = ("diagnostic", "pi hit its usage limit; running this turn on codex")
+    with api.app.state.store.transaction() as c:
+        aid = attempt_with(c, [("error", PAUSED), hop])
+        kept = login_holds.after_turn(c, "r1", "ops", "", "pi", Body(outcome="completed", fallback="codex",
+                                                                     primary_limited=True), aid, HIT)
+        assert kept == {} and not login_holds.get(c, "r1", "", "pi")
+        # Its fallback ran out too: that login is held as before, with its own wait; Tico's still is not.
+        aid = attempt_with(c, [("error", PAUSED), hop, ("error", QUOTA)])
+        kept = login_holds.after_turn(c, "r2", "ops", "", "pi", Body(limited=True, fallback="codex",
+                                                                     primary_limited=True), aid, HIT)
+        assert kept["runtime"] == "codex" and login_holds.get(c, "r2", "", "codex")
+        assert not login_holds.get(c, "r2", "", "pi")
+        src = login_holds.source(c, aid, "pi", Body(limited=True, fallback="codex", primary_limited=True))
+        assert login_holds.label(src) == ("Fallback codex API quota or billing limit; primary pi also limited "
+                                          "(Tico models paused (out of credit))")
+
+
 def test_a_primary_usage_limit_names_the_primary_and_its_window(api, monkeypatch):
     at(monkeypatch, "2026-10-19T01:46:47.000000Z")
     machine = runner(api)

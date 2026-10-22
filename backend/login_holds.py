@@ -15,6 +15,8 @@ import json
 import re
 from datetime import timedelta, timezone
 
+from clients import gateway
+
 from .store import H
 
 PREFIX = "login-hold:"
@@ -297,6 +299,8 @@ def turn_steps(c, attempt_id, runtime, result):
 def window(notice):
     """Which kind of limit a notice is: an API key's quota or billing refusal, or the plan's usage window."""
     from .execution import BILLING_LIMIT_RE
+    if gateway.out_of_credit(notice):
+        return "Tico models paused (out of credit)"
     if BILLING_LIMIT_RE.search(notice or ""):
         return "API quota or billing limit"
     if re.search(r"\bweekly\b", notice or "", re.I):
@@ -385,6 +389,10 @@ def after_turn(c, runner_id, bot, profile, runtime, body, attempt_id, hit):
         if limited:
             if n == 0 and body.primary_held:
                 continue                # never tried: its hold stands as it is
+            if gateway.out_of_credit(notice):
+                # The Tico AI Gateway paused the company's Tico models for want of credit: no login of this computer
+                # is spent, and the bot goes back to them within a minute of credit landing (execution.reset_cooldown).
+                continue
             reset = reset_from_text(notice, hit) or (body.limit_resets_at if last else None)
             hold = record(c, runner_id, login, rt, hit, reset, attempt_id, bot, error=notice or "")
             if last:

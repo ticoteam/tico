@@ -478,7 +478,7 @@ mod tests {
                         mut carried: BTreeMap<String, Value>) -> (Result<Drove, Fail>, BTreeMap<String, Value>, GoalRun) {
         runner.state.record(&json!({"id": "acme-late"})).unwrap();
         let wake = Notify::new();
-        let d = Drive { aid: "acme-late", host, thread, effort: None, limit: Instant::now() + Duration::from_secs(60),
+        let d = Drive { aid: "acme-late", bot: "acme", session: "", host, thread, effort: None, limit: Instant::now() + Duration::from_secs(60),
                         flags: f, wake: &wake, redactor: None, runtime };
         let mut segment = Segment { meter: Meter::default(), config: json!({}), profile: None, billing: "api" };
         let mut goal = GoalRun { chat_goal, controlled: false, failure: None, paused: None, tries_key: ("acme".into(), thread.into()) };

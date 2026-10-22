@@ -69,6 +69,11 @@ All notable changes to Tico are recorded here. The format follows
   each one at its own rate.
 
 ### Fixed
+- **A company out of Tico credit no longer holds its bots off Tico models for 30 minutes**: when Tico HQ's Gateway
+  pauses Tico models for want of credit (`out_of_credit`), the bot says "Tico models are paused: this company is out
+  of credit. Your bots use their other models until credit is added", runs on its fallback meanwhile, and asks the
+  Gateway again after a minute, so it is back on Tico models within about a minute of credit being added. It used to
+  show the Gateway's raw 429 JSON and hold the Tico login like a provider's usage limit.
 - **A resumed Claude session keeps reading follow-ups**: Claude answers a resumed session with an empty result
   before it reads the new prompt. The runner took that as the turn's answer and stopped reading follow-up
   messages for the rest of the turn; it now waits for the answer to the prompt. This applies to every resumed
