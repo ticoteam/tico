@@ -479,7 +479,7 @@ mod tests {
         runner.state.record(&json!({"id": "acme-late"})).unwrap();
         let wake = Notify::new();
         let d = Drive { aid: "acme-late", host, thread, effort: None, limit: Instant::now() + Duration::from_secs(60),
-                        flags: f, wake: &wake, redactor: None, runtime };
+                        flags: f, wake: &wake, redactor: None, runtime, bot: "acme", session: thread };
         let mut segment = Segment { meter: Meter::default(), config: json!({}), profile: None, billing: "api" };
         let mut goal = GoalRun { chat_goal, controlled: false, failure: None, paused: None, tries_key: ("acme".into(), thread.into()) };
         let mut rejected = None;
