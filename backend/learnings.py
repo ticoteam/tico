@@ -553,14 +553,45 @@ def claim(c, night):
     return run_id
 
 
+def starts_at(c, at):
+    """Tonight's start (company time) on Settings > Routines (03:00 by default), or None while the run is off there."""
+    from . import system_routines as SR
+    cfg = SR.config_of(c, "learnings")
+    if not cfg["on"]:
+        return None
+    hour, minute = (int(x) for x in (cfg["at"] or f"{HOUR:02d}:00").split(":"))
+    return local(at).replace(hour=hour, minute=minute, second=0, microsecond=0)
+
+
+def claim_tonight(c):
+    """Run now (the Learnings page, Settings > Routines): tonight's run id, claimed now. 409 while it runs or once it
+    ran; an unconfigured, capped or failed night is tried again under the same key."""
+    night = night_of(datetime.now(timezone.utc))
+    found = c.execute("SELECT id,status FROM learning_runs WHERE night=?", (night,)).fetchone()
+    if found and found["status"] == "running":
+        raise Problem("conflict", "Tonight's learning run is still running", 409)
+    if found and found["status"] not in ("unconfigured", "capped", "failed"):
+        raise Problem("conflict", "Tonight's learning run already ran", 409)
+    if found:
+        c.execute("UPDATE learning_runs SET status='running',started=?,finished=NULL,detail_json='{}' WHERE id=?",
+                  (H.now(), found["id"]))
+        return found["id"]
+    return claim(c, night)
+
+
 def nightly(store, at):
-    """From the scheduler's tick: once a night, at or after 03:00 local. Off in rehearsal and test servers."""
+    """From the scheduler's tick: once a night, at or after its time (03:00 local unless Settings > Routines says
+    otherwise), and not while switched off there. Off in rehearsal and test servers."""
     settings = store.settings
-    if settings.rehearsal or settings.test_identities or local(at).hour < HOUR:
+    if settings.rehearsal or settings.test_identities:
         return None
     night = night_of(at)
     # The tick comes every few seconds: once this process has seen the night claimed, it never asks again.
     if store.__dict__.get("learnings_night") == night:
+        return None
+    with store.read() as c:
+        start_at = starts_at(c, at)
+    if start_at is None or local(at) < start_at:
         return None
     with store.transaction() as c:
         run_id = claim(c, night)
@@ -716,17 +747,7 @@ def install(app, store, auth, mutate):
             raise Problem("forbidden", "Only the owner starts the learning run", 403)
 
         def work(c):
-            night = night_of(datetime.now(timezone.utc))
-            found = c.execute("SELECT id,status FROM learning_runs WHERE night=?", (night,)).fetchone()
-            if found and found["status"] == "running":
-                raise Problem("conflict", "Tonight's learning run is still running", 409)
-            if found and found["status"] not in ("unconfigured", "capped", "failed"):
-                raise Problem("conflict", "Tonight's learning run already ran", 409)
-            if found:          # an unconfigured, capped or failed night is tried again under the same key
-                c.execute("UPDATE learning_runs SET status='running',started=?,finished=NULL,detail_json='{}' WHERE id=?",
-                          (H.now(), found["id"]))
-                return {"id": found["id"], "night": night}
-            return {"id": claim(c, night), "night": night}
+            return {"id": claim_tonight(c), "night": night_of(datetime.now(timezone.utc))}
         result = mutate(request, body, work)
         start(store, result["id"])
         return result

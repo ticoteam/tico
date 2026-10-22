@@ -48,12 +48,16 @@ function renderSettingsRecurring() {
   };
 }
 
-// The System section above the bot routines: every job Tico runs on its own timers (backend/system_routines.py), by
-// group, with its schedule, last run, next run and, for a job that asks Decide, which route answered and this month's
-// spend. Read-only; fetched again at most once a minute while the tab is open.
-let SYSTEM_ROUTINES = null, SYSTEM_ROUTINES_AT = 0;
+// The Routines list above the bot routines: every job Tico runs on its own (backend/system_routines.py) in one flat list,
+// no group headings, with a search box that matches name, trigger, action, department tag and group word. Each row reads
+// WHEN <trigger> THEN <action>, with its department tag, schedule, last and next run and, for a job that asks Decide,
+// which route answered and this month's spend. An owner or admin switches the six AI/people jobs (and Topic changed),
+// picks their schedule preset and runs them now; Health scan only the owner (`can_change`, enforced by the server too).
+// Fetched again at most once a minute while the tab is open.
+let SYSTEM_ROUTINES = null, SYSTEM_ROUTINES_AT = 0, SYSTEM_ROUTINES_Q = '';
+const SYSTEM_ROUTINE_BUSY = new Set();
 function systemRoutineLastHTML(j) {
-  if (!j.records) return '<span class="muted">Each connection shows its own</span>';
+  if (!j.records) return j.key === 'topic_fresh' ? '<span class="muted">Runs when it happens</span>' : '<span class="muted">Each connection shows its own</span>';
   if (!j.last) return '<span class="muted">Not run yet</span>';
   const when = `<span class="tnum muted" title="${esc(fmt(j.last.finished || j.last.started))}">${esc(ago(j.last.finished || j.last.started))}</span>`;
   return `<span class="${j.last.ok ? '' : 'sysr-failed'}" data-sysr-result>${esc(j.last.result)}</span> ${when}`;
@@ -64,25 +68,112 @@ function systemRoutineAIHTML(j) {
   return `<div class="sysr-ai"><span class="pill" data-sysr-route>${esc(j.route ? 'AI: ' + j.route : 'Uses AI')}</span>${spent}
     ${j.fallback ? `<div class="sysr-fallback" data-sysr-fallback>${esc(j.fallback)}</div>` : ''}</div>`;
 }
+function systemRoutineRuleHTML(j) {
+  const part = list => list.map(esc).join(' <b class="sysr-and">AND</b> ');
+  return `<div class="sysr-rule" data-sysr-rule><b>WHEN</b> ${part(j.when || [])} <b>THEN</b> ${part(j.then || [])}</div>`;
+}
+function systemRoutineScheduleHTML(j) {
+  const busy = SYSTEM_ROUTINE_BUSY.has(j.key);
+  if (!(j.presets || []).length || !j.can_change) return `<span data-sysr-schedule>${esc(j.schedule)}</span>`;
+  const options = j.presets.map(p => `<option value="${esc(p.key)}"${p.key === j.preset ? ' selected' : ''}>${esc(p.key === 'daily' ? (j.key === 'learnings' ? 'Nightly at' : 'Daily at') : p.label)}</option>`).join('');
+  const pick = j.presets.length === 1 ? `<span>${esc(j.key === 'learnings' ? 'Nightly at' : 'Daily at')}</span>`
+    : `<select class="settings-inline-select" data-sysr-preset aria-label="${esc(j.name)} schedule"${busy ? ' disabled' : ''}>${options}</select>`;
+  return `${pick}
+    ${j.preset === 'daily' ? `<input type="time" step="60" data-sysr-at value="${esc(j.at || '')}" aria-label="${esc(j.name)} time (Pacific)" title="Pacific time"${busy ? ' disabled' : ''}>` : ''}`;
+}
+function systemRoutineControlHTML(j) {
+  if (!j.switch) return j.needed ? '<span class="muted sysr-needed">Tico needs this to run</span>' : '';
+  const busy = SYSTEM_ROUTINE_BUSY.has(j.key);
+  if (!j.can_change) {
+    // A member reads on or off; an admin looking at Health scan sees why they cannot change it.
+    return `<span class="sysr-state" data-sysr-state>${j.on ? 'On' : 'Off'}</span>${j.owner_only && settingsIsAdmin() ? '<span class="muted sysr-owner" data-sysr-owner>Only the owner changes this</span>' : ''}`;
+  }
+  return `<label class="sysr-switch">${peopleSwitch('data-sysr-on', j.on, busy, j.name)}<span>${j.on ? 'On' : 'Off'}</span></label>
+    ${j.controllable ? `<button type="button" class="ghost" data-sysr-run${busy || !j.on ? ' disabled' : ''}${j.on ? '' : ' title="Switch it on to run it"'}>${busy ? 'Running…' : 'Run now'}</button>` : ''}`;
+}
 function systemRoutineRowHTML(j) {
   return `<div class="sysr-row" data-system-routine="${esc(j.key)}">
-    <div class="sysr-name"><strong>${esc(j.name)}</strong><span class="muted">${esc(j.what)}</span>
-      ${j.needed ? '<span class="muted sysr-needed">Tico needs this to run</span>' : ''}${systemRoutineAIHTML(j)}</div>
-    <div class="sysr-schedule" data-sysr-schedule>${esc(j.schedule)}</div>
+    <div class="sysr-name"><div class="sysr-title"><strong>${esc(j.name)}</strong><span class="pill sysr-dept" data-sysr-dept>${esc(j.department?.name || '')}</span></div>
+      ${systemRoutineRuleHTML(j)}<span class="muted">${esc(j.what)}</span>${systemRoutineAIHTML(j)}</div>
+    <div class="sysr-schedule"><span class="sysr-label">Schedule</span>${systemRoutineScheduleHTML(j)}</div>
     <div class="sysr-last"><span class="sysr-label">Last run</span>${systemRoutineLastHTML(j)}</div>
-    <div class="sysr-next"><span class="sysr-label">Next run</span>${j.next ? `<span class="tnum" title="${esc(fmt(j.next))}" data-sysr-next>${esc(until(j.next))}</span>` : '<span class="muted">—</span>'}</div>
+    <div class="sysr-next"><span class="sysr-label">Next run</span>${j.next ? `<span class="tnum" title="${esc(fmt(j.next))}" data-sysr-next>${esc(until(j.next))}</span>` : `<span class="muted">${j.switch && !j.on ? 'Off' : '—'}</span>`}</div>
+    <div class="sysr-ctl">${systemRoutineControlHTML(j)}<p class="settings-cell-note" role="status" data-sysr-status></p></div>
   </div>`;
 }
+function systemRoutineRowsHTML(data) {
+  const jobs = (data.jobs || []).filter(j => !SYSTEM_ROUTINES_Q || searchIncludes([j.search, j.name], SYSTEM_ROUTINES_Q));
+  return jobs.length ? jobs.map(systemRoutineRowHTML).join('') : '<div class="empty" data-sysr-none>No routine matches.</div>';
+}
 function systemRoutinesHTML(data) {
-  return (data.groups || []).map(g => `<div class="sysr-group" data-system-group="${esc(g.key)}">
-    <h3>${esc(g.name)}</h3>${g.jobs.map(systemRoutineRowHTML).join('')}</div>`).join('');
+  return `<div class="settings-bots-filters"><input class="settings-filter-search sysr-search" type="search" autocomplete="off" data-sysr-search
+      value="${esc(SYSTEM_ROUTINES_Q)}" placeholder="Search by name, when, then or department" aria-label="Search routines"></div>
+    <div class="sysr-list" data-sysr-list>${systemRoutineRowsHTML(data)}</div>`;
+}
+function systemRoutinesPaint() {
+  const el = $('#set-system-routines'); if (!el || !SYSTEM_ROUTINES) return;
+  const list = el.querySelector('[data-sysr-list]');
+  if (list) list.innerHTML = systemRoutineRowsHTML(SYSTEM_ROUTINES);
+  else el.innerHTML = systemRoutinesHTML(SYSTEM_ROUTINES);
+  systemRoutinesBind(el);
+}
+function systemRoutineReplace(job) {
+  if (!SYSTEM_ROUTINES || !job) return;
+  SYSTEM_ROUTINES.jobs = SYSTEM_ROUTINES.jobs.map(j => j.key === job.key ? job : j);
+}
+async function systemRoutineWrite(key, send, status) {
+  SYSTEM_ROUTINE_BUSY.add(key); systemRoutinesPaint();
+  let note = '', failed = false, again = false;
+  try {
+    const out = await send();
+    systemRoutineReplace(out.job);
+    note = out.running ? 'Running…' : 'Saved';
+    again = !!out.running;
+  } catch (e) { note = e.message || 'Try again'; failed = true; }
+  finally { SYSTEM_ROUTINE_BUSY.delete(key); }
+  systemRoutinesPaint();
+  const box = $(`[data-system-routine="${key}"] [data-sysr-status]`);
+  if (box) { box.textContent = note; box.classList.toggle('err', failed); }
+  if (again) systemRoutineFollow(key, 0);
+}
+// A Run now that asks Decide works on its own thread: read its row again until its result lands (about two minutes).
+function systemRoutineFollow(key, n) {
+  const before = (SYSTEM_ROUTINES?.jobs || []).find(j => j.key === key)?.last?.started || '';
+  setTimeout(async () => {
+    try { SYSTEM_ROUTINES = await get('/v2/system-routines'); SYSTEM_ROUTINES_AT = Date.now(); } catch (e) { return; }
+    systemRoutinesPaint();
+    const now = (SYSTEM_ROUTINES.jobs || []).find(j => j.key === key)?.last?.started || '';
+    if (now === before && n < 24) systemRoutineFollow(key, n + 1);
+  }, 5000);
+}
+function systemRoutinesBind(el) {
+  const search = el.querySelector('[data-sysr-search]');
+  if (search) search.oninput = () => { SYSTEM_ROUTINES_Q = search.value; const list = el.querySelector('[data-sysr-list]'); if (list) list.innerHTML = systemRoutineRowsHTML(SYSTEM_ROUTINES); };
+  const list = el.querySelector('[data-sysr-list]'); if (!list) return;
+  list.onchange = ev => {
+    const row = ev.target.closest('[data-system-routine]'); if (!row) return;
+    const key = row.dataset.systemRoutine, path = '/v2/system-routines/' + encodeURIComponent(key);
+    if (ev.target.matches('[data-sysr-on]')) void systemRoutineWrite(key, () => put(path, {on: ev.target.checked}));
+    else if (ev.target.matches('[data-sysr-preset]')) {
+      const body = {preset: ev.target.value};
+      const job = SYSTEM_ROUTINES.jobs.find(j => j.key === key);
+      if (body.preset === 'daily' && !job?.at) body.at = '09:00';
+      void systemRoutineWrite(key, () => put(path, body));
+    } else if (ev.target.matches('[data-sysr-at]') && ev.target.value) void systemRoutineWrite(key, () => put(path, {at: ev.target.value}));
+  };
+  list.onclick = ev => {
+    const run = ev.target.closest('[data-sysr-run]'); if (!run || run.disabled) return;
+    const key = run.closest('[data-system-routine]').dataset.systemRoutine;
+    void systemRoutineWrite(key, () => post('/v2/system-routines/' + encodeURIComponent(key) + '/run', {}));
+  };
 }
 async function renderSystemRoutines(force) {
   const el = $('#set-system-routines'); if (!el) return;
-  if (SYSTEM_ROUTINES) el.innerHTML = systemRoutinesHTML(SYSTEM_ROUTINES);
+  if (SYSTEM_ROUTINES && !el.querySelector('[data-sysr-list]')) { el.innerHTML = systemRoutinesHTML(SYSTEM_ROUTINES); systemRoutinesBind(el); }
   if (!force && SYSTEM_ROUTINES && Date.now() - SYSTEM_ROUTINES_AT < 60000) return;
   SYSTEM_ROUTINES_AT = Date.now();
   try { SYSTEM_ROUTINES = await get('/v2/system-routines'); }
-  catch (e) { if (!SYSTEM_ROUTINES) el.innerHTML = `<div class="empty">Couldn't load the system routines: ${esc(e.message || 'try again')}</div>`; return; }
-  const now = $('#set-system-routines'); if (now) now.innerHTML = systemRoutinesHTML(SYSTEM_ROUTINES);
+  catch (e) { if (!SYSTEM_ROUTINES) el.innerHTML = `<div class="empty">Couldn't load the routines: ${esc(e.message || 'try again')}</div>`; return; }
+  if (SYSTEM_ROUTINE_BUSY.size || formBusy(el.querySelector('[data-sysr-list]'))) return;
+  systemRoutinesPaint();
 }
