@@ -656,3 +656,24 @@ def test_a_limit_keeps_the_provider_and_login_it_came_from_after_settings_and_ho
                                     (first["id"],)).fetchone()[0])["source"]["profile"] == "work"
     assert f"Limit: {said}" in api.get(f"/api/runs/{first['id']}/log", headers=headers()).text
     assert health_detail(api, "ops").startswith(said)
+
+
+def test_a_hundred_wakes_during_a_fallbacks_limit_start_no_turn_and_one_probe_at_the_reset(api, monkeypatch):
+    # The Oct 18 storm (8,203 failed 12-second wakes, no reset time on any): Dev 198's cooldown, Dev 241's login
+    # holds and Dev 279's per-login source cover it. Fixed here as a guard: wakes during the limit start nothing.
+    machine = two_bots(api, monkeypatch)
+    post(api, "tasks", {"owner": "ops", "title": "Work", "body": "Please do it."})
+    fallback_turn(api, machine, [("diagnostic", "fake unavailable; running this turn on codex"), ("error", QUOTA)])
+    for n in range(100):
+        post(api, "tasks", {"owner": "ops", "title": f"Wake {n}", "body": "Please do it."})
+    started = 0
+    for when in ("01:47:00", "01:55:00", "02:05:00", "02:15:00"):          # the guessed wait is 30 minutes (02:16:47)
+        at(monkeypatch, f"2026-10-19T{when}.000000Z", api)
+        signed_in(api, machine, ["ops", "finance"], ["codex"])
+        started += bool(claim(api, machine))
+    assert started == 0
+    at(monkeypatch, "2026-10-19T02:17:00.000000Z", api)
+    signed_in(api, machine, ["ops", "finance"], ["codex"])
+    probe = claim(api, machine)
+    assert probe and probe["bot"] == "ops"
+    assert claim(api, machine) is None                                      # one turn at the reset, not a hundred
