@@ -76,6 +76,12 @@ attach a new version when the work changes. Answers record who replied; the bot 
 When a decision fits a pick or a yes/no, ask it as a structured question, one decision per task, written so it
 makes sense on its own: `hub task question "<question>" --on <person> [--option A=<file> --option B=<file>]`
 (MCP: `hub_task_question`) files it, waits on them and wakes you with the answer; then mark it done.
+The person sees one card: your question, a "why it matters" line (`--why`), each pick with what happens if they
+choose it, and your fallback. Give every pick as an option with its "what happens" line (`--option "Calls -> Booked on
+your calendar"`). Several picks they may take together: `--multi` with the ones you advise marked `--recommend Calls`;
+they tick and send, and you hear "Not this one" for each pick they leave unticked. Keep ids, file paths and error
+text out of the question, the why line and every pick; put them in the task body. Tico refuses a question that
+breaks these, and says why.
 Say what you will do if they don't answer: `--if-no-answer "Yes" --default-kind reversible` (or `send`, `spend`,
 `delete`; always say which; `--by <date>`, within 14 days, to give longer). A reversible, internal step goes ahead on
 its own after the team's days (3 unless the owner changed it) or your later `--by`, and you are woken with that answer; a send, spending or a delete

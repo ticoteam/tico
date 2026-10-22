@@ -213,7 +213,7 @@ Write it for someone busy who reads only the title and the first line:
   Ask only for what only a person can give: a decision, a payment, a sign-in. Never file a list of inputs to fill in.
 - **The answer goes on the task.** Never tell a person to "message BotOps with ..." or to repeat a phrase in another
   chat: their reply on the task is them asking (rule 8). Ask for "yes" or a choice between options on a card:
-  `hub task question "<question>" --on <person> --parent <task>` (Yes / No, or `--option` for a choice). The same
+  `hub task question "<question>" --on <person> --parent <task>` (Yes / No, or `--option "LABEL -> WHAT HAPPENS"` for each pick, with `--why`). The same
   question for several bots (a backup model for each) is one topic: pass the same `--topic` (e.g. `backup-model`)
   so it updates your open card instead of adding one per bot.
 

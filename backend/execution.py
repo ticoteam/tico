@@ -1743,14 +1743,15 @@ class Execution:
         """Whether a result that arrives after the lease lapsed may still settle its job. The
         test is the one `restore` uses without the clock: this runner still owns the bot, the job
         is still uncertain and still on this attempt, no review has decided it, and no other
-        attempt is running in its lane. A review — a person's or `auto_reconcile`'s — always
+        attempt is running in its lane, and no person pressed Stop on it: a Stop its runner never heard, because the
+        computer slept through the lease, still stands over the answer the model went on to finish. A review — a person's or `auto_reconcile`'s — always
         writes job_recovery and moves the job off `uncertain`, so a decision already taken wins
         and a late result can never undo one. Elapsed time is what hands a job from the runner to
         the sweep; it is not what makes settling safe, and the longest turns are exactly the ones
         most likely to outlive a lease."""
         job = c.execute("SELECT state FROM jobs WHERE id=? AND attempt_id=?",
                         (row["job_id"], row["id"])).fetchone()
-        return bool(self.current_owner(c, who, row)
+        return bool(self.current_owner(c, who, row) and not row["stop_requested"]
                     and job and job["state"] == "uncertain"
                     and not c.execute("SELECT 1 FROM job_recovery WHERE job_id=? AND attempt_id=?",
                                       (row["job_id"], row["id"])).fetchone()
@@ -1764,7 +1765,7 @@ class Execution:
         completed and its answer is posted where the request was made, a closed task's own room included, and the
         queued rerun never happens. Any other outcome, or a job another attempt (`attempt_id`) or another computer now
         owns, is only filed (`file_result`)."""
-        if body.outcome != "completed" or not self.current_owner(c, who, row):
+        if body.outcome != "completed" or not self.current_owner(c, who, row) or row["stop_requested"]:
             return False
         job = c.execute("SELECT state FROM jobs WHERE id=? AND attempt_id=?", (row["job_id"], row["id"])).fetchone()
         return bool(job and job["state"] in ("cancelled", "queued"))
