@@ -547,6 +547,7 @@ function decideKey(st, ev) {
   if (!c) return;
   let what = null, i;
   if (k === 's') what = 'skip';
+  else if (k === 'c') { ev.preventDefault(); $('.decide .dc-note textarea')?.focus(); return; }   // every card, a multi too
   else if (c.type === 'pick' && c.q.multi) {
     // Several picks: a number ticks or unticks one; A says yes to all, T sends the ticked ones.
     if (/^[1-6]$/.test(k) && Number(k) <= c.q.options.length) {
@@ -556,7 +557,6 @@ function decideKey(st, ev) {
     else if (k === 't') what = 'ticked';
   }
   else if (k === 'r' && c.type === 'task' && c.it.recommend?.ask) what = 'recommend';
-  else if (k === 'c') { ev.preventDefault(); $('.decide .dc-note textarea')?.focus(); return; }
   else if ((c.type === 'approve' || c.yn) && (k === 'y' || k === 'n')) what = k === 'y' ? 'yes' : 'no';
   else if (decideYesNo(c) && (k === 'y' || k === 'n')) { what = 'pick'; i = k === 'y' ? 0 : 1; }
   else if (c.type === 'task' && !c.yn && k === 'd') what = 'done';

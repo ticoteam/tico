@@ -1425,7 +1425,8 @@ def lint_sentences(text):
 
 def lint_person_ask(text):
     """The problems with an ask to a person, empty when it passes: there is one, it is one or two sentences of at
-    most LINT_ASK_WORDS words, and it carries no ids, hashes, file paths, s3:// links or tool and field names.
+    most LINT_ASK_WORDS words, and it carries no ids, hashes, file paths, s3:// links, tool and field names or error
+    output.
     Deterministic on purpose: the same words always pass or fail, so a bot can fix them in one retry."""
     text = str(text or "").strip()
     if not text:
@@ -1438,8 +1439,9 @@ def lint_person_ask(text):
     return problems + lint_plain(text)
 
 
-# Error output a bot pasted: a traceback, an exception or error class with its message, an exit code, an HTTP error
-# status. "an error in the invoice" is prose; "ValueError: bad date" and "HTTP 502" are the bot's own record.
+# Error output a bot pasted: a traceback, an exception or error class name (bare or with its message), an exit code, an
+# HTTP error status. "an error in the invoice" is prose; "TypeError", "ValueError: bad date" and "HTTP 502" are the
+# bot's own record, so they go under Details.
 LINT_ERROR = re.compile(r"\bTraceback\b|(?-i:\b[A-Z]\w*(?:Error|Exception)\b)|(?-i:\b(?:ERROR|FATAL|PANIC|Error|Fatal)\b)\s*:"
                         r"|\bexit(?:ed)?\s+(?:code|status)\s+-?\d+|\bHTTP\s*[45]\d\d\b|(?-i:\bE[A-Z]{3,}\b)(?=:)"
                         r"|\bstack ?trace\b", re.I)
@@ -1492,7 +1494,7 @@ def person_ask_refusal(person, text, where):
              else "the first paragraph of the task body (--body)")
     return (f"Your ask to {name} {'; '.join(problems)}. The rule: {place} is one or two plain sentences saying what "
             f"you need from {name} and what happens after, at most {LINT_ASK_WORDS} words, with no ids, hashes, file "
-            f"paths, s3:// links or tool names; put details in a comment or further down the body. "
+            f"paths, s3:// links, tool names or error output; put details in a comment or further down the body. "
             f'Example: "{LINT_ASK_EXAMPLE}"')
 
 

@@ -84,6 +84,10 @@ All notable changes to Tico are recorded here. The format follows
   each one at its own rate.
 
 ### Fixed
+- **Decide: C opens the note on a several-picks card too**, as the keyboard row says. Decide also orders cards by
+  when their dates are, not by how the date is written, so a time with another offset no longer lands a card in the
+  wrong place, and a question on a roadmap item no longer says it holds up that same item. A bot's ask refused for
+  error output (a bare error name such as `TypeError` counts) now says "or error output" in the rule.
 - **A run whose only work was a git push counts as acting.** The computer reports the pushes a run made from its
   task's worktrees with its result, so in `hub sql` the run reads `acted` with `did_nothing` 0 instead of
   `no_change`. Pushes from another task's worktree are not counted, and older runs read as before.

@@ -149,3 +149,30 @@ def test_a_dated_task_under_an_undated_building_item_keeps_its_urgency(api):
     card = next(i for i in get(api, "needs-you")["items"] if i["id"] == asked["task"]["id"])
     assert card["holds_up"]["kind"] == "roadmap" and card["holds_up"]["due"] is None
     assert card["holds_up"]["soonest"] == tomorrow and card["tier"] == 0
+
+
+def test_times_with_different_offsets_are_compared_by_when_they_are():
+    """Two working days from Friday 10:00Z is Tuesday 10:00Z. 12:00+05:00 is 07:00Z, inside it; 08:00-05:00 is 13:00Z,
+    after it, though their text sorts the other way round. A bare date reads as midnight UTC."""
+    friday = "2026-10-23T10:00:00.000000Z"
+    inside = {"kind": "question", "ask": {"goes_ahead_at": "2026-10-27T12:00:00+05:00", "refs": {}}}
+    after = {"kind": "question", "ask": {"goes_ahead_at": "2026-10-27T08:00:00-05:00", "refs": {}}}
+    day = {"kind": "question", "ask": {"refs": {"if_no_answer": {"by": "2026-10-27"}}}}
+    assert [views.decide_tier(x, friday) for x in (inside, after, day)] == [0, 2, 0]
+
+
+def test_a_card_on_the_roadmap_item_itself_does_not_say_it_holds_itself_up(api):
+    _, _, attempt = setup_attempt(api)
+    tomorrow = H.shift(H.now(), hours=24)
+    item = post(api, "tasks", {"owner": "bot:ops", "title": "Website sales chat build", "body": "Spec.", "due": tomorrow,
+                               "type": "Product roadmap", "step": "Building"})
+    with api.app.state.store.read() as c:
+        assert views.holds_up(c, H.task(c, item["id"]), lambda tid: True) is None
+    # Under a parent, the parent is what it holds up, dated by the item's own due.
+    parent = post(api, "tasks", {"owner": "bot:ops", "title": "Launch the website", "body": "x"})
+    sub = post(api, "tasks", {"owner": "bot:ops", "title": "Website chat for launch", "body": "Spec.",
+                              "type": "Product roadmap", "step": "Building", "due": tomorrow,
+                              "relations": [{"task": parent["id"], "kind": "parent"}]})
+    with api.app.state.store.read() as c:
+        held = views.holds_up(c, H.task(c, sub["id"]), lambda tid: True)
+    assert (held["title"], held["kind"], held["soonest"]) == ("Launch the website", "task", tomorrow)

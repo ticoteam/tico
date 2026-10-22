@@ -923,12 +923,15 @@ class WaitingWithDependency(HubCase):
                     "Move the site to ES2022? If yes, I ship it Monday.",
                     "Start the ISO27001 audit? If yes, I book the auditor.",
                     "Build the site with Node.js? If yes, I start today.",
-                    "Approve the trial (it ends Oct. 20)? If yes, I sign up."]:
+                    "Approve the trial (it ends Oct. 20)? If yes, I sign up.",
+                    "Fix the error in the invoice? If yes, I send it again."]:
             self.assertEqual(H.lint_person_ask(ask), [], ask)
         for ask, failed in [("Approve it. I send it. Then I book it.", "3 sentences"),
                             ("Approve PO-1234? If yes, I pay it.", 'id or hash: "PO-1234"'),
                             ("Approve invoice #4821?", 'id or hash: "#4821"'),
-                            ("Ship the fix in app.js?", 'file path: "app.js"')]:
+                            ("Ship the fix in app.js?", 'file path: "app.js"'),
+                            # An error class name is the bot's record even with no message after it.
+                            ("Retry the import? It stopped on a TypeError.", 'error output: "TypeError"')]:
             self.assertIn(failed, "; ".join(H.lint_person_ask(ask)), ask)
 
     def test_a_bot_gives_a_person_a_plain_ask_or_is_refused(self):
@@ -945,6 +948,7 @@ class WaitingWithDependency(HubCase):
                 self.assertEqual(refused.exception.rule, 'lint')
                 self.assertIn(f'Your ask to ana {failed}', refused.exception.detail)
                 self.assertIn(f'Example: "{H.LINT_ASK_EXAMPLE}"', refused.exception.detail)
+                self.assertIn('s3:// links, tool names or error output', refused.exception.detail)
         self.assertEqual(H.bot(self.conn, 'cmo')['state'], 'active')
         self.assertIsNone(H.task(self.conn, task['id'])['waiting_on'])
         after = H.task_update(self.conn, CMO, task['id'], status='waiting', waiting_on='ana', note=plain)
