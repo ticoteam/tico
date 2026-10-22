@@ -68,7 +68,7 @@
     },
     {
       "name": "Goals",
-      "description": "What every person and bot is for (docs/goals-and-kpis.md): goals with a colour the Goal Manager works out from their KPIs, unless a person set one; check-ins in the owner's words; proposals the owner confirms."
+      "description": "What every person and bot is for (docs/goals-and-kpis.md): goals with a colour the CEO Bot works out from their KPIs, unless a person set one; check-ins in the owner's words; proposals the owner confirms."
     },
     {
       "name": "KPIs",
@@ -2136,8 +2136,8 @@
     },
     "/api/v2/ceo-bot": {
       "get": {
-        "summary": "Whether this install has the CEO Bot switch on (the Goal Manager shown as the CEO Bot, at the top of the chart), how much it does (its level, with each level's sentence and who changed it when), and how many items it put in each person's Needs you today against its cap of 5 (everyone's for the owner, admins and the CEO Bot; your own for anyone else)",
-        "operationId": "getCeoBotSwitch",
+        "summary": "The CEO Bot's name, whether its regular checks run, how much it does (its level, with each level's sentence and who changed it when), and how many items it put in each person's Needs you today against its cap of 5 (everyone's for the owner, admins and the CEO Bot; your own for anyone else)",
+        "operationId": "getCeoBot",
         "responses": {
           "200": {
             "description": "OK",
@@ -2173,15 +2173,17 @@
         "tags": [
           "Goals"
         ]
-      },
+      }
+    },
+    "/api/v2/ceo-bot/checks": {
       "post": {
-        "summary": "Owners and admins: turn the CEO Bot switch on or off for this install; no bot may. Only names and the chart change",
-        "operationId": "setCeoBotSwitch",
+        "summary": "Settings > CEO Bot, \"Regular checks\": the owner turns the KPI pass and the automatic goal colours on or off, on their own click. Off, neither runs until they are turned back on. No admin or bot may",
+        "operationId": "setCeoBotChecks",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/CeoBotSwitch"
+                "$ref": "#/components/schemas/CeoBotChecks"
               }
             }
           },
@@ -2237,7 +2239,7 @@
     },
     "/api/v2/ceo-bot/level": {
       "post": {
-        "summary": "Settings > CEO Bot, \"How much your CEO Bot does\": the owner or an admin picks level 1, 2 or 3 on their own click, logged with who and when. No bot may, the CEO Bot included. 409 while the switch is off",
+        "summary": "Settings > CEO Bot, \"How much your CEO Bot does\": the owner picks Passive (1), Suggests actions (2) or Acts on its own (3) on their own click, logged with who and when. No admin or bot may, the CEO Bot included",
         "operationId": "setCeoBotLevel",
         "requestBody": {
           "content": {
@@ -2742,7 +2744,7 @@
     },
     "/api/v2/company": {
       "get": {
-        "summary": "The company's Vision and Description (the Company section at the top of Goals where the CEO Bot switch is on), and whether the caller may edit them",
+        "summary": "The company's Vision and Description (the Company section at the top of Goals), and whether the caller may edit them",
         "operationId": "getCompany",
         "responses": {
           "200": {
@@ -2781,7 +2783,7 @@
         ]
       },
       "post": {
-        "summary": "The owner or an admin, on their own click: change the Vision and/or the Description; never a bot, the CEO Bot included. Each change is kept with who and when",
+        "summary": "The owner, on their own click: change the Vision and/or the Description; never an admin or a bot, the CEO Bot included. Each change is kept with who and when",
         "operationId": "updateCompany",
         "requestBody": {
           "content": {
@@ -5502,7 +5504,7 @@
     },
     "/api/v2/goal-manager/turn-on": {
       "post": {
-        "summary": "Owner only: add the Goal Manager from the catalog or restore it, and activate it",
+        "summary": "Owner only: add the CEO Bot from the catalog or restore it, and activate it",
         "operationId": "turnOnGoalManager",
         "requestBody": {
           "content": {
@@ -5707,7 +5709,7 @@
     },
     "/api/v2/goals/needs-you": {
       "get": {
-        "summary": "Red KPIs on goals the caller owns, stale KPIs they own, and definitions or targets they are asked to confirm; for a person each is a Goal Manager task (`task`), the one Tasks and Decide show",
+        "summary": "Red KPIs on goals the caller owns, stale KPIs they own, and definitions or targets they are asked to confirm; for a person each is a CEO Bot task (`task`), the one Tasks and Decide show",
         "operationId": "getGoalsNeedsYou",
         "responses": {
           "200": {
@@ -5748,7 +5750,7 @@
     },
     "/api/v2/goals/refresh": {
       "post": {
-        "summary": "The Goal Manager's status pass (or the owner's): work automatic colours out again. A colour a person set only gets a suggestion",
+        "summary": "The CEO Bot's status pass (or the owner's): work automatic colours out again. A colour a person set only gets a suggestion",
         "operationId": "refreshGoalStatuses",
         "requestBody": {
           "content": {
@@ -6395,7 +6397,7 @@
     },
     "/api/v2/goals/{gid}/status/auto": {
       "post": {
-        "summary": "\"Let Goal Manager set it\": end a colour set by hand; the automatic colour is worked out at once",
+        "summary": "\"Let CEO Bot set it\": end a colour set by hand; the automatic colour is worked out at once",
         "operationId": "handBackGoalStatus",
         "parameters": [
           {
@@ -14702,6 +14704,12 @@
                                   "title": "Question",
                                   "type": "string"
                                 },
+                                "why": {
+                                  "default": "",
+                                  "maxLength": 200,
+                                  "title": "Why",
+                                  "type": "string"
+                                },
                                 "options": {
                                   "items": {
                                     "additionalProperties": false,
@@ -14729,6 +14737,17 @@
                                           }
                                         ],
                                         "title": "File"
+                                      },
+                                      "then": {
+                                        "default": "",
+                                        "maxLength": 120,
+                                        "title": "Then",
+                                        "type": "string"
+                                      },
+                                      "recommended": {
+                                        "default": false,
+                                        "title": "Recommended",
+                                        "type": "boolean"
                                       }
                                     },
                                     "required": [
@@ -18373,6 +18392,20 @@
         ],
         "additionalProperties": true
       },
+      "CeoBotChecks": {
+        "properties": {
+          "on": {
+            "type": "boolean",
+            "title": "On"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "on"
+        ],
+        "title": "CeoBotChecks"
+      },
       "CeoBotLevel": {
         "properties": {
           "level": {
@@ -18513,34 +18546,15 @@
         ],
         "additionalProperties": true
       },
-      "CeoBotSwitch": {
-        "properties": {
-          "on": {
-            "type": "boolean",
-            "title": "On"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "on"
-        ],
-        "title": "CeoBotSwitch"
-      },
       "CeoBotView": {
         "type": "object",
         "properties": {
-          "on": {
-            "type": "boolean"
-          },
           "name": {
             "type": "string"
           },
-          "changed_by": {
-            "type": "string"
-          },
-          "changed_at": {
-            "type": "string"
+          "regular_checks": {
+            "type": "boolean",
+            "description": "Whether the KPI pass and the automatic goal colours run"
           },
           "level": {
             "type": "integer",
@@ -18635,7 +18649,7 @@
           "level",
           "levels",
           "name",
-          "on"
+          "regular_checks"
         ],
         "additionalProperties": true
       },
@@ -19046,19 +19060,14 @@
             ],
             "additionalProperties": true
           },
-          "on": {
-            "type": "boolean",
-            "description": "Whether the CEO Bot switch is on: the section shows only then"
-          },
           "may_edit": {
             "type": "boolean",
-            "description": "The owner or an admin, never a bot"
+            "description": "The owner on their own click, never an admin or a bot"
           }
         },
         "required": [
           "company",
-          "may_edit",
-          "on"
+          "may_edit"
         ],
         "additionalProperties": true
       },
@@ -20211,14 +20220,14 @@
               "string",
               "null"
             ],
-            "description": "auto: worked out by the Goal Manager; person: set by hand and kept until handed back"
+            "description": "auto: worked out by the CEO Bot; person: set by hand and kept until handed back"
           },
           "suggest_status": {
             "type": [
               "string",
               "null"
             ],
-            "description": "On a colour set by hand: the colour the Goal Manager would choose, when it differs"
+            "description": "On a colour set by hand: the colour the CEO Bot would choose, when it differs"
           },
           "suggest_note": {
             "type": [
@@ -21048,14 +21057,14 @@
                   "string",
                   "null"
                 ],
-                "description": "auto: worked out by the Goal Manager; person: set by hand and kept until handed back"
+                "description": "auto: worked out by the CEO Bot; person: set by hand and kept until handed back"
               },
               "suggest_status": {
                 "type": [
                   "string",
                   "null"
                 ],
-                "description": "On a colour set by hand: the colour the Goal Manager would choose, when it differs"
+                "description": "On a colour set by hand: the colour the CEO Bot would choose, when it differs"
               },
               "suggest_note": {
                 "type": [
@@ -21260,14 +21269,14 @@
                     "string",
                     "null"
                   ],
-                  "description": "auto: worked out by the Goal Manager; person: set by hand and kept until handed back"
+                  "description": "auto: worked out by the CEO Bot; person: set by hand and kept until handed back"
                 },
                 "suggest_status": {
                   "type": [
                     "string",
                     "null"
                   ],
-                  "description": "On a colour set by hand: the colour the Goal Manager would choose, when it differs"
+                  "description": "On a colour set by hand: the colour the CEO Bot would choose, when it differs"
                 },
                 "suggest_note": {
                   "type": [
@@ -25230,6 +25239,17 @@
               }
             ],
             "title": "File"
+          },
+          "then": {
+            "type": "string",
+            "maxLength": 120,
+            "title": "Then",
+            "default": ""
+          },
+          "recommended": {
+            "type": "boolean",
+            "title": "Recommended",
+            "default": false
           }
         },
         "additionalProperties": false,
@@ -25920,6 +25940,12 @@
             "maxLength": 300,
             "minLength": 1,
             "title": "Question"
+          },
+          "why": {
+            "type": "string",
+            "maxLength": 200,
+            "title": "Why",
+            "default": ""
           },
           "options": {
             "items": {

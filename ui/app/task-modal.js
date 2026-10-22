@@ -308,10 +308,22 @@ async function taskRelate(d, task, body, on = task.id) {
     if (d.open && String(d.dataset.task) === String(task.id) && data.task) taskModalShow(data.task, d);
   } catch (e) { toast(e.message, true); }
 }
+// A milestone the task waits for besides tasks (backend/milestone_waits.py): "PR #943 to merge", then "merged".
+function taskMilestoneHTML(t) {
+  const waits = Array.isArray(t.milestone_waits) ? t.milestone_waits : [];
+  if (!waits.length) return '';
+  const done = w => w.kind === 'pr_merged' ? 'merged' : 'published';
+  return `<div class="trel task-milestones"><span class="trel-k">Waits for</span><div class="tlinks">${waits.map(w => {
+    const text = `${w.label} ${w.met ? done(w) : w.kind === 'pr_merged' ? 'to merge' : 'to be published'}`;
+    return `<span class="tlink milestone${w.met ? ' met' : ''}" title="${esc(w.sentence)}">${w.url
+      ? `<a href="${esc(w.url)}" target="_blank" rel="noopener">${esc(text)}</a>` : esc(text)}</span>`;
+  }).join('')}</div></div>`;
+}
 function taskRelHTML(t) {
   const groups = TASK_REL_GROUPS.map(([kind, dir, label]) => [kind, dir, label, taskRels(t, kind, dir)]).filter(g => g[3].length);
-  return `<section class="tsec task-related${groups.length ? '' : ' tsec-empty'}"><h3 class="rail-h">Related<button type="button" class="prop-add" data-related-add aria-haspopup="menu" aria-label="Relate a task" title="Relate a task">${TL_ICON.plus}</button></h3>
-    ${groups.map(([kind, dir, label, rows]) => `<div class="trel"><span class="trel-k">${esc(label)}</span><div class="tlinks">${rows.map(k => `<span class="tlink task"><button type="button" class="linkish" data-open-task="t${esc(k.id)}" aria-label="Open ${esc(k.title)}">${taskStatusText(k)} ${esc(clipLine(k.title, 70))}</button><button type="button" class="x" data-drop-rel="${esc(kind)} ${esc(dir)} ${esc(k.id)}" aria-label="Remove ${esc(label.toLowerCase())}: ${esc(k.title)}">×</button></span>`).join('')}</div></div>`).join('')}</section>`;
+  const milestones = taskMilestoneHTML(t);
+  return `<section class="tsec task-related${groups.length || milestones ? '' : ' tsec-empty'}"><h3 class="rail-h">Related<button type="button" class="prop-add" data-related-add aria-haspopup="menu" aria-label="Relate a task" title="Relate a task">${TL_ICON.plus}</button></h3>
+    ${groups.map(([kind, dir, label, rows]) => `<div class="trel"><span class="trel-k">${esc(label)}</span><div class="tlinks">${rows.map(k => `<span class="tlink task"><button type="button" class="linkish" data-open-task="t${esc(k.id)}" aria-label="Open ${esc(k.title)}">${taskStatusText(k)} ${esc(clipLine(k.title, 70))}</button><button type="button" class="x" data-drop-rel="${esc(kind)} ${esc(dir)} ${esc(k.id)}" aria-label="Remove ${esc(label.toLowerCase())}: ${esc(k.title)}">×</button></span>`).join('')}</div></div>`).join('')}${milestones}</section>`;
 }
 // ---- saving a task's properties. One save at a time per dialog, each with the version the last one returned, so a
 // quick second edit never trips over the first. The dialog redraws at once with the task the server sent back; the
@@ -751,7 +763,7 @@ function hubModalHTML(t, it, opts = {}) {
     ${t.goal_id ? `<div class="muted tmeta"><a href="#/goals/${encodeURIComponent(t.goal_id)}" class="task-goal" data-goal-title="${esc(t.goal_id)}">serves a goal</a></div>` : ''}
     <div class="tmodal-body task-layout">
       <div class="tmodal-main">
-      ${waitLabel && waitText ? (askToYou ? `<div class="task-ask"><div class="lbl">${esc(waitLabel)}</div><div class="task-ask-body">${esc(waitText)}</div></div>`
+      ${askToYou && qcardItem(t) ? qcardBoxHTML(t) : waitLabel && waitText ? (askToYou ? `<div class="task-ask"><div class="lbl">${esc(waitLabel)}</div><div class="task-ask-body">${esc(waitText)}</div></div>`
         : `<p class="task-wait"><span class="lbl">${esc(waitLabel)}</span> ${esc(waitText)}</p>`) : ''}
       ${taskQuietHTML(t)}
       ${original ? (waitText ? `<details class="task-orig"><summary>Original request</summary><div class="tdesc md">${safeMd(original)}</div></details>`

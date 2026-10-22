@@ -1751,14 +1751,15 @@ class Execution:
         """Whether a result that arrives after the lease lapsed may still settle its job. The
         test is the one `restore` uses without the clock: this runner still owns the bot, the job
         is still uncertain and still on this attempt, no review has decided it, and no other
-        attempt is running in its lane. A review — a person's or `auto_reconcile`'s — always
+        attempt is running in its lane, and no person pressed Stop on it: a Stop its runner never heard, because the
+        computer slept through the lease, still stands over the answer the model went on to finish. A review — a person's or `auto_reconcile`'s — always
         writes job_recovery and moves the job off `uncertain`, so a decision already taken wins
         and a late result can never undo one. Elapsed time is what hands a job from the runner to
         the sweep; it is not what makes settling safe, and the longest turns are exactly the ones
         most likely to outlive a lease."""
         job = c.execute("SELECT state FROM jobs WHERE id=? AND attempt_id=?",
                         (row["job_id"], row["id"])).fetchone()
-        return bool(self.current_owner(c, who, row)
+        return bool(self.current_owner(c, who, row) and not row["stop_requested"]
                     and job and job["state"] == "uncertain"
                     and not c.execute("SELECT 1 FROM job_recovery WHERE job_id=? AND attempt_id=?",
                                       (row["job_id"], row["id"])).fetchone()
@@ -1772,7 +1773,7 @@ class Execution:
         completed and its answer is posted where the request was made, a closed task's own room included, and the
         queued rerun never happens. Any other outcome, or a job another attempt (`attempt_id`) or another computer now
         owns, is only filed (`file_result`)."""
-        if body.outcome != "completed" or not self.current_owner(c, who, row):
+        if body.outcome != "completed" or not self.current_owner(c, who, row) or row["stop_requested"]:
             return False
         job = c.execute("SELECT state FROM jobs WHERE id=? AND attempt_id=?", (row["job_id"], row["id"])).fetchone()
         return bool(job and job["state"] in ("cancelled", "queued"))
@@ -2063,6 +2064,40 @@ class Execution:
             seq = event.seq
         c.execute("UPDATE attempts SET last_seq=? WHERE id=?", (seq, aid))
         return {"ack_seq": seq, "historical": row["lease_until"] <= H.now() or row["state"] == "expired"}
+
+    def background_done(self, c, who, aid, body):
+        """The commands a turn left running when it ended on its wait have all ended: one wake for the bot, in the
+        turn's task and conversation, with each command's exit and the end of its output. A second report of the same
+        turn changes nothing."""
+        from . import run_triggers
+        from .watchers import defang, live
+        row = self.attempt(c, who, aid, active=False)
+        if c.execute("SELECT 1 FROM events WHERE action='attempt.background-done' AND target=?", (aid,)).fetchone():
+            return {"woke": False}
+        job = c.execute("SELECT message_id FROM jobs WHERE id=?", (row["job_id"],)).fetchone()
+        origin = H.message(c, job["message_id"]) if job else None
+        task = H.task(c, H.message_task_id(origin) or "") if origin else None
+        lines = []
+        for cmd in body.commands:
+            ended = ("killed: ran over the run's time limit" if cmd.killed
+                     else "exit code unknown" if cmd.exit is None else f"exit {cmd.exit}")
+            what = cmd.description or "A background command"
+            if cmd.ci_watch:
+                what += " (CI watch: " + ", ".join(f"{k} {v}" for k, v in cmd.ci_watch.items()) + ")"
+            tail = cmd.tail.strip()
+            lines.append(f"- {what}: {ended}" + (f"\n  Last output:\n```\n{tail}\n```" if tail else ""))
+        text = ("The background commands your earlier turn left running have ended. The runner kept them when that "
+                "turn ended on its wait (Claude may have said they did not finish; they did).\n" + "\n".join(lines))
+        woke = bool(origin) and (task is None or live(task))
+        if woke:
+            refs = {"task": task["id"]} if task else {}
+            H.say(c, H.KEEPER, "bot:" + row["bot"], defang(text, c), kind="notice",
+                  conversation_id=task["conversation_id"] if task else origin["conversation_id"],
+                  refs=run_triggers.stamp({**refs, "wake": "background-done"}, "background_done", aid))
+        H.event(c, H.KEEPER, "attempt.background-done", aid,
+                {"bot": row["bot"], "task": task["id"] if task else None, "woke": woke,
+                 "commands": [{"exit": cmd.exit, "killed": cmd.killed} for cmd in body.commands]})
+        return {"woke": woke}
 
     def complete(self, c, who, aid, body):
         row = self.attempt(c, who, aid, final=True)

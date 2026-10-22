@@ -26,7 +26,7 @@ from . import repo_waits
 from . import built_on
 from . import agents, app_delivery, batch, external_sync, inbox_isolation, mcp_oauth, harness_actions, model_login, oidc, personal_tokens, views
 from . import owner_link
-from . import check_models, run_triggers, team_rules, update_feeds, topic_change, usage_limits, bot_to_bot, wake_presets, visuals, wake_rules, quiet_work
+from . import check_models, run_triggers, team_rules, update_feeds, topic_change, usage_limits, bot_to_bot, wake_presets, visuals, wake_rules, quiet_work, milestone_waits
 from . import task_privacy as privacy
 from . import task_relations as TR
 from . import task_roles as TRo
@@ -189,6 +189,8 @@ def create_app(settings=None):
                 refresh_deployed_tasks(app.state.github_app)
                 # A worktree is released by its pull requests' state, so a missed webhook must heal unread.
                 reconcile_worktree_prs(app.state.github_app)
+                # A merge or release a task waits for whose webhook never came is asked of GitHub (Dev 256).
+                milestone_waits.recover(app.state.github_app)
             while not stop.is_set():
                 try:
                     await asyncio.to_thread(github_wakes)
@@ -994,6 +996,8 @@ def create_app(settings=None):
             value["links"] = H.task_links(c, row["id"])
             from .worktree_waits import for_task as worktree_waits_for
             value["worktree_waits"] = worktree_waits_for(c, row["id"])
+            # What it waits for besides tasks: a pull request to merge, a release to be published (Dev 256).
+            value["milestone_waits"] = milestone_waits.waits(c, row["id"])
             value["children_summary"] = H.children_summary(c, row["id"], visible_sql)
             value["pr_state"] = H.pr_state(value["links"])
             if parts is None:
@@ -1622,9 +1626,9 @@ def create_app(settings=None):
             return {"cards": onboarding.catalog(c)}
 
     @app.get("/api/v2/ceo-bot")
-    def ceo_bot_switch(request: Request):
-        """The CEO Bot rollout switch and its level (backend/ceo_bot.py). How many items it put in each person's Needs
-        you today is the owner's, an admin's and the CEO Bot's to read; anyone else sees only their own count."""
+    def ceo_bot_settings(request: Request):
+        """The CEO Bot's name, level and regular checks (backend/ceo_bot.py). How many items it put in each person's
+        Needs you today is the owner's, an admin's and the CEO Bot's to read; anyone else sees only their own count."""
         who = request.state.identity
         auth.domain(who)
         from . import ceo_bot
@@ -1633,14 +1637,6 @@ def create_app(settings=None):
         if who.actor != "bot:" + ceo_bot.SLUG and auth.company_role(who) not in ("owner", "admin"):
             value["asked_today"] = {k: n for k, n in value["asked_today"].items() if k == who.actor}
         return value
-
-    @app.post("/api/v2/ceo-bot")
-    def ceo_bot_switch_set(request: Request, body: M.CeoBotSwitch):
-        """Owners and admins flip it at runtime, no release; a bot never does, the Goal Manager included."""
-        who = request.state.identity
-        admin_only(who, "turns the CEO Bot on or off")
-        from . import ceo_bot
-        return mutate(request, body, lambda c: ceo_bot.named(c, ceo_bot.set_on(c, who.actor, body.on)))
 
     @app.post("/api/v2/goal-manager/turn-on")
     def turn_on_goal_manager(request: Request, body: M.Empty):
@@ -1956,7 +1952,7 @@ def create_app(settings=None):
             access = auth.bot_accesses(c, who)
             roster, configs = views.roster(c), views.entries(c)
             archived = {row["slug"] for row in H.bots(c) if row.get("state") == "archived"}
-            # The CEO Bot switch moves bots on the chart only; each keeps the `reports_to` it has (backend/ceo_bot.py).
+            # The CEO Bot heads the chart: bots move on the chart only; each keeps the `reports_to` it has (backend/ceo_bot.py).
             from . import ceo_bot
             chart = ceo_bot.chart_entries(c, settings, roster, configs, archived)
             view = P.org_view(roster, chart, archived, person_id=person or "", team=team or "")
@@ -3114,9 +3110,13 @@ def create_app(settings=None):
             c.execute("UPDATE tasks SET request_id=? WHERE id=?", (inherited_request or request_id, row["id"]))
         for url in body.links:
             H.task_link(c, who.actor, row["id"], url, mover=True)
+        # The parent it was filed under is a relation written here too, and reads back first.
+        filed_under = TR.parent_of(c, row["id"])
+        readback = TR.readback(c, row["id"], filed_under, "parent") if filed_under else []
         own_subtask = None
         for other, kind in others:
-            TR.relate(c, who.actor, row["id"], other, kind, mover=mover(c, who) or None)
+            changed = TR.relate(c, who.actor, row["id"], other, kind, mover=mover(c, who) or None)
+            readback += TR.readback(c, row["id"], other, kind, changed=changed)
             own_subtask = own_subtask or TR.own_subtask_warning(c, row["id"], other, kind)
         if body.roles:
             try:
@@ -3125,6 +3125,7 @@ def create_app(settings=None):
                 raise Problem("roles", str(exc), 422)
         note = " ".join(filter(None, (usage_limits.warning(c, owner) or H.setup_hold(c, owner), own_subtask)))
         return {"task": task_view(H.task(c, row["id"]), c, visible_sql=auth.task_sql(c, who), who=who),
+                **({"readback": readback} if readback else {}),
                 **({"warning": note} if note else {}), **({"warnings": row["warnings"]} if row.get("warnings") else {})}
 
     @app.post("/api/v2/tasks")
@@ -3520,10 +3521,49 @@ def create_app(settings=None):
             other_id = auth.resolve_task(c, who, body.task)
             auth.task(c, who, task_id)
             auth.task(c, who, other_id)
-            TR.relate(c, who.actor, task_id, other_id, body.kind, remove=body.remove, mover=mover(c, who) or None)
+            changed = TR.relate(c, who.actor, task_id, other_id, body.kind, remove=body.remove,
+                                mover=mover(c, who) or None)
+            # The stored direction in words, from both ends (Dev 256): a reversed write shows in the reply.
             note = None if body.remove else TR.own_subtask_warning(c, task_id, other_id, body.kind)
-            return {"task": task_view(H.task(c, task_id), c, visible_sql=auth.task_sql(c, who), who=who),
+            return {"readback": TR.readback(c, task_id, other_id, body.kind, remove=body.remove, changed=changed),
+                    "task": task_view(H.task(c, task_id), c, visible_sql=auth.task_sql(c, who), who=who),
                     **({"warning": note} if note else {})}
+        return mutate(request, body, work)
+
+    @app.post("/api/v2/tasks/{tid}/waits")
+    def task_wait_on(request: Request, tid: str, body: M.TaskWait):
+        """Wait on `task:<id>` (blocked_by), `pr:<url|task>` (until it merges) or `release:<tag>` (until it is
+        published); `remove` takes the wait off. The upstream task never moves (backend/milestone_waits.py)."""
+        who = request.state.identity
+        def work(c):
+            task_id = auth.resolve_task(c, who, tid)
+            row = auth.task(c, who, task_id)
+            kind, _, value = body.on.partition(":")
+            if kind.strip().lower() == "task":
+                other_id = auth.resolve_task(c, who, value.strip())
+                auth.task(c, who, other_id)
+                changed = TR.relate(c, who.actor, task_id, other_id, "blocked_by", remove=body.remove,
+                                    mover=mover(c, who) or None)
+                readback = TR.readback(c, task_id, other_id, "blocked_by", remove=body.remove, changed=changed)
+            else:
+                H._writer(c, who.actor)
+                H._task_private_writer(c, who.actor, row)
+                TR._mine(c, who.actor, row, mover(c, who))
+                def resolve(value):
+                    other = auth.resolve_task(c, who, value)
+                    auth.task(c, who, other)
+                    return other
+                if body.remove:
+                    gone = milestone_waits.remove(c, who.actor, row, body.on, release_repo=settings.release_repo,
+                                                  resolve_task=resolve)
+                    readback = [f"Removed: {TR._name(c, task_id)} waits for {gone}"]
+                else:
+                    wait = milestone_waits.add(c, who.actor, row, body.on, release_repo=settings.release_repo,
+                                               resolve_task=resolve)
+                    readback = [("" if wait["added"] else "Already: ") + f"{TR._name(c, task_id)} {wait['sentence']}"
+                                + (" (already happened: woken once)" if wait["woke_at"] else "")]
+            return {"readback": readback,
+                    "task": task_view(H.task(c, task_id), c, visible_sql=auth.task_sql(c, who), who=who)}
         return mutate(request, body, work)
 
     @app.get("/api/v2/preferences/{key}")
@@ -5355,6 +5395,11 @@ def create_app(settings=None):
     @app.post("/api/v2/attempts/{aid}/inputs/{mid}/ack")
     def input_ack(request: Request, aid: str, mid: str, body: M.Empty):
         return mutate(request, body, lambda c: execution.acknowledge_input(c, request.state.identity, aid, mid))
+
+    @app.post("/api/v2/attempts/{aid}/background-done")
+    def background_done(request: Request, aid: str, body: M.BackgroundDone):
+        body = scrub_attempt(aid, body)          # a secret set in this run never reaches the wake
+        return mutate(request, body, lambda c: execution.background_done(c, request.state.identity, aid, body))
 
     @app.post("/api/v2/attempts/{aid}/complete")
     def complete(request: Request, aid: str, body: M.Completion):

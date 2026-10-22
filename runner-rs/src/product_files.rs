@@ -1,4 +1,4 @@
-//! Built-in bots (the assistant, BotOps, Librarian, Goal Manager and the starters onboarding made) follow the
+//! Built-in bots (the assistant, BotOps, Librarian, CEO Bot and the starters onboarding made) follow the
 //! catalog the release ships (service.py bootstrap and refresh_product_files). This binary carries no templates:
 //! the Python helper does the work, as `python -m runner --config <path> catalog` (runner/catalog_job.py),
 //! the way side jobs run (crate::sidejobs). A bot assigned here without a repository is set up from its template

@@ -3,7 +3,7 @@
 A check-in is the goal owner's own words about what is going on. Readings are facts; a check-in is
 interpretation. Keep them apart: never put an explanation in a reading's note, never make up an answer.
 
-When to ask: a goal turned yellow or red in the status pass, or a KPI on a goal is stale or missing for a second
+Only above Passive (`level` in `hub goal ceo-bot`); at Passive you ask nobody. When to ask: a goal turned yellow or red in the status pass, or a KPI on a goal is stale or missing for a second
 pass. Not when a check-in for that goal exists from the last 7 days (`hub goal checkin-list <id>`), and at most one
 question per goal per week.
 

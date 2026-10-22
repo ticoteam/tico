@@ -28,7 +28,7 @@ GET https://updates.tico.team/v1/latest?install_id=6f1c2a9e-3b7d-4c58-9a10-2d4e8
 | `version` | The Tico release you run, for example `0.2.15`. |
 | `active_people` | `true` if at least one human used Tico in the last 7 days, otherwise `false`. |
 | `active_bots` | `true` if at least one bot run finished in the last 7 days, otherwise `false`. |
-| `first_result` | `true` once a run of one of your own bots has ever finished on this install (the built-in Assistant, BotOps, Librarian and Goal Manager do not count), otherwise `false`. It lets the project measure how long a new install takes to reach its first working bot. |
+| `first_result` | `true` once a run of one of your own bots has ever finished on this install (the built-in Assistant, BotOps, Librarian and CEO Bot do not count), otherwise `false`. It lets the project measure how long a new install takes to reach its first working bot. |
 
 That is all. No team name, domain, email address, humans, bot names, counts, content, hostnames or file names. Your
 IP address is unavoidably seen by any server you connect to (GitHub sees it today), and HQ handles it as described below.
@@ -172,6 +172,10 @@ from or goes to a Tico server you run.
 
 - `GET /v1/onboarding/health`: whether Tico's assistant can answer. Nothing is sent with it. Until the assistant
   launches it answers `{"ok": false}`, and the page plans in your browser.
+- `POST /v1/onboarding/turn`, only while Tico's assistant is on: your message, the tab you are on and your plan, with the
+  chat's last 8 turns, which HQ sends through OpenRouter to the chat's model (Inception Mercury 3 by default) for the
+  answer, with data collection denied and zero retention; key-shaped text is removed first, and HQ keeps none of it and
+  logs no text.
 - `POST /v1/onboarding/event`, when you send a message or download your company file, and nothing else:
 
 ```
