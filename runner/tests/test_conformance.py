@@ -551,6 +551,30 @@ def test_a_usage_limit_with_no_fallback_set_runs_on_another_signed_in_provider(a
                for d in diagnostics), diagnostics
 
 
+@pytest.mark.parametrize("harness", ["codex"])
+@pytest.mark.parametrize("setup", [{}, {"bot": {"fallback": {"harness": "codex", "model": "gpt-5.5"}}}])
+@pytest.mark.parametrize("alternate", [False, True])
+def test_a_limited_primary_never_retries_its_login_as_a_fallback(api, computer, alternate):
+    from backend.store import H
+    view = get(api, "providers")
+    api.put("/api/v2/providers", json={"enabled": ["openai", "anthropic"] if alternate else ["openai"],
+                                       "model": "gpt-6-luna", "expected_revision": view["revision"], "auto_fallback": True},
+            headers={**headers(), "Idempotency-Key": H.new_id()}).raise_for_status()
+    computer.start()
+    msg = post(api, "chat/ops", {"text": "Please LIMIT yourself"})
+    first = until(lambda: (computer.attempts() or [None])[0], "the primary's attempt")
+    aid = first["id"]
+    result = until(lambda: next((a["result"] for a in computer.attempts() if a["id"] == aid), None), "the completion")
+    assert [p["harness"] for p in computer.prompts()] == (["codex", "claude"] if alternate else ["codex"])
+    if alternate:
+        assert result["outcome"] == "completed" and result["fallback"] == "claude"
+        assert until(lambda: reply_to(api, msg["conversation_id"]), "the fallback reply")["body"] == "Acme reply."
+    else:
+        assert result["limited"] and not result.get("fallback")
+        status = until(lambda: get(api, "bots/ops")["status"], "the held status")
+        assert status["state"] == "limited" and "resumes" in status["focus"]
+
+
 # TK-EKWAFWPD: the first of the company's providers is out of quota on this computer too. The hop that hits its limit
 # moves the turn on to the next provider in the same turn, and the next turn skips that login altogether.
 @pytest.mark.parametrize("harness", ["claude"])

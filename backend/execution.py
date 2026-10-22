@@ -746,12 +746,18 @@ def fallback_choice(c, settings, runner_id, bot, config, job_id=None, ctx=None):
     the turn is its one probe, so with another job's probe out on it the bot waits rather than the runner picking it
     anyway. The Gateway counts when the turn would be handed it (models_preset.with_gateway_fallback). A fallback
     turned off, none, or one the runner already found not ready in this hold window (`stuck`) means waiting."""
-    from .harnesses import runtime_of
+    from .harnesses import harness_caps, runtime_of
     from .subscriptions import effective
     named = config.get("fallback") if isinstance(config.get("fallback"), dict) else {}
     if named.get("off"):
         return None
     _, own, primary = login_key(c, settings, runner_id, bot, config, ctx)
+    # The runner ignores a named model on this same spent login and continues through the company list.
+    # Match it here, so the claim admits that next provider, or holds the job when there is none.
+    if (named.get("harness") and named.get("model") and runtime_of(named["harness"]) == primary
+            and harness_caps(config.get("harness"), primary).get("api_keys") != "bot"
+            and harness_caps(named["harness"]).get("api_keys") != "bot"):
+        named = {}
     if bot in login_holds.get(c, runner_id, own, primary).get("stuck", []):
         return None
     row = c.execute("SELECT readiness_json FROM runners WHERE id=?", (runner_id,)).fetchone()

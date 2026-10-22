@@ -1,5 +1,6 @@
 """A usage limit holds the provider login, survives restarts, and lets one probe turn through per hold window."""
 import json
+import pytest
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -196,6 +197,38 @@ def test_a_held_login_sends_the_turn_to_a_ready_fallback_and_waits_only_when_non
     at(monkeypatch, "2026-10-19T02:21:00.000000Z", api)
     signed_in(api, machine, ["ops"], ["codex"])
     assert claim(api, machine)["config"]["primary_held"] == hold["until"]
+
+
+@pytest.mark.parametrize("alternate", [False, True])
+def test_a_same_login_named_fallback_uses_the_next_company_row_or_waits_without_a_lease(api, monkeypatch, alternate):
+    from backend.execution import fallback_choice
+    view = get(api, "providers")
+    api.put("/api/v2/providers", json={"enabled": ["openai", "anthropic"] if alternate else ["openai"],
+                                       "model": "gpt-6-luna", "expected_revision": view["revision"]},
+            headers={**headers(), "Idempotency-Key": "same-login-fallback"}).raise_for_status()
+    at(monkeypatch, "2026-10-19T01:46:47.000000Z")
+    machine = runner(api)
+    assign(api, machine, "ops")
+    config = {"runtime": "codex", "harness": "codex", "model": "gpt-6-luna",
+              "fallback": {"harness": "codex", "model": "gpt-6-luna"}}
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET config_json=json_patch(config_json,?) WHERE bot='ops'", (json.dumps(config),))
+    signed_in(api, machine, ["ops"], ["codex", "claude"])
+    for n in range(2):
+        post(api, "tasks", {"owner": "ops", "title": f"Same login work {n}", "body": "Please do it."})
+    limit(api, machine, claim(api, machine))
+    at(monkeypatch, "2026-10-19T01:50:00.000000Z", api)
+    with api.app.state.store.read() as c:
+        assert fallback_choice(c, api.app.state.store.settings, machine["runner_id"], "ops", config) == (
+            ("", "claude") if alternate else None)
+    next_turn = claim(api, machine)
+    if alternate:
+        assert next_turn and next_turn["config"]["primary_held"]
+    else:
+        assert next_turn is None
+        with api.app.state.store.read() as c:
+            assert login_holds.get(c, machine["runner_id"], "", "codex")["until"].startswith("2026-10-19T02:40")
+            assert H.status(c, "ops")["state"] == "limited"
 
 
 def test_a_bot_whose_fallback_is_off_or_not_signed_in_waits_out_the_hold(api, monkeypatch):

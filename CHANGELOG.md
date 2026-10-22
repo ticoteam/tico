@@ -134,6 +134,9 @@ All notable changes to Tico are recorded here. The format follows
   each one at its own rate.
 
 ### Fixed
+- **A fallback on the same exhausted login is skipped.** A bot configured to use another model on its own
+  limited login now tries the next ready company provider. If none is ready, its work waits for the login's
+  reset instead of retrying the same account.
 - **Milestone waits follow the blocked_by rules.** Adding or removing a wait for a pull request or release now needs
   the same permission as a blocked_by (the task's owner, or a person on a team that moves tasks), a deleted task
   keeps its waits and gets them back when restored, and a message held while a task waits says what it waits for.
