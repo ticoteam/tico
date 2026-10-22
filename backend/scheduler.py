@@ -76,23 +76,25 @@ def run_now(store, auth, key, actor):
     their own thread, as when scheduled, and return True. Raises a 409 when that one is already running."""
     from .store import Problem
     at = datetime.now(timezone.utc)
-    with store.transaction() as c:
-        H.event(c, actor, "system_routines.run_now", key, {})
     if key in QUICK:
         QUICK[key](store, auth, at, [])
-        return False
-    if key == "stale_review":
+        running = False
+    elif key == "stale_review":
         from . import stale_review
         if stale_review.tick(store, stamp(at), force=True) is None:
             raise Problem("conflict", "A stale ticket review is already running", 409)
-        return True
-    if key == "learnings":
+        running = True
+    elif key == "learnings":
         from . import learnings
         with store.transaction() as c:
             run_id = learnings.claim_tonight(c)
         learnings.start(store, run_id)
-        return True
-    raise Problem("invalid", "Nothing to run", 422)
+        running = True
+    else:
+        raise Problem("invalid", "Nothing to run", 422)
+    with store.transaction() as c:
+        H.event(c, actor, "system_routines.run_now", key, {"running": running})
+    return running
 
 
 class Scheduler:
