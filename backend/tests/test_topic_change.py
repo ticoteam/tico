@@ -227,6 +227,7 @@ def test_the_server_tells_runners_it_takes_the_marks(chat):
     api, machine, _, _, _ = chat
     features = api.get("/api/v2/runners/desired", headers=headers(machine["token"])).json()["features"]
     assert features["usage_requests"] is True and features["usage_request_main"] is True
+    assert features["run_pushes"] is True
 
 
 @pytest.mark.parametrize("requests,checked", [

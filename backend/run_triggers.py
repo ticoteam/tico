@@ -9,9 +9,10 @@ Every run (`turns`, same id as its attempt) records three things, all in plain c
 - tokens: `tokens_in` (all input), `cached_tokens` (the cached part of it, where the harness reports it),
   `input_tokens` (the rest) and `output_tokens`, as the run's usage already records them.
 - `did_nothing`: 1 when the run made no write Tico counts (`writes` is 0), else 0. Exact for every write that
-  reaches Tico with the run's token; a git push Tico is never told of is not seen (the runner does not report one).
+  reaches Tico with the run's token, and for a git push from a worktree of the run's own task, which its runner
+  reports with the result (`pushes`, see `pushed`). A push from anywhere else is not seen.
 - `outcome`: `acted` when the run wrote something: a hub write made with its own run token (`writes`), or a
-  reply Tico posted for it (to a person, or an answer to a bot's ask). A commit or pull request counts once Tico
+  reply Tico posted for it (to a person, or an answer to a bot's ask), or a push its runner reported. A commit or pull request counts once Tico
   sees it (`hub task link`, a task note); one that never reaches Tico cannot. Reads and bookkeeping (`BOOKKEEPING`) are not writes.
   With no write it is `no_change` when its task is still open (it looked; nothing had moved) and
   `nothing_to_do` when there was no open task to act on (no task, or one already done, closed or declined).
@@ -73,3 +74,18 @@ OUTCOME_SQL = ("CASE WHEN coalesce(writes,0)>0 THEN 'acted' "
                "WHEN (SELECT k.status FROM tasks k WHERE k.id=turns.task_id) IN ("
                + ",".join(f"'{s}'" for s in OPEN_TASK) + ") THEN 'no_change' ELSE 'nothing_to_do' END")
 SETTLE_SQL = f"outcome={OUTCOME_SQL}, did_nothing=(coalesce(writes,0)=0)"
+
+
+def pushed(conn, turn_id, computer, pushes):
+    """Add the pushes a runner reported for a run to its `writes`: only those from a worktree of the run's own task on
+    that computer, and only while the run is still open, so a result sent again is not counted twice. A runner that
+    reports none (an older one, or a run that pushed nothing) leaves the run as it was."""
+    row = conn.execute("SELECT task_id FROM turns WHERE id=? AND finished IS NULL", (turn_id,)).fetchone()
+    if not pushes or not row or not row[0]:
+        return 0
+    paths = {r[0] for r in conn.execute("SELECT path FROM task_links WHERE task_id=? AND kind='worktree' "
+                                        "AND computer_id=?", (row[0], computer))}
+    count = sum(p.count for p in pushes if p.path in paths)
+    if count:
+        conn.execute("UPDATE turns SET writes=coalesce(writes,0)+? WHERE id=?", (count, turn_id))
+    return count
