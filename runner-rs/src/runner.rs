@@ -285,6 +285,8 @@ impl Runner {
     /// Readiness and the heartbeat. `full` re-reads this computer's bots from the server; without it the last
     /// answer stands and the heartbeat goes only when `forced`, changed, or HEARTBEAT_LIVE_S has passed.
     pub async fn maintain(&self, full: bool, forced: bool) -> Result<(), ApiError> {
+        // First, so a panic later in this pass (or one that keeps recurring here) is still sent.
+        crate::panics::report(&self.client).await;
         let repository_rows = if full { self.lanes.repositories.poll().await } else { None };
         if full {
             let assignments = self.client.get("runners/assignments").await?;
@@ -387,7 +389,6 @@ impl Runner {
                 && self.events.live()
                 && beat.as_ref().is_some_and(|(p, at)| *p == printed && at.elapsed().as_secs_f64() < HEARTBEAT_LIVE_S)
         };
-        crate::panics::report(&self.client).await;
         if !quiet {
             let began = Instant::now();
             let (beat, tries) = self.post_heartbeat(&mut body).await;
@@ -867,6 +868,24 @@ mod tests {
         assert!(seen[1].starts_with("POST /api/v2/runners/heartbeat") && !seen[1].contains("isolated"), "{}", seen[1]);
         assert!(seen[1].contains("\"ops\":{\"ready\":true}") && seen[1].contains("\"pi\":{\"installed\":true}"), "{}", seen[1]);
         assert!(seen[2].starts_with("POST /api/v2/jobs/claim"), "{}", seen[2]);
+    }
+
+    #[tokio::test]
+    async fn a_panic_since_the_last_pass_is_the_first_thing_a_pass_sends() {
+        let _one = crate::panics::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (url, seen) = crate::client::tests::serve(vec![(200, r#"{"ok": true}"#)]).await;
+        let dir = std::env::temp_dir().join(format!("tico-panic-report-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(dir.join("projects")).unwrap();
+        let path = dir.join("runner.json");
+        std::fs::write(&path, json!({"url": url, "token": "t", "runner_id": "r1", "projects_dir": dir.join("projects")}).to_string()).unwrap();
+        let config = Config::load(&path).unwrap();
+        let client = Client::new(&config.url(), &config.token(), 5, 0).unwrap();
+        let runner = Runner::new(config, client, State::open(&dir.join("state")).unwrap());
+        crate::panics::note_for_test("src/drive.rs", 4242);
+        // The rest of the pass finds no server: only what it sent first matters here.
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(30), runner.maintain(false, false)).await;
+        let seen = seen.lock().unwrap();
+        assert!(seen[0].starts_with("POST /api/v2/runners/errors") && seen[0].contains(r#"{"file":"src/drive.rs","line":4242}"#), "{}", seen[0]);
     }
 
     #[test]

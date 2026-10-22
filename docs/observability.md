@@ -20,7 +20,7 @@ one PostHog project between several apps by filtering on the `app` property (Tic
 | `TICO_POSTHOG_HOST` | Exactly `https://us.i.posthog.com` or `https://eu.i.posthog.com`, matching the chosen project's region |
 | `TICO_SENTRY_DSN` | Public HTTPS Sentry ingestion DSN for the Tico project; enables browser errors with the required common settings |
 | `TICO_SENTRY_SERVER_DSN` | Public HTTPS ingestion DSN for the same Tico project; enables API/scheduler errors with the environment setting |
-| `TICO_INSTANCE_NAME` | Optional name for this install on its error reports (`instance` tag, made a lowercase slug such as `acme-co`); unset: the company name |
+| `TICO_INSTANCE_NAME` | Optional name for this install on its error reports (`instance` tag, made a lowercase slug such as `acme-co`); unset: the team's name is sent (`TICO_TEAM_NAME`), or the opaque `TICO_ENVIRONMENT_ID` when it has none |
 | `TICO_RELEASE` | Optional release label; only letters, numbers, dots, underscores and hyphens, up to 100 characters; unset: the Tico version |
 
    Public DSNs must use a Sentry ingestion host, numeric project path, and public hexadecimal
@@ -133,7 +133,8 @@ optionally `TICO_INSTANCE_NAME`; forward them with the [compose override](#docke
 server. With either of the first two unset or empty, the Sentry SDK is never started and nothing is sent. Several
 installs can share one Sentry project: every event carries `release` (the Tico version, or `TICO_RELEASE`) and an
 `instance` tag. Runners need no setting: each sends the file and line of a panic to its own server with its next
-heartbeat, and the server forwards it only when reporting is on (`source` `runner`, with the runner's version).
+heartbeat, and the server forwards it only when reporting is on (`source` `runner`, with the runner's version). A
+runner reports the same file and line at most once an hour, and at most five panics between two heartbeats.
 
 To see that reports arrive, and what they hold, send a harmless test error from the server:
 

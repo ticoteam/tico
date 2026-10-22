@@ -6,7 +6,7 @@ import json
 import re
 from pathlib import Path
 
-from .config import ROOT
+from .config import DEFAULT_COMPANY_NAME, ROOT
 
 ENVIRONMENTS = frozenset({"development", "staging", "production", "test"})
 POSTHOG_HOSTS = frozenset({"https://us.i.posthog.com", "https://eu.i.posthog.com"})
@@ -162,7 +162,10 @@ class Observability:
             return
         from .releases import version
         self.release = release(self.settings.release_id) or release(version())
-        self.instance = instance(self.settings.instance_name) or instance(self.settings.company_name)
+        # Unnamed, the team's name; an install that never set one has the stock name, so its opaque id instead.
+        named = self.settings.company_name if self.settings.company_name != DEFAULT_COMPANY_NAME else ""
+        self.instance = (instance(self.settings.instance_name) or instance(named)
+                         or instance(self.settings.environment_id))
         try:
             from sentry_sdk import Client
             self.client = Client(

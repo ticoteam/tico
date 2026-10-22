@@ -135,7 +135,11 @@ def test_route_and_runner_failures_each_send_one_tagged_event(reporting_api, rec
         {"filename": "runner-rs/src/runner.rs", "lineno": 812, "in_app": True}]}}
     wire = json.dumps(events(recording))
     assert "t-secret-1" not in wire and EMAIL not in wire and TOKEN not in wire and TEXT not in wire
-    # Only a runner reports a runner's panics.
+    # A runner posting a burst gets five reports out of it; only a runner reports a runner's panics.
+    burst = [{"file": "src/lanes.rs", "line": n} for n in range(1, 21)]
+    assert reporting_api.post("/api/v2/runners/errors", headers=headers(machine["token"]),
+                              json={"panics": burst}).status_code == 200
+    assert len(events(recording)) == 2 + 5
     assert reporting_api.post("/api/v2/runners/errors", headers=headers(), json={"panics": []}).status_code == 403
 
 
