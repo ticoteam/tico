@@ -38,8 +38,14 @@ from pathlib import Path
 # the meaningful lines an earlier change added or deleted, and at least MIN_LINES of them.
 REVERT_SHARE = 0.6
 MIN_LINES = 5
-# Release notes move between sections at every cut; they are never evidence of a revert or need a review.
+# Release notes move between sections at every cut, and the cut deletes the changelog fragments it compiled; they are
+# never evidence of a revert or need a review.
 NOTES_FILES = {"CHANGELOG.md"}
+NOTES_DIR = "changes/"
+
+
+def is_notes(path):
+    return path in NOTES_FILES or path.startswith(NOTES_DIR)
 # Cutting tests is routine here (the suite is kept small), so only product code counts toward a revert.
 TEST_PATH = re.compile(r"(^|/)(tests?|testdata|fixtures)/|(^|/)test_[^/]*$|_test\.[a-z]+$|\.test\.[a-z]+$")
 PR_SUBJECT = (re.compile(r"^Merge pull request #(\d+)\b"), re.compile(r"\(#(\d+)\)\s*$"))
@@ -77,7 +83,7 @@ def parse_log(text):
             elif line.startswith("+++ "):
                 # A deleted file names itself only on its "---" line.
                 path = line[6:] if line.startswith("+++ b/") else path
-            elif line[:1] in "+-" and line and path is not None and path not in NOTES_FILES \
+            elif line[:1] in "+-" and line and path is not None and not is_notes(path) \
                     and not TEST_PATH.search(path):
                 text = line[1:].strip()
                 if text:
@@ -274,7 +280,7 @@ def unreviewed(repo, changes, receipts, github, fetch=True):
     for commit in changes:
         number = pr_number(repo, commit)
         if number is None:
-            if not set(commit["touched"]) - NOTES_FILES:
+            if all(is_notes(path) for path in commit["touched"]):
                 continue
             if any(r.get("commit") and commit["sha"].startswith(r["commit"]) for r in receipts):
                 continue

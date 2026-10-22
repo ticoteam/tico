@@ -12,6 +12,7 @@ from backend.store import H
 from backend.tests.test_api import api, headers  # noqa: F401
 from backend.tests.test_mcp import call, rpc
 from backend.tests.test_openapi_v2 import conforms
+from scripts import changelog_fragments
 from scripts.changelog_notes import section
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -108,8 +109,8 @@ def released_edits(root):
     """Released versions whose CHANGELOG section here differs from the one at their tag, or None when no tag is readable.
 
     A release whose section is not here yet (tagged on its release branch, notes not merged back to main) is not an
-    edit: lines main gains meanwhile stay under Unreleased. A pull request whose line would land in a released section
-    once merged is refused by test_pr_changelog_lines_stay_under_unreleased instead.
+    edit. A pull request that would change a released section once merged is refused by
+    test_pr_changes_no_changelog_lines instead.
     """
     git = lambda *args, **kw: subprocess.run(["git", "-C", str(root), *args], capture_output=True, **kw)
     text = (root / "CHANGELOG.md").read_text()
@@ -153,11 +154,14 @@ def regions(text):
     return out
 
 
-def changes_outside_unreleased(root, main="origin/main", head="HEAD"):
-    """Places outside ## [Unreleased] whose lines `head` adds or changes once merged into main, or None.
+def changelog_edits(root, main="origin/main", head="HEAD"):
+    """Places in CHANGELOG.md that `head` changes once merged into main without a release trailer naming them, or None.
 
-    The branch is merged with main the way GitHub squashes it (git merge-tree), so a line the branch wrote under
-    Unreleased before a release's notes landed, and that the merge would put in the released section, counts too.
+    Pull requests put their notes in changes/unreleased/ and never edit CHANGELOG.md; only the release commit, its
+    notes merge-back or an erratum does, naming each released section it changes in a `Changelog-Release: vX.Y.Z`
+    trailer. Removing lines from ## [Unreleased] stays open, which is how a branch moves its old-style line into a
+    fragment. The branch is merged with main the way GitHub squashes it (git merge-tree), so a line the branch wrote
+    under Unreleased before a release's notes landed, and that the merge would put in the released section, counts too.
     None when there is no git or no `main` ref to compare with.
     """
     git = lambda *args: subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True)
@@ -172,36 +176,48 @@ def changes_outside_unreleased(root, main="origin/main", head="HEAD"):
     old = git("show", main + ":CHANGELOG.md").stdout
     new = git("show", tree + ":CHANGELOG.md").stdout
     diff = git("diff", "--no-color", "--no-ext-diff", "-U0", main, tree, "--", "CHANGELOG.md").stdout
-    before, after, places = regions(old), regions(new), []
+    before, after, removed, added = regions(old), regions(new), [], []
     for hunk in re.finditer(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@", diff, re.M):
         start, count, start2, count2 = (int(n) if n is not None else 1 for n in hunk.groups())
-        # A side with count 0 (a pure addition or removal) reads no lines.
-        places += before[start - 1:start - 1 + count] + after[start2 - 1:start2 - 1 + count2]
+        # Without context lines a hunk's old side is only removed lines and its new side only added ones; a side
+        # with count 0 (a pure addition or removal) reads no lines.
+        removed += before[start - 1:start - 1 + count]
+        added += after[start2 - 1:start2 - 1 + count2]
     allowed = set(RELEASE_TRAILER.findall(git("log", "--format=%B", main + ".." + head).stdout))
-    allowed |= {"links", "preamble"} if allowed else set()  # a merge-back also moves the compare links
-    return sorted(set(places) - allowed - {"Unreleased"})
+    allowed |= {"links", "preamble", "Unreleased"} if allowed else set()  # a release also moves the links
+    return sorted((set(removed) - {"Unreleased"} | set(added)) - allowed)
 
 
-def outside_unreleased_message(places):
-    names = {"links": "the link references", "preamble": "the preamble above ## [Unreleased]"}
+def changelog_edits_message(places):
+    names = {"links": "the link references", "preamble": "the preamble above ## [Unreleased]",
+             "Unreleased": "## [Unreleased]"}
     where = "conflicts with main" if places == [CONFLICT] else "adds or changes lines in " + ", ".join(
         names.get(p, "the released [%s] section" % p) for p in places)
-    return ("CHANGELOG.md: this branch %s; merge main and move your line under ## [Unreleased] (a release notes "
-            "merge-back or erratum names each section it changes in a `Changelog-Release: vX.Y.Z` commit trailer)" % where)
+    return ("CHANGELOG.md: this branch %s. Pull requests don't edit CHANGELOG.md: put your entry in "
+            "changes/unreleased/<branch>.md (`python scripts/changelog_fragments.py adopt` moves a line written in "
+            "CHANGELOG.md there and gives it back main's copy); only a release commit, notes merge-back or erratum "
+            "edits it, naming each section in a `Changelog-Release: vX.Y.Z` commit trailer" % where)
 
 
-def test_pr_changelog_lines_stay_under_unreleased():
-    # Release validation runs this suite on a candidate from its release branch: an empty Unreleased and its own
-    # new section, which test_released_changelog_sections_match_their_tags checks. A pull request is never one.
-    if os.environ.get("GITHUB_EVENT_NAME") != "pull_request" and not section((ROOT / "CHANGELOG.md").read_text(), "Unreleased"):
-        pytest.skip("a release candidate (empty Unreleased); its notes are checked against its tag")
-    outside = changes_outside_unreleased(ROOT) if shutil.which("git") else None
-    if outside is None:
+def test_pr_changes_no_changelog_lines():
+    # Release validation runs this suite on a candidate from its release branch, whose release commit names its new
+    # section in a trailer and which test_released_changelog_sections_match_their_tags checks against its tag; it may
+    # not merge cleanly with a main that moved on. A pull request is always checked.
+    if os.environ.get("GITHUB_EVENT_NAME") != "pull_request" and RELEASE_TRAILER.search(subprocess.run(
+            ["git", "-C", str(ROOT), "log", "--format=%B", "origin/main..HEAD"], capture_output=True, text=True).stdout):
+        pytest.skip("a release candidate or notes merge-back; its notes are checked against its tag")
+    edits = changelog_edits(ROOT) if shutil.which("git") else None
+    if edits is None:
         pytest.skip("no origin/main in this checkout to merge CHANGELOG.md with")
-    assert not outside, outside_unreleased_message(outside)
+    assert not edits, changelog_edits_message(edits)
 
 
-def test_changelog_guard_refuses_lines_outside_unreleased(tmp_path):
+def test_changelog_fragments_parse():
+    problems = changelog_fragments.check(ROOT)
+    assert not problems, "changes/unreleased: " + "; ".join(problems)
+
+
+def test_changelog_guard_refuses_pull_request_edits(tmp_path):
     def git(*args):
         return subprocess.run(["git", "-C", str(tmp_path), "-c", "user.name=t", "-c", "user.email=t@acme.example", *args],
                               capture_output=True, text=True, check=True).stdout
@@ -219,55 +235,144 @@ def test_changelog_guard_refuses_lines_outside_unreleased(tmp_path):
     git("commit", "-qm", "Start")
     fork = git("rev-parse", "HEAD").strip()
     git("update-ref", "refs/remotes/origin/main", fork)
-    assert changes_outside_unreleased(tmp_path) == []
-    assert changes_outside_unreleased(tmp_path, main="origin/nothing") is None
+    assert changelog_edits(tmp_path) == []
+    assert changelog_edits(tmp_path, main="origin/nothing") is None
 
-    # A line under Unreleased passes; one inside the released section fails with the one-line instruction.
+    # A pull request adds its line in a fragment; a line under Unreleased or in a released section fails with the
+    # one-line instruction.
+    (tmp_path / "changes" / "unreleased").mkdir(parents=True)
+    (tmp_path / "changes" / "unreleased" / "archive.md").write_text("### Added\n- Archive tasks.\n")
+    git("add", "changes")
+    git("commit", "-qm", "Fragment")
+    assert changelog_edits(tmp_path) == []
     commit(shipped.replace("- Restore tasks.\n", "- Restore tasks.\n- Archive tasks.\n") + links)
-    assert changes_outside_unreleased(tmp_path) == []
+    assert changelog_edits(tmp_path) == ["Unreleased"]
+    message = changelog_edits_message(["Unreleased"])
+    assert "adds or changes lines in ## [Unreleased]. Pull requests don't edit CHANGELOG.md" in message
+    assert "changes/unreleased/<branch>.md" in message and "\n" not in message
+    commit(shipped.replace("- Search tasks.", "- Search tasks across the team.") + links)  # changing one counts
+    assert changelog_edits(tmp_path) == ["Unreleased"]
     commit(shipped.replace("- Browse.\n", "- Browse.\n- Archive tasks.\n") + links)
-    assert changes_outside_unreleased(tmp_path) == ["0.1.0"]
-    message = outside_unreleased_message(["0.1.0"])
-    assert "the released [0.1.0] section" in message and "merge main and move your line under ## [Unreleased]" in message
-    assert "\n" not in message
-    commit(shipped.replace("- Browse.", "- Browse the team.") + links)  # changing a shipped line counts too
-    assert changes_outside_unreleased(tmp_path) == ["0.1.0"]
-    commit(shipped.replace("- Browse.\n", "") + links)  # and so does removing one
-    assert changes_outside_unreleased(tmp_path) == ["0.1.0"]
+    assert changelog_edits(tmp_path) == ["0.1.0"]
+    assert "the released [0.1.0] section" in changelog_edits_message(["0.1.0"])
+    commit(shipped.replace("- Browse.\n", "") + links)  # and so does removing a shipped line
+    assert changelog_edits(tmp_path) == ["0.1.0"]
+    # Moving old-style lines out of Unreleased into fragments only removes lines there, which stays open.
+    commit(shipped.replace("### Added\n- Search tasks.\n- Restore tasks.\n\n", "") + links)
+    assert changelog_edits(tmp_path) == []
 
-    # The Release Manager's notes merge-back passes only with its trailer, and only for the section it names.
+    # The release commit and its notes merge-back pass only with the trailer, and only for the section it names.
     git("checkout", "-q", "-b", "notes", fork)
     released = shipped.replace("## [Unreleased]\n\n", "## [Unreleased]\n\n## [0.2.0] - 2026-10-02\n\n")
     moved = released + links.replace("v0.1.0...HEAD", "v0.2.0...HEAD") + "[0.2.0]: https://github.com/acme/app/compare/v0.1.0...v0.2.0\n"
     commit(moved, "Release notes: merge back v0.2.0")
-    assert changes_outside_unreleased(tmp_path) == ["0.2.0", "links"]
+    assert changelog_edits(tmp_path) == ["0.2.0", "links"]
     git("commit", "-q", "--amend", "-m", "Release notes: merge back v0.2.0\n\nChangelog-Release: v0.2.0")
-    assert changes_outside_unreleased(tmp_path) == []
+    assert changelog_edits(tmp_path) == []
     merge_back = git("rev-parse", "HEAD").strip()
 
     # An erratum to an older section needs that section's own trailer.
     git("checkout", "-q", "-b", "erratum", fork)
     commit(shipped.replace("- Browse.", "- Browse the team.") + links, "Erratum\n\nChangelog-Release: v0.2.0")
-    assert changes_outside_unreleased(tmp_path) == ["0.1.0"]
+    assert changelog_edits(tmp_path) == ["0.1.0"]
     git("commit", "-q", "--amend", "-m", "Erratum\n\nChangelog-Release: v0.1.0")
-    assert changes_outside_unreleased(tmp_path) == []
+    assert changelog_edits(tmp_path) == []
 
-    # A branch cut before the notes landed wrote its line under Unreleased, but merging it now puts it in [0.2.0].
+    # A branch cut before the notes landed and still carrying an old-style line: merged now, it lands in [0.2.0].
     git("checkout", "-q", "-b", "old-branch", fork)
     commit(shipped.replace("- Restore tasks.\n", "- Restore tasks.\n- Archive tasks.\n") + links)
     git("update-ref", "refs/remotes/origin/main", merge_back)
-    assert changes_outside_unreleased(tmp_path) == ["0.2.0"]
+    assert changelog_edits(tmp_path) == ["0.2.0"]
     git("merge", "-q", "--no-edit", "origin/main")
-    assert changes_outside_unreleased(tmp_path) == ["0.2.0"]  # a clean main merge is not proof
-    text = (tmp_path / "CHANGELOG.md").read_text().replace("- Archive tasks.\n", "")
-    commit(text.replace("## [Unreleased]\n\n", "## [Unreleased]\n\n### Added\n- Archive tasks.\n\n"), "Move the line")
-    assert changes_outside_unreleased(tmp_path) == []
+    assert changelog_edits(tmp_path) == ["0.2.0"]  # a clean main merge is not proof
 
     # A CHANGELOG conflict with main is named rather than read as a diff.
     git("checkout", "-q", "-b", "conflict", fork)
     commit(shipped.replace("## [Unreleased]\n\n", "## [Unreleased]\n\n## [9.9.9]\n\n") + links)
-    assert changes_outside_unreleased(tmp_path) == [CONFLICT]
-    assert outside_unreleased_message([CONFLICT]).startswith("CHANGELOG.md: this branch conflicts with main; merge main")
+    assert changelog_edits(tmp_path) == [CONFLICT]
+    assert changelog_edits_message([CONFLICT]).startswith("CHANGELOG.md: this branch conflicts with main. Pull requests")
+
+
+def test_fragments_compile_into_the_release_commit(tmp_path):
+    def git(*args):
+        return subprocess.run(["git", "-C", str(tmp_path), "-c", "user.name=t", "-c", "user.email=t@acme.example", *args],
+                              capture_output=True, text=True, check=True).stdout
+
+    fragments = tmp_path / "changes" / "unreleased"
+    fragments.mkdir(parents=True)
+    (tmp_path / "changes" / "README.md").write_text("How fragments work.\n")
+    links = ("[Unreleased]: https://github.com/acme/app/compare/v0.1.0...HEAD\n"
+             "[0.1.0]: https://github.com/acme/app/releases/tag/v0.1.0\n")
+    (tmp_path / "CHANGELOG.md").write_text("# Changelog\n\n## [Unreleased]\n\n### Fixed\n- Written the old way.\n\n"
+                                           "## [0.1.0] - 2026-10-01\n- Browse.\n\n" + links)
+    (fragments / "search.md").write_text("### Added\n- **Search tasks.** Across the team,\n  with filters.\n")
+    git("init", "-q", "-b", "main")
+    git("add", "-A")
+    git("commit", "-qm", "Start", "--date", "2026-10-01T00:00:00Z")
+    git("tag", "v0.1.0")
+    (fragments / "restore.md").write_text("### Fixed\n- Restore a task.\n\n### Added\n- Restore tasks.\n")
+    git("add", "-A")
+    git("commit", "-qm", "Restore")
+    env = {**os.environ, "GIT_COMMITTER_DATE": "2030-01-01T00:00:00Z"}
+    subprocess.run(["git", "-C", str(tmp_path), "-c", "user.name=t", "-c", "user.email=t@acme.example", "commit",
+                    "-q", "--amend", "--no-edit"], env=env, check=True)
+    assert changelog_fragments.check(tmp_path) == []
+
+    used = changelog_fragments.compile_release(tmp_path, "0.2.0", "2026-10-02")
+    assert sorted(p.name for p in used) == ["restore.md", "search.md"]
+    assert not list(fragments.glob("*.md")) and (tmp_path / "changes" / "README.md").exists()
+    text = (tmp_path / "CHANGELOG.md").read_text()
+    # Newest fragment first within each heading, then lines left under Unreleased; Unreleased stays, empty.
+    assert text.startswith("# Changelog\n\n## [Unreleased]\n\n## [0.2.0] - 2026-10-02\n\n### Added\n- Restore tasks.\n"
+                           "- **Search tasks.** Across the team,\n  with filters.\n\n### Fixed\n- Restore a task.\n"
+                           "- Written the old way.\n\n## [0.1.0] - 2026-10-01\n- Browse.\n\n")
+    assert section(text, "Unreleased") == "" and section(text, "0.1.0") == "- Browse."
+    assert text.endswith("[Unreleased]: https://github.com/acme/app/compare/v0.2.0...HEAD\n"
+                         "[0.2.0]: https://github.com/acme/app/compare/v0.1.0...v0.2.0\n" + links.split("\n", 1)[1])
+
+    # Nothing left to release, a section that exists and a tag whose notes are not merged back are all refused.
+    with pytest.raises(changelog_fragments.FragmentError, match="nothing to release"):
+        changelog_fragments.compile_release(tmp_path, "0.3.0", "2026-10-03")
+    with pytest.raises(changelog_fragments.FragmentError, match="already has a \\[0.2.0\\] section"):
+        changelog_fragments.compile_release(tmp_path, "0.2.0", "2026-10-03")
+    git("tag", "v0.3.0")
+    (fragments / "later.md").write_text("### Fixed\n- Later.\n")
+    with pytest.raises(changelog_fragments.FragmentError, match="v0.3.0 is tagged but its notes are not in this"):
+        changelog_fragments.compile_release(tmp_path, "0.4.0", "2026-10-04")
+    assert (fragments / "later.md").exists()
+
+
+def test_fragment_check_and_adopt(tmp_path):
+    def git(*args):
+        return subprocess.run(["git", "-C", str(tmp_path), "-c", "user.name=t", "-c", "user.email=t@acme.example", *args],
+                              capture_output=True, text=True, check=True).stdout
+
+    fragments = tmp_path / "changes" / "unreleased"
+    fragments.mkdir(parents=True)
+    for name, text in {"heading.md": "### Fixes\n- Wrong heading.\n", "orphan.md": "- No heading.\n",
+                       "empty.md": "### Fixed\n", "prose.md": "### Fixed\nNot an entry.\n"}.items():
+        (fragments / name).write_text(text)
+    problems = changelog_fragments.check(tmp_path)
+    assert len(problems) == 4 and any("### Fixes is not one of Added" in p for p in problems)
+    for path in fragments.iterdir():
+        path.unlink()
+
+    main = "# Changelog\n\n## [Unreleased]\n\n### Fixed\n- Already on main.\n\n## [0.1.0] - 2026-10-01\n- Browse.\n"
+    (tmp_path / "CHANGELOG.md").write_text(main)
+    git("init", "-q", "-b", "main")
+    git("add", "-A")
+    git("commit", "-qm", "Start")
+    git("update-ref", "refs/remotes/origin/main", "HEAD")
+    git("checkout", "-q", "-b", "tico/1234-archive")
+    (tmp_path / "CHANGELOG.md").write_text(main.replace("### Fixed\n", "### Added\n- Archive tasks,\n  in bulk.\n\n### Fixed\n"))
+    path, moved = changelog_fragments.adopt(tmp_path)
+    assert path == fragments / "1234-archive.md" and moved == [("Added", "- Archive tasks,\n  in bulk.")]
+    assert path.read_text() == "### Added\n- Archive tasks,\n  in bulk.\n"
+    assert (tmp_path / "CHANGELOG.md").read_text() == main
+    changelog_fragments.add(tmp_path, "fixed", "Archived tasks keep their tags.")
+    assert path.read_text() == "### Added\n- Archive tasks,\n  in bulk.\n\n### Fixed\n- Archived tasks keep their tags.\n"
+    with pytest.raises(changelog_fragments.FragmentError, match="adds nothing under"):
+        changelog_fragments.adopt(tmp_path)
 
 
 def test_tag_before_its_notes_reach_main_is_not_an_edit(tmp_path):
@@ -305,4 +410,4 @@ def test_guard_refuses_lines_that_landed_in_released_sections():
     if not shutil.which("git") or any(subprocess.run(["git", "-C", str(ROOT), "cat-file", "-e", c + "^"]).returncode for c in replays):
         pytest.skip("no full history in this checkout")
     for squash, version in replays.items():
-        assert changes_outside_unreleased(ROOT, main=squash + "^", head=squash) == [version]
+        assert changelog_edits(ROOT, main=squash + "^", head=squash) == [version]

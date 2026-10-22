@@ -801,9 +801,11 @@ def refresh_deployed_tasks(service):
     threading.Thread(target=refresh, name="tico-deploy-refresh", daemon=True).start()
 
 
-# What a release kept of a pull request is read hunk by hunk: release notes move between sections at every cut and
-# tests are cut routinely, so the product files decide when the pull request has any.
+# What a release kept of a pull request is read hunk by hunk: release notes move between sections at every cut (which
+# deletes the changelog fragments under changes/) and tests are cut routinely, so the product files decide when the
+# pull request has any.
 NOTES_FILES = {"CHANGELOG.md"}
+NOTES_DIR = "changes/"
 TEST_PATH = re.compile(r"(^|/)(tests?|testdata|fixtures)/|(^|/)test_[^/]*$|_test\.[a-z]+$|\.test\.[a-z]+$")
 
 
@@ -860,7 +862,7 @@ def change_kept(get, repo, merge, release):
     files = commit.get("files") or []
     if len(parents) > 1:   # a merge commit: the pull request is what it changed on top of main
         files = (get(f"{base}/compare/{parents[0]['sha']}...{merge}") or {}).get("files") or []
-    files = [f for f in files if f.get("filename") not in NOTES_FILES]
+    files = [f for f in files if f.get("filename") not in NOTES_FILES and not f.get("filename", "").startswith(NOTES_DIR)]
     product = [f for f in files if not TEST_PATH.search(f["filename"])]
     if not (product or files):
         return None

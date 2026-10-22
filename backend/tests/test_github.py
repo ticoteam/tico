@@ -674,7 +674,7 @@ def test_a_release_that_reverts_a_merged_pr_does_not_ship_it(api, monkeypatch):
     typ = post(api, 'task-types', {'name': 'Dev', 'steps': [
         {'name': 'Pending Release', 'status': 'review'}, {'name': 'Post Release QA', 'status': 'review'}]})['type']
     tasks = {}
-    for n in range(412, 418):
+    for n in range(412, 419):
         url = PR.replace('/412', f'/{n}')
         tasks[n] = post(api, 'tasks', {'owner': 'cpo', 'title': f'Change {n}', 'body': 'x', 'links': [url],
                                        'type': typ['id'], 'step': 'Pending Release'})
@@ -695,18 +695,23 @@ def test_a_release_that_reverts_a_merged_pr_does_not_ship_it(api, monkeypatch):
                                            merge_commit_sha=merges[n]))
         return merges[n]
     # 412 the live desks (product, test, notes); 413 kept; 414 a two-character edit; 415 indentation only;
-    # 416 adds a line that already exists elsewhere in the file; 417 renames a file and edits it.
+    # 416 adds a line that already exists elsewhere in the file; 417 renames a file and edits it; 418 is a test and its
+    # changelog fragment.
     last = merge(412, base, ui__app__refresh_dot_js=live, CHANGELOG_dot_md='## [Unreleased]\n- Desks move live\n',
                  ui__tests__overview_live_dot_cjs='assert desk moved at once\n')
-    last = merge(413, last, ui__app__pricing_dot_js='price = 12 per seat\n')
+    last = merge(413, last, ui__app__pricing_dot_js='price = 12 per seat\n',
+                 changes__unreleased__seats_dot_md='### Changed\n- Priced per seat\n')
     last = merge(414, last, app__flag_dot_py='x=2\n')
     last = merge(415, last, app__loop_dot_py='for item in items:\n    work(item)\n    done()\n')
     last = merge(416, last, app__audit_dot_py=audit.replace('    return 2', '    audit_event()\n    return 2'))
     merges[417] = last = h.commit('#417', [last], h.tree(last, app__old_dot_py=None,
                                   app__new_dot_py='def price():\n    return 20\n'), {'app/new.py': 'app/old.py'})
     hook(api, 'pull_request', pr_event('closed', html_url=PR.replace('/412', '/417'), merged=True, merge_commit_sha=last))
-    # The cut moves the notes and drops 416's pre-existing call, keeping the one 416 added.
+    last = merge(418, last, app__tests__test_flag_dot_py='assert x == 2\n', changes__unreleased__flag_dot_md='### Fixed\n- Flag\n')
+    # The cut moves the notes, deletes the fragments it compiled and drops 416's pre-existing call, keeping the one
+    # 416 added.
     cut = h.commit('cut', [last], h.tree(last, CHANGELOG_dot_md='## [0.3.55]\n- Desks move live\n',
+                                         changes__unreleased__seats_dot_md=None, changes__unreleased__flag_dot_md=None,
                                          app__audit_dot_py=audit.replace('    audit_event()\n    return 1', '    return 1')
                                          .replace('    return 2', '    audit_event()\n    return 2')))
     revert = h.commit('revert', [cut], h.tree(cut, ui__app__refresh_dot_js=code, CHANGELOG_dot_md='## [0.3.55]\n',
@@ -721,7 +726,7 @@ def test_a_release_that_reverts_a_merged_pr_does_not_ship_it(api, monkeypatch):
         assert G.ship_deployed(c, api.app.state.store.settings) == []
 
     _refresh_release(api, monkeypatch, h, revert)
-    shipped = {413, 416}
+    shipped = {413, 416, 418}
     with api.app.state.store.read() as c:
         for n, task in tasks.items():
             assert [l['state'] for l in H.task_links(c, task['id'])] == ['shipped' if n in shipped else 'merged'], n

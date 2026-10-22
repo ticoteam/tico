@@ -5,14 +5,18 @@ installer bundle, checks the tag against [CHANGELOG.md](../CHANGELOG.md) and pub
 release. Running installations look for that release to show "New version" in the sidebar.
 The installed `CHANGELOG.md` also supplies the in-app, API and MCP product changelog, so each
 release's versioned notes automatically reach its users. No separate product announcement is required.
-Keep those versioned sections on `main` after publishing a tag; move only new work into Unreleased,
-so later builds retain the complete history and do not announce already shipped work again.
-PR checks refuse a pull request that adds or changes CHANGELOG lines outside `## [Unreleased]` once merged with main.
-The pull request that merges a release's notes back to `main`, or corrects a shipped section, passes by naming each
-released section it changes in a commit trailer: `Changelog-Release: vX.Y.Z`, one line per section. Every notes
-merge-back needs it, starting with the first one after this check was added. Between a tag and its merge-back,
-`main` has no section for that release yet; pull requests merged meanwhile keep their lines under Unreleased and
-stay green. Once the notes are back, a released section on `main` that differs from its tag fails the tests.
+Keep those versioned sections on `main` after publishing a tag, so later builds retain the complete history and do
+not announce already shipped work again.
+
+**Pull requests never edit CHANGELOG.md.** Each one adds its notes as a small file of its own,
+`changes/unreleased/<branch>.md`, with Keep a Changelog headings and its entries exactly as they will read
+([changes/README.md](../changes/README.md)). Two pull requests never conflict over the changelog, and a release cut
+never moves their lines into a released section. The release commit compiles those files into the new version's
+section and deletes them (see [Tag](#tag)). PR checks refuse a pull request that adds or changes CHANGELOG.md lines;
+`python scripts/changelog_fragments.py adopt` moves a line a branch wrote there into its fragment. The release commit,
+the pull request that merges a release's notes back to `main` and one that corrects a shipped section pass by naming
+each released section they change in a commit trailer: `Changelog-Release: vX.Y.Z`, one line per section. Once the
+notes are back, a released section on `main` that differs from its tag fails the tests.
 
 **One release path.** On a team that runs Tico with a Release Manager bot, only the Release Manager publishes
 releases. A Claude Code session or any other outside session that finishes work hands it to the Release Manager on a
@@ -184,9 +188,14 @@ hosted gate.
 
 ## Tag
 
-1. In `CHANGELOG.md`, rename `## [Unreleased]` to `## [X.Y.Z] - YYYY-MM-DD`, add a fresh empty
-   `## [Unreleased]` above it, and update the link references at the bottom.
-2. Commit that to `main` once the release check is green.
+1. Compile the notes: `python scripts/changelog_fragments.py compile X.Y.Z` writes `## [X.Y.Z] - YYYY-MM-DD` under
+   an empty `## [Unreleased]` from every fragment in `changes/unreleased/` (newest first under each heading, then any
+   line still written under Unreleased), moves the compare links on and deletes the fragments it used. It refuses
+   when a newer release is tagged whose notes are not merged back yet, since this release would repeat its lines.
+   Edit the wording in the new section if needed.
+2. Commit CHANGELOG.md and the deleted fragments together as the release commit, with the trailer
+   `Changelog-Release: vX.Y.Z`, once the release check is green. A candidate tagged on its own branch merges this
+   commit back to `main` the same way: fragments added to `main` since the cut stay for the next release.
 3. Tag and push: `git tag vX.Y.Z && git push origin vX.Y.Z`.
 
 The workflow then:

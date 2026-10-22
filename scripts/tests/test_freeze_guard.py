@@ -128,13 +128,15 @@ def test_each_merged_pr_needs_an_approval_of_its_final_head(repo):
                                         "for x in xs:\n    run(x)\nlog(x)\n")
     # PRs 13 and 14 are squash merges: their heads and reviews are on GitHub.
     write(repo, "app/d.py", "D = 1\n")
+    write(repo, "changes/unreleased/d.md", "### Added\n- D.\n")
     commit(repo, "D (#13)")
     write(repo, "app/e.py", "E = 1\n")
     commit(repo, "E (#14)")
     # A direct push needs a receipt; release notes don't.
     write(repo, "app/f.py", "F = 1\n")
     direct = commit(repo, "Hotfix straight on main")
-    write(repo, "CHANGELOG.md", "# Changelog\n## 1.1.0\n")
+    write(repo, "CHANGELOG.md", "# Changelog\n## 1.1.0\n- D.\n")
+    (repo / "changes/unreleased/d.md").unlink()   # the release commit compiles and deletes the fragments
     commit(repo, "Release 1.1.0")
 
     receipts = [{"pr": 10, "head": reviewed_10, "source": "ticket 10"}, {"pr": 11, "head": reviewed_11[:8]},
