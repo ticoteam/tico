@@ -801,6 +801,8 @@ class SettingsAdmin:
         c.execute("SAVEPOINT apply_bot_transition")
         try:
             if field == "model":
+                from .execution import lift_after_model_change, model_choice
+                was = model_choice(c, self.settings, bot)
                 declared = _json(config["config_json"], {})
                 # A Settings choice is the live authority. The checked-in manifest remains
                 # the bootstrap default, but must not make the runner reject an intentional
@@ -816,8 +818,7 @@ class SettingsAdmin:
                 hold_removals(c, self.settings)
                 # The limit was the old model's: the new one starts on the queued work now, unless it waits on the
                 # same spent login or Gateway key.
-                from .execution import lift_after_model_change
-                lift_after_model_change(c, self.settings, who.actor, bot)
+                lift_after_model_change(c, self.settings, who.actor, bot, was)
             else:
                 runner = c.execute("SELECT * FROM runners WHERE id=? AND revoked_at IS NULL", (target["runner_id"],)).fetchone()
                 if not runner:

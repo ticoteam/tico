@@ -174,6 +174,12 @@ def ran_another_model(c, settings, attempt):
     return (handed["handed_runtime"], handed["handed_model"]) != tuple(now)
 
 
+def model_choice(c, settings, bot):
+    """The (runtime, model) the bot's own turns are handed now."""
+    row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    return tuple(providers.bot_choice(c, settings, json.loads(row[0]) if row and row[0] else {}))
+
+
 def model_change_hold(c, settings, bot):
     """Why the model a limited bot was just moved to waits too, or "": its login on the bot's computer is held
     (backend/login_holds.py), or the bot's last limit was the Tico AI Gateway's and the new model is a Tico model on
@@ -181,8 +187,7 @@ def model_change_hold(c, settings, bot):
     hold = own_login_hold(c, settings, bot)
     if (hold.get("until") or "") > H.now():
         return "login"
-    row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
-    model = providers.bot_choice(c, settings, json.loads(row[0]) if row and row[0] else {})[1]
+    model = model_choice(c, settings, bot)[1]
     last = last_limit(c, bot)
     if last and gateway_connection.is_tico(model) and any(
             gateway.cap_reached(e) or gateway.out_of_credit(e) or gateway.run_code(e) == gateway.RATE_LIMITED
@@ -191,12 +196,13 @@ def model_change_hold(c, settings, bot):
     return ""
 
 
-def lift_after_model_change(c, settings, actor, bot):
-    """A person moved the bot to another model: a usage limit that was the old model's lifts, and the new model starts
-    on the queued work now. A turn still out on the old model keeps the bot at work (settle_status). When the new
-    model waits on the same spent login or Gateway key (model_change_hold), the bot stays Rate limited and says so."""
+def lift_after_model_change(c, settings, actor, bot, was):
+    """A person moved the bot from `was` (model_choice before the change) to another model: a usage limit that was the
+    old model's lifts, and the new model starts on the queued work now. A turn still out on the old model keeps the bot
+    at work (settle_status). When the new model waits on the same spent login or Gateway key (model_change_hold), the
+    bot stays Rate limited and says so. An effort-only change leaves the bot on the spent model: nothing lifts."""
     status = H.status(c, bot) or {}
-    if status.get("state") != "limited":
+    if status.get("state") != "limited" or model_choice(c, settings, bot) == tuple(was):
         return
     why = model_change_hold(c, settings, bot)
     if why:
@@ -2440,7 +2446,9 @@ class Execution:
         if check:
             runtime, model = check["runtime"], check["model"]
         # The bot was moved to another model while this turn ran on the old one: its limit is not the new model's login.
-        superseded = not check and ran_another_model(c, self.store.settings, row)
+        # A move to another model on the same runtime keeps the login, so the turn's limit is the login's either way.
+        superseded = (not check and ran_another_model(c, self.store.settings, row)
+                      and row["handed_runtime"] != runtime)
         if row["thread_id"] and body.tokens_in is not None:
             c.execute("UPDATE bot_sessions SET tokens_in=?,updated=? WHERE bot=? AND runtime=? AND model=? AND thread_id=?",
                       (int(body.tokens_in), H.now(), row["bot"], runtime, model, row["thread_id"]))
@@ -2506,7 +2514,8 @@ class Execution:
                 settle_status(c, row["bot"], "idle", f"The previous model hit its usage limit at {H.now()[11:16]}; "
                               "queued work runs on the new model", claimed=row["created"])
             H.event(c, H.KEEPER, "attempt.limited_superseded", aid,
-                    {"bot": row["bot"], "job_id": row["job_id"], "runtime": runtime})
+                    {"bot": row["bot"], "job_id": row["job_id"], "runtime": row["handed_runtime"] or runtime,
+                     "to_runtime": runtime})
         elif limited:
             streak = limit_streak(c, row["bot"])
             hit = H.now()

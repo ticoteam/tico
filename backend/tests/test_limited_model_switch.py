@@ -154,6 +154,8 @@ def test_an_effort_only_change_or_a_move_away_and_back_keeps_the_running_turns_l
     at(monkeypatch, "2026-10-21T23:25:20.000000Z", api)
     post(api, "bots/ops/transitions", {"kind": "model", "model": "gpt-6-luna", "effort": "low",
                                        "expected_revision": revision(api)})
+    # An effort-only change leaves the bot on the spent model: nothing lifts, and no model is said to have changed.
+    assert status(api)["state"] == "limited" and "Model changed" not in (status(api).get("focus") or "")
     post(api, "bots/ops/model", {"model": "claude-haiku-5-5", "expected_revision": revision(api)})
     post(api, "bots/ops/model", {"model": "gpt-6-luna", "effort": "low", "expected_revision": revision(api)})
     at(monkeypatch, "2026-10-21T23:25:40.000000Z", api)
@@ -204,3 +206,22 @@ def test_after_the_gateways_cap_another_tico_model_waits_on_the_same_key(api, mo
             config.update({"model": model, "runtime": "pi" if held else "claude"})
             c.execute("UPDATE bot_config SET config_json=? WHERE bot='ops'", (encode(config),))
             assert execution.model_change_hold(c, settings, "ops") == held
+
+
+def test_a_turn_moved_to_another_model_on_the_same_login_holds_that_login_when_it_hits_the_limit(api, monkeypatch):
+    # Opus to Haiku keeps the Claude login: the running turn's limit is the new model's too, so the next turn waits.
+    providers_on(api)
+    at(monkeypatch, "2026-10-21T23:16:00.000000Z")
+    machine = runner(api)
+    assign(api, machine, "ops")
+    signed_in(api, machine, ["ops"], ("codex", "claude"))
+    post(api, "bots/ops/model", {"model": "claude-opus-5-5", "expected_revision": revision(api)})
+    post(api, "tasks", {"owner": "ops", "title": "Plan the week", "body": "Please do it."})
+    turn = claim(api, machine)
+    post(api, f"attempts/{turn['id']}/started", {"thread_id": "t-" + turn["id"]}, machine["token"])
+    post(api, "bots/ops/model", {"model": "claude-haiku-5-5", "expected_revision": revision(api)})
+    at(monkeypatch, "2026-10-21T23:16:20.000000Z", api)
+    finish_limited(api, machine, turn)
+    assert status(api)["state"] == "limited"
+    with api.app.state.store.read() as c:
+        assert login_holds.get(c, machine["runner_id"], "", "claude")
