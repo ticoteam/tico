@@ -13,7 +13,7 @@ All notable changes to Tico are recorded here. The format follows
   with what it does, its schedule, its last run in words ("9 checked, 2 suggestions", or "Failed: <reason>" in red) and
   its next run. Stale ticket review and nightly learnings also show which route answered Decide (Gateway, company key or
   company AI), "Ran on your own key: Gateway unavailable" when the Gateway did not answer, and this month's AI spend.
-  Housekeeping rows say Tico needs them. `GET /api/v2/system-routines`; the Decide fallback order is unchanged.
+  Housekeeping rows say Tico needs them. `GET /api/v2/system-routines`; the Decide fallback order is unchanged. See [System routines](docs/system-routines.md).
 - **Five company models for the setup org chart** replace the one 22-bot starter pack: Everything (73 seats), Software
   company (51), Services firm (38), Local service business (41) and Online store (39), with Legal, People, Operations
   and Leadership and bigger Finance, Sales, Marketing and Support teams. The first chart starts from the model the

@@ -9,6 +9,7 @@ Controls appear when your rights allow the action.
 | Talk to a bot about one task | Bot chat → tap the task's row ([Sessions](sessions.md)) |
 | See or link a task's sessions | Task → Sessions +; ⋯ → Copy session ID |
 | Add or edit a Routine | Settings → Routines → New routine, or the bot's Routines card |
+| See what Tico runs on its own | Settings → Routines → System ([System routines](system-routines.md)) |
 | Add, assign or set up a bot | Settings → Bots → Add from template; then the bot → Set up |
 | Change Instructions | Bot → More → Instructions → Edit Instructions → Ask BotOps to change |
 | Change model, effort, owners or status | Settings → Bots |
