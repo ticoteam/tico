@@ -1924,10 +1924,14 @@ class Execution:
             # finish (`settleable`, `settles_late`). A Stop on that turn, by its id, is recorded all the same, so the
             # answer is filed on its run rather than posted, while its job is still on it, uncertain or let go. A
             # job already queued to run again is not this turn's to stop; a Stop without an id only finds a live
-            # turn, never an older lapsed one that may be held for review.
-            rows = c.execute("SELECT a.id,a.stop_requested FROM attempts a JOIN jobs j ON j.id=a.job_id "
-                             "AND j.attempt_id=a.id WHERE a.bot=? AND a.id=? AND a.state='expired' "
+            # turn, never an older lapsed one. A run the sweep holds for review is left to that review, which asks
+            # what the run did (`reconcile_job`); once it has been let go, a Stop still files its late answer.
+            rows = c.execute("SELECT a.id,a.stop_requested,j.state AS job_state FROM attempts a JOIN jobs j "
+                             "ON j.id=a.job_id AND j.attempt_id=a.id WHERE a.bot=? AND a.id=? AND a.state='expired' "
                              "AND j.state IN ('uncertain','cancelled')", (bot, attempt_id)).fetchall()
+            if rows and rows[0]["job_state"] == "uncertain" and c.execute(
+                    "SELECT 1 FROM events WHERE action='job.held' AND target=?", (attempt_id,)).fetchone():
+                raise Problem("held", "This run is held for review: resume or dismiss it there", 409)
         if not rows:
             raise Problem("not_running", "This bot is not running that turn", 409)
         if len(rows) > 1:

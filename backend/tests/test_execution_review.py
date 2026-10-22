@@ -906,9 +906,11 @@ def test_a_stop_after_the_lease_lapsed_takes_the_turns_id_and_a_job_still_on_it(
     aged(api, held['id'])
     assert sweep(api) == [] and job_state(api, held['job_id']) == 'uncertain'
     post(api, 'bots/ops/stop', {}, expected=409)
+    post(api, 'bots/ops/stop', {'attempt_id': held['id']}, expected=409)  # left to its review
     assert sweep(api) == [] and job_state(api, held['job_id']) == 'uncertain'
     post(api, f"jobs/{held['job_id']}/reconcile", {'attempt_id': held['id'], 'decision': 'dismiss',
          'note': 'Checked what it did; nothing left to send here.', 'acknowledge_uncertain_effects': True})
+    post(api, 'bots/ops/stop', {'attempt_id': held['id']})             # reviewed and let go: a Stop files its answer
     machine, message, attempt = finished_then_lapsed(api, machine)
     post(api, 'bots/ops/stop', {'attempt_id': attempt['id']}, token='cara-test', expected=403)
     aged(api, attempt['id'])
