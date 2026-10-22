@@ -399,12 +399,15 @@ function renderSettingsIssues() {
 }
 // The stopped-run card is the decision only (Chris, Oct 22: "remove 80%, give me clear action items"): one line
 // on what stopped, one recommendation with its button first, the rest under Details. `stopped` comes from
-// backend/execution.py review_jobs: a run that only read is safe to try again; one that may have acted, or left
-// no record, is not retried unless the person knows nothing happened.
+// backend/execution.py review_jobs, by the rule its sweep retries by (retry_facts): a run that only read, on a host
+// that reports every call, is safe to try again; one that may have acted, left no full record or keeps stopping is
+// not retried unless the person knows better.
 const STOPPED_PICK = {
-  read: {retry: true, what: () => 'after only reading', say: () => 'Try again: it only read, so nothing repeats.'},
-  changed: {retry: false, what: tools => `while using ${tools || 'a tool that can change things'}`,
+  read: {retry: true, what: () => 'before changing anything', say: () => 'Try again: it only read, so nothing repeats.'},
+  changed: {retry: false, what: tools => `after using ${tools || 'an approval or a tool that can change things'}`,
     say: tools => `Don’t retry unless you know ${tools || 'that action'} didn’t finish. It could run twice.`},
+  twice: {retry: false, what: () => 'the same way more than once',
+    say: () => 'Don’t retry: it keeps stopping. Check the task first.'},
   unknown: {retry: false, what: () => 'before answering',
     say: () => 'Don’t retry unless you know it did nothing. Tico has no record of what it did.'},
 };

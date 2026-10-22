@@ -17,7 +17,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     const errors = [];
     page.on('pageerror', e => errors.push(e.message));
     const holding = {kind: 'uncertain_work', title: 'Builder has 1 stopped run holding up work', bot: 'builder',
-      detail: '"Billing 3/5" (owner Builder) stopped partway. 3 queued requests wait on "Dev 268" until you decide. Retry it or drop it.',
+      detail: '"Billing 3/5" (owner Builder) stopped partway. 3 queued requests wait on "Dev 268" until you decide. Choose Try again or Don\'t retry.',
       severity: 'error', needs_person: true, action: 'review', held_back: 3, held_tasks: ['Dev 268']};
     const later = {kind: 'uncertain_work', title: 'Writer saved 1 stopped run for later', bot: 'writer',
       detail: 'The bot stopped before returning an answer. Other work can continue. Review it whenever useful.',
@@ -80,7 +80,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     // One line on what stopped, one recommendation, two buttons with the recommended one first; nothing else open.
     const card = page.locator('dialog.tmodal form[data-job="j1"]');
     await card.waitFor({timeout: t(5000)});
-    assert.match(await card.locator('[data-stopped]').innerText(), /^Stopped .+ while using Bash\.$/);
+    assert.match(await card.locator('[data-stopped]').innerText(), /^Stopped .+ after using Bash\.$/);
     assert.match(await card.locator('[data-pick]').innerText(), /^Don’t retry unless you know Bash didn’t finish/);
     assert.deepEqual(await card.locator(':scope > .row button').allInnerTexts(), ['Don’t retry', 'Try again']);
     assert.equal(await card.locator('[data-details]').getAttribute('open'), null);
@@ -100,7 +100,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     // A run that only read is safe to try again, so that button leads.
     const read = page.locator('dialog.tmodal form[data-job="j2"]');
     await read.waitFor({timeout: t(5000)});
-    assert.match(await read.locator('[data-stopped]').innerText(), /after only reading\.$/);
+    assert.match(await read.locator('[data-stopped]').innerText(), /before changing anything\.$/);
     assert.deepEqual(await read.locator(':scope > .row button').allInnerTexts(), ['Try again', 'Don’t retry']);
     assert.deepEqual(reviewed, ['builder', 'writer']);
     assert.deepEqual(errors, []);
