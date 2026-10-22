@@ -16174,7 +16174,7 @@
     },
     "/api/v2/usage/limits": {
       "get": {
-        "summary": "The team default limit and each bot's daily and monthly limits with this period's spend, for the bots the caller may see usage for",
+        "summary": "The team default limit and each bot's hourly, daily, weekly and monthly limits with this period's spend, for the bots the caller may see usage for; for the owner and bot administrators also the team's and each group's combined limits",
         "operationId": "getUsageLimits",
         "responses": {
           "200": {
@@ -16213,7 +16213,7 @@
         ]
       },
       "put": {
-        "summary": "The default limit for bots with none of their own, in estimated USD (empty is no limit), and whether subscription runs count toward it (owner and bot administrators)",
+        "summary": "The default limit for bots with none of their own, in estimated USD (empty is no limit), and whether subscription runs count toward every limit (owner and bot administrators)",
         "operationId": "setUsageDefault",
         "requestBody": {
           "content": {
@@ -16264,7 +16264,7 @@
     },
     "/api/v2/usage/limits/{bot}": {
       "put": {
-        "summary": "A bot's own daily and monthly limit in estimated USD; empty follows the team default. Owner and administrators, or the person who runs the bot within the team default. A bot over a limit takes no new job until the period turns over or the limit is raised",
+        "summary": "A bot's own hourly, daily, weekly and monthly limit in estimated USD; empty follows the team default. Owner and administrators, or the person who runs the bot within the team default. A bot over a limit takes no new job until the period turns over or the limit is raised",
         "operationId": "setBotUsageLimit",
         "parameters": [
           {
@@ -16294,6 +16294,119 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/BotUsageLimit"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Usage"
+        ]
+      }
+    },
+    "/api/v2/usage/pools/company": {
+      "put": {
+        "summary": "A limit on every bot's estimated spend together, per hour, day, week and month; empty removes it. Over it, no bot takes a new job (owner and bot administrators)",
+        "operationId": "setTeamUsageLimit",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UsageLimit"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsagePoolLimit"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Usage"
+        ]
+      }
+    },
+    "/api/v2/usage/pools/groups/{group}": {
+      "put": {
+        "summary": "A limit on the estimated spend of a group's bots together, nested groups included; empty removes it. Over it, none of them takes a new job (owner and bot administrators)",
+        "operationId": "setGroupUsageLimit",
+        "parameters": [
+          {
+            "name": "group",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Group"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UsageLimit"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsagePoolLimit"
                 }
               }
             }
@@ -29578,6 +29691,17 @@
       },
       "UsageDefault": {
         "properties": {
+          "hourly_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hourly Usd"
+          },
           "daily_usd": {
             "anyOf": [
               {
@@ -29588,6 +29712,17 @@
               }
             ],
             "title": "Daily Usd"
+          },
+          "weekly_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Weekly Usd"
           },
           "monthly_usd": {
             "anyOf": [
@@ -29616,7 +29751,19 @@
           "default": {
             "type": "object",
             "properties": {
+              "hourly_usd": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
               "daily_usd": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "weekly_usd": {
                 "type": [
                   "number",
                   "null"
@@ -29635,7 +29782,9 @@
             "required": [
               "count_subscription",
               "daily_usd",
-              "monthly_usd"
+              "hourly_usd",
+              "monthly_usd",
+              "weekly_usd"
             ],
             "additionalProperties": true
           }
@@ -29696,6 +29845,17 @@
       },
       "UsageLimit": {
         "properties": {
+          "hourly_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hourly Usd"
+          },
           "daily_usd": {
             "anyOf": [
               {
@@ -29706,6 +29866,17 @@
               }
             ],
             "title": "Daily Usd"
+          },
+          "weekly_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Weekly Usd"
           },
           "monthly_usd": {
             "anyOf": [
@@ -29726,7 +29897,19 @@
       "UsageLimitView": {
         "type": "object",
         "properties": {
+          "hourly_usd": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
           "daily_usd": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "weekly_usd": {
             "type": [
               "number",
               "null"
@@ -29742,7 +29925,19 @@
             "type": "object",
             "description": "Where each cap comes from: bot, company or null"
           },
+          "hour_spent": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
           "day_spent": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "week_spent": {
             "type": [
               "number",
               "null"
@@ -29756,17 +29951,39 @@
           },
           "percent": {
             "type": "integer",
-            "description": "The highest share of a limit reached"
+            "description": "The highest share of one of the bot's own limits reached"
           },
           "blocked": {
             "enum": [
+              "hourly",
               "daily",
+              "weekly",
               "monthly",
               null
             ],
-            "description": "Set while a limit is met: the bot takes no new job"
+            "description": "Set while a limit is met, the bot's own or a pool's: the bot takes no new job"
+          },
+          "blocked_by": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Whose limit holds the bot: scope (bot, company or group:<id>), name (a pool's), period, and spent and limit (a pool's to the owner and administrators only)",
+            "additionalProperties": true
+          },
+          "own_hourly_usd": {
+            "type": [
+              "number",
+              "null"
+            ]
           },
           "own_daily_usd": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "own_weekly_usd": {
             "type": [
               "number",
               "null"
@@ -29784,15 +30001,22 @@
         },
         "required": [
           "blocked",
+          "blocked_by",
           "daily_usd",
           "day_spent",
+          "hour_spent",
+          "hourly_usd",
           "may_edit",
           "month_spent",
           "monthly_usd",
           "own_daily_usd",
+          "own_hourly_usd",
           "own_monthly_usd",
+          "own_weekly_usd",
           "percent",
-          "source"
+          "source",
+          "week_spent",
+          "weekly_usd"
         ],
         "additionalProperties": true
       },
@@ -29802,7 +30026,19 @@
           "default": {
             "type": "object",
             "properties": {
+              "hourly_usd": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
               "daily_usd": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "weekly_usd": {
                 "type": [
                   "number",
                   "null"
@@ -29821,12 +30057,22 @@
             "required": [
               "count_subscription",
               "daily_usd",
-              "monthly_usd"
+              "hourly_usd",
+              "monthly_usd",
+              "weekly_usd"
             ],
             "additionalProperties": true
           },
           "may_edit_default": {
             "type": "boolean"
+          },
+          "pools": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Owner and administrators: company (UsagePoolView) and groups, {id: UsagePoolView with name and parent}",
+            "additionalProperties": true
           },
           "bots": {
             "type": "object",
@@ -29838,7 +30084,103 @@
         "required": [
           "bots",
           "default",
-          "may_edit_default"
+          "may_edit_default",
+          "pools"
+        ],
+        "additionalProperties": true
+      },
+      "UsagePoolLimit": {
+        "type": "object",
+        "properties": {
+          "scope": {
+            "type": "string",
+            "description": "company or group:<id>"
+          },
+          "limit": {
+            "$ref": "#/components/schemas/UsagePoolView"
+          }
+        },
+        "required": [
+          "limit",
+          "scope"
+        ],
+        "additionalProperties": true
+      },
+      "UsagePoolView": {
+        "type": "object",
+        "properties": {
+          "hourly_usd": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "daily_usd": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "weekly_usd": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "monthly_usd": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "hour_spent": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "day_spent": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "week_spent": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "month_spent": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "percent": {
+            "type": "integer"
+          },
+          "blocked": {
+            "enum": [
+              "hourly",
+              "daily",
+              "weekly",
+              "monthly",
+              null
+            ]
+          }
+        },
+        "required": [
+          "blocked",
+          "daily_usd",
+          "day_spent",
+          "hour_spent",
+          "hourly_usd",
+          "month_spent",
+          "monthly_usd",
+          "percent",
+          "week_spent",
+          "weekly_usd"
         ],
         "additionalProperties": true
       },

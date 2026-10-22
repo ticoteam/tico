@@ -1884,7 +1884,9 @@ class RunUsage(RunUsagePart):
 
 
 class UsageLimit(Contract):
+    hourly_usd: float | None = None
     daily_usd: float | None = None
+    weekly_usd: float | None = None
     monthly_usd: float | None = None
 
 
@@ -1993,6 +1995,14 @@ class TaskDefer(Contract):
 
 class Empty(Contract):
     pass
+
+
+class SystemRoutineUpdate(Contract):
+    """One system routine's switch, schedule preset or daily time (backend/system_routines.py); only what is sent
+    changes."""
+    on: bool | None = None
+    preset: Literal["15m", "hourly", "4h", "daily"] | None = None
+    at: str | None = Field(default=None, max_length=5)
 
 
 class LimitRetry(Contract):
