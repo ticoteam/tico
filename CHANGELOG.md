@@ -14,6 +14,14 @@ All notable changes to Tico are recorded here. The format follows
   HQ registers only a join code's hash through scoped SSM; no owner token or join secret crosses that control plane.
 
 ### Changed
+- **Questions close on their own** (Decide cards part 1). A bot's question to a person closes when its task or any task
+  above it is done, closed or declined (pick questions too; a done task keeps only the "accept this?" question it asks
+  its requester once done), when the person replies to it or writes on its task to that bot (the reply is the answer),
+  and on its "if you don't answer by" date even when its fallback is a send, a spend or a delete (the bot is told nothing
+  went ahead). One with no date that waits two business days (Mon-Fri, Pacific) goes back to its bot: each weekday
+  morning a bot gets one "Still needed?" wake listing all of them, and asks again or drops them; until then it stays in
+  Needs you, marked stale, rather than moving to Older questions. A stuck check never asks a person: the bot is retried
+  once, then BotOps gets a task to find why, and open "no progress" questions to people close at the next hourly sweep.
 - **One new subscription per AI tool on each computer.** Adding a second subscription for the same tool is refused
   with a Switch account message, including while the first sign-in is pending. Different tools and computers stay
   independent; existing connections and API keys are kept.
@@ -74,16 +82,6 @@ All notable changes to Tico are recorded here. The format follows
   plainly when a used-up login has bots on the Gateway. Gateway usage records keep which gateway key and install
   paid, never the key. The other three choices, and a team that never picks one, keep working
   as before ([Tico AI Gateway](docs/ai-gateway.md#choose-how-bots-get-their-models)).
-
-### Changed
-- **Questions close on their own** (Decide cards part 1). A bot's question to a person closes when its task or any task
-  above it is done, closed or declined (pick questions too; a done task keeps only the "accept this?" question it asks
-  its requester once done), when the person replies to it or writes on its task to that bot (the reply is the answer),
-  and on its "if you don't answer by" date even when its fallback is a send, a spend or a delete (the bot is told nothing
-  went ahead). One with no date that waits two business days (Mon-Fri, Pacific) goes back to its bot: each weekday
-  morning a bot gets one "Still needed?" wake listing all of them, and asks again or drops them; until then it stays in
-  Needs you, marked stale, rather than moving to Older questions. A stuck check never asks a person: the bot is retried
-  once, then BotOps gets a task to find why, and open "no progress" questions to people close at the next hourly sweep.
 
 ### Fixed
 - **Recommended starter bots install their Gateway runtime before subscription sign-in.** An isolated computer
