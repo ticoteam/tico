@@ -337,7 +337,7 @@ def ordered(steps):
 
     def engine(state, questions, label=None):
         J.validate(state, questions, label)
-        failed, paid = None, []
+        failed, first, paid = None, None, []
         with J.within(CHAIN_SECONDS):
             for i, step in enumerate(steps):
                 try:
@@ -347,9 +347,11 @@ def ordered(steps):
                     if i == len(steps) - 1:
                         exc.paid = paid
                         raise
-                    failed = failed or J.error_code(exc)
+                    if not failed:
+                        failed, first = J.error_code(exc), getattr(step, "provider", "") or ""
                     continue
-                result = {**result, "fallback": failed} if failed else result
+                # `fallback_from` is the provider that failed first, for the System routines row's words.
+                result = {**result, "fallback": failed, "fallback_from": first} if failed else result
                 return {**result, "paid": paid} if paid else result
     engine.steps = steps
     engine.model, engine.provider = step_models(steps)[0], getattr(steps[0], "provider", "")

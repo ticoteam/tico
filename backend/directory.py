@@ -463,14 +463,23 @@ class Directory:
             return True
         return datetime.now(timezone.utc) - last >= timedelta(minutes=cfg["interval_minutes"])
 
-    def tick(self):
+    def tick(self, record=False):
         with self.store.read() as c:
             if not self.due(c):
                 return
+        from . import system_routines
+        run = system_routines.Run("directory_sync")
         try:
             self.run("directory", auto=True)
-        except Problem:
-            pass                                           # recorded in `last`; try again next interval
+            run.did("Synced")
+        except Problem as exc:
+            run.error = "Failed: " + (exc.detail if isinstance(getattr(exc, "detail", None), str) else "the directory refused")[:200]
+        except Exception as exc:
+            run.error = system_routines.failure_words(exc)
+            raise
+        finally:
+            if record:                                     # the server's own timer, not a test's direct call
+                system_routines.write(self.store, run)
 
 
 def install_directory(app, settings, store, mutate):

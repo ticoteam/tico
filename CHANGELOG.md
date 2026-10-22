@@ -8,6 +8,12 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- **System routines in Settings > Routines**: a read-only System section above the bot routines lists every job Tico
+  runs on its own timers, in four groups (Checks that suggest, Learning, Reminders and deadlines, Housekeeping), each
+  with what it does, its schedule, its last run in words ("9 checked, 2 suggestions", or "Failed: <reason>" in red) and
+  its next run. Stale ticket review and nightly learnings also show which route answered Decide (Gateway, company key or
+  company AI), "Ran on your own key: Gateway unavailable" when the Gateway did not answer, and this month's AI spend.
+  Housekeeping rows say Tico needs them. `GET /api/v2/system-routines`; the Decide fallback order is unchanged.
 - **Wait for a milestone, not the whole task**: `hub task wait <id> --on pr:<url>` waits until that pull request
   merges, `--on release:v0.3.64` until that release is published (`task:<id>` is blocked_by). The owner gets one wake
   when it happens, while the task it came from keeps its own step (In QA, a release watch). A wait made after the

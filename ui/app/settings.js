@@ -103,7 +103,8 @@ function pageSettings() {
       <section class="card"><header><h2>Services</h2></header><div id="set-services">${skelRows(3, {card: true, dot: false})}</div></section></div>
     ${settingsIsAdmin() ? `<div class="settings-pane" id="settings-people" role="tabpanel" hidden><div id="set-people">${skelRows(3, {card: true, dot: false})}</div></div>` : ''}
     <div class="settings-pane" id="settings-recurring" role="tabpanel" hidden>
-      <section class="card"><header><h2>Routines</h2></header><div id="set-recurring">${skelRows(3, {card: true, dot: false})}</div></section>
+      <section class="card" id="set-system-card"><header><h2>System</h2><span class="muted">What Tico runs on its own</span></header><div id="set-system-routines">${skelRows(3, {card: true, dot: false})}</div></section>
+      <section class="card"><header><h2>Bot routines</h2></header><div id="set-recurring">${skelRows(3, {card: true, dot: false})}</div></section>
     </div>
     <div class="settings-pane" id="settings-triggers" role="tabpanel" hidden>
       <section class="card"><header><h2>Triggers</h2></header><div id="set-triggers">${skelRows(2, {card: true, dot: false})}</div></section>
@@ -223,7 +224,7 @@ function settingsShow(tab) {
   const reposPane = $('#settings-repos');
   if (reposPane) { reposPane.hidden = SETTINGS_TAB !== 'repos'; if (SETTINGS_TAB === 'repos' && !formBusy(reposPane)) void renderSettingsRepos(); }
   const recurring = $('#settings-recurring');
-  if (recurring) { recurring.hidden = SETTINGS_TAB !== 'recurring'; if (SETTINGS_TAB === 'recurring' && !formBusy(recurring)) renderSettingsRecurring(); }
+  if (recurring) { recurring.hidden = SETTINGS_TAB !== 'recurring'; if (SETTINGS_TAB === 'recurring') { void renderSystemRoutines(); if (!formBusy(recurring)) renderSettingsRecurring(); } }
   const triggersPane = $('#settings-triggers');
   if (triggersPane) { triggersPane.hidden = SETTINGS_TAB !== 'triggers'; if (SETTINGS_TAB === 'triggers' && !formBusy(triggersPane)) void renderSettingsTriggers(); }
 }
