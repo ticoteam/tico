@@ -59,6 +59,28 @@ hub task relate <task> <blocker> --kind blocked_by
 hub task update <task> --status waiting --note "Needs the build environment"
 ```
 
+### Waiting for a milestone, not the whole task
+
+Often what a task needs is an earlier milestone of another task, not that task being done: a pull request merged
+while its ticket stays In QA, or a release published while its checklist stays open for its QA watch. Wait for the
+milestone itself:
+
+```sh
+hub task wait <task> --on pr:https://github.com/<owner>/<repo>/pull/943   # until that pull request merges
+hub task wait <task> --on pr:<other task>                                  # the one pull request linked on it
+hub task wait <task> --on release:v0.3.64                                  # until that release is published
+hub task wait <task> --on task:<other task>                                # the same as blocked_by
+hub task wait <task> --on pr:<url> --remove                                # take it off
+```
+
+The task shows it ("Waits for PR #943 to merge"). When the pull request merges or the release is published (the
+GitHub webhook), the owner gets one wake; the task it came from keeps its own step, and nothing is closed or moved.
+A wait made after the milestone is woken once by the minute sweep instead, and a merge or release whose webhook
+never arrived (the server was down) is checked with GitHub every few minutes, in repositories the GitHub App reaches. Replays and the sweep never wake it twice. `release:` takes the server's release repository unless
+named (`release:<owner>/<repo>@v0.3.64`). The MCP tool is `hub_task_wait`; the API is
+`POST /api/v2/tasks/{id}/waits` with `{"on": "pr:<url>", "remove": false}`; each task answer carries
+`milestone_waits`.
+
 When the task waits on a person to act instead (a decision, access, a host only they can fix),
 name them with `--on` and say plainly what you need in the note:
 
@@ -131,6 +153,13 @@ stalls are escalated to BotOps with a separate diagnostic for each source task. 
 stuck or unavailable, the diagnostic goes to the human requester, or the team's default human for
 bot-requested work. An unresolved diagnostic is reused on later days. Health warns when repeated
 runs have escalated a public task without progress; an explicit run is still available.
+
+A task blocked by its own subtask is allowed (a question for a person in a subtask works that way),
+but relating it returns a warning: a subtask kept open until its parent finishes, such as a hold or
+an acknowledgement, never clears. When every blocker is such a subtask, owned by a bot, quiet five
+minutes and waiting on nothing of its own (no blocker, no unanswered question, no future due date,
+snooze, stored resume or milestone wait), the task counts as stalled even while `waiting`: its bot
+is woken with the way out, under the same limits, and BotOps's stuck list shows it with `own_blockers`.
 
 Task worktrees have a separate lifecycle. The 50-worktree limit stays in effect, and cleanup
 waits until the owning bot is idle so it cannot remove a checkout in use. A supported cleanup
@@ -210,6 +239,30 @@ arrived since stays on the card.
 **Still wanted? questions stop.** While Stale ticket review is on, Tico doesn't send the
 **Still wanted?** questions described above: its suggestions cover the quiet week.
 
+### The question card
+
+A bot's question to a person shows as one card, the same in Decide and in the task's Needs you box. The header
+names who asked (the bot, or Tico for a check Tico runs itself, never "Assistant"), "asked 3 days ago", and what it
+holds up: the roadmap item it is under, or its parent task. Below are the question, a "why it matters" line, and the
+picks. One pick is a button; several picks that go together (`--multi`) are checkboxes, the recommended ones ticked
+and labelled, with **Yes to all** and **Send ticked (n)**. Every button says what happens. The bot hears "Not this
+one" for each pick left unticked, with any note the person adds. The fallback ("If you don't answer by ...") sits
+small at the foot, and ids, file paths and error text only in the collapsed Details.
+
+Tico refuses a bot's question to a person, saying why and with an example, when:
+
+- it lists picks in its words, or is `--multi`, but gives no options;
+- an option has no "what happens" line (`then`; `--option "LABEL -> WHAT HAPPENS"`);
+- it is `--multi` with none marked recommended (`--recommend LABEL`);
+- the question, the why line or a pick's label, description or outcome has an id, hash, file path, tool name or
+  error text.
+
+A yes-or-no question needs no options; its Yes and No buttons say the bot hears that answer. The refusal is a writing refusal: it never counts toward a quarantine.
+
+Decide puts first a card that is, or holds up work, due or going ahead on its own within 2 working days (the nearest
+date of anything it holds up, not only the item the header names); then one holding up a roadmap item
+at Approved or Building; then the rest, newest first. Waiting longer never moves a card up.
+
 ### When nobody answers a bot's ask
 
 A bot's question may say what it will do if nobody answers (`hub task question ... --if-no-answer "Yes"
@@ -218,13 +271,21 @@ answer by Fri, Oct 16, Writer goes ahead: Yes". When that step is reversible and
 nothing by then (the team's days after the ask, 3 by default, or its later `by`; `by` is at most 14 days away and
 `--default-kind` is required with `--if-no-answer`), Tico answers for them with "No answer from Ana by
 Oct 16, so Writer goes ahead with what it said it would do: Yes", which wakes the bot with that choice. A send,
-spending money or a delete never goes ahead without an answer: the card says the bot waits. The owner turns this off,
+spending money or a delete never goes ahead without an answer: the card says so, and on its date the question closes and the bot decides without it. The owner turns this off,
 or changes the days, in Settings > Humans (**Bots go ahead on their recommendation**).
 
-An ask to a person with no word from them in 14 days expires: the bot goes ahead on its default when the rule above
-allows it, or is told to drop the work or ask again. A task a bot handed a person (they own it, the bot asked for it)
-that they have not touched in 14 days closes the same way, unless it is due later or waits on someone else, and the
-bot hears why. Hourly, `backend/ask_deadlines.py`.
+A send, a spend, a delete, any default when the owner turned going ahead off, and any default once the person has
+written since the ask (a comment, a Clarify tap) never goes ahead, but its question still closes on its date: the bot is
+told nothing went ahead and decides without it. A question with no date that
+is unanswered after two business days (Monday to Friday, Pacific) leaves the person's Needs you at the next weekday
+morning's batch (8:00): each asking bot gets one "Still needed?" wake listing all of its questions that crossed the line,
+and asks again (a fresh question with a new clock) or drops them (`backend/still_needed.py`). A question also closes
+when its task or any task above it is done, closed or declined (a done task keeps only the structured question asking its
+requester to accept the result, asked once it is done), when the person replies to it or writes on its task to the bot
+that asked, and when the bot asks them a newer question on the same task.
+
+A task a bot handed a person (they own it, the bot asked for it) that they have not touched in 14 days closes, unless it
+is due later or waits on someone else, and the bot hears why. Hourly, `backend/ask_deadlines.py`.
 
 ## Snoozing a task
 
@@ -592,9 +653,9 @@ a chat before task rooms) has no `execution`: that room's runs belong to the cha
 Tico spot-checks running work. A bot's open or doing task whose own session ran in the last day (or runs now) and
 that has made no progress for 30 minutes (no checkpoint, comment, status change, message from its bot or finished
 turn) gets one "Status check: checkpoint where you are, or mark it blocked or done." in its session. Thirty minutes
-later with still no progress it is reported stuck in the main chat, and when a person asked for it they get a
-question on it in Needs you, whose answer wakes the bot; the question is withdrawn when the task is done. These share the stall watcher's spacing and its cap of three
-a day, after which BotOps gets a task to find out why.
+later with still no progress its bot is retried once; thirty minutes after that, still with no progress, it is reported
+stuck in the main chat and BotOps gets a task to find out why. A stuck check never goes to a person as a question. These
+share the stall watcher's spacing and its cap of three a day, after which BotOps gets a task to find out why.
 
 `task_goal: on` on a bot (`hub bot update <slug> --task-goal on`, `hub_bot_update`, or the bot definition API; off by
 default) works each task it owns as a goal: the turn carries `task.goal` (the title and its acceptance criteria), and
@@ -637,6 +698,9 @@ hub task relate <task-id> <other-task-id> --kind parent --remove
 
 The MCP tool is `hub_task_relate`; the API is `POST /api/v2/tasks/{id}/relations` with
 `{"task": "<other id>", "kind": "...", "remove": false}`, and task create takes `"relations": [...]`.
+Each write reads back what it stored, in words from both ends, in `readback` (the CLI prints it as `hub: stored:`):
+`#237 "…" waits for #233 "…"` and `#233 "…" blocks #237 "…"`. A `blocks` sent where `blocked_by` was meant reads
+the other way round, so check that line before reporting a dependency as fixed.
 Either task's id, prefix or number works. A parent or a blocker follows the rules those always had (the
 task's parties or a mover; a blocker is the owner's or a mover's); the other kinds need the right to
 change both tasks, as for links. Finishing a blocker takes its relation off and wakes the bot owner
@@ -705,14 +769,18 @@ not found on this task` and attaches a copy with `--attach` instead.
 
 ```json
 {"questions":[{"id":"verdict","header":"Review","question":"Is this ready?",
- "options":[{"label":"Approve"},{"label":"Request changes","description":"Say what to change"}],
+ "why":"The client sees it on Friday.",
+ "options":[{"label":"Approve","then":"It goes to the client"},
+            {"label":"Request changes","description":"Say what to change","then":"Writer redoes it"}],
  "multi":false,"other":true}],"who":null}
 ```
 
 Questions may be on a comment or a file version. An ask has one to four questions, each with
 an id (up to 40 characters), header (30), question (300), and zero to six options. Labels are up
 to 60 characters and descriptions up to 200. An option can link to a version using `file: "<id>@<n>"`.
-`multi` defaults to false; `other` defaults to true. Question ids and labels must be unique.
+`then` (up to 120) says what happens if it is picked, `recommended: true` marks the ones the asker advises, and a
+question's `why` (200) says why it matters. `multi` defaults to false; `other` defaults to true. A bot asking a person
+keeps the asking rules in [The question card](#the-question-card). Question ids and labels must be unique.
 Unknown fields are rejected. `who` names a person or bot for Needs you; otherwise the requester
 is highlighted (the owner when the requester asks). Every open ask counts in the task's
 `open_asks`, including older unanswered questions.

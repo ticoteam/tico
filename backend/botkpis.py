@@ -3,7 +3,7 @@
 Each bot has five, and each is a virtual KPI: nothing is stored, the value is worked out when it is
 read, and it has an id (`auto:<bot>:<metric>`) that a goal links to like any other KPI, with a target
 on the link. Their readings are the same measure at the end of each of the last fourteen days, so a
-sparkline and a pace work the way they do for a KPI a person or the Goal Manager keeps.
+sparkline and a pace work the way they do for a KPI a person or the CEO Bot keeps.
 
   tasks_done_7d       tasks the bot owns that were finished in the last seven days
   first_response_min  median minutes from a message to the bot to its first reply in that conversation (7 days)

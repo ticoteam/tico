@@ -192,6 +192,36 @@ def test_an_answer_to_a_bots_ask_in_the_final_text_counts_once(api):
     assert turn(api, attempt)["writes"] == 1
 
 
+def worktree(api, task_id, attempt, path):
+    """A worktree of `task_id` on the computer that runs `attempt`."""
+    with api.app.state.store.transaction() as c:
+        computer = c.execute("SELECT runner_id FROM attempts WHERE id=?", (attempt["id"],)).fetchone()[0]
+        c.execute("INSERT INTO task_links(id,task_id,kind,url,state,added_by,created,repo,branch,path,computer_id) "
+                  "VALUES(?,?,'worktree',?,'present','bot:ops',?,'acme/app','tico/x',?,?)",
+                  (path, task_id, "worktree:" + path, H.now(), path, computer))
+
+
+@pytest.mark.parametrize("case", ["own_task", "none", "other_task", "older_runner"])
+def test_a_push_from_the_runs_own_task_worktree_is_acting(api, case):
+    """Tico never sees a git push; the runner reports the ones from the run's task worktrees with its result."""
+    r = machine(api)
+    task = post(api, "tasks", {"owner": "ops", "title": "Fix the export", "body": "Push the fix."})
+    other = post(api, "tasks", {"owner": "ops", "title": "Tidy the docs", "body": "Later."})
+    attempt = claim(api, r)
+    start(api, r, attempt)
+    worktree(api, task["id"], attempt, "tasks/fix/app")
+    worktree(api, other["id"], attempt, "tasks/docs/app")
+    pushes = {"own_task": [{"path": "tasks/fix/app", "count": 2}], "none": [],
+              "other_task": [{"path": "tasks/docs/app", "count": 1}, {"path": "tasks/elsewhere/app", "count": 1}]}
+    body = {"outcome": "completed", "last_seq": 0, "text": "", "usage": USAGE}
+    if case != "older_runner":
+        body["pushes"] = pushes[case]
+    post(api, f"attempts/{attempt['id']}/complete", body, r["token"])
+    row = turn(api, attempt)
+    assert (row["writes"], row["outcome"], row["did_nothing"]) == (
+        (2, "acted", 0) if case == "own_task" else (0, "no_change", 1))
+
+
 def test_a_restore_ends_open_runs_with_an_outcome(api):
     r = machine(api)
     post(api, "tasks", {"owner": "ops", "title": "Check the bank feed", "body": "Daily."})

@@ -34,7 +34,7 @@ def test_asked_again_on_the_same_task_it_updates_the_open_question(api):
     first = _ask(api, attempt["token"], "Run the vendor trial once?")
     before = _to_ana(api)
     again = _ask(api, attempt["token"], "Run the vendor trial this week, with the smaller plan?",
-                 options=[{"label": "This week"}, {"label": "Next month"}])
+                 options=[{"label": "This week", "then": "Go with This week"}, {"label": "Next month", "then": "Go with Next month"}])
     assert again["folded"] and not first["folded"]
     assert again["task"]["id"] == first["task"]["id"] and again["question"]["id"] == first["question"]["id"]
     assert _to_ana(api) == before, "nothing new was sent and no run was queued"
@@ -85,12 +85,12 @@ def test_a_second_decision_on_the_same_task_takes_its_own_topic(api):
     work = post(api, "tasks", {"owner": "ops", "title": "Launch the autumn page", "body": "Copy and banner."})
     ship = _ask(api, attempt["token"], "Ship the autumn page today?", parent=work["id"])
     banner = _ask(api, attempt["token"], "Which banner?", parent=work["id"], topic="banner",
-                  options=[{"label": "A"}, {"label": "B"}])
+                  options=[{"label": "A", "then": "Go with A"}, {"label": "B", "then": "Go with B"}])
     copy = _ask(api, attempt["token"], "Shorter copy?", parent=work["id"], topic="copy")
     assert not any(q["folded"] for q in (ship, banner, copy))
     assert len({q["task"]["id"] for q in (ship, banner, copy)}) == 3
     again = _ask(api, attempt["token"], "Which banner, now that both are final?", parent=work["id"], topic="banner",
-                 options=[{"label": "A"}, {"label": "B"}])
+                 options=[{"label": "A", "then": "Go with A"}, {"label": "B", "then": "Go with B"}])
     assert again["folded"] and again["task"]["id"] == banner["task"]["id"]
 
 

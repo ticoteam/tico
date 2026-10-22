@@ -473,6 +473,45 @@ async fn a_task_lane_commits_its_memory_stamps_its_run_and_lands_beside_the_othe
 }
 
 #[tokio::test]
+async fn a_task_turn_moves_the_bots_claude_memory_into_its_worktree_and_it_is_done_once_pushed() {
+    use crate::harness_memory::{claude_dir, move_for_turn, Moved};
+    let tmp = Tmp::new();
+    let (bare, _seed) = remote(&tmp.0, "bot-ops");
+    let projects = tmp.0.join("projects");
+    std::fs::create_dir_all(&projects).unwrap();
+    let main = projects.join("bot-ops");
+    sh(&projects, &["clone", "-q", bare.to_str().unwrap(), main.to_str().unwrap()]);
+    let env = turn_env(&tmp.0, &[]);
+    let session = sessions::path_for(&projects, "ops", "t1");
+    assert_eq!(sessions::ensure(&main, &session, "t1", &env).await.1, "");
+    // Claude named the bot's memory by its own checkout, not the task's worktree.
+    let home = tmp.0.join("home");
+    let dir = claude_dir(&home, &main);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("MEMORY.md"), "- [Ask first](ask-first.md) — hook\n").unwrap();
+    std::fs::write(dir.join("ask-first.md"), "---\nname: ask-first\ndescription: Ask before a spec\n---\nAsk first.\n").unwrap();
+    let (gemini, state) = (tmp.0.join("gemini-home"), tmp.0.join("state"));
+
+    let turn = |checkout: &std::path::Path| move_for_turn(&home, &main, checkout, &gemini, &state, "2026-10-21").unwrap();
+    assert_eq!(turn(&session), Moved::Copied(1), "a task turn copies into its worktree before the harness starts");
+    assert!(std::fs::read_to_string(session.join("memory/learnings.md")).unwrap().contains("[source: claude-memory/ask-first.md;"));
+    // A main-lane turn meanwhile leaves it to the task's checkout: no second copy to collide on rebase.
+    assert_eq!(turn(&main), Moved::Elsewhere);
+    assert!(!main.join("memory/learnings.md").exists());
+    // Not done until the repository has it: the turn's memory commit, then the push.
+    assert_eq!(turn(&session), Moved::Copied(0));
+    assert_eq!(sessions::finish(&session, "run-1", &env, &[]).await, "");
+    assert_eq!(execute::push_repo(&session, &env).await.1, "");
+    assert_eq!(turn(&session), Moved::Done);
+    assert!(state.join("done").exists());
+    // Done means done: an owner's edit that removes a moved rule stays removed.
+    sh(&main, &["pull", "-q"]);
+    std::fs::write(main.join("memory/learnings.md"), "# Learnings\n").unwrap();
+    assert_eq!(turn(&main), Moved::Done);
+    assert_eq!(std::fs::read_to_string(main.join("memory/learnings.md")).unwrap(), "# Learnings\n");
+}
+
+#[tokio::test]
 async fn a_shared_checkout_never_forces_and_says_which_files_conflict() {
     let tmp = Tmp::new();
     let (bare, seed) = remote(&tmp.0, "bot-eng");
@@ -603,6 +642,41 @@ async fn an_attached_worktree_is_certified_then_saved_to_a_wip_branch_when_its_t
     let wip = worktrees::wip_branch(&row);
     let saved = sh(&tmp.0, &["--git-dir", bare.to_str().unwrap(), "show", &format!("{wip}:draft.txt")]);
     assert_eq!(saved, "half done");
+}
+
+#[tokio::test]
+async fn a_turn_counts_only_its_own_tasks_pushes() {
+    let tmp = Tmp::new();
+    let (bare, seed) = remote(&tmp.0, "product");
+    let workspace = tmp.0.join("ws");
+    let base = workspace.join("repos/product");
+    std::fs::create_dir_all(base.parent().unwrap()).unwrap();
+    sh(&tmp.0, &["clone", "-q", bare.to_str().unwrap(), base.to_str().unwrap()]);
+    let (mine, theirs) = (workspace.join("tasks/mine/product"), workspace.join("tasks/theirs/product"));
+    sh(&base, &["worktree", "add", "-q", "-b", "tico/mine", mine.to_str().unwrap()]);
+    sh(&base, &["worktree", "add", "-q", "-b", "tico/theirs", theirs.to_str().unwrap()]);
+    let env = turn_env(&tmp.0, &[]);
+    let links = [json!({"path": "tasks/mine/product"})];
+    let since = crate::util::epoch_s() as i64;
+    assert_eq!(worktrees::pushes(&workspace, &links, since, &env).await, Vec::<Value>::new(), "nothing pushed yet");
+    // Another task's worktree of the same clone pushes, and this one only fetches its own branch, which someone else
+    // pushed: neither is this turn's push.
+    sh(&theirs, &["commit", "-q", "--allow-empty", "-m", "theirs"]);
+    sh(&theirs, &["push", "-q", "-u", "origin", "HEAD"]);
+    // ... and pushes to main, which this worktree tracks: a shared ref of another name is not read.
+    sh(&theirs, &["push", "-q", "origin", "HEAD:main"]);
+    sh(&mine, &["branch", "-q", "--set-upstream-to=origin/main"]);
+    sh(&seed, &["push", "-q", "origin", "HEAD:tico/mine"]);
+    sh(&mine, &["fetch", "-q", "origin"]);
+    assert_eq!(worktrees::pushes(&workspace, &links, since, &env).await, Vec::<Value>::new());
+    for n in ["one", "two"] {
+        sh(&mine, &["commit", "-q", "--allow-empty", "-m", n]);
+        sh(&mine, &["push", "-q", "-u", "origin", "HEAD"]);
+    }
+    let both = [links[0].clone(), json!({"path": "tasks/mine/product"})]; // named twice: counted once
+    assert_eq!(worktrees::pushes(&workspace, &both, since, &env).await, vec![json!({"path": "tasks/mine/product", "count": 2})]);
+    // A push before the turn began is not its own.
+    assert_eq!(worktrees::pushes(&workspace, &links, since + 3600, &env).await, Vec::<Value>::new());
 }
 
 /// A server that answers every request `{}` and records each request's method, path and JSON body.

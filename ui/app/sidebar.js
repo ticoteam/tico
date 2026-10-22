@@ -21,7 +21,7 @@ document.querySelectorAll('[data-section-toggle]').forEach(button => button.oncl
 });
 renderNavSections();
 // The built-ins stay out of the team chart. The Assistant and BotOps have their own rows in the main rail (each
-// person's private Assistant is its own page, ui/app/assistant-page.js); the Goal Manager is on Goals and the
+// person's private Assistant is its own page, ui/app/assistant-page.js); the CEO Bot is on Goals and the
 // Librarian on Docs and Market. Search, bot pickers and a person's page do not list the Assistant or the Librarian;
 // Settings > Bots manages all four, and #/bot/<slug> opens each.
 const isHiddenBot = slug => slug === assistantBot() || slug === 'librarian';
@@ -69,10 +69,10 @@ function orgBossKey(n) {
 }
 function orgHang(key, boss, groupOf) {
   const group = groupOf[key] || '';
-  // With the CEO Bot switch on, the CEO Bot hangs under the owner wherever the owner sits. A bot the server hangs under
+  // The CEO Bot hangs under the owner wherever the owner sits. A bot the server hangs under
   // the CEO Bot (backend/ceo_bot.py) stays in its group only when that group hangs under the CEO Bot too, else it
   // leaves the group for the CEO Bot's branch: the owner's own group never moves there, or the chart would loop.
-  if (ceoBotOn() && boss && (key === 'b:goal-manager' || (boss === 'b:goal-manager' && group && !orgGroupUnderCeo(group)))) return boss;
+  if (boss && (key === 'b:goal-manager' || (boss === 'b:goal-manager' && group && !orgGroupUnderCeo(group)))) return boss;
   if (group) return boss && groupOf[boss] === group ? boss : 'g:' + group;
   return boss && !groupOf[boss] ? boss : '';
 }
@@ -83,10 +83,10 @@ function orgGroupUnderCeo(id) {
   for (let hops = 0; g?.parent && byId.has(g.parent) && hops < 20; hops++) g = byId.get(g.parent);
   return g?.org_parent === 'b:goal-manager';
 }
-// Where a group hangs: in its parent group, else at the top. With the CEO Bot switch on, the server hangs the top-level
+// Where a group hangs: in its parent group, else at the top. The server hangs the top-level
 // group of a Head it puts under the CEO Bot there too (`org_parent`, backend/ceo_bot.py), when the CEO Bot is on the chart.
 const orgGroupParent = (g, keys) => g.parent && keys.has('g:' + g.parent) ? 'g:' + g.parent
-  : ceoBotOn() && g.org_parent === 'b:goal-manager' && keys.has('b:goal-manager') ? 'b:goal-manager' : '';
+  : g.org_parent === 'b:goal-manager' && keys.has('b:goal-manager') ? 'b:goal-manager' : '';
 function orgGroupOf(people, bots) {
   const groups = orgGroupIds(), out = {};
   for (const p of people) if (groups.has(p.team)) out['p:' + p.id] = p.team;
@@ -221,7 +221,7 @@ function defaultCollapsed() {
     if (!k || !by[k].length) continue;
     if (k.startsWith('g:')) continue;
     if (founder && k === 'p:' + founder.id) continue;
-    if (k === 'b:goal-manager' && ceoBotOn()) continue;        // the CEO Bot heads the chart: its Heads show
+    if (k === 'b:goal-manager') continue;        // the CEO Bot heads the chart: its Heads show
     keys.add(k);
   }
   return keys;
@@ -533,8 +533,8 @@ $('#org-history').onclick = () => {
 // Message bots sit in their own group after the team chart; built-ins have separate entry points. `reports_to` is untouched,
 // and a bot that reports to one hangs where it would have.
 const MESSAGE_BOTS_GROUP = '__message_bots';
-// With the CEO Bot switch on, the Goal Manager is on the chart as the CEO Bot (ceoBotOn).
-const isHelperBot = e => (isBuiltInBot(e.name) && !(e.name === 'goal-manager' && ceoBotOn())) || !!e.helper
+// The CEO Bot is built in but on the chart, at its top.
+const isHelperBot = e => (isBuiltInBot(e.name) && e.name !== 'goal-manager') || !!e.helper
   || (S.people || []).some(p => p.inbox_bot === e.name);
 // The order here and on Goals: the Assistant, then the other built-ins, then message bots.
 const HELPER_ORDER = ['botops', 'librarian', 'goal-manager', 'inbox'];

@@ -392,7 +392,9 @@ def billing_limit(c, bot=None, attempt_id=None):
     if attempt_id is None:
         last = last_limit(c, bot)
         attempt_id = last["id"] if last else None
-    return bool(attempt_id) and any(BILLING_LIMIT_RE.search(error) for error in limit_errors(c, attempt_id))
+    # The Gateway's out-of-credit refusal says insufficient_quota too, but it is the company's credit, not a key's plan.
+    return bool(attempt_id) and any(BILLING_LIMIT_RE.search(error) and not gateway.out_of_credit(error)
+                                    for error in limit_errors(c, attempt_id))
 
 
 def provider_reset(last, finished):
@@ -430,6 +432,10 @@ def reset_cooldown(c, attempt_id, finished, cooldown, resets_at=None):
         # reset or Retry-After said.
         return max(cooldown, int((gateway.month_after(finished) - finished).total_seconds()) + 1)
     reported = provider_reset({"resets_at": resets_at}, finished)
+    if any(gateway.out_of_credit(error) for error in errors):
+        # The company is out of credit: the Gateway lets the next call through as soon as credit lands, so the bot
+        # asks again after its Retry-After (a minute), never a login's 30-minute hold.
+        return reported or gateway.OUT_OF_CREDIT_WAIT
     if any(gateway.rate_limited(error) for error in errors):
         # Retry-After covers both the key's minute window and an address block; older runners keep the safe default.
         return reported or max(cooldown, gateway.RETRY_AFTER)
@@ -1743,14 +1749,15 @@ class Execution:
         """Whether a result that arrives after the lease lapsed may still settle its job. The
         test is the one `restore` uses without the clock: this runner still owns the bot, the job
         is still uncertain and still on this attempt, no review has decided it, and no other
-        attempt is running in its lane. A review — a person's or `auto_reconcile`'s — always
+        attempt is running in its lane, and no person pressed Stop on it: a Stop its runner never heard, because the
+        computer slept through the lease, still stands over the answer the model went on to finish. A review — a person's or `auto_reconcile`'s — always
         writes job_recovery and moves the job off `uncertain`, so a decision already taken wins
         and a late result can never undo one. Elapsed time is what hands a job from the runner to
         the sweep; it is not what makes settling safe, and the longest turns are exactly the ones
         most likely to outlive a lease."""
         job = c.execute("SELECT state FROM jobs WHERE id=? AND attempt_id=?",
                         (row["job_id"], row["id"])).fetchone()
-        return bool(self.current_owner(c, who, row)
+        return bool(self.current_owner(c, who, row) and not row["stop_requested"]
                     and job and job["state"] == "uncertain"
                     and not c.execute("SELECT 1 FROM job_recovery WHERE job_id=? AND attempt_id=?",
                                       (row["job_id"], row["id"])).fetchone()
@@ -1764,7 +1771,7 @@ class Execution:
         completed and its answer is posted where the request was made, a closed task's own room included, and the
         queued rerun never happens. Any other outcome, or a job another attempt (`attempt_id`) or another computer now
         owns, is only filed (`file_result`)."""
-        if body.outcome != "completed" or not self.current_owner(c, who, row):
+        if body.outcome != "completed" or not self.current_owner(c, who, row) or row["stop_requested"]:
             return False
         job = c.execute("SELECT state FROM jobs WHERE id=? AND attempt_id=?", (row["job_id"], row["id"])).fetchone()
         return bool(job and job["state"] in ("cancelled", "queued"))
@@ -1827,6 +1834,7 @@ class Execution:
         archivable against it."""
         c.execute("UPDATE attempts SET final_text=?,result_json=? WHERE id=?",
                   (body.text, encode(body.model_dump()), row["id"]))
+        run_triggers.pushed(c, row["id"], row["runner_id"], body.pushes)
         H.turn_finish(c, H.KEEPER, row["id"], exit_code=body.outcome, tokens_in=body.tokens_in,
                       tokens_out=body.tokens_out, summary=body.text[:2000], usage=self.run_usage(c, row, body))
         H.event(c, H.KEEPER, "attempt.late-result", row["id"],
@@ -2054,6 +2062,40 @@ class Execution:
         c.execute("UPDATE attempts SET last_seq=? WHERE id=?", (seq, aid))
         return {"ack_seq": seq, "historical": row["lease_until"] <= H.now() or row["state"] == "expired"}
 
+    def background_done(self, c, who, aid, body):
+        """The commands a turn left running when it ended on its wait have all ended: one wake for the bot, in the
+        turn's task and conversation, with each command's exit and the end of its output. A second report of the same
+        turn changes nothing."""
+        from . import run_triggers
+        from .watchers import defang, live
+        row = self.attempt(c, who, aid, active=False)
+        if c.execute("SELECT 1 FROM events WHERE action='attempt.background-done' AND target=?", (aid,)).fetchone():
+            return {"woke": False}
+        job = c.execute("SELECT message_id FROM jobs WHERE id=?", (row["job_id"],)).fetchone()
+        origin = H.message(c, job["message_id"]) if job else None
+        task = H.task(c, H.message_task_id(origin) or "") if origin else None
+        lines = []
+        for cmd in body.commands:
+            ended = ("killed: ran over the run's time limit" if cmd.killed
+                     else "exit code unknown" if cmd.exit is None else f"exit {cmd.exit}")
+            what = cmd.description or "A background command"
+            if cmd.ci_watch:
+                what += " (CI watch: " + ", ".join(f"{k} {v}" for k, v in cmd.ci_watch.items()) + ")"
+            tail = cmd.tail.strip()
+            lines.append(f"- {what}: {ended}" + (f"\n  Last output:\n```\n{tail}\n```" if tail else ""))
+        text = ("The background commands your earlier turn left running have ended. The runner kept them when that "
+                "turn ended on its wait (Claude may have said they did not finish; they did).\n" + "\n".join(lines))
+        woke = bool(origin) and (task is None or live(task))
+        if woke:
+            refs = {"task": task["id"]} if task else {}
+            H.say(c, H.KEEPER, "bot:" + row["bot"], defang(text, c), kind="notice",
+                  conversation_id=task["conversation_id"] if task else origin["conversation_id"],
+                  refs=run_triggers.stamp({**refs, "wake": "background-done"}, "background_done", aid))
+        H.event(c, H.KEEPER, "attempt.background-done", aid,
+                {"bot": row["bot"], "task": task["id"] if task else None, "woke": woke,
+                 "commands": [{"exit": cmd.exit, "killed": cmd.killed} for cmd in body.commands]})
+        return {"woke": woke}
+
     def complete(self, c, who, aid, body):
         row = self.attempt(c, who, aid, final=True)
         # `attempt` has already given `restore` its chance. What is left is a finished turn whose
@@ -2270,6 +2312,8 @@ class Execution:
         if body.outcome == "completed":
             # Each next-run task this run carried and left: back to the next run, unless it was worked or deferred.
             quiet_work.settle(c, aid, row["bot"], row["started"] or row["created"])
+        # A push from the task's worktrees is the run acting too, though only its runner saw it.
+        run_triggers.pushed(c, aid, row["runner_id"], body.pushes)
         # The runner's notices (a file left out of the commit) are shown beside the reply, not as the turn's summary.
         H.turn_finish(c, H.KEEPER, aid, exit_code=body.outcome, tokens_in=body.tokens_in,
                       tokens_out=body.tokens_out, summary=split_runner_notices(body.text)[0][:2000],
@@ -2378,6 +2422,11 @@ class Execution:
             elif tico_code == gateway.RATE_LIMITED:
                 focus = (f"Tico AI Gateway rate limited at {hit[11:16]}; "
                          f"retrying after {retry[:10]} {retry[11:16]} UTC")
+            elif (gateway.out_of_credit(login_hold.get("error")) if login_hold
+                  else any(gateway.out_of_credit(error) for error in limit_errors(c, aid))):
+                # The turn ended on the company's credit, not a login's limit (login_holds.after_turn): its minute.
+                focus = (f"{gateway.PAUSED_MESSAGE} at {hit[11:16]}; trying Tico models again at {retry[11:16]} UTC, "
+                         "or as soon as credit is added")
             else:
                 # Whose limit it was, from the turn's own notes (backend/login_holds.py source): primary or fallback,
                 # which provider and login, and an API key's quota told apart from a plan's usage window. A fallback's

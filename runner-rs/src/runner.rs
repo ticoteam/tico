@@ -294,6 +294,13 @@ impl Runner {
                 log(&format!("Tico runner: credential migration failed ({}); will retry", describe(&e)));
             }
             crate::readiness_extra::fetch_grants(&self.client).await;
+            // What the server takes in a readiness row (fallback.rs remember), before the first report and not only
+            // from the harness relay's minute: a Muse Code data folder is then named from the first heartbeat.
+            if !crate::fallback::config_seen() {
+                if let Ok(c) = self.client.get("config").await {
+                    crate::fallback::remember(&c);
+                }
+            }
         }
         let assignments = self.assignments.lock().unwrap().clone();
         let candidates = readiness_candidates(&assignments);
@@ -648,6 +655,7 @@ impl Runner {
         tokio::spawn(self.clone().push_backlog());
         tokio::spawn(self.events.clone().run(self.client.clone()));
         tokio::spawn(crate::perf::run_loop(self.clone()));
+        tokio::spawn(crate::afterwatch::run_loop(self.clone()));
         tokio::spawn(crate::appdriver::run_loop(self.clone()));
         let mut clock = Clock {
             polled: HashMap::new(),

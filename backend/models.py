@@ -269,10 +269,17 @@ class TaskTypeUpdate(Contract):
     steps_only: bool | None = None
 
 
+# What a pick says on a person's card (ui/app/question-card.js): `then` is its "what happens" line, under its button;
+# `recommended` pre-ticks it among several picks. A bot's pick to a person needs `then` (hubdb.lint_question).
+OptionThen = Annotated[StrictStr, Field(max_length=120)]
+
+
 class QuestionOption(Contract):
     label: Annotated[StrictStr, Field(min_length=1, max_length=60)]
     description: Annotated[StrictStr, Field(max_length=200)] = ""
     file: Annotated[StrictStr, Field(pattern=r"^[^@]+@[1-9][0-9]*$")] | None = None
+    then: OptionThen = ""
+    recommended: StrictBool = False
 
 
 class QuestionFile(Contract):
@@ -293,13 +300,19 @@ class QuestionChoice(Contract):
     label: Annotated[StrictStr, Field(min_length=1, max_length=60)]
     description: Annotated[StrictStr, Field(max_length=200)] = ""
     file: QuestionFile | None = None
+    then: OptionThen = ""
+    recommended: StrictBool = False
 
 
 class TaskQuestion(Contract):
     """One decision put to a person as its own task: created, asked and set waiting on them in one write."""
     question: Annotated[StrictStr, Field(min_length=1, max_length=300)]
     on: ID
+    # The card's one "why it matters" line, under the question.
+    why: Annotated[StrictStr, Field(max_length=200)] = ""
     options: list[QuestionChoice] = Field(default_factory=list, max_length=6)
+    # Several picks: each a checkbox, answered with "Yes to all" or "Send ticked".
+    multi: StrictBool = False
     title: Annotated[StrictStr, Field(min_length=1, max_length=300)] | None = None
     body: Text | None = None
     parent: ID | None = None
@@ -323,6 +336,8 @@ class ReviewQuestion(Contract):
     id: Annotated[StrictStr, Field(min_length=1, max_length=40)]
     header: Annotated[StrictStr, Field(max_length=30)]
     question: Annotated[StrictStr, Field(min_length=1, max_length=300)]
+    # The card's one "why it matters" line, under the question.
+    why: Annotated[StrictStr, Field(max_length=200)] = ""
     options: list[QuestionOption] = Field(default_factory=list, max_length=6)
     multi: StrictBool = False
     other: StrictBool = True
@@ -397,6 +412,13 @@ class TaskLink(Contract):
     kind: Literal["session"] | None = None
     # A pull request link: true wakes the owner once when its checks finish, it is reviewed or it ships; false disarms.
     wake_once: bool | None = None
+
+
+class TaskWait(Contract):
+    """What the task waits on: `task:<id>` (blocked_by), `pr:<url>` or `pr:<task>` (until that pull request merges),
+    `release:<tag>` (until that release is published). `remove` takes it off."""
+    on: Annotated[str, Field(min_length=3, max_length=400)]
+    remove: bool = False
 
 
 class TaskRelation(Contract):
@@ -784,6 +806,11 @@ class SubscriptionWeekly(Contract):
 UsageWindow = Annotated[SubscriptionWeekly | None, WrapValidator(_account_or_none)]
 
 
+def _cut(limit):
+    """A reported string longer than `limit` is cut, never refused: a refused report would hide the computer."""
+    return BeforeValidator(lambda v: v[:limit] if isinstance(v, str) else v)
+
+
 class GoalReadiness(Contract):
     goals: bool = False
     commands: list[SlashCommand] = Field(default_factory=list, max_length=30)
@@ -812,6 +839,8 @@ class ProfileReadiness(GoalReadiness):
     # Its turns on this runtime use the computer's own login (a profile that shares the operator's): one login, held
     # once (backend/login_holds.py canonical).
     shared_login: bool | None = None
+    # Signed in, but its turns can't save a session (Muse Code's data folder): the folder and why, not a sign-in.
+    data_problem: Annotated[str, _cut(500)] = ""
 
 
 class HarnessReadiness(GoalReadiness):
@@ -853,6 +882,7 @@ class RuntimeReadiness(GoalReadiness):
     models: list[ID] = Field(default_factory=list, max_length=50)
     controls: list[Literal["interrupt", "new-session"]] = Field(default_factory=list)
     detail: str = Field(default="", max_length=500)
+    data_problem: Annotated[str, _cut(500)] = ""      # as ProfileReadiness
     # One machine may hold several subscriptions for the same runtime. The runtime row keeps
     # the profile that needs attention first; this is the per-profile breakdown behind it.
     profiles: dict[str, ProfileReadiness] = Field(default_factory=dict, max_length=50)
@@ -957,6 +987,7 @@ class BotReadiness(GoalReadiness):
     # The subscription profile this bot's turns run on, and that profile's own sign-in state.
     profile: str = Field(default="", max_length=100)
     sign_in: Literal["ready", "missing", "failed", "unknown"] = "unknown"
+    data_problem: Annotated[str, _cut(500)] = ""      # its runtime row's (ProfileReadiness): a folder, not a sign-in
     # The bot's declared `access:`, for the Tools row on its page. A runner from before it omits it.
     tools: list[ToolAccess] = Field(default_factory=list, max_length=30)
     # What bot.yaml asks for its mail sending; omitted when it asks for nothing.
@@ -989,11 +1020,6 @@ class ScreenReadiness(Contract):
     width: int | None = Field(default=None, ge=1, le=10000)
     height: int | None = Field(default=None, ge=1, le=10000)
     reason: Annotated[str, BeforeValidator(lambda v: v[:200] if isinstance(v, str) else v), Field(max_length=200)] = ""
-
-
-def _cut(limit):
-    """A reported string longer than `limit` is cut, never refused: a refused report would hide the computer."""
-    return BeforeValidator(lambda v: v[:limit] if isinstance(v, str) else v)
 
 
 AppState = Literal["ready", "no_permission", "not_installed", "not_signed_in", "needs_foreground", "ui_changed",
@@ -1541,7 +1567,7 @@ class BotCompactAt(Contract):
 
 
 class BotWakePreset(Contract):
-    wake_preset: Literal["current", "token_saver", "performance"]
+    wake_preset: Literal["current", "token_saver", "performance"] = Field(description="Token saver or Performance; legacy current is accepted as an alias for Performance.")
     expected_revision: int = Field(ge=1)
 
 
@@ -1604,7 +1630,7 @@ class UsageCount(Contract):
     enabled: bool
 
 
-class CeoBotSwitch(Contract):
+class CeoBotChecks(Contract):
     on: bool
 
 
@@ -1797,6 +1823,19 @@ class EventBatch(Contract):
     events: list[Event] = Field(min_length=1, max_length=100)
 
 
+class BackgroundCommand(Contract):
+    description: str = Field(default="", max_length=300)
+    exit: int | None = Field(default=None, ge=-255, le=255)
+    killed: bool = False
+    ci_watch: dict[str, int] | None = None
+    tail: str = Field(default="", max_length=2000)
+
+
+class BackgroundDone(Contract):
+    """The commands a Claude turn left running when it ended on its wait, all ended (runner-rs/src/afterwatch.rs)."""
+    commands: list[BackgroundCommand] = Field(min_length=1, max_length=20)
+
+
 class StreamCapture(Contract):
     """A run's raw provider stream, one JSON record per line (runner-rs/src/capture.rs)."""
     provider: str = Field(min_length=1, max_length=40)
@@ -1853,6 +1892,11 @@ class SubscriptionUnavailable(Contract):
     problem: str = Field(min_length=1, max_length=500)
 
 
+class RunPush(Contract):
+    path: str = Field(min_length=1, max_length=1000)  # the worktree, as its task link records it
+    count: int = Field(ge=1, le=1000)
+
+
 class Completion(Contract):
     subscription_unavailable: SubscriptionUnavailable | None = None
     profile_used: str | None = Field(default=None, max_length=80)
@@ -1873,6 +1917,9 @@ class Completion(Contract):
     # Inputs this run took from `attempts/{aid}/inputs` but never gave the runtime (the turn ended between
     # the poll and the steer). They go back to the queue whatever the outcome, not settled with the run.
     undelivered: list[ID] = Field(default_factory=list, max_length=100)
+    # Git pushes the run made from its task's worktrees (runner-rs/src/worktrees.rs pushes): writes Tico sees no
+    # other way. Counted in its `writes` (backend/run_triggers.py).
+    pushes: list[RunPush] = Field(default_factory=list, max_length=50)
 
 
 class Retry(Contract):

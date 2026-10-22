@@ -1079,7 +1079,7 @@
   {
    "slug": "goal-manager",
    "template": "goal-manager",
-   "name": "Goal Manager",
+   "name": "CEO Bot",
    "department": "core",
    "lead": false,
    "core": true,

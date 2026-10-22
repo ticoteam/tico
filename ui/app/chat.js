@@ -17,7 +17,7 @@ function v2ChatStop() {
   V2C = null;
 }
 // Which of the viewer's rooms with a bot is its chat: the shared room, or one of their own. The bot page and the
-// Goal Manager on Goals both show this one room.
+// CEO Bot on Goals both show this one room.
 function v2ChatMode(slug) {
   slug = botBranchChatTarget(slug);
   const bot = (S.emps || []).find(e => e.name === slug);
@@ -350,6 +350,13 @@ function chatTaskRowHTML(m) {
     <span class="ct-dot ${esc(t.state)}" aria-hidden="true"></span><span class="ct-title">${esc(chatLine(t.title, 90))}</span><span class="ct-state">· ${esc(t.state)}</span>${
     m.created ? `<time class="chat-time" title="${esc(fmt(m.created))}">${esc(ago(m.created))}</time>` : ''}</button>`;
 }
+// Task rows in a row, from one sender: more than three show the oldest, a count of the rest, and the newest.
+function chatTaskRunHTML(run) {
+  if (run.length <= 3) return run.map(chatTaskRowHTML).join('');
+  return chatTaskRowHTML(run[0])
+    + `<div class="chat-task-row chat-task-more" data-task-hidden="${run.length - 2}"><span class="ct-state">...${run.length - 2} more...</span></div>`
+    + chatTaskRowHTML(run.at(-1));
+}
 // Tico Live was retired; the lines it left in rooms (refs.live) read as plain messages.
 function v2MessageHTML(m) {
   // A Confirm card a bot left for you (BotOps: adding a person, a role, a shared credential): filled in from the action.
@@ -483,13 +490,19 @@ function v2MessagesHTML(messages, goalLine, slug = V2C?.slug) {
   messages.forEach((message, i) => {
     if (goalLine?.at === i) feed.push({html: goalLine.html});
     const kind = chatSideKind(message, slug);
-    feed.push({message, side: !!kind && kind !== 'task'});
+    feed.push({message, side: !!kind && kind !== 'task', task: kind === 'task'});
   });
   if (goalLine?.at === messages.length) feed.push({html: goalLine.html});
   const lastMain = feed.findLastIndex(item => !item.side);
   if (lastMain >= 0 && lastMain < feed.length - 1) feed.splice(lastMain, 0, ...feed.splice(lastMain + 1));
   const rows = [];
   for (let i = 0; i < feed.length;) {
+    if (feed[i].task) {
+      const run = [], from = feed[i].message.from_actor;
+      while (i < feed.length && feed[i].task && feed[i].message.from_actor === from) run.push(feed[i++].message);
+      rows.push(chatTaskRunHTML(run));
+      continue;
+    }
     if (!feed[i].side) { rows.push(feed[i].html || v2MessageHTML(feed[i].message)); i++; continue; }
     const run = [];
     while (i < feed.length && feed[i].side) run.push(feed[i++].message);

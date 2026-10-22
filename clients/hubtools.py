@@ -743,14 +743,24 @@ def task_ask(api, args):
 @tool("hub_task_question", "Put one decision to a person as a small task, in one call: a pick between 2 to 6 "
       "options (an option may carry an image or file) or, with no options, Yes / No. The task is yours and waits on "
       "them; asked from a run on one of your tasks it is filed under that task. Their answer wakes you and you mark it "
-      "done. One decision per task; write the question so it makes sense on its own. One open question per topic: "
+      "done. One decision per task; write the question so it makes sense on its own. Each option says what happens "
+      "if it is picked (`then`); several picks (`multi`) mark the ones you recommend; the question, `why` and each option's "
+      "label, description and then line carry no ids, paths, tool names or error output (put those in `body`, shown under Details), or the ask is "
+      "refused with what to fix. One open question per topic: "
       "asked again while your earlier one on the same topic (same `topic`, else the same parent task) still waits on "
       "them, it updates that one (`folded: true`) instead of adding a second; give a different decision its own topic.",
       {"question": _s("The question, readable with no other context", maxLength=300),
        "on": _s("The person who decides: their id"),
+       "why": _s("One plain line on why it matters, shown under the question", maxLength=200),
+       "multi": {"type": "boolean", "description": "Several picks: the person ticks the ones they want (Yes to all, "
+                 "or Send ticked); each unticked one comes back to you as \"not this one\". Mark recommended ones"},
        "options": {"type": "array", "minItems": 2, "maxItems": 6, "description": "The choices; omit for Yes / No",
-                   "items": {"type": "object", "additionalProperties": False, "required": ["label"], "properties": {
+                   "items": {"type": "object", "additionalProperties": False, "required": ["label", "then"], "properties": {
                        "label": _s("A short label", maxLength=60),
+                       "then": _s("What happens if it is picked, in a few plain words (\"engineering starts "
+                                  "building\"): required", maxLength=120),
+                       "recommended": {"type": "boolean", "description": "You recommend it: pre-ticked among several "
+                                       "picks (multi needs at least one)"},
                        "description": _s("One line more about it", maxLength=200),
                        "path": _s("A local image or file shown with this option (on the computer that runs you)")}}},
        "title": _s("Task title; defaults to the question"),
@@ -773,9 +783,13 @@ def task_ask(api, args):
       required=("question", "on"), writes=True)
 def task_question(api, args):
     options = [dict(o) for o in args.get("options") or []]
-    for item in args.get("option") or []:            # the CLI's --option LABEL[=FILE], repeatable
-        label, _, path = str(item).partition("=")
-        options.append({"label": label.strip(), **({"path": path.strip()} if path.strip() else {})})
+    recommend = {str(x).strip() for x in args.get("recommend") or []}
+    for item in args.get("option") or []:            # the CLI's --option "LABEL[=FILE] -> WHAT HAPPENS", repeatable
+        head, _, then = str(item).partition("->")
+        label, _, path = head.partition("=")
+        options.append({"label": label.strip(), **({"then": then.strip()} if then.strip() else {}),
+                        **({"recommended": True} if label.strip() in recommend else {}),
+                        **({"path": path.strip()} if path.strip() else {})})
     if options and not 2 <= len(options) <= 6:
         raise ValueError("A question has 2 to 6 options, or none for Yes / No")
     if any(o.get("path") for o in options) and not hasattr(api, "post_multipart"):
@@ -787,7 +801,7 @@ def task_question(api, args):
             local, _ = BF.local_file(BF.checkout_root(), path)
             option["file"] = {"name": Path(path).name, "content_base64": base64.b64encode(local.read_bytes()).decode()}
     body = {"question": args["question"], "on": args["on"], "options": options}
-    for field in ("title", "body", "parent", "private", "topic"):
+    for field in ("title", "body", "parent", "private", "topic", "why", "multi"):
         if args.get(field) is not None:
             body[field] = args[field]
     default = args.get("if_no_answer")
@@ -1044,7 +1058,8 @@ def task_link(api, args):
 @tool("hub_task_relate", "Relate another task to this one, read as `id kind task`: parent (task is its "
       "parent; moves it and its subtree), blocks, blocked_by (it waits on task; several are allowed), "
       "related (they belong together, the default), duplicate_of, follow_up (it was split off or followed "
-      "up from task). `remove` takes the relation off.",
+      "up from task). `remove` takes the relation off. The reply's `readback` says what was stored, both ends "
+      "(\"#237 waits for #233\" / \"#233 blocks #237\"): check it before reporting the link as fixed.",
       {"id": TASK_ID, "task": {**TASK_ID, "description": "The other task: its id or first 8 or more characters"},
        "kind": {"type": "string", "enum": ["parent", "blocks", "blocked_by", "related", "duplicate_of", "follow_up"], "default": "related"},
        "remove": {"type": "boolean", "default": False}},
@@ -1052,6 +1067,17 @@ def task_link(api, args):
 def task_relate(api, args):
     return api.post(f"tasks/{args['id']}/relations", {"task": args["task"], "kind": args.get("kind") or "related",
                                                       "remove": bool(args.get("remove"))}, key=_key(args))
+
+
+@tool("hub_task_wait", "Make a task wait on another task (task:<id>, blocked_by), a pull request merging (pr:<url>, "
+      "or pr:<task> for the one pull request linked on that task) or a release being published (release:<tag>). The "
+      "owner gets one wake when it happens; the task waited on keeps its own step. The reply's `readback` says what was "
+      "stored: check it before reporting the wait as set. `remove` takes it off.",
+      {"id": TASK_ID, "on": _s("task:<id>, pr:<url|task> or release:<tag>"),
+       "remove": {"type": "boolean", "default": False}},
+      required=("id", "on"), writes=True)
+def task_wait(api, args):
+    return api.post(f"tasks/{args['id']}/waits", {"on": args["on"], "remove": bool(args.get("remove"))}, key=_key(args))
 
 
 # ----------------------------------------------------------------------------- goals
@@ -1089,8 +1115,8 @@ def goal_create(api, args):
 
 @tool("hub_goal_status", "Set a goal's colour by hand: red, yellow or green with one honest sentence; "
       "done when reached, dropped when it stops mattering. A colour set by hand sticks, with your name and "
-      "note, until a person hands it back (status `auto`); the Goal Manager only suggests a different one. "
-      "`auto` lets the Goal Manager set the colour again: it ends a colour set by hand and works the automatic one "
+      "note, until a person hands it back (status `auto`); the CEO Bot only suggests a different one. "
+      "`auto` lets the CEO Bot set the colour again: it ends a colour set by hand and works the automatic one "
       "out now, from the goal's KPIs, or its owner's check-ins and tasks. The goal's owner, the owner of the goal "
       "it serves, or someone above them.",
       {"id": _s("Goal id"),
@@ -1104,9 +1130,9 @@ def goal_status(api, args):
                     key=_key(args))["goal"]
 
 
-@tool("hub_goal_refresh", "The Goal Manager's status pass: work the automatic colour of every live goal (or "
+@tool("hub_goal_refresh", "The CEO Bot's status pass: work the automatic colour of every live goal (or "
       "the ones named) out again. A goal whose colour a person set only gets a visible suggestion. "
-      "Returns {changed, suggested, checked}. The Goal Manager or the team owner.",
+      "Returns {changed, suggested, checked}. The CEO Bot or the team owner.",
       {"goal_ids": {"type": "array", "items": {"type": "string"}, "description": "Only these goals; default all"}},
       writes=True)
 def goal_refresh(api, args):
@@ -1115,7 +1141,7 @@ def goal_refresh(api, args):
 
 @tool("hub_goal_checkin", "Record how the owner says a goal is going, in their words: interpretation, kept "
       "apart from the readings (facts). It colours a goal that has no KPI. The goal's owner, someone above "
-      "them, or the Goal Manager recording an owner's answer (`from_actor`).",
+      "them, or the CEO Bot recording an owner's answer (`from_actor`).",
       {"id": _s("Goal id"), "body": _s("What is going on, in a sentence or two"),
        "signal": {"type": "string", "enum": ["on_track", "at_risk", "off_track"]},
        "from_actor": _s("Whose words these are, when you record them for someone else: a bot slug or a person id"),
@@ -1144,9 +1170,9 @@ def goal_company(api, args):
     return api.get("company")
 
 
-@tool("hub_goal_ceo_bot", "Whether the CEO Bot switch is on, how much it does (level 1 goals and tracking, 2 suggests "
-      "actions, 3 acts on its own; only a person changes it) and how many items it put in each person's Needs you "
-      "today against its cap of 5.", {})
+@tool("hub_goal_ceo_bot", "The CEO Bot's name, how much it does (level 1 Passive, 2 suggests actions, 3 acts on its "
+      "own; only the owner changes it), whether its regular checks run, and how many items it put in each person's "
+      "Needs you today against its cap of 5.", {})
 def goal_ceo_bot(api, args):
     return api.get("ceo-bot")
 
@@ -1239,7 +1265,7 @@ def kpi_show(api, args):
 @tool("hub_kpi_create", "Make a KPI: a measure on its own that goals link to. Name what is counted, per what; "
       "give a definition, the unit, which way is good, how often it is read and who is accountable (default you). "
       "With `goal_id` it is linked to that goal, with the target fields on the link (an improvement: target and "
-      "deadline; or a range: min/max). The Goal Manager proposes instead (hub_proposal_create).",
+      "deadline; or a range: min/max). The CEO Bot proposes instead (hub_proposal_create).",
       {"name": _s("'booked Calendly demos per two weeks'"), "goal_id": _s("Link it to this goal"),
        "owner": _s("`me` (default), `company` (the owner's), a bot slug or a person id"),
        **KPI_PROPS, **TARGET_PROPS},
@@ -1276,7 +1302,7 @@ def kpi_restore(api, args):
 
 @tool("hub_kpi_link", "Link a goal to a KPI and set the target on that link, or change the target of an "
       "existing link: an improvement (baseline, target, deadline) or a range (min, max); none is just "
-      "linked. The goal's owner or someone above them; the Goal Manager proposes instead.",
+      "linked. The goal's owner or someone above them; the CEO Bot proposes instead.",
       {"goal_id": _s("Goal id"), "kpi_id": _s("KPI id (auto:<bot>:<metric> for a bot's automatic KPI)"),
        **TARGET_PROPS},
       required=("goal_id", "kpi_id"), writes=True)
@@ -1293,7 +1319,7 @@ def kpi_unlink(api, args):
 
 @tool("hub_kpi_log", "Log a reading on a KPI: a fact, with the period it describes, where it came from and how "
       "good it is. Never edited: to correct one, log a new reading that `supersedes` it. The KPI's owner, the "
-      "Goal Manager, or the owner of a goal that uses it.",
+      "CEO Bot, or the owner of a goal that uses it.",
       {"kpi_id": _s("KPI id"), "value": {"type": "number"},
        "note": _s("Where the number came from", default=""),
        "period_start": _s("Start of the period it describes, ISO date or date-time; default one cadence before the end"),
@@ -1321,7 +1347,7 @@ def kpi_log(api, args):
       "flag (flag: payload issue vague|duplicate|unmeasured), or, where the CEO Bot is on, a goal's Why (goal_why: "
       "payload why, one line tying the goal to the company's vision), or, from the CEO Bot at level 2 or 3, a red or "
       "stalled goal's recovery (recovery: payload evidence, options [{label, actions}], pick; actions create, "
-      "reorder or settle). The Goal Manager cannot change a definition or a target it is judged against without one.",
+      "reorder or settle). The CEO Bot cannot change a definition or a target it is judged against without one.",
       {"kind": {"type": "string", "enum": list(PROPOSAL_KINDS)}, "goal_id": _s("The goal it is about"),
        "kpi_id": _s("The KPI it is about"), "payload": {"type": "object", "description": "The proposed change"},
        "reason": _s("One sentence: why")},

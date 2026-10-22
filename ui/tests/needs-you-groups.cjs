@@ -41,7 +41,8 @@ const REC = {do: 'Gusto', ask: 'q-pick', option: 'Gusto', kind: 'reversible'};
 const card = (id, over) => ({...TASKS.find(x => x.id === id), kind: 'task', ...over});
 const NEEDS = [
   card('t-keys', {need: 'connect'}),
-  card('t-pick', {need: 'decide', recommend: REC,
+  // It holds up a roadmap item at Building, so Decide shows it first (backend/views.py decide_tier).
+  card('t-pick', {need: 'decide', recommend: REC, tier: 1, holds_up: {id: 'r-payroll', title: 'Payroll move', kind: 'roadmap', step: 'Building'},
     folded: [{id: 't-vendor', title: 'Switch the payroll vendor', owner: 'bot:analyst', kind: 'waiting', note: 'Waiting on Ana to pick the vendor.'}]}),
   SEND,
   SPEND,

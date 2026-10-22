@@ -48,6 +48,7 @@
 .chat-task-row .ct-title{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink);font-weight:500}
 .chat-task-row .ct-state{flex:none}
 .chat-task-row .chat-time{flex:none;margin-left:8px}
+.chat-task-more{cursor:default}
 .chat-side>summary{padding:5px 0;cursor:pointer;display:flex;align-items:baseline;min-width:0}
 .chat-side>summary::before{content:"▶";flex:none;width:1.6em;font-size:.72em}
 .chat-side[open]>summary::before{content:"▼"}
@@ -242,21 +243,6 @@ a.ref::before,.run-did .ref::before{content:'';display:inline-block;width:.8em;h
 .img-lightbox-bar{display:flex;gap:12px;justify-content:space-between;color:#fff;font-size:var(--t-base);padding:8px 2px}
 .img-lightbox-bar a{color:#fff}
 .fchip svg{width:13px;height:13px}
-/* Session tab: the runtime's own file, read straight through. The replay says where it came from */
-.sess-head{font-size:var(--t-sm);color:var(--muted);padding-bottom:8px;border-bottom:1px solid var(--line);margin-bottom:8px;overflow-wrap:anywhere}
-.sess-head strong{color:var(--ink);font-weight:600}
-.sess-head .mono{display:block;margin-top:2px}
-#sess-turns{max-height:min(64vh,620px);overflow-y:auto;overscroll-behavior:contain;padding-right:4px}
-.sess-turn{padding:6px 0;border-top:1px solid var(--line)}
-.sess-turn:first-child{border-top:0}
-.sess-turn .when{float:right;color:var(--muted);font-size:var(--t-sm);margin-left:10px;font-variant-numeric:tabular-nums}
-.sess-turn .who{display:block;font-size:var(--t-label);text-transform:uppercase;letter-spacing:var(--track-caps);color:var(--muted);margin-bottom:3px;font-weight:600}
-.sess-turn.user .body{white-space:pre-wrap;background:var(--surface2);border-radius:10px;padding:8px 12px;overflow-wrap:anywhere}
-.sess-turn.reasoning{color:var(--muted);font-size:var(--t-sm)}
-.sess-turn.system .body,.sess-turn.reasoning .body{white-space:pre-wrap;color:var(--muted);font-size:var(--t-sm);overflow-wrap:anywhere}
-.sess-turn.tool>details>summary{color:var(--muted);font-size:var(--t-sm);padding:2px 0;cursor:pointer}
-.sess-turn.tool>details>summary code{font-family:var(--mono);font-size:var(--t-sm);color:var(--ink)}
-.sess-turn.tool pre{background:var(--surface2);border-radius:6px;padding:8px 10px;margin:5px 0 0;max-height:300px;overflow:auto;font:var(--t-sm)/1.5 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere}
 .conv-replay{font-size:var(--t-sm);color:var(--muted);margin:0 0 4px}
 /* on a bot page the pill is the composer, at the bottom of the Chat tab */
 #chat-composer{margin-top:12px}

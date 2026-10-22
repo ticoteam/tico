@@ -494,7 +494,7 @@ async function botDetail(browser) {
       assert.equal(new URL(page.url()).hash, '#/bot/eng/tasks', how + ' returns to the bot');
     }
     for (const id of ['t-outward', 't-finished']) {
-      if (id === 't-finished') await page.locator('.bot-done > summary').click();
+      if (id === 't-finished') await page.locator('#bot-tab-t-done').click();
       await page.locator(`[data-task-detail="${id}"] [data-task-detail-open]`).click();
       await d.locator(`[data-task-props]`).waitFor();
       await page.waitForFunction(id => document.querySelector('#task-modal')?.dataset.task === id, id);

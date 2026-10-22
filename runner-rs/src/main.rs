@@ -6,6 +6,7 @@
 #![allow(clippy::result_large_err, clippy::type_complexity)]
 
 mod accounts;
+mod afterwatch;
 mod appdriver;
 mod backlog;
 mod capture;
@@ -29,6 +30,7 @@ mod gitrun;
 mod gittests;
 mod files_publish;
 mod gitcred;
+mod harness_memory;
 mod harness_tools;
 mod goals;
 mod hosts;
@@ -50,6 +52,7 @@ mod placement;
 mod playbook;
 mod product_files;
 mod prompt;
+mod reap;
 mod readiness;
 mod readiness_extra;
 mod redact;
@@ -271,6 +274,9 @@ fn main() {
     let argv: Vec<String> = std::env::args().collect();
     if argv.first().and_then(|a| std::path::Path::new(a).file_name()).is_some_and(|n| n == "gh") {
         std::process::exit(gitcred::gh_main(argv[1..].to_vec()));
+    }
+    if argv.get(1).is_some_and(|a| a == reap::FLAG) {
+        std::process::exit(reap::main(&argv[2..]));
     }
     if argv.get(1).is_some_and(|a| a == "--build-id") {
         // The source fingerprint build.rs stamped in: runner/engine.py rebuilds when the checkout's differs.
