@@ -1717,9 +1717,7 @@ class Execution:
         if not privacy.attempt_readable(c, "bot:" + row["bot"], aid):
             raise Problem("stale_lease", "Task access expired; stop this attempt", 409)
         current = self.current_owner(c, who, row)
-        # A Stop recorded after the lease lapsed stands over the result handed in for it (`complete` files it): only a
-        # renewal brings the turn back, and its answer carries the Stop.
-        if active and current and row["state"] == "expired" and not (final and row["stop_requested"]):
+        if active and current and row["state"] == "expired":
             row = self.restore(c, row) or row
         if final and row["state"] == "expired":
             return row
@@ -1744,6 +1742,9 @@ class Execution:
         job = c.execute("SELECT state,message_id FROM jobs WHERE id=? AND attempt_id=?", (row["job_id"], row["id"])).fetchone()
         if (not row["finished"] or row["finished"] <= H.shift(now, seconds=-STALL_MAX)
                 or not job or job["state"] != "uncertain"
+                # A Stop recorded after the lease lapsed stands over whatever the turn reports next: nothing brings
+                # it back, and `complete` files its result.
+                or row["stop_requested"]
                 or c.execute("SELECT 1 FROM job_recovery WHERE job_id=? AND attempt_id=?", (row["job_id"], row["id"])).fetchone()
                 or c.execute("SELECT 1 FROM attempts WHERE bot=? AND lane=? AND state IN ('leased','running')",
                              (row["bot"], row["lane"])).fetchone()):
@@ -1885,8 +1886,8 @@ class Execution:
     def stop(self, c, who, bot, attempt_id=None, redirect=None):
         """A person who manages the bot asks its running turn to stop. The runner interrupts the turn
         when it next renews the lease, and `complete` settles it as stopped rather than held for review.
-        A turn whose lease already lapsed can be stopped too: its late answer is then filed, not posted, and
-        its job ends stopped rather than resumed.
+        A turn whose lease already lapsed can be stopped by its id too: its late answer is then filed, not
+        posted, and its job ends stopped rather than resumed.
 
         With `redirect`, the caller's own message still queued in a conversation that turn works in is
         claimed first once it ends, so the next turn starts with it in the same session (Stop and redirect,
@@ -1897,15 +1898,15 @@ class Execution:
             raise Problem("forbidden", "Only a person who manages this bot can stop it", 403)
         rows = c.execute("SELECT id,stop_requested FROM attempts WHERE bot=? AND state IN ('leased','running') "
                          "AND (? IS NULL OR id=?) ORDER BY created", (bot, attempt_id, attempt_id)).fetchall()
-        if not rows:
+        if not rows and attempt_id:
             # A turn whose lease lapsed while its computer slept may still hand in the answer the model went on to
-            # finish (`settleable`, `settles_late`). A Stop pressed on it is recorded all the same, so that answer
-            # is filed on its run rather than posted: the turn named by its id while its job is still on it, or
-            # without an id, a lapsed turn whose job is still uncertain.
+            # finish (`settleable`, `settles_late`). A Stop on that turn, by its id, is recorded all the same, so the
+            # answer is filed on its run rather than posted, while its job is still on it, uncertain or let go. A
+            # job already queued to run again is not this turn's to stop; a Stop without an id only finds a live
+            # turn, never an older lapsed one that may be held for review.
             rows = c.execute("SELECT a.id,a.stop_requested FROM attempts a JOIN jobs j ON j.id=a.job_id "
-                             "AND j.attempt_id=a.id WHERE a.bot=? AND a.state='expired' AND a.started IS NOT NULL "
-                             "AND (a.id=? OR ? IS NULL AND j.state='uncertain') ORDER BY a.created",
-                             (bot, attempt_id, attempt_id)).fetchall()
+                             "AND j.attempt_id=a.id WHERE a.bot=? AND a.id=? AND a.state='expired' "
+                             "AND j.state IN ('uncertain','cancelled')", (bot, attempt_id)).fetchall()
         if not rows:
             raise Problem("not_running", "This bot is not running that turn", 409)
         if len(rows) > 1:
@@ -2164,7 +2165,9 @@ class Execution:
             filed = self.file_result(c, row, body)
             if row["stop_requested"] and self.holds(c, who, row):
                 # The Stop stands over the answer, and over a second run of the request too: the job ends as a
-                # stopped one would, rather than waiting uncertain for `auto_reconcile` to resume it.
+                # stopped one would, rather than waiting uncertain for `auto_reconcile` to resume it. Inputs the runtime
+                # never received go back in the queue, as they do for a Stop the runner heard.
+                self.release_undelivered(c, aid, body.undelivered)
                 c.execute("UPDATE jobs SET state='cancelled' WHERE id=?", (row["job_id"],))
                 msg = H.message(c, c.execute("SELECT message_id FROM jobs WHERE id=?", (row["job_id"],)).fetchone()[0],
                                 include_deleted=True)
@@ -2805,7 +2808,7 @@ class Execution:
         """
         cutoff = H.shift(H.now(), seconds=-STALL_MAX)
         decided = []
-        rows = c.execute("SELECT j.*, a.started, a.finished, a.state AS attempt_state, a.stop_requested, "
+        rows = c.execute("SELECT j.*, a.started, a.finished, a.state AS attempt_state, a.stop_requested, a.job_id AS attempt_job, "
                          "coalesce(a.finished, j.created) <= ? AS aged "
                          "FROM jobs j LEFT JOIN attempts a ON a.id=j.attempt_id "
                          "WHERE j.state='uncertain' AND (coalesce(a.finished, j.created) <= ? "
@@ -2841,9 +2844,10 @@ class Execution:
                     decided.append(self._decide(c, row, row['attempt_id'], 'dismiss',
                                                'Task access was revoked.', H.KEEPER, action='job.auto_reconcile'))
                     continue
-                if row['stop_requested']:
-                    # A person pressed Stop and the computer never reported back: the run is over by their choice,
-                    # as it would be had the runner heard it, so it is not resumed. A late answer is only filed.
+                if row['stop_requested'] and row['id'] == row['attempt_job']:
+                    # A person pressed Stop and the computer never reported back: the request is over by their
+                    # choice, as it would be had the runner heard it, so it is not resumed. A late answer is only
+                    # filed. A message folded into the turn is not what they stopped and is judged as before.
                     decided.append(self._decide(c, row, row['attempt_id'], 'dismiss',
                                                 f"Stopped by {stopper(c, row['stop_requested'])}; not resumed.",
                                                 H.KEEPER, action='job.auto_reconcile'))
