@@ -80,3 +80,19 @@ def test_a_move_to_another_computer_still_waits_for_the_running_turn(api):
                                                  "expected_revision": revision(api),
                                                  "expected_generation": generation}, expected=409)
     assert refused["error"]["code"] == "busy"
+
+
+def test_a_turn_leased_before_a_model_change_does_not_start_the_new_models_session(api, monkeypatch):
+    providers_on(api)
+    at(monkeypatch, "2026-10-21T23:25:00.000000Z")
+    machine = runner(api)
+    assign(api, machine, "ops")
+    signed_in(api, machine, ["ops"], ("codex", "claude"))
+    post(api, "bots/ops/transitions", {"kind": "model", "model": "gpt-6-luna", "expected_revision": revision(api)})
+    post(api, "tasks", {"owner": "ops", "title": "Plan the week", "body": "Please do it."})
+    turn = claim(api, machine)                                  # handed the old model
+    at(monkeypatch, "2026-10-21T23:25:20.000000Z", api)
+    post(api, "bots/ops/transitions", {"kind": "model", "model": "claude-haiku-5-5", "expected_revision": revision(api)})
+    post(api, f"attempts/{turn['id']}/started", {"thread_id": "old-" + turn["id"]}, machine["token"])
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT 1 FROM bot_sessions WHERE bot='ops' AND model='claude-haiku-5-5'").fetchone() is None
