@@ -14,7 +14,7 @@ All notable changes to Tico are recorded here. The format follows
   alone. A review or check subtask keeps its check model. When the task model can't run (retired, its provider off,
   not installed or not signed in on the bot's computer), the task runs on the bot's own model and effort instead of waiting, and the
   task's history says so and why. A task's Runs now show the effort beside each model, and the note on what ran.
-- **Shared ChatGPT login queue.** A turn waiting for a shared ChatGPT login says who holds it, on what, since when and
+- **Optional login queue (dormant for Codex).** A harness that opts in can show who holds a login, on what, since when and
   its place, on the run, the task, the bot's status and in Health (waiting, not stuck). Release-blocking work goes
   first, then reviews and a person's own chat, with no waiter passed over more than twice. A turn that holds the login
   20 minutes while another waits pauses at a safe point and continues right after; a waiter whose task is closed is skipped,
@@ -149,6 +149,7 @@ All notable changes to Tico are recorded here. The format follows
   ([GitHub App](docs/github-app.md#permissions-and-why)).
 
 ### Fixed
+- **Codex bots share a ChatGPT login concurrently.** Bots on one login run turns at the same time, with no login queue or waiting label; they share the plan’s usage allowance.
 - **The hub and MCP model change also moves a rate-limited bot while a turn runs.** `hub bot model` and the MCP
   model tool refused with "Wait for the current run to finish before changing models"; they now follow the Settings
   rule: the change applies at once, from the next turn, and lifts the old model's limit. A move onto a model that uses
