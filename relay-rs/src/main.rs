@@ -723,8 +723,10 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             .redirect(reqwest::redirect::Policy::none())
             .no_proxy()
             .build()?,
+        // Also a backend client (screen authorize), so it drops idle connections before the backend does too.
         http: reqwest::Client::builder()
             .timeout(Duration::from_secs(2))
+            .pool_idle_timeout(Duration::from_secs(4))
             .redirect(reqwest::redirect::Policy::none())
             .build()?,
     };
