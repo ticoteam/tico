@@ -4376,7 +4376,7 @@ def create_app(settings=None):
         """Where a runner panicked, for the install's opt-in error reporting; dropped when that is off."""
         if request.state.identity.role != "runner":
             raise Problem("identity", "A registered runner is required", 403)
-        telemetry.capture_runner(body.version, body.panics)
+        telemetry.capture_runner(request.state.identity.runner_id, body.version, body.panics)
         return {"ok": True}
 
     @app.post("/api/v2/runners/heartbeat")

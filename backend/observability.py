@@ -3,7 +3,10 @@
 import hashlib
 import hmac
 import json
+import os
 import re
+import threading
+import time
 from pathlib import Path
 
 from .config import DEFAULT_COMPANY_NAME, ROOT
@@ -92,6 +95,10 @@ ROUTE = re.compile(r"(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS) /[A-Za-z0-9_{}/.
 # A Rust runner panic's location: a file of the runner's own crate.
 RUNNER_FILE = re.compile(r"runner-rs/src/[a-z0-9_]+(?:/[a-z0-9_]+)*\.rs")
 RUNNER_PANICS = 5        # reports kept from one runner post
+# The hub's own limits on what a runner token can send, whatever the runner does: one report per file and line an
+# hour, at most RUNNER_HOURLY reports per runner an hour.
+RUNNER_REPEAT = 3600
+RUNNER_HOURLY = 20
 
 
 def instance(value):
@@ -155,6 +162,8 @@ class Observability:
         self.client = None
         self.release = ""
         self.instance = ""
+        self.runner_sent = {}     # (runner, file, line) -> when, then (runner,) -> [when, ...]
+        self.runner_lock = threading.Lock()
 
     def start(self):
         dsn = public_dsn(self.settings.sentry_server_dsn)
@@ -212,11 +221,32 @@ class Observability:
             pass
         return None
 
-    def capture_runner(self, version, panics):
+    def capture_runner(self, runner, version, panics, now=None):
         """A runner's panics, each its file and line in the runner's own source (runner-rs/src/panics.rs)."""
+        if self.client is None:
+            return
+        now = time.monotonic() if now is None else now
         for panic in panics[:RUNNER_PANICS]:
+            if not self.runner_allows(runner, panic.file, panic.line, now):
+                continue
             frames = [{"filename": "runner-rs/" + panic.file, "lineno": panic.line}] if panic.file else []
             self.capture("runner", frames=frames, runner=version)
+
+    def runner_allows(self, runner, file, line, now):
+        with self.runner_lock:
+            sent = self.runner_sent
+            if len(sent) > 10_000:   # bounded memory: forget what is past both windows
+                for key in [k for k, v in sent.items() if not isinstance(v, list) and now - v >= RUNNER_REPEAT]:
+                    del sent[key]
+            if now - sent.get((runner, file, line), -RUNNER_REPEAT) < RUNNER_REPEAT:
+                return False
+            hour = [t for t in sent.get((runner,), []) if now - t < 3600]
+            if len(hour) >= RUNNER_HOURLY:
+                sent[(runner,)] = hour
+                return False
+            sent[(runner, file, line)] = now
+            sent[(runner,)] = hour + [now]
+            return True
 
     def close(self):
         client, self.client = self.client, None
@@ -231,14 +261,39 @@ class TestError(RuntimeError):
     """Raised on purpose by `python -m backend.observability test`; nothing is wrong."""
 
 
+def reporting_settings(env=None):
+    """The settings error reporting reads, from the environment of a shell beside the server. `docker compose exec`
+    does not see the entrypoint's exports, so this needs neither TICO_DB nor TICO_ENVIRONMENT_ID (Settings.from_env
+    refuses both missing): the install's id is read, read-only, from its database as the entrypoint reads it."""
+    import sqlite3
+    from contextlib import closing
+    from .config import Settings
+    from .replication import rehearsal_on
+    env = os.environ if env is None else env
+    db = Path(env.get("TICO_DB") or Path(env.get("TICO_DATA_DIR") or "/data") / "hub.sqlite")
+    environment_id = env.get("TICO_ENVIRONMENT_ID", "").strip()
+    if not environment_id and db.is_file():
+        try:
+            with closing(sqlite3.connect(db.resolve().as_uri() + "?mode=ro", uri=True)) as c:
+                row = c.execute("SELECT value_json FROM registry_metadata WHERE key='docker-environment-id'").fetchone()
+            environment_id = json.loads(row[0]) if row else ""
+        except (sqlite3.Error, ValueError, TypeError):
+            environment_id = ""
+    company = env.get("TICO_TEAM_NAME", "").strip() or env.get("TICO_COMPANY_NAME", "").strip()
+    return Settings(db_path=db, environment_id=environment_id if isinstance(environment_id, str) else "",
+                    company_name=company or DEFAULT_COMPANY_NAME,
+                    release_id=env.get("TICO_RELEASE", ""), instance_name=env.get("TICO_INSTANCE_NAME", "").strip(),
+                    observability_environment=env.get("TICO_OBSERVABILITY_ENVIRONMENT", ""),
+                    sentry_server_dsn="" if rehearsal_on(env) else env.get("TICO_SENTRY_SERVER_DSN", ""))
+
+
 def main(argv=None):
     """`python -m backend.observability test`: send one harmless error, to see that reports arrive and how they look."""
     import argparse
-    from .config import Settings
     parser = argparse.ArgumentParser(prog="python -m backend.observability")
     parser.add_argument("command", choices=["test"])
     parser.parse_args(argv)
-    telemetry = Observability(Settings.from_env())
+    telemetry = Observability(reporting_settings())
     telemetry.start()
     if telemetry.client is None:
         print("Error reporting is off: set TICO_SENTRY_SERVER_DSN and TICO_OBSERVABILITY_ENVIRONMENT, then restart.")

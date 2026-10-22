@@ -134,7 +134,9 @@ server. With either of the first two unset or empty, the Sentry SDK is never sta
 installs can share one Sentry project: every event carries `release` (the Tico version, or `TICO_RELEASE`) and an
 `instance` tag. Runners need no setting: each sends the file and line of a panic to its own server with its next
 heartbeat, and the server forwards it only when reporting is on (`source` `runner`, with the runner's version). A
-runner reports the same file and line at most once an hour, and at most five panics between two heartbeats.
+runner reports the same file and line at most once an hour, and at most five panics between two heartbeats. Panics are
+held in memory until the next pass, so a panic that stops the runner is not reported. The server also sends at most
+one report per runner, file and line an hour, and at most 20 per runner an hour, whatever a runner posts.
 
 To see that reports arrive, and what they hold, send a harmless test error from the server:
 
