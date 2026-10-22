@@ -392,7 +392,9 @@ def billing_limit(c, bot=None, attempt_id=None):
     if attempt_id is None:
         last = last_limit(c, bot)
         attempt_id = last["id"] if last else None
-    return bool(attempt_id) and any(BILLING_LIMIT_RE.search(error) for error in limit_errors(c, attempt_id))
+    # The Gateway's out-of-credit refusal says insufficient_quota too, but it is the company's credit, not a key's plan.
+    return bool(attempt_id) and any(BILLING_LIMIT_RE.search(error) and not gateway.out_of_credit(error)
+                                    for error in limit_errors(c, attempt_id))
 
 
 def provider_reset(last, finished):
@@ -430,6 +432,10 @@ def reset_cooldown(c, attempt_id, finished, cooldown, resets_at=None):
         # reset or Retry-After said.
         return max(cooldown, int((gateway.month_after(finished) - finished).total_seconds()) + 1)
     reported = provider_reset({"resets_at": resets_at}, finished)
+    if any(gateway.out_of_credit(error) for error in errors):
+        # The company is out of credit: the Gateway lets the next call through as soon as credit lands, so the bot
+        # asks again after its Retry-After (a minute), never a login's 30-minute hold.
+        return reported or gateway.OUT_OF_CREDIT_WAIT
     if any(gateway.rate_limited(error) for error in errors):
         # Retry-After covers both the key's minute window and an address block; older runners keep the safe default.
         return reported or max(cooldown, gateway.RETRY_AFTER)
@@ -2413,6 +2419,11 @@ class Execution:
             elif tico_code == gateway.RATE_LIMITED:
                 focus = (f"Tico AI Gateway rate limited at {hit[11:16]}; "
                          f"retrying after {retry[:10]} {retry[11:16]} UTC")
+            elif (gateway.out_of_credit(login_hold.get("error")) if login_hold
+                  else any(gateway.out_of_credit(error) for error in limit_errors(c, aid))):
+                # The turn ended on the company's credit, not a login's limit (login_holds.after_turn): its minute.
+                focus = (f"{gateway.PAUSED_MESSAGE} at {hit[11:16]}; trying Tico models again at {retry[11:16]} UTC, "
+                         "or as soon as credit is added")
             else:
                 # Whose limit it was, from the turn's own notes (backend/login_holds.py source): primary or fallback,
                 # which provider and login, and an API key's quota told apart from a plan's usage window. A fallback's
