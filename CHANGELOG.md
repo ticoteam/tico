@@ -104,6 +104,12 @@ All notable changes to Tico are recorded here. The format follows
   each one at its own rate.
 
 ### Fixed
+- **The hub and MCP model change also moves a rate-limited bot while a turn runs.** `hub bot model` and the MCP
+  model tool refused with "Wait for the current run to finish before changing models"; they now follow the Settings
+  rule: the change applies at once, from the next turn, and lifts the old model's limit. A move onto a model that uses
+  the same spent login, or another Tico model after the Gateway key's limit, keeps Rate limited and says why instead of
+  "queued work resumes". A turn now records the model it was handed, so an effort-only change or a move away and back
+  while it runs keeps that model's real limit.
 - **Questions that close on their own leave every count right.** The hourly sweep closes each leftover question on
   its own, so one that fails stays for the next sweep instead of undoing the rest. When questions close in bulk (a
   task above ends, the hourly sweep, the weekday "Still needed?" batch), the bot that asked them has its "needs a

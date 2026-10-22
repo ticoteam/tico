@@ -814,14 +814,10 @@ class SettingsAdmin:
                           (target["model"], target["runtime"], target["effort"], bot))
                 from .model_login import hold_removals
                 hold_removals(c, self.settings)
-                if (H.status(c, bot) or {}).get("state") == "limited":
-                    # The limit was the old model's: the new one starts on the queued work now. A turn still out on
-                    # the old model keeps the bot at work (execution.settle_status).
-                    out = c.execute("SELECT 1 FROM attempts WHERE bot=? AND state IN ('leased','running') LIMIT 1",
-                                    (bot,)).fetchone()
-                    H.status_set(c, who.actor, bot, state="running" if out else "idle",
-                                 focus="Working on other tasks" if out else "Model changed; queued work resumes",
-                                 reason="Model changed")
+                # The limit was the old model's: the new one starts on the queued work now, unless it waits on the
+                # same spent login or Gateway key.
+                from .execution import lift_after_model_change
+                lift_after_model_change(c, self.settings, who.actor, bot)
             else:
                 runner = c.execute("SELECT * FROM runners WHERE id=? AND revoked_at IS NULL", (target["runner_id"],)).fetchone()
                 if not runner:

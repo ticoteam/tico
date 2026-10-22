@@ -1221,6 +1221,11 @@ class Store:
                 # Gateway segments are recorded under, even if the key is rotated or cleared before the run ends.
                 # NULL with none handed. Unversioned like stop_requested.
                 H.add_column(c, "attempts", "gateway_key_id", "TEXT")
+                # The runtime and model the claim handed the bot's turn (execution.ran_another_model): a model change
+                # while it is out is told from an effort change. NULL for a turn from before. Unversioned like
+                # stop_requested.
+                H.add_column(c, "attempts", "handed_runtime", "TEXT")
+                H.add_column(c, "attempts", "handed_model", "TEXT")
                 # A queued message a person sent with Stop and redirect (backend/execution.py stop): it is claimed
                 # before the bot's other queued work once the stopped turn ends. Unversioned like stop_requested.
                 H.add_column(c, "jobs", "redirect", "INTEGER NOT NULL DEFAULT 0")

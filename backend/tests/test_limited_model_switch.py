@@ -96,3 +96,111 @@ def test_a_turn_leased_before_a_model_change_does_not_start_the_new_models_sessi
     post(api, f"attempts/{turn['id']}/started", {"thread_id": "old-" + turn["id"]}, machine["token"])
     with api.app.state.store.read() as c:
         assert c.execute("SELECT 1 FROM bot_sessions WHERE bot='ops' AND model='claude-haiku-5-5'").fetchone() is None
+
+
+def limited_with_a_retry_running(api, monkeypatch, machine, model="gpt-6-luna"):
+    """The bot on `model` hits its plan's limit, a person writes, and the retry's turn is running: Rate limited."""
+    assign(api, machine, "ops")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runners SET capacity=16 WHERE id=?", (machine["runner_id"],))
+    signed_in(api, machine, ["ops"], ("codex", "claude"))
+    post(api, "bots/ops/model", {"model": model, "expected_revision": revision(api)})
+    post(api, "tasks", {"owner": "ops", "title": "Plan the week", "body": "Please do it."})
+    limit(api, machine, claim(api, machine))
+    assert status(api)["state"] == "limited"
+    at(monkeypatch, "2026-10-21T23:25:00.000000Z", api)
+    post(api, "chat/ops", {"text": "Are you there?"})
+    retry = claim(api, machine)
+    post(api, f"attempts/{retry['id']}/started", {"thread_id": "old-" + retry["id"]}, machine["token"])
+    assert status(api)["state"] == "limited"
+    return retry
+
+
+def finish_limited(api, machine, turn):
+    events = [{"seq": 1, "kind": "error", "payload": {"error": CLAUDE, "limit": True}}]
+    post(api, f"attempts/{turn['id']}/events", {"events": events}, machine["token"])
+    post(api, f"attempts/{turn['id']}/complete", {"outcome": "failed", "last_seq": 1, "limited": True, "text": ""},
+         machine["token"])
+
+
+def test_the_hub_and_mcp_model_change_also_moves_a_limited_bot_while_its_turn_runs(api, monkeypatch):
+    # The hub CLI and MCP model tool (POST bots/{bot}/model) follow the Settings rule (Dev 353, Dev 334).
+    providers_on(api)
+    at(monkeypatch, "2026-10-21T23:16:00.000000Z")
+    machine = runner(api)
+    retry = limited_with_a_retry_running(api, monkeypatch, machine)
+    at(monkeypatch, "2026-10-21T23:25:20.000000Z", api)
+    moved = post(api, "bots/ops/model", {"model": "claude-haiku-5-5", "expected_revision": revision(api)})
+    assert moved["model"] == "claude-haiku-5-5"
+    assert status(api)["state"] != "limited"
+
+    at(monkeypatch, "2026-10-21T23:25:40.000000Z", api)
+    finish_limited(api, machine, retry)
+    assert status(api)["state"] != "limited"
+    with api.app.state.store.read() as c:
+        assert not login_holds.get(c, machine["runner_id"], "", "claude")
+        assert c.execute("SELECT 1 FROM bot_sessions WHERE bot='ops' AND model='claude-haiku-5-5'").fetchone() is None
+    signed_in(api, machine, ["ops"], ("codex", "claude"))
+    nxt = claim(api, machine)
+    assert nxt and (nxt["config"]["runtime"], nxt["config"]["model"]) == ("claude", "claude-haiku-5-5")
+
+
+def test_an_effort_only_change_or_a_move_away_and_back_keeps_the_running_turns_limit(api, monkeypatch):
+    # The turn still runs on the model the bot is set to: its limit is that model's, and the bot waits it out.
+    providers_on(api)
+    at(monkeypatch, "2026-10-21T23:16:00.000000Z")
+    machine = runner(api)
+    retry = limited_with_a_retry_running(api, monkeypatch, machine)
+    at(monkeypatch, "2026-10-21T23:25:20.000000Z", api)
+    post(api, "bots/ops/transitions", {"kind": "model", "model": "gpt-6-luna", "effort": "low",
+                                       "expected_revision": revision(api)})
+    post(api, "bots/ops/model", {"model": "claude-haiku-5-5", "expected_revision": revision(api)})
+    post(api, "bots/ops/model", {"model": "gpt-6-luna", "effort": "low", "expected_revision": revision(api)})
+    at(monkeypatch, "2026-10-21T23:25:40.000000Z", api)
+    finish_limited(api, machine, retry)
+    assert status(api)["state"] == "limited"
+
+
+def test_a_move_onto_a_model_whose_login_is_held_keeps_rate_limited(api, monkeypatch):
+    # Another model on the same spent login waits for the same reset: the header does not say work resumes.
+    providers_on(api)
+    at(monkeypatch, "2026-10-21T23:16:00.000000Z")
+    machine = runner(api)
+    retry = limited_with_a_retry_running(api, monkeypatch, machine, model="claude-opus-5-5")
+    with api.app.state.store.read() as c:
+        assert login_holds.get(c, machine["runner_id"], "", "claude")
+    at(monkeypatch, "2026-10-21T23:25:20.000000Z", api)
+    post(api, "bots/ops/transitions", {"kind": "model", "model": "claude-haiku-5-5",
+                                       "expected_revision": revision(api)})
+    now = status(api)
+    assert now["state"] == "limited"
+    assert "resumes" not in (now.get("focus") or "")
+    # The turn still out on the old model ends on the limit: the new model waits on that login too.
+    at(monkeypatch, "2026-10-21T23:25:40.000000Z", api)
+    finish_limited(api, machine, retry)
+    assert status(api)["state"] == "limited"
+    # Moving on to another login lifts it.
+    post(api, "bots/ops/model", {"model": "gpt-6-luna", "expected_revision": revision(api)})
+    now = status(api)
+    assert now["state"] != "limited"
+
+
+def test_after_the_gateways_cap_another_tico_model_waits_on_the_same_key(api, monkeypatch):
+    # The Gateway's cap is the company key's: any Tico model meets it again, another provider's model does not.
+    from backend import execution
+    from backend.store import encode
+    import json
+    providers_on(api)
+    at(monkeypatch, "2026-10-21T23:16:00.000000Z")
+    machine = runner(api)
+    assign(api, machine, "ops")
+    signed_in(api, machine, ["ops"], ("codex",))
+    post(api, "tasks", {"owner": "ops", "title": "Plan the week", "body": "Please do it."})
+    limit(api, machine, claim(api, machine), errors=("Tico AI Gateway: cap_reached for this key",))
+    settings = api.app.state.store.settings
+    with api.app.state.store.transaction() as c:
+        for model, held in (("tico-mid-1.0", "gateway"), ("claude-haiku-5-5", "")):
+            config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='ops'").fetchone()[0])
+            config.update({"model": model, "runtime": "pi" if held else "claude"})
+            c.execute("UPDATE bot_config SET config_json=? WHERE bot='ops'", (encode(config),))
+            assert execution.model_change_hold(c, settings, "ops") == held
