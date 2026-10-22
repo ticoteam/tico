@@ -666,7 +666,7 @@ CREATE TABLE IF NOT EXISTS task_check_models (
   harness TEXT NOT NULL, effort TEXT NOT NULL DEFAULT '', role TEXT NOT NULL, created_by TEXT, created TEXT);
 """
 
-# What the Goal Manager has asked a person on the Goals page's behalf (backend/goal_asks.py): one row per
+# What the CEO Bot has asked a person on the Goals page's behalf (backend/goal_asks.py): one row per
 # KPI or proposal, kind and person, naming the task that asks it; append to preserve existing installations.
 GOAL_ASKS_SCHEMA = """
 CREATE TABLE IF NOT EXISTS goal_asks (
@@ -964,6 +964,9 @@ def migrate(conn, adopt_legacy=False):
     # Deleted tasks wait here until restored or purged (backend/task_delete.py).
     from .task_delete import ensure as ensure_task_trash
     ensure_task_trash(conn)
+    # Milestone waits: a task waits for a pull request to merge or a release to be published (backend/milestone_waits.py).
+    from .milestone_waits import ensure as ensure_milestone_waits
+    ensure_milestone_waits(conn)
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS one_active_personal_room "
                  "ON conversations(owner_actor,room_key) WHERE scope='personal' AND closed_at IS NULL")
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS one_active_shared_room "
@@ -5292,6 +5295,10 @@ def waiting_for(conn, row):
         return "an undecided approval"
     if row.get("waiting_on"):
         return f"{actor_id(row['waiting_on'])} to act"
+    from .milestone_waits import pending as milestone_pending
+    milestone = milestone_pending(conn, row["id"])
+    if milestone:
+        return milestone
     # Only a PR GitHub reports on can wake it: one the App has sent an event for, or in a repository it reaches.
     armed = _one(conn, "SELECT l.title FROM task_links l WHERE l.task_id=? AND l.kind='pr' "
                        "AND l.state IN ('open','draft','merged') AND json_extract(l.detail_json,'$.wake_once') IS NOT NULL "

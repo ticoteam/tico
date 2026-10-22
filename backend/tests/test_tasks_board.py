@@ -53,7 +53,7 @@ def post(api, path, body, token="ana-test", expected=200):
     r = api.post("/api/v2/" + path, json=body, headers=headers(token))
     assert r.status_code == expected, r.text
     data = r.json()
-    return data["task"] if isinstance(data, dict) and set(data) == {"task"} else data
+    return data["task"] if isinstance(data, dict) and "task" in data and set(data) <= {"task", "readback"} else data
 
 
 def relate(api, tid, other, kind="related", token="ana-test", expected=200, remove=False):

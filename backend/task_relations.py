@@ -344,6 +344,45 @@ def relate(conn, actor, task_id, other_id, kind="related", remove=False, mover=N
     return True
 
 
+# What each stored kind says, read from its `from` end, and from its `to` end. A write reads back in these words.
+SAYS = {
+    "parent": ("is a subtask of", "is the parent of"),
+    "blocks": ("blocks", "waits for"),
+    "related": ("is related to", "is related to"),
+    "duplicate_of": ("duplicates", "is duplicated by"),
+    "follow_up": ("follows up", "is followed up by"),
+}
+
+
+def _name(conn, task_id):
+    row = conn.execute("SELECT number,title FROM tasks WHERE id=?", (task_id,)).fetchone()
+    if not row:
+        return task_id[:8]
+    title = str(row["title"] or "").strip()
+    title = title if len(title) <= 60 else title[:59].rstrip() + "…"
+    return (f"#{row['number']} " if row["number"] is not None else f"{task_id[:8]} ") + f'"{title}"'
+
+
+def readback(conn, task_id, other_id, kind="related", remove=False, changed=True):
+    """The relation a write stored, in words from both ends, after normalizing: `blocked_by` and `blocks` asked from
+    either side read the same once stored. Dev 237 (Oct 19): a bot sent the reverse `blocks` links while reporting a
+    fix; the API stored what it was sent. Each line names the direction so a reversed write is visible in the reply."""
+    from_id, to_id, kind = normalize(str(task_id or "").strip(), str(other_id or "").strip(), kind)
+    if kind not in SAYS:
+        return []
+    if kind == "blocks":
+        # Lead with the waiting task: "#237 waits for #233", then "#233 blocks #237".
+        lines = [f"{_name(conn, to_id)} {SAYS[kind][1]} {_name(conn, from_id)}",
+                 f"{_name(conn, from_id)} {SAYS[kind][0]} {_name(conn, to_id)}"]
+    elif kind == "related":
+        lines = [f"{_name(conn, from_id)} {SAYS[kind][0]} {_name(conn, to_id)}"]
+    else:
+        lines = [f"{_name(conn, from_id)} {SAYS[kind][0]} {_name(conn, to_id)}",
+                 f"{_name(conn, to_id)} {SAYS[kind][1]} {_name(conn, from_id)}"]
+    prefix = "Removed: " if remove else "Already: " if not changed else ""
+    return [prefix + line for line in lines]
+
+
 def set_parent(conn, actor, child_id, parent_id, mover=None, note="", private=None):
     """Put a task under `parent_id`, or take it out of its parent with None.
 

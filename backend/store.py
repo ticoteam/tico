@@ -1197,6 +1197,9 @@ class Store:
                 # Tasks waiting for room for a worktree (backend/worktree_waits.py). Unversioned like the trash.
                 from .worktree_waits import ensure as ensure_worktree_waits
                 ensure_worktree_waits(c)
+                # Milestone waits (backend/milestone_waits.py). Unversioned like the trash.
+                from .milestone_waits import ensure as ensure_milestone_waits
+                ensure_milestone_waits(c)
                 # The company's Vision, Description and their history, and each goal's Why (backend/company.py).
                 # Unversioned like the trash: an older release never reads the tables or the columns.
                 from .company import ensure as ensure_company
@@ -1310,6 +1313,9 @@ class Store:
                 # so no migration number to collide with another branch's.
                 from . import groups as Groups
                 Groups.migrate(c, self.settings)
+                # The Goal Manager becomes the CEO Bot on every install, once (backend/ceo_bot.py). Idempotent.
+                from . import ceo_bot as CeoBot
+                CeoBot.migrate(c)
                 from . import releases as Releases
                 Releases.record_start(c, H.now())
                 from .credentials import FILE_MIGRATION, HUB_MIGRATION
