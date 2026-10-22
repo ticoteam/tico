@@ -1137,8 +1137,8 @@ def create_app(settings=None):
         return task_views(page, c, who, visible_sql), offset + limit if has_more else None
 
     def visual_view(c, who, rows):
-        """Messages with each visual as this reader sees it now: fresh addresses on /visuals (backend/visuals.py), or
-        none at all while inline display is off (a file chip)."""
+        """Messages with each visual as this reader sees it now: fresh addresses on /visuals (backend/visuals.py), on the
+        visual address or, in the fallback, the app's own (pictures, video and audio only)."""
         return visuals.for_reader(app, settings, c, who, rows)
 
     def visual_key():
@@ -1153,7 +1153,8 @@ def create_app(settings=None):
         """A visual for inline display, apart from the app's sign-in: the signed token is the only credential, and
         the reader it names is checked again on every request (each range request too)."""
         return visuals.serve(request, store, auth, app.state.files, app.state.blobs, visual_key(),
-                             visual_ancestors(), token, on=visuals.inline_on(settings))
+                             visual_ancestors(), token, full=visuals.mode(settings) == "full",
+                             visual_origin=settings.visual_origin)
 
     def check_refs(c, who, refs):
         # Validate referenced objects rather than trusting an arbitrary ID in a payload.
@@ -3549,12 +3550,14 @@ def create_app(settings=None):
             task_id = auth.resolve_task(c, who, tid)
             row = auth.task(c, who, task_id)
             kind, _, value = body.on.partition(":")
+            note = None
             if kind.strip().lower() == "task":
                 other_id = auth.resolve_task(c, who, value.strip())
                 auth.task(c, who, other_id)
                 changed = TR.relate(c, who.actor, task_id, other_id, "blocked_by", remove=body.remove,
                                     mover=mover(c, who) or None)
                 readback = TR.readback(c, task_id, other_id, "blocked_by", remove=body.remove, changed=changed)
+                note = None if body.remove else TR.own_subtask_warning(c, task_id, other_id, "blocked_by")
             else:
                 H._writer(c, who.actor)
                 H._task_private_writer(c, who.actor, row)
@@ -3573,7 +3576,8 @@ def create_app(settings=None):
                     readback = [("" if wait["added"] else "Already: ") + f"{TR._name(c, task_id)} {wait['sentence']}"
                                 + (" (already happened: woken once)" if wait["woke_at"] else "")]
             return {"readback": readback,
-                    "task": task_view(H.task(c, task_id), c, visible_sql=auth.task_sql(c, who), who=who)}
+                    "task": task_view(H.task(c, task_id), c, visible_sql=auth.task_sql(c, who), who=who),
+                    **({"warning": note} if note else {})}
         return mutate(request, body, work)
 
     @app.get("/api/v2/preferences/{key}")
@@ -4379,9 +4383,11 @@ def create_app(settings=None):
         # `limit_resets_at`: a run's result may say when its usage limit resets (an older one refuses the field).
         # `usage_requests`: a run's usage may carry each model request's tokens (an older one refuses the field).
         # `usage_request_main`: ... and a fourth count marking the bot's own requests (an older one refuses it).
+        # `run_pushes`: a run's result may list the pushes its task worktrees made (an older one refuses the field).
         return {**runner_versions.desired(), "features": {"task_files_multipart": True, "runner_commit": True,
                                                           "screen_v1": True, "limit_resets_at": True,
-                                                          "usage_requests": True, "usage_request_main": True}}
+                                                          "usage_requests": True, "usage_request_main": True,
+                                                          "run_pushes": True}}
 
     @app.get("/api/v2/runners/assignments")
     def assigned(request: Request):

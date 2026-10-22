@@ -153,6 +153,14 @@ def bump_bot_session_epoch(c, bot):
               "epoch=epoch+1,updated=excluded.updated", (bot, H.now()))
 
 
+def model_changed_since(c, bot, since):
+    """Whether a person moved the bot to another model after `since`, a turn's lease. That turn runs on the model its
+    claim handed it, so what it meets (a usage limit, a provider thread) is the old model's, not the bot's now
+    (Dev 334: a rate-limited bot can be moved off the spent model while a turn is out)."""
+    return c.execute("SELECT 1 FROM bot_transitions WHERE bot=? AND kind='model' AND state='applied' AND applied_at>? "
+                     "LIMIT 1", (bot, since)).fetchone() is not None
+
+
 # The room messages a claim hands its turn (the runner forwards only what arrived since the session last answered).
 HISTORY_PAGE = 50
 
@@ -392,7 +400,9 @@ def billing_limit(c, bot=None, attempt_id=None):
     if attempt_id is None:
         last = last_limit(c, bot)
         attempt_id = last["id"] if last else None
-    return bool(attempt_id) and any(BILLING_LIMIT_RE.search(error) for error in limit_errors(c, attempt_id))
+    # The Gateway's out-of-credit refusal says insufficient_quota too, but it is the company's credit, not a key's plan.
+    return bool(attempt_id) and any(BILLING_LIMIT_RE.search(error) and not gateway.out_of_credit(error)
+                                    for error in limit_errors(c, attempt_id))
 
 
 def provider_reset(last, finished):
@@ -430,6 +440,10 @@ def reset_cooldown(c, attempt_id, finished, cooldown, resets_at=None):
         # reset or Retry-After said.
         return max(cooldown, int((gateway.month_after(finished) - finished).total_seconds()) + 1)
     reported = provider_reset({"resets_at": resets_at}, finished)
+    if any(gateway.out_of_credit(error) for error in errors):
+        # The company is out of credit: the Gateway lets the next call through as soon as credit lands, so the bot
+        # asks again after its Retry-After (a minute), never a login's 30-minute hold.
+        return reported or gateway.OUT_OF_CREDIT_WAIT
     if any(gateway.rate_limited(error) for error in errors):
         # Retry-After covers both the key's minute window and an address block; older runners keep the safe default.
         return reported or max(cooldown, gateway.RETRY_AFTER)
@@ -1828,6 +1842,7 @@ class Execution:
         archivable against it."""
         c.execute("UPDATE attempts SET final_text=?,result_json=? WHERE id=?",
                   (body.text, encode(body.model_dump()), row["id"]))
+        run_triggers.pushed(c, row["id"], row["runner_id"], body.pushes)
         H.turn_finish(c, H.KEEPER, row["id"], exit_code=body.outcome, tokens_in=body.tokens_in,
                       tokens_out=body.tokens_out, summary=body.text[:2000], usage=self.run_usage(c, row, body))
         H.event(c, H.KEEPER, "attempt.late-result", row["id"],
@@ -1889,10 +1904,12 @@ class Execution:
         from .shared_bots import follow
         config = follow(c, row["bot"], json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot=?", (row["bot"],)).fetchone()[0]))
         runtime, model = providers.bot_choice(c, self.store.settings, config)
-        c.execute("INSERT INTO bot_sessions(bot,runtime,model,thread_id,runner_id,tokens_in,updated) "
-                  "VALUES(?,?,?,?,?,0,?) ON CONFLICT(bot,runtime,model) DO UPDATE SET "
-                  "thread_id=excluded.thread_id,runner_id=excluded.runner_id,updated=excluded.updated",
-                  (row["bot"], runtime, model, body.thread_id, who.runner_id, H.now()))
+        if not model_changed_since(c, row["bot"], row["created"]):
+            # A turn leased before a model change started the old model's thread: it is not the new model's.
+            c.execute("INSERT INTO bot_sessions(bot,runtime,model,thread_id,runner_id,tokens_in,updated) "
+                      "VALUES(?,?,?,?,?,0,?) ON CONFLICT(bot,runtime,model) DO UPDATE SET "
+                      "thread_id=excluded.thread_id,runner_id=excluded.runner_id,updated=excluded.updated",
+                      (row["bot"], runtime, model, body.thread_id, who.runner_id, H.now()))
         msg = c.execute("SELECT message_id FROM jobs WHERE id=?", (row["job_id"],)).fetchone()[0]
         H.task_session_started(c, row["bot"], row["lane"], msg, body.thread_id, runtime)
         H.mark_delivered(c, H.KEEPER, msg)
@@ -2305,6 +2322,8 @@ class Execution:
         if body.outcome == "completed":
             # Each next-run task this run carried and left: back to the next run, unless it was worked or deferred.
             quiet_work.settle(c, aid, row["bot"], row["started"] or row["created"])
+        # A push from the task's worktrees is the run acting too, though only its runner saw it.
+        run_triggers.pushed(c, aid, row["runner_id"], body.pushes)
         # The runner's notices (a file left out of the commit) are shown beside the reply, not as the turn's summary.
         H.turn_finish(c, H.KEEPER, aid, exit_code=body.outcome, tokens_in=body.tokens_in,
                       tokens_out=body.tokens_out, summary=split_runner_notices(body.text)[0][:2000],
@@ -2343,6 +2362,8 @@ class Execution:
         runtime, model = providers.bot_choice(c, self.store.settings, json.loads(config[0]) if config else {})
         if check:
             runtime, model = check["runtime"], check["model"]
+        # The bot was moved to another model while this turn ran on the old one: its limit is not the new model's login.
+        superseded = not check and model_changed_since(c, row["bot"], row["created"])
         if row["thread_id"] and body.tokens_in is not None:
             c.execute("UPDATE bot_sessions SET tokens_in=?,updated=? WHERE bot=? AND runtime=? AND model=? AND thread_id=?",
                       (int(body.tokens_in), H.now(), row["bot"], runtime, model, row["thread_id"]))
@@ -2350,7 +2371,7 @@ class Execution:
         # The Tico AI Gateway's cap and address block are the company key's, not a provider login's: they keep their
         # own waits (reset_cooldown).
         gateway_wait = tico_code == gateway.RATE_LIMITED or any(gateway.cap_reached(e) for e in limit_errors(c, aid))
-        if not check and not stopped and not gateway_wait and (limited or body.outcome == "completed"):
+        if not check and not superseded and not stopped and not gateway_wait and (limited or body.outcome == "completed"):
             from .subscriptions import effective
             login_hold = login_holds.after_turn(c, row["runner_id"], row["bot"], effective(c, row["bot"])[0] or "",
                                                 runtime, body, aid, H.now())
@@ -2401,6 +2422,12 @@ class Execution:
             H.event(c, H.KEEPER, "attempt.check_limited", aid,
                     {"bot": row["bot"], "job_id": row["job_id"], "task_id": check_task, "runtime": runtime,
                      "retry_after": retry})
+        elif limited and superseded:
+            # Its work goes back in the queue and runs on the model the bot was moved to, which is not held.
+            settle_status(c, row["bot"], "idle", f"The previous model hit its usage limit at {H.now()[11:16]}; "
+                          "queued work runs on the new model", claimed=row["created"])
+            H.event(c, H.KEEPER, "attempt.limited_superseded", aid,
+                    {"bot": row["bot"], "job_id": row["job_id"], "runtime": runtime})
         elif limited:
             streak = limit_streak(c, row["bot"])
             hit = H.now()
@@ -2413,6 +2440,11 @@ class Execution:
             elif tico_code == gateway.RATE_LIMITED:
                 focus = (f"Tico AI Gateway rate limited at {hit[11:16]}; "
                          f"retrying after {retry[:10]} {retry[11:16]} UTC")
+            elif (gateway.out_of_credit(login_hold.get("error")) if login_hold
+                  else any(gateway.out_of_credit(error) for error in limit_errors(c, aid))):
+                # The turn ended on the company's credit, not a login's limit (login_holds.after_turn): its minute.
+                focus = (f"{gateway.PAUSED_MESSAGE} at {hit[11:16]}; trying Tico models again at {retry[11:16]} UTC, "
+                         "or as soon as credit is added")
             else:
                 # Whose limit it was, from the turn's own notes (backend/login_holds.py source): primary or fallback,
                 # which provider and login, and an API key's quota told apart from a plan's usage window. A fallback's

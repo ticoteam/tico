@@ -63,7 +63,8 @@ def run(*, host="127.0.0.1", port=8765, settings=None, log_level="info"):
         else:
             settings = replace(settings, screen_relay_url=url, screen_relay_key=key)
         server = uvicorn.Server(uvicorn.Config(create_app(settings), log_level=log_level, access_log=False,
-            proxy_headers=False, timeout_graceful_shutdown=2))
+            proxy_headers=False, timeout_graceful_shutdown=2,
+            timeout_keep_alive=5))  # longer than the Rust relay's 4 s pool idle timeout
         def watch():
             process.wait()
             server.should_exit = True

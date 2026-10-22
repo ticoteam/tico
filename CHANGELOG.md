@@ -14,6 +14,13 @@ All notable changes to Tico are recorded here. The format follows
   its next run. Stale ticket review and nightly learnings also show which route answered Decide (Gateway, company key or
   company AI), "Ran on your own key: Gateway unavailable" when the Gateway did not answer, and this month's AI spend.
   Housekeeping rows say Tico needs them. `GET /api/v2/system-routines`; the Decide fallback order is unchanged.
+- **Visuals show without a visual address.** A company with no separate visual address now sees pictures, video and
+  audio inline in chat and task conversations, served from the app's own address as media only. A visual page or an
+  SVG is a card with its title, a still preview when there is one, and **Open**, which shows it in the file viewer;
+  pages and SVG are never served inline from the app's own address. There is no switch: Settings › General shows one
+  read-only line, "Visuals: full" or "Visuals: pictures, video and audio only (no separate visual address)".
+  `TICO_VISUAL_SAME_ORIGIN` is no longer read, and a local install uses the same fallback. A `TICO_VISUAL_ORIGIN` on
+  the app's own hostname, with any scheme or port, now stops the server; without it such a setup gets the fallback.
 - **A Claude bot's turn no longer waits an hour on its own background commands**: once the bot has answered and the
   turn is only waiting on background shells (a test suite, `gh pr checks --watch`, `gh run watch`) for 5 minutes
   (`background_wait_s` in bot.yaml, 0 for off), the runner ends the turn as completed and the commands keep running.
@@ -33,15 +40,23 @@ All notable changes to Tico are recorded here. The format follows
   when it happens, while the task it came from keeps its own step (In QA, a release watch). A wait made after the
   merge, or a merge that arrived while the server was down, is woken once by the minute sweep; a replayed webhook
   never wakes it twice. The task page shows it under Related ("Waits for PR #943 to merge"). MCP `hub_task_wait`.
+  A bot's subtask with a pending milestone wait is not a stuck hold: the task it blocks is not woken as stalled.
 - **Relation writes read back their direction**: `hub task relate`, `hub_task_relate`, task create with relations and
   `hub task wait` answer with what was stored, from both ends ("#237 waits for #233" / "#233 blocks #237"), so a
-  reversed link is visible in the reply.
+  reversed link is visible in the reply. `hub task wait --on task:<subtask>` warns about blocking a task on its own
+  subtask, as `relate` and create do.
 - **Hosted bot computers.** Hosting can run bots on a separate computer, keeping their work away from the Tico
   server. Settings > Computers offers **Hosted computer (we run it)**. The installer supports server-only installs,
   bounded AWS runner recovery and the same 4- and 8-core sizes on both machines, with 100 and 200 GB disks.
   HQ registers only a join code's hash through scoped SSM; no owner token or join secret crosses that control plane.
 
 ### Changed
+- **A bot's tasks are one Tasks section with four tabs.** The right rail's Needs you, Active and Done sections become
+  tabs, each with its count: **Needs You** (what the bot needs from you), **Doing** (every open task it holds, of every
+  type, newest first), **Blocked** (each task saying who or what it waits on) and **Done Recently** (the last 14 days).
+  Assigned to others, Updates, Files and Routines stay below.
+- **Long runs of task updates in a bot's chat fold.** Four or more task status rows in a row show the oldest, a
+  "...N more..." line with the exact number hidden, and the newest. Three or fewer show as before; a message starts a new run.
 - **The CEO Bot is on every install, Passive by default, and only the owner sets it up**: the Goal Manager is the CEO
   Bot everywhere, at the top of the org chart, with its KPI history and old messages kept; there is no On/Off switch
   any more. At the new default level, **Passive**, it keeps the **regular checks** running (KPI readings and the
@@ -75,6 +90,17 @@ All notable changes to Tico are recorded here. The format follows
   each one at its own rate.
 
 ### Fixed
+- **A run whose only work was a git push counts as acting.** The computer reports the pushes a run made from its
+  task's worktrees with its result, so in `hub sql` the run reads `acted` with `did_nothing` 0 instead of
+  `no_change`. Pushes from another task's worktree are not counted, and older runs read as before.
+- **No more rare empty 502s from the server.** About once in a few hundred API requests, a request reused a connection
+  to the backend just as the backend closed it for being idle, and the app or a bot got a bare 502. The server's front
+  door now drops idle connections before the backend does.
+- **A company out of Tico credit no longer holds its bots off Tico models for 30 minutes**: when Tico HQ's Gateway
+  pauses Tico models for want of credit (`out_of_credit`), the bot says "Tico models are paused: this company is out
+  of credit. Your bots use their other models until credit is added", runs on its fallback meanwhile, and asks the
+  Gateway again after a minute, so it is back on Tico models within about a minute of credit being added. It used to
+  show the Gateway's raw 429 JSON and hold the Tico login like a provider's usage limit.
 - **A resumed Claude session keeps reading follow-ups**: Claude answers a resumed session with an empty result
   before it reads the new prompt. The runner took that as the turn's answer and stopped reading follow-up
   messages for the rest of the turn; it now waits for the answer to the prompt. This applies to every resumed
@@ -91,13 +117,20 @@ All notable changes to Tico are recorded here. The format follows
 - **Muse Code turns work again on a Docker computer that runs bots as their own user.** Each Muse login now keeps
   its sessions in a folder of Tico's own (per subscription profile too), so a turn, including an automatic fallback
   to Muse, no longer fails at once with "failed to create session lock directory ... Permission denied". If that
-  folder is there but the bot user can't write it, Settings > Computers shows Muse as not ready and names the folder.
-  Muse sessions from before this change start fresh.
+  folder is there but the bot user can't write it, Settings > Computers marks Muse Code and names the folder, rather
+  than asking you to sign in. Muse sessions from before this change start fresh.
 - Choosing a bot's model connection refreshes its computer's readiness and queued work immediately, including
   when the previous connection is signed out.
 - **Recovering an AWS bot computer waits for Systems Manager.** Resuming an interrupted install waits up to five
   minutes for its agent before sending recovery, tolerates a registration race and keeps the same computer on
   failure. An accepted recovery command is never sent again by that wait.
+- **Worktrees start only for work that can run, and stuck or obsolete ones free themselves.** A new task worktree is
+  refused, with the reason, for a task not started yet, one blocked by an open task (named) or a finished one; a task
+  waiting for room is checked again before its tree is reserved or prepared. A `pending` worktree whose pull requests
+  all finished or whose task closed is cancelled (at once when nothing was checked out); one whose setup makes no
+  progress for 6 hours fails visibly, tells its owner once and retries on the same worktree. A fix-forward after a merge
+  keeps its tree while its bot's turn runs or its branch has commits past the merged head ("held: ..."). Each release
+  records why, and Health lists them ([Task worktrees](docs/worktrees.md)).
 - **A bot's message to a bot says when it was held.** A plain message or task comment from one bot to another waits
   for that bot's next run; the send now answers `woke: false` with a `held` reason, and `hub` prints it: held for
   that bot's next run, add `--needs-action` to wake it now. Before, a held escalation read as delivered.
@@ -108,6 +141,10 @@ All notable changes to Tico are recorded here. The format follows
 - **No "Claude login required" while the Tico AI Gateway runs the bot.** Under the recommended choice a bot whose
   Claude or ChatGPT is not signed in yet shows as ready, its card says "Using Tico AI Gateway; sign in to Claude to use
   your subscription", and its model check and chat no longer ask for a login. With no Gateway either, it still does.
+- **A rate-limited bot can be moved to another model.** Settings > Bots refused the change with "Wait for the
+  current bot turn to finish" whenever a retry was running, so the bot stayed stuck on its spent model. The change now
+  applies at once and takes effect from the next turn; the limit lifts, and a turn still running on the old model no
+  longer puts the limit back on the new one.
 
 ## [0.3.71] - 2026-10-21
 

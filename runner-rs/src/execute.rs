@@ -784,11 +784,29 @@ impl Runner {
         got.map_err(Fail::runtime)
     }
 
+    /// The pushes this turn made from its task's worktrees on this computer: those the claim named, and any the
+    /// turn added (`hub task worktree add`), which this computer's worktree list names by now.
+    async fn task_pushes(&self, attempt: &Value, bot: &str, since: i64) -> Vec<Value> {
+        let task = text_of(&attempt["task"]["id"]);
+        if task.is_empty() {
+            return vec![];
+        }
+        let mut links: Vec<Value> = attempt["worktrees"].as_array().cloned().unwrap_or_default();
+        if let Ok(listed) = self.client.get("runners/me/worktrees").await {
+            let owner = format!("bot:{bot}");
+            links.extend(listed["worktrees"].as_array().into_iter().flatten()
+                .filter(|r| text_of(&r["task_id"]) == task && text_of(&r["owner"]) == owner).cloned());
+        }
+        crate::worktrees::pushes(&self.config.projects_dir(), &links, since, &crate::env::process_environment()).await
+    }
+
     /// One turn, start to result. Err only when the result could not be settled; the loop then saves an
     /// interrupted result for recovery.
     pub async fn execute(self: Arc<Self>, mut attempt: Value) -> Result<(), String> {
         let aid = text_of(&attempt["id"]);
         let bot = text_of(&attempt["bot"]);
+        // Pushes from the task's worktrees from here on are this turn's (crate::worktrees::pushes).
+        let begun = crate::util::epoch_s() as i64;
         self.state.record(&attempt)?;
         let config = attempt["config"].clone();
         let key = session_key(&attempt);
@@ -1358,6 +1376,13 @@ impl Runner {
         completion.insert("tokens_out".into(), drove.tokens.get("output").cloned().unwrap_or(Value::Null));
         if !carried.is_empty() {
             completion.insert("undelivered".into(), json!(carried.keys().collect::<Vec<_>>()));
+        }
+        // An older server refuses the field, and a refused result would never arrive: it only loses the count.
+        if host.is_some() && crate::follow::feature("run_pushes") {
+            let pushed = self.task_pushes(&attempt, &bot, begun).await;
+            if !pushed.is_empty() {
+                completion.insert("pushes".into(), json!(pushed));
+            }
         }
         let profile_used = selected.as_ref().filter(|_| host.is_some()).map(|p| p.name.clone());
         if let Some(name) = &profile_used {

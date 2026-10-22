@@ -806,6 +806,11 @@ class SubscriptionWeekly(Contract):
 UsageWindow = Annotated[SubscriptionWeekly | None, WrapValidator(_account_or_none)]
 
 
+def _cut(limit):
+    """A reported string longer than `limit` is cut, never refused: a refused report would hide the computer."""
+    return BeforeValidator(lambda v: v[:limit] if isinstance(v, str) else v)
+
+
 class GoalReadiness(Contract):
     goals: bool = False
     commands: list[SlashCommand] = Field(default_factory=list, max_length=30)
@@ -834,6 +839,8 @@ class ProfileReadiness(GoalReadiness):
     # Its turns on this runtime use the computer's own login (a profile that shares the operator's): one login, held
     # once (backend/login_holds.py canonical).
     shared_login: bool | None = None
+    # Signed in, but its turns can't save a session (Muse Code's data folder): the folder and why, not a sign-in.
+    data_problem: Annotated[str, _cut(500)] = ""
 
 
 class HarnessReadiness(GoalReadiness):
@@ -875,6 +882,7 @@ class RuntimeReadiness(GoalReadiness):
     models: list[ID] = Field(default_factory=list, max_length=50)
     controls: list[Literal["interrupt", "new-session"]] = Field(default_factory=list)
     detail: str = Field(default="", max_length=500)
+    data_problem: Annotated[str, _cut(500)] = ""      # as ProfileReadiness
     # One machine may hold several subscriptions for the same runtime. The runtime row keeps
     # the profile that needs attention first; this is the per-profile breakdown behind it.
     profiles: dict[str, ProfileReadiness] = Field(default_factory=dict, max_length=50)
@@ -979,6 +987,7 @@ class BotReadiness(GoalReadiness):
     # The subscription profile this bot's turns run on, and that profile's own sign-in state.
     profile: str = Field(default="", max_length=100)
     sign_in: Literal["ready", "missing", "failed", "unknown"] = "unknown"
+    data_problem: Annotated[str, _cut(500)] = ""      # its runtime row's (ProfileReadiness): a folder, not a sign-in
     # The bot's declared `access:`, for the Tools row on its page. A runner from before it omits it.
     tools: list[ToolAccess] = Field(default_factory=list, max_length=30)
     # What bot.yaml asks for its mail sending; omitted when it asks for nothing.
@@ -1011,11 +1020,6 @@ class ScreenReadiness(Contract):
     width: int | None = Field(default=None, ge=1, le=10000)
     height: int | None = Field(default=None, ge=1, le=10000)
     reason: Annotated[str, BeforeValidator(lambda v: v[:200] if isinstance(v, str) else v), Field(max_length=200)] = ""
-
-
-def _cut(limit):
-    """A reported string longer than `limit` is cut, never refused: a refused report would hide the computer."""
-    return BeforeValidator(lambda v: v[:limit] if isinstance(v, str) else v)
 
 
 AppState = Literal["ready", "no_permission", "not_installed", "not_signed_in", "needs_foreground", "ui_changed",
@@ -1888,6 +1892,11 @@ class SubscriptionUnavailable(Contract):
     problem: str = Field(min_length=1, max_length=500)
 
 
+class RunPush(Contract):
+    path: str = Field(min_length=1, max_length=1000)  # the worktree, as its task link records it
+    count: int = Field(ge=1, le=1000)
+
+
 class Completion(Contract):
     subscription_unavailable: SubscriptionUnavailable | None = None
     profile_used: str | None = Field(default=None, max_length=80)
@@ -1908,6 +1917,9 @@ class Completion(Contract):
     # Inputs this run took from `attempts/{aid}/inputs` but never gave the runtime (the turn ended between
     # the poll and the steer). They go back to the queue whatever the outcome, not settled with the run.
     undelivered: list[ID] = Field(default_factory=list, max_length=100)
+    # Git pushes the run made from its task's worktrees (runner-rs/src/worktrees.rs pushes): writes Tico sees no
+    # other way. Counted in its `writes` (backend/run_triggers.py).
+    pushes: list[RunPush] = Field(default_factory=list, max_length=50)
 
 
 class Retry(Contract):

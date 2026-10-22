@@ -176,14 +176,15 @@ Every run records what woke it (`turns.trigger_kind`), its tokens, and whether i
 - **`writes`**: the hub writes the run made with its own run token (a task change, comment, link, message,
   file, approval request), plus one for a reply Tico posted for it (to a person, or an answer to a bot's ask). Reads and bookkeeping are not
   writes: `hub sql`, opening a conversation, marking messages read, its own status line, refusals and lint.
-  A commit or pull request counts once Tico hears of it (`hub task link`, a task note); a local commit
-  Tico never sees cannot be counted.
+  A git push from a worktree of the run's own task counts one per push: its runner reports them with the run's
+  result. A commit or pull request counts once Tico hears of it (`hub task link`, a task note, a push); a local
+  commit Tico never sees cannot be counted.
 - **`outcome`**: `acted` when `writes` is above zero; otherwise `no_change` when the run's task is still open
   as it ends (it looked, and nothing had moved) and `nothing_to_do` when there was no open task to act on (no
   task, or one already done, closed or declined).
 - **`did_nothing`**: 1 when `writes` is 0, else 0: the exact flag to measure against. It sees every write that
-  reaches Tico with the run's token; a git push the run never tells Tico about (no `hub task link`, no comment)
-  is not seen yet.
+  reaches Tico with the run's token, and every push from its task's worktrees; a push from anywhere else (the
+  bot's own checkout, another task's worktree) is not counted.
 
 A run from before this was recorded has none of these, and reads `unknown`; so does an attempt that never got
 a `turns` row (one that failed or expired before it started), counted with no tokens and no outcome. `run_weekly` adds them up per week

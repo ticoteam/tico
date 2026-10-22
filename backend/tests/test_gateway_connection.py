@@ -713,6 +713,49 @@ def test_gateway_work_resumes_after_the_reported_rate_window(api, monkeypatch):
     assert retried and retried["job_id"] == attempt["job_id"] and retried["id"] != attempt["id"]
 
 
+# What a company out of credit ends a Tico run with: the runner's plain words (runner-rs/src/hosts/pi.rs `plain_error`),
+# or the Gateway's own 429 as an older runner passes it on (tico-services gateway/chat.py ERRORS).
+OUT_OF_CREDIT = [
+    "Tico models are paused: this company is out of credit. Your bots use their other models until credit is added "
+    "(out_of_credit)",
+    '429: {"code":"out_of_credit","message":"Tico models are paused: this company is out of credit.",'
+    '"type":"insufficient_quota","param":null}',
+]
+
+
+@pytest.mark.parametrize("reported", [False, True])
+@pytest.mark.parametrize("error", OUT_OF_CREDIT, ids=["plain", "older_runner"])
+def test_out_of_credit_is_the_gateways_wait_and_tico_models_are_back_within_a_minute(api, monkeypatch, error, reported):
+    """Waitlist spec v3 tests 9 and 12 h (app side): a company out of credit is not a provider login's limit. No
+    login is held past the Gateway's minute; the bot asks the Gateway again after its Retry-After (a minute), so it is back on
+    Tico models within about a minute of credit landing, and says so plainly."""
+    from backend.execution import billing_limit, limit_cooldown
+    machine, attempt = tico_run(api, monkeypatch)
+    at = H.now()
+    monkeypatch.setattr(H, "now", lambda: at)
+    finish(api, machine, attempt, error, limited=True,
+           **({"limit_resets_at": H.shift(at, seconds=G.OUT_OF_CREDIT_WAIT)} if reported else {}))
+    status, job = ended(api, attempt)
+    assert status["state"] == "limited" and job == "queued"
+    assert status["focus"].startswith(G.PAUSED_MESSAGE + " at "), status["focus"]
+    assert "{" not in status["focus"] and "usage limit" not in status["focus"] and "cap" not in status["focus"]
+    with api.app.state.store.read() as c:
+        # The Tico login waits only the Gateway's minute, never the 30-minute backoff.
+        holds = [json.loads(r[0]) for r in c.execute("SELECT value_json FROM registry_metadata WHERE key LIKE 'login-hold:%'")]
+        assert all(hold["until"] <= H.shift(at, seconds=G.OUT_OF_CREDIT_WAIT + 1) for hold in holds), holds
+        assert G.OUT_OF_CREDIT_WAIT <= limit_cooldown(c, "ops") <= G.OUT_OF_CREDIT_WAIT + 1
+        # Not an API key's plan or billing: Health doesn't send the person to check one.
+        assert not billing_limit(c, "ops")
+    assert claim(api, machine, "ops") is None
+    at = H.shift(at, seconds=G.OUT_OF_CREDIT_WAIT + 2)
+    with api.app.state.store.transaction() as c:
+        # The computer has been reporting in all along, not waking from a silence.
+        c.execute("UPDATE runners SET last_seen=?,awake_since=NULL", (at,))
+    ready(api, machine, ["ops"])
+    retried = claim(api, machine, "ops")
+    assert retried and retried["job_id"] == attempt["job_id"] and retried["config"]["model"] == "tico-mid-1.0"
+
+
 @pytest.mark.parametrize("code", ["revoked_key", "unknown_key"])
 def test_a_refused_key_says_the_connection_is_not_working(api, monkeypatch, code):
     machine, attempt = tico_run(api, monkeypatch)
