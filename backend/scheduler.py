@@ -95,30 +95,40 @@ class Scheduler:
         started = time.monotonic()
 
         @contextmanager
-        def write():
+        def locked(step):
             # One short write transaction per step, per routine and per reminder batch. The pass used to be one
             # transaction, and on a hub with many tasks and routines every request waited 20-30 s behind it
             # (TK-RCZJXEWA). Each step is whole on its own; routines and reminders keep their dedupe rows
             # (schedule_occurrences, task_reminders), checked under the same lock that writes them.
-            begun = time.monotonic()
+            # The hold is timed from BEGIN to commit; the wait for the lock is kept apart, since it measures other
+            # writers, not this pass.
+            asked, begun = time.monotonic(), None
             try:
                 with self.store.transaction() as c:
+                    begun = time.monotonic()
                     yield c
             finally:
-                holds.append(time.monotonic() - begun)
+                if begun is not None:
+                    holds.append((time.monotonic() - begun, begun - asked, step))
 
         from . import wake_presets
+
+        def wake_presets_tick(c):
+            wake_presets.tick(c, H.now())
+
+        def placement_sweep(c):
+            placement.sweep(c, self.execution)
         for step in (self.execution.expire,
                      # Interrupted work that needs no eyes is settled here, so what a person is shown
                      # is only the runs that used tools before they stopped.
                      self.execution.auto_reconcile,
                      self.execution.release_deploy_drains,
                      self.execution.release_limits,      # a usage limit lifts at its reset, not at the next claim
-                     lambda c: wake_presets.tick(c, H.now()),   # wake presets let go of the notices and sweeps now due
+                     wake_presets_tick,                         # wake presets let go of the notices and sweeps now due
                      self.execution.hold_unrunnable,
-                     lambda c: placement.sweep(c, self.execution),   # an active bot with no computer gets one
+                     placement_sweep,                           # an active bot with no computer gets one
                      H.lift_cooled_quarantines):
-            with write() as c:
+            with locked(getattr(step, "__name__", "step")) as c:
                 step(c)
         # Routines are read without the lock; one not yet due whose next_due is already written needs no write at all.
         with self.store.read() as c:
@@ -130,7 +140,7 @@ class Scheduler:
             except Exception:
                 pass                                    # a bad cron or date is recorded by the write below
             created = None
-            with write() as c:
+            with locked("schedule:" + str(listed["id"])) as c:
                 row = c.execute(SCHEDULES_SQL + " AND s.id=?", (listed["id"],)).fetchone()
                 if row is None:                         # deleted, disabled or its bot paused since the read
                     continue
@@ -180,19 +190,19 @@ class Scheduler:
                         fired.append(created)
         # a merged pull request whose push record arrived after the deploy still ships
         from .github import ship_deployed
-        with write() as c:
+        with locked("ship_deployed") as c:
             ship_deployed(c, self.store.settings)
         from .task_loops import flag as flag_task_loops
-        with write() as c:
+        with locked("task_loops") as c:
             with isolated(c, "task_loops", "all", failures):
                 flag_task_loops(c)
         # Snoozes whose date came: back on every list, and one notice to the owner bot (backend/task_snooze.py).
         from . import task_snooze
-        with write() as c:
+        with locked("task_snooze") as c:
             task_snooze.wake_ended(c, stamp(at), failures)
         # Quiet tasks a run deferred to a time that has come get their run (backend/quiet_work.py).
         from . import quiet_work
-        with write() as c:
+        with locked("quiet_work") as c:
             quiet_work.due(c, stamp(at), failures)
         # Due-date reminders: candidates are read without the lock (H.TASKS_DUE_SQL, an index), and only the ones
         # that would send are written, a batch per transaction, each checked again under the lock.
@@ -205,7 +215,7 @@ class Scheduler:
                 except Exception:
                     ready.append(row)                   # the write below records the failure
         for batch in range(0, len(ready), REMINDER_BATCH):
-            with write() as c:
+            with locked("reminders") as c:
                 for listed in ready[batch:batch + REMINDER_BATCH]:
                     with isolated(c, "reminder", listed["id"], failures):
                         row = c.execute("SELECT id,title,owner,due,conversation_id FROM tasks WHERE id=? AND due=? "
@@ -221,14 +231,18 @@ class Scheduler:
                         except H.Refused as exc:
                             H.event(c, H.KEEPER, "task.reminder-refused", row["id"], {"reason": str(exc)[:300]})
                         c.execute("INSERT INTO task_reminders VALUES(?,?,?)", (row["id"], row["due"], stamp(at)))
-        with write() as c:
+        longest = max(holds, default=(0, 0, None))
+        with self.store.transaction() as c:
             c.execute("INSERT INTO service_health VALUES('scheduler',?,?,?) ON CONFLICT(service) DO UPDATE SET "
                       "last_success=excluded.last_success,last_error=excluded.last_error,detail_json=excluded.detail_json",
                       (stamp(at), "schedule errors" if failures else None,
-                       # How long the pass took, and the longest any one of its transactions held the write lock,
-                       # so a slow one shows in service_health.
+                       # How long the 10-second pass took, the longest any one of its transactions held the write
+                       # lock and which step that was, and the longest it waited for the lock behind other writers.
+                       # The minute and hourly passes below take their own transactions and are not counted here.
                        encode({"failures": failures, "tick_ms": round((time.monotonic() - started) * 1000),
-                               "hold_ms": round(max(holds, default=0) * 1000), "transactions": len(holds)})))
+                               "hold_ms": round(longest[0] * 1000), "hold_step": longest[2],
+                               "wait_ms": round(max((h[1] for h in holds), default=0) * 1000),
+                               "transactions": len(holds)})))
         # Updates (backend/updates.py): today's queue, one bot asked at a time. Its own short
         # transaction, so a failure here never holds back the routines above.
         # A person's draft is written by the company's model in a background thread, so the call never
@@ -237,10 +251,10 @@ class Scheduler:
             from . import updates
             settings = self.store.settings
             with self.store.transaction() as c:
-                write = updates.writer_for(c, settings, self.store)
-                sent = updates.dispatch(c, at, settings.assistant_bot if write else None)
+                writer = updates.writer_for(c, settings, self.store)
+                sent = updates.dispatch(c, at, settings.assistant_bot if writer else None)
             if sent and updates.is_person(sent):
-                threading.Thread(target=updates.write_draft, args=(self.store, sent, write, settings.assistant_bot),
+                threading.Thread(target=updates.write_draft, args=(self.store, sent, writer, settings.assistant_bot),
                                  name="update-draft", daemon=True).start()
         except Exception as exc:
             failures.append({"updates": type(exc).__name__})

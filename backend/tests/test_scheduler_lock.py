@@ -87,7 +87,29 @@ def test_tick_holds_the_write_lock_only_briefly_per_step(api, monkeypatch):
     assert worst["steps"] < BOUND, worst
     with store.read() as c:
         health = json.loads(c.execute("SELECT detail_json FROM service_health WHERE service='scheduler'").fetchone()[0])
-    assert "tick_ms" in health and "hold_ms" in health
+    assert {"tick_ms", "hold_ms", "hold_step", "wait_ms"} <= set(health)
+
+
+def test_hold_ms_is_the_hold_not_the_wait_behind_another_writer(api):
+    """Another writer holds the lock for a second as the tick starts: that shows as wait_ms, not hold_ms."""
+    import threading
+    store = api.app.state.store
+    taken = threading.Event()
+
+    def hold():
+        with store.read() as other:
+            other.execute("BEGIN IMMEDIATE")
+            taken.set()
+            time.sleep(1)
+            other.execute("ROLLBACK")
+    holder = threading.Thread(target=hold)
+    holder.start()
+    taken.wait(5)
+    Scheduler(store, api.app.state.execution).tick(AT)
+    holder.join()
+    with store.read() as c:
+        health = json.loads(c.execute("SELECT detail_json FROM service_health WHERE service='scheduler'").fetchone()[0])
+    assert health["wait_ms"] >= 900 and health["hold_ms"] < 900, health
 
 
 def plan(c, sql, *args):

@@ -104,6 +104,8 @@ CONVERSATION_SCOPES = ("direct", "personal", "shared", "task")
 # a deploy). To everything that only knows the company lane they are a kind of `doing`.
 TASK_STATUSES = ("open", "doing", "waiting", "review", "ready", "done", "closed", "declined")
 ACTIVE_STATUSES = ("open", "doing", "waiting", "review", "ready")   # still on the board
+# tasks_due_active (TASKS_DUE_INDEX) is built from this list. An existing index keeps the list it was created with, so
+# changing it needs that index under a new name and a migration, or upgraded hubs quietly scan every task again.
 BOARD_STATUSES = ACTIVE_STATUSES + ("declined",)               # visible until a person reassigns or closes it
 LIVE_STATUSES = ACTIVE_STATUSES + ("done",)                # not closed, not declined
 OWNER_STATUSES = ("doing", "waiting", "review", "done", "declined")  # what the owner may set

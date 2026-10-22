@@ -38,7 +38,8 @@ All notable changes to Tico are recorded here. The format follows
   in one write transaction and read every task to find due dates, so on a hub with many tasks and routines requests
   waited behind it and runners saw 503s. Each step, routine and batch of due-date reminders now commits on its own,
   the due-date and deferred-task lookups use new indexes (migration 61), and Health's scheduler entry shows the
-  longest single hold (`hold_ms`) next to the pass's `tick_ms`.
+  pass's longest single hold (`hold_ms`, with `hold_step`) and its longest wait behind other writers (`wait_ms`)
+  next to `tick_ms`. These cover the 10-second pass; the minute and hourly sweeps take their own transactions.
 - **A task blocked only by its own quiet subtask no longer waits silently.** Relating a subtask as its parent's
   blocker returns a warning, and when that subtask (a bot's hold or acknowledgement) goes quiet waiting on nothing
   else, the parent counts as stalled even while waiting: its bot is woken with the way out, and BotOps sees it stuck.
