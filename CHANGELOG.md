@@ -84,6 +84,12 @@ All notable changes to Tico are recorded here. The format follows
   each one at its own rate.
 
 ### Fixed
+- **Chat Send shows that it is sending, and a stalled send ends.** While a message is out, Send shows a spinner at full
+  colour instead of looking like the dimmed Send of an empty box. After 5 seconds a line by the box says "Still
+  sending…", and that it is trying again when the server is busy. A message without files gives up after 30 seconds,
+  retries included, with "Not sent … Your message is still here." and **Retry**, which reuses the same request id so a
+  send that did land is not saved twice; uploads keep no time limit. A slow or failed send leaves one console line
+  with its time, retries and last status, never the message text.
 - **A run whose only work was a git push counts as acting.** The computer reports the pushes a run made from its
   task's worktrees with its result, so in `hub sql` the run reads `acted` with `did_nothing` 0 instead of
   `no_change`. Pushes from another task's worktree are not counted, and older runs read as before.

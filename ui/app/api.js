@@ -67,29 +67,41 @@ const newRequestId = () => globalThis.crypto?.randomUUID?.() || 'xxxxxxxx-xxxx-4
 });
 // Every JSON write goes through one path so a PUT carries the same Idempotency-Key and the same
 // retry rules as a POST; the method is part of the signature so the two never share a request id.
-const writeRequestOnce = async (method, p, body={}, operationId) => {
+// `opts.timeout` caps the whole write, retries included: a stalled connection ends as {timedOut, unconfirmed}
+// instead of waiting for the browser to give up, and the request id is kept so a retry is never saved twice.
+// `opts.onRetry` hears each retry (attempt, status), so a slow send can say it is trying again.
+const writeTimedOut = ms => Object.assign(new Error(`No answer from the server in ${Math.round(ms / 1000)} seconds.`), {unconfirmed: true, timedOut: true});
+const writeRequestOnce = async (method, p, body={}, operationId, opts={}) => {
   if (SESSION.out) throw signedOutError(true);
   getForget();
   const payload = JSON.stringify(body), signature = method + ' ' + p + '\n' + payload;
   const key = operationId || pendingWrites.get(signature) || newRequestId();
   pendingWrites.set(signature, key);
+  const deadline = opts.timeout ? performance.now() + opts.timeout : Infinity;
   for (let attempt = 0; attempt < 3; attempt++) {
+    const left = deadline - performance.now();
+    if (left <= 0) throw writeTimedOut(opts.timeout);
+    const abort = new AbortController(), timer = left < Infinity ? setTimeout(() => abort.abort(), left) : 0;
+    let status = 0;
     try {
-      const r = await fetch(API + p, {method, headers:{'Content-Type':'application/json', 'Idempotency-Key':key}, body:payload});
+      const r = await fetch(API + p, {method, headers:{'Content-Type':'application/json', 'Idempotency-Key':key}, body:payload, signal:abort.signal});
+      status = r.status;
       window.TicoObservability?.response(r.status);
       if (r.ok) SESSION.seen = true;
-      const j = await r.json().catch(()=>({}));
+      const j = await r.json().catch(error => { if (abort.signal.aborted) throw error; return {}; });
       if ([429,502,503,504].includes(r.status)) throw new TypeError(apiError(j, r));
       pendingWrites.delete(signature);
       if (!r.ok) { signInRedirect(r, j); throw apiFailure(j, r); }
       return j;
     } catch (error) {
+      if (abort.signal.aborted) throw writeTimedOut(opts.timeout);
       if (!(error instanceof TypeError)) throw error;
       // A proxy that signed the person out answered before Tico saw the write, so nothing was saved.
       if (await sessionProbe()) throw signedOutError(true);
-      if (attempt === 2) throw Object.assign(new Error('Could not confirm whether this saved. Retry the same submission in this tab; it will use the same request ID.'), {unconfirmed: true});
-      await new Promise(resolve => setTimeout(resolve, 500 * (attempt + 1)));
-    }
+      if (attempt === 2) throw Object.assign(new Error('Could not confirm whether this saved. Retry the same submission in this tab; it will use the same request ID.'), {unconfirmed: true, status});
+      opts.onRetry?.(attempt + 1, status);
+      await new Promise(resolve => setTimeout(resolve, Math.min(500 * (attempt + 1), Math.max(0, deadline - performance.now()))));
+    } finally { clearTimeout(timer); }
   }
 };
 // The button just pressed shows the write is under way until it settles (styles/skeleton.css), so a slow server
@@ -108,11 +120,11 @@ const pressPending = () => {
   return () => { el.classList.remove('is-pending'); el.removeAttribute('aria-busy'); };
 };
 const writeRequest = async (...args) => { const done = pressPending(); try { return await writeRequestOnce(...args); } finally { done(); } };
-const postRequest = (p, body={}, operationId) => writeRequest('POST', p, body, operationId);
+const postRequest = (p, body={}, operationId, opts) => writeRequest('POST', p, body, operationId, opts);
 const patchRequest = (p, body={}, operationId) => writeRequest('PATCH', p, body, operationId);
 const putRequest = (p, body={}, operationId) => writeRequest('PUT', p, body, operationId);
-const post = (p, body={}, operationId) => window.TicoObservability
-  ? window.TicoObservability.run(p, () => postRequest(p, body, operationId)) : postRequest(p, body, operationId);
+const post = (p, body={}, operationId, opts) => window.TicoObservability
+  ? window.TicoObservability.run(p, () => postRequest(p, body, operationId, opts)) : postRequest(p, body, operationId, opts);
 const patch = (p, body={}, operationId) => window.TicoObservability
   ? window.TicoObservability.run(p, () => patchRequest(p, body, operationId)) : patchRequest(p, body, operationId);
 const put = (p, body={}, operationId) => window.TicoObservability
@@ -137,7 +149,7 @@ async function memoryBody(body, digests) {
   return copied;
 }
 // Keep multipart and binary retries stable across newly constructed bodies.
-const formRequestOnce = async (url, body) => {
+const formRequestOnce = async (url, body, opts={}) => {
   if (SESSION.out) throw signedOutError(true);
   getForget();
   const digests = S.me?.cloud ? new Map() : null;
@@ -168,19 +180,22 @@ const formRequestOnce = async (url, body) => {
       if (!(error instanceof TypeError)) throw error;
       if (await sessionProbe()) throw signedOutError(true);
       if (attempt === 2) throw Object.assign(new Error('Could not confirm whether this upload saved. Keep the files and retry the same submission in this tab.'), {unconfirmed: true});
+      opts.onRetry?.(attempt + 1, 0);
       await new Promise(resolve => setTimeout(resolve, 500 * (attempt + 1)));
     }
   }
 };
 const formRequest = async (...args) => { const done = pressPending(); try { return await formRequestOnce(...args); } finally { done(); } };
-const formFetch = (url, body) => window.TicoObservability
-  ? window.TicoObservability.run(url.startsWith(API) ? url.slice(API.length) : '', () => formRequest(url, body)) : formRequest(url, body);
-async function cloudCompose(path, body, files = []) {
-  if (!files.length) return post(path, body);
+const formFetch = (url, body, opts) => window.TicoObservability
+  ? window.TicoObservability.run(url.startsWith(API) ? url.slice(API.length) : '', () => formRequest(url, body, opts)) : formRequest(url, body, opts);
+// `opts` (writeRequestOnce): the timeout applies to a message without files; an upload keeps no time limit, since a
+// large file on a slow line can rightly take minutes, and only reports its retries.
+async function cloudCompose(path, body, files = [], opts = {}) {
+  if (!files.length) return post(path, body, undefined, opts);
   const fd = new FormData();
   for (const [key, value] of Object.entries(body)) fd.append(key, typeof value === 'object' ? JSON.stringify(value) : value);
   files.forEach(file => fd.append('files', file, file.name));
-  const response = await formFetch(API + path.replace('/v2/', '/v2/uploads/'), fd);
+  const response = await formFetch(API + path.replace('/v2/', '/v2/uploads/'), fd, {onRetry: opts.onRetry});
   const result = await response.json().catch(() => ({}));
   if (!response.ok || !result.task && !result.message) throw new Error(apiError(result, response) || 'The server did not confirm this upload.');
   return result;

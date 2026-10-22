@@ -24,6 +24,14 @@
 .p-send-icon:hover:not(:disabled,.p-off){filter:brightness(1.06)}
 .p-send-icon:disabled,.p-send-icon.p-off{opacity:.45;cursor:default}
 .p-send-icon[hidden]{display:none}
+/* sending: a spinner in place of the arrow, at full strength so it never reads as the empty box's dimmed Send */
+.p-send-icon.p-sending,.p-send-icon.p-sending:disabled{opacity:1;cursor:progress;position:relative;color:transparent}
+.p-send-icon.p-sending>*{visibility:hidden}
+.p-send-icon.p-sending::after{content:"";position:absolute;inset:0;margin:auto;width:16px;height:16px;border:2px solid var(--accent-ink);border-right-color:transparent;border-radius:50%;animation:p-spin .8s linear infinite}
+@keyframes p-spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.p-send-icon.p-sending::after{animation-duration:2.4s}}
+.p-slow{padding:4px 4px 0;font-size:var(--t-sm)}
+.p-slow[hidden]{display:none}
 /* a phone gives the bot page the whole screen: no bottom bar, the composer on the bottom edge */
 @media (max-width:760px){
   body.bot-page #mobile-nav{display:none}

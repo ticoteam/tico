@@ -70,6 +70,7 @@ function makePill(cfg) {
       ${goals ? `<button class="p-stop p-send-icon" type="button" aria-label="Stop" title="Stop" hidden>${ICON_STOP}</button>` : ''}
       <button class="p-send p-send-icon" type="button" aria-label="Send" title="Send">${ICON_SEND}</button>
     </div>
+    <div class="p-slow muted" role="status" hidden></div>
     <div class="p-chips"></div>
     <div class="p-cmd" hidden></div>`;
 
