@@ -58,6 +58,10 @@ It uses the same targets (an existing server over SSH, a new EC2 computer with n
 runs `ghcr.io/ticoteam/tico-runner` with a volume for logins and repositories. The one-time join code lasts 15 minutes and works
 once: set `TICO_OWNER_TOKEN` (the owner's personal token) and it mints one at the last moment, or set `TICO_ENROLL_CODE`, or
 paste one when asked. Plan for about 0.5-1 GiB of RAM per bot working at the same time (`t4g.medium` is the default).
+Resuming an AWS install with the same name reuses its computer and waits up to five minutes for Systems Manager
+before sending recovery. A registration race is retried only before the command is accepted; a failed or timed-out
+command is not replayed automatically. If recovery cannot finish, setup exits unsuccessfully and keeps the computer.
+
 Stopping or restarting the runner container (`docker stop`, `docker restart`, an update) lets running turns finish first:
 it takes no new work and exits once nothing runs, interrupting what is left after 14 minutes. Stop it twice to stop at once.
 

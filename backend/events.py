@@ -279,6 +279,13 @@ RUNNER_TRIGGERS = [
      _tell("assignments", "SELECT OLD.runner_id AS rid", "OLD.bot")),
     ("changes_runner_bot_config_update", "UPDATE", "bot_config", _changed("config_json", "operator", "team", "onboarding_state"),
      _bot_runner("assignments", "NEW.bot")),
+    # A bot's selected connection changes its assignment and readiness even while its old login is signed out.
+    ("changes_runner_subscription_insert", "INSERT", "subscription_assignments", "NEW.scope='bot'",
+     _bot_runner("assignments", "NEW.target") + _bot_runner("work", "NEW.target")),
+    ("changes_runner_subscription_update", "UPDATE", "subscription_assignments", f"NEW.scope='bot' AND {_changed('profile')}",
+     _bot_runner("assignments", "NEW.target") + _bot_runner("work", "NEW.target")),
+    ("changes_runner_subscription_delete", "DELETE", "subscription_assignments", "OLD.scope='bot'",
+     _bot_runner("assignments", "OLD.target") + _bot_runner("work", "OLD.target")),
     # The names of the credentials its bots are granted, and the one-time move of secrets files.
     ("changes_runner_credential_grants_insert", "INSERT", "credential_grants", None, _tell("credentials", _ALL_RUNNERS)),
     ("changes_runner_credential_grants_update", "UPDATE", "credential_grants", _changed("revoked", "subject"),

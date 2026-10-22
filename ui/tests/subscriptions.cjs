@@ -351,8 +351,8 @@ async function who(browser) {
     assert.equal(await sub.isDisabled(), !enabled, `${as}: ${enabled ? 'may' : 'may not'} choose`);
     if (as === 'operator') {
       // The computer's operator sees only their computer, and adds and signs in subscriptions on it.
-      await page.evaluate(() => document.querySelector('#bot-editor').close());
-      await page.evaluate(() => settingsShow('devices'));
+      await page.goto('https://tico-ui.test/#/settings');
+      await page.locator('[data-settings-tab=devices]').click();
       assert.deepEqual(await page.locator('#set-machines tr[data-computer-row]').evaluateAll(r => r.map(x => x.dataset.computerRow)), ['r2']);
       await page.locator('#set-machines .machine-name[data-computer-open=r2]').click();
       const add = await addSubscription(page, 'claude');

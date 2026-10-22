@@ -728,9 +728,18 @@ pub fn use_own_config_home(runtime: &str, profile: Option<&crate::profiles::Prof
         "musecode" => {
             env.remove("MUSE_AUTH_PATH");
             env.insert("XDG_CONFIG_HOME".into(), musecode::config_home(profile).display().to_string());
+            env.insert("XDG_DATA_HOME".into(), musecode::data_home(profile).display().to_string());
             true
         }
         _ => false,
+    }
+}
+
+/// A folder the host's turns write that the bot user cannot (Muse Code's data home), as a readiness problem.
+pub fn data_problem(runtime: &str, profile: Option<&crate::profiles::Profile>) -> Option<String> {
+    match runtime {
+        "musecode" => musecode::data_problem(&musecode::data_home(profile)),
+        _ => None,
     }
 }
 

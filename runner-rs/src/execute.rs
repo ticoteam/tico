@@ -671,7 +671,7 @@ impl Runner {
                 vec![crate::harness_tools::executable_for("musecode")],
                 None,
                 crate::isolation::bot_state(&self.state.directory).join("musecode"),
-                crate::hosts::musecode::config_home(profile),
+                (crate::hosts::musecode::config_home(profile), crate::hosts::musecode::data_home(profile)),
                 tx,
             )),
             "pi" => Host::Pi(crate::hosts::pi::PiHost::new(bot, vec![crate::harness_tools::executable_for("pi")], tx)),

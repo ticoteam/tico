@@ -56,8 +56,6 @@ function botScreenState(slug) {
   const id = e?.machine?.runner_id, machine = screenMachine(id);
   if (!machine) return {state: e?.agent ? 'external' : 'none'};
   const base = {id, machine, operator: machine.operator ? botPersonName(machine.operator) : '', may: screenMayOpen(machine)};
-  const platform = e.machine.platform || '';
-  if (platform && platform !== 'linux' && !machine.screen_available) return {...base, state: 'linux_only'};
   if (!e.online) return {...base, state: 'offline'};
   if (!machine.screen_available) return {...base, state: 'not_offered'};
   if (!machine.screen || machine.screen === 'off') return {...base, state: 'off'};
@@ -65,31 +63,19 @@ function botScreenState(slug) {
 }
 const SCREEN_DOCS = `${GH}/blob/main/docs/install.md#screen`;
 // Docker: `screen on` inside the runner's container turns it on live and saves it in runner.json on the runner-home
-// volume, so it survives updates. A non-empty TICO_SCREEN in .env wins over runner.json; the fallback rewrites that
-// line and recreates the container, which cuts off a running turn.
+// volume, so it survives updates. Installation troubleshooting lives in the screen documentation.
 // A named or --server-network runner has runner.override.yaml beside the stock file, used on every compose call
 // (install.sh, the updater); without it the command reaches the default runner's project.
 const SCREEN_DOCKER_CMD = 'sudo docker compose -f runner.compose.yaml $([ -f runner.override.yaml ] && echo -f runner.override.yaml) exec runner tico-runner --config /home/runner/runner.json screen on';
-// install.sh writes .env as root, mode 600, so the fallback edits it with sudo; `up -d runner` recreates the runner only.
-const SCREEN_DOCKER_ENV_CMD = "sudo sed -i '/^TICO_SCREEN=/d' .env && echo TICO_SCREEN=1 | sudo tee -a .env >/dev/null && sudo docker compose -f runner.compose.yaml $([ -f runner.override.yaml ] && echo -f runner.override.yaml) up -d runner";
 const SCREEN_CHECKOUT_CMD = 'scripts/tico screen on';
 const screenCmdHTML = (cmd, label) => `<div class="bot-screen-cmd"><code>${esc(cmd)}</code><button class="ghost" type="button" data-screen-copy="${esc(cmd)}" aria-label="Copy the ${label} command">Copy</button></div>`;
 function botScreenRowHTML(slug) {
   const s = botScreenState(slug);
-  const ask = `Ask ${s.operator ? `${esc(s.operator)} or an admin` : 'an admin'} to turn it on in Settings > Computers.`;
   const status = text => `<span class="bot-screen-status">${text}</span>`;
   const body = {
     ready: () => `<a class="bot-screen-open" href="${screenHref(s.id)}"><span class="nav-icon" aria-hidden="true">computer</span>Open</a>${status(` · ${s.machine.screen === 'control' ? 'Control' : 'View'}`)}`,
-    off: () => status('Screen is off for this computer.') + (s.may
-      ? ` <button class="ghost" type="button" data-screen-on="${esc(s.id)}">Turn on (Control)</button><span class="settings-cell-note">View is a choice in Settings > Computers.</span>`
-      : `<span class="settings-cell-note">${ask}</span>`),
-    not_offered: () => status("This computer's screen isn't turned on.") + (s.may
-      ? `<div class="bot-screen-steps"><p>Docker: in the runner's folder on the computer (<code>/opt/tico-runner</code>, or <code>/opt/tico-runner-&lt;name&gt;</code> for a named runner), turn it on live. Nothing restarts, so no running turn is cut off:</p>${screenCmdHTML(SCREEN_DOCKER_CMD, 'Docker')}
-          <p>If the runner is too old for that command, or its <code>.env</code> says <code>TICO_SCREEN=0</code> (which wins over it), set <code>TICO_SCREEN=1</code> in <code>.env</code> instead, once the computer is idle: this restarts the runner and cuts off a running turn.</p>${screenCmdHTML(SCREEN_DOCKER_ENV_CMD, 'Docker .env')}
-          <p>A Linux checkout:</p>${screenCmdHTML(SCREEN_CHECKOUT_CMD, 'checkout')}
-          <a href="${SCREEN_DOCS}" target="_blank" rel="noopener noreferrer">How to turn on the screen</a></div>`
-      : `<span class="settings-cell-note">${ask.replace('in Settings > Computers', 'on the computer')}</span>`),
-    linux_only: () => status('Screen is Linux only for now.'),
+    off: () => status('Off'),
+    not_offered: () => status('Off'),
     offline: () => status("This computer is offline. Screen works when it's back."),
     not_allowed: () => status(s.operator ? `Only ${esc(s.operator)} and admins can open this computer's screen.` : "Only admins can open this computer's screen."),
     none: () => status('This bot has no computer yet.'),
@@ -103,6 +89,9 @@ const botScreenKey = s => [s.state, s.id, s.machine?.screen, s.may, s.operator].
 function botScreenRefresh(slug) {
   const row = $('#bot-screen-row');
   if (row && row.dataset.screenKey !== botScreenKey(botScreenState(slug))) botScreenPaint(slug);
+  botScreenSettingsPaint(slug);
+  const state = botScreenState(slug);
+  if (state.machine?.screen_available && SCREEN_SETUP_PENDING.has(state.id) && !SCREEN_SAVING.has(state.id)) void screenSetMode(state.id, 'control');
 }
 // Draws the row again, and the header's Screen button, which shows only when the row is ready.
 function botScreenPaint(slug) {
@@ -119,23 +108,66 @@ function botScreenPaint(slug) {
   }
   botScreenWire(slug);
 }
-function botScreenWire(slug) {
-  const row = $('#bot-screen-row'); if (!row) return;
-  row.onclick = async event => {
-    const copy = event.target.closest('[data-screen-copy]');
-    if (copy) { copyText(copy.dataset.screenCopy).then(() => toast('Copied'), () => toast('Could not copy', true)); return; }
-    const on = event.target.closest('[data-screen-on]'); if (!on) return;
-    const id = on.dataset.screenOn;
-    on.disabled = true;
-    try {
-      // Control, as a new computer's first offer starts (backend/screen.py first_offer); View and Off are in Settings.
-      const saved = await post(`/v2/computers/${encodeURIComponent(id)}/screen`, {mode: 'control'});
-      screenSaved(id, {screen: 'control', ...saved});
-      toast('Screen: control');
-      if (BOT?.slug === slug) botScreenPaint(slug);
-    } catch (error) { toast(error.message, true); on.disabled = false; }
-  };
+const SCREEN_SETUP_PENDING = new Set(), SCREEN_SAVING = new Set();
+function screenControlHTML(machine, online = true) {
+  if (!machine) return '<span class="muted">No computer assigned.</span>';
+  if (!screenMayOpen(machine)) return '<span class="muted">Only the computer’s operator and admins can change its screen.</span>';
+  const id = machine.id || machine.runner_id;
+  const on = !!machine.screen_available && machine.screen !== 'off' && !!machine.screen;
+  const pending = SCREEN_SETUP_PENDING.has(id) && !on;
+  const key = [id, machine.screen, machine.screen_available, online, pending, SCREEN_SAVING.has(id)].join('|');
+  return `<div class="screen-control" data-screen-control="${esc(id)}" data-screen-control-key="${esc(key)}">
+    <label class="screen-toggle">${peopleSwitch(`data-screen-toggle="${esc(id)}"`, on || pending, SCREEN_SAVING.has(id), 'Enable screen')}<span>${pending ? 'Waiting for computer setup' : on ? 'On' : 'Off'}${!online ? ' · Computer offline' : ''}</span></label>
+    ${on ? `<select class="settings-inline-select" data-screen-mode="${esc(id)}" aria-label="Screen access" ${SCREEN_SAVING.has(id) ? 'disabled' : ''}><option value="view" ${machine.screen === 'view' ? 'selected' : ''}>View</option><option value="control" ${machine.screen === 'control' ? 'selected' : ''}>Control</option></select>${online ? `<a class="bot-screen-open" href="${screenHref(id)}">Open screen</a>` : ''}` : ''}
+    ${pending ? `<div class="bot-screen-steps"><p>Run this on ${esc(machine.label || 'the computer')}, in its runner folder (usually <code>/opt/tico-runner</code>):</p>${screenCmdHTML(SCREEN_DOCKER_CMD, 'Docker')}
+      <details><summary>Running from a checkout?</summary>${screenCmdHTML(SCREEN_CHECKOUT_CMD, 'checkout')}</details>
+      <p>The screen becomes available when the computer reports it is ready. <a href="${SCREEN_DOCS}" target="_blank" rel="noopener noreferrer">Setup help</a></p></div>` : ''}
+  </div>`;
 }
+function botScreenSettingsPaint(slug) {
+  const host = $('#bot-screen-settings'); if (!host || BOT?.slug !== slug) return;
+  const state = botScreenState(slug);
+  const html = `<dt>Screen</dt><dd>${screenControlHTML(state.machine, !!S.emps.find(e => e.name === slug)?.online)}</dd>`;
+  const box = document.createElement('div'); box.innerHTML = html;
+  const key = box.querySelector('[data-screen-control]')?.dataset.screenControlKey;
+  if (key && host.querySelector('[data-screen-control]')?.dataset.screenControlKey === key) return;
+  if (host.innerHTML !== html) host.innerHTML = html;
+}
+function botScreenWire(slug) { botScreenSettingsPaint(slug); }
+function screenControlsPaint(id) {
+  if (BOT) botScreenPaint(BOT.slug);
+  const machine = (SETTINGS_DATA.machines || []).find(m => m.id === id);
+  for (const box of document.querySelectorAll('[data-screen-control]')) {
+    if (box.dataset.screenControl === id && !box.closest('#bot-screen-settings') && machine)
+      box.outerHTML = screenControlHTML(machine, machine.online !== false);
+  }
+}
+async function screenSetMode(id, mode) {
+  if (SCREEN_SAVING.has(id)) return;
+  SCREEN_SAVING.add(id); screenControlsPaint(id);
+  try {
+    const saved = await post(`/v2/computers/${encodeURIComponent(id)}/screen`, {mode});
+    screenSaved(id, saved); SCREEN_SETUP_PENDING.delete(id);
+  } catch (error) {
+    SCREEN_SETUP_PENDING.delete(id); toast(error.message, true);
+  } finally { SCREEN_SAVING.delete(id); screenControlsPaint(id); }
+}
+document.addEventListener('change', event => {
+  const toggle = event.target.closest('[data-screen-toggle]'), mode = event.target.closest('[data-screen-mode]');
+  if (mode) { void screenSetMode(mode.dataset.screenMode, mode.value); return; }
+  if (!toggle) return;
+  const id = toggle.dataset.screenToggle, machine = screenMachine(id);
+  if (!machine || !screenMayOpen(machine)) return;
+  if (toggle.checked && !machine.screen_available) {
+    SCREEN_SETUP_PENDING.add(id); screenControlsPaint(id);
+  } else if (!toggle.checked && SCREEN_SETUP_PENDING.has(id) && (!machine.screen || machine.screen === 'off')) {
+    SCREEN_SETUP_PENDING.delete(id); screenControlsPaint(id);
+  } else void screenSetMode(id, toggle.checked ? 'control' : 'off');
+});
+document.addEventListener('click', event => {
+  const copy = event.target.closest('[data-screen-copy]');
+  if (copy) void copyText(copy.dataset.screenCopy).then(() => toast('Copied'), () => toast('Could not copy', true));
+});
 
 // ----------------------------------------------------------------- the page
 function screenStop() {
