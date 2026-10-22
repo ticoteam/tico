@@ -585,11 +585,6 @@ fieldset.brepo>.repo-name+p{margin:-4px 0 4px 24px;font-size:var(--t-xs);line-he
 .trigger-deliveries{list-style:none;margin:0;padding:0;font-size:var(--t-sm)}
 .trigger-deliveries li{display:flex;flex-wrap:wrap;gap:6px;align-items:baseline;padding:3px 0}.trigger-deliveries code{overflow-wrap:anywhere}
 @media (max-width:640px){.trigger-list li{grid-template-columns:1fr}.trigger-actions{justify-content:flex-start}}
-/* Settings > General: a team switch with its explanation beside it (Stale ticket review). */
-.settings-team-rule{display:flex;align-items:flex-start;gap:12px;cursor:pointer}
-.settings-team-rule > span{display:flex;flex-direction:column;gap:2px}
-/* The rules share one card on General: room between them. */
-.settings-team-rule ~ .settings-team-rule{margin-top:14px}
 /* Settings > CEO Bot (ui/app/settings-ceo-bot.js): three levels, one sentence each, a Confirm before a change. */
 .ceo-levels{display:grid;gap:8px;margin:10px 0}
 .ceo-level{display:grid;gap:4px;text-align:left;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:none;color:inherit;font:inherit;cursor:pointer}
@@ -597,3 +592,26 @@ fieldset.brepo>.repo-name+p{margin:-4px 0 4px 24px;font-size:var(--t-xs);line-he
 .ceo-level[aria-checked="true"]{border-color:var(--accent)}
 .ceo-confirm{padding:10px 12px;border:1px solid var(--accent);border-radius:8px;margin-bottom:8px}
 .ceo-confirm p{margin:0 0 8px}
+/* Settings > Routines, the flat list of Tico's own routines (ui/app/settings-recurring.js) */
+.sysr-list{display:grid}
+.settings-bots-filters .settings-filter-search.sysr-search{width:min(100%,420px);flex:0 1 420px;max-width:100%}
+.sysr-row{display:grid;grid-template-columns:minmax(0,2.4fr) minmax(0,1fr) minmax(0,1.3fr) minmax(0,.7fr) minmax(0,1fr);gap:12px;padding:10px 0;border-top:1px solid var(--line);align-items:start}
+.sysr-name{display:grid;gap:3px;min-width:0}
+.sysr-name .muted{font-size:var(--t-sm)}
+.sysr-title{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.sysr-dept{font-size:var(--t-xs)}
+.sysr-rule{font-size:var(--t-sm);overflow-wrap:anywhere}
+.sysr-rule b{font-size:var(--t-xs);letter-spacing:.04em;color:var(--muted)}
+.sysr-label{display:block;font-size:var(--t-sm);color:var(--muted)}
+.sysr-schedule{display:flex;flex-wrap:wrap;gap:4px;align-items:center;min-width:0}
+.sysr-schedule .sysr-label{flex-basis:100%}
+.sysr-schedule select,.sysr-schedule input[type=time]{max-width:100%}
+.sysr-ctl{display:flex;flex-wrap:wrap;gap:6px;align-items:center;min-width:0}
+.sysr-ctl .settings-cell-note{flex-basis:100%;margin:0}
+.sysr-switch{display:inline-flex;gap:6px;align-items:center}
+.sysr-owner,.sysr-needed{font-size:var(--t-sm)}
+.sysr-note{font-size:var(--t-sm);color:var(--wait)}
+.sysr-failed{color:var(--fail);font-weight:600}
+.sysr-ai{display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:var(--t-sm);margin-top:2px}
+.sysr-fallback{flex-basis:100%;color:var(--wait)}
+@media (max-width:720px){.sysr-row{grid-template-columns:1fr 1fr}.sysr-name,.sysr-ctl{grid-column:1/-1}}

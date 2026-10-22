@@ -28,18 +28,30 @@ The owner and the admins see every bot. Anyone else sees the bots they own. A bo
 
 ## Limits
 
-A bot can have a daily and a monthly limit in estimated USD; the team has a default for bots with none of their own. Neither is set
-until someone sets it. Change a bot's on its Usage row or in Settings > Bots; the owner and administrators also set the default (Usage >
-Default limit). The owner of a bot may set its limit, no higher than the team default.
+A limit is a cap in estimated USD per hour, day, week or month, set at three levels:
 
-- At 80% of a limit the bot's owner (else the team owner) gets one message; a chip shows on the Usage row.
-- At a limit the bot takes no new job until the period turns over or the limit is raised. The job stays queued, the bot reads "Paused: over
-  its daily limit" on its page and in Tasks, and a run already going finishes.
-- What counts is the estimate of the runs the bot has finished in the UTC day or month. Subscription runs count their API-equivalent only
-  if the team turns on "Count subscription runs".
-- A message is sent once per bot, period and limit, so raising a limit arms it again.
+- **A bot**: its own limits; the team has a default for bots with none of their own. Change a bot's on its Usage row or in
+  Settings > Bots; the owner and administrators also set the default (Usage > **Default limit**). The owner of a bot may set its
+  limit, no higher than the team default.
+- **A group** (department): the combined spend of the group's bots, and of the bots in groups nested under it.
+- **The whole team**: the combined spend of every bot. Set it to keep all the bots together under what a shared subscription or
+  budget can take in an hour, so they slow down before the provider stops them for hours.
 
-`GET /api/v2/usage/limits`, `PUT /api/v2/usage/limits` (the default) and `PUT /api/v2/usage/limits/{bot}` (empty follows the default).
+The owner and administrators set group and team limits (Usage > **Team and group limits**). None of them is set until someone sets
+it.
+
+- At 80% of a limit, one message goes to the bot's owner (else the team owner); for a group or the team, to the team owner. A chip
+  shows on the bot's Usage row.
+- At a limit, every bot it covers takes no new job until the period turns over or the limit is raised. The job stays queued, the bot
+  reads "Paused: over its hourly limit" (its own) or "Paused: the team is over its hourly limit" on its page and in Tasks, and a run
+  already going finishes. A group's or the team's total is shown only to the owner and administrators.
+- What counts is the estimate of the runs the bots finished that started in the UTC clock hour, the UTC day, the week from Monday
+  00:00 UTC, or the UTC month. Subscription runs count their API-equivalent only if the team turns on "Count subscription runs" (in
+  the default limit), for every level.
+- A message is sent once per bot or pool, period and limit, so raising a limit arms it again.
+
+`GET /api/v2/usage/limits`, `PUT /api/v2/usage/limits` (the default), `PUT /api/v2/usage/limits/{bot}` (empty follows the default),
+`PUT /api/v2/usage/pools/company` and `PUT /api/v2/usage/pools/groups/{group}` (empty removes it).
 
 ## API
 

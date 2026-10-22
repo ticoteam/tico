@@ -18,6 +18,7 @@ of that exact plan (`plan_hash`); the interval sync holds instead and says why.
 import hashlib
 import json
 import os
+import re
 import threading
 from datetime import datetime, timedelta, timezone
 
@@ -463,14 +464,37 @@ class Directory:
             return True
         return datetime.now(timezone.utc) - last >= timedelta(minutes=cfg["interval_minutes"])
 
-    def tick(self):
+    def tick(self, record=False):
         with self.store.read() as c:
             if not self.due(c):
                 return
+        from . import system_routines
+        run = system_routines.Run("directory_sync")
         try:
             self.run("directory", auto=True)
-        except Problem:
-            pass                                           # recorded in `last`; try again next interval
+            run.did("Synced")
+        except Problem as exc:
+            run.error = failure_words(exc)
+        except Exception as exc:
+            run.error = system_routines.failure_words(exc)
+            raise
+        finally:
+            if record:                                     # the server's own timer, not a test's direct call
+                system_routines.write(self.store, run)
+
+
+# A failed sync's words on the System routines row, which every member can read: fixed words by the refusal's code and
+# at most the vendor's HTTP status, never the refusal's text (a vendor's error body names the app, tenant and scope;
+# it stays on the owner-only directory page).
+FAILED_WORDS = {"directory_google": "Google refused the request", "directory_entra": "Microsoft Entra refused the request",
+                "directory_scim": "the SCIM source refused the request", "credentials": "credentials missing",
+                "directory_unavailable": "the saved credentials could not be read", "rehearsal": "off in a rehearsal"}
+
+
+def failure_words(exc):
+    words = FAILED_WORDS.get(getattr(exc, "code", ""), "the directory refused")
+    status = re.search(r"\((\d{3})\)", str(getattr(exc, "detail", "") or "")) if exc.code.startswith("directory_") else None
+    return "Failed: " + words + (f" ({status.group(1)})" if status else "")
 
 
 def install_directory(app, settings, store, mutate):
