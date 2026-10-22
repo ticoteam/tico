@@ -238,6 +238,15 @@ def test_a_person_mentioned_in_a_comment_gets_it_as_a_question_in_needs_you(api)
         assert task["id"] not in {t["id"] for t in H.needs_you(c, "human:priya")["tasks"]}
 
 
+def test_a_mention_on_a_task_with_no_bot_on_it_is_one_comment(api):
+    task = post(api, "tasks", {"owner": "ben", "title": "Book the venue", "body": "x"})
+    said = post(api, f"tasks/{task['id']}/comments", {"text": "@ben can you book it by Friday?"})
+    assert said["comment"]["kind"] == "ask" and said["comment"]["to_actor"] == "human:ben"
+    assert [m["body"] for m in get(api, "tasks/" + task["id"])["comments"]] == ["@ben can you book it by Friday?"]
+    with api.app.state.store.read() as c:
+        assert task["id"] in {t["id"] for t in H.needs_you(c, "human:ben")["tasks"]}
+
+
 def test_mentioning_a_person_on_a_task_a_bot_owns_still_wakes_the_bot(api):
     task = post(api, "tasks", {"owner": "ops", "title": "Send the weekly numbers", "body": "x"})
     queued = jobs_for(api, "ops")

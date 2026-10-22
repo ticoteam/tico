@@ -8,6 +8,11 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Shared ChatGPT login queue.** A turn waiting for a shared ChatGPT login says who holds it, on what, since when and
+  its place, on the run, the task, the bot's status and in Health (waiting, not stuck). Release-blocking work goes
+  first, then reviews and a person's own chat, with no waiter passed over more than twice. A turn that holds the login
+  20 minutes while another waits pauses at a safe point and continues right after; a waiter whose task is closed is skipped,
+  unless a person's own message started it.
 - **Hourly and weekly spend limits, and limits for a group and the whole team.** Beside daily and monthly, a bot's limit
   and the team default can now cap an hour (the UTC clock hour) and a week (from Monday 00:00 UTC). New pooled limits cap
   the combined spend of every bot (Usage > **Team and group limits**) or of a group's bots, nested groups included; over
@@ -90,6 +95,9 @@ All notable changes to Tico are recorded here. The format follows
   plain line with a Fix that goes to where it is fixed. The lines come from Settings > Health (its warnings and
   problems, update available among them), what needs a person in Needs you, and the scheduler and connection. The
   red "N things need you" line under the sidebar is gone; the Health tab inside Settings keeps its own dot.
+- **Subscription runs count toward spend limits by default.** Runs on a ChatGPT or Claude sign-in now count their
+  API-equivalent toward every limit unless the team turns off "Count subscription runs" (Usage > **Default limit**). A
+  team that saved the default with the box off keeps it off.
 - **Updates: per-update reader check for assistant-drafted updates.** Each drafted update is checked against its
   reader on every read, so some drafts show to fewer readers than before.
 - **The stopped-run card is now just the decision.** Each stopped run shows one line on what stopped ("Stopped 8:12
@@ -137,8 +145,18 @@ All notable changes to Tico are recorded here. The format follows
   ([Tico AI Gateway](docs/ai-gateway.md)). The web app's Add bot form preselects a current model when the team
   default is Cheap 1.0, since a new bot is a new pick. The pi runner now reports each model request, so Usage prices
   each one at its own rate.
+- **A bot with read access to a repository can read its pull requests, their comments and its deployments**
+  (`gh pr view`, `gh pr diff`, a preview's link), still without changing any of them. Deployments need the GitHub
+  App's Deployments permission set to Read-only and accepted on the installation; until then tokens leave it out
+  ([GitHub App](docs/github-app.md#permissions-and-why)).
 
 ### Fixed
+- **The hub and MCP model change also moves a rate-limited bot while a turn runs.** `hub bot model` and the MCP
+  model tool refused with "Wait for the current run to finish before changing models"; they now follow the Settings
+  rule: the change applies at once, from the next turn, and lifts the old model's limit. A move onto a model that uses
+  the same spent login, or another Tico model after the Gateway key's limit, keeps Rate limited and says why instead of
+  "queued work resumes". A turn now records the model it was handed, so an effort-only change or a move away and back
+  while it runs keeps that model's real limit.
 - **Milestone waits follow the blocked_by rules.** Adding or removing a wait for a pull request or release now needs
   the same permission as a blocked_by (the task's owner, or a person on a team that moves tasks), a deleted task
   keeps its waits and gets them back when restored, and a message held while a task waits says what it waits for.
@@ -209,6 +227,16 @@ All notable changes to Tico are recorded here. The format follows
   current bot turn to finish" whenever a retry was running, so the bot stayed stuck on its spent model. The change now
   applies at once and takes effect from the next turn; the limit lifts, and a turn still running on the old model no
   longer puts the limit back on the new one.
+- **Worktree release follow-ups.** A stuck `pending` worktree whose pull requests finished is released without first
+  telling its bot to retry setup; only the turns of the bot that owns the task hold a finished tree; a fault reading
+  turns is raised instead of read as "no live turn"; and a new push clears the earlier "stale push cleared" note, so a
+  release no longer names an old push.
+- **A manager bot reads its reports' routines**: a bot above another in the `reports_to` chain now reads that bot's
+  routines and their occurrences in its own run, as the permissions page already said. It was refused ("Only people
+  and the bot itself read its routines"), so a manager bot reviewing its reports could not see what each one runs.
+  It still cannot change them ([Routines](docs/routines.md)).
+- **An @mention on a task with no bot on it shows once.** The comment itself is the mentioned person's question,
+  as on any task where it wakes no bot; it no longer also saves a second copy that showed the comment twice.
 
 ## [0.3.71] - 2026-10-21
 

@@ -459,7 +459,9 @@ def run(args, io: IO, deps: Deps) -> int:
     gather_runner_host(io, args, s, zone, dry)
     st.gather_runtime(args, s, final=True)
     if s.target == "aws" and s.company_file_data and len(envfile.render(s.to_env()).encode()) > 8000:
-        raise MissingInput("The starter plan and install settings exceed AWS Parameter Store's 8 KB limit; shorten the plan or import it in the app")
+        from backend.company_file import starter
+        raise MissingInput("The starter plan and install settings exceed AWS Parameter Store's 8 KB limit. "
+                           + starter.IMPORT_IN_APP)
     if s.target == "ssh" and s.front_door == "caddy":
         default_ip = ""
         try:
