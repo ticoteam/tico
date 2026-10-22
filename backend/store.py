@@ -192,6 +192,11 @@ CREATE TABLE IF NOT EXISTS attempts(
  token_hash TEXT NOT NULL UNIQUE, state TEXT NOT NULL, lease_until TEXT NOT NULL,
  created TEXT NOT NULL, started TEXT, finished TEXT, thread_id TEXT,
  result_json TEXT, final_text TEXT, last_seq INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS attempt_diagnostics(
+ attempt_id TEXT PRIMARY KEY REFERENCES attempts(id), heartbeat_at TEXT, last_event_at TEXT, last_event TEXT,
+ end_reason TEXT, ended_at TEXT, stalled_at TEXT, stderr_tail TEXT, stderr_at TEXT);
+CREATE INDEX IF NOT EXISTS attempt_diagnostics_stderr ON attempt_diagnostics(stderr_at) WHERE stderr_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS attempt_diagnostics_stalled ON attempt_diagnostics(stalled_at) WHERE stalled_at IS NOT NULL;
 CREATE TABLE IF NOT EXISTS attempt_events(
  id INTEGER PRIMARY KEY AUTOINCREMENT, attempt_id TEXT NOT NULL REFERENCES attempts(id),
  seq INTEGER NOT NULL, kind TEXT NOT NULL, payload_json TEXT NOT NULL, created TEXT NOT NULL,

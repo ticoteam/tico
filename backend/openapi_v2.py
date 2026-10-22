@@ -835,6 +835,9 @@ SCHEMAS = {
     "Storage": obj({"mode": {"type": "string", "enum": ["local", "s3"]}, "bucket": "s", "region": "s",
                     "files": "i", "bytes": "i", "copy": obj({"done": "i", "total": "i", "failed": "i"})}),
     "Health": obj({"audience": "s", "checks": "a", "attention": "i", "checked": "s"},
+                  stalled_runs=items(obj({"run": "s", "bot": "s", "stalled": "b", "stalled_at": "s",
+                                          "last_event": {"type": ["string", "null"]},
+                                          "last_event_at": {"type": ["string", "null"]}, "stall_minutes": "i"})),
                   required=["audience", "checks", "attention", "checked"],
                   storage={**ref("Storage"), "description": "Read-only file storage usage and copy progress; Team owners only"},
                   stuck={"type": "array", "items": {"type": "object"}, "description":

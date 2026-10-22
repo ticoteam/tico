@@ -1,10 +1,9 @@
 //! The process side of the hosts that run one harness process per turn and read its JSON lines (Pi, Cursor, the
 //! Mac app driver): the prompt goes in on
-//! stdin, stderr to an unlinked file read back for the error text, one turn at a time, interrupt and stop by
+//! stdin, bounded stderr drained independently, one turn at a time, interrupt and stop by
 //! signal. What a harness's lines mean is its `Wire`.
 
 use std::collections::{HashMap, HashSet};
-use std::io::{Read, Seek, SeekFrom};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -18,7 +17,6 @@ use crate::env::Env;
 use crate::util::log;
 
 const STOP_TIMEOUT: Duration = Duration::from_secs(10);
-const STDERR_TAIL: usize = 2000;
 
 #[derive(Clone)]
 pub struct Thread {
@@ -176,20 +174,20 @@ impl<W: Wire> OneShot<W> {
         thread_id.into()
     }
 
-    fn launch(&self, argv: &[String], settings: &Settings) -> std::io::Result<(Child, std::fs::File)> {
-        let path = std::env::temp_dir().join(format!("tico-{}-stderr-{}", W::NAME, uuid::Uuid::new_v4().simple()));
-        let stderr = std::fs::OpenOptions::new().read(true).write(true).create_new(true).open(&path)?;
-        let _ = std::fs::remove_file(&path);
+    fn launch(&self, argv: &[String], settings: &Settings) -> std::io::Result<(Child, crate::run_diagnostics::Stderr)> {
+
         let mut command = if W::ISOLATED { crate::isolation::command(&argv[0]) } else { tokio::process::Command::new(&argv[0]) };
         command
             .args(&argv[1..])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::from(stderr.try_clone()?))
+            .stderr(Stdio::piped())
             .current_dir(&settings.cwd)
             .env_clear()
             .envs(W::env(settings));
-        Ok((command.spawn()?, stderr))
+        let mut child = command.spawn()?;
+        let stderr = crate::run_diagnostics::Stderr::capture(&mut child, self.0.tx.clone(), &W::env(settings));
+        Ok((child, stderr))
     }
 
     pub fn start_turn(&self, thread_id: &str, text: &str, effort: Option<&str>) -> Result<String, HostError> {
@@ -266,7 +264,7 @@ impl<W: Wire> OneShot<W> {
         }
     }
 
-    async fn read_loop(&self, mut child: Child, mut stderr: std::fs::File, tid: String, turn: String, text: String) {
+    async fn read_loop(&self, mut child: Child, mut stderr: crate::run_diagnostics::Stderr, tid: String, turn: String, text: String) {
         let stdout = child.stdout.take();
         if let Some(mut stdin) = child.stdin.take() {
             tokio::spawn(async move {
@@ -323,6 +321,7 @@ impl<W: Wire> OneShot<W> {
                     // A turn that already gave its whole answer keeps it.
                     if !(state.ended && state.error.is_empty()) {
                         W::timed_out(&mut state);
+                        late = true;
                     }
                     stopper.terminate(Duration::from_secs(2));
                     exited.await
@@ -334,6 +333,10 @@ impl<W: Wire> OneShot<W> {
             Ok(status) => super::return_code(&status),
             Err(_) => -1,
         };
+        stderr.drained().await;
+        if late {
+            self.emit(event("diagnostic", Some(&tid), Some(&turn), json!({"end_reason": format!("Timeout: {} harness execution limit ({} seconds)", W::PROGRAM, W::deadline(&self.0.cmd).unwrap_or_default().as_secs())})));
+        }
         self.finish(&tid, &turn, rc, &stderr_tail(&mut stderr), state);
     }
 
@@ -359,7 +362,7 @@ impl<W: Wire> OneShot<W> {
             self.emit(event("turn_completed", Some(tid), Some(turn), json!({"status": "completed"})));
         } else {
             let error = [state.error.as_str(), stderr].into_iter().find(|t| !t.is_empty()).map(String::from).unwrap_or_else(|| format!("{} exited {rc}", W::PROGRAM));
-            self.emit(event("turn_failed", Some(tid), Some(turn), json!({"error": error, "limit": is_limit(&error)})));
+            self.emit(event("turn_failed", Some(tid), Some(turn), json!({"error": error, "exit_code": rc, "process_exit": rc < 0 || state.error.is_empty() && rc != 0, "limit": is_limit(&error)})));
         }
         self.emit(event("status", Some(tid), None, json!({"state": "idle"})));
     }
@@ -381,16 +384,7 @@ impl<W: Wire> OneShot<W> {
     }
 }
 
-fn stderr_tail(file: &mut std::fs::File) -> String {
-    let mut bytes = vec![];
-    if file.seek(SeekFrom::Start(0)).is_ok() {
-        let _ = file.read_to_end(&mut bytes);
-    }
-    let text = String::from_utf8_lossy(&bytes);
-    let t = text.trim();
-    let skip = t.chars().count().saturating_sub(STDERR_TAIL);
-    t.chars().skip(skip).collect()
-}
+fn stderr_tail(file: &mut crate::run_diagnostics::Stderr) -> String { file.tail() }
 
 #[cfg(test)]
 pub mod testing {

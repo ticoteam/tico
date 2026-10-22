@@ -56,6 +56,7 @@ pub struct Drive<'a> {
     pub thread: &'a str,
     pub effort: Option<&'a str>,
     pub limit: Instant,
+    pub limit_name: &'a str,
     pub flags: &'a Flags,
     pub wake: &'a Notify,
     pub redactor: Option<&'a Arc<Redactor>>,
@@ -168,7 +169,11 @@ impl Runner {
             if self.stopping() || salvaged || late {
                 goal.failure = Some(if late { "Run time limit reached" } else if self.stopping() { "The computer stopped" } else { "The execution lease expired" }.into());
                 let _ = host.interrupt(thread, &turn).await;
-                return Err(Fail::runtime("Execution interrupted after stop, run-time limit, or loss of ownership"));
+                let why = if late { format!("Timeout: {}", d.limit_name) }
+                    else if self.stopping() { "Runner stopped during execution".into() }
+                    else { "Computer lost or heartbeat stopped (execution lease expired)".into() };
+                let _ = self.state.append(aid, "diagnostic", &json!({"end_reason": why}));
+                return Err(Fail::runtime(why));
             }
             while let Ok(ev) = rx.try_recv() {
                 queue.push(ev);
@@ -505,7 +510,7 @@ mod tests {
                         mut carried: BTreeMap<String, Value>) -> (Result<Drove, Fail>, BTreeMap<String, Value>, GoalRun) {
         runner.state.record(&json!({"id": "acme-late"})).unwrap();
         let wake = Notify::new();
-        let d = Drive { aid: "acme-late", host, thread, effort: None, limit: Instant::now() + Duration::from_secs(60),
+        let d = Drive { limit_name: "max_run_minutes (60 minutes)", aid: "acme-late", host, thread, effort: None, limit: Instant::now() + Duration::from_secs(60),
                         flags: f, wake: &wake, redactor: None, runtime, bot: "acme", session: thread, login: None };
         let mut segment = Segment { meter: Meter::default(), config: json!({}), profile: None, billing: "api" };
         let mut goal = GoalRun { chat_goal, controlled: false, failure: None, paused: None, tries_key: ("acme".into(), thread.into()) };
@@ -514,6 +519,36 @@ mod tests {
             .await
             .expect("the drive ends");
         (drove, carried, goal)
+    }
+
+    #[tokio::test]
+    async fn run_diagnostics_timeout_names_the_limit_and_tail_uses_a_separate_capped_row() {
+        let (runner, dir) = runner_at("http://127.0.0.1:9");
+        runner.state.record(&json!({"id": "diagnostics"})).unwrap();
+        let secret = "synthetic-granted-secret".to_string();
+        let redactor = Arc::new(Redactor::new(&[secret.clone()]));
+        let (tx, mut rx) = runner.attempt_events("diagnostics", Some(redactor));
+        tx.send(json!({"kind": "diagnostic", "stderr_tail": format!("failure {secret}")})).unwrap();
+        tx.send(json!({"kind": "diagnostic", "stderr_tail": format!("last failure {secret}")})).unwrap();
+        tx.send(json!({"kind": "_diagnostics_drained"})).unwrap();
+        assert_eq!(rx.recv().await.unwrap()["kind"], "_diagnostics_drained");
+        let tails = runner.state.pending_stderr(Some("diagnostics")).unwrap();
+        assert_eq!(tails.len(), 1);
+        assert!(tails[0].1.starts_with("last failure"));
+        assert!(!tails[0].1.contains(&secret));
+        assert!(runner.state.pending("diagnostics").unwrap().is_empty());
+        let host = Host::Claude(ClaudeHost::new("acme", vec![], tx));
+        let f = flags(false);
+        let wake = Notify::new();
+        let d = Drive { aid: "diagnostics", host: &host, thread: "th", effort: None,
+            limit: Instant::now(), limit_name: "max_run_minutes (60 minutes)", flags: &f, wake: &wake,
+            redactor: None, runtime: "claude", bot: "acme", session: "th", login: None };
+        let mut segment = Segment { meter: Meter::default(), config: json!({}), profile: None, billing: "api" };
+        let mut goal = GoalRun { chat_goal: None, controlled: false, failure: None, paused: None, tries_key: ("acme".into(), "th".into()) };
+        let err = runner.drive(&d, &mut rx, "turn".into(), &mut segment, &mut BTreeMap::new(), &mut None, &mut goal).await.err().unwrap();
+        assert_eq!(err.text, "Timeout: max_run_minutes (60 minutes)");
+        assert!(runner.state.pending("diagnostics").unwrap().iter().any(|e| e["payload"]["end_reason"] == err.text));
+        std::fs::remove_dir_all(dir).ok();
     }
 
     #[tokio::test]

@@ -191,6 +191,40 @@ impl Runner {
         self.assignments.lock().unwrap().clone()
     }
 
+    /// Stderr has its own capped row, never repeated in the event outbox or ordinary event stream.
+    pub(crate) fn attempt_events(&self, aid: &str, redactor: Option<Arc<crate::redact::Redactor>>) ->
+        (crate::hosts::Events, tokio::sync::mpsc::UnboundedReceiver<Value>) {
+        let (input, mut rx) = tokio::sync::mpsc::unbounded_channel::<Value>();
+        let (out, events) = tokio::sync::mpsc::unbounded_channel();
+        let state = self.state.clone();
+        let aid = aid.to_string();
+        tokio::spawn(async move {
+            while let Some(ev) = rx.recv().await {
+                if ev["kind"] == "diagnostic" && ev.get("stderr_tail").is_some() {
+                    let text = crate::util::text_of(&ev["stderr_tail"]);
+                    let text = redactor.as_ref().map_or(text.clone(), |r| r.scrub_text(&text));
+                    let text = crate::redact::scrub_credentials(&text, &[]);
+                    let id = aid.clone();
+                    let _ = state.off(move |s| s.stderr(&id, &text)).await;
+                } else { let _ = out.send(ev); }
+            }
+        });
+        (input, events)
+    }
+
+    async fn upload_stderr(&self, aid: Option<&str>) {
+        if !crate::follow::feature("run_diagnostics") { return; }
+        let filter = aid.map(str::to_string);
+        let pending = self.state.off(move |s| s.pending_stderr(filter.as_deref())).await.unwrap_or_default();
+        for (id, tail, revision) in pending.into_iter().take(10) {
+            // Diagnostics never hold up a run result through network retries. The capped row retries on maintenance.
+            let sent = tokio::time::timeout(Duration::from_secs(2), self.client.post(&format!("attempts/{id}/diagnostics"), &json!({"tail": tail}), None)).await;
+            if matches!(sent, Ok(Ok(_))) {
+                let _ = self.state.off(move |s| s.stderr_sent(&id, revision)).await;
+            }
+        }
+    }
+
     /// Send the attempt's unacknowledged events, 100 at a time, keyed on their seq range so a retry is one write.
     pub async fn flush(&self, aid: &str) -> Result<(), ApiError> {
         let lock = self.flush_locks.lock().unwrap().entry(aid.to_string()).or_default().clone();
@@ -199,6 +233,7 @@ impl Runner {
             let id = aid.to_string();
             let batch = self.state.off(move |s| s.pending(&id)).await.map_err(|e| ApiError::new("state", e, 0, false))?;
             if batch.is_empty() {
+                self.upload_stderr(Some(aid)).await;
                 return Ok(());
             }
             let key = format!("events:{aid}:{}:{}", batch[0]["seq"], batch[batch.len() - 1]["seq"]);
@@ -230,6 +265,7 @@ impl Runner {
 
     /// Results a restart or an outage left on this computer, sent before anything new.
     pub async fn recover_output(&self) {
+        self.upload_stderr(None).await;
         crate::files_publish::drain(&self.state, &self.client).await; // files a restart or an outage left queued
         let rows = match self.state.unfinished() {
             Ok(rows) => rows,

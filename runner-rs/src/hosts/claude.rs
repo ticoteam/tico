@@ -5,7 +5,6 @@
 //! exits. Claude stays up for its background tasks either way; open stdin lets a follow-up in meanwhile.
 
 use std::collections::{HashMap, HashSet};
-use std::io::{Read, Seek, SeekFrom};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
@@ -25,7 +24,6 @@ pub const STREAM_ARGS: &[&str] = &[
 ];
 const EFFORTS: &[&str] = &["low", "medium", "high", "xhigh", "max"];
 const STOP_TIMEOUT: Duration = Duration::from_secs(10);
-const STDERR_TAIL: usize = 2000;
 /// How long a turn waits, after a `result`, with a steer unread and nothing at all on stdout.
 pub const STEER_READ_TIMEOUT_S: u64 = 120;
 /// How long a turn waits for Claude's `result` after Claude reported a usage limit and did no further model work.
@@ -565,13 +563,10 @@ impl ClaudeHost {
         argv
     }
 
-    /// Starts Claude for one turn: the process, its stderr file, and its reaping parent's status file if it has one.
-    fn launch(&self, thread_id: &str, t: &Thread, effort: Option<&str>) -> std::io::Result<(Child, std::fs::File, Option<std::path::PathBuf>)> {
+    /// Starts Claude for one turn: the process, its stderr tail, and its reaping parent's status file if it has one.
+    fn launch(&self, thread_id: &str, t: &Thread, effort: Option<&str>) -> std::io::Result<(Child, crate::run_diagnostics::Stderr, Option<std::path::PathBuf>)> {
         let argv = self.argv(thread_id, t, effort);
-        // Claude's stderr goes to an unlinked file: read back for the error text, never a pipe that could fill.
-        let path = std::env::temp_dir().join(format!("tico-claude-stderr-{}", uuid::Uuid::new_v4().simple()));
-        let stderr = std::fs::OpenOptions::new().read(true).write(true).create_new(true).open(&path)?;
-        let _ = std::fs::remove_file(&path);
+        // Drain stderr independently; only the bounded, scrubbed tail is kept.
         // A turn that may end on its background wait runs under a reaping parent, which learns its shells' exit codes.
         let reaping = (cfg!(target_os = "linux") && t.settings.background_wait.is_some())
             .then(|| std::env::temp_dir().join(format!("tico-claude-reap-{}", uuid::Uuid::new_v4().simple())));
@@ -596,7 +591,7 @@ impl ClaudeHost {
         command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::from(stderr.try_clone()?))
+            .stderr(Stdio::piped())
             .current_dir(&t.settings.cwd);
         command.env_clear().envs(turn_env(&t.settings));
         #[cfg(test)]
@@ -605,7 +600,9 @@ impl ClaudeHost {
             args.extend(argv.iter().map(|a| json!(a)));
             command.env(crate::reap::tests::ARGS, Value::Array(args).to_string());
         }
-        Ok((command.spawn()?, stderr, reaping))
+        let mut child = command.spawn()?;
+        let stderr = crate::run_diagnostics::Stderr::capture(&mut child, self.0.tx.clone(), &turn_env(&t.settings));
+        Ok((child, stderr, reaping))
     }
 
     pub fn start_turn(&self, thread_id: &str, text: &str, effort: Option<&str>) -> Result<String, HostError> {
@@ -683,7 +680,7 @@ impl ClaudeHost {
         });
     }
 
-    async fn read_loop(&self, mut child: Child, mut stderr: std::fs::File, tid: String, turn: String, text: String, effort: Option<String>) {
+    async fn read_loop(&self, mut child: Child, mut stderr: crate::run_diagnostics::Stderr, tid: String, turn: String, text: String, effort: Option<String>) {
         let mut recovered = false;
         loop {
             let stdout = child.stdout.take();
@@ -802,6 +799,9 @@ impl ClaudeHost {
             // Killed on its wait, after its answer: the turn completed.
             let rc = if kept && rc == -libc::SIGKILL { 0 } else { rc };
             let clean = result.as_ref().is_some_and(|r| !crate::util::truthy(r.get("is_error"))) && rc == 0;
+            if timed_out {
+                self.emit(event("diagnostic", Some(&tid), Some(&turn), json!({"end_reason": format!("Timeout: follow-up read limit ({STEER_READ_TIMEOUT_S} seconds)")})));
+            }
             let failure = if timed_out {
                 Some(format!("Claude did not read a follow-up message within {STEER_READ_TIMEOUT_S} s; it was not applied"))
             } else if let Some(text) = limit_text.filter(|_| result.is_none()) {
@@ -811,6 +811,7 @@ impl ClaudeHost {
             } else {
                 None
             };
+            stderr.drained().await;
             let tail = stderr_tail(&mut stderr);
             // Claude answers only with an error result when the session file is not on this computer: restart once
             // as a new session under the same id. Never after an event, and never once a steer went in.
@@ -1275,7 +1276,7 @@ impl ClaudeHost {
                 "turn_failed",
                 Some(tid),
                 Some(turn),
-                json!({"error": error, "limit": limited || is_limit(&error), "auth_retry": is_auth_retryable(&error)}),
+                json!({"error": error, "exit_code": rc, "process_exit": rc < 0 || result.is_none() && rc != 0, "limit": limited || is_limit(&error), "auth_retry": is_auth_retryable(&error)}),
             ));
         }
         self.emit(event("status", Some(tid), None, json!({"state": "idle"})));
@@ -1414,17 +1415,7 @@ fn transcript(settings: &Settings, session: &str) -> Option<std::path::PathBuf> 
     std::fs::read_dir(dir.join("projects")).ok()?.flatten().map(|e| e.path().join(&name)).find(|p| p.is_file())
 }
 
-fn stderr_tail(file: &mut std::fs::File) -> String {
-    let mut text = String::new();
-    if file.seek(SeekFrom::Start(0)).is_ok() {
-        let mut bytes = vec![];
-        let _ = file.read_to_end(&mut bytes);
-        text = String::from_utf8_lossy(&bytes).to_string();
-    }
-    let t = text.trim();
-    let skip = t.chars().count().saturating_sub(STDERR_TAIL);
-    t.chars().skip(skip).collect()
-}
+fn stderr_tail(file: &mut crate::run_diagnostics::Stderr) -> String { file.tail() }
 
 pub fn error_text(result: Option<&Value>, rc: i32, stderr: &str) -> String {
     if let Some(r) = result {

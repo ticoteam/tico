@@ -8,6 +8,7 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- Runs record their end reason, last activity and heartbeat. Five quiet minutes flag a stalled attempt in run lists and Health without stopping it. A redacted, capped 200-line harness stderr tail is exportable for a week even when no provider stream was captured.
 - **A bot's tasks can run on another model.** A bot now has a task model (harness, model and effort) beside its own,
   set with `POST /api/v2/bots/{bot}/task-model` (null clears it back to "same as the bot"). A turn in a task's own
   session runs on it; chat with the bot stays on the bot's model, and changing the bot's model leaves the task model

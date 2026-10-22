@@ -1531,6 +1531,12 @@ def view(c, who, settings, auth, github, config):
                       if settings.rehearsal else _backups(config, settings))
         checks.append(_signin(settings))
         checks.extend(_server_settings(c, settings))
+    from . import run_diagnostics
+    stalled_runs = run_diagnostics.stalled_runs(c, who, auth)
+    checks.append(_check("stalled_runs", "Stalled runs", "warn" if stalled_runs else "ok",
+                         f"{len(stalled_runs)} runs have no heartbeat or event for {run_diagnostics.STALL_MINUTES} minutes."
+                         if stalled_runs else "No stalled runs.",
+                         [_fix("Open Runs", "#/settings", "runs")] if stalled_runs else []))
     checks.append(_check("failed", "Failed runs", "warn" if failed else "ok",
                          f"{_plural(failed, 'run')} failed in the last day." if failed else "No failed runs in the last day.",
                          [_fix("Open Runs", "#/settings", "runs")] if failed and full else []))
@@ -1538,7 +1544,7 @@ def view(c, who, settings, auth, github, config):
             "computers": computers if full else _bot_computers(computers) if kind == "bot" else [],
             "waiting": waiting if full else [], "slow": slow if full else [], "stuck": blocked,
             "on_fallback": on_fallback, "limited": limited,
-            "failures": failures if full or kind == "bot" else [], "checked": H.now(),
+            "failures": failures if full or kind == "bot" else [], "stalled_runs": stalled_runs, "checked": H.now(),
             # The sidebar's notice reads the same fresh answer, so the two never disagree.
             "update": config.get("update") or {}}
 

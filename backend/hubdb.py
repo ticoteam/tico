@@ -6756,6 +6756,9 @@ def turn_finish(conn, actor, turn_id, exit_code="ok", tokens_in=None, tokens_out
         conn.execute("UPDATE bots SET last_turn_at=? WHERE slug=?", (ts, row["bot"]))
         conn.execute("UPDATE bot_status SET last_turn_at=?, updated_at=? WHERE bot=?",
                      (ts, ts, row["bot"]))
+    from . import run_diagnostics
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE name='attempts' AND type='table'").fetchone():
+        run_diagnostics.finish(conn, turn_id, exit_code, summary)
     event(conn, actor, "turn.finish", turn_id, {"exit": exit_code, "cost": cost})
     return row
 
