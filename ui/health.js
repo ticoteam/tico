@@ -34,6 +34,8 @@ async function hlRefresh() {
 // What Health says needs looking at, for the account button's one status dot and its lines (ui/app/heartbeat.js).
 // Inside Settings, the Health tab keeps its own dot.
 window.hlAttention = () => (HL?.checks || []).filter(check => check.status === 'warn' || check.status === 'bad');
+// The computers Health lists: everyone's for owners and admins; null for others, who are shown none.
+window.hlComputers = () => HL && HL.audience !== 'human' ? HL.computers : null;
 window.hlNav = function hlNav() {
   const attention = HL?.attention || 0;
   document.querySelectorAll('[data-hl-alert]').forEach(dot => { dot.hidden = !attention; });

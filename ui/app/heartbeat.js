@@ -31,10 +31,23 @@ function accountStatusLines() {
   for (const issue of (st?.health_issues || []).filter(needsPerson)) {
     lines.push({level: issue.severity === 'warning' ? 'warn' : 'bad', text: [issue.title, firstSentence(issue.detail)].filter(Boolean).join(': '), fix: accountIssueFix(issue)});
   }
-  for (const check of window.hlAttention?.() || []) {
+  // A computer offline for a moment (asleep, a restart) comes back by itself: Health calls it bad at once, but the
+  // server asks a person only after NEEDS_YOU_MINUTES (backend/views.py, "stopped checking in"). Until a machine issue
+  // needs this person, the offline checks are amber; with no computer set up at all, nothing clears, so red stays.
+  const attention = window.hlAttention?.() || [];
+  const machineNeedsYou = (st?.health_issues || []).some(issue => issue.kind === 'machine' && needsPerson(issue));
+  const noComputer = Array.isArray(window.hlComputers?.()) && !window.hlComputers().length;
+  const offline = new Set(['computers', 'waiting']);
+  // One cause, one line: bots waiting on an offline computer are that computer's line.
+  const computersLine = attention.some(check => check.id === 'computers');
+  for (const check of attention) {
+    if (check.id === 'waiting' && computersLine) continue;
     const fix = check.fixes?.[0];
-    lines.push({level: check.status === 'bad' ? 'bad' : 'warn', text: [check.label, firstSentence(check.summary)].filter(Boolean).join(': '),
-      fix: fix ? window.hlFixHtml({...fix, label: 'Fix'}).replace(/^<(a|button) /, `<$1 title="${esc(fix.label)}" `) : ACCOUNT_HEALTH});
+    const level = check.status !== 'bad' ? 'warn' : offline.has(check.id) && !machineNeedsYou && !noComputer ? 'warn' : 'bad';
+    // A fix that leaves Tico (GitHub's settings, a provider's docs) opens in its own tab.
+    const away = /^https?:/.test(fix?.href || '') ? ' target="_blank" rel="noopener"' : '';
+    lines.push({level, text: [check.label, firstSentence(check.summary)].filter(Boolean).join(': '),
+      fix: fix ? window.hlFixHtml({...fix, label: 'Fix'}).replace(/^<(a|button) /, `<$1 title="${esc(fix.label)}"${away} `) : ACCOUNT_HEALTH});
   }
   return lines.sort((a, b) => (a.level === 'bad' ? 0 : 1) - (b.level === 'bad' ? 0 : 1));
 }

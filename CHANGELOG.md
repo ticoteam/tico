@@ -66,7 +66,8 @@ All notable changes to Tico are recorded here. The format follows
 - **One status dot on the account button.** The sidebar's account button showed up to three red dots (left of the
   name, right of it, and on Settings in its menu), none saying what was wrong. Now one dot sits left of the name: red
   when something is broken and needs you, amber for a warning or something that clears by itself (a lost connection, a
-  computer's Tico update), none when all is clear. Opening the menu, or hovering the dot, lists each problem on one
+  computer asleep or restarting until its owner is asked after 30 minutes, a computer's Tico update), none when all is
+  clear. Opening the menu, or hovering the dot, lists each problem on one
   plain line with a Fix that goes to where it is fixed. The lines come from Settings > Health (its warnings and
   problems, update available among them), what needs a person in Needs you, and the scheduler and connection. The
   red "N things need you" line under the sidebar is gone; the Health tab inside Settings keeps its own dot.
