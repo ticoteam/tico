@@ -85,6 +85,21 @@ async function run(viewport, shot) {
     assert.equal(await thread.locator('.bubble', {hasText: 'docs build needs a staging key'}).count(), 0, 'the report is not carried as a message');
     assert.equal(await thread.locator('.bubble', {hasText: 'On it.'}).count(), 1, 'the conversation itself is unchanged');
 
+    // Four or more task rows in a row fold to the oldest, "...N more..." and the newest; a real message starts a new run.
+    const folded = await page.evaluate(() => {
+      const row = (n, state = 'done') => ({id: 'r' + n, from_actor: 'keeper', to_actor: 'human:ana', kind: 'notice', body: `Review ${n}: ${state}.`,
+        refs: {task: 't' + n, task_report: state}, ref_tasks: {['t' + n]: {title: `Review ${n}`}}, created: new Date(Date.now() - (60 - n) * 60000).toISOString()});
+      const say = {id: 'say', from_actor: 'bot:botops', to_actor: 'human:ana', kind: 'say', body: 'Halfway there.', created: new Date().toISOString()};
+      const lines = list => { const el = document.createElement('div'); el.innerHTML = v2MessagesHTML(list, null, 'botops');
+        return [...el.querySelectorAll('.chat-task-row, .conv-run')].map(r => r.matches('.chat-task-more') ? r.textContent.trim()
+          : r.querySelector('.ct-title')?.textContent || 'message'); };
+      return {five: lines([1, 2, 3, 4, 5].map(n => row(n))), three: lines([1, 2, 3].map(n => row(n))),
+        split: lines([row(1), row(2), say, row(3), row(4), row(5)])};
+    });
+    assert.deepEqual(folded.five, ['Review 1', '...3 more...', 'Review 5'], 'five rows show the oldest, the hidden count and the newest');
+    assert.deepEqual(folded.three, ['Review 1', 'Review 2', 'Review 3'], 'three rows show unchanged');
+    assert.deepEqual(folded.split, ['Review 1', 'Review 2', 'message', 'Review 3', 'Review 4', 'Review 5'], 'a message breaks the run');
+
     if (shot) await page.screenshot({path: shot.replace('.png', '-chat.png')});
     // A tap on the report opens the task's own thread: its header and its conversation, Back to the chat.
     await rows.nth(1).click();

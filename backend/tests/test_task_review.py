@@ -13,7 +13,7 @@ def task(api, title="Review the draft"):
 
 def ask(who=None, other=True):
     return {"questions": [{"id": "verdict", "header": "Review", "question": "Is this ready?",
-                           "options": [{"label": "Approve"}, {"label": "Request changes"}], "other": other}], "who": who}
+                           "options": [{"label": "Approve", "then": "Go with Approve"}, {"label": "Request changes", "then": "Go with Request changes"}], "other": other}], "who": who}
 
 
 def attach(api, tid, name="report.md", **fields):

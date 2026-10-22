@@ -955,6 +955,20 @@ impl Runner {
             mark("placed", &aid);
             execution_path = p.execution_path.clone();
             memory_before = redact::head(&execution_path);
+            // What the bot kept in its AI tool's own memory moves into its repository, in whichever checkout the
+            // turn runs: the bot's own or a task's worktree (crate::harness_memory).
+            if execution_path.join(".git").exists() {
+                let home = env.get("HOME").filter(|h| !h.is_empty()).cloned().or_else(|| std::env::var("HOME").ok()).unwrap_or_default();
+                let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                let day: String = text_of(&crate::util::iso(&json!(secs))).chars().take(10).collect();
+                let moved = crate::harness_memory::move_for_turn(Path::new(&home), &p.main_path, &execution_path,
+                    &self.state.directory.join("gemini").join(&bot), &self.state.directory.join("harness-memory").join(&bot), &day);
+                match moved {
+                    Ok(crate::harness_memory::Moved::Copied(n)) if n > 0 => log(&format!("Tico runner: {bot}: copied {n} memories from its AI tool's own memory on this computer into memory/learnings.md")),
+                    Ok(_) => {}
+                    Err(e) => log(&format!("Tico runner: {bot}: could not copy its AI tool's own memory into memory/learnings.md: {e}")),
+                }
+            }
             if redactor.is_some() {
                 started_at = memory_before.clone();
             }
@@ -1001,6 +1015,7 @@ impl Runner {
                 add_dirs: p.add_dirs.clone(),
                 shared: crate::sessions::is_shared(&config),
                 mcp_servers: self.mcp_servers(&aid, &execution_path, &env, &vault.names, &runtime, &config),
+                background_wait: hosts::background_wait(&config),
             };
             let mut resumed = false;
             if let Some(prev) = &previous {
@@ -1026,7 +1041,10 @@ impl Runner {
             let names = self.names().await;
             let after = if resumed { self.state.cursor(&th, None)? } else { None };
             attempt["_stale_playbook"] = json!(crate::playbook::note(&crate::readiness::local_path(&self.config, &bot), &attempt));
-            let prompt = crate::prompt::prompt(&attempt, &names, after.as_deref(), resumed);
+            let mut prompt = crate::prompt::prompt(&attempt, &names, after.as_deref(), resumed);
+            if let Some(line) = crate::afterwatch::still_running(&bot, &key) {
+                prompt = format!("{prompt}\n\n{line}");
+            }
             let cold = crate::harness_tools::caps(&runtime, "").serial_cold_start && crate::hosts::token_cold(&runtime, selected.as_ref());
             let t = if cold {
                 // Held only until the sign-in this turn triggers has landed, not for the length of the turn: the
@@ -1049,7 +1067,7 @@ impl Runner {
                 self.state.repo_rules(&th, Some(&digest))?;
             }
             turn = Some(t.clone());
-            let d = Drive { aid: &aid, host: h, thread: &th, effort: effort.as_deref(), limit, flags: &flags, wake: &wake, redactor: redactor.as_ref(), runtime: &runtime };
+            let d = Drive { aid: &aid, host: h, thread: &th, effort: effort.as_deref(), limit, flags: &flags, wake: &wake, redactor: redactor.as_ref(), runtime: &runtime, bot: &bot, session: &key };
             drove = self.drive(&d, &mut rx, t, segments.last_mut().unwrap(), &mut carried, &mut auth_rejected, &mut goal).await?;
             turn = Some(drove.turn.clone());
             keep_session(&self.state, &bot, &conv, &session_runtime, &h.session_id(&th)).await?;
@@ -1171,6 +1189,7 @@ impl Runner {
                     add_dirs: place.as_ref().map(|p| p.add_dirs.clone()).unwrap_or_default(),
                     shared: crate::sessions::is_shared(&config),
                     mcp_servers: self.mcp_servers(&aid, &execution_path, &hop_env, &vault.names, &hop.runtime, &hop_config),
+                    background_wait: hosts::background_wait(&config),
                 };
                 let th = h.start_thread(&bot, &settings).await?;
                 thread = Some(th.clone());
@@ -1201,6 +1220,8 @@ impl Runner {
                     wake: &wake,
                     redactor: redactor.as_ref(),
                     runtime: &hop.runtime,
+                    bot: &bot,
+                    session: &key,
                 };
                 drove = self.drive(&d, &mut rx, t, segments.last_mut().unwrap(), &mut carried, &mut auth_rejected, &mut goal).await?;
                 turn = Some(drove.turn.clone());

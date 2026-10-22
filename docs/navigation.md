@@ -28,7 +28,7 @@ Controls appear when your rights allow the action.
 
 All four system bots appear as **Built-in** in Settings > Bots. Assistant and BotOps have main rail entries
 (Assistant opens your private chat, `#/assistant`);
-the Goal Manager is on Goals, and Ask the Librarian is on Docs and Market. They stay out of the team chart.
+the CEO Bot is on Goals, and Ask the Librarian is on Docs and Market. The CEO Bot is at the top of the team chart; the other three stay out of it.
 Inbox Manager and other repeating message work appear under **Message bots**.
 An older app may show Instructions under the bot's Docs tab; the action is still **Edit Instructions**.
 Removing a Computer revokes its registration and leaves its local files and bots in place.

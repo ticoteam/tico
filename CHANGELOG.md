@@ -8,12 +8,59 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- **A Claude bot's turn no longer waits an hour on its own background commands**: once the bot has answered and the
+  turn is only waiting on background shells (a test suite, `gh pr checks --watch`, `gh run watch`) for 5 minutes
+  (`background_wait_s` in bot.yaml, 0 for off), the runner ends the turn as completed and the commands keep running.
+  When the last one ends, the bot gets one message on the same task with each command's exit code and the end of
+  its output; one still running at the run's time limit is killed and says so. A new turn on that session meanwhile
+  is told which commands still run. The run's events record "Turn ended: background wait" with the minutes saved,
+  and the wake counts as `background_done` in `hub sql`. On a Mac the exit code reads "unknown". A turn still
+  working, or running a subagent, waits as before.
+- **One question card** in Decide and in a task's Needs you box: who asked (the bot, or Tico), how long ago and what
+  it holds up; the question and why it matters; every pick with what happens; several picks as ticked boxes with
+  **Yes to all** and **Send ticked** (the bot hears "Not this one" for the rest); the fallback small at the foot.
+  Tico refuses a bot's question to a person that lists picks without options, leaves out what happens, has no
+  recommended pick among several, or puts ids, paths or errors in the question or its picks. Decide shows cards due
+  within 2 working days first, then those holding up a roadmap item at Approved or Building, then newest first.
+- **Wait for a milestone, not the whole task**: `hub task wait <id> --on pr:<url>` waits until that pull request
+  merges, `--on release:v0.3.64` until that release is published (`task:<id>` is blocked_by). The owner gets one wake
+  when it happens, while the task it came from keeps its own step (In QA, a release watch). A wait made after the
+  merge, or a merge that arrived while the server was down, is woken once by the minute sweep; a replayed webhook
+  never wakes it twice. The task page shows it under Related ("Waits for PR #943 to merge"). MCP `hub_task_wait`.
+  A bot's subtask with a pending milestone wait is not a stuck hold: the task it blocks is not woken as stalled.
+- **Relation writes read back their direction**: `hub task relate`, `hub_task_relate`, task create with relations and
+  `hub task wait` answer with what was stored, from both ends ("#237 waits for #233" / "#233 blocks #237"), so a
+  reversed link is visible in the reply. `hub task wait --on task:<subtask>` warns about blocking a task on its own
+  subtask, as `relate` and create do.
 - **Hosted bot computers.** Hosting can run bots on a separate computer, keeping their work away from the Tico
   server. Settings > Computers offers **Hosted computer (we run it)**. The installer supports server-only installs,
   bounded AWS runner recovery and the same 4- and 8-core sizes on both machines, with 100 and 200 GB disks.
   HQ registers only a join code's hash through scoped SSM; no owner token or join secret crosses that control plane.
 
 ### Changed
+- **Long runs of task updates in a bot's chat fold.** Four or more task status rows in a row show the oldest, a
+  "...N more..." line with the exact number hidden, and the newest. Three or fewer show as before; a message starts a new run.
+- **The CEO Bot is on every install, Passive by default, and only the owner sets it up**: the Goal Manager is the CEO
+  Bot everywhere, at the top of the org chart, with its KPI history and old messages kept; there is no On/Off switch
+  any more. At the new default level, **Passive**, it keeps the **regular checks** running (KPI readings and the
+  automatic goal colours) and otherwise acts only when you talk to it: no vision or Why asks, no asks to goal owners,
+  no Monday note. **Suggests actions** and **Acts on its own** work as before. Settings > CEO Bot, its level, its
+  regular checks (which the owner can now turn off), its name and the Company section are the owner's only; an admin
+  no longer changes them. An install at level 1 lands on Passive at upgrade
+  ([Your CEO Bot](docs/ceo-bot.md)).
+- **One memory per bot, the one you can see.** Bots no longer keep a hidden memory on the computer they run on
+  (Claude Code's auto memory, Codex memories, the Gemini CLI's saved memories): each turn tells the bot to read and
+  follow the working rules at the top of its `memory/learnings.md` and to save what it learns there, so what steers it
+  shows in its Learnings panel and an edit there reaches its next turn. The panel's Learnings and Decisions views open
+  on the working rules, then the newest entries ([Learnings](docs/learnings.md#one-memory-in-the-repository)).
+- **Questions close on their own** (Decide cards part 1). A bot's question to a person closes when its task or any task
+  above it is done, closed or declined (pick questions too; a done task keeps only the "accept this?" question it asks
+  its requester once done), when the person replies to it or writes on its task to that bot (the reply is the answer),
+  and on its "if you don't answer by" date even when its fallback is a send, a spend or a delete (the bot is told nothing
+  went ahead). One with no date that waits two business days (Mon-Fri, Pacific) goes back to its bot: each weekday
+  morning a bot gets one "Still needed?" wake listing all of them, and asks again or drops them; until then it stays in
+  Needs you, marked stale, rather than moving to Older questions. A stuck check never asks a person: the bot is retried
+  once, then BotOps gets a task to find why, and open "no progress" questions to people close at the next hourly sweep.
 - **One new subscription per AI tool on each computer.** Adding a second subscription for the same tool is refused
   with a Switch account message, including while the first sign-in is pending. Different tools and computers stay
   independent; existing connections and API keys are kept.
@@ -26,6 +73,24 @@ All notable changes to Tico are recorded here. The format follows
   each one at its own rate.
 
 ### Fixed
+- **A company out of Tico credit no longer holds its bots off Tico models for 30 minutes**: when Tico HQ's Gateway
+  pauses Tico models for want of credit (`out_of_credit`), the bot says "Tico models are paused: this company is out
+  of credit. Your bots use their other models until credit is added", runs on its fallback meanwhile, and asks the
+  Gateway again after a minute, so it is back on Tico models within about a minute of credit being added. It used to
+  show the Gateway's raw 429 JSON and hold the Tico login like a provider's usage limit.
+- **A resumed Claude session keeps reading follow-ups**: Claude answers a resumed session with an empty result
+  before it reads the new prompt. The runner took that as the turn's answer and stopped reading follow-up
+  messages for the rest of the turn; it now waits for the answer to the prompt. This applies to every resumed
+  Claude turn.
+- **A bot's answer that finished while its computer slept now arrives.** When a computer was asleep or paused past a
+  turn's lease, the runner woke to the hub refusing the lease and dropped the answer the model had already finished,
+  so the person saw "No reply" and the run ended interrupted. The runner now reads out what the model already said
+  for up to ten seconds after that refusal and hands it in completed; the hub settles it as before (Dev 242). A model
+  still working is not waited for, and nothing new starts in that window. A person's Stop still stands: a late answer
+  from a stopped turn is kept on its run, not posted.
+- **A task blocked only by its own quiet subtask no longer waits silently.** Relating a subtask as its parent's
+  blocker returns a warning, and when that subtask (a bot's hold or acknowledgement) goes quiet waiting on nothing
+  else, the parent counts as stalled even while waiting: its bot is woken with the way out, and BotOps sees it stuck.
 - **Muse Code turns work again on a Docker computer that runs bots as their own user.** Each Muse login now keeps
   its sessions in a folder of Tico's own (per subscription profile too), so a turn, including an automatic fallback
   to Muse, no longer fails at once with "failed to create session lock directory ... Permission denied". If that

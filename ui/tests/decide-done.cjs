@@ -6,7 +6,7 @@ const {open} = require('./tasks-page.cjs');
 const at = minutes => new Date(Date.now() - minutes * 60000).toISOString();
 const request = (id, title, created) => ({id, kind: 'task', title, body: '', owner: 'human:ana', requester: 'bot:writer', status: 'open',
   version: 1, labels: [], created: at(created), updated: at(created), ask: null, open_asks: 0});
-const items = [request('t-tap', 'Approve the launch post', 300), request('t-noted', 'Pick the launch date', 200)];
+const items = [request('t-tap', 'Approve the launch post', 200), request('t-noted', 'Pick the launch date', 300)];   // newest first
 (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {

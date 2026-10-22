@@ -20,7 +20,8 @@ Every run (`turns`, same id as its attempt) records three things, all in plain c
 was recorded reads `unknown` for both, and is still counted.
 """
 
-TRIGGERS = ("comment", "status_or_relation", "pr_checks", "stall_check", "schedule", "person_message", "other")
+TRIGGERS = ("comment", "status_or_relation", "pr_checks", "stall_check", "schedule", "person_message",
+            "background_done", "other")
 OUTCOMES = ("acted", "no_change", "nothing_to_do")
 UNKNOWN = "unknown"
 

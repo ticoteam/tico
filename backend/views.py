@@ -1248,9 +1248,85 @@ def approval_files(c, auth, who, payload):
     return out
 
 
+# The roadmap steps at which a question that holds up an item comes before the rest in Decide.
+ROADMAP_LIVE_STEPS = ("Approved", "Building")
+SOON_BUSINESS_DAYS = 2
+
+
+def business_days_ahead(start, days):
+    """`start` (ISO text) moved forward by `days` working days, Saturday and Sunday skipped, as ISO text."""
+    from datetime import timedelta
+    at = H.parse_ts(start)
+    while days > 0:
+        at += timedelta(days=1)
+        if at.weekday() < 5:
+            days -= 1
+    return H.shift(at.astimezone(timezone.utc).isoformat())
+
+
+def holds_up(c, row, readable):
+    """What answering a card on task `row` lets move, for its header: the roadmap item its task works toward (the task,
+    an ancestor, or a task either of them blocks), else its parent task. {id, title, kind: "roadmap" or "task", step,
+    due, soonest}, or None. `soonest` is the nearest due date of any open work it holds up, whichever title the header
+    names, so a dated task under an undated roadmap item keeps its urgency. Only a task `readable(id)` says the person
+    may read is named or dated."""
+    from . import roadmap_flow
+    product = roadmap_flow.role_type(c, roadmap_flow.PRODUCT)
+    chain = [row["id"], *TR.ancestors(c, row["id"])]
+    seen, roadmap, dues = set(), None, []
+    for tid in [*chain, *(b for t in chain for b in TR.blocked_ids(c, t))]:
+        if tid in seen:
+            continue
+        seen.add(tid)
+        t = H.task(c, tid) if tid != row["id"] else row
+        if not t or t["status"] in ("closed", "declined", "done") or not readable(tid):
+            continue
+        if t.get("due"):
+            dues.append(t["due"])
+        if roadmap is None and product and t.get("type_id") == product:
+            step = c.execute("SELECT name FROM task_steps WHERE id=?", (t.get("step_id"),)).fetchone()
+            roadmap = {"id": tid, "title": t["title"], "kind": "roadmap", "step": step[0] if step else None,
+                       "due": t.get("due")}
+    held = roadmap
+    parent = H.task(c, chain[1]) if len(chain) > 1 else None
+    if held is None and parent and readable(parent["id"]):
+        held = {"id": parent["id"], "title": parent["title"], "kind": "task", "step": None, "due": parent.get("due")}
+    if held is not None:
+        held["soonest"] = min(dues) if dues else None
+    return held
+
+
+def decide_tier(item, now=None):
+    """Where a card goes in Decide (ui/app/decide.js): 0 when it holds up something due, or it goes ahead on its
+    own, within SOON_BUSINESS_DAYS working days; 1 when it holds up a roadmap item at Approved or Building; else 2,
+    newest first. How old a card is never moves it up."""
+    soon = business_days_ahead(now or H.now(), SOON_BUSINESS_DAYS)
+    ask, held = item.get("ask") or {}, item.get("holds_up") or {}
+    dates = [ask.get("goes_ahead_at"), ((ask.get("refs") or {}).get("if_no_answer") or {}).get("by"), held.get("due"),
+             held.get("soonest"), deadline(item)]
+    if any(d and str(d) <= soon for d in dates):
+        return 0
+    return 1 if held.get("kind") == "roadmap" and held.get("step") in ROADMAP_LIVE_STEPS else 2
+
+
+def card_why(item):
+    """The one "why it matters" line a question card shows under the question: the question's own `why`, else the
+    first paragraph of its task's body when that is a plain line (hubdb.lint_plain). What else the body says, and
+    anything with ids, paths or error output, stays under Details."""
+    q = next(iter(((item.get("ask") or {}).get("refs") or {}).get("questions") or []), None) or {}
+    if str(q.get("why") or "").strip():
+        return str(q["why"]).strip()
+    line = H.person_ask_of_body(item.get("body"), item.get("title"))
+    said = " ".join(line.split()).casefold()
+    if (not line or "\n" in line or len(line) > 200 or H.lint_plain(line)
+            or said in {" ".join(str(x or "").split()).casefold() for x in (q.get("question"), item.get("title"))}):
+        return ""
+    return line
+
+
 def needs_items(c, auth, who, task_view, older=None):
-    """The person's queue. A task there only for a question older than H.ASK_OLDER_DAYS goes to `older` instead
-    (a list the caller passes), out of the queue and its count."""
+    """The person's queue. A question unanswered for two business days stays, marked stale, until the weekday-morning
+    batch sends it back to its bot (backend/still_needed.py); `older`, a list the caller passes, stays empty."""
     raw = H.needs_you(c, who.actor)
     visible = auth.task_sql(c, who)
     H.hydrate_task_tags(c, raw["tasks"] + raw["waiting"] + raw["declined"])
@@ -1280,12 +1356,6 @@ def needs_items(c, auth, who, task_view, older=None):
             if row["id"] in merged:
                 # The CEO Bot's merged item: the originals it stands for, which the Tasks page leaves out of Needs you.
                 item["merged"] = [t for t in merged[row["id"]] if _readable(auth, c, who, t)]
-            if (item["kind"] == "question" and row["owner"] != who.actor and H.ask_older(ask)
-                    and not any(a["to_actor"] == who.actor and not H.ask_older(a) for a in open_asks)):
-                ask["older"] = True
-                if older is not None:
-                    older.append(item)
-                continue
             if ask and ask.get("to_actor") == who.actor and H.ask_older(ask):
                 ask["stale"] = True      # its one-click Clarify (backend/clarify_asks.py) shows on the card
             items.append(item)
@@ -1301,10 +1371,7 @@ def needs_items(c, auth, who, task_view, older=None):
                 "from_person": msg["from_actor"] if H.is_human(msg["from_actor"]) else None,
                 "recommend": recommendation(ask, who.actor)}
         if H.ask_older(msg):
-            ask["older"] = True
-            if older is not None:
-                older.append(item)
-            continue
+            ask["stale"] = True
         items.append(item)
     for row in raw["approvals"]:
         msg = H.message(c, row["message_id"])
@@ -1344,6 +1411,11 @@ def needs_items(c, auth, who, task_view, older=None):
     for item in items:
         item["pressing"] = pressing(item, at)
         item["need"] = need_of(item)
+        if item["kind"] in ("question", "waiting", "task", "declined"):
+            item["holds_up"] = holds_up(c, H.task(c, item["id"]) or item, lambda tid: _readable(auth, c, who, tid))
+        if item["kind"] in ("question", "ask"):
+            item["why"] = card_why(item)
+        item["tier"] = decide_tier(item, at)
     return sorted(items, key=needs_key)
 
 
