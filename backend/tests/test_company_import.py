@@ -59,7 +59,10 @@ def test_people_who_hold_seats_come_along_in_the_plan_and_make_no_bot(environmen
                        ("goal_add", {"title": "Close the books by day 5", "owner": seat["controller"]}),
                        ("goal_add", {"title": "Clean ledgers", "owner": "Ana"})):
         assert turn.apply(name, args)["ok"], name
-    text = C.to_yaml(turn.finish())
+    draft = turn.finish()
+    # A bot under a coworker reports to the owner: the coworker is no one in Tico yet.
+    next(b for b in draft["bots"] if b["template"] == "finance-lead")["reports_to"] = "ana"
+    text = C.to_yaml(draft)
     assert "held_by: ana" in text and "held_by: ben" in text
     body = {"company_yaml": text}
     preview = api.post("/api/v2/onboarding/company/preview", json=body, headers=signed_in())
@@ -67,6 +70,7 @@ def test_people_who_hold_seats_come_along_in_the_plan_and_make_no_bot(environmen
     summary = preview.json()
     # Ana's seat has a template and Ben's has none yet: a person holds each, so neither makes a bot.
     assert {e["template"] for e in summary["employees"]} == {"assistant", "botops", "finance-lead"}
+    assert next(e for e in summary["employees"] if e["template"] == "finance-lead")["reports_to"].startswith("human:")
     assert {"open_seats", "coworkers"} <= set(summary["deferred"])
     # A goal owned by a seat with no bot, or by a coworker, is no bot's in Tico: it goes to the company.
     assert {g["title"]: g["owner"] for g in summary["goals"]} == {"Close the books by day 5": "company", "Clean ledgers": "company"}

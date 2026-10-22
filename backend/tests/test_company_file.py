@@ -174,7 +174,7 @@ def test_6_a_person_fills_a_seat_with_no_bot_yet():
     assert not any(b.get("person") for b in gone["bots"])
     _, results = run(after, ("seat_fill", {"seat": "BotOps", "name": "Ana"}))
     assert not results[0]["ok"]
-    # "cap table" is the Equity Manager, for bot_add and seat_fill alike.
+    # "cap table" names the Equity Manager role for bot_add.
     assert A.find_role("cap table")["slug"] == "equity-manager"
 
 
