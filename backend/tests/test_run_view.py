@@ -3,6 +3,7 @@ the background shells and monitors still running, and the checkpoint. Nothing fr
 import json
 
 from backend.store import H
+from backend.tests.test_shared_logins import queued_login  # noqa: F401
 from backend.tests.test_api import api, assign, claim, expire, get, post, put, ready, runner  # noqa: F401
 from backend.tests.test_execution_review import aged, sweep
 
@@ -259,7 +260,7 @@ def test_the_working_line_follows_whichever_bot_a_persons_message_went_to(api):
     assert get(api, f"tasks/{tid}")["comment_to"] == {"bot": None, "wakes": False, "mention": []}, "no bot gets it"
 
 
-def test_a_run_waiting_for_its_chatgpt_login_says_so_and_names_the_holder_only_to_who_may_see_it(api):
+def test_an_opt_in_login_queue_names_the_holder_only_to_who_may_see_it(api, queued_login):
     from backend.tests.test_api import as_member, restrict
     as_member(api, "ben@acme.example")
     with api.app.state.store.transaction() as c:      # finance is Ana's alone: Ben may not even learn it is busy
@@ -320,7 +321,7 @@ def test_a_run_waiting_for_its_chatgpt_login_says_so_and_names_the_holder_only_t
     assert run["moved"] == "ChatGPT login busy with another bot; ran this turn on claude"
 
 
-def test_a_chat_turn_waiting_for_its_login_shows_the_wait_as_its_label_not_a_failure(api):
+def test_an_opt_in_login_queue_shows_the_wait_as_the_chat_label_not_a_failure(api, queued_login):
     machine = runner(api, "ana")
     assign(api, machine, "ops")
     ready(api, machine, ["ops"])
@@ -335,3 +336,30 @@ def test_a_chat_turn_waiting_for_its_login_shows_the_wait_as_its_label_not_a_fai
     events(api, machine, attempt["id"], [("status", {"waiting": ""})], first=2)
     execution = get(api, f"conversations/{msg['conversation_id']}/snapshot")["execution"]
     assert "waiting" not in execution and execution["label"] != line
+
+
+def test_codex_ignores_old_login_wait_events_in_tasks_chat_status_and_health(api):
+    from backend import login_waits
+    machine = runner(api, "ana")
+    assign(api, machine, "ops")
+    ready(api, machine, ["ops"])
+    tid, attempt = task_attempt(api, machine)
+    aid = attempt["id"]
+    # An old runner's final wait must not survive as a current label after the queue is disabled.
+    events(api, machine, aid, [("status", {
+        "waiting": 'Waiting for ChatGPT login "work" to be free', "login": 'ChatGPT login "work"',
+        "holder": "finance", "holder_attempt": "gone", "position": 1})])
+    with api.app.state.store.read() as c:
+        assert login_waits.wait(c, aid) is None
+        assert not login_waits.unknown_holder(c, aid)
+    [run] = get(api, f"tasks/{tid}/run-view")["attempts"]
+    assert run["waiting"] is None and run["state"] == "running"
+    execution = get(api, f"tasks/{tid}")["execution"]
+    assert "waiting" not in execution and "Waiting for" not in execution["label"]
+    conversation = attempt["conversation"]["id"]
+    execution = get(api, f"conversations/{conversation}/snapshot")["execution"]
+    assert "waiting" not in execution and "Waiting for" not in execution["label"]
+    [status] = [s for s in get(api, "status")["bots"] if s and s["bot"] == "ops"]
+    assert not status.get("waiting") and "Waiting for" not in status["focus"]
+    assert not [row for row in get(api, "health")["stuck"]
+                if row["bot"] == "ops" and row.get("reason") == "login_holder_unknown"]

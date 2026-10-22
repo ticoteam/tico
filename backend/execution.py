@@ -9,7 +9,7 @@ from datetime import timezone
 
 from clients import gateway, sessions
 
-from . import app_delivery, check_models, gateway_connection, inbox_isolation, login_holds, models_preset, providers, quiet_work, routines, run_triggers, runner_versions, screen, usage_limits, wake_presets
+from . import app_delivery, check_models, gateway_connection, inbox_isolation, login_holds, models_preset, providers, quiet_work, routines, run_triggers, runner_versions, screen, task_models, usage_limits, wake_presets
 from . import task_privacy as privacy
 from .auth import Identity
 from .batch_work import isolated
@@ -1641,8 +1641,14 @@ class Execution:
         handed = providers.bot_choice(c, self.store.settings, followed)
         # A check subtask's turns run on its own model, in its own session (backend/check_models.py).
         check = check_models.of(c, task["id"], row["bot"]) if task else None
-        followed = check_models.apply(followed, check)
         roots, lanes = roots_on(runner), lanes_on(runner)
+        # A turn in a task's own session runs on the bot's task model when it has one, or on its own model when that
+        # cannot run here; a check keeps its check model (backend/task_models.py).
+        followed, model_record = task_models.pick(
+            c, self.store.settings, row["bot"], followed, task["id"] if task else None,
+            session_task_id(c, row["bot"], followed, task["id"], roots) if task else None, conv["id"],
+            who.runner_id, row["id"], check)
+        followed = check_models.apply(followed, check)
         lane = job_lane(c, row["bot"], followed, msg, conv, lanes, roots)
         token = secrets.token_urlsafe(32)
         until = H.shift(H.now(), seconds=self.store.settings.lease_seconds)
@@ -1660,6 +1666,7 @@ class Execution:
         c.execute("UPDATE attempts SET wake_json=?,handed_runtime=?,handed_model=? WHERE id=?",
                   (json.dumps(wake_presets.record(c, job, msg)), *handed, aid))
         c.execute("INSERT OR IGNORE INTO attempt_conversations VALUES(?,?)", (aid, conv["id"]))
+        task_models.handed(c, aid, task["id"] if task else None, model_record)
         held = None
         if check:
             check_models.handed(c, aid, task["id"], check)
@@ -2076,7 +2083,10 @@ class Execution:
         from .shared_bots import follow
         config = follow(c, row["bot"], json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot=?", (row["bot"],)).fetchone()[0]))
         runtime, model = providers.bot_choice(c, self.store.settings, config)
-        if ran_another_model(c, self.store.settings, row):
+        if ran := task_models.handed_out(c, aid):
+            # Its thread is the task model's, kept under that model, never as the bot's own session.
+            runtime, model = ran["runtime"], ran["model"]
+        if not ran and ran_another_model(c, self.store.settings, row):
             # A turn leased before a model change started the old model's thread: it is not the new model's.
             runtime = row["handed_runtime"] or runtime
         else:
@@ -2550,11 +2560,16 @@ class Execution:
         usage_limits.after_run(c, row["bot"], self.store.settings.owner_email)
         config = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (row["bot"],)).fetchone()
         runtime, model = providers.bot_choice(c, self.store.settings, json.loads(config[0]) if config else {})
+        # A turn on the bot's task model ran on that model (backend/task_models.py): its usage and limit are that login's.
+        ran = None if check else task_models.handed_out(c, aid)
         if check:
             runtime, model = check["runtime"], check["model"]
+        elif ran:
+            runtime, model = ran["runtime"], ran["model"]
         # The bot was moved to another model while this turn ran on the old one: its limit is not the new model's login.
         # A move to another model on the same runtime keeps the login, so the turn's limit is the login's either way.
-        superseded = (not check and ran_another_model(c, self.store.settings, row)
+        # A task-model turn did not run on the bot's own model, so a move of that model says nothing about it.
+        superseded = (not check and not ran and ran_another_model(c, self.store.settings, row)
                       and row["handed_runtime"] != runtime)
         if row["thread_id"] and body.tokens_in is not None:
             c.execute("UPDATE bot_sessions SET tokens_in=?,updated=? WHERE bot=? AND runtime=? AND model=? AND thread_id=?",
@@ -2608,6 +2623,16 @@ class Execution:
             H.event(c, H.KEEPER, "attempt.check_limited", aid,
                     {"bot": row["bot"], "job_id": row["job_id"], "task_id": check_task, "runtime": runtime,
                      "retry_after": retry})
+        elif limited and ran and not gateway_wait:
+            # The task model's limit is not the bot's: its login is held (after_turn above), the bot's chat, routines
+            # and other work go on on its own model, and its next task turns run there until the hold ends.
+            hit = H.now()
+            retry = login_hold.get("until") or H.shift(hit, seconds=reset_cooldown(c, aid, hit, LIMIT_COOLDOWN,
+                                                                                    body.limit_resets_at))
+            settle_status(c, row["bot"], "idle", f"{runtime} usage limit on the bot's task model at {hit[11:16]}; its "
+                          f"tasks run on its own model until {retry[:10]} {retry[11:16]} UTC", claimed=row["created"])
+            H.event(c, H.KEEPER, "attempt.task_model_limited", aid,
+                    {"bot": row["bot"], "job_id": row["job_id"], "runtime": runtime, "retry_after": retry})
         elif limited and superseded:
             # Its work goes back in the queue and runs on the model the bot was moved to. When that model waits on
             # the same spent login or key, the bot stays Rate limited as the move left it (lift_after_model_change).
