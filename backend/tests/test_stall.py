@@ -303,3 +303,36 @@ def test_a_parent_held_by_two_quiet_holds_of_its_own_lists_both(api):
         H.TR.relate(c, "bot:ops", window["id"], second["id"], "blocked_by")
         assert flagged(c, window, hold, second) == (True, True)
         assert {t["id"]: t for t in H.stuck_tasks(c)}[window["id"]]["own_blockers"] == [hold["id"], second["id"]]
+
+
+def test_between_the_retry_and_the_stuck_report_no_stall_wake_and_the_report_counts_every_wake(api):
+    from backend.tests.test_api import post
+    room = post(api, "chat/finance", {"text": "Can you look at cash?"})["conversation_id"]
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT OR IGNORE INTO bots(slug,display_name,state) VALUES('botops','BotOps','active')")
+        task = H.task_create(c, H.human_actor("ana"), "Recheck the cash warning", "Before the deadline.", "bot:finance",
+                             conversation_id=room)
+        c.execute("INSERT INTO runners(id,label,operator,token_hash,created) VALUES('r1','r','ana','h','t')")
+        job = c.execute("SELECT id FROM jobs WHERE bot='finance' ORDER BY created DESC LIMIT 1").fetchone()[0]
+        c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created,lane) "
+                  "VALUES('a1',?,'finance','r1',1,'a1','running',?,?,?)",
+                  (job, H.shift(H.now(), seconds=600), H.shift(H.now(), seconds=-2400), "task:" + task["id"]))
+        aged(c, task["id"], 40)
+        assert H.wake_stalled(c)["checked"] == [task["id"]]
+        c.execute("UPDATE events SET ts=? WHERE action='task.stall_wake' AND target=?",
+                  (H.shift(H.now(), seconds=-1900), task["id"]))
+        assert H.wake_stalled(c)["retried"] == [task["id"]]
+        # Its session ends without moving it, so it is stalled too: the retry is its wake until the report.
+        c.execute("UPDATE attempts SET state='completed', lease_until=? WHERE id='a1'", (H.shift(H.now(), seconds=-60),))
+        c.execute("UPDATE jobs SET state='completed' WHERE bot='finance'")
+        out = H.wake_stalled(c)
+        assert out["woke"] == [] and out["checked"] == [] and out["stuck"] == []
+        # An earlier stall wake today counts in the report with the status check and the retry.
+        c.execute("INSERT INTO events(id,ts,actor,action,target,detail_json) VALUES(?,?,?,?,?,?)",
+                  (H.new_id(), H.shift(H.now(), seconds=-7200), H.KEEPER, "task.stall_wake", task["id"], "{}"))
+        c.execute("UPDATE events SET ts=? WHERE action='task.stuck_retry' AND target=?",
+                  (H.shift(H.now(), seconds=-1900), task["id"]))
+        assert H.wake_stalled(c)["stuck"] == [task["id"]]
+        escalated = c.execute("SELECT detail_json FROM events WHERE action='task.stall_escalated' AND target=?",
+                              (task["id"],)).fetchone()[0]
+        assert json.loads(escalated)["wakes"] == 3
