@@ -1153,6 +1153,17 @@ class WorktreeStatus(Contract):
     record_updated: str | None = Field(default=None, max_length=40)
 
 
+class RunnerPanic(Contract):
+    # Its file in the runner's crate (`src/runner.rs`), or empty for a panic in a dependency; never its message.
+    file: str = Field(default="", max_length=200)
+    line: int = Field(default=0, ge=0, le=1_000_000)
+
+
+class RunnerErrors(Contract):
+    version: str = Field(default="", max_length=100)
+    panics: list[RunnerPanic] = Field(default_factory=list, max_length=20)
+
+
 class Heartbeat(Contract):
     worktrees: list[WorktreeStatus] | None = Field(default=None, max_length=1000)
     profiles: Annotated[list[Any], BeforeValidator(lambda value: value[:100] if isinstance(value, list) else value)] | None = None

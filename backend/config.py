@@ -257,6 +257,8 @@ class Settings:
     posthog_host: str = field(default="", repr=False)
     sentry_dsn: str = field(default="", repr=False)
     sentry_server_dsn: str = field(default="", repr=False)
+    # Which install a server error report comes from (backend/observability.py); unset: the company name.
+    instance_name: str = ""
     # Decide's providers, in order (backend/judge.py): the Tico AI Gateway with its key, then a customer's own TypeSafe
     # key (never set by default), then the team's own LLM; with none of them Decide is off.
     gateway_key: str = field(default="", repr=False)
@@ -506,6 +508,7 @@ class Settings:
             posthog_host=quiet(os.environ.get("TICO_POSTHOG_HOST", "")),
             sentry_dsn=quiet(os.environ.get("TICO_SENTRY_DSN", "")),
             sentry_server_dsn=quiet(os.environ.get("TICO_SENTRY_SERVER_DSN", "")),
+            instance_name=os.environ.get("TICO_INSTANCE_NAME", "").strip(),
             gateway_key="" if rehearsal else _gateway_key(),
             gateway_url=_gateway_url(),
             typesafe_api_key="" if rehearsal else _typesafe_key(),
