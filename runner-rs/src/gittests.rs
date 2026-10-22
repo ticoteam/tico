@@ -663,6 +663,9 @@ async fn a_turn_counts_only_its_own_tasks_pushes() {
     // pushed: neither is this turn's push.
     sh(&theirs, &["commit", "-q", "--allow-empty", "-m", "theirs"]);
     sh(&theirs, &["push", "-q", "-u", "origin", "HEAD"]);
+    // ... and pushes to main, which this worktree tracks: a shared ref of another name is not read.
+    sh(&theirs, &["push", "-q", "origin", "HEAD:main"]);
+    sh(&mine, &["branch", "-q", "--set-upstream-to=origin/main"]);
     sh(&seed, &["push", "-q", "origin", "HEAD:tico/mine"]);
     sh(&mine, &["fetch", "-q", "origin"]);
     assert_eq!(worktrees::pushes(&workspace, &links, since, &env).await, Vec::<Value>::new());

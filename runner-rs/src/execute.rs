@@ -1377,7 +1377,8 @@ impl Runner {
         if !carried.is_empty() {
             completion.insert("undelivered".into(), json!(carried.keys().collect::<Vec<_>>()));
         }
-        if host.is_some() {
+        // An older server refuses the field, and a refused result would never arrive: it only loses the count.
+        if host.is_some() && crate::follow::feature("run_pushes") {
             let pushed = self.task_pushes(&attempt, &bot, begun).await;
             if !pushed.is_empty() {
                 completion.insert("pushes".into(), json!(pushed));

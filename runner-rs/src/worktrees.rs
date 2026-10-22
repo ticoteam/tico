@@ -1004,7 +1004,8 @@ pub async fn pushes(workspace: &Path, links: &[Value], since: i64, env: &Env) ->
         let mut refs = vec![format!("refs/remotes/origin/{branch}")];
         if let Ok(up) = git(&path, env, &["rev-parse", "--symbolic-full-name", "@{upstream}"], false).await {
             let up = up.stdout.trim().to_string();
-            if up.starts_with("refs/remotes/") && !refs.contains(&up) {
+            // An upstream of another name (origin/main) is a ref sibling worktrees push to as well.
+            if up.starts_with("refs/remotes/") && up.ends_with(&format!("/{branch}")) && !refs.contains(&up) {
                 refs.push(up);
             }
         }
