@@ -153,6 +153,14 @@ def bump_bot_session_epoch(c, bot):
               "epoch=epoch+1,updated=excluded.updated", (bot, H.now()))
 
 
+def model_changed_since(c, bot, since):
+    """Whether a person moved the bot to another model after `since`, a turn's lease. That turn runs on the model its
+    claim handed it, so what it meets (a usage limit, a provider thread) is the old model's, not the bot's now
+    (Dev 334: a rate-limited bot can be moved off the spent model while a turn is out)."""
+    return c.execute("SELECT 1 FROM bot_transitions WHERE bot=? AND kind='model' AND state='applied' AND applied_at>? "
+                     "LIMIT 1", (bot, since)).fetchone() is not None
+
+
 # The room messages a claim hands its turn (the runner forwards only what arrived since the session last answered).
 HISTORY_PAGE = 50
 
@@ -246,6 +254,27 @@ def reports_tools(c, attempt_id, config):
         return bool(row['said'])
     return reports_tool_calls(config, config.get('runtime'))
 
+
+
+def retry_facts(c, job, started, finished):
+    """What a held run did, judged once for both the sweep that retries a safe one by itself (`auto_reconcile`) and
+    the review card that recommends a person's choice (`review_jobs`), so the two can never disagree: its recorded
+    calls, the ones that can change things, approvals it used up, whether its host's silence proves anything, how
+    many times it has started, and `safe` for a run that only read on a host that reports every call."""
+    config = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (job['bot'],)).fetchone()
+    declared = json.loads(config[0]) if config else {}
+    calls = recorded_tools(c, job['attempt_id'])
+    acted = sorted({call['tool'] for call in calls if call['tool'] not in READ_ONLY_TOOLS})
+    window = (started or job['created'], finished or H.now())
+    consumed = c.execute("SELECT count(*) FROM approvals WHERE requested_by=? AND consumed_at IS NOT NULL "
+                         "AND consumed_at BETWEEN ? AND ?", ('bot:' + job['bot'], *window)).fetchone()[0]
+    reported = reports_tools(c, job['attempt_id'], declared)
+    # A message folded into another job's run counts that run as one of its own starts.
+    starts = c.execute("SELECT count(*) FROM attempts WHERE started IS NOT NULL AND (job_id=? OR id IN "
+                       "(SELECT attempt_id FROM attempt_inputs WHERE message_id=?))",
+                       (job['id'], job['message_id'])).fetchone()[0]
+    return {'calls': calls, 'acted': acted, 'consumed': consumed, 'reported': reported, 'starts': starts,
+            'safe': reported and not acted and not consumed}
 
 # Tool calls that only read: a run that made nothing else repeats nothing when it runs again. Claude's and Codex's
 # own names. A subagent's launch is listed because its own calls are reported and judged one by one. A shell command
@@ -1896,10 +1925,12 @@ class Execution:
         from .shared_bots import follow
         config = follow(c, row["bot"], json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot=?", (row["bot"],)).fetchone()[0]))
         runtime, model = providers.bot_choice(c, self.store.settings, config)
-        c.execute("INSERT INTO bot_sessions(bot,runtime,model,thread_id,runner_id,tokens_in,updated) "
-                  "VALUES(?,?,?,?,?,0,?) ON CONFLICT(bot,runtime,model) DO UPDATE SET "
-                  "thread_id=excluded.thread_id,runner_id=excluded.runner_id,updated=excluded.updated",
-                  (row["bot"], runtime, model, body.thread_id, who.runner_id, H.now()))
+        if not model_changed_since(c, row["bot"], row["created"]):
+            # A turn leased before a model change started the old model's thread: it is not the new model's.
+            c.execute("INSERT INTO bot_sessions(bot,runtime,model,thread_id,runner_id,tokens_in,updated) "
+                      "VALUES(?,?,?,?,?,0,?) ON CONFLICT(bot,runtime,model) DO UPDATE SET "
+                      "thread_id=excluded.thread_id,runner_id=excluded.runner_id,updated=excluded.updated",
+                      (row["bot"], runtime, model, body.thread_id, who.runner_id, H.now()))
         msg = c.execute("SELECT message_id FROM jobs WHERE id=?", (row["job_id"],)).fetchone()[0]
         H.task_session_started(c, row["bot"], row["lane"], msg, body.thread_id, runtime)
         H.mark_delivered(c, H.KEEPER, msg)
@@ -2352,6 +2383,8 @@ class Execution:
         runtime, model = providers.bot_choice(c, self.store.settings, json.loads(config[0]) if config else {})
         if check:
             runtime, model = check["runtime"], check["model"]
+        # The bot was moved to another model while this turn ran on the old one: its limit is not the new model's login.
+        superseded = not check and model_changed_since(c, row["bot"], row["created"])
         if row["thread_id"] and body.tokens_in is not None:
             c.execute("UPDATE bot_sessions SET tokens_in=?,updated=? WHERE bot=? AND runtime=? AND model=? AND thread_id=?",
                       (int(body.tokens_in), H.now(), row["bot"], runtime, model, row["thread_id"]))
@@ -2359,7 +2392,7 @@ class Execution:
         # The Tico AI Gateway's cap and address block are the company key's, not a provider login's: they keep their
         # own waits (reset_cooldown).
         gateway_wait = tico_code == gateway.RATE_LIMITED or any(gateway.cap_reached(e) for e in limit_errors(c, aid))
-        if not check and not stopped and not gateway_wait and (limited or body.outcome == "completed"):
+        if not check and not superseded and not stopped and not gateway_wait and (limited or body.outcome == "completed"):
             from .subscriptions import effective
             login_hold = login_holds.after_turn(c, row["runner_id"], row["bot"], effective(c, row["bot"])[0] or "",
                                                 runtime, body, aid, H.now())
@@ -2410,6 +2443,12 @@ class Execution:
             H.event(c, H.KEEPER, "attempt.check_limited", aid,
                     {"bot": row["bot"], "job_id": row["job_id"], "task_id": check_task, "runtime": runtime,
                      "retry_after": retry})
+        elif limited and superseded:
+            # Its work goes back in the queue and runs on the model the bot was moved to, which is not held.
+            settle_status(c, row["bot"], "idle", f"The previous model hit its usage limit at {H.now()[11:16]}; "
+                          "queued work runs on the new model", claimed=row["created"])
+            H.event(c, H.KEEPER, "attempt.limited_superseded", aid,
+                    {"bot": row["bot"], "job_id": row["job_id"], "runtime": runtime})
         elif limited:
             streak = limit_streak(c, row["bot"])
             hit = H.now()
@@ -2546,23 +2585,39 @@ class Execution:
             output = [{'seq': e['seq'], 'kind': e['kind'],
                        'text': str(json.loads(e['payload_json']).get('text', ''))[:4000]}
                       for e in reversed(events)]
-            calls = recorded_tools(c, row['attempt_id'])
-            acted = sorted({call['tool'] for call in calls if call['tool'] not in READ_ONLY_TOOLS})
+            facts = retry_facts(c, row, attempt['started'] if attempt else None, attempt['finished'] if attempt else None)
+            calls, acted = facts['calls'], facts['acted']
+            # `stopped` is what the review card leads with (ui/app/settings.js executionReview), by the same rule the
+            # sweep retries by: only a run `auto_reconcile` would call safe, on its first start, is 'read'.
             if acted:
+                stopped = 'changed'
                 reason = (f"The run stopped after using a tool that can change things ({', '.join(acted)}). Tico "
                           "cannot tell whether it finished, so retrying automatically could repeat the action.")
-            elif calls:
-                reason = "The run stopped after only reading, so trying it again repeats nothing."
-            else:
+            elif facts['consumed']:
+                stopped = 'changed'
+                reason = ("The run stopped after using an approval. Tico cannot tell whether the approved action "
+                          "finished, so retrying automatically could repeat it.")
+            elif not facts['reported']:
+                stopped = 'unknown'
                 reason = ("The run stopped before it returned an answer. Its runner did not record "
                           "enough detail for Tico to prove that retrying automatically is safe.")
+            elif facts['starts'] > 1:
+                stopped = 'twice'
+                reason = "The run only read, but it stopped the same way more than once, so Tico won't run it again."
+            else:
+                stopped = 'read'
+                reason = ("The run stopped after only reading, so trying it again repeats nothing." if calls else
+                          "The run stopped before it used any tool, so trying it again repeats nothing.")
             jobs.append({'id':row['id'], 'attempt_id':row['attempt_id'], 'readable':readable,
                          'task':{'id':task['id'],'title':task['title'],'status':task['status'],'owner':task['owner'],
                                  'owner_name':owner_name(c, task['owner'])} if task and readable else None,
                          'request':message['body'] if readable else '',
                          'attempt':(dict(attempt) if readable else
                                     {**dict(attempt), 'final_text': ''}) if attempt else None,
-                         'output':output if readable else [], 'tools':calls if readable else [], 'reason':reason})
+                         'output':output if readable else [], 'tools':calls if readable else [], 'reason':reason,
+                         # `acted` names tools only, as `reason` always has, so a reader of none of the run's words
+                         # still sees why it is held.
+                         'stopped':stopped, 'acted':acted})
         return {'jobs':jobs}
 
     def reconcile_job(self, c, who, job_id, body):
@@ -2765,19 +2820,10 @@ class Execution:
                 held = row['attempt_id'] and c.execute("SELECT 1 FROM events WHERE action='job.held' AND target=?",
                                                        (row['attempt_id'],)).fetchone()
                 calls, acted, safe = [], [], False
+                facts = retry_facts(c, row, row['started'], row['finished'])
                 if not held:
-                    config = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (row['bot'],)).fetchone()
-                    declared = json.loads(config[0]) if config else {}
-                    calls = recorded_tools(c, row['attempt_id'])
-                    acted = sorted({call['tool'] for call in calls if call['tool'] not in READ_ONLY_TOOLS})
-                    window = (row['started'] or row['created'], row['finished'] or H.now())
-                    consumed = c.execute("SELECT count(*) FROM approvals WHERE requested_by=? AND consumed_at IS NOT NULL "
-                                         "AND consumed_at BETWEEN ? AND ?", ('bot:' + row['bot'], *window)).fetchone()[0]
-                    safe = reports_tools(c, row['attempt_id'], declared) and not acted and not consumed
-                # A message folded into another job's run counts that run as one of its own starts.
-                started = c.execute("SELECT count(*) FROM attempts WHERE started IS NOT NULL AND (job_id=? OR id IN "
-                                    "(SELECT attempt_id FROM attempt_inputs WHERE message_id=?))",
-                                    (row['id'], row['message_id'])).fetchone()[0]
+                    calls, acted, safe = facts['calls'], facts['acted'], facts['safe']
+                started = facts['starts']
                 if not row['aged'] and not (safe and started <= 1):
                     continue  # the usual wait: a person may look first
                 msg = H.message(c, row['message_id'])

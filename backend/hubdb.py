@@ -104,6 +104,8 @@ CONVERSATION_SCOPES = ("direct", "personal", "shared", "task")
 # a deploy). To everything that only knows the company lane they are a kind of `doing`.
 TASK_STATUSES = ("open", "doing", "waiting", "review", "ready", "done", "closed", "declined")
 ACTIVE_STATUSES = ("open", "doing", "waiting", "review", "ready")   # still on the board
+# tasks_due_active (TASKS_DUE_INDEX) is built from this list. An existing index keeps the list it was created with, so
+# changing it needs that index under a new name and a migration, or upgraded hubs quietly scan every task again.
 BOARD_STATUSES = ACTIVE_STATUSES + ("declined",)               # visible until a person reassigns or closes it
 LIVE_STATUSES = ACTIVE_STATUSES + ("done",)                # not closed, not declined
 OWNER_STATUSES = ("doing", "waiting", "review", "done", "declined")  # what the owner may set
@@ -1080,6 +1082,8 @@ def migrate(conn, adopt_legacy=False):
     conn.execute("CREATE INDEX IF NOT EXISTS tasks_finished_lane_time ON tasks("
                  "lane,COALESCE(closed_at,done_at,updated,created) DESC,id DESC) "
                  "WHERE status IN ('done','closed')")
+    conn.execute(TASKS_DUE_INDEX)                  # the scheduler's due-date reminder pass
+    conn.execute(TASKS_RESUME_INDEX)               # ...and its quiet tasks whose deferred time came (quiet_work.due)
     # A task's history, and the Tasks page's stats: how many tasks reached each status, by day.
     conn.execute("CREATE INDEX IF NOT EXISTS task_events_task ON task_events(task_id, ts)")
     conn.execute("CREATE INDEX IF NOT EXISTS task_events_field_ts ON task_events(field, ts)")
@@ -3094,7 +3098,16 @@ def supersede_asks(conn, task_id, *, from_actor=None, to_actor=None, keep=None, 
         conn.executemany("UPDATE messages SET superseded_at=? WHERE id=?", [(now(), mid) for mid in ids])
         _task_event(conn, task_id, KEEPER, "asks_superseded", None, str(len(ids)),
                     why or ("Replaced by a newer question" if keep else "The task finished"))
+        recount(conn, asking_actors(conn, ids))     # each asking bot's needs_human counts its open asks
     return ids
+
+
+def asking_actors(conn, ask_ids):
+    """Who sent these asks."""
+    if not ask_ids:
+        return []
+    return [r[0] for r in conn.execute(
+        f"SELECT DISTINCT from_actor FROM messages WHERE id IN ({','.join('?' * len(ask_ids))})", list(ask_ids))]
 
 
 def drop_asked_waits(conn, task_id, ask_ids, why):
@@ -3113,7 +3126,7 @@ def drop_asked_waits(conn, task_id, ask_ids, why):
         return
     conn.execute("UPDATE tasks SET waiting_on=NULL WHERE id=?", (task_id,))
     _task_event(conn, task_id, KEEPER, "waiting_on", person, None, why)
-    _recount(conn, person)
+    _recount(conn, row["owner"])            # its owner's needs_human counted this wait
 
 
 def _step_end(conn, step_id, task_id, top=False):
@@ -6126,9 +6139,12 @@ def wake_stalled(conn, at=None):
                         retried_ids.append(row["id"])
                         continue
                     if retried <= shift(at, seconds=-SPOT_STUCK_MINUTES * 60):
-                        _report_stuck(conn, spot, 2)
+                        woken = conn.execute("SELECT count(*) FROM events WHERE action='task.stall_wake' AND target=? "
+                                             "AND ts>?", (row["id"], shift(at, seconds=-86400))).fetchone()[0] or 0
+                        _report_stuck(conn, spot, woken + 1)    # the stall wakes today and the retry
                         stuck.append(row["id"])
-                        continue
+                    # Between the retry and the report the retry is its wake: no stall wake on top of it.
+                    continue
             # A status note must not buy another round of retries. Cap automatic wakes
             # over the whole day; busy work is excluded above and explicit runs remain available.
             since = shift(at, seconds=-86400)
@@ -7019,6 +7035,21 @@ def tasks(conn, owner=None, requester=None, status=None, limit=500, lane=None, l
     return rows
 
 
+# The due-date reminder pass (backend/scheduler.py) reads only the columns it uses, through tasks_due_active: its
+# predicate is this query's status list and due test, word for word, or SQLite will not use it and scans every task.
+TASKS_DUE_SQL = (
+    f"SELECT id,title,owner,due,conversation_id FROM tasks WHERE status IN ({','.join(repr(x) for x in ACTIVE_STATUSES)}) "
+    "AND due IS NOT NULL AND due!='' AND substr(due,1,10)<=? AND owner LIKE 'bot:%' AND snoozed_until IS NULL "
+    "AND NOT EXISTS (SELECT 1 FROM task_reminders r WHERE r.task_id=tasks.id AND r.due=tasks.due) "
+    "ORDER BY created,id")
+TASKS_DUE_INDEX = (
+    "CREATE INDEX IF NOT EXISTS tasks_due_active ON tasks(substr(due,1,10)) "
+    f"WHERE status IN ({','.join(repr(x) for x in ACTIVE_STATUSES)}) AND due IS NOT NULL AND due!=''")
+# quiet_work.due's query, the same way: its predicate is that query's, word for word.
+TASKS_RESUME_INDEX = ("CREATE INDEX IF NOT EXISTS tasks_resume_due ON tasks(json_extract(resume_json,'$.until')) "
+                      "WHERE resume_json IS NOT NULL AND next_run=1 AND status='open'")
+
+
 def tasks_due_for_bots(conn, through):
     """Live tasks a bot owns whose due date may have arrived by `through` (a "YYYY-MM-DD").
 
@@ -7026,11 +7057,7 @@ def tasks_due_for_bots(conn, through):
     is a day-level bound with a day of slack; the caller compares the exact instant. No row cap:
     the reminder pass needs every one of them, however many tasks the hub holds.
     """
-    return _rows(conn.execute(
-        f"SELECT * FROM tasks WHERE status IN ({','.join(repr(x) for x in ACTIVE_STATUSES)}) "
-        "AND owner LIKE 'bot:%' AND due IS NOT NULL AND due!='' AND substr(due,1,10)<=? AND snoozed_until IS NULL "
-        "AND NOT EXISTS (SELECT 1 FROM task_reminders r WHERE r.task_id=tasks.id AND r.due=tasks.due) "
-        "ORDER BY created,id", (through,)))
+    return _rows(conn.execute(TASKS_DUE_SQL, (through,)))
 
 
 FLOW_STATUSES = ("created",) + TASK_STATUSES

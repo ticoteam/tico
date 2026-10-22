@@ -134,7 +134,9 @@ def _ended(c, wait, task):
     bot = H.bot(c, H.actor_id(wait['owner']))
     if not bot or bot.get('state') != 'active':
         return 'The bot is not active'
-    return ''
+    # Checked again before serving and before preparing: a task blocked since it asked gets no tree (and no wake).
+    from .worktrees import start_refusal
+    return start_refusal(c, task)
 
 
 def _wake(c, wait, task, body):
@@ -192,6 +194,11 @@ def _serve_one(c, wait, full, default_org):
     ended = _ended(c, wait, task)
     if ended:
         _finish(c, wait, 'cancelled', ended)
+        link = c.execute("SELECT * FROM task_links WHERE id=? AND kind='worktree' AND state='pending'",
+                         (wait['link_id'] or '',)).fetchone()
+        if link and json.loads(link['detail_json'] or '{}').get('checkout_state') == 'queued':
+            from .worktrees import cancel_pending
+            cancel_pending(c, dict(link), json.loads(link['detail_json'] or '{}'), ended)
         return False
     if wait['state'] == 'waiting':
         # The oldest wait that does not fit holds the bot's younger ones back: a freed place goes to it first.

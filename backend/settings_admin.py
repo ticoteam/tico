@@ -789,10 +789,14 @@ class SettingsAdmin:
         if config["revision"] != transition["expected_revision"]:
             raise Problem("version_conflict", "Bot settings changed while the checkpoint was being prepared", 409)
         self.execution.expire(c)
-        if c.execute("SELECT 1 FROM attempts WHERE bot=? AND state IN ('leased','running')", (transition["bot"],)).fetchone():
-            raise Problem("busy", "Wait for the current bot turn to finish", 409)
         target, bot, field = _json(transition["target_json"], {}), transition["bot"], transition["kind"]
         field = "model" if field == "model" else "placement"
+        # A move takes the bot's turns off their computer, so it waits for them. A model change does not: a turn that
+        # is out finishes on the model its claim handed it, and the next turn runs on the new one. A person must be
+        # able to move a rate-limited bot off its spent model while a retry is running (Dev 334).
+        if field == "placement" and c.execute("SELECT 1 FROM attempts WHERE bot=? AND state IN ('leased','running')",
+                                              (bot,)).fetchone():
+            raise Problem("busy", "Wait for the current bot turn to finish", 409)
         before = self.snapshot(c, bot, field)
         c.execute("SAVEPOINT apply_bot_transition")
         try:
@@ -810,6 +814,14 @@ class SettingsAdmin:
                           (target["model"], target["runtime"], target["effort"], bot))
                 from .model_login import hold_removals
                 hold_removals(c, self.settings)
+                if (H.status(c, bot) or {}).get("state") == "limited":
+                    # The limit was the old model's: the new one starts on the queued work now. A turn still out on
+                    # the old model keeps the bot at work (execution.settle_status).
+                    out = c.execute("SELECT 1 FROM attempts WHERE bot=? AND state IN ('leased','running') LIMIT 1",
+                                    (bot,)).fetchone()
+                    H.status_set(c, who.actor, bot, state="running" if out else "idle",
+                                 focus="Working on other tasks" if out else "Model changed; queued work resumes",
+                                 reason="Model changed")
             else:
                 runner = c.execute("SELECT * FROM runners WHERE id=? AND revoked_at IS NULL", (target["runner_id"],)).fetchone()
                 if not runner:
@@ -928,7 +940,7 @@ class SettingsAdmin:
         if change["undone_at"] or self.snapshot(c, change["bot"], change["field"]) != after:
             raise Problem("not_latest", "A newer change replaced this value, so it cannot be undone directly", 409)
         self.execution.expire(c)
-        if change["field"] in ("model", "placement") and c.execute(
+        if change["field"] == "placement" and c.execute(
                 "SELECT 1 FROM attempts WHERE bot=? AND state IN ('leased','running')", (change["bot"],)).fetchone():
             raise Problem("busy", "Wait for the current bot turn to finish before undoing", 409)
         bot = change["bot"]

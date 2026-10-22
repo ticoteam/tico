@@ -10,8 +10,16 @@ from setup.tests.fakes import aws_clients
 from setup.ui import MissingInput
 
 
-def test_company_file_reaches_private_env_and_secure_parameter_without_public_state_or_sample(tmp_path):
+def chart(seats=20):
+    """A first chart cut to `seats` bots. Every company model is over the 8 KB parameter the installer packs a plan
+    into today; carrying a whole model chart waits on the plan-bucket transport (hosted signup, Org chart models)."""
     draft = C.Turn(C.blank()).finish()
+    draft["bots"] = draft["bots"][:seats]
+    return draft
+
+
+def test_company_file_reaches_private_env_and_secure_parameter_without_public_state_or_sample(tmp_path):
+    draft = chart()
     draft["company"]["name"] = "Acme Books"
     path = tmp_path / "tico.company.yaml"
     path.write_text(C.to_yaml(draft))
@@ -56,12 +64,22 @@ def test_invalid_or_oversize_transport_fails_before_cloud_changes():
     assert not ssm.called("put_parameter")
 
 
+def test_a_whole_model_chart_is_refused_plainly_before_cloud_changes_until_the_plan_bucket_lands(tmp_path):
+    draft = C.Turn(C.blank()).finish()
+    draft["company"]["name"] = "Acme Books"
+    path = tmp_path / "tico.company.yaml"
+    path.write_text(C.to_yaml(draft))
+    with pytest.raises(MissingInput, match="without --company-file.*Already chose your team.*Use this team"):
+        wizard.gather_company_file(argparse.Namespace(company_file=str(path), company=None),
+                                   settings.Settings(preset="recommended"))
+
+
 def test_hosted_cli_carries_selected_file_through_machine_and_dns_setup(tmp_path, monkeypatch):
     from setup import verify
     from setup.tests.test_preview_flags import CREATE, go, world
     monkeypatch.setenv("TICO_OIDC_CLIENT_SECRET", "test-client-private-value")
     monkeypatch.setattr(verify, "run_all", lambda **kw: [verify.Check("stub", True, "ok")])
-    draft = C.Turn(C.blank()).finish()
+    draft = chart()
     draft["company"]["name"] = "Acme Finance"
     path = tmp_path / "tico.company.yaml"
     path.write_text(C.to_yaml(draft))

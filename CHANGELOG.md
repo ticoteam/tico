@@ -8,6 +8,25 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Five company models for the setup org chart** replace the one 22-bot starter pack: Everything (73 seats), Software
+  company (51), Services firm (38), Local service business (41) and Online store (39), with Legal, People, Operations
+  and Leadership and bigger Finance, Sales, Marketing and Support teams. The first chart starts from the model the
+  company's signals point to (new signals: sells services, on-site jobs, sells products; none of them is Everything),
+  adds every department head it lacks and the roles that fit what the visitor said, and drops nothing. New setup
+  actions switch the chart to a model (`model_use`; "show me everything" is Everything) and put a person in a seat
+  (`seat_fill`, "Ana runs our cap table"). Controller, Equity Manager, Fundraising Manager, Scheduling & Bookings and
+  Quality & Inspections are seats with no bot yet: a person can hold one, and importing the company file makes no bot
+  for it or for any seat a person holds (the coworkers who hold seats stay in the saved plan; they join in Tico). The
+  cap table moves from the Corporate Secretary's description to the Equity Manager's. A whole model chart is over the
+  8 KB the installer can carry today, so `setup` refuses it before anything is set up and names the step: run setup
+  without `--company-file`, then import the file on Tico's first Welcome step (**Already chose your team?**).
+- **Visuals show without a visual address.** A company with no separate visual address now sees pictures, video and
+  audio inline in chat and task conversations, served from the app's own address as media only. A visual page or an
+  SVG is a card with its title, a still preview when there is one, and **Open**, which shows it in the file viewer;
+  pages and SVG are never served inline from the app's own address. There is no switch: Settings › General shows one
+  read-only line, "Visuals: full" or "Visuals: pictures, video and audio only (no separate visual address)".
+  `TICO_VISUAL_SAME_ORIGIN` is no longer read, and a local install uses the same fallback. A `TICO_VISUAL_ORIGIN` on
+  the app's own hostname, with any scheme or port, now stops the server; without it such a setup gets the fallback.
 - **A Claude bot's turn no longer waits an hour on its own background commands**: once the bot has answered and the
   turn is only waiting on background shells (a test suite, `gh pr checks --watch`, `gh run watch`) for 5 minutes
   (`background_wait_s` in bot.yaml, 0 for off), the runner ends the turn as completed and the commands keep running.
@@ -40,6 +59,14 @@ All notable changes to Tico are recorded here. The format follows
 ### Changed
 - **Updates: per-update reader check for assistant-drafted updates.** Each drafted update is checked against its
   reader on every read, so some drafts show to fewer readers than before.
+- **The stopped-run card is now just the decision.** Each stopped run shows one line on what stopped ("Stopped 8:12
+  AM after using Bash."), one recommendation, and two buttons with the recommended one first: **Try again** leads
+  only for a run Tico's own retry rule calls safe (it only read, on a host that reports every call, first stop);
+  **Don't retry** leads for one that may have changed something, used an approval, left no full record or stopped
+  more than once. The
+  request, saved output, tool calls and the optional note are folded under **Details**. The Needs you line is
+  shorter: what stopped and what waits on it. The review API adds `stopped` (`changed`, `read`, `twice` or `unknown`) and
+  `acted` to each run.
 - **A bot's tasks are one Tasks section with four tabs.** The right rail's Needs you, Active and Done sections become
   tabs, each with its count: **Needs You** (what the bot needs from you), **Doing** (every open task it holds, of every
   type, newest first), **Blocked** (each task saying who or what it waits on) and **Done Recently** (the last 14 days).
@@ -79,6 +106,18 @@ All notable changes to Tico are recorded here. The format follows
   each one at its own rate.
 
 ### Fixed
+- **Questions that close on their own leave every count right.** The hourly sweep closes each leftover question on
+  its own, so one that fails stays for the next sweep instead of undoing the rest. When questions close in bulk (a
+  task above ends, the hourly sweep, the weekday "Still needed?" batch), the bot that asked them has its "needs a
+  person" count updated at once, and "Still needed?" keeps a task waiting on a person while another question to them
+  is still open on it. A stuck task gets no extra stall wake between its retry and its report to BotOps, and BotOps's
+  "Find why" task says how many wake-ups it really got that day.
+- **The scheduler no longer blocks the server for seconds at a time on a busy hub.** Its 10-second pass used to run
+  in one write transaction and read every task to find due dates, so on a hub with many tasks and routines requests
+  waited behind it and runners saw 503s. Each step, routine and batch of due-date reminders now commits on its own,
+  the due-date and deferred-task lookups use new indexes (migration 61), and Health's scheduler entry shows the
+  pass's longest single hold (`hold_ms`, with `hold_step`) and its longest wait behind other writers (`wait_ms`)
+  next to `tick_ms`. These cover the 10-second pass; the minute and hourly sweeps take their own transactions.
 - **A run whose only work was a git push counts as acting.** The computer reports the pushes a run made from its
   task's worktrees with its result, so in `hub sql` the run reads `acted` with `did_nothing` 0 instead of
   `no_change`. Pushes from another task's worktree are not counted, and older runs read as before.
@@ -113,6 +152,13 @@ All notable changes to Tico are recorded here. The format follows
 - **Recovering an AWS bot computer waits for Systems Manager.** Resuming an interrupted install waits up to five
   minutes for its agent before sending recovery, tolerates a registration race and keeps the same computer on
   failure. An accepted recovery command is never sent again by that wait.
+- **Worktrees start only for work that can run, and stuck or obsolete ones free themselves.** A new task worktree is
+  refused, with the reason, for a task not started yet, one blocked by an open task (named) or a finished one; a task
+  waiting for room is checked again before its tree is reserved or prepared. A `pending` worktree whose pull requests
+  all finished or whose task closed is cancelled (at once when nothing was checked out); one whose setup makes no
+  progress for 6 hours fails visibly, tells its owner once and retries on the same worktree. A fix-forward after a merge
+  keeps its tree while its bot's turn runs or its branch has commits past the merged head ("held: ..."). Each release
+  records why, and Health lists them ([Task worktrees](docs/worktrees.md)).
 - **A bot's message to a bot says when it was held.** A plain message or task comment from one bot to another waits
   for that bot's next run; the send now answers `woke: false` with a `held` reason, and `hub` prints it: held for
   that bot's next run, add `--needs-action` to wake it now. Before, a held escalation read as delivered.
@@ -123,6 +169,10 @@ All notable changes to Tico are recorded here. The format follows
 - **No "Claude login required" while the Tico AI Gateway runs the bot.** Under the recommended choice a bot whose
   Claude or ChatGPT is not signed in yet shows as ready, its card says "Using Tico AI Gateway; sign in to Claude to use
   your subscription", and its model check and chat no longer ask for a login. With no Gateway either, it still does.
+- **A rate-limited bot can be moved to another model.** Settings > Bots refused the change with "Wait for the
+  current bot turn to finish" whenever a retry was running, so the bot stayed stuck on its spent model. The change now
+  applies at once and takes effect from the next turn; the limit lifts, and a turn still running on the old model no
+  longer puts the limit back on the new one.
 
 ## [0.3.71] - 2026-10-21
 
