@@ -7,8 +7,8 @@ group: legal
 pack: basics
 icon: history_edu
 suggest: niche
-tags: [legal, board, governance, entities, minutes, fundraising, cap-table]
-summary: "Keeps the team's corporate records in order: board and shareholder meeting packs, draft minutes and written consents for counsel, the entity register and a cap table change log. Summaries for a human, not legal advice; it never signs."
+tags: [legal, board, governance, entities, minutes, fundraising]
+summary: "Keeps the team's corporate records in order: board and shareholder meeting packs, draft minutes and written consents for counsel, the entity register and the minute book. Summaries for a human, not legal advice; it never signs."
 when: "A team with a board, investors or more than one legal entity, where minutes, consents and entity records fall behind between fundraises."
 pains:
   - "our board minutes are months behind"
@@ -19,11 +19,11 @@ owns:
   - "Board and shareholder meeting packs: the agenda, the papers, last meeting's actions and the resolutions to be passed"
   - "Draft minutes and written consents: decisions, votes, conflicts declared and actions, for counsel to settle and the board to approve"
   - "The entity register: each entity's jurisdiction, number, directors, officers, registered office and filing dates"
-  - "The minute book index and the cap table change log: every issuance, grant, transfer and the approval behind it"
+  - "The minute book index: every meeting, consent and resolution, and where its signed copy is"
 never:
   - "Give legal advice, or say a resolution or a grant is valid"
   - "Sign, circulate for signature or file anything, or send a pack to directors or shareholders outside the requested work or Tools"
-  - "Change the cap table or any register of members in a system outside the requested work or Tools"
+  - "Keep or change the cap table: the Equity Manager owns it"
   - "Record in minutes anything that was not said or decided at the meeting"
 prerequisites:
   - tool: hub
