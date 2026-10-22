@@ -54,7 +54,7 @@ function renderSettingsRecurring() {
 // which route answered and this month's spend. An owner or admin switches the six AI/people jobs (and Topic changed),
 // picks their schedule preset and runs them now; Health scan only the owner (`can_change`, enforced by the server too).
 // Fetched again at most once a minute while the tab is open.
-let SYSTEM_ROUTINES = null, SYSTEM_ROUTINES_AT = 0, SYSTEM_ROUTINES_Q = '';
+let SYSTEM_ROUTINES = null, SYSTEM_ROUTINES_AT = 0, SYSTEM_ROUTINES_Q = '', SYSTEM_ROUTINES_HELD = false;
 const SYSTEM_ROUTINE_BUSY = new Set();
 function systemRoutineLastHTML(j) {
   if (!j.records) return j.key === 'topic_fresh' ? '<span class="muted">Runs when it happens</span>' : '<span class="muted">Each connection shows its own</span>';
@@ -94,7 +94,7 @@ function systemRoutineControlHTML(j) {
 function systemRoutineRowHTML(j) {
   return `<div class="sysr-row" data-system-routine="${esc(j.key)}">
     <div class="sysr-name"><div class="sysr-title"><strong>${esc(j.name)}</strong><span class="pill sysr-dept" data-sysr-dept>${esc(j.department?.name || '')}</span></div>
-      ${systemRoutineRuleHTML(j)}<span class="muted">${esc(j.what)}</span>${systemRoutineAIHTML(j)}</div>
+      ${systemRoutineRuleHTML(j)}<span class="muted">${esc(j.what)}</span>${j.note ? `<span class="sysr-note" data-sysr-note>${esc(j.note)}</span>` : ''}${systemRoutineAIHTML(j)}</div>
     <div class="sysr-schedule"><span class="sysr-label">Schedule</span>${systemRoutineScheduleHTML(j)}</div>
     <div class="sysr-last"><span class="sysr-label">Last run</span>${systemRoutineLastHTML(j)}</div>
     <div class="sysr-next"><span class="sysr-label">Next run</span>${j.next ? `<span class="tnum" title="${esc(fmt(j.next))}" data-sysr-next>${esc(until(j.next))}</span>` : `<span class="muted">${j.switch && !j.on ? 'Off' : '—'}</span>`}</div>
@@ -113,6 +113,9 @@ function systemRoutinesHTML(data) {
 function systemRoutinesPaint() {
   const el = $('#set-system-routines'); if (!el || !SYSTEM_ROUTINES) return;
   const list = el.querySelector('[data-sysr-list]');
+  // A redraw (another row's save, a run being followed) would wipe a half-typed time, so it waits for the box to close.
+  if (list?.querySelector('[data-sysr-at]:focus')) { SYSTEM_ROUTINES_HELD = true; return; }
+  SYSTEM_ROUTINES_HELD = false;
   if (list) list.innerHTML = systemRoutineRowsHTML(SYSTEM_ROUTINES);
   else el.innerHTML = systemRoutinesHTML(SYSTEM_ROUTINES);
   systemRoutinesBind(el);
@@ -159,8 +162,22 @@ function systemRoutinesBind(el) {
       const job = SYSTEM_ROUTINES.jobs.find(j => j.key === key);
       if (body.preset === 'daily' && !job?.at) body.at = '09:00';
       void systemRoutineWrite(key, () => put(path, body));
-    } else if (ev.target.matches('[data-sysr-at]') && ev.target.value) void systemRoutineWrite(key, () => put(path, {at: ev.target.value}));
+    }
   };
+  // The daily time saves when the box is left (or Enter), not on each keystroke: a save redraws the row, and saving
+  // after the hour alone would take the focus before the minutes are typed.
+  const saveAt = input => {
+    const row = input.closest('[data-system-routine]'), key = row.dataset.systemRoutine;
+    const job = SYSTEM_ROUTINES.jobs.find(j => j.key === key);
+    if (!input.value || input.value === job?.at) { if (SYSTEM_ROUTINES_HELD) systemRoutinesPaint(); return; }
+    void systemRoutineWrite(key, () => put('/v2/system-routines/' + encodeURIComponent(key), {at: input.value}));
+  };
+  // There is no onfocusout property, so it is a listener, added once: the list element outlives its redraws.
+  if (!list.dataset.sysrBound) {
+    list.dataset.sysrBound = '1';
+    list.addEventListener('focusout', ev => { if (ev.target.matches('[data-sysr-at]')) saveAt(ev.target); });
+  }
+  list.onkeydown = ev => { if (ev.key === 'Enter' && ev.target.matches('[data-sysr-at]')) ev.target.blur(); };
   list.onclick = ev => {
     const run = ev.target.closest('[data-sysr-run]'); if (!run || run.disabled) return;
     const key = run.closest('[data-system-routine]').dataset.systemRoutine;

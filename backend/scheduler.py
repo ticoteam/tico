@@ -81,8 +81,10 @@ def run_now(store, auth, key, actor):
         running = False
     elif key == "stale_review":
         from . import stale_review
+        if store.settings.rehearsal:
+            raise Problem("conflict", "A rehearsal server runs no stale ticket review", 409)
         if stale_review.tick(store, stamp(at), force=True) is None:
-            raise Problem("conflict", "A stale ticket review is already running", 409)
+            raise Problem("conflict", "A stale ticket review is already running, or it was just switched off", 409)
         running = True
     elif key == "learnings":
         from . import learnings

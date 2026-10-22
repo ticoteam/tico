@@ -62,6 +62,7 @@ def test_a_member_sees_the_list_with_nothing_to_change_and_the_server_refuses_th
 def test_health_scan_is_owner_only_an_admin_reads_it_and_the_owner_changes_it(api):
     assert rows(api, "ben-test")["health_scan"]["can_change"] is False
     assert rows(api, "ben-test")["health_scan"]["owner_only"] is True
+    assert "Health Monitor is off" in rows(api)["health_scan"]["note"], "its switch alone does not make it find things"
     put(api, "system-routines/health_scan", {"on": False}, token="ben-test", expected=403)
     post(api, "system-routines/health_scan/run", {}, token="ben-test", expected=403)
     assert rows(api)["health_scan"]["can_change"] is True
@@ -108,6 +109,15 @@ def test_a_plain_job_runs_on_its_saved_preset_not_hourly(api):
     assert runs() == 2, "off: no run"
 
 
+def test_a_restarted_scheduler_reads_the_last_run_and_does_not_run_early(api):
+    store = api.app.state.store
+    at = datetime.now(timezone.utc)
+    Scheduler(store, api.app.state.execution).tick(at)
+    Scheduler(store, api.app.state.execution).tick(at + timedelta(minutes=30))     # a fresh process, half an hour on
+    with store.read() as c:
+        assert c.execute("SELECT count(*) FROM system_runs WHERE job='kpi_asks'").fetchone()[0] == 1
+
+
 def test_daily_at_a_time_runs_once_a_day_after_that_time():
     cfg = {"on": True, "preset": "daily", "at": "09:00"}
     pt = SR.zone()
@@ -149,15 +159,21 @@ def test_run_now_on_stale_review_makes_at_most_30_decide_calls_and_the_row_shows
             when = H.shift(H.now(), days=-10)
             c.execute("UPDATE tasks SET status='open',updated=?,created=? WHERE id=?", (when, when, row["id"]))
         stale_review._set_watermark(c, H.now())          # a pass just ran: Run now runs anyway
-    reply = post(api, "system-routines/stale_review/run", {}, token="ben-test")
-    assert reply["running"] is True
-    for _ in range(200):
-        if not stale_review._RUNNING.locked() and rows(api)["stale_review"]["last"]:
-            break
-        time.sleep(0.05)
-    assert len(model.calls) <= stale_review.CALLS_PER_HOUR == 30
-    last = rows(api)["stale_review"]["last"]
-    assert last and last["ok"] and "checked" in last["result"], last
+
+    def run_once():
+        before = (rows(api)["stale_review"]["last"] or {}).get("started")
+        assert post(api, "system-routines/stale_review/run", {}, token="ben-test")["running"] is True
+        for _ in range(200):
+            last = rows(api)["stale_review"]["last"]
+            if not stale_review._RUNNING.locked() and last and last["started"] != before:
+                return last
+            time.sleep(0.05)
+        raise AssertionError("the run never finished")
+    last = run_once()
+    assert len(model.calls) == stale_review.CALLS_PER_HOUR == 30, "the hourly cap bites a manual run too"
+    assert last["ok"] and "checked" in last["result"], last
+    run_once()                                           # a second Run now in the same hour gets what is left: none
+    assert len(model.calls) == 30
 
 
 def test_run_now_on_a_plain_job_lands_its_result_on_the_row_and_is_refused_while_off(api):

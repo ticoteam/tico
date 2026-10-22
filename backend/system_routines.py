@@ -630,6 +630,10 @@ def listing(c, settings, now=None, who=None, auth=None):
                 "can_change": bool(ctl and who is not None and auth is not None and can_change(auth, who, job.key)),
                 "last": None, "next": _stamp(following) if following else None}
         item["search"] = search_words(job, when_words, then_words, department)
+        if job.key == "health_scan":
+            # Its own switch only says whether it may run; it finds nothing while the Health Monitor itself is off.
+            from .health_monitor import active
+            item["note"] = None if active(c) else "Finds nothing while the Health Monitor is off (Settings > Health)"
         if row:
             item["last"] = {"started": row["started"], "finished": row["finished"], "ok": bool(row["ok"]),
                             "result": row["result"], "runs": row["runs"]}

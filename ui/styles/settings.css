@@ -609,6 +609,7 @@ fieldset.brepo>.repo-name+p{margin:-4px 0 4px 24px;font-size:var(--t-xs);line-he
 .sysr-ctl .settings-cell-note{flex-basis:100%;margin:0}
 .sysr-switch{display:inline-flex;gap:6px;align-items:center}
 .sysr-owner,.sysr-needed{font-size:var(--t-sm)}
+.sysr-note{font-size:var(--t-sm);color:var(--wait)}
 .sysr-failed{color:var(--fail);font-weight:600}
 .sysr-ai{display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:var(--t-sm);margin-top:2px}
 .sysr-fallback{flex-basis:100%;color:var(--wait)}

@@ -159,8 +159,17 @@ const row = (page, key) => page.locator(`[data-system-routine="${key}"]`);
         await page.waitForFunction(() => document.querySelector('[data-system-routine="topic_fresh"] [data-sysr-status]')?.textContent === 'Saved');
         await row(page, 'stale_review').locator('[data-sysr-run]').click();
         await page.waitForFunction(() => /4 checked, 1 suggestion/.test(document.querySelector('[data-system-routine="stale_review"] [data-sysr-result]')?.textContent || ''));
+        // The daily time saves once, when the box is left, not after the hour alone.
+        const at = row(page, 'still_wanted').locator('[data-sysr-at]');
+        await at.click();
+        await page.keyboard.type('1030');
+        await page.keyboard.type('AM');
+        assert.equal(await page.evaluate(() => document.activeElement?.matches('[data-sysr-at]')), true, 'focus stays while typing');
+        await page.keyboard.press('Enter');
+        await page.waitForFunction(() => document.querySelector('[data-system-routine="still_wanted"] [data-sysr-status]')?.textContent === 'Saved');
         assert.deepEqual(writes, [{method: 'PUT', key: 'stale_review', body: {preset: '4h'}},
-          {method: 'PUT', key: 'topic_fresh', body: {on: true}}, {method: 'POST', key: 'stale_review', body: {}}]);
+          {method: 'PUT', key: 'topic_fresh', body: {on: true}}, {method: 'POST', key: 'stale_review', body: {}},
+          {method: 'PUT', key: 'still_wanted', body: {at: '10:30'}}]);
       }
       // The bot routines are still listed below.
       assert.match(await page.locator('#set-recurring').innerText(), /Weekly report/);
