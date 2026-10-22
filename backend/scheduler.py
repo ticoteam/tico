@@ -333,4 +333,12 @@ class Scheduler:
                     approval_expiry.sweep(c, stamp(at))
             except Exception as exc:
                 failures.append({"approval_expiry": type(exc).__name__})
+            # ...and each weekday morning, questions unanswered two business days go back to their bots, one wake per
+            # bot (backend/still_needed.py).
+            try:
+                from . import still_needed
+                with self.store.transaction() as c:
+                    still_needed.sweep(c, stamp(at))
+            except Exception as exc:
+                failures.append({"still_needed": type(exc).__name__})
         return {"fired": fired, "failures": failures}
