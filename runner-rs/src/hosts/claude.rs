@@ -1271,6 +1271,7 @@ impl ClaudeHost {
             let stop = result.as_ref().and_then(|r| r.get("stop_reason")).cloned().unwrap_or(Value::Null);
             self.emit(event("turn_completed", Some(tid), Some(turn), json!({"status": "completed", "stop_reason": stop})));
         } else {
+            let process_exit = failure.is_none() && (rc < 0 || result.is_none() && rc != 0);
             let error = failure.unwrap_or_else(|| error_text(result.as_ref(), rc, stderr));
             let mut failure = event(
                 "turn_failed",
@@ -1278,7 +1279,7 @@ impl ClaudeHost {
                 Some(turn),
                 json!({"error": error, "limit": limited || is_limit(&error), "auth_retry": is_auth_retryable(&error)}),
             );
-            if rc < 0 || result.is_none() && rc != 0 { failure["exit_code"] = json!(rc); failure["process_exit"] = json!(true); }
+            if process_exit { failure["exit_code"] = json!(rc); failure["process_exit"] = json!(true); }
             self.emit(failure);
         }
         self.emit(event("status", Some(tid), None, json!({"state": "idle"})));
