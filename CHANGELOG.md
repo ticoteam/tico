@@ -18,8 +18,8 @@ All notable changes to Tico are recorded here. The format follows
   Quality & Inspections are seats with no bot yet: a person can hold one, and importing the company file makes no bot
   for it or for any seat a person holds (the coworkers who hold seats stay in the saved plan; they join in Tico). The
   cap table moves from the Corporate Secretary's description to the Equity Manager's. A whole model chart is over the
-  8 KB the installer can carry today, so `setup` asks for it to be imported in the app until the plan-bucket
-  transport lands.
+  8 KB the installer can carry today, so `setup` refuses it before anything is set up and names the step: run setup
+  without `--company-file`, then import the file on Tico's first Welcome step (**Already chose your team?**).
 - **Visuals show without a visual address.** A company with no separate visual address now sees pictures, video and
   audio inline in chat and task conversations, served from the app's own address as media only. A visual page or an
   SVG is a card with its title, a still preview when there is one, and **Open**, which shows it in the file viewer;
