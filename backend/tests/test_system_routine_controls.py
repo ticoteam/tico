@@ -154,6 +154,12 @@ def test_nightly_learnings_has_an_off_switch_on_by_default_and_off_means_no_run_
     assert len(started) == 2
     following = H.parse_ts(rows(api)["learnings"]["next"])
     assert following > datetime.now(timezone.utc) + timedelta(minutes=1), "tonight has run: the next is tomorrow's"
+    noon = datetime(2026, 1, 15, 12, 0, tzinfo=SR.zone())          # a night no other line claims
+    with store.transaction() as c:
+        c.execute("INSERT INTO learning_runs(id,night,status,started) VALUES('u',?,'unconfigured',?)",
+                  (L.night_of(noon), H.now()))
+        assert SR.next_night(c, {"at": "04:00"}, noon) == noon.replace(hour=4) + timedelta(days=1), \
+            "an unconfigured night is not tried again before tomorrow"
 
 
 def test_run_now_on_stale_review_makes_at_most_30_decide_calls_and_the_row_shows_the_result(api, monkeypatch):

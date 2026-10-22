@@ -538,12 +538,12 @@ def next_at(job, last, now, settings=None, c=None, cfg=None):
 
 def next_night(c, cfg, now):
     """Nightly learnings runs once per company night (backend/learnings.py `nightly`), not once after each time: tonight's
-    start while tonight has no run (or one that is tried again), else tomorrow's, whenever its last run started."""
+    start while tonight has no run, else tomorrow's, whenever its last run started. The scheduled claim never retries a
+    night that has a row (only Run now does), so an unconfigured, capped or failed night also waits for tomorrow."""
     from . import learnings
     hour, minute = (int(x) for x in (cfg.get("at") or "03:00").split(":"))
     start = now.astimezone(zone()).replace(hour=hour, minute=minute, second=0, microsecond=0)
-    found = c.execute("SELECT status FROM learning_runs WHERE night=?", (learnings.night_of(now),)).fetchone()
-    if found and found["status"] not in ("unconfigured", "capped", "failed"):
+    if c.execute("SELECT 1 FROM learning_runs WHERE night=?", (learnings.night_of(now),)).fetchone():
         return start + timedelta(days=1)
     return max(start, now)
 
