@@ -2,9 +2,10 @@
 
 Empty means the same as the bot. A turn that carries a task in its own session (clients/sessions.py, a `task:` key)
 runs on it; chat with the bot, and a bot on `session: bot`, stays on the bot's model. A check subtask's model
-(backend/check_models.py) wins over it. A task model that cannot run here (retired, its provider off, its computer
-not signed in) never holds or fails the turn: it runs on the bot's own model and effort, and the run and the task say
-so. Each turn's choice is kept on its attempt (`model_json`) for its run history (usage_records.ran_on)."""
+(backend/check_models.py) wins over it. A task model that cannot run here (retired, its provider off, not installed
+or not signed in on its computer) never holds or fails the turn: it runs on the bot's own model and effort, and the
+run and the task say so. Each turn's choice is kept on its attempt (`model_json`) for its run history
+(usage_records.ran_on)."""
 import json
 
 from clients import sessions
@@ -13,6 +14,7 @@ from . import hubdb as H
 from . import providers
 from .harnesses import runtime_of
 from .readiness import can_run
+from .store import readiness_document
 
 KEY = "task_model"
 
@@ -44,10 +46,31 @@ def task_keyed(config, bot, task_id, session_task_id, conversation_id):
                                                   conversation_id).startswith("task:")
 
 
+def readiness(c, bot, choice, runner_id=None):
+    """`can_run` for the task model on `bot`'s computer, as a task turn would see it. A runtime the computer has not
+    installed is not "installing": a runner installs only its bots' own models and fallbacks
+    (runner-rs/src/relays.rs), so nothing ever will. And a runtime that is not signed in is not signed in, even where
+    the Gateway would run the bot's own turns before sign-in (models_preset): a task turn falls back to the bot's own
+    model instead of spending Gateway credit under the task model's name."""
+    can = can_run(c, bot, choice["runtime"], runner=runner_id, harness=choice["harness"], model=choice["model"])
+    computer = can.get("computer") or {}
+    where = computer.get("label") or "this bot's computer"
+    row = c.execute("SELECT readiness_json FROM runners WHERE id=?", (computer.get("id") or "",)).fetchone()
+    ready = readiness_document(row[0]) if row else {}
+    state = (ready.get("runtimes") or {}).get(choice["runtime"])
+    if ready.get("schema_version") == 1 and isinstance(state, dict) and state.get("installed") is False:
+        return {**can, "can_run": False, "problem": f"{choice['runtime']} is not installed on {where}"}
+    if can.get("gateway"):
+        return {**{k: v for k, v in can.items() if k != "gateway"}, "can_run": False, "sign_in": True,
+                "problem": f"{choice['runtime']} is not signed in on {where}"}
+    return can
+
+
 def why_not(c, settings, bot, choice, runner_id, job_id=None):
-    """Why the task model cannot run this turn on `bot`'s computer `runner_id`, or "" when it can. Its sign-in is
-    `can_run`'s to judge (the bot's own profile, the Gateway preset); a login a usage limit holds, or that another job
-    is probing after one, is a reason too, so the task runs on the bot's model rather than wait on it."""
+    """Why the task model cannot run this turn on `bot`'s computer `runner_id`, or "" when it can. Any answer of
+    `readiness` short of a yes is a reason (not installed, not signed in, a sign-in not checked yet): never-block
+    prefers a turn on the bot's model. A login a usage limit holds, or that another job is probing after one, is a
+    reason too, so the task runs on the bot's model rather than wait on it."""
     from . import login_holds
     from .subscriptions import effective
     row = providers.MODEL_BY_ID.get(choice["model"])
@@ -59,8 +82,8 @@ def why_not(c, settings, bot, choice, runner_id, job_id=None):
         providers.complete_choice(providers.load(c, settings)["enabled"], choice["runtime"], choice["model"])
     except providers.ProviderError as exc:
         return str(exc).replace("default model", "task model")
-    can = can_run(c, bot, choice["runtime"], runner=runner_id, harness=choice["harness"], model=choice["model"])
-    if can.get("can_run") is False:
+    can = readiness(c, bot, choice, runner_id)
+    if can.get("can_run") is not True:
         return can.get("problem") or f"{choice['runtime']} cannot run on this bot's computer"
     login = login_holds.canonical(c, runner_id, effective(c, bot)[0] or "", choice["runtime"])
     held = login_holds.holding(c, runner_id, login, choice["runtime"], job_id)

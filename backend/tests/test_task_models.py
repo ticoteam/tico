@@ -219,3 +219,57 @@ def test_a_limit_on_the_task_model_holds_the_task_models_login_not_the_bots(api)
     with api.app.state.store.read() as c:
         record = json.loads(c.execute("SELECT model_json FROM attempts WHERE id=?", (again["id"],)).fetchone()[0])
     assert record["source"] == "fallback" and record["why"].startswith("grok is at its usage limit until ")
+
+
+def rust_heartbeat(api, machine, runtimes, isolated=None):
+    """A heartbeat in the Rust runner's shape: every harness it knows is listed `idle`, installed or not
+    (runner-rs/src/harness_tools.rs), and a runtime it has not installed is `installed: false`."""
+    readiness = {"schema_version": 1, "runtimes": runtimes,
+                 "harnesses": {name: {"name": name.title(), "runtime": name, "installed": bool(state["installed"]),
+                                      "state": "idle"} for name, state in runtimes.items()},
+                 "bots": {"ops": {"runtime": "claude", "ready": True}}}
+    if isolated is not None:
+        readiness["isolated"] = isolated
+    post(api, "runners/heartbeat", {"version": "test", "platform": "test",
+                                    "capabilities": ["task_lanes_v2", "session_roots_v1"], "readiness": readiness},
+         token=machine["token"])
+
+
+def test_a_task_model_its_computer_has_not_installed_falls_back_rather_than_waiting_on_an_install(api):
+    machine = ops_on_sonnet(api)
+    rust_heartbeat(api, machine, {"claude": {"installed": True, "authenticated": "ready"},
+                                  "grok": {"installed": False, "authenticated": "missing"}})
+    saved = set_task_model(api, {"harness": "grok", "model": "grok-4.6", "effort": "low"})
+    assert saved["readiness"]["can_run"] is False
+    assert saved["readiness"]["problem"] == "grok is not installed on Test Mac"
+    task, turn = task_turn(api, machine)
+    assert (turn["config"]["model"], turn["config"]["reasoning_effort"]) == ("claude-sonnet-5-5", "high")
+    with api.app.state.store.read() as c:
+        record = json.loads(c.execute("SELECT model_json FROM attempts WHERE id=?", (turn["id"],)).fetchone()[0])
+    assert record["source"] == "fallback" and record["why"] == "grok is not installed on Test Mac"
+
+
+def test_under_the_gateway_preset_a_task_model_not_signed_in_runs_on_the_bots_model_not_the_gateway(api, monkeypatch):
+    from backend import models_preset
+    from backend.tests.test_models_preset import choose, connected
+    connected(api, monkeypatch)
+    choose(api, models_preset.RECOMMENDED)
+    with api.app.state.store.transaction() as c:
+        config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='ops'").fetchone()[0])
+        config = {k: v for k, v in config.items() if k != "fallback"}
+        config.update(runtime="claude", harness="claude", model="claude-sonnet-5-5", reasoning_effort="high")
+        c.execute("UPDATE bot_config SET config_json=? WHERE bot='ops'", (json.dumps(config),))
+    machine = runner(api)
+    assign(api, machine, "ops")
+    rust_heartbeat(api, machine, {"claude": {"installed": True, "authenticated": "ready"},
+                                  "codex": {"installed": True, "authenticated": "missing"},
+                                  "pi": {"installed": True, "authenticated": "missing"}}, isolated=True)
+    saved = set_task_model(api, {"harness": "codex", "model": "gpt-6.1-sol", "effort": "high"})
+    assert saved["readiness"]["can_run"] is False and "gateway" not in saved["readiness"]
+    task, turn = task_turn(api, machine)
+    assert (turn["config"]["runtime"], turn["config"]["model"], turn["config"]["reasoning_effort"]) == \
+        ("claude", "claude-sonnet-5-5", "high")
+    assert "waiting_for_sign_in" not in turn["config"]   # not moved to Tico Mid; the Gateway is only its last fallback
+    with api.app.state.store.read() as c:
+        record = json.loads(c.execute("SELECT model_json FROM attempts WHERE id=?", (turn["id"],)).fetchone()[0])
+    assert record["source"] == "fallback" and record["why"] == "codex is not signed in on Test Mac"

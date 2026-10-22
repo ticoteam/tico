@@ -1121,8 +1121,7 @@ class SettingsAdmin:
             c.execute("UPDATE settings_changes SET undone_by=?,undone_at=? WHERE id=? AND undone_at IS NULL",
                       (who.actor, H.now(), undo_change_id))
         H.event(c, who.actor, "bot.task_model_changed", bot, {"before": before, "after": after})
-        readiness = (can_run(c, bot, after["runtime"], harness=after["harness"], model=after["model"])
-                     if after else None)
+        readiness = task_models.readiness(c, bot, after) if after else None
         return {"bot": bot, "task_model": after, "revision": config["revision"] + 1, "readiness": readiness}
 
     def set_compact_at(self, c, who, bot, body):
