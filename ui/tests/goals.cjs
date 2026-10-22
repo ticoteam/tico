@@ -16,7 +16,7 @@ const bots = [
   bot('cmo', 'AI CMO', 'p:ana'), bot('seo', 'SEO', 'b:cmo'), bot('sales', 'Sales', 'p:ana'),
   bot('support', 'Support', 'p:ana', {status: 'paused', onboarding_state: 'needs_setup'}),
   bot('old', 'Old bot', 'p:ana', {status: 'archived'}),
-  bot('coo', 'Assistant', ''), bot('librarian', 'Librarian', ''), bot('botops', 'BotOps', ''), bot('goal-manager', 'Goal Manager', ''), bot('inbox', 'Inbox Manager', 'b:botops', {template: 'inbox'}),
+  bot('coo', 'Assistant', ''), bot('librarian', 'Librarian', ''), bot('botops', 'BotOps', ''), bot('goal-manager', 'CEO Bot', 'p:ana', {reports_to: ''}), bot('inbox', 'Inbox Manager', 'b:botops', {template: 'inbox'}),
   bot('channel', 'Channel Inbox', 'b:botops', {helper: true}),
 ];
 const day = Date.now() - 2 * 86400000;
@@ -120,7 +120,7 @@ const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence:
 
     // Every person and every bot that is not archived, goal or not, nested as the org chart nests them; built-in and message bots apart.
     const lines = await page.locator('#goal-tree > li').evaluateAll(els => els.map(el => el.classList.contains('gt-sep') ? el.textContent : el.classList.contains('gt-cont') ? '+' + el.dataset.goal : `${el.dataset.owner}@${el.style.getPropertyValue('--d')}`));
-    assert.deepEqual(lines, ['company@0', 'human:ana@0', 'human:ben@1', 'bot:cmo@1', '+g-cmo2', 'bot:seo@2', 'bot:sales@1', 'bot:support@1',
+    assert.deepEqual(lines, ['company@0', 'human:ana@0', 'human:ben@1', 'bot:cmo@1', '+g-cmo2', 'bot:seo@2', 'bot:goal-manager@1', 'bot:sales@1', 'bot:support@1',
       'Message bots', 'bot:inbox@0', 'bot:channel@0']);
     // The sidebar separates the same built-in and message bots, in the same order.
     assert.deepEqual(await page.locator('#tree a.node[data-helper]').evaluateAll(els => els.map(el => el.dataset.org)),
@@ -128,7 +128,7 @@ const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence:
     assert.deepEqual(await page.locator('#tree .noderow[data-helper] .dept-label').allTextContents(), ['Message bots']);
     const row = owner => page.locator(`#goal-tree .gt-row[data-owner="${owner}"]:not(.gt-cont)`);
     assert.equal(await row('bot:sales').locator('.gt-goal').count(), 0, 'no goal: nothing written');
-    assert.equal(await row('bot:goal-manager').count(), 0, 'existing built-in goals are hidden');
+    assert.equal(await row('bot:goal-manager').locator('.gt-goal').count(), 0, 'existing built-in goals are hidden');
     assert.equal(await page.locator('#nav-assistant').getAttribute('href'), '#/assistant');
     assert.equal(await page.locator('#nav-botops').getAttribute('href'), '#/bot/botops');
     await page.locator('.gm-routines li b').first().waitFor();
@@ -140,7 +140,7 @@ const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence:
     assert.equal(last().path, '/api/v2/chat/goal-manager');
     assert.deepEqual(last().body, {text: 'Change the revenue goal', refs: {}});
     assert.equal(await page.locator('.gm-history').count(), 0, 'history stays inline');
-    assert.deepEqual(await page.locator('[data-gm-thread] .bubble').evaluateAll(els => els.map(el => { const copy = el.cloneNode(true); copy.querySelectorAll('[data-chat-copy]').forEach(button => button.remove()); return copy.textContent; })), ['anaChange the revenue goal', 'Goal ManagerUpdated the goal.']);
+    assert.deepEqual(await page.locator('[data-gm-thread] .bubble').evaluateAll(els => els.map(el => { const copy = el.cloneNode(true); copy.querySelectorAll('[data-chat-copy]').forEach(button => button.remove()); return copy.textContent; })), ['anaChange the revenue goal', 'CEO BotUpdated the goal.']);
     // A reload shows the same room the bot page uses (the viewer's personal room), with its latest exchange.
     await page.reload();
     await page.locator('[data-gm-thread]', {hasText: 'Updated the goal.'}).waitFor();
@@ -197,7 +197,7 @@ const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence:
     assert.equal(await row('company').locator('.gt-goal .gdot').getAttribute('class'), 'gdot red');
     // Needs you: a count and its lines; a proposal is confirmed there.
     assert.match(await page.locator('#goal-needs').innerText(), /Needs you\s*2[\s\S]*Activation on Double organic signups/i);
-    // Each line is the Goal Manager's task, linked; the link opens the task, not the KPI.
+    // Each line is the CEO Bot's task, linked; the link opens the task, not the KPI.
     assert.equal(await page.locator('#goal-needs .need-row [data-need-task]').getAttribute('href'), '#/task/t-red');
     await page.locator('#goal-needs [data-decide=confirm]').click();
     await until(() => page.locator('#goal-needs .kpi-prop').count().then(n => n === 0), 'proposal gone');
@@ -356,7 +356,8 @@ const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence:
     await resultRequested;
     assert.deepEqual(posted.findLast(r => r.path === '/api/v2/goal-manager/turn-on').body, {});
     assert.equal(bots.find(b => b.name === 'goal-manager').status, 'active');
-    assert.equal(await page.locator('#goal-tree [data-owner="bot:goal-manager"]').count(), 0);
+    assert.equal(await page.locator('#goal-tree [data-owner="bot:goal-manager"]').count(), 1, 'still its one line on the tree');
+    assert.equal(await page.locator('#goal-tree [data-owner="bot:goal-manager"] .gt-goal').count(), 0);
     assert.equal(await page.locator('[data-gm-result]').innerText(), '', 'the chat is ready while the routine result is pending');
     releaseResult();
     await page.locator('[data-gm-result]', {hasText: 'Updated KPI readings'}).waitFor();

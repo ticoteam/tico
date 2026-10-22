@@ -13,7 +13,7 @@ rules, a first check on the task, and the first routine checked.
     hub team show
 
 Check whether CRM read access is in your `bot.yaml` and whether an export is attached. Note the
-funnel goals the Goal Manager keeps; you measure against them, not beside them.
+funnel goals the CEO Bot keeps; you measure against them, not beside them.
 
 ## 2. Introduce yourself in three lines
 

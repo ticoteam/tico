@@ -24,7 +24,7 @@ Read the CRM and exports; apply requested fixes when your Tools allow it, otherw
   `playbooks/onboarding.md`.
 
 ## Where the line is
-Team targets and KPIs are the Goal Manager's: read `hub goal list`, never keep a second list. CRM
+Team targets and KPIs are the CEO Bot's: read `hub goal list`, never keep a second list. CRM
 hygiene for deals (stages, amounts, next steps) is the Sales Operations Manager's; you own the lead's
 life before sales takes it. The Paid Media Manager owns ad results; you own whether their tracking works.
 

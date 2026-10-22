@@ -35,7 +35,7 @@ TAGS = {
     "Files": "What a bot creates, revises or delivers, listed on its page (docs/files.md).",
     "Docs": "The team's docs (docs/docs.md): internal docs written or imported in Tico, with history and locks; external sources, including indexed public GitHub docs; and search across them.",
     "Assistant": "The signed-in person's own private Assistant chat (docs/assistant.md): ask, and confirm what it proposes.",
-    "Goals": "What every person and bot is for (docs/goals-and-kpis.md): goals with a colour the Goal Manager works out from their KPIs, "
+    "Goals": "What every person and bot is for (docs/goals-and-kpis.md): goals with a colour the CEO Bot works out from their KPIs, "
              "unless a person set one; check-ins in the owner's words; proposals the owner confirms.",
     "KPIs": "Measures that stand on their own: a goal links to them and carries the target. Readings are facts with a period, "
             "evidence and a quality, never edited; a correction supersedes the old one.",
@@ -365,18 +365,17 @@ STABLE = [
      "The Assistant only: post the list of approvals it is about to approve for you in your chat; only those may then "
      "be approved on your yes", None),
     # Goals and KPIs (docs/goals-and-kpis.md)
-    ("/api/v2/ceo-bot", "get", "Goals", "getCeoBotSwitch",
-     "Whether this install has the CEO Bot switch on (the Goal Manager shown as the CEO Bot, at the top of the chart), "
-     "how much it does (its level, with each level's sentence and who changed it when), and how many items it put in "
-     "each person's Needs you today against its cap of 5 (everyone's for the owner, admins and the CEO Bot; your own "
-     "for anyone else)", "CeoBotView"),
-    ("/api/v2/ceo-bot", "post", "Goals", "setCeoBotSwitch",
-     "Owners and admins: turn the CEO Bot switch on or off for this install; no bot may. Only names and the chart change",
-     "CeoBotView"),
+    ("/api/v2/ceo-bot", "get", "Goals", "getCeoBot",
+     "The CEO Bot's name, whether its regular checks run, how much it does (its level, with each level's sentence and "
+     "who changed it when), and how many items it put in each person's Needs you today against its cap of 5 "
+     "(everyone's for the owner, admins and the CEO Bot; your own for anyone else)", "CeoBotView"),
     ("/api/v2/ceo-bot/level", "post", "Goals", "setCeoBotLevel",
-     "Settings > CEO Bot, \"How much your CEO Bot does\": the owner or an admin picks level 1, 2 or 3 on their own "
-     "click, logged with who and when. No bot may, the CEO Bot included. 409 while the switch is off",
+     "Settings > CEO Bot, \"How much your CEO Bot does\": the owner picks Passive (1), Suggests actions (2) or Acts on "
+     "its own (3) on their own click, logged with who and when. No admin or bot may, the CEO Bot included",
      "CeoBotView"),
+    ("/api/v2/ceo-bot/checks", "post", "Goals", "setCeoBotChecks",
+     "Settings > CEO Bot, \"Regular checks\": the owner turns the KPI pass and the automatic goal colours on or off, "
+     "on their own click. Off, neither runs until they are turned back on. No admin or bot may", "CeoBotView"),
     ("/api/v2/ceo-bot/merge", "post", "Goals", "mergeCeoBotAsks",
      "The CEO Bot only, at level 2 or 3: one item in a person's Needs you for 2 to 10 tasks where bots ask them the "
      "same thing. The originals leave their Needs you while it is open; their one answer goes to each bot that asked, "
@@ -386,15 +385,15 @@ STABLE = [
      "recoveries approved in a row with its pick unchanged, and no offer in 30 days. It never raises its own level",
      "CeoBotLevel3OfferResult"),
     ("/api/v2/company", "get", "Goals", "getCompany",
-     "The company's Vision and Description (the Company section at the top of Goals where the CEO Bot switch is on), "
+     "The company's Vision and Description (the Company section at the top of Goals), "
      "and whether the caller may edit them", "CompanyResult"),
     ("/api/v2/company", "post", "Goals", "updateCompany",
-     "The owner or an admin, on their own click: change the Vision and/or the Description; never a bot, the CEO Bot "
+     "The owner, on their own click: change the Vision and/or the Description; never an admin or a bot, the CEO Bot "
      "included. Each change is kept with who and when", "CompanyResult"),
     ("/api/v2/company/history", "get", "Goals", "getCompanyHistory",
      "Every change to the Vision and the Description, newest first, with who made it and when", "CompanyHistory"),
     ("/api/v2/goal-manager/turn-on", "post", "Goals", "turnOnGoalManager",
-     "Owner only: add the Goal Manager from the catalog or restore it, and activate it", None),
+     "Owner only: add the CEO Bot from the catalog or restore it, and activate it", None),
     ("/api/v2/goals", "get", "Goals", "listGoals",
      "The caller's own goals, the chain above them and their reports' goals; ?all=true is every goal the caller may read "
      "(?status=red,gray filters); ?owner= names someone else", "GoalList"),
@@ -405,9 +404,9 @@ STABLE = [
      "what the Goals page draws", "GoalTree"),
     ("/api/v2/goals/needs-you", "get", "Goals", "getGoalsNeedsYou",
      "Red KPIs on goals the caller owns, stale KPIs they own, and definitions or targets they are asked to confirm; for a person "
-     "each is a Goal Manager task (`task`), the one Tasks and Decide show", "GoalsNeedsYou"),
+     "each is a CEO Bot task (`task`), the one Tasks and Decide show", "GoalsNeedsYou"),
     ("/api/v2/goals/refresh", "post", "Goals", "refreshGoalStatuses",
-     "The Goal Manager's status pass (or the owner's): work automatic colours out again. A colour a person set only gets a suggestion",
+     "The CEO Bot's status pass (or the owner's): work automatic colours out again. A colour a person set only gets a suggestion",
      "GoalRefreshView"),
     ("/api/v2/goals/{gid}", "get", "Goals", "getGoal",
      "One goal with its KPIs, the goals under and above it, tasks, history, recent check-ins and pending proposals", "GoalResult"),
@@ -417,7 +416,7 @@ STABLE = [
      "Set the colour by hand with one sentence (red, yellow, green) or end the goal (done, dropped). It sticks, with the setter's "
      "name, until a person hands it back", "GoalResult"),
     ("/api/v2/goals/{gid}/status/auto", "post", "Goals", "handBackGoalStatus",
-     "\"Let Goal Manager set it\": end a colour set by hand; the automatic colour is worked out at once", "GoalResult"),
+     "\"Let CEO Bot set it\": end a colour set by hand; the automatic colour is worked out at once", "GoalResult"),
     ("/api/v2/goals/{gid}/why", "post", "Goals", "setGoalWhy",
      "A person who may edit the goal writes its Why (one line tying it to the vision) or clears it; a bot proposes one "
      "instead (kind goal_why)", "GoalResult"),
@@ -879,8 +878,8 @@ SCHEMAS = {
     "Goal": obj({"id": "s", "title": "s", "owner": "s", "parent_id": "n", "body": "s", "status": {"type": ["string", "null"], "description":
                  "red, yellow, green, gray (no data), done, dropped; null while unscored or proposed"},
                  "status_note": "s", "status_by": "n", "status_at": "n",
-                 "status_source": {"type": ["string", "null"], "description": "auto: worked out by the Goal Manager; person: set by hand and kept until handed back"},
-                 "suggest_status": {"type": ["string", "null"], "description": "On a colour set by hand: the colour the Goal Manager would choose, when it differs"},
+                 "status_source": {"type": ["string", "null"], "description": "auto: worked out by the CEO Bot; person: set by hand and kept until handed back"},
+                 "suggest_status": {"type": ["string", "null"], "description": "On a colour set by hand: the colour the CEO Bot would choose, when it differs"},
                  "suggest_note": "n", "suggest_at": "n", "rank": {"type": ["integer", "null"]}, "created": "s", "created_by": "s", "updated": "s"},
                 required=["id", "title", "owner", "parent_id", "body", "status", "status_note", "status_by", "status_at", "status_source",
                           "rank", "created", "created_by", "updated"],
@@ -929,8 +928,7 @@ SCHEMAS = {
     "GoalResult": obj({"goal": {}}),
     "CompanyResult": obj({"company": obj({"vision": "s", "description": "s", "updated": "n", "updated_by": "n",
                                           "updated_by_name": "s"}),
-                          "on": {"type": "boolean", "description": "Whether the CEO Bot switch is on: the section shows only then"},
-                          "may_edit": {"type": "boolean", "description": "The owner or an admin, never a bot"}}),
+                          "may_edit": {"type": "boolean", "description": "The owner on their own click, never an admin or a bot"}}),
     "CompanyHistory": obj({"events": items(obj({"id": "s", "ts": "s", "actor": "s", "actor_name": "s",
                                                 "field": {"enum": ["vision", "description"]}, "old": "s", "new": "s"}))}),
     "GoalList": obj({"goals": items(ref("Goal"))}, required=["goals"], owner={"type": "string"},
@@ -942,7 +940,7 @@ SCHEMAS = {
                      "unaligned": {"type": "object", "description": "{actor: open tasks that serve no goal}"},
                      "other_kpis": items(ref("Kpi")), "proposals": items(ref("GoalProposalView"))},
                     required=["goals", "owners", "unaligned", "other_kpis", "proposals"]),
-    "CeoBotView": obj({"on": "b", "name": "s", "changed_by": "s", "changed_at": "s",
+    "CeoBotView": obj({"name": "s", "regular_checks": {"type": "boolean", "description": "Whether the KPI pass and the automatic goal colours run"},
                        "level": {"type": "integer", "enum": [1, 2, 3]},
                        "levels": items(obj({"level": "i", "name": "s", "sentence": "s", "ready": "b"},
                                            required=["level", "name", "sentence", "ready"])),
@@ -952,7 +950,7 @@ SCHEMAS = {
                        "daily_cap": "i", "asked_today": {"type": "object", "additionalProperties": {"type": "integer"},
                                                          "description": "{person actor: items the CEO Bot put in their Needs you today (UTC)}"},
                        "level3_offer": ref("CeoBotLevel3Offer")},
-                      required=["on", "name", "level", "levels", "daily_cap"]),
+                      required=["name", "regular_checks", "level", "levels", "daily_cap"]),
     "CeoBotLevel3Offer": obj({"streak": "i", "needed": "i", "due": "b", "last_offered_at": "s"},
                              required=["streak", "needed", "due"]),
     "CeoBotLevel3OfferResult": obj({"level3_offer": ref("CeoBotLevel3Offer")}),

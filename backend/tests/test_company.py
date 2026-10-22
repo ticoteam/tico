@@ -1,13 +1,13 @@
-"""The company at the top of Goals and each goal's Why (backend/company.py), where the CEO Bot switch is on: the owner
-and admins write the Vision and the Description, everyone reads them, and every change is kept with who and when. The
-CEO Bot proposes a goal's Why; a person accepts it, edits it or writes their own. No bot writes either, the CEO Bot
-included (spec: Head of Product, CEO Bot, tests 1, 2 and 4)."""
+"""The company at the top of Goals and each goal's Why (backend/company.py): only the owner writes the Vision and the
+Description, everyone reads them, and every change is kept with who and when. The CEO Bot proposes a goal's Why; a person
+accepts it, edits it or writes their own. No bot writes either, the CEO Bot included, and no admin writes the company
+(spec: Head of Product, CEO Bot, tests 1, 2 and 4; v3 10.11)."""
 
 from backend import goal_asks as GA
 from backend.auth import Identity
 from backend.store import H
 from backend.tests.test_api import api, get, headers, post  # noqa: F401
-from backend.tests.test_goal_asks import goal_manager
+from backend.tests.test_goal_asks import goal_manager, raise_level
 
 CEO = "bot:goal-manager"
 
@@ -23,9 +23,9 @@ def bot(api, slug):
     return token
 
 
-def switched_on(api):
-    goal_manager(api)
-    assert post(api, "ceo-bot", {"on": True})["on"] is True
+def with_ceo_bot(api, level=1):
+    """The CEO Bot, at Passive unless the owner raised it, as its own agent credential."""
+    goal_manager(api, level)
     return bot(api, "goal-manager")
 
 
@@ -38,45 +38,15 @@ def goal(api, goal_id):
     return get(api, f"goals/{goal_id}")["goal"]
 
 
-def test_off_there_is_no_company_section_to_write(api):
-    """Spec test 17's guard: with the switch off the record reads empty and nothing about it can be written."""
-    goal_manager(api)
-    ceo = bot(api, "goal-manager")
-    shown = get(api, "company")
-    assert shown["on"] is False and shown["company"]["vision"] == "" and shown["may_edit"] is True
-    post(api, "company", {"vision": "Every landlord runs on Tico."}, expected=409)
-    gid = post(api, "goals", {"title": "Grow rentals", "owner": "company"})["goal"]["id"]
-    post(api, "goal-proposals", {"kind": "goal_why", "goal_id": gid, "payload": {"why": "Landlords first."}},
-         token=ceo, expected=409)
-    post(api, f"goals/{gid}/why", {"why": "Landlords first."}, expected=409)
-    # Off wins over every other refusal: a bot, the Assistant acting for the owner, a member, an unknown goal.
-    api.app.state.store.settings.test_identities["ana-via"] = Identity("human:ana", "owner", "ana@acme.example",
-                                                                       via="assistant", confirmed=True)
-    for token in (ceo, "ana-via", "cara-test"):
-        post(api, "company", {"vision": "Said for her."}, token=token, expected=409)
-        post(api, f"goals/{gid}/why", {"why": "Said for her."}, token=token, expected=409)
-    post(api, "goals/no-such-goal/why", {"why": "Landlords first."}, expected=409)
-    post(api, "goal-proposals", {"kind": "goal_why", "goal_id": "no-such-goal", "payload": {"why": "Landlords first."}},
-         token=ceo, expected=409)
-    # A Why left waiting from when it was on can't be decided while off, by anyone.
-    assert post(api, "ceo-bot", {"on": True})["on"] is True
-    waiting = propose_why(api, gid, "Landlords first.", ceo)
-    assert post(api, "ceo-bot", {"on": False})["on"] is False
-    for token in (ceo, "ana-via", "cara-test", "ana-test"):
-        post(api, f"goal-proposals/{waiting['id']}/decide", {"decision": "confirm"}, token=token, expected=409)
-    assert goal(api, gid)["why"] == ""
-    assert get(api, "company/history")["events"] == []
-
-
 def test_the_owner_writes_it_a_member_reads_it_and_the_history_says_who_and_when(api):
-    """Spec tests 1 and 2: empty at first; the owner (or an admin) saves it, a member reads it and cannot change it,
+    """Spec tests 1 and 2: empty at first; the owner saves it, an admin or a member reads it and cannot change it,
     and the history keeps every change with who made it."""
-    switched_on(api)
+    with_ceo_bot(api)
     first = get(api, "company")
-    assert first == {**first, "on": True, "may_edit": True}
+    assert "on" not in first and first["may_edit"] is True
     assert first["company"]["vision"] == "" and first["company"]["description"] == ""
     assert get(api, "company", token="cara-test")["may_edit"] is False
-    assert get(api, "company", token="ben-test")["may_edit"] is True                    # an admin
+    assert get(api, "company", token="ben-test")["may_edit"] is False                   # an admin: owner only
     saved = post(api, "company", {"vision": "Every small landlord runs  their rentals on Tico.",
                                   "description": "Tico runs a rental business with bots.\nFor landlords with 1-20 units."})
     assert saved["company"]["vision"] == "Every small landlord runs their rentals on Tico."   # one line
@@ -86,22 +56,24 @@ def test_the_owner_writes_it_a_member_reads_it_and_the_history_says_who_and_when
     read = get(api, "company", token="cara-test")
     assert read["company"]["vision"] == saved["company"]["vision"] and read["may_edit"] is False
     post(api, "company", {"vision": "Mine now."}, token="cara-test", expected=403)
-    # An admin changes the description only; the same words again change nothing.
-    post(api, "company", {"description": "Bots that run rentals."}, token="ben-test")
-    post(api, "company", {"description": "Bots that run rentals."}, token="ben-test")
+    # An admin may not change it either (v3: owner only).
+    refused = post(api, "company", {"description": "Bots that run rentals."}, token="ben-test", expected=403)
+    assert "Only the owner" in str(refused)
+    # The owner changes the description only; the same words again change nothing.
+    post(api, "company", {"description": "Bots that run rentals."})
+    post(api, "company", {"description": "Bots that run rentals."})
     post(api, "company", {"vision": "x" * 401}, expected=422)
     events = get(api, "company/history", token="cara-test")["events"]
     assert [(e["field"], e["actor"]) for e in events] == [
-        ("description", "human:ben"), ("description", "human:ana"), ("vision", "human:ana")]
+        ("description", "human:ana"), ("description", "human:ana"), ("vision", "human:ana")]
     newest = events[0]
     assert newest["old"].startswith("Tico runs a rental business") and newest["new"] == "Bots that run rentals."
     assert newest["actor_name"] and newest["ts"]
-    assert get(api, "company")["company"]["updated_by"] == "human:ben"
 
 
 def test_no_bot_writes_the_company_or_accepts_a_why_the_ceo_bot_included(api):
     """The API refuses a Vision or Description edit and a Why accept or write from any bot; the CEO Bot proposes."""
-    ceo = switched_on(api)
+    ceo = with_ceo_bot(api)
     ops = bot(api, "ops")
     for token in (ceo, ops):
         post(api, "company", {"vision": "Bots rule."}, token=token, expected=403)
@@ -133,8 +105,10 @@ def test_no_bot_writes_the_company_or_accepts_a_why_the_ceo_bot_included(api):
 
 def test_the_ceo_bot_proposes_a_why_and_the_owner_accepts_or_edits_it(api):
     """Spec test 4: a goal with no Why is not tied to the vision; the CEO Bot proposes one, the owner accepts it as it
-    is or edited, or writes their own. One open Why per goal, and none of them is a Needs you item of its own."""
-    ceo = switched_on(api)
+    is or edited, or writes their own. One open Why per goal, and none of them is a Needs you item of its own. At
+    Passive (where the owner asked for them in chat) they wait on their goals and nobody is asked; above it they are one
+    bundled item."""
+    ceo = with_ceo_bot(api)
     a = post(api, "goals", {"title": "Grow rentals 30%", "owner": "company"})["goal"]["id"]
     b = post(api, "goals", {"title": "Ship the stats page", "owner": "ben"})["goal"]["id"]
     c = post(api, "goals", {"title": "Hire a support lead", "owner": "cara"})["goal"]["id"]
@@ -152,8 +126,12 @@ def test_the_ceo_bot_proposes_a_why_and_the_owner_accepts_or_edits_it(api):
     whys = [p for p in tree["proposals"] if p["kind"] == "goal_why"]
     assert [(p["id"], p["goal_id"], p["may_decide"]) for p in whys] == [(first["id"], a, True)]
     assert [p["may_decide"] for p in get(api, "goals/tree", token="cara-test")["proposals"] if p["kind"] == "goal_why"] == [False]
-    # Never one Needs you item (or Goal Manager task) per goal: the CEO Bot bundles them (Dev 220).
+    # Never one Needs you item (or CEO Bot task) per goal: the CEO Bot bundles them (Dev 220), and only above Passive.
     assert not [i for i in get(api, "goals/needs-you")["items"] if i["kind"] == "proposal"]
+    with api.app.state.store.transaction() as conn:
+        GA.sync(conn, api.app.state.auth.owner_id(conn))
+        assert conn.execute("SELECT count(*) FROM goal_asks").fetchone()[0] == 0           # Passive: nobody asked
+    raise_level(api, 2)
     with api.app.state.store.transaction() as conn:
         GA.sync(conn, api.app.state.auth.owner_id(conn))
         assert [r[0] for r in conn.execute("SELECT kind FROM goal_asks ORDER BY kind")] == ["vision", "why"]

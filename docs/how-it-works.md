@@ -13,7 +13,7 @@ model subscriptions and sends the results back. The in-app Help page (**?** in t
 - **Team**: humans and bots are teammates on one team chart, in groups.
 - **Built-in**: four bots every team gets. The [Assistant](assistant.md) is each human's own helper; BotOps sets up and
   fixes bots, computers, Tools and Credentials; the [Librarian](librarian.md) answers from the team's docs and the Tico
-  manual; the [Goal Manager](goals-and-kpis.md#the-goal-manager) keeps KPIs and goal status current.
+  manual; the [CEO Bot](goals-and-kpis.md#the-ceo-bot) keeps KPIs and goal status current.
 - **Message bots** work a human's email or a Slack channel. **External agents** (Hermes, OpenClaw, Codex, Claude) connect
   over MCP with a token ([Connect an external agent](connect-an-agent.md)).
 - **Tools and Credentials**: a bot gets only the Credentials granted to it, and drafts to outsiders until its send switch
@@ -26,7 +26,7 @@ model subscriptions and sends the results back. The in-app Help page (**?** in t
 | Assistant (built-in) | Your own helper: finds things, makes tasks, drafts the rest for your click | Sidebar, or ⌘K | “What needs me today?” |
 | BotOps (built-in) | Sets up and fixes bots, computers, Tools and Credentials | Sidebar | “Add a bot that answers #support” |
 | Librarian (built-in) | Answers from your docs and the Tico manual, with sources | Ask the Librarian on Docs and Market | “What is our refund limit?” |
-| Goal Manager (built-in) | Keeps KPIs and goal colours current | Top of Goals | “Why is this goal yellow?” |
+| CEO Bot (built-in) | Keeps KPIs and goal colours current | Top of Goals | “Why is this goal yellow?” |
 | Your bots | Do the team's work from their Instructions | Team in the sidebar: chat or a task | “Draft replies to the open tickets” |
 | Message bots (Beta) | Work a human's email or a Slack channel | Message bots in the sidebar | “Sort today's email” |
 
@@ -65,7 +65,7 @@ Words are defined in the [Glossary](glossary.md).
   (a playbook file) or inline `instructions`, `labels`. Each occurrence becomes a task.
 - **Goal** — what a human or a bot is for: a title, an owner (`company`, a human or a bot), the goal it
   supports (`parent_id`, optional) and a colour with a one-line note. The colour is set automatically
-  from the goal's KPIs (or its owner's check-ins and tasks) by the built-in **Goal Manager**; a human
+  from the goal's KPIs (or its owner's check-ins and tasks) by the built-in **CEO Bot**; a human
   may override it, and it stays theirs until they hand it back. `done` or `dropped` when it ends. A task
   may name the goal it serves. Bots read theirs with `hub goal list`; nothing is pushed into a run.
 - **KPI** — a measure that stands on its own: a name, definition, unit, direction, cadence and one owner.
@@ -119,7 +119,7 @@ action items), **Docs**,
 **Tools**, **Changelog**, the **Team** tree, and under your email **Settings**
 and, for the owner and admins, **SQL**. Tasks has List, Board and Done; Routines are in **Settings → Routines**.
 Credentials are in **Tools → Credentials**. See [Navigation](navigation.md). A bot's page has **Chat**,
-**Tasks**, **Docs** and **More**. The assistant (Tico, `coo`), BotOps, the Librarian and the Goal Manager are built in and cannot be archived or deleted (`409 system_bot`); the assistant
+**Tasks**, **Docs** and **More**. The assistant (Tico, `coo`), BotOps, the Librarian and the CEO Bot are built in and cannot be archived or deleted (`409 system_bot`); the assistant
 and the Librarian work in the background and are not listed for humans. Each human has one private **Assistant** chat, its own page from the left rail
 (also the first tab on their own page, and "Ask the Assistant…" in search): it looks things up at once, does low-risk things as that human, and
 proposes anything with a side effect for their own click ([The Assistant](assistant.md)). There is no shared

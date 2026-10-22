@@ -59,6 +59,28 @@ hub task relate <task> <blocker> --kind blocked_by
 hub task update <task> --status waiting --note "Needs the build environment"
 ```
 
+### Waiting for a milestone, not the whole task
+
+Often what a task needs is an earlier milestone of another task, not that task being done: a pull request merged
+while its ticket stays In QA, or a release published while its checklist stays open for its QA watch. Wait for the
+milestone itself:
+
+```sh
+hub task wait <task> --on pr:https://github.com/<owner>/<repo>/pull/943   # until that pull request merges
+hub task wait <task> --on pr:<other task>                                  # the one pull request linked on it
+hub task wait <task> --on release:v0.3.64                                  # until that release is published
+hub task wait <task> --on task:<other task>                                # the same as blocked_by
+hub task wait <task> --on pr:<url> --remove                                # take it off
+```
+
+The task shows it ("Waits for PR #943 to merge"). When the pull request merges or the release is published (the
+GitHub webhook), the owner gets one wake; the task it came from keeps its own step, and nothing is closed or moved.
+A wait made after the milestone is woken once by the minute sweep instead, and a merge or release whose webhook
+never arrived (the server was down) is checked with GitHub every few minutes, in repositories the GitHub App reaches. Replays and the sweep never wake it twice. `release:` takes the server's release repository unless
+named (`release:<owner>/<repo>@v0.3.64`). The MCP tool is `hub_task_wait`; the API is
+`POST /api/v2/tasks/{id}/waits` with `{"on": "pr:<url>", "remove": false}`; each task answer carries
+`milestone_waits`.
+
 When the task waits on a person to act instead (a decision, access, a host only they can fix),
 name them with `--on` and say plainly what you need in the note:
 
@@ -225,7 +247,7 @@ answer by Fri, Oct 16, Writer goes ahead: Yes". When that step is reversible and
 nothing by then (the team's days after the ask, 3 by default, or its later `by`; `by` is at most 14 days away and
 `--default-kind` is required with `--if-no-answer`), Tico answers for them with "No answer from Ana by
 Oct 16, so Writer goes ahead with what it said it would do: Yes", which wakes the bot with that choice. A send,
-spending money or a delete never goes ahead without an answer: the card says the bot waits. The owner turns this off,
+spending money or a delete never goes ahead without an answer: the card says so, and on its date the question closes and the bot decides without it. The owner turns this off,
 or changes the days, in Settings > Humans (**Bots go ahead on their recommendation**).
 
 A send, a spend, a delete, any default when the owner turned going ahead off, and any default once the person has
@@ -652,6 +674,9 @@ hub task relate <task-id> <other-task-id> --kind parent --remove
 
 The MCP tool is `hub_task_relate`; the API is `POST /api/v2/tasks/{id}/relations` with
 `{"task": "<other id>", "kind": "...", "remove": false}`, and task create takes `"relations": [...]`.
+Each write reads back what it stored, in words from both ends, in `readback` (the CLI prints it as `hub: stored:`):
+`#237 "…" waits for #233 "…"` and `#233 "…" blocks #237 "…"`. A `blocks` sent where `blocked_by` was meant reads
+the other way round, so check that line before reporting a dependency as fixed.
 Either task's id, prefix or number works. A parent or a blocker follows the rules those always had (the
 task's parties or a mover; a blocker is the owner's or a mover's); the other kinds need the right to
 change both tasks, as for links. Finishing a blocker takes its relation off and wakes the bot owner

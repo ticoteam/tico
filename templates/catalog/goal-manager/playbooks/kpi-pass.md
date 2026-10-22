@@ -22,7 +22,7 @@ a step says so.
    data. Add one line to the report: the KPI, what was missing, and how long it has been.
 5. A KPI that fails twice in a row gets one task for the KPI's owner (`hub task create --owner <owner>`), after
    `hub task list` shows there is not one already.
-6. When every due KPI is done or reported, follow `playbooks/status-pass.md`, then `playbooks/check-ins.md` for
-   what slipped.
+6. When every due KPI is done or reported, follow `playbooks/status-pass.md`, then, above Passive only
+   (`level` in `hub goal ceo-bot`), `playbooks/check-ins.md` for what slipped.
 7. Final message, plain: readings posted (KPI, value, period), stale or missing, failures with the reason, and
    suggestions on overridden goals. Commit the repository and rewrite `state.md`.

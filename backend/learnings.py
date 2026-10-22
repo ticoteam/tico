@@ -72,9 +72,9 @@ SAW_WORDS = {"task": ("task", "tasks"), "chat": ("chat", "chats"), "slack": ("Sl
 
 LEARN_TEXT = """Tonight's packet: what people said and decided yesterday that scored as relevant to you. Turn the durable parts into memory.
 
-1. Read `MEMORY.md` (or `memory/learnings.md` if there is no MEMORY.md). Then, for each packet item, decide: write only an explicit human statement, a human correcting a bot, or a pattern seen 3+ times (check memory for earlier sightings). Skip one-off inferences and chit-chat.
+1. Read `memory/learnings.md`: its working rules come first, then the log, newest first. Then, for each packet item, decide: write only an explicit human statement, a human correcting a bot, or a pattern seen 3+ times (check memory for earlier sightings). Skip one-off inferences and chit-chat.
 2. Before writing, search your memory, knowledge and playbooks for a related entry and choose ONE action: update it (preferred), merge near-duplicates, replace it when a newer source contradicts it, add a new one-line entry, or skip if already known.
-3. Entry format: `- <claim> [source: <link or source label>; added: YYYY-MM-DD]`. Quote the source; never paraphrase a person's words into something stronger.
+3. Entry format: `- <claim> [source: <link or source label>; added: YYYY-MM-DD]`, a new one at the top of the log (a standing rule in the working rules section). Keep no memory outside the repository. Quote the source; never paraphrase a person's words into something stronger.
 4. Personal preferences of a specific human do NOT go into this repository (docs/conversation.md).
 5. If a learning needs a change to your instructions (AGENT.md) or settings, file it with `hub task create --owner botops --title "<one line>" --body "<the change and the packet item>"`; BotOps makes the change.
 6. Commit with a clear one-line subject per change and the trailer `Tico-Run: <run id>`, push, and finish this task with a one-line note: what changed, or "Nothing new"."""
