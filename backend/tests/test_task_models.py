@@ -289,3 +289,32 @@ def test_a_task_model_whose_sign_in_cannot_be_checked_runs_rather_than_falling_b
     with api.app.state.store.read() as c:
         record = json.loads(c.execute("SELECT model_json FROM attempts WHERE id=?", (turn["id"],)).fetchone()[0])
     assert record["source"] == "task"
+
+
+def test_an_ordinary_fallback_usage_limit_is_not_a_task_model_limit(api):
+    machine = ops_on_sonnet(api)
+    _, turn = task_turn(api, machine)
+    post(api, f"attempts/{turn['id']}/started", {"thread_id": "ordinary-fallback"}, machine["token"])
+    post(api, f"attempts/{turn['id']}/complete", {
+        "outcome": "failed", "last_seq": 0, "text": "", "limited": True,
+        "fallback": "codex", "primary_limited": True,
+        "usage": {"runtime": "codex", "harness": "codex", "model": "gpt-6.1-sol",
+                  "input_tokens": 10, "output_tokens": 1, "billing": "subscription"}}, machine["token"])
+    with api.app.state.store.read() as c:
+        status = H.status(c, "ops")
+    assert status["state"] == "limited", status
+    assert "task model" not in status["focus"], status
+
+
+def test_a_task_model_limit_without_fallback_usage_keeps_own_model_work_available(api):
+    machine = ops_on_sonnet(api)
+    set_task_model(api, {"harness": "grok", "model": "grok-4.6"})
+    _, turn = task_turn(api, machine)
+    post(api, f"attempts/{turn['id']}/started", {"thread_id": "task-fallback"}, machine["token"])
+    post(api, f"attempts/{turn['id']}/complete", {
+        "outcome": "failed", "last_seq": 0, "text": "", "limited": True,
+        "fallback": "codex", "primary_limited": True}, machine["token"])
+    with api.app.state.store.read() as c:
+        status = H.status(c, "ops")
+    assert status["state"] == "idle", status
+    assert "task model" in status["focus"], status
