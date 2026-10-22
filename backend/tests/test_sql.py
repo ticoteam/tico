@@ -335,6 +335,7 @@ def test_parallel_audits_share_a_commit_without_early_ack_or_lost_context(tmp_pa
 
 def test_a_granted_bot_reads_outcome_totals_but_no_proposal_row_and_cannot_write(api, world):
     from backend import assistant
+    from backend.tests.test_api import setup_attempt
     with api.app.state.store.transaction() as c:
         assistant.ensure_schema(c)
         for n, (status, proposer) in enumerate([("done", "assistant"), ("cancelled", "assistant"), ("done", "bot:botops")]):
@@ -361,6 +362,14 @@ def test_a_granted_bot_reads_outcome_totals_but_no_proposal_row_and_cannot_write
                 "SELECT owner FROM assistant_action_weekly", "SELECT detail_json FROM mcp_call_weekly"):
         assert query(api, sql, token, expected=422)
     assert query(api, "DELETE FROM assistant_actions", token, expected=422)
-    # Another bot, without the grant, is refused; revoking takes it away at once.
+    # A grant to one bot never opens totals, rows or writes to another bot.
+    _, _, other = setup_attempt(api, bot="finance")
+    assert "no such table" in error(api, totals, other["token"])
+    assert "no such table" in error(api, "SELECT * FROM mcp_call_weekly", other["token"])
+    assert "prohibited" in error(api, "SELECT * FROM assistant_actions", other["token"])
+    assert api.get("/api/v2/live/stats", headers=headers(other["token"])).status_code == 403
+    assert api.put("/api/v2/outcome-stats/readers/finance", json={"read": True},
+                   headers=headers(other["token"])).status_code == 403
+    # Revoking takes it away at once.
     assert api.put("/api/v2/outcome-stats/readers/ops", json={"read": False}, headers=headers("ana-test")).json() == {"readers": []}
     assert "no such table" in error(api, totals, token)
