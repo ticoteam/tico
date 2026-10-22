@@ -337,7 +337,7 @@ def run_pass(store, at=None, engine=None, clock=time.monotonic):
         with store.read() as c:
             engine = server_engine(store, c, primary_engine(settings, store))
     summary = {"candidates": len(found), "new": len(found), "calls": 0, "suggested": 0, "left": 0,
-               "deferred": 0, "errors": 0, "changed": 0, "routes": {}, "cost_usd": 0.0}
+               "deferred": 0, "errors": 0, "changed": 0, "routes": {}, "cost_usd": 0.0, "fallback": None}
     if engine is None or qset is None:
         summary["deferred"], summary["why"] = len(found), "unavailable"
     else:
@@ -375,6 +375,9 @@ def run_pass(store, at=None, engine=None, clock=time.monotonic):
                 summary["cost_usd"] = round(summary["cost_usd"] + float(result.get("cost_usd") or 0), 6)
                 route = route_of(result)
                 summary["routes"][route] = summary["routes"].get(route, 0) + 1
+                if result.get("fallback") and not summary["fallback"]:
+                    summary["fallback"] = {"code": result["fallback"],
+                                           "from": route_of({"provider": result.get("fallback_from")})}
             if error:
                 detail["error"] = error
                 summary["errors"] += 1
@@ -420,15 +423,44 @@ def tick(store, at=None):
         return None
 
     def work():
+        from . import system_routines as SR
+        run = SR.Run("stale_review")
         try:
-            run_pass(store, at)
+            summary = run_pass(store, at)
+            if summary is not None:
+                words(run, summary)
         except Exception as exc:
             LOG.warning("Stale ticket review pass failed: %s", type(exc).__name__)
+            run.error = SR.failure_words(exc)
+            summary = {}
         finally:
             _RUNNING.release()
+        if summary is not None:
+            SR.write(store, run)
     thread = threading.Thread(target=work, name="stale-review", daemon=True)
     thread.start()
     return thread
+
+
+WHY_WORDS = {"unavailable": "Decide unavailable", "switched_off": "switched off", "hourly_cap": "hourly limit reached",
+             "daily_cap": "daily limit reached", "time": "out of time"}
+
+
+def words(run, summary):
+    """A pass's summary as its System routines run: "9 checked, 2 suggestions", the route and the cost."""
+    if not summary.get("candidates"):
+        return run.did("No new candidates")
+    parts = [f"{summary.get('calls', 0)} checked",
+             f"{summary.get('suggested', 0)} suggestion{'' if summary.get('suggested') == 1 else 's'}"]
+    if summary.get("deferred"):
+        why = WHY_WORDS.get(summary.get("why"), "")
+        parts.append(f"{summary['deferred']} left for later" + (f" ({why})" if why else ""))
+    run.did(", ".join(parts))
+    if summary.get("calls") and summary.get("errors") == summary.get("calls") and not summary.get("routes"):
+        run.error = "Failed: Decide did not answer"
+    if summary.get("routes") or summary.get("cost_usd"):
+        run.ai(summary.get("routes"), summary.get("fallback"), summary.get("cost_usd"))
+    return run
 
 
 # ----------------------------------------------------------------------------- the person's card

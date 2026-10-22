@@ -8,6 +8,12 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- **System routines in Settings > Routines**: a read-only System section above the bot routines lists every job Tico
+  runs on its own timers, in four groups (Checks that suggest, Learning, Reminders and deadlines, Housekeeping), each
+  with what it does, its schedule, its last run in words ("9 checked, 2 suggestions", or "Failed: <reason>" in red) and
+  its next run. Stale ticket review and nightly learnings also show which route answered Decide (Gateway, company key or
+  company AI), "Ran on your own key: Gateway unavailable" when the Gateway did not answer, and this month's AI spend.
+  Housekeeping rows say Tico needs them. `GET /api/v2/system-routines`; the Decide fallback order is unchanged.
 - **Five company models for the setup org chart** replace the one 22-bot starter pack: Everything (73 seats), Software
   company (51), Services firm (38), Local service business (41) and Online store (39), with Legal, People, Operations
   and Leadership and bigger Finance, Sales, Marketing and Support teams. The first chart starts from the model the
@@ -109,6 +115,9 @@ All notable changes to Tico are recorded here. The format follows
   now recorded, the late answer is kept on its run instead of posted, and the request ends stopped ("Stopped by …")
   rather than being run again by the automatic recovery 90 minutes later. A stopped turn whose computer never
   reports back is let go with "Stopped by …; not resumed" instead of being resumed.
+- **Milestone waits follow the blocked_by rules.** Adding or removing a wait for a pull request or release now needs
+  the same permission as a blocked_by (the task's owner, or a person on a team that moves tasks), a deleted task
+  keeps its waits and gets them back when restored, and a message held while a task waits says what it waits for.
 - **Questions that close on their own leave every count right.** The hourly sweep closes each leftover question on
   its own, so one that fails stays for the next sweep instead of undoing the rest. When questions close in bulk (a
   task above ends, the hourly sweep, the weekday "Still needed?" batch), the bot that asked them has its "needs a
