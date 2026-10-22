@@ -225,7 +225,9 @@ def python_shard(index, total):
     """File group `index` of `total` of the default Python suite: the PR-check Python job, split over VMs."""
     started, initial_load = time.monotonic(), load()
     env = {**os.environ, 'TICO_PYTHON': sys.executable}
-    result = subprocess.run([sys.executable, '-m', 'pytest', '-q'] + shard_files(index, total, env, selection=()),
+    # Alone on its VM, a shard uses every core rather than pytest.ini's shared-box cap.
+    workers = str(os.cpu_count() or 2)
+    result = subprocess.run([sys.executable, '-m', 'pytest', '-q', '-n', workers] + shard_files(index, total, env, selection=()),
                             cwd=ROOT, env=env)
     print(f'Python shard {index}/{total}: exit {result.returncode}, {time.monotonic() - started:.2f}s; '
           f'load {initial_load} -> {load()}', flush=True)
