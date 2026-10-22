@@ -1861,6 +1861,9 @@ def create_app(settings=None):
                         "compact_at": compact_at_of(declared),
                         # What its tasks run on; null is the same as the bot (backend/task_models.py).
                         "task_model": task_models.of(declared),
+                        # Plain words for a cheaper task model on a high-stakes bot, against its model now ("" else).
+                        "task_model_warning": task_models.warning(c, settings, bot["slug"], declared,
+                                                                  task_models.of(declared)),
                         "wake": wake_presets.effective(declared),
                         "thread_mode": config["thread_mode"] or rooms.thread_mode(c, bot["slug"], config)})
         configured = json.loads(config["owner_ids_json"]) if config and config["owner_ids_json"] else None

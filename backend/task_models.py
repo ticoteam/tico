@@ -115,8 +115,22 @@ def stakes(c, settings, bot):
                                          (H.bot_actor(bot),))}
     found = [{"kind": kind, "does": STAKES[kind][0], "risk": STAKES[kind][1]} for kind in STAKES if kind in asked]
     from . import bot_tools
+    from .github_app import repo_of
+    row = c.execute("SELECT repo FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    stored = (row and row[0]) or "emp-" + bot
+    own = (repo_of(stored, settings.github_owner) or stored).lower()
+
+    def own_repo(tool):
+        # Its own repository, as the built-in `repo` row or a declared GitHub entry for it: every bot writes there.
+        # Without an owner on one side (no GitHub owner set, or a bare name), the repository name alone decides.
+        named = str((tool.get("scope") or {}).get("repo") or tool.get("identity") or "").lower()
+        if tool["id"] == "repo" or not named:
+            return tool["id"] == "repo"
+        return named == own or (("/" not in named or "/" not in own) and named.split("/")[-1] == own.split("/")[-1])
+    # Only grants it holds now: a requested tool not added yet (`pending: add`) gives it nothing to write with.
     writes = [tool for tool in bot_tools.listing(c, settings, bot)["tools"]
-              if tool["id"] not in ("model", "repo") and "write" in (tool.get("can") or [])]
+              if tool["id"] != "model" and tool.get("pending") != "add" and not own_repo(tool)
+              and "write" in (tool.get("can") or [])]
     if writes:
         names = ", ".join(dict.fromkeys(tool.get("identity") or tool.get("name") or tool["service"] for tool in writes))
         found.append({"kind": "write", "does": f"can change {names}", "risk": "may change things it should not"})
@@ -142,8 +156,10 @@ def _named(model):
 def warning(c, settings, bot, config, choice):
     """The plain-words warning for a task model below the minimum on a high-stakes bot, or "". It never refuses: the
     task model saves and its tasks run on it."""
+    if not choice:   # most bots: no lookups at all, so the bot list does not grow with them
+        return ""
     own = providers.bot_choice(c, settings, config)[1]
-    if not choice or not below_minimum(own, choice):
+    if not below_minimum(own, choice):
         return ""
     found = stakes(c, settings, bot)
     if not found:

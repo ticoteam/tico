@@ -44,8 +44,10 @@ const {unrouted} = require('./support/routes.cjs');
           // As backend/settings_admin.py set_task_model answers: the stored choice, and a warning for a cheaper pick.
           const t = body.task_model;
           helper.task_model = t ? {harness: t.harness, model: t.model, reasoning_effort: t.effort, runtime: t.harness} : null;
+          // The bot view carries the same warning, judged against the bot's model now.
+          helper.task_model_warning = t?.model === 'claude-haiku-5-5' && helper.model === 'claude-sonnet-5-5' ? WARNING : '';
           return json({bot: 'helper', task_model: helper.task_model, revision: ++helper.revision, readiness: null,
-            warning: t?.model === 'claude-haiku-5-5' ? WARNING : ''});
+            warning: helper.task_model_warning});
         }
         if (what === 'definition') {
           Object.assign(helper, {display_name: body.display_name, description: body.description});

@@ -209,13 +209,10 @@ function settingsTaskRow(e, columns) {
     <button type="button" class="ghost" data-task-close="${esc(e.name)}">Close</button></div>
     ${settingsTaskWarning(e)}</td></tr>`;
 }
-// The plain-words warning the last save gave per bot (backend/task_models.py `warning`), {value, text}: shown under
-// the task model while it is still the one that was saved, in the bots row and the bot editor.
-const SETTINGS_TASK_WARNINGS = new Map();
+// The plain-words warning for a cheaper task model on a high-stakes bot, as the server judges it against the bot's
+// model now (`task_model_warning`, backend/task_models.py `warning`), under the task model in the row and the editor.
 function settingsTaskWarning(e) {
-  const saved = SETTINGS_TASK_WARNINGS.get(e.name), task = e.task_model;
-  const now = task?.model ? settingsChoiceValue(task.harness || task.runtime, task.model, task.reasoning_effort || task.effort) : '';
-  return saved && saved.value === now ? `<p class="sb-task-warning" role="status" data-task-warning>${esc(saved.text)}</p>` : '';
+  return e.task_model_warning ? `<p class="sb-task-warning" role="status" data-task-warning>${esc(e.task_model_warning)}</p>` : '';
 }
 function settingsChoicePopover(anchor) {
   let pop = $('#sb-choice-pop');
@@ -315,7 +312,6 @@ async function settingsPickChoice(box, value) {
 async function settingsSaveTaskModel(e, value, revision, inEditor = false) {
   const saved = await post(`/v2/bots/${encodeURIComponent(e.name)}/task-model`, {task_model: settingsFallbackBody(value), expected_revision: revision});
   const choice = value ? settingsChoiceFromValue(value) : null;
-  if (saved.warning) SETTINGS_TASK_WARNINGS.set(e.name, {value, text: saved.warning}); else SETTINGS_TASK_WARNINGS.delete(e.name);
   const cannot = saved.readiness?.can_run === false ? ` For now they run on its own model: ${saved.readiness.problem}.` : '';
   const said = `${choice ? `${e.display_name}'s tasks run on ${settingsChoiceLabel(choice.harness, choice.model, choice.effort)}.`
     : `${e.display_name}'s tasks run on the same model as ${e.display_name}.`}${cannot}${saved.warning ? ` ${saved.warning}` : ''}`;
