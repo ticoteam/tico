@@ -40,6 +40,10 @@ All notable changes to Tico are recorded here. The format follows
 ### Changed
 - **Updates: per-update reader check for assistant-drafted updates.** Each drafted update is checked against its
   reader on every read, so some drafts show to fewer readers than before.
+- **A bot's tasks are one Tasks section with four tabs.** The right rail's Needs you, Active and Done sections become
+  tabs, each with its count: **Needs You** (what the bot needs from you), **Doing** (every open task it holds, of every
+  type, newest first), **Blocked** (each task saying who or what it waits on) and **Done Recently** (the last 14 days).
+  Assigned to others, Updates, Files and Routines stay below.
 - **Long runs of task updates in a bot's chat fold.** Four or more task status rows in a row show the oldest, a
   "...N more..." line with the exact number hidden, and the newest. Three or fewer show as before; a message starts a new run.
 - **The CEO Bot is on every install, Passive by default, and only the owner sets it up**: the Goal Manager is the CEO
@@ -75,6 +79,12 @@ All notable changes to Tico are recorded here. The format follows
   each one at its own rate.
 
 ### Fixed
+- **A run whose only work was a git push counts as acting.** The computer reports the pushes a run made from its
+  task's worktrees with its result, so in `hub sql` the run reads `acted` with `did_nothing` 0 instead of
+  `no_change`. Pushes from another task's worktree are not counted, and older runs read as before.
+- **No more rare empty 502s from the server.** About once in a few hundred API requests, a request reused a connection
+  to the backend just as the backend closed it for being idle, and the app or a bot got a bare 502. The server's front
+  door now drops idle connections before the backend does.
 - **A company out of Tico credit no longer holds its bots off Tico models for 30 minutes**: when Tico HQ's Gateway
   pauses Tico models for want of credit (`out_of_credit`), the bot says "Tico models are paused: this company is out
   of credit. Your bots use their other models until credit is added", runs on its fallback meanwhile, and asks the
@@ -96,8 +106,8 @@ All notable changes to Tico are recorded here. The format follows
 - **Muse Code turns work again on a Docker computer that runs bots as their own user.** Each Muse login now keeps
   its sessions in a folder of Tico's own (per subscription profile too), so a turn, including an automatic fallback
   to Muse, no longer fails at once with "failed to create session lock directory ... Permission denied". If that
-  folder is there but the bot user can't write it, Settings > Computers shows Muse as not ready and names the folder.
-  Muse sessions from before this change start fresh.
+  folder is there but the bot user can't write it, Settings > Computers marks Muse Code and names the folder, rather
+  than asking you to sign in. Muse sessions from before this change start fresh.
 - Choosing a bot's model connection refreshes its computer's readiness and queued work immediately, including
   when the previous connection is signed out.
 - **Recovering an AWS bot computer waits for Systems Manager.** Resuming an interrupted install waits up to five

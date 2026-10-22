@@ -45,7 +45,8 @@ lock and log) go to a data folder of Tico's own as well, `XDG_DATA_HOME` beside 
 in the runner's host state, or `musecode/profiles/<profile>/data` there for a subscription profile, outside every
 folder handed to the bot user), never `~/.local/share/muse`: on a computer that runs
 bots as their own user, that folder may belong to another user. If the data folder is there but the bot user can't
-write it, readiness shows Muse Code as not ready and names the folder.
+write it, readiness shows Muse Code as not ready and names the folder: Settings > Computers marks the Muse Code line
+and says which folder, without asking for a sign-in, since signing in again does not fix it.
 The download is about 340 MB. The sign-in is `muse/auth.json` in that folder (sign in from Settings; a
 profile signs in to its own); `META_API_KEY` wins over it, and a computer-wide key reaches the run. The CLI has no
 sign-in status command, so readiness reports the file being there. Version checks and sign-ins also set

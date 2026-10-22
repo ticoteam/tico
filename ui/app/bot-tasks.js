@@ -21,7 +21,8 @@ function actorAvatarOnly(a) {
   const person = pid === S.me?.id ? (mePerson() || {id: pid, name: S.me?.name}) : (S.people || []).find(p => p.id === pid) || {id: pid, name: actorLabel(a)};
   return `<span class="who-av" title="${esc(pid === S.me?.id ? 'You' : actorLabel(a))}">${personAvatar(person, 22)}</span>`;
 }
-function v2TaskRow(t, slug, showStatus = true) {
+// `below` is one more line under the title, as a Blocked row's "Waits on …".
+function v2TaskRow(t, slug, showStatus = true, below = '') {
   // On a bot's page the other party is whoever is not the bot; on a person's page (no slug) it is the requester.
   const other = slug && actorSlug(taskRequester(t)) === slug ? t.owner : taskRequester(t);
   const age = taskAge(t);
@@ -29,7 +30,7 @@ function v2TaskRow(t, slug, showStatus = true) {
       ${showStatus ? `<span class="pill ${V2_PILL[t.status] ?? ''}">${esc({open: !actorPerson(t.owner) ? 'Doing · starting' : actorPerson(t.owner) === S.me?.id ? 'Needs you' : 'To do', waiting: 'Waiting', doing: 'Doing'}[t.status] || t.status || '')}</span>${taskStatusText(t)}` : ''}
       <a class="ttl" data-task-detail-open href="#/task/${encodeURIComponent(t.id)}" title="${esc(`${t.title || ''} · ${taskStateLabel(t)} · ${age}`)}">${esc(t.title || '')}</a>${prStateBadge(t.pr_state)}
       <span class="tags">${actorChip(other)}</span>${actorAvatarOnly(t.owner)}
-      <span class="muted tnum" title="${esc(taskAgeTitle(t))}">${esc(age)}</span></div></div>`;
+      <span class="muted tnum" title="${esc(taskAgeTitle(t))}">${esc(age)}</span></div>${below ? `<div class="trow-waits muted">${esc(below)}</div>` : ''}</div>`;
 }
 // The rail and person rows open the same complete task as the manager; actor links keep their own destination.
 document.addEventListener('click', ev => {
@@ -133,17 +134,59 @@ async function loadBotTasksV2(slug) {
   BOT_TASKS_CACHE.set(slug, {owned, asked});
   botTasksRender(slug, owned, asked);
 }
+// One Tasks section, four views of the bot's work: what needs the viewer, everything open (the full list), what waits
+// on someone else, and what finished in the last two weeks. [key, label, count id]; the ids predate the tabs.
+const BOT_TASK_TABS = [['needs', 'Needs You', 'cnt-needs'], ['active', 'Doing', 'cnt-active'],
+                       ['blocked', 'Blocked', 'cnt-blocked'], ['done', 'Done Recently', 'cnt-done']];
+const BOT_DONE_RECENT_DAYS = 14;
+// The tab a person picked on each bot's page, for this visit; until they pick, Needs You leads while it has rows.
+const BOT_TASK_TAB = new Map();
+// A redraw (the 30 s refresh, a live event) only re-applies the tab; a person's pick also brings the tab into view, sideways
+// within the tab bar, so neither moves the rail away from what someone is reading.
+function botTaskTabShow(slug, key, picked = false) {
+  const rail = $('#pane-tasks');
+  if (!rail || BOT?.slug !== slug || !BOT_TASK_TABS.some(([k]) => k === key)) return;
+  for (const [k] of BOT_TASK_TABS) {
+    const button = $('#bot-tab-t-' + k), panel = $('#bot-' + k);
+    if (!button || !panel) continue;
+    button.classList.toggle('cur', k === key);
+    button.setAttribute('aria-selected', String(k === key));
+    button.tabIndex = k === key ? 0 : -1;
+    panel.hidden = k !== key;
+  }
+  const tab = $('#bot-tab-t-' + key), bar = tab?.parentElement;
+  if (!picked || !bar) return;
+  if (tab.offsetLeft < bar.scrollLeft) bar.scrollLeft = tab.offsetLeft;
+  else if (tab.offsetLeft + tab.offsetWidth > bar.scrollLeft + bar.clientWidth) bar.scrollLeft = tab.offsetLeft + tab.offsetWidth - bar.clientWidth;
+}
+// Arrow keys, Home and End move between the tabs, as in any tab list.
+function botTaskTabKey(slug, ev) {
+  const keys = BOT_TASK_TABS.map(([k]) => k), at = keys.indexOf(ev.target.closest('[data-bot-task-tab]')?.dataset.botTaskTab);
+  if (at < 0) return;
+  const to = {ArrowRight: at + 1, ArrowLeft: at - 1, Home: 0, End: keys.length - 1}[ev.key];
+  if (to === undefined) return;
+  ev.preventDefault();
+  const key = keys[(to + keys.length) % keys.length];
+  BOT_TASK_TAB.set(slug, key);
+  botTaskTabShow(slug, key, true);
+  $('#bot-tab-t-' + key)?.focus({preventScroll: true});
+}
+// What a blocked task waits on: the person or bot it names, else the first line of its note.
+function botTaskWaitsOn(t) {
+  if (t.waiting_on) return `Waits on ${actorPerson(t.waiting_on) === S.me?.id ? 'you' : actorLabel(t.waiting_on)}`;
+  const line = String(t.note || '').split('\n').map(s => s.trim()).find(Boolean);
+  return line ? (line.length > 140 ? line.slice(0, 139) + '…' : line) : 'Waits on: not said';
+}
 // The Needs you section from the list the page holds, so it moves with the org tree's number; returns its ids.
 function botNeedsPaint(slug) {
   const host = $('#bot-needs'), items = botNeeds(slug);
   if (!host || BOT?.slug !== slug) return new Set();
-  host.hidden = !items.length;
   $('#cnt-needs').textContent = items.length || '';
   // A question opened here, and an answer half typed into it, survive the redraw.
   const list = $('#t-needs'), kept = new Map([...list.querySelectorAll('details[data-ask]')].map(d =>
     [d.dataset.ask, {open: d.open, text: d.querySelector('textarea')?.value || ''}]));
   list.innerHTML = items.length ? `<div class="bot-task-list">${items.map(it =>
-    it.kind === 'ask' ? looseAskRow(it) : v2TaskRow(it, slug)).join('')}</div>` : '';
+    it.kind === 'ask' ? looseAskRow(it) : v2TaskRow(it, slug)).join('')}</div>` : '<div class="rail-empty">Nothing needs you.</div>';
   for (const d of list.querySelectorAll('details[data-ask]')) {
     const was = kept.get(d.dataset.ask);
     if (!was) continue;
@@ -160,24 +203,29 @@ function botNeedsChanged(slug) {
 }
 function botTasksRender(slug, owned, asked) {
   if (!$('#t-open') || BOT?.slug !== slug) return;
-  const needed = botNeedsPaint(slug), listed = t => !needed.has(String(t.id));
-  const mine = (owned.tasks || []).filter(listed), theirs = (asked.tasks || []).filter(t => actorSlug(t.owner) !== slug && listed(t));
+  const needed = botNeedsPaint(slug);
+  const mine = owned.tasks || [], theirs = (asked.tasks || []).filter(t => actorSlug(t.owner) !== slug && !needed.has(String(t.id)));
   const latest = (a, b) => String(b.updated || b.created || '').localeCompare(String(a.updated || a.created || ''));
-  // What a person asked for (directly or under a person's task) above what the bot made itself, then the latest change.
-  const personFirst = t => t.from_person ? 0 : 1;
-  const active = mine.filter(t => V2_ACTIVE.includes(String(t.status))).sort((a, b) => personFirst(a) - personFirst(b) || latest(a, b));
-  // Done: the bot's own work, most recently done first. A routine's runs (a sweep every 30
-  // minutes) are not work a person asked for; they live under Recurring.
+  const newest = (a, b) => String(b.created || '').localeCompare(String(a.created || ''));
+  // Doing is the full list: every open task the bot holds, of every type, newest first. The other tabs are views into it.
+  const active = mine.filter(t => V2_ACTIVE.includes(String(t.status))).sort(newest);
+  const blocked = active.filter(t => t.status === 'waiting');
+  // Done Recently: the bot's own work finished in the last two weeks, most recently done first. A routine's runs (a
+  // sweep every 30 minutes) are not work a person asked for; they live under Recurring.
   const doneAt = t => String(t.done_at || t.closed_at || t.updated || '');
-  const finished = mine.filter(t => !V2_ACTIVE.includes(String(t.status)) && !isRecurringTask(t))
+  const since = new Date(Date.now() - BOT_DONE_RECENT_DAYS * 86400000).toISOString();
+  const finished = mine.filter(t => !V2_ACTIVE.includes(String(t.status)) && !isRecurringTask(t) && doneAt(t) >= since)
     .sort((a, b) => doneAt(b).localeCompare(doneAt(a)));
-  $('#cnt-done').textContent = finished.length || '';
   // What it asked of others: whatever waits on a person first, then by the latest change.
   const needsPerson = t => actorPerson(t.owner) ? 0 : 1;
   const outward = theirs.filter(t => V2_ACTIVE.includes(String(t.status))).sort((a, b) => needsPerson(a) - needsPerson(b) || latest(a, b));
   $('#cnt-active').textContent = active.length || '';
+  $('#cnt-blocked').textContent = blocked.length || '';
+  $('#cnt-done').textContent = finished.length || '';
   $('#t-open').innerHTML = active.length ? `<div class="bot-task-list">${active.map(t => v2TaskRow(t, slug)).join('')}</div>`
     : '<div class="rail-empty">None</div>';
+  $('#t-blocked').innerHTML = blocked.length ? `<div class="bot-task-list">${blocked.map(t => v2TaskRow(t, slug, true, botTaskWaitsOn(t))).join('')}</div>`
+    : '<div class="rail-empty">Nothing is blocked.</div>';
   // Folded at the foot of the rail; it opens by itself while something in it waits on a person.
   const assigned = $('#bot-assigned');
   if (assigned) {
@@ -188,7 +236,8 @@ function botTasksRender(slug, owned, asked) {
   }
   $('#t-done').innerHTML = finished.length
     ? `<div class="bot-task-list">${finished.map(t => v2TaskRow(t, slug, false)).join('')}</div>`
-    : '<div class="rail-empty">None</div>';
+    : '<div class="rail-empty">Nothing done in the last two weeks.</div>';
+  botTaskTabShow(slug, BOT_TASK_TAB.get(slug) || (needed.size ? 'needs' : 'active'));
 }
 
 // the pill's "Send as task" on a keeper bot: a hub task, not an Issue

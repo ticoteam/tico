@@ -4382,9 +4382,11 @@ def create_app(settings=None):
         # `limit_resets_at`: a run's result may say when its usage limit resets (an older one refuses the field).
         # `usage_requests`: a run's usage may carry each model request's tokens (an older one refuses the field).
         # `usage_request_main`: ... and a fourth count marking the bot's own requests (an older one refuses it).
+        # `run_pushes`: a run's result may list the pushes its task worktrees made (an older one refuses the field).
         return {**runner_versions.desired(), "features": {"task_files_multipart": True, "runner_commit": True,
                                                           "screen_v1": True, "limit_resets_at": True,
-                                                          "usage_requests": True, "usage_request_main": True}}
+                                                          "usage_requests": True, "usage_request_main": True,
+                                                          "run_pushes": True}}
 
     @app.get("/api/v2/runners/assignments")
     def assigned(request: Request):

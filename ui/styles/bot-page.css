@@ -88,6 +88,11 @@ a.bot-goal-main:hover{text-decoration:none}a.bot-goal-main:hover .bot-goal-title
 .rail-ico:hover,.rail-ico:focus-visible{opacity:1;color:var(--ink);background:var(--surface2);text-decoration:none}
 .rail-ico .nav-icon{font-size:16px;width:16px;height:16px;color:inherit}
 .rail-empty{font-size:var(--t-sm);color:var(--muted);padding:1px 0}
+/* The Tasks section's tabs: one row that scrolls sideways when it overflows, never wraps. */
+.bot-task-tabs.tabs.slim{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;margin:2px 0 6px;gap:2px}
+.bot-task-tabs::-webkit-scrollbar{display:none}
+.bot-task-tabs.tabs.slim button{flex:none;white-space:nowrap;padding:3px 8px;font-size:var(--t-sm)}
+.trow-waits{font-size:var(--t-sm);padding:0 0 2px 2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .rail-more{border:0;background:none;padding:1px 0;margin:0;font:inherit;font-size:var(--t-sm);font-weight:600;color:var(--muted);cursor:pointer;font-variant-numeric:tabular-nums}
 .rail-more:hover{color:var(--ink)}
 .rail-more:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:3px}

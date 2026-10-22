@@ -1834,6 +1834,7 @@ class Execution:
         archivable against it."""
         c.execute("UPDATE attempts SET final_text=?,result_json=? WHERE id=?",
                   (body.text, encode(body.model_dump()), row["id"]))
+        run_triggers.pushed(c, row["id"], row["runner_id"], body.pushes)
         H.turn_finish(c, H.KEEPER, row["id"], exit_code=body.outcome, tokens_in=body.tokens_in,
                       tokens_out=body.tokens_out, summary=body.text[:2000], usage=self.run_usage(c, row, body))
         H.event(c, H.KEEPER, "attempt.late-result", row["id"],
@@ -2311,6 +2312,8 @@ class Execution:
         if body.outcome == "completed":
             # Each next-run task this run carried and left: back to the next run, unless it was worked or deferred.
             quiet_work.settle(c, aid, row["bot"], row["started"] or row["created"])
+        # A push from the task's worktrees is the run acting too, though only its runner saw it.
+        run_triggers.pushed(c, aid, row["runner_id"], body.pushes)
         # The runner's notices (a file left out of the commit) are shown beside the reply, not as the turn's summary.
         H.turn_finish(c, H.KEEPER, aid, exit_code=body.outcome, tokens_in=body.tokens_in,
                       tokens_out=body.tokens_out, summary=split_runner_notices(body.text)[0][:2000],
