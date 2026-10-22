@@ -608,7 +608,7 @@ mod tests {
         tx.send(json!({"kind": "delta", "thread_id": "th-3", "turn_id": "turn-1", "text": "Acme's renewal"})).unwrap();
         let (f, began) = (flags(true), Instant::now());
         let err = drive_turn(&runner, &host, &mut rx, &f, "th-3").await.err().expect("not completed");
-        assert!(err.text.contains("loss of ownership"), "{}", err.text);
+        assert_eq!(err.text, "Computer lost or heartbeat stopped (execution lease expired)");
         assert!(began.elapsed() >= SALVAGE && began.elapsed() < SALVAGE + Duration::from_secs(3), "{:?}", began.elapsed());
         drop(tx);
         std::fs::remove_dir_all(dir).ok();
@@ -643,7 +643,7 @@ mod tests {
         let host = Host::Claude(ClaudeHost::new("acme", vec![], tx.clone()));
         let (f, began) = (flags(true), Instant::now());
         let err = drive_turn(&runner, &host, &mut rx, &f, "th-5").await.err().expect("not completed");
-        assert!(err.text.contains("loss of ownership"), "{}", err.text);
+        assert_eq!(err.text, "Computer lost or heartbeat stopped (execution lease expired)");
         assert!(began.elapsed() < SALVAGE + Duration::from_secs(1), "{:?}", began.elapsed());
         std::fs::remove_dir_all(dir).ok();
     }
