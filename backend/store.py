@@ -665,6 +665,8 @@ class Store:
             c.executescript(_learnings.SCHEMA)
             from . import stale_review as _stale_review
             c.executescript(_stale_review.SCHEMA)
+            from . import system_routines as _system_routines
+            c.executescript(_system_routines.SCHEMA)
             from . import owner_link as _owner_link
             c.executescript(_owner_link.SCHEMA)
             from . import docs as _docs
@@ -1181,6 +1183,12 @@ class Store:
                     from . import task_relations as _task_relations
                     _task_relations.migrate(c)
                     c.execute("INSERT INTO cloud_migrations VALUES(60,?)", (H.now(),))
+                if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=61").fetchone():
+                    # The scheduler's due-date reminder pass and its quiet-task resume read these indexes, not
+                    # every task row (H.TASKS_DUE_SQL, quiet_work.due).
+                    c.execute(H.TASKS_DUE_INDEX)
+                    c.execute(H.TASKS_RESUME_INDEX)
+                    c.execute("INSERT INTO cloud_migrations VALUES(61,?)", (H.now(),))
                 from .public_roadmaps import migrate as migrate_public_roadmaps
                 migrate_public_roadmaps(c)
                 H.ensure_market_reads(c)
