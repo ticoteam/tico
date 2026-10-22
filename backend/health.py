@@ -436,6 +436,9 @@ def _waiting(c, online_ids, settings=None):
         if runner_id not in holding:
             holding[runner_id] = holding_turns(c, turns.get(runner_id, []))
         return holding[runner_id]
+    # A turn waiting for its shared login is busy, not stuck, unless what holds the login is no run Tico knows.
+    from .login_waits import unknown_holder
+    orphaned = {r["bot"] for rows in turns.values() for r in rows if unknown_holder(c, r["id"])}
     waiting, slow, stuck = [], [], []
     for bot in c.execute("SELECT slug,display_name FROM bots WHERE state='active' ORDER BY slug"):
         slug = bot["slug"]
@@ -443,6 +446,9 @@ def _waiting(c, online_ids, settings=None):
         where = assigned.get(slug)
         row = {"bot": slug, "name": bot["display_name"] or slug, "queued": count, "oldest": oldest,
                "computer": where[1] if where else ""}
+        if slug in orphaned and where and where[0] in online_ids:
+            stuck.append({**row, "reason": "login_holder_unknown", "runner_id": where[0], "runtime": ""})
+            continue
         report = report_for(slug, where) if count else {}
         if where and where[0] not in online_ids:
             waiting.append({**row, "reason": "computer_offline"})
@@ -540,6 +546,9 @@ HELD = {
     "lane_held": ("{computer} still runs an earlier turn of this bot whose lease lapsed: the next starts when it ends",
                   RUNS),
     "uncertain": ("An interrupted run on the same task or chat waits for review in Runs", RUNS),
+    # The runner says the turn holding the shared login is a run Tico has no live record of (backend/login_waits.py).
+    "login_holder_unknown": ("Its turn waits for {computer}'s ChatGPT login, held by a run that is not running in "
+                             "Tico: restart the runner on {computer} to free it", COMPUTERS),
     "cooling_off": ("Waiting out a usage limit, or a Tico AI Gateway outage, before it tries again", RUNS),
     "readiness_unknown": ("{computer} has not said whether it can run this bot", COMPUTERS),
     "sign_in_rejected": ("Its model sign-in was rejected on {computer}", COMPUTERS),

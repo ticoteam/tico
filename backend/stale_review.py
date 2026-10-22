@@ -56,7 +56,7 @@ QUESTION_SET = "stale-review"
 RULE = "stale_review"
 WATERMARK = "stale_review"
 STATUSES = ("open", "doing", "waiting", "review")
-EVERY_SECONDS = 3600
+EVERY_SECONDS = 3600            # the default schedule (Settings > Routines may space passes further)
 CALLS_PER_HOUR = 30
 PASS_SECONDS = 50 * 60          # the pass stops asking here, so it never runs into the next one
 SUGGEST_EVERY_DAYS = 7
@@ -95,9 +95,10 @@ def _set_watermark(c, at):
 
 
 def due(c, at):
-    """Whether an hour has passed since the last pass."""
+    """Whether the saved schedule (Settings > Routines, hourly by default) says a pass is due since the last one."""
+    from . import system_routines as SR
     last = last_pass(c)
-    return not last or last <= H.shift(at, seconds=-EVERY_SECONDS)
+    return SR.due(SR.config_of(c, RULE), H.parse_ts(at), H.parse_ts(last) if last else None)
 
 
 # ----------------------------------------------------------------------------- candidates (plain code)
@@ -308,22 +309,24 @@ def _stop(c, settings, at, label):
     return None
 
 
-def _claim(store, at):
-    """In one transaction: the switch, the hour and the watermark. The new candidates, or None when no pass is due."""
+def _claim(store, at, force=False):
+    """In one transaction: the switch, the schedule and the watermark. The new candidates, or None when no pass is due.
+    `force` (Run now) skips only the schedule."""
     with store.transaction() as c:
-        if not enabled(c) or not due(c, at):
+        if not enabled(c) or not (force or due(c, at)):
             return None
         _set_watermark(c, at)
         _record_outcomes(c, at)
         return new_candidates(c, at)
 
 
-def run_pass(store, at=None, engine=None, clock=time.monotonic):
+def run_pass(store, at=None, engine=None, clock=time.monotonic, force=False):
     """One pass, start to end, on the caller's thread (the scheduler's own thread, or a test). Returns what it did,
-    or None when no pass was due. `engine` is the decision model (a test's fake); by default the server's."""
+    or None when no pass was due. `engine` is the decision model (a test's fake); by default the server's. `force` is
+    Run now: due or not, with the same per-call limits."""
     at = at or H.now()
     started = clock()
-    found = _claim(store, at)
+    found = _claim(store, at, force)
     if not found:
         return None if found is None else {"new": 0}
     settings = store.settings
@@ -409,15 +412,17 @@ def run_pass(store, at=None, engine=None, clock=time.monotonic):
     return summary
 
 
-def tick(store, at=None):
+def tick(store, at=None, force=False, engine=None):
     """From the scheduler: when a pass is due, run it on its own thread, so no call holds the scheduler or the write
-    lock. One pass at a time; the watermark keeps a restart from running two in an hour."""
+    lock. One pass at a time; the watermark keeps a restart from running two inside the schedule. `force` is Run now
+    (Settings > Routines): the pass runs though not due, still only while the switch is on and within the same caps.
+    Returns the thread, or None when nothing started."""
     settings = store.settings
     if settings.rehearsal:
         return None
     at = at or H.now()
     with store.read() as c:
-        if not enabled(c) or not due(c, at):
+        if not enabled(c) or not (force or due(c, at)):
             return None
     if not _RUNNING.acquire(blocking=False):
         return None
@@ -426,7 +431,7 @@ def tick(store, at=None):
         from . import system_routines as SR
         run = SR.Run("stale_review")
         try:
-            summary = run_pass(store, at)
+            summary = run_pass(store, at, engine=engine, force=force)
             if summary is not None:
                 words(run, summary)
         except Exception as exc:
