@@ -107,8 +107,9 @@ behaviour is in [environments](environments.md#sign-in-options).
 
 Tico does not build or manage the load balancer, Cognito or the network around them.
 
-Visuals in replies need an address of their own, apart from the app's: `TICO_VISUAL_ORIGIN`. Without it, a
-production server shows them as file chips. See [Visuals in replies](visuals.md#self-hosting).
+Visuals in replies are always on. For pages and SVG to show inline they need an address of their own, apart from
+the app's: `TICO_VISUAL_ORIGIN`. Without it, the server shows pictures, video and audio, and pages and SVG open in
+the file viewer. See [Visuals in replies](visuals.md#self-hosting).
 
 
 ## Run recovery
