@@ -23,11 +23,13 @@ def test_the_keepers_stuck_question_leaves_needs_you_when_the_task_is_done(api):
     with api.app.state.store.transaction() as c:
         work = H.task_create(c, ANA, "Draft the board report", "For Friday.", OPS)
         stuck = question(c, H.KEEPER, work["id"], "No progress for 30 min after a status check.", refs={"stuck": True})
-        accept = question(c, OPS, work["id"], "Does the draft read right?")
+        pick = question(c, OPS, work["id"], "Which chart goes first?")
         H.task_update(c, OPS, work["id"], status="done", note="Drafted.")
-        assert H.message(c, stuck["id"])["superseded_at"]
+        assert H.message(c, stuck["id"])["superseded_at"] and H.message(c, pick["id"])["superseded_at"]
+        assert not listed(c, work["id"])        # every question about the work ended with it, picks too
+        accept = question(c, OPS, work["id"], "Does the draft read right?")
         assert not H.message(c, accept["id"])["superseded_at"]
-        assert listed(c, work["id"])            # a done task's own question for acceptance still counts
+        assert listed(c, work["id"])            # a done task's own question for acceptance, asked once done, counts
         # A done task holding a stuck question from before the task-end hook existed is not listed either.
         old = H.task_create(c, ANA, "Check the cash forecast", "Monthly.", OPS)
         question(c, H.KEEPER, old["id"], "No progress for 30 min after a status check.", refs={"stuck": True})

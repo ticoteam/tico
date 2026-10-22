@@ -1061,7 +1061,7 @@ def create_app(settings=None):
             if tid in asks:
                 continue            # the newest readable open ask is the one shown
             message["refs"] = H._json(message.get("refs_json"), {}) or {}
-            message["older"] = H.ask_older(message)
+            message["stale"] = H.ask_older(message)     # it stays until the weekday batch sends it back (still_needed)
             asks[tid] = message
 
         origins = {}
