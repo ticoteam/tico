@@ -12,24 +12,25 @@ async function recentRuns() {
 }
 
 // ----------------------------------------------------------------- bot page
-// Header (name, alert, goal) always visible, on a phone only the name; everything else behind four tabs that live in the URL
+// Header (name, alert, goal) stays visible; work and configuration tabs live in the URL
 // as #/bot/<slug>/<tab>, so refresh and Back keep the tab. Panes stay in the DOM once loaded; only
 // the conversation is torn down when you leave Chat, because it polls.
-// The session view is a card inside More; #/bot/<slug>/session still opens it
-// there and scrolls to it, so every link a run row wrote keeps working.
-const BOT_TABS = ['chat', 'tasks', 'history', 'docs', 'more'];   // history: its updates
+// Configuration has its own four tabs; old More, Docs and Session links retain a destination.
+const BOT_DETAIL_TABS = ['info', 'instructions', 'history', 'settings'];
+const BOT_TABS = ['chat', 'tasks', ...BOT_DETAIL_TABS];
 // The assistant is chatted with only on each person's own Assistant page (#/assistant), so its bot page has no Chat.
 const botTabs = slug => {
   const tabs = slug === assistantBot() ? BOT_TABS.filter(t => t !== 'chat') : BOT_TABS;
   const mine = S.emps.find(e => e.name === slug)?.my_access;
   // Seen but not read: no updates or docs, and Chat and Tasks only for someone who may write to it (the
   // page then holds their own threads and tasks with the bot, and the request box).
-  return mine && !mine.read ? tabs.filter(t => t === 'more' || (mine.write && (t === 'chat' || t === 'tasks'))) : tabs;
+  return mine && !mine.read ? tabs.filter(t => t === 'info' || (mine.write && (t === 'chat' || t === 'tasks'))) : tabs;
 };
 const botLimited = e => !!e?.my_access && !e.my_access.read;
 const botPersonName = id => (S.people || []).find(p => p.id === id)?.name || settingsPersonName(id);
 let BOT = null;
 function botStopped() {
+  BOT?.settingsCleanup?.();
   BOT_CHAT_TASK_LOAD++; BOT_CHAT_TASKS = new Map(); BOT = null;
 }
 function botStatePill(slug) {
@@ -253,11 +254,12 @@ async function pageBot(slug, tab) {
   const work = botTabs(slug).filter(t => t === 'chat' || t === 'tasks');
   const base = `#/bot/${encodeURIComponent(slug)}`;
   const typing = BOT_PILL?.slug === slug && document.activeElement === pq(BOT_PILL, '.p-text');   // the redraw below must not take the cursor
-  const tabsShown = [...work, ...(isKeeper(slug) && !limited ? ['history'] : []), 'more'];
+  const tabsShown = [...work, 'info'];
   // The goal leads the page; chat and tasks sit side by side under it on a
-  // desktop. Narrower, one top line holds back, the bot and Chat · Tasks · More, with the goal as one
-  // line under it; on a phone the goal and the rest wait at the top of More (placeBotHead). A status shows
-  // only when it is an alert. Docs live inside More.
+  // desktop. Narrower, the top line holds the bot and Chat · Tasks · Info; configuration has its own tabs.
+  // On a phone the goal and the extra controls move into Info (placeBotHead). A status shows
+  // only when it is an alert. Configuration opens on Info.
+  BOT?.settingsCleanup?.();
   $('#main').innerHTML = `
   <div class="bot-top" id="bot-top">
     <button class="bot-back-arrow" id="bot-back-arrow" type="button" aria-label="Back" title="Back">‹</button>
@@ -270,7 +272,7 @@ async function pageBot(slug, tab) {
         return `<button type="button" data-bt="${t}" role="tab" aria-label="${label}" title="${label}"><span class="nav-icon bt-icon" aria-hidden="true">${BOT_TAB_ICONS[t] || 'more_horiz'}</span><span class="bt-label">${label}</span></button>`; }).join('')}
     </div>
     ${limited ? '' : '<section class="bot-goal" id="bot-goal" aria-label="Goal"><span class="muted">Loading the goal…</span></section>'}
-    <a class="ghost bot-more-btn" id="bot-more-btn" href="${base}/more" aria-label="More" title="More"><span class="nav-icon" aria-hidden="true">more_vert</span></a>
+    <a class="ghost bot-more-btn" id="bot-more-btn" href="${base}/info" aria-label="Info" title="Info"><span class="nav-icon" aria-hidden="true">more_vert</span></a>
   </div>
   <div id="bot-banners"><div id="bot-limit-host">${limited ? '' : botLimitHTML(slug)}</div>
   <div id="bot-onboard-host">${frBotBannerHTML(e)}</div></div>
@@ -307,16 +309,15 @@ async function pageBot(slug, tab) {
   ${railEdgeHTML('right')}
   </div>
 
-  ${limited ? '' : `<div id="pane-history" hidden>
-    <section class="card"><header><h2>Updates</h2></header>
-      <div id="bot-history" class="bot-history"><div class="empty">Loading…</div></div></section>
-  </div>
-  `}
-  <div id="pane-more" hidden>
+  <div id="bot-details" hidden>
+    <div class="tabs bot-detail-tabs" id="bot-detail-tabs" role="tablist" aria-label="Bot details">
+      ${BOT_DETAIL_TABS.filter(t => botTabs(slug).includes(t)).map(t => `<button type="button" id="bot-tab-${t}" data-bot-detail-tab="${t}" role="tab" aria-controls="${t === 'info' ? 'pane-more' : t === 'instructions' ? 'pane-docs' : 'pane-' + t}">${t[0].toUpperCase() + t.slice(1)}</button>`).join('')}
+    </div>
+    <div id="pane-more" role="tabpanel" aria-labelledby="bot-tab-info" hidden>
     <div class="bot-more-top" id="bot-more-top"></div>
     ${limited ? `    <section class="card"><header><h2>About</h2></header>
       <dl class="bot-setup">
-        ${role ? `<dt>Role</dt><dd style="white-space:pre-wrap">${esc(role)}</dd>` : ''}
+        ${role ? `<dt>Role</dt><dd>${botRoleHTML(role)}</dd>` : ''}
         <dt>Owner</dt><dd>${esc(botPersonName(e.operator))}</dd>
         <dt>Works for</dt><dd>${userChips(e) || '<span class="muted">Nobody assigned</span>'}</dd>
         ${boss ? `<dt>Reports to</dt><dd><a href="#/bot/${boss.name}">${esc(boss.display_name)}</a></dd>`
@@ -325,11 +326,13 @@ async function pageBot(slug, tab) {
         ${botScreenRowHTML(slug)}
       </dl></section>
     <section class="card" id="bot-tools-card"><header><h2>Tools</h2></header><div id="bot-tools"><div class="empty">Loading…</div></div></section>
-` : `    <section class="card" id="bot-setup-card"><header><h2>Setup</h2>${settingsCanManageBot(e) ? '<button class="ghost" type="button" id="bot-edit-settings">Bot settings</button>' : ''}</header>
+` : `    <section class="card" id="bot-setup-card"><header><h2>Info</h2></header>
       <dl class="bot-setup">
-        ${role ? `<dt>Role</dt><dd style="white-space:pre-wrap">${esc(role)}</dd>` : ''}
+        ${role ? `<dt>Role</dt><dd>${botRoleHTML(role)}</dd>` : ''}
         <dt>Humans</dt><dd>${userChips(e) || '<span class="muted">Nobody assigned</span>'}</dd>
-        ${e.agent ? `<dt>Run by</dt><dd>${esc(agentKind(e.agent))}${e.agent.profile ? ` · profile <code>${esc(e.agent.profile)}</code>` : ''}${e.agent.version ? ` · ${esc(e.agent.version)}` : ''}${e.agent.platform ? ` · ${esc(e.agent.platform)}` : ''}<span class="muted"> · ${esc(agentPresenceLabel(e.agent, e.online).toLowerCase())}${e.agent.last_seen ? `, last ${e.agent.synced ? 'sync' : 'seen'} ${esc(ago(e.agent.last_seen))}` : ''}</span>${!e.agent.synced && settingsCanManageBot(e) ? `<span class="settings-agent-actions">${agentPairButton(e)}<button class="ghost" type="button" data-agent-credential="${esc(e.name)}">${e.agent.credential ? 'Rotate credential' : 'Create credential'}</button>${e.agent.credential ? `<button class="ghost" type="button" data-agent-revoke="${esc(e.name)}">Revoke</button>` : ''}</span>` : ''}</dd>
+        ${!e.agent ? `<dt>Computer</dt><dd>${e.machine ? `${esc(e.machine.label || e.machine.runner_id)} <span class="muted">· ${e.online ? 'Online' : 'Offline'}</span>` : '<span class="muted">Not assigned</span>'}</dd>
+        <dt>Harness</dt><dd>${esc(harnessWords(e.harness || e.runtime || e.resolved_runtime) || 'Team default')}</dd>` : ''}
+        ${e.agent ? `<dt>Run by</dt><dd>${esc(agentKind(e.agent))}${e.agent.profile ? ` · profile <code>${esc(e.agent.profile)}</code>` : ''}${e.agent.version ? ` · ${esc(e.agent.version)}` : ''}${e.agent.platform ? ` · ${esc(e.agent.platform)}` : ''}<span class="muted"> · ${esc(agentPresenceLabel(e.agent, e.online).toLowerCase())}${e.agent.last_seen ? `, last ${e.agent.synced ? 'sync' : 'seen'} ${esc(ago(e.agent.last_seen))}` : ''}</span></dd>
         <dt>Model</dt><dd>${e.agent.model ? `${esc(e.agent.model)}${e.agent.provider ? `<span class="muted"> · ${esc(e.agent.provider)}</span>` : ''}` : "<span class=\"muted\">the profile's own</span>"}</dd>`
         : `<dt>Model</dt><dd>${esc(e.model ? settingsChoiceLabel(e.harness || e.runtime, e.model, e.reasoning_effort || e.effort) : settingsDefaultLabel(e))}${e.fallback ? `<span class="muted"> · fallback ${esc(settingsChoiceLabel(e.fallback.harness, e.fallback.model, e.fallback.reasoning_effort || e.fallback.effort))}</span>` : ''}</dd>`}
         ${boss ? `<dt>Reports to</dt><dd><a href="#/bot/${boss.name}">${esc(boss.display_name)}</a></dd>` : ''}
@@ -338,40 +341,44 @@ async function pageBot(slug, tab) {
       </dl></section>
     <section class="card" id="bot-tools-card"><header><h2>Tools</h2></header><div id="bot-tools"><div class="empty">Loading…</div></div></section>
     <div id="bot-quarantine-host">${botQuarantineCard(slug)}</div>
-    <section class="card" id="bot-updates-card"><header><h2>Updates</h2><a class="linkish" href="${UPDATES}">See updates</a></header>
-      <div id="bot-updates"><div class="empty">Loading…</div></div></section>
     <section class="card" id="bot-goals-card"><header><h2>Goals</h2>
         <button class="linkish" type="button" id="bot-goals-add">Add goal</button></header>
       <div id="bot-goals-list"><div class="empty">Loading…</div></div></section>
-    ${keeper ? `<section class="card" id="bot-status-card"><header><h2>Status history</h2></header>
-      <div id="v2-history"><div class="empty">Loading…</div></div></section>` : ''}
-    <section class="card" id="bot-access-card"><header><h2>Access</h2></header>
-      ${accessTable(e)}</section>
-
     <section class="card" id="bot-routines"><header><h2>Routines</h2>${routineMayEdit({bot: slug}) ? `
         <button class="linkish" type="button" data-new-routine="${esc(slug)}">New routine</button>` : ''}</header>
       <div id="bot-routines-list">${botRoutinesHTML(e, slug)}</div>
     </section>
 
+`}
+  </div>
+  ${limited ? '' : `<div id="pane-history" role="tabpanel" aria-labelledby="bot-tab-history" hidden>
+    <section class="card" id="bot-updates-card"><header><h2>Updates</h2><a class="linkish" href="${UPDATES}">See updates</a></header>
+      <div id="bot-updates"><div class="empty">Loading…</div></div></section>
+    <section class="card"><header><h2>Activity</h2></header><div id="bot-history" class="bot-history"><div class="empty">Loading…</div></div></section>
+    ${keeper ? `<section class="card" id="bot-status-card"><header><h2>Status history</h2></header>
+      <div id="v2-history"><div class="empty">Loading…</div></div></section>` : ''}
     <section class="card" id="bot-runs-card"><header><h2>Runs</h2></header>
       ${(rs => rs.length ? `<div id="bot-recent-runs">${runsTable(rs, false)}</div>`
         : '<div id="bot-recent-runs" data-pending="1"><div class="muted">Loading…</div></div>'
       )((S.status?.recent_runs || []).filter(r => r.employee === slug).slice(0, 10))}</section>
 
-    <section class="card" id="sess-card"><header><h2>Session</h2></header>
-      <div class="sess-head" id="sess-head">Loading…</div>
-      <div id="sess-turns"></div></section>
-`}
-    <dialog class="bot-editor" id="bot-editor" aria-labelledby="bot-editor-title"></dialog>
-    <dialog class="owner-picker" id="owner-picker" aria-labelledby="owner-picker-title"></dialog>
-
+    ${S.me?.role === 'owner' ? '<section class="card"><header><h2>Settings changes</h2></header><div id="bot-settings-history">Loading…</div></section>' : ''}
   </div>
+  <div id="pane-settings" role="tabpanel" aria-labelledby="bot-tab-settings" hidden>
+    <section class="card"><div class="bot-editor bot-editor-inline" id="bot-editor"><div class="empty">Loading settings…</div></div><div id="bot-settings-panels"></div></section>
+    <section class="card"><header><h2>Screen</h2></header><dl class="bot-setup" id="bot-screen-settings"></dl></section>
+    <section class="card" id="bot-access-card"><header><h2>Access</h2></header>
+      ${accessTable(e)}</section>
 
-  ${limited ? '<div id="pane-docs" hidden>' : `<div id="pane-docs" hidden>
-    <section class="card"><header><h2>Instructions</h2>${settingsCanManageBot(e) && !e.shared_from ? `<button class="ghost" type="button" data-edit-instructions="${esc(slug)}">Edit Instructions</button>` : ''}</header><div class="md" id="agent">Loading…</div></section>
+  </div>`}
+
+  ${limited ? '<div id="pane-docs" role="tabpanel" aria-labelledby="bot-tab-instructions" hidden>' : `<div id="pane-docs" role="tabpanel" aria-labelledby="bot-tab-instructions" hidden>
+    <section class="card"><header><h2>Instructions</h2></header><div class="md" id="agent">Loading…</div>
+      <div id="bot-instructions-editor"></div></section>
     <section class="card"><header><h2>Working notes</h2></header>
       <div class="tabs" id="tabs"></div><div class="md" id="doc">Loading…</div></section>
   `}
+  </div>
   </div>`;
 
   BOT = {slug, tab: null, loaded: new Set(), limited};
@@ -402,10 +409,17 @@ async function pageBot(slug, tab) {
   };
   // "The back arrow in a bot should always go back to home. Not previous page."
   $('#bot-back-arrow').onclick = () => { location.hash = UPDATES; };   // home
-  const editSettings = $('#bot-edit-settings');
-  if (editSettings) editSettings.onclick = async () => {
-    if (!SETTINGS_DATA.people.length) await loadSettings();
-    settingsEditBot(slug);
+  $('#bot-detail-tabs').onkeydown = event => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    const buttons = [...event.currentTarget.querySelectorAll('button')];
+    const i = buttons.indexOf(event.target); if (i < 0) return;
+    event.preventDefault();
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : (i + (event.key === 'ArrowRight' ? 1 : -1) + buttons.length) % buttons.length;
+    buttons[next].click(); buttons[next].focus();
+  };
+  $('#bot-detail-tabs').onclick = event => {
+    const button = event.target.closest('[data-bot-detail-tab]');
+    if (button) location.hash = `${base}/${button.dataset.botDetailTab}`;
   };
   // One click, from the warning beside the name or the card under More. Stopped runs settle on their own;
   // nothing to write or review.
@@ -468,11 +482,12 @@ const BOT_WIDE = window.matchMedia('(min-width: 1100px)');
 // card first, then an alert, Learnings and branches (moved here from beside the name,
 // and back on a wider screen), then the cards in groups.
 const BOT_PHONE = window.matchMedia('(max-width: 760px)');
-const BOT_TAB_ICONS = {chat: 'chat_bubble', tasks: 'task_alt', history: 'dynamic_feed', more: 'menu'};
+const BOT_TAB_ICONS = {chat: 'chat_bubble', tasks: 'task_alt', info: 'menu'};
 function placeBotHead() {
   const host = $('#bot-more-top'), top = $('#bot-top');
   if (!host || !top) return;
   const [alert, learn, screen, ...rest] = ['#bot-alert', '#bot-learn', '#bot-screen', '#bot-branches'].map(q => $(q));
+  if (screen) screen.hidden = BOT_PHONE.matches; // The Info summary already has the screen link on a phone.
   if (BOT_PHONE.matches) { host.append(...[alert, learn, screen, ...rest].filter(Boolean)); return; }
   for (const el of [learn, screen]) if (el?.parentElement === host) $('#bot-tool-strip').before(el);
   for (const el of [...rest, alert]) if (el?.parentElement === host) top.querySelector('.botid').append(el);
@@ -481,10 +496,10 @@ function placeBotHead() {
 // fills in its own time, so one observer cuts whatever has arrived; "Show more" undoes it for that list until
 // the page is redrawn, and "Show less" cuts it again.
 const MORE_LISTS = [['#bot-tools', '.bt-item'], ['#bot-routines-list', '.rlist>*'], ['#bot-access-card .scroll', 'tr:not(:first-child)'],
-  ['#v2-history', '.sh-row'], ['#bot-recent-runs', 'tr:not(:first-child)'], ['#sess-turns', ':scope>*', true]];
+  ['#v2-history', '.sh-row'], ['#bot-recent-runs', 'tr:not(:first-child)']];
 const MORE_KEEP = 3;
 function moreClamp() {
-  const pane = $('#pane-more'); if (!pane) return;
+  const pane = $('#bot-details'); if (!pane) return;
   for (const [q, rows, newest] of MORE_LISTS) {
     const host = pane.querySelector(q); if (!host) continue;
     const items = [...host.querySelectorAll(rows)];
@@ -504,19 +519,18 @@ function moreClamp() {
   }
 }
 function moreClampWatch() {
-  const pane = $('#pane-more'); if (!pane) return;
+  const pane = $('#bot-details'); if (!pane) return;
   new MutationObserver(moreClamp).observe(pane, {childList: true, subtree: true});
   moreClamp();
 }
 BOT_PHONE.addEventListener('change', placeBotHead);
 function showBotTab(tab) {
   if (!BOT || !$('#btabs')) return;
-  const wantSession = tab === 'session';                         // the old tab, now a card in More
-  const wantTools = tab === 'tools';                             // the Tools card in More, from the icons beside the name
+  const wantTools = tab === 'tools';
+  const aliases = {more: 'info', docs: 'instructions', session: 'history', tools: 'info'};
   const tabs = botTabs(BOT.slug);
-  const t = tabs.includes(tab) ? tab : wantSession || wantTools ? 'more' : tabs[0];
-  BOT.tab = t;
-  const view = t === 'docs' ? 'more' : t;                        // Docs live inside More
+  const view = tabs.includes(aliases[tab] || tab) ? aliases[tab] || tab : tabs[0];
+  BOT.tab = view;
   const work = view === 'chat' || view === 'tasks';
   const split = work && BOT_WIDE.matches && tabs.includes('chat');
   const chat = split || view === 'chat';
@@ -524,20 +538,27 @@ function showBotTab(tab) {
   $('#main').classList.toggle('chat-layout', chat);
   $('#main').classList.toggle('bot-chat-layout', chat);
   $('#main').classList.toggle('bot-split-layout', split);
-  $('#btabs').querySelectorAll('[data-bt]').forEach(b => { const on = b.dataset.bt === view; b.classList.toggle('cur', on); b.setAttribute('aria-selected', String(on)); });
+  $('#btabs').querySelectorAll('[data-bt]').forEach(b => { const on = b.dataset.bt === (work ? view : 'info'); b.classList.toggle('cur', on); b.setAttribute('aria-selected', String(on)); });
   const more = $('#bot-more-btn');
-  more.classList.toggle('cur', view === 'more');
+  more.classList.toggle('cur', !work);
   if (!work) more.setAttribute('aria-current', 'page'); else more.removeAttribute('aria-current');
   $('#bot-work').hidden = !work;
   $('#bot-back').hidden = work;
   $('#pane-chat').hidden = !chat;
   $('#pane-tasks').hidden = !(split || view === 'tasks');
   $('#pane-tasks').setAttribute('role', split ? 'complementary' : 'region');
-  $('#pane-more').hidden = $('#pane-docs').hidden = view !== 'more';
-  if ($('#pane-history')) $('#pane-history').hidden = view !== 'history';
+  $('#bot-details').hidden = work;
+  $('#pane-more').hidden = view !== 'info';
+  $('#pane-docs').hidden = view !== 'instructions';
+  for (const t of ['history', 'settings']) if ($('#pane-' + t)) $('#pane-' + t).hidden = view !== t;
+  $('#bot-detail-tabs').querySelectorAll('[data-bot-detail-tab]').forEach(button => {
+    const on = button.dataset.botDetailTab === view;
+    button.classList.toggle('cur', on); button.setAttribute('aria-selected', String(on));
+    button.tabIndex = on ? 0 : -1;
+  });
   if (view === 'history') void botHistoryLoad(BOT.slug);
   placeBotHead();
-  if (view === 'more') botScreenRefresh(BOT.slug);
+  if (!work) { botScreenRefresh(BOT.slug); botInfoRefresh(BOT.slug); }
   if (chat && BOT_PILL?.focusOnOpen) {
     delete BOT_PILL.focusOnOpen;
     const box = pq(BOT_PILL, '.p-text');
@@ -556,18 +577,20 @@ function showBotTab(tab) {
     if (!BOT.limited) botRecurringPaint(S.emps.find(x => x.name === BOT.slug), BOT.slug);   // routines change under More; redraw on return
     botLatestSeen();
   }
-  if (view === 'more') once('toolslist', slug => window.botTools?.mountList($('#bot-tools'), {slug, get, esc}));
-  if (view === 'more' && !BOT.limited) {
-    if (isKeeper(BOT.slug)) once('history', v2HistoryLoad);
-    once('docs', loadDocs);            // Routines expands playbooks
-    once('runs', fillBotRuns);                                    // /status carries no recent_runs
-    sessionLoad(BOT.slug, SESS_PICK);                             // read afresh: the file keeps moving
+  if (view === 'info') once('toolslist', slug => window.botTools?.mountList($('#bot-tools'), {slug, get, esc}));
+  if (!BOT.limited) {
+    if (view === 'history') {
+      if (isKeeper(BOT.slug)) once('history', v2HistoryLoad);
+      once('runs', fillBotRuns);
+      once('settings-history', botSettingsHistoryLoad);
+    }
+    if (view === 'instructions' || view === 'info') once('docs', loadDocs);
+    if (view === 'instructions') once('instructions-editor', botInstructionsMount);
+    if (view === 'settings') once('settings', botSettingsMount);
   }
-  SESS_PICK = null;
   $('#main').scrollTop = 0;
-  if (wantSession) $('#sess-card')?.scrollIntoView({block: 'start'});
   if (wantTools) $('#bot-tools-card')?.scrollIntoView({block: 'start'});
-  if (t === 'docs') $('#pane-docs')?.scrollIntoView({block: 'start'});
+
 }
 BOT_WIDE.addEventListener('change', () => { if (BOT && $('#btabs')) showBotTab(BOT.tab); });
 

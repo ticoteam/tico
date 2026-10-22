@@ -390,13 +390,7 @@ function machineVersionsHTML(machine, online) {
     ${table}${machineAppsHtml(machine)}${harnesses ? `<details data-machine-details="${esc(machine.id)}:tools"><summary>Installation and updates</summary><div class="machine-harnesses">${harnesses}</div></details>` : ''}`;
 }
 function machineScreenSectionHTML(machine, online) {
-  // Screen (Off / View / Control): offered once the computer itself has a screen turned on (`screen_available`),
-  // and kept while a mode is set so it can be turned off again. The operator or a bot admin sets it.
-  const screen = machine.screen || 'off';
-  const choice = !machine.revoked_at && screenMayOpen(machine) && (machine.screen_available || screen !== 'off')
-    ? `<div class="machine-screen-choice" data-computer-screen="${esc(machine.id)}"><span>Screen${betaPill('computer_screen')}</span>${repoSegHTML(`screen-${machine.id}`, 'Screen', [['off', 'Off'], ['view', 'View'], ['control', 'Control']], screen, !online, ' repo-seg-sm')}</div>` : '';
-  const link = machineScreenHTML(machine);
-  return choice || link ? `${choice}${link}` : `<p class="muted">${machine.screen_available ? 'Screen off.' : 'This computer has not turned its screen on.'}</p>`;
+  return screenControlHTML(machine, online);
 }
 function machineSettingsHTML(machine) {
   const admin = settingsIsAdmin(), manage = !machine.revoked_at && machineCanSignIn(machine);

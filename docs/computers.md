@@ -12,8 +12,10 @@ These used to be a separate AI providers tab, and Subscriptions before that; old
 A **connection** is one login an AI tool on a computer runs on. It is one of:
 
 - **A subscription**: a named login to a provider plan (a ChatGPT or Claude plan), for one tool. The pop-up shows it as
-  "Subscription · *name*". A computer can hold several, for example one per team. Names are labels: Tico does not record
-  who owns a subscription, only which provider account the login reports.
+  "Subscription · *name*". A computer can add one subscription per tool: Claude Code, Codex and Cursor can be connected
+  together, but a second Claude Code subscription on the same computer is refused. Use **Switch account** on its
+  existing connection to change accounts. Other computers can use different subscriptions. Names are labels: Tico
+  does not record who owns a subscription, only which provider account the login reports.
 - **The computer's login**: the tool's own sign-in on that computer, the one its bots use when they have no
   subscription of their own. It is a plan login or an API key.
 - **An API key**: the computer's login can run on a model API key instead of a plan (Codex, Claude Code, Cursor Agent
@@ -23,6 +25,11 @@ A **connection** is one login an AI tool on a computer runs on. It is one of:
 Plan logins stay on the computer that holds them. Tico stores each connection's name, sign-in state, the account it
 reports and its usage readings, never the login itself. A key added from Tico is kept sealed in Tico's credential vault
 for that computer alone.
+
+The limit also applies while a sign-in is pending, so starting two sign-ins cannot add two subscriptions. Existing
+connections are kept, including computers that already have several for one tool; they can still refresh, switch or
+sign out those logins. API keys are unchanged. The guard applies to sign-ins requested through Tico; provider commands
+run directly in a terminal are outside that relay.
 
 **The computer's login and a subscription can be the same account.** When both are signed in to the same provider
 account, the pop-up shows one line marked **Computer's login** with one usage reading, not two. Its sign-in buttons
@@ -49,7 +56,7 @@ Models and per bot ([How it works](how-it-works.md)), not here.
 
 ### Bots sharing one ChatGPT sign-in take turns
 
-A Codex ChatGPT sign-in is one login file whose refresh token rotates as it is used, and OpenAI allows one such login per machine or serialized job stream. So on a Computer, the bots that use one ChatGPT sign-in (the same named subscription, or the Computer's own login) run one Codex turn at a time, in arrival order, and one bot's parallel tasks on it take turns too. A waiting run reads **Waiting for <login> to be free (busy with <bot>)** until its turn comes, or runs on the bot's own fallback when one is ready ([how it works](how-it-works.md#one-turn-per-chatgpt-login)). The connection's line in the computer's pop-up says when several bots share one sign-in and that they take turns; give a bot its own subscription when it needs to run alongside the others. Bots on an OpenAI API key still run side by side. Tico never copies a login file into another bot's home to get around this, because a copy would rotate apart from the original. The rule is per runner process: two runners on one machine that share a login folder don't wait for each other.
+A Codex ChatGPT sign-in is one login file whose refresh token rotates as it is used, and OpenAI allows one such login per machine or serialized job stream. So on a Computer, the bots that use one ChatGPT sign-in (the same named subscription, or the Computer's own login) run one Codex turn at a time, in arrival order, and one bot's parallel tasks on it take turns too. A waiting run reads **Waiting for <login> to be free (busy with <bot>)** until its turn comes, or runs on the bot's own fallback when one is ready ([how it works](how-it-works.md#one-turn-per-chatgpt-login)). The connection's line in the computer's pop-up says when several bots share one sign-in and that they take turns; use a separate computer and subscription when a bot needs an independent login. Bots on an OpenAI API key still run side by side. Tico never copies a login file into another bot's home to get around this, because a copy would rotate apart from the original. The rule is per runner process: two runners on one machine that share a login folder don't wait for each other.
 
 ### What "% left" means
 
@@ -94,7 +101,7 @@ Click a row to open its pop-up. Its sections, top to bottom:
    **Replace key** and **Clear key** for a key; for a subscription, **Refresh usage** (Codex) and **Manage** (rename,
    manual weekly reading), **Rename** and **Remove**. **Add connection** at the end opens its own pop-up to sign in an
    installed tool, add a named subscription or add a key.
-2. **Screen**: **Off**, **View** or **Control** (Beta), as described in [Install](install.md#screen).
+2. **Screen**: an on/off switch, then **View** or **Control** when enabled (Beta). Enabling a screen that needs setup reveals the runner command, as described in [Install](install.md#screen).
 3. **Bots on this computer**: each bot with the connection it actually runs on, read-only. **Assign on the Bots page**
    opens Settings → Bots, where a bot's computer and connection are chosen.
 4. **Versions and updates**: Tico, the OS and runner, each AI tool's version with **Installed** and **Enabled**, and

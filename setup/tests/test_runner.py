@@ -142,23 +142,88 @@ def test_a_failed_docker_download_stops_the_bootstrap_and_the_ssh_step(tmp_path,
     assert p.returncode == 1, p.stdout + p.stderr  # was 0: systemctl ran after an empty install
 
 
-def test_aws_runner_reuses_its_exact_name_boundary_and_private_join(monkeypatch):
-    from setup import aws
+@pytest.mark.parametrize('recovery', ['delayed', 'offline', 'unregistered', 'command_failed'])
+def test_aws_runner_reuses_its_exact_name_boundary_and_private_join(monkeypatch, recovery):
     monkeypatch.setenv('TICO_ENROLL_CODE', CODE)
     ec2, iam, ssm, clients = fakes.aws_clients()
-    ssm.get_command_invocation = lambda **kw: {'Status':'Success','ResponseCode':0,
-        'StandardOutputContent':'Up 3 seconds\n','StandardErrorContent':''}
+    clock, polls, sends = [0.0], [], []
+    phase = ['launch']
+    monkeypatch.setattr(remote.time, 'monotonic', lambda: clock[0])
+    original_send = ssm.send_command
+
+    class NotRegistered(Exception):
+        response = {'Error': {'Code': 'InvalidInstanceId'}}
+
+    def information(Filters):
+        assert Filters == [{'Key': 'InstanceIds', 'Values': [ec2.instances[0]['InstanceId']]}]
+        polls.append(phase[0])
+        if phase[0] == 'recovery':
+            if polls.count('recovery') == 1:
+                return {'InstanceInformationList': [{'PingStatus': 'ConnectionLost'}]}
+            if recovery == 'offline' or len(polls) < 4:
+                return {'InstanceInformationList': []}
+        return {'InstanceInformationList': [{'PingStatus': 'Online'}]}
+
+    def send(**kw):
+        command = kw['Parameters']['commands'][0]
+        if 'cloud-init status --wait' in command:
+            # An EC2 running state is insufficient, and even Online can race agent registration.
+            assert polls.count('recovery') >= 3
+            sends.append(command)
+            if recovery == 'unregistered' or len(sends) == 1 and recovery == 'delayed':
+                raise NotRegistered()
+        return original_send(**kw)
+
+    def invocation(**kw):
+        failed = recovery == 'command_failed' and 'cloud-init status --wait' in ssm.commands[-1]
+        return {'Status': 'Failed' if failed else 'Success', 'ResponseCode': int(failed),
+                'StandardOutputContent': 'Up 3 seconds\n', 'StandardErrorContent': ''}
+
+    ssm.describe_instance_information = information
+    ssm.send_command, ssm.get_command_invocation = send, invocation
     d = fakes.deps()
     d.aws_clients = clients
+    d.sleep = lambda seconds: clock.__setitem__(0, clock[0] + seconds)
     argv = ['runner','--cloud','aws','--aws-region','us-east-2','--aws-instance-type','m8i-flex.xlarge',
             '--name','pv-bot','--aws-permissions-boundary','arn:aws:iam::123456789012:policy/boundary',
             '--server-url','https://acme.tico.dev','--label','pv-bot','--runner-tag','v0.3.71',
             '--non-interactive','--yes']
-    for _ in range(2):
+    for phase[0] in ['launch', 'recovery']:
         code, out = go(argv, d)
-        assert code == 0, out
+        assert code == (0 if phase[0] == 'launch' or recovery == 'delayed' else 1), out
         assert CODE not in out
+        if code:
+            assert 'kept for recovery' in out
     assert len(ec2.called('run_instances')) == 1
     assert iam.called('create_role')[0]['PermissionsBoundary'].endswith(':policy/boundary')
     assert state.load_runners()[0]['name'] == 'pv-bot'
-    assert any('cloud-init status --wait' in command for command in ssm.commands)
+    accepted_replays = [command for command in ssm.commands if 'cloud-init status --wait' in command]
+    assert len(accepted_replays) == (0 if recovery in ('offline', 'unregistered') else 1)
+    if recovery in ('offline', 'unregistered'):
+        assert 300 <= clock[0] <= 304
+        assert polls.count('recovery') <= 60
+    if recovery == 'delayed':
+        assert len(sends) == 2
+
+
+@pytest.mark.parametrize('failure_at', ['send', 'poll'])
+def test_recovery_does_not_resend_an_access_denial_or_an_uncertain_invocation(failure_at):
+    ssm, sends = fakes.FakeSSM(), []
+
+    class Refused(Exception):
+        # A not-ready error is retryable only before a command has been accepted.
+        response = {'Error': {'Code': 'AccessDeniedException' if failure_at == 'send' else 'InvalidInstanceId'}}
+
+    def send(**kw):
+        sends.append(kw)
+        if failure_at == 'send':
+            raise Refused()
+        return {'Command': {'CommandId': 'accepted'}}
+
+    def poll(**kw):
+        raise Refused()
+
+    ssm.send_command, ssm.get_command_invocation = send, poll
+    with pytest.raises(Refused):
+        remote.SSMShell(ssm, 'i-existing', sleep=lambda _: None).run('recover', ready_timeout=300)
+    assert len(sends) == 1
