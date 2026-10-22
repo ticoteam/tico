@@ -1,11 +1,11 @@
-"""KPIs and the Goal Manager (backend/kpis.py, backend/goals.py, docs/goals-and-kpis.md): the colour
-arithmetic, a person's override, what the Goal Manager may not do without a confirm, the migration of
+"""KPIs and the CEO Bot (backend/kpis.py, backend/goals.py, docs/goals-and-kpis.md): the colour
+arithmetic, a person's override, what the CEO Bot may not do without a confirm, the migration of
 the old KPI rows and the automatic bot KPIs."""
 
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
-from backend import hubdb, kpis as K
+from backend import ceo_bot, hubdb, kpis as K
 from backend.store import H
 from backend.tests.test_api import api, assign, claim, get, headers, post, ready, runner  # noqa: F401
 
@@ -112,6 +112,8 @@ def test_a_goals_worst_kpi_sets_its_colour_and_reason_without_overriding_a_perso
 def test_archive_restore_preserves_kpi_history_and_hides_it_from_active_views(api):
     goal, kpi = goal_with_kpi(api)
     logged = log(api, kpi["id"], 52, evidence="https://bi.example/activation", note="September", period_end=H.now())
+    with api.app.state.store.transaction() as c:
+        ceo_bot.set_level(c, "human:ana", 2)                  # above Passive, a stale KPI waits in Needs you
     stale = post(api, "kpis", {"name": "Unreported measure", "owner": "me"})["kpi"]
     assert any(item.get("kpi_id") == stale["id"] for item in get(api, "goals/needs-you")["items"])
     post(api, f"kpis/{stale['id']}/archive", {})

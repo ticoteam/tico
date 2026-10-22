@@ -17,7 +17,7 @@ function v2ChatStop() {
   V2C = null;
 }
 // Which of the viewer's rooms with a bot is its chat: the shared room, or one of their own. The bot page and the
-// Goal Manager on Goals both show this one room.
+// CEO Bot on Goals both show this one room.
 function v2ChatMode(slug) {
   slug = botBranchChatTarget(slug);
   const bot = (S.emps || []).find(e => e.name === slug);

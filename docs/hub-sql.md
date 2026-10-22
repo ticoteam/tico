@@ -88,7 +88,7 @@ Timestamps are ISO-8601 UTC text (`2026-09-15T21:40:12.931675Z`); compare them w
 | `task_types` | `id, name, numbered, created, updated` | types and, in `task_steps(id, type_id, name, position, status)`, their steps; `numbered` is 1 when the type numbers its tasks |
 | `task_events` | `task_id, ts, actor, field, old, new, note` | every change to a task |
 | `task_roles` | `task_id, role, actor, added_by, created` | who is on a task, by role (a short name the team chooses: `developer`, `reviewer`, `qa` ...); one actor may hold several roles on a task |
-| `goals` | `id, title, owner, parent_id, body, status, status_note, status_by, status_at, status_source, suggest_status, suggest_note, suggest_at, rank, last_read_at, last_read_by, created, created_by, updated` | what every human and bot is for; `status`: red, yellow, green, gray (no data), done, dropped, or NULL while proposed or not yet scored; `status_source`: `auto` (the Goal Manager's arithmetic) or `person` (set by hand, sticks until handed back); `suggest_*` is what the arithmetic says over a human's colour; `parent_id` is the goal it supports (optional); `owner` is `bot:x`, `human:x` or `company`; `tasks.goal_id` names the goal a task serves |
+| `goals` | `id, title, owner, parent_id, body, status, status_note, status_by, status_at, status_source, suggest_status, suggest_note, suggest_at, rank, last_read_at, last_read_by, created, created_by, updated` | what every human and bot is for; `status`: red, yellow, green, gray (no data), done, dropped, or NULL while proposed or not yet scored; `status_source`: `auto` (the CEO Bot's arithmetic) or `person` (set by hand, sticks until handed back); `suggest_*` is what the arithmetic says over a human's colour; `parent_id` is the goal it supports (optional); `owner` is `bot:x`, `human:x` or `company`; `tasks.goal_id` names the goal a task serves |
 | `goal_events` | `goal_id, ts, actor, field, old, new, note, status_by, status_source` | every change to a goal; a `status` row says who set it and how |
 | `kpis` | `id, slug, name, definition, unit, direction, cadence, owner, source_note, definition_version, created, created_by, updated` (`goal_id` and `target` are kept for the rows that had them) | a measure that stands on its own; `direction`: up, down, range; `cadence`: daily, weekly, monthly |
 | `goal_kpis` | `goal_id, kpi_id, kind, baseline, baseline_at, target, deadline, min, max, created, created_by, updated, updated_by` | the link between a goal and a KPI, holding the target: `kind` is `improve` (baseline, target, deadline), `maintain` (min, max) or `none`; `kpi_id` may be `auto:<bot>:<metric>` |
@@ -96,7 +96,7 @@ Timestamps are ISO-8601 UTC text (`2026-09-15T21:40:12.931675Z`); compare them w
 | `kpi_definitions` | `kpi_id, version, ts, actor, name, definition, unit, direction, cadence, source_note` | every version of a KPI's definition |
 | `goal_checkins` | `goal_id, kpi_id, ts, author, source_actor, body, signal` | the owner's own words on how a goal is going; `signal`: on_track, at_risk, off_track |
 | `goal_proposals` | `id, kind, goal_id, kpi_id, payload_json, reason, proposed_by, proposed_at, status, decided_by, decided_at` | a change waiting for its owner to confirm |
-| `goal_asks` | `kind, ref, owner, task_id, created` | the Goal Manager's task asking a person about a KPI or proposal; `kind`: kpi_red, kpi_stale, proposal; `ref`: the KPI or proposal id |
+| `goal_asks` | `kind, ref, owner, task_id, created` | the CEO Bot's task asking a person about a KPI or proposal; `kind`: kpi_red, kpi_stale, proposal; `ref`: the KPI or proposal id |
 | `task_delegations` | `task_id, delegate, requested_by, message_id, expires` | |
 | `approvals` | `id, kind, task_id, message_id, payload_json, requested_by, decided_by, decision, decided_at, consumed_at, created` | `kind`: send, spend, publish, merge |
 | `jobs` | `id, message_id, bot, state, created, attempt_id` | one per message a bot has to act on; `state`: queued, leased, running, input, completed, failed, uncertain, cancelled |
@@ -169,7 +169,8 @@ Every run records what woke it (`turns.trigger_kind`), its tokens, and whether i
   subtask finished, reopened, snoozed by someone), `pr_checks` (its pull request's checks, review comments,
   merge conflict, merge or release), `stall_check` (Tico's status check or stall wake on a quiet task, a task
   not starting, a stale ask, a worktree left idle), `schedule` (a routine firing, a due date, a snooze ending,
-  a next-run task, an update request) or `other` (anything else: a Slack digest, a meeting turn, a worktree
+  a next-run task, an update request), `background_done` (background commands an earlier turn left running
+  when the runner ended it on its wait have ended) or `other` (anything else: a Slack digest, a meeting turn, a worktree
   becoming ready). `trigger_source` names the event behind it where there is one: the message itself for
   `comment` and `person_message`, the subtask, the routine, the worktree.
 - **`writes`**: the hub writes the run made with its own run token (a task change, comment, link, message,

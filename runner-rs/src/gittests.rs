@@ -473,6 +473,45 @@ async fn a_task_lane_commits_its_memory_stamps_its_run_and_lands_beside_the_othe
 }
 
 #[tokio::test]
+async fn a_task_turn_moves_the_bots_claude_memory_into_its_worktree_and_it_is_done_once_pushed() {
+    use crate::harness_memory::{claude_dir, move_for_turn, Moved};
+    let tmp = Tmp::new();
+    let (bare, _seed) = remote(&tmp.0, "bot-ops");
+    let projects = tmp.0.join("projects");
+    std::fs::create_dir_all(&projects).unwrap();
+    let main = projects.join("bot-ops");
+    sh(&projects, &["clone", "-q", bare.to_str().unwrap(), main.to_str().unwrap()]);
+    let env = turn_env(&tmp.0, &[]);
+    let session = sessions::path_for(&projects, "ops", "t1");
+    assert_eq!(sessions::ensure(&main, &session, "t1", &env).await.1, "");
+    // Claude named the bot's memory by its own checkout, not the task's worktree.
+    let home = tmp.0.join("home");
+    let dir = claude_dir(&home, &main);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("MEMORY.md"), "- [Ask first](ask-first.md) — hook\n").unwrap();
+    std::fs::write(dir.join("ask-first.md"), "---\nname: ask-first\ndescription: Ask before a spec\n---\nAsk first.\n").unwrap();
+    let (gemini, state) = (tmp.0.join("gemini-home"), tmp.0.join("state"));
+
+    let turn = |checkout: &std::path::Path| move_for_turn(&home, &main, checkout, &gemini, &state, "2026-10-21").unwrap();
+    assert_eq!(turn(&session), Moved::Copied(1), "a task turn copies into its worktree before the harness starts");
+    assert!(std::fs::read_to_string(session.join("memory/learnings.md")).unwrap().contains("[source: claude-memory/ask-first.md;"));
+    // A main-lane turn meanwhile leaves it to the task's checkout: no second copy to collide on rebase.
+    assert_eq!(turn(&main), Moved::Elsewhere);
+    assert!(!main.join("memory/learnings.md").exists());
+    // Not done until the repository has it: the turn's memory commit, then the push.
+    assert_eq!(turn(&session), Moved::Copied(0));
+    assert_eq!(sessions::finish(&session, "run-1", &env, &[]).await, "");
+    assert_eq!(execute::push_repo(&session, &env).await.1, "");
+    assert_eq!(turn(&session), Moved::Done);
+    assert!(state.join("done").exists());
+    // Done means done: an owner's edit that removes a moved rule stays removed.
+    sh(&main, &["pull", "-q"]);
+    std::fs::write(main.join("memory/learnings.md"), "# Learnings\n").unwrap();
+    assert_eq!(turn(&main), Moved::Done);
+    assert_eq!(std::fs::read_to_string(main.join("memory/learnings.md")).unwrap(), "# Learnings\n");
+}
+
+#[tokio::test]
 async fn a_shared_checkout_never_forces_and_says_which_files_conflict() {
     let tmp = Tmp::new();
     let (bare, seed) = remote(&tmp.0, "bot-eng");

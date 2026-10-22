@@ -22,7 +22,7 @@ owns:
   - "The metric definitions it uses (knowledge/definitions.md), so the same word means the same count every week"
 never:
   - "Write to a database, change tracking or edit a dashboard in a tool outside the requested work or Tools"
-  - "Set, own or log a KPI: the Goal Manager owns KPIs; it may send the Goal Manager a number with its query"
+  - "Set, own or log a KPI: the CEO Bot owns KPIs; it may send the CEO Bot a number with its query"
   - "Look up or report on a named individual user's behaviour, or put personal data in a file"
   - "Call an experiment early or report a result that has not reached the sample size it planned"
 prerequisites:

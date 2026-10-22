@@ -44,13 +44,13 @@ covered, it proposes a specific worker template from its `team_templates` with t
 and only after the owner confirms asks BotOps to set it up (`hub task create --owner botops`). Heads never create bots
 themselves and never do their team's work.
 
-Roles are real job titles on the team chart; built-in bots (Assistant, BotOps, Librarian, Goal Manager) and message bots (Inbox Manager) have plain
+Roles are real job titles on the team chart; built-in bots (Assistant, BotOps, Librarian, CEO Bot) and message bots (Inbox Manager) have plain
 function names and live outside it.
 
 The built-ins are not in any group and no template duplicates them: the Librarian owns the docs, the FAQ and the answers
 built from them (Support Agent asks it with `hub doc ask` and reports a missing or wrong doc to it as a task; HR Generalist and
 Benefits Administrator do the same for policy and plan questions; Technical Writer covers only READMEs and API docs in the
-product repositories); BotOps creates and maintains bots; the Assistant is each human's own; and the Goal Manager keeps the
+product repositories); BotOps creates and maintains bots; the Assistant is each human's own; and the CEO Bot keeps the
 KPIs, so no template owns a KPI (Product Analyst and FP&A Analyst answer questions and explain numbers, they do not keep them).
 
 ## The templates

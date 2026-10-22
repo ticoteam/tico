@@ -257,7 +257,9 @@ document.addEventListener('visibilitychange', refreshConfig);   // a tab that wa
 // The main assistant is shown under the environment's assistant name, never its slug.
 // The built-in assistant reads as what it is (assistantName, ui/app/state.js).
 const assistantShownName = () => assistantName();
-const namedRoster = rows => rows.map(e => e.name === assistantBot() ? {...e, display_name: assistantShownName()} : e);
+// The CEO Bot's old name never shows (state.js `ceoBotName`), wherever the roster is read.
+const namedRoster = rows => rows.map(e => e.name === assistantBot() ? {...e, display_name: assistantShownName()}
+  : e.name === 'goal-manager' && ['', 'Goal Manager'].includes(String(e.display_name || '').trim()) ? {...e, display_name: 'CEO Bot'} : e);
 // Small compatibility hook for separately loaded UI modules. It exposes only deployment mode,
 // never identity or credentials.
 window.ticoIsCloud = () => !!S.me?.cloud;

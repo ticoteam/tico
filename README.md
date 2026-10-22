@@ -31,7 +31,7 @@ it, and you close the task. You need one model sign-in (a ChatGPT sign-in for Co
 API key); no GitHub account or outside Tool. [Demo mode](docs/demo.md) does not run bots.
 
 1. In **Finish setup**, choose an AI provider, name your team and pick **Marketing** with **Content Marketer** (`content`) checked.
-   Assistant, BotOps, Librarian and Goal Manager are the four built-in bots.
+   Assistant, BotOps, Librarian and CEO Bot are the four built-in bots.
 2. Use **Add computer** to join this computer, run the command shown, then **Create my team**.
 3. Open **Settings > Computers** and **Sign in** beside Codex or Claude Code; finish the provider's browser flow.
    Other harnesses and API credentials are covered in [Harnesses](docs/harnesses.md). Choose the bot's model in **Settings > Bots**.
@@ -93,7 +93,7 @@ team on localhost with no setup ([docs/demo.md](docs/demo.md)).
 | [docs/updates.md](docs/updates.md) | Updating the server and its computers |
 | [docs/assistant.md](docs/assistant.md) | The built-in Assistant: what it does at once and what it proposes |
 | [docs/librarian.md](docs/librarian.md) | The built-in Librarian: answers from the team's docs, with citations |
-| [docs/goals-and-kpis.md](docs/goals-and-kpis.md) | Goals, KPIs and the built-in Goal Manager: automatic colours, a human's override, readings with evidence |
+| [docs/goals-and-kpis.md](docs/goals-and-kpis.md) | Goals, KPIs and the built-in CEO Bot: automatic colours, a human's override, readings with evidence |
 | [docs/connect-an-agent.md](docs/connect-an-agent.md) | Connecting an external agent (Grok, Muse, Claude, Cursor, Codex, any MCP client) with a personal token |
 | [PRIVACY.md](PRIVACY.md), [docs/telemetry.md](docs/telemetry.md) | The anonymous usage count: exactly what is sent, and how to turn it off |
 
