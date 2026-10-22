@@ -152,6 +152,11 @@ All notable changes to Tico are recorded here. The format follows
   ([GitHub App](docs/github-app.md#permissions-and-why)).
 
 ### Fixed
+- **Stop holds for a turn whose computer slept.** A Stop pressed after Tico had marked a sleeping computer's turn
+  as lapsed was refused ("not running"), and the answer the model went on to finish was posted anyway. The Stop is
+  now recorded, the late answer is kept on its run instead of posted, and the request ends stopped ("Stopped by …")
+  rather than being run again by the automatic recovery 90 minutes later. A stopped turn whose computer never
+  reports back is let go with "Stopped by …; not resumed" instead of being resumed.
 - **Codex bots share a ChatGPT login concurrently.** Bots on one login run turns at the same time, with no login queue or waiting label; they share the plan’s usage allowance.
 - **The hub and MCP model change also moves a rate-limited bot while a turn runs.** `hub bot model` and the MCP
   model tool refused with "Wait for the current run to finish before changing models"; they now follow the Settings
