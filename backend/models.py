@@ -1891,7 +1891,7 @@ class UsageLimit(Contract):
 
 
 class UsageDefault(UsageLimit):
-    count_subscription: bool = False
+    count_subscription: bool = True
 
 
 class SubscriptionUnavailable(Contract):
@@ -1917,6 +1917,9 @@ class Completion(Contract):
     # When the provider said that limit lifts (its own reset time); work resumes then instead of after a default wait.
     limit_resets_at: str | None = Field(default=None, max_length=40)
     retryable: bool = False  # the runtime could not renew its sign-in; the turn never started
+    # The turn gave a shared one-turn login to a waiting turn at its hold cap (runner-rs/src/login_turns.rs): it stopped
+    # at a safe point and its job goes back in the queue to continue, neither answered nor held for review.
+    yielded: bool = False
     fallback: str | None = Field(default=None, max_length=80)  # harness that actually ran the turn
     primary_limited: bool = False  # the bot's own runtime hit its usage limit and the company's default `fallback` ran the turn
     primary_held: bool = False  # the claim held the bot's own login (config `primary_held`): the runner never tried it
