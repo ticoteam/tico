@@ -1,7 +1,8 @@
 # Changelog fragments
 
 Pull requests never edit [CHANGELOG.md](../CHANGELOG.md). Each one adds its release notes here, as
-`changes/unreleased/<branch>.md` (one file per pull request, named after its branch so two never collide):
+`changes/unreleased/<branch>.md` (one file per pull request, named after its branch so two never collide; from a
+fork whose branch is `main` or `patch-1`, pass `--name` with something specific):
 
 ```markdown
 ### Fixed

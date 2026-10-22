@@ -188,7 +188,8 @@ hosted gate.
 
 ## Tag
 
-1. Compile the notes: `python scripts/changelog_fragments.py compile X.Y.Z` writes `## [X.Y.Z] - YYYY-MM-DD` under
+1. Compile the notes on the candidate's own checkout (its release branch), so fragments merged after the freeze stay
+   for the next release: `python scripts/changelog_fragments.py compile X.Y.Z` writes `## [X.Y.Z] - YYYY-MM-DD` under
    an empty `## [Unreleased]` from every fragment in `changes/unreleased/` (newest first under each heading, then any
    line still written under Unreleased), moves the compare links on and deletes the fragments it used. It refuses
    when a newer release is tagged whose notes are not merged back yet, since this release would repeat its lines.

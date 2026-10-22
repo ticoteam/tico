@@ -16,7 +16,7 @@ such commit) and reports, naming the pull request or commit each time:
    that head is the same as the change at the final head, line for line with whitespace (a merge of main into the
    branch, say).
 3. NO PR: a commit that landed without a pull request and has no receipt. Commits that only touch CHANGELOG.md
-   (release notes) are exempt.
+   or changes/ (release notes and their fragments) are exempt.
 
 Review receipts come from the tickets when GitHub reviews aren't used, as a JSON list:
 

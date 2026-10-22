@@ -198,7 +198,8 @@ def adopt(root, main="origin/main", name=None):
     ours = git(root, "show", "HEAD:CHANGELOG.md").stdout if unmerged else (root / "CHANGELOG.md").read_text()
     mine = [e for e in unreleased(ours) if e not in before]
     if not mine:
-        raise FragmentError("this branch adds nothing under [Unreleased]")
+        raise FragmentError("this branch adds nothing under [Unreleased]; if a main merge moved your line into a "
+                            "released section, undo that merge, run adopt, commit, then merge main again")
     path = Path(root) / FRAGMENTS / ("%s.md" % (name or branch_name(root)))
     entries = (parse(path.read_text(), str(path)) if path.exists() else []) + mine
     path.parent.mkdir(parents=True, exist_ok=True)
