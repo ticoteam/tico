@@ -459,6 +459,8 @@ def operation_issues(c, who, auth):
             from .execution import held_back, held_runs, isolation_refused, left_by_keeper
             named = "; ".join(f"\"{h['title']}\" (owner {h['owner_name']})" for h in held_runs(c, who, auth, slug))
             held_note = f" Held: {named}." if named else ""
+            # Needs you says only what stopped and what it holds up; the review card says what to do (Chris, Oct 22).
+            what = named or ("A run" if uncertain == 1 else f"{uncertain} runs")
             waiting, waiting_on = held_back(c, who, auth, slug)
             left = left_by_keeper(c, who, slug)
             if isolation_refused(c, who, auth, slug):
@@ -473,11 +475,10 @@ def operation_issues(c, who, auth):
                 # it: only a review lets it go, so this one is a person's now, not a later look (Dev 280).
                 wakes = f"{waiting} queued request{' waits' if waiting == 1 else 's wait'}"
                 on = " on " + ", ".join(f"\"{t}\"" for t in waiting_on) if waiting_on else ""
-                behind = (f" {wakes}{on} until it is reviewed." if waiting else
-                          " Tico settled the rest of that run but could not decide this safely.")
+                behind = (f" {wakes}{on} until you decide." if waiting else
+                          " Tico can't safely decide it on its own.")
                 add("uncertain_work", f"{bot['display_name']} has {uncertain} stopped {noun} holding up work",
-                    f"The bot stopped before returning an answer, so Tico will not repeat it on its own.{held_note}"
-                    f"{behind} Review it to let the work run.",
+                    f"{what} stopped partway.{behind} Retry it or drop it.",
                     bot=slug, action="review", held_back=waiting, held_tasks=waiting_on)
             else:
                 add("uncertain_work", f"{bot['display_name']} saved {uncertain} stopped {noun} for later",

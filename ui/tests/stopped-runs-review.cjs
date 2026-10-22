@@ -17,12 +17,20 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     const errors = [];
     page.on('pageerror', e => errors.push(e.message));
     const holding = {kind: 'uncertain_work', title: 'Builder has 1 stopped run holding up work', bot: 'builder',
-      detail: 'The bot stopped before returning an answer, so Tico will not repeat it on its own. 3 queued requests wait on "Dev 268" until it is reviewed. Review it to let the work run.',
+      detail: '"Billing 3/5" (owner Builder) stopped partway. 3 queued requests wait on "Dev 268" until you decide. Retry it or drop it.',
       severity: 'error', needs_person: true, action: 'review', held_back: 3, held_tasks: ['Dev 268']};
     const later = {kind: 'uncertain_work', title: 'Writer saved 1 stopped run for later', bot: 'writer',
       detail: 'The bot stopped before returning an answer. Other work can continue. Review it whenever useful.',
       severity: 'warning', needs_person: false, action: 'review'};
     const reviewed = [];
+    // The card is the decision (Chris, Oct 22): what stopped, one recommendation with its button first, the rest folded.
+    const job = (id, title, stopped, acted, tools) => ({id, attempt_id: `a-${id}`, readable: true, stopped, acted,
+      task: {id: `t-${id}`, title, status: 'doing', owner: 'bot:builder', owner_name: 'Builder'},
+      request: 'Ship Billing 3/5.', attempt: {started: '2026-10-22T08:12:00Z', final_text: 'Merged #25; deploying next.'},
+      output: [], tools: tools.map(tool => ({tool, summary: '', status: 'completed'})),
+      reason: 'The run stopped after using a tool that can change things (Bash). Tico cannot tell whether it finished.'});
+    const jobs = {builder: [job('j1', 'Billing 3/5', 'changed', ['Bash'], ['Read', 'Bash'])],
+      writer: [job('j2', 'Weekly digest', 'read', [], ['Read'])]};
     const health = {audience: 'owner', attention: 0, checks: [], computers: [], waiting: [], slow: [], failures: [],
       checked: new Date().toISOString()};
     await page.route('**/*', route => {
@@ -48,7 +56,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
       if (p === '/api/v2/needs-you') return json({items: []});
       if (p === '/api/v2/operations') return json({machines: [], services: [], issues: [holding, later]});
       const review = p.match(/^\/api\/v2\/bots\/([^/]+)\/execution-review$/);
-      if (review) { reviewed.push(review[1]); return json({jobs: []}); }
+      if (review) { reviewed.push(review[1]); return json({jobs: jobs[review[1]] || []}); }
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       return json(unrouted(p));
     });
@@ -69,6 +77,15 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     assert.equal(await settings.innerText(), 'Review stopped runs');
     await settings.click();
     await page.locator('dialog.tmodal h2', {hasText: 'Stopped runs'}).waitFor({timeout: t(5000)});
+    // One line on what stopped, one recommendation, two buttons with the recommended one first; nothing else open.
+    const card = page.locator('dialog.tmodal form[data-job="j1"]');
+    await card.waitFor({timeout: t(5000)});
+    assert.match(await card.locator('[data-stopped]').innerText(), /^Stopped .+ while using Bash\.$/);
+    assert.match(await card.locator('[data-pick]').innerText(), /^Don’t retry unless you know Bash didn’t finish/);
+    assert.deepEqual(await card.locator(':scope > .row button').allInnerTexts(), ['Don’t retry', 'Try again']);
+    assert.equal(await card.locator('[data-details]').getAttribute('open'), null);
+    assert.equal(await card.locator('textarea[name=note]').isVisible(), false);
+    assert.doesNotMatch(await card.innerText(), /Why Tico paused|Did an outside action finish|Merged #25/);
     await page.locator('dialog.tmodal [data-close]').click();
 
     // Health keeps the one that holds nothing as a note, and it is still reviewed from there.
@@ -80,6 +97,11 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     assert.equal(await page.locator('#hl-page .hl-notes [data-execution-review="builder"]').count(), 0);
     await note.click();
     await page.locator('dialog.tmodal h2', {hasText: 'Stopped runs'}).waitFor({timeout: t(5000)});
+    // A run that only read is safe to try again, so that button leads.
+    const read = page.locator('dialog.tmodal form[data-job="j2"]');
+    await read.waitFor({timeout: t(5000)});
+    assert.match(await read.locator('[data-stopped]').innerText(), /after only reading\.$/);
+    assert.deepEqual(await read.locator(':scope > .row button').allInnerTexts(), ['Try again', 'Don’t retry']);
     assert.deepEqual(reviewed, ['builder', 'writer']);
     assert.deepEqual(errors, []);
     console.log(`PASS: stopped runs are reviewed from Needs you, Settings and Health (${((Date.now() - t0) / 1000).toFixed(1)}s)`);

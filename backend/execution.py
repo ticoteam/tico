@@ -2566,12 +2566,17 @@ class Execution:
                       for e in reversed(events)]
             calls = recorded_tools(c, row['attempt_id'])
             acted = sorted({call['tool'] for call in calls if call['tool'] not in READ_ONLY_TOOLS})
+            # `stopped` is what the review card leads with (ui/app/settings.js executionReview): 'changed' may have
+            # acted, 'read' only read, 'unknown' left no record of its tools.
             if acted:
+                stopped = 'changed'
                 reason = (f"The run stopped after using a tool that can change things ({', '.join(acted)}). Tico "
                           "cannot tell whether it finished, so retrying automatically could repeat the action.")
             elif calls:
+                stopped = 'read'
                 reason = "The run stopped after only reading, so trying it again repeats nothing."
             else:
+                stopped = 'unknown'
                 reason = ("The run stopped before it returned an answer. Its runner did not record "
                           "enough detail for Tico to prove that retrying automatically is safe.")
             jobs.append({'id':row['id'], 'attempt_id':row['attempt_id'], 'readable':readable,
@@ -2580,7 +2585,8 @@ class Execution:
                          'request':message['body'] if readable else '',
                          'attempt':(dict(attempt) if readable else
                                     {**dict(attempt), 'final_text': ''}) if attempt else None,
-                         'output':output if readable else [], 'tools':calls if readable else [], 'reason':reason})
+                         'output':output if readable else [], 'tools':calls if readable else [], 'reason':reason,
+                         'stopped':stopped, 'acted':acted})
         return {'jobs':jobs}
 
     def reconcile_job(self, c, who, job_id, body):
