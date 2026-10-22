@@ -703,6 +703,16 @@ pub(crate) mod tests {
 
     #[test]
     fn the_computers_own_login_keeps_its_windows_until_it_signs_out() {
+        // This test needs the real default-login key (""), which other turn tests also populate. Its empty-window
+        // assertions belong to a fresh process, as the account-reader and isolation tests do.
+        const CHILD: &str = "TICO_TEST_DEFAULT_LOGIN_WINDOWS";
+        if std::env::var_os(CHILD).is_none() {
+            let out = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "profiles::tests::the_computers_own_login_keeps_its_windows_until_it_signs_out", "--nocapture"])
+                .env(CHILD, "1").output().unwrap();
+            assert!(out.status.success(), "{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+            return;
+        }
         let reset = crate::util::iso(&json!(crate::util::epoch_s() + 3600.0));
         // "" is the computer's own login: AWS's bots run on it with no named profile.
         remember_weekly("", "claude", &json!({"used_percent": 53.0, "window_minutes": 300, "resets_at": reset, "status": "allowed"}));
