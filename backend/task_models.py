@@ -59,18 +59,24 @@ def readiness(c, bot, choice, runner_id=None):
     ready = readiness_document(row[0]) if row else {}
     state = (ready.get("runtimes") or {}).get(choice["runtime"])
     if ready.get("schema_version") == 1 and isinstance(state, dict) and state.get("installed") is False:
-        return {**can, "can_run": False, "problem": f"{choice['runtime']} is not installed on {where}"}
+        return {**can, "can_run": False, "problem": f"{choice['runtime']} is not installed on {where}",
+                "fix": f"Install {choice['runtime']} on {where}, or choose a model it already runs",
+                "link": "#/settings"}
     if can.get("gateway"):
         return {**{k: v for k, v in can.items() if k != "gateway"}, "can_run": False, "sign_in": True,
-                "problem": f"{choice['runtime']} is not signed in on {where}"}
+                "problem": f"{choice['runtime']} is not signed in on {where}",
+                "fix": f"Sign in {choice['runtime']} on {where} in Settings > Computers, or choose a model it already "
+                       "runs", "link": "#/settings"}
     return can
 
 
 def why_not(c, settings, bot, choice, runner_id, job_id=None):
-    """Why the task model cannot run this turn on `bot`'s computer `runner_id`, or "" when it can. Any answer of
-    `readiness` short of a yes is a reason (not installed, not signed in, a sign-in not checked yet): never-block
-    prefers a turn on the bot's model. A login a usage limit holds, or that another job is probing after one, is a
-    reason too, so the task runs on the bot's model rather than wait on it."""
+    """Why the task model cannot run this turn on `bot`'s computer `runner_id`, or "" when it can. A no from
+    `readiness` is a reason (not installed, not signed in). Its "don't know" is not: Grok's sign-in can't be checked
+    without starting it (`check = "none"`) and Antigravity reports no readiness, so a "don't know" would keep them off
+    for good. Such a turn runs, and a refused login comes back through `mark_rejected` as a no for the next claim. A
+    login a usage limit holds, or that another job is probing after one, is a reason too, so the task runs on the
+    bot's model rather than wait on it."""
     from . import login_holds
     from .subscriptions import effective
     row = providers.MODEL_BY_ID.get(choice["model"])
@@ -83,7 +89,7 @@ def why_not(c, settings, bot, choice, runner_id, job_id=None):
     except providers.ProviderError as exc:
         return str(exc).replace("default model", "task model")
     can = readiness(c, bot, choice, runner_id)
-    if can.get("can_run") is not True:
+    if can.get("can_run") is False:
         return can.get("problem") or f"{choice['runtime']} cannot run on this bot's computer"
     login = login_holds.canonical(c, runner_id, effective(c, bot)[0] or "", choice["runtime"])
     held = login_holds.holding(c, runner_id, login, choice["runtime"], job_id)
