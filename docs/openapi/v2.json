@@ -14704,6 +14704,12 @@
                                   "title": "Question",
                                   "type": "string"
                                 },
+                                "why": {
+                                  "default": "",
+                                  "maxLength": 200,
+                                  "title": "Why",
+                                  "type": "string"
+                                },
                                 "options": {
                                   "items": {
                                     "additionalProperties": false,
@@ -14731,6 +14737,17 @@
                                           }
                                         ],
                                         "title": "File"
+                                      },
+                                      "then": {
+                                        "default": "",
+                                        "maxLength": 120,
+                                        "title": "Then",
+                                        "type": "string"
+                                      },
+                                      "recommended": {
+                                        "default": false,
+                                        "title": "Recommended",
+                                        "type": "boolean"
                                       }
                                     },
                                     "required": [
@@ -25222,6 +25239,17 @@
               }
             ],
             "title": "File"
+          },
+          "then": {
+            "type": "string",
+            "maxLength": 120,
+            "title": "Then",
+            "default": ""
+          },
+          "recommended": {
+            "type": "boolean",
+            "title": "Recommended",
+            "default": false
           }
         },
         "additionalProperties": false,
@@ -25912,6 +25940,12 @@
             "maxLength": 300,
             "minLength": 1,
             "title": "Question"
+          },
+          "why": {
+            "type": "string",
+            "maxLength": 200,
+            "title": "Why",
+            "default": ""
           },
           "options": {
             "items": {

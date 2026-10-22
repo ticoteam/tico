@@ -196,7 +196,7 @@ def test_a_bot_puts_one_decision_to_a_person_in_one_call(api):
     # With a file, the same refusal comes before any bytes are stored.
     png = base64.b64encode(b"\x89PNG never stored").decode()
     picture = {"question": "Which banner?", "on": "cara", "options": [
-        {"label": "A", "file": {"name": "a.png", "content_base64": png}}, {"label": "B"}]}
+        {"label": "A", "then": "Go with A", "file": {"name": "a.png", "content_base64": png}}, {"label": "B", "then": "Go with B"}]}
     r = api.post("/api/v2/task-questions", json=picture, headers=headers(attempt["token"]))
     assert r.status_code == 403 and not any(api.app.state.blobs.directory.rglob(hashlib.sha256(b"\x89PNG never stored").hexdigest()))
     r = api.post("/api/v2/task-questions", json={**picture, "on": "ana"}, headers=headers(attempt["token"], "pic-1"))
@@ -206,7 +206,7 @@ def test_a_bot_puts_one_decision_to_a_person_in_one_call(api):
     # A private question refused in the write's checks stores no bytes either.
     secret_png = base64.b64encode(b"\x89PNG private, never stored").decode()
     hidden_pick = {"question": "Which settlement banner?", "on": "cara", "private": True, "parent": secret["id"],
-                   "options": [{"label": "A", "file": {"name": "a.png", "content_base64": secret_png}}, {"label": "B"}]}
+                   "options": [{"label": "A", "then": "Go with A", "file": {"name": "a.png", "content_base64": secret_png}}, {"label": "B", "then": "Go with B"}]}
     r = api.post("/api/v2/task-questions", json=hidden_pick, headers=headers(attempt["token"]))
     assert r.status_code == 403 and r.json()["error"]["code"] == "privacy", r.text
     assert not any(api.app.state.blobs.directory.rglob(hashlib.sha256(b"\x89PNG private, never stored").hexdigest()))
@@ -228,7 +228,7 @@ def test_a_private_question_goes_to_any_person_and_only_they_and_the_bot_read_it
     _, _, attempt = setup_attempt(api)          # Ana started this run; the question goes to Ben
     png = base64.b64encode(b"\x89PNG for ben").decode()
     ask = {"question": "Approve the Q3 bonus pool?", "on": "ben", "private": True,
-           "options": [{"label": "Yes", "file": {"name": "pool.png", "content_base64": png}}, {"label": "No"}]}
+           "options": [{"label": "Yes", "then": "Go with Yes", "file": {"name": "pool.png", "content_base64": png}}, {"label": "No", "then": "Go with No"}]}
     r = api.post("/api/v2/task-questions", json=ask, headers=headers(attempt["token"], "private-ben"))
     assert r.status_code == 200, r.text
     made = r.json()["task"]

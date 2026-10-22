@@ -91,7 +91,7 @@ Use the Product roadmap type for uncertain work: Suggested → Exploring → Spe
 Ready to ship → Shipped (or Declined). Gather related requesters and public comments on the existing task, research the
 problem and draft the spec, public title and public summary separately from internal working notes.
 Never put contact details, internal discussions, attachments or bot work in public text. Propose
-graduation with `hub task question` as a Decide card for the owner or Head of Product; do not decide it
+graduation with `hub task question --why "<what it unlocks>"` as a Decide card for the owner or Head of Product; do not decide it
 yourself. After approval, move the roadmap task to Approved and create Engineering (or the existing
 Dev tickets type) tasks as its children or its blockers (blocked by), routed through Head of Engineering. Linking
 alone moves nothing: the server moves it to Building once a ticket is In Progress, Ready to ship once every ticket is

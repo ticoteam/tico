@@ -1435,6 +1435,22 @@ def lint_person_ask(text):
     sentences = lint_sentences(text)
     if n > LINT_ASK_WORDS or sentences > 2:
         problems.append(f"is {n} words in {sentences} sentence{'s' if sentences != 1 else ''}")
+    return problems + lint_plain(text)
+
+
+# Error output a bot pasted: a traceback, an exception or error class with its message, an exit code, an HTTP error
+# status. "an error in the invoice" is prose; "ValueError: bad date" and "HTTP 502" are the bot's own record.
+LINT_ERROR = re.compile(r"\bTraceback\b|(?-i:\b[A-Z]\w*(?:Error|Exception)\b)|(?-i:\b(?:ERROR|FATAL|PANIC|Error|Fatal)\b)\s*:"
+                        r"|\bexit(?:ed)?\s+(?:code|status)\s+-?\d+|\bHTTP\s*[45]\d\d\b|(?-i:\bE[A-Z]{3,}\b)(?=:)"
+                        r"|\bstack ?trace\b", re.I)
+
+
+def lint_plain(text):
+    """What in `text` belongs under Details, not in front of a person, empty when nothing does: an s3:// link, an id
+    or hash, a file path, a tool or field name, or error output. The part of the ask rules (lint_person_ask,
+    lint_question) that holds for every line a card shows above Details."""
+    text = str(text or "").strip()
+    problems = []
     m = LINT_S3.search(text)
     if m:
         problems.append(f'has an s3:// link: "{m.group(0)}"')
@@ -1450,6 +1466,9 @@ def lint_person_ask(text):
     m = LINT_TOOL.search(plain) or LINT_CODES.search(plain) or LINT_JARGON.search(plain)
     if m:
         problems.append(f'has a tool or field name: "{m.group(0)}"')
+    m = LINT_ERROR.search(plain)
+    if m:
+        problems.append(f'has error output: "{m.group(0)}"')
     return problems
 
 
@@ -1482,6 +1501,68 @@ def require_person_ask(conn, actor, person, text, where):
     but never counts toward a quarantine (_escalate): it is corrected by rewriting, not a sign the bot reaches
     where it should not."""
     detail = person_ask_refusal(person, text, where)
+    if detail:
+        refuse(conn, actor, "lint", detail)
+
+
+# A question that lists its picks in its own words ("1. Calls ... 2. Pages ...", "(a) ... (b) ...") instead of as
+# options: the card could only show them as text, with nothing to tick.
+LINT_LISTED_PICKS = re.compile(r"(?:^|\s)(?:\(?[1-9][.)]|\([a-f]\)|[a-f]\))\s+\S.*?(?:^|\s)(?:\(?[2-9][.)]|\([b-f]\)|[b-f]\))\s+\S",
+                               re.S)
+
+
+def lint_question(question):
+    """The problems with one question a bot puts to a person, as a card shows it (ui/app/question-card.js), empty
+    when it passes. Its picks are options, each saying what happens when it is chosen (`then`); several picks
+    (`multi`) mark the ones the bot recommends; and the question, its "why it matters" line and each `then` line
+    carry nothing that belongs under Details (lint_plain), nor does any pick's label or description. A question with no options is a yes/no or a written
+    answer, unless it lists picks in its words or is several picks. Deterministic, so a bot fixes it in one retry."""
+    q = question if isinstance(question, dict) else question.model_dump()
+    text, options, problems = str(q.get("question") or ""), q.get("options") or [], []
+    for where, value in (("the question", text), ('the "why it matters" line (why)', q.get("why"))):
+        problems += [f"{where} {p}" for p in lint_plain(value)]
+    if not options and (q.get("multi") or LINT_LISTED_PICKS.search(text)):
+        problems.append("lists picks but has no options: give each pick as an option")
+    missing = [o.get("label") for o in options if not str(o.get("then") or "").strip()]
+    if missing:
+        problems.append(f'option{"s" if len(missing) > 1 else ""} {", ".join(chr(34) + str(m) + chr(34) for m in missing)} '
+                        f'{"have" if len(missing) > 1 else "has"} no "what happens" line (then)')
+    for o in options:
+        # Every visible part of a pick sits above Details, so it keeps the same plain rule as the question.
+        problems += [f'option "{o.get("label")}" {p}' for p in lint_plain(o.get("label"))]
+        problems += [f'the description of "{o.get("label")}" {p}' for p in lint_plain(o.get("description"))]
+        problems += [f'the "what happens" line of "{o.get("label")}" {p}' for p in lint_plain(o.get("then"))]
+    if q.get("multi") and options and not any(o.get("recommended") for o in options):
+        problems.append("is several picks with none marked recommended: mark the ones you recommend")
+    return problems
+
+
+QUESTION_EXAMPLE = ('{"question": "Website sales chat: go with these picks?", "why": "Engineering can\'t start until '
+                    'these are set.", "multi": true, "options": [{"label": "Spend cap $10/day", "then": "Chat stops '
+                    'for the day at $10", "recommended": true}, ...]}')
+
+
+def question_refusal(person, questions):
+    """What a refusal of these questions to `person` says, or "" when they pass: what failed, the rule and an example."""
+    problems = []
+    for q in questions:
+        label = (q if isinstance(q, dict) else q.model_dump()).get("question") or ""
+        problems += [f'"{str(label)[:60]}": {p}' for p in lint_question(q)]
+    if not problems:
+        return ""
+    return (f"Your question to {actor_id(person)} can't be shown as a clear card: {'; '.join(problems)}. The rule: a "
+            f"question with picks gives each pick as an option with a short \"what happens\" line (then); several "
+            f"picks (multi) mark the recommended ones (recommended); the question, its why line and each pick's "
+            f"label, description and then line have no ids, hashes, file paths, tool names or error output. Put "
+            f"those in the task body or a comment, which the card keeps under Details. Example: {QUESTION_EXAMPLE}")
+
+
+def require_plain_question(conn, actor, person, questions):
+    """Refuse a bot's question to a person that breaks the asking rules (question_refusal). Like require_person_ask,
+    a `lint` refusal is fixed by rewriting and never counts toward a quarantine."""
+    if not is_bot(actor) or not is_human(person):
+        return
+    detail = question_refusal(person, questions)
     if detail:
         refuse(conn, actor, "lint", detail)
 
