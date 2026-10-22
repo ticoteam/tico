@@ -55,10 +55,14 @@ def expire_notice(bot, record):
 
 def expire(c, now):
     """Mark every waiting go-live past its deadline failed (`expired`), so one whose computer never reports still
-    ends with a notice. The scheduler calls this; the heartbeat scan does the same for the records it reads."""
+    ends with a notice. The scheduler calls this; the heartbeat scan does the same for the records it reads. Returns the
+    bots whose go-live it ended."""
+    ended = []
     for key, bot, record in rows(c):
         if not record.get("failed") and expired(record, now):
             fail(c, key, bot, record, "expired", expire_notice(bot, record))
+            ended.append(bot)
+    return ended
 
 
 def waiting(c, who, auth, full):

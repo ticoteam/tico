@@ -15,6 +15,12 @@ All notable changes to Tico are recorded here. The format follows
   read-only line, "Visuals: full" or "Visuals: pictures, video and audio only (no separate visual address)".
   `TICO_VISUAL_SAME_ORIGIN` is no longer read, and a local install uses the same fallback. A `TICO_VISUAL_ORIGIN` on
   the app's own hostname, with any scheme or port, now stops the server; without it such a setup gets the fallback.
+- **System routines in Settings > Routines**: a read-only System section above the bot routines lists every job Tico
+  runs on its own timers, in four groups (Checks that suggest, Learning, Reminders and deadlines, Housekeeping), each
+  with what it does, its schedule, its last run in words ("9 checked, 2 suggestions", or "Failed: <reason>" in red) and
+  its next run. Stale ticket review and nightly learnings also show which route answered Decide (Gateway, company key or
+  company AI), "Ran on your own key: Gateway unavailable" when the Gateway did not answer, and this month's AI spend.
+  Housekeeping rows say Tico needs them. `GET /api/v2/system-routines`; the Decide fallback order is unchanged.
 - **A Claude bot's turn no longer waits an hour on its own background commands**: once the bot has answered and the
   turn is only waiting on background shells (a test suite, `gh pr checks --watch`, `gh run watch`) for 5 minutes
   (`background_wait_s` in bot.yaml, 0 for off), the runner ends the turn as completed and the commands keep running.
