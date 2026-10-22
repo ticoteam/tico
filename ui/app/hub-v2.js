@@ -164,7 +164,8 @@ function pausedNotice(slug) {
   let why = PAUSED_WHY[s.state], since = s.since;
   if (s.state === 'paused' && /^Paused: over /.test(s.focus || '')) why = s.focus.replace(/^Paused: /, '');     // a spend limit (Usage)
   if (s.state === 'crashed')
-    return `${empName(slug)} saved a stopped run for later${esc(when(since))} — only that request is paused; other work continues`;
+    return s.last_stop ? `${empName(slug)}: ${esc(s.last_stop.text)}`
+      : `${empName(slug)} saved a stopped run for later${esc(when(since))} — only that request is paused; other work continues`;
   if (!why) {
     const off = (S.status?.health_issues || []).find(i => i.kind === 'machine' && (i.bots || [i.bot]).includes(slug) && i.since);
     if (off && Date.now() - Date.parse(off.since) > 10 * 60000) { why = off.title; since = off.since; }

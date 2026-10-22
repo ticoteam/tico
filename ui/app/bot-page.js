@@ -164,16 +164,52 @@ function botRecurringPaint(e, slug) {
   host.hidden = !host.innerHTML;
   bindRecurringRail(host);
 }
+// Why the bot's last run ended without finishing (backend/execution.py last_stop), never a bare "Crashed": one plain
+// line, grey when nothing is needed and red when a person must act, and only an action that exists (`review`: the
+// Stopped runs dialog, which retries or dismisses the run). A click opens what happened.
+const lastStopOf = slug => { const s = v2StatusOf(slug); return ['crashed', 'idle'].includes(s?.state) ? s.last_stop || null : null; };
+const stopReviewable = (slug, stop) => stop.action === 'review' && settingsCanManageBot(S.emps.find(x => x.name === slug));
+function lastStopHTML(slug) {
+  const stop = lastStopOf(slug); if (!stop) return '';
+  const soft = stop.tone === 'soft';
+  return `<button type="button" class="bot-alert bot-stop${soft ? ' soft' : ''}" data-last-stop${soft ? '' : ' role="status"'}>${soft ? '' : '<span aria-hidden="true">⚠</span> '}${esc(stop.text)}</button>`
+    + (stopReviewable(slug, stop) ? '<button class="primary bot-alert-resume" type="button" data-stop-review>Retry or dismiss</button>' : '');
+}
+const stopReview = slug => void executionReview(slug, async () => { await v2Refresh(); botAlertDraw(); });
+function lastStopOpen(slug) {
+  const stop = lastStopOf(slug); if (!stop) return;
+  const review = stopReviewable(slug, stop);
+  const needed = !stop.needs_person ? 'No. Nothing was lost.'
+    : stop.action === 'review' ? (review ? 'Yes: say whether to try it again or let it go.'
+                                         : 'Yes: a person who manages this bot decides whether to try it again.')
+    : 'Yes, as the line above says.';
+  const dialog = document.createElement('dialog'); dialog.className = 'tmodal'; dialog.id = 'last-stop';
+  dialog.innerHTML = `<header><h2>Last run</h2><button class="ghost" type="button" data-close>Close</button></header>
+    <p>${esc(stop.text)}</p>
+    ${stop.reason ? `<p><strong>What happened</strong><br>${esc(stop.reason)}</p>` : ''}
+    <p><strong>Is anything needed?</strong><br>${esc(needed)}</p>
+    ${stop.at ? `<p class="muted">${esc(fmt(stop.at))}</p>` : ''}
+    ${review ? '<div class="row"><button class="primary" type="button" data-stop-review>Retry or dismiss</button></div>' : ''}`;
+  dialog.querySelector('[data-close]').onclick = () => dialog.close();
+  const open = dialog.querySelector('[data-stop-review]');
+  if (open) open.onclick = () => { dialog.close(); stopReview(slug); };
+  dialog.addEventListener('close', () => dialog.remove());
+  document.body.appendChild(dialog); dialog.showModal();
+}
 // Beside the bot's name only when something is wrong (#514): crashed, quarantined, rate limited,
 // blocked, a failed last run, or an agent that is offline while work waits for it. Idle says nothing.
 function botAlertHTML(slug) {
   const e = S.emps.find(x => x.name === slug) || {}, s = v2StatusOf(slug);
   let word = '', why = '';
-  if (s && ['crashed', 'quarantined', 'limited', 'blocked'].includes(s.state)) { word = V2_WORD[s.state]; why = s.state === 'quarantined' ? quarantineWhy(slug) : s.focus || ''; }
+  if (s?.state === 'crashed' && s.last_stop) return lastStopHTML(slug);
+  if (s && ['crashed', 'quarantined', 'limited', 'blocked'].includes(s.state)) {
+    word = s.state === 'crashed' ? 'Last run stopped' : V2_WORD[s.state]; why = s.state === 'quarantined' ? quarantineWhy(slug) : s.focus || '';
+  }
   else if (!s && stateOf(slug) === 'failed') word = 'Last run failed';
   else if (e.agent?.synced && !e.online) { word = agentPresenceLabel(e.agent, false); why = 'Imported history needs a sync.'; }
   else if (e.agent?.credential && !e.online && ((S.status?.queued || []).some(q => (q.bot || q.employee) === slug) || s?.open_tasks))
     word = 'Offline with work waiting';
+  else if (lastStopOf(slug)) return lastStopHTML(slug);
   // The way out sits beside the warning, for a person who may take it.
   const resume = s?.bot_state === 'quarantined' && settingsCanManageBot(e) ? '<button class="primary bot-alert-resume" type="button" data-quarantine-resume>Resume bot</button>' : limitRetryButton(slug, 'primary bot-alert-resume');
   return word ? `<span class="bot-alert" role="status"${why ? ` title="${esc(why)}"` : ''}><span aria-hidden="true">⚠</span> ${esc(word)}</span>${resume}` : '';
@@ -425,6 +461,8 @@ async function pageBot(slug, tab) {
   // One click, from the warning beside the name or the card under More. Stopped runs settle on their own;
   // nothing to write or review.
   const resumeClick = async ev => {
+    if (ev.target.closest('[data-stop-review]')) { stopReview(slug); return; }
+    if (ev.target.closest('[data-last-stop]')) { lastStopOpen(slug); return; }
     const retry = ev.target.closest('[data-limit-retry]');
     if (retry && !retry.disabled) {
       retry.disabled = true;

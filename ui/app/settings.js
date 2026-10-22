@@ -397,7 +397,8 @@ function renderSettingsIssues() {
   });
   bindRunnerRestart(el);
 }
-async function executionReview(bot) {
+// `after` redraws the page it was opened from once a run is decided: Settings, or the bot's own header.
+async function executionReview(bot, after = loadSettings) {
   const dialog = document.createElement('dialog'); dialog.className = 'tmodal';
   dialog.innerHTML = `<header><h2>Stopped runs</h2><button class="ghost" data-close>Close</button></header><div data-review>Loading…</div>`;
   dialog.querySelector('[data-close]').onclick = () => dialog.close();
@@ -433,7 +434,7 @@ async function executionReview(bot) {
           acknowledge_uncertain_effects:true
         });
         form.innerHTML = `<p role="status">${decision === 'resume' ? 'Got it. Tico will try this request again.' : 'Got it. Tico will not retry this delivery.'}</p>`;
-        await loadSettings();
+        await after();
       } catch(error) {
         form.querySelector('[data-result]').textContent=error.message;
         buttons.forEach(button=>button.disabled=false);

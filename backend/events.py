@@ -606,6 +606,9 @@ def status_line(c, who, slug, default=None, inputs=None, auth=None):
         return None
     row = privacy.status(c, who, row, **(inputs or {}))
     row["bot_state"] = (H.bot(c, row["bot"]) or {}).get("state")
+    # Why its last run ended without finishing, said plainly for its page header: never a bare "Crashed".
+    from .execution import last_stop
+    row["last_stop"] = last_stop(c, row["bot"], row)
     if row["bot_state"] == "quarantined":
         # A refusal-count quarantine lifts itself after the cooldown; any other needs a person.
         row["quarantine"] = H.quarantine_resumes(c, row["bot"])

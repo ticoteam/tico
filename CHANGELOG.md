@@ -84,6 +84,12 @@ All notable changes to Tico are recorded here. The format follows
   each one at its own rate.
 
 ### Fixed
+- **A bot's header no longer says a bare "Crashed".** When its last run ended without finishing, the header says what
+  happened in one plain line and whether anything is needed. A run its computer took but never started is a grey line
+  ("Last run didn't start in time. Nothing was lost; nothing is needed."), not a crash, and it clears once the run goes
+  again or its work was done elsewhere. A run that stopped partway is red, with **Retry or dismiss** for a person who
+  manages the bot. Clicking the line says why the run ended. A computer that gives up on a run before starting it now
+  hands it straight back, rather than holding it for 90 seconds until its lease runs out.
 - **A run whose only work was a git push counts as acting.** The computer reports the pushes a run made from its
   task's worktrees with its result, so in `hub sql` the run reads `acted` with `did_nothing` 0 instead of
   `no_change`. Pushes from another task's worktree are not counted, and older runs read as before.

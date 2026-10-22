@@ -74,6 +74,7 @@ async function open(browser, viewport, options = {}, data = {}) {
     if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: [], schedules: bots[0].schedules.map(s => ({...s, employee: 'cmo'}))});
     if (p === '/api/v2/status') return json({bots: [status]});
     if (p === '/api/v2/bots/cmo/limit/retry') { cleared.push(p); status = {bot: 'cmo', state: 'idle', bot_state: 'active'}; return json({cleared: 1}); }
+    if (p === '/api/v2/bots/cmo/execution-review') return json({jobs: []});
     if (p === '/api/v2/bots/cmo/quarantine/clear') { cleared.push(p); status = {bot: 'cmo', state: 'idle', bot_state: 'active'}; return json({}); }
     if (p === '/api/v2/goals') return json({goals: [], chain: [], reports: [], company: []});
     if (p === '/api/v2/updates/read') { read.push(...JSON.parse(route.request().postData()).ids); return json({}); }
@@ -295,6 +296,47 @@ const railOrder = page => page.evaluate(() => [...document.querySelectorAll('#pa
       assert.deepEqual(errors, [], 'escape banner errors');
       await context.close();
     }
-    console.log('bot page: Tasks, Updates, Files and Routines; tools open under More; desktop and phone navigation; quarantine says why and when it resumes; Resume bot beside the warning and under More; Try now on a usage limit');
+    {
+      // Never a bare "Crashed" (Oct 22): a run its computer never started is a grey line that says nothing is needed;
+      // a run that stopped partway is red, offers the one action that exists, and a click says what happened.
+      const NOT_STARTED = "Last run didn't start in time. Nothing was lost; nothing is needed.";
+      const soft = {bot: 'cmo', state: 'idle', bot_state: 'active', since: iso(-60e3), last_stop: {kind: 'not_started', tone: 'soft',
+        needs_person: false, action: null, at: iso(-60e3), attempt_id: 'a1', text: NOT_STARTED,
+        reason: "Its computer took the run but didn't start it before its lease ran out. It is back in the queue and runs again shortly."}};
+      let {page, errors, context} = await open(browser, {width: 1440, height: 900}, {}, {status: soft});
+      await page.goto('https://tico-ui.test/#/bot/cmo');
+      const line = page.locator('#bot-alert .bot-stop.soft');
+      await line.waitFor();
+      assert.equal(await line.innerText(), NOT_STARTED);
+      assert.doesNotMatch(await page.locator('#bot-alert').innerText(), /Crashed|Retry/);
+      assert.equal(await page.locator('#conv-paused').isHidden(), true);
+      if (shots) await page.screenshot({path: path.join(shots, 'bot-last-run-not-started.png')});
+      await line.click();
+      const dialog = page.locator('dialog#last-stop');
+      assert.match(await dialog.innerText(), /What happened\s*Its computer took the run but didn't start it before its lease ran out\.[\s\S]*Is anything needed\?\s*No\. Nothing was lost\./);
+      assert.equal(await dialog.locator('[data-stop-review]').count(), 0);
+      await dialog.locator('[data-close]').click();
+      await dialog.waitFor({state: 'detached'});
+      assert.deepEqual(errors, [], 'soft last-run errors');
+      await context.close();
+      const stopped = {bot: 'cmo', state: 'crashed', bot_state: 'active', since: iso(-60e3), focus: 'One run stopped; saved for later',
+        last_stop: {kind: 'stopped', tone: 'alert', needs_person: true, action: 'review', at: iso(-60e3), attempt_id: 'a2',
+          text: 'Last run stopped partway. Retry it or dismiss it.',
+          reason: 'Its computer stopped answering while the run was going, so the run\'s lease ran out.'}};
+      ({page, errors, context} = await open(browser, {width: 1440, height: 900}, {}, {status: stopped}));
+      await page.goto('https://tico-ui.test/#/bot/cmo');
+      const red = page.locator('#bot-alert .bot-stop:not(.soft)');
+      await red.waitFor();
+      assert.match(await page.locator('#bot-alert').innerText(), /^⚠\s*Last run stopped partway\. Retry it or dismiss it\.\s*Retry or dismiss$/);
+      assert.match(await page.locator('#conv-paused').innerText(), /AI CMO: Last run stopped partway/);
+      if (shots) await page.screenshot({path: path.join(shots, 'bot-last-run-stopped.png')});
+      await red.click();
+      assert.match(await page.locator('dialog#last-stop').innerText(), /lease ran out[\s\S]*Yes: say whether to try it again or let it go\./);
+      await page.locator('dialog#last-stop [data-stop-review]').click();
+      await page.locator('dialog.tmodal', {hasText: 'No stopped runs remain.'}).waitFor();
+      assert.deepEqual(errors, [], 'stopped last-run errors');
+      await context.close();
+    }
+    console.log('bot page: Tasks, Updates, Files and Routines; tools open under More; desktop and phone navigation; quarantine says why and when it resumes; Resume bot beside the warning and under More; Try now on a usage limit; a last run that ended unfinished says why');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exit(1); });

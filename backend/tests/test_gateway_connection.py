@@ -792,9 +792,7 @@ def test_a_tico_model_on_a_runner_that_runs_bots_as_itself_says_so_once_and_is_n
     machine, attempt = tico_run(api, monkeypatch)
     error = ("Tico models need a runner that runs bots as their own user (Tico's Docker runner). This computer can't, "
              "so pick another model or move the bot (not_isolated)")
-    # Any other turn still says it started before it ends.
-    post(api, f"attempts/{attempt['id']}/complete", {"outcome": "failed", "last_seq": 0, "text": ""}, machine["token"],
-         expected=409)
+    # (Any other report of an unstarted run hands it back to the queue: backend/tests/test_last_stop.py.)
     post(api, f"attempts/{attempt['id']}/events", {"events": [
         {"seq": 1, "kind": "error", "payload": {"error": error}},
         {"seq": 2, "kind": "diagnostic", "payload": {"text": f"RuntimeError: execution interrupted ({error})"}}]},
