@@ -597,3 +597,14 @@ fieldset.brepo>.repo-name+p{margin:-4px 0 4px 24px;font-size:var(--t-xs);line-he
 .ceo-level[aria-checked="true"]{border-color:var(--accent)}
 .ceo-confirm{padding:10px 12px;border:1px solid var(--accent);border-radius:8px;margin-bottom:8px}
 .ceo-confirm p{margin:0 0 8px}
+/* Settings > Routines, System section (ui/app/settings-recurring.js) */
+.sysr-group{margin-bottom:14px}
+.sysr-group h3{font-size:var(--t-sm);text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin:10px 0 4px}
+.sysr-row{display:grid;grid-template-columns:minmax(0,2.4fr) minmax(0,.9fr) minmax(0,1.4fr) minmax(0,.7fr);gap:12px;padding:8px 0;border-top:1px solid var(--line);align-items:start}
+.sysr-name{display:grid;gap:2px;min-width:0}
+.sysr-name .muted{font-size:var(--t-sm)}
+.sysr-label{display:block;font-size:var(--t-sm);color:var(--muted)}
+.sysr-failed{color:var(--fail);font-weight:600}
+.sysr-ai{display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:var(--t-sm);margin-top:2px}
+.sysr-fallback{flex-basis:100%;color:var(--wait)}
+@media (max-width:720px){.sysr-row{grid-template-columns:1fr 1fr}.sysr-name{grid-column:1/-1}}

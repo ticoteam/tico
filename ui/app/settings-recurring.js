@@ -47,3 +47,42 @@ function renderSettingsRecurring() {
     if (focus != null) { const box = el.querySelector('input[data-recurring-filter="q"]'); box.focus(); box.setSelectionRange(focus, focus); }
   };
 }
+
+// The System section above the bot routines: every job Tico runs on its own timers (backend/system_routines.py), by
+// group, with its schedule, last run, next run and, for a job that asks Decide, which route answered and this month's
+// spend. Read-only; fetched again at most once a minute while the tab is open.
+let SYSTEM_ROUTINES = null, SYSTEM_ROUTINES_AT = 0;
+function systemRoutineLastHTML(j) {
+  if (!j.records) return '<span class="muted">Each connection shows its own</span>';
+  if (!j.last) return '<span class="muted">Not run yet</span>';
+  const when = `<span class="tnum muted" title="${esc(fmt(j.last.finished || j.last.started))}">${esc(ago(j.last.finished || j.last.started))}</span>`;
+  return `<span class="${j.last.ok ? '' : 'sysr-failed'}" data-sysr-result>${esc(j.last.result)}</span> ${when}`;
+}
+function systemRoutineAIHTML(j) {
+  if (!j.ai) return '';
+  const spent = j.spent_this_month_usd != null ? `<span class="tnum" data-sysr-spend>$${Number(j.spent_this_month_usd).toFixed(2)} this month</span>` : '';
+  return `<div class="sysr-ai"><span class="pill" data-sysr-route>${esc(j.route ? 'AI: ' + j.route : 'Uses AI')}</span>${spent}
+    ${j.fallback ? `<div class="sysr-fallback" data-sysr-fallback>${esc(j.fallback)}</div>` : ''}</div>`;
+}
+function systemRoutineRowHTML(j) {
+  return `<div class="sysr-row" data-system-routine="${esc(j.key)}">
+    <div class="sysr-name"><strong>${esc(j.name)}</strong><span class="muted">${esc(j.what)}</span>
+      ${j.needed ? '<span class="muted sysr-needed">Tico needs this to run</span>' : ''}${systemRoutineAIHTML(j)}</div>
+    <div class="sysr-schedule" data-sysr-schedule>${esc(j.schedule)}</div>
+    <div class="sysr-last"><span class="sysr-label">Last run</span>${systemRoutineLastHTML(j)}</div>
+    <div class="sysr-next"><span class="sysr-label">Next run</span>${j.next ? `<span class="tnum" title="${esc(fmt(j.next))}" data-sysr-next>${esc(until(j.next))}</span>` : '<span class="muted">—</span>'}</div>
+  </div>`;
+}
+function systemRoutinesHTML(data) {
+  return (data.groups || []).map(g => `<div class="sysr-group" data-system-group="${esc(g.key)}">
+    <h3>${esc(g.name)}</h3>${g.jobs.map(systemRoutineRowHTML).join('')}</div>`).join('');
+}
+async function renderSystemRoutines(force) {
+  const el = $('#set-system-routines'); if (!el) return;
+  if (SYSTEM_ROUTINES) el.innerHTML = systemRoutinesHTML(SYSTEM_ROUTINES);
+  if (!force && SYSTEM_ROUTINES && Date.now() - SYSTEM_ROUTINES_AT < 60000) return;
+  SYSTEM_ROUTINES_AT = Date.now();
+  try { SYSTEM_ROUTINES = await get('/v2/system-routines'); }
+  catch (e) { if (!SYSTEM_ROUTINES) el.innerHTML = `<div class="empty">Couldn't load the system routines: ${esc(e.message || 'try again')}</div>`; return; }
+  const now = $('#set-system-routines'); if (now) now.innerHTML = systemRoutinesHTML(SYSTEM_ROUTINES);
+}

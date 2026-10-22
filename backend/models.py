@@ -1878,7 +1878,9 @@ class RunUsage(RunUsagePart):
 
 
 class UsageLimit(Contract):
+    hourly_usd: float | None = None
     daily_usd: float | None = None
+    weekly_usd: float | None = None
     monthly_usd: float | None = None
 
 

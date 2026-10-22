@@ -191,29 +191,39 @@ def create_app(settings=None):
                 reconcile_worktree_prs(app.state.github_app)
                 # A merge or release a task waits for whose webhook never came is asked of GitHub (Dev 256).
                 milestone_waits.recover(app.state.github_app)
+            from . import system_routines
+            def recorded(key, work):
+                # One system routine's run, recorded for Settings > Routines (backend/system_routines.py).
+                with system_routines.recording(store, key) as run:
+                    work()
+                    run.did("Done", quiet=True)
+            def repository_waits():
+                from .repositories import daily
+                daily(app.state.github_app)
+                # A bot waiting for its GitHub repository finishes once a person has made it or granted the permission.
+                from . import repo_waits
+                repo_waits.tick(app.state.github_app)
+                # A task waiting for room for a worktree whose freeing event was lost (backend/worktree_waits.py).
+                from . import worktree_waits
+                worktree_waits.tick(store, settings.github_owner)
+                # A bot left in setup for a day: its person hears once (backend/setup_stuck.py).
+                from . import setup_stuck
+                setup_stuck.tick(store)
+            def release_check():
+                # The release check (and the anonymous count that rides on it) runs even when nobody has the
+                # page open; it is a no-op until its six hours are up.
+                releases.notice()
+                # Subscribed updates for bots, as quiet notes; nothing is fetched while no bot subscribes.
+                update_feeds.tick(store)
             while not stop.is_set():
                 try:
-                    await asyncio.to_thread(github_wakes)
+                    await asyncio.to_thread(recorded, "github_sync", github_wakes)
                 except Exception as exc:
                     telemetry.capture("github_wakes", exc)
                 try:
                     await asyncio.to_thread(scheduler.tick)
-                    # The release check (and the anonymous count that rides on it) runs even when nobody has the
-                    # page open; it is a no-op until its six hours are up.
-                    await asyncio.to_thread(releases.notice)
-                    from .repositories import daily
-                    daily(app.state.github_app)
-                    # A bot waiting for its GitHub repository finishes once a person has made it or granted the permission.
-                    from . import repo_waits
-                    await asyncio.to_thread(repo_waits.tick, app.state.github_app)
-                    # A task waiting for room for a worktree whose freeing event was lost (backend/worktree_waits.py).
-                    from . import worktree_waits
-                    await asyncio.to_thread(worktree_waits.tick, store, settings.github_owner)
-                    # A bot left in setup for a day: its person hears once (backend/setup_stuck.py).
-                    from . import setup_stuck
-                    await asyncio.to_thread(setup_stuck.tick, store)
-                    # Subscribed updates for bots, as quiet notes; nothing is fetched while no bot subscribes.
-                    await asyncio.to_thread(update_feeds.tick, store)
+                    await asyncio.to_thread(recorded, "release_check", release_check)
+                    await asyncio.to_thread(recorded, "repository_waits", repository_waits)
                 except Exception as exc:
                     telemetry.capture("scheduler", exc)
                     import logging
@@ -225,7 +235,7 @@ def create_app(settings=None):
         async def directory_loop():
             while not stop.is_set():
                 try:
-                    await asyncio.to_thread(app.state.directory.tick)
+                    await asyncio.to_thread(app.state.directory.tick, True)
                 except Exception as exc:
                     telemetry.capture("directory", exc)
                 try:
@@ -2309,16 +2319,20 @@ def create_app(settings=None):
         ids = list(dict.fromkeys(ids))
         if not ids:
             return ids
-        readable = update_visible(c, who)
-        rows = c.execute("SELECT id, bot FROM updates WHERE id IN (" + ",".join("?" * len(ids)) + ")",
+        readable, meetings = update_visible(c, who), updates.meeting_reader(who)
+        rows = c.execute("SELECT id, bot, meetings FROM updates WHERE id IN (" + ",".join("?" * len(ids)) + ")",
                           ids).fetchall()
-        if len(rows) != len(ids) or any(row["bot"] not in readable for row in rows):
+        if len(rows) != len(ids) or any(row["bot"] not in readable or (row["meetings"] and not meetings)
+                                        for row in rows):
             raise Problem("not_found", "Update not found", 404)
         return ids
 
     def require_update(c, who, row):
         """A bot's update takes the bot's own gate (404 unseen, 403 seen without Read); a person's
-        is for everyone on the chart, so anyone else gets 404."""
+        is for everyone on the chart, so anyone else gets 404. One flagged `meetings` is not found for
+        anyone but a meeting reader (`updates.meeting_reader`)."""
+        if updates.withheld(c, who, row["id"]):
+            raise Problem("not_found", "Update not found", 404)
         if not updates.is_person(row["bot"]):
             auth.require_read(c, who, row["bot"], "Update not found")
         elif row["bot"] not in update_visible(c, who):
@@ -2335,7 +2349,8 @@ def create_app(settings=None):
         with store.read() as c:
             return updates.listing(c, who.actor, update_visible(c, who, mine, update_scope(scope)), kind=kind, bot=bot, unread=unread,
                                    before=before, limit=max(1, min(limit, 100)), archive=archive,
-                                   include_archive=include_archive, may_read=update_visible(c, who))
+                                   include_archive=include_archive, may_read=update_visible(c, who),
+                                   meetings=updates.meeting_reader(who))
 
     @app.get("/api/v2/updates/unread")
     def updates_unread(request: Request, mine: bool = False, scope: str | None = None):
@@ -2343,7 +2358,8 @@ def create_app(settings=None):
         auth.domain(who)
         with store.read() as c:
             from .meetings import pending_count
-            return {"unread": updates.count_unread(c, who.actor, update_visible(c, who, mine, update_scope(scope))),
+            return {"unread": updates.count_unread(c, who.actor, update_visible(c, who, mine, update_scope(scope)),
+                                                   meetings=updates.meeting_reader(who)),
                     "meetings_pending": pending_count(c, who)}
 
     @app.get("/api/v2/updates/tree")
@@ -2358,7 +2374,8 @@ def create_app(settings=None):
         if day and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day):
             raise Problem("day", "day is YYYY-MM-DD", 422)
         with store.read() as c:
-            return updates.tree(c, who.actor, update_visible(c, who), kind, day or None, scope or None)
+            return updates.tree(c, who.actor, update_visible(c, who), kind, day or None, scope or None,
+                                meetings=updates.meeting_reader(who))
 
     @app.get("/api/v2/updates/{uid}")
     def update_show(request: Request, uid: str):
@@ -2382,7 +2399,7 @@ def create_app(settings=None):
                         rooms_ok[cid] = False
                 return rooms_ok[cid]
             thread = [m for m in updates.thread(c, uid) if readable(m)]
-            row = updates.with_inputs(c, row, update_visible(c, who))
+            row = updates.with_inputs(c, row, update_visible(c, who), updates.meeting_reader(who))
             return {"update": {**row, "read": bool(read), "archived": updates.archived(c, who.actor, uid)},
                     "thread": thread}
 
@@ -2401,7 +2418,8 @@ def create_app(settings=None):
             slides = body.slides.model_dump(exclude_none=True) if body.slides else None
             updates.check_day(c, author, body.day)
             return {"update": updates.post(c, author, body.body, kind=body.kind, day=body.day, slides=slides,
-                                           replace_draft=body.replace_draft)}
+                                           replace_draft=body.replace_draft,
+                                           reader=updates.meeting_reader(who))}
         return mutate(request, body, work)
 
     @app.post("/api/v2/updates/redo")
@@ -2420,7 +2438,8 @@ def create_app(settings=None):
             views.human_only(who)
             if body.all:
                 visible = update_visible(c, who)
-                ids = updates.inbox_ids(c, who.actor, visible, created_after=H.shift(H.now(), days=-30))
+                ids = updates.inbox_ids(c, who.actor, visible, created_after=H.shift(H.now(), days=-30),
+                                        meetings=updates.meeting_reader(who))
             else:
                 ids = readable_update_ids(c, who, body.ids)
             return {"marked": updates.mark(c, who.actor, ids, read=body.read), "read": body.read}
@@ -2437,7 +2456,8 @@ def create_app(settings=None):
             for uid in ids:
                 H.event(c, who.actor, "update.archive" if body.archived else "update.restore", uid, {})
             return {"updated": len(ids), "archived": body.archived,
-                    "unread": updates.count_unread(c, who.actor, update_visible(c, who))}
+                    "unread": updates.count_unread(c, who.actor, update_visible(c, who),
+                                                   meetings=updates.meeting_reader(who))}
         return mutate(request, body, work)
 
     @app.post("/api/v2/updates/{uid}/reply")
@@ -3551,7 +3571,8 @@ def create_app(settings=None):
             else:
                 H._writer(c, who.actor)
                 H._task_private_writer(c, who.actor, row)
-                TR._mine(c, who.actor, row, mover(c, who))
+                # The same gate as a blocked_by: a wait parks the task's news just as a blocker does.
+                TR._blocker_gate(c, who.actor, row, TR._mover(c, who.actor, mover(c, who) or None))
                 def resolve(value):
                     other = auth.resolve_task(c, who, value)
                     auth.task(c, who, other)
@@ -5497,6 +5518,8 @@ def create_app(settings=None):
     install_judge(app, store, auth)
     from . import stale_review
     stale_review.install(app, store, auth, mutate)
+    from . import system_routines
+    system_routines.install(app, store, auth)
     from .live_meetings import install_live_meetings
     install_live_meetings(app, store, auth, mutate)
     from .mail import install_mail
