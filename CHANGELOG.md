@@ -13,9 +13,11 @@ All notable changes to Tico are recorded here. The format follows
   when it happens, while the task it came from keeps its own step (In QA, a release watch). A wait made after the
   merge, or a merge that arrived while the server was down, is woken once by the minute sweep; a replayed webhook
   never wakes it twice. The task page shows it under Related ("Waits for PR #943 to merge"). MCP `hub_task_wait`.
+  A bot's subtask with a pending milestone wait is not a stuck hold: the task it blocks is not woken as stalled.
 - **Relation writes read back their direction**: `hub task relate`, `hub_task_relate`, task create with relations and
   `hub task wait` answer with what was stored, from both ends ("#237 waits for #233" / "#233 blocks #237"), so a
-  reversed link is visible in the reply.
+  reversed link is visible in the reply. `hub task wait --on task:<subtask>` warns about blocking a task on its own
+  subtask, as `relate` and create do.
 - **Hosted bot computers.** Hosting can run bots on a separate computer, keeping their work away from the Tico
   server. Settings > Computers offers **Hosted computer (we run it)**. The installer supports server-only installs,
   bounded AWS runner recovery and the same 4- and 8-core sizes on both machines, with 100 and 200 GB disks.

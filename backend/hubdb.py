@@ -5647,9 +5647,10 @@ def own_stuck_blockers(conn, row, at=None):
     Such a subtask belongs to a bot, has gone quiet, and waits on no task, no person's answer and no time of
     its own: what it waits for, if anything, is its parent, which waits on it. A hold kept open until its
     parent's window is released is the case seen; a question for a person in a subtask is not (it
-    belongs to the person), nor is a subtask with a future due date, a snooze or a stored resume (each brings
-    it back by itself; once the date or snooze has passed, it is quiet again). Being blocked by these does
-    not hold `row` back from the stall watcher."""
+    belongs to the person), nor is a subtask with a future due date, a snooze, a stored resume or a pending
+    milestone wait (each brings it back by itself; once the date or snooze has passed, or the milestone has
+    woken it, it is quiet again). Being blocked by these does not hold `row` back from the stall watcher."""
+    from .milestone_waits import pending as milestone_pending
     at = at or now()
     blockers = TR.live_blockers(conn, row["id"], ACTIVE_STATUSES)
     if not blockers:
@@ -5658,7 +5659,8 @@ def own_stuck_blockers(conn, row, at=None):
     for block in blockers:
         if (not is_bot(block["owner"]) or block["updated"] >= quiet or not TR.is_descendant(conn, row["id"], block["id"])
                 or TR.live_blocker(conn, block["id"], ACTIVE_STATUSES) or unanswered_ask(conn, block)
-                or due_later(block, at) or TS.snoozed(block, at) or block.get("resume_json")):
+                or due_later(block, at) or TS.snoozed(block, at) or block.get("resume_json")
+                or milestone_pending(conn, block["id"])):
             return []
     return [block["id"] for block in blockers]
 
