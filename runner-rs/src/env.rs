@@ -43,6 +43,7 @@ pub fn reserved_credential(key: &str) -> bool {
         && (!name.is_match(key)
             || RESERVED_ENV.contains(&key)
             || RUNNER_HUB_ENV.contains(&key)
+            || key.starts_with("HUB_")
             || RESERVED_PREFIXES.iter().any(|p| key.starts_with(p)))
 }
 
