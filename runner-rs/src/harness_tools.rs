@@ -1592,7 +1592,7 @@ mod tests {
         let data: toml::Table = toml::from_str(&typo).unwrap();
         assert!(parse(&data, "claude-code.toml").unwrap_err().contains("unknown capability compactoin"));
         assert_eq!(all["cursor-agent"].bin_relative(), ".local/bin/cursor-agent");
-        assert_eq!(all["muse-code"].env, vec![("MUSE_NO_AUTO_UPDATE".to_string(), "1".to_string())]);
+        assert_eq!(all["muse-code"].env, [("MUSE_NO_AUTO_UPDATE", "1"), ("TBH_CREDENTIAL_BACKEND", "file")].map(|(k, v)| (k.to_string(), v.to_string())));
         assert!(all["pi"].catch_all);
         let mut dup = BUILT_IN.iter().map(|(n, t)| (n.to_string(), t.to_string())).collect::<Vec<_>>();
         dup.push(("other.toml".into(), BUILT_IN[1].1.replace("id = \"codex\"", "id = \"other\"")));

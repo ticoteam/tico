@@ -13,7 +13,7 @@ from . import draft as D
 from .keys import scrub_all
 from .yamlfile import from_yaml, to_yaml
 
-MAX_BYTES = 524288          # a 300-seat plan, normalized, with room (about 180 KB at 300 bots)
+MAX_BYTES = 524288          # a 300-seat plan, normalized, with room (about 320 KB at 300 bots and 325 goals, every text at full length)
 # A packed plan HQ carries to the server as a file (the hosted plan bucket): gzip+base64 of MAX_BYTES is about 700 KB.
 MAX_PACKED = 1048576
 # A packed plan carried in TICO_COMPANY_FILE_B64 (self-install, and AWS without --plan-bucket): Parameter Store's 8 KB

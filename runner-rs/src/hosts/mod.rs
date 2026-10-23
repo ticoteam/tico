@@ -205,6 +205,20 @@ pub fn event(kind: &str, thread: Option<&str>, turn: Option<&str>, fields: Value
     Value::Object(ev)
 }
 
+/// Adds one streamed piece to a turn's reply and returns the text its `delta` carries. Pieces of one message join
+/// with nothing between them; the first piece of a new message after earlier text starts a paragraph of its own,
+/// as Claude's separate answers do, so two messages never read as one ("...recovers.No change...").
+pub fn add_piece(reply: &mut String, new_message: bool, text: &str) -> String {
+    if !new_message || reply.trim().is_empty() {
+        reply.push_str(text);
+        return text.to_string();
+    }
+    reply.truncate(reply.trim_end().len());
+    let piece = format!("\n\n{}", text.trim_start());
+    reply.push_str(&piece);
+    piece
+}
+
 /// The longest input summary a `tool` event carries. The drive loop scrubs it with the rest of the event.
 pub const TOOL_SUMMARY_CHARS: usize = 120;
 
@@ -664,6 +678,15 @@ mod tests {
     }
 
     #[test]
+    fn a_new_message_starts_a_paragraph_and_pieces_of_one_message_join_with_nothing() {
+        let mut reply = String::new();
+        assert_eq!(add_piece(&mut reply, true, "Holding until "), "Holding until ");
+        assert_eq!(add_piece(&mut reply, false, "it recovers. "), "it recovers. ");
+        assert_eq!(add_piece(&mut reply, true, "No change."), "\n\nNo change.");
+        assert_eq!(reply, "Holding until it recovers.\n\nNo change.");
+    }
+
+    #[test]
     fn the_python_classifiers_agree() {
         assert!(is_limit("You've hit your usage limit"));
         assert!(is_limit("You've hit your session limit · resets 12:40am (UTC)"));
@@ -777,6 +800,23 @@ pub fn data_problem(runtime: &str, profile: Option<&crate::profiles::Profile>) -
 pub fn file_signed_in(runtime: &str, env: &Env) -> Option<bool> {
     match runtime {
         "musecode" => musecode::signed_in(&musecode::auth_file(env)),
+        "grok" => grok::signed_in(env),
+        _ => None,
+    }
+}
+
+/// A file-backed host can distinguish a subscription from a saved API-key login.
+pub fn file_sign_in_detail(runtime: &str, env: &Env) -> Option<&'static str> {
+    match runtime {
+        "grok" => grok::sign_in_detail(env),
+        _ => None,
+    }
+}
+
+/// Why the host's login file cannot be used, when `file_signed_in` gives no answer for a reason the person can fix.
+pub fn file_problem(runtime: &str, env: &Env) -> Option<String> {
+    match runtime {
+        "musecode" => musecode::store_problem(&musecode::auth_file(env)),
         _ => None,
     }
 }

@@ -10,7 +10,7 @@ permissions:
   contents: read
 jobs:
   shapes:
-    runs-on: ubuntu-24.04
+    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64
     continue-on-error: true
     timeout-minutes: 10
     env:
