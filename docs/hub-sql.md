@@ -102,7 +102,7 @@ Timestamps are ISO-8601 UTC text (`2026-09-15T21:40:12.931675Z`); compare them w
 | `jobs` | `id, message_id, bot, state, created, attempt_id` | one per message a bot has to act on; `state`: queued, leased, running, input, completed, failed, uncertain, cancelled |
 | `attempts` | `id, job_id, bot, runner_id, state, lease_until, created, started, finished, result_json, final_text` | a run (`state`: leased, running, input, completed, failed, interrupted, expired); its streamed output is `attempt_events(attempt_id, seq, kind, payload_json, created)` |
 | `turns` | `id, bot, started, finished, trigger, message_id, task_id, exit, tokens_in, tokens_out, cost, summary, input_tokens, cached_tokens, output_tokens, model, provider, est_cost_usd, billing, trigger_kind, trigger_source, purpose, writes, outcome, did_nothing` | one per run (`id` = the run's attempt id); `exit` is null while running. `tokens_in` is all input, `cached_tokens` the cached part of it and `input_tokens` the rest. `trigger_kind`, `writes` and `outcome` are explained under [What woke each run](#what-woke-each-run-and-what-it-did) |
-| `run_weekly` | `week, bot, trigger, purpose, runs, input_tokens, cached_input_tokens, output_tokens, acted, no_change, nothing_to_do, unknown, did_nothing, acted_pct, no_change_pct, nothing_to_do_pct, unknown_pct` | a read-only view: runs per week, bot and trigger, every attempt counted ([below](#what-woke-each-run-and-what-it-did)) |
+| `run_weekly` | `week, bot, trigger, purpose, runs, input_tokens, cached_input_tokens, output_tokens, acted, no_change, nothing_to_do, unknown, did_nothing, acted_pct, no_change_pct, nothing_to_do_pct, unknown_pct` | a read-only view: runs per week, bot, trigger and purpose, every attempt counted ([below](#what-woke-each-run-and-what-it-did)) |
 | `schedules` | `id, bot, routine_key, title, cron, event_name, playbook, timezone and enabled (schedule_config), last_fired, next_due, deleted_at` | routines (`docs/routines.md`); `schedule_occurrences(schedule_id, occurrence, task_id, outcome)` says what each firing did |
 | `events` | `ts, actor, action, target, detail_json` | the audit log; `action` such as `task.create`, `sql.query` |
 | `slack_posts` | `message_id, bot, state, attempts, next_attempt, slack_ts, created, updated` | Owner-only outbound queue status for messages the Owner may read; message text, destination and raw errors are hidden. Join `messages` and filter `json_extract(messages.refs_json, '$.task')` for one task. Other callers receive no rows. |
@@ -190,7 +190,7 @@ Every run records what woke it (`turns.trigger_kind`), its tokens, and whether i
 
 A run from before this was recorded has none of these, and reads `unknown`; so does an attempt that never got
 a `turns` row (one that failed or expired before it started), counted with no tokens and no outcome. `run_weekly` adds them up per week
-(starting Monday, UTC), bot and trigger, over exactly the runs you may read in `turns` and `attempts`: a run on a
+(starting Monday, UTC), bot, trigger and purpose, over exactly the runs you may read in `turns` and `attempts`: a run on a
 private task, in someone else's room, or one you no longer have access to is left out of your totals. Its `input_tokens` is the run's measured usage (`input_tokens` + `cached_tokens`, every
 fallback segment included) and falls back to `tokens_in` only for a run with no usage recorded.
 Last week's numbers, biggest input first:
