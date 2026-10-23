@@ -750,8 +750,8 @@ impl Runner {
     }
 
     /// The login a turn of `runtime` (`harness`) on `profile` holds while its host runs, when that CLI serves one turn
-    /// per login (`one_turn_per_login`) and the login is a subscription (Codex signed in with ChatGPT): the profile's
-    /// own login or the computer's (crate::fallback::login). None for a key login (an OpenAI API key) or another CLI.
+    /// per login (`one_turn_per_login`) and the login is a subscription: the profile's
+    /// own login or the computer's (crate::fallback::login). None for a key login or a CLI that opts out (including Codex).
     pub(crate) fn serial_login(&self, runtime: &str, harness: &str, profile: Option<&Profile>) -> Option<crate::login_turns::Login> {
         if !crate::harness_tools::caps(runtime, harness).one_turn_per_login || self.billing(runtime, profile) != "subscription" {
             return None;
@@ -1716,7 +1716,7 @@ mod tests {
     }
 
     #[test]
-    fn a_turn_on_a_busy_chatgpt_login_moves_to_its_fallback_or_waits_and_a_wait_ends_on_a_lost_lease_a_stop_or_a_hard_stop() {
+    fn codex_logins_run_together_and_optional_queue_waits_end_on_a_lost_lease_a_stop_or_a_hard_stop() {
         let dir = std::env::temp_dir().join(format!("tico-login-wait-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(dir.join("projects")).unwrap();
         let path = dir.join("runner.json");
@@ -1724,17 +1724,24 @@ mod tests {
         let config = crate::config::Config::load(&path).unwrap();
         let client = crate::client::Client::new(&config.url(), &config.token(), 1, 0).unwrap();
         let runner = Runner::new(config, client, crate::state::State::open(&dir.join("state")).unwrap());
-        // Only a ChatGPT sign-in is held; an API key or an unknown sign-in runs side by side.
+        // The built-in Codex manifest never holds a login, including ChatGPT subscriptions.
         let signed_in = |detail: &str| {
             *runner.runtime_rows.lock().unwrap() = [("codex".to_string(), json!({"status": "ready", "detail": detail}))].into_iter().collect();
             runner.serial_login("codex", "codex", None)
         };
-        assert_eq!(signed_in("Signed in with ChatGPT").map(|l| l.key), Some("codex:".into()));
+        assert_eq!(signed_in("Signed in with ChatGPT"), None);
+        let profile = Profile { name: "work".into(), directory: dir.join("work"), share_operator: false };
+        runner.runtime_rows.lock().unwrap().get_mut("codex").unwrap()["profiles"] =
+            json!({"work": {"detail": "Signed in with ChatGPT"}});
+        assert_eq!(runner.serial_login("codex", "codex", Some(&profile)), None);
+        let shared = Profile { share_operator: true, ..profile };
+        assert_eq!(runner.serial_login("codex", "codex", Some(&shared)), None);
         assert_eq!(signed_in("Signed in with an API key"), None);
         assert_eq!(signed_in(""), None);
         assert_eq!(runner.serial_login("claude", "claude", None), None);
 
-        // Busy login, ready fallback: an ordinary turn moves; a command, or a turn under an active native goal, waits.
+        // Optional queue mechanics remain available to a harness that opts in: an ordinary turn moves to its
+        // fallback; a command or a turn under an active native goal waits.
         *runner.runtime_rows.lock().unwrap() = [("codex".to_string(), json!({"status": "ready", "installed": true, "authenticated": "ready", "detail": "Signed in with ChatGPT"})),
                                                 ("claude".to_string(), json!({"status": "ready", "installed": true, "authenticated": "ready", "detail": "Signed in"}))].into_iter().collect();
         let config = json!({"runtime": "codex", "harness": "codex", "model": "gpt-5.5", "fallback": {"harness": "claude", "model": "claude-sonnet-5"}});

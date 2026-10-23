@@ -1244,6 +1244,9 @@ class Store:
                 # Unversioned like redirect: an older release never reads the columns and claims every queued job.
                 from .wake_presets import ensure as ensure_wake_presets
                 ensure_wake_presets(c)
+                # What a turn in a task's session was handed, the bot's task model or the fallback from it, and why
+                # (backend/task_models.py). Unversioned: an older release never reads it.
+                H.add_column(c, "attempts", "model_json", "TEXT")
                 # The change log live events are read from (backend/events.py); idempotent.
                 from .events import ensure as ensure_changes
                 ensure_changes(c)

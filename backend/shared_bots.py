@@ -10,6 +10,7 @@ from .wake_presets import NEW_BOT_PRESET
 # What a branch takes from its original at every claim. Everything else (its name, its person,
 # its computer) is the branch's own.
 FOLLOWED = ("model", "runtime", "harness", "reasoning_effort", "compact_at", "session", "subtask_session", "task_goal", "review_model", "fallback",
+            "task_model",
             "max_run_minutes", "bot_contact", "private_tasks_default")
 
 
