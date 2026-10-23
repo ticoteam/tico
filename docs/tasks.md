@@ -243,13 +243,32 @@ arrived since stays on the card.
 
 ### The question card
 
-A bot's question to a person shows as one card, the same in Decide and in the task's Needs you box. The header
-names who asked (the bot, or Tico for a check Tico runs itself, never "Assistant"), "asked 3 days ago", and what it
-holds up: the roadmap item it is under, or its parent task. Below are the question, a "why it matters" line, and the
-picks. One pick is a button; several picks that go together (`--multi`) are checkboxes, the recommended ones ticked
-and labelled, with **Yes to all** and **Send ticked (n)**. Every button says what happens. The bot hears "Not this
-one" for each pick left unticked, with any note the person adds. The fallback ("If you don't answer by ...") sits
-small at the foot, and ids, file paths and error text only in the collapsed Details.
+Decide and the task's **Needs you** box show the same question card: the same text, picks, and buttons.
+The header names the real asker, or **Tico** for a system check. It shows the question's age, such as
+"asked 3 days ago", and **holds up:** with the parent task or roadmap item's title.
+The question comes next, followed by **Why it matters:**.
+
+To answer a question with several picks:
+
+1. Review the checkboxes. Recommended picks start ticked and labelled **(recommended)**.
+2. Tick the picks you want and untick any you do not want.
+3. Optionally write in **Add a note** to explain what you want instead.
+4. Click **Send ticked (n)** to send the ticked picks as yes. The number is how many picks you have ticked.
+
+The bot receives each unticked pick as "not this one", along with your note.
+For example, with four picks, tick 1, 2, and 4, then click **Send ticked (3)**.
+The bot receives yes for those three and "not this one" for pick 3.
+To say yes to every pick, click **Yes to all** instead. **Send ticked (n)** is disabled when no picks are ticked.
+
+A single-choice question has one button per option. Click the option you want to send that answer.
+Each pick and answer button has a short line saying what happens when you choose it.
+
+If the question has a fallback, its **If you don't answer by…** line appears in small text at the bottom.
+It describes what happens without your answer; it is not a recommended pick.
+Open the collapsed **Details** for the full message and technical text, including ids, file paths, and error output.
+In Decide, **Details** also includes a link to the task.
+See [When nobody answers a bot's ask](#when-nobody-answers-a-bots-ask) for when questions close.
+Approvals for spending or publishing keep their own card.
 
 Tico refuses a bot's question to a person, saying why and with an example, when:
 
@@ -261,9 +280,14 @@ Tico refuses a bot's question to a person, saying why and with an example, when:
 
 A yes-or-no question needs no options; its Yes and No buttons say the bot hears that answer. The refusal is a writing refusal: it never counts toward a quarantine.
 
-Decide puts first a card that is, or holds up work, due or going ahead on its own within 2 working days (the nearest
-date of anything it holds up, not only the item the header names); then one holding up a roadmap item
-at Approved or Building; then the rest, newest first. Waiting longer never moves a card up.
+Decide orders cards by what they block:
+
+1. Cards with a due or fallback date within two business days, including dates on work they hold up.
+2. Cards holding up a roadmap item at **Approved** or **Building**.
+3. The remaining cards.
+
+Within each group, newest cards come first. Age never moves a card up.
+This ordering applies to Decide; it does not change the order of Needs you elsewhere.
 
 ### When nobody answers a bot's ask
 

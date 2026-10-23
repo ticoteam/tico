@@ -46,6 +46,11 @@ human must act — a question, an approval, a blocked or declined item. The all-
 A comment on a task answers that task's question, so the bot can ask its next question; it does not answer a different
 task in the same room. *Done*: finished, awaiting close.
 
+**How do I answer a bot's question?**
+Open **Decide** from **Tasks**, or open the task's **Needs you** box. Both show the same question card.
+Review the recommended checkboxes, change your picks, then click **Send ticked (n)**, or choose **Yes to all**.
+See [The question card](tasks.md#the-question-card) for notes, single-choice answers, Details, and Decide's order.
+
 **Marked a task Done by mistake?**
 Choose **Undo** in the toast, or open the finished task under **Done** and choose **Reopen**.
 A task you requested for yourself closes when you mark it Done; Reopen works for it too.
