@@ -42,6 +42,7 @@ def test_attempt_stores_fresh_start_and_end_snapshots_visible_in_run_list(api):
     post(api, f"attempts/{a['id']}/complete", body, token=r["token"])
     run = next(x for x in get(api, "bots/ops/turns") if x["id"] == a["id"])
     assert run["load_start"] == start and run["load_end"] == end
+    assert run["end_reason"] == "Finished" and run["ended_at"]
     # Snapshots outlive the rolling 48h samples, and Delete history removes both.
     P.sweep(api.app.state.store, int(now + 49 * 3600))
     assert next(x for x in get(api, "bots/ops/turns") if x["id"] == a["id"])["load_start"] == start

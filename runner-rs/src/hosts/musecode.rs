@@ -714,7 +714,7 @@ impl MuseCodeHost {
             let error = if !state.reason.is_empty() {
                 state.reason
             } else if !stderr.is_empty() {
-                stderr.into()
+                crate::run_diagnostics::process_reason(rc, stderr)
             } else if !state.terminal.is_empty() {
                 format!("muse run ended {}", state.terminal)
             } else {

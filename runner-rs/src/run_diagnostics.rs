@@ -16,12 +16,12 @@ const LINE_BYTES: usize = 8192;
 
 fn safe(text: &str, scrub: &Redactor) -> String {
     static SHAPES: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    let shapes = SHAPES.get_or_init(|| regex::Regex::new(r"(?i)(?:bearer|basic)\s+\S+|\b(?:sk|pk|xai|gsk|ghp|github_pat)[-_][\w-]{6,}|[A-Za-z0-9_+/=-]{32,}|(?:password|token|api[_ -]?key|secret)\s*[:=]\s*\S+").unwrap());
+    let shapes = SHAPES.get_or_init(|| regex::Regex::new(r"(?i)(?:bearer|basic)\s+\S+|\b(?:sk|pk|xai|gsk|ghp|github_pat)[-_][\w-]{6,}|\b[A-Za-z0-9_+=-]{32,}\b|(?:password|token|api[_ -]?key|secret)\s*[:=]\s*\S+").unwrap());
     shapes.replace_all(&redact::scrub_credentials(&scrub.scrub_text(text), &[]), "[redacted]").into_owned()
 }
 
 #[derive(Clone, Default)]
-pub struct Stderr(Arc<Mutex<VecDeque<String>>>, Arc<std::sync::atomic::AtomicBool>, Arc<tokio::sync::Notify>);
+pub struct Stderr(Arc<Mutex<VecDeque<String>>>, Arc<std::sync::atomic::AtomicBool>, Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>);
 
 impl Stderr {
     pub fn capture(child: &mut Child, tx: Events, env: &crate::env::Env) -> Self {
@@ -41,7 +41,10 @@ impl Stderr {
             let mut tick = tokio::time::interval(Duration::from_secs(1));
             loop {
                 tokio::select! {
-                    read = pipe.read(&mut buf) => {
+                    read = async { tokio::select! {
+                        read = pipe.read(&mut buf) => read,
+                        _ = kept.3.notified() => Ok(0),
+                    }} => {
                         let n = read.unwrap_or(0);
                         if n == 0 {
                             if !pending.is_empty() || oversized {
@@ -92,7 +95,10 @@ impl Stderr {
     pub async fn drained(&self) {
         let done = self.2.notified();
         if !self.1.load(std::sync::atomic::Ordering::SeqCst) {
-            let _ = tokio::time::timeout(Duration::from_millis(100), done).await;
+            if tokio::time::timeout(Duration::from_millis(100), done).await.is_err() {
+                self.3.notify_one();
+                let _ = tokio::time::timeout(Duration::from_millis(100), self.2.notified()).await;
+            }
         }
     }
 
@@ -100,10 +106,8 @@ impl Stderr {
 }
 
 pub fn process_reason(code: i32, stderr: &str) -> String {
-    let lower = stderr.to_lowercase();
-    if matches!(code, -9 | 137) && (lower.contains("oom-kill") || lower.contains("out of memory")) {
-        "OOM-killed (reported by the process)".into()
-    } else if code < 0 { format!("Process exited (signal {})", -code) }
+    let _ = stderr; // Stderr may quote a child tool; it cannot establish a kernel OOM kill.
+    if code < 0 { format!("Process exited (signal {})", -code) }
     else { format!("Process exited (exit code {code})") }
 }
 
@@ -118,9 +122,28 @@ mod tests {
         assert!(t.tail().starts_with("line 100\n"));
         for _ in 0..100 { t.push("x".repeat(8000)); }
         assert!(t.tail().len() <= BYTES);
+        assert_eq!(safe("/workspace/project/runner/src/hosts/claude.rs", &Redactor::new(&[])), "/workspace/project/runner/src/hosts/claude.rs");
         assert_eq!(process_reason(-15, ""), "Process exited (signal 15)");
         assert_eq!(process_reason(-9, ""), "Process exited (signal 9)");
-        assert!(process_reason(-9, "out of memory").starts_with("OOM-killed"));
+        assert_eq!(process_reason(-9, "out of memory"), "Process exited (signal 9)");
+    }
+
+    #[tokio::test]
+    async fn drain_closes_a_pipe_inherited_by_a_live_child() {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut child = tokio::process::Command::new("sh").args(["-c", "exec 3<&0; cat <&3 >&2 & echo $!; echo before >&2"])
+            .stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped()).spawn().unwrap();
+        // Keep cat's stdin open so it retains stderr after its parent exits.
+        let input = child.stdin.take();
+        child.wait().await.unwrap();
+        let tail = Stderr::capture(&mut child, tx, &crate::env::Env::new());
+        let started = std::time::Instant::now();
+        tail.drained().await;
+        assert!(started.elapsed() >= Duration::from_millis(90));
+        assert_eq!(tail.tail(), "before");
+        while tokio::time::timeout(Duration::from_secs(1), rx.recv()).await.unwrap().is_some() {}
+        drop(input);
     }
 
     #[tokio::test]

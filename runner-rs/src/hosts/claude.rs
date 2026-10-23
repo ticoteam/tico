@@ -1433,7 +1433,7 @@ pub fn error_text(result: Option<&Value>, rc: i32, stderr: &str) -> String {
         }
     }
     if !stderr.is_empty() {
-        return stderr.into();
+        return crate::run_diagnostics::process_reason(rc, stderr);
     }
     format!("claude exited {rc}")
 }
@@ -1461,6 +1461,32 @@ fn turn_env(settings: &Settings) -> crate::env::Env {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_crashed_turn_keeps_stderr_out_of_failure_events() {
+        let dir = std::env::temp_dir().join(format!("claude-stderr-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("claude");
+        crate::util::write_script(&path, "#!/bin/sh\ncase \"$1\" in --version) echo '2.1.296 (Claude Code)'; exit 0;; --help) exit 0;; esac\nIFS= read -r line\nprintf '%3000s\\nprivate-stderr-marker\\n' x >&2\nkill -TERM $$\n");
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let host = ClaudeHost::new("acme", vec![path.display().to_string()], tx);
+        host.start().await.unwrap();
+        let settings = Settings { cwd: dir.display().to_string(), ..Default::default() };
+        let thread = host.start_thread(&settings);
+        host.start_turn(&thread, "hello", None).unwrap();
+        let mut events = Vec::new();
+        loop {
+            let ev = tokio::time::timeout(Duration::from_secs(10), rx.recv()).await.unwrap().unwrap();
+            let idle = ev["kind"] == "status" && ev["state"] == "idle";
+            events.push(ev);
+            if idle { break; }
+        }
+        assert!(events.iter().any(|e| e["stderr_tail"].as_str().is_some_and(|t| t.contains("private-stderr-marker"))));
+        let failure = events.iter().find(|e| e["kind"] == "turn_failed").unwrap();
+        assert_eq!(failure["error"], "Process exited (signal 15)");
+        assert!(!failure.to_string().contains("private-stderr-marker"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     /// A `claude` that writes a fixture once the prompt arrives and exits when stdin closes, as Claude does.
     fn fake_claude(dir: &std::path::Path) -> String {

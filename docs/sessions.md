@@ -128,7 +128,7 @@ and only owners and engineering bots read it, for runs they can already see in t
 `hub run list <bot>` includes `end_reason`, `ended_at`, `last_event`, `last_event_at` and
 `last_heartbeat_at`. Reasons distinguish a finished run, a model error (with its reported code and message),
 a process exit (code or signal), a named timeout limit, cancellation and its actor, a lost heartbeat,
-and a runner restart. A kill is identified as OOM only when the process reports evidence of running out of memory.
+and a runner restart. An explicit runner OOM report is identified as OOM; a kill signal or words in stderr alone do not prove an OOM kill.
 
 Every minute, the server checks attempts for five minutes without either an attempt heartbeat or an event.
 It marks them `stalled` in the run list and Health, with their last event and time. This warning does not stop

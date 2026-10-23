@@ -24,7 +24,8 @@ def listed(api, aid):
 
 @pytest.mark.parametrize(('cause', 'expected'), [
     ({'error': 'killed', 'exit_code': -15, 'process_exit': True}, 'Process exited (signal 15)'),
-    ({'error': 'out of memory', 'exit_code': -9, 'process_exit': True}, 'OOM-killed (reported by the process)'),
+    ({'error': 'out of memory', 'exit_code': -9, 'process_exit': True}, 'Process exited (signal 9)'),
+    ({'exit_code': -9, 'process_exit': True, 'oom_killed': True}, 'OOM-killed (reported by the runner)'),
     ({'end_reason': 'Timeout: max_run_minutes (60 minutes)'}, 'Timeout: max_run_minutes (60 minutes)'),
     ({'error': {'code': 'server_error', 'message': 'upstream failed'}},
      'Model error: {"code": "server_error", "message": "upstream failed"}'),
@@ -81,7 +82,8 @@ def test_stall_sweep_warns_without_stopping_and_renewal_clears_it(api):
     assert not get(api, 'health')['stalled_runs']
 
 
-def test_stderr_export_is_capped_redacted_private_and_survives_missing_stream(api, tmp_path):
+@pytest.mark.parametrize('finished', [False, True])
+def test_stderr_export_is_capped_redacted_private_and_survives_missing_stream(api, tmp_path, finished):
     from clients.hubtools import write_fixture
     machine, msg, a = setup_attempt(api)
     post(api, f"attempts/{a['id']}/started", {'thread_id': 'stderr'}, machine['token'])
@@ -117,6 +119,13 @@ def test_stderr_export_is_capped_redacted_private_and_survives_missing_stream(ap
     assert len(get(api, f"attempts/{a['id']}/capture")['stderr_tail'].encode()) <= 65536
     alien = runner(api)
     post(api, f"attempts/{a['id']}/diagnostics", {'tail': 'wrong computer'}, alien['token'], expected=403)
+    post(api, f"attempts/{a['id']}/events", {'events': [
+        {'seq': 1, 'kind': 'error', 'payload': {'error': 'Process exited (signal 15)',
+                                             'exit_code': -15, 'process_exit': True}}]}, machine['token'])
+    if finished:
+        post(api, f"attempts/{a['id']}/complete", {'outcome': 'failed', 'last_seq': 1}, machine['token'])
+        assert 'final failure' not in api.get(f"/api/runs/{a['id']}/log", headers=headers()).text
+        assert 'final failure' not in json.dumps(get(api, f"turns/{a['id']}/steps"))
     # Removing a secret removes the tail and prevents a later runner retry from putting it back.
     post(api, f"messages/{msg['id']}/redact", {'span': 'summarize the current', 'label': 'removed'})
     assert not post(api, f"attempts/{a['id']}/diagnostics", {'tail': raw}, machine['token'])['kept']
@@ -134,3 +143,10 @@ def test_finished_restart_and_cancelled_reasons(api, outcome, text, stopped, exp
         post(api, 'bots/ops/stop', {'attempt_id': a['id']})
     post(api, f"attempts/{a['id']}/complete", {'outcome': outcome, 'text': text, 'last_seq': 0}, machine['token'])
     assert listed(api, a['id'])['end_reason'] == expected
+
+
+def test_failed_reply_text_never_becomes_list_reason(api):
+    machine, _, a = start(api)
+    post(api, f"attempts/{a['id']}/complete",
+         {'outcome': 'failed', 'last_seq': 0, 'text': 'private reply text'}, machine['token'])
+    assert listed(api, a['id'])['end_reason'] == 'Process failed (no exit status reported)'

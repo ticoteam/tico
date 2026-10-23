@@ -8,7 +8,7 @@ STALL_MINUTES = 5
 TAIL_BYTES = 64 * 1024
 TAIL_LINES = 200
 # Defense in depth after the runner's literal/encoded granted-secret redactor.
-SECRET = re.compile(r"(?i)(?:bearer|basic)\s+\S+|\b(?:sk|pk|xai|gsk|ghp|github_pat)[-_][\w-]{6,}|[A-Za-z0-9_+/=-]{32,}|(?i:password|token|api[_ -]?key|secret)\s*[:=]\s*\S+")
+SECRET = re.compile(r"(?i)(?:bearer|basic)\s+\S+|\b(?:sk|pk|xai|gsk|ghp|github_pat)[-_][\w-]{6,}|\b[A-Za-z0-9_+=-]{32,}\b|(?i:password|token|api[_ -]?key|secret)\s*[:=]\s*\S+")
 
 
 def scrub(text):
@@ -72,9 +72,8 @@ def reason(c, row, outcome, summary=''):
             continue
         if p.get('process_exit') and isinstance(p.get('exit_code'), int):
             code = p['exit_code']
-            error = str(p.get('error') or '').lower()
-            if code in (-9, 137) and ('oom-kill' in error or 'out of memory' in error):
-                return 'OOM-killed (reported by the process)'
+            if p.get('oom_killed') is True:
+                return 'OOM-killed (reported by the runner)'
             return f'Process exited (signal {-code})' if code < 0 else f'Process exited (exit code {code})'
         if ev['kind'] == 'error' and p.get('error'):
             err = p['error']
@@ -86,7 +85,7 @@ def reason(c, row, outcome, summary=''):
         p = json.loads(ev['payload_json'])
         if p.get('runner_error'):
             return scrub(str(p.get('error_type') or 'Runner error') + ': ' + str(p['runner_error']))[:500]
-    return scrub(result.get('error') or result.get('reason') or summary or result.get('text') or
+    return scrub(result.get('error') or result.get('reason') or
                  ('Process interrupted (no exit status reported)' if outcome == 'interrupted' else
                   'Process failed (no exit status reported)'))[:500]
 

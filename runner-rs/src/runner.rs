@@ -219,7 +219,7 @@ impl Runner {
         for (id, tail, revision) in pending.into_iter().take(10) {
             // Diagnostics never hold up a run result through network retries. The capped row retries on maintenance.
             let sent = tokio::time::timeout(Duration::from_secs(2), self.client.post(&format!("attempts/{id}/diagnostics"), &json!({"tail": tail}), None)).await;
-            if matches!(sent, Ok(Ok(_))) {
+            if matches!(sent, Ok(Ok(_))) || matches!(&sent, Ok(Err(e)) if (400..500).contains(&e.status) && e.status != 429 && e.status != 408) {
                 let _ = self.state.off(move |s| s.stderr_sent(&id, revision)).await;
             }
         }
@@ -233,7 +233,6 @@ impl Runner {
             let id = aid.to_string();
             let batch = self.state.off(move |s| s.pending(&id)).await.map_err(|e| ApiError::new("state", e, 0, false))?;
             if batch.is_empty() {
-                self.upload_stderr(Some(aid)).await;
                 return Ok(());
             }
             let key = format!("events:{aid}:{}:{}", batch[0]["seq"], batch[batch.len() - 1]["seq"]);

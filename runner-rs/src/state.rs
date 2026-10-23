@@ -127,7 +127,7 @@ impl State {
 
     pub fn pending_stderr(&self, aid: Option<&str>) -> Result<Vec<(String, String, i64)>, String> {
         self.with(|c| {
-            let mut q = c.prepare("SELECT attempt_id,tail,revision FROM attempt_stderr WHERE uploaded<revision AND (? IS NULL OR attempt_id=?) LIMIT 100")?;
+            let mut q = c.prepare("SELECT attempt_id,tail,revision FROM attempt_stderr WHERE uploaded<revision AND (? IS NULL OR attempt_id=?) ORDER BY updated,attempt_id LIMIT 100")?;
             let rows = q.query_map(params![aid, aid], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
             rows.collect()
         })
