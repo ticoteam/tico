@@ -8,9 +8,14 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
-- Computers report high-level CPU load, memory, swap and running turns every minute, kept for 48 hours. Bots can
-  read the latest sample in `hub computer list`, Health flags five minutes above 90% CPU or memory, and
-  `hub run list` includes load snapshots captured at run start and finish.
+- **Task model in Settings.** The bot editor has a Task model row (harness, model and effort; "Same as bot" until set),
+  and Settings > Bots shows a small Tasks mark beside each bot's model, marked when its tasks run on another model.
+  The mark opens a row under the bot with the same three pickers. Saving changes only what its tasks run on; the bot
+  keeps its own model.
+- **A plain-words warning for a cheap task model on a high-stakes bot.** Picking a cheaper model than the bot's own,
+  in the same family, for a bot that sends, spends or publishes through approvals, or can write through a tool grant,
+  shows a warning that names the risk ("This bot sends messages for you. … may word things badly."). It still saves
+  and its tasks still run on it, and each such run's note says it ran below the minimum for that bot.
 
 ## [0.3.74] - 2026-10-22
 

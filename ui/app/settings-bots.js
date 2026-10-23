@@ -93,9 +93,10 @@ document.addEventListener('click', event => {
   if (move) void settingsMoveForModel(move);
   if (event.target.closest('[data-off-providers]')) settingsShow('models');
 });
-// Keep the three choices local until Apply, so selecting a harness cannot start a transition.
+// Keep the three choices local until Apply, so selecting a harness cannot start a transition. `none` allows no
+// choice at all, named by it when it is a string ("Same as bot" for a task model), else "None".
 function settingsChoiceFields(current = '', disabled = false, none = false, label = 'Model settings') {
-  return `<div class="settings-model-choice" role="group" aria-label="${esc(label)}" data-choice-fields data-current="${esc(current)}" ${disabled ? 'data-readonly' : ''} ${none ? 'data-allow-none' : ''}>
+  return `<div class="settings-model-choice" role="group" aria-label="${esc(label)}" data-choice-fields data-current="${esc(current)}" ${disabled ? 'data-readonly' : ''} ${none ? `data-allow-none="${esc(none === true ? 'None' : none)}"` : ''}>
     <label>Harness / provider<select data-choice-harness aria-label="Harness / provider" ${disabled ? 'disabled' : ''}></select></label>
     <label>Model<select data-choice-model aria-label="Model" ${disabled ? 'disabled' : ''}></select></label>
     <label>Effort<select data-choice-effort aria-label="Effort" ${disabled ? 'disabled' : ''}></select></label>
@@ -116,7 +117,7 @@ function settingsWireChoiceFields(fields, onChange = () => {}) {
   const paint = () => {
     const harnesses = [...new Set(choices.map(row => row.harness))];
     const off = settingsOffHarnesses(choices);
-    harness.innerHTML = option('', fields.hasAttribute('data-allow-none') ? 'None' : 'Choose harness', !picked.harness)
+    harness.innerHTML = option('', fields.hasAttribute('data-allow-none') ? fields.getAttribute('data-allow-none') || 'None' : 'Choose harness', !picked.harness)
       + (picked.harness && !harnesses.includes(picked.harness) ? option(picked.harness, settingsHarnessName(picked.harness) || picked.harness, true, true) : '')
       + harnesses.map(id => { const why = block(id);
         // Short, so a narrow select does not cut it off: "Claude Code (sign in)".
@@ -165,14 +166,18 @@ function settingsWireChoiceFields(fields, onChange = () => {}) {
   paint();
   return {value, valid, changed};
 }
+// What each picker kind sets on a bot: its own model, its fallback, or the model its tasks run on (task_model,
+// backend/task_models.py; none is the same as the bot).
+const SETTINGS_CHOICE_KINDS = {model: {name: 'Model', of: e => e}, fallback: {name: 'Fallback', of: e => e.fallback, none: true},
+  task: {name: 'Task model', of: e => e.task_model, none: 'Same as bot'}};
 function settingsChoiceCombo(e, kind) {
-  const fallback = kind === 'fallback', selected = fallback ? e.fallback : e;
+  const spec = SETTINGS_CHOICE_KINDS[kind], selected = spec.of(e);
   const current = selected?.model ? settingsChoiceValue(selected.harness || selected.runtime, selected.model,
     selected.reasoning_effort || selected.effort) : '';
   const manage = settingsCanManageBot(e);
   return `<div class="settings-choice" data-bot-choice="${esc(e.name)}" data-kind="${kind}" data-current="${esc(current)}">
-    ${!current && !fallback ? `<small class="muted">${esc(settingsDefaultLabel(e))}</small>` : ''}
-    ${settingsChoiceFields(current, !manage, fallback, `${fallback ? 'Fallback' : 'Model'} for ${e.display_name || e.name}`)}
+    ${!current && !spec.none ? `<small class="muted">${esc(settingsDefaultLabel(e))}</small>` : ''}
+    ${settingsChoiceFields(current, !manage, spec.none || false, `${spec.name} for ${e.display_name || e.name}`)}
     ${manage ? '<button type="button" class="ghost" data-choice-apply disabled>Apply</button>' : ''}
   </div>`;
 }
@@ -185,6 +190,29 @@ function settingsChoiceCell(e, kind) {
   if (!settingsCanManageBot(e)) return `<span class="sb-pick ro" title="${esc(label)}">${text}</span>`;
   return `<button type="button" class="sb-pick" data-choice-open="${esc(e.name)}" data-kind="${kind}" aria-haspopup="dialog" aria-expanded="false"
     aria-label="${fallback ? 'Fallback' : 'Model'} for ${esc(e.display_name || e.name)}: ${esc(label)}" title="${esc(label)}">${text}<span class="sb-pick-caret" aria-hidden="true"></span></button>`;
+}
+// The bots table's task indicator, beside the model: faint when tasks run on the bot's own model, marked when they
+// run on another. It opens the bot's task-model row under it (SETTINGS_BOTS_VIEW.taskOpen).
+function settingsTaskIndicator(e) {
+  const task = e.task_model, open = SETTINGS_BOTS_VIEW.taskOpen.has(e.name);
+  const label = task?.model ? `Tasks run on ${settingsChoiceLabel(task.harness || task.runtime, task.model, task.reasoning_effort || task.effort)}`
+    : 'Tasks run on the same model as the bot';
+  if (!settingsCanManageBot(e) && !task?.model) return '';
+  return `<button type="button" class="sb-task-mark${task?.model ? ' on' : ''}" data-task-open="${esc(e.name)}" aria-expanded="${open}"
+    aria-label="${esc(`${label}. Task model for ${e.display_name || e.name}`)}" title="${esc(label)}" ${settingsCanManageBot(e) ? '' : 'disabled'}>Tasks</button>`;
+}
+// The row a task indicator opens under its bot: the same three pickers, Apply, and Close. Clearing it to
+// "Same as bot" returns the bot's tasks to its own model; the bot's own model never changes here.
+function settingsTaskRow(e, columns) {
+  return `<tr class="sb-task-row" data-task-row="${esc(e.name)}"><td colspan="${columns}"><div class="sb-task-under">
+    <span class="sb-task-head">Tasks · ${esc(e.display_name || e.name)}</span>${settingsChoiceCombo(e, 'task')}
+    <button type="button" class="ghost" data-task-close="${esc(e.name)}">Close</button></div>
+    ${settingsTaskWarning(e)}</td></tr>`;
+}
+// The plain-words warning for a cheaper task model on a high-stakes bot, as the server judges it against the bot's
+// model now (`task_model_warning`, backend/task_models.py `warning`), under the task model in the row and the editor.
+function settingsTaskWarning(e) {
+  return e.task_model_warning ? `<p class="sb-task-warning" role="status" data-task-warning>${esc(e.task_model_warning)}</p>` : '';
 }
 function settingsChoicePopover(anchor) {
   let pop = $('#sb-choice-pop');
@@ -204,8 +232,9 @@ function settingsChoicePopover(anchor) {
   }
   pop.anchor = anchor;
   const kind = anchor.dataset.kind;
-  pop.setAttribute('aria-label', `${kind === 'fallback' ? 'Fallback' : 'Model'} for ${e.display_name || e.name}`);
-  pop.innerHTML = `<div class="sb-choice-head">${kind === 'fallback' ? 'Fallback' : 'Model'} · ${esc(e.display_name || e.name)}</div>${settingsChoiceCombo(e, kind)}`;
+  const name = SETTINGS_CHOICE_KINDS[kind].name;
+  pop.setAttribute('aria-label', `${name} for ${e.display_name || e.name}`);
+  pop.innerHTML = `<div class="sb-choice-head">${name} · ${esc(e.display_name || e.name)}</div>${settingsChoiceCombo(e, kind)}`;
   const box = pop.querySelector('[data-bot-choice]');
   box.querySelector('[data-choice-apply]')?.classList.replace('ghost', 'primary');
   box.insertAdjacentHTML('beforeend', '<button type="button" class="ghost" data-choice-cancel>Cancel</button>');
@@ -250,6 +279,11 @@ async function settingsPickChoice(box, value) {
   const current = box.dataset.current || '';
   if (!e || value === current) return;
   const input = box.querySelector('input[type=search]');
+  if (box.dataset.kind === 'task') {
+    try { await settingsSaveTaskModel(e, value, e.revision); }
+    catch (error) { toast(error.message, true); }
+    return;
+  }
   if (box.dataset.kind === 'fallback') {
     try {
       const choice = value ? settingsChoiceFromValue(value) : null;
@@ -271,6 +305,20 @@ async function settingsPickChoice(box, value) {
   }
   await settingsBeginTransition(box, e, {kind:'model', model:choice.model, effort:choice.effort,
     harness:choice.harness, expected_generation:e.machine?.generation || 0, expected_revision:e.revision});
+}
+// POST the task model ('' is the same as the bot) and say what the bot's tasks now run on. A pick its computer cannot
+// run yet saves all the same, as does a cheaper one on a high-stakes bot: the toast and the row say so. The bot
+// editor's Save passes `inEditor`: it reloads and toasts once at the end, and takes the revision this made.
+async function settingsSaveTaskModel(e, value, revision, inEditor = false) {
+  const saved = await post(`/v2/bots/${encodeURIComponent(e.name)}/task-model`, {task_model: settingsFallbackBody(value), expected_revision: revision});
+  const choice = value ? settingsChoiceFromValue(value) : null;
+  const cannot = saved.readiness?.can_run === false ? ` For now they run on its own model: ${saved.readiness.problem}.` : '';
+  const said = `${choice ? `${e.display_name}'s tasks run on ${settingsChoiceLabel(choice.harness, choice.model, choice.effort)}.`
+    : `${e.display_name}'s tasks run on the same model as ${e.display_name}.`}${cannot}${saved.warning ? ` ${saved.warning}` : ''}`;
+  if (inEditor) { if (cannot || saved.warning) toast(said); return saved.revision; }
+  await loadSettings();
+  toast(said);
+  return saved.revision;
 }
 function settingsMachineSelect(e) {
   if (e.agent) return settingsAgentCell(e);
@@ -300,7 +348,7 @@ function settingsBotProblem(e) {
 // cannot see. Bulk apply is the single-row path run once per bot, not a new route.
 // On a phone the selects fold behind a Filters button and the checkboxes behind Select (`filtersOpen`, `picking`).
 const SETTINGS_BOTS_FILTER_KEY = 'hub.settings.bots.filters';
-const SETTINGS_BOTS_VIEW = {q: '', computer: '', model: '', effort: '', selected: new Set(), filtersOpen: false, picking: false};
+const SETTINGS_BOTS_VIEW = {q: '', computer: '', model: '', effort: '', selected: new Set(), filtersOpen: false, picking: false, taskOpen: new Set()};
 try {
   const {computer = '', model = '', effort = ''} = JSON.parse(localStorage.getItem(SETTINGS_BOTS_FILTER_KEY) || '{}');
   Object.assign(SETTINGS_BOTS_VIEW, {computer, model, effort});
@@ -505,11 +553,12 @@ function renderSettingsBots() {
     const model = e.agent ? `<span class="muted" title="${esc(e.agent.model ? `profile's model · ${e.agent.model}` : "the profile's own model")}">${esc(agentKind(e.agent))}</span>` : settingsChoiceCell(e, 'model');
     return `<tr data-settings-bot="${esc(e.name)}"><td class="settings-pick">${pick(e)}</td>
       <td class="sb-cell-name"><div class="sb-bot">${avatar(e.name, 27, stateOf(e.name))}<div class="sb-text"><div class="sb-line"><a class="sb-name" href="#/bot/${esc(e.name)}">${shownName(e)}</a>${botDisplayName(e.name) !== (e.display_name || e.name) ? `<span class="mono muted">${esc(e.name)}</span>` : ''}${badges}</div>${e.team || problem ? `<small>${e.team ? esc(teamLabel(e.team)) : ''}${e.team && problem ? ' · ' : ''}${problem ? `<span class="sb-problem">${esc(problem)}</span>` : ''}</small>` : ''}</div></div></td>
-      <td class="sb-cell-access" aria-label="Access: ${esc(settingsAccessWord(e))}"><span class="sb-access-label" aria-hidden="true">Access:</span>${settingsAccessCell(e)}</td><td class="sb-cell-model">${model}</td>
+      <td class="sb-cell-access" aria-label="Access: ${esc(settingsAccessWord(e))}"><span class="sb-access-label" aria-hidden="true">Access:</span>${settingsAccessCell(e)}</td><td class="sb-cell-model"><div class="sb-model-wrap">${model}${e.agent ? '' : settingsTaskIndicator(e)}</div></td>
       <td class="sb-cell-fallback">${e.agent ? '<span class="muted">-</span>' : settingsChoiceCell(e, 'fallback')}</td>
       <td class="sb-cell-owners">${stack(e)}</td><td class="sb-cell-computer">${settingsMachineSelect(e)}</td>
       <td class="sb-cell-limit">${useLimitButton(e.name, e.display_name, SETTINGS_DATA.limits?.bots?.[e.name])}</td>
-      <td class="settings-row-actions">${settingsCanManageBot(e) ? `<button class="ghost" type="button" data-edit-bot="${esc(e.name)}" aria-label="Edit ${esc(e.display_name)}">Edit</button>` : ''}</td></tr>`;
+      <td class="settings-row-actions">${settingsCanManageBot(e) ? `<button class="ghost" type="button" data-edit-bot="${esc(e.name)}" aria-label="Edit ${esc(e.display_name)}">Edit</button>` : ''}</td></tr>${
+      !e.agent && settingsCanManageBot(e) && SETTINGS_BOTS_VIEW.taskOpen.has(e.name) ? settingsTaskRow(e, 9) : ''}`;
   };
   const q = SETTINGS_BOTS_VIEW.q.trim();
   const none = q ? `<div class="empty">No bots match “${esc(q)}”${['computer', 'model', 'effort'].some(name => SETTINGS_BOTS_VIEW[name]) ? ' with these filters' : ''}.</div>`
@@ -545,6 +594,13 @@ function renderSettingsBots() {
     if (restore) { void settingsRestoreBot(restore.dataset.botRestore, restore); return; }
     const choice = event.target.closest('[data-choice-open]');
     if (choice) { settingsChoicePopover(choice); return; }
+    const task = event.target.closest('[data-task-open],[data-task-close]');
+    if (task) {
+      const slug = task.dataset.taskOpen || task.dataset.taskClose, open = SETTINGS_BOTS_VIEW.taskOpen;
+      open.has(slug) ? open.delete(slug) : open.add(slug);
+      const back = `[data-task-open="${CSS.escape(slug)}"]`;
+      redraw(open.has(slug) ? `[data-task-row="${CSS.escape(slug)}"] select:not(:disabled)` : back); return;
+    }
     if (event.target.closest('[data-bulk-model]')) { settingsBulkModelDialog(); return; }
     if (event.target.closest('[data-bulk-clear]')) { SETTINGS_BOTS_VIEW.selected.clear(); redraw('[data-bots-picking]'); return; }
     if (event.target.closest('[data-bots-search-clear]')) {
