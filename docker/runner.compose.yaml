@@ -22,7 +22,10 @@ services:
     security_opt: ["no-new-privileges:true"]
     cap_drop: [ALL]
     cap_add: [CHOWN, DAC_OVERRIDE, KILL, SETGID, SETUID]
-    pids_limit: 2048
+    # Each running turn holds about 30 processes and threads (its harness, tools and their workers), so the limit
+    # covers the highest capacity a runner honours (256) with room left; at 2048 a runner at capacity 100 could not
+    # start new turns ("Resource temporarily unavailable") while the host had plenty to spare.
+    pids_limit: 12288
     stop_grace_period: 15m
     environment:
       TICO_RUNNER_KIND: docker

@@ -7,6 +7,14 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.3.75] - 2026-10-23
+
+### Fixed
+- **A Docker runner at high capacity starts its turns and signs in.** The runner container allowed 2048 processes
+  and threads, about 70 turns' worth, so a runner set above that failed to start new turns ("Resource temporarily
+  unavailable"), kept claiming and dropping the same requests, and a Claude Code or Codex sign-in on that computer
+  stopped without signing in. The limit is now 12288, enough for the 256 turns a runner honours.
+
 ## [0.3.74] - 2026-10-22
 
 ### Added
@@ -4274,7 +4282,8 @@ First public release.
 - Hosting: local only on a Mac, or self-hosted, including a reference AWS stack under `infra/ec2/`
   with Litestream backups.
 
-[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.74...HEAD
+[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.75...HEAD
+[0.3.75]: https://github.com/ticoteam/tico/compare/v0.3.74...v0.3.75
 [0.3.74]: https://github.com/ticoteam/tico/compare/v0.3.73...v0.3.74
 [0.3.73]: https://github.com/ticoteam/tico/compare/v0.3.71...v0.3.73
 [0.3.71]: https://github.com/ticoteam/tico/compare/v0.3.70...v0.3.71
