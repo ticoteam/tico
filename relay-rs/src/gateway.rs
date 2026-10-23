@@ -126,6 +126,11 @@ pub(super) fn routes(app: App) -> Router {
 // Dev 452 receipt only (never merged): this comment makes PR checks select relay-rs.
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn dev452_receipt_deliberately_fails() {
+        assert_eq!(1 + 1, 3, "Dev 452 receipt: a deliberately failing Rust test");
+    }
+
     use super::*;
     #[test]
     fn only_configured_proxies_preserve_client_headers() {

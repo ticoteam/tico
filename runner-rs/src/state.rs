@@ -344,6 +344,11 @@ impl State {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn dev452_receipt_deliberately_fails() {
+        assert_eq!(1 + 1, 3, "Dev 452 receipt: a deliberately failing Rust test");
+    }
+
     use super::*;
 
     fn temp() -> PathBuf {
