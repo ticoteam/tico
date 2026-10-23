@@ -377,3 +377,45 @@ def renamed_assistant_goals_on_goals_page(api, owners):
     assert rows(api, "SELECT owner FROM kpis WHERE id=?", (week["id"],)) == [{"owner": "company"}]
     assert goals["Untitled goal"]["kpis"] == []
     assert not rows(api, "SELECT id FROM goals WHERE owner IN ('bot:ace','bot:coo')")
+
+
+def test_a_300_seat_plan_too_big_for_the_env_starts_the_server_from_its_file(tmp_path, monkeypatch):
+    """Hosted --plan-bucket: setup copies the packed plan to a file and TICO_COMPANY_FILE names it (compose.yaml)."""
+    from backend.config import Settings
+    from backend.tests.test_company_file import chart
+    from clients.environments import seed_registry
+
+    draft = chart(300)
+    draft["company"].update(name="Acme Finance", about="We help small firms manage their books.")
+    packed = starter.pack(C.to_yaml(draft), starter.MAX_PACKED)
+    assert len(packed) > starter.ENV_PACKED
+    with pytest.raises(C.DraftError, match="too large for automatic setup"):
+        starter.pack(C.to_yaml(draft))                                    # the env path's limit is unchanged
+    plan = tmp_path / "plan.b64"
+    plan.write_text(packed + "\n")
+    monkeypatch.setenv("TICO_DB", str(tmp_path / "hub.db"))
+    monkeypatch.delenv("TICO_REHEARSAL", raising=False)
+    monkeypatch.delenv("TICO_COMPANY_FILE_B64", raising=False)
+    monkeypatch.setenv("TICO_COMPANY_FILE", str(plan))
+    assert Settings.from_env().company_file_data == packed
+    monkeypatch.setenv("TICO_COMPANY_FILE_B64", "from-the-env")
+    assert Settings.from_env().company_file_data == "from-the-env"   # the env still wins (self-install, older setups)
+    monkeypatch.delenv("TICO_COMPANY_FILE_B64")
+    for problem, path in (("cannot be read", tmp_path / "missing.b64"), ("larger than a starter plan", tmp_path / "big.b64")):
+        if problem.startswith("larger"):
+            path.write_text("x" * (starter.MAX_PACKED + 1))
+        monkeypatch.setenv("TICO_COMPANY_FILE", str(path))
+        with pytest.raises(RuntimeError, match=problem):              # never a server that starts as some other team
+            Settings.from_env()
+
+    seed_registry(tmp_path, "Owner", OWNER_EMAIL, {"company_name": "Acme Finance", "app_name": "Tico", "assistant_name": "Assistant"})
+    settings = settings_for(tmp_path)
+    app = create_app(settings)
+    app.state.store.initialize()
+    app.state.store.seed()
+    settings.company_file_data = packed
+    seats = {s["slug"] for s in C.SEATS}
+    with TestClient(create_app(settings)) as api:
+        imported = {r["bot"] for r in rows(api, "SELECT bot FROM bot_config")}
+        employees = [b["id"] for b in draft["bots"] if b["template"] not in seats]
+        assert len(draft["bots"]) == 300 and employees and set(employees) <= imported
