@@ -382,7 +382,7 @@ the same template is one of the two command line routes; Tico gives it a slug of
 
 ## Adding a template
 
-Tico ships 93 templates, by group, each with a card; [Starter bots](starter-bots.md) lists them all.
+Tico ships 98 templates, by group, each with a card; [Starter bots](starter-bots.md) lists them all.
 
 `templates/catalog/<template>/` is one template. The folder name is what `--template` takes.
 

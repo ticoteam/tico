@@ -64,7 +64,8 @@ def test_1_each_model_has_its_spec_seat_count_and_every_seat_names_a_template_or
     """Org chart models spec test 1, against the data files."""
     real = {role["slug"] for role in C.ROLES}
     open_seats = {seat["slug"] for seat in C.SEATS}
-    assert open_seats == {"controller", "equity-manager", "fundraising-manager", "scheduling-bookings", "quality-inspections"}
+    assert not open_seats, "all five seats the first models placed now have templates"
+    assert {"controller", "equity-manager", "fundraising-manager", "scheduling-bookings", "quality-inspections"} <= real
     assert not open_seats & real, "a seat to build that has a template is a real seat"
     for key, count in SPEC_COUNTS.items():
         model = C.MODELS[key]
@@ -141,14 +142,17 @@ def test_3_a_house_cleaning_company_starts_from_the_local_service_business_model
     assert {"Scheduling & Bookings", "Quality & Inspections", "Dispatcher", "Logistics Coordinator"} <= set(titles(draft))
 
 
-def test_5_the_software_company_s_finance_holds_investor_relations_and_two_seats_with_no_bot_yet():
+def test_5_the_software_company_s_finance_holds_investor_relations_equity_and_fundraising_with_templates():
     draft, _ = first_chart("SaaS.", ["sells_software"])
     by = {b["title"]: b for b in draft["bots"]}
     for title in ("Investor Relations Manager", "Equity Manager", "Fundraising Manager"):
-        assert by[title]["dept"] == "finance"
-    assert {b["title"] for b in draft["bots"] if b["template"] in D.OPEN_SEATS} == {"Equity Manager", "Fundraising Manager"}
-    assert by["Investor Relations Manager"]["template"] not in D.OPEN_SEATS
-    # A seat with no bot yet goes into the file marked so, and an installed Tico makes no bot for it.
+        assert by[title]["dept"] == "finance" and by[title]["template"] not in D.OPEN_SEATS
+    assert not [b for b in draft["bots"] if b["template"] in D.OPEN_SEATS]
+
+
+def test_a_seat_with_no_template_goes_into_the_file_marked_no_bot_yet(monkeypatch):
+    monkeypatch.setattr(D, "OPEN_SEATS", {"equity-manager"})
+    draft, _ = first_chart("SaaS.", ["sells_software"])
     doc = yaml.safe_load(C.to_yaml(draft, CREATED))
     row = next(e for e in doc["employees"] if e["title"] == "Equity Manager")
     assert row["template"] == "equity-manager" and row["no_bot_yet"] is True
@@ -237,12 +241,14 @@ def test_8_a_company_no_model_fits_starts_from_everything():
 
 def test_9_the_cap_table_belongs_to_the_equity_manager_only():
     for role in C.ROLES:
-        assert "cap table" not in role["summary"].lower(), role["slug"]
-        assert "cap-table" not in role["tags"], role["slug"]
-    seats = {seat["slug"]: seat["summary"] for seat in C.SEATS}
-    assert [slug for slug, summary in seats.items() if "cap table" in summary.lower()] == ["equity-manager"]
+        if role["slug"] != "equity-manager":
+            assert "cap table" not in role["summary"].lower() and "cap-table" not in role["tags"], role["slug"]
+    equity = next(role for role in C.ROLES if role["slug"] == "equity-manager")
+    assert equity["department"] == "finance" and "cap table" in equity["summary"].lower() and equity["recommend_when"]
     secretary = next(role for role in C.ROLES if role["slug"] == "corporate-secretary")["summary"]
     assert all(word in secretary for word in ("board", "minutes", "entity register"))
+    card = yaml.safe_load((Path(__file__).resolve().parents[2] / "templates/catalog/corporate-secretary/card.yaml").read_text())
+    assert not [line for line in card["owns"] if "cap table" in line.lower()]
 
 
 def test_5_the_visitor_s_own_edits_stand_and_a_removed_bot_stays_off():

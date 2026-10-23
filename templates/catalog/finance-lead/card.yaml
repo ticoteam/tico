@@ -9,7 +9,7 @@ lead: true
 icon: account_balance_wallet
 suggest: default
 tags: [cash, month-end, runway, smb, startup, services, saas, ecommerce]
-team_templates: [bookkeeping, ar-followup, accounts-payable, expense-auditor, spend-watcher, board-updates, payroll, tax, revenue-accountant, billing]
+team_templates: [bookkeeping, ar-followup, accounts-payable, expense-auditor, spend-watcher, board-updates, payroll, tax, revenue-accountant, billing, controller, equity-manager, fundraising-manager]
 summary: "Runs finance for the owner: a weekly summary of cash and the 13-week outlook, the month-end close status, what is due in and out, and the finance calendar. It is read-only to the books and bank, and writes summaries for a human, never payments."
 when: "A team of ten to two hundred people without a full-time finance lead, or whose founder is still the one who knows the cash position."
 pains:
