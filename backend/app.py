@@ -26,7 +26,7 @@ from . import repo_waits
 from . import built_on
 from . import agents, app_delivery, batch, external_sync, inbox_isolation, mcp_oauth, harness_actions, model_login, oidc, personal_tokens, views
 from . import owner_link
-from . import check_models, run_triggers, task_models, team_rules, update_feeds, topic_change, usage_limits, bot_to_bot, wake_presets, visuals, wake_rules, quiet_work, milestone_waits
+from . import auto_tasks, check_models, run_triggers, task_models, team_rules, update_feeds, topic_change, usage_limits, bot_to_bot, wake_presets, visuals, wake_rules, quiet_work, milestone_waits
 from . import task_privacy as privacy
 from . import task_relations as TR
 from . import task_roles as TRo
@@ -1886,6 +1886,7 @@ def create_app(settings=None):
                         "compact_at": compact_at_of(declared),
                         # What its tasks run on; null is the same as the bot (backend/task_models.py).
                         "task_model": task_models.of(declared),
+                        "keep_tasks_going": auto_tasks.of(json.loads(config["config_json"]) or {}),
                         # Plain words for a cheaper task model on a high-stakes bot, against its model now ("" else).
                         "task_model_warning": task_models.warning(c, settings, bot["slug"], declared,
                                                                   task_models.of(declared)),
@@ -1902,6 +1903,7 @@ def create_app(settings=None):
         if not level["read"]:
             return {k: v for k, v in row.items() if k in SEE_ONLY}
         slug = bot["slug"]
+        row["task_flow"] = rows.task_flow.get(slug, {"going": 0, "waiting": 0})
         row["draining"] = slug in rows.draining
         status = rows.statuses.get(slug)
         row["status"] = privacy.status(c, who, dict(status), **rows.status_inputs[slug]) if status else status
@@ -5315,6 +5317,11 @@ def create_app(settings=None):
     @app.post("/api/v2/bots/{bot}/fallback")
     def fallback(request: Request, bot: str, body: M.BotFallback):
         return mutate(request, body, lambda c: settings_admin.set_fallback(
+            c, request.state.identity, bot, body))
+
+    @app.post("/api/v2/bots/{bot}/keep-tasks-going")
+    def bot_keep_tasks_going(request: Request, bot: str, body: M.BotKeepTasksGoing):
+        return mutate(request, body, lambda c: settings_admin.set_keep_tasks_going(
             c, request.state.identity, bot, body))
 
     @app.post("/api/v2/bots/{bot}/task-model")

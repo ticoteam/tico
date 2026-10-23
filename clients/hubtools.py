@@ -2441,6 +2441,19 @@ def agent_pair_decline(api, args):
     return _as_person(api).post("agents/pairings/decline", {"code": args["code"]}, key=_key(args))
 
 
+@tool("hub_bot_keep_tasks_going", "Read or set automatic assigned-task starts for a bot you manage. "
+      "Default unlimited; 0 turns it off, N caps active work. Waiting work frees a place; review subtasks have no cap.",
+      {"bot": _s("Bot slug"), "limit": {"type": ["integer", "null"], "minimum": 0, "maximum": 1000,
+       "description": "Omit to read, null for unlimited, 0 for off, N for an active-task cap"}}, ("bot",), writes=True)
+def bot_keep_tasks_going(api, args):
+    who = api.on_behalf_of_requester()
+    bot = who.get(f"bots/{args['bot']}")
+    if 'limit' not in args:
+        return {"bot": args['bot'], "keep_tasks_going": bot.get('keep_tasks_going'), "task_flow": bot.get('task_flow')}
+    return who.post(f"bots/{args['bot']}/keep-tasks-going", {
+        "keep_tasks_going": args['limit'], "expected_revision": bot['revision']}, key=_key(args))
+
+
 @tool("hub_bot_model", "Show the models a bot may run on, or change its model, as the person who asked you. A change waits for a "
       "run in progress to end.",
       {"bot": _s("The bot's slug"), "model": _s("A model id or name from the list; leave out to list them"),
@@ -3887,7 +3900,7 @@ AUDIENCE = {
     "hub_bot_repo_create": ("owner", "botops"),
     "hub_repo_product_create": ("owner", "bot", "botops"),   # a bot needs Create product repositories (server)
     **{name: REQUESTER for name in ("hub_credential_grant", "hub_credential_revoke", "hub_credential_import", "hub_credential_delete")},
-    **{name: REQUESTER for name in ("hub_bot_create", "hub_bot_restore", "hub_agent_pair_show", "hub_agent_pair_approve", "hub_agent_pair_decline", "hub_bot_place", "hub_bot_go_live", "hub_bot_model", "hub_bot_pause",
+    **{name: REQUESTER for name in ("hub_bot_create", "hub_bot_restore", "hub_agent_pair_show", "hub_agent_pair_approve", "hub_agent_pair_decline", "hub_bot_place", "hub_bot_go_live", "hub_bot_model", "hub_bot_keep_tasks_going", "hub_bot_pause",
                                     "hub_bot_resume", "hub_bot_access", "hub_bot_owners", "hub_human_add", "hub_group_update",
                                     "hub_tool_add", "hub_tool_update", "hub_tool_remove",
                                     "hub_bot_copy", "hub_bot_update_from_original", "hub_bot_suggest_to_original", "hub_skill_copy")},

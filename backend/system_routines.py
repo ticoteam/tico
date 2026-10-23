@@ -82,6 +82,7 @@ class Job:
 TRIGGERS = {
     "schedule": ("", ()),                    # the job's schedule in words: "every hour", "every day at 09:00"
     "topic_changed": ("a message in a direct chat changes the topic", ("chat", "topic", "message")),
+    "free_turn": ("a bot has a free turn and assigned work that is not snoozed or blocked", ("tasks", "assigned", "turn", "prerequisite")),
     "directory": ("a company directory is connected", ("directory",)),
 }
 ACTIONS = {
@@ -104,6 +105,7 @@ ACTIONS = {
                          ("approval", "expire", "close", "done", "needs you")),
     "resend_questions": ("send questions unanswered for two business days back to their bots",
                          ("question", "remind", "unanswered")),
+    "start_task": ("start the highest-ranked eligible assigned task in its own session", ("task", "start", "assigned", "On Deck", "prerequisite")),
     "start_routines": ("start each bot routine that is due", ("routine", "start")),
     "wake_stalled": ("wake the bot on a task nothing is moving", ("stalled", "wake", "tasks")),
     "drop_unreadable": ("drop queued work its bot can no longer read", ("queue", "drop")),
@@ -130,6 +132,9 @@ ACTIONS = {
 
 
 JOBS = [
+    Job("assigned_tasks", "Start assigned tasks",
+        "Starts eligible assigned work on a free computer turn; respects task caps, usage holds and turn share.",
+        HOUSEKEEPING, "When a turn is free", records=False, then=("start_task",), when="free_turn"),
     Job("stale_review", "Stale ticket review",
         "Finds open tasks that look finished or forgotten and suggests to each owner what to do.",
         CHECKS, "Hourly", 3600, ai=True, control=True, labels=("stale-review",), then=("check_stale", "suggest_owner")),
@@ -165,7 +170,7 @@ JOBS = [
         HOUSEKEEPING, "Hourly", 3600, then=("unstrand", "ask_to_task")),
     Job("snooze_ends", "Snooze ends",
         "Brings snoozed tasks back when their date comes and starts deferred runs that are due.",
-        HOUSEKEEPING, "Every 10 seconds", 10, then=("end_snooze", "start_deferred")),
+        HOUSEKEEPING, "Every 10 seconds", 10, then=("end_snooze", "start_deferred", "start_task")),
     Job("go_live_expiry", "Go-live expiry", "Ends a go-live waiting for a computer that never reports.",
         HOUSEKEEPING, "Every 10 minutes", 600, then=("end_go_live",)),
     Job("goal_colours", "Goal colours", "Works out every goal's colour again as its data ages.",

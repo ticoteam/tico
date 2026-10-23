@@ -1384,6 +1384,75 @@
         ]
       }
     },
+    "/api/v2/bots/{bot}/keep-tasks-going": {
+      "post": {
+        "summary": "Set automatic assigned-task starts: null is unlimited, 0 is off, N caps active work; reviews have no cap",
+        "operationId": "setKeepTasksGoing",
+        "parameters": [
+          {
+            "name": "bot",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Bot"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BotKeepTasksGoing"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Bots"
+        ]
+      }
+    },
     "/api/v2/bots/{bot}/kpis": {
       "get": {
         "summary": "A bot's five automatic KPIs, computed from Tico's own data (Read on the bot)",
@@ -17691,6 +17760,15 @@
               "null"
             ]
           },
+          "keep_tasks_going": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "task_flow": {
+            "$ref": "#/components/schemas/TaskFlow"
+          },
           "access": {
             "$ref": "#/components/schemas/Access"
           },
@@ -17840,6 +17918,15 @@
           },
           "goals": {
             "type": "string"
+          },
+          "keep_tasks_going": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "task_flow": {
+            "$ref": "#/components/schemas/TaskFlow"
           },
           "access": {
             "$ref": "#/components/schemas/Access"
@@ -18076,6 +18163,34 @@
           "updated"
         ],
         "additionalProperties": true
+      },
+      "BotKeepTasksGoing": {
+        "properties": {
+          "keep_tasks_going": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 1000.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Keep Tasks Going",
+            "description": "Automatic assigned-task starts: null is unlimited (default), 0 is off, N caps active work. Reviews have no cap."
+          },
+          "expected_revision": {
+            "type": "integer",
+            "title": "Expected Revision"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "expected_revision"
+        ],
+        "title": "BotKeepTasksGoing"
       },
       "BotKpis": {
         "type": "object",
@@ -28242,6 +28357,22 @@
           "mime",
           "name",
           "versions"
+        ],
+        "additionalProperties": true
+      },
+      "TaskFlow": {
+        "type": "object",
+        "properties": {
+          "going": {
+            "type": "integer"
+          },
+          "waiting": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "going",
+          "waiting"
         ],
         "additionalProperties": true
       },

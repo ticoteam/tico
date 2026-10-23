@@ -472,3 +472,15 @@ class BotSetup(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+def test_keep_tasks_going_cli_preserves_explicit_unlimited(monkeypatch):
+    from clients import remotecli
+    from clients.hubtools import BY_NAME
+    sent = []
+    monkeypatch.setitem(BY_NAME['hub_bot_keep_tasks_going'], 'fn', lambda api, args: sent.append(args))
+    for argv in (['bot', 'keep-tasks-going', 'ops'], ['bot', 'keep-tasks-going', 'ops', 'unlimited'],
+                 ['bot', 'keep-tasks-going', 'ops', 'off'], ['bot', 'keep-tasks-going', 'ops', '3']):
+        remotecli.via_tool(None, hubcli.parser().parse_args(argv))
+    assert 'limit' not in sent[0]
+    assert [row['limit'] for row in sent[1:]] == [None, 0, 3]

@@ -49,6 +49,24 @@ new title as its subject.
 A linked pull request never moves a task, on any type: opening, merging or closing the PR, a
 release tag and a deploy only change the link's state. A person (or a bot) moves the task.
 
+## Automatic starts
+
+Assigned bot work starts as soon as its computer has a free turn. Tico picks the highest-ranked eligible
+On Deck task (or an open general task), moves it to In Progress, and uses that task's own session.
+Snoozed work, unfinished prerequisites and pending milestone waits stay parked. Existing snooze-end,
+blocker-done and milestone events make the task eligible again; no manual nudge is needed.
+
+In **Settings → Bots → Edit**, **Keep N tasks going** is blank by default (no task cap). Set a positive
+number to cap active work, or **0** to turn automatic starts off. Waiting for a person, a check, a review
+child or a workspace frees a place. Delegated review children have no task cap; every review uses its
+own session as computer turns become free. Usage holds, computer readiness and each bot's turn share
+still apply. The Bots page shows how many tasks are going and how many eligible tasks wait to start.
+
+`hub bot keep-tasks-going <bot> 3` sets a cap; `off` turns it off and `unlimited` restores the default.
+Omit the value to read it. The matching MCP tool and `POST /api/v2/bots/{bot}/keep-tasks-going` use
+the same permissions and revision check. **Settings → Routines** lists **Start assigned tasks** using
+WHEN/THEN wording; its `start_task` catalog action uses the same task delivery and claim checks.
+
 ## Work that is waiting
 
 Keep actively worked tasks in **Doing**. When another task must finish first, relate the blocker,

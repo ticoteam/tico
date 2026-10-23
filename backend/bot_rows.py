@@ -3,7 +3,7 @@ of them, then lookups, so a request costs about the same for 7 bots as for 90. P
 are per task, job or message stay per row (backend/task_privacy.py); only the reading is shared."""
 
 from . import task_privacy as privacy
-from . import read_cache
+from . import auto_tasks, read_cache
 from .harnesses import is_external, resolve_harness
 from .shared_bots import _json, source_of
 from .store import H
@@ -38,6 +38,12 @@ class BotRows:
         self.queued = privacy.job_counts(c, who, read)
         self.next_run = H.next_run_tasks_by(c, read)
         self.notes = H.notes_waiting_counts(c, read, limit=500)
+        tasks = {}
+        for part in H.chunks(read):
+            for task in H._rows(c.execute("SELECT * FROM tasks WHERE owner IN (" + ','.join('?' * len(part)) +
+                                          ") AND status IN ('open','doing')", ['bot:' + slug for slug in part])):
+                tasks.setdefault(H.actor_id(task['owner']), []).append(task)
+        self.task_flow = {slug: auto_tasks.counts(c, slug, who, tasks.get(slug, [])) for slug in read}
         self.goals = {}
         for part in H.chunks(slugs):
             for row in c.execute("SELECT bot,conversation_id FROM chat_goals WHERE status='active' AND bot IN "

@@ -1556,6 +1556,12 @@ class BotFallback(Contract):
     expected_revision: int = Field(ge=1)
 
 
+class BotKeepTasksGoing(Contract):
+    keep_tasks_going: int | None = Field(None, ge=0, le=1000, strict=True,
+        description="Automatic assigned-task starts: null is unlimited (default), 0 is off, N caps active work. Reviews have no cap.")
+    expected_revision: int
+
+
 class BotTaskModel(Contract):
     task_model: BotFallbackChoice | None = Field(None, description="Harness, model and effort for the bot's tasks; "
                                                  "null is the same as the bot")

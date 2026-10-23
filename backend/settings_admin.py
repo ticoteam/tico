@@ -17,7 +17,7 @@ from . import providers
 from . import app_delivery
 from . import rooms
 from . import shared_bots
-from . import task_models, update_feeds, wake_presets
+from . import auto_tasks, task_models, update_feeds, wake_presets
 from .auth import Identity
 from .execution import _reported, stranded
 from .harnesses import EXTERNAL_HARNESSES, HARNESS_BY_ID, normalize_fallback, resolve_harness, runtime_of
@@ -201,6 +201,7 @@ class SettingsAdmin:
                 "review_model": effective.get("review_model"),
                 # What the bot's tasks run on; null is the same as the bot (backend/task_models.py).
                 "task_model": task_models.of(effective),
+                "keep_tasks_going": auto_tasks.of(_json(config["config_json"], {}) or {}),
                 "capture_stream": (_json(config["config_json"], {}) or {}).get("capture_stream"),
                 "update_subscriptions": update_feeds.chosen(_json(config["config_json"], {}) or {}),
                 "update_feeds": update_feeds.status(),
@@ -655,6 +656,8 @@ class SettingsAdmin:
             return task_models.of(_json(config["config_json"], {}) or {})
         if field == "compact_at":
             return compact_at(_json(config["config_json"], {}))
+        if field == auto_tasks.KEY:
+            return auto_tasks.of(_json(config["config_json"], {}) or {})
         if field == "wake_preset":
             return wake_presets.preset_of(_json(config["config_json"], {}))
         if field == "placement":
@@ -990,6 +993,9 @@ class SettingsAdmin:
             return self.set_fallback(c, who, bot, SimpleNamespace(
                 fallback=SimpleNamespace(**before) if before else None,
                 expected_revision=body.expected_revision), undo_change_id=change_id)
+        if change["field"] == auto_tasks.KEY:
+            return self.set_keep_tasks_going(c, who, bot, SimpleNamespace(
+                keep_tasks_going=before, expected_revision=body.expected_revision), undo_change_id=change_id)
         if change["field"] == "task_model":
             return self.set_task_model(c, who, bot, SimpleNamespace(
                 task_model=SimpleNamespace(effort=before.get("reasoning_effort"), **{
@@ -1138,6 +1144,23 @@ class SettingsAdmin:
         self.record(c, who.actor, bot, "compact_at", before, body.compact_at)
         H.event(c, who.actor, "bot.compact_at_changed", bot, {"before": before, "after": body.compact_at})
         return {"bot": bot, "compact_at": body.compact_at, "revision": config["revision"] + 1}
+
+    def set_keep_tasks_going(self, c, who, bot, body, undo_change_id=None):
+        self._manager(c, who, bot)
+        config = self._config(c, bot)
+        if config["revision"] != body.expected_revision:
+            raise Problem("version_conflict", "Bot configuration changed; refresh before saving", 409)
+        declared = _json(config["config_json"], {}) or {}
+        before = auto_tasks.of(declared)
+        declared[auto_tasks.KEY] = body.keep_tasks_going
+        c.execute("UPDATE bot_config SET config_json=?,revision=revision+1 WHERE bot=?", (encode(declared), bot))
+        self.record(c, who.actor, bot, auto_tasks.KEY, before, body.keep_tasks_going)
+        if undo_change_id:
+            c.execute("UPDATE settings_changes SET undone_by=?,undone_at=? WHERE id=? AND undone_at IS NULL",
+                      (who.actor, H.now(), undo_change_id))
+        H.event(c, who.actor, "bot.keep_tasks_going_changed", bot,
+                {"before": before, "after": body.keep_tasks_going})
+        return {"bot": bot, "keep_tasks_going": body.keep_tasks_going, "revision": config["revision"] + 1}
 
     def set_wake_preset(self, c, who, bot, body):
         """How soon the bot's nonblocking notices and enabled sweeps start a turn (backend/wake_presets.py). Only the

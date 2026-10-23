@@ -9,7 +9,7 @@ from datetime import timezone
 
 from clients import gateway, sessions
 
-from . import app_delivery, check_models, gateway_connection, inbox_isolation, login_holds, models_preset, providers, quiet_work, routines, run_triggers, runner_versions, screen, task_models, usage_limits, wake_presets
+from . import auto_tasks, app_delivery, check_models, gateway_connection, inbox_isolation, login_holds, models_preset, providers, quiet_work, routines, run_triggers, runner_versions, screen, task_models, usage_limits, wake_presets
 from . import task_privacy as privacy
 from .auth import Identity
 from .batch_work import isolated
@@ -913,6 +913,11 @@ def job_refusal(c, job, followed, ready, busy, lanes, roots, live=frozenset()):
         return "unreadable"
     conversation = H.conversation(c, message["conversation_id"])
     task_id = H.message_task_id(message, conversation)
+    task = H.task(c, task_id) if task_id else None
+    if (task and task['owner'] == 'bot:' + job['bot'] and message['from_actor'] == H.KEEPER
+            and not (message.get("refs") or {}).get("run_now")):
+        if why := auto_tasks.refusal(c, task, followed):
+            return why
     wanted = check_models.of(c, task_id, job["bot"])
     if not check_models.runs_here(ready, wanted) or (wanted and check_models.held(c, task_id)):
         return "check_model"
@@ -1479,6 +1484,7 @@ class Execution:
         candidates = c.execute(
             "SELECT j.*,a.generation FROM jobs j JOIN assignments a ON a.bot=j.bot "
             "JOIN messages m ON m.id=j.message_id JOIN conversations cv ON cv.id=m.conversation_id "
+            f"LEFT JOIN tasks qt ON qt.id={H.MESSAGE_TASK_SQL} "
             # A job its wake preset holds waits for its release (backend/wake_presets.py tick).
             f"WHERE j.state='queued' AND j.held=0 AND j.bot IN ({marks}) AND a.runner_id=? "
             f"AND (m.from_actor LIKE 'human:%' OR j.bot NOT IN ({','.join('?' for _ in full)})) "
@@ -1489,7 +1495,7 @@ class Execution:
             # fewest turns here, so a freed turn goes to another bot's waiting job before the busy bot's next one;
             # then the longest waiting.
             "ORDER BY j.redirect DESC,CASE WHEN m.from_actor LIKE 'human:%' THEN 0 ELSE 1 END,"
-            f"CASE j.bot {' '.join('WHEN ? THEN ?' for _ in bots)} ELSE 0 END,j.created,j.id",
+            f"CASE j.bot {' '.join('WHEN ? THEN ?' for _ in bots)} ELSE 0 END,(qt.rank IS NULL),qt.rank,j.created,j.id",
             (*bots, who.runner_id, *full, *(v for bot in bots for v in (bot, held.get(bot, 0)))))
         for row in candidates:
             if job_refusal(c, row, followed[row["bot"]], ready, busy, lanes, roots, live) is None and not login_refusal(
@@ -1544,6 +1550,8 @@ class Execution:
                           (who.runner_id,)).fetchone()[0]
         if count >= runner["capacity"] or not self.awake(awake_since, now):
             return {"attempt": None}
+        if auto_tasks.missing(c, self.store.settings, runner, body):
+            return None
         row = self.candidate(c, who, body, runner)
         if row is not None and selected is not None:
             selected.append(row)
@@ -1615,6 +1623,9 @@ class Execution:
         # Its work keeps its place in the queue and goes out once the machine is really up.
         if not self.awake(awake_since, now):
             return {"attempt": None}
+        if pending := auto_tasks.missing(c, self.store.settings, runner, body):
+            auto_tasks.enqueue(c, pending)
+            selected = None
         row = selected if selected is not None else self.candidate(c, who, body, runner)
         if not row:
             return {"attempt": None}
@@ -1645,6 +1656,9 @@ class Execution:
         handed = providers.bot_choice(c, self.store.settings, followed)
         # A check subtask's turns run on its own model, in its own session (backend/check_models.py).
         check = check_models.of(c, task["id"], row["bot"]) if task else None
+        if (task and task['owner'] == 'bot:' + row['bot'] and not auto_tasks.refusal(c, task, followed)
+                and not (msg.get("refs") or {}).get("run_now")):
+            task = auto_tasks.started(c, task)
         roots, lanes = roots_on(runner), lanes_on(runner)
         # A turn in a task's own session runs on the bot's task model when it has one, or on its own model when that
         # cannot run here; a check keeps its check model (backend/task_models.py).

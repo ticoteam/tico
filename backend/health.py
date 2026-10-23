@@ -540,6 +540,9 @@ def runtime_choice(c, bot, runtime, who, computers, harness="", model=""):
 RUNS, COMPUTERS, BOT_SETTINGS = ("Open Runs", "#/settings", "runs"), ("Open Computers", "#/settings", "devices"), \
     ("Open bot settings", "#/settings", "bots")
 HELD = {
+    "task_wait": ("Its assigned task waits for a snooze, prerequisite, person or check", RUNS),
+    "task_cap": ("Its active task limit is full; waiting work frees a place", BOT_SETTINGS),
+    "auto_start_off": ("Automatic assigned-task starts are off for this bot", BOT_SETTINGS),
     "draining": ("Paused, or held while Tico updates: its work starts when it is resumed", BOT_SETTINGS),
     "restarting": ("{computer} is restarting: it starts new work once its running turns end", COMPUTERS),
     "maintaining": ("{computer} is tidying this bot's task worktrees: its work starts when that finishes", COMPUTERS),
@@ -1441,7 +1444,7 @@ def view(c, who, settings, auth, github, config):
     blocking = [s for s in blocked if s["bot"] not in held and s["reason"] != "setup"]
     if blocking:
         # A count: each bot, its reason and its fix are listed once, under `stuck` (Health's Stuck list, Overview).
-        bad = any(s["reason"] not in ("slow", "updating", "restarting", "draining", "maintaining", "lane_held", "cooling_off")
+        bad = any(s["reason"] not in ("slow", "updating", "restarting", "draining", "maintaining", "lane_held", "cooling_off", "task_wait", "task_cap", "auto_start_off")
                   for s in blocking)
         checks.append(_check("queue", "Stuck bots", "bad" if bad else "warn",
                              f"{_plural(len(blocking), 'bot')} with work that is not starting.", []))
