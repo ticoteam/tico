@@ -55,7 +55,9 @@ class Sources:
         # Existing rooms predate the durable room binding. Their original keeper input
         # remains provenance even when its message is deleted or the bot is detached.
         ids = set()
-        rows = self.c.execute("SELECT m.refs_json FROM messages m JOIN live_meeting_turns t "
+        # The sender index scans every keeper notice in the company for each ordinary room.
+        # Bind this legacy lookup to its room even when SQLite estimates the sender is selective.
+        rows = self.c.execute("SELECT m.refs_json FROM messages m INDEXED BY messages_conversation JOIN live_meeting_turns t "
                               "ON t.id=json_extract(m.refs_json,'$.live_meeting.turn_id') "
                               "AND t.meeting_id=json_extract(m.refs_json,'$.live_meeting.meeting_id') "
                               "WHERE m.conversation_id=? AND m.from_actor=? AND m.to_actor='bot:'||t.bot LIMIT 101",
