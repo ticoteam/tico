@@ -38,8 +38,8 @@ from . import models as M
 from .auth import LOCAL_COOKIE, LOCAL_COOKIE_DAYS, LOCAL_SIGNIN_PATH, LOGOUT_PATH, Auth, Identity
 from .config import Settings
 from .observability import Observability, browser_config, staff_display_name
-from .execution import (Execution, bot_repository, bump_bot_session_epoch, clear_limits, lift_after_model_change,
-                        model_choice, own_login_hold)
+from .execution import (Execution, bot_repository, bump_bot_session_epoch, claim_scope, clear_limits,
+                        lift_after_model_change, model_choice, own_login_hold)
 from .onboarding import BOTOPS, Onboarding
 from .recruit import Recruiter
 from . import rooms
@@ -1903,6 +1903,12 @@ def create_app(settings=None):
             return {k: v for k, v in row.items() if k in SEE_ONLY}
         slug = bot["slug"]
         row["draining"] = slug in rows.draining
+        # The one task its claims are limited to (POST /api/v2/bots/{bot}/control scope): its id when this reader
+        # may read the task, or only that a limit is on.
+        scope = rows.scopes.get(slug)
+        scoped_task = H.task(c, scope) if scope else None
+        row["claim_scoped"] = bool(scope)
+        row["claim_task"] = scope if scoped_task and privacy.task_readable(c, who, scoped_task) else None
         status = rows.statuses.get(slug)
         row["status"] = privacy.status(c, who, dict(status), **rows.status_inputs[slug]) if status else status
         row["assignment"] = dict(assignment) if assignment else None
@@ -5403,11 +5409,27 @@ def create_app(settings=None):
             config = c.execute("SELECT * FROM bot_config WHERE bot=?", (bot,)).fetchone()
             if config["revision"] != body.expected_revision:
                 raise Problem("version_conflict", "Bot configuration changed; refresh before controlling it", 409)
+            if body.action in ("scope", "unscope"):
+                # A narrower claim, never a wider one: the bot's pause, drain and every other claim check stand, and
+                # the work outside the task stays queued as it is (execution.scoped_sql).
+                task = H.task(c, body.task_id) if body.action == "scope" and body.task_id else None
+                if body.action == "scope" and not (task and privacy.task_readable(c, who, task)):
+                    raise Problem("not_found", "No such task", 404)
+                before = claim_scope(c, bot)
+                c.execute("INSERT INTO bot_control(bot,claim_task) VALUES(?,?) "
+                          "ON CONFLICT(bot) DO UPDATE SET claim_task=excluded.claim_task",
+                          (bot, task["id"] if task else None))
+                c.execute("UPDATE bot_config SET revision=revision+1 WHERE bot=?", (bot,))
+                H.event(c, who.actor, "bot." + body.action, bot,
+                        {"task_id": task["id"] if task else None, "previous": before})
+                return {"bot": bot, "action": body.action, "task_id": task["id"] if task else None,
+                        "revision": config["revision"] + 1}
             if H.bot(c, bot)["state"] == "quarantined" and body.action != "drain":
                 raise Problem("quarantined", "Review the refusal and use quarantine clear to resume this bot", 409)
             if body.action == "resume":
                 settings_admin.ensure_activation(c, who, bot)
-            c.execute("INSERT INTO bot_control VALUES(?,?) ON CONFLICT(bot) DO UPDATE SET draining=excluded.draining",
+            c.execute("INSERT INTO bot_control(bot,draining) VALUES(?,?) "
+                      "ON CONFLICT(bot) DO UPDATE SET draining=excluded.draining",
                       (bot, int(body.action in ("drain", "pause"))))
             if body.action != "drain":
                 c.execute("UPDATE bots SET state=? WHERE slug=?", ("active" if body.action == "resume" else "paused", bot))

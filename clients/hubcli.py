@@ -272,6 +272,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub bot model <bot> [<model>] [--effort E]
                                            list the models, or change the bot's
     hub bot pause|resume <bot>             stop or restart a bot (resume places one that has no computer)
+    hub bot scope <bot> <task>|--release   limit a bot's claims to one task and its subtasks, or lift that
     hub bot copy <bot> [--slug S] [--name N] [--with-memory] [--computer C]
                                            copy a bot into a new one the requester owns: its instructions, skills, playbooks and
                                            tools, never a secret; notes and memory only with --with-memory (BotOps)
@@ -1776,6 +1777,11 @@ def parser():
         s = bot.add_parser(verb, help=f"{verb} a bot (BotOps)")
         s.add_argument("bot")
         s.set_defaults(fn="bot " + verb)
+    s = bot.add_parser("scope", help="limit a bot's claims to one task and its subtasks, or lift that (BotOps)")
+    s.add_argument("bot")
+    s.add_argument("task", nargs="?", help="the task it may still work on")
+    s.add_argument("--release", action="store_true", help="lift the limit; its other work becomes claimable again")
+    s.set_defaults(fn="bot scope")
     s = bot.add_parser("branch", help="make your branch of a bot that allows branches")
     s.add_argument("bot")
     s.add_argument("--computer", help="your computer's label or id")

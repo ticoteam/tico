@@ -546,6 +546,8 @@ HELD = {
     "lane_held": ("{computer} still runs an earlier turn of this bot whose lease lapsed: the next starts when it ends",
                   RUNS),
     "uncertain": ("An interrupted run on the same task or chat waits for review in Runs", RUNS),
+    # A person limited the bot's claims to one task (execution.scoped_sql): the rest waits for the scope's release.
+    "scoped": ("Limited to one task: its other work starts when the limit is lifted", BOT_SETTINGS),
     # The runner says the turn holding the shared login is a run Tico has no live record of (backend/login_waits.py).
     "login_holder_unknown": ("Its turn waits for {computer}'s ChatGPT login, held by a run that is not running in "
                              "Tico: restart the runner on {computer} to free it", COMPUTERS),
@@ -1454,8 +1456,8 @@ def view(c, who, settings, auth, github, config):
     blocking = [s for s in blocked if s["bot"] not in held and s["reason"] != "setup"]
     if blocking:
         # A count: each bot, its reason and its fix are listed once, under `stuck` (Health's Stuck list, Overview).
-        bad = any(s["reason"] not in ("slow", "updating", "restarting", "draining", "maintaining", "lane_held", "cooling_off")
-                  for s in blocking)
+        bad = any(s["reason"] not in ("slow", "updating", "restarting", "draining", "maintaining", "lane_held",
+                                      "cooling_off", "scoped") for s in blocking)
         checks.append(_check("queue", "Stuck bots", "bad" if bad else "warn",
                              f"{_plural(len(blocking), 'bot')} with work that is not starting.", []))
     elif slow and all(s["reason"] == "busy" for s in slow):

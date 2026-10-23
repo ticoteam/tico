@@ -9,7 +9,7 @@ import pytest
 
 from backend import check_models, diagnostics, execution, health, health_monitor
 from backend.store import H
-from backend.tests.test_api import api, claim, headers, post  # noqa: F401  (api is a fixture)
+from backend.tests.test_api import api, claim, get, headers, post  # noqa: F401  (api is a fixture)
 from backend.tests.test_task_lanes import new_task, task_bot
 
 
@@ -61,6 +61,34 @@ def test_a_drained_bot(api):
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO bot_control(bot,draining) VALUES('ops',1)")
     says(api, machine, "draining")
+
+
+def test_a_bot_limited_to_one_task_claims_only_it_and_its_subtasks_until_released(api):
+    machine = task_bot(api, lanes=True)
+    def control(**body):
+        post(api, "bots/ops/control", {**body, "expected_revision": get(api, "bots/ops")["revision"]})
+    task, other = new_task(api, "the check"), new_task(api, "unrelated")
+    child = post(api, "tasks", {"owner": "ops", "title": "review", "body": "Review it.",
+                                "relations": [{"task": task["id"], "kind": "parent"}]})
+    control(action="pause")
+    control(action="scope", task_id=task["id"])
+    assert claim(api, machine) is None                       # the scope never lifts a pause
+    control(action="resume")
+    post(api, "chat/ops", {"text": "Anything new?"})          # new work outside the task arrives during the check
+    taken = {claim(api, machine)["lane"], claim(api, machine)["lane"]}
+    assert taken == {"task:" + task["id"], "task:" + child["id"]} and claim(api, machine) is None
+    with api.app.state.store.read() as c:                     # Health reads the same rule
+        assert execution.bot_refusal(c, api.app.state.store.settings, machine["runner_id"], "ops") == "scoped"
+    control(action="pause")
+    control(action="unscope")
+    assert claim(api, machine) is None                       # released while paused: eligible again, not started
+    with api.app.state.store.read() as c:
+        assert not c.execute("SELECT 1 FROM attempts WHERE bot='ops' AND state IN ('leased','running')").fetchone()
+        assert [r[0] for r in c.execute("SELECT action FROM events WHERE target='ops' AND action LIKE 'bot.%scope' "
+                                        "ORDER BY rowid")] == ["bot.scope", "bot.unscope"]
+    control(action="resume")
+    lanes = {claim(api, machine)["lane"] for _ in range(4)}
+    assert lanes == {"task:" + t["id"] for t in (task, child, other)} | {"main"}
 
 
 def test_a_bot_whose_worktrees_the_runner_is_maintaining(api):

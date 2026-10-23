@@ -1195,6 +1195,10 @@ class Store:
                     # A day of history must not authorize every older attempt first.
                     c.execute("CREATE INDEX IF NOT EXISTS attempts_created ON attempts(created)")
                     c.execute("INSERT INTO cloud_migrations VALUES(62,?)", (H.now(),))
+                if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=63").fetchone():
+                    # The one task an operator limited a bot's claims to (execution.scoped_sql); NULL is no limit.
+                    H.add_column(c, "bot_control", "claim_task", "TEXT")
+                    c.execute("INSERT INTO cloud_migrations VALUES(63,?)", (H.now(),))
                 from .public_roadmaps import migrate as migrate_public_roadmaps
                 migrate_public_roadmaps(c)
                 H.ensure_market_reads(c)

@@ -2486,6 +2486,20 @@ tool("hub_bot_resume", "Resume a paused bot, as the person who asked you; one wi
      {"bot": _s("The bot's slug")}, required=("bot",), writes=True)(_control("resume"))
 
 
+@tool("hub_bot_scope", "Limit a bot's claims to one task and its direct subtasks, as the person who asked you, or lift "
+      "that limit with release: its other queued and new work stays queued, untouched, and nothing is paused, resumed "
+      "or started.",
+      {"bot": _s("The bot's slug"), "task": _s("The task it may still work on"),
+       "release": {"type": "boolean", "description": "Lift the limit instead"}}, required=("bot",), writes=True)
+def _bot_scope(api, args):
+    if bool(args.get("task")) == bool(args.get("release")):
+        raise ValueError("Give a task to limit the bot to, or release to lift the limit")
+    who = _as_person(api)
+    revision = who.get(f"bots/{args['bot']}/access")["revision"]
+    body = ({"action": "unscope"} if args.get("release") else {"action": "scope", "task_id": args["task"]})
+    return who.post(f"bots/{args['bot']}/control", {**body, "expected_revision": revision}, key=_key(args))
+
+
 # A computer's full row runs to tens of thousands of characters (every repository, each bot's readiness, runtime
 # catalogs, recent log errors), so the list is one short row each and the detail is paged section by section.
 COMPUTER_SECTIONS = ("assigned", "repositories", "bots", "runtimes", "harnesses", "recent_errors")
@@ -3888,6 +3902,7 @@ AUDIENCE = {
     "hub_repo_product_create": ("owner", "bot", "botops"),   # a bot needs Create product repositories (server)
     **{name: REQUESTER for name in ("hub_credential_grant", "hub_credential_revoke", "hub_credential_import", "hub_credential_delete")},
     **{name: REQUESTER for name in ("hub_bot_create", "hub_bot_restore", "hub_agent_pair_show", "hub_agent_pair_approve", "hub_agent_pair_decline", "hub_bot_place", "hub_bot_go_live", "hub_bot_model", "hub_bot_pause",
+                                    "hub_bot_scope",
                                     "hub_bot_resume", "hub_bot_access", "hub_bot_owners", "hub_human_add", "hub_group_update",
                                     "hub_tool_add", "hub_tool_update", "hub_tool_remove",
                                     "hub_bot_copy", "hub_bot_update_from_original", "hub_bot_suggest_to_original", "hub_skill_copy")},

@@ -914,6 +914,29 @@ def unfenced_sql():
             f"OR ({task_sql} IS NULL AND cv.kind='chat' AND um.conversation_id=m.conversation_id))))")
 
 
+def scoped_sql():
+    """SQL over a queued job `j`, its message `m` and conversation `cv`: true unless an operator limited the bot's
+    claims to one task (bot_control.claim_task) and this job is about neither that task nor a direct subtask of it.
+    Work outside the scope stays queued, untouched, until the scope is released; the scope only narrows what the
+    other checks (pause, drain, readiness, the interrupted-work fence, privacy) already allow."""
+    task_sql = queued_task_sql()
+    return ("NOT EXISTS(SELECT 1 FROM bot_control sc WHERE sc.bot=j.bot AND sc.claim_task IS NOT NULL "
+            f"AND coalesce({task_sql},'')<>sc.claim_task AND NOT EXISTS(SELECT 1 FROM task_relations sr "
+            f"WHERE sr.from_task={task_sql} AND sr.to_task=sc.claim_task AND sr.kind='parent'))")
+
+
+def claim_scope(c, bot):
+    """The one task `bot`'s claims are limited to, or None (scoped_sql)."""
+    row = c.execute("SELECT claim_task FROM bot_control WHERE bot=?", (bot,)).fetchone()
+    return row[0] if row else None
+
+
+def in_scope(c, scope, task_id):
+    """Whether `task_id` is `scope` or a direct subtask of it: what a scoped bot may still be given."""
+    return bool(task_id) and (task_id == scope or bool(c.execute(
+        "SELECT 1 FROM task_relations WHERE from_task=? AND to_task=? AND kind='parent'", (task_id, scope)).fetchone()))
+
+
 def live_tasks(c):
     """{(bot, task)} with a turn out now. A later wake for that bot about that task waits for the turn even when its
     lane is another one: a task moved under another of the bot's tasks mid-turn keys a new lane (session_root), and
@@ -977,12 +1000,15 @@ def bot_claimable(c, settings, runner_id, bot):
     mine = sum(1 for b, _ in held_lanes if b == bot)
     at_share = mine and mine >= turn_limit(turn_share(c, runner_id, runner["capacity"]), runner["capacity"], False)
     followed, refused = follow(c, bot, config), None     # refused: (created, reason) of the oldest held job
-    for job in c.execute(f"SELECT j.*,m.from_actor,{unfenced_sql()} free FROM jobs j JOIN messages m ON m.id=j.message_id "
+    for job in c.execute(f"SELECT j.*,m.from_actor,{unfenced_sql()} free,{scoped_sql()} in_scope FROM jobs j "
+                         "JOIN messages m ON m.id=j.message_id "
                          "JOIN conversations cv ON cv.id=m.conversation_id WHERE j.bot=? AND j.state='queued' AND j.held=0 "
                          "ORDER BY j.redirect DESC,CASE WHEN m.from_actor LIKE 'human:%' THEN 0 ELSE 1 END,j.created,j.id",
                          (bot,)).fetchall():
         person = str(job["from_actor"]).startswith("human:")
-        if not job["free"]:
+        if not job["in_scope"]:
+            why = "scoped"
+        elif not job["free"]:
             why = "uncertain"
         elif at_share and not person:
             why = "lane_held"
@@ -1504,7 +1530,7 @@ class Execution:
             f"AND (m.from_actor LIKE 'human:%' OR j.bot NOT IN ({','.join('?' for _ in full)})) "
             "AND (m.from_actor LIKE 'human:%' OR NOT EXISTS(SELECT 1 FROM bot_config pc "
             "WHERE pc.bot=j.bot AND pc.onboarding_state IN " + PARKED_SQL + ")) "
-            f"AND {unfenced_sql()} "
+            f"AND {unfenced_sql()} AND {scoped_sql()} "
             # A redirect first (it replaces a turn just stopped); then a person's chat; then the bot holding the
             # fewest turns here, so a freed turn goes to another bot's waiting job before the busy bot's next one;
             # then the longest waiting.
@@ -1786,13 +1812,16 @@ class Execution:
         # turn. The claim holds the write lock and `carried_by` marks each one taken, so two lanes
         # never carry the same task.
         carried = []
+        # A bot limited to one task (scoped_sql) carries only that task's work: its other next-run tasks and waiting
+        # notes stay where they are for a run after the scope is released.
+        scope = claim_scope(c, row["bot"])
         # A check runs on another model for one subtask: the bot's other work waits for its own turns.
         if getattr(body, "next_run", False) and not check:
             if row["bot"] == "librarian":
                 from .docs import refresh_generated_docs
                 refresh_generated_docs(c)  # Also covers a Librarian enabled after the upgrade.
             for item in H.next_run_tasks(c, row["bot"], exclude=task["id"] if task else None):
-                if not H.task_private_readable(c, bot_who.actor, item):
+                if not H.task_private_readable(c, bot_who.actor, item) or scope and not in_scope(c, scope, item["id"]):
                     continue
                 if routine and H.task_private(c, item):
                     # A routine runs in company scope: a private task carried in would make the whole run
@@ -1813,7 +1842,7 @@ class Execution:
         # Quiet notes ride the same way: every note waiting for this bot, each with when it was
         # sent, so the run can tell yesterday's from this morning's.
         notes = []
-        if getattr(body, "next_run", False) and not check:
+        if getattr(body, "next_run", False) and not check and not scope:
             from . import bot_to_bot
             waiting = H.notes_waiting(c, row["bot"])
             for item in waiting:
@@ -2157,7 +2186,10 @@ class Execution:
                      if origin_task and str(dict(attempt).get("lane") or "").startswith("task:") else None)
         taken = 0
         for row in c.execute("SELECT m.* FROM jobs j JOIN messages m ON m.id=j.message_id "
+                             "JOIN conversations cv ON cv.id=m.conversation_id "
                              "WHERE j.bot=? AND j.state='queued' AND coalesce(json_extract(m.refs_json,'$.command'),0)!=1 "
+                             # A bot limited to one task takes nothing else into a running turn either.
+                             f"AND {scoped_sql()} "
                              # A redirect replaces the turn being stopped, so it starts the next one instead.
                              "AND j.redirect=0 AND (m.conversation_id=("
                              "SELECT active_message.conversation_id FROM attempts active_attempt "

@@ -1959,8 +1959,11 @@ class Adopt(Contract):
 
 
 class BotControl(Contract):
-    action: Literal["drain", "resume", "pause"]
+    """`scope` limits the bot's claims to `task_id` and its direct subtasks, leaving the rest of its queue untouched;
+    `unscope` lifts that limit. Neither pauses, resumes or starts anything."""
+    action: Literal["drain", "resume", "pause", "scope", "unscope"]
     expected_revision: int = Field(ge=1)
+    task_id: str | None = Field(None, max_length=200)
 
 
 class BotPlace(Contract):

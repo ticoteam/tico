@@ -734,7 +734,8 @@ def bots(client, args):
         except ValueError as exc:
             raise APIError("not_found", str(exc)) from None
     if args.fn in ("bot access", "bot mail", "bot owners", "bot setup-done", "bot place", "bot go-live", "bot model", "bot pause",
-                   "bot resume", "bot restore", "bot archive") or (args.fn == "bot create" and args.record_only):
+                   "bot resume", "bot scope", "bot restore",
+                   "bot archive") or (args.fn == "bot create" and args.record_only):
         from clients import hubtools
         fields = {k: v for k, v in vars(args).items()
                   if k not in ("cmd", "sub", "subsub", "fn", "no_setup", "record_only") and v not in (None, [])}

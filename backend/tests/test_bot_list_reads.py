@@ -4,7 +4,7 @@ as reading them one bot at a time, and about the same number of statements for 7
 import collections
 import json
 
-from backend import agents, rooms, update_feeds, views, task_models, wake_presets
+from backend import agents, execution, rooms, update_feeds, views, task_models, wake_presets
 from backend import task_privacy as privacy
 from backend.chat_goals import readable_active
 from backend.harnesses import resolve_harness
@@ -69,6 +69,9 @@ def per_bot_view(c, settings, auth, bot, level, access, registry_roster, registr
     if not level["read"]:
         return {k: v for k, v in row.items() if k in SEE_ONLY}
     row["draining"] = bool(c.execute("SELECT 1 FROM bot_control WHERE bot=? AND draining=1", (bot["slug"],)).fetchone())
+    scope = execution.claim_scope(c, bot["slug"])
+    row["claim_scoped"] = bool(scope)
+    row["claim_task"] = scope if scope and privacy.task_readable(c, who, H.task(c, scope)) else None
     row["status"] = privacy.status(c, who, H.status(c, bot["slug"]))
     row["assignment"] = dict(assignment) if assignment else None
     row["online"] = bool(assignment and not assignment["revoked_at"] and assignment["last_seen"]

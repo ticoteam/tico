@@ -33,6 +33,8 @@ class BotRows:
                                   "r.revoked_at FROM assignments a JOIN runners r ON r.id=a.runner_id "
                                   "WHERE a.bot IN ({})", read)
         self.draining = set(_by(c, "SELECT bot FROM bot_control WHERE draining=1 AND bot IN ({})", read))
+        self.scopes = {bot: row["claim_task"] for bot, row in _by(
+            c, "SELECT bot,claim_task FROM bot_control WHERE claim_task IS NOT NULL AND bot IN ({})", read).items()}
         self.statuses = _by(c, "SELECT * FROM bot_status WHERE bot IN ({})", read)
         self.status_inputs = privacy.status_inputs(c, list(self.statuses))
         self.queued = privacy.job_counts(c, who, read)
