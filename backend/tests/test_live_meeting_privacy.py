@@ -470,13 +470,23 @@ def test_shared_message_provenance_stays_bounded_and_permissions_stay_current(li
         return original(self, value)
 
     monkeypatch.setattr(live_privacy.Sources, "references", counted)
+    task_calls = []
+    original_tasks = task_privacy.references
+
+    def task_counted(c, value):
+        task_calls.append(1)
+        return original_tasks(c, value)
+
+    monkeypatch.setattr(task_privacy, "references", task_counted)
     with live.app.state.store.transaction() as c:
         index = live_privacy.sources(c)
         for n in range(99):
             ids = index.message(H.message(c, f"shared-chain-{n}"), include_run=False)
             assert ids == {mid} and index.readable("bot:ops", ids)
+            assert task_privacy.message_tasks(c, H.message(c, f"shared-chain-{n}")) == task_privacy.message_tasks(c, H.message(c, "shared-common"))
         # Shared reply chains must cost their distinct messages, not every prefix again.
         assert len(calls) <= 110, len(calls)
+        assert len(task_calls) <= 110, len(task_calls)
         with pytest.raises(Problem, match="too deep"):
             index.message(H.message(c, "shared-chain-99"), include_run=False)
         # Permission results are never memoized, even when provenance is reused.
@@ -505,10 +515,15 @@ def test_shared_attempt_provenance_rechecks_membership_and_source_commits(live, 
     store, aid = live.app.state.store, attempt["id"]
     with store.read_transaction() as c:
         assert live_privacy.sources(c).attempt_readable("bot:ops", aid)
+        assert live_privacy.sources(c).conversation(attempt["message"]["conversation_id"]) == {mid}
+    # An unrelated committed write preserves neutral provenance without caching policy.
+    with store.transaction() as c:
+        c.execute("UPDATE live_meetings SET title=title||' updated' WHERE id=?", (mid,))
     statements = []
     with store.read_transaction() as c:
         c.set_trace_callback(statements.append)
         assert live_privacy.sources(c).attempt(aid) == {mid}
+        assert live_privacy.sources(c).conversation(attempt["message"]["conversation_id"]) == {mid}
         c.set_trace_callback(None)
     assert not any("JOIN jobs j ON j.id=a.job_id" in sql for sql in statements), statements
     with store.transaction() as c:
@@ -531,3 +546,35 @@ def test_shared_attempt_provenance_rechecks_membership_and_source_commits(live, 
     with store.read_transaction() as c:
         assert "missing-meeting" in live_privacy.sources(c).attempt(aid)
         assert not live_privacy.sources(c).attempt_readable("human:ben", aid)
+
+
+def test_existing_provenance_clock_upgrades_meeting_sources(live, derived):
+    from backend import live_privacy, provenance_clock
+    mid, attempt = derived
+    store, cid = live.app.state.store, attempt["message"]["conversation_id"]
+    with store.transaction() as c:
+        # Simulate the installed pre-meeting UPDATE definitions before startup upgrades them.
+        for table, cols in (("messages", "id,conversation_id,refs_json,in_reply_to"),
+                            ("conversations", "id,task_id")):
+            c.execute(f"DROP TRIGGER provenance_{table}_update_v2")
+            c.execute(f"CREATE TRIGGER provenance_{table}_update AFTER UPDATE OF {cols} ON {table} "
+                      "BEGIN UPDATE provenance_clock SET value=value+1 WHERE id=1; END")
+        provenance_clock.ensure(c)
+        c.execute("UPDATE conversations SET room_key=NULL WHERE id=?", (cid,))
+    def source():
+        with store.read_transaction() as c:
+            return live_privacy.sources(c).conversation(cid)
+    assert source() == {mid}
+    with store.transaction() as c:
+        c.execute("UPDATE messages SET from_actor='human:ana' WHERE id=?", (attempt["message"]["id"],))
+    assert source() == set()
+    with store.transaction() as c:
+        c.execute("UPDATE messages SET from_actor=?,to_actor='bot:finance' WHERE id=?",
+                  (H.KEEPER, attempt["message"]["id"]))
+    assert source() == set()
+    with store.transaction() as c:
+        c.execute("UPDATE live_meeting_turns SET bot='finance' WHERE meeting_id=?", (mid,))
+    assert source() == {mid}
+    with store.transaction() as c:
+        c.execute("UPDATE conversations SET room_key='live-meeting:missing-meeting' WHERE id=?", (cid,))
+    assert source() == {"missing-meeting"}

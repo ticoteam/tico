@@ -109,8 +109,8 @@ def _message_tasks(c, message, seen=None, include_run=True, current=False):
            json.dumps(message.get("refs") or H._json(message.get("refs_json"), {}) or {}, sort_keys=True),
            message.get("in_reply_to"))
     cached = values.get(cache_key) if values is not None else None
-    if cached is not None and not (cached[1] & seen):
-        if len(seen) + len(cached[1]) > 100:
+    if cached is not None:
+        if len(seen | cached[1]) > 100:
             raise Problem("privacy", "Message provenance is too deep to authorize", 403)
         seen.update(cached[1])
         return set(cached[0])

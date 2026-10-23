@@ -52,6 +52,11 @@ class Sources:
         return self.room(cid).startswith(ROOM_PREFIX)
 
     def _conversation(self, cid):
+        from . import provenance_clock
+        return frozenset(provenance_clock.cached(
+            self.c, ("meeting_conversation", cid), lambda: self._conversation_uncached(cid)))
+
+    def _conversation_uncached(self, cid):
         room = self.room(cid)
         if room.startswith(ROOM_PREFIX):
             return frozenset((room[len(ROOM_PREFIX):],))

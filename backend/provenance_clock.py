@@ -74,7 +74,8 @@ class Cache:
 
 def cached(c, key, build):
     # Uncommitted source changes can roll back to the same clock value. Never publish
-    # or consume cross-connection cache entries from a writer transaction.
+    # shared entries from a writer transaction. An unchanged source clock can still
+    # consume committed neutral entries; changed sources are rebuilt locally.
     cache = getattr(c, 'provenance_cache', None)
     if cache is None:
         return build()
