@@ -24,10 +24,16 @@ All notable changes to Tico are recorded here. The format follows
   shows a warning that names the risk ("This bot sends messages for you. … may word things badly."). It still saves
   and its tasks still run on it, and each such run's note says it ran below the minimum for that bot.
 
+## [0.3.75] - 2026-10-23
+
 ### Fixed
-- **A Docker runner at high capacity starts its turns.** The runner container allowed 2048 processes and threads,
-  about 70 turns' worth, so a runner set above that failed to start new turns ("Resource temporarily unavailable")
-  and kept claiming and dropping the same requests. The limit is now 12288, enough for the 256 a runner honours.
+- **A Docker runner at high capacity starts its turns and signs in.** The runner container allowed 2048 processes
+  and threads, about 70 turns' worth, so a runner set above that failed to start new turns ("Resource temporarily
+  unavailable"), kept claiming and dropping the same requests, and a Claude Code or Codex sign-in on that computer
+  stopped without signing in. The limit is now 12288, enough for the 256 turns a runner honours.
+- **A question's Needs you card shows when you open its task right after answering another.** A refresh that started
+  while an earlier read was still on its way reused that read and kept the old list, so the task page opened without
+  its card until the task was drawn again.
 
 ## [0.3.74] - 2026-10-22
 
@@ -4296,7 +4302,8 @@ First public release.
 - Hosting: local only on a Mac, or self-hosted, including a reference AWS stack under `infra/ec2/`
   with Litestream backups.
 
-[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.74...HEAD
+[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.75...HEAD
+[0.3.75]: https://github.com/ticoteam/tico/compare/v0.3.74...v0.3.75
 [0.3.74]: https://github.com/ticoteam/tico/compare/v0.3.73...v0.3.74
 [0.3.73]: https://github.com/ticoteam/tico/compare/v0.3.71...v0.3.73
 [0.3.71]: https://github.com/ticoteam/tico/compare/v0.3.70...v0.3.71
