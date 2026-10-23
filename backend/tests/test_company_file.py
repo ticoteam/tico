@@ -814,3 +814,53 @@ def test_the_chat_adds_goals_up_to_the_goal_limit_and_refuses_the_next_in_plain_
     assert not over["ok"] and over["refused"] == "The plan has the most goals it can hold (325)."
     assert C.Turn(draft, TODAY).finish()["goals"] == draft["goals"]
     assert len(C.from_yaml(C.to_yaml(draft, CREATED))["goals"]) == 325
+
+
+# ------------------------------------------------------------------ goals from POST /goals keep their layer (Dev 321 parity)
+def layered_goals():
+    """A draft with a company goal, a group goal serving it and a role goal serving that, as the page keeps them."""
+    draft = started()
+    owner = D.owner(draft)["id"] if D.owner(draft) else "you"
+    aim = {"measure": "things", "unit": "things", "direction": "up", "target": 4, "baseline": None, "deadline": "2027-01-15"}
+    dept = "marketing"
+    draft["goals"] = [
+        {"id": "goal-1", "title": "Sign 4 customers", "owner": owner, "level": "company", "parent": None, **aim},
+        {"id": "goal-2", "title": "Publish 2 guides", "owner": owner, "level": "group", "parent": "goal-1", "dept": dept, **aim},
+        {"id": "goal-3", "title": "Hand in work early", "owner": owner, "level": "role", "parent": "goal-2", "dept": dept, **aim}]
+    return draft
+
+
+def layers(draft):
+    return [(g["id"], g.get("level"), g.get("parent"), g.get("dept")) for g in draft["goals"]]
+
+
+def test_goals_with_a_level_parent_and_dept_pass_the_check_and_keep_them():
+    draft = layered_goals()
+    assert layers(D.check(draft)) == layers(draft)
+    kept, results = run(draft, ("goal_edit", {"goal": "goal-3", "title": "Hand in each guide early"}))
+    assert results[0]["ok"] and layers(kept) == layers(draft)
+    assert layers(kept["undo"]) == layers(draft)
+
+
+def test_a_parent_not_among_the_goals_or_itself_is_let_go_not_refused():
+    draft = layered_goals()
+    draft["goals"][1]["parent"] = "goal-999"
+    draft["goals"][2]["parent"] = "goal-3"
+    out = D.check(draft)
+    assert out["goals"][1]["parent"] is None and out["goals"][2]["parent"] is None
+    assert out["goals"][1]["level"] == "group" and out["goals"][1]["dept"] == draft["goals"][1]["dept"]
+
+
+def test_the_company_file_holds_no_level_parent_or_dept():
+    text = C.to_yaml(layered_goals(), CREATED)
+    assert "level:" not in text and "parent:" not in text
+    assert [g["title"] for g in yaml.safe_load(text)["goals"]] == ["Sign 4 customers", "Publish 2 guides", "Hand in work early"]
+
+
+@pytest.mark.parametrize("field, value", [("level", "team"), ("level", 2), ("dept", "space"), ("parent", "Not an id!"),
+                                          ("kind", "role")])
+def test_a_goal_with_a_bad_level_dept_or_parent_or_another_field_is_still_refused(field, value):
+    draft = layered_goals()
+    draft["goals"][-1][field] = value
+    with pytest.raises(D.DraftError):
+        D.check(draft)

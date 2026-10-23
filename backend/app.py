@@ -5548,7 +5548,7 @@ def create_app(settings=None):
                 validate_identity(c, request.state.identity)
                 if not c.execute("SELECT 1 FROM idempotency WHERE actor=? AND operation=? AND key=?",
                                  (request.state.identity.actor, request.url.path, key)).fetchone():
-                    idle = execution.inputs(c, request.state.identity, aid, if_idle=True)
+                    idle = execution.idle_inputs(c, request.state.identity, aid)
                     if idle is not None:
                         privacy.require_payload(c, request.state.identity, idle)
                         return idle

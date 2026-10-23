@@ -552,3 +552,26 @@ def test_a_real_request_holding_the_lock_is_named_while_held_and_after(tmp_path,
     assert any(not h.get("open") and h["route"] == "POST /api/v2/test-hold/{key}" for h in holds)   # and when it ended
     found = flight_file.summary(folder, 10**9)["long_holds"]
     assert any(h.get("open") and h["route"] == "POST /api/v2/test-hold/{key}" for h in found)
+
+
+def test_hourly_sizes_read_a_tables_rowid_span_not_every_row(tmp_path):
+    import sqlite3
+    from backend.flight import _rows
+    c = sqlite3.connect(tmp_path / "rows.sqlite")
+    c.execute("CREATE TABLE log(id INTEGER PRIMARY KEY, v TEXT)")
+    c.execute("CREATE TABLE keyed(k TEXT PRIMARY KEY, v TEXT) WITHOUT ROWID")
+    assert _rows(c, "log") == 0 and _rows(c, "keyed") == 0
+    c.executemany("INSERT INTO log(v) VALUES(?)", [("x",)] * 50)
+    c.executemany("INSERT INTO keyed VALUES(?,?)", [(str(i), "x") for i in range(7)])
+    c.execute("DELETE FROM log WHERE id<=20")              # pruned from the oldest end
+    assert _rows(c, "log") == 30 and _rows(c, "keyed") == 7
+
+    def steps():
+        seen = []
+        c.set_progress_handler(lambda: seen.append(1), 1)
+        _rows(c, "log")
+        c.set_progress_handler(None, 0)
+        return len(seen)
+    few = steps()
+    c.executemany("INSERT INTO log(v) VALUES(?)", [("x",)] * 5000)
+    assert steps() == few, "the span reads two ends of the rowid b-tree, not each row"
