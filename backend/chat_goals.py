@@ -216,7 +216,7 @@ def install(app, store, auth, mutate, send):
     def write(request: Request, cid: str, body: GoalAction):
         def work(c):
             who = request.state.identity
-            conv = auth.conversation(c, who, cid)
+            conv = auth.conversation(c, who, cid, write=True)
             bot, supported, _ = capabilities(c, auth, conv)
             if bot:
                 auth.require_write(c, who, bot)
