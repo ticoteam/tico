@@ -628,6 +628,24 @@ impl Host {
             _ => thread_id.to_string(),
         }
     }
+
+    /// Whether this host says when a thread it started is up (a `thread_confirmed` event: Claude's system init,
+    /// Gemini's init, Pi's session line, Codex's first turn/started). A new thread on one is kept only then.
+    pub fn confirms_threads(&self) -> bool {
+        matches!(self, Host::Claude(_) | Host::Codex(_) | Host::Gemini(_) | Host::Pi(_))
+    }
+
+    /// The session a thread this host started runs as, once its harness confirmed it; None before, and on a host
+    /// that does not confirm threads.
+    pub fn confirmed(&self, thread_id: &str) -> Option<String> {
+        match self {
+            Host::Claude(h) => h.confirmed(thread_id),
+            Host::Codex(h) => h.confirmed(thread_id),
+            Host::Gemini(h) => h.confirmed(thread_id),
+            Host::Pi(h) => h.confirmed(thread_id),
+            _ => None,
+        }
+    }
 }
 
 #[cfg(test)]
