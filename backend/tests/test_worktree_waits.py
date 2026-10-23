@@ -416,3 +416,8 @@ def test_served_wait_reuses_removed_link_without_old_cleanup_intent(prepared):
     row = rows(api, 'SELECT state,detail_json FROM task_links WHERE id=?', (retired,))[0]
     assert row['state'] == 'present'
     assert not any(json.loads(row['detail_json']).get(k) for k in W.REMOVAL)
+    # A PR opened for the new allocation can still release it when that work finishes.
+    with api.app_state.store.transaction() as c:
+        pr = H.task_link(c, 'bot:cmo', tid, 'https://github.com/Acme/product/pull/8')
+        c.execute("UPDATE task_links SET state='merged',branch='tico/retired' WHERE id=?", (pr['id'],))
+    assert [(a['link_id'], a['action']) for a in beat(api)] == [(retired, 'remove')]

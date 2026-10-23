@@ -1120,6 +1120,9 @@ def test_old_merged_pr_releases_its_tree_but_keeps_a_newer_doing_allocation(prep
     newer = post(api, f'tasks/{tid}/worktrees/attach',
                  {'repo': 'Acme/product', 'path': f'tasks/{tid[:8]}/new', 'branch': 'tico/new'}, 'bot-test').json()
     assert mark_ready(api, tid, newer['link_id']).status_code == 200
+    # A missed webhook can link the historical PR after the newer allocation starts.
+    with api.app_state.store.transaction() as c:
+        c.execute('UPDATE task_links SET created=?,pr_merged_at=? WHERE id=?', (H.now(), old, pr['id']))
     body = {**HEARTBEAT, 'worktrees': [
         {'link_id': tree['link_id'], 'state': 'present', 'checkout_state': 'ready',
          'branch': tree['branch'], 'last_commit': 'a' * 40} for tree in (original, newer)]}

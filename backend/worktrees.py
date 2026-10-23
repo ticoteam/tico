@@ -287,7 +287,7 @@ def allocation_has_pr(row, detail, prs):
     Legacy links use creation; missing PR branch/repo metadata keeps its established compatibility behavior.
     """
     since = detail.get('allocation_started') or row['created']
-    return any(pr['created'] >= since
+    return any(pr['created'] >= since and (not pr['pr_merged_at'] or pr['pr_merged_at'] >= since)
                and (not pr['repo'] or not row['repo'] or pr['repo'].casefold() == row['repo'].casefold())
                and (not pr['branch'] or not row['branch'] or pr['branch'] == row['branch']) for pr in prs)
 
@@ -301,7 +301,7 @@ def holdings(c, owner):
                      "AND coalesce(json_extract(l.detail_json,'$.owner'),t.owner)=? ORDER BY l.created", (owner,)).fetchall()
     out = []
     for row in rows:
-        prs = c.execute("SELECT url,state,review_state,checks,mergeable,created,repo,branch FROM task_links WHERE task_id=? AND kind='pr'",
+        prs = c.execute("SELECT url,state,review_state,checks,mergeable,created,pr_merged_at,repo,branch FROM task_links WHERE task_id=? AND kind='pr'",
                         (row['task_id'],)).fetchall()
         states = [p['state'] for p in prs]
         detail = json.loads(row['detail_json'] or '{}')
@@ -478,7 +478,7 @@ def heartbeat(c, who, reports, capable, default_org=""):
     for row in rows.values():
         detail = json.loads(row['detail_json'] or '{}')
         stored = dict(detail)
-        pr_links = c.execute("SELECT state,created,repo,branch FROM task_links WHERE task_id=? AND kind='pr'",
+        pr_links = c.execute("SELECT state,created,pr_merged_at,repo,branch FROM task_links WHERE task_id=? AND kind='pr'",
                              (row['task_id'],)).fetchall()
         prs = [pr['state'] for pr in pr_links]
         finished = all(state in PR_FINISHED for state in prs)
