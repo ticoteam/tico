@@ -641,6 +641,28 @@ function recruitFor({department, briefing, share}) {
     }), ['Register Add Start', 'Set Sign other:With']);
     assert.match(await page.evaluate(() => onbCommands({...ONB, providers: {default: {runtime: 'codex'}}})[1][1]), /profile login default codex/);
     assert.match(await page.evaluate(() => onbCommands({...ONB, kind: 'linux', providers: {default: {runtime: 'claude'}}})[1][1]), /docker exec -it -u bot tico-runner-tico-[a-z0-9]+ claude auth login/);
+    // Sign-ins follow the company's choice, not an unrelated saved default model.
+    const signIns = await page.evaluate(() => {
+      const providers = [{id: 'anthropic', runtime: 'claude', label: 'Claude'},
+        {id: 'openai', runtime: 'codex', label: 'ChatGPT'}, {id: 'google', runtime: 'gemini', label: 'Google'},
+        {id: 'openrouter', runtime: 'pi', label: 'OpenRouter'}, {id: 'tico', runtime: 'pi', gateway: true}];
+      return ['mac', 'linux'].flatMap(kind => ['subscriptions-gateway', 'subscriptions', 'gateway', 'own-keys'].map(preset => {
+        const state = {...ONB, kind, providers: {preset, providers, enabled: ['anthropic', 'google', 'openrouter', 'tico'], default: {runtime: 'codex'}}};
+        return {kind, preset, commands: onbCommands(state).map(row => row[1]).join('\n')};
+      }));
+    });
+    for (const {kind, preset, commands} of signIns) {
+      if (preset.startsWith('subscriptions')) {
+        assert.match(commands, kind === 'mac' ? /profile login default claude/ : /claude auth login/);
+        assert.match(commands, kind === 'mac' ? /profile login default codex/ : /codex login/);
+        assert.doesNotMatch(commands, /gemini/);
+      } else if (preset === 'gateway') {
+        assert.doesNotMatch(commands, /profile login|codex login|claude auth login|gemini/);
+      } else {
+        assert.match(commands, kind === 'mac' ? /profile login default claude/ : /claude auth login/);
+        assert.doesNotMatch(commands, /codex login|profile login default codex|profile login default pi/);
+      }
+    }
     assert.match(await page.locator('#onb-step').textContent(), /scripts\/tico -e <slug> install bot/);
     await page.locator('#onb-enroll').click();
     await page.waitForFunction(() => !/<setup-file>/.test(document.querySelector('#onb-step').textContent));
@@ -755,6 +777,16 @@ function recruitFor({department, briefing, share}) {
     assert.equal(await bigTitle(page), true);
     await shot(page, 'desktop-5d-review');
     if (shots) { await page.setViewportSize({width: 390, height: 844}); await shot(page, 'phone-5d-review'); await page.setViewportSize({width: 1100, height: 800}); }
+    assert.match(await page.locator('.onb-summary').textContent(), /AI providers\s*Choose later in Settings > Computers/);
+    for (const width of [1100, 390]) {
+      await page.setViewportSize({width, height: 844});
+      const aligned = await page.locator('.onb-summary > div').evaluateAll(rows => rows.every(row => {
+        const [key, value] = row.children, k = key.getBoundingClientRect(), v = value.getBoundingClientRect();
+        return v.left > k.right && Math.abs(v.top - k.top) < 8;
+      }));
+      assert.ok(aligned, `Review values remain in the value column at ${width}px`);
+    }
+    await page.setViewportSize({width: 1100, height: 800});
     const review = await page.locator('#onb-step').textContent();
     assert.match(review, /Initech Hub/);
     assert.match(review, /Businesses/);
@@ -961,11 +993,37 @@ function recruitFor({department, briefing, share}) {
     const seven = await context.newPage();
     seven.on('pageerror', e => errors.push(e.message));
     await seven.setViewportSize({width: 390, height: 844});
-    await seven.route('**/v2/providers', r => r.fulfill({json: {configured: false, enabled: [], providers: []}}));
+    await seven.route('**/v2/providers', r => r.fulfill({json: {configured: false, preset: 'subscriptions-gateway',
+      enabled: ['anthropic', 'openai'], default: {runtime: 'codex'}, providers: [
+        {id: 'anthropic', label: 'Anthropic', runtime: 'claude'}, {id: 'openai', label: 'OpenAI', runtime: 'codex'},
+        {id: 'openrouter', label: 'OpenRouter', runtime: 'pi'}]}}));
     await seven.goto('https://tico-ui.test/#/welcome');
     await seven.locator('#onb-step').waitFor();
     assert.equal(await seven.locator('.onb-progress li').count(), 7);
     assert.equal(await oneLine(seven), true);
+    const details = seven.locator('[data-provider-details]');
+    assert.equal(await details.isVisible(), false);
+    assert.equal(await seven.locator('[data-provider]:visible, [data-provider-model]:visible, .prov-routed:visible').count(), 0);
+    const recommended = seven.locator('.prov-preset').first();
+    const firstScreen = await recommended.boundingBox();
+    assert.ok(firstScreen.y + firstScreen.height < 844, 'Recommended fits on the first screen');
+    assert.ok(await seven.locator('.prov-preset').evaluateAll(rows => rows.every(row => {
+      const radio = row.querySelector('input').getBoundingClientRect();
+      const title = row.querySelector('strong').getClientRects()[0];
+      return radio.top < title.bottom && radio.bottom > title.top && radio.right < title.left;
+    })), 'each radio is beside the first title line');
+    assert.ok(await seven.locator('#onb-step').evaluate(step =>
+      ['onb-sample-box', 'onb-company-file-box'].every(id => step.compareDocumentPosition(document.getElementById(id)) & Node.DOCUMENT_POSITION_FOLLOWING)));
+    await seven.locator('[data-provider-preset][value=own-keys]').check();
+    assert.equal(await details.isVisible(), true);
+    assert.equal(await seven.locator('[data-provider]:visible').count(), 3);
+    assert.equal(await seven.locator('[data-provider-model]').isVisible(), true);
+    assert.equal(await seven.locator('.prov-routed').isVisible(), true);
+    for (const preset of ['subscriptions', 'gateway', 'subscriptions-gateway']) {
+      await seven.locator(`[data-provider-preset][value=${preset}]`).check();
+      assert.equal(await details.isVisible(), false);
+    }
+    assert.match(await seven.evaluate(() => onbSummaryHTML(ONB)), /AI providers.*Your Claude and ChatGPT subscriptions, plus Tico Gateway/s);
     await shot(seven, 'phone-0-providers');
     await seven.close();
     await phone.locator('#onb-next').click();
