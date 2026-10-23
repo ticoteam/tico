@@ -103,9 +103,9 @@ def value(conn, slug, key, at=None, *, _privacy_checked=False):
         return float(conn.execute("SELECT count(*) FROM attempts WHERE bot=? AND state='failed' "
                                   "AND coalesce(finished, created)>? AND coalesce(finished, created)<=?",
                                   (slug, since, end)).fetchone()[0])
-    # The estimate from each run's token counts (backend/usage.py), else the cost a run recorded itself.
+    # The estimate from each run's measured token counts (backend/usage.py).
     # A subscription run costs nothing extra, so only runs billed by the API count.
-    row = conn.execute("SELECT sum(coalesce(est_cost_usd, cost)), count(coalesce(est_cost_usd, cost)) FROM turns "
+    row = conn.execute("SELECT sum(est_cost_usd), count(est_cost_usd) FROM turns "
                        "WHERE bot=? AND started>? AND started<=? AND coalesce(billing, 'api') != 'subscription'",
                        (slug, since, end)).fetchone()
     return round(row[0], 4) if row and row[1] else None

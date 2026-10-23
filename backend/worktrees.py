@@ -139,12 +139,12 @@ def supported(c):
     return 'computer_id' in {r[1] for r in c.execute('PRAGMA table_info(task_links)')}
 
 
-LIMIT = 50            # live worktrees per bot; the computer's free-disk floor can stop it sooner
+LIMIT = 100           # live worktrees per bot; the computer's free-disk floor can stop it sooner
 CLEANUP_TRIES = 6     # a refused worktree cleanup is asked again after 2, 4, ... 64 minutes, then left
 PENDING_HOURS = 6     # a checkout or setup with no progress this long has failed; its owner is told and may retry
 
 
-def live_turn(c, task_id, owner):
+def live_turn(c, task_id, owner, memo=None):
     """The owner bot is in a turn on this task now: a leased or running attempt that carries the task. Only the turns
     of the bot that owns both the tree and the task count: a reviewer's or another bot's turn on the task, or a turn of
     a bot the task has since moved away from, neither holds the tree nor shields it from the setup deadline."""
@@ -153,15 +153,31 @@ def live_turn(c, task_id, owner):
     task = c.execute('SELECT owner FROM tasks WHERE id=?', (task_id,)).fetchone()
     if not task or task[0] != owner:
         return False
+    memo = {} if memo is None else memo
+    key = ("live_turn", owner)
+    if key not in memo:
+        memo[key] = _live_tasks(c, H.actor_id(owner), memo)
+    return task_id in memo[key]
+
+
+def _live_tasks(c, bot, memo):
     from .task_privacy import attempt_tasks
     try:
-        rows = c.execute("SELECT id FROM attempts WHERE bot=? AND state IN ('leased','running')",
-                         (H.actor_id(owner),)).fetchall()
+        rows = c.execute("SELECT id FROM attempts WHERE bot=? AND state IN ('leased','running')", (bot,)).fetchall()
     except sqlite3.OperationalError as exc:
         if 'no such table' not in str(exc):
-            raise                   # a real fault is not "no live turn": the tree would be released under the turn
-        return False                # a local hub has no attempts table
-    return any(task_id in attempt_tasks(c, r[0]) for r in rows)
+            raise                   # a fault must not release a checkout under its running turn
+        return frozenset()          # a local hub has no attempts table
+    return frozenset(tid for row in rows for tid in attempt_tasks(c, row[0], memo))
+
+
+def live_turn_cache(c, computer):
+    """Prepare provenance without the write lock; the caller validates data_version before using it."""
+    memo = {}
+    owners = {row['owner'] for row in inventory(c, computer) if H.is_bot(row['owner'] or '')}
+    for owner in owners:
+        memo[("live_turn", owner)] = _live_tasks(c, H.actor_id(owner), memo)
+    return memo
 
 
 def start_refusal(c, task):
@@ -227,12 +243,12 @@ def expire_pending(c, row, detail):
                 trigger='other', source=row['id'])
 
 
-def held_reason(c, row, detail):
+def held_reason(c, row, detail, memo=None):
     """Why a tree whose pull requests are finished is not released yet, or '': its bot is in a turn on the task (a
     fix-forward or review fix starting), or its pushed branch has moved past the head of the last finished pull
     request on it (fix-forward commits after a merge). Both clear on their own: the turn ends, or a new pull request
     carries the commits and finishes."""
-    if live_turn(c, row['task_id'], row.get('owner')):
+    if live_turn(c, row['task_id'], row.get('owner'), memo):
         return 'held: live turn'
     last = c.execute("SELECT number,detail_json,coalesce(pr_merged_at,updated) AS finished FROM task_links WHERE task_id=? AND kind='pr' AND lower(repo)=lower(?) "
                      f"AND branch=? AND state IN {PR_FINISHED} ORDER BY coalesce(pr_merged_at,updated,created) DESC LIMIT 1",
@@ -324,7 +340,7 @@ def preparable(c, row, detail):
             and bool(waits.preparing(c, row['id'])))
 
 
-def heartbeat(c, who, reports, capable, default_org=""):
+def heartbeat(c, who, reports, capable, default_org="", live_tasks=None):
     if not supported(c):
         return []
     rows = {r['id']: r for r in inventory(c, who.runner_id)}
@@ -459,6 +475,9 @@ def heartbeat(c, who, reports, capable, default_org=""):
         c.execute("UPDATE task_links SET state='unknown' WHERE kind='worktree' AND computer_id=? AND state<>'removed'", (who.runner_id,))
         return []
     actions = []
+    # This pass changes checkout records, not the tasks carried by active attempts. Share provenance only
+    # inside this transaction: fifty finished trees must not walk the same hundred runs fifty times.
+    live_tasks = {} if live_tasks is None else live_tasks
     for row in rows.values():
         detail = json.loads(row['detail_json'] or '{}')
         stored = dict(detail)
@@ -476,7 +495,7 @@ def heartbeat(c, who, reports, capable, default_org=""):
         # Its own branch's commits with no pull request linked are nobody's yet: the tree stays and says why.
         unlinked = released and any(m['link_id'] == row['id'] for m in H.unlinked_pushes(c, row['task_id']))
         held = (f"held: commits on {row['branch']} with no pull request linked" if unlinked
-                else held_reason(c, row, detail) if released else '')
+                else held_reason(c, row, detail, live_tasks) if released else '')
         if row['state'] == 'pending' and (released or closed) and waits.preparing(c, row['id']):
             held = held or 'held: reserved for a waiting turn'
         if held:
@@ -495,7 +514,7 @@ def heartbeat(c, who, reports, capable, default_org=""):
         if (row['state'] == 'pending' and not closed and not released and not detail.get('pending_expired')
                 and detail.get('checkout_state') != 'setup_failed'
                 and H.shift(row['updated'] or row['created'], hours=PENDING_HOURS) < H.now()
-                and not live_turn(c, row['task_id'], row['owner'])):
+                and not live_turn(c, row['task_id'], row['owner'], live_tasks)):
             expire_pending(c, row, detail)
         if released and not detail.get('release_requested'):
             detail['release_requested'] = True

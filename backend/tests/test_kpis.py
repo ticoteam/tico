@@ -5,7 +5,7 @@ the old KPI rows and the automatic bot KPIs."""
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
-from backend import ceo_bot, hubdb, kpis as K
+from backend import botkpis, ceo_bot, hubdb, kpis as K
 from backend.store import H
 from backend.tests.test_api import api, assign, claim, get, headers, post, ready, runner  # noqa: F401
 
@@ -23,6 +23,18 @@ def reading(value, days_ago, quality="measured"):
 
 ACTIVATION = {"name": "Activation", "unit": "%", "direction": "up", "cadence": "weekly"}
 CLIMB = {"kind": "improve", "baseline": 40.0, "baseline_at": stamp(60), "target": 70.0, "deadline": "2026-11-28"}
+
+
+def test_automatic_cost_uses_measured_api_cost_and_ignores_retired_cost(api):
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO turns(id, bot, started, cost, billing) VALUES('legacy', 'ops', ?, 900, 'api')",
+                  (stamp(1),))
+        assert botkpis.value(c, "ops", "cost_7d", NOW) is None
+        c.executemany("INSERT INTO turns(id, bot, started, est_cost_usd, cost, billing) VALUES(?, 'ops', ?, ?, ?, ?)", [
+            ("measured", stamp(1), 2.5, 1000, "api"), ("subscription", stamp(1), 5, 500, "subscription")])
+        assert botkpis.value(c, "ops", "cost_7d", NOW) == 2.5
+        c.execute("UPDATE turns SET est_cost_usd=0 WHERE billing='api' AND est_cost_usd IS NOT NULL")
+        assert botkpis.value(c, "ops", "cost_7d", NOW) == 0
 
 
 def colour(link, value, days_ago=0, kpi=ACTIVATION, **more):

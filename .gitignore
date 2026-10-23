@@ -24,3 +24,4 @@ evals/replay/cases/*
 /ci-results/
 /durations.json
 /previous-timings/
+tools/release-command/target/
