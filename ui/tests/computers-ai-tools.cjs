@@ -10,6 +10,11 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
+// Read shipped capabilities so the browser flow cannot drift from its manifest.
+const manifestCaps = JSON.parse(require('node:child_process').execFileSync('python3', ['-c',
+  'import json; from clients.harness_manifests import load; print(json.dumps({k: v["capabilities"] for k, v in load().items()}))'],
+  {cwd: require('node:path').resolve(__dirname, '../..'), encoding: 'utf8'}));
+
 (async () => {
   const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
   try {
@@ -79,8 +84,8 @@ const {unrouted} = require('./support/routes.cjs');
         {id: 'claude', runtime: 'claude', name: 'Claude Code', capabilities: {account: 'status-json', weekly_usage: 'turns', browser_sign_in: true}},
         {id: 'codex', runtime: 'codex', name: 'Codex', capabilities: {account: 'app-server', weekly_usage: 'refresh', browser_sign_in: true}},
         // terminal_login as the server sends it: the executable and its arguments (clients/harness_manifests.py).
-        {id: 'grok', runtime: 'grok', name: 'Grok Build', capabilities: {account: '', weekly_usage: 'manual', terminal_login: 'grok login'}},
-        {id: 'cursor', runtime: 'cursor', name: 'Cursor Agent', capabilities: {account: '', weekly_usage: '', terminal_login: 'cursor-agent login', api_keys: 'computer'}},
+        {id: 'grok', runtime: 'grok', name: 'Grok Build', capabilities: manifestCaps.grok},
+        {id: 'cursor', runtime: 'cursor', name: 'Cursor Agent', capabilities: manifestCaps.cursor},
         {id: 'musecode', runtime: 'musecode', name: 'Muse Code', capabilities: {account: '', weekly_usage: ''}}]});
       if (p === '/api/v2/subscriptions') return json({profiles_by_computer: [], assignments: []});
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
@@ -131,15 +136,14 @@ const {unrouted} = require('./support/routes.cjs');
     assert.equal(await codex.locator('meter').evaluateAll(m => m.map(x => x.value)).then(v => v.join()), '30');
     assert.match(await dialog.locator('[data-connection="own:musecode"]').innerText(), /Login expired or rejected[\s\S]*The provider refused the login/);
     assert.equal(await dialog.locator('[data-detail-section=connections] > :last-child [data-add-connection=box]').isEnabled(), true, 'Add connection at the end');
-    // Installed tools no bot uses, signed in only from a terminal: their command is in the Add connection pop-up, with no
-    // chip and no line.
+    // Both tools can sign in the computer's one login from Add connection.
     const add = page.locator('dialog.computer-add-dialog[open]');
-    for (const [tool, command] of [['grok', 'grok login'], ['cursor', 'cursor-agent login']]) {
+    for (const tool of ['grok', 'cursor']) {
       await dialog.locator('[data-add-connection=box]').click();
       await add.locator(`[data-add-tool=${tool}]`).click();
-      const line = add.locator(`[data-add-terminal=${tool}]`);
-      assert.deepEqual([await line.locator('code').textContent(), await line.locator('[data-machine-copy-login]').getAttribute('data-machine-copy-login')], [command, command]);
-      assert.equal(await add.locator('[data-add-own]').isDisabled(), true);
+      assert.equal(await add.locator(`[data-add-terminal=${tool}]`).count(), 0);
+      assert.equal(await add.locator('[data-add-own]').isEnabled(), true);
+      assert.equal(await add.locator('input[name=profile]').count(), 0);
       await add.locator('[data-add-close]').first().click();
       await add.waitFor({state: 'detached'});
     }
