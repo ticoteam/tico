@@ -319,6 +319,9 @@ def test_started_blocked_and_done_notices_use_fixed_templates_and_wake_nobody(ap
     url = 'https://github.com/acme/app/pull/7'
     with api.app.state.store.transaction() as c:
         H.task_link(c, 'human:ana', ticket['id'], url, mover=True)
+        c.execute("UPDATE task_links SET detail_json=json_set(detail_json,'$.head_sha',?) WHERE task_id=? AND kind='pr'",
+                  ('a' * 40, ticket['id']))
+        c.execute("UPDATE tasks SET note=? WHERE id=?", ('Tests: head ' + 'a' * 40 + ': 9 passed, 0 failed', ticket['id']))
         number, other_number = (H.task(c, t['id'])['number'] for t in (ticket, other))
     assert number is not None
     name = f'#{number} Build exports'

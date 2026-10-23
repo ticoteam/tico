@@ -3340,6 +3340,11 @@ def _set_task_tags(conn, actor, task_id, labels, note="", approval_id=None, appr
         event(conn, actor, "tag.detach", ident, {"task_id": task_id})
     if old != keys:
         _task_event(conn, task_id, actor, "labels", _dump(old), _dump(keys), note)
+        if actor != KEEPER and ("qa" in old) != ("qa" in keys):
+            from .repositories import metadata, save_metadata
+            saved = metadata(conn, "qa-default:" + task_id)
+            if saved:
+                save_metadata(conn, "qa-default:" + task_id, {**saved, "author": "qa" in keys})
 
 
 def type_manager(conn, row):
@@ -3641,6 +3646,10 @@ def task_link(conn, actor, task_id, url, title=None, kind=None, mover=None, wake
     if kind == "pr" and match:
         conn.execute("UPDATE task_links SET repo=?,number=?,updated=? WHERE id=?",
                      (match.group(1) + "/" + match.group(2), int(match.group(3)), now(), link["id"]))
+        from .review_gate import engineering
+        if engineering(conn, row):
+            conn.execute("UPDATE task_links SET detail_json=? WHERE id=?",
+                         (json.dumps({"qa_default_pending": True}), link["id"]))
         link = _one(conn, "SELECT * FROM task_links WHERE id=?", (link["id"],))
     _task_event(conn, task_id, actor, "link", None, url, title)
     conn.execute("UPDATE tasks SET updated=? WHERE id=?", (now(), task_id))
@@ -4549,7 +4558,8 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
                 allow_planned=False, conversation_id=None, lane=None, labels=None, top=False, lint=True,
                 goal_id=None, next_run=False, type=None, step=None, number=None, mover=None, private=None,
                 requester_actor=None, own_room=True, visibility=None, public_title=None, public_summary=None,
-                wake_refs=None, trigger="status_or_relation", trigger_source=None):
+                wake_refs=None, trigger="status_or_relation", trigger_source=None, review_prs=None,
+                change_paths=None, qa=None, qa_not_checkable_live=False):
     """Rule 5. Anyone may open a task for any active owner; a human owner's General task is
     linted (rule 7).
 
@@ -4577,6 +4587,9 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
     from . import ceo_bot
     ceo_bot.check_cap(conn, actor, target)          # at most 5 a day in one person's Needs you (backend/ceo_bot.py)
     parent = _task_parent(conn, actor, None, parent_id) if parent_id else None
+    from . import review_gate
+    if parent and review_gate.REVIEW.match(str(title).strip()):
+        review_gate.check(conn, actor, parent, review_prs, require_pr=True)
     # Whoever files a subtask asked for it: it shows them as asking and their notices reach them.
     requester = actor
     if private is False and (not is_human(actor) or VIA.get()):
@@ -4607,7 +4620,10 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
     if next_run and not is_bot(target):
         refuse(conn, actor, "next-run", "only a bot has a next run; file an ordinary task for a person")
     lane = _lane_for(conn, lane, target, actor)
-    general = _task_state(conn, actor, {}, type=type, step=step)[0] == GENERAL_TYPE
+    creation_type = _task_state(conn, actor, {}, type=type, step=step)[0]
+    general = creation_type == GENERAL_TYPE
+    from .review_gate import engineering
+    dev_ticket = engineering(conn, {"type_id": creation_type})
     # Rule 7 shapes an ask to a person (a verb, the ask first). A task on a custom type is a
     # ticket on that type's board, written the way the board writes them, not an ask.
     if not title:
@@ -4623,6 +4639,13 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
         refuse(conn, actor, "lint", "; ".join(plain), severity)
     plain = warnings + plain
     labels = _labels(labels)
+    if qa is False:
+        labels = [key for key in labels if key != "qa"]
+    author_qa = qa if qa is not None else True if "qa" in labels else None
+    from . import qa_defaults
+    qa_rule = qa_defaults.classify(change_paths, qa=author_qa, not_checkable_live=qa_not_checkable_live)
+    if dev_ticket and qa_rule["qa"] and "qa" not in labels:
+        labels.append("qa")
     if labels and is_bot(actor) and not mover:
         _create_labels(conn, actor, labels)     # people, movers and the keeper as before
     dup = _one(conn, "SELECT id FROM tasks WHERE requester=? AND owner=? AND title=? "
@@ -4673,6 +4696,10 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
         _task_event(conn, row["id"], actor, "parent_id", None, parent["id"], "")
         _task_event(conn, parent["id"], actor, "subtask", None, row["id"], "")
     _set_task_tags(conn, actor, row["id"], labels)
+    if dev_ticket:
+        qa_defaults.create(conn, row["id"], change_paths, qa, qa_not_checkable_live, explicit_qa=author_qa is True)
+        if qa_rule["note"]:
+            conn.execute("UPDATE tasks SET note=? WHERE id=?", (qa_rule["note"], row["id"]))
     if dedicated:
         conn.execute("UPDATE conversations SET task_id=? WHERE id=?", (row["id"], conv["id"]))
     if number is not None:
@@ -4776,7 +4803,7 @@ def _retitle(conn, actor, row, title, owner, type_id):
 def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=None, body=None,
                 lane=None, labels=None, rank=None, mover=None, goal_id=None, quiet=False, type=None, step=None,
                 step_rank=None, number=None, title=None, private=None, waiting_on=None, roles=None, visibility=None, public_title=None,
-                public_summary=None, approval_id=None, size=None, clear_size=False):
+                public_summary=None, approval_id=None, size=None, clear_size=False, review_prs=None):
     """Rule 5. The owner may set doing|waiting|review|done|declined and a note; it may not close.
 
     `lane` and `labels` are a mover's to change (`mover` says whether this actor is one; the
@@ -4832,6 +4859,10 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
             missing = unlinked_pushes(conn, task_id)
             if missing:
                 refuse(conn, actor, "worktree_pr", "This task " + _unlinked_text(missing))
+        target_step = _one(conn, "SELECT name FROM task_steps WHERE id=?", (step_id,))
+        if target_step and target_step["name"] in ("Review 1", "Review 2") and step_id != row.get("step_id"):
+            from . import review_gate
+            review_gate.check(conn, actor, {**row, "type_id": type_id}, review_prs, note=note)
         # A move between steps with the same status changes only the pipeline label.
         if step is not None and effective == row["status"]:
             status = None
