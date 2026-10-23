@@ -3,6 +3,10 @@
 let TASK_TYPES = [];
 let TASK_TYPES_LOADING = null;
 const PIPELINE_STATUSES = ['open', 'doing', 'waiting', 'review', 'ready', 'done', 'closed', 'declined'];
+// A step's status is one of these: waiting is a tag on a task in its step, and declining goes to the closed step.
+const STEP_STATUSES = ['open', 'doing', 'review', 'ready', 'done', 'closed'];
+// The board shows a type's working steps; its done and closed tasks are under Done and Closed.
+const BOARD_HIDDEN = new Set(['done', 'closed', 'declined']);
 const pipelineTypeId = task => task.type_id || task.type?.id || 'general';
 const pipelineType = task => TASK_TYPES.find(type => type.id === pipelineTypeId(task));
 // A steps-only type's tasks change status only by a step move: no Done, Close or Reopen of their own.
@@ -63,7 +67,6 @@ function taskPipelineSelect(state, id) {
   tasksSelectionClear(state);
   taskPipelineRemember(state); tasksRemember(state);
   tasksFiltersChanged(state); tasksPeekSync(state);
-  if (state.view === 'board' && !state.doneLoaded && !state.doneLoading) void tasksLoadDone(state, true);
 }
 function taskPipelineMenu(state, anchor) {
   const dev = taskPipelineDevType();
@@ -84,10 +87,11 @@ function taskPipelineMenu(state, anchor) {
 function taskPipelineBoard(items, state) {
   const type = pipelineSelectedType(state);
   if (!type) return null;
-  const columns = type.steps.map(step => ({id: step.id, name: step.name,
+  const shown = type.steps.filter(step => !BOARD_HIDDEN.has(step.status));
+  const columns = shown.map(step => ({id: step.id, name: step.name,
     items: items.filter(item => item.task.step_id === step.id)}));
-  const unmapped = items.filter(item => !type.steps.some(step => step.id === item.task.step_id));
-  for (const status of PIPELINE_STATUSES) {
+  const unmapped = items.filter(item => !shown.some(step => step.id === item.task.step_id));
+  for (const status of PIPELINE_STATUSES.filter(status => !BOARD_HIDDEN.has(status))) {
     const list = unmapped.filter(item => item.task.status === status);
     if (list.length) columns.push({id: 'status-' + status, name: STATUS_WORD[status] || status, items: list});
   }
@@ -98,7 +102,7 @@ function taskPipelineBoard(items, state) {
     const step = type.steps.find(step => step.id === column.id);
     column.kind = STEP_KIND[step?.status || column.id.replace(/^status-/, '')] || '';
   }
-  return boardColumnsHTML(columns) + (state.doneNext != null ? '<button class="ghost tl-more" type="button" id="board-more">Show more</button>' : '');
+  return boardColumnsHTML(columns);
 }
 // A task's Type and Step are rows in its properties (ui/app/task-props.js).
 async function taskPipelineCreate(form, selected = '') {
@@ -187,7 +191,7 @@ function taskTypeEditor(type = null) {
     const row = document.createElement('div'); row.className = 'task-step-edit'; row.dataset.stepId = step?.id || '';
     row.innerHTML = `<input required aria-label="Step name" value="${esc(step?.name || '')}" placeholder="Step name">
       <input ${dialog.querySelector('[name=defaultVisibility]').value === 'public' ? '' : 'hidden'} aria-label="Public step name" value="${esc(step?.public_name ?? step?.name ?? '')}" placeholder="Public step">
-      <select aria-label="Step status">${PIPELINE_STATUSES.map(status => `<option value="${status}"${step?.status === status ? ' selected' : ''}>${esc(STATUS_WORD[status] || status)}</option>`).join('')}</select>
+      <select aria-label="Step status">${PIPELINE_STATUSES.filter(status => STEP_STATUSES.includes(status) || step?.status === status).map(status => `<option value="${status}"${step?.status === status ? ' selected' : ''}>${esc(STATUS_WORD[status] || status)}</option>`).join('')}</select>
       <button class="ghost" type="button" data-up aria-label="Move step up">↑</button><button class="ghost" type="button" data-down aria-label="Move step down">↓</button>
       <button class="ghost danger" type="button" data-remove aria-label="Remove step">×</button>`;
     row.querySelector('[data-up]').onclick = () => { if (row.previousElementSibling) rows.insertBefore(row, row.previousElementSibling); };
