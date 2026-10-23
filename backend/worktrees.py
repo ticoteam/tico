@@ -302,8 +302,16 @@ def allocation_has_pr(row, detail, prs):
     A revived link keeps its original creation date and branch, so its allocation needs its own timestamp.
     Legacy links use creation; missing PR branch/repo metadata keeps its established compatibility behavior.
     """
-    since = detail.get('allocation_started') or row['created']
-    return any(pr['created'] >= since and (not pr['pr_merged_at'] or pr['pr_merged_at'] >= since)
+    since = H.parse_ts(detail.get('allocation_started') or row['created'])
+    if since is None:
+        return False
+
+    def at_or_after(value):
+        # GitHub merge times can omit fractions that allocation timestamps include.
+        timestamp = H.parse_ts(value)
+        return timestamp is not None and timestamp >= since
+
+    return any(at_or_after(pr['created']) and (not pr['pr_merged_at'] or at_or_after(pr['pr_merged_at']))
                and (not pr['repo'] or not row['repo'] or pr['repo'].casefold() == row['repo'].casefold())
                and (not pr['branch'] or not row['branch'] or pr['branch'] == row['branch']) for pr in prs)
 

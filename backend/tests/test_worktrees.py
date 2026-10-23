@@ -1107,6 +1107,42 @@ def test_a_new_push_after_a_stale_push_was_cleared_resets_the_cleared_flag(prepa
     assert detail['pushed'] == 'd' * 40 and 'stale_push_cleared' not in detail
 
 
+@pytest.mark.parametrize('guard', ['merge_time', 'branch', 'repository', 'matching', 'legacy'])
+def test_finished_pr_must_match_the_working_allocation(prepared, guard):
+    api, tid, _ = prepared
+    link = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test').json()
+    assert mark_ready(api, tid, link['link_id']).status_code == 200
+    allocation = '2026-10-23T08:00:00.500000Z'
+    merged = '2026-10-23T08:00:00Z' if guard == 'merge_time' else '2026-10-23T08:00:01Z'
+    branch = 'tico/other' if guard == 'branch' else link['branch']
+    repo = 'Acme/other' if guard == 'repository' else 'acme/PRODUCT'
+    if guard == 'legacy':
+        repo = branch = None
+    with api.app_state.store.transaction() as c:
+        detail = json.loads(c.execute('SELECT detail_json FROM task_links WHERE id=?', (link['link_id'],)).fetchone()[0])
+        detail['allocation_started'] = allocation
+        detail['remote'] = {'at': H.now(), 'heads': ['a' * 40]}
+        c.execute('UPDATE task_links SET detail_json=? WHERE id=?', (json.dumps(detail), link['link_id']))
+        c.execute("UPDATE attempts SET state='done' WHERE id='a1'")
+        pr = H.task_link(c, 'bot:cmo', tid, 'https://github.com/Acme/product/pull/7')
+        # Late linking must not make a historical merge belong to the renewed allocation.
+        c.execute("UPDATE task_links SET state='merged',created=?,pr_merged_at=?,repo=?,branch=?,detail_json=? WHERE id=?",
+                  ('2026-10-23T08:00:02.000000Z', merged, repo, branch, json.dumps({'head_sha': 'a' * 40}), pr['id']))
+    body = {**HEARTBEAT, 'worktrees': [
+        {'link_id': link['link_id'], 'state': 'present', 'checkout_state': 'ready',
+         'branch': link['branch'], 'last_commit': 'a' * 40, 'ahead': 0, 'dirty_files': 0}]}
+    response = post(api, 'runners/heartbeat', body, 'runner-test')
+    assert response.status_code == 200, response.text
+    released = guard in ('matching', 'legacy')
+    assert [(a['link_id'], a['action']) for a in response.json()['worktree_actions']] == (
+        [(link['link_id'], 'remove')] if released else [])
+    with api.app_state.store.read() as c:
+        held = {w['link_id']: w for w in W.holdings(c, 'bot:cmo')}
+        assert held[link['link_id']]['clear'] == ('merged' if released else 'in_progress')
+        detail = json.loads(c.execute('SELECT detail_json FROM task_links WHERE id=?', (link['link_id'],)).fetchone()[0])
+        assert any(detail.get(k) for k in W.REMOVAL) == released
+
+
 def test_old_merged_pr_releases_its_tree_but_keeps_a_newer_doing_allocation(prepared):
     api, tid, _ = prepared
     original = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test').json()
