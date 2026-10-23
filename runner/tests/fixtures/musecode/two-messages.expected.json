@@ -1,0 +1,34 @@
+[
+ {
+  "kind": "status",
+  "state": "active"
+ },
+ {
+  "kind": "delta",
+  "text": "Still waiting: builds resume the moment ",
+  "delta_kind": "text"
+ },
+ {
+  "kind": "delta",
+  "text": "the Builder recovers.",
+  "delta_kind": "text"
+ },
+ {
+  "kind": "delta",
+  "text": "\n\nNo change in the last few minutes.",
+  "delta_kind": "text"
+ },
+ {
+  "kind": "message",
+  "text": "Still waiting: builds resume the moment the Builder recovers.\n\nNo change in the last few minutes.",
+  "final": true
+ },
+ {
+  "kind": "turn_completed",
+  "status": "completed"
+ },
+ {
+  "kind": "status",
+  "state": "idle"
+ }
+]

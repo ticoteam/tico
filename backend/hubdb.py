@@ -229,7 +229,7 @@ CREATE INDEX IF NOT EXISTS turns_bot_started ON turns(bot, started);
 from .meetings_schema import (MEETING_BRAIN_SCHEMA, MEETING_COMMENTS_SCHEMA, MEETING_ITEMS_SCHEMA,
                               MEETING_SCHEMA, RECORDING_SOURCES_SCHEMA, MEETING_REVIEW_SCHEMA,
                               LIVE_MEETINGS_SCHEMA, LIVE_MEETINGS_ROUTING_LIMITS_SCHEMA,
-                              LIVE_MEETINGS_CHAT_ROUTING_SCHEMA)
+                              LIVE_MEETINGS_CHAT_ROUTING_SCHEMA, LIVE_MEETING_ACCESS_SCHEMA)
 
 # Goals and KPIs (backend/goals.py). A task may name the goal
 # it serves; the column is optional and nothing requires it.
@@ -730,7 +730,7 @@ MIGRATIONS = [SCHEMA, MEETING_SCHEMA, MEETING_ITEMS_SCHEMA,   # index i takes us
               LIVE_MEETINGS_CHAT_ROUTING_SCHEMA, TASK_RELATIONS_SCHEMA, TRIGGERS_SCHEMA,
               TRIGGER_SIGNING_SCHEMA, CHECK_MODELS_SCHEMA, GOAL_ASKS_SCHEMA, RUN_TRIGGERS_SCHEMA,
               TASK_GUEST_SCHEMA, CEO_MERGES_SCHEMA, ONE_LOGIN_PER_COMPUTER_SCHEMA, RUN_PURPOSE_SCHEMA,
-              RUN_ROTATION_SCHEMA]
+              RUN_ROTATION_SCHEMA, LIVE_MEETING_ACCESS_SCHEMA]
 
 
 class Refused(Exception):

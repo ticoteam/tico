@@ -9,8 +9,10 @@ shapes below are part of the contract; change them only with a reviewed contract
 ## Identity and visibility
 
 - A signed-in human explicitly connects a meeting. A meeting is not team-visible before that action.
-- After connect, signed-in company humans can read the meeting's live state, transcript, chat, and
-  router trace. Only the connector can write transcript chunks, pause/resume, disconnect, end, or
+- Connect chooses `visibility`: `team` (the default) lets signed-in company humans read the meeting's
+  live state, transcript, chat, and router trace. `private` limits that to the connector, people the
+  connector adds, and attached bots; to everyone else the meeting answers 404 and is left out of the
+  list. The connector can add or remove people, or switch visibility, while the meeting is live or paused. Only the connector can write transcript chunks, pause/resume, disconnect, end, or
   finalize; another human explicitly joins before chatting or attaching a bot.
 - A joined human may attach active org-chart bots they are allowed to see and have Write access to.
   Attachment creates a meeting-scoped read grant; it does not change the bot's standing access or
@@ -39,13 +41,14 @@ fields are listed below.
 
 | Method and path | Access | Purpose |
 | --- | --- | --- |
-| `POST /api/v2/live-meetings` | Human | Explicitly connect; body `{title,client_id?,fallback_window_seconds?,threshold?,reply_cap?,cooldown_seconds?}`. `reply_cap` is 1–20 (default 3); `cooldown_seconds` is 0–3600 (default 60). Returns the meeting view described below. Fallback window is 30–45 seconds; repeating a `client_id` for that person returns the same meeting. |
-| `GET /api/v2/live-meetings` | Human | List live and paused meetings newest first; ended meetings are excluded. |
+| `POST /api/v2/live-meetings` | Human | Explicitly connect; body `{title,client_id?,fallback_window_seconds?,threshold?,reply_cap?,cooldown_seconds?,visibility?}`. `visibility` is `team` (default) or `private`. `reply_cap` is 1–20 (default 3); `cooldown_seconds` is 0–3600 (default 60). Returns the meeting view described below. Fallback window is 30–45 seconds; repeating a `client_id` for that person returns the same meeting. |
+| `GET /api/v2/live-meetings` | Human | List live and paused meetings this person can see, newest first; ended meetings are excluded. |
 | `GET /api/v2/live-meetings/bot-candidates` | Human | Return `{"bots":[{"slug":"ops","name":"Operations","description":"...","team":"..."}]}`. `team` may be null. Only active bots this human can see and contact with Write access are included; `bots` may be empty. |
 | `GET /api/v2/live-meetings/{id}` | Company human, or attached bot | Read state, transcript chunks, chat, attached bots, transcript-window traces, chat-route traces, named-bypass traces, and turn outcomes. |
 | `POST /api/v2/live-meetings/{id}/chunks` | Connector | Append `{chunks:[{seq,speaker,start_ms,end_ms,text}]}` (1–500 chunks). Seq starts at 1 and is contiguous. HTTP 200 body is exactly `{"id":"<live-id>","state":"live|paused|ended","seq":<highest-seq>,"accepted":[<seq>,...],"event_id":<meeting-event-id>}`. Identical duplicate seq is acknowledged without a new event; a different payload for an existing seq returns `409` with `error.code = "sequence_conflict"`; a gap returns `409` with `error.code = "sequence_gap"` and `error.expected_seq`. New chunks are accepted only in `live`; an already-stored identical retry may still be acknowledged while paused or ended. |
 | `POST /api/v2/live-meetings/{id}/chunks/{seq}/corrections` | Connector | Append `{revision,speaker,start_ms,end_ms,text}`. Revision 2 follows initial revision 1. HTTP 200 body is exactly `{"id":"<live-id>","seq":<seq>,"revision":<revision>,"replayed":<bool>,"event_id":<meeting-event-id>}`. Repeating the same revision and content returns `replayed:true` without a new event; changed content at an existing revision returns `409` with `error.code = "revision_conflict"`; a gap returns `409` with `error.code = "revision_gap"` and `error.expected_revision`. Corrections are accepted while live or paused. The latest revision becomes the transcript used for display and finalization; older versions remain replayable. |
-| `POST /api/v2/live-meetings/{id}/join` | Human | Join the connected meeting. Joined people can chat; all company humans can read after connect. |
+| `POST /api/v2/live-meetings/{id}/join` | Human who can see it | Join the connected meeting. Joined people can chat. |
+| `POST /api/v2/live-meetings/{id}/access` | Connector | `{visibility?,add?:[person],remove?:[person]}` with person ids or `human:` actors. Adding lets a person see and join a private meeting; removing also takes them out of the joined list. Returns the meeting view, whose `visibility` and `access:[{actor,name}]` show the result. |
 | `POST /api/v2/live-meetings/{id}/chat` | Joined human or attached bot | Append `{text,at_ms?,transcript_seq?,turn_id?}`. The response is `{"message":<saved chat object> or null,"event_id":<latest meeting-event-id>}` and includes `"outcome":"pass"` for a bot PASS. A live unnamed human message receives one multi-bot decision using the existing decisions service; a named-bot mention bypasses that decision and directly targets named attachments. Chat sent while paused is saved but not dispatched. A bot using this API must claim its turn first and name it on reply. For bot text exactly `PASS`, optionally followed by `.` or `!`, HTTP 200 is exactly `{"message":null,"event_id":<meeting-event-id>,"outcome":"pass"}`; it settles the claimed turn without chat text. Assigned bots using the normal Tico runner receive a private, meeting-scoped job; the runner lease claims the turn and its completed response settles it. A transcript reference links chat/replies to the captured words. |
 | `POST /api/v2/live-meetings/{id}/bots` | Joined human with Write access to each bot | Attach `{bots:[org_chart_slug,...]}`. Each bot receives meeting-only read/reply access. |
 | `DELETE /api/v2/live-meetings/{id}/bots/{bot}` | Joined human | Send `{}` with an `Idempotency-Key` to remove one attached bot. HTTP 200 is `{"id":"<live-id>","bot":"<slug>","removed":<bool>,"cancelled_turns":[<turn-id>,...],"event_id":<meeting-event-id>}`. Repeating the same key/body returns the saved result. Unclaimed/claimed turns are marked skipped as `bot_detached`; queued jobs are cancelled; late replies cannot post. Removal is meeting-local and idempotent when the bot is already absent. |
@@ -76,7 +79,7 @@ schemas; nullable values are present as JSON `null` where noted:
 
 | Event | Exact `data` object |
 | --- | --- |
-| `meeting.state` on connect | `{state:"live",connected_by:<actor>,visibility:"team",window_ms:<integer>,cooldown_ms:<integer>,reply_cap:<integer>}` |
+| `meeting.state` on connect | `{state:"live",connected_by:<actor>,visibility:"team"|"private",window_ms:<integer>,cooldown_ms:<integer>,reply_cap:<integer>}` |
 | `meeting.state` on control | `{state:"paused|live|ended",by:<actor>,action:"pause|disconnect|resume|end"}` |
 | `meeting.chunk` | `{seq:<integer>,speaker:<string>,start_ms:<integer>,end_ms:<integer>,text:<string>,revision:1}` |
 | `meeting.chunk_corrected` | `{seq:<integer>,revision:<integer>,speaker:<string>,start_ms:<integer>,end_ms:<integer>,text:<string>,corrected_by:<actor>}` |
