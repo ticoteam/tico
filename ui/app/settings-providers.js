@@ -39,7 +39,7 @@ function providersPresetHTML(view, dis) {
   const known = view.presets || PROVIDER_PRESETS.map(row => row.id);
   return `<div class="prov-list" role="radiogroup" aria-label="Models" data-provider-presets>${PROVIDER_PRESETS.filter(row => known.includes(row.id)).map(row =>
     `<label class="prov prov-preset"><input type="radio" name="provider-preset" data-provider-preset value="${esc(row.id)}" ${view.preset === row.id ? 'checked' : ''}${dis}>
-      <strong>${esc(row.label)}</strong>${row.recommended ? ' <span class="pill">Recommended</span>' : ''}<span class="muted">${esc(row.line)}</span></label>`).join('')}</div>`;
+      <span class="prov-preset-title"><strong>${esc(row.label)}</strong>${row.recommended ? ' <span class="pill">Recommended</span>' : ''}</span><span class="muted">${esc(row.line)}</span></label>`).join('')}</div>`;
 }
 function providersFormHTML(view, models, id, editable = true) {
   const enabled = view.enabled || [], dis = editable ? '' : ' disabled';
@@ -48,11 +48,12 @@ function providersFormHTML(view, models, id, editable = true) {
   const direct = rows.filter(row => PROVIDER_LINE[row.id]), routed = rows.filter(row => !PROVIDER_LINE[row.id]);
   return `<div id="${id}" data-providers-form>
     ${providersPresetHTML(view, dis)}
+    <div data-provider-details${id === 'onb-prov' && view.preset !== 'own-keys' ? ' hidden' : ''}>
     <div class="prov-list" role="group" aria-label="Providers">${direct.map(row =>
       `<label class="prov">${box(row)}<strong>${esc(row.label)}</strong><span class="muted">${esc(PROVIDER_LINE[row.id])}</span></label>`).join('')}
       ${routed.length ? `<div class="prov prov-routed"><span class="muted">Via OpenRouter</span>${routed.map(row =>
         `<label class="prov-chip">${box(row)}${esc(row.label)}</label>`).join('')}</div>` : ''}</div>
-    <label class="onb-field"><span class="k">Default model</span><select data-provider-model${dis}></select></label>
+    <label class="onb-field"><span class="k">Default model</span><select data-provider-model${dis}></select></label></div>
     ${id === 'set-prov' ? `<label class="prov"><input type="checkbox" data-provider-fallback ${view.auto_fallback !== false ? 'checked' : ''}${dis}>
       <strong>Fall back when a plan runs out</strong><span class="muted">A bot with no fallback of its own runs on another provider signed in on its computer</span></label>
     <label class="onb-field"><span class="k">Check model</span><input type="text" data-provider-check
@@ -77,6 +78,7 @@ function providersWire(root, view, models) {
   root.querySelectorAll('[data-provider]').forEach(input => input.onchange = () =>
     providersFillModels(root, view, models, root.querySelector('[data-provider-model]').value));
   root.querySelectorAll('[data-provider-preset]').forEach(input => input.onchange = () => {
+    if (root.id === 'onb-prov') root.querySelector('[data-provider-details]').hidden = input.value !== 'own-keys';
     const boxes = [...root.querySelectorAll('[data-provider]')];
     if (boxes.some(box => box.checked)) return;
     boxes.filter(box => (PRESET_PROVIDERS[input.value] || []).includes(box.value)).forEach(box => { box.checked = true; });

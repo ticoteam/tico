@@ -40,7 +40,7 @@
 .onb-sample p{flex:1 1 280px;margin:0;font-size:var(--t-base)}
 .onb-actions .spacer{flex:1}
 .onb-summary{margin:0 0 var(--s3)}
-.onb-summary>div{display:flex;gap:var(--s2);padding:5px 0;border-bottom:1px solid var(--line);font-size:var(--t-base);flex-wrap:wrap;overflow-wrap:anywhere}
+.onb-summary>div{display:grid;grid-template-columns:150px minmax(0,1fr);gap:var(--s2);padding:5px 0;border-bottom:1px solid var(--line);font-size:var(--t-base);overflow-wrap:anywhere}
 .onb-summary>div:last-child{border-bottom:0}
 .onb-summary .k{flex:0 0 150px;color:var(--muted);font-size:var(--t-label);text-transform:uppercase;letter-spacing:var(--track-caps);padding-top:3px;font-weight:600}
 /* The computer step: one numbered path; a command wraps inside its box with Copy in the box; the code shows large. */
@@ -90,7 +90,7 @@
 .onb-group:last-child .onb-bot:last-child{border-bottom:0}
 .onb-bot-name{flex:1;min-width:0;overflow-wrap:anywhere}
 .onb-bot-actions{display:flex;gap:var(--s2);align-items:center;flex:none}
-@media (max-width:760px){.cat-grid{grid-template-columns:minmax(0,1fr)}.onb-summary .k{flex-basis:100%}.onb{max-width:none}.onb-code-value{font-size:20px}
+@media (max-width:760px){.cat-grid{grid-template-columns:minmax(0,1fr)}.onb-summary>div{grid-template-columns:100px minmax(0,1fr)}.onb{max-width:none}.onb-code-value{font-size:20px}
   /* a phone: the dots, and the current step's name only */
   .onb-head h1{font-size:var(--t-xl)}
   .onb-progress{gap:var(--s2)}
