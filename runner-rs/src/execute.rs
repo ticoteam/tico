@@ -1058,7 +1058,13 @@ impl Runner {
                     log(&format!("Tico runner: {bot}: session cleared in Tico; starting a new {session_runtime} thread"));
                 }
             }
-            let mut previous = self.state.session(&bot, &conv, &session_runtime)?;
+            // Task-model turns on another runtime are absent from the bot runtime's older thread. A server-marked
+            // task-model fallback always starts fresh, so prompt() supplies the latest task checkpoint instead.
+            let mut previous = if key.starts_with("task:") && truthy(config.get("task_model_fallback")) {
+                None
+            } else {
+                self.state.session(&bot, &conv, &session_runtime)?
+            };
             let (limit, limit_name) = self.run_deadline(&aid, &config, vault.relay.as_ref())?;
             prepared = true;
             if busy.is_some() || held.is_some() {

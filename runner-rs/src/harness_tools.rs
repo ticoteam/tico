@@ -1696,6 +1696,29 @@ mod tests {
     }
 
     #[test]
+    fn task_models_require_their_runtime_until_cleared_even_when_switched_off() {
+        let dir = std::env::temp_dir().join(format!("tico-task-runtime-{}", uuid::Uuid::new_v4().simple()));
+        let mut h = Harnesses::new(dir.join("tools"), dir.join("harnesses.json"), built_in());
+        h.choose(json!({"grok": false}).as_object().unwrap());
+        let mut rows = vec![json!({"config": {"runtime": "claude", "fallback": {"harness": "codex", "model": "gpt-6.1-sol"},
+                                             "task_model": {"runtime": "grok", "harness": "grok", "model": "grok-4.6"}}})];
+        let runtimes = crate::relays::harness_runtimes(&rows);
+        assert_eq!(runtimes, HashSet::from(["claude".into(), "codex".into(), "grok".into()]));
+        let required: Vec<String> = runtimes.into_iter().collect();
+        assert!(h.want(&required, &Vec::<String>::new()).contains("grok"));
+        assert!(!h.turned_off("grok"));
+        h.manifests.retain(|id, _| id == "grok");
+        h.manifests.get_mut("grok").unwrap().executable = format!("tico-missing-{}", uuid::Uuid::new_v4().simple());
+        let job = h.next().unwrap();
+        assert_eq!((job.kind.as_str(), job.harness.as_str()), ("install", "grok"));
+        rows[0]["config"].as_object_mut().unwrap().remove("task_model");
+        let required: Vec<String> = crate::relays::harness_runtimes(&rows).into_iter().collect();
+        assert!(!h.want(&required, &Vec::<String>::new()).contains("grok"));
+        assert!(h.turned_off("grok"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn gateway_turns_prepare_their_harness_without_installing_other_company_providers() {
         let dir = std::env::temp_dir().join(format!("tico-harness-{}", uuid::Uuid::new_v4().simple()));
         let mut h = Harnesses::new(dir.join("tools"), dir.join("harnesses.json"), built_in());

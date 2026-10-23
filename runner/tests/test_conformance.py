@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from backend.store import encode
+from backend.store import H, encode
 from backend.tests.test_api import api, assign, get, headers, post, runner, settled  # noqa: F401
 from backend.tests.live import live  # noqa: F401
 
@@ -239,6 +239,52 @@ def bot_attempts(api, computer, bot):
         rows = c.execute("SELECT id, result_json FROM attempts WHERE runner_id=? AND bot=? ORDER BY created",
                          (computer.registration["runner_id"], bot)).fetchall()
     return [{"id": r[0], "result": json.loads(r[1] or "null")} for r in rows]
+
+
+@pytest.mark.parametrize("harness", ["claude"])
+def test_task_model_fallback_starts_from_the_checkpoint_instead_of_an_older_thread(api, computer):
+    from backend.tests.test_check_models import company
+    from backend.tests.test_task_models import set_task_model
+
+    company(api, "anthropic", "xai")
+    computer.start()
+    task = post(api, "tasks", {"owner": "ops", "title": "Follow the Acme release", "body": "Keep the release ready."})
+
+    def completed(count):
+        turns = until(lambda: (a if len(a := [t for t in computer.attempts() if t["state"] == "completed"]) >= count
+                                else None), f"task turn {count}")
+        assert all(t["result"]["outcome"] == "completed" for t in turns), turns
+        return get(api, f"tasks/{task['id']}")["runs"][0]
+
+    completed(1)
+    old = next(c for c in computer.prompts() if c["harness"] == "claude")
+    old_thread = old["argv"][old["argv"].index("--session-id") + 1]
+    set_task_model(api, {"harness": "grok", "model": "grok-4.6"})
+    post(api, f"tasks/{task['id']}/chat", {"text": "Continue on the task model."})
+    grok = completed(2)
+    assert grok["ran_on"]["task_model"]["source"] == "task"
+    assert "grok-4.6" in grok["ran_on"]["task_model"]["note"]
+    assert computer.prompts()[-1]["harness"] == "grok"
+    # Only synthetic fixture state: represent the checkpoint left by the task-model turn, then make it unavailable.
+    checkpoint = "The Grok turn verified Acme build 42; continue with its release checklist."
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET checkpoint=?,checkpoint_at=?,checkpoint_blocked=0 WHERE id=?",
+                  (checkpoint, H.now(), task["id"]))
+    company(api, "anthropic")
+    post(api, f"tasks/{task['id']}/chat", {"text": "Continue after the task model became unavailable."})
+    fallback = completed(3)
+    assert fallback["ran_on"]["task_model"]["source"] == "fallback"
+    assert fallback["ran_on"]["segments"][0]["runtime"] == "claude"
+    call = [c for c in computer.prompts() if c["harness"] == "claude"][-1]
+    assert "--resume" not in call["argv"], "fallback resumed the pre-task-model thread"
+    assert call["argv"][call["argv"].index("--session-id") + 1] != old_thread
+    assert checkpoint in call["prompt"] and "Where this task stood" in call["prompt"]
+    # The cheaper policy deliberately starts every task-model fallback fresh, including consecutive fallbacks.
+    post(api, f"tasks/{task['id']}/chat", {"text": "Continue while the task model is still unavailable."})
+    completed(4)
+    last = [c for c in computer.prompts() if c["harness"] == "claude"][-1]
+    assert "--resume" not in last["argv"] and checkpoint in last["prompt"]
+    assert last["argv"] != call["argv"]
 
 
 def test_a_chat_turn_streams_completes_and_resumes_the_bot_thread(api, computer):
