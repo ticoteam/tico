@@ -787,7 +787,7 @@ fn log_out(exe: &str, logout: &[String], env: &Env) {
 }
 
 /// Sign `runtime` out: the computer's own login is marked signed out first (so no key signs it straight back in),
-/// then the CLI's own logout runs and the sign-in is checked again. A logout that did not take leaves it as it was.
+/// then the CLI's own logout runs and the sign-in is checked again. Only a confirmed existing login clears the mark.
 fn run_sign_out(s: Arc<Session>, runner: Arc<Runner>, config: Config) {
     let default = profile_for(&config, "").map(|p| p.name).unwrap_or_default();
     let fail = |msg: &str| s.finish("failed", msg, &runner, &default);
@@ -813,16 +813,14 @@ fn run_sign_out(s: Arc<Session>, runner: Arc<Runner>, config: Config) {
     }
     log_out(&exe, &logout, &env);
     match sign_in_status(&s.runtime, &exe, &env) {
-        Some((false, _)) => {}
-        verdict => {
+        None => return fail(&format!("The logout finished but could not confirm whether {} signed out", s.runtime)),
+        Some((true, _)) => {
             if own {
                 let _ = runner.sign_in.unmark_signed_out(&s.runtime);
             }
-            return fail(&match verdict {
-                Some((true, _)) => format!("The logout finished but {} is still signed in", s.runtime),
-                _ => format!("The logout finished but {} sign-out could not be checked", s.runtime),
-            });
+            return fail(&format!("The logout finished but {} is still signed in", s.runtime));
         }
+        Some((false, _)) => {},
     }
     let account = profile.as_ref().map(|p| p.name.clone()).unwrap_or_default();
     crate::accounts::forget(&account, &s.runtime);
@@ -1252,8 +1250,10 @@ fn run_remove(s: Arc<Session>, runner: Arc<Runner>, config: Config) {
                 std::thread::sleep(Duration::from_millis(50));
             }
         }
-        if signed_in(&s.runtime, &exe, &env, false).0 {
-            return fail(&format!("The logout finished but {} is still signed in on {}", s.runtime, s.profile));
+        match sign_in_status(&s.runtime, &exe, &env) {
+            None => return fail(&format!("The logout finished but could not confirm whether {} signed out on {}", s.runtime, s.profile)),
+            Some((true, _)) => return fail(&format!("The logout finished but {} is still signed in on {}", s.runtime, s.profile)),
+            Some((false, _)) => {},
         }
     }
     crate::accounts::forget(&profile.name, &s.runtime);
@@ -2362,6 +2362,16 @@ exit 2
         assert!(!creds.exists() && !sign.key_off("claude") && !claude_side());
         assert_eq!(sign.headless_secret("claude"), Some(("ANTHROPIC_API_KEY".into(), "sk-ant-key-0123456789".into())), "the next turn's key");
         assert_eq!(read_env(&computer)["OPENAI_API_KEY"], "sk-key-0123456789");
+        // An uncertain logout keeps the explicit block on saved keys; sign-out retains a computer-owned key on disk.
+        std::fs::write(&creds, subscription).unwrap();
+        flag("break-after", true);
+        let out = Session::new(&json!({"id": "lunknown", "runtime": "claude", "kind": "sign_out"}));
+        run_sign_out(out.clone(), runner.clone(), config.clone());
+        assert_eq!(state(&out), ("failed".into(), "The logout finished but could not confirm whether claude signed out".into()));
+        assert!(sign.signed_out("claude") && sign.headless_secret("claude").is_none());
+        assert!(!creds.exists());
+        assert_eq!(read_env(&computer)["ANTHROPIC_API_KEY"], "sk-ant-key-0123456789", "sign-out blocks, but does not clear, a computer-owned key");
+        assert_eq!(read_env(&computer)["OPENAI_API_KEY"], "sk-key-0123456789");
     }
 
     #[test]
@@ -2438,6 +2448,146 @@ exit 2
         std::fs::write(&codex, "work\n").unwrap();
         assert_eq!(remove(true), ("done".into(), "Removed work".into()));
         assert!(!folder.exists() && !listed());
+    }
+
+    #[test]
+    fn muse_sign_out_and_switch_preserve_each_logins_files() {
+        const CHILD: &str = "TICO_TEST_MUSE_SWITCH";
+        let Some(root) = std::env::var_os(CHILD).map(std::path::PathBuf::from) else {
+            // A separate process keeps every home, credential and stand-in CLI isolated from the runner and other tests.
+            let root = std::env::temp_dir().join(format!("tico-muse-switch-{}", uuid::Uuid::new_v4().simple()));
+            std::fs::create_dir_all(root.join("bin")).unwrap();
+            std::fs::write(root.join("bin/muse"), r#"#!/bin/sh
+home="$XDG_CONFIG_HOME/muse"
+if [ "$TBH_CREDENTIAL_BACKEND" != file ]; then
+  # As on macOS by default: the token goes to a Keychain item outside the config folder (here one item, the worst case).
+  case "$1" in
+    login) mkdir -p "$home"; echo "$XDG_CONFIG_HOME" > "$HOME/keychain"
+      printf '%s\n' '{"schema_version":2,"providers":{"meta":{"storage":"keychain"}}}' > "$home/auth.json" ;;
+    logout) rm -f "$HOME/keychain" ;;
+  esac
+  exit 0
+fi
+case "$1" in
+  logout)
+    if [ -f "$HOME/broken" ]; then echo malformed > "$home/auth.json"
+    else printf '%s\n' '{"schema_version":1,"providers":{}}' > "$home/auth.json"; fi ;;
+  login)
+    mkdir -p "$home"; printf '%s\n' '{"schema_version":1,"providers":{"meta":{"api_key":"new"}}}' > "$home/auth.json"
+    if [ -f "$HOME/hold" ]; then
+      echo ready > "$HOME/started"
+      while [ -f "$HOME/hold" ]; do sleep 0.05; done
+    fi ;;
+  *) exit 2 ;;
+esac
+"#).unwrap();
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(root.join("bin/muse"), std::fs::Permissions::from_mode(0o755)).unwrap();
+            let out = Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "login::tests::muse_sign_out_and_switch_preserve_each_logins_files", "--nocapture"])
+                .env_clear().env(CHILD, &root).env("HOME", &root)
+                .env("PATH", format!("{}:/usr/bin:/bin", root.join("bin").display()))
+                .env("XDG_CONFIG_HOME", root.join("operator"))
+                .env("MUSE_AUTH_PATH", root.join("operator/auth.json"))
+                .output().unwrap();
+            std::fs::remove_dir_all(&root).ok();
+            let said = String::from_utf8_lossy(&out.stdout);
+            assert!(out.status.success() && said.contains("1 passed"), "{said}{}", String::from_utf8_lossy(&out.stderr));
+            return;
+        };
+        crate::hosts::musecode::set_state_dir(&root.join("host-state"));
+        std::fs::create_dir_all(root.join("operator")).unwrap();
+        let operator = root.join("operator/auth.json");
+        std::fs::write(&operator, "operator").unwrap();
+        let keychain = root.join("keychain");
+        std::fs::write(&keychain, "operator").unwrap();
+        let path = root.join("runner.json");
+        std::fs::write(&path, json!({"url": "http://127.0.0.1:9", "token": "synthetic", "runner_id": "fixture",
+            "projects_dir": root.join("projects")}).to_string()).unwrap();
+        crate::profiles::add_profile(&Config::load(&path).unwrap(), "acme").unwrap();
+        let config = Config::load(&path).unwrap();
+        let client = crate::client::Client::new(&config.url(), &config.token(), 1, 0).unwrap();
+        let runner = Arc::new(Runner::new(config.clone(), client, crate::state::State::open(&root.join("state")).unwrap()));
+        let own = crate::hosts::musecode::config_home(None).join("muse/auth.json");
+        let named = root.join("profiles/acme/musecode/muse/auth.json");
+        let old = "{\"schema_version\":1,\"providers\":{\"meta\":{\"api_key\":\"old\"}}}\n";
+        let new = "{\"schema_version\":1,\"providers\":{\"meta\":{\"api_key\":\"new\"}}}\n";
+        for auth in [&own, &named] {
+            std::fs::create_dir_all(auth.parent().unwrap()).unwrap();
+            std::fs::write(auth, old).unwrap();
+        }
+        for (profile, auth, other) in [("", &own, &named), ("acme", &named, &own)] {
+            let session = |kind: &str| Session::new(&json!({"id": format!("l{}", uuid::Uuid::new_v4().simple()),
+                "runtime": "musecode", "kind": kind, "profile": profile}));
+            let untouched = std::fs::read(other).unwrap();
+            // An unreadable verdict is not confirmation of sign-out.
+            std::fs::write(root.join("broken"), "").unwrap();
+            let broken = session("sign_out");
+            run_sign_out(broken.clone(), runner.clone(), config.clone());
+            // The credential boundary first: a logout from Tico's folder never reaches the item outside it.
+            assert_eq!(std::fs::read_to_string(&keychain).ok().as_deref(), Some("operator"), "a Tico logout reached the Keychain");
+            assert_eq!(state(&broken).0, "failed", "{:?}", state(&broken));
+            assert!(state(&broken).1.contains("could not confirm"));
+            assert_eq!(runner.sign_in.signed_out("musecode"), profile.is_empty());
+            std::fs::remove_file(root.join("broken")).unwrap();
+            std::fs::write(auth, old).unwrap();
+            let out = session("sign_out");
+            run_sign_out(out.clone(), runner.clone(), config.clone());
+            assert_eq!(state(&out).0, "signed_out", "{:?}", state(&out));
+            assert!(auth.exists(), "Muse logout keeps an empty credential store");
+            let (exe, env, _) = login_env("musecode", &config, profile).unwrap();
+            assert_eq!(sign_in_status("musecode", &exe, &env).unwrap().0, false);
+            assert_eq!(std::fs::read(other).unwrap(), untouched);
+
+            // A cancelled sign-in has already written a new file on the side; the old file must stay in use.
+            std::fs::write(auth, old).unwrap();
+            std::fs::write(root.join("hold"), "").unwrap();
+            let cancelled = session("switch");
+            let (s, r, c) = (cancelled.clone(), runner.clone(), config.clone());
+            let running = std::thread::spawn(move || run_session(s, r, c, Duration::from_secs(20)));
+            wait_for(|| root.join("started").exists());
+            assert_eq!(std::fs::read_to_string(auth).unwrap(), old);
+            cancelled.cancelled.store(true, Ordering::SeqCst);
+            running.join().unwrap();
+            assert_eq!(state(&cancelled).0, "cancelled", "{:?}", state(&cancelled));
+            assert_eq!(std::fs::read_to_string(auth).unwrap(), old);
+            std::fs::remove_file(root.join("hold")).unwrap();
+            std::fs::remove_file(root.join("started")).unwrap();
+
+            // A completed login moves into place only after the server confirms the switch.
+            let switched = session("switch");
+            answer_finishing(&switched, true);
+            run_session(switched.clone(), runner.clone(), config.clone(), Duration::from_secs(20));
+            assert_eq!(state(&switched).0, "signed_in", "{:?}", state(&switched));
+            assert_eq!(std::fs::read_to_string(auth).unwrap(), new);
+            assert_eq!(std::fs::read(other).unwrap(), untouched);
+            assert_eq!(std::fs::read_to_string(&operator).unwrap(), "operator");
+            let home = auth.parent().unwrap().parent().unwrap();
+            assert!(!std::fs::read_dir(home).unwrap().flatten().any(|e| e.file_name().to_string_lossy().starts_with(".tico-switch-")));
+        }
+        // Remove needs an explicit signed-out result before deleting a Tico-made subscription folder.
+        let folder = root.join("profiles/acme");
+        let listed = || Config::load(&path).unwrap().data["profiles"].get("acme").is_some();
+        let untouched = std::fs::read(&own).unwrap();
+        let remove = || {
+            let s = Session::new(&json!({"id": format!("l{}", uuid::Uuid::new_v4().simple()),
+                "runtime": "musecode", "kind": "remove", "profile": "acme"}));
+            answer_finishing(&s, true);
+            run_remove(s.clone(), runner.clone(), Config::load(&path).unwrap());
+            state(&s)
+        };
+        std::fs::write(root.join("broken"), "").unwrap();
+        let broken = remove();
+        assert_eq!(broken.0, "failed", "malformed logout must keep the subscription: {broken:?}");
+        assert!(listed() && folder.is_dir() && named.is_file(), "unknown sign-out deleted the subscription");
+        assert_eq!(std::fs::read_to_string(&named).unwrap(), "malformed\n");
+        std::fs::remove_file(root.join("broken")).unwrap();
+        std::fs::write(&named, old).unwrap();
+        assert_eq!(remove(), ("done".into(), "Removed acme".into()));
+        assert!(!listed() && !folder.exists(), "confirmed sign-out must remove the subscription and folder");
+        assert_eq!(std::fs::read(&own).unwrap(), untouched);
+        assert_eq!(std::fs::read_to_string(&operator).unwrap(), "operator");
+        assert_eq!(std::fs::read_to_string(&keychain).unwrap(), "operator", "a Tico login reached the shared Keychain");
     }
 
     #[test]
@@ -2555,7 +2705,7 @@ esac
             let failed = make("sign_out");
             run_sign_out(failed.clone(), runner.clone(), config.clone());
             assert_eq!(state(&failed).0, "failed");
-            assert!(!runner.sign_in.signed_out(runtime));
+            assert_eq!(runner.sign_in.signed_out(runtime), crate::harness_tools::caps(runtime, "").sign_in_status.check == "command", "an unknown verdict must keep automatic key login blocked; a confirmed existing login clears the mark");
             assert_eq!(std::fs::read_to_string(&auth).unwrap(), old);
             std::fs::remove_file(root.join("logout-error")).unwrap();
             std::fs::remove_file(root.join("status-error")).unwrap();
@@ -2564,8 +2714,8 @@ esac
                 let corrupt = make("sign_out");
                 run_sign_out(corrupt.clone(), runner.clone(), config.clone());
                 assert_eq!(state(&corrupt).0, "failed");
-                assert!(state(&corrupt).1.contains("could not be checked"));
-                assert!(!runner.sign_in.signed_out(runtime));
+                assert!(state(&corrupt).1.contains("could not confirm"));
+                assert!(runner.sign_in.signed_out(runtime));
                 assert_eq!(sign_in_status(runtime, &exe, &env), None);
                 std::fs::remove_file(root.join("logout-corrupt")).unwrap();
                 std::fs::write(&auth, r#"{"xai::api_key":{"auth_mode":"api_key","key":"stored-synthetic-key"}}"#).unwrap();
@@ -2620,7 +2770,7 @@ esac
         // `muse` has no `auth status`; the executable is never run for it.
         assert!(!signed_in("musecode", "/nonexistent/muse", &env, false).0);
         std::fs::create_dir_all(dir.join("muse")).unwrap();
-        std::fs::write(dir.join("muse").join("auth.json"), "{}").unwrap();
+        std::fs::write(dir.join("muse").join("auth.json"), r#"{"schema_version":1,"providers":{"meta":{"api_key":"fixture"}}}"#).unwrap();
         let signed = signed_in("musecode", "/nonexistent/muse", &env, false);
         std::fs::remove_dir_all(&dir).unwrap();
         assert_eq!(signed, (true, "Signed in with a Meta account".into()));
