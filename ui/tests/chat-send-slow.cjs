@@ -39,7 +39,9 @@ async function check(engine) {
       if (p === '/api/v2/conversations')
         return json({conversations: url.searchParams.get('chat_with') ? [{id: 'c1', kind: 'chat', scope: 'personal', participants: ['human:ana', 'bot:botops']}] : []});
       if (p.endsWith('/snapshot')) return json({messages: [], execution: null});
-      if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
+      // Both live streams need SSE responses; WebKit reports a JSON catch-all as a page error.
+      if (p === '/api/v2/events' || p.endsWith('/watch'))
+        return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       if (p === '/api/v2/chat/botops') {
         const text = route.request().postDataJSON().text;
         keys.push(route.request().headers()['idempotency-key']);
