@@ -78,7 +78,7 @@ def test_quick_hand_backs_wait_between_tries_and_do_not_fail_the_run(api, monkey
     machine, _, attempt = setup_attempt(api)
     for _ in range(20):                           # a minute of claims, each handed straight back
         if attempt:
-            post(api, f"attempts/{attempt['id']}/complete", {"outcome": "failed", "last_seq": 0, "text": ""},
+            post(api, f"attempts/{attempt['id']}/complete", {"outcome": "interrupted", "last_seq": 0, "text": ""},
                  machine["token"])
         ready(api, machine, ["ops"])
         attempt = claim(api, machine)
