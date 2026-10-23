@@ -23,9 +23,18 @@ def test_a_fallback_quota_failure_names_kind_fallback_and_model(api, monkeypatch
     machine = two_bots(api, monkeypatch)
     post(api, "tasks", {"owner": "ops", "title": "Work", "body": "Please do it."})
     finish(api, machine, [("diagnostic", "fake unavailable; running this turn on codex"), ("error", QUOTA)],
-           fallback="codex", usage={"segments": [{"model": "gpt-5.5"}]})
+           fallback="codex", usage={"segments": [{"model": "gpt-5.5", "runtime": "codex"}]})
     reason = failed_run(api)["failure_reason"]
     assert reason.startswith("failed: quota (Codex fallback") and "model gpt-5.5" in reason
+
+
+def test_a_fallback_failing_at_once_does_not_borrow_the_primarys_model(api, monkeypatch):
+    machine = two_bots(api, monkeypatch)
+    post(api, "tasks", {"owner": "ops", "title": "Work", "body": "Please do it."})
+    finish(api, machine, [("diagnostic", "fake unavailable; running this turn on codex"), ("error", QUOTA)],
+           fallback="codex", usage={"segments": [{"model": "fake-model", "runtime": "fake", "input_tokens": 5}]})
+    reason = failed_run(api)["failure_reason"]
+    assert reason.startswith("failed: quota (Codex fallback") and "model" not in reason
 
 
 def test_a_primary_session_limit_failure_says_usage_limit_and_primary(api, monkeypatch):
