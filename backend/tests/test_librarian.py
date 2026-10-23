@@ -188,8 +188,11 @@ def test_docs_first_visit_takes_the_sources_and_files_one_setup_task(desk):
     after = get(desk, "librarian/setup")["docs"]
     assert after["show"] is False and after["task"]["id"] == done["task_id"]
     assert post(desk, "librarian/setup/docs", {"sources": ["https://help.acme.example"]}, token="ben-test")["task_id"]
-    # Bots and a Librarian that is off are refused.
-    post(desk, "librarian/setup/docs", {"note": "x"}, token=desk.runner["token"], expected=403)
+    # Bots and a Librarian that is off are refused: the Librarian's own turn credential, not a runner's.
+    ask(desk, "Where do refunds live?")
+    bot = claim(desk, desk.runner)["token"]
+    get(desk, "librarian/setup", token=bot, expected=403)
+    post(desk, "librarian/setup/docs", {"note": "x"}, token=bot, expected=403)
     with desk.app.state.store.transaction() as c:
         c.execute("UPDATE bots SET state='paused' WHERE slug='librarian'")
     post(desk, "librarian/setup/docs", {"note": "x"}, expected=409)
@@ -220,3 +223,17 @@ def test_market_questions_are_kept_as_answered_so_the_owner_can_skip_and_resume(
         "can_answer": False, "answers": {"sell": "", "buyers": "", "competitors": "", "watch": ""}, "step": 0,
         "skipped": False, "task": None}
     post(desk, "librarian/setup/market", {"answers": answers, "action": "save"}, token="ben-test", expected=403)
+
+
+def test_a_market_setup_task_is_only_ever_the_owners_own_librarian_task(desk):
+    # The owner can write any preferences row, so a stored task id is checked: it must be the Librarian's task and
+    # the owner's own, or the setup shows no task.
+    elsewhere = post(desk, "tasks", {"owner": "ops", "title": "Not the Librarian's", "body": "x"})
+    elsewhere = elsewhere.get("task", elsewhere)
+    bens = post(desk, "librarian/setup/docs", {"note": "On the wiki"}, token="ben-test")["task_id"]
+    for forged in (elsewhere["id"], bens):
+        post(desk, "preferences/librarian.market_setup", {"value": {"task_id": forged}})
+        assert get(desk, "librarian/setup")["market"]["task"] is None
+    done = post(desk, "librarian/setup/market", {"answers": {"sell": "https://northwind.example"}, "step": 3,
+                                                 "action": "finish"})
+    assert get(desk, "librarian/setup")["market"]["task"]["id"] == done["task"]["id"]

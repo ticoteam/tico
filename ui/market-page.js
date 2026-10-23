@@ -333,9 +333,12 @@ async function mountBlank(shell) {
   if (S.me?.cloud && S.me.role === 'owner') {
     try { setup = (await get('/v2/librarian/setup')).market; } catch { setup = null; }
     if (setup) setup = {...setup, answers: {...setup.answers}};
-    // Filed from another browser and still being worked on: the notice, not the questions.
-    if (setup?.task && !['done', 'closed', 'declined'].includes(setup.task.status) && !marketResearchGet())
-      marketResearchSet({at: Date.now(), task: setup.task.id, base: null});
+    // Filed from another browser and still being worked on: the notice, not the questions. Its thirty minutes
+    // count from when the task was filed, so a reload never starts them again.
+    const filed = Date.parse(setup?.task?.created || '');
+    if (setup?.task && !['done', 'closed', 'declined'].includes(setup.task.status) && !marketResearchGet()
+        && Date.now() - filed < MARKET_RESEARCH_MAX)
+      marketResearchSet({at: filed, task: setup.task.id, base: null});
   }
   const watch = on => {
     if (!on) { clearInterval(poll); poll = 0; } else if (!poll) poll = setInterval(() => void tick(), MARKET_RESEARCH_POLL);
@@ -364,7 +367,14 @@ async function mountBlank(shell) {
     const field = shell.querySelector('#market-answer');
     if (field) setup.answers[MARKET_QUESTIONS[setup.step][0]] = field.value.trim();
   };
-  const send = (step, action) => post('/v2/librarian/setup/market', {answers: setup.answers, step, action});
+  // One write at a time, in the order they were made: a slow Back save never lands after the Next that followed it.
+  let saving = Promise.resolve();
+  const send = (step, action) => {
+    const body = {answers: {...setup.answers}, step, action};
+    const sent = saving.catch(() => {}).then(() => post('/v2/librarian/setup/market', body));
+    saving = sent;
+    return sent;
+  };
   const fail = (form, error) => {
     const line = form.querySelector('[data-market-error]');
     line.textContent = error.message || 'That did not go through.'; line.hidden = false;

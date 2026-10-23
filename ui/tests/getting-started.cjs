@@ -56,7 +56,7 @@ const bots = [['coo', 'Ace'], ['botops', 'BotOps']].map(([name, display_name]) =
     const calls = [];
     let items = checklist(), role = 'owner', canBuild = true;
     let dismissed = {tour: true, checklist: false, skipped: []};
-    let librarianOff = false, polls = [];
+    let librarianOff = false, polls = [], held = null;
     let setup = {can_answer: true, answers: {sell: '', buyers: '', competitors: '', watch: ''}, step: 0, skipped: false, task: null};
     let market = {entities: [], docs: [{id: 'market/overview', title: 'Overview', seeded: true, fetched: '2026-01-01T00:00:00Z'}]};
     const view = () => {
@@ -95,6 +95,7 @@ const bots = [['coo', 'Ace'], ['botops', 'BotOps']].map(([name, display_name]) =
       if (p === '/api/v2/librarian/setup') return json({available: true, docs: {show: false, empty: true, skipped: false, task: null}, market: setup});
       if (p === '/api/v2/librarian/setup/market') {
         const body = req.postDataJSON(); calls.push({p, body});
+        if (held && !held.body) { held.body = body; await held.gate; }   // this write is slow to arrive
         if (body.action === 'finish' && librarianOff) return json({error: {code: 'librarian', detail: 'The Librarian is not running yet.'}}, 409);
         setup = {...setup, answers: {...setup.answers, ...body.answers}, step: body.step, skipped: body.action === 'skip',
                  task: body.action === 'finish' ? {id: 't-market', status: 'open'} : setup.task};
@@ -241,6 +242,54 @@ const bots = [['coo', 'Ace'], ['botops', 'BotOps']].map(([name, display_name]) =
       await page.evaluate(() => localStorage.removeItem('tico.market.researching'));
       await page.close();
     }
+    // An open task restores the notice in another browser, but its thirty minutes count from when the task was
+    // filed: a reload never starts them again, and the clock running out brings the questions back.
+    const filedAgo = minutes => ({id: 't-market', status: 'open', created: new Date(Date.now() - minutes * 60000).toISOString()});
+    setup = {...setup, task: filedAgo(31)};
+    page = await context.newPage();
+    page.on('pageerror', e => errors.push('market-open: ' + e.message));
+    await page.addInitScript(() => { if (!sessionStorage.getItem('seeded')) { sessionStorage.setItem('seeded', '1'); localStorage.setItem('tico.market.researching', JSON.stringify({at: Date.now() - 31 * 60000, task: 't-market', base: null})); } });
+    await page.goto('http://tico-ui.test/#/market');
+    await page.locator('#market-shell [data-market-setup]').waitFor();
+    await page.reload();
+    await page.locator('#market-shell [data-market-setup]').waitFor();
+    assert.equal(await page.evaluate(() => localStorage.getItem('tico.market.researching')), null);
+    await page.close();
+    setup = {...setup, task: filedAgo(29)};
+    page = await context.newPage();
+    page.on('pageerror', e => errors.push('market-open: ' + e.message));
+    await page.clock.install();
+    await page.goto('http://tico-ui.test/#/market');
+    await page.locator('#market-shell [data-market-researching]').waitFor();
+    await page.clock.fastForward(2 * 60000);
+    await page.locator('#market-shell [data-market-setup]').waitFor();
+    await page.clock.fastForward(31000);
+    assert.equal(await page.locator('#market-shell [data-market-researching]').count(), 0);
+    await page.close();
+
+    // Back saves without waiting, but the writes go out in order: a slow Back save never lands after the Next
+    // that followed it, so a reload resumes at the newer answer and place.
+    setup = {...setup, answers: {sell: 'https://northwind.example', buyers: '', competitors: '', watch: ''}, step: 1, skipped: false, task: null};
+    page = await open('#/market');
+    const shows = text => page.waitForFunction(text => document.querySelector('#market-shell h1')?.textContent === text, text);
+    const form = page.locator('#market-shell [data-market-setup]');
+    await shows('Who buys it?');
+    let release;
+    held = {gate: new Promise(resolve => { release = resolve; })};
+    await form.locator('[data-market-back]').click();
+    await shows('What do you sell?');
+    for (const end = Date.now() + t(5000); !held.body && Date.now() < end;) await new Promise(r => setTimeout(r, 20));
+    assert.equal(held.body.step, 0);
+    await form.locator('textarea').fill('https://northwind.example/cleaning');
+    await form.locator('[type=submit]').click();
+    await new Promise(r => setTimeout(r, 300));
+    release();
+    await shows('Who buys it?');
+    held = null;
+    assert.deepEqual({sell: setup.answers.sell, step: setup.step}, {sell: 'https://northwind.example/cleaning', step: 1});
+    await page.reload();
+    await shows('Who buys it?');
+    await page.close();
 
     // Someone who is not the owner cannot ask: the empty market just says so.
     role = 'human';

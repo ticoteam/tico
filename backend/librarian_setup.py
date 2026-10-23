@@ -77,11 +77,11 @@ def _task(c, task_id, requester=None):
     """A setup task's id and status: only ever a task to the Librarian, and the person's own when one is named."""
     if not isinstance(task_id, str) or not task_id:
         return None
-    row = c.execute("SELECT id,status,requester FROM tasks WHERE id=? AND owner=?",
+    row = c.execute("SELECT id,status,requester,created FROM tasks WHERE id=? AND owner=?",
                     (task_id, "bot:" + L.LIBRARIAN)).fetchone()
     if not row or requester and row["requester"] != requester:
         return None
-    return {"id": row["id"], "status": row["status"]}
+    return {"id": row["id"], "status": row["status"], "created": row["created"]}
 
 
 def _docs_task(c):
