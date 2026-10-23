@@ -104,6 +104,11 @@ def run(args, who=None):
         return command(client, args.worktree_sub, getattr(args, 'repo', None) or getattr(args, 'path', None), args.task)
     if args.cmd == "repo":
         from clients import hubtools
+        if args.fn == "repo review":
+            body = Path(args.body_file).read_text() if args.body_file else args.body
+            return hubtools.repo_review(client, {"repository": args.repository, "number": args.number,
+                                                 "head": args.head, "verdict": args.verdict, "body": body,
+                                                 **({"operation_id": args.operation_id} if args.operation_id else {})})
         if args.fn == "repo product-create":
             return product_repo_create(client, args.name, confirm=args.confirm)
         if args.sub == "list":

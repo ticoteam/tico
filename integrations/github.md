@@ -98,3 +98,12 @@ For a repository whose merge still needs human review, request that exact action
 
 What bots and people learn about this integration is added with `hub tool learn github "…"` and
 shown under this page; a person folds it into the page over time. The page is the rule.
+
+### Authorized reviewer identity
+
+An operator may configure a second GitHub App for selected reviewer bots, leaving the Builder on the primary
+App. Per-bot tokens retain their existing repository grants. A bot authorized to submit reviews uses
+`hub repo review OWNER/REPO NUMBER --head FULL_SHA --verdict approve|changes --body-file REVIEW.txt`.
+The server appends VERDICT and pins `commit_id`; the reviewer identity sends APPROVE/REQUEST_CHANGES, while
+shared-App mode sends COMMENT. Keep the GitHub receipt on the review task. Setup, exact main ruleset settings
+and rollback: [GitHub App](../docs/github-app.md#separate-identity-for-reviewers).

@@ -251,6 +251,11 @@ class Settings:
     # The task role a GitHub review request puts its reviewer in (backend/github.py), matched by the
     # person's `github` login on the roster. Unset: review requests change no roles.
     github_review_role: str = ""
+    # Owner-operated reviewer identity; bot runs cannot select or alter it.
+    github_reviewer_bots: tuple[str, ...] = ()
+    github_reviewer_app_id: str = ""
+    github_reviewer_installation_id: str = ""
+    github_reviewer_private_key_file: str = field(default="", repr=False)
     observability_environment: str = ""
     observability_id_secret: str = field(default="", repr=False)
     posthog_key: str = field(default="", repr=False)
@@ -500,6 +505,10 @@ class Settings:
             **_release_origin(),
             github_webhook_secret=os.environ.get("TICO_GITHUB_WEBHOOK_SECRET", "").strip(),
             github_review_role=os.environ.get("TICO_GITHUB_REVIEW_ROLE", "").strip().lower(),
+            github_reviewer_bots=tuple(b.strip() for b in os.environ.get("TICO_GITHUB_REVIEWER_BOTS", "").split(",") if b.strip()),
+            github_reviewer_app_id=os.environ.get("TICO_GITHUB_REVIEWER_APP_ID", "").strip(),
+            github_reviewer_installation_id=os.environ.get("TICO_GITHUB_REVIEWER_INSTALLATION_ID", "").strip(),
+            github_reviewer_private_key_file=os.environ.get("TICO_GITHUB_REVIEWER_PRIVATE_KEY_FILE", "").strip(),
             observability_environment=os.environ.get("TICO_OBSERVABILITY_ENVIRONMENT", ""),
             observability_id_secret=os.environ.get("TICO_OBSERVABILITY_ID_SECRET", ""),
             posthog_key=quiet(os.environ.get("TICO_POSTHOG_KEY", "")),

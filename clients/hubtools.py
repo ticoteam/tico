@@ -3382,6 +3382,20 @@ def github_create_bot_repo(api, args):
     return api.post("github/repos", body, key=_key(args))
 
 
+@tool("hub_repo_review", "Submit this bot's GitHub PR review at an explicit current head. The configured reviewer App "
+      "uses APPROVE or REQUEST_CHANGES; the shared App uses COMMENT. Requires the bot's existing repository write "
+      "grant. VERDICT is appended automatically. A moved head is refused; a lost response is never blindly resubmitted.",
+      {"repository": _s("GitHub owner/repository"), "number": {"type": "integer", "minimum": 1},
+       "head": _s("Reviewed full commit SHA", pattern="^[0-9a-f]{40}$"),
+       "verdict": _s("Review verdict", enum=["approve", "changes"]),
+       "body": _s("Review findings, excluding the automatically appended VERDICT line", maxLength=60000)},
+      required=("repository", "number", "head", "verdict", "body"), writes=True)
+def repo_review(api, args):
+    body = {key: args[key] for key in ("repository", "number", "head", "verdict", "body")}
+    key = args.get("operation_id") or "review-" + hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest()
+    return api.post("github/reviews", body, key=key)
+
+
 @tool("hub_repo_product_create", "The Owner, or a bot with Create product repositories (every bot, unless the Owner "
       "or an admin switched it off in the bot's settings under Repositories). Private only; a bot that creates one gets write to it and the Owner "
       "is told. First call with `name` and a stable `operation_id` to preview the "
@@ -3885,6 +3899,7 @@ AUDIENCE = {
     "hub_bot_update": REQUESTER, "hub_api": REQUESTER, "hub_credential_request": BOTOPS,
     "hub_credential_set": BOTOPS, "hub_message_redact": BOTOPS, "hub_support_file": BOTOPS,
     "hub_bot_repo_create": ("owner", "botops"),
+    "hub_repo_review": ("bot", "botops"),
     "hub_repo_product_create": ("owner", "bot", "botops"),   # a bot needs Create product repositories (server)
     **{name: REQUESTER for name in ("hub_credential_grant", "hub_credential_revoke", "hub_credential_import", "hub_credential_delete")},
     **{name: REQUESTER for name in ("hub_bot_create", "hub_bot_restore", "hub_agent_pair_show", "hub_agent_pair_approve", "hub_agent_pair_decline", "hub_bot_place", "hub_bot_go_live", "hub_bot_model", "hub_bot_pause",
