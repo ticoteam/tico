@@ -5,6 +5,10 @@
   "tool_events": true
  },
  {
+  "kind": "thread_confirmed",
+  "session_id": "be14c362-d687-48dc-a259-3c4639374457"
+ },
+ {
   "kind": "tool",
   "tool": "Bash",
   "status": "started",
@@ -93,6 +97,10 @@
   "text": "`note.txt` contains `alpha`. The word-count subagent is still running, so I'll report its number when it finishes.",
   "final": false,
   "item_id": "msg_011Cg5J4yRwdSk1w8zhRVSWc"
+ },
+ {
+  "kind": "thread_confirmed",
+  "session_id": "be14c362-d687-48dc-a259-3c4639374457"
  },
  {
   "kind": "message",

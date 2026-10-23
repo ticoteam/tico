@@ -104,10 +104,10 @@ with unsigned commits will be asked to sign them before it is merged.
 
 ## Releases
 
-Don't edit CHANGELOG.md in a PR. The Technical Writer writes each release's notes at the cut.
+Don't edit CHANGELOG.md in a PR. The Technical Writer writes each release's notes after it is published.
 
-A release is a version tag. Once the Technical Writer has written the version section in
-[CHANGELOG.md](CHANGELOG.md) and the release checks are green, the Release Manager pushes
-`vX.Y.Z` on `main`. The tag builds the Docker images and publishes the GitHub release, with that
-CHANGELOG section as its notes, and running installs then offer the update. Contributors do not tag.
+A release is a version tag. Once the release checks are green on the frozen commit, the Release
+Manager pushes `vX.Y.Z` on `main`. The tag builds the Docker images and publishes the GitHub release,
+and running installs then offer the update; the version's section in [CHANGELOG.md](CHANGELOG.md)
+follows. Contributors do not tag.
 The steps are in [docs/releasing.md](docs/releasing.md).

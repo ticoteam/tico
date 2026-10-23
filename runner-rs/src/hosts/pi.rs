@@ -497,6 +497,7 @@ mod tests {
         // No zero token count: a refused call did nothing, so the server may treat the turn as having done nothing.
         assert_eq!(events, vec![
             json!({"kind": "status", "state": "active"}),
+            json!({"kind": "thread_confirmed"}),
             json!({"kind": "turn_failed", "error": "Gateway cap reached: this gateway key has used its monthly spend limit (cap_reached)", "limit": true}),
             json!({"kind": "status", "state": "idle"}),
         ]);
@@ -529,6 +530,7 @@ mod tests {
         // A person reads a sentence, not the Gateway's JSON; `limit` sends the turn to the bot's fallback.
         assert_eq!(events, vec![
             json!({"kind": "status", "state": "active"}),
+            json!({"kind": "thread_confirmed"}),
             json!({"kind": "turn_failed", "error": "Tico models are paused: this company is out of credit. Your bots use their other models until credit is added (out_of_credit)", "limit": true}),
             json!({"kind": "status", "state": "idle"}),
         ]);
