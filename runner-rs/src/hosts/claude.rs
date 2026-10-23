@@ -527,6 +527,11 @@ impl ClaudeHost {
         self.inner().threads.get(thread_id).and_then(|t| t.session_id.clone()).unwrap_or_else(|| thread_id.to_string())
     }
 
+    /// The session Claude said it runs `thread_id` as (its system init), once it has.
+    pub fn confirmed(&self, thread_id: &str) -> Option<String> {
+        self.inner().threads.get(thread_id).and_then(|t| t.session_id.clone())
+    }
+
     pub fn argv(&self, thread_id: &str, t: &Thread, effort: Option<&str>) -> Vec<String> {
         let mut argv = self.0.cmd.clone();
         argv.push("-p".into());
@@ -1114,13 +1119,15 @@ impl ClaudeHost {
                 }
             }
             "system" if msg["subtype"] == "init" => {
-                let mut inner = self.inner();
-                if let Some(t) = inner.threads.get_mut(tid) {
+                let session = msg["session_id"].as_str().filter(|s| !s.is_empty()).unwrap_or(tid).to_string();
+                if let Some(t) = self.inner().threads.get_mut(tid) {
                     // Claude owns the id now: resume from here on.
                     t.started = true;
                     t.fork_from = None;
-                    t.session_id = Some(msg["session_id"].as_str().filter(|s| !s.is_empty()).unwrap_or(tid).to_string());
+                    t.session_id = Some(session.clone());
                 }
+                // The session is up: a new thread is saved, and the one it replaces let go, only now (execute.rs Fresh).
+                self.emit(event("thread_confirmed", Some(tid), Some(turn), json!({"session_id": session})));
             }
             "rate_limit_event" => {
                 let info = &msg["rate_limit_info"];

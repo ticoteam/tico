@@ -220,6 +220,11 @@ impl GeminiHost {
         thread_id.into()
     }
 
+    /// A thread this host started, once the CLI's `init` said its session is up (a resumed one counts as up).
+    pub fn confirmed(&self, thread_id: &str) -> Option<String> {
+        self.inner().threads.get(thread_id).filter(|t| t.started).map(|_| thread_id.to_string())
+    }
+
     fn argv(&self, thread_id: &str, t: &Thread) -> Vec<String> {
         let model = t.settings.model.clone().filter(|m| !m.is_empty()).unwrap_or_else(|| DEFAULT_MODEL.into());
         let mut argv = self.0.cmd.clone();
@@ -406,6 +411,8 @@ impl GeminiHost {
                 if let Some(t) = self.inner().threads.get_mut(tid) {
                     t.started = true;
                 }
+                // The session is up: a new thread is saved, and the one it replaces let go, only now (execute.rs Fresh).
+                self.emit(event("thread_confirmed", Some(tid), Some(turn), json!({})));
             }
             "message" if msg["role"] == "assistant" => {
                 let text = text_of(&msg["content"]);
@@ -574,6 +581,26 @@ mod tests {
             s.env.insert(k.into(), v);
         }
         s
+    }
+
+    #[tokio::test]
+    async fn a_new_thread_is_confirmed_only_by_the_clis_init() {
+        let dir = std::env::temp_dir().join(format!("gemini-confirm-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cmd = fake_gemini(&dir);
+        let turn = crate::hosts::fixtures::dir("gemini").join("turn.jsonl");
+        std::fs::write(dir.join("silent.jsonl"), "").unwrap();
+        for (fixture, up) in [(dir.join("silent.jsonl"), false), (turn, true)] {
+            let (tx, mut rx) = mpsc::unbounded_channel();
+            let host = GeminiHost::new("acme", &dir.join("home"), vec![cmd.clone()], tx);
+            host.start();
+            let thread = host.start_thread(&settings(&dir, &fixture));
+            host.start_turn(&thread, "hello", None).unwrap();
+            let confirmed = turn_events(&mut rx).await.iter().filter(|e| e["kind"] == "thread_confirmed").count();
+            assert_eq!((confirmed, host.confirmed(&thread).is_some()), (up as usize, up), "{}", fixture.display());
+            host.stop().await;
+        }
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]
