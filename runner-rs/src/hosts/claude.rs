@@ -369,6 +369,9 @@ struct Inner {
     goal_offsets: HashMap<String, u64>,
     /// This turn's tool calls by `tool_use` id, the bot's own and its subagents'.
     tools: HashMap<String, ToolCall>,
+    /// Called each time a turn's pipe has just been published (ordering tests).
+    #[cfg(test)]
+    pipe_opened: Option<Arc<dyn Fn(&ClaudeHost) + Send + Sync>>,
 }
 
 /// A tool call reported as started, kept until its end is reported once.
@@ -647,7 +650,9 @@ impl ClaudeHost {
         Ok(turn)
     }
 
-    fn open_pipe(&self, stdin: Option<tokio::process::ChildStdin>, stopper: super::Stopper, text: &str) {
+    /// Publishes the turn's pipe with the prompt and any carried follow-ups already queued, under one lock: a
+    /// steer is let in only once the pipe is open, so it always lands after them.
+    fn open_pipe(&self, tid: &str, stdin: Option<tokio::process::ChildStdin>, stopper: super::Stopper, pid: Option<u32>, text: &str, carried: Vec<String>) {
         let (tx, mut rx) = mpsc::unbounded_channel::<Option<String>>();
         let first = uuid::Uuid::new_v4().to_string();
         let _ = tx.send(Some(user_line(&first, text)));
@@ -666,7 +671,10 @@ impl ClaudeHost {
             }
             drop(stdin.take());
         });
-        self.inner().pipe = Some(Pipe {
+        let mut inner = self.inner();
+        let wait = inner.threads.get(tid).and_then(|t| t.settings.background_wait);
+        let reaping = inner.reaping.take();
+        let mut pipe = Pipe {
             lines: tx,
             open: true,
             first: first.clone(),
@@ -684,11 +692,15 @@ impl ClaudeHost {
             held: vec![],
             task_calls: HashMap::new(),
             idle_since: None,
-            wait: None,
-            pid: None,
+            wait,
+            pid,
             kept: None,
-            reaping: None,
-        });
+            reaping,
+        };
+        for text in carried {
+            pipe.follow_up(&text);
+        }
+        inner.pipe = Some(pipe);
     }
 
     async fn read_loop(&self, mut child: Child, mut stderr: crate::run_diagnostics::Stderr, tid: String, turn: String, text: String, effort: Option<String>) {
@@ -700,19 +712,12 @@ impl ClaudeHost {
             let stdin = child.stdin.take();
             let pid = child.id();
             let (stopper, exited) = super::own(child);
-            self.open_pipe(stdin, stopper, &text);
-            {
-                let mut inner = self.inner();
-                let wait = inner.threads.get(&tid).and_then(|t| t.settings.background_wait);
-                let reaping = inner.reaping.take();
-                if let Some(p) = inner.pipe.as_mut() {
-                    p.wait = wait;
-                    p.pid = pid;
-                    p.reaping = reaping;
-                    for text in requeued.drain(..) {
-                        p.follow_up(&text);
-                    }
-                }
+            self.open_pipe(&tid, stdin, stopper, pid, &text, std::mem::take(&mut requeued));
+            #[cfg(test)]
+            let opened = self.inner().pipe_opened.clone();
+            #[cfg(test)]
+            if let Some(opened) = opened {
+                opened(self);
             }
             let mut result: Option<Value> = None;
             let mut saw_event = false;
@@ -1933,33 +1938,38 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_missing_session_restores_with_the_follow_up_that_went_in() {
+    async fn a_missing_session_restores_with_its_follow_ups_in_order() {
         // Oct 23: a follow-up went in before Claude answered "No conversation found"; the turn failed outright.
         let missing = r#"{"type": "result", "subtype": "error_during_execution", "is_error": true, "num_turns": 0, "errors": ["No conversation found with session ID: 5b1"], "usage": {"input_tokens": 0, "output_tokens": 0}}"#;
         let replay = |text: &str| format!(r#"{{"type": "user", "isReplay": true, "message": {{"role": "user", "content": "{text}"}}}}"#);
-        let then = format!("{}\n{}\n{}\n{}\n", replay("hello"), replay("Also the QA result."), assistant_line("m1", "Both read."), result_line("Both read."));
+        let then = format!("{}\n{}\n{}\n{}\n{}\n", replay("hello"), replay("Also the QA result."), replay("Then this."), assistant_line("m1", "All read."), result_line("All read."));
         let dir = std::env::temp_dir().join(format!("claude-missing-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("first.jsonl"), format!("{missing}\n")).unwrap();
         std::fs::write(dir.join("then.jsonl"), then).unwrap();
         let path = dir.join("claude");
-        // The first process answers only after the follow-up is on its stdin; the second records the two lines it reads.
+        // The first process answers only after the follow-up is on its stdin; the second records the three lines it reads.
         crate::util::write_script(
             &path,
-            "#!/bin/sh\ncase \"$1\" in --version) echo '2.1.296 (Claude Code)'; exit 0;; --help) echo '  --autocompact <tokens>'; exit 0;; esac\nIFS= read -r line\nIFS= read -r steer\nif [ -f ran ]; then printf '%s\\n%s\\n' \"$line\" \"$steer\" > read.jsonl; cat then.jsonl; cat >/dev/null; exit 0; fi\ntouch ran\ncat first.jsonl\nexit 1\n",
+            "#!/bin/sh\ncase \"$1\" in --version) echo '2.1.296 (Claude Code)'; exit 0;; --help) echo '  --autocompact <tokens>'; exit 0;; esac\nIFS= read -r line\nIFS= read -r steer\nif [ -f ran ]; then IFS= read -r later; printf '%s\\n%s\\n%s\\n' \"$line\" \"$steer\" \"$later\" > read.jsonl; cat then.jsonl; cat >/dev/null; exit 0; fi\ntouch ran\ncat first.jsonl\nexit 1\n",
         );
         let (tx, mut rx) = mpsc::unbounded_channel();
         let host = ClaudeHost::new("acme", vec![path.display().to_string()], tx);
         host.start().await.unwrap();
+        // A steer the moment each pipe is published: the first into the missing session, the second into the
+        // restored one, where it must land after the carried follow-up.
+        let steered = Arc::new(Mutex::new(vec![]));
+        let record = steered.clone();
+        host.inner().pipe_opened = Some(Arc::new(move |h: &ClaudeHost| {
+            let (thread, turn) = h.inner().turn.clone().unwrap();
+            let mut record = record.lock().unwrap();
+            let text = ["Also the QA result.", "Then this."][record.len().min(1)];
+            record.push(h.steer(&thread, &turn, text).is_ok());
+        }));
         let mut settings = Settings { cwd: dir.display().to_string(), ..Default::default() };
         settings.env.insert("PATH".into(), "/usr/bin:/bin".into());
         let thread = host.resume_thread(&uuid::Uuid::new_v4().to_string(), &settings);
-        let turn = host.start_turn(&thread, "hello", None).unwrap();
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while host.inner().pipe.is_none() && Instant::now() < deadline {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-        assert!(host.steer(&thread, &turn, "Also the QA result.").is_ok());
+        host.start_turn(&thread, "hello", None).unwrap();
         let mut got = vec![];
         while let Ok(Some(ev)) = tokio::time::timeout(Duration::from_secs(10), rx.recv()).await {
             let idle = ev["kind"] == "status" && ev["state"] == "idle";
@@ -1970,13 +1980,14 @@ mod tests {
         }
         let read = std::fs::read_to_string(dir.join("read.jsonl")).unwrap_or_default();
         std::fs::remove_dir_all(dir).unwrap();
+        assert_eq!(*steered.lock().unwrap(), [true, true]);
         assert!(got.iter().any(|e| e["kind"] == "diagnostic" && e["text"] == RESTORING), "{got:?}");
         assert!(!got.iter().any(|e| e["kind"] == "turn_failed"), "{got:?}");
         assert!(got.iter().any(|e| e["kind"] == "turn_completed"), "{got:?}");
-        // The restored session read the prompt, then the follow-up.
+        // The restored session read the prompt, the carried follow-up, then the newer one.
         let lines: Vec<Value> = read.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
         let texts: Vec<&Value> = lines.iter().map(|l| &l["message"]["content"][0]["text"]).collect();
-        assert_eq!(texts, [&json!("hello"), &json!("Also the QA result.")], "{read}");
+        assert_eq!(texts, [&json!("hello"), &json!("Also the QA result."), &json!("Then this.")], "{read}");
     }
 
     #[tokio::test]
