@@ -629,11 +629,15 @@ function recruitFor({department, briefing, share}) {
     assert.match(blurb, /A Mac/);
     assert.match(blurb, /A Linux or cloud server/);
     assert.doesNotMatch(blurb, /Mac you own/);
-    // No AI provider is chosen yet, so there is no model to sign in to: that step is left out and the rest renumber.
-    assert.doesNotMatch(await page.locator('#onb-step').textContent(), /profile add default|profile login|codex login/);
+    // The saved subscriptions preset offers both sign-ins; a team without providers still omits them.
+    assert.match(await page.locator('#onb-step').textContent(), /profile login default claude/);
+    assert.match(await page.locator('#onb-step').textContent(), /profile login default codex/);
+    assert.doesNotMatch(await page.evaluate(() => onbCommands({...ONB, providers: null}).map(row => row[1]).join('\n')),
+      /profile add default|profile login|codex login/);
     // One numbered path: make the setup file, then the lines that use it. A Mac has no other way, so no Other ways.
     assert.deepEqual(await page.locator('.onb-steps > li > .k').allTextContents(),
-      ["Download this computer's setup file", 'Register this Mac for the team', 'Start the bot service']);
+      ["Download this computer's setup file", 'Register this Mac for the team', 'Add your Claude subscription',
+        'Add your ChatGPT through Codex subscription', 'Start the bot service']);
     assert.equal(await page.locator('#onb-other').count(), 0);
     // Copy sits inside each command's box, not on a row of its own under it.
     assert.equal(await page.locator('.onb-cmd').count(), await page.locator('.onb-cmd > [data-onb-copy]').count());
@@ -782,7 +786,8 @@ function recruitFor({department, briefing, share}) {
     assert.equal(await bigTitle(page), true);
     await shot(page, 'desktop-5d-review');
     if (shots) { await page.setViewportSize({width: 390, height: 844}); await shot(page, 'phone-5d-review'); await page.setViewportSize({width: 1100, height: 800}); }
-    assert.match(await page.locator('.onb-summary').textContent(), /AI providers\s*Choose later in Settings > Computers/);
+    assert.match(await page.locator('.onb-summary').textContent(), /AI providers\s*Your Claude and ChatGPT subscriptions, plus Tico Gateway/);
+    assert.match(await page.evaluate(() => onbSummaryHTML({...ONB, providers: null})), /Choose later in Settings &gt; Computers/);
     for (const width of [1100, 390]) {
       await page.setViewportSize({width, height: 844});
       const aligned = await page.locator('.onb-summary > div').evaluateAll(rows => rows.every(row => {
