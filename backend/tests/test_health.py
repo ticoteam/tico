@@ -900,6 +900,7 @@ def test_aged_prs_use_synced_condition_age_and_clear_on_review_or_resolution(env
     api = environment()
     add_bot(api, 'builder')
     add_bot(api, 'reviewer')
+    add_bot(api, 'hidden-reviewer')
     old = H.shift(H.now(), hours=-13)
     young = H.shift(H.now(), hours=-11)
     urls = [f'https://github.com/AcmeCorp/atlas/pull/{n}' for n in range(1, 6)]
@@ -919,6 +920,10 @@ def test_aged_prs_use_synced_condition_age_and_clear_on_review_or_resolution(env
                                             'repository': {'full_name': 'AcmeCorp/atlas'}})
         child = H.task_create(c, 'human:morgan', 'Review 1: PR #2', '', 'bot:reviewer', private=False)
         task_relations.set_parent(c, 'human:morgan', child['id'], tasks[1]['id'])
+        c.execute("UPDATE tasks SET status='waiting' WHERE id=?", (child['id'],))
+        hidden = H.task_create(c, 'human:morgan', 'Review 2: PR #2', '', 'bot:hidden-reviewer', private=True)
+        task_relations.set_parent(c, 'human:morgan', hidden['id'], tasks[1]['id'])
+        c.execute("UPDATE tasks SET status='waiting' WHERE id=?", (hidden['id'],))
         # Refreshes do not reset a wait, and a fresh check on the same head does not either.
         G.pull_request(c, {'action': 'refresh', 'pull_request': {'html_url': urls[0], 'mergeable': False, 'state': 'open', 'head': {'sha': '1' * 40}}})
         G.pr_signal(c, 'status', {'sha': '2' * 40, 'state': 'success', 'context': 'tests', 'repository': {'full_name': 'AcmeCorp/atlas'}})
@@ -932,6 +937,9 @@ def test_aged_prs_use_synced_condition_age_and_clear_on_review_or_resolution(env
     assert items[1]['reason'] == 'review' and items[1]['whose_move'] == 'bot:reviewer'
     issues = api.get('/api/v2/health/issues', headers=signed_in()).json()['issues']
     assert {i['pr'] for i in issues if i['kind'] == 'aged_prs'} == set(urls[:2])
+    assert next(i for i in issues if i.get('pr') == urls[1])['whose_move'] == 'bot:reviewer'
+    assert 'hidden-reviewer' not in json.dumps({'check': checks['aged_prs'],
+                                               'issues': [i for i in issues if i['kind'] == 'aged_prs']})
     with api.app.state.store.transaction() as c:
         G.pull_request(c, {'action': 'refresh', 'pull_request': {'html_url': urls[0], 'mergeable': True, 'state': 'open', 'head': {'sha': '1' * 40}}})
         G.pr_signal(c, 'pull_request_review', {'action': 'submitted', 'pull_request': {'html_url': urls[1]},

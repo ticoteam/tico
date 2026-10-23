@@ -1207,7 +1207,7 @@ def _aged_pr_checks(c, who, auth, full, kind):
         if reason == "review":
             # Review subtasks, like task roles, say whose move it is. Never expose a hidden child's owner.
             reviewers = c.execute(
-                "SELECT tasks.owner FROM tasks WHERE tasks.status IN ('open','doing','review') "
+                "SELECT tasks.owner FROM tasks WHERE tasks.status IN ('open','doing','waiting','review','ready') "
                 "AND tasks.title LIKE 'Review %' "
                 "AND EXISTS (SELECT 1 FROM task_relations r WHERE r.kind='parent' AND r.from_task=tasks.id AND r.to_task=?) "
                 f"AND coalesce(tasks.private,1)=0 AND ({auth.task_sql(c, who)}) ORDER BY tasks.created LIMIT 3",
