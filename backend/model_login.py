@@ -262,6 +262,13 @@ def start(c, who, rid, runtime, profile="", auth=None, switch=False, to=""):
     if kind in SIDE_KINDS and runtime not in SIGN_OUT_RUNTIMES:
         raise Problem("kind", f"You can't {what} from here for " + runtime, 422)
     runner = _runner(c, rid)
+    # Switch to subscription keeps the API key in use until the subscription is in place. A login a person cleared
+    # the key of, or signed out, has no key to keep, so the switch would be a plain sign-in whose cancel leaves no
+    # login while it reads "The API key is still in use" (a page drawn before the Clear key, #1298).
+    if kind == "to_subscription" and cleared(c, rid, runtime):
+        gone = "its key was cleared" if runtime in key_cleared_logins(c, rid) else "it is signed out"
+        raise Problem("state", f"{runtime} on {runner['label']} has no API key to switch from: {gone}. Sign in "
+                      "instead", 409)
     if kind in SIDE_KINDS and runner["platform"] in manifests.caps(runtime).get("switch_unavailable_on", []):
         raise Problem("kind", f"You can't {what} for {runtime} on {runner['label']} from here: it keeps the "
                       "login in the system keychain. Sign out, then sign in", 422)
