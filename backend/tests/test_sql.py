@@ -378,6 +378,12 @@ def test_carried_private_tasks_and_unknown_plain_rooms_stay_hidden(api, world):
     assert rows('messages', msg['id']) == [[msg['id']]]
     with store.transaction() as c:
         c.execute('UPDATE conversations SET task_id=? WHERE id=?',
+                  (hidden['id'], world['ana_room']))
+    # A valid room grant cannot expose plain messages from a denied private task.
+    assert rows('conversations', world['ana_room']) == [[world['ana_room']]]
+    assert rows('messages', msg['id']) == []
+    with store.transaction() as c:
+        c.execute('UPDATE conversations SET task_id=? WHERE id=?',
                   ('unknown-fixture-task', world['ana_room']))
     # The room grant remains valid, so the plain-message provenance gate must deny.
     assert rows('conversations', world['ana_room']) == [[world['ana_room']]]
