@@ -25412,6 +25412,12 @@
                     "null"
                   ]
                 },
+                "effort": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
                 "family": {
                   "type": [
                     "string",
@@ -25420,6 +25426,7 @@
                 }
               },
               "required": [
+                "effort",
                 "family",
                 "harness",
                 "model",
@@ -25428,6 +25435,13 @@
               ],
               "additionalProperties": true
             }
+          },
+          "task_model": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "For a turn in a task's own session on a bot with a task model: `source` is task (it ran on the task model), fallback (the task model could not run, so the bot's own model did) or check (a check subtask kept its check model), and `note` says it in plain words"
           },
           "fallback": {
             "type": [
@@ -25447,7 +25461,8 @@
         "required": [
           "fallback",
           "family",
-          "segments"
+          "segments",
+          "task_model"
         ],
         "additionalProperties": true
       },
@@ -29723,7 +29738,7 @@
           "count_subscription": {
             "type": "boolean",
             "title": "Count Subscription",
-            "default": false
+            "default": true
           }
         },
         "additionalProperties": false,

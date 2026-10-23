@@ -130,7 +130,7 @@ Each task has its own session. The main chat sees only a one-line report when th
 declined or stuck. To give the task more to go on, write in the task's thread.
 
 **Can a bot work on two of my tasks at once?**
-Yes. Each task runs in its own session and worktree, side by side. Two messages on the same task take turns. On a Codex ChatGPT sign-in, the task lanes take turns too, because OpenAI allows one job at a time per login: a waiting task shows *Waiting for <login> to be free*, not a failure ([how it works](how-it-works.md#one-turn-per-chatgpt-login)).
+Yes. Each task runs in its own session and worktree, side by side. Two messages on the same task take turns. On a Codex ChatGPT sign-in, the task lanes run side by side too and share the plan's usage allowance ([how it works](how-it-works.md#one-turn-per-chatgpt-login)).
 
 **What happens when a bot needs something from me?**
 It files a subtask for you under its task, which shows in your Needs you. When you finish it, the bot wakes on the

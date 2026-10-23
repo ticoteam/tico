@@ -179,6 +179,32 @@ Grok Build retains its catalog model and supported efforts through the
 [existing CLI integration](https://docs.x.ai/build/overview). Selecting a harness does not enable
 its provider, grant credentials or guarantee model access on a computer.
 
+### Run a bot's tasks on another model
+
+Use **Task model** to choose a harness, model and effort for a bot's task sessions. Chat keeps the bot's own model.
+
+1. Open **Settings > Bots** and click **Tasks** beside the bot's model.
+2. Choose the harness, model and effort in the row that opens.
+3. Click **Apply**.
+
+The **Tasks** mark gets an accent dot when a task model is set. For example, you can keep a bot on Sonnet 5.5
+and choose Haiku 5.5 for its tasks. You can also use **Task model** in the bot editor, then click **Apply** or
+**Save bot**. To clear the choice, pick **Same as bot** and apply it. Changing the bot's own model leaves its task model set.
+
+If a choice cannot be saved, the row or editor shows the reason. A saved task model that cannot run falls back
+to the bot's own model and effort; the task history records why. A review or check subtask keeps its check model.
+
+#### A warning about a cheaper task model
+
+A bot that has requested send, spend or publish approvals, or holds a tool grant that can write beyond its
+own repository, can show a warning under **Task model**. The warning compares models from the same provider
+using their listed output prices. Another provider's model, or one without a listed price, is not judged.
+
+For example: "This bot sends messages for you. Haiku 5.5 is a cheaper model than its own Sonnet 5.5, and
+may word things badly." The warning names the risk and still lets you save. Tasks still run on that model;
+the run note and task history say it ran "below the minimum for this bot". The warning updates when the bot's
+own model changes. A requested tool grant that has not been added does not count, nor does access to the bot's own repository.
+
 ### Keeping the model list current
 
 Maintain a curated list per harness, reviewing provider release notes at least monthly and when
@@ -334,6 +360,10 @@ Computers), `paste_code` means it takes a pasted code, `logout` means Sign out a
 some of `files`, and `logout` needs `files`. `keychain` lists the platforms where Switch account is not offered
 (`switch_unavailable_on` in `harnesses[].capabilities`; Claude Code on a Mac).
 
+Codex bots on the same ChatGPT login run turns at the same time, as Claude bots do. The computer's own
+login and a named subscription both share their plan's usage allowance. Tico never copies a login into
+another bot's home; all turns use the original login in its own home.
+
 | Capability | Means | Absent |
 |---|---|---|
 | `terminal_login` | What a person runs on the computer to sign in (after the executable) | No interactive sign-in; keys only |
@@ -355,7 +385,7 @@ some of `files`, and `logout` needs `files`. `keychain` lists the platforms wher
 | `persistent_session` | One process per conversation is kept between turns | One process per turn |
 | `goal_runs_across_turns` | A native goal keeps the thread going after a turn completes, and a clear is reconciled | A goal ends with its turn |
 | `serial_cold_start` | An expired stored token is refreshed by the first turn; the others wait for it | Turns start together |
-| `one_turn_per_login` | A subscription login (its `subscription_marker` in the sign-in detail) runs one turn at a time on the computer: another bot's turn on it waits, or runs on its fallback. A key login is not held | Turns on one login run together |
+| `one_turn_per_login` | Optional queue, disabled for Codex (`false`). A subscription login (its `subscription_marker` in the sign-in detail) runs one turn at a time on the computer: another bot's turn on it waits, or runs on its fallback. A key login is not held | Turns on one login run together |
 | `compaction` | The bot's Compact at setting applies | Setting hidden |
 | `resume_command` | The local command that resumes a session (the id follows) | `<executable> --resume` |
 | `model_list` | `host`: the host adapter lists the models in readiness; `command`: the CLI lists them (`model_list_args`) | No model list |

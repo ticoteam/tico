@@ -133,6 +133,31 @@ p:empty{display:none}
 .sb-choice-pop .settings-choice>small{flex:1 0 100%}
 .sb-choice-pop .settings-choice>[data-choice-apply]{margin-top:4px;padding:6px 14px}
 .sb-choice-pop .settings-choice>[data-choice-cancel]{margin-top:4px}
+/* The task indicator beside a bot's model: faint until the row is hovered when tasks run on the bot's own model;
+   marked, with a dot, when they run on another. It opens the task-model row under the bot (.sb-task-row). */
+.sb-model-wrap{display:flex;align-items:center;gap:4px;min-width:0}
+.sb-model-wrap>.sb-pick{flex:1 1 auto;width:auto}
+.sb-task-mark{flex:none;display:inline-flex;align-items:center;gap:4px;padding:2px 6px;border:1px solid transparent;border-radius:999px;background:none;color:var(--muted);font:inherit;font-size:var(--t-xs);cursor:pointer;opacity:.45}
+tr:hover .sb-task-mark,.sb-task-mark:focus-visible,.sb-task-mark[aria-expanded=true]{opacity:1}
+.sb-task-mark:hover,.sb-task-mark[aria-expanded=true]{border-color:var(--line);background:var(--surface2)}
+.sb-task-mark.on{opacity:1;color:var(--accent);border-color:color-mix(in srgb,var(--accent) 35%,transparent)}
+.sb-task-mark.on::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
+.sb-task-mark:disabled{cursor:default}
+.settings-bots-table tr.sb-task-row td{padding:4px 0 12px;background:var(--bg)}
+.sb-task-under{display:flex;align-items:flex-end;flex-wrap:wrap;gap:8px 12px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--surface)}
+.sb-task-head{flex:1 0 100%;font-size:var(--t-sm);font-weight:600;color:var(--muted)}
+.sb-task-under .settings-choice{display:flex;align-items:flex-end;flex-wrap:wrap;gap:8px;flex:1 1 520px;min-width:0}
+.sb-task-under .settings-model-choice{flex:1 1 420px;grid-template-columns:repeat(3,minmax(0,1fr))}
+.sb-task-under .settings-choice-blocks{grid-column:1/-1}
+.sb-task-under .settings-choice>[data-choice-apply]{margin-top:0}
+.sb-task-warning{margin:8px 0 0;padding:8px 10px;border-radius:6px;background:color-mix(in srgb,var(--warn,#b7791f) 12%,transparent);color:var(--ink);font-size:var(--t-sm)}
+@media (max-width:760px){
+  .settings-bots-table tr.sb-task-row{display:block;padding:0 0 10px}
+  .settings-bots-table tr.sb-task-row td{display:block}
+  .sb-task-under .settings-choice,.sb-task-under .settings-model-choice{flex:1 0 100%}
+  .sb-task-under .settings-model-choice{grid-template-columns:minmax(0,1fr)}
+  .settings-bots-table td.sb-cell-model .sb-task-mark{min-height:32px}
+}
 .settings-bots-table .settings-pick{padding-right:0}.settings-pick input{margin:0;cursor:pointer}.settings-pick input:disabled{cursor:not-allowed}
 .sb-bot{display:flex;align-items:center;gap:8px;min-width:0}
 .sb-bot>.av,.sb-bot>.avatar,.sb-bot>svg,.sb-bot>img{flex:none}
@@ -615,3 +640,19 @@ fieldset.brepo>.repo-name+p{margin:-4px 0 4px 24px;font-size:var(--t-xs);line-he
 .sysr-ai{display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:var(--t-sm);margin-top:2px}
 .sysr-fallback{flex-basis:100%;color:var(--wait)}
 @media (max-width:720px){.sysr-row{grid-template-columns:1fr 1fr}.sysr-name,.sysr-ctl{grid-column:1/-1}}
+/* Settings > Billing (ui/app/settings-billing.js) */
+#set-billing h3{margin:var(--s3) 0 var(--s1);font-size:var(--t-sm);display:flex;align-items:center;gap:var(--s2)}
+.billing-head{display:flex;justify-content:space-between;align-items:flex-start;gap:var(--s2);flex-wrap:wrap}
+.billing-balance{font-size:2rem;font-weight:600;font-variant-numeric:tabular-nums}
+#set-billing h3 select{width:auto;font-size:var(--t-sm)}
+.billing-status{margin:2px 0 0}.billing-status[data-tone=ok]{color:var(--ok)}.billing-status[data-tone=warn]{color:var(--wait)}.billing-status[data-tone=bad]{color:var(--fail)}
+.billing-table{width:100%;border-collapse:collapse;font-size:var(--t-sm)}
+.billing-table td,.billing-table th{padding:4px 6px;border-bottom:1px solid var(--line);text-align:left}
+.billing-table .num,.billing-days .num,.billing-hour .num{text-align:right;font-variant-numeric:tabular-nums}
+.billing-statement .billing-total td{font-weight:600}
+.billing-past{margin-top:var(--s1)}.billing-past summary,.billing-days summary{cursor:pointer}
+.billing-days summary{display:flex;justify-content:space-between;padding:4px 0}
+.billing-days details>.billing-table,.billing-days [data-billing-hours]{margin-left:var(--s2)}
+.billing-hour-head{display:flex;justify-content:space-between;color:var(--muted);font-size:var(--t-xs);margin-top:var(--s1)}
+a.primary.btn{display:inline-block;text-decoration:none;background:var(--accent);color:var(--accent-ink);border-radius:var(--r-ctl);padding:5px 14px;line-height:20px;font-weight:600}
+@media (max-width:640px){.billing-table td,.billing-table th{padding:4px 3px}.billing-balance{font-size:1.6rem}}
