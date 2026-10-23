@@ -11,7 +11,8 @@ const CONFIG = {environment_id: 'initech', company_name: 'Initech', app_name: 'I
   assistant_bot: 'coo', public_url: 'https://initech.test', runner_url: 'https://initech.test', local: false, release: '',
   onboarding_needed: true, providers_configured: false, version: '0.2.0', runner_compat: {version: '0.2.0', min_runner: '0.1.0'}};
 const SAMPLE_BOTS = [['coo', 'Assistant'], ['botops', 'BotOps'], ['head-of-product', 'Head of Product'], ['builder', 'Builder'],
-  ['support-agent', 'Support Agent'], ['content-marketer', 'Content Marketer']].map(([slug, display_name]) => ({slug, display_name,
+  ['support-agent', 'Support Agent'], ['content-marketer', 'Content Marketer'], ['goal-manager', 'CEO Bot'],
+  ['librarian', 'Librarian']].map(([slug, display_name]) => ({slug, display_name,
   status: 'active', template: slug, onboarding_state: ['coo', 'botops'].includes(slug) ? '' : 'onboarded', setup_task_id: null,
   repository_present: false}));
 
@@ -48,7 +49,7 @@ const SAMPLE_BOTS = [['coo', 'Assistant'], ['botops', 'BotOps'], ['head-of-produ
         samples.push(request.postDataJSON());
         await samplesHeld;
         record = {...record, names: {...record.names, company_name: 'Sample Co'}, completed: '2026-10-18T10:00:00Z', needed: false,
-                  bots: SAMPLE_BOTS, sample: {loaded: '2026-10-18T10:00:00Z', by: 'human:owner', bots: SAMPLE_BOTS.map(b => b.slug), tasks: ['t1']}};
+                  bots: SAMPLE_BOTS, sample: {loaded: '2026-10-18T10:00:00Z', by: 'human:owner', bots: SAMPLE_BOTS.map(b => b.slug), tasks: ['t1', 't2', 't3', 't4', 't5']}};
         return json({...record, home: 'human:owner'});
       }
       if (p === '/api/v2/setup/company/preview') {
@@ -95,9 +96,10 @@ const SAMPLE_BOTS = [['coo', 'Assistant'], ['botops', 'BotOps'], ['head-of-produ
                  'Sample Co|false|true');
     assert.equal(await page.locator('[data-onb-bot=builder]').count(), 1);
     assert.match(await page.locator('.fr-sample-created').textContent(), /Five bots plus the built-in helpers/);
-    assert.equal(await page.locator('.fr-starter-tasks summary').textContent(), '1 starter task created');
-    assert.equal(await page.locator('.fr-starter-tasks a').getAttribute('href'), '#/task/t1');
-    assert.equal(await page.locator('#fr-owners summary').textContent().then(text => text.replace(/\s+/g, ' ').trim()), 'You own all 6 bots. Change');
+    assert.equal(await page.locator('.fr-starter-tasks summary').textContent(), '5 starter tasks created');
+    assert.deepEqual(await page.locator('.fr-starter-tasks a').evaluateAll(links => links.map(link => link.getAttribute('href'))),
+      ['#/task/t1', '#/task/t2', '#/task/t3', '#/task/t4', '#/task/t5']);
+    assert.equal(await page.locator('#fr-owners summary').textContent().then(text => text.replace(/\s+/g, ' ').trim()), 'You own all 8 bots. Change');
 
     // A company that has begun the wizard is past the offer: it shows on the first screen only.
     const later = await context.newPage();
