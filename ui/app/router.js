@@ -19,6 +19,7 @@ function route() {
   $('#main').classList.remove('overview-layout');
   const from = LAST_ROUTE;
   S.route = LAST_ROUTE = location.hash || UPDATES;
+  if (S.route !== SETTINGS) { clearTimeout(SETTINGS_PRESENCE.timer); SETTINGS_PRESENCE.timer = null; }
   const botOf = r => r.startsWith('#/bot/') ? r.slice(6).split('/')[0] : '';
   const botHere = botOf(S.route);
   document.body.classList.toggle('bot-page', !!botHere);   // a phone gives the bot page the whole screen

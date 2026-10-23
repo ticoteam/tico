@@ -368,7 +368,7 @@ function renderSettingsMachines() {
   const machines = SETTINGS_DATA.machines.filter(machine => showRevoked || !machine.revoked_at);
   const cards = machines.map(machine => {
     const online = machineOnline(machine);
-    const status = machine.revoked_at ? ['failed', 'revoked'] : online ? ['ok', 'online'] : ['', machine.last_seen ? `offline ${ago(machine.last_seen)}` : 'offline'];
+    const status = [machine.revoked_at ? 'failed' : online ? 'ok' : '', machinePresenceWords(machine)];
     const failures = Object.values(machine.readiness?.bots || {}).filter(value => !value.ready).length;
     const facts = [settingsPersonName(machine.operator), machine.version ? `Tico ${machine.version}` : ''].filter(Boolean).join(' · ');
     return `<tr class="machine-card" data-computer-row="${esc(machine.id)}">

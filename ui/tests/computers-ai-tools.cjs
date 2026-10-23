@@ -54,6 +54,8 @@ const {unrouted} = require('./support/routes.cjs');
       readiness: {runtimes: {claude: {installed: true, authenticated: 'ready'}}}};
     const me = {id: 'ana', role: 'owner', name: 'Ana', email: 'ana@example.com', cloud: true, registered: true};
     const writes = [];
+    let presenceMode = 'fixed', presenceReads = 0, presenceOffset = 0;
+    const heldPresence = [];
     await page.route('**/*', route => {
       const req = route.request(), p = new URL(req.url()).pathname;
       const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
@@ -73,7 +75,13 @@ const {unrouted} = require('./support/routes.cjs');
       if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: []});
       if (p === '/api/v2/status') return json({bots: []});
       if (p === '/api/v2/needs-you') return json({items: []});
-      if (p === '/api/v2/operations') return json({machines: [box, empty, fresh, revoked], services: []});
+      if (p === '/api/v2/operations') {
+        presenceReads++;
+        if (presenceMode === 'slow') { heldPresence.push(route); return; }
+        if (presenceMode === 'failure') return json({error: 'Unavailable'}, 503);
+        if (presenceMode === 'live') box.last_seen = at(presenceOffset - 3000);
+        return json({machines: [box, empty, fresh, revoked], services: []});
+      }
       // The manifests' capabilities this page reads (runner/harnesses/*.toml).
       if (p === '/api/v2/models') return json({models: [], harnesses: [
         {id: 'claude', runtime: 'claude', name: 'Claude Code', capabilities: {account: 'status-json', weekly_usage: 'turns', browser_sign_in: true}},
@@ -182,7 +190,7 @@ const {unrouted} = require('./support/routes.cjs');
     box.last_seen = at(-3 * 3600000);
     await page.evaluate(() => loadSettings());
     await row('box').locator('[data-machine-status]', {hasText: 'offline'}).waitFor();
-    assert.equal(await row('box').locator('[data-machine-status]').innerText(), 'offline 3h ago');
+    assert.equal(await row('box').locator('[data-machine-status]').innerText(), 'offline · last seen 3h ago');
     assert.equal(await row('box').locator('.machine-chip meter').first().evaluate(m => m.value), 30);
     await row('box').locator('.machine-name').click();
     await dialog.locator('[data-computer-offline]').waitFor();
@@ -216,6 +224,89 @@ const {unrouted} = require('./support/routes.cjs');
     await page.setViewportSize({width: 1440, height: 900});
     await page.keyboard.press('Escape');
 
+    // Presence refresh protects the core recovery flow: cached heartbeats cannot disable a live computer.
+    console.log('presence: starting');
+    box.readiness.runtimes.codex.authenticated = 'missing';
+    await page.clock.install({time: now});
+    await page.clock.pauseAt(now + 1000);
+    presenceMode = 'live';
+    await page.evaluate(() => { settingsMachinesWatch(); return settingsMachinesRefresh(); });
+    const beforeIdle = presenceReads;
+    presenceOffset = 65000;
+    await page.clock.fastForward(65000);
+    await page.evaluate(() => SETTINGS_PRESENCE.pending);
+    assert.ok(presenceReads > beforeIdle, 'Computers refreshes while visible');
+    await row('box').locator('.machine-name').click();
+    await page.evaluate(() => SETTINGS_PRESENCE.pending);
+    const online = async () => {
+      assert.match(await row('box').locator('[data-machine-status]').innerText(), /^online/);
+      assert.match(await dialog.locator('[data-computer-status]').innerText(), /^online/);
+      assert.equal(await dialog.locator('[data-add-connection=box]').isEnabled(), true);
+      assert.equal(await dialog.locator('[data-model-login][data-runtime=codex]').isEnabled(), true);
+    };
+    await online(); console.log('presence: online');
+    const openedReads = presenceReads;
+    presenceOffset = 130000;
+    await page.clock.fastForward(65000);
+    await page.evaluate(() => SETTINGS_PRESENCE.pending);
+    await online(); console.log('presence: online');
+    await page.keyboard.press('Escape');
+    await row('box').locator('.machine-name').click();
+    await page.evaluate(() => SETTINGS_PRESENCE.pending);
+    assert.ok(presenceReads > openedReads, 'open and reopen read presence');
+    await online(); console.log('presence: online');
+
+    // Carry the actual draft node through repaint, including focus and the selected text range.
+    await dialog.locator('[data-connection="own:codex"]').evaluate(node => {
+      const field = document.createElement('textarea'); field.dataset.presenceDraft = ''; node.appendChild(field);
+      field.value = 'unfinished connection'; field.focus(); field.setSelectionRange(3, 8);
+      window.presenceDraft = field;
+    });
+    await page.evaluate(() => settingsMachinesRefresh());
+    assert.deepEqual(await page.evaluate(() => {
+      const field = document.querySelector('[data-presence-draft]');
+      return [field === window.presenceDraft, field.value, document.activeElement === field, field.selectionStart, field.selectionEnd];
+    }), [true, 'unfinished connection', true, 3, 8]);
+
+    // A slow/failed read preserves the last confirmed state, even when its heartbeat ages past a minute.
+    await page.evaluate(() => clearTimeout(SETTINGS_PRESENCE.timer));
+    presenceMode = 'slow';
+    await page.evaluate(() => { void settingsMachinesRefresh(); });
+    assert.equal(await page.evaluate(() => SETTINGS_PRESENCE.checking), true);
+    assert.match(await dialog.locator('[data-computer-status]').innerText(), /checking/);
+    presenceOffset = 200000;
+    await page.clock.fastForward(70000);
+    await page.evaluate(() => SETTINGS_PRESENCE.pending);
+    await online(); console.log('presence: online');
+    assert.match(await row('box').locator('[data-machine-status]').innerText(), /checking/);
+    presenceMode = 'failure';
+    for (const held of heldPresence.splice(0)) await held.fulfill({status: 503, contentType: 'application/json', body: '{}'});
+    await page.evaluate(() => settingsMachinesRefresh());
+    await online(); console.log('presence: online');
+    assert.match(await dialog.locator('[data-computer-status]').innerText(), /checking/);
+
+    // Only a successful read can confirm disconnect; both views recover from the next heartbeat.
+    presenceMode = 'fixed';
+    await page.evaluate(() => settingsMachinesRefresh());
+    assert.match(await row('box').locator('[data-machine-status]').innerText(), /^offline/);
+    assert.match(await dialog.locator('[data-computer-status]').innerText(), /^offline/);
+    assert.equal(await dialog.locator('[data-add-connection=box]').isDisabled(), true);
+    presenceMode = 'live';
+    await page.evaluate(() => settingsMachinesRefresh());
+    await online(); console.log('presence: online');
+    await dialog.locator('[data-presence-draft]').evaluate(node => node.remove());
+    await page.keyboard.press('Escape');
+    // Leaving the tab stops its timer; returning starts it and requests fresh presence.
+    await page.evaluate(() => settingsShow('general'));
+    const afterLeaving = presenceReads;
+    await page.clock.fastForward(65000);
+    assert.equal(presenceReads, afterLeaving);
+    await page.evaluate(() => settingsShow('devices'));
+    await page.evaluate(() => SETTINGS_PRESENCE.pending);
+    assert.ok(presenceReads > afterLeaving);
+    await page.clock.resume();
+    presenceMode = 'fixed';
+
     // 25. Revoked computers on request; Revoke lives in the pop-up only.
     await page.locator('#set-machines [data-show-revoked-computers]').check();
     await row('old').waitFor();
@@ -237,6 +328,6 @@ const {unrouted} = require('./support/routes.cjs');
     await page.keyboard.press('Escape');
 
     assert.deepEqual(errors, []);
-    console.log('PASS: compact computer rows, connection chips, detail pop-up, one login per tool, bots, header fix, empty/offline/waiting/revoked/member, desktop apps, shared sign-ins');
+    console.log('PASS: compact computer rows, connection chips, detail pop-up, one login per tool, bots, header fix, empty/offline/waiting/revoked/member, desktop apps, shared sign-ins, live/stale presence and draft preservation');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

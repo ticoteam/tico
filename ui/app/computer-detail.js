@@ -6,7 +6,11 @@
    loaded in the order index.html lists them. */
 'use strict';
 
-const machineOnline = machine => !machine.revoked_at && !!machine.last_seen && Date.now() - new Date(machine.last_seen) < 60000;
+const machineOnline = machine => !machine.revoked_at && !!machine.last_seen && (SETTINGS_PRESENCE.at || Date.now()) - new Date(machine.last_seen) < 60000;
+const machinePresenceStale = () => SETTINGS_PRESENCE.checking || SETTINGS_PRESENCE.failed
+  || !!SETTINGS_PRESENCE.at && Date.now() - SETTINGS_PRESENCE.at > SETTINGS_PRESENCE.interval;
+const machinePresenceWords = machine => machine.revoked_at ? 'revoked'
+  : `${machineOnline(machine) ? 'online' : `offline${machine.last_seen ? ` · last seen ${ago(machine.last_seen)}` : ''}`}${machinePresenceStale() ? ' · checking…' : ''}`;
 const machineToolName = (machine, runtime) => Object.values(machine.readiness?.harnesses || {}).find(tool => tool.runtime === runtime)?.name
   || harnessRow(runtime)?.name || harnessWords(runtime);
 // Whether the computer has reported its tools yet: before its first report the server sends empty `runtimes`.
@@ -261,6 +265,7 @@ function computerAddOpen(id) {
   });
   paint();
   dialog.showModal();
+  void settingsMachinesRefresh();
   return dialog;
 }
 function machineBotsHTML(machine) {
@@ -344,13 +349,13 @@ function machineSettingsHTML(machine) {
 function computerDetailHTML(machine) {
   const online = machineOnline(machine), manage = !machine.revoked_at && machineCanSignIn(machine);
   const conns = machineShown(machine);
-  const status = machine.revoked_at ? 'revoked' : online ? 'online' : `offline${machine.last_seen ? ` · last seen ${ago(machine.last_seen)}` : ''}`;
+  const status = machinePresenceWords(machine);
   const notes = [!machine.revoked_at && !online ? '<p class="computer-detail-note" role="status" data-computer-offline>Computer is offline. Sign-in, usage refresh, screen and updates wait until it is back.</p>' : '',
     machineWaiting(machine) ? `<p class="computer-detail-note" role="status" data-machine-waiting>Waiting for ${esc(machine.label)} to report.</p>` : ''].join('');
   const empty = machineReported(machine) && !conns.length && !machine.revoked_at
     ? `<p class="computer-detail-empty"><span class="machine-chip-dot" aria-hidden="true"></span>Bots here can't run until a connection is added${manage ? ' · Add connection below' : ''}.</p>` : '';
   const section = (key, title, body) => `<section class="computer-detail-section" data-detail-section="${key}"><h3>${title}</h3>${body}</section>`;
-  return `<header class="computer-detail-head"><div><h2 id="computer-detail-title">${esc(machine.label)}</h2><span class="muted">${esc(settingsPersonName(machine.operator))} · ${esc(status)}</span></div>
+  return `<header class="computer-detail-head"><div><h2 id="computer-detail-title">${esc(machine.label)}</h2><span class="muted">${esc(settingsPersonName(machine.operator))} · <span data-computer-status>${esc(status)}</span></span></div>
       <button class="ghost tmodal-x" type="button" data-detail-close aria-label="Close">✕</button></header>
     <div class="computer-detail-body">${notes}
       ${section('connections', 'Connections', empty + conns.map(conn => machineConnectionHTML(machine, conn, online, manage)).join('') + machineAddHTML(machine, online, manage))}
@@ -374,6 +379,7 @@ function computerDetailOpen(id) {
   dialog.dataset.computer = id;
   computerDetailPaint(true);
   if (!dialog.open) dialog.showModal();
+  void settingsMachinesRefresh();
 }
 // Redraw the open pop-up after Settings loads again. A connection, or Add connection, that someone is typing in is
 // carried over as it is (draft, focus and caret), and everything around it is redrawn; a save settles its own form
