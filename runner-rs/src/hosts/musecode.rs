@@ -32,8 +32,10 @@ const DEFAULT_EFFORT: &str = "medium";
 const STOP_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long a process may stay up after its run's terminal record before it is stopped.
 const AFTER_TERMINAL: Duration = Duration::from_secs(5);
-/// Set on every Muse process, the sign-in check's and `--version`'s too, so the launcher never updates itself.
-pub const QUIET: &[(&str, &str)] = &[("MUSE_NO_AUTO_UPDATE", "1"), ("NO_COLOR", "1")];
+/// Set on every Muse process, the sign-in check's and `--version`'s too, so the launcher never updates itself. The
+/// file credential backend keeps a login whole in its config folder's auth.json: on macOS Muse otherwise keeps the token
+/// in the login Keychain, outside the files a switch moves into place or a cancel keeps.
+pub const QUIET: &[(&str, &str)] = &[("MUSE_NO_AUTO_UPDATE", "1"), ("NO_COLOR", "1"), ("TBH_CREDENTIAL_BACKEND", "file")];
 
 /// The catalog id as the CLI's model id; anything else passes through, so a model Meta adds works unchanged.
 pub fn model_for(model: Option<&str>) -> String {
@@ -228,13 +230,98 @@ pub fn mcp_overrides(settings: &Settings) -> (Vec<String>, Env) {
     (args, extra)
 }
 
-/// Whether a Meta-account login file exists: Some(false) when it does not, None when its folder cannot be read
-/// (a bot user's 0700 config folder), which is not "signed out".
+/// Muse's saved credential store as far as Tico can tell from it.
+#[derive(Debug, PartialEq)]
+enum Store {
+    /// No Meta login: never signed in, or signed out (logout leaves `providers` empty).
+    Empty,
+    /// A Meta login held in the file itself, the file backend's form: an API key or an OAuth access token.
+    Login,
+    /// A pointer to a token in the macOS Keychain, outside this folder's files.
+    Keychain,
+    /// Unreadable, or a shape this check does not know: never taken for a login.
+    Unknown,
+}
+
+fn store(path: &Path) -> Store {
+    match std::fs::symlink_metadata(path) {
+        Ok(m) if m.is_file() => {},
+        Ok(_) => return Store::Unknown,
+        Err(e) if matches!(e.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory) => return Store::Empty,
+        Err(_) => return Store::Unknown,
+    }
+    let Some(bytes) = read_auth(path, Duration::from_secs(5)).filter(|b| b.len() <= 65536) else {
+        return Store::Unknown;
+    };
+    let Ok(auth) = serde_json::from_slice::<Value>(&bytes) else {
+        return Store::Unknown;
+    };
+    // 1 is the file backend's store; 2 is the one whose credentials are Keychain pointers.
+    let (Some(version @ (1 | 2)), Some(providers)) = (auth["schema_version"].as_u64(), auth["providers"].as_object()) else {
+        return Store::Unknown;
+    };
+    let meta = match providers.get("meta") {
+        None | Some(Value::Null) => return Store::Empty,
+        Some(Value::Object(meta)) if meta.is_empty() => return Store::Empty,
+        Some(Value::Object(meta)) => meta,
+        _ => return Store::Unknown,
+    };
+    let text = |key: &str| meta.get(key).and_then(Value::as_str).is_some_and(|v| !v.trim().is_empty());
+    match meta.get("storage") {
+        Some(Value::String(s)) if s == "keychain" => return Store::Keychain,
+        None if version == 1 => {}
+        Some(Value::String(s)) if s == "file" && version == 1 => {}
+        _ => return Store::Unknown,
+    }
+    let oauth = text("access_token") && meta.get("mechanism").is_none_or(|m| m == "oauth");
+    if text("api_key") || oauth { Store::Login } else { Store::Unknown }
+}
+
+/// Whether Muse's saved credential store holds a Meta login of its own. Logout leaves the store with no Meta entry;
+/// an unreadable store, a Keychain pointer or any other shape gives no answer, never a "signed in" from the file alone.
 pub fn signed_in(path: &Path) -> Option<bool> {
-    match std::fs::metadata(path) {
-        Ok(m) => Some(m.is_file()),
-        Err(e) if matches!(e.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory) => Some(false),
-        Err(_) => None,
+    match store(path) {
+        Store::Empty => Some(false),
+        Store::Login => Some(true),
+        Store::Keychain | Store::Unknown => None,
+    }
+}
+
+/// Why the saved store cannot be used, when the reason is one the person can act on.
+pub fn store_problem(path: &Path) -> Option<String> {
+    (store(path) == Store::Keychain).then(|| {
+        "Muse Code sign-in is saved in the macOS Keychain, outside Tico's Muse folder: sign in again from Tico".into()
+    })
+}
+
+/// Read as the CLI's user, with bounded output and time. A file swapped for a pipe after the metadata check
+/// must not stall readiness or sign-out, and credential contents never belong in diagnostics.
+fn read_auth(path: &Path, timeout: Duration) -> Option<Vec<u8>> {
+    let mut child = crate::isolation::std_command("head").args(["-c", "65537", "--"]).arg(path)
+        .stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().ok()?;
+    let stdout = child.stdout.take()?;
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let result = stdout.take(65537).read_to_end(&mut bytes).map(|_| bytes);
+        let _ = tx.send(result);
+    });
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                if !status.success() {
+                    return None;
+                }
+                return rx.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now())).ok()?.ok();
+            }
+            Ok(None) if std::time::Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
     }
 }
 
@@ -913,6 +1000,7 @@ mod tests {
         let env = std::fs::read_to_string(dir.join("env")).unwrap();
         assert!(env.lines().any(|l| l == "TICO_MCP_1=Bearer lin-secret"));
         assert!(env.lines().any(|l| l == "MUSE_NO_AUTO_UPDATE=1"));
+        assert!(env.lines().any(|l| l == "TBH_CREDENTIAL_BACKEND=file"), "a turn must never fall back to the shared Keychain");
         // A restarted runner resumes the same session by its id.
         assert_eq!(host.resume_thread(&thread, &settings), thread);
         std::fs::remove_dir_all(dir).unwrap();
@@ -997,8 +1085,40 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let dir = temp("muse-auth");
         assert_eq!(signed_in(&dir.join("auth.json")), Some(false));
-        std::fs::write(dir.join("auth.json"), "{}").unwrap();
+        std::fs::write(dir.join("auth.json"), "malformed").unwrap();
+        assert_eq!(signed_in(&dir.join("auth.json")), None);
+        std::fs::write(dir.join("auth.json"), r#"{"schema_version":1,"providers":{}}"#).unwrap();
+        assert_eq!(signed_in(&dir.join("auth.json")), Some(false));
+        std::fs::write(dir.join("auth.json"), r#"{"schema_version":1,"providers":{"meta":{"api_key":"fixture"}}}"#).unwrap();
         assert_eq!(signed_in(&dir.join("auth.json")), Some(true));
+        // Field names as Muse 1.4.9 writes them: the file backend's inline login, the Keychain backend's pointer.
+        let keychain = r#"{"schema_version":2,"providers":{"meta":{"storage":"keychain","subs_active":true}}}"#;
+        for (store, expected) in [
+            (r#"{"schema_version":2,"providers":{}}"#, Some(false)),
+            (r#"{"schema_version":3,"providers":{}}"#, None),
+            (r#"{"schema_version":1,"providers":{"meta":{}}}"#, Some(false)),
+            (r#"{"schema_version":1,"providers":{"meta":null}}"#, Some(false)),
+            (r#"{"schema_version":1,"providers":{"meta":{"mechanism":"oauth","access_token":"t","obtained_via":"device_code"}}}"#, Some(true)),
+            (r#"{"schema_version":1,"providers":{"meta":{"storage":"file","api_key":"k"}}}"#, Some(true)),
+            (keychain, None),
+            (r#"{"schema_version":1,"providers":{"meta":{"storage":"keychain"}}}"#, None),
+            (r#"{"schema_version":2,"providers":{"meta":{"api_key":"k"}}}"#, None),
+            (r#"{"schema_version":1,"providers":{"meta":{"subs_active":true,"user_email":"a@acme.example"}}}"#, None),
+            (r#"{"schema_version":1,"providers":{"meta":{"api_key":" "}}}"#, None),
+            (r#"{"schema_version":1,"providers":{"meta":{"mechanism":"other","access_token":"t"}}}"#, None),
+            (r#"{"schema_version":1,"providers":{"meta":{"storage":"vault","api_key":"k"}}}"#, None),
+        ] {
+            std::fs::write(dir.join("auth.json"), store).unwrap();
+            assert_eq!(signed_in(&dir.join("auth.json")), expected, "{store}");
+            assert_eq!(store_problem(&dir.join("auth.json")).is_some(), store.contains(r#""storage":"keychain""#), "{store}");
+        }
+        std::fs::write(dir.join("auth.json"), " ".repeat(65537)).unwrap();
+        assert_eq!(signed_in(&dir.join("auth.json")), None);
+        std::fs::rename(dir.join("auth.json"), dir.join("target.json")).unwrap();
+        std::os::unix::fs::symlink(dir.join("target.json"), dir.join("auth.json")).unwrap();
+        assert_eq!(signed_in(&dir.join("auth.json")), None);
+        std::fs::remove_file(dir.join("auth.json")).unwrap();
+        std::fs::write(dir.join("auth.json"), r#"{"schema_version":1,"providers":{}}"#).unwrap();
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o000)).unwrap();
         let locked = signed_in(&dir.join("auth.json"));
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -1006,6 +1126,18 @@ mod tests {
         if unsafe { libc::geteuid() } != 0 {
             assert_eq!(locked, None);
         }
+    }
+
+    #[test]
+    fn a_pipe_swapped_in_for_auth_cannot_stall_the_reader() {
+        let dir = temp("muse-auth-pipe");
+        let path = dir.join("auth.json");
+        let cpath = std::ffi::CString::new(path.as_os_str().as_encoded_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(cpath.as_ptr(), 0o600) }, 0);
+        let start = std::time::Instant::now();
+        assert_eq!(read_auth(&path, Duration::from_millis(100)), None);
+        assert!(start.elapsed() < Duration::from_secs(5));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     /// The installed CLI on its offline echo provider, two turns on one thread with the hub MCP server: both land
