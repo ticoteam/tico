@@ -1,4 +1,5 @@
 """Live-meeting provenance survives bot detachment and uses current access on every read."""
+import hashlib
 import json
 from functools import lru_cache
 
@@ -104,7 +105,7 @@ class Sources:
         if not isinstance(refs, dict):
             raise Problem("privacy", "Meeting provenance cannot be authorized", 403)
         cache_key = (mid, include_run, message.get("conversation_id"),
-               json.dumps(refs, sort_keys=True), message.get("in_reply_to"))
+               hashlib.sha256(json.dumps(refs, sort_keys=True).encode()).digest(), message.get("in_reply_to"))
         cached = self.messages.get(cache_key)
         # Only complete root traversals are reusable. A nested traversal may have
         # omitted an ancestor already visited by its caller, so never publish it.
@@ -135,6 +136,11 @@ class Sources:
         return ids
 
     def _attempt(self, aid):
+        from . import provenance_clock
+        return frozenset(provenance_clock.cached(
+            self.c, ("meeting_attempt", aid), lambda: self._attempt_uncached(aid)))
+
+    def _attempt_uncached(self, aid):
         ids = set()
         for row in self.c.execute("SELECT m.* FROM attempts a JOIN jobs j ON j.id=a.job_id "
                                   "JOIN messages m ON m.id=j.message_id WHERE a.id=? UNION "

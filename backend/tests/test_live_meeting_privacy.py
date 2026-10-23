@@ -488,3 +488,46 @@ def test_shared_message_provenance_stays_bounded_and_permissions_stay_current(li
         fresh = live_privacy.sources(c)
         assert fresh.message(H.message(c, "shared-chain-98"), include_run=False) == {mid, "missing-meeting"}
         assert not fresh.readable("human:ben", {"missing-meeting"})
+        # A diamond and a cycle through a reusable closure keep the same reachable sources.
+        c.execute("UPDATE messages SET refs_json=? WHERE id='shared-chain-2'",
+                  (encode({"answers": ["shared-common", "shared-chain-0"]}),))
+        c.execute("UPDATE messages SET in_reply_to='shared-chain-3' WHERE id='shared-chain-0'")
+        cyclic = live_privacy.sources(c)
+        expected = {mid, "missing-meeting"}
+        assert cyclic.message(H.message(c, "shared-chain-3"), include_run=False) == expected
+        assert cyclic.message(H.message(c, "shared-chain-4"), include_run=False) == expected
+
+
+
+def test_shared_attempt_provenance_rechecks_membership_and_source_commits(live, derived):
+    from backend import live_privacy
+    mid, attempt = derived
+    store, aid = live.app.state.store, attempt["id"]
+    with store.read_transaction() as c:
+        assert live_privacy.sources(c).attempt_readable("bot:ops", aid)
+    statements = []
+    with store.read_transaction() as c:
+        c.set_trace_callback(statements.append)
+        assert live_privacy.sources(c).attempt(aid) == {mid}
+        c.set_trace_callback(None)
+    assert not any("JOIN jobs j ON j.id=a.job_id" in sql for sql in statements), statements
+    with store.transaction() as c:
+        c.execute("DELETE FROM live_meeting_bots WHERE meeting_id=? AND bot='ops'", (mid,))
+    with store.read_transaction() as c:
+        assert not live_privacy.sources(c).attempt_readable("bot:ops", aid)
+    # A rolled-back source must never enter the Store-wide neutral cache.
+    with pytest.raises(RuntimeError, match="synthetic rollback"):
+        with store.transaction() as c:
+            c.execute("UPDATE messages SET refs_json=? WHERE id=?",
+                      (encode({"live_meetings": ["missing-meeting"]}), attempt["message"]["id"]))
+            assert "missing-meeting" in live_privacy.sources(c).attempt(aid)
+            raise RuntimeError("synthetic rollback")
+    with store.read_transaction() as c:
+        assert live_privacy.sources(c).attempt(aid) == {mid}
+    with store.transaction() as c:
+        # Room binding is a neutral source too; access still checks the current meeting row.
+        c.execute("UPDATE conversations SET room_key='live-meeting:missing-meeting' WHERE id=?",
+                  (attempt["message"]["conversation_id"],))
+    with store.read_transaction() as c:
+        assert "missing-meeting" in live_privacy.sources(c).attempt(aid)
+        assert not live_privacy.sources(c).attempt_readable("human:ben", aid)

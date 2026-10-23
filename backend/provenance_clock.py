@@ -11,8 +11,9 @@ SOURCES = {
     'attempts': ('id', 'bot', 'job_id', 'state'),
     'attempt_inputs': ('attempt_id', 'message_id'),
     'jobs': ('id', 'message_id'),
-    'messages': ('id', 'conversation_id', 'refs_json', 'in_reply_to'),
-    'conversations': ('id', 'task_id'),
+    'messages': ('id', 'conversation_id', 'refs_json', 'in_reply_to', 'from_actor', 'to_actor'),
+    'conversations': ('id', 'task_id', 'room_key'),
+    'live_meeting_turns': ('id', 'meeting_id', 'bot'),
     'tasks': ('id', 'carried_by'),
     'events': ('action', 'target', 'detail_json'),
 }
@@ -31,7 +32,11 @@ def ensure(c):
                                        (('OLD', 'NEW') if operation == 'UPDATE' else
                                         ('OLD',) if operation == 'DELETE' else ('NEW',))))
                 condition = f'({condition}) AND ({relevant})'
-            c.execute(f'CREATE TRIGGER IF NOT EXISTS provenance_{table}_{operation.lower()} AFTER {action} ON {table} '
+            # Upgrade existing clocks when meeting provenance adds source columns.
+            suffix = '_v2' if operation == 'UPDATE' and table in {'messages', 'conversations'} else ''
+            if suffix:
+                c.execute(f'DROP TRIGGER IF EXISTS provenance_{table}_{operation.lower()}')
+            c.execute(f'CREATE TRIGGER IF NOT EXISTS provenance_{table}_{operation.lower()}{suffix} AFTER {action} ON {table} '
                       f'WHEN {condition} BEGIN UPDATE provenance_clock SET value=value+1 WHERE id=1; END')
 
 
