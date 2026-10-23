@@ -247,7 +247,8 @@ function botTaskTabRows(tab, mine) {
   const since = new Date(Date.now() - BOT_DONE_RECENT_DAYS * 86400000).toISOString();
   const finished = t => !V2_ACTIVE.includes(String(t.status)) && !['review', 'ready'].includes(String(t.status));
   const waits = t => t.status === 'waiting' ? String(t.waiting_on || '') : '';
-  const on = {'': () => true, me: t => !!waits(t) && waits(t) === myActor(), person: t => !!actorPerson(waits(t)), bot: t => !!actorSlug(waits(t))}[tab.waiting_on || ''];
+  // A value this page does not know (a newer server's) filters nothing rather than breaking the list.
+  const on = {me: t => !!waits(t) && waits(t) === myActor(), person: t => !!actorPerson(waits(t)), bot: t => !!actorSlug(waits(t))}[tab.waiting_on] || (() => true);
   return mine.filter(t => (!tab.types?.length || tab.types.includes(pipelineTypeId(t))) && (tab.states || []).includes(String(t.status))
       && on(t) && !(finished(t) && (isRecurringTask(t) || String(t.done_at || t.closed_at || t.updated || '') < since)))
     .sort((a, b) => String(b.created || '').localeCompare(String(a.created || '')));
