@@ -145,7 +145,8 @@ buys it, who you compete with, and what to watch. Only the first must be answere
 is given, so **Skip for now** leaves and **Continue** picks up at the same question, in any browser. The last question's
 **Start research** files "Set up the market map" (below), which builds the map from the answers and sets what Market tracks:
 the Coverage universe page opens with a "What Market tracks" section (the competitors, the buyer segments, and the
-channels, topics, rules and people to watch, each with its entity id), and the daily curate routine puts those first.
+channels, topics, rules and people to watch, each with its entity id once it is in the graph, or marked "not found yet"),
+and the daily curate routine puts those first.
 Everyone else sees "Nothing here yet."
 
 | Endpoint | Who |

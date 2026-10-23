@@ -138,8 +138,9 @@ A page with nothing found says what you looked for, in one line. Do not pad it.
 
 1. Rewrite the Overview and Coverage universe last, from what the graph now holds. The Coverage universe opens
    with a `## What Market tracks` section: the competitors, the buyer segments, and the channels, topics, rules
-   and people to watch, each with its entity id, starting with what the owner named. Something the owner named
-   that you could not find or verify stays on the list, marked "not found yet", so the curate routine looks again.
+   and people to watch, each with its entity id once it is in the graph, starting with what the owner named.
+   Something the owner named that you could not find or verify stays on the list without an id, marked
+   "not found yet", so the curate routine looks again.
 2. From here on you keep the map current from what others report: the daily "Curate the market" routine
    (`playbooks/curate-the-market.md`). Note in `state.md` what is thin and which sources could not be read, so
    the next curate pass knows where to look.
