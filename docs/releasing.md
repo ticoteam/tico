@@ -10,8 +10,10 @@ then the Release Manager tags it once the release checks are green. Keep those v
 after publishing a tag, so later builds retain the complete history and do not announce already shipped work again.
 The existing CHANGELOG checks still guard the release commit and shipped history.
 The release cut normally lands as a direct, CHANGELOG-only commit on `main` before validation and tagging.
-If the cut lands by pull request instead, it needs review at its final head and a `Changelog-Release: vX.Y.Z`
-commit trailer for each version section it changes; preserve the trailers in the merged commit. A pull request
+If the cut lands by pull request instead, it must change only `CHANGELOG.md`, needs review at its final head,
+and each notes commit needs a `Changelog-Release: vX.Y.Z` trailer for each version section it changes;
+preserve the trailers in the merged commit. PR checks reject ordinary changelog edits before selecting tests.
+A pull request
 that merges notes back to `main` or corrects a shipped section needs the same trailers. Once the notes are on
 `main`, a released section that differs from its tag fails the tests.
 
