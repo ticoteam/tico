@@ -5,7 +5,8 @@ import json
 import os
 import sqlite3
 import threading
-from contextlib import contextmanager
+from collections import deque
+from contextlib import ExitStack, contextmanager
 
 import yaml
 
@@ -192,6 +193,14 @@ CREATE TABLE IF NOT EXISTS attempts(
  token_hash TEXT NOT NULL UNIQUE, state TEXT NOT NULL, lease_until TEXT NOT NULL,
  created TEXT NOT NULL, started TEXT, finished TEXT, thread_id TEXT,
  result_json TEXT, final_text TEXT, last_seq INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS attempt_diagnostics(
+ attempt_id TEXT PRIMARY KEY REFERENCES attempts(id), heartbeat_at TEXT, last_event_at TEXT, last_event TEXT,
+ end_reason TEXT, ended_at TEXT, stalled_at TEXT, stderr_tail TEXT, stderr_at TEXT);
+CREATE INDEX IF NOT EXISTS attempt_diagnostics_stderr ON attempt_diagnostics(stderr_at) WHERE stderr_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS attempt_diagnostics_stalled ON attempt_diagnostics(stalled_at) WHERE stalled_at IS NOT NULL;
+-- Bound history reads by time before evaluating their visibility gates.
+CREATE INDEX IF NOT EXISTS attempts_created ON attempts(created);
+CREATE INDEX IF NOT EXISTS attempts_bot_state ON attempts(bot,state);
 CREATE TABLE IF NOT EXISTS attempt_events(
  id INTEGER PRIMARY KEY AUTOINCREMENT, attempt_id TEXT NOT NULL REFERENCES attempts(id),
  seq INTEGER NOT NULL, kind TEXT NOT NULL, payload_json TEXT NOT NULL, created TEXT NOT NULL,
@@ -409,12 +418,19 @@ MAIL_RETENTION_DAYS = 180
 # answers again, and an empty claim handed out no lease. They arrive every 15 s per runner
 # (the heartbeat reply carries every assignment), and grew to most of the database file. A claim that leased a job stays replayable so a lost reply cannot
 # strand the lease.
+# A running turn asks for steering input every few seconds, and almost every answer is empty; an answer that
+# took input stays replayable. Output events replay by their own sequence numbers (execution.events), so a
+# stored receipt for each batch only grew the table: together they were most of its writes.
 def is_poll(operation, result):
     if operation in ("/api/v2/runners/heartbeat", "/api/v2/runners/performance"):
         return True
     if operation == "/api/v2/jobs/claim":
         return isinstance(result, dict) and result.get("attempt") is None
-    return operation.startswith("/api/v2/attempts/") and operation.endswith("/renew")
+    if not operation.startswith("/api/v2/attempts/"):
+        return False
+    if operation.endswith("/inputs"):
+        return isinstance(result, dict) and not result.get("messages")
+    return operation.endswith(("/renew", "/events"))
 
 
 def encode(value):
@@ -619,6 +635,38 @@ def _pooled(base):
     return type("Pooled" + base.__name__, (base,), body)
 
 
+class WriterGate:
+    """FIFO admission: a scheduler opening its next transaction goes behind already waiting requests."""
+
+    def __init__(self, timeout=30):
+        self.lock = threading.Lock()
+        self.queue = deque()
+        self.timeout = timeout
+
+    def acquire(self):
+        ready = threading.Event()
+        with self.lock:
+            self.queue.append(ready)
+            if len(self.queue) == 1:
+                ready.set()
+        try:
+            if not ready.wait(self.timeout):
+                raise sqlite3.OperationalError("database is locked")
+        except BaseException:
+            with self.lock:
+                first = self.queue[0] is ready
+                self.queue.remove(ready)
+                if first and self.queue:
+                    self.queue[0].set()
+            raise
+
+    def release(self):
+        with self.lock:
+            self.queue.popleft()
+            if self.queue:
+                self.queue[0].set()
+
+
 class Store:
     def __init__(self, settings, recorder=None):
         self.settings = settings
@@ -633,6 +681,9 @@ class Store:
         # which on a large install cost more than most reads themselves.
         self.pooled = _pooled(self.factory)
         self.pool, self.pool_file, self.pool_lock = [], None, threading.Lock()
+        # In-process writers queue before BEGIN instead of competing in SQLite's busy-handler sleeps.
+        # Reads still use independent WAL snapshots; other processes remain governed by busy_timeout.
+        self.writer = WriterGate()
 
     def connect(self, factory=None, check_same_thread=True):
         c = sqlite3.connect(str(self.settings.db_path), timeout=30, isolation_level=None,
@@ -642,7 +693,10 @@ class Store:
         # As hubdb.connect: a writer waits out a backup checkpoint or a long scheduler pass
         # rather than answering storage_unavailable.
         c.execute("PRAGMA busy_timeout=30000")
-        c.execute("PRAGMA synchronous=FULL")
+        # In WAL mode NORMAL syncs at checkpoints, not on every commit inside the writer gate, where a sync
+        # waiting behind other disk writes on the host held every writer for seconds. The database cannot
+        # corrupt; an OS crash or power loss can lose the last commits, as with hubdb.connect.
+        c.execute(f"PRAGMA synchronous={H.synchronous('NORMAL')}")
         return c
 
     def initialize(self, *, seed_market=True, adopt_legacy=False):
@@ -1189,6 +1243,10 @@ class Store:
                     c.execute(H.TASKS_DUE_INDEX)
                     c.execute(H.TASKS_RESUME_INDEX)
                     c.execute("INSERT INTO cloud_migrations VALUES(61,?)", (H.now(),))
+                if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=62").fetchone():
+                    # A day of history must not authorize every older attempt first.
+                    c.execute("CREATE INDEX IF NOT EXISTS attempts_created ON attempts(created)")
+                    c.execute("INSERT INTO cloud_migrations VALUES(62,?)", (H.now(),))
                 from .public_roadmaps import migrate as migrate_public_roadmaps
                 migrate_public_roadmaps(c)
                 H.ensure_market_reads(c)
@@ -1223,6 +1281,11 @@ class Store:
                 # Gateway segments are recorded under, even if the key is rotated or cleared before the run ends.
                 # NULL with none handed. Unversioned like stop_requested.
                 H.add_column(c, "attempts", "gateway_key_id", "TEXT")
+                # The runtime and model the claim handed the bot's turn (execution.ran_another_model): a model change
+                # while it is out is told from an effort change. NULL for a turn from before. Unversioned like
+                # stop_requested.
+                H.add_column(c, "attempts", "handed_runtime", "TEXT")
+                H.add_column(c, "attempts", "handed_model", "TEXT")
                 # A queued message a person sent with Stop and redirect (backend/execution.py stop): it is claimed
                 # before the bot's other queued work once the stopped turn ends. Unversioned like stop_requested.
                 H.add_column(c, "jobs", "redirect", "INTEGER NOT NULL DEFAULT 0")
@@ -1239,6 +1302,9 @@ class Store:
                 # Unversioned like redirect: an older release never reads the columns and claims every queued job.
                 from .wake_presets import ensure as ensure_wake_presets
                 ensure_wake_presets(c)
+                # What a turn in a task's session was handed, the bot's task model or the fallback from it, and why
+                # (backend/task_models.py). Unversioned: an older release never reads it.
+                H.add_column(c, "attempts", "model_json", "TEXT")
                 # The change log live events are read from (backend/events.py); idempotent.
                 from .events import ensure as ensure_changes
                 ensure_changes(c)
@@ -1415,25 +1481,20 @@ class Store:
 
     @contextmanager
     def transaction(self):
-        with self.read() as c:
-            if self.recorder is None:
-                c.execute("BEGIN IMMEDIATE")
-                try:
-                    yield c
-                    message_links.refresh_dirty(c)
-                    c.commit()
-                except Exception:
-                    c.rollback()
-                    raise
-                return
-            # The flight recorder: how long the write lock took to get, and how long it was held.
-            from .flight import begin
-            done = begin(c, self.recorder)
+        from .flight import begin
+        # The gate is released only after commit/rollback, including message-link maintenance.
+        with ExitStack() as stack:
+            c = None
+            def checkout():
+                nonlocal c
+                c = stack.enter_context(self.read())
+                return c
+            done = begin(None, self.recorder, gate=self.writer, checkout=checkout)
             try:
                 yield c
                 message_links.refresh_dirty(c)
                 c.commit()
-            except Exception:
+            except BaseException:
                 c.rollback()
                 raise
             finally:

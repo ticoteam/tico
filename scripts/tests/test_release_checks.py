@@ -152,6 +152,79 @@ def test_python_shards_cover_every_collected_file_once_balanced_by_tests(monkeyp
     assert release_checks.parse_shard('3/4') == (3, 4)
 
 
+def test_python_shards_balance_by_recorded_seconds_and_still_run_unrecorded_files(tmp_path, monkeypatch):
+    import json
+    timings = tmp_path / 'test-timings.json'
+    timings.write_text(json.dumps({'default': {'a.py': 1, 'b.py': 30, 'c.py': 10, 'gone.py': 99},
+                                   'release': {'a.py': 50}}))
+    monkeypatch.setattr(release_checks, 'TIMINGS', timings)
+    listing = '\n'.join(['a.py::t%d' % i for i in range(6)] + ['b.py::t%d' % i for i in range(3)]
+                        + ['c.py::t0', 'c.py::t1', 'd.py::t', '', '12 tests collected in 0.1s'])
+    monkeypatch.setattr(release_checks, 'subprocess', SimpleNamespace(
+        run=lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=listing, stderr='')))
+    # By seconds, not count: a.py's 6 quick tests share a shard with d.py, which has no record and weighs its one
+    # test at the recorded 41 s / 11 tests; a recorded file that is no longer collected (gone.py) is ignored.
+    default = [release_checks.shard_files(index, 3, {}, selection=()) for index in (1, 2, 3)]
+    assert default == [['b.py'], ['c.py'], ['a.py', 'd.py']]
+    # The release step reads its own record: only a.py is recorded, the rest weigh 50/6 s per test.
+    release = [release_checks.shard_files(index, 3, {}) for index in (1, 2, 3)]
+    assert release == [['a.py'], ['b.py'], ['c.py', 'd.py']]
+    for shards in (default, release):   # every collected file, the unrecorded one included, exactly once
+        assert sorted(sum(shards, [])) == ['a.py', 'b.py', 'c.py', 'd.py']
+    timings.unlink()   # no record at all: balanced by test count, as before
+    assert [release_checks.shard_files(index, 3, {}) for index in (1, 2, 3)] == [['a.py'], ['b.py'], ['c.py', 'd.py']]
+
+
+def test_an_unrecorded_file_weighs_its_tests_at_the_recorded_seconds_per_test(tmp_path, monkeypatch):
+    import json
+    timings = tmp_path / 'test-timings.json'
+    timings.write_text(json.dumps({'default': {'a.py': 10, 'b.py': 10, 'z.py': 0.0}}))
+    monkeypatch.setattr(release_checks, 'TIMINGS', timings)
+    listing = '\n'.join(['a.py::t', 'b.py::t', 'z.py::t', 'new.py::t0', 'new.py::t1', 'new.py::t2'])
+    monkeypatch.setattr(release_checks, 'subprocess', SimpleNamespace(
+        run=lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=listing, stderr='')))
+    # new.py's 3 tests at 20 s / 3 recorded tests weigh 20 s, the heaviest, so it goes first; at 1 s a test it would
+    # go last. z.py's recorded 0.0 is a record, not a missing one.
+    assert [release_checks.shard_files(index, 3, {}, selection=()) for index in (1, 2, 3)] == [
+        ['new.py'], ['a.py', 'z.py'], ['b.py']]
+    assert release_checks.file_weights({'z.py': 1, 'new.py': 3}, {'z.py': 0.0, 'a.py': 1})[1] == ['new.py']
+
+
+def test_recorded_timings_split_into_three_shards_within_ten_percent_of_the_mean(monkeypatch):
+    """The checked-in record: on its own seconds, the slowest of the three shards is within 10% of the mean."""
+    import json
+    recorded = json.loads(release_checks.TIMINGS.read_text())
+    for kind, selection in (('default', ()), ('release', release_checks.RELEASE_SELECTION)):
+        timings = recorded[kind]
+        listing = '\n'.join(f'{name}::test' for name in timings)
+        monkeypatch.setattr(release_checks, 'subprocess', SimpleNamespace(
+            run=lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=listing, stderr='')))
+        shards = [release_checks.shard_files(index, 3, {}, selection=selection) for index in (1, 2, 3)]
+        assert sorted(sum(shards, [])) == sorted(timings)
+        loads = [sum(timings[name] for name in shard) for shard in shards]
+        assert max(loads) <= 1.1 * sum(loads) / 3, (kind, loads)
+
+
+def test_record_timings_writes_each_files_seconds_from_junit_reports(tmp_path, monkeypatch):
+    import json
+    import pytest
+
+    def report(name, cases):
+        path = tmp_path / name
+        path.write_text('<testsuites><testsuite>' + ''.join(
+            '<testcase ' + (f'file="{file}" ' if file else '') + f'name="t" time="{seconds}"/>' for file, seconds in cases)
+            + '</testsuite></testsuites>')
+        return str(path)
+    monkeypatch.setattr(release_checks, 'TIMINGS', tmp_path / 'test-timings.json')
+    default = report('default.xml', [('a.py', 1.5), ('a.py', 2), ('b.py', 0.25)])
+    slow = report('slow.xml', [('a.py', 10), ('s.py', 4)])
+    assert release_checks.main(['--record-timings', default, slow]) == 0
+    assert json.loads(release_checks.TIMINGS.read_text()) == {
+        'default': {'a.py': 3.5, 'b.py': 0.25}, 'release': {'a.py': 13.5, 'b.py': 0.25, 's.py': 4.0}}
+    with pytest.raises(RuntimeError, match='xunit1'):
+        release_checks.record_timings(report('xunit2.xml', [(None, 1)]), slow)
+
+
 def test_shard_alone_runs_a_file_group_of_the_default_suite_pr_checks_run(monkeypatch, capsys):
     listing = '\n'.join(['a.py::t%d' % i for i in range(4)] + ['b.py::t0', 'b.py::t1', 'c.py::t', 'd.py::t',
                                                                  '', '8/9 tests collected (1 deselected) in 0.1s'])

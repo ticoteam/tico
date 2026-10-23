@@ -85,22 +85,27 @@ It prints a reusable private owner sign-in link. Keep it private: anyone with th
 Recover the token any time with `docker compose exec server cat /data/local-owner.token` in the install directory.
 Open the link in your browser: the app opens on **Finish setup**. Then:
 
-1. **Choose AI providers** (optional): leave them all unticked to do it later. Bots need one to run; until then each bot says
-   "Add an AI provider", and Settings > Computers > Models adds it. With a gateway key from Tico, the
-   [Tico AI Gateway](ai-gateway.md) card there adds Tico Cheap 1.1, Mid 1.0 and Power 1.0. The step starts with how bots get
-   their models; **Your Claude and ChatGPT subscriptions, plus Tico Gateway** is recommended
-   ([the four choices](ai-gateway.md#choose-how-bots-get-their-models)).
+1. **Choose AI providers** (optional): **Your Claude and ChatGPT subscriptions, plus Tico Gateway** is recommended
+   ([the four choices](ai-gateway.md#choose-how-bots-get-their-models)). To choose later, select
+   **Your company's plans or API keys**, untick its providers and press **Skip for now**. Bots need a provider
+   to run; until then each bot says "Add an AI provider", and **Settings > Computers > Models** adds it.
+   With a gateway key from Tico, the [Tico AI Gateway](ai-gateway.md) card there adds Tico Cheap 1.1, Mid 1.0 and Power 1.0.
 2. **Name the team**, say what it does, and pick its groups. A few bots are suggested for each group. For the first result
    below, pick **Marketing** and keep **Content Marketer** (`content`) checked; untick the other suggestions if you want only it.
 3. **Add computer**: choose *A Linux or cloud server (Docker)*, press **Add computer**, and run the line it shows on this computer.
    It joins the server's own Docker network, so it needs no domain, and the computer shows online in a few seconds.
 4. **Create my team.** The four built-in bots are created automatically. Your selected starters are placed on the computer,
    with **Needs setup** until you talk to them.
-5. **Sign in to a model.** In **Settings > Computers**, wait for the selected harness to be installed, then press **Sign in**
-   beside Codex or Claude Code. Open the provider link and enter its device code, or paste the returned code into Tico when asked.
+5. **Sign in to your models.** For either Claude and ChatGPT subscription choice, sign in to both Claude Code and Codex
+   (ChatGPT through Codex). **Tico Gateway only** needs no model sign-in. In **Settings > Computers**, wait for each
+   selected harness to be installed, then press **Sign in** beside it.
+   Open the provider link and enter its device code, or paste the returned code into Tico when asked.
    Wait for the computer's model sign-in to show **ready**. Other harnesses use their own terminal sign-in; API credentials and
    profiles are explained in [Harnesses](harnesses.md). Pick a provider in **Settings > Computers > Models** if you skipped it,
    then choose the starter's model in **Settings > Bots**.
+
+**Unreleased wizard layout:** Provider checkboxes appear only under **Your company's plans or API keys**.
+The Computer step shows sign-in commands for your provider choice ([Finish setup](onboarding.md#the-screens)).
 
 ### Your first result
 
@@ -116,7 +121,7 @@ a Claude sign-in for Claude Code, or an API key ([Harnesses](harnesses.md)). No 
    [First-result recovery](#first-result-recovery). Runs cost what your provider charges; [Usage](usage.md) shows the estimate.
    With no spending limit set (the default) there is no cap. A bot that reaches an hourly, daily, weekly or monthly limit (its own, its group's or the team's) takes no new work
    ("Paused: over its daily limit") until the period turns over or someone raises it; a run already in progress finishes.
-   Runs on a ChatGPT or Claude sign-in count toward a limit only when **Count subscription runs** is on.
+   Runs on a ChatGPT or Claude sign-in count toward a limit too, unless you turn off **Count subscription runs**.
 2. **Set up Content Marketer.** Open its page and press **Set up**. Paste the [sample answers](#sample-answers-for-content-marketer)
    and answer anything else it asks. It posts a first draft in the same chat, labelled "First draft, not yet reviewed".
    Outbound sending stays off until you turn it on for that bot.

@@ -161,3 +161,10 @@ def test_only_the_owner_and_administrators_set_team_and_group_limits(api):
     put(api, "usage/pools/groups/eng", {"hourly_usd": 1}, "ben-test", expected=403)
     assert get(api, "usage/limits", "ben-test")["pools"] is None
     assert get(api, "usage/limits")["pools"]["company"]["hourly_usd"] == 10
+
+
+def test_subscription_runs_count_unless_the_team_turns_that_off(api):
+    assert get(api, "usage/limits")["default"]["count_subscription"] is True       # never chosen
+    assert put(api, "usage/limits", {"daily_usd": 20, "count_subscription": False})["default"]["count_subscription"] is False
+    assert get(api, "usage/limits")["default"]["count_subscription"] is False      # a saved choice stays
+    assert put(api, "usage/limits", {"daily_usd": 20})["default"]["count_subscription"] is True

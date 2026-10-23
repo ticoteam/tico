@@ -71,6 +71,31 @@ def test_create_permissions_limit_old_computer_and_attach(prepared):
     assert response.status_code == 403
 
 
+def test_a_bot_can_create_its_51st_worktree_but_not_its_101st(prepared):
+    api, tid, _ = prepared
+    with api.app_state.store.transaction() as c:
+        filler = H.task_create(c, 'human:ana', 'Parked work', 'Existing checkouts', 'bot:cmo')['id']
+        c.execute("UPDATE tasks SET status='doing' WHERE id=?", (filler,))
+
+    def seed(start, stop):
+        with api.app_state.store.transaction() as c:
+            for i in range(start, stop):
+                link = uuid.uuid4().hex
+                c.execute("INSERT INTO task_links(id,task_id,kind,url,title,state,added_by,created,repo,path,detail_json) "
+                          "VALUES(?,?,'worktree',?,'Parked','present','bot:cmo',?,'Acme/product',?,?)",
+                          (link, filler, 'worktree:' + link, H.now(), f'tasks/{filler[:8]}/parked{i}',
+                           json.dumps({'owner': 'bot:cmo'})))
+
+    seed(0, 50)
+    response = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test')
+    assert response.status_code == 200, response.text
+    seed(50, 99)  # 99 parked checkouts plus the newly created one fill all 100 places.
+    refused = post(api, f'tasks/{filler}/worktrees', {'repo': 'Acme/product'}, 'bot-test')
+    assert refused.status_code == 409, refused.text
+    assert refused.json()['error']['code'] == 'worktree_limit'
+    assert refused.json()['error']['limit'] == 100
+
+
 def test_heartbeat_cleanup_waits_for_prs_restore_and_old_report(prepared):
     api, tid, _ = prepared
     link = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}).json()
@@ -295,6 +320,29 @@ def test_heartbeat_writes_only_changes_and_backs_off_a_refused_cleanup(prepared)
         assert json.loads(c.execute('SELECT detail_json FROM task_links WHERE id=?', (link['link_id'],)).fetchone()[0])['cleanup_gave_up']
 
 
+def test_a_removed_checkout_reported_every_heartbeat_is_not_a_task_change(prepared):
+    api, tid, _ = prepared
+    link = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}).json()
+    report = {'link_id': link['link_id'], 'state': 'present', 'branch': link['branch'], 'ahead': 0, 'dirty_files': 0,
+              'last_commit': 'abc', 'last_activity': 1792560695.4}
+    body = {'version': '0.3.2', 'platform': 'linux', 'readiness': {'schema_version': 1, 'bots': {}, 'worktrees': True},
+            'worktrees': [report]}
+    post(api, 'runners/heartbeat', body, 'runner-test')
+    # Gone from disk, the computer reports only the link and its state: no commit, no activity.
+    body['worktrees'] = [{'link_id': link['link_id'], 'state': 'removed'}]
+    post(api, 'runners/heartbeat', body, 'runner-test')
+
+    def written():
+        with api.app_state.store.read() as c:
+            return (c.execute("SELECT count(*) FROM changes WHERE topic='tasks' AND kind='link' AND subject_id=?",
+                              (tid,)).fetchone()[0],
+                    c.execute('SELECT updated,detail_json FROM task_links WHERE id=?', (link['link_id'],)).fetchone())
+    seen = written()
+    for _ in range(3):
+        assert post(api, 'runners/heartbeat', body, 'runner-test').status_code == 200
+    assert written() == seen, 'a removed checkout reported again is not activity'
+
+
 def test_a_refused_cleanup_keeps_its_error_across_a_computer_restart(prepared):
     api, tid, _ = prepared
     link = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}).json()
@@ -368,6 +416,19 @@ def test_finished_pr_releases_an_open_tasks_worktree_and_the_limit_names_it(prep
     with api.app_state.store.transaction() as c:
         H.task_link(c, 'bot:cmo', tid, 'https://github.com/Acme/product/pull/2')
     assert post(api, 'runners/heartbeat', body, 'runner-test').json()['worktree_actions'] == []
+    # Once the follow-up also merges, the computer can finish cleanup while the ticket still waits for release.
+    with api.app_state.store.transaction() as c:
+        c.execute("UPDATE task_links SET state='merged' WHERE task_id=? AND kind='pr'", (tid,))
+    body['worktrees'][0].update(ahead=0, dirty_files=0)
+    assert post(api, 'runners/heartbeat', body, 'runner-test').json()['worktree_actions'][0]['release'] is True
+    body['worktrees'][0]['state'] = 'removed'
+    post(api, 'runners/heartbeat', body, 'runner-test')
+    with api.app_state.store.read() as c:
+        assert H.task(c, tid)['status'] == 'waiting'
+        assert c.execute('SELECT state FROM task_links WHERE id=?', (link['link_id'],)).fetchone()[0] == 'removed'
+        released = c.execute("SELECT detail_json FROM events WHERE action='worktree.released' AND target=? "
+                             "AND json_extract(detail_json,'$.link')=?", (tid, link['link_id'])).fetchone()
+        assert json.loads(released[0])['reason'] == 'pull request merged'
 
 
 def test_a_released_worktree_refused_for_unpushed_commits_is_tried_again_after_a_push(prepared):
@@ -1041,3 +1102,137 @@ def test_a_delayed_old_push_clears_on_the_next_clean_report_and_a_real_fix_forwa
     report['state'] = 'removed'
     post(api, 'runners/heartbeat', body, 'runner-test')
     assert released_events(api, tid)[-1]['reason'] == f"pull request merged (stale push {'a' * 12} cleared)"
+
+
+def test_a_stale_pending_tree_whose_pull_requests_finished_is_released_without_a_retry_nudge(prepared):
+    api, tid, _ = prepared
+    link = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test').json()
+    old = H.shift(H.now(), hours=-(W.PENDING_HOURS + 1))
+    with api.app_state.store.transaction() as c:
+        detail = json.loads(c.execute('SELECT detail_json FROM task_links WHERE id=?', (link['link_id'],)).fetchone()[0])
+        detail.update(checkout_state='checkout_ready', current_branch=link['branch'], last_commit='c' * 40,
+                      expected_head='a' * 40, checkout_target='refs/remotes/origin/main', expected_base='b' * 64)
+        c.execute('UPDATE task_links SET detail_json=?,updated=? WHERE id=?', (json.dumps(detail), old, link['link_id']))
+        H.task_link(c, 'bot:cmo', tid, 'https://github.com/Acme/product/pull/1')
+        c.execute("UPDATE task_links SET state='merged' WHERE kind='pr'")
+    actions = post(api, 'runners/heartbeat', {**HEARTBEAT, 'worktrees': []}, 'runner-test').json()['worktree_actions']
+    assert [(a['action'], a.get('release')) for a in actions] == [('remove', True)]
+    with api.app_state.store.read() as c:
+        assert not c.execute("SELECT count(*) FROM messages WHERE to_actor='bot:cmo' AND body LIKE '%Setup did not finish%'"
+                             ).fetchone()[0]
+        assert 'pending_expired' not in json.loads(c.execute('SELECT detail_json FROM task_links WHERE id=?',
+                                                             (link['link_id'],)).fetchone()[0])
+
+
+def test_only_the_task_owners_own_turn_holds_its_tree(prepared):
+    api, tid, _ = prepared
+    with api.app_state.store.transaction() as c:
+        c.execute("UPDATE tasks SET carried_by='a1' WHERE id=?", (tid,))        # cmo's turn on the task is running
+        assert W.live_turn(c, tid, 'bot:cmo')
+        assert not W.live_turn(c, tid, 'bot:cpo')                               # a reviewer's or other bot's view
+        c.execute("UPDATE tasks SET owner='bot:cpo' WHERE id=?", (tid,))        # the task moved to another bot
+        assert not W.live_turn(c, tid, 'bot:cmo')                               # the former owner's turn holds nothing
+        row = {'task_id': tid, 'owner': 'bot:cmo', 'repo': 'Acme/product', 'branch': None}
+        assert W.held_reason(c, row, {}) == ''
+
+
+def test_a_fault_reading_turns_is_raised_not_taken_for_no_live_turn(prepared):
+    import sqlite3
+    api, tid, _ = prepared
+
+    class Failing:
+        def __init__(self, c, message):
+            self.c, self.message = c, message
+
+        def execute(self, sql, *args):
+            if 'FROM attempts' in sql:
+                raise sqlite3.OperationalError(self.message)
+            return self.c.execute(sql, *args)
+    with api.app_state.store.read() as c:
+        assert not W.live_turn(Failing(c, 'no such table: attempts'), tid, 'bot:cmo')    # a local hub
+        with pytest.raises(sqlite3.OperationalError):
+            W.live_turn(Failing(c, 'database disk image is malformed'), tid, 'bot:cmo')
+
+
+def test_a_new_push_after_a_stale_push_was_cleared_resets_the_cleared_flag(prepared):
+    from backend import github
+    api, tid, _ = prepared
+    link = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test').json()
+    with api.app_state.store.transaction() as c:
+        detail = json.loads(c.execute('SELECT detail_json FROM task_links WHERE id=?', (link['link_id'],)).fetchone()[0])
+        c.execute('UPDATE task_links SET detail_json=? WHERE id=?',
+                  (json.dumps({**detail, 'stale_push_cleared': 'a' * 40}), link['link_id']))
+        github.push(c, {'ref': 'refs/heads/' + link['branch'], 'after': 'd' * 40,
+                        'repository': {'full_name': 'Acme/product', 'default_branch': 'main'}})
+        detail = json.loads(c.execute('SELECT detail_json FROM task_links WHERE id=?', (link['link_id'],)).fetchone()[0])
+    assert detail['pushed'] == 'd' * 40 and 'stale_push_cleared' not in detail
+
+
+@pytest.mark.parametrize('guard', ['merge_time', 'branch', 'repository', 'matching', 'legacy'])
+def test_finished_pr_must_match_the_working_allocation(prepared, guard):
+    api, tid, _ = prepared
+    link = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test').json()
+    assert mark_ready(api, tid, link['link_id']).status_code == 200
+    allocation = '2026-10-23T08:00:00.500000Z'
+    merged = '2026-10-23T08:00:00Z' if guard == 'merge_time' else '2026-10-23T08:00:01Z'
+    branch = 'tico/other' if guard == 'branch' else link['branch']
+    repo = 'Acme/other' if guard == 'repository' else 'acme/PRODUCT'
+    if guard == 'legacy':
+        repo = branch = None
+    with api.app_state.store.transaction() as c:
+        detail = json.loads(c.execute('SELECT detail_json FROM task_links WHERE id=?', (link['link_id'],)).fetchone()[0])
+        detail['allocation_started'] = allocation
+        detail['remote'] = {'at': H.now(), 'heads': ['a' * 40]}
+        c.execute('UPDATE task_links SET detail_json=? WHERE id=?', (json.dumps(detail), link['link_id']))
+        c.execute("UPDATE attempts SET state='done' WHERE id='a1'")
+        pr = H.task_link(c, 'bot:cmo', tid, 'https://github.com/Acme/product/pull/7')
+        # Late linking must not make a historical merge belong to the renewed allocation.
+        c.execute("UPDATE task_links SET state='merged',created=?,pr_merged_at=?,repo=?,branch=?,detail_json=? WHERE id=?",
+                  ('2026-10-23T08:00:02.000000Z', merged, repo, branch, json.dumps({'head_sha': 'a' * 40}), pr['id']))
+    body = {**HEARTBEAT, 'worktrees': [
+        {'link_id': link['link_id'], 'state': 'present', 'checkout_state': 'ready',
+         'branch': link['branch'], 'last_commit': 'a' * 40, 'ahead': 0, 'dirty_files': 0}]}
+    response = post(api, 'runners/heartbeat', body, 'runner-test')
+    assert response.status_code == 200, response.text
+    released = guard in ('matching', 'legacy')
+    assert [(a['link_id'], a['action']) for a in response.json()['worktree_actions']] == (
+        [(link['link_id'], 'remove')] if released else [])
+    with api.app_state.store.read() as c:
+        held = {w['link_id']: w for w in W.holdings(c, 'bot:cmo')}
+        assert held[link['link_id']]['clear'] == ('merged' if released else 'in_progress')
+        detail = json.loads(c.execute('SELECT detail_json FROM task_links WHERE id=?', (link['link_id'],)).fetchone()[0])
+        assert any(detail.get(k) for k in W.REMOVAL) == released
+
+
+def test_old_merged_pr_releases_its_tree_but_keeps_a_newer_doing_allocation(prepared):
+    api, tid, _ = prepared
+    original = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test').json()
+    assert mark_ready(api, tid, original['link_id']).status_code == 200
+    with api.app_state.store.transaction() as c:
+        pr = H.task_link(c, 'bot:cmo', tid, 'https://github.com/Acme/product/pull/7')
+        old = H.shift(H.now(), days=-2)
+        c.execute('UPDATE task_links SET created=? WHERE id=?', (H.shift(old, days=-1), original['link_id']))
+        c.execute("UPDATE task_links SET state='merged',created=?,branch=?,detail_json=? WHERE id=?",
+                  (old, original['branch'], json.dumps({'head_sha': 'a' * 40}), pr['id']))
+    newer = post(api, f'tasks/{tid}/worktrees/attach',
+                 {'repo': 'Acme/product', 'path': f'tasks/{tid[:8]}/new', 'branch': 'tico/new'}, 'bot-test').json()
+    assert mark_ready(api, tid, newer['link_id']).status_code == 200
+    # A missed webhook can link the historical PR after the newer allocation starts.
+    with api.app_state.store.transaction() as c:
+        c.execute('UPDATE task_links SET created=?,pr_merged_at=? WHERE id=?', (H.now(), old, pr['id']))
+    body = {**HEARTBEAT, 'worktrees': [
+        {'link_id': tree['link_id'], 'state': 'present', 'checkout_state': 'ready',
+         'branch': tree['branch'], 'last_commit': 'a' * 40} for tree in (original, newer)]}
+    actions = post(api, 'runners/heartbeat', body, 'runner-test').json()['worktree_actions']
+    assert [(a['link_id'], a['action']) for a in actions] == [(original['link_id'], 'remove')]
+    with api.app_state.store.read() as c:
+        detail = json.loads(c.execute('SELECT detail_json FROM task_links WHERE id=?', (newer['link_id'],)).fetchone()[0])
+        assert not any(detail.get(k) for k in W.REMOVAL)
+        held = {w['link_id']: w for w in W.holdings(c, 'bot:cmo')}
+        assert held[newer['link_id']]['clear'] == 'in_progress'
+        assert held[original['link_id']]['clear'] == 'merged'
+    # Review-step cleanup keeps its established behavior, including task-wide finished PRs.
+    with api.app_state.store.transaction() as c:
+        c.execute("UPDATE tasks SET status='review' WHERE id=?", (tid,))
+    actions = post(api, 'runners/heartbeat', body, 'runner-test').json()['worktree_actions']
+    assert {a['link_id'] for a in actions if a['action'] == 'remove'} == {original['link_id'], newer['link_id']}

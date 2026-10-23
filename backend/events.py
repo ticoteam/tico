@@ -606,6 +606,13 @@ def status_line(c, who, slug, default=None, inputs=None, auth=None):
         return None
     row = privacy.status(c, who, row, **(inputs or {}))
     row["bot_state"] = (H.bot(c, row["bot"]) or {}).get("state")
+    # A turn waiting for its shared ChatGPT login is waiting, not stuck: the line says on whom and its place.
+    from .login_waits import waiting
+    live = c.execute("SELECT id FROM attempts WHERE bot=? AND state IN ('leased','running') ORDER BY created DESC LIMIT 1",
+                     (row["bot"],)).fetchone()
+    line = waiting(c, live[0], row["bot"], who, auth) if live else None
+    if line:
+        row["waiting"] = row["focus"] = line
     if row["bot_state"] == "quarantined":
         # A refusal-count quarantine lifts itself after the cooldown; any other needs a person.
         row["quarantine"] = H.quarantine_resumes(c, row["bot"])
@@ -720,8 +727,10 @@ def _messages(view, rows):
 
 
 def _readable_before_deletion(view, message):
+    from .live_privacy import sources
     try:
-        return view.privacy.readable(view.c, view.principal, view.privacy.message_tasks(view.c, message))
+        return (sources(view.c).message_readable(view.principal, message)
+                and view.privacy.readable(view.c, view.principal, view.privacy.message_tasks(view.c, message)))
     except Problem:
         return False
 

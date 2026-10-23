@@ -169,6 +169,32 @@ def test_a_cleared_key_is_not_signed_back_in_by_the_shared_key(environment):
     assert fetch(api, box)["credentials"][0]["value"] == SHARED
 
 
+def test_switch_to_subscription_keeps_the_key_it_runs_on_and_is_refused_once_the_key_is_cleared(environment):
+    """#1298: a cancelled Switch to subscription leaves the key in use and the computer reading ready on it. After Clear
+    key there is no login to keep, so a switch (a page drawn before the clear) is refused rather than run as a plain
+    sign-in whose cancel would read "The API key is still in use" on a computer with no login; Sign in is the way."""
+    api = setup(environment)
+    grant(api, store(api, "OPENAI_API_KEY", SHARED), "computers")
+    switches = CAPABLE + ["model_switch_type_v1"]
+    box = computer(api, "Team box", source="shared", capabilities=switches)
+    rid = box["runner_id"]
+    first = call(api, "POST", f"runners/{rid}/logins", {"runtime": "codex", "to": "subscription"})
+    report(api, box, first["id"], "waiting")
+    call(api, "POST", f"runners/{rid}/logins/{first['id']}/cancel", {})
+    assert fetch(api, box)["credentials"] == [{"env": "OPENAI_API_KEY", "value": SHARED, "source": "shared"}]
+    assert (listed(api, box)["signed_out"], listed(api, box)["key_cleared"]) == ({}, [])
+    cleared = call(api, "POST", f"runners/{rid}/keys/clear", {"runtime": "codex"})["computers"][0]["login"]
+    report(api, box, cleared["id"], "signed_out")
+    heartbeat(api, box["token"], None, switches)
+    refused = call(api, "POST", f"runners/{rid}/logins", {"runtime": "codex", "to": "subscription"}, expected=409)
+    assert "its key was cleared. Sign in" in refused["error"]["detail"]
+    assert pending(api, box) == []
+    assert listed(api, box)["key_cleared"] == ["codex"] and fetch(api, box)["credentials"] == []
+    signed = call(api, "POST", f"runners/{rid}/logins", {"runtime": "codex"})
+    report(api, box, signed["id"], "signed_in")
+    assert listed(api, box)["signed_out"] == {}
+
+
 def test_this_computer_only_or_all_of_them_for_a_key_serving_several_computers(environment):
     """Acceptance: the shared key's ask lists the computers it serves; "this computer only" leaves the others on it,
     "all of them" clears it everywhere, and an offline one clears its copy when it is next online."""

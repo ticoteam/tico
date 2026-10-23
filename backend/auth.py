@@ -555,6 +555,22 @@ class Auth:
             return True
         return self.manages(c, who, "bot", slug)
 
+    def bot_above(self, c, who, slug):
+        """Whether the caller is a bot's own run that sits above this bot in the `reports_to` chain: a manager bot,
+        or one above its manager. It already has full access to the bot (`bot_accesses`); this is for the few reads
+        that check the caller's kind before access, like a bot's routines. Never true for a run acting for someone."""
+        if who.role != "bot" or who.via or not str(who.actor).startswith("bot:"):
+            return False
+        me = H.actor_id(who.actor)
+        parents = {r["bot"]: r["reports_to"] or "" for r in read_cache.configs(c)}
+        seen, parent = {slug}, parents.get(slug, "")
+        while parent and parent not in seen:
+            if parent == me:
+                return True
+            seen.add(parent)
+            parent = parents.get(parent, "")
+        return False
+
     def botops_manages(self, c, who, slug):
         """BotOps in its own run (the daily update, or a routine only the owner wrote: `botops_act.own_run`) manages
         every bot that is not built in: its tools, repositories, contact and Instructions, not its people, status,
@@ -862,6 +878,10 @@ class Auth:
         `reports_to` chain also reads its reports' work: a run on a task or a routine, or one a bot asked for. A run
         a person started by chatting stays theirs, and peers and the bots above `bot` keep the conversation rule.
         The task fence (backend/task_privacy.py) still applies on top."""
+        from .live_privacy import sources
+        from .task_privacy import actor
+        if not sources(c).message_readable(actor(who), message):
+            raise Problem("not_found", "Turn not found", 404)
         if who.role == "bot" and H.actor_id(who.actor) != bot and above(
                 {r["bot"]: r["reports_to"] or "" for r in read_cache.configs(c)}, H.actor_id(who.actor), bot):
             from . import task_privacy
@@ -873,11 +893,16 @@ class Auth:
                 pass
         self.conversation(c, who, message["conversation_id"])
 
-    def conversation(self, c, who, conversation_id):
+    def conversation(self, c, who, conversation_id, *, write=False):
         self.domain(who)
         row = H.conversation(c, conversation_id)
         if not row:
             raise Problem("not_found", "Conversation not found", 404)
+        from .live_privacy import require_conversation, sources
+        from .task_privacy import actor
+        meeting_room = require_conversation(c, actor(who), conversation_id)
+        if write and (meeting_room or sources(c).conversation(conversation_id)):
+            raise Problem("forbidden", "Use live meeting chat for scoped meeting replies", 403)
         if row.get("task_id"):
             self.task(c, who, row["task_id"])
             if row.get("kind") == "task":
@@ -900,6 +925,8 @@ class Auth:
                     pass
                 else:
                     raise Problem("forbidden", "This conversation is outside the current execution context", 403)
+            return row
+        if meeting_room:
             return row
         scope = row.get("scope") or "direct"
         if scope == rooms.PERSONAL:

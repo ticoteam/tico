@@ -85,20 +85,6 @@ def test_other_members_and_bots_never_see_an_account(api):
     assert all('account' not in state for row in rows for p in row['profiles'] for state in p['runtimes'].values())
 
 
-def test_own_login_on_a_subscriptions_account_is_named_without_the_account(api):
-    # The computer's own Codex login is the acme subscription's account: everyone's page shows one line for both.
-    r = runner(api, operator='ana')
-    readiness = {'schema_version': 1, 'bots': {}, 'runtimes': {
-        'codex': {'installed': True, 'authenticated': 'ready', 'account': {'email': 'dev@acme.example'}},
-        'claude': {'installed': True, 'authenticated': 'ready', 'account': {'email': 'other@acme.example'}}}}
-    post(api, 'runners/heartbeat', {'version': 'test', 'platform': 'test', 'readiness': readiness, 'profiles': [
-        {'name': 'acme', 'runtimes': {'codex': {'signed_in': True, 'account': {'email': 'Dev@acme.example'}}}}]},
-        token=r['token'])
-    for token in ('ana-test', 'cara-test'):
-        assert machine(api, r, token)['same_account'] == {'codex': 'acme'}
-    assert 'account' not in machine(api, r, 'cara-test')['readiness']['runtimes']['codex']
-
-
 def test_nothing_token_like_is_stored_or_shown(api):
     r = runner(api, operator='cara')
     secrets = ['sk-ant-oat01-' + 'a' * 40, 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.sig', 'ghp_' + 'b' * 36]

@@ -4,10 +4,11 @@ Unrelated historical blobs are not loaded. Small source maps are loaded only whe
 query touches that kind of content, and recursive lookups have bounded LRU caches.
 """
 from collections import defaultdict
-from functools import lru_cache
+from functools import cached_property, lru_cache
 
 from .store import H
 from . import task_privacy as privacy
+from .live_privacy import Sources as MeetingSources
 
 
 class ReadIndex:
@@ -15,19 +16,31 @@ class ReadIndex:
         privacy.snapshot(c)
         self.c, self.who = c, who
         self.principals = privacy.actor(who)
-        # The private rows by their partial index (tasks_private); any other task is looked up by id when a
-        # provenance check names it. Reading every task's whole row, and later every id, was a busy server's slowest query.
+        self.meetings = MeetingSources(c)
+        # Read private rows by their partial index. Ordinary task identifiers and
+        # room references load lazily, without task bodies or room participants.
         self.private = {r["id"]: dict(r) for r in c.execute(
             "SELECT id,requester,owner,guest,private FROM tasks WHERE private IS NOT 0")}
         self.denied = {tid for tid, row in self.private.items() if not privacy.task_readable(c, who, row)}
         self._attempts = self._attachments = self._tags = self._intervals = None
         # Each instance belongs to one consistent read transaction.
         self.message_sources = lru_cache(maxsize=4096)(self._message_sources)
-        self.known_task = lru_cache(maxsize=4096)(
-            lambda tid: tid in self.private or c.execute("SELECT 1 FROM tasks WHERE id=?", (tid,)).fetchone() is not None)
-        self.conversation = lru_cache(maxsize=4096)(lambda cid: H.conversation(c, cid))
         self.target_message = lru_cache(maxsize=4096)(lambda mid: H.message(c, mid, include_deleted=True))
         self.attempt_sources = lru_cache(maxsize=4096)(self._attempt_sources)
+
+    @cached_property
+    def task_ids(self):
+        # Provenance validates task existence, even when no private task is denied.
+        # Reuse identifiers from this snapshot rather than thrash a per-row LRU.
+        return {row[0] for row in self.c.execute("SELECT id FROM tasks")}
+
+    @cached_property
+    def conversation_tasks(self):
+        # Message provenance needs only the task reference, never room content.
+        return dict(self.c.execute("SELECT id,task_id FROM conversations"))
+
+    def known_task(self, tid):
+        return tid in self.task_ids
 
     def references(self, value):
         if isinstance(value, str):
@@ -43,7 +56,14 @@ class ReadIndex:
         return set()
 
     def content(self, value):
-        return not self.denied.intersection(self.references(value))
+        return (not self.denied.intersection(self.references(value))
+                and self.meetings.readable(self.principals, self.meetings.references(value)))
+
+    def conversation(self, cid):
+        return self.meetings.conversation_readable(self.principals, cid)
+
+    def meeting_room(self, cid):
+        return self.meetings.bound_conversation(cid) and self.conversation(cid)
 
     def attempts(self):
         if self._attempts is None:
@@ -98,7 +118,8 @@ class ReadIndex:
 
     def attempt(self, aid):
         try:
-            return not self.denied.intersection(self.attempt_sources(aid))
+            return (self.meetings.attempt_readable(self.principals, aid)
+                    and not self.denied.intersection(self.attempt_sources(aid)))
         except ValueError:
             return False
 
@@ -117,7 +138,7 @@ class ReadIndex:
         if not isinstance(refs, dict):
             raise ValueError("Unsupported message provenance")
         ids = self.references(refs)
-        conv = self.conversation(msg["conversation_id"]) if msg.get("conversation_id") else None
+        conv = {"task_id": self.conversation_tasks.get(msg["conversation_id"])} if msg.get("conversation_id") else None
         tid = H.message_task_id(msg, conv)
         if tid and not self.known_task(tid):
             raise ValueError("Unknown task provenance")
@@ -140,7 +161,9 @@ class ReadIndex:
 
     def message(self, mid, cid, refs, reply):
         try:
-            return not self.denied.intersection(self.message_sources(mid, cid, refs, reply))
+            return (self.meetings.message_readable(self.principals,
+                    {"id": mid, "conversation_id": cid, "refs_json": refs, "in_reply_to": reply})
+                    and not self.denied.intersection(self.message_sources(mid, cid, refs, reply)))
         except ValueError:
             return False
 
@@ -166,7 +189,13 @@ class ReadIndex:
         if target in self.tags() and not self.tag(target, False):
             return False
         msg = self.target_message(target)
-        if msg and (msg.get("deleted_at") or msg.get("deleted") or self.denied.intersection(self.sources(msg))):
+        if msg and (msg.get("deleted_at") or msg.get("deleted") or self.denied.intersection(self.sources(msg))
+                    or not self.meetings.message_readable(self.principals, msg)):
+            return False
+        if not self.conversation(target):
+            return False
+        meeting = self.c.execute("SELECT * FROM live_meetings WHERE id=?", (target,)).fetchone()
+        if meeting and not self.meetings.readable(self.principals, {target}):
             return False
         if target in self.attempts() and not self.attempt(target):
             return False
@@ -212,6 +241,7 @@ class ReadIndex:
             return False
         for mid in row["messages"]:
             msg = self.target_message(mid)
-            if not msg or msg.get("deleted_at") or msg.get("deleted") or self.denied.intersection(self.sources(msg)):
+            if (not msg or msg.get("deleted_at") or msg.get("deleted") or self.denied.intersection(self.sources(msg))
+                    or not self.meetings.message_readable(self.principals, msg)):
                 return False
         return all(self.attempt(aid) for aid in row["attempts"]) and all(self.blob(parent, seen) for parent in row["parents"])
