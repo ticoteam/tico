@@ -68,6 +68,12 @@ def _login_dependencies(c, settings):
     return found
 
 
+def _login_problem(state):
+    # A missing/rejected login's detail still needs the sign-in action; failed can mean a folder problem.
+    return str(state.get("data_problem") or (state.get("detail") if state.get("authenticated") == "failed" else "")
+               or "")[:200]
+
+
 def _computers(c, runners_online, settings):
     from .readiness import computer_login, login_warning, SIGNED_OUT
     since = {r["id"] for r in runners_online}
@@ -101,8 +107,7 @@ def _computers(c, runners_online, settings):
                                    "login_warning": login_warning(document, n) if n in run_on.get(r["id"], ()) else "",
                                    "login_unavailable": (n in run_on.get(r["id"], ())
                                                          and computer_login(document, n).get("authenticated") in SIGNED_OUT),
-                                   "login_problem": str(computer_login(document, n).get("data_problem")
-                                                        or computer_login(document, n).get("detail") or "")[:200],
+                                   "login_problem": _login_problem(computer_login(document, n)),
                                    "signable": bool(v.get("installed")) and v.get("authenticated") != "ready"
                                    and n in model_login.RUNTIMES,
                                    # A model this computer runs that it has no sign-in for, and that no key from the

@@ -96,3 +96,11 @@ def test_health_preserves_folder_failure_reason_without_exposing_it_to_members(a
         member = checks(api, 'cara-test')['computer_logins']
         assert member['status'] == 'bad' and member['fixes'] == []
         assert '/srv/acme' not in member['summary'] and 'Acme workstation' not in member['summary']
+    # A normal signed-out report includes detail too, but its fix is to sign in, not inspect a folder.
+    post(api, 'runners/heartbeat', {'version': 'test', 'platform': 'test',
+        'capabilities': ['computer_logins_v1'], 'readiness': {'schema_version': 1,
+        'runtimes': {'musecode': {'installed': True, 'authenticated': 'missing',
+                                'detail': 'Muse Code login required'}}}}, machine['token'])
+    summary = checks(api)['computer_logins']['summary']
+    assert 'Sign in or switch account in Settings > Computers' in summary
+    assert reason not in summary and '/srv/acme' not in summary
