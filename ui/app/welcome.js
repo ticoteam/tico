@@ -357,7 +357,7 @@ function onbBotRowsHTML(state) {
   const tasks = sample?.tasks || [];
   const starter = sample ? `<p class="fr-sample-created">Five bots plus the built-in helpers.</p>${tasks.length ?
     `<details class="fr-starter-tasks"><summary>${tasks.length} starter ${tasks.length === 1 ? 'task' : 'tasks'} created</summary><ul>${tasks.map((id, i) =>
-      `<li><a href="#/task/${esc(id)}">Starter task ${i + 1}</a></li>`).join('')}</ul></details>` : ''}` : '';
+      `<li><a href="#/task/${encodeURIComponent(id)}">Starter task ${i + 1}</a></li>`).join('')}</ul></details>` : ''}` : '';
   const rows = groups.map(group => {
     const content = group.bots.map(bot => frBotRowHTML(state, bot, botOps)).join('');
     return group.id === 'built-in' ? `<details class="onb-group onb-builtins" data-onb-group="built-in"><summary>Built-in helpers: ${group.bots.map(bot => esc(bot.display_name || bot.slug)).join(', ')}</summary>${content}</details>`

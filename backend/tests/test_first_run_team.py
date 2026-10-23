@@ -171,6 +171,19 @@ def test_created_groups_keep_the_finished_wizard_chart_order_after_json_storage(
         groups = api.get("/api/v2/groups", headers=who).json()
         assert [group["id"] for group in groups] == departments
 
+    # A manual group added after setup appends, even though stored keys sort it between wizard groups.
+    added = api.post("/api/v2/groups", json={"name": "Legal"}, headers=signed_in())
+    assert added.status_code == 200
+    expected = departments + ["legal"]
+    groups = api.get("/api/v2/groups", headers=who).json()
+    chart = api.get("/api/v2/org", headers=who).json()["org_groups"]
+    assert [group["id"] for group in groups] == expected
+    assert [group["id"] for group in sorted(chart, key=lambda group: group["order"])] == expected
+    with api.app.state.store.read() as c:
+        saved = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])
+    assert list(saved["org_groups"]) == sorted(expected)
+    assert {gid: group["order"] for gid, group in saved["org_groups"].items()} == dict(zip(expected, range(6)))
+
 
 def test_created_groups_append_after_legacy_positions_across_reload_and_repeated_create(environment):
     """Adding a group preserves legacy positions and the chart/list agree after sorted JSON reloads."""
@@ -178,8 +191,12 @@ def test_created_groups_append_after_legacy_positions_across_reload_and_repeated
     who = signed_in()
     for name in ["Marketing", "Operations"]:
         assert api.post("/api/v2/groups", json={"name": name}, headers=signed_in()).status_code == 200
-    with api.app.state.store.read() as c:
+    # Model a roster stored before group creation persisted positions.
+    with api.app.state.store.transaction() as c:
         legacy = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])
+        for group in legacy["org_groups"].values():
+            group.pop("order", None)
+        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (json.dumps(legacy, sort_keys=True),))
     assert all("order" not in group for group in legacy["org_groups"].values())
     selected = {"finance-lead": {"template": "finance-lead", "display_name": "Finance", "instructions": ""}}
     assert api.put("/api/v2/setup", json={"answers": {"departments": ["finance"]},

@@ -169,6 +169,14 @@ def _may_change(auth, who):
         raise Problem("forbidden", "Only an owner or an admin changes groups", 403)
 
 
+
+def _next_order(groups):
+    # Freeze legacy fallback positions before a new key changes their indices in sorted JSON.
+    for i, group in enumerate(groups.values()):
+        group.setdefault("order", i)
+    return max((group["order"] for group in groups.values()), default=-1) + 1
+
+
 def create(c, auth, settings, who, body):
     _may_change(auth, who)
     roster = _roster(c)
@@ -179,7 +187,8 @@ def create(c, auth, settings, who, body):
     if _named(groups, body.name, parent):
         raise Problem("conflict", "There is already a group with that name there", 409)
     gid = _new_id(groups, body.name)
-    groups[gid] = {"id": gid, "name": body.name.strip(), "reports_to": "", "parent": parent, "root": ""}
+    groups[gid] = {"id": gid, "name": body.name.strip(), "reports_to": "", "parent": parent, "root": "",
+                   "order": _next_order(groups)}
     people, changed = _apply_members(c, settings, roster, gid, body.add, M.GroupMembers())
     roster = _finish(c, roster, people, changed)
     H.event(c, who.actor, "group.created", gid, {"name": body.name.strip(), "parent": parent})
@@ -249,7 +258,8 @@ def ensure(roster, gid, name):
     for other, group in groups.items():
         if group["name"].strip().lower() == name.strip().lower():
             return other
-    groups[gid] = {"id": gid, "name": name, "reports_to": "", "parent": "", "root": ""}
+    groups[gid] = {"id": gid, "name": name, "reports_to": "", "parent": "", "root": "",
+                   "order": _next_order(groups)}
     return gid
 
 
@@ -268,17 +278,10 @@ def place(c, settings, slugs, group_order=()):
     # Only newly made groups take this order; an existing team's groups keep their positions.
     rank = {gid: i for i, gid in enumerate(group_order)}
     todo.sort(key=lambda slug: rank.get(homes.get(str(configs[slug].get("template") or ""), {}).get("id"), len(rank)))
-    # Freeze legacy fallback positions before a new key changes their indices in sorted JSON.
-    for i, group in enumerate(roster["org_groups"].values()):
-        group.setdefault("order", i)
-    next_order = max((g["order"] for g in roster["org_groups"].values()), default=-1) + 1
     for slug in todo:
         home = homes.get(str(configs[slug].get("template") or ""))
         if home and not outside(settings, slug, configs[slug]):
             gid = ensure(roster, home["id"], home["name"])
-            if gid not in made and "order" not in roster["org_groups"][gid]:
-                roster["org_groups"][gid]["order"] = next_order
-                next_order += 1
             _set_bot(c, slug, gid)
     if set(roster["org_groups"]) != made:
         _save(c, roster)
