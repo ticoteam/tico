@@ -74,7 +74,9 @@ impl Wire for Cursor {
     }
 
     fn env(settings: &Settings) -> Env {
-        base_env(settings)
+        let mut env = base_env(settings);
+        env.extend(crate::harness_tools::env_for(Self::NAME));
+        env
     }
 
     fn on_event(msg: &Value, turn: &mut Turn) {
