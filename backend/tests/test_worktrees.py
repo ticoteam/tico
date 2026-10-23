@@ -1105,3 +1105,34 @@ def test_a_new_push_after_a_stale_push_was_cleared_resets_the_cleared_flag(prepa
                         'repository': {'full_name': 'Acme/product', 'default_branch': 'main'}})
         detail = json.loads(c.execute('SELECT detail_json FROM task_links WHERE id=?', (link['link_id'],)).fetchone()[0])
     assert detail['pushed'] == 'd' * 40 and 'stale_push_cleared' not in detail
+
+
+def test_old_merged_pr_releases_its_tree_but_keeps_a_newer_doing_allocation(prepared):
+    api, tid, _ = prepared
+    original = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test').json()
+    assert mark_ready(api, tid, original['link_id']).status_code == 200
+    with api.app_state.store.transaction() as c:
+        pr = H.task_link(c, 'bot:cmo', tid, 'https://github.com/Acme/product/pull/7')
+        old = H.shift(H.now(), days=-2)
+        c.execute('UPDATE task_links SET created=? WHERE id=?', (H.shift(old, days=-1), original['link_id']))
+        c.execute("UPDATE task_links SET state='merged',created=?,branch=?,detail_json=? WHERE id=?",
+                  (old, original['branch'], json.dumps({'head_sha': 'a' * 40}), pr['id']))
+    newer = post(api, f'tasks/{tid}/worktrees/attach',
+                 {'repo': 'Acme/product', 'path': f'tasks/{tid[:8]}/new', 'branch': 'tico/new'}, 'bot-test').json()
+    assert mark_ready(api, tid, newer['link_id']).status_code == 200
+    body = {**HEARTBEAT, 'worktrees': [
+        {'link_id': tree['link_id'], 'state': 'present', 'checkout_state': 'ready',
+         'branch': tree['branch'], 'last_commit': 'a' * 40} for tree in (original, newer)]}
+    actions = post(api, 'runners/heartbeat', body, 'runner-test').json()['worktree_actions']
+    assert [(a['link_id'], a['action']) for a in actions] == [(original['link_id'], 'remove')]
+    with api.app_state.store.read() as c:
+        detail = json.loads(c.execute('SELECT detail_json FROM task_links WHERE id=?', (newer['link_id'],)).fetchone()[0])
+        assert not any(detail.get(k) for k in W.REMOVAL)
+        held = {w['link_id']: w for w in W.holdings(c, 'bot:cmo')}
+        assert held[newer['link_id']]['clear'] == 'in_progress'
+        assert held[original['link_id']]['clear'] == 'merged'
+    # Review-step cleanup keeps its established behavior, including task-wide finished PRs.
+    with api.app_state.store.transaction() as c:
+        c.execute("UPDATE tasks SET status='review' WHERE id=?", (tid,))
+    actions = post(api, 'runners/heartbeat', body, 'runner-test').json()['worktree_actions']
+    assert {a['link_id'] for a in actions if a['action'] == 'remove'} == {original['link_id'], newer['link_id']}
