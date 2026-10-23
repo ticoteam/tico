@@ -331,6 +331,59 @@ def test_attempt_provenance_uses_keyed_inputs_and_retained_run_events(api, world
     assert readable() == []
 
 
+def test_carried_private_tasks_and_unknown_plain_rooms_stay_hidden(api, world):
+    from backend import sql as S
+    from backend.auth import Identity
+
+    store, auth = api.app.state.store, api.app.state.auth
+    aid = world['attempt']['id']
+    who = Identity('bot:ops', 'bot', attempt_id=aid)
+
+    def rows(table, rid):
+        with store.read() as c:
+            conn = S.connect(store.settings.db_path, c, auth, who)
+            try:
+                return S.run(conn, f'SELECT id FROM {table} WHERE id=?', [rid], 500, 5)['rows']
+            finally:
+                conn.close()
+
+    with store.transaction() as c:
+        hidden = H.task_create(c, 'human:ben', 'Hidden carried fixture', '', 'bot:finance',
+                               private=True, lint=False)
+    assert rows('attempts', aid) == [[aid]]
+    assert rows('turns', aid) == [[aid]]
+
+    # The job message stays readable; only the carried task hides this run.
+    with store.transaction() as c:
+        c.execute('UPDATE tasks SET carried_by=? WHERE id=?', (aid, hidden['id']))
+    assert rows('attempts', aid) == []
+    assert rows('turns', aid) == []
+    with store.transaction() as c:
+        c.execute('UPDATE tasks SET carried_by=NULL WHERE id=?', (hidden['id'],))
+    assert rows('attempts', aid) == [[aid]]
+
+    # Retained next-run provenance survives independently of tasks.carried_by.
+    with store.transaction() as c:
+        event = H.event(c, H.KEEPER, 'task.next-run.carried', aid,
+                        {'bot': 'ops', 'tasks': [hidden['id']]})
+    assert rows('attempts', aid) == []
+    assert rows('turns', aid) == []
+    with store.transaction() as c:
+        c.execute('DELETE FROM events WHERE id=?', (event['id'],))
+    assert rows('attempts', aid) == [[aid]]
+
+    with store.transaction() as c:
+        msg = H.say(c, 'human:ana', 'bot:ops', 'Plain room fixture',
+                    conversation_id=world['ana_room'])
+    assert rows('messages', msg['id']) == [[msg['id']]]
+    with store.transaction() as c:
+        c.execute('UPDATE conversations SET task_id=? WHERE id=?',
+                  ('unknown-fixture-task', world['ana_room']))
+    # The room grant remains valid, so the plain-message provenance gate must deny.
+    assert rows('conversations', world['ana_room']) == [[world['ana_room']]]
+    assert rows('messages', msg['id']) == []
+
+
 def test_nested_udf_interrupt_is_timeout_and_other_udf_errors_remain_sql(monkeypatch):
     import sqlite3
     from backend import sql as S
