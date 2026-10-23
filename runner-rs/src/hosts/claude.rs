@@ -125,7 +125,8 @@ struct Pipe {
     first: String,
     unread: HashSet<String>,
     order: Vec<String>,
-    steered: bool,
+    /// The follow-ups written after the prompt, in order: a restart of a missing session writes them again.
+    followups: Vec<String>,
     cost: f64,
     awaiting: Option<Instant>,
     timed_out: bool,
@@ -155,6 +156,16 @@ struct Pipe {
 }
 
 impl Pipe {
+    /// Writes a follow-up message after the prompt; Claude has not read it until it replays it.
+    fn follow_up(&mut self, text: &str) {
+        let mid = uuid::Uuid::new_v4().to_string();
+        self.unread.insert(mid.clone());
+        self.order.push(mid.clone());
+        self.followups.push(text.to_string());
+        self.answered = false;
+        let _ = self.lines.send(Some(user_line(&mid, text)));
+    }
+
     fn close(&mut self) {
         if self.open {
             self.open = false;
@@ -661,7 +672,7 @@ impl ClaudeHost {
             first: first.clone(),
             unread: HashSet::from([first.clone()]),
             order: vec![first],
-            steered: false,
+            followups: vec![],
             cost: 0.0,
             awaiting: None,
             timed_out: false,
@@ -682,6 +693,8 @@ impl ClaudeHost {
 
     async fn read_loop(&self, mut child: Child, mut stderr: crate::run_diagnostics::Stderr, tid: String, turn: String, text: String, effort: Option<String>) {
         let mut recovered = false;
+        // What a restarted session is told after its prompt: the follow-ups the missing one never read.
+        let mut requeued: Vec<String> = vec![];
         loop {
             let stdout = child.stdout.take();
             let stdin = child.stdin.take();
@@ -696,6 +709,9 @@ impl ClaudeHost {
                     p.wait = wait;
                     p.pid = pid;
                     p.reaping = reaping;
+                    for text in requeued.drain(..) {
+                        p.follow_up(&text);
+                    }
                 }
             }
             let mut result: Option<Value> = None;
@@ -771,16 +787,16 @@ impl ClaudeHost {
                     self.track_wait(&msg);
                 }
             }
-            let (unread, steered, timed_out, limit_text) = {
+            let (unread, followups, timed_out, limit_text) = {
                 let mut inner = self.inner();
                 match inner.pipe.as_mut() {
                     Some(p) => {
                         p.close();
                         p.awaiting = None;
                         p.limit_at = None;
-                        (p.unread.iter().any(|m| *m != p.first), p.steered, p.timed_out, p.limit_text.take())
+                        (p.unread.iter().any(|m| *m != p.first), std::mem::take(&mut p.followups), p.timed_out, p.limit_text.take())
                     }
-                    None => (false, false, false, None),
+                    None => (false, vec![], false, None),
                 }
             };
             let (kept, reaping) = self.inner().pipe.as_ref().map_or((false, false), |p| (p.kept.is_some(), p.reaping.is_some()));
@@ -814,9 +830,10 @@ impl ClaudeHost {
             stderr.drained().await;
             let tail = stderr_tail(&mut stderr);
             // Claude answers only with an error result when the session file is not on this computer: restart once
-            // as a new session under the same id. Never after an event, and never once a steer went in.
+            // as a new session under the same id. Never after an event. A follow-up that went in meanwhile did nothing
+            // there either, so the new session is given it again after its prompt.
             let missing = result.as_ref().is_some_and(|r| error_text(Some(r), rc, &tail).starts_with("No conversation found with session ID"));
-            if missing && !recovered && !saw_event && !steered && rc != 0 {
+            if missing && !recovered && !saw_event && rc != 0 {
                 let retry = {
                     let mut inner = self.inner();
                     let up = inner.up && !inner.interrupted.contains(&turn);
@@ -838,6 +855,7 @@ impl ClaudeHost {
                     child = c;
                     stderr = s;
                     recovered = true;
+                    requeued = followups;
                     self.emit(event("diagnostic", Some(&tid), Some(&turn), json!({"text": RESTORING})));
                     continue;
                 }
@@ -1333,12 +1351,7 @@ impl ClaudeHost {
         match inner.pipe.as_mut() {
             // Not once Claude reported a limit: the turn is ending, so the input goes to the next one.
             Some(p) if running && p.open && p.limit_at.is_none() => {
-                let mid = uuid::Uuid::new_v4().to_string();
-                p.unread.insert(mid.clone());
-                p.order.push(mid.clone());
-                p.steered = true;
-                p.answered = false;
-                let _ = p.lines.send(Some(user_line(&mid, text)));
+                p.follow_up(text);
                 Ok(())
             }
             _ => Err(HostError::SteerRefused(format!("claude turn {turn_id} is over or ending"))),
@@ -1917,6 +1930,53 @@ mod tests {
         let got = error_first_turn(&format!("{refused}\n"), "", false).await;
         let failed = got.iter().find(|e| e["kind"] == "turn_failed").expect("a failed turn");
         assert!(text_of(&failed["error"]).contains("Invalid API key"), "{failed}");
+    }
+
+    #[tokio::test]
+    async fn a_missing_session_restores_with_the_follow_up_that_went_in() {
+        // Oct 23: a follow-up went in before Claude answered "No conversation found"; the turn failed outright.
+        let missing = r#"{"type": "result", "subtype": "error_during_execution", "is_error": true, "num_turns": 0, "errors": ["No conversation found with session ID: 5b1"], "usage": {"input_tokens": 0, "output_tokens": 0}}"#;
+        let replay = |text: &str| format!(r#"{{"type": "user", "isReplay": true, "message": {{"role": "user", "content": "{text}"}}}}"#);
+        let then = format!("{}\n{}\n{}\n{}\n", replay("hello"), replay("Also the QA result."), assistant_line("m1", "Both read."), result_line("Both read."));
+        let dir = std::env::temp_dir().join(format!("claude-missing-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("first.jsonl"), format!("{missing}\n")).unwrap();
+        std::fs::write(dir.join("then.jsonl"), then).unwrap();
+        let path = dir.join("claude");
+        // The first process answers only after the follow-up is on its stdin; the second records the two lines it reads.
+        crate::util::write_script(
+            &path,
+            "#!/bin/sh\ncase \"$1\" in --version) echo '2.1.296 (Claude Code)'; exit 0;; --help) echo '  --autocompact <tokens>'; exit 0;; esac\nIFS= read -r line\nIFS= read -r steer\nif [ -f ran ]; then printf '%s\\n%s\\n' \"$line\" \"$steer\" > read.jsonl; cat then.jsonl; cat >/dev/null; exit 0; fi\ntouch ran\ncat first.jsonl\nexit 1\n",
+        );
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let host = ClaudeHost::new("acme", vec![path.display().to_string()], tx);
+        host.start().await.unwrap();
+        let mut settings = Settings { cwd: dir.display().to_string(), ..Default::default() };
+        settings.env.insert("PATH".into(), "/usr/bin:/bin".into());
+        let thread = host.resume_thread(&uuid::Uuid::new_v4().to_string(), &settings);
+        let turn = host.start_turn(&thread, "hello", None).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while host.inner().pipe.is_none() && Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(host.steer(&thread, &turn, "Also the QA result.").is_ok());
+        let mut got = vec![];
+        while let Ok(Some(ev)) = tokio::time::timeout(Duration::from_secs(10), rx.recv()).await {
+            let idle = ev["kind"] == "status" && ev["state"] == "idle";
+            got.push(ev);
+            if idle {
+                break;
+            }
+        }
+        let read = std::fs::read_to_string(dir.join("read.jsonl")).unwrap_or_default();
+        std::fs::remove_dir_all(dir).unwrap();
+        assert!(got.iter().any(|e| e["kind"] == "diagnostic" && e["text"] == RESTORING), "{got:?}");
+        assert!(!got.iter().any(|e| e["kind"] == "turn_failed"), "{got:?}");
+        assert!(got.iter().any(|e| e["kind"] == "turn_completed"), "{got:?}");
+        // The restored session read the prompt, then the follow-up.
+        let lines: Vec<Value> = read.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+        let texts: Vec<&Value> = lines.iter().map(|l| &l["message"]["content"][0]["text"]).collect();
+        assert_eq!(texts, [&json!("hello"), &json!("Also the QA result.")], "{read}");
     }
 
     #[tokio::test]
