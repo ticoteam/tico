@@ -1115,10 +1115,8 @@ impl Runner {
             };
             let mut resumed = false;
             if let Some(prev) = &previous {
-                if let Ok(t) = h.resume_thread(prev, &settings).await {
-                    thread = Some(t);
-                    resumed = true;
-                }
+                thread = Some(h.resume_thread(prev, &settings).await?);
+                resumed = true;
             }
             if thread.is_none() {
                 thread = Some(h.start_thread(&bot, &settings).await?);
