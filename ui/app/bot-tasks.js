@@ -141,27 +141,43 @@ const BOT_TASK_TABS = [['needs', 'Needs You', 'cnt-needs'], ['active', 'Doing', 
 const BOT_DONE_RECENT_DAYS = 14;
 // The tab a person picked on each bot's page, for this visit; until they pick, Needs You leads while it has rows.
 const BOT_TASK_TAB = new Map();
+// The tabs this bot's Tasks section shows, in order. Every bot has the four for now; the tab settings modal
+// (Task-list tabs 2/3) gives each bot its own. Every panel is drawn either way; a tab left out hides its panel.
+function botTaskTabs(slug) {
+  return BOT_TASK_TABS;
+}
+// A tab's count; a tab the bot does not show has none to set.
+function botTaskCount(id, n) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = n || '';
+}
+// The board, filtered to this bot as owner; the owner chip there can be changed or removed.
+const botTaskBoardHref = slug => `${TASKS}?owner=bot:${encodeURIComponent(slug)}&view=board`;
 // A redraw (the 30 s refresh, a live event) only re-applies the tab; a person's pick also brings the tab into view, sideways
-// within the tab bar, so neither moves the rail away from what someone is reading.
+// within the tab bar, so neither moves the rail away from what someone is reading. A key the bot has no tab for shows
+// its first. One tab is one list: no tab bar over it.
 function botTaskTabShow(slug, key, picked = false) {
-  const rail = $('#pane-tasks');
-  if (!rail || BOT?.slug !== slug || !BOT_TASK_TABS.some(([k]) => k === key)) return;
+  const rail = $('#pane-tasks'), tabs = botTaskTabs(slug);
+  if (!rail || BOT?.slug !== slug || !tabs.length) return;
+  if (!tabs.some(([k]) => k === key)) key = tabs[0][0];
+  const bar = rail.querySelector('.bot-task-tabs');
+  if (bar) bar.hidden = tabs.length < 2;
   for (const [k] of BOT_TASK_TABS) {
     const button = $('#bot-tab-t-' + k), panel = $('#bot-' + k);
-    if (!button || !panel) continue;
+    if (panel) panel.hidden = k !== key;
+    if (!button) continue;
     button.classList.toggle('cur', k === key);
     button.setAttribute('aria-selected', String(k === key));
     button.tabIndex = k === key ? 0 : -1;
-    panel.hidden = k !== key;
   }
-  const tab = $('#bot-tab-t-' + key), bar = tab?.parentElement;
-  if (!picked || !bar) return;
+  const tab = $('#bot-tab-t-' + key);
+  if (!picked || !bar || bar.hidden || !tab) return;
   if (tab.offsetLeft < bar.scrollLeft) bar.scrollLeft = tab.offsetLeft;
   else if (tab.offsetLeft + tab.offsetWidth > bar.scrollLeft + bar.clientWidth) bar.scrollLeft = tab.offsetLeft + tab.offsetWidth - bar.clientWidth;
 }
 // Arrow keys, Home and End move between the tabs, as in any tab list.
 function botTaskTabKey(slug, ev) {
-  const keys = BOT_TASK_TABS.map(([k]) => k), at = keys.indexOf(ev.target.closest('[data-bot-task-tab]')?.dataset.botTaskTab);
+  const keys = botTaskTabs(slug).map(([k]) => k), at = keys.indexOf(ev.target.closest('[data-bot-task-tab]')?.dataset.botTaskTab);
   if (at < 0) return;
   const to = {ArrowRight: at + 1, ArrowLeft: at - 1, Home: 0, End: keys.length - 1}[ev.key];
   if (to === undefined) return;
@@ -181,7 +197,7 @@ function botTaskWaitsOn(t) {
 function botNeedsPaint(slug) {
   const host = $('#bot-needs'), items = botNeeds(slug);
   if (!host || BOT?.slug !== slug) return new Set();
-  $('#cnt-needs').textContent = items.length || '';
+  botTaskCount('cnt-needs', items.length);
   // A question opened here, and an answer half typed into it, survive the redraw.
   const list = $('#t-needs'), kept = new Map([...list.querySelectorAll('details[data-ask]')].map(d =>
     [d.dataset.ask, {open: d.open, text: d.querySelector('textarea')?.value || ''}]));
@@ -219,9 +235,9 @@ function botTasksRender(slug, owned, asked) {
   // What it asked of others: whatever waits on a person first, then by the latest change.
   const needsPerson = t => actorPerson(t.owner) ? 0 : 1;
   const outward = theirs.filter(t => V2_ACTIVE.includes(String(t.status))).sort((a, b) => needsPerson(a) - needsPerson(b) || latest(a, b));
-  $('#cnt-active').textContent = active.length || '';
-  $('#cnt-blocked').textContent = blocked.length || '';
-  $('#cnt-done').textContent = finished.length || '';
+  botTaskCount('cnt-active', active.length);
+  botTaskCount('cnt-blocked', blocked.length);
+  botTaskCount('cnt-done', finished.length);
   $('#t-open').innerHTML = active.length ? `<div class="bot-task-list">${active.map(t => v2TaskRow(t, slug)).join('')}</div>`
     : '<div class="rail-empty">None</div>';
   $('#t-blocked').innerHTML = blocked.length ? `<div class="bot-task-list">${blocked.map(t => v2TaskRow(t, slug, true, botTaskWaitsOn(t))).join('')}</div>`

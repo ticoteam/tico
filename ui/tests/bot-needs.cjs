@@ -2,7 +2,8 @@
 // person: its own tasks for them, a question it asked on another bot's task, even a finished one, a task of its own
 // waiting on them, a question outside any task), Doing (every open task it holds, newest first), Blocked (each saying
 // what it waits on) and Done Recently (the last 14 days). Assigned to others follows. The org tree's number is the
-// Needs you rows, and stays so when the list moves. Fixtures only, no network.
+// Needs you rows, and stays so when the list moves. The Tasks header's board icon opens the board filtered to the bot as
+// owner; a bot with one tab shows that list with no tab bar. Fixtures only, no network.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -149,6 +150,45 @@ const NEEDS = [{...T.asked, kind: 'question'}, {...T.forAna, kind: 'task'}, {...
     assert.equal(await page.locator('#tree a[href="#/bot/lead"] .cnt.needs').count(), 0);
     assert.equal((await rail.locator('#t-needs').innerText()).trim(), 'Nothing needs you.');
     assert.deepEqual((await rail.locator('#t-assigned .trow .ttl').allTextContents()).map(s => s.trim()).sort(), ['Pick the release day', 'Run the release check']);
+
+    // The Tasks header: "Tasks", then a board icon. No settings icon until the tab settings modal (Task-list tabs 2/3) is
+    // there to open; then it opens it for this bot.
+    const boardIcon = rail.locator('#bot-tasks .rail-head #bot-tasks-board');
+    assert.equal(await boardIcon.getAttribute('href'), '#/tasks?owner=bot:lead&view=board');
+    assert.equal(await boardIcon.getAttribute('aria-label'), "Open Head of Engineering's tasks on the board");
+    assert.equal(await rail.locator('#bot-tasks-settings').count(), 0);
+    const reopen = async () => {
+      await page.evaluate(() => { location.hash = '#/bot/qa'; });
+      await page.waitForFunction(() => BOT?.slug === 'qa');
+      await page.evaluate(() => { location.hash = '#/bot/lead/tasks'; });
+      await rail.locator('#t-open .trow').first().waitFor({state: 'attached'});
+    };
+    await page.evaluate(() => { window.botTaskSettingsOpen = slug => { window.settingsFor = slug; }; });
+    await reopen();
+    await rail.locator('#bot-tasks .rail-head #bot-tasks-settings').click();
+    assert.equal(await page.evaluate(() => window.settingsFor), 'lead');
+
+    // Spec test 11: a bot with one tab shows that one list, with no tab bar over it.
+    await page.evaluate(() => { window.fourTabs = botTaskTabs; window.botTaskTabs = () => [['active', 'Doing', 'cnt-active']]; });
+    await reopen();
+    assert.equal(await rail.locator('.bot-task-tabs').isHidden(), true, 'no tab bar over a single list');
+    assert.equal(await rail.locator('#bot-active').isVisible(), true);
+    for (const key of ['needs', 'blocked', 'done']) assert.equal(await rail.locator(`#bot-${key}`).isHidden(), true, key);
+    assert.equal(await rail.locator('#t-open .trow').count(), 5);
+    await page.evaluate(() => { window.botTaskTabs = window.fourTabs; });
+    await reopen();
+    assert.equal(await rail.locator('.bot-task-tabs').isVisible(), true);
+    assert.equal(await rail.locator('[data-bot-task-tab]').count(), 4);
+
+    // Spec test 10: the board icon opens the board with the owner pre-selected to this bot, and the owner can be changed.
+    await rail.locator('#bot-tasks-board').click();
+    await page.waitForFunction(() => location.hash === '#/tasks?owner=bot:lead&view=board');
+    await page.locator('#task-chips [data-chip="owner"]').waitFor();
+    assert.equal(await page.locator('#task-view [aria-selected="true"], #task-view .cur').first().innerText().then(s => s.replace(/\s+\d+$/, '').trim()), 'Board');
+    assert.equal((await page.locator('#task-chips [data-chip="owner"] .v').innerText()).trim(), 'Head of Engineering');
+    await page.locator('#task-chips [data-chip-drop="owner"]').click();
+    await page.waitForFunction(() => !location.hash.includes('owner='));
+    assert.equal(await page.locator('#task-chips [data-chip="owner"]').count(), 0);
     assert.deepEqual(errors, []);
     console.log('bot-needs: ok');
   } finally { await browser.close(); }
