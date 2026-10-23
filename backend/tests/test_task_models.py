@@ -289,3 +289,88 @@ def test_a_task_model_whose_sign_in_cannot_be_checked_runs_rather_than_falling_b
     with api.app.state.store.read() as c:
         record = json.loads(c.execute("SELECT model_json FROM attempts WHERE id=?", (turn["id"],)).fetchone()[0])
     assert record["source"] == "task"
+
+
+def test_an_ordinary_fallback_usage_limit_is_not_a_task_model_limit(api):
+    machine = ops_on_sonnet(api)
+    _, turn = task_turn(api, machine)
+    post(api, f"attempts/{turn['id']}/started", {"thread_id": "ordinary-fallback"}, machine["token"])
+    post(api, f"attempts/{turn['id']}/complete", {
+        "outcome": "failed", "last_seq": 0, "text": "", "limited": True,
+        "fallback": "codex", "primary_limited": True,
+        "usage": {"runtime": "codex", "harness": "codex", "model": "gpt-6.1-sol",
+                  "input_tokens": 10, "output_tokens": 1, "billing": "subscription"}}, machine["token"])
+    with api.app.state.store.read() as c:
+        status = H.status(c, "ops")
+    assert status["state"] == "limited", status
+    assert "task model" not in status["focus"], status
+
+
+def test_a_task_model_limit_without_fallback_usage_keeps_own_model_work_available(api):
+    machine = ops_on_sonnet(api)
+    set_task_model(api, {"harness": "grok", "model": "grok-4.6"})
+    _, turn = task_turn(api, machine)
+    post(api, f"attempts/{turn['id']}/started", {"thread_id": "task-fallback"}, machine["token"])
+    post(api, f"attempts/{turn['id']}/complete", {
+        "outcome": "failed", "last_seq": 0, "text": "", "limited": True,
+        "fallback": "codex", "primary_limited": True}, machine["token"])
+    with api.app.state.store.read() as c:
+        status = H.status(c, "ops")
+    assert status["state"] == "idle", status
+    assert "task model" in status["focus"], status
+
+
+def test_a_cheaper_task_model_on_a_bot_that_sends_warns_in_plain_words_and_still_saves_and_runs(api):
+    """Spec test 11 (task 7a9b30d4): warn, never refuse; the run says it was below the minimum."""
+    machine = ops_on_sonnet(api)
+    # Not high-stakes yet: no warning for the same cheaper pick.
+    assert set_task_model(api, HAIKU)["warning"] == ""
+    set_task_model(api, None)
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO approvals(id,kind,requested_by,created) VALUES('ap-1','send','bot:ops',?)", (H.now(),))
+    saved = set_task_model(api, HAIKU)
+    assert saved["task_model"]["model"] == "claude-haiku-5-5", "it still saves"
+    assert saved["warning"] == ("This bot sends messages for you. Haiku 5.5 is a cheaper model than its own Sonnet 5.5, "
+                                "and may word things badly. It still saves, and its tasks run on it.")
+    assert get(api, "bots/ops")["task_model_warning"] == saved["warning"], "the bot view carries it too"
+    task, turn = task_turn(api, machine)
+    assert turn["config"]["model"] == "claude-haiku-5-5", "it still runs"
+    finish(api, machine, turn, HAIKU_RAN)
+    note = get(api, "tasks/" + task["id"])["runs"][0]["ran_on"]["task_model"]["note"]
+    assert note.startswith("Ran on the bot's task model claude-haiku-5-5 (low), below the minimum for this bot")
+    with api.app.state.store.read() as c:
+        assert [r[0] for r in c.execute("SELECT note FROM task_events WHERE task_id=? AND field='task_model'",
+                                        (task["id"],))] == [note]
+    # The bot view judges against the bot's model now: on Haiku itself, its Haiku tasks are not below it.
+    with api.app.state.store.transaction() as c:
+        config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='ops'").fetchone()[0])
+        c.execute("UPDATE bot_config SET config_json=? WHERE bot='ops'",
+                  (json.dumps({**config, "model": "claude-haiku-5-5"}),))
+    assert get(api, "bots/ops")["task_model_warning"] == ""
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET config_json=? WHERE bot='ops'", (json.dumps(config),))
+    # A pick of the same tier or dearer, or another provider's, is not below the minimum.
+    set_task_model(api, None)
+    assert set_task_model(api, {"harness": "claude", "model": "claude-opus-5-5", "effort": "high"})["warning"] == ""
+    assert set_task_model(api, {"harness": "grok", "model": "grok-4.6", "effort": "low"})["warning"] == ""
+
+
+def test_write_stakes_count_only_grants_held_now_beyond_the_bots_own_repository(api, monkeypatch):
+    """A tool requested but not added yet, and the bot's own repository however it is listed, are not high stakes."""
+    from backend import bot_tools, task_models
+    settings = api.app.state.store.settings
+    from backend.github_app import repo_of
+    with api.app.state.store.read() as c:
+        stored = c.execute("SELECT repo FROM bot_config WHERE bot='ops'").fetchone()[0]
+    own = repo_of(stored or "emp-ops", settings.github_owner) or "ops-owner/emp-ops"
+    tools = [{"id": "model", "service": "claude", "can": ["use"]},
+             {"id": "repo", "service": "github", "identity": own, "can": ["read", "write"]},
+             {"id": "github", "service": "github", "identity": own, "scope": {"repo": own}, "can": ["read", "write"]},
+             {"id": "pending-1", "service": "stripe", "identity": "acme", "can": ["write"], "pending": "add"}]
+    monkeypatch.setattr(bot_tools, "listing", lambda c, settings, bot: {"tools": tools})
+    with api.app.state.store.read() as c:
+        assert task_models.stakes(c, settings, "ops") == []
+    tools.append({"id": "github-extra-0", "service": "github", "identity": "acme/site", "scope": {"repo": "acme/site"},
+                  "can": ["read", "write"]})
+    with api.app.state.store.read() as c:
+        assert [row["does"] for row in task_models.stakes(c, settings, "ops")] == ["can change acme/site"]

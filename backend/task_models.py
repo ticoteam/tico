@@ -100,6 +100,75 @@ def why_not(c, settings, bot, choice, runner_id, job_id=None):
     return ""
 
 
+# What a bot does that a weaker model could get wrong, from the approvals it has asked for (backend/hubdb.py
+# APPROVAL_KINDS), and the plain words a warning names it with.
+STAKES = {"send": ("sends messages for you", "may word things badly"),
+          "spend": ("spends money for you", "may spend it badly"),
+          "publish": ("publishes for you", "may get what it publishes wrong")}
+
+
+def stakes(c, settings, bot):
+    """What is at stake on `bot`, plain words per signal: each send, spend or publish approval it has asked for, and
+    each tool grant that lets it write beyond its own repository (backend/bot_tools.py). Empty for a bot with none.
+    Customer data and permission changes have no signal of their own beyond these."""
+    asked = {row[0] for row in c.execute("SELECT DISTINCT kind FROM approvals WHERE requested_by=?",
+                                         (H.bot_actor(bot),))}
+    found = [{"kind": kind, "does": STAKES[kind][0], "risk": STAKES[kind][1]} for kind in STAKES if kind in asked]
+    from . import bot_tools
+    from .github_app import repo_of
+    row = c.execute("SELECT repo FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    stored = (row and row[0]) or "emp-" + bot
+    own = (repo_of(stored, settings.github_owner) or stored).lower()
+
+    def own_repo(tool):
+        # Its own repository, as the built-in `repo` row or a declared GitHub entry for it: every bot writes there.
+        # Without an owner on one side (no GitHub owner set, or a bare name), the repository name alone decides.
+        named = str((tool.get("scope") or {}).get("repo") or tool.get("identity") or "").lower()
+        if tool["id"] == "repo" or not named:
+            return tool["id"] == "repo"
+        return named == own or (("/" not in named or "/" not in own) and named.split("/")[-1] == own.split("/")[-1])
+    # Only grants it holds now: a requested tool not added yet (`pending: add`) gives it nothing to write with.
+    writes = [tool for tool in bot_tools.listing(c, settings, bot)["tools"]
+              if tool["id"] != "model" and tool.get("pending") != "add" and not own_repo(tool)
+              and "write" in (tool.get("can") or [])]
+    if writes:
+        names = ", ".join(dict.fromkeys(tool.get("identity") or tool.get("name") or tool["service"] for tool in writes))
+        found.append({"kind": "write", "does": f"can change {names}", "risk": "may change things it should not"})
+    return found
+
+
+def below_minimum(own, choice):
+    """Whether the task model is a cheaper tier than the bot's own model in the same family: the same provider, at a
+    lower output list price (providers.PRICES). A model with no price, or another provider's, is not judged."""
+    mine, theirs = providers.MODEL_BY_ID.get(own or ""), providers.MODEL_BY_ID.get((choice or {}).get("model") or "")
+    if not mine or not theirs or mine.get("provider") != theirs.get("provider"):
+        return False
+    a, b = providers.PRICES.get(mine["id"]), providers.PRICES.get(theirs["id"])
+    return bool(a and b and b[2] < a[2])
+
+
+def _named(model):
+    """A model as the warning names it: its catalog label, capitalised ("Haiku 5.5")."""
+    text = providers.MODEL_BY_ID.get(model, {}).get("label") or model
+    return text[:1].upper() + text[1:]
+
+
+def warning(c, settings, bot, config, choice):
+    """The plain-words warning for a task model below the minimum on a high-stakes bot, or "". It never refuses: the
+    task model saves and its tasks run on it."""
+    if not choice:   # most bots: no lookups at all, so the bot list does not grow with them
+        return ""
+    own = providers.bot_choice(c, settings, config)[1]
+    if not below_minimum(own, choice):
+        return ""
+    found = stakes(c, settings, bot)
+    if not found:
+        return ""
+    does = " and ".join(row["does"] for row in found[:2]) + (" and more" if len(found) > 2 else "")
+    return (f"This bot {does}. {_named(choice['model'])} is a cheaper model than its own {_named(own)}, and "
+            f"{found[0]['risk']}. It still saves, and its tasks run on it.")
+
+
 def apply(config, choice):
     """The bot's config for a turn on the task model: its runtime, harness, model and effort. The bot's fallback,
     session and everything else stay as they are."""
@@ -132,22 +201,28 @@ def pick(c, settings, bot, followed, task_id, session_task_id, conversation_id, 
                           "ran": f"{own}{f' ({effort})' if effort else ''}",
                           "note": f"Ran on the bot's model {own}{f' ({effort})' if effort else ''}: task model "
                                   f"{label(choice)} could not run ({why})"}
-    return apply(followed, choice), {"source": "task", "asked": asked,
-                                     "note": f"Ran on the bot's task model {label(choice)}"}
+    record = {"source": "task", "asked": asked, "note": f"Ran on the bot's task model {label(choice)}"}
+    own = providers.bot_choice(c, settings, followed)[1]
+    if below_minimum(own, choice) and stakes(c, settings, bot):
+        # Below the minimum for what this bot does: it runs all the same, and the run says so (task 7a9b30d4).
+        record.update(below_minimum=True, note=f"{record['note']}, below the minimum for this bot: a cheaper model "
+                                               f"than its own {own} on a bot that sends, spends, publishes or writes")
+    return apply(followed, choice), record
 
 
 def handed(c, attempt_id, task_id, record):
-    """Keep what the claim chose on the attempt. A fallback is also a task event, once per reason, so the task says
-    the fallback happened and why without a line for every turn."""
+    """Keep what the claim chose on the attempt. A fallback, and a run below the minimum for its bot, is also a task
+    event, once per reason, so the task says it happened and why without a line for every turn."""
     if not record:
         return
     c.execute("UPDATE attempts SET model_json=? WHERE id=?", (json.dumps(record), attempt_id))
-    if record["source"] != "fallback" or not task_id:
+    if (record["source"] != "fallback" and not record.get("below_minimum")) or not task_id:
         return
     last = c.execute("SELECT note FROM task_events WHERE task_id=? AND field='task_model' ORDER BY rowid DESC LIMIT 1",
                      (task_id,)).fetchone()
     if not last or last[0] != record["note"]:
-        H._task_event(c, task_id, H.KEEPER, "task_model", label(record["asked"]), record["ran"], record["note"])
+        H._task_event(c, task_id, H.KEEPER, "task_model", label(record["asked"]),
+                      record.get("ran") or label(record["asked"]), record["note"])
 
 
 def handed_out(c, attempt_id):

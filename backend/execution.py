@@ -260,6 +260,11 @@ def current_task_goal(c, bot, task):
     return task_goal(c, bot, follow(c, bot, json.loads(found[0] or "{}")) if found else {}, task)
 
 
+def stopper(c, person):
+    """The name of the person who pressed Stop, as the "Stopped by" line shows it."""
+    return (H.human(c, H.actor_id(person)) or {}).get("name") or H.actor_id(person)
+
+
 def settle_status(c, bot, state, focus, claimed=None, task_id=None):
     """The status a finished or lapsed turn leaves its bot in. While another of its turns is still out,
     the bot is still at work, so an idle or crashed turn does not mark the whole bot idle or crashed;
@@ -1875,6 +1880,9 @@ class Execution:
         job = c.execute("SELECT state,message_id FROM jobs WHERE id=? AND attempt_id=?", (row["job_id"], row["id"])).fetchone()
         if (not row["finished"] or row["finished"] <= H.shift(now, seconds=-STALL_MAX)
                 or not job or job["state"] != "uncertain"
+                # A Stop recorded after the lease lapsed stands over whatever the turn reports next: nothing brings
+                # it back, and `complete` files its result.
+                or row["stop_requested"]
                 or c.execute("SELECT 1 FROM job_recovery WHERE job_id=? AND attempt_id=?", (row["job_id"], row["id"])).fetchone()
                 or c.execute("SELECT 1 FROM attempts WHERE bot=? AND lane=? AND state IN ('leased','running')",
                              (row["bot"], row["lane"])).fetchone()):
@@ -1903,9 +1911,13 @@ class Execution:
         and a late result can never undo one. Elapsed time is what hands a job from the runner to
         the sweep; it is not what makes settling safe, and the longest turns are exactly the ones
         most likely to outlive a lease."""
+        return bool(not row["stop_requested"] and self.holds(c, who, row))
+
+    def holds(self, c, who, row):
+        """`settleable` before the Stop: this runner still speaks for the job its lapsed attempt left uncertain."""
         job = c.execute("SELECT state FROM jobs WHERE id=? AND attempt_id=?",
                         (row["job_id"], row["id"])).fetchone()
-        return bool(self.current_owner(c, who, row) and not row["stop_requested"]
+        return bool(self.current_owner(c, who, row)
                     and job and job["state"] == "uncertain"
                     and not c.execute("SELECT 1 FROM job_recovery WHERE job_id=? AND attempt_id=?",
                                       (row["job_id"], row["id"])).fetchone()
@@ -1989,6 +2001,20 @@ class Execution:
                 {"bot": row["bot"], "job_id": row["job_id"], "outcome": body.outcome})
         return {"attempt_id": row["id"], "outcome": body.outcome, "message": None, "filed": True}
 
+    @staticmethod
+    def stopped(c, row, conversation_id):
+        """A turn a person stopped is over: the bot is idle, told quietly who stopped it, and gives up its worktree wait."""
+        person = row["stop_requested"]
+        name = stopper(c, person)
+        settle_status(c, row["bot"], "idle", "", claimed=row["created"])
+        # Quiet: the bot reads it with the room next time; it does not start a run of its own.
+        H.say(c, H.KEEPER, "bot:" + row["bot"], f"Stopped by {name}", conversation_id=conversation_id, kind="notice",
+              refs={"quiet": True, "stopped_by": person, "turn_id": row["id"]})
+        H.event(c, H.KEEPER, "attempt.stopped", row["id"], {"bot": row["bot"], "job_id": row["job_id"], "by": person})
+        # A worktree this turn was waiting for is not wanted any more (backend/worktree_waits.py).
+        from .worktree_waits import cancel_for_attempt
+        cancel_for_attempt(c, row["id"], f"Stopped by {name}")
+
     def renew(self, c, who, aid):
         row = self.attempt(c, who, aid)
         from . import run_diagnostics
@@ -2004,6 +2030,8 @@ class Execution:
     def stop(self, c, who, bot, attempt_id=None, redirect=None):
         """A person who manages the bot asks its running turn to stop. The runner interrupts the turn
         when it next renews the lease, and `complete` settles it as stopped rather than held for review.
+        A turn whose lease already lapsed can be stopped by its id too: its late answer is then filed, not
+        posted, and its job ends stopped rather than resumed.
 
         With `redirect`, the caller's own message still queued in a conversation that turn works in is
         claimed first once it ends, so the next turn starts with it in the same session (Stop and redirect,
@@ -2014,6 +2042,19 @@ class Execution:
             raise Problem("forbidden", "Only a person who manages this bot can stop it", 403)
         rows = c.execute("SELECT id,stop_requested FROM attempts WHERE bot=? AND state IN ('leased','running') "
                          "AND (? IS NULL OR id=?) ORDER BY created", (bot, attempt_id, attempt_id)).fetchall()
+        if not rows and attempt_id:
+            # A turn whose lease lapsed while its computer slept may still hand in the answer the model went on to
+            # finish (`settleable`, `settles_late`). A Stop on that turn, by its id, is recorded all the same, so the
+            # answer is filed on its run rather than posted, while its job is still on it, uncertain or let go. A
+            # job already queued to run again is not this turn's to stop; a Stop without an id only finds a live
+            # turn, never an older lapsed one. A run the sweep holds for review is left to that review, which asks
+            # what the run did (`reconcile_job`); once it has been let go, a Stop still files its late answer.
+            rows = c.execute("SELECT a.id,a.stop_requested,j.state AS job_state FROM attempts a JOIN jobs j "
+                             "ON j.id=a.job_id AND j.attempt_id=a.id WHERE a.bot=? AND a.id=? AND a.state='expired' "
+                             "AND j.state IN ('uncertain','cancelled')", (bot, attempt_id)).fetchall()
+            if rows and rows[0]["job_state"] == "uncertain" and c.execute(
+                    "SELECT 1 FROM events WHERE action='job.held' AND target=?", (attempt_id,)).fetchone():
+                raise Problem("held", "This run is held for review: resume or dismiss it there", 409)
         if not rows:
             raise Problem("not_running", "This bot is not running that turn", 409)
         if len(rows) > 1:
@@ -2284,7 +2325,17 @@ class Execution:
         if row["last_seq"] != body.last_seq:
             raise Problem("event_gap", "Upload all events before completing the attempt", 409)
         if late and not self.settleable(c, who, row) and not self.settles_late(c, who, row, body):
-            return self.file_result(c, row, body)
+            filed = self.file_result(c, row, body)
+            if row["stop_requested"] and self.holds(c, who, row):
+                # The Stop stands over the answer, and over a second run of the request too: the job ends as a
+                # stopped one would, rather than waiting uncertain for `auto_reconcile` to resume it. Inputs the runtime
+                # never received go back in the queue, as they do for a Stop the runner heard.
+                self.release_undelivered(c, aid, body.undelivered)
+                c.execute("UPDATE jobs SET state='cancelled' WHERE id=?", (row["job_id"],))
+                msg = H.message(c, c.execute("SELECT message_id FROM jobs WHERE id=?", (row["job_id"],)).fetchone()[0],
+                                include_deleted=True)
+                self.stopped(c, row, msg["conversation_id"])
+            return filed
         if late:
             H.event(c, H.KEEPER, "attempt.late-settled", aid, {"bot": row["bot"], "job_id": row["job_id"],
                                                                 "outcome": body.outcome})
@@ -2550,25 +2601,16 @@ class Execution:
             # The runner ran this turn on the bot's fallback harness: countable here, and
             # named in Runs, so a primary that keeps failing is noticed. `primary_runtime` is what the bot is
             # set to and did not do the work; `model` is what did, when the runner counted it.
-            ran = (body.usage.segments or [body.usage])[-1] if body.usage else None
+            fallback_ran = (body.usage.segments or [body.usage])[-1] if body.usage else None
             H.event(c, H.KEEPER, "attempt.fallback", aid,
                     {"bot": row["bot"], "job_id": row["job_id"], "primary_runtime": runtime, "fallback": body.fallback,
-                     "model": (ran.model or None) if ran else None,
+                     "model": (fallback_ran.model or None) if fallback_ran else None,
                      "outcome": body.outcome, **({"primary_limited": True} if body.primary_limited else {})})
         if skipped:
             settle_status(c, row["bot"], "idle", "", claimed=row["created"])
             H.event(c, H.KEEPER, "attempt.skipped", aid, {"bot": row["bot"], "job_id": row["job_id"]})
         elif stopped:
-            person = row["stop_requested"]
-            name = (H.human(c, H.actor_id(person)) or {}).get("name") or H.actor_id(person)
-            settle_status(c, row["bot"], "idle", "", claimed=row["created"])
-            # Quiet: the bot reads it with the room next time; it does not start a run of its own.
-            H.say(c, H.KEEPER, actor, f"Stopped by {name}", conversation_id=conv["id"], kind="notice",
-                  refs={"quiet": True, "stopped_by": person, "turn_id": aid})
-            H.event(c, H.KEEPER, "attempt.stopped", aid, {"bot": row["bot"], "job_id": row["job_id"], "by": person})
-            # A worktree this turn was waiting for is not wanted any more (backend/worktree_waits.py).
-            from .worktree_waits import cancel_for_attempt
-            cancel_for_attempt(c, aid, f"Stopped by {name}")
+            self.stopped(c, row, conv["id"])
         elif limited and check and not body.profile_used and (moved := check_models.move_on(
                 c, self.store.settings, row["bot"], check_task, check, row["runner_id"])):
             # The computer's default login for the check's model is already out of quota (Health's
@@ -2975,7 +3017,7 @@ class Execution:
         """
         cutoff = H.shift(H.now(), seconds=-STALL_MAX)
         decided = []
-        rows = c.execute("SELECT j.*, a.started, a.finished, a.state AS attempt_state, "
+        rows = c.execute("SELECT j.*, a.started, a.finished, a.state AS attempt_state, a.stop_requested, a.job_id AS attempt_job, "
                          "coalesce(a.finished, j.created) <= ? AS aged "
                          "FROM jobs j LEFT JOIN attempts a ON a.id=j.attempt_id "
                          "WHERE j.state='uncertain' AND (coalesce(a.finished, j.created) <= ? "
@@ -3001,6 +3043,14 @@ class Execution:
                 if not privacy.message_readable(c, 'bot:' + row['bot'], msg):
                     decided.append(self._decide(c, row, row['attempt_id'], 'dismiss',
                                                'Task access was revoked.', H.KEEPER, action='job.auto_reconcile'))
+                    continue
+                if row['stop_requested'] and row['id'] == row['attempt_job']:
+                    # A person pressed Stop and the computer never reported back: the request is over by their
+                    # choice, as it would be had the runner heard it, so it is not resumed. A late answer is only
+                    # filed. A message folded into the turn is not what they stopped and is judged as before.
+                    decided.append(self._decide(c, row, row['attempt_id'], 'dismiss',
+                                                f"Stopped by {stopper(c, row['stop_requested'])}; not resumed.",
+                                                H.KEEPER, action='job.auto_reconcile'))
                     continue
                 if task and task['status'] in ('done', 'closed'):
                     note = (f"Dismissed automatically: the task \"{task['title']}\" was already {task['status']} "

@@ -975,6 +975,8 @@ def test_a_task_turn_works_in_its_own_worktree_with_the_tasks_repo_and_pushes_it
 
     task = post(api, "tasks", {"owner": "ops", "title": "Build product", "body": "Please build the product."})
     until(lambda: any(a["state"] == "completed" for a in computer.attempts()), "the task's first turn")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET status='doing' WHERE id=?", (task["id"],))  # a started task gets a worktree
     link = post(api, f"tasks/{task['id']}/worktrees/attach",
                 {"path": "work/product", "repo": "org/product", "branch": "tico/feature"})
 

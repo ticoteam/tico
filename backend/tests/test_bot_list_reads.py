@@ -54,6 +54,8 @@ def per_bot_view(c, settings, auth, bot, level, access, registry_roster, registr
                     "temp": bool(declared.get("temp")),
                     "compact_at": compact_at_of(declared),
                     "task_model": task_models.of(declared),
+                    "task_model_warning": task_models.warning(c, settings, bot["slug"], declared,
+                                                              task_models.of(declared)),
                     "wake": wake_presets.effective(declared),
                     "thread_mode": config["thread_mode"] or rooms.thread_mode(c, bot["slug"])})
     configured = json.loads(config["owner_ids_json"]) if config and config["owner_ids_json"] else None
