@@ -27,7 +27,7 @@ from . import built_on
 from . import agents, app_delivery, batch, external_sync, inbox_isolation, mcp_oauth, harness_actions, model_login, oidc, personal_tokens, views
 from . import outcome_stats
 from . import owner_link
-from . import check_models, run_triggers, team_rules, update_feeds, topic_change, usage_limits, bot_to_bot, wake_presets, visuals, wake_rules, quiet_work, milestone_waits
+from . import check_models, run_triggers, task_models, team_rules, update_feeds, topic_change, usage_limits, bot_to_bot, wake_presets, visuals, wake_rules, quiet_work, milestone_waits
 from . import task_privacy as privacy
 from . import task_relations as TR
 from . import task_roles as TRo
@@ -1860,6 +1860,11 @@ def create_app(settings=None):
                         "shared_from": str(declared.get("shared_from") or ""),
                         "temp": bool(declared.get("temp")),
                         "compact_at": compact_at_of(declared),
+                        # What its tasks run on; null is the same as the bot (backend/task_models.py).
+                        "task_model": task_models.of(declared),
+                        # Plain words for a cheaper task model on a high-stakes bot, against its model now ("" else).
+                        "task_model_warning": task_models.warning(c, settings, bot["slug"], declared,
+                                                                  task_models.of(declared)),
                         "wake": wake_presets.effective(declared),
                         "thread_mode": config["thread_mode"] or rooms.thread_mode(c, bot["slug"], config)})
         configured = json.loads(config["owner_ids_json"]) if config and config["owner_ids_json"] else None
@@ -4404,10 +4409,11 @@ def create_app(settings=None):
         # `usage_requests`: a run's usage may carry each model request's tokens (an older one refuses the field).
         # `usage_request_main`: ... and a fourth count marking the bot's own requests (an older one refuses it).
         # `run_pushes`: a run's result may list the pushes its task worktrees made (an older one refuses the field).
+        # `load_snapshot`: start and completion may carry an instantaneous load reading.
         return {**runner_versions.desired(), "features": {"task_files_multipart": True, "runner_commit": True,
                                                           "screen_v1": True, "limit_resets_at": True,
                                                           "usage_requests": True, "usage_request_main": True,
-                                                          "run_pushes": True}}
+                                                          "run_pushes": True, "load_snapshot": True}}
 
     @app.get("/api/v2/runners/assignments")
     def assigned(request: Request):
@@ -4733,26 +4739,34 @@ def create_app(settings=None):
             return result
 
     def computer_rows(c, who):
+        from .performance import load_status
         online = {r["id"] for r in _online_runners(c)}
         everyone = who.role == "owner" or auth.bot_admin(who)
         mine = H.actor_id(who.actor)
         readable = auth.bot_accesses(c, who)
         rows = []
         for r in c.execute("SELECT * FROM runners WHERE revoked_at IS NULL ORDER BY label"):
-            if not (everyone or r["operator"] == mine or r["accepts_member_bots"]):
+            detailed = everyone or r["operator"] == mine or r["accepts_member_bots"]
+            if not detailed:
+                if who.role == "bot":
+                    # Discovery and load do not grant access to repositories, logs or operator identity.
+                    rows.append({"id": r["id"], "label": r["label"], "online": r["id"] in online,
+                                 "platform": r["platform"] or "", "accepts_member_bots": False,
+                                 **load_status(c, r["id"])})
                 continue
             bots = [x["bot"] for x in c.execute("SELECT bot FROM assignments WHERE runner_id=? ORDER BY bot", (r["id"],))
                     if (readable.get(x["bot"]) or {}).get("see")]
             rows.append({"id": r["id"], "label": r["label"], "online": r["id"] in online,
                          "platform": r["platform"] or "", "operator": r["operator"],
                          "accepts_member_bots": bool(r["accepts_member_bots"]), "bots": bots,
-                         **screen_listing(r), **performance_listing(r), **views.computer_details(c, r, who, auth)})
+                         **screen_listing(r), **performance_listing(r), **views.computer_details(c, r, who, auth),
+                         **load_status(c, r["id"])})
         return rows
 
     @app.get("/api/v2/computers")
     def computers(request: Request):
-        """The computers this person may put a bot on, with what runs on each: owners and admins see every one, a
-        member their own and the ones opened to members' bots."""
+        """The computers a person may put a bot on; company bots can discover every computer's load.
+        Newly discoverable computers expose no repositories, logs or operator identity."""
         who = request.state.identity
         auth.domain(who)
         with store.read() as c:
@@ -5281,6 +5295,14 @@ def create_app(settings=None):
     @app.post("/api/v2/bots/{bot}/fallback")
     def fallback(request: Request, bot: str, body: M.BotFallback):
         return mutate(request, body, lambda c: settings_admin.set_fallback(
+            c, request.state.identity, bot, body))
+
+    @app.post("/api/v2/bots/{bot}/task-model")
+    def bot_task_model(request: Request, bot: str, body: M.BotTaskModel):
+        """The harness, model and effort the bot's tasks run on, or null for the same as the bot
+        (backend/task_models.py). The bot's own model (POST .../model) never changes it, and this never changes that.
+        `warning` is plain words for a cheaper pick on a bot that sends, spends, publishes or writes; it still saves."""
+        return mutate(request, body, lambda c: settings_admin.set_task_model(
             c, request.state.identity, bot, body))
 
     @app.post("/api/v2/bots/{bot}/compact-at")

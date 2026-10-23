@@ -1,6 +1,6 @@
 //! Performance diagnostics. While the server says they are on for this computer (the heartbeat reply's
 //! `performance`; on unless a person turned them off), the runner reads CPU, load, memory, swap and free disk every
-//! 30 s, plus the busiest process names, and posts them in batches to `runners/performance` (backend/performance.py).
+//! 60 s, plus the busiest process names, and posts them in batches to `runners/performance` (backend/performance.py).
 //! Off, it reads nothing. Which turns ran at the time is the server's own record.
 //!
 //! A sample holds numbers and process names (the executable's name) only: never command lines, arguments,
@@ -17,11 +17,11 @@ use serde_json::{json, Map, Value};
 use crate::runner::Runner;
 use crate::util::log;
 
-pub const EVERY: Duration = Duration::from_secs(30);
+pub const EVERY: Duration = Duration::from_secs(60);
 /// Samples sent together: one post a minute.
-const BATCH: usize = 2;
+const BATCH: usize = 1;
 /// Samples kept while the server cannot be reached: ten minutes, then the oldest go.
-const KEEP: usize = 20;
+const KEEP: usize = 10;
 /// An older server has no `runners/performance`: asked again after this long.
 const MISSING_BACKOFF: Duration = Duration::from_secs(600);
 /// Process names a sample carries: the busiest by CPU, then by memory.
@@ -118,6 +118,7 @@ impl Sampler {
         }
         let mut sample = Map::new();
         sample.insert("at".into(), json!(unix_now()));
+        sample.insert("interval_s".into(), json!(EVERY.as_secs()));
         sample.insert("scope".into(), json!(scope));
         if scope == "container" {
             // Without a memory limit, memory is still the host's.
@@ -132,10 +133,7 @@ impl Sampler {
             sample.insert("mem_total".into(), json!(memory.total));
             sample.insert("mem_used".into(), json!(memory.total.saturating_sub(memory.available)));
         }
-        if memory.swap_total > 0 {
-            sample.insert("swap_total".into(), json!(memory.swap_total));
-            sample.insert("swap_used".into(), json!(memory.swap_used));
-        }
+        add_swap(&mut sample, &memory, cfg!(target_os = "linux"));
         let mut disks: Vec<Value> = Vec::new();
         let mut seen = Vec::new();
         for (volume, path) in volumes {
@@ -150,6 +148,18 @@ impl Sampler {
         sample.insert("active".into(), json!(active));
         sample.insert("procs".into(), json!(top_names(&procs, &rates)));
         Some(Value::Object(sample))
+    }
+}
+
+/// macOS grows its swap total with use: report raw bytes, but keep them out of the diagnostic swap rule.
+fn add_swap(sample: &mut Map<String, Value>, memory: &Memory, diagnostic: bool) {
+    if memory.swap_total > 0 {
+        sample.insert("load_swap_total".into(), json!(memory.swap_total));
+        sample.insert("load_swap_used".into(), json!(memory.swap_used));
+        if diagnostic {
+            sample.insert("swap_total".into(), json!(memory.swap_total));
+            sample.insert("swap_used".into(), json!(memory.swap_used));
+        }
     }
 }
 
@@ -350,9 +360,19 @@ fn system_cpu() -> Option<(u64, u64)> {
 fn memory() -> Memory {
     let total = run(&["sysctl", "-n", "hw.memsize"]).and_then(|s| s.trim().parse().ok()).unwrap_or(0);
     let used = run(&["vm_stat"]).map(|s| vm_stat_used(&s)).unwrap_or(0);
-    // macOS adds swap files as it needs them, so its swap total moves with use and a share of it says nothing:
-    // memory pressure shows in Memory Used instead.
-    Memory { total, available: total.saturating_sub(used), swap_total: 0, swap_used: 0 }
+    // Raw swap is visible in simple load readings; add_swap keeps it out of diagnostic overloads.
+    let (swap_total, swap_used) = run(&["sysctl", "-n", "vm.swapusage"]).map(|s| swap_usage(&s)).unwrap_or((0, 0));
+    Memory { total, available: total.saturating_sub(used), swap_total, swap_used }
+}
+
+#[cfg_attr(target_os = "linux", allow(dead_code))]
+fn swap_usage(text: &str) -> (u64, u64) {
+    let bytes = |key: &str| {
+        text.split(&format!("{key} = ")).nth(1).and_then(|s| s.split_whitespace().next())
+            .and_then(|s| s.strip_suffix('M')).and_then(|s| s.parse::<f64>().ok())
+            .map(|n| (n * 1024.0 * 1024.0) as u64).unwrap_or(0)
+    };
+    (bytes("total"), bytes("used"))
 }
 
 /// Activity Monitor's Memory Used from `vm_stat`: app memory (anonymous pages less purgeable ones), wired memory and
@@ -382,9 +402,38 @@ fn run(argv: &[&str]) -> Option<String> {
     out.status.success().then(|| String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
+/// Instantaneous high-level reading: one-minute load per core, memory, and active turns. No process scan.
+pub fn load_snapshot(active: usize) -> Value {
+    let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1) as f64;
+    let mut mem = memory();
+    if crate::follow::kind() == "docker" {
+        if let Some((used, limit)) = cgroup_memory().filter(|(_, limit)| mem.total == 0 || *limit < mem.total) {
+            mem.total = limit;
+            mem.available = limit.saturating_sub(used);
+        }
+    }
+    json!({"at": unix_now(), "cpu_pct": load_average().map(|l| round1(100.0 * l[0] / cores)),
+           "mem_pct": (mem.total > 0).then(|| round1(100.0 * mem.total.saturating_sub(mem.available) as f64 / mem.total as f64)),
+           "running_turns": active})
+}
+
+/// Add only for servers that accept the field; diagnostics off means no reading.
+pub async fn with_snapshot(body: Value, active: usize) -> Value {
+    with_snapshot_if(body, active, enabled(), crate::follow::feature("load_snapshot")).await
+}
+
+async fn with_snapshot_if(mut body: Value, active: usize, on: bool, supported: bool) -> Value {
+    if on && supported {
+        if let Ok(snapshot) = tokio::task::spawn_blocking(move || load_snapshot(active)).await {
+            body["load_snapshot"] = snapshot;
+        }
+    }
+    body
+}
+
 // ------------------------------------------------------------------------------------------------ the loop
 
-/// Samples every 30 s while on, posts a batch each minute. An older server without the endpoint is asked again
+/// Samples every 60 s while on, posts a batch each minute. An older server without the endpoint is asked again
 /// after ten minutes; a failed post keeps the samples for the next one, ten minutes at most.
 pub async fn run_loop(runner: Arc<Runner>) {
     let mut sampler = Sampler::default();
@@ -445,6 +494,44 @@ mod tests {
     }
 
     #[test]
+    fn high_level_snapshot_needs_no_cpu_baseline_and_names_no_processes() {
+        let snapshot = load_snapshot(7);
+        assert_eq!(snapshot["running_turns"], json!(7));
+        assert!(snapshot["at"].as_f64().unwrap() > 0.0);
+        assert!(snapshot.get("cpu_pct").is_some() && snapshot.get("mem_pct").is_some());
+        assert_eq!(snapshot.as_object().unwrap().len(), 4);
+        let mut sampler = Sampler { at: Some(Instant::now() - EVERY), ..Sampler::default() };
+        let sample = sampler.sample(7, &[]).unwrap();
+        assert_eq!(sample["interval_s"], json!(60));
+        assert_eq!(sample["active"], json!(7));
+    }
+
+    #[tokio::test]
+    async fn snapshots_require_diagnostics_and_server_support() {
+        for (on, supported) in [(false, false), (false, true), (true, false)] {
+            let body = json!({"thread_id": "gate"});
+            assert_eq!(with_snapshot_if(body.clone(), 2, on, supported).await, body);
+        }
+        let body = with_snapshot_if(json!({"thread_id": "gate"}), 2, true, true).await;
+        assert_eq!(body["load_snapshot"]["running_turns"], json!(2));
+        assert_eq!(body["thread_id"], json!("gate"));
+    }
+
+    #[test]
+    fn raw_mac_swap_does_not_enter_diagnostic_fields() {
+        let memory = Memory { total: 1000, available: 150, swap_total: 100, swap_used: 95 };
+        let mut mac = Map::new();
+        add_swap(&mut mac, &memory, false);
+        assert_eq!(mac["load_swap_used"], json!(95));
+        assert_eq!(mac["load_swap_total"], json!(100));
+        assert!(!mac.contains_key("swap_used") && !mac.contains_key("swap_total"));
+        let mut linux = Map::new();
+        add_swap(&mut linux, &memory, true);
+        assert_eq!(linux["swap_used"], json!(95));
+        assert_eq!(linux["swap_total"], json!(100));
+    }
+
+    #[test]
     fn process_names_are_base_names_and_never_arguments() {
         assert_eq!(clean_name("/usr/local/bin/cargo"), "cargo");
         assert_eq!(clean_name("/Applications/Claude.app/Contents/MacOS/Claude Helper"), "ClaudeHelper");
@@ -473,5 +560,7 @@ mod tests {
         assert_eq!(parse_cpu_time("1-00:00:01"), Some(86_401_000));
         let vm = "Mach Virtual Memory Statistics: (page size of 16384 bytes)\nPages free:  10.\nPages active: 99.\nPages inactive: 5.\nPages purgeable: 4.\nPages wired down: 30.\nFile-backed pages: 60.\nAnonymous pages: 50.\nPages occupied by compressor: 6.\n";
         assert_eq!(vm_stat_used(vm), (50 - 4 + 30 + 6) * 16384);
+        assert_eq!(swap_usage("total = 1024.00M  used = 256.00M  free = 768.00M (encrypted)"),
+                   (1024 * 1024 * 1024, 256 * 1024 * 1024));
     }
 }

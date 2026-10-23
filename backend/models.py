@@ -1561,6 +1561,12 @@ class BotFallback(Contract):
     expected_revision: int = Field(ge=1)
 
 
+class BotTaskModel(Contract):
+    task_model: BotFallbackChoice | None = Field(None, description="Harness, model and effort for the bot's tasks; "
+                                                 "null is the same as the bot")
+    expected_revision: int = Field(ge=1)
+
+
 class BotCompactAt(Contract):
     compact_at: Literal[150_000, 250_000, 400_000, 600_000, 1_000_000]
     expected_revision: int = Field(ge=1)
@@ -1809,8 +1815,16 @@ class Claim(Contract):
     next_run: bool = False
 
 
+class LoadSnapshot(Contract):
+    at: float = Field(ge=0, allow_inf_nan=False)
+    cpu_pct: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    mem_pct: float | None = Field(default=None, ge=0, le=100, allow_inf_nan=False)
+    running_turns: int = Field(ge=0, le=10_000)
+
+
 class Started(Contract):
     thread_id: ID
+    load_snapshot: LoadSnapshot | None = None
 
 
 class Event(Contract):
@@ -1900,6 +1914,7 @@ class RunPush(Contract):
 
 
 class Completion(Contract):
+    load_snapshot: LoadSnapshot | None = None
     subscription_unavailable: SubscriptionUnavailable | None = None
     profile_used: str | None = Field(default=None, max_length=80)
     outcome: Literal["completed", "failed", "interrupted"]
@@ -2073,6 +2088,7 @@ class PerformanceProcess(_Sampled):
 
 
 class PerformanceSample(_Sampled):
+    interval_s: Literal[30, 60] = 30  # old runners sample twice a minute
     at: float = Field(ge=0, allow_inf_nan=False)
     scope: Literal["host", "container"] = "host"
     # A container's memory is the host's when it has no memory limit; an older runner leaves this out.
@@ -2084,6 +2100,9 @@ class PerformanceSample(_Sampled):
     mem_used: Bytes | None = None
     swap_total: Bytes | None = None
     swap_used: Bytes | None = None
+    # Raw swap for the simple load reading; macOS omits diagnostic swap because its total grows with use.
+    load_swap_total: Bytes | None = None
+    load_swap_used: Bytes | None = None
     disk: list[PerformanceDisk] = Field(default_factory=list, max_length=4)
     active: int = Field(default=0, ge=0, le=10_000)
     procs: list[PerformanceProcess] = Field(default_factory=list, max_length=16)

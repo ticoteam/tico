@@ -1351,6 +1351,14 @@ def view(c, who, settings, auth, github, config):
     else:
         checks.append(_check("computers", "Computers", "ok", f"{_plural(len(online), 'computer')} online."))
 
+    from .performance import load_status
+    for computer in computers:
+        load = load_status(c, computer["id"])
+        if load["overloaded"]:
+            checks.append(_check("runner_load:" + computer["id"], "Load", "warn",
+                                 f"{computer['label']}: overloaded now (CPU or memory above 90% for five minutes).",
+                                 [_fix("Open Computers", "#/settings", "devices")]))
+
     if full:
         for computer in computers:
             disk = computer.get("disk") or {}
