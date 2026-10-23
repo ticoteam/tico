@@ -44,17 +44,19 @@ When the send finishes, the spinner and line disappear.
 *Slow-send example with synthetic message text.*
 
 **What should I do if Chat says Not confirmed?**
-**Unreleased.** A text send without attachments has a 30-second deadline, including connection retries.
+**Unreleased.** A text send without attachments has a 30-second deadline, including connection retries and sign-in checks.
 If it times out, Tico says **Not confirmed** and **It may still arrive.** Your draft stays in the message box.
 
 1. Leave the draft unchanged.
-2. Choose **Retry** in the notification to try the original send again.
+2. Within 48 hours of the original submission, choose **Retry** in the notification to try that send again.
 
-Retry reuses the pending request ID, so a message that reached the server is not saved twice.
-This protection lasts for five minutes after the timeout, in the same tab with the same draft.
-Editing or clearing the draft, or letting those five minutes pass, forgets the pending request ID.
-An identical message sent later can be a new send.
-For example, retry an unchanged “Please review the Acme draft” within five minutes to avoid saving it twice.
+In the same tab, the unchanged draft keeps its original request ID until you edit or clear it.
+Retry reuses that ID within the server's 48-hour replay window, so a message that reached the server is not saved twice.
+After that window expires, Retry does not send again automatically. Tico warns that the message may already have sent.
+Check the chat before deciding whether to send it again.
+
+Editing or clearing the draft forgets the pending request ID. An identical message sent later can be a new send.
+For example, retry an unchanged “Please review the Acme draft” after ten minutes in the same tab to avoid saving it twice.
 
 **Do file uploads have the same deadline?**
 **Unreleased.** Messages with attachments have no 30-second deadline: a large upload on a slow connection can take minutes.
