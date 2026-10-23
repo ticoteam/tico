@@ -189,6 +189,9 @@ def test_each_wrapped_block_still_reports_its_old_failure_name(api, monkeypatch)
                          still_needed)
     from backend import goals as G
     store = api.app.state.store
+    # The pass refreshes one live goal per transaction; an empty registry has no refresh to fail.
+    with store.transaction() as c:
+        G.create(c, "human:ana", "Exercise goal failure reporting", "company")
     store.settings.gateway_key = "synthetic"
     monkeypatch.setattr(billing_check, "env_key", lambda settings: "synthetic")
 
@@ -204,3 +207,6 @@ def test_each_wrapped_block_still_reports_its_old_failure_name(api, monkeypatch)
     for name in ("goals", "goal_asks", "health_monitor", "go_live", "ask_deadlines", "approval_expiry",
                  "still_needed", "billing_check", "still_wanted", "gateway"):
         assert {name: "RuntimeError"} in failures, name
+    jobs, _ = rows(api)
+    assert jobs["goal_colours"]["last"]["ok"] is False
+    assert jobs["goal_colours"]["last"]["result"] == "Failed: unexpected error (RuntimeError)"
