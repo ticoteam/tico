@@ -9,10 +9,11 @@ Don't edit CHANGELOG.md in a PR. The Technical Writer writes each release's vers
 then the Release Manager tags it once the release checks are green. Keep those versioned sections on `main`
 after publishing a tag, so later builds retain the complete history and do not announce already shipped work again.
 The existing CHANGELOG checks still guard the release commit and shipped history.
-The pull request that merges a release's notes back to `main`, or corrects a shipped section, passes by naming each
-released section it changes in a commit trailer: `Changelog-Release: vX.Y.Z`, one line per section. Every notes
-merge-back needs it, starting with the first one after this check was added. Once the notes are back, a released
-section on `main` that differs from its tag fails the tests.
+The release cut normally lands as a direct, CHANGELOG-only commit on `main` before validation and tagging.
+If the cut lands by pull request instead, it needs review at its final head and a `Changelog-Release: vX.Y.Z`
+commit trailer for each version section it changes; preserve the trailers in the merged commit. A pull request
+that merges notes back to `main` or corrects a shipped section needs the same trailers. Once the notes are on
+`main`, a released section that differs from its tag fails the tests.
 
 **One release path.** On a team that runs Tico with a Release Manager bot, only the Release Manager publishes
 releases. A Claude Code session or any other outside session that finishes work hands it to the Release Manager on a
@@ -189,8 +190,9 @@ hosted gate.
 1. The Technical Writer writes the release's notes in `CHANGELOG.md` under
    `## [X.Y.Z] - YYYY-MM-DD` at the cut, leaves a fresh empty `## [Unreleased]` above it,
    and updates the link references at the bottom.
-2. Commit those notes to `main` once the release check is green.
-3. The Release Manager tags and pushes: `git tag vX.Y.Z && git push origin vX.Y.Z`.
+2. Commit those notes to `main`, then run the release check on that exact candidate commit.
+3. Once the check is green, the Release Manager tags that validated commit and pushes:
+   `git tag vX.Y.Z <validated-commit> && git push origin vX.Y.Z`.
 
 The workflow then:
 
