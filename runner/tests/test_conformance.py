@@ -280,10 +280,14 @@ def test_task_model_fallback_starts_from_the_checkpoint_instead_of_an_older_thre
     assert call["argv"][call["argv"].index("--session-id") + 1] != old_thread
     assert checkpoint in call["prompt"] and "Where this task stood" in call["prompt"]
     # The cheaper policy deliberately starts every task-model fallback fresh, including consecutive fallbacks.
+    with api.app.state.store.read() as c:
+        latest = c.execute("SELECT checkpoint,checkpoint_at FROM tasks WHERE id=?", (task["id"],)).fetchone()
+    assert latest["checkpoint"] and latest["checkpoint"] != checkpoint, "the fallback wrote a newer checkpoint"
     post(api, f"tasks/{task['id']}/chat", {"text": "Continue while the task model is still unavailable."})
     completed(4)
     last = [c for c in computer.prompts() if c["harness"] == "claude"][-1]
-    assert "--resume" not in last["argv"] and checkpoint in last["prompt"]
+    assert "--resume" not in last["argv"]
+    assert f"Where this task stood after its last turn ({latest['checkpoint_at']}):\n{latest['checkpoint']}" in last["prompt"]
     assert last["argv"] != call["argv"]
 
 
