@@ -363,7 +363,7 @@ def test_a_digest_turn_is_measured_from_each_event_and_split_over_its_tickets(ap
                       (H.shift(t0, minutes=10 * n), job["id"]))
     tick(api, H.shift(t0, minutes=31))
     attempt = claim(api, machine)
-    finish(api, machine, attempt, tokens_in=900, tokens_out=0)
+    finish(api, machine, attempt, usage={"input_tokens": 900, "cached_tokens": 0, "output_tokens": 0, "model": "fake"})
     with api.app.state.store.transaction() as c:
         for task in tasks:
             H.task_update(c, "bot:ops", task["id"], status="done", note="Done")
