@@ -22,9 +22,9 @@ const {open} = require('./tasks-page.cjs');
     assert.equal(await modal.getByRole('menuitem', {name: 'Close task', exact: true}).count(), 0);
     await page.keyboard.press('Escape');
     await page.keyboard.press('Escape');
-    // Bulk accepts Done and skips already Closed work.
+    // Bulk accepts Done; closed work is under Closed, not Done.
+    assert.equal(await page.locator('#task-body [data-task-key="tt-faq"]').count(), 0);
     await page.locator('[data-task-key="tt-sso"] .tl-check').click();
-    await page.locator('[data-task-key="tt-faq"] .tl-check').click();
     await page.locator('#task-bulk [data-bulk="close"]').click();
     await page.waitForFunction(() => /closed/.test(document.querySelector('.tl-bulk-msg')?.textContent || ''));
     assert.deepEqual(posts.filter(p => /^\/api\/v2\/tasks\/t-(sso|faq)$/.test(p.p)), [{p: '/api/v2/tasks/t-sso', body: {version: 3, close: true}}]);

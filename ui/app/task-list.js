@@ -181,8 +181,9 @@ function taskItems(state, view = state.view) {
     if (!taskPipelineMatches(it.task, state)) return false;
     if (state.q && !taskMatches(it, state.q)) return false;
     if (taskSnoozed(it.task) !== (view === 'snoozed')) return false;
-    if (view === 'board' && pipelineSelectedType(state)) return true;
-    if (view === 'done') return it.col === 'done';
+    // A type's board has its working steps only: a finished or declined task has left it.
+    if (view === 'board' && pipelineSelectedType(state)) return it.col !== 'done' && it.task.status !== 'declined';
+    if (tasksFinishedView(view)) return it.col === 'done' && it.task.status === view;
     if (it.col === 'done') return false;
     return view === 'foryou' ? (taskNeedsViewer(it.task) || taskOlderAsk(it.task)) && !needsFolded(it.id) : true;
   });
@@ -225,7 +226,7 @@ function tasksFilterOptions(state, field) {
 
 // ---- grouping
 function tasksGroupBy(state) {
-  if (state.view === 'done') return 'none';
+  if (tasksFinishedView(state.view)) return 'none';
   const by = state.group?.[state.view] || TASK_GROUP_DEFAULT[state.view] || 'status';
   return taskGroupsFor(state.view).some(([k]) => k === by) ? by : 'status';
 }
@@ -338,7 +339,7 @@ function taskListRowHTML(it, ctx, depth = 0) {
   const parent = pid && depth === 0 ? (tasksById(state).get(pid) || t.parent) : null;
   const when = ctx.done ? (it.closed || it.updated) : it.updated;
   const ageText = ctx.done ? ageShort(when) : taskAge(t);
-  const ageTitle = ctx.done ? `Done ${fmt(when)}` : taskAgeTitle(t);
+  const ageTitle = ctx.done ? `${t.status === 'closed' ? 'Closed' : 'Done'} ${fmt(when)}` : taskAgeTitle(t);
   const need = state.view === 'foryou' ? needsItem(t.id) : null;
   // What a row shows is drawn here; its selection, cursor and peek are painted on afterwards (tasksSelectionPaint,
   // tasksCursorPaint), so an unchanged row keeps the same signature and the poll leaves it alone.
@@ -349,7 +350,7 @@ function taskListRowHTML(it, ctx, depth = 0) {
     <button type="button" class="tl-open" data-open-task="${esc(key)}" tabindex="-1"${kids.length ? ` aria-expanded="${open ? 'true' : 'false'}"` : ''}><span class="tl-title">${esc(it.title)}</span></button>
     ${parent?.title ? `<span class="tl-parent" title="Part of ${esc(parent.title)}"><span aria-hidden="true">↳ </span><span class="tl-parent-t">${esc(parent.title)}</span></span>` : ''}
     ${note ? `<span class="tl-note" title="${esc(note.text)}"><span class="tl-note-ic">${TL_ICON.note}</span><span class="tl-note-text">${esc(note.text)}</span></span>` : '<span class="tl-fill"></span>'}
-    <span class="tl-chips">${need?.folded?.length ? `<span class="tl-folded" title="${esc(`Also waiting on this: ${need.folded.map(f => f.title).join('; ')}`)}">+${need.folded.length}</span>` : ''}${waitsOnMe ? '<span class="tl-waiting" title="Its bot is waiting on you">Waiting</span>' : ''}${taskChipsHTML(t)}</span>
+    <span class="tl-chips">${need?.folded?.length ? `<span class="tl-folded" title="${esc(`Also waiting on this: ${need.folded.map(f => f.title).join('; ')}`)}">+${need.folded.length}</span>` : ''}${waitsOnMe ? '<span class="tl-waiting" title="Its bot is waiting on you">Waiting</span>' : taskStatusLabel(t) === 'Waiting' ? '' : taskWaitTag(t)}${taskChipsHTML(t)}</span>
     ${need?.recommend ? recommendButton(need.recommend, 'tl-rec', t.version) : ''}
     ${ctx.by === 'status' ? '' : waitsOnMe && taskStatusLabel(t) === 'Waiting' ? '<span class="tl-status-pad"></span>' : taskStatusText(t)}
     <span class="tl-people">${showAsker ? `<span class="tl-asker" title="Asked by ${esc(actorLabel(asker))}">${actorFace(asker, 14)}</span>` : ''}<span class="tl-face" title="${esc(actorLabel(t.owner))}">${actorFace(t.owner, 18)}</span></span>
@@ -363,7 +364,7 @@ function tasksEmptyHTML(state, what) {
   return `<div class="tl-empty">${filtered ? 'No tasks match.' : esc(what)}${filtered ? ' <button type="button" class="linkish" data-clear-filters>Clear filters</button>' : ''}${window.talkLineHTML?.() || ''}</div>`;
 }
 function tasksListHTML(items, state) {
-  const by = tasksGroupBy(state), done = state.view === 'done';
+  const by = tasksGroupBy(state), done = tasksFinishedView(state.view);
   // Approvals and questions asked outside any task lead Needs you; a filter or a search is about tasks, so it hides them.
   const cards = state.view === 'foryou' && !state.q && !tasksActiveFilterCount(state);
   // Grouped by what it takes, approvals and questions go in their groups instead of leading the list.
@@ -377,7 +378,7 @@ function tasksListHTML(items, state) {
   if (!items.length && asks) return `<div class="tl">${asks}</div>`;
   if (!items.length && !extra.size) {
     const emptyWhat = state.view === 'foryou' ? 'Nothing needs you.' : state.view === 'snoozed' ? 'Nothing snoozed.'
-      : done ? state.doneNext != null ? 'No matching finished tasks on this page.' : 'Nothing finished yet.' : 'Nothing open.';
+      : done ? state.doneNext != null ? 'No matching finished tasks on this page.' : state.view === 'closed' ? 'Nothing closed.' : 'Nothing finished yet.' : 'Nothing open.';
     const empty = tasksEmptyHTML(state, emptyWhat);
     // Done is paged before type and chip filters are applied. An empty page can still have older rows to scan.
     return done && state.doneNext != null
@@ -473,7 +474,7 @@ function tasksTools(state) {
   }
   const mode = $('#task-select-mode');
   if (mode) {
-    mode.hidden = !tasksCanSelect() || !['list', 'foryou', 'done'].includes(state.view);
+    mode.hidden = !tasksCanSelect() || !['list', 'foryou', 'done', 'closed'].includes(state.view);
     mode.setAttribute('aria-pressed', String(!!state.selectMode));
     mode.textContent = state.selectMode ? 'Done' : 'Select';
   }
@@ -919,7 +920,7 @@ function tasksKeys(state, ev) {
     || (el.tagName === 'INPUT' && !['checkbox', 'radio', 'button', 'submit', 'reset'].includes(el.type)));
   if (typing) return;
   const inPeek = !!el?.closest?.('#task-peek');
-  const listy = ['list', 'foryou', 'done', 'board'].includes(state.view);
+  const listy = ['list', 'foryou', 'done', 'closed', 'board'].includes(state.view);
   const key = ev.key;
   const inTabs = !!el?.closest?.('[role=tablist]');
   if ((key === 'j' || (key === 'ArrowDown' && !inPeek && !inTabs)) && listy) { ev.preventDefault(); tasksMove(state, 1); return; }

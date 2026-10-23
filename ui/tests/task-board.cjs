@@ -207,7 +207,7 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
     await page.setViewportSize({width: 1200, height: 900});
     // Labelled tabs (no icon-only buttons), the selected one marked for screen readers.
     assert.deepEqual(await page.locator('#task-view [role=tab]').evaluateAll(tabs => tabs.map(b => [b.firstChild.textContent, b.getAttribute('aria-selected')])),
-      [['Needs you', 'true'], ['Open', 'false'], ['Board', 'false'], ['Routines', 'false'], ['Done', 'false']]);
+      [['Needs you', 'true'], ['Open', 'false'], ['Board', 'false'], ['Routines', 'false'], ['Done', 'false'], ['Closed', 'false']]);
     assert.equal(await page.locator('#task-view .nav-icon').count(), 0);
     await page.locator('#task-q').focus();
     await page.keyboard.press('Tab');
