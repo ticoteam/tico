@@ -104,10 +104,10 @@ def _message_tasks(c, message, seen=None, include_run=True, current=False):
     # Only complete root traversals are reusable. A nested traversal can skip ancestors
     # already visited by its caller, so caching that partial result would lose provenance.
     values = read_cache.cache(c)
-    key = ("message_tasks", mid, include_run, message.get("conversation_id"),
+    cache_key = ("message_tasks", mid, include_run, message.get("conversation_id"),
            json.dumps(message.get("refs") or H._json(message.get("refs_json"), {}) or {}, sort_keys=True),
            message.get("in_reply_to"))
-    cached = values.get(key) if values is not None else None
+    cached = values.get(cache_key) if values is not None else None
     if cached is not None and not (cached[1] & seen):
         if len(seen) + len(cached[1]) > 100:
             raise Problem("privacy", "Message provenance is too deep to authorize", 403)
@@ -134,7 +134,7 @@ def _message_tasks(c, message, seen=None, include_run=True, current=False):
     if include_run and run_id:
         ids.update(attempt_tasks(c, run_id))
     if root and values is not None:
-        values[key] = (frozenset(ids), frozenset(seen))
+        values[cache_key] = (frozenset(ids), frozenset(seen))
     return ids
 
 
@@ -158,7 +158,7 @@ def _attempt_tasks(c, aid):
                          "JOIN messages m ON m.id=j.message_id WHERE a.id=? UNION "
                          "SELECT m.* FROM attempt_inputs i JOIN messages m ON m.id=i.message_id "
                          "WHERE i.attempt_id=?", (aid, aid)):
-        ids.update(message_tasks(c, row, include_run=False))
+        ids.update(message_tasks(c, row, include_run=False, current=True))
     ids.update(r[0] for r in c.execute("SELECT id FROM tasks WHERE carried_by=?", (aid,)))
     for row in c.execute("SELECT detail_json FROM events WHERE action IN (" + RUN_TASK_EVENTS_SQL + ") AND target=?",
                          (aid,)):
@@ -182,10 +182,15 @@ def record_moved_input(c, from_attempt, to_attempt, message):
 def readable(c, actor, ids):
     snapshot(c)
     principals = actor if isinstance(actor, tuple) else (actor,)
-    for tid in ids:
-        # The row alone decides: H.task's labels are not read, and it is read once for every principal.
-        row = H._one(c, "SELECT * FROM tasks WHERE id=?", (tid,))
-        if not all(H.task_private_readable(c, a, row) for a in principals):
+    ordered = sorted(set(ids))
+    for start in range(0, len(ordered), 500):
+        chunk = ordered[start:start + 500]
+        # Every permission is current in this snapshot. Tags and wide task bodies
+        # contribute nothing to the decision, and shared provenance needs one lookup.
+        rows = read_cache.rows(c, "SELECT id,private,owner,requester,guest FROM tasks WHERE id IN (" +
+                               ",".join("?" * len(chunk)) + ")", chunk)
+        if len(rows) != len(chunk) or any(not H.task_private_readable(c, a, row)
+                                          for row in rows for a in principals):
             return False
     return True
 

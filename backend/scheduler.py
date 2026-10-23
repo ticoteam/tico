@@ -202,7 +202,14 @@ class Scheduler:
 
         def placement_sweep(c):
             placement.sweep(c, self.execution)
-        for step in (self.execution.expire,
+        with self.store.read() as c:
+            expired = [row[0] for row in c.execute(
+                "SELECT id FROM attempts WHERE state IN ('leased','running') AND lease_until<=? ORDER BY lease_until,id",
+                (H.now(),))]
+        for aid in expired:
+            with locked("expire:" + aid) as c:
+                self.execution.expire(c, attempt_ids=[aid])
+        for step in (
                      # Interrupted work that needs no eyes is settled here, so what a person is shown
                      # is only the runs that used tools before they stopped.
                      self.execution.auto_reconcile,
@@ -477,9 +484,12 @@ class Scheduler:
                     task_ids = list(dict.fromkeys(row["id"] for row in
                                     [*H.stalled_tasks(c, stamp(at)), *H.spot_check_tasks(c, stamp(at))]))
                 woke = {key: [] for key in ("woke", "escalated", "checked", "stuck", "held", "retried")}
+                # Our earlier task wake must not make the same bot appear busy for
+                # the rest of this pass. Other newly queued work still fences it.
+                queued_here = []
                 for task_id in task_ids:
                     with locked("stall_check:" + task_id) as c:
-                        result = H.wake_stalled(c, stamp(at), task_ids=[task_id])
+                        result = H.wake_stalled(c, stamp(at), task_ids=[task_id], queued_here=queued_here)
                         for key, values in result.items():
                             woke.setdefault(key, []).extend(values)
                 acted = {"stalled tasks woken": woke.get("woke") or [], "sent to BotOps": woke.get("escalated") or [],

@@ -5474,21 +5474,20 @@ def create_app(settings=None):
         # A read first: an idle runner asks every fraction of a second and must not take the write lock.
         with store.read() as c:
             selected = []
-            version = c.execute("PRAGMA data_version").fetchone()[0]
             idle = execution.idle_claim(c, request.state.identity, body,
                                         request.headers.get("idempotency-key"), selected)
             if idle is not None:
                 return idle
-            # Privacy checks open a coherent read snapshot. End it before data_version is
-            # checked under the write lock, or a newer commit stays hidden by that snapshot.
+            if not selected:
+                selected.append(execution.candidate(c, request.state.identity, body,
+                                                    execution.runner(c, request.state.identity)))
+            # Release the selection snapshot before taking the writer lock. The selected
+            # job is checked against current policy in that transaction.
             if c.in_transaction:
                 c.rollback()
-            # Under the write lock, reuse the read result only if no other connection
-            # committed since that read began. A changed queue is selected afresh.
             def work(write):
-                unchanged = c.execute("PRAGMA data_version").fetchone()[0] == version
                 return execution.claim(write, request.state.identity, body,
-                                       selected=selected[0] if unchanged and selected else None)
+                                       selected=selected[0], prepared=True)
             return mutate(request, body, work)
 
     @app.post("/api/v2/attempts/{aid}/renew")
@@ -5508,6 +5507,10 @@ def create_app(settings=None):
     @app.post("/api/v2/attempts/{aid}/events")
     def events(request: Request, aid: str, body: M.EventBatch):
         body = scrub_attempt(aid, body)          # a secret set in this run never reaches the record
+        # Warm neutral provenance in a read snapshot. The transaction checks current
+        # permissions again, and only reuses this graph while its source clock matches.
+        with store.read_transaction() as c:
+            execution.attempt(c, request.state.identity, aid, active=False)
         return mutate(request, body, lambda c: execution.events(c, request.state.identity, aid, body))
 
     @app.post("/api/v2/attempts/{aid}/capture")
@@ -5532,6 +5535,16 @@ def create_app(settings=None):
 
     @app.post("/api/v2/attempts/{aid}/inputs")
     def inputs(request: Request, aid: str, body: M.Empty):
+        key = request.headers.get("idempotency-key", "")
+        if 0 < len(key) <= 200:
+            with store.read_transaction() as c:
+                validate_identity(c, request.state.identity)
+                if not c.execute("SELECT 1 FROM idempotency WHERE actor=? AND operation=? AND key=?",
+                                 (request.state.identity.actor, request.url.path, key)).fetchone():
+                    idle = execution.inputs(c, request.state.identity, aid, if_idle=True)
+                    if idle is not None:
+                        privacy.require_payload(c, request.state.identity, idle)
+                        return idle
         return mutate(request, body, lambda c: execution.inputs(c, request.state.identity, aid))
 
     @app.post("/api/v2/attempts/{aid}/inputs/{mid}/ack")

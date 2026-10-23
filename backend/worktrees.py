@@ -430,7 +430,8 @@ def heartbeat(c, who, reports, capable, default_org="", live_tasks=None):
         else:
             detail.pop('missing_since', None)
             detail.pop('missing_woke', None)
-        task = H.task(c, row['task_id'])
+        # Lifecycle decisions need current task state, never display tag hydration.
+        task = H._one(c, "SELECT * FROM tasks WHERE id=?", (row['task_id'],))
         if task['status'] not in CLOSED and row['bot_state'] == 'active':
             for key, since, days, message in (
                 ('missing_woke', detail.get('missing_since'), 1, 'Worktree missing for a day'),

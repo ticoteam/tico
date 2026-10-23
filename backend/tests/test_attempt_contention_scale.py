@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from backend import flight, worktrees
+from backend import execution, flight, worktrees
 from backend.scheduler import Scheduler
 from backend.store import H, encode, _pooled
 from backend.tests.test_api import api, headers  # noqa: F401
@@ -41,11 +41,20 @@ def test_busy_install_routes(api, monkeypatch):
                 c.execute('INSERT INTO attempt_inputs(attempt_id,message_id) VALUES(?,?)',
                           (f'attempt-{i}', mid))
                 c.execute("UPDATE jobs SET state='input',attempt_id=? WHERE id=?", (f'attempt-{i}', mid))
-        # Keep a claimable queue so claims exercise selection, rather than the capacity-only idle path.
-        c.execute('UPDATE runners SET capacity=200 WHERE id=?', (computer['runner_id'],))
+        # Distinct task lanes leave real work for concurrent claims. The heartbeat
+        # reports every checkout, as a busy runner does, rather than an empty inventory.
+        c.execute('UPDATE runners SET capacity=200,capabilities_json=? WHERE id=?',
+                  (encode([execution.LANES, execution.ROOTS]), computer['runner_id']))
+        for i in range(197, 200):
+            c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,created,refs_json) "
+                      "VALUES(?,?,'human:ana','bot:ops','say','Synthetic queued work',?,?)",
+                      (f'queued-{i}', f'room-{i}', now, encode({'task': f'task-{i}'})))
+        c.execute("UPDATE tasks SET updated=?,owner='bot:finance',private=0 WHERE id IN (" + ','.join('?' * 10) + ")",
+                  (H.shift(now, hours=-2), *(f'task-{i}' for i in range(100, 110))))
         # Fixture construction is not part of the lease workload. Start the real lease
         # clock only after all synthetic inputs have been inserted.
-        c.execute("UPDATE attempts SET created=?,lease_until=?", (H.now(), H.shift(H.now(), seconds=store.settings.lease_seconds)))
+        original_lease = H.shift(H.now(), seconds=45)
+        c.execute("UPDATE attempts SET created=?,lease_until=?", (H.now(), original_lease))
     print("SCALE_SEED_SECONDS", round(time.monotonic() - started, 2), flush=True)
     rec = flight.Recorder()
     store.recorder, store.factory = rec, flight.connection_class(rec)
@@ -77,6 +86,14 @@ def test_busy_install_routes(api, monkeypatch):
     samples = {n: [] for n in ('renew', 'inputs', 'events', 'task')}
     failures = []
 
+    def background(route, call):
+        method, template = route.split(' ', 1)
+        _, token = flight.request_started(method, {'route': SimpleNamespace(path=template)})
+        try:
+            return call()
+        finally:
+            flight.request_finished(token)
+
     def request(name, i):
         route = 'GET /api/v2/tasks/{tid}' if name == 'task' else f'POST /api/v2/attempts/{{aid}}/{name}'
         method, template = route.split(' ', 1)
@@ -93,20 +110,28 @@ def test_busy_install_routes(api, monkeypatch):
             flight.request_finished(token)
 
     def beat():
-        return api.post('/api/v2/runners/heartbeat', headers=headers(computer['token']), json={
-            'version': 'synthetic', 'platform': 'test', 'readiness': {'schema_version': 1, 'bots': {'ops': {'ready': True}}, 'worktrees': True}})
+        return background('POST /api/v2/runners/heartbeat', lambda: api.post(
+            '/api/v2/runners/heartbeat', headers=headers(computer['token']), json={
+                'version': 'synthetic', 'platform': 'test', 'capacity': 200,
+                'capabilities': [execution.LANES, execution.ROOTS],
+                'worktrees': [{'link_id': f'tree-{i}', 'state': 'present', 'checkout_state': 'ready',
+                              'last_commit': 'synthetic', 'last_activity': 1} for i in range(100, 200)],
+                'readiness': {'schema_version': 1, 'bots': {'ops': {'ready': True}}, 'worktrees': True}}))
 
     with ThreadPoolExecutor(max_workers=12) as pool:
         heartbeat = pool.submit(beat)
         assert prepared.wait(60)
-        tick = pool.submit(Scheduler(store, api.app.state.execution).tick)
-        claims = [pool.submit(api.post, '/api/v2/jobs/claim', headers=headers(computer['token']), json={}) for _ in range(3)]
+        tick = pool.submit(background, 'TICK scheduler', Scheduler(store, api.app.state.execution).tick)
+        claims = [pool.submit(background, 'POST /api/v2/jobs/claim', lambda: api.post(
+            '/api/v2/jobs/claim', headers=headers(computer['token']), json={})) for _ in range(3)]
         requests = [pool.submit(request, name, i) for i in range(100) for name in samples]
         for pending in requests:
             pending.result(timeout=120)
         assert heartbeat.result().status_code == 200
         assert not tick.result()['failures']
-        assert all(p.result().status_code == 200 for p in claims)
+        claimed = [p.result() for p in claims]
+        assert all(p.status_code == 200 for p in claimed)
+        assert any(p.json().get('attempt') for p in claimed), [p.json() for p in claimed]
     def p95(values):
         return round(sorted(values)[math.ceil(len(values)*.95)-1], 2)
     receipt = {name: {'n': len(rows), 'p95_ms': p95([r[0] for r in rows]),
@@ -119,5 +144,7 @@ def test_busy_install_routes(api, monkeypatch):
     assert not failures, failures
     with store.read() as c:
         assert c.execute("SELECT count(*) FROM attempts WHERE id LIKE 'attempt-%' AND state='running' AND lease_until>?", (H.now(),)).fetchone()[0] == 100
+        assert c.execute("SELECT count(*) FROM attempts WHERE id LIKE 'attempt-%' AND lease_until>?", (original_lease,)).fetchone()[0] == 100
+        assert c.execute("SELECT count(*) FROM messages WHERE to_actor='bot:finance'").fetchone()[0] >= 10
     assert all(r['p95_ms'] < 500 for r in receipt.values()), receipt
     assert all(h['hold_s'] <= .25 for h in holds), sorted(holds, key=lambda h:-h['hold_s'])[:10]

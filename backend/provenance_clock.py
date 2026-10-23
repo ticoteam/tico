@@ -37,9 +37,10 @@ def ensure(c):
 
 def current(c):
     from . import hubdb as H
+    from . import read_cache
     if not H._has_table(c, 'provenance_clock'):
         return None
-    return c.execute('SELECT value FROM provenance_clock WHERE id=1').fetchone()[0]
+    return read_cache.one(c, 'SELECT value FROM provenance_clock WHERE id=1')[0]
 
 
 class Cache:
@@ -73,7 +74,8 @@ def cached(c, key, build):
     if cache is None:
         return build()
     version = current(c)
-    writing = getattr(c, 'write_transaction', False)
-    if version is None or writing and version != c.provenance_start:
+    writing = (getattr(c, 'write_transaction', False) or
+               c.total_changes != getattr(c, 'provenance_changes', c.total_changes))
+    if version is None or writing and version != getattr(c, 'provenance_start', None):
         return build()
     return cache.read(version, key, build, publish=not writing)

@@ -5895,7 +5895,7 @@ def setup_hold(conn, actor):
             f"its owner finishes its setup in its chat (hub bot go-live {slug}).")
 
 
-def stalled_tasks(conn, at=None, task_ids=None):
+def stalled_tasks(conn, at=None, task_ids=None, queued_here=None):
     """Bot tasks nothing is going to move, with how long they have been quiet (minutes). A task whose bot is
     still in setup carries `held`: waking it would only queue another run that never starts. A task held only
     by its own quiet subtasks (own_stuck_blockers) counts too, even `waiting`, and carries `own_blockers`."""
@@ -5914,7 +5914,9 @@ def stalled_tasks(conn, at=None, task_ids=None):
         # A parked bot's queued job that is not a person's message never starts: it is not busy.
         busy = {r[0] for r in conn.execute(
             "SELECT j.bot, max(j.state!='queued' OR coalesce(m.from_actor,'') LIKE 'human:%') FROM jobs j "
-            "LEFT JOIN messages m ON m.id=j.message_id WHERE j.state IN ('queued','leased','running') GROUP BY j.bot")
+            "LEFT JOIN messages m ON m.id=j.message_id WHERE j.state IN ('queued','leased','running') " +
+            ("AND j.message_id NOT IN (SELECT value FROM json_each(?)) " if queued_here else "") +
+            "GROUP BY j.bot", (json.dumps(queued_here),) if queued_here else ())
             if r[1] or r[0] not in parked}
     except sqlite3.OperationalError:     # a local hub has no jobs table
         busy = set()
@@ -6143,7 +6145,7 @@ def _settle_undiagnosed(conn, row, cause):
           {"bot": actor_id(row["owner"]), "recovery_task": None, "owner": None, "cause": cause})
 
 
-def wake_stalled(conn, at=None, task_ids=None):
+def wake_stalled(conn, at=None, task_ids=None, queued_here=None):
     """Wake the owner of each stalled task (at most once per STALL_REPEAT_MINUTES, STALL_WAKES_PER_DAY
     a day); past that, one diagnostic per stuck task, for BotOps. No diagnostic is filed about another
     diagnostic or sent to a person: when BotOps cannot take one, the stuck task carries the cause instead
@@ -6157,7 +6159,7 @@ def wake_stalled(conn, at=None, task_ids=None):
     from . import wake_rules
     at = at or now()
     woke, escalated, checked, stuck, held, retried_ids = [], [], [], [], [], []
-    stalled = {row["id"]: row for row in stalled_tasks(conn, at, task_ids=task_ids)}
+    stalled = {row["id"]: row for row in stalled_tasks(conn, at, task_ids=task_ids, queued_here=queued_here)}
     spots = {row["id"]: row for row in spot_check_tasks(conn, at, task_ids=task_ids)}
     parked = parked_bots(conn)
     for row in [*stalled.values(), *[r for r in spots.values() if r["id"] not in stalled]]:
@@ -6177,7 +6179,9 @@ def wake_stalled(conn, at=None, task_ids=None):
                     retried = conn.execute("SELECT min(ts) FROM events WHERE action='task.stuck_retry' AND target=? "
                                            "AND ts>?", (row["id"], spot["progress"])).fetchone()[0]
                     if not retried:
-                        _wake(conn, row, row["owner"], STUCK_RETRY, {"wake": "stuck_retry"}, trigger="stall_check")
+                        msg = _wake(conn, row, row["owner"], STUCK_RETRY, {"wake": "stuck_retry"}, trigger="stall_check")
+                        if queued_here is not None and msg:
+                            queued_here.append(msg["id"])
                         event(conn, KEEPER, "task.stuck_retry", row["id"],
                               {"bot": actor_id(row["owner"]), "quiet_minutes": spot["quiet_minutes"]})
                         retried_ids.append(row["id"])
@@ -6209,6 +6213,8 @@ def wake_stalled(conn, at=None, task_ids=None):
                 if nudged:
                     continue
                 msg = _wake(conn, row, row["owner"], STATUS_CHECK, {"wake": "status_check"}, trigger="stall_check")
+                if queued_here is not None and msg:
+                    queued_here.append(msg["id"])
                 if msg and msg["refs"].get(wake_rules.MARK) == "same_state":
                     continue     # no attempted wake for the retry/escalation machinery to count
                 event(conn, KEEPER, "task.stall_wake", row["id"],
@@ -6228,6 +6234,8 @@ def wake_stalled(conn, at=None, task_ids=None):
                         f"or, when someone else must act, file a subtask for them (hub task create --parent {row['id']} "
                         "--owner <bot or person>) and set this waiting; finishing the subtask wakes it.")
             msg = _wake(conn, row, row["owner"], text, {"wake": "stalled"}, trigger="stall_check")
+            if queued_here is not None and msg:
+                queued_here.append(msg["id"])
             if msg and msg["refs"].get(wake_rules.MARK) == "same_state":
                 continue
             if row.get("next_run"):
@@ -6919,7 +6927,13 @@ def chats_with(conn, actor, bot_actor_id):
 def message(conn, message_id, *, include_deleted=False):
     row = _one(conn, "SELECT * FROM messages WHERE id=?" + ("" if include_deleted else " AND deleted_at IS NULL"),
                (message_id,))
+    return message_view(conn, row)
+
+
+def message_view(conn, row):
+    """Decorate a complete stored row without reading the same message again."""
     if row:
+        row = dict(row)
         row["refs"] = _json(row.get("refs_json"), {}) or {}
         if row["kind"] == "ask" and row["refs"].get("questions"):
             row["ask"] = {k: row["refs"].get(k) for k in ("questions", "who")}

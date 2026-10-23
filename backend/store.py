@@ -1323,6 +1323,9 @@ class Store:
                                    # A bot's latest usage-limited attempt (execution.last_limit), read per Health render.
                                    ("attempts_bot_finished", "attempts(bot, finished)"),
                                    ("attempts_job", "attempts(job_id)"),
+                                   # Lease maintenance walks only active runs, never their history.
+                                   ("attempts_live_lease", "attempts(lease_until,id) WHERE state IN ('leased','running')"),
+                                   ("jobs_queued", "jobs(id,bot,message_id) WHERE state='queued'"),
                                    ("attempts_runner_state", "attempts(runner_id, state)"),
                                    # The turns a computer ran in a window, read under the write lock by an
                                    # open overload (backend/performance.py `_runs`).
@@ -1461,6 +1464,8 @@ class Store:
         c.read_cache = {}
         c.provenance_cache = self.provenance_cache
         c.write_transaction = False
+        c.provenance_changes = c.total_changes
+        c.provenance_start = None
         return c
 
     def _give(self, c):
