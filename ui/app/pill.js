@@ -11,6 +11,7 @@ const ICON_SEND = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" st
 const clock = ms => { const t = Math.max(0, Math.round((ms || 0) / 1000)), h = Math.floor(t / 3600);
   return (h ? `${h}:` : '') + String(Math.floor(t % 3600 / 60)).padStart(2, '0') + ':' + String(t % 60).padStart(2, '0'); };
 const PILLS = new Set();
+let PILL_WHY_N = 0;
 let BOT_PILL = null;
 // What was typed to one bot is still there after visiting another and coming
 // back. The text is kept per bot in this browser, so a reload keeps it too; attached files are
@@ -71,6 +72,7 @@ function makePill(cfg) {
       <button class="p-send p-send-icon" type="button" aria-label="Send" title="Send">${ICON_SEND}</button>
     </div>
     <div class="p-slow muted" role="status" hidden></div>
+    <div class="p-why muted" id="p-why-${++PILL_WHY_N}"></div>
     <div class="p-chips"></div>
     <div class="p-cmd" hidden></div>`;
 
@@ -170,6 +172,7 @@ function pillButtons(P) {
     const show = !!P.running && !box.value.trim() && !P.files.length;
     stop.hidden = !show; btn.hidden = show; stop.disabled = !!P.stopping;
   }
+  pillWhy(P);
 }
 // Ask the bot's running turn to stop; the button stays pressed until the run ends.
 async function pillStop(P) {
@@ -195,12 +198,37 @@ function pillChips(P) {
   }).join('');
   pillLabel(P); pillButtons(P);
 }
-// The chat composer's send is an arrow: a busy word goes to its label, never over the icon.
+// The chat composer's send is an arrow: a busy word goes to its label, never over the icon. A busy word said while
+// the button is disabled stays until it is enabled again, so pillLabel's action word never covers it.
 const pillBtnSay = (btn, text) => {
   if (!btn) return;
-  if (btn.classList.contains('p-send-icon')) { btn.setAttribute('aria-label', text || 'Send'); btn.title = text || 'Send'; }
+  if (btn.disabled && text) btn.dataset.busy = text; else delete btn.dataset.busy;
+  if (btn.classList.contains('p-send-icon')) { btn.setAttribute('aria-label', text || 'Send'); btn.title = PILL_BUSY[text] || text || 'Send'; }
   else btn.textContent = text;
+  // Every busy start (a send, a goal save, a task) goes through here, so the reason and the phone line come at once.
+  for (const P of PILLS) if (P.el?.contains(btn)) pillWhy(P);
 };
+// What a disabled (or, for an empty box, dimmed) Send or Stop says on hover and to a screen reader, in plain words.
+// On a phone, with no hover, the busy reasons show as a line under the box (ui/styles/chat.css).
+const PILL_BUSY = {'Sending…': 'Sending… waiting for Tico to answer'};
+function pillWhy(P) {
+  const btn = pq(P, '.p-send'), why = pq(P, '.p-why'); if (!btn || !why) return;
+  const busy = btn.disabled && (btn.dataset.busy || (P.sending ? 'Sending…' : ''));
+  const stop = pq(P, '.p-stop'), stopping = stop && !stop.hidden && stop.disabled;
+  let text = '';
+  if (stopping) text = 'Stopping…';
+  else if (busy) text = busy === 'Sending…' && P.sendRetrying ? 'Sending… trying again' : PILL_BUSY[busy] || busy;
+  else if (btn.classList.contains('p-off'))
+    text = pillGoalMode(P) ? 'Type a goal to set' : P.action === 'chat' ? 'Type a message or attach a file to send' : 'Type a message to send';
+  why.textContent = text;
+  why.classList.toggle('p-why-busy', !!(stopping || busy));
+  if (stop) {
+    stop.title = stopping ? text : 'Stop';
+    if (stopping) stop.setAttribute('aria-describedby', why.id); else stop.removeAttribute('aria-describedby');
+  }
+  if (text && !stopping) { btn.title = text; btn.setAttribute('aria-describedby', why.id); }
+  else { btn.title = btn.dataset.word || 'Send'; btn.removeAttribute('aria-describedby'); }
+}
 // Goal mode (ui/app/chat-goal.js) turns Send into Set goal. Attached files always go as a message, so they are never lost.
 const pillGoalMode = P => !!P.goalMode && P.action === 'chat' && !P.send && !P.files.length;
 // The label always says what Send will do; in goal mode it says so in words, and so does the empty box.
@@ -208,8 +236,10 @@ function pillLabel(P) {
   const btn = pq(P, '.p-send'); if (!btn) return;
   const goal = pillGoalMode(P);
   const word = goal ? 'Set goal' : P.action === 'task' ? 'Send as a task' : P.action === 'reply' ? `Reply on #${P.needsIssue}` : 'Send';
-  btn.innerHTML = goal ? word : ICON_SEND; btn.setAttribute('aria-label', word); btn.title = word;
+  btn.innerHTML = goal ? word : ICON_SEND; btn.dataset.word = word;
+  btn.setAttribute('aria-label', btn.disabled && btn.dataset.busy || word);
   btn.classList.toggle('p-send-goal', goal);
+  pillWhy(P);
   const box = pq(P, '.p-text');
   if (box) {
     box.dataset.placeholder ??= box.placeholder;

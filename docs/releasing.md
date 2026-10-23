@@ -120,9 +120,11 @@ imported-history for chat changes, or every browser script when the UI mapping i
 Python jobs install no npm packages, browsers or apt packages. The browser job caches both browser binaries and
 Ubuntu package indexes/debs under exact runner-image and dependency-lock keys. A warm cache uses apt with
 `--no-download`; a cold cache uses the canonical Ubuntu mirror. Each Install attempt has a five-minute limit with
-one retry. Pip and npm download caches remain enabled. The four Python groups use JUnit per-file timings from
-the last successful full main run, with collected test counts until timings exist. New files use the observed
-seconds per test. The **PR job timings** check links each job and its elapsed seconds in its summary. It also
+one retry. Pip and npm download caches remain enabled. Checks run on 4-vCPU RunsOn Spot VMs in Tico's own AWS
+account (fork PRs on GitHub-hosted runners). `scripts/pr_checks.py` sizes the Python and browser groups so each VM
+finishes in about `TICO_CI_JOB_SECONDS` (180) including setup, using JUnit per-file and browser per-script timings
+from the last successful full main run, with collected test counts until timings exist. New files use the observed
+seconds per test; untimed browser scripts count 20 seconds. The **PR job timings** check links each job and its elapsed seconds in its summary. It also
 fails if a required job failed or was cancelled. The target is under ten minutes from start to completed checks;
 hosted run receipts, including cache state, establish whether that target is met.
 

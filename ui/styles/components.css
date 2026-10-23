@@ -26,7 +26,7 @@ td.tnum,td:last-child a.muted{white-space:nowrap}
 td.tags .pill{margin-right:2px}
 .pill{display:inline-block;font-size:var(--t-xs);padding:1px 7px;border-radius:10px;background:var(--idle-bg);color:var(--muted);white-space:nowrap;letter-spacing:.01em}
 .pill.ready,.pill.in-progress{background:var(--run-bg);color:var(--run)}
-.pill.waiting,.pill.needs{background:var(--wait-bg);color:var(--wait)}
+.pill.waiting,.pill.needs{background:var(--wait-bg);color:var(--wait-ink)}
 .pill.blocked,.pill.fail{background:var(--fail-bg);color:var(--fail)}
 .pill.ok,.pill.active{background:var(--ok-bg);color:var(--ok)}
 .pill.p0,.pill.p1{background:var(--fail-bg);color:var(--fail)}

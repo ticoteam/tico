@@ -3,7 +3,8 @@
 // says it is still sending, and that it is trying again when the server answers 503; a send with no answer in time
 // ends in "Not confirmed ... still here" with Retry, which resends under the same request id, also when the answer's
 // headers came but its body stalled. A slow or failed send leaves
-// one console line with numbers only, never the message text.
+// one console line with numbers only, never the message text. A disabled or dimmed Send (and a pending Stop) says why
+// on hover and to a screen reader, and a redraw of the composer's label never puts "Send" back over the reason.
 const {chromium, webkit} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -24,7 +25,7 @@ async function check(engine) {
     const errors = [], sends = [], keys = [], warnings = [];
     page.on('pageerror', e => errors.push(e.message));
     page.on('console', m => { if (m.type() === 'warning' && m.text().startsWith('chat send')) warnings.push(m.text()); });
-    let answer = 'ok', busy = 0, hold = null;
+    let answer = 'ok', busy = 0, hold = null, stopHold = null;
     await page.route('**/*', async route => {
       const url = new URL(route.request().url()), p = url.pathname;
       const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
@@ -42,6 +43,7 @@ async function check(engine) {
       // Both live streams need SSE responses; WebKit reports a JSON catch-all as a page error.
       if (p === '/api/v2/events' || p.endsWith('/watch'))
         return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
+      if (p === '/api/v2/bots/botops/stop') { await stopHold; return json({ok: true}); }
       if (p === '/api/v2/chat/botops') {
         const text = route.request().postDataJSON().text;
         keys.push(route.request().headers()['idempotency-key']);
@@ -61,6 +63,8 @@ async function check(engine) {
 
     // The empty box dims Send; a send that is out shows a spinner at full strength, and after a moment says so in words.
     assert.equal(await send.evaluate(b => getComputedStyle(b).opacity), '0.45', 'an empty box dims Send');
+    const why = () => send.evaluate(b => [b.title, document.getElementById(b.getAttribute('aria-describedby'))?.textContent || '']);
+    assert.deepEqual(await why(), Array(2).fill('Type a message or attach a file to send'), 'the empty box says why');
     let open; hold = new Promise(done => open = done);
     const first = 'Secret words that never reach the console';
     await box.fill(first); await page.keyboard.press('Enter');
@@ -68,12 +72,21 @@ async function check(engine) {
     assert.equal(await send.evaluate(b => getComputedStyle(b).opacity), '1', 'sending is not the dimmed empty look');
     assert.equal(await send.evaluate(b => getComputedStyle(b, '::after').content), '""', 'the spinner shows');
     assert.ok(await send.isDisabled(), 'no double send while it is out');
+    assert.deepEqual(await why(), Array(2).fill('Sending… waiting for Tico to answer'), 'a send in flight says why at once');
+    assert.ok(await page.locator('#chat-composer .p-why').evaluate(e => e.classList.contains('p-why-busy')), 'the phone line has its reason');
+    // The bot page redraws the label (pillNeeds) while the send is out: the reason stays, not "Send".
+    await page.evaluate(() => pillNeeds(BOT_PILL, null));
+    assert.deepEqual(await why(), Array(2).fill('Sending… waiting for Tico to answer'), 'a redraw keeps the reason');
     await slow.waitFor({state: 'visible'});
     assert.equal(await slow.innerText(), 'Still sending…');
     open(); hold = null;
     await page.waitForFunction(() => !document.querySelector('#chat-composer textarea').value && !BOT_PILL.sending);
     assert.ok(await slow.isHidden(), 'the line goes once it is sent');
     assert.ok(!(await send.evaluate(b => b.classList.contains('p-sending'))), 'the spinner goes');
+    assert.deepEqual(await why(), Array(2).fill('Type a message or attach a file to send'), 'settled, the empty box says why again');
+    await box.fill('typed');
+    assert.deepEqual(await why(), ['Send', ''], 'an enabled Send keeps its own title');
+    await box.fill('');
     assert.deepEqual(sends, [first]);
     assert.equal(warnings.length, 1, 'a slow send leaves one line');
     assert.match(warnings[0], /chat send/);
@@ -83,6 +96,7 @@ async function check(engine) {
     busy = 2;
     await box.fill('Through two busy answers'); await page.keyboard.press('Enter');
     await page.waitForFunction(() => /trying again/.test(document.querySelector('#chat-composer .p-slow')?.textContent || ''));
+    assert.equal((await why())[0], 'Sending… trying again');
     await page.waitForFunction(() => !document.querySelector('#chat-composer textarea').value && !BOT_PILL.sending);
     assert.equal(sends.at(-1), 'Through two busy answers');
     assert.equal(new Set(keys.slice(-3)).size, 1, 'the retries reuse one request id');
@@ -135,6 +149,14 @@ async function check(engine) {
     await page.waitForFunction(() => !document.querySelector('#chat-composer textarea').value && !BOT_PILL.sending);
     assert.notEqual(keys.at(-1), yesKey, 'the later "yes" is a new send');
     assert.equal(sends.at(-1), 'yes');
+
+    // A pending Stop says so until the stop answers.
+    let stopped; stopHold = new Promise(done => stopped = done);
+    const stop = page.locator('#chat-composer .p-stop');
+    await page.evaluate(() => { BOT_PILL.running = {attempt_id: 'a1'}; pillButtons(BOT_PILL); document.querySelector('#chat-composer .p-stop').click(); });
+    assert.deepEqual(await stop.evaluate(b => [b.disabled, b.title, document.getElementById(b.getAttribute('aria-describedby'))?.textContent]),
+      [true, 'Stopping…', 'Stopping…']);
+    stopped();
     assert.deepEqual(errors, []);
   } finally { await browser.close(); }
 }
