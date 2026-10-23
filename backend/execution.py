@@ -4,6 +4,7 @@ import json
 import re
 import secrets
 import sqlite3
+import threading
 import time
 from datetime import timezone
 
@@ -1097,6 +1098,9 @@ class Execution:
         # bot's repository (backend/app.py finish_pending_go_live).
         self.readiness_reported = None
         self.served_at = None   # when this process last answered a runner (heartbeat, claim, attempt call)
+        self.stall_lock = threading.Lock()
+        self.stall_graces = []
+        self.stall_seen = None
 
     def refuse_in_rehearsal(self, what="Runners"):
         """A rehearsal (TICO_REHEARSAL=1) is a copy of real data: a computer that connected would run bots against its
@@ -1197,7 +1201,7 @@ class Execution:
         row = self.runner(c, who)
         now = H.now()
         awake_since = self.waking(row, now)
-        self.served_at = now
+        self.record_contact(now)
         offered_before = screen.available(row)
         del row
         from .subscriptions import record
@@ -1438,23 +1442,42 @@ class Execution:
         gap = (H.parse_ts(now) - H.parse_ts(self.served_at)).total_seconds()
         return self.store.settings.lease_seconds / 2 < gap <= STALL_MAX
 
+    def stall_recovery(self, now, *, contact=False):
+        """Keep the original cutoff and deadline while bounded sweeps drain a stalled fleet.
+
+        Contact may resume between chunks. A lease extended beyond the cutoff cannot receive
+        this grace again, and an undrained cohort expires normally after its fixed deadline.
+        """
+        with self.stall_lock:
+            self.stall_graces = [g for g in self.stall_graces if g[2] > now]
+            if self.stalled(now) and self.served_at != self.stall_seen:
+                self.stall_seen = self.served_at
+                self.stall_graces.append((self.served_at, now,
+                                          H.shift(now, seconds=self.store.settings.lease_seconds)))
+            if contact:
+                self.served_at = now
+            return tuple(self.stall_graces)
+
+    def record_contact(self, now):
+        self.stall_recovery(now, contact=True)
+
     def expire(self, c, *, attempt_ids=None, limit=None):
         now = H.now()
+        graces = self.stall_recovery(now)
         rows = c.execute("SELECT * FROM attempts WHERE state IN ('leased','running') AND lease_until<=?" +
                          (" AND id IN (" + ','.join('?' * len(attempt_ids)) + ")" if attempt_ids else "") +
                          " ORDER BY lease_until,id" + (" LIMIT ?" if limit is not None else ""),
                          (now, *(attempt_ids or ()), *((limit,) if limit is not None else ()))).fetchall()
-        if rows and self.stalled(now):
-            # The same grace as after a restart: one more lease period, then the usual rule.
-            until = H.shift(now, seconds=self.store.settings.lease_seconds)
-            for row in rows:
-                with isolated(c, "expire", row["id"]):
-                    c.execute("UPDATE attempts SET lease_until=? WHERE id=?", (until, row["id"]))
-                    H.event(c, H.KEEPER, "attempt.lease-grace", row["id"],
-                            {"bot": row["bot"], "lapsed": row["lease_until"], "lease_until": until, "served_at": self.served_at})
-            return
         for row in rows:
             with isolated(c, "expire", row["id"]):
+                grace = next((g for g in graces if row["lease_until"] <= g[1]), None)
+                if grace:
+                    served_at, _, until = grace
+                    c.execute("UPDATE attempts SET lease_until=? WHERE id=?", (until, row["id"]))
+                    H.event(c, H.KEEPER, "attempt.lease-grace", row["id"],
+                            {"bot": row["bot"], "lapsed": row["lease_until"], "lease_until": until,
+                             "served_at": served_at})
+                    continue
                 retry_state = state = "queued" if row["state"] == "leased" else "uncertain"
                 jobs = c.execute("SELECT j.id,j.message_id,t.status AS task_status FROM jobs j "
                                  "JOIN messages m ON m.id=j.message_id JOIN conversations cv ON cv.id=m.conversation_id "
@@ -1625,7 +1648,7 @@ class Execution:
             return None
         answer = self._idle_claim(c, who, body, selected)
         if answer is not None:
-            self.served_at = H.now()        # answering a runner is what `stalled` measures
+            self.record_contact(H.now())
         return answer
 
     def _idle_claim(self, c, who, body, selected=None):
@@ -1683,7 +1706,7 @@ class Execution:
         if not runner:
             raise Problem("forbidden", "This computer is no longer registered", 403)
         now = H.now()
-        self.served_at = now
+        self.record_contact(now)
         self.stamp(c, who, runner, now)
 
     def claim(self, c, who, body, selected=None, *, prepared=False):
@@ -1695,7 +1718,7 @@ class Execution:
             # choose afresh under this lock so it goes out now, not one poll later.
             selected, prepared = None, False
         now = H.now()
-        self.served_at = now
+        self.record_contact(now)
         # A claim is contact too, and on a machine waking for a few seconds it is the first
         # contact: the heartbeat behind it is up to 15 s away. Recording the waking period here
         # is what keeps a brief wake from taking work on a stale one.
@@ -1980,7 +2003,7 @@ class Execution:
         exists nowhere else, so a lapsed lease must not be grounds for refusing it: ownership
         still decides, the clock does not."""
         self.runner(c, who)
-        self.served_at = H.now()
+        self.record_contact(H.now())
         row = c.execute("SELECT a.*,x.runner_id AS assigned_runner,x.generation AS assigned_generation "
                         "FROM attempts a JOIN assignments x ON x.bot=a.bot WHERE a.id=?", (aid,)).fetchone()
         if not row or row["runner_id"] != who.runner_id:

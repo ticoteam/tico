@@ -1495,10 +1495,10 @@ class Store:
                 c = stack.enter_context(self.read())
                 return c
             done = begin(None, self.recorder, gate=self.writer, checkout=checkout)
-            c.write_transaction = True
-            from . import provenance_clock
-            c.provenance_start = provenance_clock.current(c)
             try:
+                c.write_transaction = True
+                from . import provenance_clock
+                c.provenance_start = provenance_clock.current(c)
                 yield c
                 message_links.refresh_dirty(c)
                 c.commit()

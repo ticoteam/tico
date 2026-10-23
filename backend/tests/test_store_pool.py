@@ -2,6 +2,8 @@
 import os
 import sqlite3
 
+import pytest
+
 from backend.config import Settings
 from backend.store import Store
 from backend import read_cache
@@ -174,3 +176,37 @@ def test_writer_fifo_timeout_and_cancelled_waiter_keep_the_next_writer_live(monk
     gate.acquire()
     gate.release()
     assert not gate.queue
+
+
+@pytest.mark.parametrize("recording", [False, True])
+@pytest.mark.parametrize("error", [sqlite3.OperationalError, KeyboardInterrupt])
+def test_provenance_initialization_failure_releases_writer(tmp_path, monkeypatch, recording, error):
+    from backend import flight, provenance_clock
+    s = store(tmp_path)
+    rec = flight.Recorder() if recording else None
+    s.recorder = rec
+    monkeypatch.setattr(flight, "ACTIVE", None)
+    original = provenance_clock.current
+    borrowed = []
+
+    def fail_once(c):
+        assert c.in_transaction and len(s.writer.queue) == 1
+        if rec:
+            assert len(rec.holding) == 1
+        borrowed.append(c)
+        c.execute("UPDATE t SET x=2")
+        monkeypatch.setattr(provenance_clock, "current", original)
+        raise error("synthetic provenance failure")
+
+    monkeypatch.setattr(provenance_clock, "current", fail_once)
+    with pytest.raises(error, match="synthetic provenance failure"):
+        with s.transaction():
+            pytest.fail("initialization must fail before yielding")
+    assert len(borrowed) == 1 and not borrowed[0].in_transaction
+    assert not s.writer.queue
+    if rec:
+        assert not rec.holding and not rec.waiting
+    with s.transaction() as c:
+        assert c.execute("SELECT x FROM t").fetchone()[0] == 1
+        c.execute("UPDATE t SET x=3")
+    assert not s.writer.queue

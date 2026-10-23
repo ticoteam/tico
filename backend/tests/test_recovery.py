@@ -100,3 +100,75 @@ def test_every_cloud_migration_number_is_used_once_and_in_order():
     assert all(inserted == [v] for v, inserted in pairs), "each block records exactly its own number"
     # Numbers may skip: some company-specific migrations were removed.
     assert checked == sorted(checked), "migration blocks run in number order"
+
+
+@pytest.mark.parametrize("sweep", ["claim", "scheduler"])
+def test_stall_grace_survives_bounded_expiry_and_contact_between_chunks(api, monkeypatch, sweep):
+    from backend.scheduler import Scheduler
+    from backend.tests.test_api import claim, headers
+    from backend.tests.test_attempt_contention import fleet
+
+    machine = fleet(api, attempts=10, trees=0)
+    store, execution = api.app.state.store, api.app.state.execution
+    now = H.now()
+    clock = [now]
+    monkeypatch.setattr(H, "now", lambda: clock[0])
+    with store.transaction() as c:
+        c.execute("UPDATE attempts SET state=CASE WHEN id IN ('attempt-0','attempt-2','attempt-4',"
+                  "'attempt-6','attempt-8') THEN 'leased' ELSE 'running' END,lease_until=?",
+                  (H.shift(now, seconds=-1),))
+        c.execute("UPDATE jobs SET state=(SELECT a.state FROM attempts a WHERE a.id=jobs.attempt_id) "
+                  "WHERE attempt_id IS NOT NULL")
+    execution.served_at = H.shift(now, seconds=-store.settings.lease_seconds)
+    if sweep == "claim":
+        # Each claim maintains at most eight leases and records renewed runner contact.
+        assert claim(api, machine) is None
+        with store.read() as c:
+            assert c.execute("SELECT count(*) FROM events WHERE action='attempt.lease-grace'").fetchone()[0] == 8
+        assert claim(api, machine) is None
+    else:
+        original = execution.expire
+        from contextlib import contextmanager
+        chunks = []
+        transaction = store.transaction
+        contact_due = [False]
+
+        def expired(c, **kwargs):
+            original(c, **kwargs)
+            if "attempt_ids" in kwargs:
+                chunks.append(kwargs["attempt_ids"])
+                if len(chunks) == 1:
+                    contact_due[0] = True
+
+        @contextmanager
+        def transaction_then_contact():
+            with transaction() as c:
+                yield c
+            if contact_due[0]:
+                contact_due[0] = False
+                # A real read-only renew updates contact after the first chunk commits.
+                assert api.post('/api/v2/attempts/attempt-0/renew', json={},
+                                headers=headers(machine['token'])).status_code == 200
+
+        monkeypatch.setattr(store, "transaction", transaction_then_contact)
+        monkeypatch.setattr(execution, "expire", expired)
+        assert not Scheduler(store, execution).tick()["failures"]
+        assert len(chunks) == 10
+        monkeypatch.setattr(execution, "expire", original)
+    until = H.shift(now, seconds=store.settings.lease_seconds)
+    with store.read() as c:
+        assert c.execute("SELECT count(*) FROM attempts WHERE state IN ('leased','running') "
+                         "AND lease_until=?", (until,)).fetchone()[0] == 10
+        assert c.execute("SELECT count(*) FROM events WHERE action='attempt.lease-grace'").fetchone()[0] == 10
+        assert not c.execute("SELECT 1 FROM events WHERE action='attempt.expired'").fetchone()
+    # Contact continues, but these runners really stop renewing. Every original lease must expire.
+    for seconds in (store.settings.lease_seconds // 3, 2 * store.settings.lease_seconds // 3,
+                    store.settings.lease_seconds):
+        clock[0] = H.shift(now, seconds=seconds)
+        execution.record_contact(clock[0])
+    clock[0] = H.shift(until, seconds=1)
+    with store.transaction() as c:
+        execution.expire(c)
+    with store.read() as c:
+        assert c.execute("SELECT count(*) FROM attempts WHERE state='expired'").fetchone()[0] == 10
+        assert c.execute("SELECT count(*) FROM events WHERE action='attempt.lease-grace'").fetchone()[0] == 10
