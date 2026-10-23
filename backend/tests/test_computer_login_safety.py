@@ -74,3 +74,25 @@ def test_warning_requires_evidence_of_a_computer_api_login_and_a_capable_harness
     assert readiness.login_warning(document, 'codex')  # Older runner, before account metadata arrives.
     document['runtimes']['gemini'] = {'authenticated': 'ready', 'key': {'name': 'GEMINI_API_KEY'}}
     assert not readiness.login_warning(document, 'gemini', 'gemini')  # Per-bot credentials are not this login.
+
+
+def test_health_preserves_folder_failure_reason_without_exposing_it_to_members(api):
+    machine = runner(api, label='Acme workstation')
+    assign(api, machine, 'ops')
+    set_runtime(api, 'musecode')
+    reason = "Muse Code can't save sessions: the bot user can't write /srv/acme/muse/sessions (read-only)"
+    row = {'installed': True, 'authenticated': 'failed', 'detail': reason}
+    # Older runners report the folder in detail; newer ones also send data_problem.
+    for explicit_problem in (False, True):
+        if explicit_problem:
+            row['data_problem'] = reason
+            row['detail'] = 'Sign-in check failed'
+        post(api, 'runners/heartbeat', {'version': 'test', 'platform': 'test',
+            'capabilities': ['computer_logins_v1'], 'readiness': {'schema_version': 1,
+            'runtimes': {'musecode': row}}}, machine['token'])
+        issue = checks(api)['computer_logins']
+        assert issue['status'] == 'bad' and reason in issue['summary']
+        assert 'Sign in or switch account' not in issue['summary']
+        member = checks(api, 'cara-test')['computer_logins']
+        assert member['status'] == 'bad' and member['fixes'] == []
+        assert '/srv/acme' not in member['summary'] and 'Acme workstation' not in member['summary']

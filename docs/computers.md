@@ -29,12 +29,14 @@ now run on the computer's login for that tool, which must be signed in for them 
 ([Subscriptions from earlier releases](#subscriptions-from-earlier-releases)).
 
 Before upgrading from separate bot subscriptions, check the computer's login for every tool its bots use.
-When that login is an API key, its connection shows a warning: API billing is separate from a subscription's
+When the runner identifies a primary connection's login as an API key, its connection shows a warning: API billing is separate from a subscription's
 allowance, and Tico does not check the API credit balance. Paid API use remains available. If you intend to use
 a subscription, choose **Switch to subscription** and sign in to that plan on the computer. **Health** also warns about
 API-key computer logins used by bots, and flags a missing, failed or rejected login used by an active bot's
 primary or fallback model, even before it has queued work. Computers that are offline keep their last report;
 the login check resumes when they report again.
+An unknown account type gives no API-key warning; a retained named login may need its next account report first.
+When a tool cannot write its data folder, Health names the reported folder problem for the computer operator.
 
 **Shared connections.** A model key stored under Credentials can be shared with **Every computer** or with computers
 by name. It signs in each computer that has no login of its own for that tool ([Install](install.md#add-computers-to-run-your-bots)).

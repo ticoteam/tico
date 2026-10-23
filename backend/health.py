@@ -101,6 +101,8 @@ def _computers(c, runners_online, settings):
                                    "login_warning": login_warning(document, n) if n in run_on.get(r["id"], ()) else "",
                                    "login_unavailable": (n in run_on.get(r["id"], ())
                                                          and computer_login(document, n).get("authenticated") in SIGNED_OUT),
+                                   "login_problem": str(computer_login(document, n).get("data_problem")
+                                                        or computer_login(document, n).get("detail") or "")[:200],
                                    "signable": bool(v.get("installed")) and v.get("authenticated") != "ready"
                                    and n in model_login.RUNTIMES,
                                    # A model this computer runs that it has no sign-in for, and that no key from the
@@ -1445,9 +1447,13 @@ def view(c, who, settings, auth, github, config):
     if logins:
         unavailable = any(runtime["login_unavailable"] for _, runtime in logins)
         summary = ("; ".join(f"{computer['label']} / {_harness_name(runtime['name'])}: "
-                             + ("bots depend on an unavailable computer login. Sign in or switch account in Settings > Computers"
+                             + ("bots depend on an unavailable computer login. "
+                                + (runtime['login_problem'] + ". Check this tool in Settings > Computers"
+                                   if runtime['login_problem'] else
+                                   "Sign in or switch account in Settings > Computers")
                                 if runtime["login_unavailable"] else runtime["login_warning"])
-                             for computer, runtime in logins[:5]) if full else
+                             for computer, runtime in logins[:5])
+                   + (f"; and {len(logins) - 5} more." if len(logins) > 5 else "") if full else
                    f"{len(logins)} computer login(s) used by bots need attention. Ask a computer operator to check Settings > Computers.")
         checks.append(_check("computer_logins", "Computer logins used by bots", "bad" if unavailable else "warn", summary,
                              [_fix("Open Computers", "#/settings", "devices")] if full else []))
