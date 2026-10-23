@@ -3,6 +3,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -42,6 +43,27 @@ NOTES = """# Changelog
 ## [0.1.0] - 2026-10-01
 - Browse the team.
 """
+
+
+def test_a_prerelease_uses_its_own_notes_or_only_its_matching_base():
+    text = "## [1.2.3-rc.2]\n- Another candidate.\n## [1.2.3]\n- This release.\n## [1.2.2]\n- Older.\n"
+    assert section("## [1.2.3-rc.1]\n- This candidate.\n" + text, "v1.2.3-rc.1") == "- This candidate."
+    assert section("## [1.2.3-rc.1]\n\n" + text, "v1.2.3-rc.1") == ""  # an explicit empty section still fails
+    assert section(text, "v1.2.3-rc.1") == "- This release."
+    assert section(text, "v1.2.3") == "- This release."
+    assert section(text, "v1.2.4-rc.1") == ""
+
+
+def test_prerelease_notes_cli_uses_matching_base_and_refuses_missing_notes(tmp_path):
+    changelog = tmp_path / "CHANGELOG.md"
+    changelog.write_text("## [1.2.3]\n- This release.\n")
+    def extract(version):
+        return subprocess.run([sys.executable, str(ROOT / "scripts/changelog_notes.py"), version, str(changelog)],
+                              capture_output=True, text=True)
+    candidate = extract("v1.2.3-rc.1")
+    assert candidate.returncode == 0 and candidate.stdout == "- This release.\n" and not candidate.stderr
+    missing = extract("v1.2.4-rc.1")
+    assert missing.returncode != 0 and not missing.stdout and "has no notes" in missing.stderr
 
 
 def test_bundled_history_api_and_mcp(api, monkeypatch, tmp_path):
