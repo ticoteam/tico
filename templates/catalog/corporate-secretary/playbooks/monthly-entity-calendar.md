@@ -27,8 +27,8 @@ fact older than twelve months to re-confirm.
 
 ## 4. Cap table
 
-Compare the cap table (read only) with `knowledge/cap-table-log.md`: any issuance, grant, exercise or transfer since
-last month while outbound_send is off in the minute book goes on the list for the next board pack or a consent.
+Read the Equity Manager's change log (`equity-manager`) where that bot exists, otherwise the cap table export on the task (read only; you keep no log of it) against `knowledge/minute-book.md`: any issuance, grant, exercise or transfer since
+last month with no matching approval in the minute book goes on the list for the next board pack or a consent.
 
 ## 5. Write and hand over
 

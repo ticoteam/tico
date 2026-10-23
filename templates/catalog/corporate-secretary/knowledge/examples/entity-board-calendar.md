@@ -21,7 +21,7 @@ still unsigned.**
 - **Consent: new bank signatories**: signed by 4 of 5 directors; waiting on Kenji since 2026-09-21.
 
 ## Cap table changes while outbound_send is off
-- Options for 2 hires (Lena, Marco), granted in the cap table 2026-08-15 and 2026-09-01. No consent or minute
+- Options for 2 hires (Lena, Marco), granted in the cap table (Equity Manager's change log) 2026-08-15 and 2026-09-01. No consent or minute
   found. Proposed: a resolution in the Q4 pack approving both at the board's chosen date. For counsel.
 
 ## Entities
@@ -34,6 +34,6 @@ still unsigned.**
 **Summary for a human, not legal advice.**
 
 ## Sources
-- `knowledge/board.md` (bylaws read 2026-09-14); `knowledge/minute-book.md` and `knowledge/cap-table-log.md`
+- `knowledge/board.md` (bylaws read 2026-09-14); `knowledge/minute-book.md` and `knowledge/approvals-needed.md`
   2026-10-03; cap table export 2026-10-02; `hub calendar list` 2026-10-03
 ```

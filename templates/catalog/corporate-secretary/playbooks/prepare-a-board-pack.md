@@ -13,7 +13,7 @@ counsel can settle. You never send either and never sign.
 - **Agenda**: approval of the last minutes, matters arising (last meeting's actions and their status), reports
   (the papers the owner names: finance, product, hiring), decisions, any other business.
 - **Resolutions**: every decision the meeting must take, in plain resolution wording, including approvals the
-  cap table log shows are missing (grants, issuances) and anything investors must consent to under `knowledge/board.md`.
+  Equity Manager's change log shows are missing (grants, issuances) and anything investors must consent to under `knowledge/board.md`.
 - **Papers**: ask each author on the task for their paper by 7 days before; list what is missing.
 - **Notice**: the date the notice must go under the bylaws, and a draft notice for the chair.
 Save `reports/packs/YYYY-MM-DD-<entity>-board.md`, mark it **Draft for counsel**, `hub file publish` it and share it with the chair within the requested work. Board messages to outsiders stay drafts until a person turns mail sending on in Tico.
