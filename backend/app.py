@@ -2606,8 +2606,8 @@ def create_app(settings=None):
     @app.get("/api/v2/live/stats")
     def live_stats(request: Request, days: int = 7, via: str = ""):
         """How an outside assistant's tool calls perform (backend/mcp.py record_call), per tool:
-        calls, median and p90 server time, typical answer size, errors. For people and BotOps, which
-        tunes them."""
+        calls, median and p90 server time, typical answer size, errors. People and BotOps read all callers;
+        a bot granted outcome stats reads only bot calls. Delegated turns are refused."""
         who = request.state.identity
         with store.read() as c:
             granted = outcome_stats.may_read(c, who) and who.role == "bot"
@@ -2619,7 +2619,9 @@ def create_app(settings=None):
         since = H.shift(H.now(), days=-max(1, min(days, 90)))
         tools = {}
         with store.read() as c:
-            for row in c.execute("SELECT detail_json FROM events WHERE action='mcp.call' AND ts>?", (since,)):
+            for row in c.execute("SELECT actor, detail_json FROM events WHERE action='mcp.call' AND ts>?", (since,)):
+                if granted and not (row["actor"] or "").startswith("bot:"):
+                    continue
                 d = json.loads(row["detail_json"] or "{}")
                 if via and d.get("via") != via:
                     continue

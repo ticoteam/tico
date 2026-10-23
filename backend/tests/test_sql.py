@@ -454,7 +454,13 @@ def test_a_granted_bot_reads_outcome_totals_but_no_proposal_row_and_cannot_write
             c.execute("INSERT INTO assistant_actions(id,owner,summary,method,path,body_json,status,created,proposer) "
                       "VALUES(?,?,?,?,?,?,?,?,?)", (f"a{n}", "human:ana", "Pay Dana's invoice", "POST",
                                                     "/api/v2/tasks/xyz/close", '{"note":"secret"}', status, H.now(), proposer))
-        H.event(c, "human:ana", "mcp.call", "hub_task_show", {"tool": "hub_task_show", "ms": 40, "via": "ana-laptop"})
+        # The same status across owners/routes/methods must remain one approved-grain bucket.
+        c.execute("INSERT INTO assistant_actions(id,owner,summary,method,path,body_json,status,created,proposer) "
+                  "VALUES(?,?,?,?,?,?,?,?,?)", ("a3", "human:dana", "Private category", "DELETE",
+                                                "/api/v2/meetings/xyz", '{}', "done", H.now(), "assistant"))
+        H.event(c, "bot:ops", "mcp.call", "hub_task_show", {"tool": "hub_task_show", "ms": 40})
+        H.event(c, "human:ana", "mcp.call", "hub_assistant_send",
+                {"tool": "hub_assistant_send", "ms": 900, "via": "ana-laptop"})
     token = world["attempt"]["token"]
     totals = "SELECT status, sum(actions) FROM assistant_action_weekly GROUP BY status"
     # Without the grant the bot has neither the totals nor the rows.
@@ -464,13 +470,21 @@ def test_a_granted_bot_reads_outcome_totals_but_no_proposal_row_and_cannot_write
     # Only the owner, signed in, grants it; the bot cannot grant itself.
     assert api.put("/api/v2/outcome-stats/readers/ops", json={"read": True}, headers=headers(token)).status_code == 403
     assert api.put("/api/v2/outcome-stats/readers/ops", json={"read": True}, headers=headers("ana-test")).json() == {"readers": ["ops"]}
-    assert query(api, totals, token)["rows"] == [["cancelled", 1], ["done", 2]]
+    assert query(api, totals, token)["rows"] == [["cancelled", 1], ["done", 3]]
+    buckets = query(api, "SELECT proposer, status, actions, share_pct FROM assistant_action_weekly "
+                    "ORDER BY proposer, status", token)["rows"]
+    assert buckets == [["assistant", "cancelled", 1, 33.3], ["assistant", "done", 2, 66.7],
+                       ["bot:botops", "done", 1, 100.0]]
     assert query(api, "SELECT tool, calls FROM mcp_call_weekly", token)["rows"] == [["hub_task_show", 1]]
     stats = api.get("/api/v2/live/stats", headers=headers(token))
-    assert stats.status_code == 200 and stats.json()["tools"][0]["tool"] == "hub_task_show"
+    assert stats.status_code == 200
+    assert {r["tool"]: r["calls"] for r in stats.json()["tools"]} == {"hub_task_show": 1}
+    # People keep their existing all-caller stats; the narrow grant cannot borrow them.
+    owner_stats = api.get("/api/v2/live/stats", headers=headers()).json()["tools"]
+    assert {r["tool"]: r["calls"] for r in owner_stats} == {"hub_task_show": 1, "hub_assistant_send": 1}
     # Failed MCP calls record caller-typed names too, even when they resemble a hub name.
     for name in ("Ana wants to pay Dana's private invoice", "hub_ana_private_invoice"):
-        assert rpc(api, "tools/call", {"name": name, "arguments": {}})["error"]["code"] == -32602
+        assert rpc(api, "tools/call", {"name": name, "arguments": {}}, token=token)["error"]["code"] == -32602
     assert query(api, "SELECT tool, calls FROM mcp_call_weekly ORDER BY tool", token)["rows"] == [
         ["hub_task_show", 1], ["other", 2]]
     stats = api.get("/api/v2/live/stats", headers=headers(token))
@@ -481,7 +495,8 @@ def test_a_granted_bot_reads_outcome_totals_but_no_proposal_row_and_cannot_write
     assert api.get("/api/v2/live/stats?via=ana-laptop", headers=headers(token)).status_code == 403
     # Still no row: not the table, not a hidden column, not the base events the totals are built from.
     for sql in ("SELECT * FROM assistant_actions", "SELECT summary FROM assistant_action_weekly",
-                "SELECT owner FROM assistant_action_weekly", "SELECT detail_json FROM mcp_call_weekly"):
+                "SELECT owner FROM assistant_action_weekly", "SELECT area FROM assistant_action_weekly",
+                "SELECT method FROM assistant_action_weekly", "SELECT detail_json FROM mcp_call_weekly"):
         assert query(api, sql, token, expected=422)
     assert query(api, "DELETE FROM assistant_actions", token, expected=422)
     # A grant to one bot never opens totals, rows or writes to another bot.

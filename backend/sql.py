@@ -85,22 +85,20 @@ DERIVED = {
         GROUP BY 1, 2, 3, 4"""),
 }
 # Totals over rows the reader may not read one by one, built only for the owner and a bot the owner granted them
-# (backend/outcome_stats.py). Each groups by week and fixed names (status, route area, tool) and carries no text, no
+# (backend/outcome_stats.py). Each groups by week and fixed names (status, proposer, bot, tool) and carries no text, no
 # id and no person: a proposal's owner, a call's person and its token label never leave the base row.
 GRANTED = {
-    # Assistant and BotOps proposals per week, by who proposed, the API area and method they would run, and how they
-    # settled (pending, running, done, failed, cancelled, expired); `share_pct` is that status's share of its group.
+    # Assistant and BotOps proposals per week, proposer and status (pending, running, done, failed, cancelled,
+    # expired); `share_pct` is that status's share of its week and proposer.
     "assistant_action_weekly": (("assistant_actions",), """
-        SELECT week, proposer, area, method, status, actions,
-               round(100.0 * actions / sum(actions) OVER (PARTITION BY week, proposer, area, method), 1) AS share_pct
+        SELECT week, proposer, status, actions,
+               round(100.0 * actions / sum(actions) OVER (PARTITION BY week, proposer), 1) AS share_pct
         FROM (SELECT date(created, '-6 days', 'weekday 1') AS week,
                      coalesce(proposer, proposed_via, 'assistant') AS proposer,
-                     CASE WHEN path LIKE '/api/v2/%' THEN substr(path, 9, instr(substr(path, 9) || '/', '/') - 1)
-                          ELSE 'other' END AS area,
-                     method, status, count(status) AS actions
-              FROM {all_assistant_actions} GROUP BY 1, 2, 3, 4, 5)"""),
-    # Tool calls through the MCP endpoint per week, by tool, and by bot when a bot the reader may read made them (a
-    # person's calls, and a hidden bot's, count with no `bot`). A name that is not a hub tool's counts as `other`.
+                     status, count(status) AS actions
+              FROM {all_assistant_actions} GROUP BY 1, 2, 3)"""),
+    # Bot tool calls through MCP per week, by tool and by bot when the reader may read that bot; hidden bots count
+    # with no `bot`. People's calls are excluded. A name that is not a hub tool's counts as `other`.
     "mcp_call_weekly": (("events", "bots"), """
         SELECT week, bot, tool, count(*) AS calls, sum(error) AS errors,
                round(100.0 * sum(error) / count(*), 1) AS error_pct,
@@ -111,11 +109,11 @@ GRANTED = {
                      CASE WHEN target IN {tool_names} THEN target ELSE 'other' END AS tool,
                      coalesce(json_extract(detail_json, '$.error'), 0) <> 0 AS error,
                      coalesce(json_extract(detail_json, '$.ms'), 0) AS ms
-              FROM {all_events} WHERE action = 'mcp.call')
+              FROM {all_events} WHERE action = 'mcp.call' AND actor LIKE 'bot:%')
         GROUP BY 1, 2, 3"""),
 }
 # Base tables only a GRANTED view reads, and the columns it may see of them.
-GRANTED_SOURCES = {"assistant_actions": ("created", "proposer", "proposed_via", "path", "method", "status")}
+GRANTED_SOURCES = {"assistant_actions": ("created", "proposer", "proposed_via", "status")}
 # FTS5 reads these as main.<virtual>_* with no view context; they are not a public API.
 FTS_SHADOWS = ("_data", "_idx", "_content", "_docsize", "_config")
 STATEMENT = re.compile(r"^\s*(?:(?:--[^\n]*\n?|/\*.*?\*/)\s*)*(select|with|explain\s+query\s+plan)\b", re.I | re.S)
