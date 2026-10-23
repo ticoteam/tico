@@ -50,7 +50,8 @@ jobs:
   gate:
     needs: candidate
     name: ${{ matrix.name }}
-    runs-on: runs-on=${{ github.run_id }}/runner=4cpu-linux-x64/extras=s3-cache
+    # The gate needs 35 GiB free (Docker images, browsers, Rust targets); the default RunsOn disk leaves about 10.
+    runs-on: runs-on=${{ github.run_id }}/runner=4cpu-linux-x64/volume=80gb/extras=s3-cache
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -72,6 +73,8 @@ jobs:
       TICO_UI_SLOWDOWN: '2'
       TICO_BROWSER_CHANNEL: ''
       PYTHONUNBUFFERED: '1'
+      # The slowest tests of each part, so a part that outruns the others shows what holds it.
+      PYTEST_ADDOPTS: '--durations=25'
     steps:
       - name: Validate inputs before checkout
         env:
@@ -81,9 +84,15 @@ jobs:
           import os, re
           assert re.fullmatch(r'[0-9a-f]{40}', os.environ['CANDIDATE_SHA']), 'A full lowercase commit SHA is required'
           assert re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+', os.environ['PREVIOUS_RELEASE']), 'A stable previous release is required'
-          assert os.environ['TICO_HOSTED_ENVIRONMENT'] == 'github-hosted', 'A GitHub-hosted VM is required'
+          # A RunsOn VM is a self-hosted runner, but like a GitHub-hosted one it is launched for this job alone.
+          kind = os.environ['TICO_HOSTED_ENVIRONMENT']
+          instance = os.environ.get('RUNS_ON_INSTANCE_ID', '')
+          if kind == 'self-hosted' and re.fullmatch(r'i-[0-9a-f]{8,17}', instance) \
+                  and os.environ.get('RUNNER_NAME', '').startswith(f'runs-on--{instance}--'):
+              kind = 'runs-on'
+          assert kind in ('github-hosted', 'runs-on'), 'A GitHub-hosted or RunsOn VM is required'
           with open(os.environ['GITHUB_ENV'], 'a') as stream:
-              stream.write('TICO_HOSTED_ENVIRONMENT=github-hosted\n')
+              stream.write(f'TICO_HOSTED_ENVIRONMENT={kind}\n')
           PY
       # Controls come from the reviewed workflow commit; builds/tests come only from the candidate.
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
