@@ -137,7 +137,8 @@ def subscription_login(runtime, detail):
 
 def shared_logins(c, runner_id, readiness, assigned, access):
     """The sign-ins on this computer that several bots run on, for a harness whose subscription login serves one turn
-    at a time (`one_turn_per_login`): those bots take turns (runner-rs/src/login_turns.rs). One row per login: its
+    at a time (`one_turn_per_login`): those bots take turns (runner-rs/src/login_turns.rs). Codex opts out and is
+    omitted: its bots run concurrently on one ChatGPT login. One row per login: its
     runtime, its subscription (`profile`, '' for the computer's own sign-in) and `display_name`, how many bots share
     it and the ones this reader may see. A key login runs its bots side by side and is left out."""
     from .harnesses import harness_caps

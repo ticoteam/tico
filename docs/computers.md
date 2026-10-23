@@ -54,9 +54,9 @@ Groups no longer choose a subscription. The bot editor shows the result as "Runs
 *computer*", using the names on this page. When a plan runs out, a bot can move to its fallback model; that is set in
 Models and per bot ([How it works](how-it-works.md)), not here.
 
-### Bots sharing one ChatGPT sign-in take turns
+### Bots sharing one ChatGPT sign-in run side by side
 
-A Codex ChatGPT sign-in is one login file whose refresh token rotates as it is used, and OpenAI allows one such login per machine or serialized job stream. So on a Computer, the bots that use one ChatGPT sign-in (the same named subscription, or the Computer's own login) run one Codex turn at a time, release-blocking work first, and one bot's parallel tasks on it take turns too. A waiting run reads **Waiting for <login> (held by <bot> on <task> since <time>; position N)** until its turn comes, a turn holding the login past 20 minutes while another waits pauses at a safe point and continues right after, or runs on the bot's own fallback when one is ready ([how it works](how-it-works.md#one-turn-per-chatgpt-login)). The connection's line in the computer's pop-up says when several bots share one sign-in and that they take turns; use a separate computer and subscription when a bot needs an independent login. Bots on an OpenAI API key still run side by side. Tico never copies a login file into another bot's home to get around this, because a copy would rotate apart from the original. The rule is per runner process: two runners on one machine that share a login folder don't wait for each other.
+Codex bots on one Computer using the same ChatGPT sign-in run turns at the same time, just as Claude bots do. This applies to the Computer's own login, a shared named subscription, and separate tasks of the same bot. They share the plan's usage allowance; that allowance is the limit, and a busy login does not make another turn wait. When the allowance runs out, the usual usage-limit and fallback rules apply ([how it works](how-it-works.md#one-turn-per-chatgpt-login)). Bots on an OpenAI API key also run side by side. Tico uses the original login in its own home and never copies a login file into another bot's home: copies can rotate apart during token refresh.
 
 ### What "% left" means
 
@@ -143,8 +143,8 @@ Choose **API key** when you pay the provider for each use:
   pop-up reads "No plan usage (API key)". The provider bills each run.
 - Use it for a tool that has no subscription sign-in here (**Subscription** is greyed out), or when a plan's weekly
   limit is too small for your bots.
-- Bots on one OpenAI API key run side by side; bots on one ChatGPT sign-in
-  [take turns](#bots-sharing-one-chatgpt-sign-in-take-turns).
+- Bots on one OpenAI API key run side by side, as do bots on one ChatGPT sign-in
+  ([sharing a sign-in](#bots-sharing-one-chatgpt-sign-in-run-side-by-side)).
 - Where the key goes:
   - **Add key** gives this computer a key of its own, for Codex, Claude Code, Cursor Agent and Muse Code. Only this
     computer uses it.

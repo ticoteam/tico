@@ -1,8 +1,27 @@
-"""Bots that share one ChatGPT sign-in take turns on it (runner-rs/src/login_turns.rs): Settings > Computers says which
-sign-ins several bots share, naming only the bots the reader may see."""
+"""Codex bots sharing a ChatGPT login run concurrently. Optional queue support stays covered with a synthetic opt-in."""
 import uuid
 
+import pytest
+
 from backend.tests.test_api import api, as_member, assign, get, post, restrict, runner  # noqa: F401
+
+
+@pytest.fixture
+def queued_login(monkeypatch):
+    """Exercise dormant queue support without enabling it in the built-in Codex manifest."""
+    from clients.harness_manifests import caps
+    monkeypatch.setitem(caps("codex"), "one_turn_per_login", True)
+
+
+def test_codex_bots_on_one_chatgpt_login_do_not_show_a_take_turns_warning(api):
+    r = runner(api)
+    for bot in ("ops", "finance"):
+        assign(api, r, bot)
+    for profile in ("", "acme"):
+        beat(api, r, {"ops": profile, "finance": profile})
+        assert shared(api, r) == []
+        mine = next(m for m in get(api, "computers")["computers"] if m["id"] == r["runner_id"])
+        assert mine["shared_logins"] == []
 
 
 def beat(api, r, bots, detail="Signed in with ChatGPT", acme="Signed in with ChatGPT"):
@@ -22,7 +41,7 @@ def shared(api, r, token="ana-test"):
     return next(m for m in get(api, "operations", token)["computers"] if m["id"] == r["runner_id"])["shared_logins"]
 
 
-def test_computers_list_the_sign_ins_several_codex_bots_share_but_not_an_api_key_or_a_login_of_ones_own(api):
+def test_an_opt_in_queue_lists_shared_logins_but_not_an_api_key_or_a_login_of_ones_own(api, queued_login):
     r = runner(api)
     for bot in ("ops", "finance", "inbox"):
         assign(api, r, bot)
@@ -44,7 +63,7 @@ def test_computers_list_the_sign_ins_several_codex_bots_share_but_not_an_api_key
         {"runtime": "codex", "profile": "", "display_name": "", "count": 2, "bots": ["finance"]}]
 
 
-def test_a_key_login_or_one_whose_kind_is_unknown_is_not_listed_as_shared(api):
+def test_a_key_login_or_one_whose_kind_is_unknown_is_not_listed_as_shared(api, queued_login):
     # Bots on a key run side by side; a login that does not say it is ChatGPT is not claimed to take turns.
     r = runner(api)
     for bot in ("ops", "finance"):
@@ -101,7 +120,7 @@ def test_a_turn_that_gave_its_login_up_at_the_cap_goes_back_in_the_queue_unanswe
     assert again["job_id"] == a["job_id"] and again["id"] != a["id"]
 
 
-def test_a_turn_waiting_for_its_login_whose_task_is_closed_meanwhile_is_skipped_cleanly(api):
+def test_a_turn_waiting_for_its_login_whose_task_is_closed_meanwhile_is_skipped_cleanly(api, queued_login):
     from backend.tests.test_api import claim, ready
     r = runner(api)
     assign(api, r, "ops")

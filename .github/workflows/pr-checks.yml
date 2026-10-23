@@ -52,6 +52,13 @@ jobs:
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json', 'backend/requirements-dev.txt') }}
+      - name: Use the canonical Ubuntu package mirror
+        # Azure's mirror can stall browser dependency downloads until the job times out.
+        run: |
+          sudo sed -i \
+            -e 's|mirror+file:/etc/apt/apt-mirrors.txt|https://archive.ubuntu.com/ubuntu/|g' \
+            -e 's|http://azure\.archive\.ubuntu\.com/ubuntu/|https://archive.ubuntu.com/ubuntu/|g' \
+            /etc/apt/sources.list.d/ubuntu.sources
       - name: Install
         run: |
           python3 -m venv "$RUNNER_TEMP/venv"
