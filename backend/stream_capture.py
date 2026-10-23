@@ -55,8 +55,20 @@ def scrub_value(c, value, label, attempt_id="", conversation_id=""):
     # That includes a lapsed lease (`expired`), which the runner's next call restores before it uploads.
     for aid in ids:
         c.execute("INSERT OR IGNORE INTO attempt_capture_drops(attempt_id,created) SELECT id,? FROM attempts "
-                  "WHERE id=? AND state NOT IN ('completed','failed','interrupted')", (H.now(), aid))
+                  "WHERE id=?", (H.now(), aid))
     for aid in ids:
+        # A reason can quote the model error that contained the removed value too.
+        diagnostic = c.execute("SELECT end_reason,last_event FROM attempt_diagnostics WHERE attempt_id=?", (aid,)).fetchone()
+        if diagnostic:
+            fields = [diagnostic['end_reason'], diagnostic['last_event']]
+            for index, field in enumerate(fields):
+                if field:
+                    for form in sorted(forms, key=len, reverse=True):
+                        field = field.replace(form, label)
+                    fields[index] = field
+            c.execute("UPDATE attempt_diagnostics SET end_reason=?,last_event=? WHERE attempt_id=?", (*fields, aid))
+        # Always-on stderr can contain the same customer material as the opt-in stream.
+        c.execute("UPDATE attempt_diagnostics SET stderr_tail=NULL,stderr_at=NULL WHERE attempt_id=?", (aid,))
         row = c.execute("SELECT frames FROM attempt_captures WHERE attempt_id=?", (aid,)).fetchone()
         if row and any(f in row["frames"] for f in forms):
             frames = row["frames"]
@@ -125,11 +137,20 @@ def export(c, who, auth, aid, full=True):
     attempt, msg = require_run(c, who, auth, aid)
     cap = c.execute("SELECT * FROM attempt_captures WHERE attempt_id=? AND created>=?",
                     (aid, H.shift(H.now(), days=-KEEP_DAYS))).fetchone()
-    if not cap:
-        raise Problem("not_found", "No stream was captured for this run, or it is over a week old", 404)
+    from . import run_diagnostics
+    diagnostic = c.execute("SELECT stderr_tail,stderr_at FROM attempt_diagnostics WHERE attempt_id=? AND stderr_at>=?",
+                           (aid, H.shift(H.now(), days=-KEEP_DAYS))).fetchone()
+    stderr = diagnostic['stderr_tail'] if diagnostic else ''
+    if not cap and not stderr:
+        raise Problem("not_found", "No stream or stderr was captured for this run, or it is over a week old", 404)
+    stream_captured = bool(cap)
+    cap = dict(cap) if cap else {"provider": "runner", "frames": "", "bytes": 0, "truncated": False,
+                                "dropped_bytes": 0, "created": diagnostic['stderr_at']}
+    diagnostics = run_diagnostics.metadata(c, aid)
     if not full:
         return {"attempt": {"id": aid, "bot": attempt["bot"], "state": attempt["state"]}, "provider": cap["provider"],
-                "bytes": cap["bytes"], "truncated": bool(cap["truncated"]), "captured": cap["created"],
+                "bytes": cap["bytes"], "stderr_bytes": len((stderr or "").encode()), "stream_captured": stream_captured,
+                **diagnostics, "truncated": bool(cap["truncated"]), "captured": cap["created"],
                 "fixture": f"hub run export {aid} --fixture"}
     # A deleted message's text is not served again; the stream may still hold it until the week is out.
     message = ({"kind": msg["kind"], "from": msg["from_actor"], "body": mask(msg["body"] or "")} if msg
@@ -142,8 +163,10 @@ def export(c, who, auth, aid, full=True):
     result = json.loads(attempt["result_json"]) if attempt["result_json"] else {}
     return {
         "attempt": {"id": aid, "bot": attempt["bot"], "state": attempt["state"], "created": attempt["created"],
-                    "started": attempt["started"], "finished": attempt["finished"]},
+                    "started": attempt["started"], "finished": attempt["finished"], **diagnostics},
         "provider": cap["provider"],
+        "stream_captured": stream_captured,
+        "stderr_tail": stderr or "",
         "truncated": bool(cap["truncated"]),
         "dropped_bytes": cap["dropped_bytes"],
         "captured": cap["created"],

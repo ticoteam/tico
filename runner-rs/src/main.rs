@@ -59,6 +59,7 @@ mod redact;
 mod relays;
 mod repositories;
 mod worktrees;
+mod run_diagnostics;
 mod runner;
 mod sessions;
 mod safegit;

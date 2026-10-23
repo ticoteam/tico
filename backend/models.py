@@ -1822,6 +1822,10 @@ class Started(Contract):
     load_snapshot: LoadSnapshot | None = None
 
 
+class AttemptStderr(Contract):
+    tail: str = Field(max_length=65536)
+
+
 class Event(Contract):
     seq: int = Field(ge=1)
     kind: Literal["delta", "message", "tokens", "status", "error", "tool", "diagnostic", "goal"]

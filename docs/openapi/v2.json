@@ -22162,6 +22162,51 @@
           "checked": {
             "type": "string"
           },
+          "stalled_runs": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "run": {
+                  "type": "string"
+                },
+                "bot": {
+                  "type": "string"
+                },
+                "stalled": {
+                  "type": "boolean"
+                },
+                "stalled_at": {
+                  "type": "string"
+                },
+                "last_event": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "last_event_at": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "stall_minutes": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "bot",
+                "last_event",
+                "last_event_at",
+                "run",
+                "stall_minutes",
+                "stalled",
+                "stalled_at"
+              ],
+              "additionalProperties": true
+            }
+          },
           "storage": {
             "$ref": "#/components/schemas/Storage",
             "description": "Read-only file storage usage and copy progress; Team owners only"

@@ -166,8 +166,9 @@ impl CodexHost {
             self.stop_and_reap().await;
         }
         let mut command = crate::isolation::command("codex");
-        command.arg("app-server").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).env_clear().envs(&self.0.env);
+        command.arg("app-server").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).env_clear().envs(&self.0.env);
         let mut child = command.spawn().map_err(|e| failed(format!("could not start codex app-server: {e}")))?;
+        let _stderr = crate::run_diagnostics::Stderr::capture(&mut child, self.0.tx.clone(), &self.0.env);
         let stdout = child.stdout.take().ok_or_else(|| failed("codex app-server has no stdout"))?;
         *self.0.stdin.lock().await = child.stdin.take();
         log(&format!("codex: app-server started pid {}", child.id().map_or("?".into(), |p| p.to_string())));
@@ -177,8 +178,12 @@ impl CodexHost {
         let (relay_tx, relay_rx) = oneshot::channel();
         let (reaped_tx, reaped_rx) = tokio::sync::watch::channel(false);
         let flag = gone.clone();
+        let diagnostics = self.0.tx.clone();
         tokio::spawn(async move {
             let status = exited.await.unwrap_or_else(|_| Err(std::io::Error::other("codex app-server reaper ended")));
+            _stderr.drained().await;
+            let code = super::return_code(&status);
+            let _ = diagnostics.send(json!({"kind": "error", "error": crate::run_diagnostics::process_reason(code, &_stderr.tail()), "exit_code": code, "process_exit": true}));
             flag.store(true, Ordering::SeqCst);
             let _ = reaped_tx.send(true);
             let _ = relay_tx.send(status);

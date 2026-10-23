@@ -1665,6 +1665,8 @@ class Execution:
         c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created,lane) "
                   "VALUES(?,?,?,?,?,?,'leased',?,?,?)",
                   (aid, row["id"], row["bot"], who.runner_id, row["generation"], digest(token), until, H.now(), lane))
+        from . import run_diagnostics
+        run_diagnostics.touch(c, aid, "leased")
         c.execute("UPDATE jobs SET state='leased',attempt_id=? WHERE id=?", (aid, row["id"]))
         # What woke this turn and the wake preset in force, for its run record (backend/wake_presets.py).
         job = c.execute("SELECT wake_preset,wake_class,hold_until FROM jobs WHERE id=?", (row["id"],)).fetchone()
@@ -1890,6 +1892,8 @@ class Execution:
             return None
         until = H.shift(now, seconds=self.store.settings.lease_seconds)
         c.execute("UPDATE attempts SET state='running',finished=NULL,lease_until=? WHERE id=?", (until, row["id"]))
+        from . import run_diagnostics
+        run_diagnostics.restored(c, row["id"])
         c.execute("UPDATE jobs SET state='running' WHERE id=?", (row["job_id"],))
         c.execute("UPDATE turns SET finished=NULL,exit=NULL,summary=NULL WHERE id=?", (row["id"],))
         current = H.message(c, job["message_id"])
@@ -2018,6 +2022,8 @@ class Execution:
 
     def renew(self, c, who, aid):
         row = self.attempt(c, who, aid)
+        from . import run_diagnostics
+        run_diagnostics.touch(c, aid)
         until = H.shift(H.now(), seconds=self.store.settings.lease_seconds)
         c.execute("UPDATE attempts SET lease_until=? WHERE id=?", (until, aid))
         # The runner renews every few seconds, so a person's Stop rides on the answer it already reads. A turn whose
@@ -2086,6 +2092,8 @@ class Execution:
         from .performance import stamp_attempt
         stamp_attempt(c, aid, row["runner_id"], "start", body.load_snapshot)
         c.execute("UPDATE turns SET thread_id=? WHERE id=?", (body.thread_id, aid))
+        from . import run_diagnostics
+        run_diagnostics.touch(c, aid, "started")
         c.execute("UPDATE jobs SET state='running' WHERE id=?", (row["job_id"],))
         from .shared_bots import follow
         config = follow(c, row["bot"], json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot=?", (row["bot"],)).fetchone()[0]))
@@ -2243,8 +2251,10 @@ class Execution:
         row = self.attempt(c, who, aid, active=False)
         seq = row["last_seq"]
         from .login_waits import stored
+        from . import run_diagnostics
         for event in body.events:
-            payload = encode(stored(event.kind, event.payload))
+            clean = stored(event.kind, event.payload)
+            payload = encode(clean)
             existing = c.execute("SELECT kind,payload_json FROM attempt_events WHERE attempt_id=? AND seq=?",
                                  (aid, event.seq)).fetchone()
             if existing:
@@ -2257,6 +2267,7 @@ class Execution:
                 raise Problem("terminal", "Cannot append new output to a completed attempt", 409)
             c.execute("INSERT INTO attempt_events(attempt_id,seq,kind,payload_json,created) VALUES(?,?,?,?,?)",
                       (aid, event.seq, event.kind, payload, H.now()))
+            run_diagnostics.touch(c, aid, event.kind, clean)
             if event.kind == "goal" and row["lease_until"] > H.now() and row["state"] != "expired":
                 from .chat_goals import report
                 report(c, row, event.payload)

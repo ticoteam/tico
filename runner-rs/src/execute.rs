@@ -11,7 +11,6 @@ use std::time::{Duration, Instant};
 
 use regex::Regex;
 use serde_json::{json, Map, Value};
-use tokio::sync::mpsc::unbounded_channel;
 use tokio::sync::Notify;
 
 use crate::client::ApiError;
@@ -26,7 +25,7 @@ use crate::util::{log, mark, text_of, truthy};
 
 pub const STREAM_WINDOW: Duration = Duration::from_millis(50);
 const RENEW_INTERVAL: Duration = Duration::from_secs(10);
-const OWN_INTERRUPT: &[&str] = &["Lease expired", "Execution interrupted after stop"];
+const OWN_INTERRUPT: &[&str] = &["Lease expired", "Execution interrupted after stop", "Timeout:", "Runner stopped during execution", "Computer lost or heartbeat stopped"];
 
 fn run_clock() -> Instant {
     #[cfg(test)]
@@ -622,17 +621,19 @@ impl Runner {
         let _ = self.state.append(aid, "diagnostic", &json!({"text": text}));
     }
 
-    fn run_deadline(&self, aid: &str, config: &Value, relay: Option<&crate::gateway_relay::Relay>) -> Result<Instant, Fail> {
+    fn run_deadline(&self, aid: &str, config: &Value, relay: Option<&crate::gateway_relay::Relay>) -> Result<(Instant, String), Fail> {
         let minutes = config["max_run_minutes"].as_f64().or_else(|| text_of(&config["max_run_minutes"]).parse().ok()).unwrap_or(60.0);
         let requested = run_clock() + Duration::from_secs_f64(60.0 * minutes);
         let limit = relay.map_or(requested, |r| r.limit(requested));
+        let name = if limit < requested { "Gateway credential lifetime (24 hours)".into() } else { format!("max_run_minutes ({minutes} minutes)") };
         if limit < requested {
             self.diagnose(aid, "Tico Gateway limits this attempt to just under 24 hours from when it received its key, including any fallback, so the key remains valid after rotation.");
         }
         if limit <= run_clock() {
+            let _ = self.state.append(aid, "diagnostic", &json!({"end_reason": format!("Timeout: {name}")}));
             return Err(Fail::runtime("Tico Gateway run time limit reached; start a new attempt to continue with its current key"));
         }
-        Ok(limit)
+        Ok((limit, name))
     }
 
     /// publish_history with the turn's token, logged when it changes (service.py publish).
@@ -892,6 +893,7 @@ impl Runner {
         let mut env: Env = Env::new();
         let mut base_env: Option<Env> = None;
         let mut host: Option<Host> = None;
+        let mut receivers = Vec::new();
         let (mut thread, mut turn): (Option<String>, Option<String>) = (None, None);
         let mut drove = Drove::interrupted();
         let mut redactor: Option<Arc<Redactor>> = None;
@@ -1040,12 +1042,14 @@ impl Runner {
                 }
             }
             let previous = self.state.session(&bot, &conv, &session_runtime)?;
-            let limit = self.run_deadline(&aid, &config, vault.relay.as_ref())?;
+            let (limit, limit_name) = self.run_deadline(&aid, &config, vault.relay.as_ref())?;
             prepared = true;
             if busy.is_some() || held.is_some() {
                 return Ok(()); // the fallback takes the turn below; this harness never starts
             }
-            let (tx, mut rx) = unbounded_channel();
+            let (tx, rx) = self.attempt_events(&aid, redactor.clone());
+            receivers.push((tx.clone(), rx));
+            let rx = &mut receivers.last_mut().unwrap().1;
             let own = tx.clone();
             let made = if persistent {
                 let make = |home: &Path, _: &Env| AntigravityHost::new(home, vec!["agy".into()], tx.clone());
@@ -1130,8 +1134,8 @@ impl Runner {
                 self.state.repo_rules(&th, Some(&digest))?;
             }
             turn = Some(t.clone());
-            let d = Drive { aid: &aid, host: h, thread: &th, effort: effort.as_deref(), limit, flags: &flags, wake: &wake, redactor: redactor.as_ref(), runtime: &runtime, bot: &bot, session: &key, login: yields(&attempt, &login_held) };
-            drove = self.drive(&d, &mut rx, t, segments.last_mut().unwrap(), &mut carried, &mut auth_rejected, &mut goal).await?;
+            let d = Drive { limit_name: &limit_name, aid: &aid, host: h, thread: &th, effort: effort.as_deref(), limit, flags: &flags, wake: &wake, redactor: redactor.as_ref(), runtime: &runtime, bot: &bot, session: &key, login: yields(&attempt, &login_held) };
+            drove = self.drive(&d, rx, t, segments.last_mut().unwrap(), &mut carried, &mut auth_rejected, &mut goal).await?;
             turn = Some(drove.turn.clone());
             keep_session(&self.state, &bot, &conv, &session_runtime, &h.session_id(&th)).await?;
             // A runtime that cannot sign itself in is as unavailable as one out of quota: a bot with a fallback
@@ -1235,7 +1239,9 @@ impl Runner {
                 }
                 // The primary's promise to report every tool call ends here; the fallback host makes its own.
                 let _ = self.state.append(&aid, "status", &json!({"tool_events": false}));
-                let (tx, mut rx) = unbounded_channel();
+                let (tx, rx) = self.attempt_events(&aid, redactor.clone());
+                receivers.push((tx.clone(), rx));
+                let rx = &mut receivers.last_mut().unwrap().1;
                 let h = host.insert(self.make_host(&bot, &hop.runtime, &hop_config, &hop_env, selected.as_ref(), tx)?);
                 if let Some(held) = login_held.as_mut() {
                     held.bind(h.clone());
@@ -1243,7 +1249,7 @@ impl Runner {
                 if let Some(c) = &capture {
                     h.set_capture(c);
                 }
-                let limit = self.run_deadline(&aid, &config, vault.relay.as_ref())?;
+                let (limit, limit_name) = self.run_deadline(&aid, &config, vault.relay.as_ref())?;
                 h.start().await?;
                 let settings = Settings {
                     cwd: execution_path.display().to_string(),
@@ -1280,6 +1286,7 @@ impl Runner {
                 let t = h.start_turn(&th, &text, hop.reasoning_effort.as_deref()).await?;
                 turn = Some(t.clone());
                 let d = Drive {
+                    limit_name: &limit_name,
                     aid: &aid,
                     host: h,
                     thread: &th,
@@ -1293,7 +1300,7 @@ impl Runner {
                     session: &key,
                     login: yields(&attempt, &login_held),
                 };
-                drove = self.drive(&d, &mut rx, t, segments.last_mut().unwrap(), &mut carried, &mut auth_rejected, &mut goal).await?;
+                drove = self.drive(&d, rx, t, segments.last_mut().unwrap(), &mut carried, &mut auth_rejected, &mut goal).await?;
                 turn = Some(drove.turn.clone());
                 let how = if drove.outcome == "completed" { String::new() } else { format!(" ({})", drove.outcome) };
                 let why = match &busy {
@@ -1348,6 +1355,17 @@ impl Runner {
 
         // The result: settle the host, scrub, save, send. Each step's mark lets the flight file name a slow one.
         mark("model_done", &aid);
+        // Read an unexpected process exit before cleanup. A signal sent by h.stop() is not the failure's cause.
+        if let Some((tx, rx)) = receivers.last_mut() {
+            let _ = tx.send(json!({"kind": "_diagnostics_drained"}));
+            while let Ok(Some(ev)) = tokio::time::timeout(Duration::from_secs(2), rx.recv()).await {
+                if ev["kind"] == "_diagnostics_drained" { break; }
+                if ev["process_exit"] == true {
+                    let clean = redactor.as_ref().map(|r| r.scrub_json(&ev)).unwrap_or(ev);
+                    let _ = self.state.append(&aid, "error", &clean);
+                }
+            }
+        }
         if let Some(h) = &host {
             if let (Some(th), Some(t)) = (&thread, &turn) {
                 if drove.outcome == "interrupted" {
@@ -1360,6 +1378,13 @@ impl Runner {
             if let Host::Antigravity(warm) = h {
                 // Its token file is blanked; only a turn that completed leaves the process running.
                 self.warm.release(warm, drove.outcome == "completed").await;
+            }
+        }
+        // A barrier settles final stderr before last_seq is frozen; cleanup's process exits are discarded.
+        for (tx, rx) in &mut receivers {
+            let _ = tx.send(json!({"kind": "_diagnostics_drained"}));
+            while let Ok(Some(ev)) = tokio::time::timeout(Duration::from_secs(2), rx.recv()).await {
+                if ev["kind"] == "_diagnostics_drained" { break; }
             }
         }
         // The host has stopped: the next turn waiting for this ChatGPT login starts now, and one that gave it up at
@@ -1662,6 +1687,7 @@ impl Runner {
         let masked = redact::scrub_credentials(&scrub.scrub_text(&e.text), &[]);
         let cause: String = masked.chars().take(300).collect();
         let detail = if cause.is_empty() { String::new() } else { format!(" ({cause})") };
+        let _ = self.state.append(aid, "diagnostic", &json!({"runner_error": cause, "error_type": e.kind}));
         self.diagnose(aid, &format!("{}: {what}{detail}; inspect local runner", e.kind));
         if !OWN_INTERRUPT.iter().any(|p| e.text.contains(p)) {
             crate::util::diagnostic(&format!("Tico runner: {bot}: turn {aid} stopped: {}{}", e.kind, if cause.is_empty() { String::new() } else { format!(": {cause}") }));
@@ -1998,7 +2024,7 @@ for line in sys.stdin:
         let flags = Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), done: AtomicBool::new(false),
                             done_notify: Notify::new(), deadline: Mutex::new(Instant::now() + Duration::from_secs(60)) };
         let wake = Notify::new();
-        let d = crate::drive::Drive { aid: "a-ops", host: &host, thread: "th1", effort: None, limit: Instant::now() + Duration::from_secs(60), flags: &flags,
+        let d = crate::drive::Drive { limit_name: "max_run_minutes (60 minutes)", aid: "a-ops", host: &host, thread: "th1", effort: None, limit: Instant::now() + Duration::from_secs(60), flags: &flags,
                                       wake: &wake, redactor: None, runtime: "codex", bot: "ops", session: "th1", login: Some(held.cap()) };
         let mut segment = crate::drive::Segment { meter: Meter::default(), config: json!({}), profile: None, billing: "subscription" };
         let mut goal = crate::drive::GoalRun { chat_goal: None, controlled: false, failure: None, paused: None, tries_key: ("ops".into(), "task-7".into()) };
@@ -2074,7 +2100,7 @@ for line in sys.stdin:
         let flags = Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), done: AtomicBool::new(false),
                             done_notify: Notify::new(), deadline: Mutex::new(Instant::now() + Duration::from_secs(60)) };
         let wake = Notify::new();
-        let d = crate::drive::Drive { aid: "a-ops", host: &host, thread: "th1", effort: None, limit: Instant::now() + Duration::from_secs(60), flags: &flags,
+        let d = crate::drive::Drive { limit_name: "max_run_minutes (60 minutes)", aid: "a-ops", host: &host, thread: "th1", effort: None, limit: Instant::now() + Duration::from_secs(60), flags: &flags,
                                       wake: &wake, redactor: None, runtime: "codex", bot: "ops", session: "th1", login: Some(held.cap()) };
         let mut segment = crate::drive::Segment { meter: Meter::default(), config: json!({}), profile: None, billing: "subscription" };
         let mut goal = crate::drive::GoalRun { chat_goal: None, controlled: false, failure: None, paused: None, tries_key: ("ops".into(), "task-7".into()) };

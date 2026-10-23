@@ -32,7 +32,6 @@ const DEFAULT_EFFORT: &str = "medium";
 const STOP_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long a process may stay up after its run's terminal record before it is stopped.
 const AFTER_TERMINAL: Duration = Duration::from_secs(5);
-const STDERR_TAIL: usize = 2000;
 /// Set on every Muse process, the sign-in check's and `--version`'s too, so the launcher never updates itself.
 pub const QUIET: &[(&str, &str)] = &[("MUSE_NO_AUTO_UPDATE", "1"), ("NO_COLOR", "1")];
 
@@ -554,13 +553,11 @@ impl MuseCodeHost {
             let offset = session_log(&env, thread_id).and_then(|p| std::fs::metadata(p).ok()).map_or(0, |m| m.len());
             let prompt = self.prompt_file(text).map_err(|e| failed(format!("could not start muse: {e}")))?;
             let spawned = (|| {
-                // stderr goes to an unlinked file: read back for the error text, never a pipe that could fill.
-                let path = std::env::temp_dir().join(format!("tico-muse-stderr-{}", uuid::Uuid::new_v4().simple()));
-                let stderr = std::fs::OpenOptions::new().read(true).write(true).create_new(true).open(&path)?;
-                let _ = std::fs::remove_file(&path);
-                let child = self.command(thread_id, &settings, &prompt, effort)
-                    .stderr(Stdio::from(stderr.try_clone()?))
+                // Drain stderr independently so a noisy harness cannot block its own exit.
+                let mut child = self.command(thread_id, &settings, &prompt, effort)
+                    .stderr(Stdio::piped())
                     .spawn()?;
+                let stderr = crate::run_diagnostics::Stderr::capture(&mut child, self.0.tx.clone(), &env);
                 Ok::<_, std::io::Error>((child, stderr))
             })();
             let (mut child, stderr) = match spawned {
@@ -591,7 +588,7 @@ impl MuseCodeHost {
         &self,
         stdout: Option<ChildStdout>,
         exited: tokio::sync::oneshot::Receiver<std::io::Result<std::process::ExitStatus>>,
-        mut stderr: std::fs::File,
+        mut stderr: crate::run_diagnostics::Stderr,
         files: (PathBuf, Env, u64),
         tid: String,
         turn: String,
@@ -638,6 +635,7 @@ impl MuseCodeHost {
                 }
             }
         }
+        stderr.drained().await;
         self.finish(&tid, &turn, rc, &stderr_tail(&mut stderr), state);
     }
 
@@ -712,17 +710,20 @@ impl MuseCodeHost {
             }
             self.emit(event("turn_completed", Some(tid), Some(turn), json!({"status": "completed"})));
         } else {
+            let process_exit = rc < 0 || state.reason.is_empty() && rc != 0;
             let error = if !state.reason.is_empty() {
                 state.reason
             } else if !stderr.is_empty() {
-                stderr.into()
+                crate::run_diagnostics::process_reason(rc, stderr)
             } else if !state.terminal.is_empty() {
                 format!("muse run ended {}", state.terminal)
             } else {
                 format!("muse exited {rc}")
             };
             let limit = is_limit(&error);
-            self.emit(event("turn_failed", Some(tid), Some(turn), json!({"error": error, "limit": limit})));
+            let mut failure = event("turn_failed", Some(tid), Some(turn), json!({"error": error, "limit": limit}));
+            if process_exit { failure["exit_code"] = json!(rc); failure["process_exit"] = json!(true); }
+            self.emit(failure);
         }
         self.emit(event("status", Some(tid), None, json!({"state": "idle"})));
     }
@@ -739,19 +740,8 @@ impl MuseCodeHost {
     }
 }
 
-/// The last STDERR_TAIL characters of stderr, without the CLI's progress notes ("muse: workspace root: ..."),
-/// which are not why a run failed.
-fn stderr_tail(file: &mut std::fs::File) -> String {
-    let mut bytes = vec![];
-    if file.seek(SeekFrom::Start(0)).is_ok() {
-        let _ = file.read_to_end(&mut bytes);
-    }
-    let text = String::from_utf8_lossy(&bytes);
-    let kept = text.lines().filter(|l| !l.trim().is_empty() && !l.starts_with("muse: ")).collect::<Vec<_>>().join("\n");
-    let kept = kept.trim();
-    let skip = kept.chars().count().saturating_sub(STDERR_TAIL);
-    kept.chars().skip(skip).collect()
-}
+/// The bounded stderr retained independently of the provider stream.
+fn stderr_tail(file: &mut crate::run_diagnostics::Stderr) -> String { file.tail() }
 
 #[cfg(test)]
 mod tests {
