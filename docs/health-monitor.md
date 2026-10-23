@@ -8,6 +8,16 @@ Settings > Health also lists checks that belong to one feature, documented on th
 suggestions with no receiving bot are in [Public roadmaps](roadmaps.md), and the Tico AI Gateway key (near or at its
 monthly cap, not recognised, or not ready) is in [Tico AI Gateway](ai-gateway.md#what-the-card-says).
 
+Health's **Stuck bots** check and `hub health check` name the bot, queued job count, oldest queued age,
+why it cannot start, and a fix or a command to inspect its runs. **Tasks not progressing** names visible tasks
+and links their recovery diagnosis. Settings > Health shows the same summaries.
+
+**Pull requests not progressing** names visible bot PRs that have remained conflicting for more than 12 hours,
+or green and mergeable without a review for more than 12 hours. Each names the ticket, waiting age and whose
+move it is: the author merges main, or the reviewer reviews. These clocks start when the existing GitHub sync
+first observes the condition, survive repeated refreshes, and clear when it resolves. A new head starts a new
+review wait. Older links acquire a clock on their next sync; Health performs no extra GitHub polling.
+
 ## What it checks
 
 Once an hour, while it is on, the server checks the install in plain code (`backend/health_monitor.py`). No model runs:
