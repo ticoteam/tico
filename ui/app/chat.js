@@ -788,9 +788,9 @@ function chatSendWatch(P, fileCount) {
   };
   const timer = setTimeout(() => { slow = true; say(); }, CHAT_SEND.slow);
   return {
-    retry(attempt, code) { retries = attempt; status = code || status; say(); },
+    retry(attempt, code) { retries = attempt; status = code || status; say(); P.sendRetrying = true; pillWhy(P); },
     end(outcome, code) {
-      clearTimeout(timer);
+      clearTimeout(timer); P.sendRetrying = false;
       if (line) { line.hidden = true; line.textContent = ''; }
       const ms = Math.round(performance.now() - started);
       if (outcome !== 'sent' || ms >= CHAT_SEND.slow)

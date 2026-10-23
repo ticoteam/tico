@@ -8,6 +8,8 @@
 
 let DEC = null;                 // the open Decide page's state, null elsewhere
 const DEC_UNDO_MS = 4000;
+// A card's comment Send is disabled until there is a comment; its hover title says so.
+const DC_SEND_WHY = 'Type a comment to send';
 
 // ---- which cards, in which order (GET /v2/needs-you items)
 // A question answered in the card (question-card.js): one question with 2 to 6 options, a pick or several picks, put
@@ -90,7 +92,8 @@ function pageDecide() {
     const box = ev.target.closest('.dc-note textarea');
     if (!box) return;
     box.style.height = 'auto'; box.style.height = Math.min(box.scrollHeight, 120) + 'px';
-    const send = $('.dc-send', root); if (send) send.disabled = !box.value.trim();
+    const send = $('.dc-send', root);
+    if (send) { send.disabled = !box.value.trim(); send.title = send.disabled ? DC_SEND_WHY : 'Send comment'; }
   });
   root.addEventListener('keydown', ev => {
     if (ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing && ev.target.matches('.dc-note textarea') && $('.dc-send', root) && ev.target.value.trim()) {
@@ -195,7 +198,7 @@ function decideRender(st, enter = false) {
       <span class="pill ${decide ? 'needs' : ''}">${esc(needLabel(c.it.need || (decide ? 'decide' : 'do')))}</span></div>
     <div class="dc-body"></div>
     <div class="dc-note"><textarea rows="1" maxlength="4000" aria-label="${decide ? 'Note' : 'Comment'}" placeholder="${decide ? 'Add a note' : 'Add a comment'}"></textarea>
-      ${decide ? '' : `<button type="button" class="dc-send" data-dc="comment" aria-label="Send comment" title="Send comment" disabled>${ICON_SEND}</button>`}</div>
+      ${decide ? '' : `<button type="button" class="dc-send" data-dc="comment" aria-label="Send comment" title="${DC_SEND_WHY}" disabled>${ICON_SEND}</button>`}</div>
   </article>`;
   decidePaintBody(st);
   actions.innerHTML = decideActionsHTML(c);

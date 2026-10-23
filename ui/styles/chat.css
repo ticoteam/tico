@@ -32,6 +32,11 @@
 @media (prefers-reduced-motion:reduce){.p-send-icon.p-sending::after{animation-duration:2.4s}}
 .p-slow{padding:4px 4px 0;font-size:var(--t-sm)}
 .p-slow[hidden]{display:none}
+/* why a disabled Send or Stop is disabled: its hover title and screen-reader description; a phone, with no hover,
+   shows a busy reason as a line after a second (a quick send never jumps the page) until "Still sending…" takes over */
+.p-why{display:none;padding:0 4px;font-size:var(--t-sm);max-height:0;overflow:hidden}
+@media (max-width:760px){.p-slow[hidden]+.p-why.p-why-busy{display:block;animation:p-why-in .15s 1s forwards}}
+@keyframes p-why-in{to{max-height:3em;padding-top:4px}}
 /* a phone gives the bot page the whole screen: no bottom bar, the composer on the bottom edge */
 @media (max-width:760px){
   body.bot-page #mobile-nav{display:none}
