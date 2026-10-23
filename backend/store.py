@@ -698,7 +698,7 @@ class Store:
         # In WAL mode NORMAL syncs at checkpoints, not on every commit inside the writer gate, where a sync
         # waiting behind other disk writes on the host held every writer for seconds. The database cannot
         # corrupt; an OS crash or power loss can lose the last commits, as with hubdb.connect.
-        c.execute("PRAGMA synchronous=NORMAL")
+        c.execute(f"PRAGMA synchronous={H.synchronous('NORMAL')}")
         return c
 
     def initialize(self, *, seed_market=True, adopt_legacy=False):

@@ -210,3 +210,21 @@ def test_provenance_initialization_failure_releases_writer(tmp_path, monkeypatch
         assert c.execute("SELECT x FROM t").fetchone()[0] == 1
         c.execute("UPDATE t SET x=3")
     assert not s.writer.queue
+
+
+def test_test_databases_skip_the_disk_sync_and_servers_keep_theirs(tmp_path, monkeypatch):
+    from backend import hubdb as H
+    sync = lambda c: c.execute("PRAGMA synchronous").fetchone()[0]  # 0 OFF, 1 NORMAL, 2 FULL
+    s = store(tmp_path)
+    assert os.environ["TICO_SQLITE_SYNC"] == "off"
+    with s.transaction() as c:
+        assert sync(c) == 0
+    hub = H.connect(tmp_path / "hub.db")
+    assert sync(hub) == 0
+    hub.close()
+    monkeypatch.delenv("TICO_SQLITE_SYNC")
+    with Store(Settings(db_path=tmp_path / "hub.sqlite")).transaction() as c:
+        assert sync(c) == 1
+    hub = H.connect(tmp_path / "hub.db")
+    assert sync(hub) == 1
+    hub.close()
