@@ -122,7 +122,9 @@ class Computer:
         # A Meta-account login, as signing in from Tico leaves it: in the runner's own Muse folder, never ~/.config.
         muse = self.config.parent / f"state-{self.registration['runner_id']}" / "musecode" / "config" / "muse"
         muse.mkdir(parents=True)
-        (muse / "auth.json").write_text("{}")
+        (muse / "auth.json").write_text(json.dumps({
+            "schema_version": 1, "providers": {"meta": {"api_key": "acme-synthetic-meta-login"}},
+        }))
         self.config.write_text(json.dumps({"url": live, "token": self.registration["token"],
                                            "runner_id": self.registration["runner_id"],
                                            "projects_dir": str(tmp_path / "projects"), **(registration or {})}))

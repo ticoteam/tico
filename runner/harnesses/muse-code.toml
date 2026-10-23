@@ -34,10 +34,16 @@ api_key_env = ["META_API_KEY"]
 [login]
 command = ["login"]
 terminal = true
+logout = ["logout"]
+files = ["muse/auth.json"]
 
 # The launcher updates itself on every run unless this is set; the runner updates the harness itself.
+# The file credential backend keeps each login whole in its own config folder's muse/auth.json. Without it, Muse on macOS
+# keeps the token in the login Keychain, outside the files a switch moves into place or a cancel keeps, so neither could
+# replace or keep a login as one change.
 [env]
 MUSE_NO_AUTO_UPDATE = "1"
+TBH_CREDENTIAL_BACKEND = "file"
 
 # What Tico does differently for this CLI (docs/harnesses.md, Capabilities).
 [capabilities]
@@ -53,7 +59,7 @@ mcp_transports = ["http"]
 resume_command = "muse resume"
 model_list = "host"
 
-# Muse has no status command: the login file in its config folder is the sign-in.
+# Muse has no status command: check its saved Meta credential in the config folder.
 [capabilities.sign_in_status]
 check = "file"
 ready_detail = "Signed in with a Meta account"
