@@ -114,6 +114,8 @@ struct Shared {
     turns: Mutex<HashMap<String, String>>,
     reply: Mutex<HashMap<String, String>>,
     boundary: Mutex<HashSet<String>>,
+    /// The `messageId` of each turn's last text chunk.
+    message: Mutex<HashMap<String, String>>,
     done_turns: Mutex<HashSet<String>>,
 }
 
@@ -133,6 +135,7 @@ impl GrokHost {
             turns: Mutex::new(HashMap::new()),
             reply: Mutex::new(HashMap::new()),
             boundary: Mutex::new(HashSet::new()),
+            message: Mutex::new(HashMap::new()),
             done_turns: Mutex::new(HashSet::new()),
         }))
     }
@@ -306,15 +309,18 @@ impl GrokHost {
         let (s, t) = (Some(sid.as_str()), Some(turn.as_str()));
         match (u["sessionUpdate"].as_str().unwrap_or_default(), text) {
             ("agent_message_chunk", Some(text)) => {
-                {
+                let piece = {
                     let mut reply = self.0.reply.lock().unwrap();
                     let r = reply.entry(turn.clone()).or_default();
                     if self.0.boundary.lock().unwrap().remove(&turn) {
                         r.clear();
                     }
-                    r.push_str(&text_of(&text));
-                }
-                self.emit(event("delta", s, t, json!({"text": text, "delta_kind": "text"})));
+                    // A chunk names its message: one of another message than the chunk before it starts a new one.
+                    let id = u["messageId"].as_str().filter(|i| !i.is_empty());
+                    let new_message = id.is_some_and(|id| self.0.message.lock().unwrap().insert(turn.clone(), id.into()).is_some_and(|last| last != id));
+                    super::add_piece(r, new_message, &text_of(&text))
+                };
+                self.emit(event("delta", s, t, json!({"text": piece, "delta_kind": "text"})));
             }
             ("tool_call", _) => {
                 // A new tool call separates progress from the answer that follows; the call is reported by its
@@ -337,6 +343,7 @@ impl GrokHost {
         self.0.turns.lock().unwrap().remove(sid);
         let text = self.0.reply.lock().unwrap().remove(turn).unwrap_or_default();
         self.0.boundary.lock().unwrap().remove(turn);
+        self.0.message.lock().unwrap().remove(turn);
         let (s, t) = (Some(sid), Some(turn));
         let result = match reply {
             Err(err) => {
