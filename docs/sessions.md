@@ -67,6 +67,11 @@ or mark it blocked or done. With still no progress, Tico retries the bot once. T
 main chat gets a **stuck** line and BotOps gets a task to find out why ([Work that is waiting](tasks.md#work-that-is-waiting)).
 Tico asks no person about a stuck bot. These count toward the stalled-task limit of three a day.
 
+An idle task unchanged since its owner's last settled checkpoint skips a plain automatic stall or status check.
+Changed state or a missing checkpoint leaves the check eligible under the usual wake rules. Human messages still
+wake the bot as before, and leased or running sessions keep their recovery checks
+([details](hub-sql.md#what-woke-each-run-and-what-it-did)).
+
 ## Task goals
 
 With `task_goal: on`, a bot works each task it owns as a goal: keep going until the task's title and acceptance

@@ -85,6 +85,25 @@ def _typesafe_key():
     return _secret("TYPESAFE_API_KEY", "TICO_TYPESAFE_SECRET_ARN", "/etc/tico/typesafe-api-key")
 
 
+def _company_file_data():
+    """The installer's packed starter plan: TICO_COMPANY_FILE_B64, or else the file TICO_COMPANY_FILE names (a plan too
+    big for the env, which setup copied to the server). A named file that is missing or too big stops startup, so a
+    failed copy never starts as some other team."""
+    data = os.environ.get("TICO_COMPANY_FILE_B64", "").strip()
+    path = os.environ.get("TICO_COMPANY_FILE", "").strip()
+    if data or not path:
+        return data
+    from .company_file.starter import MAX_PACKED
+    try:
+        with open(path, "rb") as stream:
+            raw = stream.read(MAX_PACKED + 1)
+    except OSError as exc:
+        raise RuntimeError(f"TICO_COMPANY_FILE {path} cannot be read ({exc.strerror}); setup copies it at first boot") from None
+    if len(raw) > MAX_PACKED:
+        raise RuntimeError(f"TICO_COMPANY_FILE {path} is larger than a starter plan can be ({MAX_PACKED} bytes)")
+    return raw.decode("ascii", "replace").strip()
+
+
 def _gateway_key():
     """The Tico AI Gateway key behind `POST /api/v2/decisions` and the Slack gateway: the default decision provider."""
     return _secret("TICO_GATEWAY_KEY", "TICO_GATEWAY_SECRET_ARN", "/etc/tico/gateway-key")
@@ -520,7 +539,7 @@ class Settings:
             decisions_jev_usd_per_mtok_output=max(0.0, float(os.environ.get("TICO_DECISIONS_JEV_USD_PER_MTOK_OUTPUT", "") or 0)),
             decisions_idea_triage=not rehearsal and os.environ.get("TICO_DECISIONS_IDEA_TRIAGE", "0") == "1",
             sample_company=not rehearsal and os.environ.get("TICO_SAMPLE_COMPANY", "").strip().lower() == "on",
-            company_file_data="" if rehearsal else os.environ.get("TICO_COMPANY_FILE_B64", "").strip(),
+            company_file_data="" if rehearsal else _company_file_data(),
             enabled_providers=tuple(part.strip().lower() for part in
                                     os.environ.get("TICO_ENABLED_PROVIDERS", "").split(",") if part.strip()),
             default_runtime=os.environ.get("TICO_DEFAULT_RUNTIME", "").strip().lower(),

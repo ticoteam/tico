@@ -145,7 +145,7 @@ In a computer's pop-up, **Add connection** (at the end of Connections) opens its
 1. **Which AI tool?** The tools installed on that computer. **Install another tool** goes to **Versions and updates**,
    where the owner installs one.
 2. **Subscription** or **API key** ([which to choose](#subscription-or-api-key)). A tool with no subscription sign-in from the browser has Subscription greyed out.
-   A tool that signs in only from a terminal (such as Grok Build or Cursor Agent) shows the command to run on the
+   A tool that signs in only from a terminal shows the command to run on the
    computer here, with **Copy**.
 3. - **Subscription**: signs in the computer's login for that tool. The provider's sign-in follows in the same pop-up:
      the browser relays the provider's link and code, and the provider writes the login on the computer. A tool
@@ -162,6 +162,17 @@ In a computer's pop-up, **Add connection** (at the end of Connections) opens its
 The computer must be online ("Computer is offline" otherwise). Every bot on the computer that runs that tool uses the
 new login from its next turn.
 
+| Tool | Sign in from Tico | Sign-in state |
+|---|---|---|
+| Grok Build | Open the link and enter the device code shown in the pop-up | The computer checks Grok's local login store |
+| Cursor Agent | Open the browser link shown in the pop-up and finish signing in | The computer runs Cursor's status command |
+
+Both tools support **Sign out** and **Switch account**, keeping the old login until a new account is confirmed.
+Cursor uses a file login so the computer's default login home stays separate on macOS as well as Linux. If Cursor
+was signed in through the macOS Keychain, sign in once from Tico to create this login; the Keychain entry stays untouched.
+A computer login with a custom auth-folder override must sign out and sign in to change accounts; **Switch account**
+refuses before it starts. See [harness sign-in details](harnesses.md#supported-harnesses).
+
 A new computer whose team signs in with a plan needs its own sign-in: a plan login cannot be copied between computers.
 Settings > Health shows "*computer name*: sign in to Codex" (or Claude Code) until it is done.
 
@@ -171,12 +182,12 @@ These are on each connection's line in a computer's pop-up, for the computer's o
 
 ### Signing out and switching accounts
 
-In a computer's pop-up each signed-in Codex or Claude Code login has **Switch account** and **Sign out** on its line.
+In a computer's pop-up each signed-in Codex, Claude Code, Grok Build or Cursor Agent login has **Switch account** and **Sign out** on its line.
 The same people who may sign a login in see them: the Computer's operator, owners and admins. The Computer must be online
 and on a current runner; an older one answers `Update <computer> to sign out from here` and is never asked.
 
 - **Sign out** first names the bots that stop: the active bots assigned to that Computer whose runtime is that login. The button stays off until they are named; if they can't be looked up, the dialog says so and offers
-  **Try again**. The Computer then runs the CLI's own logout (`codex logout`, `claude auth logout`) as the user that
+  **Try again**. The Computer then runs the CLI's own logout (`codex logout`, `claude auth logout`, `grok logout`, `cursor-agent logout`) as the user that
   signs in, and checks the login again. If it is still signed in, the sign-out fails and the login is as it was. A
   shared-key sign-in already running there is waited for (up to 40 seconds) so it cannot sign the login back in; if it
   is still running, the sign-out fails with "try again in a minute". Bots and assignments stay: those bots wait, as for
@@ -204,7 +215,9 @@ and on a current runner; an older one answers `Update <computer> to sign out fro
   **Clear key** removes it (the Computer's copies, and its own key in the vault), and no key reaches that login again:
   not readiness, not the ten-minute key login and not a turn's environment, so the next turn runs on the subscription.
   The server stops handing it the **Every computer** key too. Unlike a sign-out, a later sign-in or Switch account does
-  not bring a key back; **Add key** or **Use the shared key** does. Bots keep the connection. Not offered for Claude
+  not bring a key back; **Add key** or **Use the shared key** does. Bots keep the connection. After **Clear key** or
+  **Sign out** there is no key to keep, so a switch started from a page drawn before it is refused ("has no API key
+  to switch from … Sign in instead") rather than run as a plain sign-in whose cancel would leave no login. Not offered for Claude
   Code on a Mac (Keychain), and it needs a runner that knows it (`Update <computer> to switch to a subscription from
   here` otherwise).
 - **Switch to API key** is the way back: it sits on a Computer's own login on a subscription, next to **Switch
