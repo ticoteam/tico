@@ -473,11 +473,11 @@ def decorate(c, who, files, key, base, messages, full=True):
     the address the route is on: the visual address, or "" for the app's own (the fallback, `full` False). In the
     fallback a page or SVG gets no `src`: it is a card with `open` true, its title and, when the file has one, a still
     preview (`preview_url`, a picture), and Open shows it in the file viewer."""
-    from . import task_privacy as privacy
     cache, rows, served = {}, {}, {}
     # The visual route rebuilds a bot reader without its run (serve, token_reader), so a file this run sees but that
     # bare bot does not, a chat's file among them, gets no address: a file chip, not a link that always 404s.
-    route = token_reader(c, files.auth, privacy.actor(who)) if who.role == "bot" else who
+    # A token names one reader: the caller itself, even when it acts for someone else (task_privacy.actor is then a pair).
+    route = token_reader(c, files.auth, who.actor) if who.role == "bot" else who
     for message in messages:
         items = ((message or {}).get("refs") or {}).get("attachments") or []
         if not any(isinstance(a, dict) and a.get("kind") in INLINE for a in items):
@@ -497,7 +497,7 @@ def decorate(c, who, files, key, base, messages, full=True):
             view = {**a, "removed": removed or v is None,
                     "current_version": None if removed else row["current_version"]}
             if v is not None:
-                actor = privacy.actor(who)
+                actor = who.actor
                 here = base if route is who or (route and files.visible(c, route, row, served)) else None
                 inline = full or a["kind"] in MEDIA
                 view["src"] = here + "/visuals/" + mint(key, actor, fid, number) if inline and here is not None else None
@@ -566,6 +566,8 @@ def token_reader(c, auth, actor):
     run (a token outlives the turn it was minted in), or None when neither exists."""
     from .auth import Identity
     from .store import H, Problem
+    if not isinstance(actor, str):
+        return None
     try:
         if actor.startswith("human:"):
             return auth.identity_for_actor(c, actor)

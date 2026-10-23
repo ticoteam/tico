@@ -188,7 +188,7 @@ def test_test_databases_skip_the_disk_sync_and_servers_keep_theirs(tmp_path, mon
     hub.close()
     monkeypatch.delenv("TICO_SQLITE_SYNC")
     with Store(Settings(db_path=tmp_path / "hub.sqlite")).transaction() as c:
-        assert sync(c) == 2
+        assert sync(c) == 1
     hub = H.connect(tmp_path / "hub.db")
     assert sync(hub) == 1
     hub.close()
