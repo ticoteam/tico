@@ -432,15 +432,16 @@ def heartbeat(c, who, reports, capable, default_org="", live_tasks=None):
         else:
             detail.pop('missing_since', None)
             detail.pop('missing_woke', None)
-        # Lifecycle decisions need current task state, never display tag hydration.
-        task = H._one(c, "SELECT * FROM tasks WHERE id=?", (row['task_id'],))
-        if task['status'] not in CLOSED and row['bot_state'] == 'active':
+        # Most reports have no overdue wake; read current task state only when one is due.
+        if row['bot_state'] == 'active':
             for key, since, days, message in (
                 ('missing_woke', detail.get('missing_since'), 1, 'Worktree missing for a day'),
                 ('stalled_woke', detail.get('activity_at') if report.ahead else None, 3, 'Worktree has unpushed commits and no activity for three days')):
                 if since and not detail.get(key) and (datetime.now(timezone.utc) - datetime.fromisoformat(since.replace('Z', '+00:00'))).total_seconds() >= days * 86400:
-                    H._wake(c, task, task['owner'], message + ': ' + row['path'], trigger='stall_check', source=row['id'])
-                    detail[key] = True
+                    task = H._one(c, "SELECT * FROM tasks WHERE id=?", (row['task_id'],))
+                    if task['status'] not in CLOSED:
+                        H._wake(c, task, task['owner'], message + ': ' + row['path'], trigger='stall_check', source=row['id'])
+                        detail[key] = True
         if report.state == 'removed' and detail.get('cleanup_requested'):
             if row['state'] != 'removed':
                 released_event(c, row, detail)
@@ -502,6 +503,12 @@ def heartbeat(c, who, reports, capable, default_org="", live_tasks=None):
     # Serving can revive a removed link from the inventory read before the reports. Use its new allocation
     # state and detail, or this cleanup pass can overwrite the reset with the retired allocation's flags.
     rows.update({r['id']: r for r in inventory(c, who.runner_id)})
+    # PR metadata is unchanged by cleanup; load it once rather than once per checkout.
+    task_prs = {}
+    for part in H.chunks({row['task_id'] for row in rows.values()}):
+        for pr in c.execute("SELECT task_id,state,created,pr_merged_at,repo,branch FROM task_links "
+                            "WHERE kind='pr' AND task_id IN (%s)" % ','.join('?' * len(part)), part):
+            task_prs.setdefault(pr['task_id'], []).append(pr)
     actions = []
     # This pass changes checkout records, not the tasks carried by active attempts. Share provenance only
     # inside this transaction: fifty finished trees must not walk the same hundred runs fifty times.
@@ -509,8 +516,7 @@ def heartbeat(c, who, reports, capable, default_org="", live_tasks=None):
     for row in rows.values():
         detail = json.loads(row['detail_json'] or '{}')
         stored = dict(detail)
-        pr_links = c.execute("SELECT state,created,pr_merged_at,repo,branch FROM task_links WHERE task_id=? AND kind='pr'",
-                             (row['task_id'],)).fetchall()
+        pr_links = task_prs.get(row['task_id'], [])
         prs = [pr['state'] for pr in pr_links]
         finished = all(state in PR_FINISHED for state in prs)
         closed = row['task_status'] in CLOSED or row['bot_state'] == 'archived' or detail.get('delete_requested')
