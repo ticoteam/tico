@@ -108,8 +108,9 @@ class Sources:
         cached = self.messages.get(cache_key)
         # Only complete root traversals are reusable. A nested traversal may have
         # omitted an ancestor already visited by its caller, so never publish it.
-        if cached is not None and not (cached[1] & seen):
-            if len(seen) + len(cached[1]) > 100:
+        if cached is not None:
+            # Complete closures may share ancestors; count their distinct visited ids.
+            if len(seen | cached[1]) > 100:
                 raise Problem("privacy", "Meeting provenance is too deep to authorize", 403)
             seen.update(cached[1])
             return set(cached[0])

@@ -454,27 +454,31 @@ def test_shared_message_provenance_stays_bounded_and_permissions_stay_current(li
     mid, attempt = derived
     cid = attempt["message"]["conversation_id"]
     with live.app.state.store.transaction() as c:
-        for n in range(101):
+        c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,refs_json,created) "
+                  "VALUES('shared-common',?,'bot:ops','keeper','say','Synthetic shared parent','{}',?)", (cid, H.now()))
+        for n in range(100):
             c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,refs_json,created,in_reply_to) "
-                      "VALUES(?,?,'bot:ops','keeper','say','Synthetic shared chain','{}',?,?)",
-                      (f"shared-chain-{n}", cid, H.now(), f"shared-chain-{n-1}" if n else None))
+                      "VALUES(?,?,'bot:ops','keeper','say','Synthetic shared chain',?,?,?)",
+                      (f"shared-chain-{n}", cid, encode({"answers": ["shared-common"]}),
+                       H.now(), f"shared-chain-{n-1}" if n else None))
     calls = []
     original = live_privacy.Sources.references
 
     def counted(self, value):
-        calls.append(1)
+        if isinstance(value, dict):
+            calls.append(1)
         return original(self, value)
 
     monkeypatch.setattr(live_privacy.Sources, "references", counted)
     with live.app.state.store.transaction() as c:
         index = live_privacy.sources(c)
-        for n in range(100):
+        for n in range(99):
             ids = index.message(H.message(c, f"shared-chain-{n}"), include_run=False)
             assert ids == {mid} and index.readable("bot:ops", ids)
         # Shared reply chains must cost their distinct messages, not every prefix again.
         assert len(calls) <= 110, len(calls)
         with pytest.raises(Problem, match="too deep"):
-            index.message(H.message(c, "shared-chain-100"), include_run=False)
+            index.message(H.message(c, "shared-chain-99"), include_run=False)
         # Permission results are never memoized, even when provenance is reused.
         c.execute("DELETE FROM live_meeting_bots WHERE meeting_id=? AND bot='ops'", (mid,))
         assert not index.readable("bot:ops", ids)
@@ -482,5 +486,5 @@ def test_shared_message_provenance_stays_bounded_and_permissions_stay_current(li
         c.execute("UPDATE messages SET refs_json=? WHERE id='shared-chain-0'",
                   (encode({"live_meetings": ["missing-meeting"]}),))
         fresh = live_privacy.sources(c)
-        assert fresh.message(H.message(c, "shared-chain-99"), include_run=False) == {mid, "missing-meeting"}
+        assert fresh.message(H.message(c, "shared-chain-98"), include_run=False) == {mid, "missing-meeting"}
         assert not fresh.readable("human:ben", {"missing-meeting"})
