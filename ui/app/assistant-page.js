@@ -59,11 +59,12 @@ async function pageAssistant() {
     return;
   }
   if (load !== ASSISTANT_LOAD || S.route !== ASSISTANT) return;
+  // Earlier chats are stored history: readable while the CEO Bot is paused too.
+  assistantEarlier(d.earlier, load);
   if (!d.available) {
     window.assistantChat?.off($('#conv-thread'), d, {post, esc, after: () => { if (S.route === ASSISTANT) pageAssistant(); }});
     return;
   }
-  assistantEarlier(d.earlier, load);
   const P = assistantPill(), thread = $('#conv-thread');
   $('#chat-composer').append(P.el);
   if (ASSISTANT_DRAFT) { assistantPrefill(ASSISTANT_DRAFT); ASSISTANT_DRAFT = ''; }

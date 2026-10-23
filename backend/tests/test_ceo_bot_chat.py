@@ -6,6 +6,7 @@ Assistant, and their own Assistant chats, back."""
 import uuid
 
 from backend import assistant, updates
+from clients import sessions
 from backend.auth import Identity
 from backend.store import H, digest
 from backend.tests.test_api import api, as_member, assign, get, headers, post, ready, runner  # noqa: F401
@@ -85,10 +86,14 @@ def test_the_ceo_bot_acts_as_the_owner_in_their_chat_in_a_session_of_its_own(api
     ceo(api)
     with api.app.state.store.transaction() as c:
         review = H.task_create(c, "human:ben", "Review the plan", "Please review.", "human:ana")
+        # Even a CEO Bot set to one thread for everything keeps the owner's chat off that thread.
+        c.execute("UPDATE bot_config SET config_json=? WHERE bot='goal-manager'", ('{"session": "bot"}',))
     r, attempt = turn(api, "goal-manager", "ana-test", "Close the plan review, it is done")
     token = attempt["token"]
     # One conversation, one session: the chat keys its own session, apart from the goals session.
     assert attempt["config"]["session"] == "task" and attempt["task"] is None
+    assert sessions.session_key(attempt["config"], "goal-manager", None, attempt["conversation"]["id"]) == \
+        "conversation:" + attempt["conversation"]["id"]
     me = get(api, "me", token)
     assert me["actor"] == "human:ana"
     who = api.app.state.auth.authenticate({"authorization": "Bearer " + token}, "/api/v2/tasks", "GET")

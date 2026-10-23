@@ -78,6 +78,23 @@ const view = (over) => ({available: true, state: 'active', can_turn_on: false, r
       assert.deepEqual(errors, [], 'owner: no page errors');
       await page.close();
     }
+    // While the CEO Bot is paused the owner is told so, with nothing to send, and Earlier chats stay readable.
+    {
+      const {page, errors, read} = await open(browser, owner, {...ceo, available: false, state: 'paused'}, 'Chief');
+      await page.goto('https://tico-ui.test/#/assistant');
+      await page.locator('#conv-thread .asst-off').waitFor();
+      assert.match(await page.locator('#conv-thread .asst-off').innerText(), /Chief is not answering right now/, 'paused: the off notice');
+      assert.equal(await page.locator('#chat-composer .p-text').count(), 0, 'paused: no message box');
+      const earlier = page.locator('#asst-earlier');
+      await earlier.locator('summary').click();
+      await earlier.getByText('Done: three tasks for Monday').waitFor();
+      await earlier.locator('[data-earlier-more]').click();
+      await earlier.getByText('Book the offsite').waitFor();
+      assert.deepEqual(read, [null, 'o2'], 'paused: Earlier chats page as usual');
+      assert.equal(await page.locator('#main').locator('textarea, input, [data-confirm], [data-turn-on]').count(), 0, 'paused: nothing to send or confirm');
+      assert.deepEqual(errors, [], 'paused: no page errors');
+      await page.close();
+    }
     // An admin is not the owner: the Assistant, as before, and no Earlier chats.
     {
       const admin = {id: 'ben', role: 'human', bot_admin: true, name: 'Ben', email: 'ben@example.test', cloud: true};

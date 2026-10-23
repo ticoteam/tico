@@ -99,12 +99,12 @@ The owner talks to the CEO Bot in place of an Assistant. The menu tab reads **CE
 opens your chat with it (`#/assistant`, `GET /api/v2/assistant` answers `"ceo": true`). It does everything an
 [Assistant](assistant.md) does, as you and with the same "via" rules (your cards, your cited requests, your daily update
 draft, labelled the CEO Bot's), plus company-wide work within its level. Your chat is one conversation and one session
-of its own; its goals work (regular checks, goals, bots' messages to it) is another, and neither shares the other's
-context. Everything it does in your chat is recorded as you, via the CEO Bot.
+of its own, whatever its session setting; its goals work (regular checks, goals, bots' messages to it) is another,
+and neither shares the other's context. Everything it does in your chat is recorded as you, via the CEO Bot.
 
 Nobody else talks to it: everyone else, administrators included, keeps the Assistant, and the chat routes refuse them
 (`403`). Bots still message it, in its goals session, never in your chat. Your chats with your Assistant from before
-stay readable under **Earlier chats** on the same page.
+stay readable under **Earlier chats** on the same page, also while the CEO Bot is paused.
 
 If you hand ownership to someone else (Settings > People), the CEO Bot tab and its chat history go with the owner seat
 to the new owner. You get your Assistant back, with your own earlier Assistant chats; the new owner does not see those.

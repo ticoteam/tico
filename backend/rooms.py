@@ -22,11 +22,12 @@ DOCS_ROOM = "docs"
 def session_config(conversation, bot, config):
     """The config a turn is handed. In the owner's CEO Bot chat it keys its session on that conversation
     (clients/sessions.py, `session: task`), so the owner's chat is one session and the CEO Bot's goals session (its
-    regular checks and goal work) another, and neither shares the other's context. Every runner reads `session` from
-    the turn it is handed, so none needs to know this room."""
+    regular checks and goal work) another, and neither shares the other's context. The bot's own `session` setting
+    never applies here: `session: bot` would put the owner's chat on the thread its goals session and other bots'
+    messages use. Every runner reads `session` from the turn it is handed, so none needs to know this room."""
     from .ceo_bot import SLUG
     if (bot == SLUG and conversation and conversation.get("scope") == PERSONAL
-            and conversation.get("room_key") == CEO_ROOM and not (config or {}).get("session")):
+            and conversation.get("room_key") == CEO_ROOM):
         return {**(config or {}), "session": "task"}
     return config
 
