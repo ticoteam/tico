@@ -71,6 +71,9 @@ struct Inner {
     settings: Option<Settings>,
     provider: Option<String>,
     usage: Value,
+    /// The turn's streamed text as it was sent, and with a paragraph between its messages (a tool call ends one).
+    streamed: (String, String),
+    new_message: bool,
     tx: Events,
     reader: Option<tokio::task::JoinHandle<()>>,
 }
@@ -97,6 +100,8 @@ impl AntigravityHost {
                 settings: None,
                 provider: None,
                 usage: json!({}),
+                streamed: Default::default(),
+                new_message: false,
                 tx,
                 reader: None,
             }),
@@ -266,6 +271,7 @@ impl AntigravityHost {
             return Err(failed("Antigravity is unavailable or already running a turn"));
         }
         inner.turn = Some(turn.clone());
+        (inner.streamed, inner.new_message) = Default::default();
         let _ = inner.tx.send(event("status", Some(thread_id), Some(&turn), json!({"state": "active"})));
         Ok(turn)
     }
@@ -324,9 +330,13 @@ impl AntigravityHost {
         let Some(turn) = turn else { return Ok(()) };
         let (tid, turn) = (tid.as_deref(), Some(turn.as_str()));
         if step["step_type"] == "agent_response" && crate::util::truthy(step.get("text_delta")) {
-            let _ = inner.tx.send(event("delta", tid, turn, json!({"text": step["text_delta"], "delta_kind": "text"})));
+            let text = text_of(&step["text_delta"]);
+            inner.streamed.0.push_str(&text);
+            let piece = super::add_piece(&mut inner.streamed.1, std::mem::take(&mut inner.new_message), &text);
+            let _ = inner.tx.send(event("delta", tid, turn, json!({"text": piece, "delta_kind": "text"})));
         }
         if step["step_type"] == "tool" {
+            inner.new_message = true;
             let tool = step.get("tool_name").cloned().unwrap_or(json!("tool"));
             let _ = inner.tx.send(event("tool", tid, turn, json!({"tool": tool, "state": step.get("state").cloned().unwrap_or(Value::Null)})));
         }
@@ -350,7 +360,12 @@ impl AntigravityHost {
         };
         send(event("tokens", tid, turn, json!({"input": i, "output": o, "cached": c, "total": i + o, "usage": {"input": i, "cached": c, "output": o}})));
         if result["status"] == "SUCCESS" {
-            let text = result["response"].as_str().unwrap_or_default().trim().to_string();
+            let mut text = result["response"].as_str().unwrap_or_default().trim().to_string();
+            // Antigravity's answer runs the turn's messages together with nothing between them: when it is just the
+            // streamed text, each message keeps its own paragraph.
+            if !text.is_empty() && text == inner.streamed.0.trim() {
+                text = inner.streamed.1.trim().to_string();
+            }
             send(event("message", tid, turn, json!({"text": text, "final": true})));
             send(event("turn_completed", tid, turn, json!({"status": "completed"})));
         } else {

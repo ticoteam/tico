@@ -85,6 +85,12 @@ fn tool_started(kind: &str, payload: &Value) -> Option<String> {
     None
 }
 
+/// A model response the run starts: real runs propose one as a `model.<provider>.response` task. Its text is a new
+/// message, not more of the one before it.
+fn response_started(kind: &str, payload: &Value) -> bool {
+    kind == "task.lifecycle.proposed" && payload["event"]["task_kind"].as_str().is_some_and(|k| k.starts_with("model."))
+}
+
 /// (input, cached, output) from one event's own token counters, or None. A session's `cumulative` running totals
 /// are skipped: a resumed session's totals include earlier turns.
 pub fn usage_of(payload: &Value) -> Option<(i64, i64, i64)> {
@@ -384,6 +390,8 @@ struct Turn {
     reply: String,
     /// Text streamed since the last tool call: the answer when the terminal carries no text of its own.
     streamed: String,
+    /// A model response started since the last streamed text: its first piece opens a new paragraph.
+    new_message: bool,
     terminal: String,
     reason: String,
     usage: Option<(i64, i64, i64)>,
@@ -663,9 +671,11 @@ impl MuseCodeHost {
         }
         if kind == "run.output.delta" {
             if let Some(text) = payload["text"].as_str().filter(|t| !t.is_empty()) {
-                state.streamed.push_str(text);
+                let text = super::add_piece(&mut state.streamed, std::mem::take(&mut state.new_message), text);
                 self.emit(event("delta", Some(tid), Some(turn), json!({"text": text, "delta_kind": "text"})));
             }
+        } else if response_started(&kind, payload) {
+            state.new_message = true;
         } else if let Some(name) = tool_started(&kind, payload) {
             state.streamed.clear(); // text before a tool call is progress, not the answer
             self.emit(event("tool", Some(tid), Some(turn), json!({"name": name, "tool": name, "phase": "tool_execution_start"})));
