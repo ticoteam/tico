@@ -1789,6 +1789,13 @@ mod tests {
         assert_eq!(session_key(&a(json!({"session": "task"}), Value::Null)), "conversation:c1");
         let botops = json!({"bot": "botops", "config": {}, "conversation": {"id": "c2"}});
         assert_eq!(session_key(&botops), "conversation:c2");
+        // A CEO Bot on `session: bot`: its goals work keeps the bot thread, while the owner's chat, handed `session:
+        // task` by the server (backend/rooms.py session_config), keys every follow-up on that chat alone.
+        let ceo = |config: Value, conversation: &str| {
+            json!({"bot": "goal-manager", "config": config, "task": null, "conversation": {"id": conversation}})
+        };
+        assert_eq!(session_key(&ceo(json!({"session": "bot"}), "c-goals")), "bot");
+        assert_eq!(session_key(&ceo(json!({"session": "task"}), "c-owner")), "conversation:c-owner");
     }
 
     #[test]

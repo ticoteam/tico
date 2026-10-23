@@ -86,14 +86,10 @@ def test_the_ceo_bot_acts_as_the_owner_in_their_chat_in_a_session_of_its_own(api
     ceo(api)
     with api.app.state.store.transaction() as c:
         review = H.task_create(c, "human:ben", "Review the plan", "Please review.", "human:ana")
-        # Even a CEO Bot set to one thread for everything keeps the owner's chat off that thread.
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot='goal-manager'", ('{"session": "bot"}',))
     r, attempt = turn(api, "goal-manager", "ana-test", "Close the plan review, it is done")
     token = attempt["token"]
     # One conversation, one session: the chat keys its own session, apart from the goals session.
     assert attempt["config"]["session"] == "task" and attempt["task"] is None
-    assert sessions.session_key(attempt["config"], "goal-manager", None, attempt["conversation"]["id"]) == \
-        "conversation:" + attempt["conversation"]["id"]
     me = get(api, "me", token)
     assert me["actor"] == "human:ana"
     who = api.app.state.auth.authenticate({"authorization": "Bearer " + token}, "/api/v2/tasks", "GET")
@@ -137,6 +133,44 @@ def test_the_ceo_bots_other_work_stays_its_own_in_the_goals_session(api):
     assert get(api, "me", attempt["token"])["actor"] == "bot:goal-manager"
     with api.app.state.store.read() as c:
         assert assistant.find_ceo_room(c) is None
+
+
+def key(attempt):
+    """The provider thread a runner continues for this turn (clients/sessions.py; runner-rs session_key mirrors it)."""
+    return sessions.session_key(attempt["config"], attempt["bot"], (attempt["task"] or {}).get("id"),
+                                attempt["conversation"]["id"])
+
+
+def done(api, r, attempt):
+    post(api, f"attempts/{attempt['id']}/started", {"thread_id": "thread-" + key(attempt)}, token=r["token"])
+    post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "text": "Done", "last_seq": 0},
+         token=r["token"])
+
+
+def test_the_owners_chat_and_the_goals_session_never_share_a_thread_even_on_one_bot_thread(api):
+    ceo(api)
+    with api.app.state.store.transaction() as c:
+        # A CEO Bot set to one thread for everything: its goals work keeps that thread, the owner's chat never joins it.
+        c.execute("UPDATE bot_config SET config_json=? WHERE bot='goal-manager'", ('{"session": "bot"}',))
+    r = runner(api)
+    for bot in ("ops", "goal-manager"):
+        assign(api, r, bot)
+    ready(api, r, ["ops", "goal-manager"])
+    post(api, "chat/ops", {"text": "Check the launch goal"})
+    ops = post(api, "jobs/claim", {"bot": "ops"}, token=r["token"])["attempt"]
+    post(api, "messages", {"to": "goal-manager", "text": "The launch goal slipped a week",
+                           "needs_action": True}, token=ops["token"])
+    goals = post(api, "jobs/claim", {"bot": "goal-manager"}, token=r["token"])["attempt"]
+    assert key(goals) == sessions.BOT_THREAD
+    done(api, r, goals)
+    owner = []
+    for text in ("Plan the launch week", "And move the review to Friday"):
+        assert say(api, text, "ana-test")["fast"] is False
+        owner.append(post(api, "jobs/claim", {"bot": "goal-manager"}, token=r["token"])["attempt"])
+        done(api, r, owner[-1])
+    # The owner's follow-up continues the owner's own chat, on its own thread, apart from the goals session.
+    assert owner[0]["conversation"]["id"] == owner[1]["conversation"]["id"] != goals["conversation"]["id"]
+    assert key(owner[0]) == key(owner[1]) == "conversation:" + owner[0]["conversation"]["id"]
 
 
 def test_an_assistant_never_changes_another_persons_task_even_when_asked(api):
