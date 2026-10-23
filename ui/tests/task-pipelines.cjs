@@ -11,7 +11,8 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     const page = await browser.newPage({viewport: {width: 1200, height: 900}, serviceWorkers: 'block'});
     const errors = [], posted = [];
     page.on('pageerror', error => errors.push(error.message));
-    const statuses = ['open', 'doing', 'waiting', 'review', 'ready', 'done', 'closed', 'declined'];
+    // No step is waiting or declined (backend retire_held_steps); the board shows only the working steps.
+    const statuses = ['open', 'doing', 'review', 'ready', 'done', 'closed'];
     let types = [
       {id: 'general', name: 'General', steps: statuses.map((status, position) => ({id: 'general-' + status, type_id: 'general', name: status, status, position}))},
       {id: 'marketing', name: 'Marketing', steps: [
@@ -37,6 +38,9 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     tasks.push({...tasks[0], id: 'general-task', title: 'General task', type_id: 'general', step_id: 'general-open',
       type: {id: 'general', name: 'General'}, step: types[0].steps[0]});
     Object.assign(tasks[1], {labels: [tag.key], tags: [tag]});
+    // Waiting is a tag on a task that stays in its step.
+    tasks[0].status = 'waiting';
+    tasks.push({...tasks[2], id: 'closed-task', title: 'Dropped campaign', step_id: 'archive', step: types[1].steps[4], status: 'closed'});
     await page.route('**/*', async route => {
       const req = route.request(), url = new URL(req.url()), p = url.pathname;
       const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
@@ -91,10 +95,21 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
       return json(unrouted(p));
     });
     await page.goto('http://tico-ui.test/#/tasks');
-    await page.waitForFunction(() => TASKS_ST?.doneLoaded && TASKS_ST.type === 'marketing');
+    await page.waitForFunction(() => TASKS_ST && !TASKS_ST.loading && TASKS_ST.type === 'marketing' && document.querySelector('#task-body .bcard'));
     assert.deepEqual(await page.locator('#task-body .bcol h2').allTextContents(),
-      ['Draft', 'Legal review', 'Copy review', 'Complete', 'Archive', 'Doing']);
-    assert.equal(await page.locator('#task-body .bcard').count(), 4, 'a saved type includes finished work');
+      ['Draft', 'Legal review', 'Copy review', 'Doing'], 'done and closed steps are not columns');
+    assert.equal(await page.locator('#task-body .bcard').count(), 3, 'finished work leaves the board');
+    assert.deepEqual(await page.locator('#task-body [data-col="draft"] .bcard .tl-waiting').allTextContents(), ['Waiting'],
+      'a waiting task stays in its step with a tag');
+    assert.equal(await page.locator('#task-body .tl-waiting').count(), 1);
+    // Done and Closed are their own tabs, Closed right after Done; each lists only its status.
+    assert.deepEqual((await page.locator('#task-view [role=tab]').allTextContents()).slice(-2), ['Done', 'Closed']);
+    for (const [view, title] of [['done', 'Finished campaign'], ['closed', 'Dropped campaign']]) {
+      await page.locator(`#task-view [data-view="${view}"]`).click();
+      await page.waitForFunction(title => [...document.querySelectorAll('#task-body .tl-title')].map(n => n.textContent).join('|') === title, title);
+    }
+    await page.locator('#task-view [data-view="board"]').click();
+    await page.locator('#task-body .bcol').first().waitFor();
     assert.equal(await page.locator('#task-body').getByText('General task', {exact: true}).count(), 0);
     // The saved type appears in the header, and the address carries it.
     assert.equal(await page.locator('#task-type-more').innerText(), 'Marketing');
@@ -104,7 +119,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     await page.waitForFunction(() => location.hash.includes('type=marketing'));
     // Column headings name their steps without circular status glyphs.
     assert.equal(await page.locator('#task-body .bcol > header > .si').count(), 0);
-    assert.equal(await page.locator('#task-body .bcol > header > h2').count(), 6);
+    assert.equal(await page.locator('#task-body .bcol > header > h2').count(), 4);
     assert.equal(await page.locator('#task-body .bcard .task-status').count(), 0, 'custom step columns supply status context too');
     await page.locator('#task-filter').click();
     await page.locator('#task-filter-pop [data-pick-field="tag"]').click();
@@ -142,7 +157,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     await peek.waitFor({state: 'hidden'});
     await page.locator('[data-task-type="general"]').click();
     await page.waitForFunction(() => location.hash.includes('type=general'));
-    assert.equal(await page.locator('#task-body .bcol').count(), statuses.length, 'General has its own columns');
+    assert.equal(await page.locator('#task-body .bcol').count(), 4, 'General has its own working columns');
     assert.equal(await page.locator('#task-body .bcard').count(), 2, 'General never includes Marketing tasks');
     await page.locator('#task-new').click();
     await page.locator('#task-create select[name=type]').waitFor();
@@ -179,6 +194,8 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
       assert.equal(await page.locator('[data-settings-tab=tasks]').getAttribute('aria-selected'), 'true', 'saved routes select Tasks');
     }
     await page.locator('#set-types [data-edit-type=marketing]').click();
+    assert.deepEqual(await page.locator('.task-type-editor [data-steps] .task-step-edit').first().locator('select option').evaluateAll(o => o.map(x => x.value)),
+      ['open', 'doing', 'review', 'ready', 'done', 'closed'], 'no step can be waiting or declined');
     await page.locator('.task-type-editor input[aria-label="Type name"]').fill('Campaigns');
     await page.locator('.task-type-editor [data-steps] .task-step-edit').nth(1).locator('[data-up]').click();
     assert.equal(await page.locator('.task-type-editor [name=typeBots]').inputValue(), 'parties', 'a type starts with its bots kept to their own tasks');
