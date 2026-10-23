@@ -188,6 +188,30 @@ def register_worktree_pr(c, pr):
     return made
 
 
+def health_wait_reason(link, detail):
+    """The PR condition whose age Health measures, from the already synced link only."""
+    if link.get("state") not in ("open", "draft"):
+        return ""
+    if link.get("mergeable") == "conflict":
+        return "conflict"
+    reviewed = (detail.get("health_reviewed_head") == detail.get("head_sha")
+                if "health_reviewed_head" in detail else bool(link.get("review_state")))
+    if link.get("state") == "open" and link.get("mergeable") == "clean" and link.get("checks") == "passing" and not reviewed:
+        return "review"
+    return ""
+
+
+def record_health_wait(link, detail):
+    """Keep the first observation through refreshes; a resolved condition clears its clock."""
+    reason = health_wait_reason(link, detail)
+    old = detail.get("health_wait") or {}
+    head = detail.get("head_sha") or ""
+    if not reason:
+        detail.pop("health_wait", None)
+    elif old.get("reason") != reason or reason == "review" and old.get("head") != head:
+        detail["health_wait"] = {"reason": reason, "since": H.now(), "head": head}
+
+
 def pull_request(c, payload, review_role="", release_repo=""):
     pr = payload.get("pull_request") or {}
     url = str(pr.get("html_url") or "").split("?")[0].rstrip("/")
@@ -228,6 +252,7 @@ def pull_request(c, payload, review_role="", release_repo=""):
                 detail.pop("checks", None)
                 detail.pop("head_login", None)
                 detail.pop("conflict_head", None)
+                detail["health_reviewed_head"] = ""
                 c.execute("UPDATE task_links SET checks='pending' WHERE id=?", (link["id"],))
             detail["head_sha"] = head_sha
             login = (str((payload.get("sender") or {}).get("login") or "").lower()
@@ -249,6 +274,8 @@ def pull_request(c, payload, review_role="", release_repo=""):
             detail["conflict_head"] = conflict_head
         elif mergeable == "clean":
             detail.pop("conflict_head", None)
+        record_health_wait({**link, "state": state, "mergeable": mergeable,
+                            **({"checks": "pending"} if new_head else {})}, detail)
         c.execute("UPDATE task_links SET detail_json=? WHERE id=?", (json.dumps(detail), link["id"]))
         current = c.execute("SELECT * FROM task_links WHERE id=?", (link["id"],)).fetchone()
         if any(current[field] != link.get(field) for field in ("state", "mergeable", "repo", "number", "branch", "checks")):
@@ -388,6 +415,8 @@ def pr_signal(c, event, payload):
                 reviews[review_id] = signature
                 detail["reviews"] = dict(list(reviews.items())[-100:])
             fields["review_state"] = state
+            if payload.get("action") != "dismissed" and not _own_comment(c, task, payload, "review", detail):
+                detail["health_reviewed_head"] = review.get("commit_id") or detail.get("head_sha") or ""
             wake = fresh and payload.get("action") != "dismissed" and (
                 state == "changes_requested" or state == "commented" and not _own_comment(c, task, payload, "review", detail))
             item = f"Review {state.replace('_', ' ')} on {label}"
@@ -415,6 +444,7 @@ def pr_signal(c, event, payload):
             item = f"{fields['pending_comments']} review comments on {label}"
             batch = "review"
         changed = any(value != link.get(field) for field, value in fields.items())
+        record_health_wait({**link, **fields}, detail)
         fields.update(detail_json=json.dumps(detail), updated=H.now())
         if changed:
             c.execute("UPDATE tasks SET updated=? WHERE id=?", (H.now(), task["id"]))

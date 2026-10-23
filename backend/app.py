@@ -4746,13 +4746,17 @@ def create_app(settings=None):
             checks = health.view(c, who, settings, auth, getattr(app.state, "github_app", None), config_view(c, settings, who))["checks"]
             result["checks"] = checks
             for check in checks:
-                if check["status"] not in ("warn", "bad", "unknown"):
+                if check["status"] not in ("warn", "bad", "unknown") and not check.get("items"):
                     continue
-                result["issues"].append({"bot": "", "name": check["label"], "kind": check["id"],
-                                         "severity": "high" if check["status"] == "bad" else "medium",
-                                         "text": check["summary"], "fixes": check["fixes"],
-                                         "fix": "; ".join(f["label"] + (": " + f["href"] if f["href"] else "")
-                                                          for f in check["fixes"])})
+                items = check.get("items") or [{"bot": "", "name": check["label"], "text": check["summary"],
+                                                "fixes": check["fixes"]}]
+                for item in items:
+                    fixes = item.get("fixes") or []
+                    result["issues"].append({**item, "kind": check["id"],
+                                             "severity": "high" if check["status"] == "bad" else "low" if check["status"] == "info" else "medium",
+                                             "fix": item.get("fix") or "; ".join(
+                                                 f["label"] + (": " + f["href"] if f["href"] else "") for f in fixes)})
+
             result["issues"].sort(key=lambda i: (fleet_check_module.ORDER[i["severity"]], i["name"].lower(), i["kind"]))
             result["counts"] = {level: sum(i["severity"] == level for i in result["issues"])
                                 for level in fleet_check_module.ORDER}

@@ -261,7 +261,11 @@ def test_a_bot_its_computer_cannot_start_is_stuck_with_the_reason_and_one_fix(en
         conversation = H.open_conversation(c, owner, [owner, "bot:release"], kind="chat")
         H._write_message(c, owner, "bot:release", "ship it", conversation, "say", {}, None, None)
     body, checks = health_of(api)
-    assert checks["queue"]["status"] == "bad" and checks["queue"]["summary"] == "1 bot with work that is not starting."
+    assert checks["queue"]["status"] == "bad"
+    assert "release" in checks["queue"]["summary"] and checks["queue"]["fixes"]
+    [issue] = [i for i in api.get("/api/v2/health/issues", headers=signed_in()).json()["issues"] if i["kind"] == "queue"]
+    assert issue["bot"] == "release" and issue["queued"] == 1 and issue["oldest_minutes"] == 0
+    assert issue["reason"] == "not_ready" and "Claude login required" in issue["text"] and issue["fixes"]
     [row] = body["stuck"]
     assert row["bot"] == "release" and row["why"] == "Claude login required on Team box"
     assert row["fix"]["login"] == {"runner_id": runner, "runtime": "claude", "computer": "Team box"}
@@ -841,3 +845,95 @@ def test_roadmap_suggestions_warn_from_the_routing_rule_and_only_to_administrato
     assert label(chosen="ops", ops="archived", pm="archived") == "No bot receives roadmap suggestions"
     assert health(chosen="ops", pm="archived") is None           # choosing an active bot clears it
     assert health(pm="archived", headers=as_person(api, "quinn")) is None
+
+
+def test_health_names_queued_bot_and_stalled_tasks_for_bot_reader(environment):
+    api = environment()
+    runner = enrolled(api)
+    add_bot(api, "helper")
+    add_bot(api, "observer")
+    api.app.state.store.settings.test_identities["observer-bot"] = Identity("bot:observer", "bot", agent="hermes")
+    old = H.shift(H.now(), hours=-3)
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO agents(bot,harness,token_hash,created,created_by) VALUES('observer','hermes','x',?,'human:ana')", (H.now(),))
+        c.execute("INSERT INTO assignments(bot,runner_id,generation,updated,updated_by) VALUES('helper',?,1,?,'t')", (runner, H.now()))
+        c.execute("UPDATE runners SET last_seen=? WHERE id=?", (H.now(), runner))
+        cv = H.open_conversation(c, 'human:morgan', ['human:morgan', 'bot:helper'], kind='chat')
+        H._write_message(c, 'human:morgan', 'bot:helper', 'check the queue', cv, 'say', {}, None, None)
+        c.execute("UPDATE jobs SET created=? WHERE bot='helper'", (old,))
+        tasks = [H.task_create(c, 'human:morgan', title, '', 'bot:helper', private=False)
+                 for title in ('Repair the queue', 'Check the diagnosis')]
+        for task in tasks:
+            c.execute("UPDATE tasks SET updated=? WHERE id=?", (old, task['id']))
+            H.event(c, H.KEEPER, 'task.stall_escalated', task['id'], {'wakes': 3})
+        c.execute("UPDATE bots SET state='paused' WHERE slug='helper'")
+    headers = signed_in('observer-bot')
+    body, checks = health_of(api, headers)
+    [queued] = checks['queue']['items']
+    assert (queued['bot'], queued['queued'], queued['oldest'], queued['oldest_minutes'], queued['reason']) == ('helper', 3, old, 180, 'paused')
+    assert queued['fix'] == 'hub run list helper' and queued['fixes']
+    issues = api.get('/api/v2/health/issues', headers=headers).json()['issues']
+    assert next(i for i in issues if i['kind'] == 'queue') == {**queued, 'kind': 'queue', 'severity': 'high'}
+    assert {i['task'] for i in issues if i['kind'] == 'stalled_tasks'} == {t['id'] for t in tasks}
+    assert all(t['title'] in checks['stalled_tasks']['summary'] for t in tasks)
+
+    # A full computer is an explained wait, also in the CLI, without raising an outage.
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bots SET state='active' WHERE slug='helper'")
+        claimable(c, runner, 'helper')
+        c.execute("UPDATE runners SET capacity=1 WHERE id=?", (runner,))
+        H._write_message(c, 'human:morgan', 'bot:helper', 'one more request', cv, 'say', {}, None, None)
+        job = c.execute("SELECT id FROM jobs WHERE bot='helper' ORDER BY created DESC LIMIT 1").fetchone()[0]
+        c.execute("UPDATE jobs SET state='running' WHERE id=?", (job,))
+        c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created) "
+                  "VALUES('helper-running',?,'helper',?,1,'x','running',?,?)",
+                  (job, runner, H.shift(H.now(), hours=1), H.now()))
+    queue = health_of(api, headers)[1]['queue']
+    assert queue['status'] == 'info' and queue['items'][0]['reason'] == 'no_slot'
+    issues = api.get('/api/v2/health/issues', headers=headers).json()['issues']
+    assert next(i for i in issues if i['kind'] == 'queue')['reason'] == 'no_slot'
+
+
+def test_aged_prs_use_synced_condition_age_and_clear_on_review_or_resolution(environment, monkeypatch):
+    from backend import github as G
+    from backend import task_relations
+    api = environment()
+    add_bot(api, 'builder')
+    add_bot(api, 'reviewer')
+    old = H.shift(H.now(), hours=-13)
+    young = H.shift(H.now(), hours=-11)
+    urls = [f'https://github.com/AcmeCorp/atlas/pull/{n}' for n in range(1, 6)]
+    tasks = []
+    with api.app.state.store.transaction() as c:
+        for i, url in enumerate(urls):
+            task = H.task_create(c, 'human:morgan', f'Build change {i + 1}', '', 'bot:builder', private=i == 3)
+            tasks.append(task)
+            H.task_link(c, 'human:morgan', task['id'], url)
+            payload = {'action': 'refresh', 'pull_request': {'html_url': url, 'state': 'open',
+                       'mergeable': i != 0, 'head': {'sha': str(i + 1) * 40, 'ref': f'change-{i + 1}'}}}
+            with monkeypatch.context() as clock:
+                clock.setattr(H, 'now', lambda: young if i == 2 else old)
+                G.pull_request(c, payload)
+                if i != 0:
+                    G.pr_signal(c, 'status', {'sha': str(i + 1) * 40, 'state': 'success', 'context': 'tests',
+                                            'repository': {'full_name': 'AcmeCorp/atlas'}})
+        child = H.task_create(c, 'human:morgan', 'Review 1: PR #2', '', 'bot:reviewer', private=False)
+        task_relations.set_parent(c, 'human:morgan', child['id'], tasks[1]['id'])
+        # Refreshes do not reset a wait, and a fresh check on the same head does not either.
+        G.pull_request(c, {'action': 'refresh', 'pull_request': {'html_url': urls[0], 'mergeable': False, 'state': 'open', 'head': {'sha': '1' * 40}}})
+        G.pr_signal(c, 'status', {'sha': '2' * 40, 'state': 'success', 'context': 'tests', 'repository': {'full_name': 'AcmeCorp/atlas'}})
+        # A human-owned task is outside the bot PR check.
+        c.execute("UPDATE tasks SET owner='human:morgan' WHERE id=?", (tasks[4]['id'],))
+    _, checks = health_of(api)
+    items = checks['aged_prs']['items']
+    assert {i['pr'] for i in items} == set(urls[:2])
+    assert all(i['age_minutes'] == 780 and i['fixes'] and i['task'] in {t['id'] for t in tasks[:2]} for i in items)
+    assert items[0]['reason'] == 'conflict' and items[0]['whose_move'] == 'bot:builder'
+    assert items[1]['reason'] == 'review' and items[1]['whose_move'] == 'bot:reviewer'
+    issues = api.get('/api/v2/health/issues', headers=signed_in()).json()['issues']
+    assert {i['pr'] for i in issues if i['kind'] == 'aged_prs'} == set(urls[:2])
+    with api.app.state.store.transaction() as c:
+        G.pull_request(c, {'action': 'refresh', 'pull_request': {'html_url': urls[0], 'mergeable': True, 'state': 'open', 'head': {'sha': '1' * 40}}})
+        G.pr_signal(c, 'pull_request_review', {'action': 'submitted', 'pull_request': {'html_url': urls[1]},
+                    'review': {'id': 1, 'state': 'approved', 'commit_id': '2' * 40, 'user': {'login': 'reviewer'}}})
+    assert 'aged_prs' not in health_of(api)[1]
