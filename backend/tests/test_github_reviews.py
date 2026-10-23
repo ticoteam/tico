@@ -44,13 +44,15 @@ def configured(api, gh, tmp_path, monkeypatch):
         if path == "/repos/Acme/product/pulls/7":
             return httpx.Response(200, json={"state": "open", "head": {"sha": seen["head"]}})
         if path == "/repos/Acme/product/pulls/7/reviews":
+            if seen.get("refusal"):
+                return httpx.Response(seen["refusal"], json={"message": "synthetic refusal"})
             seen["reviews"].append((json.loads(request.content), request.headers["authorization"]))
             if seen.get("lost_response"):
                 raise httpx.ReadTimeout("synthetic lost response", request=request)
             payload = json.loads(request.content)
             return httpx.Response(200, json={"id": len(seen["reviews"]), "html_url": "https://github.com/Acme/product/pull/7#review",
-                                            "commit_id": payload["commit_id"],
-                                            "state": {"APPROVE": "APPROVED", "REQUEST_CHANGES": "CHANGES_REQUESTED", "COMMENT": "COMMENTED"}[payload["event"]]})
+                                            "commit_id": seen.get("receipt_head", payload["commit_id"]),
+                                            "state": seen.get("receipt_state") or {"APPROVE": "APPROVED", "REQUEST_CHANGES": "CHANGES_REQUESTED", "COMMENT": "COMMENTED"}[payload["event"]]})
         response = gh(request)
         if path == "/app/installations/99/access_tokens" and response.status_code == 201:
             return httpx.Response(201, json={**response.json(), "token": "reviewer-" + response.json()["token"]})
@@ -115,7 +117,7 @@ def test_real_reviews_pin_head_verdict_and_identity_and_refuse_stale_or_unauthor
         assert authz.startswith("Bearer reviewer-")
     seen["head"] = "b" * 40
     assert submit(api, key="moved").status_code == 409
-    assert submit(api, repository="Acme/docs", key="read-only").status_code == 403
+    # Selected reviewers can use existing read grants, but a foreign repository is still refused.
     assert submit(api, repository="elsewhere/product", key="foreign").status_code == 403
     assert len(seen["reviews"]) == 2
     seen["head"] = HEAD
@@ -135,3 +137,56 @@ def test_real_reviews_pin_head_verdict_and_identity_and_refuse_stale_or_unauthor
     assert revoked.status_code == 200, revoked.text
     assert submit(api).status_code == 403
     assert len(seen["reviews"]) == 4
+
+
+def test_reviewer_turn_can_write_only_its_own_repo_and_reads_a_product_write_grant(api, gh, tmp_path, monkeypatch):
+    configured(api, gh, tmp_path, monkeypatch)
+    minted = []
+    gh.on_token = lambda body: minted.append(body)
+    reply = turn_token(api, "cmo").json()
+    assert any("Acme/emp-cmo" in g["repositories"] and g["access"] == "write" for g in reply["tokens"])
+    assert any(REPO in g["repositories"] and g["access"] == "read" for g in reply["tokens"])
+    assert all(REPO not in g["repositories"] for g in reply["tokens"] if g["access"] == "write")
+    assert all("product" not in b.get("repositories", []) for b in minted if b.get("permissions", {}).get("contents") == "write")
+    narrowed = api.post("/api/v2/github/token", json={"bot": "cmo", "repository": REPO}, headers=auth("bot-test"))
+    assert narrowed.status_code == 200, narrowed.text
+    assert all(g["access"] == "read" for g in narrowed.json()["tokens"])
+    assert submit(api).status_code == 200  # Only the server-side path mints product review write.
+    changed = api.put("/api/v2/bots/cmo/repositories", json={"mode": "chosen", "chosen": [
+        {"full_name": REPO, "access": "read"}]}, headers=auth())
+    assert changed.status_code == 200
+    assert submit(api, key="read-grant").status_code == 200
+    api.app_state.store.settings.github_reviewer_bots = ()
+    assert submit(api, key="primary-read-only").status_code == 403
+
+
+def test_review_mismatch_stays_fenced_and_definite_refusal_can_retry(api, gh, tmp_path, monkeypatch):
+    settings, seen = configured(api, gh, tmp_path, monkeypatch)
+    for field, value in (("receipt_head", "b" * 40), ("receipt_state", "COMMENTED")):
+        seen[field] = value
+        assert submit(api, key=field).status_code == 502
+        assert submit(api, key=field).status_code == 409
+        seen.pop(field)
+    seen["refusal"] = 422
+    assert submit(api, key="refused").status_code == 409
+    seen.pop("refusal")
+    assert submit(api, key="refused").status_code == 200
+
+
+def test_reviewer_failure_does_not_mutate_primary_health_or_reachability(api, gh, tmp_path, monkeypatch):
+    configured(api, gh, tmp_path, monkeypatch)
+    from backend import repositories as R
+    def unexpected(*args, **kw):
+        raise AssertionError("reviewer failure must not write primary health")
+    monkeypatch.setattr(G, "note_github_token", unexpected)
+    monkeypatch.setattr(R, "repository_health", unexpected)
+    monkeypatch.setattr(R, "workflow_health", unexpected)
+    gh.refuse = (403, "synthetic installation refusal")
+    assert turn_token(api, "cmo").status_code == 409
+
+
+def test_reviewer_ignores_known_missing_repo_without_changing_primary_cache(api, gh, tmp_path, monkeypatch):
+    configured(api, gh, tmp_path, monkeypatch)
+    reviewer = api.app_state.github_reviewer_app
+    token, _, repos = reviewer.mint_reachable([REPO, "Acme/gone"], G.READ_PERMISSIONS, missing={"acme/gone"})
+    assert token.startswith("reviewer-") and repos == [REPO]

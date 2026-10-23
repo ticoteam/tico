@@ -4,11 +4,14 @@ A login is (computer, subscription profile or "" for the computer's own login, r
 login's usage limit, a hold is saved here, in the database, so it outlives a restart of the runner or the server:
 - until the reset the provider gave (Claude says it in words: "resets 2:40am (UTC)"), honored even when it is days
   away, as long as it is in the future and within LIMIT_RESET_MAX;
-- otherwise for BACKOFF[n] after the n-th limit in a row on that login (30, 60, then 120 minutes at most).
+- otherwise for BACKOFF[n] after the n-th limit in a row on that login (30, 60, then 120 minutes at most);
+- for CAPACITY_WAIT only when the provider said the model is at capacity or overloaded for now (`capacity`): the
+  provider's busy moment, not the login's quota, so it neither waits out a backoff nor counts in the streak.
 While it holds, no bot starts a turn on that login: a bot with a fallback that is ready and not held itself runs
 there instead (Dev 137), and only one with none waits. When it ends, one queued job (the probe) may start on the login and
 every other job on it waits for that turn's result: a success clears the hold, another limit saves a longer one. So a
-login sees at most one turn per hold window, however many jobs and bots wait on it.
+login sees at most one turn per hold window, however many jobs and bots wait on it. Try now ends the hold early the
+same way (`try_now`): one probe, and the cut-short window back if it meets the limit again.
 """
 
 import json
@@ -24,6 +27,18 @@ BACKOFF = (1800, 3600, 7200)      # seconds held after the 1st, 2nd and later li
 LIMIT_RESET_MAX = 8 * 86400       # a reset further off than a weekly window is not believed
 PROBE_STALE = 900                 # a probe job that has not started within this long stops holding the others back
 LIVE_JOB = ("leased", "running")
+CAPACITY_WAIT = 120               # seconds held after a temporary model-capacity refusal
+CAPACITY_KIND = "temporary model capacity"
+
+# A provider out of capacity for the moment (runner-rs/src/hosts/mod.rs capacity_re): "Selected model is at capacity.
+# Please try a different model.", "overloaded_error", HTTP 503, "rate limited, try again in 20s". Quota or billing words
+# in the same notice win (_QUOTA_RE): "Quota exceeded. Check your plan and billing details." is the plan's, not a busy
+# moment.
+_CAPACITY_RE = re.compile(r"model is at capacity|no capacity available|\boverloaded(?:_error)?\b|"
+                          r"\b(?:code|status|http) 503\b|(?:retry|try again) (?:after|in) \d+(?:\.\d+)? ?"
+                          r"(?:s|secs?|seconds)\b", re.I)
+_QUOTA_RE = re.compile(r"hit your (?:usage|session|weekly) limit|usage limit|usage_limit_reached|quota|spend(?:ing)? "
+                       r"limit|monthly (?:usage |spend(?:ing)? )?limit|out_of_credit|billing|\bresets?\b", re.I)
 
 _MONTHS = {m: i for i, m in enumerate(("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov",
                                        "dec"), 1)}
@@ -34,6 +49,12 @@ _RESET_RE = re.compile(r"\bresets\s+(?:(?P<month>[A-Za-z]{3})[a-z]*\.?\s+(?P<day
                        re.I)
 # An API's own words with a timestamp: "Your usage window resets at 2026-10-19T00:00:00Z".
 _WINDOW_RE = re.compile(r"usage window resets at (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)", re.I)
+
+
+def capacity(notice):
+    """Whether a limit notice is a provider's temporary model capacity, not a login's quota or plan."""
+    notice = str(notice or "")
+    return bool(_CAPACITY_RE.search(notice)) and not _QUOTA_RE.search(notice) and not gateway.run_code(notice)
 
 
 def _iso(at):
@@ -47,11 +68,18 @@ def key(runner_id, profile, runtime):
 def canonical(c, runner_id, profile, runtime):
     """The login a profile's turns on `runtime` sign in with, as holds key it: "" (the computer's own) for a profile
     the computer reports shares it (`shared_login`, runner-rs/src/fallback.rs `login`), else the profile."""
+    from .store import readiness_document
+    row = c.execute("SELECT readiness_json,capabilities_json FROM runners WHERE id=?", (runner_id,)).fetchone()
+    ready = readiness_document(row["readiness_json"]) if row else {}
+    from .subscriptions import computer_logins
+    current = row and computer_logins(row, ready)
+    if not profile and current:
+        # Keep the physical home as the identity: existing holds on a retained default profile still apply.
+        profile = ready['computer_profile']
+    if current and profile != ready['computer_profile']:
+        return profile     # an older in-flight turn on another home is never folded into the new default
     if not profile:
         return ""
-    from .store import readiness_document
-    row = c.execute("SELECT readiness_json FROM runners WHERE id=?", (runner_id,)).fetchone()
-    ready = readiness_document(row["readiness_json"]) if row else {}
     report = ((ready.get("runtimes") or {}).get(runtime) or {})
     report = (report.get("profiles") or {}).get(profile) or report
     return "" if report.get("shared_login") is True else profile
@@ -133,28 +161,67 @@ def believable(reset, hit):
 def record(c, runner_id, profile, runtime, hit, reset=None, attempt_id=None, bot=None, error=""):
     """Save a hold on the login after a turn ended on its usage limit at `hit`, and return it. A hold still saved
     means no turn has worked on the login since, so this limit is the next in a row. A hold keeps every turn off the
-    login, even when the bot's work went on to finish on a fallback: the next turn goes straight there."""
+    login, even when the bot's work went on to finish on a fallback: the next turn goes straight there. A capacity
+    notice holds for CAPACITY_WAIT and keeps the quota streak as it was: a busy provider says nothing of the plan."""
     old = get(c, runner_id, profile, runtime)
+    busy = capacity(error)
+    if busy:
+        reset = H.shift(hit, seconds=CAPACITY_WAIT)
     at = believable(reset, hit)
     hit_at = H.parse_ts(hit)
-    if old and (old.get("until") or "") > _iso(hit_at):
+    # A window Try now cut short (`try_now`) still counts as in force for a limit its probe meets.
+    end = max(old.get("until") or "", old.get("cut") or "") if old else ""
+    if old and end > _iso(hit_at) and (busy or not old.get("capacity")):
         # Met while the hold was still in force (a person's one try, or a turn sent to a fallback that was not ready
-        # after all): the same window, so neither the streak nor the end moves earlier.
-        streak = int(old.get("streak") or 1)
-        until = max(at or hit_at, H.parse_ts(old["until"]))
+        # after all): the same window, so neither the streak nor the end moves earlier, and a quota hold stays one, its
+        # end too: a busy model says nothing of the plan's reset. A quota notice during a capacity hold starts its own
+        # quota hold.
+        streak = int(old.get("streak") or (0 if busy else 1))
+        until = max(at or hit_at, H.parse_ts(end))
+        if busy and not old.get("capacity"):
+            busy, at, error, until = False, old.get("reset"), old.get("error") or "", H.parse_ts(end)
     else:
-        streak = int(old.get("streak") or 0) + 1 if old else 1
+        streak = int(old.get("streak") or 0) + (0 if busy else 1) if old else (0 if busy else 1)
         until = at or hit_at + timedelta(seconds=BACKOFF[min(streak, len(BACKOFF)) - 1])
-    hold = {"runner_id": runner_id, "profile": profile or "", "runtime": runtime, "since": _iso(hit_at),
-            "until": _iso(until), "streak": streak, "reset": bool(at), "attempt_id": attempt_id, "bot": bot,
-            "error": (error or "")[:300], "probe_job": None, "probe_at": None}
+    # A turn that started before the hold and ends on the limit late leaves another job's live probe in place: only
+    # that probe's own result decides the login, so no second turn starts beside it, and the hold keeps the start the
+    # probe was claimed after, so the probe's success still clears it.
+    probe = old.get("probe_job") if old else None
+    keep = probe and _probe_live(c, old, H.now()) and not c.execute(
+        "SELECT 1 FROM jobs WHERE id=? AND attempt_id IS ?", (probe, attempt_id)).fetchone()
+    since = old.get("since") if keep and old.get("since") else _iso(hit_at)
+    hold = {"runner_id": runner_id, "profile": profile or "", "runtime": runtime, "since": since,
+            "until": _iso(until), "streak": streak, "reset": bool(at) and not busy, "capacity": busy,
+            "attempt_id": attempt_id, "bot": bot, "error": (error or "")[:300], "probe_job": probe if keep else None,
+            "probe_at": old.get("probe_at") if keep else None}
+    if old.get("cut") and keep:
+        hold["cut"] = old["cut"]
     _save(c, hold)
     return hold
 
 
 def clear(c, runner_id, profile, runtime):
-    """A turn worked on the login, or a person asked to try now: it is no longer held."""
+    """A turn worked on the login: it is no longer held."""
     c.execute("DELETE FROM registry_metadata WHERE key=?", (key(runner_id, profile, runtime),))
+
+
+def try_now(c, runner_id, profile, runtime, now=None):
+    """A person asked to try now: the hold ends at once, and as when it runs out, one queued job (the probe) starts on
+    the login and every other job on it, whichever bot it is for, waits for that turn's result. The end it cut short
+    is kept (`cut`), so a probe that meets the limit again puts the same window back rather than a shorter one. A hold
+    already ended keeps its probe."""
+    hold = get(c, runner_id, profile, runtime)
+    now = now or H.now()
+    if not hold or (hold.get("until") or "") <= now:
+        return
+    live = _probe_live(c, hold, now)
+    _save(c, {**hold, "until": now, "cut": max(hold["until"], hold.get("cut") or ""),
+              "probe_job": hold.get("probe_job") if live else None, "probe_at": hold.get("probe_at") if live else None})
+
+
+def probing(c, hold, now=None):
+    """Whether a probe turn is out on the login now, so Try now has nothing more to start."""
+    return bool(hold) and _probe_live(c, hold, now or H.now())
 
 
 def _probe_live(c, hold, now):
@@ -301,6 +368,10 @@ def window(notice):
     from .execution import BILLING_LIMIT_RE
     if gateway.out_of_credit(notice):
         return "Tico models paused, out of credit"
+    if gateway.rate_limited(notice):
+        return "Tico AI Gateway rate limit"
+    if capacity(notice):
+        return CAPACITY_KIND
     if BILLING_LIMIT_RE.search(notice or ""):
         return "API quota or billing limit"
     if re.search(r"\bweekly\b", notice or "", re.I):
@@ -380,6 +451,10 @@ def after_turn(c, runner_id, bot, profile, runtime, body, attempt_id, hit):
     # turn): the turn ran nowhere, so no login met a limit; the hop its notes name only failed to start.
     unstarted = body.primary_held and body.limited and not body.fallback
     steps = turn_steps(c, attempt_id, runtime, body)
+    # The home is pinned across primary and fallback work. An older in-flight turn may finish on a retired home
+    # after the server's upgrade: its reported login, not the new default, owns that limit.
+    if body.profile_used is not None:
+        profile = body.profile_used
     hop_profile = body.profile_used if body.fallback and body.profile_used is not None else profile
     claimed = (c.execute("SELECT created FROM attempts WHERE id=?", (attempt_id,)).fetchone() or [""])[0] or ""
     kept = {}
@@ -389,12 +464,17 @@ def after_turn(c, runner_id, bot, profile, runtime, body, attempt_id, hit):
         if limited:
             if n == 0 and body.primary_held:
                 continue                # never tried: its hold stands as it is
-            reset = reset_from_text(notice, hit) or (body.limit_resets_at if last else None)
-            if gateway.out_of_credit(notice):
-                # The Tico AI Gateway paused the company's Tico models for want of credit: the company's wait, not a
-                # spent login, so the login is held only for the Gateway's Retry-After (or its minute), never the
-                # backoff. A turn that ended here waits that minute too, even while its primary's own hold is longer.
-                reset = (body.limit_resets_at if last else None) or H.shift(hit, seconds=gateway.OUT_OF_CREDIT_WAIT)
+            if gateway.out_of_credit(notice) or gateway.rate_limited(notice):
+                # The Tico AI Gateway paused the company's Tico models for want of credit, or the key met its minute's
+                # rate limit: the Gateway's wait, not a spent login, so the login is held only for its Retry-After (or a
+                # minute), never the backoff. A turn that ended here waits that minute too, even while its primary's own
+                # hold is longer. A reset already past (a runner's clock behind) counts as none reported. With none, a
+                # minute, except a rate limit the turn ended on: that keeps execution.reset_cooldown's safe hour.
+                reported = believable(body.limit_resets_at, hit) if last else None
+                unsaid = last and not gateway.out_of_credit(notice)
+                reset = reported or H.shift(hit, seconds=gateway.RETRY_AFTER if unsaid else gateway.GATEWAY_WAIT)
+            else:
+                reset = reset_from_text(notice, hit) or (body.limit_resets_at if last else None)
             hold = record(c, runner_id, login, rt, hit, reset, attempt_id, bot, error=notice or "")
             if last:
                 # The login the turn ended on: the one its bot waits for (for_attempt), when a turn held two.

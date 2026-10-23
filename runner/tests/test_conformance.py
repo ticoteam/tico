@@ -19,7 +19,7 @@ from pathlib import Path
 import pytest
 
 from backend.store import encode
-from backend.tests.test_api import api, assign, get, headers, post, put, runner, settled  # noqa: F401
+from backend.tests.test_api import api, assign, get, headers, post, runner, settled  # noqa: F401
 from backend.tests.live import live  # noqa: F401
 
 pytestmark = pytest.mark.slow
@@ -642,10 +642,14 @@ def profiled(tmp_path):
     return directory
 
 
+# A computer whose one login is a profile (`default_profile`) runs every bot there; a bot's own `bot_profiles` entry,
+# from before one login per computer (#1259), is ignored.
 @pytest.mark.parametrize("harness", ["claude", "codex"])
-def test_a_bot_on_a_subscription_profile_runs_in_that_profiles_home(api, live, tmp_path, harness, profiled, rust_binary):
+def test_a_computer_whose_login_is_a_profile_runs_its_bots_in_that_home(api, live, tmp_path, harness, profiled, rust_binary):
+    other = tmp_path / "profiles" / "other"
     machine = Computer(api, live, tmp_path, harness, rust_binary,
-                       registration={"profiles": {"acme": {"dir": str(profiled)}}, "bot_profiles": {"ops": "acme"}})
+                       registration={"profiles": {"acme": {"dir": str(profiled)}, "other": {"dir": str(other)}},
+                                     "default_profile": "acme", "bot_profiles": {"ops": "other"}})
     try:
         machine.start()
         assert machine.readiness()["ops"]["profile"] == "acme"
@@ -657,62 +661,6 @@ def test_a_bot_on_a_subscription_profile_runs_in_that_profiles_home(api, live, t
         assert result["profile_used"] == "acme"
     finally:
         machine.stop()
-
-
-# A named subscription signed in from Settings on a running computer: the sign-in writes it into runner.json, and the
-# heartbeat lists it, shows its sign-in and a turn on it uses it, with no restart. A failed sign-in keeps the profile,
-# listed as not signed in; one taken out of runner.json goes from the next heartbeat.
-@pytest.mark.parametrize("harness", ["codex"])
-@pytest.mark.parametrize("setup", [{"env": {"FAKE_CODEX_LOGIN": "file"}}])
-def test_a_subscription_signed_in_from_the_browser_counts_without_a_restart(api, computer):
-    own_auth = Path(computer.env["CODEX_HOME"]) / "auth.json"
-    own_auth.write_text("{}")
-    computer.start()
-    rid = computer.registration["runner_id"]
-    # The runner starts ready on its own login. A named connection needs that slot free, as after signing out.
-    own_auth.unlink()
-    until(lambda: runtime_row(api, computer).get("authenticated") == "missing",
-          "the computer login signed out, in the heartbeat", timeout=40)
-    signed = lambda name: computer.profiles().get(name, {}).get("codex", {}).get("signed_in")  # noqa: E731
-    state = lambda login: get(api, f"runners/{rid}/logins/{login['id']}")["state"]  # noqa: E731
-    assert computer.profiles() == {}
-    # A failed unsigned profile does not consume the slot; keep it to test heartbeat removal below.
-    failed = post(api, f"runners/{rid}/logins", {"runtime": "codex", "profile": "spare"})
-    until(lambda: state(failed) == "waiting", "the failed sign-in's link and code")
-    (computer.config.parent / "profiles" / "spare" / "codex" / "deny").write_text("")
-    until(lambda: state(failed) == "failed", "the failed sign-in's verdict")
-    until(lambda: signed("spare") is False, "the failed profile, not signed in")
-
-    login = post(api, f"runners/{rid}/logins", {"runtime": "codex", "profile": "chris-chatgpt"})
-    home = computer.config.parent / "profiles" / "chris-chatgpt" / "codex"
-    until(lambda: state(login) == "waiting", "the sign-in's link and code")
-    # Listed while the person is still on the provider's page: there, not signed in yet.
-    until(lambda: signed("chris-chatgpt") is False, "the new profile in the heartbeat")
-    (home / "approve").write_text("")
-    until(lambda: state(login) == "signed_in", "the sign-in's verdict")
-    until(lambda: signed("chris-chatgpt") is True, "the profile signed in, in the heartbeat")
-    put(api, "subscriptions", {"scope": "bot", "target": "ops", "profile": "chris-chatgpt"})
-    msg = post(api, "chat/ops", {"text": "Please answer on Chris's subscription"})
-    until(lambda: reply_to(api, msg["conversation_id"]), "the bot's reply on the new subscription")
-    assert computer.prompts()[-1]["env"]["CODEX_HOME"] == str(home)
-    assert until(lambda: computer.attempts()[-1]["result"], "the completion")["profile_used"] == "chris-chatgpt"
-
-    denied = post(api, f"runners/{rid}/logins", {"runtime": "codex", "profile": "spare"}, expected=409)
-    assert denied["error"]["code"] == "subscription_exists"
-
-    registration = json.loads(computer.config.read_text())
-    del registration["profiles"]["spare"]
-    computer.config.write_text(json.dumps(registration))
-    until(lambda: "spare" not in computer.profiles(), "the profile taken out, gone from the heartbeat", timeout=40)
-    assert signed("chris-chatgpt") is True
-    # The subscription left in place still takes turns after another one is taken out.
-    again = post(api, "chat/ops", {"text": "Please answer again on Chris's subscription"})
-    assert until(lambda: len(computer.attempts()) == 2 and computer.attempts()[-1]["result"],
-                 "the second turn's completion")["profile_used"] == "chris-chatgpt"
-    assert "answer again" in computer.prompts()[-1]["prompt"]
-    assert computer.prompts()[-1]["env"]["CODEX_HOME"] == str(home)
-    assert reply_to(api, again["conversation_id"])
-    assert not computer.died()
 
 
 # The signed-in account a computer reports per tool (#610): allow-listed fields only, Codex's without a token refresh.
@@ -806,7 +754,7 @@ def test_two_bots_on_one_chatgpt_login_run_at_once_without_waiting(api, computer
     add_bot(api, computer, tmp_path, "finance")
     if shared_profile:
         config = json.loads(computer.config.read_text())
-        config.update(profiles={"acme": {"dir": str(profiled)}}, bot_profiles={"ops": "acme", "finance": "acme"})
+        config.update(profiles={"acme": {"dir": str(profiled)}}, default_profile="acme")
         computer.config.write_text(json.dumps(config))
     computer.start()
     until(lambda: computer.readiness().get("finance", {}).get("ready"), "the second bot's readiness")

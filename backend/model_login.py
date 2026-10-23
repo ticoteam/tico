@@ -206,56 +206,12 @@ def _removes(runner):
     return REMOVE_CAPABILITY in set(H._json(runner["capabilities_json"], []) or [])
 
 
-def _one_subscription(c, runner, runtime, profile):
-    """Reserve one subscription per tool and computer, including a sign-in not yet reported by its runner.
-
-    Existing connections may still be refreshed or switched: this guard never migrates or removes them.
-    The caller holds the store's write transaction, so two different profile names cannot reserve the tool.
-    """
-    from .execution import readiness_document
-    row = (readiness_document(runner["readiness_json"]).get("runtimes") or {}).get(runtime) or {}
-    logins = {}
-    # A runtime with profiles shows the worst login at its top level. Its own login is the empty profile's row.
-    own = (row.get("profiles") or {}).get("") if row.get("profiles") else row
-    if own and not row.get("key") and (row.get("account") or {}).get("kind") != "api_key":
-        logins[""] = own.get("authenticated") == "ready"
-    for name, state in (row.get("profiles") or {}).items():
-        if name and not state.get("shared_login"):
-            logins[name] = state.get("authenticated") == "ready"
-    for stored in c.execute("SELECT profile,runtimes_json FROM computer_profiles WHERE runner_id=?", (runner["id"],)):
-        state = (H._json(stored["runtimes_json"], {}) or {}).get(runtime) or {}
-        if state.get("signed_in") is True and (state.get("account") or {}).get("kind") != "api_key":
-            logins[stored["profile"]] = True
-    # Completion can arrive before the next heartbeat; don't let that gap admit a second login.
-    latest = set()
-    for job in c.execute("SELECT profile,state,updated,kind FROM model_logins WHERE runner_id=? AND runtime=? "
-                         "ORDER BY created DESC,rowid DESC", (runner["id"], runtime)):
-        name = job["profile"]
-        # A failed or cancelled operation did not replace the last committed login state.
-        if name in latest or job["state"] not in ("signed_in", "signed_out", "done"):
-            continue
-        latest.add(name)
-        if job["updated"] >= (runner["last_seen"] or ""):
-            if job["state"] == "signed_in":
-                logins[name] = True
-            elif job["state"] == "signed_out" or job["kind"] in ("remove", "to_key"):
-                logins[name] = False
-    connected = {name for name, signed in logins.items() if signed and not cleared(c, runner["id"], runtime, name)}
-    if profile in connected:
-        return
-    # A sign-out's mark is immediate, but its CLI may still fail: reserve the tool until it actually ends.
-    pending = c.execute("SELECT 1 FROM model_logins WHERE runner_id=? AND runtime=? AND profile<>? "
-                        f"AND kind IN ('sign_in','switch','to_subscription','sign_out','remove') AND {ACTIVE_SQL} LIMIT 1",
-                        (runner["id"], runtime, profile)).fetchone()
-    if connected or pending:
-        tool = (manifests.get(runtime) or {}).get("name") or runtime
-        raise Problem("subscription_exists", f"{tool} is already connected or signing in on {runner['label']}. "
-                      "Use Switch account on the existing connection to change it", 409)
-
-
 def _queue(c, who, runner, runtime, profile, kind, what):
     """(row, new): a new row for the runner to run, or the one already running for this login. One thing at a time
     per login: a sign-out never races a sign-in on the same files."""
+    from .subscriptions import login_upgrade
+    if not profile and (problem := login_upgrade(runner, runtime=runtime)):
+        raise Problem("runner_version", problem, 409)
     sweep(c)
     running = c.execute(f"SELECT * FROM model_logins WHERE runner_id=? AND runtime=? AND profile=? AND {ACTIVE_SQL}",
                         (runner["id"], runtime, profile)).fetchone()
@@ -264,8 +220,6 @@ def _queue(c, who, runner, runtime, profile, kind, what):
     if running:
         raise Problem("state", "Something else is running for this login on that computer; cancel it or wait for it "
                       "to finish", 409)
-    if kind in ("sign_in", "switch", "to_subscription"):
-        _one_subscription(c, runner, runtime, profile)
     # A removal can delete the subscription's whole folder, so it runs alone on it: no other tool signs in there
     # meanwhile, and it does not start while one is.
     if profile and c.execute(f"SELECT 1 FROM model_logins WHERE runner_id=? AND profile=? AND runtime<>? AND {ACTIVE_SQL} "
@@ -287,12 +241,16 @@ def _queue(c, who, runner, runtime, profile, kind, what):
 
 
 def start(c, who, rid, runtime, profile="", auth=None, switch=False, to=""):
-    """Sign `runtime` in on a computer (`profile` "" is the computer's own login). `switch` signs in to another
+    """Sign `runtime` in on a computer: its own login, the only one (a named `profile` is refused). `switch` signs in to another
     account in place: the runner signs in on the side and puts the new login in place only once it has finished, so
     a cancelled or failed switch leaves the old login working. `to="subscription"` is the same switch for the
     computer's own login running on an API key: once the subscription is in place the key goes, and stays off."""
     if to and (switch or profile):
         raise Problem("kind", "Switch to subscription is for the computer's own login, on its own", 422)
+    if profile:
+        # One login per AI tool per computer, used by all its bots: a different account means another computer.
+        raise Problem("one_login", "Each computer has one login per AI tool, used by all its bots. Sign in the "
+                      "computer's login; for a different account, add another computer", 422)
     kind = "to_subscription" if to else "switch" if switch else "sign_in"
     what = {"to_subscription": "switch to a subscription", "switch": "switch accounts", "sign_in": "start a sign-in"}[kind]
     if kind in SIDE_KINDS:
@@ -502,27 +460,38 @@ def affected_bots(c, who, rid, runtime, profile, settings, auth=None, every=Fals
     """The active bots on this computer that run `runtime` on this login: the ones a sign-out stops. `every` counts
     paused bots too: what a removal would leave with nothing to run on when they start again."""
     _operator(c, who, rid, auth)
-    _runner(c, rid)
+    runner = _runner(c, rid)
+    if not profile:
+        from .subscriptions import login_upgrade
+        if problem := login_upgrade(runner, runtime=runtime):
+            raise Problem("runner_version", problem, 409)
     return {"runtime": runtime, "profile": profile, "bots": _bots_on(c, rid, runtime, profile, settings, every)}
 
 
 def _bots_on(c, rid, runtime, profile, settings, every):
-    from . import providers, subscriptions
+    """Bots affected by this login: one computer login after acknowledgement, reported homes during an upgrade."""
+    from . import providers
     from .shared_bots import follow
-    ctx = subscriptions.context(c, settings)
+    from .subscriptions import computer_logins
+    runner = c.execute('SELECT readiness_json,capabilities_json FROM runners WHERE id=?', (rid,)).fetchone()
+    ready = H._json(runner['readiness_json'], {}) or {}
+    current = computer_logins(runner, ready)
+    if profile and current:
+        # A named default is the same login, so cleanup must still refuse it while bots use it.
+        if profile != ready['computer_profile']:
+            return []
+    record = providers.load(c, settings)
     out = []
     active = "" if every else "AND b.state='active' "
     for row in c.execute("SELECT a.bot, b.display_name, bc.config_json FROM assignments a JOIN bots b ON b.slug=a.bot "
                          f"{active}LEFT JOIN bot_config bc ON bc.bot=a.bot WHERE a.runner_id=? "
                          "ORDER BY a.bot", (rid,)):
         try:
-            config = providers.fill(ctx["providers"], follow(c, row["bot"], json.loads(row["config_json"] or "{}")))
+            config = providers.fill(record, follow(c, row["bot"], json.loads(row["config_json"] or "{}")))
         except ValueError:
             continue
-        if config.get("runtime") != runtime:
-            continue
-        assigned, _ = subscriptions.effective(c, row["bot"], ctx)
-        if (assigned or "") == profile:
+        reported = ((ready.get('bots') or {}).get(row['bot']) or {}).get('profile') or ''
+        if config.get("runtime") == runtime and (current or reported == profile):
             out.append({"bot": row["bot"], "name": row["display_name"] or row["bot"]})
     return out
 

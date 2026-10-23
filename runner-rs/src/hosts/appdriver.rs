@@ -283,7 +283,8 @@ mod tests {
         h.start_turn(&thread, "hi", None).unwrap();
         assert_eq!(
             strip(turn_events(&mut rx).await),
-            [json!({"kind": "turn_failed", "error": "Mute-chat on this Mac didn't finish its reply in time", "limit": false})]
+            [json!({"kind": "diagnostic", "end_reason": "Timeout: tico-appdriver harness execution limit (2 seconds)"}),
+             json!({"kind": "turn_failed", "error": "Mute-chat on this Mac didn't finish its reply in time", "exit_code": -15, "process_exit": true, "limit": false})]
         );
         assert!(started.elapsed() < Duration::from_secs(8), "stopped at the deadline, not the driver's 30 s");
         let pid: i32 = std::fs::read_to_string(&pid_file).unwrap().trim().parse().unwrap();

@@ -1142,6 +1142,11 @@ def install_github_app(app, settings, store):
             write_repos = [grant['full_name']] if grant['access'] == 'write' else []
             read_repos = [grant['full_name']] if grant['access'] == 'read' else []
             repos = [grant['full_name']]
+        if issuer is reviewer:
+            # A reviewer's everyday credential may write its own memory repository only. Product approvals
+            # use the server-side review endpoint; the runner cannot author product commits as that App.
+            read_repos += [name for name in write_repos if name.lower() != repo.lower()]
+            write_repos = [name for name in write_repos if name.lower() == repo.lower()]
         flagged = {g['full_name'].lower() for g in grants if g['access'] == 'write' and g.get('run_workflows')}
         workflow_repos = [name for name in write_repos if name.lower() in flagged]
         withheld = None

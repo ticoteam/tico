@@ -84,7 +84,7 @@ repository access to themselves.
    unset. Install it on the same organization, covering the reviewers' own bot repositories and their existing
    repository grants. Selected repositories work if every required repository is included.
 2. Generate a private key in that App's settings. Store the PEM as a server-only secret file, readable by the
-   server user and mounted read-only. Never put it in a bot repository, a task, a message or a runner environment.
+   server user (uid 10001 in the standard image) and mounted read-only. Never put it in a bot repository, a task, a message or a runner environment.
    Keep it in the operator's secret backup. Record the **App ID** and **installation ID** (the number at the end
    of the installation's Configure URL); the App ID must differ from the primary App's.
 3. Set these variables on the **server**, then restart it. For Docker Compose, put the environment entries and
@@ -153,7 +153,12 @@ The pull-request rule's REST parameters are `required_approving_review_count: 1`
 `require_code_owner_review: false`, and `required_review_thread_resolution: false` (retain true if already
 required). Set ruleset `target: branch`, `enforcement: active`, `bypass_actors: []`,
 `conditions.ref_name.include: [refs/heads/main]`, and `conditions.ref_name.exclude: []`.
-These settings enforce the GitHub approval gate; the factory's second independent review remains a task gate.
+The ruleset enforces GitHub's approval requirement. Reviewer turn credentials write only the reviewer's own
+bot repository and read product repositories, even when an existing product grant is write. Product reviews
+use the server-side command with an existing read or write grant; ordinary primary-App callers still need
+a write grant. This credential boundary prevents reviewer-App product authorship; the ruleset alone does not
+choose the team's reviewers. Verify during human setup that the App approval counts before enabling the rule.
+The factory's second independent review remains a task gate.
 See GitHub's [review API](https://docs.github.com/en/rest/pulls/reviews#create-a-review-for-a-pull-request) and
 [ruleset API](https://docs.github.com/en/rest/repos/rules#create-a-repository-ruleset).
 

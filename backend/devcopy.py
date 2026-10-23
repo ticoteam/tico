@@ -33,7 +33,7 @@ EMPTY = (
     # queued work
     "job_recovery", "service_jobs", "doc_source_jobs", "update_queue", "task_reminders", "calendar_actions",
     "meeting_deliveries", "worktree_waits", "idempotency", "idempotency_messages", "blob_media_retries",
-    "github_product_repo_operations",
+    "github_product_repo_operations", "github_review_operations",
     # milestone waits: each pending row is a wake the copy could send; the milestones seen only settle those
     "task_milestone_waits", "milestones",
     # routines and watchers
@@ -57,7 +57,7 @@ EMPTY = (
     "inbound_inboxes", "inbound_messages", "inbound_sync",
     "usage_alerts", "task_requesters", "roadmap_actions",
     # raw provider streams: customer text, and whatever the secret scrub missed
-    "attempt_captures", "attempt_capture_drops",
+    "attempt_captures", "attempt_capture_drops", "attempt_diagnostics",
     # Subscribe to updates: a part-way catch-up, where each bot is in a feed and what it was sent. Without a
     # cursor a subscriber starts again from the newest update, so the copy owes no bot a backlog.
     "feed_walks", "feed_cursors", "feed_deliveries",

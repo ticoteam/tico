@@ -71,6 +71,12 @@ class ReviewerApp(GitHubApp):
     def mint_reachable(self, repos, permissions, *, include_cache_status=False, refresh_margin=REFRESH_MARGIN, **kw):
         # A repository omitted from the reviewer installation is not missing from the primary installation.
         # Do not let secondary failures poison the team's shared reachability cache or broaden the mint.
+        missing = {name.lower() for name in kw.get("missing", ())}
+        own = str(kw.get("own") or "").lower()
+        repos = [name for name in repos if name.lower() not in missing or name.lower() == own]
+        if not repos:
+            result = (None, None, [])
+            return (*result, False, False) if include_cache_status else result
         token, expires, cached = self.mint(repos, permissions, diagnose=False,
                                           refresh_margin=refresh_margin, include_cache_status=True)
         result = (token, expires, list(repos))
@@ -100,9 +106,10 @@ def install_reviews(app, store, primary, reviewer):
         if not row or not repository or repository.lower().split("/")[0] != row["org"].lower():
             raise Problem("forbidden", "The review repository must be in the connected organization", 403)
         grant = next((g for g in R.access(c, H.actor_id(who.actor), row["org"])["effective"]
-                      if g["full_name"].lower() == repository.lower() and g["access"] == "write"), None)
+                      if g["full_name"].lower() == repository.lower() and
+                      (g["access"] == "write" or H.actor_id(who.actor) in store.settings.github_reviewer_bots)), None)
         if not grant:
-            raise Problem("forbidden", "Submitting a review requires this bot's existing write grant to the repository", 403)
+            raise Problem("forbidden", "Submitting a review requires an existing repository grant (write for the primary App)", 403)
         return grant["full_name"]
 
     @app.post("/api/v2/github/reviews")
@@ -148,6 +155,11 @@ def install_reviews(app, store, primary, reviewer):
         response = issuer._call("POST", path + "/reviews", headers=headers,
                                 json={"event": event, "commit_id": body.head, "body": text})
         if response.status_code != 200:
+            if response.status_code in (400, 403, 404, 422):
+                # A definite refusal created no review. Ambiguous responses retain the fence.
+                with store.transaction() as c:
+                    c.execute("DELETE FROM github_review_operations WHERE actor=? AND key=? AND response_json IS NULL",
+                              (who.actor, key))
             raise Problem("github_review", f"GitHub did not confirm the review (HTTP {response.status_code}); check the PR before retrying", 409)
         result = response.json()
         expected = {"APPROVE": "APPROVED", "REQUEST_CHANGES": "CHANGES_REQUESTED", "COMMENT": "COMMENTED"}[event]

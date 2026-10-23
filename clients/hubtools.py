@@ -3211,7 +3211,7 @@ def status_history(api, args):
     return api.get(f"bots/{args['bot']}/history", since=args.get("since"))
 
 
-@tool("hub_run_list", "A bot's recent runs and failed or expired attempts, with attempt ids, reasons, tokens and "
+@tool("hub_run_list", "A bot's recent runs and failed or expired attempts, with end_reason, last_event_at, stalled, tokens and "
       "estimated cost (`est_cost_usd`) and start/end load snapshots (`load_start`, `load_end`). Yours, and those of the bots that report to you.",
       {"bot": _s("Bot slug"), "since": _s("Window like `24h` or an ISO timestamp")}, required=("bot",))
 def turns(api, args):
@@ -3219,7 +3219,7 @@ def turns(api, args):
 
 
 @tool("hub_run_export", "Owners and engineering bots: whether a run's raw provider stream was captured, and its size. "
-      "Write the replay fixture with `hub run export <attempt> --fixture`. Only bots with capture_stream on have one, "
+      "Write the replay fixture with `hub run export <attempt> --fixture`. A bounded stderr tail is available even without a stream; streams require capture_stream on, "
       "kept a week.", {"attempt": _s("The attempt id, from hub_run_list")}, required=("attempt",))
 def run_export(api, args):
     return api.get(f"attempts/{args['attempt']}/capture", full="false")
@@ -3239,6 +3239,8 @@ def write_fixture(found, parent):
     files = {"input.json": json.dumps({**found["input"], "source": meta}, indent=2, ensure_ascii=False) + "\n",
              f"{provider}_transcript.ndjson": found["transcript"].rstrip("\n") + "\n",
              "output.json": json.dumps(found["output"], indent=2, ensure_ascii=False) + "\n"}
+    if found.get("stderr_tail"):
+        files["stderr.log"] = found["stderr_tail"].rstrip("\n") + "\n"
     for name, text in files.items():
         (folder / name).write_text(text, encoding="utf-8")
     return [str(folder / name) for name in files]
@@ -3383,8 +3385,8 @@ def github_create_bot_repo(api, args):
 
 
 @tool("hub_repo_review", "Submit this bot's GitHub PR review at an explicit current head. The configured reviewer App "
-      "uses APPROVE or REQUEST_CHANGES; the shared App uses COMMENT. Requires the bot's existing repository write "
-      "grant. VERDICT is appended automatically. A moved head is refused; a lost response is never blindly resubmitted.",
+      "uses APPROVE or REQUEST_CHANGES; the shared App uses COMMENT. Requires an existing repository "
+      "grant (write for the shared App). VERDICT is appended automatically. A moved head is refused; a lost response is never blindly resubmitted.",
       {"repository": _s("GitHub owner/repository"), "number": {"type": "integer", "minimum": 1},
        "head": _s("Reviewed full commit SHA", pattern="^[0-9a-f]{40}$"),
        "verdict": _s("Review verdict", enum=["approve", "changes"]),
