@@ -547,3 +547,32 @@ def test_sse_replays_persisted_events_after_last_event_id(live, monkeypatch):
 
     after_first = asyncio.run(read_after_cursor())
     assert after_first == first
+
+
+def test_private_meeting_is_hidden_until_owner_adds_people_or_opens_it_to_the_team(live):
+    meeting = post(live, "live-meetings", {"title": "Private sync", "visibility": "private"})
+    mid = meeting["id"]
+    assert meeting["visibility"] == "private" and meeting["access"] == []
+    assert mid not in {row["id"] for row in get(live, "live-meetings", token="ben-test")["meetings"]}
+    for path in ("", "/events"):
+        assert live.get(f"/api/v2/live-meetings/{mid}{path}", headers=headers("ben-test")).status_code == 404
+    assert live.post(f"/api/v2/live-meetings/{mid}/join", json={}, headers=headers("ben-test")).status_code == 404
+    # The owner can always add a bot; the bot reads only this meeting.
+    assert attach(live, mid, "ops")["added"] == ["ops"]
+    assert get(live, f"live-meetings/{mid}", token="ops-live")["id"] == mid
+    # Only the owner changes who can see it.
+    denied = live.post(f"/api/v2/live-meetings/{mid}/access", json={"add": ["ben"]}, headers=headers("cara-test"))
+    assert denied.status_code == 404
+    shared = post(live, f"live-meetings/{mid}/access", {"add": ["ben"]})
+    assert [row["actor"] for row in shared["access"]] == ["human:ben"]
+    assert mid in {row["id"] for row in get(live, "live-meetings", token="ben-test")["meetings"]}
+    assert live.get(f"/api/v2/live-meetings/{mid}", headers=headers("cara-test")).status_code == 404
+    post(live, f"live-meetings/{mid}/join", {}, token="ben-test")
+    post(live, f"live-meetings/{mid}/access", {"remove": ["ben"]})
+    assert live.get(f"/api/v2/live-meetings/{mid}", headers=headers("ben-test")).status_code == 404
+    opened = post(live, f"live-meetings/{mid}/access", {"visibility": "team"})
+    assert opened["visibility"] == "team"
+    post(live, f"live-meetings/{mid}/join", {}, token="cara-test")
+    unknown = live.post(f"/api/v2/live-meetings/{mid}/access", json={"add": ["nobody-here"]},
+                        headers=headers("ana-test"))
+    assert unknown.status_code == 404

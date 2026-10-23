@@ -26,6 +26,10 @@ services:
     # covers the highest capacity a runner honours (256) with room left; at 2048 a runner at capacity 100 could not
     # start new turns ("Resource temporarily unavailable") while the host had plenty to spare.
     pids_limit: 12288
+    # On a host it shares with the server (compose.yaml, cpu_shares 4096), bot work yields the CPU when they compete,
+    # and when memory runs out the kernel ends bot processes before the server. Raising the score needs no privilege.
+    cpu_shares: 512
+    oom_score_adj: 500
     stop_grace_period: 15m
     environment:
       TICO_RUNNER_KIND: docker
