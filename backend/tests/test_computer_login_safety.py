@@ -1,22 +1,26 @@
 """A computer login cannot silently turn subscription-dependent bots into API-billed work."""
 import json
 
+import pytest
+
 from backend import readiness
 from backend.store import H
 from backend.tests.test_api import api, assign, get, post, runner  # noqa: F401
 from backend.tests.test_subscriptions import set_runtime
+from backend.tests.test_openapi_v2 import conforms
 
 
-def beat(api, machine, *, codex='ready', kind='api_key'):
+def beat(api, machine, *, codex='ready', kind='api_key', selected=None):
+    selected = selected if selected is not None else codex
     # A retained named home is the computer default, not a second bot login. A dormant home must not decide it.
     state = {'installed': True, 'authenticated': codex,
              'account': {'kind': kind, 'email': 'billing@acme.example'},
-             'profiles': {'work': {'installed': True, 'authenticated': codex},
+             'profiles': {'work': {'installed': True, 'authenticated': selected},
                           'dormant': {'installed': True, 'authenticated': 'missing'}}}
     return post(api, 'runners/heartbeat', {'version': 'test', 'platform': 'test',
         'capabilities': ['computer_logins_v1'], 'readiness': {'schema_version': 1, 'computer_profile': 'work',
         'runtimes': {'codex': state, 'claude': {'installed': True, 'authenticated': 'ready'}},
-        'bots': {'ops': {'runtime': 'codex', 'ready': codex == 'ready', 'sign_in': codex,
+        'bots': {'ops': {'runtime': 'codex', 'ready': selected == 'ready', 'sign_in': selected,
                          'profile': 'work'}}}}, machine['token'])
 
 
@@ -29,12 +33,19 @@ def test_api_login_warns_across_readiness_connections_and_health_without_inventi
     assign(api, machine, 'ops')
     set_runtime(api, 'codex')
     beat(api, machine)
+    document = get(api, 'openapi.json')
+    declared = document['components']['schemas']['BotSubscription']
+    # Limit this regression to the additive warning; legacy identity fields predate this change.
+    warning_contract = {'type': 'object', 'properties': {'warning': declared['properties']['warning']},
+                        'required': [key for key in declared['required'] if key == 'warning']}
     with api.app.state.store.read() as c:
         result = readiness.can_run(c, 'ops', 'codex')
     assert result['can_run'] is True  # Paid API work remains allowed; a missing plan is not an exhausted API balance.
     warning = result['warning']
     assert 'API credit is not checked' in warning
-    assert get(api, 'bots/ops/subscription')['warning'] == warning
+    connection = get(api, 'bots/ops/subscription')
+    assert connection['warning'] == warning
+    assert conforms(connection, warning_contract, document) is None
     computer = next(m for m in get(api, 'operations')['machines'] if m['id'] == machine['runner_id'])
     assert computer['bot_connections'][0]['warning'] == warning
     assert checks(api)['computer_logins']['status'] == 'warn'
@@ -43,7 +54,9 @@ def test_api_login_warns_across_readiness_connections_and_health_without_inventi
     assert 'Acme workstation' not in member['summary'] and '@' not in member['summary']
     # Switching the physical default to a subscription clears the warning despite a dormant missing login.
     beat(api, machine, kind='subscription')
-    assert 'warning' not in get(api, 'bots/ops/subscription')
+    connection = get(api, 'bots/ops/subscription')
+    assert 'warning' not in connection
+    assert conforms(connection, warning_contract, document) is None
     assert 'computer_logins' not in checks(api)
 
 
@@ -104,3 +117,20 @@ def test_health_preserves_folder_failure_reason_without_exposing_it_to_members(a
     summary = checks(api)['computer_logins']['summary']
     assert 'Sign in or switch account in Settings > Computers' in summary
     assert reason not in summary and '/srv/acme' not in summary
+
+
+@pytest.mark.parametrize(('aggregate', 'selected'), [('missing', 'ready'), ('failed', 'ready'),
+                                                    ('ready', 'missing'), ('ready', 'failed')])
+def test_retained_default_overrides_conflicting_aggregate_but_keeps_account_metadata(api, aggregate, selected):
+    machine = runner(api)
+    assign(api, machine, 'ops')
+    set_runtime(api, 'codex')
+    beat(api, machine, codex=aggregate, selected=selected)
+    with api.app.state.store.read() as c:
+        result = readiness.can_run(c, 'ops', 'codex')
+    ready = selected == 'ready'
+    assert result['can_run'] is ready
+    # Only the runtime row has API-account metadata; selecting a home must retain it.
+    assert bool(result.get('warning')) is ready
+    assert bool(get(api, 'bots/ops/subscription').get('warning')) is ready
+    assert checks(api)['computer_logins']['status'] == ('warn' if ready else 'bad')

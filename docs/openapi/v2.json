@@ -18237,8 +18237,7 @@
           "profile",
           "runtime",
           "signed_in",
-          "source",
-          "warning"
+          "source"
         ],
         "additionalProperties": true
       },
