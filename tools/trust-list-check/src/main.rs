@@ -6,9 +6,11 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
     env,
+    fs::{File, OpenOptions},
     io::Read,
     path::Path,
     process::{self, Command},
+    time::{Duration, Instant},
 };
 
 type Result<T> = std::result::Result<T, String>;
@@ -483,10 +485,62 @@ impl Hub for Cloud {
         hub(args, key)
     }
 }
+// Only Upgrades' runner lease may write. The cloud fences a lease when its single
+// computer assignment changes, so every accepted writer shares this host lock.
+// Keep the inode outside checkouts and never unlink it (even after completion).
+fn writer_lock(hub: &mut impl Hub, path: &Path) -> Result<File> {
+    let who = hub.call(&["whoami"], None)?;
+    let assigned = hub.call(&["api", "GET", "bots/upgrades"], None)?;
+    if who["actor"] != "bot:upgrades"
+        || who["role"] != "bot"
+        || who["agent"].as_str().is_some_and(|s| !s.is_empty())
+        || who["attempt_id"].as_str().is_none_or(str::is_empty)
+        || who["runner_id"].as_str().is_none_or(str::is_empty)
+        || who["runner_id"] != assigned["assignment"]["runner_id"]
+        || assigned["state"] != "active"
+    {
+        return Err("Writing requires Upgrades' current assigned runner lease".into());
+    }
+    #[cfg(not(unix))]
+    return Err("Writing is supported only on the assigned Unix runner host".into());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .mode(0o600)
+            .open(path)
+            .map_err(|e| format!("writer lock: {e}"))?;
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            match file.try_lock() {
+                Ok(()) => return Ok(file),
+                Err(std::fs::TryLockError::WouldBlock) if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                Err(e) => return Err(format!("writer lock unavailable; no write attempted: {e}")),
+            }
+        }
+    }
+}
 fn apply(report: &Report, hub: &mut impl Hub) -> Result<Value> {
     if report.findings.is_empty() {
         return Ok(json!({"action": "none", "reason": "all current"}));
     }
+    // Runner sandboxes share HOME; their /tmp directories can be isolated.
+    let home = env::var_os("HOME").ok_or("Missing shared runner HOME for writer lock")?;
+    let dir = Path::new(&home).join(".cache/tico-trust-list-check");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("writer lock directory: {e}"))?;
+    apply_at(report, hub, &dir.join("upgrades.lock"))
+}
+fn apply_at(report: &Report, hub: &mut impl Hub, path: &Path) -> Result<Value> {
+    if report.findings.is_empty() {
+        return Ok(json!({"action": "none", "reason": "all current"}));
+    }
+    let _writer = writer_lock(hub, path)?;
     let bot = hub.call(&["api", "GET", "bots/engineering-lead"], None)?;
     if bot["state"] != "active" {
         return Err("engineering-lead is not active; no write attempted".into());
@@ -536,7 +590,25 @@ fn apply(report: &Report, hub: &mut impl Hub) -> Result<Value> {
     if open.len() > 1 {
         return Err("Multiple open trust-list tickets; reconcile them before writing".into());
     }
-    let note = report.note();
+    let mut note = report.note();
+    // An older routine snapshot must not erase a concurrent removal report.
+    const EVIDENCE: &str = "\n\nRetained root-removal evidence:\n";
+    if !report.urgent() {
+        if let Some(task) = open
+            .first()
+            .filter(|t| t["title"].as_str().unwrap_or("").starts_with("URGENT:"))
+        {
+            let previous = task["note"]
+                .as_str()
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| task["body"].as_str().unwrap_or(""));
+            let evidence = previous
+                .split_once(EVIDENCE)
+                .map_or(previous, |(_, evidence)| evidence);
+            note += EVIDENCE;
+            note += evidence;
+        }
+    }
     let urgent = report.urgent()
         || open
             .first()
@@ -554,7 +626,8 @@ fn apply(report: &Report, hub: &mut impl Hub) -> Result<Value> {
         )?;
         Ok(json!({"action": "updated", "task": saved["id"]}))
     } else {
-        // Concurrent/retried invocations in the same lifecycle share a cloud idempotency key.
+        // The host lock excludes other attempts through discovery and creation.
+        // This key protects retries within one attempt only; cloud receipts are attempt-scoped.
         let generation = matching
             .iter()
             .filter_map(|t| Some((t["created"].as_str()?, t["id"].as_str()?)))

@@ -30,7 +30,15 @@ rule without certificate-authority exceptions. Existing urgent titles are retain
 the owner's factory step and original description, with the complete current findings in its note. Keep
 these tickets with Engineering: the search is paged over that owner's work, including snoozed tickets.
 The marker at the start of the description identifies the check's ticket. A completed/closed/declined
-lifecycle permits a new ticket; concurrent creates in the same lifecycle share a cloud idempotency key.
+lifecycle permits a new ticket. Writing is supported only as Upgrades' runner-lease identity on its
+single assigned Unix computer, using its shared runner home (the runner's normal native execution;
+do not override HOME or run in an isolated home/container). Every invocation takes the OS file lock at
+`$HOME/.cache/tico-trust-list-check/upgrades.lock` before cloud discovery and holds it through the final
+write. The shared home covers separate task checkouts and sandbox-private temporary directories. The lock lives outside checkouts, is released automatically on process exit, and its
+file must never be deleted while a check could run. Contention waits at most 30 seconds, then reports
+incomplete without writing. Cloud lease fencing rejects writes from a previous computer assignment;
+external-agent, human and other-bot writers are rejected. Idempotency keys protect retries within one
+attempt only. An older routine report retains earlier urgent root-removal evidence.
 Identical repeated findings need no update. Multiple existing open matches stop the check for reconciliation.
 Never retry a refused Hub write inside a routine; retain the error's operation id and ask on its owning task.
 
@@ -68,6 +76,8 @@ scripts/heavy.sh cargo test --locked --manifest-path tools/trust-list-check/Carg
 
 Synthetic registries and an in-memory CLI fixture cover stale/current lists, repeated findings on a
 later cloud page, urgent root removal, compatibility shims, multiple versions, dependency formats,
-registry/refusal failure and create idempotency. These tests never touch a live Hub database or file test
+registry/refusal failure and same-attempt create idempotency. A shared synthetic cloud contract starts
+two distinct attempts while the first is paused after discovery: the second must wait, then update the
+one ticket with urgent root evidence. A third attempt after completion creates one new lifecycle. These tests never touch a live Hub database or file test
 tickets. Live checks use the read-only mode first. The all-current live acceptance case can only be
 recorded when main's pins really are current; do not change main merely to manufacture that receipt.

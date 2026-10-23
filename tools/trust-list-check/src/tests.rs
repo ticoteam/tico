@@ -42,6 +42,14 @@ struct HubFixture {
 }
 impl Hub for HubFixture {
     fn call(&mut self, args: &[&str], key: Option<&str>) -> Result<Value> {
+        if args == ["whoami"] {
+            return Ok(
+                json!({"actor": "bot:upgrades", "role": "bot", "attempt_id": "fixture-attempt", "runner_id": "fixture-runner"}),
+            );
+        }
+        if args == ["api", "GET", "bots/upgrades"] {
+            return Ok(json!({"state": "active", "assignment": {"runner_id": "fixture-runner"}}));
+        }
         if args == ["api", "GET", "bots/engineering-lead"] {
             return Ok(json!({"state": "active"}));
         }
@@ -71,7 +79,7 @@ impl Hub for HubFixture {
             assert_eq!(flag("--owner"), OWNER);
             assert_eq!(flag("--type"), "Dev tickets");
             assert_eq!(flag("--step"), "On Deck");
-            let task = json!({"id": "fixture-ticket", "body": flag("--body"), "title": flag("--title"), "note": "", "status": "open", "created": "2026-01-01"});
+            let task = json!({"id": format!("fixture-ticket-{}", self.tasks.len()), "body": flag("--body"), "title": flag("--title"), "note": "", "status": "open", "created": "2026-01-01"});
             self.tasks.push(task.clone());
             Ok(task)
         } else {
@@ -162,7 +170,7 @@ fn a3_new_stale_file_updates_same_ticket_including_page_two_and_snoozed_work() {
     assert_eq!(hub.writes.len(), 2);
 }
 #[test]
-fn a4_removed_roots_escalate_existing_ticket_and_do_not_downgrade_it() {
+fn a4_removed_roots_escalate_existing_ticket_and_do_not_erase_evidence() {
     let files = fixture(&[("backend/requirements.txt", "certifi==2026.10.19")]);
     let mut hub = HubFixture::default();
     apply(&report(&files, false), &mut hub).unwrap();
@@ -179,6 +187,14 @@ fn a4_removed_roots_escalate_existing_ticket_and_do_not_downgrade_it() {
         .as_str()
         .unwrap()
         .starts_with("URGENT:"));
+    assert!(hub.tasks[0]["note"]
+        .as_str()
+        .unwrap()
+        .contains("Example Removed Root"));
+    assert_eq!(
+        apply(&report(&files, false), &mut hub).unwrap()["action"],
+        "unchanged"
+    );
 }
 #[test]
 fn pin_inventory_handles_multiversion_pre_shim_and_python_dependency_formats() {
@@ -227,7 +243,7 @@ fn failed_scan_or_write_never_becomes_current_and_never_retries() {
     assert_eq!(hub.writes.len(), 1);
 }
 #[test]
-fn creation_retries_share_key_and_completed_ticket_starts_a_new_generation() {
+fn same_attempt_retries_share_key_and_completed_ticket_starts_a_new_generation() {
     let r = report(
         &fixture(&[("requirements.txt", "certifi==2026.10.19")]),
         false,
@@ -269,4 +285,173 @@ fn a5_stale_scan_succeeds_and_has_no_pr_workflow_caller() {
 fn python_metadata_is_not_a_dependency_declaration() {
     let files = fixture(&[("pyproject.toml", "[project]\ndescription=\"certifi helps validate TLS\"\ndependencies=[\"certifi==2026.10.23\"]\n[tool.uv.sources]\ncertifi={index=\"example\"}")]);
     assert_eq!(inventory(&files).unwrap().len(), 1);
+}
+
+#[test]
+fn assigned_runner_serializes_distinct_attempts_escalates_and_renews() {
+    use std::sync::{mpsc, Arc, Mutex};
+    let scratch = std::env::temp_dir().join(format!("tico-trust-lock-test-{}", process::id()));
+    std::fs::create_dir_all(&scratch).unwrap();
+    let lock_path = scratch.join("writer.lock");
+    let probe = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lock_path)
+        .unwrap();
+    let state = Arc::new(Mutex::new(HubFixture::default()));
+    let (listed_tx, listed_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let (second_done_tx, second_done_rx) = mpsc::channel();
+    struct Attempt {
+        state: Arc<Mutex<HubFixture>>,
+        id: &'static str,
+        pause: Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>,
+    }
+    impl Hub for Attempt {
+        fn call(&mut self, args: &[&str], key: Option<&str>) -> Result<Value> {
+            if args == ["whoami"] {
+                return Ok(
+                    json!({"actor": "bot:upgrades", "role": "bot", "attempt_id": self.id, "runner_id": "fixture-runner"}),
+                );
+            }
+            // Match the real cloud's attempt-scoped receipts and atomic title duplicate guard.
+            let scoped_key = key.map(|key| format!("{}:{key}", self.id));
+            let value = {
+                let mut state = self.state.lock().unwrap();
+                if args.starts_with(&["task", "create"]) {
+                    let title = args[args.iter().position(|a| *a == "--title").unwrap() + 1];
+                    if state
+                        .tasks
+                        .iter()
+                        .any(|t| t["title"] == title && t["status"] == "open")
+                    {
+                        return Err("synthetic duplicate refusal".into());
+                    }
+                }
+                state.call(args, scoped_key.as_deref())?
+            };
+            if args.starts_with(&["api", "GET"])
+                && args[2].starts_with("tasks?")
+                && value["next_offset"].is_null()
+            {
+                if let Some((listed, release)) = self.pause.take() {
+                    listed.send(()).unwrap();
+                    release.recv_timeout(Duration::from_secs(5)).unwrap();
+                }
+            }
+            Ok(value)
+        }
+    }
+    let files = fixture(&[("requirements.txt", "certifi==2026.10.19")]);
+    let routine = report(&files, false);
+    let urgent = report(&files, true);
+    let a_state = state.clone();
+    let a_path = lock_path.clone();
+    let first = std::thread::spawn(move || {
+        apply_at(
+            &routine,
+            &mut Attempt {
+                state: a_state,
+                id: "attempt-A",
+                pause: Some((listed_tx, release_rx)),
+            },
+            &a_path,
+        )
+        .unwrap()
+    });
+    listed_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert!(
+        matches!(probe.try_lock(), Err(std::fs::TryLockError::WouldBlock)),
+        "discovery must hold the shared writer lock"
+    );
+    let b_state = state.clone();
+    let b_path = lock_path.clone();
+    let second = std::thread::spawn(move || {
+        let value = apply_at(
+            &urgent,
+            &mut Attempt {
+                state: b_state,
+                id: "attempt-B",
+                pause: None,
+            },
+            &b_path,
+        );
+        second_done_tx.send(()).unwrap();
+        value.unwrap()
+    });
+    // A is paused after its empty cloud list. B cannot discover/create until A releases the lock.
+    assert!(second_done_rx
+        .recv_timeout(Duration::from_millis(300))
+        .is_err());
+    release_tx.send(()).unwrap();
+    assert_eq!(first.join().unwrap()["action"], "created");
+    assert_eq!(second.join().unwrap()["action"], "updated");
+    {
+        let mut saved = state.lock().unwrap();
+        assert_eq!(saved.tasks.len(), 1);
+        assert!(saved.tasks[0]["title"]
+            .as_str()
+            .unwrap()
+            .starts_with("URGENT:"));
+        assert!(saved.tasks[0]["note"]
+            .as_str()
+            .unwrap()
+            .contains("Example Removed Root"));
+        assert!(saved.writes[0].1.starts_with("attempt-A:"));
+        assert!(saved.writes[1].1.starts_with("attempt-B:"));
+        saved.tasks[0]["status"] = json!("closed");
+    }
+    let later = apply_at(
+        &report(&files, false),
+        &mut Attempt {
+            state: state.clone(),
+            id: "attempt-C",
+            pause: None,
+        },
+        &lock_path,
+    )
+    .unwrap();
+    assert_eq!(later["action"], "created");
+    let saved = state.lock().unwrap();
+    assert_eq!(saved.tasks.len(), 2);
+    assert_eq!(
+        saved.tasks.iter().filter(|t| t["status"] == "open").count(),
+        1
+    );
+    assert_ne!(saved.tasks[0]["id"], saved.tasks[1]["id"]);
+    println!("distinct attempts A/B: one open ticket, urgent root evidence retained; C after closure: one new open lifecycle");
+    drop(saved);
+    std::fs::remove_dir_all(scratch).unwrap();
+}
+
+#[test]
+fn nonassigned_or_external_writers_are_rejected_before_discovery() {
+    struct Unassigned {
+        discovered: bool,
+    }
+    impl Hub for Unassigned {
+        fn call(&mut self, args: &[&str], _: Option<&str>) -> Result<Value> {
+            if args == ["whoami"] {
+                return Ok(
+                    json!({"actor": "bot:upgrades", "role": "bot", "attempt_id": "fixture-attempt", "runner_id": "previous-runner"}),
+                );
+            }
+            if args == ["api", "GET", "bots/upgrades"] {
+                return Ok(json!({"state": "active", "assignment": {"runner_id": "new-runner"}}));
+            }
+            self.discovered = true;
+            panic!("no task discovery or write is allowed");
+        }
+    }
+    let mut hub = Unassigned { discovered: false };
+    let r = report(
+        &fixture(&[("requirements.txt", "certifi==2026.10.19")]),
+        false,
+    );
+    assert!(apply(&r, &mut hub)
+        .unwrap_err()
+        .contains("assigned runner lease"));
+    assert!(!hub.discovered);
 }
