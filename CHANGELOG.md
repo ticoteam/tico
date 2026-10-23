@@ -14,6 +14,9 @@ All notable changes to Tico are recorded here. The format follows
   and threads, about 70 turns' worth, so a runner set above that failed to start new turns ("Resource temporarily
   unavailable"), kept claiming and dropping the same requests, and a Claude Code or Codex sign-in on that computer
   stopped without signing in. The limit is now 12288, enough for the 256 turns a runner honours.
+- **A question's Needs you card shows when you open its task right after answering another.** A refresh that started
+  while an earlier read was still on its way reused that read and kept the old list, so the task page opened without
+  its card until the task was drawn again.
 
 ## [0.3.74] - 2026-10-22
 
