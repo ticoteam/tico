@@ -129,7 +129,7 @@ def client(settings, config=None, kind=None, region_name=None):
     from botocore.config import Config
     # botocore presigns S3 URLs with SigV2 unless SigV4 is chosen explicitly. The desktop app
     # follows a download redirect only to a SigV4 URL (app/src/hub.rs has_s3_signature).
-    signing = Config(signature_version="s3v4")
+    signing = Config()  # REPRODUCTION ONLY: the pre-0.3.52 signer, botocore default (SigV2)
     options = {"region_name": region_name or region(settings), "endpoint_url": settings.blob_endpoint or None,
                "config": signing if config is None else config.merge(signing)}
     kind = kind or kinds(settings)[0]
