@@ -216,7 +216,11 @@ tr:hover .sb-task-mark,.sb-task-mark:focus-visible,.sb-task-mark[aria-expanded=t
 .prov{display:flex;align-items:center;flex-wrap:wrap;gap:2px 8px;padding:6px 0;min-height:36px}
 .prov strong{font-weight:600}
 .prov .muted{font-size:var(--t-base);min-width:0}
-.prov-preset .muted{flex-basis:100%;padding-left:24px}
+.prov-preset{display:grid;grid-template-columns:16px minmax(0,1fr);align-items:start}
+.prov-preset>input{margin-top:3px}
+.prov-preset-title{min-width:0}
+.prov-preset-title .pill{display:inline-block;white-space:nowrap;vertical-align:middle}
+.prov-preset .muted{grid-column:2}
 .prov-routed{gap:6px 14px;padding-top:10px}
 .prov-chip{display:inline-flex;align-items:center;gap:4px;font-size:var(--t-base)}
 /* The Tico AI Gateway connection, below the providers: its own key and Save (ui/app/settings-providers.js). */
