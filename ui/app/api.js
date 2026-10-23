@@ -19,7 +19,7 @@ const signInRedirect = (r, j) => r.status === 401 && sessionCheck(r, j);
 const GET_TAGGED = new Map();
 // Two readers of the same path at the same moment (the bot page asks for its goals twice, a poll lands while a page
 // loads) share one request; each parses its own copy. A write forgets them all, so a read that follows a write never
-// gets an answer from before it.
+// gets an answer from before it. `fresh` never joins a read that is already on its way (later readers join it).
 const GET_INFLIGHT = new Map();
 // What startup asks for ahead of the page that will need it (getPrefetch): read once, within a few seconds.
 const GET_PREFETCHED = new Map();
@@ -39,13 +39,13 @@ const getRaw = p => {
   }, error => { void sessionProbe(); throw error; });   // offline, or a proxy's login on another origin
 };
 const getPrefetch = p => { if (!GET_PREFETCHED.has(p)) GET_PREFETCHED.set(p, {at: Date.now(), raw: getRaw(p).catch(() => null)}); };
-const get = async p => {
+const get = async (p, {fresh = false} = {}) => {
   if (SESSION.out) throw signedOutError();
   let res = null;
-  const pre = GET_PREFETCHED.get(p);
+  const pre = !fresh && GET_PREFETCHED.get(p);
   if (pre) { GET_PREFETCHED.delete(p); if (Date.now() - pre.at < 5000) res = await pre.raw; }
   if (!res) {
-    let raw = GET_INFLIGHT.get(p);
+    let raw = !fresh && GET_INFLIGHT.get(p);
     if (!raw) {
       raw = getRaw(p);
       GET_INFLIGHT.set(p, raw);

@@ -273,8 +273,7 @@ refused text (credential values masked) and its task; one click releases that pa
 
 **A subscription usage limit.** A run that hits one fails with `limited` set; it did nothing, so
 the job stays queued however often this happens (it is never *Interrupted*) and the bot shows
-*limited*. The limit holds the provider login, not just the bot: that runtime's sign-in on that computer (or the
-bot's own subscription connection), saved on the server so it outlasts a restart of the runner or the server. It holds
+*limited*. The limit holds the provider login, not just the bot: that runtime's sign-in on that computer, saved on the server so it outlasts a restart of the runner or the server. It holds
 until the reset the provider names (Claude's "resets 2:40am (UTC)" included, even days away), or when none is named
 or the named time has passed, 30 minutes, then 60, then two hours for each limit in a row on that login. While it
 holds, no bot starts a run on that login: a bot whose fallback (its own, or the company's default) is signed in on
@@ -318,19 +317,15 @@ bot moves back on its own once the limit resets. The owner turns this off in **S
 (*Fall back when a plan runs out*, `auto_fallback`). Overview lists how many bots are on a fallback and
 since when, and how many are limited.
 
-<a id="one-turn-per-chatgpt-login"></a>**One turn per ChatGPT login.** OpenAI lets a Codex ChatGPT sign-in serve
-one job stream at a time, so the runner gives a ChatGPT login (`one_turn_per_login` in the harness manifest) to one
-turn at a time, from before the turn's Codex process starts until it stops. A turn from another bot, or from another
-task lane of the same bot, that wants the same login waits its turn in order. While it waits, its run streams a
-`status` event `{"waiting", "login", "holder"}`, and the chat, the task and **Runs** show *Waiting for <login> to be
-free (busy with <bot>)*. A waiting run counts toward the computer's capacity and is not failed. If the bot has a fallback
-of its own that is ready, the turn runs there instead of waiting. Its diagnostic says *ChatGPT login busy with
-<bot>; running this turn on <harness>*, and the run reports `fallback` as with a usage limit. A command or an active
-native goal always waits. The company's default fallback is not used for a busy login, because the login is
-free again within one turn. To run two Codex bots side by side on a ChatGPT plan, put each on its own subscription
-profile login ([Subscription profiles](environments.md#subscription-profiles)). Codex on an API key is never held, and neither are other harnesses. Only
-people who can see the holding bot see its name; others read "another bot". The lock lives in the runner, so a
-runner restart frees every login.
+<a id="one-turn-per-chatgpt-login"></a>**Codex bots share a ChatGPT login.** Bots on the same computer using
+one ChatGPT sign-in run turns at the same time, just as Claude bots do. This includes every bot on the
+computer's login and separate task lanes of one bot.
+They share the plan's usage allowance; when it runs out, the usage-limit and fallback rules above apply.
+A busy ChatGPT login does not queue another bot's turn or show a login-wait message. Codex has
+`one_turn_per_login = false` in its harness manifest; the optional login queue is dormant.
+Tico keeps using the original login in its own home. It never copies a login into another bot's home:
+copies can rotate apart when the provider refreshes the token.
+
 **Settings → Health** counts this company fallback: a limited bot covered by it gets no "has no fallback
 model" finding. When a computer's default login (no subscription) keeps stopping on a usage limit, Health
 says so once per computer and tool, e.g. "Team box's default Codex login is out of quota", until a turn on

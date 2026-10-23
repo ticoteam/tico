@@ -59,7 +59,7 @@ def test_a_claude_bot_that_fell_back_to_codex_shows_codex_and_unknown_stays_unkn
     post(api, f"attempts/{attempt['id']}/started", {"thread_id": "silent"}, machine["token"])
     post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "last_seq": 0, "text": "Built."},
          machine["token"])
-    assert ran_on(api, task["id"]) == {"segments": [], "fallback": None, "family": None}
+    assert ran_on(api, task["id"]) == {"segments": [], "fallback": None, "family": None, "task_model": None}
 
 
 def test_a_model_the_catalog_does_not_list_is_unknown_whatever_harness_ran_it(api):
