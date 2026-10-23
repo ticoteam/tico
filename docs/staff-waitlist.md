@@ -102,7 +102,7 @@ If credit was added but the request was not marked answered, the page says so. R
 Models resume within five minutes once enough credit covers usage and brings the balance above the minimum.
 Server restart follows separate billing coverage rules. Do not promise that adding $1 restarts both servers.
 See [starting credit and credit notices](account.md#your-starting-credit-and-what-happens-at-0) for the customer’s view.
-The server restart-shortfall amount is a separate update still under review.
+The account page and staff admin page show the same [amount needed to restart servers](account.md#more-credit-and-restarting) while credit is short.
 
 ## Who can do this
 
