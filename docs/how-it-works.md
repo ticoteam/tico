@@ -297,7 +297,9 @@ only the bot's own login is held and its work goes on on a fallback); a run that
 hits the limit again goes back to the hold. **Try now**, beside the warning on the bot's page and in its chat line for anyone who
 manages the bot (`POST /api/v2/bots/{bot}/limit/retry`, BotOps as the person who asked), ends the
 hold for that bot and every bot limited on the same runtime on the same computer, which share
-the subscription (`limit.cleared` in the event log). If the bot has a fallback
+the subscription (`limit.cleared` in the event log). As when a hold runs out, one queued run goes first and the rest
+wait for its result: a success resumes them all, and another limit puts the hold back with the end it had, so a plan
+that is still spent sees one run, not one per bot. While that run is out, Try now is refused as not limited. If the bot has a fallback
 harness in **Settings → Bots**, the runner reruns that run at once on the fallback (fresh
 session, given the conversation's latest messages, up to about 16,000 tokens, marked as history; never a
 person's private Assistant chat) and

@@ -71,6 +71,31 @@ def test_create_permissions_limit_old_computer_and_attach(prepared):
     assert response.status_code == 403
 
 
+def test_a_bot_can_create_its_51st_worktree_but_not_its_101st(prepared):
+    api, tid, _ = prepared
+    with api.app_state.store.transaction() as c:
+        filler = H.task_create(c, 'human:ana', 'Parked work', 'Existing checkouts', 'bot:cmo')['id']
+        c.execute("UPDATE tasks SET status='doing' WHERE id=?", (filler,))
+
+    def seed(start, stop):
+        with api.app_state.store.transaction() as c:
+            for i in range(start, stop):
+                link = uuid.uuid4().hex
+                c.execute("INSERT INTO task_links(id,task_id,kind,url,title,state,added_by,created,repo,path,detail_json) "
+                          "VALUES(?,?,'worktree',?,'Parked','present','bot:cmo',?,'Acme/product',?,?)",
+                          (link, filler, 'worktree:' + link, H.now(), f'tasks/{filler[:8]}/parked{i}',
+                           json.dumps({'owner': 'bot:cmo'})))
+
+    seed(0, 50)
+    response = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test')
+    assert response.status_code == 200, response.text
+    seed(50, 99)  # 99 parked checkouts plus the newly created one fill all 100 places.
+    refused = post(api, f'tasks/{filler}/worktrees', {'repo': 'Acme/product'}, 'bot-test')
+    assert refused.status_code == 409, refused.text
+    assert refused.json()['error']['code'] == 'worktree_limit'
+    assert refused.json()['error']['limit'] == 100
+
+
 def test_heartbeat_cleanup_waits_for_prs_restore_and_old_report(prepared):
     api, tid, _ = prepared
     link = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}).json()
@@ -368,6 +393,19 @@ def test_finished_pr_releases_an_open_tasks_worktree_and_the_limit_names_it(prep
     with api.app_state.store.transaction() as c:
         H.task_link(c, 'bot:cmo', tid, 'https://github.com/Acme/product/pull/2')
     assert post(api, 'runners/heartbeat', body, 'runner-test').json()['worktree_actions'] == []
+    # Once the follow-up also merges, the computer can finish cleanup while the ticket still waits for release.
+    with api.app_state.store.transaction() as c:
+        c.execute("UPDATE task_links SET state='merged' WHERE task_id=? AND kind='pr'", (tid,))
+    body['worktrees'][0].update(ahead=0, dirty_files=0)
+    assert post(api, 'runners/heartbeat', body, 'runner-test').json()['worktree_actions'][0]['release'] is True
+    body['worktrees'][0]['state'] = 'removed'
+    post(api, 'runners/heartbeat', body, 'runner-test')
+    with api.app_state.store.read() as c:
+        assert H.task(c, tid)['status'] == 'waiting'
+        assert c.execute('SELECT state FROM task_links WHERE id=?', (link['link_id'],)).fetchone()[0] == 'removed'
+        released = c.execute("SELECT detail_json FROM events WHERE action='worktree.released' AND target=? "
+                             "AND json_extract(detail_json,'$.link')=?", (tid, link['link_id'])).fetchone()
+        assert json.loads(released[0])['reason'] == 'pull request merged'
 
 
 def test_a_released_worktree_refused_for_unpushed_commits_is_tried_again_after_a_push(prepared):

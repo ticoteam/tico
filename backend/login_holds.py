@@ -10,7 +10,8 @@ login's usage limit, a hold is saved here, in the database, so it outlives a res
 While it holds, no bot starts a turn on that login: a bot with a fallback that is ready and not held itself runs
 there instead (Dev 137), and only one with none waits. When it ends, one queued job (the probe) may start on the login and
 every other job on it waits for that turn's result: a success clears the hold, another limit saves a longer one. So a
-login sees at most one turn per hold window, however many jobs and bots wait on it.
+login sees at most one turn per hold window, however many jobs and bots wait on it. Try now ends the hold early the
+same way (`try_now`): one probe, and the cut-short window back if it meets the limit again.
 """
 
 import json
@@ -168,28 +169,59 @@ def record(c, runner_id, profile, runtime, hit, reset=None, attempt_id=None, bot
         reset = H.shift(hit, seconds=CAPACITY_WAIT)
     at = believable(reset, hit)
     hit_at = H.parse_ts(hit)
-    if old and (old.get("until") or "") > _iso(hit_at) and (busy or not old.get("capacity")):
+    # A window Try now cut short (`try_now`) still counts as in force for a limit its probe meets.
+    end = max(old.get("until") or "", old.get("cut") or "") if old else ""
+    if old and end > _iso(hit_at) and (busy or not old.get("capacity")):
         # Met while the hold was still in force (a person's one try, or a turn sent to a fallback that was not ready
         # after all): the same window, so neither the streak nor the end moves earlier, and a quota hold stays one, its
         # end too: a busy model says nothing of the plan's reset. A quota notice during a capacity hold starts its own
         # quota hold.
         streak = int(old.get("streak") or (0 if busy else 1))
-        until = max(at or hit_at, H.parse_ts(old["until"]))
+        until = max(at or hit_at, H.parse_ts(end))
         if busy and not old.get("capacity"):
-            busy, at, error, until = False, old.get("reset"), old.get("error") or "", H.parse_ts(old["until"])
+            busy, at, error, until = False, old.get("reset"), old.get("error") or "", H.parse_ts(end)
     else:
         streak = int(old.get("streak") or 0) + (0 if busy else 1) if old else (0 if busy else 1)
         until = at or hit_at + timedelta(seconds=BACKOFF[min(streak, len(BACKOFF)) - 1])
-    hold = {"runner_id": runner_id, "profile": profile or "", "runtime": runtime, "since": _iso(hit_at),
+    # A turn that started before the hold and ends on the limit late leaves another job's live probe in place: only
+    # that probe's own result decides the login, so no second turn starts beside it, and the hold keeps the start the
+    # probe was claimed after, so the probe's success still clears it.
+    probe = old.get("probe_job") if old else None
+    keep = probe and _probe_live(c, old, H.now()) and not c.execute(
+        "SELECT 1 FROM jobs WHERE id=? AND attempt_id IS ?", (probe, attempt_id)).fetchone()
+    since = old.get("since") if keep and old.get("since") else _iso(hit_at)
+    hold = {"runner_id": runner_id, "profile": profile or "", "runtime": runtime, "since": since,
             "until": _iso(until), "streak": streak, "reset": bool(at) and not busy, "capacity": busy,
-            "attempt_id": attempt_id, "bot": bot, "error": (error or "")[:300], "probe_job": None, "probe_at": None}
+            "attempt_id": attempt_id, "bot": bot, "error": (error or "")[:300], "probe_job": probe if keep else None,
+            "probe_at": old.get("probe_at") if keep else None}
+    if old.get("cut") and keep:
+        hold["cut"] = old["cut"]
     _save(c, hold)
     return hold
 
 
 def clear(c, runner_id, profile, runtime):
-    """A turn worked on the login, or a person asked to try now: it is no longer held."""
+    """A turn worked on the login: it is no longer held."""
     c.execute("DELETE FROM registry_metadata WHERE key=?", (key(runner_id, profile, runtime),))
+
+
+def try_now(c, runner_id, profile, runtime, now=None):
+    """A person asked to try now: the hold ends at once, and as when it runs out, one queued job (the probe) starts on
+    the login and every other job on it, whichever bot it is for, waits for that turn's result. The end it cut short
+    is kept (`cut`), so a probe that meets the limit again puts the same window back rather than a shorter one. A hold
+    already ended keeps its probe."""
+    hold = get(c, runner_id, profile, runtime)
+    now = now or H.now()
+    if not hold or (hold.get("until") or "") <= now:
+        return
+    live = _probe_live(c, hold, now)
+    _save(c, {**hold, "until": now, "cut": max(hold["until"], hold.get("cut") or ""),
+              "probe_job": hold.get("probe_job") if live else None, "probe_at": hold.get("probe_at") if live else None})
+
+
+def probing(c, hold, now=None):
+    """Whether a probe turn is out on the login now, so Try now has nothing more to start."""
+    return bool(hold) and _probe_live(c, hold, now or H.now())
 
 
 def _probe_live(c, hold, now):
