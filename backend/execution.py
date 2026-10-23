@@ -2263,6 +2263,18 @@ class Execution:
         return {"attempt_id": aid, "messages": [m for row in ids if (m := H.message(c, row[0]))
                              and privacy.message_readable(c, "bot:" + attempt["bot"], m)]}
 
+    def idle_inputs(self, c, who, aid):
+        """The answer to a steering poll that has nothing new to take, from a read: a running turn polls every few
+        seconds, and almost always no work is queued for its bot. None when the poll must run as the write
+        (`inputs`): work is queued for the bot, or the attempt is not plainly running."""
+        row = c.execute("SELECT state FROM attempts WHERE id=?", (aid,)).fetchone()
+        if not row or row["state"] != "running":
+            return None
+        attempt = self.attempt(c, who, aid)         # refuses as the write would; writes only for an expired one
+        if c.execute("SELECT 1 FROM jobs WHERE bot=? AND state='queued' LIMIT 1", (attempt["bot"],)).fetchone():
+            return None
+        return self.input_reply(c, attempt)
+
     def inputs(self, c, who, aid):
         """Add eligible queued work to a running turn when its runtime can steer.
 

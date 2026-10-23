@@ -299,3 +299,29 @@ def test_one_tasks_history_of_one_field_reads_by_task(api):
                     "SELECT * FROM task_events WHERE task_id=? AND field='owner' ORDER BY ts DESC, rowid DESC LIMIT 1"):
             plan = " ".join(row[3] for row in c.execute("EXPLAIN QUERY PLAN " + sql, ("t",)))
             assert "task_events_task_field" in plan, plan
+
+
+def test_a_steering_poll_with_nothing_queued_answers_without_the_writer(api, monkeypatch):
+    r, origin, attempt = setup_attempt(api)
+    aid = attempt["id"]
+    post(api, f"attempts/{aid}/started", {"thread_id": "t"}, token=r["token"])
+    store = api.app.state.store
+    write = store.transaction
+
+    def no_writer(*a, **k):
+        raise AssertionError("an idle steering poll took the writer gate")
+    monkeypatch.setattr(store, "transaction", no_writer)
+    for _ in range(3):
+        assert post(api, f"attempts/{aid}/inputs", {}, token=r["token"]) == {"attempt_id": aid, "messages": []}
+    monkeypatch.setattr(store, "transaction", write)
+    # A follow-up in the turn's chat is queued work: the poll takes it as the write, and redelivers it from a
+    # read until the runtime acknowledges it.
+    follow = post(api, "chat/ops", {"text": "Include the archive"})
+    assert [m["id"] for m in post(api, f"attempts/{aid}/inputs", {}, token=r["token"])["messages"]] == [follow["id"]]
+    monkeypatch.setattr(store, "transaction", no_writer)
+    assert [m["id"] for m in post(api, f"attempts/{aid}/inputs", {}, token=r["token"])["messages"]] == [follow["id"]]
+    monkeypatch.setattr(store, "transaction", write)
+    # A stale lease is refused from the read as it was from the write.
+    with store.transaction() as c:
+        c.execute("UPDATE attempts SET lease_until='2000-01-01T00:00:00Z' WHERE id=?", (aid,))
+    assert api.post(f"/api/v2/attempts/{aid}/inputs", json={}, headers=headers(r["token"])).status_code == 409

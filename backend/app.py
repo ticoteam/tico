@@ -5532,6 +5532,13 @@ def create_app(settings=None):
 
     @app.post("/api/v2/attempts/{aid}/inputs")
     def inputs(request: Request, aid: str, body: M.Empty):
+        # Most polls find nothing queued: answer those outside the writer gate (execution.idle_inputs).
+        with store.read() as c:
+            validate_identity(c, request.state.identity)
+            idle = execution.idle_inputs(c, request.state.identity, aid)
+            if idle is not None:
+                privacy.require_payload(c, request.state.identity, idle)
+                return idle
         return mutate(request, body, lambda c: execution.inputs(c, request.state.identity, aid))
 
     @app.post("/api/v2/attempts/{aid}/inputs/{mid}/ack")
