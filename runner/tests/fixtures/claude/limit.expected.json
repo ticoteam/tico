@@ -5,6 +5,10 @@
   "tool_events": true
  },
  {
+  "kind": "thread_confirmed",
+  "session_id": "5b0c1c43-6a35-4d3e-9a54-2f4a1d0c0e12"
+ },
+ {
   "kind": "rate_limits",
   "used_percent": null,
   "window_minutes": 10080,
