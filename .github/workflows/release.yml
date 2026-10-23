@@ -3,6 +3,8 @@
 # The desktop app follows: built only when the shell changed since the previous release, otherwise the previous release's
 # desktop files and updater manifest are carried forward. Either way they are added to the published release afterwards,
 # and a desktop failure leaves the server release in place. See docs/releasing.md.
+# Linux jobs run on RunsOn in Tico's own AWS account, on-demand rather than Spot: an interruption must never leave
+# a release half-published. macOS builds stay on GitHub-hosted runners.
 name: Release
 
 on:
@@ -25,7 +27,7 @@ jobs:
   # A manual rebuild may reuse an already published release; an unpublished tag still needs exact-commit validation.
   # The job always runs (never skipped), because a skipped job would also skip every job after it.
   validated:
-    runs-on: ubuntu-24.04
+    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/spot=false
     permissions:
       actions: read   # lists Release validation runs
       contents: read  # verifies an existing release before allowing a manual rebuild
@@ -62,8 +64,8 @@ jobs:
         include:
           - {os: macos-latest, name: macos-arm64, target: aarch64-apple-darwin}
           - {os: macos-latest, name: macos-x86_64, target: x86_64-apple-darwin}
-          - {os: ubuntu-latest, name: linux-x86_64, target: x86_64-unknown-linux-musl}
-          - {os: ubuntu-24.04-arm, name: linux-arm64, target: aarch64-unknown-linux-musl}
+          - {os: 'runs-on=${{ github.run_id }}/runner=4cpu-linux-x64/spot=false', name: linux-x86_64, target: x86_64-unknown-linux-musl}
+          - {os: 'runs-on=${{ github.run_id }}/runner=4cpu-linux-arm64/spot=false', name: linux-arm64, target: aarch64-unknown-linux-musl}
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
@@ -101,7 +103,7 @@ jobs:
 
   release:
     needs: runner-binaries
-    runs-on: ubuntu-latest
+    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/spot=false
     permissions:
       contents: write   # creates the GitHub release
     steps:
@@ -154,7 +156,7 @@ jobs:
   # Does this tag need new desktop apps? Only when what the shell is built from changed since the previous release.
   desktop-changes:
     needs: validated
-    runs-on: ubuntu-latest
+    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/spot=false
     permissions:
       contents: read
     outputs:
@@ -199,7 +201,7 @@ jobs:
   desktop-assets:
     needs: [release, desktop-changes, desktop]
     if: ${{ !cancelled() && needs.release.result == 'success' && (needs.desktop.result == 'success' || needs.desktop.result == 'skipped') }}
-    runs-on: ubuntu-latest
+    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/spot=false
     permissions:
       contents: write   # uploads the desktop files to the published release
     steps:
@@ -245,7 +247,7 @@ jobs:
   company-matrix:
     needs: desktop-changes
     if: needs.desktop-changes.outputs.build == 'true'
-    runs-on: ubuntu-latest
+    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/spot=false
     permissions:
       contents: read
     outputs:

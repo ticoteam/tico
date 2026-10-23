@@ -736,26 +736,76 @@ async function v2ChatSend(P, text, slug = P.slug, extraRefs = {}, extra = {}) {
     await P.sent;
     if ((pq(P, '.p-text')?.value || '').trim() !== (text || '').trim() || !text && !P.files.length) return false;
   }
+  chatForgetUnconfirmed(P);
   P.sending = true;
   let sent; P.sent = new Promise(done => sent = done);
   const files = P.files.slice();
   const btn = pq(P, '.p-send'), label = btn ? btn.textContent : '';
-  if (btn) { btn.disabled = true; pillBtnSay(btn, 'Sending…'); }
+  // "Sending" is a spinner on the button, never the dimmed look of an empty box; after a few seconds a line under
+  // the box says it is still going, and whether it is trying again.
+  if (btn) { btn.disabled = true; btn.classList.add('p-sending'); btn.setAttribute('aria-busy', 'true'); pillBtnSay(btn, 'Sending…'); }
+  const watch = chatSendWatch(P, files.length);
   try {
     let refs = {...extraRefs};
-    const j = await cloudCompose(`/v2/chat/${encodeURIComponent(slug)}`, {text: text || 'Attached files.', refs, ...extra}, files);
+    const j = await cloudCompose(`/v2/chat/${encodeURIComponent(slug)}`, {text: text || 'Attached files.', refs, ...extra}, files,
+      {timeout: CHAT_SEND.timeout, onRetry: watch.retry});
     // A 200 that created nothing (a sign-in page in front of the API) is not a send: the draft stays.
     if (!j?.message?.id) throw new Error('the server did not confirm it');
+    watch.end('sent');
     pillAcknowledge(P, text, files);
     if (j.message?.refs?.action_result) toast(j.message.refs.action_result.decision === 'approved' ? 'Approved' : 'Declined');
     v2ChatAdopt(slug, j);
     P.retryTries = 0;
     return true;
   } catch (e) {
-    if (e.unconfirmed) chatRetryLater(P, text, slug, extraRefs, extra); else toast(`Not sent: ${e.message}`, true);
+    watch.end(e.timedOut ? 'timeout' : e.unconfirmed ? 'network' : 'refused', e.status);
+    // A send with no answer in time ends here, with the draft still in the box and one press to try again. The page
+    // cannot know whether it landed, so it says so; Retry of the same text keeps its request id, so it is not saved twice.
+    if (e.timedOut) P.unconfirmed = {text: (text || '').trim(), signature: e.signature, at: Date.now()};
+    if (e.timedOut) toast(`Not confirmed: ${e.message} It may still arrive. Your message is still here; Retry sends it without a duplicate.`, true, {label: 'Retry', run: () => pillSend(P)});
+    else if (e.unconfirmed) chatRetryLater(P, text, slug, extraRefs, extra); else toast(`Not sent: ${e.message}`, true);
     return false;
   }
-  finally { P.sending = false; P.sent = null; sent(); if (btn) { btn.disabled = false; pillBtnSay(btn, label); } pillLabel(P); pillButtons(P); }
+  finally {
+    P.sending = false; P.sent = null; sent();
+    if (btn) { btn.disabled = false; btn.classList.remove('p-sending'); btn.removeAttribute('aria-busy'); pillBtnSay(btn, label); }
+    pillLabel(P); pillButtons(P);
+  }
+}
+// A message without files gives up after `timeout` ms, retries included (writeRequestOnce); an upload has no limit.
+// After `slow` ms a send says it is still going. One object, so the browser tests can shorten both.
+const CHAT_SEND = {timeout: 30000, slow: 5000};
+// What a send that is taking a while shows under the box, and the one line it leaves in the console when it was slow
+// or failed: how long, how many retries, the last HTTP status and how it ended. Never the message text.
+function chatSendWatch(P, fileCount) {
+  const started = performance.now(), line = pq(P, '.p-slow');
+  let retries = 0, status = 0, slow = false;
+  const say = () => {
+    if (!line || !slow) return;
+    line.hidden = false;
+    line.textContent = fileCount ? `Still sending… uploading ${fileCount === 1 ? 'the file' : `${fileCount} files`}${retries ? ', trying again' : ''}.`
+      : retries ? 'Still sending… the connection is slow, trying again.' : 'Still sending…';
+  };
+  const timer = setTimeout(() => { slow = true; say(); }, CHAT_SEND.slow);
+  return {
+    retry(attempt, code) { retries = attempt; status = code || status; say(); P.sendRetrying = true; pillWhy(P); },
+    end(outcome, code) {
+      clearTimeout(timer); P.sendRetrying = false;
+      if (line) { line.hidden = true; line.textContent = ''; }
+      const ms = Math.round(performance.now() - started);
+      if (outcome !== 'sent' || ms >= CHAT_SEND.slow)
+        console.warn(`chat send ${outcome} after ${ms} ms, ${retries} retries, last status ${code || status || 'none'}, ${fileCount} files`);
+    },
+  };
+}
+// A timed-out send keeps its request id so Retry cannot save it twice. Once the box no longer holds that text (the
+// person cleared or edited it, or it is minutes later), the id is forgotten: a send that did land must not swallow
+// the same short reply ("yes") sent again later, which would otherwise replay the old answer and reach no one.
+const CHAT_UNCONFIRMED_KEEP_MS = 5 * 60000;
+function chatForgetUnconfirmed(P) {
+  const u = P.unconfirmed; if (!u) return;
+  if ((pq(P, '.p-text')?.value || '').trim() === u.text && Date.now() - u.at < CHAT_UNCONFIRMED_KEEP_MS) return;
+  pendingWrites.delete(u.signature); P.unconfirmed = null;
 }
 // "see if anything was disconnected ... and trigger retries automatically". A
 // message that never reached the hub (the network dropped) sends itself when the connection is
