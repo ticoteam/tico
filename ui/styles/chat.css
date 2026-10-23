@@ -226,7 +226,7 @@ a.ref::before,.run-did .ref::before{content:'';display:inline-block;width:.8em;h
 #chat-composer .p-pill.over::after{content:'Drop to attach';position:absolute;inset:0;display:flex;align-items:center;justify-content:center;border-radius:inherit;background:color-mix(in srgb,var(--surface) 90%,transparent);color:var(--accent);font-size:var(--t-base);font-weight:600;pointer-events:none}
 /* A desktop composer has room for a long message; a phone keeps its short cap. */
 @media (min-width:761px){#chat-composer .ask textarea{max-height:min(300px,100vh / 3)}}
-.conv-paused{flex:none;margin:var(--s2) 0 0;padding:6px 10px;border-radius:var(--radius);background:var(--wait-bg);color:var(--wait);font-size:var(--t-sm)}
+.conv-paused{flex:none;margin:var(--s2) 0 0;padding:6px 10px;border-radius:var(--radius);background:var(--wait-bg);color:var(--wait-ink);font-size:var(--t-sm)}
 .conv-paused.agent{background:var(--idle-bg);color:var(--muted)}
 .settings-agent-cell{display:flex;flex-direction:column;gap:2px}.settings-agent-actions{display:flex;gap:6px;flex-wrap:wrap;margin-top:2px}
 .settings-agents-title{margin:var(--s3) 0 var(--s1);font-size:var(--t-md)}

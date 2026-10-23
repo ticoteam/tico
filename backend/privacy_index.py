@@ -8,6 +8,7 @@ from functools import cached_property, lru_cache
 
 from .store import H
 from . import task_privacy as privacy
+from .live_privacy import Sources as MeetingSources
 
 
 class ReadIndex:
@@ -15,6 +16,7 @@ class ReadIndex:
         privacy.snapshot(c)
         self.c, self.who = c, who
         self.principals = privacy.actor(who)
+        self.meetings = MeetingSources(c)
         # Read private rows by their partial index. Ordinary task identifiers and
         # room references load lazily, without task bodies or room participants.
         self.private = {r["id"]: dict(r) for r in c.execute(
@@ -54,7 +56,14 @@ class ReadIndex:
         return set()
 
     def content(self, value):
-        return not self.denied.intersection(self.references(value))
+        return (not self.denied.intersection(self.references(value))
+                and self.meetings.readable(self.principals, self.meetings.references(value)))
+
+    def conversation(self, cid):
+        return self.meetings.conversation_readable(self.principals, cid)
+
+    def meeting_room(self, cid):
+        return self.meetings.bound_conversation(cid) and self.conversation(cid)
 
     def attempts(self):
         if self._attempts is None:
@@ -109,7 +118,8 @@ class ReadIndex:
 
     def attempt(self, aid):
         try:
-            return not self.denied.intersection(self.attempt_sources(aid))
+            return (self.meetings.attempt_readable(self.principals, aid)
+                    and not self.denied.intersection(self.attempt_sources(aid)))
         except ValueError:
             return False
 
@@ -151,7 +161,9 @@ class ReadIndex:
 
     def message(self, mid, cid, refs, reply):
         try:
-            return not self.denied.intersection(self.message_sources(mid, cid, refs, reply))
+            return (self.meetings.message_readable(self.principals,
+                    {"id": mid, "conversation_id": cid, "refs_json": refs, "in_reply_to": reply})
+                    and not self.denied.intersection(self.message_sources(mid, cid, refs, reply)))
         except ValueError:
             return False
 
@@ -177,7 +189,13 @@ class ReadIndex:
         if target in self.tags() and not self.tag(target, False):
             return False
         msg = self.target_message(target)
-        if msg and (msg.get("deleted_at") or msg.get("deleted") or self.denied.intersection(self.sources(msg))):
+        if msg and (msg.get("deleted_at") or msg.get("deleted") or self.denied.intersection(self.sources(msg))
+                    or not self.meetings.message_readable(self.principals, msg)):
+            return False
+        if not self.conversation(target):
+            return False
+        meeting = self.c.execute("SELECT * FROM live_meetings WHERE id=?", (target,)).fetchone()
+        if meeting and not self.meetings.readable(self.principals, {target}):
             return False
         if target in self.attempts() and not self.attempt(target):
             return False
@@ -223,6 +241,7 @@ class ReadIndex:
             return False
         for mid in row["messages"]:
             msg = self.target_message(mid)
-            if not msg or msg.get("deleted_at") or msg.get("deleted") or self.denied.intersection(self.sources(msg)):
+            if (not msg or msg.get("deleted_at") or msg.get("deleted") or self.denied.intersection(self.sources(msg))
+                    or not self.meetings.message_readable(self.principals, msg)):
                 return False
         return all(self.attempt(aid) for aid in row["attempts"]) and all(self.blob(parent, seen) for parent in row["parents"])

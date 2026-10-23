@@ -828,6 +828,15 @@ def token_hash(token):
 
 
 # ----------------------------------------------------------------------------- connection
+def synchronous(default):
+    """The PRAGMA synchronous a connection uses: `default`, or OFF when $TICO_SQLITE_SYNC is "off".
+
+    Only the test suite sets it (conftest.py). Each test builds its own database and throws it away, so a sync per
+    commit buys nothing there, while a shared host's disk paid for it: two pytest workers on the team runner wrote
+    ~30 MB/s, a quarter of the volume's throughput, and pushed the live server's pages out of the cache."""
+    return "OFF" if os.environ.get("TICO_SQLITE_SYNC", "").lower() == "off" else default
+
+
 def connect(path=None, adopt_legacy=False):
     """Open (and if need be create) hub.db. WAL, foreign keys on, migrations applied.
 
@@ -843,7 +852,7 @@ def connect(path=None, adopt_legacy=False):
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.execute("PRAGMA busy_timeout=30000")
-    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute(f"PRAGMA synchronous={synchronous('NORMAL')}")
     try:
         migrate(conn, adopt_legacy=adopt_legacy)
     except Exception:
@@ -1116,6 +1125,9 @@ def migrate(conn, adopt_legacy=False):
     # A task's history, and the Tasks page's stats: how many tasks reached each status, by day.
     conn.execute("CREATE INDEX IF NOT EXISTS task_events_task ON task_events(task_id, ts)")
     conn.execute("CREATE INDEX IF NOT EXISTS task_events_field_ts ON task_events(field, ts)")
+    # One task's history of one field (status, owner, waiting_on): without it, and without ANALYZE, SQLite picks
+    # task_events_field_ts and reads that field's changes on every task.
+    conn.execute("CREATE INDEX IF NOT EXISTS task_events_task_field ON task_events(task_id, field, ts)")
     if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='schedule_occurrences'").fetchone():
         conn.execute("CREATE INDEX IF NOT EXISTS schedule_occurrences_task ON schedule_occurrences(task_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS events_task_origin ON events(actor,action,target,ts DESC)")
