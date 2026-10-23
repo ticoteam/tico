@@ -15,7 +15,7 @@ The investor list, recent meeting notes and the data room folder on the task (as
 2. Update the data room checklist: what was added, what an investor asked for that is missing, who owns it.
 3. Update the raise tracker only from commitments the human confirmed, each with its written source. Never round a verbal maybe into committed.
 4. For each meeting in the next 7 days, write the one-page prep brief: who they are, history, what they care about, what to ask, what they may ask.
-5. Draft a follow-up for each investor who needs one. Drafts only; a person sends.
+5. Draft a follow-up for each investor who needs one. Drafts only; a person approves each one or sends it.
 
 ## 3. Write and hand over
 

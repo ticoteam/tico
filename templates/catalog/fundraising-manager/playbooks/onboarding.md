@@ -24,7 +24,7 @@ Numbered, each with its one-line why.
 1. Are you raising now? If so, how much, what kind of round, and by when do you want it closed? Sets the raise tracker's target and the pace of the follow-ups.
 2. Where is the investor list today, and can you export it with name, firm, stage, last contact and who introduced them? Becomes knowledge/pipeline.md.
 3. What documents should the data room hold, where do they live, and who owns each? Starts the data room checklist so gaps show before an investor asks.
-4. Who talks to investors, who approves what is sent to them, and who signs off a term sheet? Every draft goes to that human. I never send to an investor myself.
+4. Who talks to investors, who approves what is sent to them, and who signs off a term sheet? Every investor message waits for that person's yes on it, or they send it themselves.
 5. What day and time suits a weekly pipeline review? (Default: Monday 09:00.) Sets the routine's schedule.
 
 ## 4. Record

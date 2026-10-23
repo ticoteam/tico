@@ -108,6 +108,10 @@ ACTIVE_STATUSES = ("open", "doing", "waiting", "review", "ready")   # still on t
 # changing it needs that index under a new name and a migration, or upgraded hubs quietly scan every task again.
 BOARD_STATUSES = ACTIVE_STATUSES + ("declined",)               # visible until a person reassigns or closes it
 LIVE_STATUSES = ACTIVE_STATUSES + ("done",)                # not closed, not declined
+# No step has these statuses: a waiting task stays in the working step it is in (a Waiting tag shows it), and a declined
+# one goes to its type's closed step (`_task_state`, `retire_held_steps`). The Product roadmap keeps its public Declined.
+HELD_STATUSES = ("waiting", "declined")
+STEP_STATUSES = tuple(s for s in TASK_STATUSES if s not in HELD_STATUSES)
 OWNER_STATUSES = ("doing", "waiting", "review", "done", "declined")  # what the owner may set
 # `ready` is a fact the hub learns (the PR merged), not a claim a bot makes: movers and the
 # keeper set it, an owning bot does not.
@@ -582,7 +586,7 @@ INSERT OR IGNORE INTO task_types(id,name,created,updated)
 """ + "\n".join(
     f"INSERT OR IGNORE INTO task_steps(id,type_id,name,position,status) "
     f"VALUES('general-{status}','general','{status.title()}',{position},'{status}');"
-    for position, status in enumerate(TASK_STATUSES)
+    for position, status in enumerate(STEP_STATUSES)
 ) + """
 UPDATE tasks SET type_id='general', step_id=(SELECT id FROM task_steps
   WHERE type_id='general' AND status=tasks.status ORDER BY position,id LIMIT 1)
@@ -1088,6 +1092,8 @@ def migrate(conn, adopt_legacy=False):
     migrate_roadmaps(conn)
     from .roadmap_flow import ready_step as roadmap_ready_step
     roadmap_ready_step(conn)
+    # Waiting and Won't do are no longer board steps (`_task_state`): move their tasks off, then delete them.
+    retire_held_steps(conn)
     # A person's open asks, read on every Needs-you load (loose_asks_to).
     conn.execute("CREATE INDEX IF NOT EXISTS messages_open_asks_to ON messages(to_actor, created) "
                  "WHERE kind='ask' AND answered_by IS NULL AND deleted_at IS NULL")
@@ -2927,7 +2933,10 @@ def _type_steps(conn, actor, type_id, steps):
         if raw.get("id") and ident not in existing:
             refuse(conn, actor, "not-found", "That step does not belong to this type")
         if status not in TASK_STATUSES:
-            refuse(conn, actor, "kind", f"A step status is {'|'.join(TASK_STATUSES)}")
+            refuse(conn, actor, "kind", f"A step status is {'|'.join(STEP_STATUSES)}")
+        if status in HELD_STATUSES and existing.get(ident, {}).get("status") != status:
+            refuse(conn, actor, "kind", f"A step can't be {status}: a waiting task keeps its step, and a declined one "
+                                        f"goes to the closed step. A step status is {'|'.join(STEP_STATUSES)}")
         names.add(name); ids.add(ident)
         clean.append({"id": ident, "type_id": type_id, "name": name,
                       "position": raw.get("position") if raw.get("position") is not None else position,
@@ -3033,6 +3042,12 @@ def _task_state(conn, actor, row, status=None, type=None, step=None):
         chosen = current
     else:
         chosen = next((s for s in typ["steps"] if s["status"] == effective), None)
+        if not chosen and effective == "waiting":
+            # Waiting is not a column: the task stays in the working step it is in, or starts at the first.
+            chosen = (current if current and current["status"] in ACTIVE_STATUSES
+                      else next((s for s in typ["steps"] if s["status"] in ("open", "doing")), None))
+        elif not chosen and effective == "declined":
+            chosen = next((s for s in typ["steps"] if s["status"] == "closed"), None)
     if effective not in TASK_STATUSES:
         refuse(conn, actor, "kind", f"A status is {'|'.join(TASK_STATUSES)}, not {effective}")
     # On a steps-only type a task is finished or brought back only by a step move: a bare close, decline,
@@ -3049,6 +3064,58 @@ def _task_state(conn, actor, row, status=None, type=None, step=None):
                                     f"({steps}), not by closing, declining, reopening or finishing it; move it, or delete it",
                context={"what": f"task {row.get('id')}"})
     return typ["id"], chosen["id"] if chosen else None, effective
+
+
+def retire_held_steps(conn):
+    """Take the Waiting and Declined (Won't do) steps off every type but the Product roadmap, whose Declined is public.
+    A task on a waiting step goes back to the working step it last left (its step history), else its type's first
+    open or doing step, and keeps status waiting; one on a declined step goes to its type's closed step, or no step
+    when there is none, and keeps status declined. Typed waiting or declined tasks with no step are placed the same
+    way. Runs at every start; once nothing is left to move it only reads."""
+    from .roadmap_flow import PRODUCT
+    held = _rows(conn.execute("SELECT s.id,s.type_id,s.status FROM task_steps s JOIN task_types ty ON ty.id=s.type_id "
+                              "WHERE s.status IN ('waiting','declined') AND coalesce(ty.role,'')<>?", (PRODUCT,)))
+    loose = _rows(conn.execute("SELECT t.id,t.type_id,t.status FROM tasks t JOIN task_types ty ON ty.id=t.type_id "
+                               "WHERE t.step_id IS NULL AND t.status IN ('waiting','declined') AND coalesce(ty.role,'')<>?",
+                               (PRODUCT,)))
+    if not held and not loose:
+        return
+    gone = {row["id"] for row in held}
+    version = "version" in {r[1] for r in conn.execute("PRAGMA table_info(tasks)")}
+    conn.execute("SAVEPOINT retire_held_steps")
+    try:
+        moving = [(t["id"], t["type_id"], t["status"]) for t in loose]
+        for step in held:
+            moving += [(r[0], step["type_id"], "waiting" if step["status"] == "waiting" else "declined")
+                       for r in conn.execute("SELECT id FROM tasks WHERE step_id=?", (step["id"],))]
+        steps = {}
+        for task_id, type_id, held_as in moving:
+            if type_id not in steps:
+                steps[type_id] = [s for s in _rows(conn.execute(
+                    "SELECT id,status FROM task_steps WHERE type_id=? ORDER BY position,id", (type_id,))) if s["id"] not in gone]
+            mine = steps[type_id]
+            if held_as == "waiting":
+                working = {s["id"] for s in mine if s["status"] in ACTIVE_STATUSES}
+                left = (r[0] for r in conn.execute("SELECT old FROM task_events WHERE task_id=? AND field='step' "
+                                                   "ORDER BY ts DESC,rowid DESC", (task_id,)))
+                target = next((old for old in left if old in working), None) \
+                    or next((s["id"] for s in mine if s["status"] in ("open", "doing")), None)
+            else:
+                target = next((s["id"] for s in mine if s["status"] == "closed"), None)
+            current = conn.execute("SELECT step_id FROM tasks WHERE id=?", (task_id,)).fetchone()[0]
+            if target == current:
+                continue
+            conn.execute("UPDATE tasks SET step_id=?,step_rank=?" + (",version=version+1" if version else "") + " WHERE id=?",
+                         (target, _step_end(conn, target, task_id) if target else None, task_id))
+            _task_event(conn, task_id, KEEPER, "step", current, target,
+                        "Waiting is a tag now, not a step" if held_as == "waiting" else "Declined goes to Closed now, not a step")
+        for ident in gone:
+            conn.execute("DELETE FROM task_steps WHERE id=?", (ident,))
+    except BaseException:
+        conn.execute("ROLLBACK TO retire_held_steps")
+        raise
+    finally:
+        conn.execute("RELEASE retire_held_steps")
 
 
 def steps_only(conn, row):
