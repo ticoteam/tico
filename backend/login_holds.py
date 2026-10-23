@@ -312,7 +312,7 @@ def limit_texts(c, attempt_id):
     return out
 
 
-_HOP_RE = re.compile(r"running this turn on (\S+)")
+HOP_RE = re.compile(r"running this turn on (\S+)")
 
 
 def chain(texts, runtime, final=None):
@@ -327,7 +327,7 @@ def chain(texts, runtime, final=None):
             if not steps[-1][2]:
                 steps[-1][1:] = [text, True]
             continue
-        moved = _HOP_RE.search(text)
+        moved = HOP_RE.search(text)
         if not moved:
             continue
         if "hit its usage limit; running this turn on" in text and not steps[-1][2]:
@@ -338,7 +338,7 @@ def chain(texts, runtime, final=None):
     return steps
 
 
-def _field(result, name):
+def field(result, name):
     return result.get(name) if isinstance(result, dict) else getattr(result, name, None)
 
 
@@ -347,16 +347,16 @@ def turn_steps(c, attempt_id, runtime, result):
     with what the runner's result says on top. A turn whose fallback ran with no note naming the hop (an older runner)
     puts its limit notices on that fallback unless the result says the primary was limited: a fallback's quota text
     must not hold the bot's own login (Dev 279)."""
-    final, limited = _field(result, "fallback"), bool(_field(result, "limited"))
-    if _field(result, "primary_held") and limited and not final:
+    final, limited = field(result, "fallback"), bool(field(result, "limited"))
+    if field(result, "primary_held") and limited and not final:
         # Sent away from its held login, no fallback ran it: the turn ran nowhere, so no login met a limit.
         return [[runtime, None, False]]
     texts = limit_texts(c, attempt_id)
     steps = chain(texts, runtime, final)
-    if (final and len(steps) == 2 and not _field(result, "primary_limited")
-            and not any(kind == "note" and _HOP_RE.search(text) for kind, text in texts)):
+    if (final and len(steps) == 2 and not field(result, "primary_limited")
+            and not any(kind == "note" and HOP_RE.search(text) for kind, text in texts)):
         steps = [[runtime, None, False], [steps[1][0], steps[0][1], steps[0][2]]]
-    if _field(result, "primary_limited"):
+    if field(result, "primary_limited"):
         steps[0][2] = True
     if limited:
         steps[-1][2] = True
@@ -388,13 +388,13 @@ def source(c, attempt_id, runtime, result, profile="", runner_id=None, held=None
     later settings change or another turn's hold does not rename it. `held` is the primary's hold when the claim sent
     the turn away from it: a turn that ran nowhere waits on that hold and keeps its kind."""
     steps = turn_steps(c, attempt_id, runtime, result)
-    used, fallback = _field(result, "profile_used"), _field(result, "fallback")
+    used, fallback = field(result, "profile_used"), field(result, "fallback")
     own = (used if used is not None and not fallback else profile) or ""
     hop = (used if used is not None and fallback else profile) or ""
     if runner_id:
         own, hop = canonical(c, runner_id, own, runtime), canonical(c, runner_id, hop, steps[-1][0])
     held_kind = window(held.get("error")) if held else ""
-    if _field(result, "primary_held") and _field(result, "limited") and not fallback:
+    if field(result, "primary_held") and field(result, "limited") and not fallback:
         # Sent away from its held login and no fallback started: nothing new was refused.
         return {"role": "primary", "runtime": runtime, "profile": own, "kind": held_kind or "plan usage limit",
                 "billing": held_kind.startswith("API"), "notice": ((held or {}).get("error") or "")[:300],
@@ -405,8 +405,8 @@ def source(c, attempt_id, runtime, result, profile="", runner_id=None, held=None
            "kind": window(notice), "billing": window(notice).startswith("API"), "notice": (notice or "")[:300],
            "primary_runtime": runtime, "primary_profile": own}
     if n:
-        out["primary"] = ("held" if _field(result, "primary_held") else "limited" if steps[0][2] else "not limited")
-        out["primary_kind"] = held_kind if _field(result, "primary_held") else window(steps[0][1]) if steps[0][2] else ""
+        out["primary"] = ("held" if field(result, "primary_held") else "limited" if steps[0][2] else "not limited")
+        out["primary_kind"] = held_kind if field(result, "primary_held") else window(steps[0][1]) if steps[0][2] else ""
     return out
 
 
@@ -441,12 +441,14 @@ def label(src, at="", primary_until=""):
     return said
 
 
-def after_turn(c, runner_id, bot, profile, runtime, body, attempt_id, hit):
+def after_turn(c, runner_id, bot, profile, runtime, body, attempt_id, hit, hopped=None):
     """Save or clear the logins' holds a finished turn shows, and return the hold that keeps the bot waiting, or {}.
     `profile` and `runtime` are the bot's own login. Every login the turn met a usage limit on is held, with the reset
     its own notice names, whatever the turn's outcome: an intermediate fallback that ran out stays held after a later
     one finishes the turn. A login the turn completed on is cleared, but only by a turn claimed after its hold began:
-    a lane leased before the limit says nothing about the login now."""
+    a lane leased before the limit says nothing about the login now. `hopped` is the bot's fallback (execution.fallback_mark)
+    when it met the limit and could not start the turn (execution.hop_failed): the bot waits out its own hold rather than
+    being sent there again, until it names another fallback."""
     # Sent away from its held login, no fallback ran it (none was ready, or it failed before it acknowledged the
     # turn): the turn ran nowhere, so no login met a limit; the hop its notes name only failed to start.
     unstarted = body.primary_held and body.limited and not body.fallback
@@ -493,4 +495,10 @@ def after_turn(c, runner_id, bot, profile, runtime, body, attempt_id, hit):
         if hold:
             _save(c, {**hold, "stuck": sorted({*hold.get("stuck", []), bot})})
             kept = get(c, runner_id, own, runtime)
-    return kept if body.limited else {}
+    if hopped is not None:
+        own = canonical(c, runner_id, profile, runtime)
+        hold = get(c, runner_id, own, runtime)
+        if hold:
+            _save(c, {**hold, "failed_fallback": {**(hold.get("failed_fallback") or {}), bot: hopped}})
+            kept = get(c, runner_id, own, runtime)
+    return kept if body.limited or hopped is not None else {}

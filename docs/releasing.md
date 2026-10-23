@@ -328,8 +328,9 @@ The workflow then:
 - waits until `ghcr.io/ticoteam/{tico,tico-runner,tico-updater}:vX.Y.Z` exist (the Docker workflow builds them from the
   same tag, in about 2 minutes), so no release is published whose installer would fail on `docker compose pull`;
 - uses the `[X.Y.Z]` section of the changelog, unchanged, as the release notes, and fails if the
-  section is missing or empty. A tag with a suffix such as `v0.2.0-rc.1` is marked a prerelease,
-  which the update check ignores;
+  section is missing or empty. A tag with a suffix such as `v0.2.0-rc.1` uses its own section when
+  present (an empty one fails), otherwise only its matching `[0.2.0]` section. It is marked a
+  prerelease, which the update check ignores;
 - publishes the release with those four files, the runner binaries and the notes. That is everything the installer, the server's update
   check and the updater read (`install.sh`, the bundle and `SHA256SUMS`), so the server rollout can start at once.
 
