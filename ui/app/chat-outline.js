@@ -1,3 +1,4 @@
+// The outline follows the current conversation.
 /* ui/app/chat-outline.js — Outline: a long chat's prompts as a list, and the jump to any message in it
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
