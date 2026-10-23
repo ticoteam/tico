@@ -81,10 +81,10 @@ const DEFAULT = [{builtin: 'needs', name: 'Needs You'}, {builtin: 'active', name
     await page.goto('https://tico-ui.test/#/bot/lead/tasks');
     await rail.locator('#t-open .trow').first().waitFor();
     assert.deepEqual(await tabTexts(), ['Needs You', 'Doing 4', 'Blocked 2', 'Done Recently 1']);
-    await rail.locator('#bot-task-tabs-edit:not([hidden])').waitFor();
+    await rail.locator('#bot-tasks-settings:not([hidden])').waitFor();
 
     // Test 6: add a tab of type Product roadmap, named "product tasks": it appears with its own count and only those tasks.
-    await rail.locator('#bot-task-tabs-edit').click();
+    await rail.locator('#bot-tasks-settings').click();
     await dialog.waitFor();
     assert.match(await dialog.innerText(), /Everyone who opens Head of Engineering sees these tabs/);
     assert.equal(await dialog.locator('.bot-tab-item').count(), 4);
@@ -101,7 +101,7 @@ const DEFAULT = [{builtin: 'needs', name: 'Needs You'}, {builtin: 'active', name
     assert.deepEqual(await shownTitles(), ['Plan the import page']);
 
     // Test 8: include Done in its states: the finished roadmap task of the last two weeks joins, list and count alike.
-    await rail.locator('#bot-task-tabs-edit').click();
+    await rail.locator('#bot-tasks-settings').click();
     await item('product tasks').getByLabel('Done', {exact: true}).check();
     // Rename a built-in tab, move "product tasks" up one and remove Blocked, in the same save.
     await item('Doing').locator('input[data-tab-name]').fill('Everything open');
@@ -120,13 +120,13 @@ const DEFAULT = [{builtin: 'needs', name: 'Needs You'}, {builtin: 'active', name
     await page.goto('https://tico-ui.test/#/bot/qa/tasks');
     await page.waitForFunction(() => document.querySelector('#bot-tab-t-c1')?.textContent.includes('Waiting on bots'));
     assert.deepEqual(await tabTexts(), ['Doing 1', 'Waiting on bots']);
-    assert.equal(await rail.locator('#bot-task-tabs-edit').isHidden(), true);
+    assert.equal(await rail.locator('#bot-tasks-settings').isHidden(), true);
     await page.goto('https://tico-ui.test/#/bot/lead/tasks');
     await page.waitForFunction(() => document.querySelector('#bot-tab-t-c2')?.textContent.includes('product tasks'));
     assert.deepEqual(await tabTexts(), ['Needs You', 'Everything open 4', 'product tasks 2', 'Done Recently 1']);
 
     // Test 9: far more tabs than fit. All are kept (no cap); the bar scrolls sideways and each tab can be reached.
-    await rail.locator('#bot-task-tabs-edit').click();
+    await rail.locator('#bot-tasks-settings').click();
     for (let n = 0; n < 12; n++) await dialog.getByRole('button', {name: 'Add a tab'}).click();
     await dialog.getByRole('button', {name: 'Save'}).click();
     await dialog.waitFor({state: 'hidden'});
@@ -155,7 +155,7 @@ const DEFAULT = [{builtin: 'needs', name: 'Needs You'}, {builtin: 'active', name
     assert.equal(await rail.locator('[data-bot-task-tab]').nth(9).getAttribute('aria-selected'), 'true');
 
     // Reset goes back to the four built-in tabs.
-    await rail.locator('#bot-task-tabs-edit').click();
+    await rail.locator('#bot-tasks-settings').click();
     await dialog.getByRole('button', {name: 'Reset to the four built-in tabs'}).click();
     await dialog.waitFor({state: 'hidden'});
     assert.equal(puts.at(-1).tabs, null);

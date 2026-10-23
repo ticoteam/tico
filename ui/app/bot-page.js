@@ -293,8 +293,9 @@ async function pageBot(slug, tab) {
   </div>
 
   <aside id="pane-tasks" class="bot-rail" aria-label="Tasks" hidden>
-    <section class="rail-sec bot-tasks-sec" id="bot-tasks" aria-labelledby="bot-tasks-h"><header class="rail-head"><h2 class="rail-h" id="bot-tasks-h">Tasks</h2><span class="spacer"></span>
-      <button class="rail-ico" type="button" id="bot-task-tabs-edit" aria-label="Tab settings" title="Tab settings" hidden><span class="nav-icon" aria-hidden="true">settings</span></button></header>
+    <section class="rail-sec bot-tasks-sec" id="bot-tasks" aria-labelledby="bot-tasks-h"><header class="rail-head"><h2 class="rail-h" id="bot-tasks-h">Tasks</h2><span class="spacer"></span>${limited ? '' :
+        `<a class="rail-ico" id="bot-tasks-board" href="${esc(botTaskBoardHref(slug))}" aria-label="${esc(`Open ${empName(slug)}'s tasks on the board`)}" title="Board"><span class="nav-icon" aria-hidden="true">view_kanban</span></a>`}${
+        !limited && typeof botTaskSettingsOpen === 'function' ? `<button type="button" class="rail-ico" id="bot-tasks-settings" aria-label="Tab settings" title="Tab settings"${BOT_TASK_LAYOUT.get(slug)?.can_edit ? '' : ' hidden'}><span class="nav-icon" aria-hidden="true">settings</span></button>` : ''}</header>
       <div class="tabs slim bot-task-tabs" role="tablist" aria-label="Task lists">${botTaskTabsBarHTML(slug)}</div>
       <div class="bot-needs" id="bot-needs" role="tabpanel" aria-labelledby="bot-tab-t-needs" hidden><div id="t-needs" class="tpane"><div class="rail-empty">Loading…</div></div></div>
       <div class="bot-active" id="bot-active" role="tabpanel" aria-labelledby="bot-tab-t-active" hidden><div id="t-open" class="tpane"><div class="rail-empty">Loading…</div></div></div>
@@ -467,14 +468,14 @@ async function pageBot(slug, tab) {
   // The right rail: one Tasks section with its tabs, what it assigned to others, Updates, Files, then Recurring.
   botTaskTabShow(slug, botTaskTabFirst(slug, botNeeds(slug).length));
   if (keeper) void botTaskTabsLoad(slug);
-  if (BOT_TASK_LAYOUT.get(slug)?.can_edit) $('#bot-task-tabs-edit').hidden = false;
-  $('#bot-task-tabs-edit').onclick = () => void botTaskTabsSettings(slug);
   // A click opens a folded section without focusing it, so its ring shows only for the keyboard.
   $('#pane-tasks').querySelectorAll('.rail-fold>summary').forEach(sum => sum.addEventListener('mousedown', ev => ev.preventDefault()));
   if (!limited) botRecurringPaint(e, slug);
   $('#pane-tasks').addEventListener('click', ev => {
     const tabButton = ev.target.closest('[data-bot-task-tab]');
     if (tabButton) { BOT_TASK_TAB.set(slug, tabButton.dataset.botTaskTab); botTaskTabShow(slug, tabButton.dataset.botTaskTab, true); }
+    // The tab settings modal is Task-list tabs 2/3's; the icon shows only once it is there.
+    if (ev.target.closest('#bot-tasks-settings')) botTaskSettingsOpen(slug);
   });
   $('#pane-tasks .bot-task-tabs').addEventListener('keydown', ev => botTaskTabKey(slug, ev));
   $('#pane-tasks .bot-task-tabs').addEventListener('wheel', botTaskTabWheel, {passive: false});
