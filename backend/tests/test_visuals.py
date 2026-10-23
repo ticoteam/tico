@@ -551,3 +551,18 @@ def test_a_bot_is_never_handed_a_visual_address_the_visual_route_refuses(api):
     assert listed.status_code == 200, listed.text
     [item] = next(m for m in listed.json()["comments"] if m["id"] == comment["id"])["refs"]["attachments"]
     assert item["file_id"] == task_fid and api.get(item["src"]).status_code == 200
+
+
+def test_botops_acting_for_a_bot_or_a_person_reads_a_task_visual_with_an_address_for_the_principal(api):
+    """A delegated reader carries the pair (principal, BotOps) as task_actor; reading task comments with a visual
+    crashed on the pair. Its address names the principal and opens on the visual route."""
+    from backend.auth import Identity
+    _, fid, comment = visual_on_task(api, private=False)
+    app, settings = api.app, api.app.state.store.settings
+    for who in (Identity("bot:ops", "bot", task_actor="bot:botops"),
+                Identity("human:ben", "human", task_actor="bot:botops")):
+        with app.state.store.read() as c:
+            [message] = V.for_reader(app, settings, c, who, [comment])
+        [view] = message["refs"]["attachments"]
+        assert view["file_id"] == fid and not view["removed"] and view["src"], view
+        assert V.read(app.state.visual_key, view["src"].rsplit("/", 1)[1])[0] == who.actor
