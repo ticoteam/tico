@@ -9,7 +9,7 @@ import pytest
 
 from backend import events as E
 from backend import hubdb as H
-from backend.tests.test_api import api, assign, post, put, ready, runner  # noqa: F401
+from backend.tests.test_api import api, assign, post, ready, runner  # noqa: F401
 from backend.tests.test_credential_sharing import JIRA, jira, local
 from backend.tests.test_events import live, topic  # noqa: F401
 
@@ -43,20 +43,23 @@ def test_work_and_credentials_reach_only_the_computer_they_concern_without_value
         assert JIRA not in json.dumps(sent) and set(sent[0][1]) == {"seq", "kind", "bots"}
 
 
-def test_subscription_changes_refresh_only_the_assigned_computer_without_values(api):
+def test_the_migration_dropping_a_bots_subscription_refreshes_only_its_computer_without_values(api):
     a, b = runner(api, label="A"), runner(api, label="B")
     assign(api, a, "ops")
     assign(api, b, "cpo")
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO subscription_assignments VALUES(?,?,?,?,?)", ("bot", "ops", "private-first", H.now(), "human:ana"))
     cursor = newest(api)
-    for profile in ("private-first", "private-second", None):
-        put(api, "subscriptions", {"scope": "bot", "target": "ops", "profile": profile})
-        sent, after, reset, _ = told(api, a, cursor)
-        assert [data["kind"] for _, data in sent] == ["assignments", "work"]
-        assert not reset and all(data["bots"] == ["ops"] for _, data in sent)
-        assert all(set(data) == {"seq", "kind", "bots"} for _, data in sent)
-        assert "private-" not in json.dumps(sent)
-        assert told(api, b, cursor)[0] == []
-        cursor = after
+    # One login per AI tool per computer (#1259): the bot's choice goes, and its computer moves it to its own login.
+    with api.app.state.store.transaction() as c:
+        H._apply(c, H.ONE_LOGIN_PER_COMPUTER_SCHEMA)
+    sent, after, reset, _ = told(api, a, cursor)
+    assert [data["kind"] for _, data in sent] == ["assignments", "work"]
+    assert not reset and all(data["bots"] == ["ops"] for _, data in sent)
+    assert all(set(data) == {"seq", "kind", "bots"} for _, data in sent)
+    assert "private-" not in json.dumps(sent)
+    assert told(api, b, cursor)[0] == []
+    cursor = after
     # Retired group choices remain stored for compatibility, but no longer select a connection.
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO subscription_assignments VALUES(?,?,?,?,?)",

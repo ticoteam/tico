@@ -327,7 +327,8 @@ class Scheduler:
                         try:
                             H.say(c, H.KEEPER, row["owner"], "Due: " + row["title"], kind="notice",
                                   conversation_id=row["conversation_id"],
-                                  refs=run_triggers.stamp({"task": row["id"], "wake": "due"}, "schedule"))
+                                  refs=run_triggers.stamp({"task": row["id"], "wake": "due"}, "schedule",
+                                                           purpose="work task due soon"))
                         except H.Refused as exc:
                             H.event(c, H.KEEPER, "task.reminder-refused", row["id"], {"reason": str(exc)[:300]})
                         c.execute("INSERT INTO task_reminders VALUES(?,?,?)", (row["id"], row["due"], stamp(at)))
@@ -465,6 +466,8 @@ class Scheduler:
             self.stall_checked = at
             with SR.recording(self.store, "stall_checks") as run:
                 with self.store.transaction() as c:
+                    from . import run_diagnostics
+                    run_diagnostics.sweep(c, stamp(at))
                     woke = H.wake_stalled(c, stamp(at))
                 acted = {"stalled tasks woken": woke.get("woke") or [], "sent to BotOps": woke.get("escalated") or [],
                          "retried": woke.get("retried") or [], "held for setup": woke.get("held") or []}

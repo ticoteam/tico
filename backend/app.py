@@ -4439,7 +4439,7 @@ def create_app(settings=None):
         return {**runner_versions.desired(), "features": {"task_files_multipart": True, "runner_commit": True,
                                                           "screen_v1": True, "limit_resets_at": True,
                                                           "usage_requests": True, "usage_request_main": True,
-                                                          "run_pushes": True, "load_snapshot": True}}
+                                                          "run_pushes": True, "run_diagnostics": True, "load_snapshot": True}}
 
     @app.get("/api/v2/runners/assignments")
     def assigned(request: Request):
@@ -5483,6 +5483,13 @@ def create_app(settings=None):
         body = scrub_attempt(aid, body)          # a secret set in this run never reaches the record
         return mutate(request, body, lambda c: stream_capture.keep(
             c, execution.attempt(c, request.state.identity, aid, active=False), body))
+
+    @app.post("/api/v2/attempts/{aid}/diagnostics")
+    def attempt_diagnostics(request: Request, aid: str, body: M.AttemptStderr):
+        from . import run_diagnostics
+        body = scrub_attempt(aid, body)
+        return mutate(request, body, lambda c: run_diagnostics.keep_stderr(
+            c, execution.attempt(c, request.state.identity, aid, active=False), body.tail))
 
     @app.get("/api/v2/attempts/{aid}/capture")
     def export_capture(request: Request, aid: str, full: bool = True):

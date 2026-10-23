@@ -273,8 +273,7 @@ refused text (credential values masked) and its task; one click releases that pa
 
 **A subscription usage limit.** A run that hits one fails with `limited` set; it did nothing, so
 the job stays queued however often this happens (it is never *Interrupted*) and the bot shows
-*limited*. The limit holds the provider login, not just the bot: that runtime's sign-in on that computer (or the
-bot's own subscription connection), saved on the server so it outlasts a restart of the runner or the server. It holds
+*limited*. The limit holds the provider login, not just the bot: that runtime's sign-in on that computer, saved on the server so it outlasts a restart of the runner or the server. It holds
 until the reset the provider names (Claude's "resets 2:40am (UTC)" included, even days away), or when none is named
 or the named time has passed, 30 minutes, then 60, then two hours for each limit in a row on that login. While it
 holds, no bot starts a run on that login: a bot whose fallback (its own, or the company's default) is signed in on
@@ -319,8 +318,8 @@ bot moves back on its own once the limit resets. The owner turns this off in **S
 since when, and how many are limited.
 
 <a id="one-turn-per-chatgpt-login"></a>**Codex bots share a ChatGPT login.** Bots on the same computer using
-one ChatGPT sign-in run turns at the same time, just as Claude bots do. This includes bots using the
-computer's own login, bots using the same named subscription, and separate task lanes of one bot.
+one ChatGPT sign-in run turns at the same time, just as Claude bots do. This includes every bot on the
+computer's login and separate task lanes of one bot.
 They share the plan's usage allowance; when it runs out, the usage-limit and fallback rules above apply.
 A busy ChatGPT login does not queue another bot's turn or show a login-wait message. Codex has
 `one_turn_per_login = false` in its harness manifest; the optional login queue is dormant.

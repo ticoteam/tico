@@ -442,7 +442,7 @@ def test_the_runners_report_of_a_fallback_that_never_started_requeues_the_job_an
 
 
 def test_profiles_sharing_the_computers_own_login_share_its_hold_and_probe(api, monkeypatch):
-    from backend import execution, subscriptions
+    from backend import execution
     at(monkeypatch, "2026-10-19T01:46:47.000000Z")
     machine = runner(api)
     assign(api, machine, "ops")
@@ -461,10 +461,9 @@ def test_profiles_sharing_the_computers_own_login_share_its_hold_and_probe(api, 
         # One hold for the computer's own login, whichever alias met the limit, and the runner hears it under "".
         assert login_holds.get(c, rid, "", "fake")["until"].startswith("2026-10-19T02:40") and not \
             login_holds.get(c, rid, "team-a", "fake")
-        for profile, held in (("", "held"), ("team-b", "held"), ("solo", None)):
-            monkeypatch.setattr(subscriptions, "effective", lambda c, bot, ctx=None, p=profile: (p,))
-            key = execution.login_key(c, api.app.state.store.settings, rid, "ops", {"runtime": "fake"})
-            assert login_holds.holding(c, *key) == held, profile
+        # A bot runs on the computer's own login (#1259), so its turns wait on that hold.
+        key = execution.login_key(c, api.app.state.store.settings, rid, "ops", {"runtime": "fake"})
+        assert login_holds.holding(c, *key) == "held"
     assert get(api, "config", machine["token"])["login_holds"][0]["profile"] == ""
 
 
@@ -576,6 +575,49 @@ def test_a_company_out_of_credit_holds_the_tico_login_a_minute_and_a_fallbacks_o
                                           "(Tico models paused, out of credit)")
 
 
+RATED = "Tico AI Gateway: rate limited; retrying after the Gateway's requested wait (rate_limited)"
+
+
+def test_a_tico_rate_limit_another_model_finished_holds_the_tico_login_a_minute_not_the_backoff(api, monkeypatch):
+    """The Tico AI Gateway's rate_limited is the key's minute window, not a spent login: when the bot's fallback
+    finishes the turn, its Tico login is held for a minute (no Retry-After reaches the server then), never 30 minutes,
+    and a second one in a row is a minute again, not an hour."""
+    monkeypatch.setattr(login_holds, "limit_texts", lambda c, aid: TURNS[aid])
+    hop = ("diagnostic", "pi hit its usage limit; running this turn on codex")
+    done = Body(outcome="completed", fallback="codex", primary_limited=True)
+    with api.app.state.store.transaction() as c:
+        aid = attempt_with(c, [("error", RATED), hop])
+        assert login_holds.after_turn(c, "r1", "ops", "", "pi", done, aid, HIT) == {}
+        assert login_holds.get(c, "r1", "", "pi")["until"].startswith("2026-10-19T01:47:47")
+        later = "2026-10-19T01:48:00.000000Z"
+        aid = attempt_with(c, [("error", RATED), hop])
+        login_holds.after_turn(c, "r1", "ops", "", "pi", done, aid, later)
+        assert login_holds.get(c, "r1", "", "pi")["until"].startswith("2026-10-19T01:49:00")
+        # Its fallback ran out too: that login is held as before, with its own wait, and named as the Gateway's.
+        aid = attempt_with(c, [("error", RATED), hop, ("error", QUOTA)])
+        body = Body(limited=True, fallback="codex", primary_limited=True)
+        kept = login_holds.after_turn(c, "r2", "ops", "", "pi", body, aid, HIT)
+        assert kept["runtime"] == "codex" and kept["until"].startswith("2026-10-19T02:16:47")
+        assert login_holds.get(c, "r2", "", "pi")["until"].startswith("2026-10-19T01:47:47")
+        assert login_holds.label(login_holds.source(c, aid, "pi", body)) == (
+            "Fallback codex API quota or billing limit; primary pi also limited (Tico AI Gateway rate limit)")
+
+
+def test_a_gateway_reset_already_past_is_its_minute_not_the_backoff(api, monkeypatch):
+    """A runner whose clock is behind reports the Gateway's Retry-After as a reset already past: the Tico login is
+    held the Gateway's minute, not 30 minutes."""
+    monkeypatch.setattr(login_holds, "limit_texts", lambda c, aid: TURNS[aid])
+    with api.app.state.store.transaction() as c:
+        aid = attempt_with(c, [("error", PAUSED)])
+        past = Body(limited=True, limit_resets_at="2026-10-19T01:46:00.000000Z")
+        login_holds.after_turn(c, "r1", "ops", "", "pi", past, aid, HIT)
+        assert login_holds.get(c, "r1", "", "pi")["until"].startswith("2026-10-19T01:47:47")
+        # A rate limit the turn ended on with no Retry-After keeps the safe hour: early tries can't reach the Gateway.
+        aid = attempt_with(c, [("error", RATED)])
+        login_holds.after_turn(c, "r2", "ops", "", "pi", Body(limited=True), aid, HIT)
+        assert login_holds.get(c, "r2", "", "pi")["until"].startswith("2026-10-19T02:46:47")
+
+
 def test_a_primary_held_for_hours_with_its_tico_fallback_out_of_credit_waits_only_the_gateways_minute(
         api, monkeypatch):
     """A subscription bot whose last fallback is a Tico model: its own login stays held to its reset, but the turn
@@ -649,7 +691,8 @@ def test_a_limit_keeps_the_provider_and_login_it_came_from_after_settings_and_ho
         # The bot moves to Codex and another turn replaces the login's hold: the run still names what refused it.
         assert c.execute("UPDATE bot_config SET config_json=? WHERE bot='ops'",
                          (json.dumps({"runtime": "codex"}),)).rowcount == 1
-        login_holds.record(c, machine["runner_id"], "", "fake", "2026-10-19T01:47:00.000000Z", attempt_id="other",
+        assert login_holds.get(c, machine["runner_id"], "work", "fake"), "an in-flight turn keeps its reported home"
+        login_holds.record(c, machine["runner_id"], "work", "fake", "2026-10-19T01:47:00.000000Z", attempt_id="other",
                            bot="finance", error=CLAUDE)
         assert not login_holds.for_attempt(c, first["id"])
         assert json.loads(c.execute("SELECT detail_json FROM events WHERE action='attempt.limited' AND target=?",

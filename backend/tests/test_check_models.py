@@ -352,14 +352,6 @@ def test_a_moved_check_tries_its_first_model_again_on_another_computer(api):
         assert [x["runner_id"] for x in out_of_quota_logins(c)] == [machine["runner_id"]]
 
 
-def test_a_subscription_for_the_checks_tool_ends_the_move(api):
-    machine, sub = moved_to_grok(api)
-    with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO subscription_assignments(scope,target,profile) VALUES('bot','ops','team-plan')")
-    with api.app.state.store.read() as c:
-        assert check_models.of(c, sub["id"], "ops")["runtime"] == "codex", "its turns use the subscription's login"
-
-
 def test_a_check_skips_a_next_model_its_computer_cannot_run(api):
     machine, parent, turn = parent_turn(api)
     company(api, "anthropic", "openai", "xai", "cursor")

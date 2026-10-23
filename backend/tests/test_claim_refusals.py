@@ -156,14 +156,6 @@ def test_a_rejected_sign_in(api):
     says(api, machine, "sign_in_rejected")
 
 
-def test_a_subscription_profile_the_computer_has_not_reported(api):
-    machine = task_bot(api, lanes=True)
-    new_task(api, "first")
-    with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO subscription_assignments(scope,target,profile) VALUES('bot','ops','team-plan')")
-    says(api, machine, "profile")
-
-
 def test_the_report_names_the_bot_and_computer_by_their_bundle_labels(api):
     machine = task_bot(api, lanes=True)
     new_task(api, "first")

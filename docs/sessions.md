@@ -123,6 +123,23 @@ three files: `input.json` (the message and model settings), `<provider>_transcri
 `output.json` (the events and result Tico recorded). A raw stream can hold customer text, so only owners turn it on,
 and only owners and engineering bots read it, for runs they can already see in the bot's run list. The MCP tool answers only whether a run was captured and its size; the CLI writes the files.
 
+### Why a run stopped or stalled
+
+`hub run list <bot>` includes `end_reason`, `ended_at`, `last_event`, `last_event_at` and
+`last_heartbeat_at`. Reasons distinguish a finished run, a model error (with its reported code and message),
+a process exit (code or signal), a named timeout limit, cancellation and its actor, a lost heartbeat,
+and a runner restart. An explicit runner OOM report is identified as OOM; a kill signal or words in stderr alone do not prove an OOM kill.
+
+Every minute, the server checks attempts for five minutes without either an attempt heartbeat or an event.
+It marks them `stalled` in the run list and Health, with their last event and time. This warning does not stop
+the attempt or change its lease. Fresh activity clears it.
+
+The runner also keeps up to 200 lines / 64 KiB of scrubbed harness stderr per attempt for seven days,
+even with provider stream capture off. `hub run export <attempt> --fixture` adds `stderr.log` when present,
+and works with stderr alone when no provider stream exists. Its access rules remain the same as raw stream
+exports. The MCP summary reports the stderr byte count and end reason without returning the log text.
+An older runner can report only the failure evidence it has; historical runs are not assigned a guessed cause.
+
 ## FAQ
 
 **Why didn't my main chat see what I said in a task?**

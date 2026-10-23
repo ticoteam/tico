@@ -554,6 +554,8 @@ HELD = {
     "cooling_off": ("Waiting out a usage limit, or a Tico AI Gateway outage, before it tries again", RUNS),
     "readiness_unknown": ("{computer} has not said whether it can run this bot", COMPUTERS),
     "sign_in_rejected": ("Its model sign-in was rejected on {computer}", COMPUTERS),
+    "login_upgrade": ("Update {computer} to use one login per AI tool; its bots wait without changing accounts",
+                      COMPUTERS),
     # A Tico model runs only where bots run as their own user (execution.claim_refusal): the bot waits, it never fails.
     "not_isolated": ("{computer} can't run Tico Gateway work (it needs Tico's Docker runner): it waits for another "
                      "model or computer", BOT_SETTINGS),
@@ -1320,21 +1322,6 @@ def view(c, who, settings, auth, github, config):
                              + ("" if len(copies) <= 3 else f"; and {len(copies) - 3} more")
                              + ". Restart that computer's runner to retry now.",
                              [_fix("Open Computers", "#/settings", "devices")]))
-    from .subscriptions import bot_subscription, effective, context
-    subscription_context = context(c, settings)
-    subscription_problems = []
-    subscription_access = auth.bot_accesses(c, who)
-    for row in c.execute("SELECT a.bot FROM assignments a JOIN bots b ON b.slug=a.bot WHERE b.state<>'archived'"):
-        if not full and not (subscription_access.get(row['bot']) or {}).get('see'):
-            continue
-        if effective(c, row['bot'], subscription_context)[0] is None:
-            continue
-        subscription = bot_subscription(c, row['bot'], settings, subscription_context)
-        if subscription['problem']:
-            subscription_problems.append(row['bot'] + ': ' + subscription['problem'])
-    if subscription_problems:
-        checks.append(_check("subscriptions", "Subscriptions", "warn", "; ".join(subscription_problems[:5]),
-                             [_fix("Open Computers", "#/settings", "devices")]))
     from .app_delivery import health_problems
     for key, summary in health_problems(c, who, auth, online_ids):
         checks.append(_check(key, "Desktop apps", "warn", summary, [_fix("Open Computers", "#/settings", "devices")]))
@@ -1541,6 +1528,12 @@ def view(c, who, settings, auth, github, config):
                       if settings.rehearsal else _backups(config, settings))
         checks.append(_signin(settings))
         checks.extend(_server_settings(c, settings))
+    from . import run_diagnostics
+    stalled_runs = run_diagnostics.stalled_runs(c, who, auth)
+    checks.append(_check("stalled_runs", "Stalled runs", "warn" if stalled_runs else "ok",
+                         f"{len(stalled_runs)} runs have no heartbeat or event for {run_diagnostics.STALL_MINUTES} minutes."
+                         if stalled_runs else "No stalled runs.",
+                         [_fix("Open Runs", "#/settings", "runs")] if stalled_runs else []))
     checks.append(_check("failed", "Failed runs", "warn" if failed else "ok",
                          f"{_plural(failed, 'run')} failed in the last day." if failed else "No failed runs in the last day.",
                          [_fix("Open Runs", "#/settings", "runs")] if failed and full else []))
@@ -1548,7 +1541,7 @@ def view(c, who, settings, auth, github, config):
             "computers": computers if full else _bot_computers(computers) if kind == "bot" else [],
             "waiting": waiting if full else [], "slow": slow if full else [], "stuck": blocked,
             "on_fallback": on_fallback, "limited": limited,
-            "failures": failures if full or kind == "bot" else [], "checked": H.now(),
+            "failures": failures if full or kind == "bot" else [], "stalled_runs": stalled_runs, "checked": H.now(),
             # The sidebar's notice reads the same fresh answer, so the two never disagree.
             "update": config.get("update") or {}}
 

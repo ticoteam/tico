@@ -1054,6 +1054,8 @@ class AppDriverReadiness(Contract):
 
 
 class StructuredReadiness(Contract):
+    # Physical home of the computer's one login; present only after the computer_logins_v1 handshake.
+    computer_profile: str | None = Field(default=None, max_length=80)
     worktrees: bool | None = None
     # Prepares a worktree reserved for a waiting task while its bot is idle (backend/worktree_waits.py).
     worktree_waits: bool | None = None
@@ -1126,13 +1128,6 @@ class ComputerProfile(Contract):
     runtimes: dict[str, SubscriptionRuntime] = Field(default_factory=dict, max_length=20)
 
 
-class SubscriptionAssignment(Contract):
-    # Only a bot chooses a subscription; a group no longer gives its bots one.
-    scope: Literal["bot"] = "bot"
-    target: str = Field(min_length=1, max_length=100)
-    profile: str | None = Field(default=None, pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$", max_length=80)
-
-
 class WorktreeStatus(Contract):
     repo: str | None = Field(default=None, max_length=200)
     last_activity: float | None = Field(default=None, ge=0)
@@ -1161,7 +1156,7 @@ class Heartbeat(Contract):
     platform: str = Field(max_length=100)
     capacity: int = Field(default=4, ge=1, le=256)
     # The assignment_* values name the retired temporary assignments (#420); an older runner still sends them.
-    capabilities: list[Literal["assignment_instances_v1", "assignment_cleanup_v1", "task_lanes_v1", "task_lanes_v2", "session_roots_v1", "task_goals_v1", "screen_v1", "model_sign_out_v1", "model_keys_v1", "model_switch_type_v1", "model_remove_v1", "model_switch_to_key_v1"]] = Field(default_factory=list, max_length=20)
+    capabilities: list[Literal["assignment_instances_v1", "assignment_cleanup_v1", "task_lanes_v1", "task_lanes_v2", "session_roots_v1", "task_goals_v1", "screen_v1", "model_sign_out_v1", "model_keys_v1", "model_switch_type_v1", "model_remove_v1", "model_switch_to_key_v1", "computer_logins_v1"]] = Field(default_factory=list, max_length=20)
     # The bool map remains accepted during runner rollout. The server normalizes both
     # shapes before storing them, so every read path sees one structured document.
     readiness: StructuredReadiness | dict[str, bool] = Field(default_factory=dict)
@@ -1825,6 +1820,10 @@ class LoadSnapshot(Contract):
 class Started(Contract):
     thread_id: ID
     load_snapshot: LoadSnapshot | None = None
+
+
+class AttemptStderr(Contract):
+    tail: str = Field(max_length=65536)
 
 
 class Event(Contract):

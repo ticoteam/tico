@@ -1,13 +1,12 @@
 // Sign out and Switch account from the app (ui/model-login.js, backend/model_login.py). In a computer's pop-up on
-// Settings > Computers each signed-in Codex or Claude Code connection, the computer's own login or a named subscription,
+// Settings > Computers each signed-in Codex or Claude Code connection, the computer's one login for that tool,
 // offers Switch account and Sign out to the computer's operator or an admin, only while the computer is online. Sign out first names the bots that
 // stop, then asks the computer and follows it to Signed out; a computer login someone signed out reads Signed out and
 // offers Sign in and Use the shared key. Switch account is the sign-in dialog, titled as a switch, posting switch: true,
-// and a cancel says the old account still works. A line that is both the computer's login and a subscription offers
-// each login's pair, named. A tool without a logout in its manifest, and a plain member, see none of it. Sign out stays off until the bots are
+// and a cancel says the old account still works. A named subscription a runner still reports from before one login
+// per computer (#1259) has no line. A tool without a logout in its manifest, and a plain member, see none of it. Sign out stays off until the bots are
 // named, and a failed lookup offers Try again. After a change the page looks again until a heartbeat newer than the
-// change shows it (a stale one still reads the old state), redrawing Computers for a named subscription too, whose
-// row then offers Sign in. A switch past its commit point reads as finishing with no cancel, and a Mac offers no
+// change shows it (a stale one still reads the old state). A switch past its commit point reads as finishing with no cancel, and a Mac offers no
 // Switch account for Claude Code (switch_unavailable_on). Every request is intercepted; the harness capabilities come
 // from runner/harnesses/*.toml.
 const {chromium} = require('playwright');
@@ -141,7 +140,7 @@ const {unrouted} = require('./support/routes.cjs');
     const buttons = row => row.locator('.computer-conn-signin button').evaluateAll(all => all.map(b => b.getAttribute('aria-label') || b.innerText));
     assert.deepEqual(await buttons(own('codex')), ['Switch account', 'Switch to API key', 'Sign out']);
     assert.deepEqual(await buttons(own('claude')), ['Switch account', 'Switch to API key', 'Sign out']);
-    assert.deepEqual(await buttons(table.locator('[data-connection="profile:acme:codex"]')), ['Switch account', 'Sign out']);
+    assert.equal(await table.locator('[data-connection^="profile:"]').count(), 0, 'a leftover named subscription has no line');
     assert.deepEqual(await buttons(own('gemini')), [], 'no logout in its manifest: nothing to offer');
 
     // Sign out: off while the bots that stop are looked up and when the lookup fails, which offers Try again; then
@@ -222,33 +221,8 @@ const {unrouted} = require('./support/routes.cjs');
     await toSub.getByRole('button', {name: 'Done'}).click();
     await own('codex').getByRole('button', {name: 'Switch account'}).waitFor({timeout: 15000});
 
-    // A named subscription's sign-out has no bots here and says nothing about the shared key. Done, its row on
-    // Computers reads Signed out with Sign in, which signs it in again and brings Switch account back.
-    const acme = table.locator('[data-connection="profile:acme:codex"]');
-    await acme.getByRole('button', {name: 'Sign out'}).click();
-    await confirm.locator('[data-bots]', {hasText: 'No bot'}).waitFor();
-    assert.equal(await confirm.locator('h2').innerText(), 'Sign out of Codex (ChatGPT) · acme on Team box?');
-    assert.doesNotMatch(await confirm.innerText(), /shared key/);
-    await confirm.locator('[data-sign-out]').click();
-    await confirm.locator('[data-status][data-state=signed_out]').waitFor();
-    assert.deepEqual(writes.at(-1), {p: '/api/v2/computers/box/logouts', body: {runtime: 'codex', profile: 'acme'}});
-    await confirm.locator('[data-actions] [data-close]').click();
-    await acme.getByRole('button', {name: 'Sign in'}).waitFor({timeout: 15000});
-    assert.equal(await acme.locator('.computer-conn-signin .pill').innerText(), 'Signed out');
-    // No bot runs on it, and it still gets the red dot: nothing signs it back in by itself.
-    assert.match((await acme.locator('.computer-conn-signin').textContent()).replace(/\s+/g, ' ').trim(), /^Signed out · Sign in/);
-    assert.match(await page.locator('#set-machines [data-chip="profile:acme:codex"].attention').getAttribute('title'), /^Codex · Acme · Signed out · /);
-    assert.deepEqual(await buttons(acme), ['Sign in']);
-    await acme.getByRole('button', {name: 'Sign in'}).click();
-    const login = page.locator('dialog.model-login:not(.model-logout)');
-    await login.locator('code', {hasText: 'ABCD-1234'}).waitFor();
-    assert.deepEqual(writes.at(-1), {p: '/api/v2/computers/box/logins', body: {runtime: 'codex', profile: 'acme'}});
-    finish(last(), 'signed_in', () => { box.signed_out = {}; box.profiles[0].runtimes.codex = {signed_in: true, account: {email: 'dev@acme.example', plan: 'pro'}}; });
-    await login.locator('[data-status][data-state=signed_in]').waitFor();
-    await login.getByRole('button', {name: 'Done'}).click();
-    await acme.getByRole('button', {name: 'Switch account'}).waitFor({timeout: 15000});
-
     // Switch account: the sign-in dialog, as a switch; a cancel keeps the old account.
+    const login = page.locator('dialog.model-login:not(.model-logout)');
     writes.length = 0;
     await own('claude').getByRole('button', {name: 'Switch account'}).click();
     await login.locator('h2', {hasText: 'Switch account for Claude Code on Team box'}).waitFor();
@@ -291,22 +265,11 @@ const {unrouted} = require('./support/routes.cjs');
     await page.evaluate(() => loadSettings());
     await own('claude').getByRole('button', {name: 'Sign out'}).waitFor();
     assert.deepEqual(await buttons(own('claude')), ['Sign out']);
-    assert.deepEqual(await buttons(acme), ['Switch account', 'Sign out'], 'Codex still switches on a Mac');
+    assert.ok((await buttons(own('codex'))).includes('Switch account'), 'Codex still switches on a Mac');
     box.platform = 'linux';
     await page.evaluate(() => loadSettings());
     await own('claude').getByRole('button', {name: 'Switch account'}).waitFor();
 
-    // The computer's own Codex login on the acme account: one line, and each login's pair named.
-    box.readiness.runtimes.codex.account = {email: 'Dev@acme.example', plan: 'pro', checked_at: new Date().toISOString()};
-    await page.evaluate(() => loadSettings());
-    const both = table.locator('[data-connection="profile:acme:codex"]');
-    await both.locator('.computer-conn-login').first().waitFor();
-    assert.equal(await own('codex').count(), 0);
-    assert.deepEqual(await both.locator('.computer-conn-login').evaluateAll(groups => groups.map(g => [g.firstChild.textContent.trim(), ...[...g.querySelectorAll('button')].map(b => b.getAttribute('aria-label') || b.innerText)].join(' '))),
-      ['Subscription Switch account Sign out', "Computer's login Switch account Switch to API key Sign out"]);
-    await both.locator('[data-login=""]').getByRole('button', {name: 'Switch account'}).click();
-    await login.locator('h2', {hasText: 'Switch account for Codex (ChatGPT) on Team box'}).waitFor();
-    assert.deepEqual(writes.at(-1), {p: '/api/v2/computers/box/logins', body: {runtime: 'codex', switch: true}});
     assert.deepEqual(errors, []);
     await page.close();
 
@@ -314,6 +277,6 @@ const {unrouted} = require('./support/routes.cjs');
     const other = await open('cara');
     assert.equal(await other.page.locator('#set-machines [data-model-sign-out], #set-machines [data-model-switch], #set-machines [data-model-to-subscription]').count(), 0);
     assert.deepEqual(other.errors, []);
-    console.log('PASS: sign out with the bots named, switch account, use the shared key, rights, offline, refresh on a newer heartbeat, named Sign in and Mac');
+    console.log('PASS: sign out with the bots named, switch account, use the shared key, rights, offline, refresh on a newer heartbeat, and Mac');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });
