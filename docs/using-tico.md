@@ -50,7 +50,9 @@ If it times out, Tico says **Not confirmed** and **It may still arrive.** Your d
 1. Leave the draft unchanged.
 2. Within 48 hours of the first send attempt, choose **Retry** in the notification to try that send again.
 
-In the same tab, the unchanged draft keeps its original request ID and first-attempt time, including when you switch bots and return.
+In the same tab, the unchanged draft keeps its original request ID and first-attempt time when you switch bots and return.
+Reloading that tab also preserves them if your browser allows session storage.
+Temporary edits or clearing and restoring the draft while the send is still in progress keep the original send identity.
 Retry reuses that ID within the server's 48-hour replay window, so a message that reached the server is not saved twice.
 Retrying does not restart that window.
 
@@ -59,9 +61,14 @@ Pressing Enter or reconnecting does not send it either.
 The warning says **This message may already have sent. Check the chat before resending; edit or clear the draft to send a new message.**
 Check the chat before deciding whether to send it again.
 
-Editing or clearing the text, or changing attachments, forgets the pending request ID. Tico also forgets it when the server confirms the send.
+After the send finishes or reports an error, deliberately editing or clearing the text, or changing attachments, forgets the pending request ID.
+Tico also forgets it when the server confirms the send.
 An identical message sent later can be a new send.
 For example, retry an unchanged “Please review the Acme draft” after ten minutes in the same tab to avoid saving it twice.
+
+If Tico says **Not sent** because a rule refuses the message, no message was created.
+Resolve the refusal, then press **Send** to try the unchanged text again.
+An uncertain send keeps its original request ID for Retry.
 
 **Do file uploads have the same deadline?**
 **Unreleased.** Messages with attachments have no 30-second deadline: a large upload on a slow connection can take minutes.
