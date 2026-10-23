@@ -1,5 +1,6 @@
 # Builds the Tico images (server, runner and updater; linux/amd64 and linux/arm64) and publishes them to
 # ghcr.io/ticoteam: vX.Y.Z and latest on a v* tag. A manual run publishes edge from its branch.
+# Jobs run on on-demand RunsOn VMs in Tico's own AWS account, so a publish is never cut short by a Spot interruption.
 # Tests run before release, locally or in the manual Release validation workflow; this workflow only builds and publishes.
 name: Docker
 
@@ -19,7 +20,7 @@ jobs:
         image: [tico, tico-runner, tico-updater]
         platform: [amd64, arm64]
     # Each architecture builds natively: emulating npm and pip installs is slow and flaky.
-    runs-on: ${{ matrix.platform == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
+    runs-on: runs-on=${{ github.run_id }}/runner=4cpu-linux-${{ matrix.platform == 'arm64' && 'arm64' || 'x64' }}/spot=false/extras=s3-cache
     permissions:
       contents: read
       packages: write
@@ -58,7 +59,7 @@ jobs:
   publish:
     needs: build
     if: ${{ !cancelled() && needs.build.result == 'success' }}
-    runs-on: ubuntu-latest
+    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/spot=false
     strategy:
       fail-fast: false
       matrix:

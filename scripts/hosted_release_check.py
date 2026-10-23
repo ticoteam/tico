@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Manual validation controls, separate from the immutable candidate.
 
-Only ephemeral GitHub Ubuntu VMs may reclaim the fixed unused SDKs.
+Only ephemeral GitHub-hosted or RunsOn Ubuntu VMs may reclaim the fixed unused SDKs.
 Never tags, publishes, deploys, or uses a production installation.
 """
 import argparse
@@ -33,11 +33,19 @@ def inputs(env):
     return sha, previous
 
 
+def runs_on(env):
+    """A RunsOn VM: one EC2 instance launched for this one job and terminated after it."""
+    instance = env.get("RUNS_ON_INSTANCE_ID", "")
+    return (re.fullmatch(r"i-[0-9a-f]{8,17}", instance) is not None
+            and env.get("RUNNER_NAME", "").startswith(f"runs-on--{instance}--"))
+
+
 def hosted(env):
-    require(env.get("GITHUB_ACTIONS") == "true" and env.get("TICO_HOSTED_ENVIRONMENT") == "github-hosted"
+    kind = env.get("TICO_HOSTED_ENVIRONMENT")
+    require(env.get("GITHUB_ACTIONS") == "true" and (kind == "github-hosted" or (kind == "runs-on" and runs_on(env)))
             and env.get("RUNNER_OS") == "Linux" and env.get("RUNNER_ARCH") == "X64"
             and platform.system() == "Linux" and platform.machine() == "x86_64",
-            "requires an ephemeral GitHub-hosted Linux x64 VM; never run on a user or bot host")
+            "requires an ephemeral GitHub-hosted or RunsOn Linux x64 VM; never run on a user or bot host")
 
 
 def output(command, cwd=None):

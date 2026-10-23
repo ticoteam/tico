@@ -515,8 +515,8 @@ function taskLiveHTML(x, stopping = '', sent = '') {
   const label = `<span class="typing ${t.mode}" aria-hidden="true"><i></i><i></i><i></i></span><span class="thinking-word">${esc(word)}${
     working ? '…' : ''}</span>${step ? `<span class="task-live-step">${esc(step)}</span>` : ''}`;
   const stop = working && x.attempt_id && settingsCanManageBot(S.emps.find(e => e.name === x.bot))
-    ? `<button type="button" class="ghost task-live-stop" data-task-stop="${esc(x.attempt_id)}" data-bot="${esc(x.bot)}" title="Stop this run"${
-      stopping === x.attempt_id ? ' disabled>Stopping…' : '>Stop'}</button>` : '';
+    ? `<button type="button" class="ghost task-live-stop" data-task-stop="${esc(x.attempt_id)}" data-bot="${esc(x.bot)}" ${
+      stopping === x.attempt_id ? 'title="Stopping…" disabled>Stopping…' : 'title="Stop this run">Stop'}</button>` : '';
   return `<div class="thinking task-live" role="status" aria-label="${esc(t.tip)}${step ? ': ' + esc(step) : ''}">${
     working && x.attempt_id ? taskStepsFold(x.attempt_id, label, true) : label}${pendingHintHTML(run)}${stop}</div>`;
 }
@@ -536,13 +536,13 @@ function taskComposerToPaint(state) {
   if (hint) hint.textContent = taskComposerTo(state.data?.comment_to, box?.value);
 }
 async function taskRunStop(state, button) {
-  button.disabled = true;
+  button.disabled = true; button.title = 'Stopping…';
   try {
     await post(`/v2/bots/${encodeURIComponent(button.dataset.bot)}/stop`, {attempt_id: button.dataset.taskStop});
     state.stopping = button.dataset.taskStop;      // the redraws keep "Stopping…" until the run has ended
     button.textContent = 'Stopping…';
     taskChatLive(state);
-  } catch (e) { button.disabled = false; toast(`Not stopped: ${e.message}`, true); }
+  } catch (e) { button.disabled = false; button.title = 'Stop this run'; toast(`Not stopped: ${e.message}`, true); }
 }
 function taskCommentsRender(state, data, sent = '') {
   const host = state.host;
@@ -675,7 +675,8 @@ async function taskCommentSend(state) {
   if (!text) { box.focus(); return; }
   state.sending = true;
   const button = $('button[type=submit]', form), status = $('[data-task-chat-status]', form);
-  button.disabled = box.disabled = true; status.textContent = '';
+  // A disabled Send says why on hover; with an aria-label, the title is its screen-reader description too.
+  button.disabled = box.disabled = true; button.title = 'Sending…'; status.textContent = '';
   try {
     const data = await post(`/v2/tasks/${encodeURIComponent(state.id)}/comments`, {text, public: !!$('[data-comment-public]', form)?.checked});
     if (!taskChatCurrent(state)) return;
@@ -686,12 +687,12 @@ async function taskCommentSend(state) {
     if (data.comments && state.data) taskCommentsRender(state, {...state.data, comments: data.comments}, data.woke ? data.comment?.id : '');
     await taskChatRead(state);
     // The composer said so before sending when no bot would get it; the server has the last word.
-    status.textContent = data.woke || taskComposerTo(state.data?.comment_to, text) ? '' : 'Saved. The bot reads it on its next run on this task.';
+    status.textContent = data.woke || data.delivered || taskComposerTo(state.data?.comment_to, text) ? '' : 'Saved. The bot reads it on its next run on this task.';
   } catch (e) {
     if (taskChatCurrent(state)) status.textContent = `Not saved: ${e.message}`;
   } finally {
     state.sending = false;
-    if (taskChatCurrent(state)) { button.disabled = box.disabled = false; box.focus(); }
+    if (taskChatCurrent(state)) { button.disabled = box.disabled = false; button.title = 'Send'; box.focus(); }
   }
 }
 async function taskChatSend(state) { return taskCommentSend(state); }

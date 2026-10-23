@@ -403,8 +403,10 @@ def heartbeat(c, who, reports, capable, default_org="", live_tasks=None):
                                and not detail.get('setup_pending'))
                               or legacy_restore_passthrough)
         now = H.now()
-        changed = (detail.get('last_commit') != report.last_commit or detail.get('dirty_files') != report.dirty_files
-                   or detail.get('last_activity') != report.last_activity)
+        # A report that leaves a reading out (a removed checkout has no commit or activity) changes nothing:
+        # detail keeps the last value, so comparing None with it would count as activity on every heartbeat.
+        changed = any(getattr(report, key) is not None and detail.get(key) != getattr(report, key)
+                      for key in ('last_commit', 'dirty_files', 'last_activity'))
         # A push changes none of the above; only the count of commits not on the remote drops.
         pushed = report.ahead < detail.get('ahead', 0)
         if (changed or pushed) and detail.get('release_requested'):

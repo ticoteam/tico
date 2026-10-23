@@ -260,7 +260,7 @@ def test_mentioning_a_person_on_a_task_a_bot_owns_still_wakes_the_bot(api):
 def test_a_comment_on_a_task_with_no_bot_on_it_is_not_quiet(api):
     task = post(api, "tasks", {"owner": "ben", "title": "Book the venue", "body": "x"})
     said = post(api, f"tasks/{task['id']}/comments", {"text": "Any update?"})
-    assert said["woke"] is True and not said["comment"].get("refs", {}).get("quiet")
+    assert said["woke"] is False and said["delivered"] is True and not said["comment"].get("refs", {}).get("quiet")
 
 
 def test_the_author_edits_a_comment_and_nobody_wakes(api):
