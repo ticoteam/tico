@@ -288,7 +288,7 @@
     },
     "/api/v2/assistant": {
       "get": {
-        "summary": "The caller's Assistant: their private room id, whether it is on, the recent messages and what waits for their OK",
+        "summary": "The caller's Assistant (the CEO Bot, for the owner): their private room id, whether it is on, the recent messages and what waits for their OK",
         "operationId": "getAssistant",
         "responses": {
           "200": {
@@ -17449,6 +17449,38 @@
           "pending": {
             "type": "array"
           },
+          "ceo": {
+            "type": "boolean",
+            "description": "True for the owner, who talks to the CEO Bot in place of an Assistant: `bot` is the CEO Bot and `name` its name"
+          },
+          "earlier": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "room_id": {
+                    "type": "string"
+                  },
+                  "bot": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "bot",
+                  "name",
+                  "room_id"
+                ],
+                "additionalProperties": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The owner's own earlier Assistant chats, read-only (GET /api/v2/conversations/{room_id}/messages); null for everyone else, or none"
+          },
           "actors": {
             "type": "object",
             "additionalProperties": {
@@ -17462,6 +17494,8 @@
           "available",
           "bot",
           "can_turn_on",
+          "ceo",
+          "earlier",
           "execution",
           "has_more",
           "messages",

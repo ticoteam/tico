@@ -338,7 +338,8 @@ STABLE = [
     ("/api/v2/librarian/turn-on", "post", "Docs", "turnOnLibrarian",
      "Owner only: add the Librarian from the catalog (or wake a planned one) and activate it", None),
     ("/api/v2/assistant", "get", "Assistant", "getAssistant",
-     "The caller's Assistant: their private room id, whether it is on, the recent messages and what waits for their OK",
+     "The caller's Assistant (the CEO Bot, for the owner): their private room id, whether it is on, the recent messages "
+     "and what waits for their OK",
      "Assistant"),
     ("/api/v2/assistant/messages", "post", "Assistant", "sendAssistantMessage",
      "Say something to the Assistant. A lookup is answered at once (fast: true, with the reply); anything else "
@@ -872,9 +873,15 @@ SCHEMAS = {
                                     "text so far; null when it is not working (show a thinking state while it is)"},
                       "actions": {"type": "object", "description": "{action id: proposal} for every card in `messages` "
                                   "(a message whose refs.action names one is a Confirm / Cancel card)"},
-                      "pending": "a"},
+                      "pending": "a",
+                      "ceo": {"type": "boolean", "description": "True for the owner, who talks to the CEO Bot in place of an "
+                              "Assistant: `bot` is the CEO Bot and `name` its name"},
+                      "earlier": {"oneOf": [obj({"room_id": "s", "bot": "s", "name": "s"},
+                                                required=["room_id", "bot", "name"]), {"type": "null"}],
+                                  "description": "The owner's own earlier Assistant chats, read-only (GET "
+                                  "/api/v2/conversations/{room_id}/messages); null for everyone else, or none"}},
                      required=["available", "state", "bot", "name", "can_turn_on", "room_id", "messages", "has_more",
-                               "next_before", "execution", "actions", "pending"], actors=ACTORS),
+                               "next_before", "execution", "actions", "pending", "ceo", "earlier"], actors=ACTORS),
     "Librarian": obj({"available": "b", "state": "s", "bot": "s", "name": "s", "can_turn_on": "b"},
                      required=["available", "state", "bot", "name", "can_turn_on"]),
     "DocsAsked": obj({"conversation_id": "s", "message_id": "s",

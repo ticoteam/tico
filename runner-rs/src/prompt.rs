@@ -89,7 +89,9 @@ pub fn replayed(attempt: &Value, names: &Names, after: Option<&str>, resumed: bo
         format!("Conversation: {conv_id}. {app} keeps all of it, even what a compaction, a model change or a new session took out of your context: `hub conversation show {conv_id}` reads the newest 200 messages, and `--before` with its `next_before` reads the page before. Your repository, its files and git log, is the record of your own past work."),
     ];
     crate::sessions::prompt_head(attempt, &mut lines);
-    if bot == "coo" && conversation["scope"] == "personal" {
+    // The Assistant's room, and the owner's CEO Bot chat, where the CEO Bot is the owner's Assistant (backend/rooms.py CEO_ROOM).
+    let ceo_chat = bot == "goal-manager" && conversation["room_key"] == "ceo";
+    if (bot == "coo" || ceo_chat) && conversation["scope"] == "personal" {
         let owner = if truthy(&conversation["owner_actor"]) { s(&conversation["owner_actor"]) } else { s(&attempt["principal"]) };
         lines.extend([
             format!("You are privately assisting {owner}. "),
@@ -280,5 +282,16 @@ mod tests {
             let id = attempt["id"].as_str().unwrap();
             assert_eq!(prompt(&attempt, &names, after, resumed), python_prompt(id), "{id}");
         }
+    }
+
+    #[test]
+    fn the_ceo_bot_assists_the_owner_privately_only_in_their_chat() {
+        let names = Names { company: "Acme".into(), app: "Tico".into() };
+        let turn = |room_key: &str| json!({"id": "a5", "bot": "goal-manager",
+            "conversation": {"id": "c5", "kind": "chat", "scope": "personal", "owner_actor": "human:ana", "room_key": room_key},
+            "message": {"id": "m5", "from_actor": "human:ana", "body": "Plan my week", "refs": {"assistant": true}}, "history": []});
+        assert!(prompt(&turn("ceo"), &names, None, false).contains("You are privately assisting human:ana."));
+        // Its old per-person chat (room_key goal-manager) is not the owner's chat: no person's authority there.
+        assert!(!prompt(&turn("goal-manager"), &names, None, false).contains("privately assisting"));
     }
 }

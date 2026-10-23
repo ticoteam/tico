@@ -175,8 +175,10 @@ function renderInboxNav() {
   list.innerHTML = rows.map(inboxNavLink).join('');
 }
 function renderLibrarians() {
+  // The owner's tab is the CEO Bot, by its name; everyone else's the Assistant (ui/app/state.js meCeo).
+  const mine = myChatBot();
   for (const [id, slug, href] of [
-    ['nav-assistant', assistantBot(), mePerson() ? ASSISTANT : `#/bot/${encodeURIComponent(assistantBot())}`],
+    ['nav-assistant', mine, mePerson() ? ASSISTANT : `#/bot/${encodeURIComponent(mine)}`],
     ['nav-botops', 'botops', '#/bot/botops'],
   ]) {
     const el = document.getElementById(id);
@@ -184,6 +186,8 @@ function renderLibrarians() {
     el.href = href;
     el.hidden = !(S.emps || []).some(e => e.name === slug);
   }
+  const label = document.querySelector('#nav-assistant [data-nav-name]');
+  if (label && label.textContent !== myChatName()) label.textContent = myChatName();
   for (const [id, slug] of [['nav-docs-librarian', 'librarian'], ['nav-market-librarian', 'librarian']]) {
     const el = document.getElementById(id);
     if (!el) continue;

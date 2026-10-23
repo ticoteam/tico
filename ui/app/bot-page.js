@@ -396,7 +396,12 @@ async function pageBot(slug, tab) {
   } else {
     if (BOT_PILL) chatDraftSave(BOT_PILL);
     if (BOT_PILL?.slug === slug) { PILLS.delete(BOT_PILL); BOT_PILL = null; }
-    $('#chat-composer').innerHTML = `<section class="card"><h2>Chat is not open to you</h2><p class="muted">You can see ${esc(e.display_name || slug)} but not send it requests. Ask its owner for Write access.</p></section>`;
+    // The CEO Bot: of people, only the owner talks to it, in their menu tab; anyone's earlier chat here stays readable.
+    $('#chat-composer').innerHTML = slug === 'goal-manager' && e.my_access?.write
+      ? `<section class="card"><p class="muted">${meCeo()
+        ? `You talk to ${esc(ceoBotName())} in your own chat: <a href="${ASSISTANT}">open it</a>.`
+        : `Only the company's owner talks to ${esc(ceoBotName())}. Ask <a href="${ASSISTANT}">your Assistant</a> instead.`}</p></section>`
+      : `<section class="card"><h2>Chat is not open to you</h2><p class="muted">You can see ${esc(e.display_name || slug)} but not send it requests. Ask its owner for Write access.</p></section>`;
   }
   window.botTools?.mountStrip($('#bot-tool-strip'), {slug, get, esc, href: `${base}/tools`, skipModel: !!runtimeTag(e)});
   if (!limited) {
