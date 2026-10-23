@@ -11,6 +11,7 @@ bot's missing key or another profile's sign-in never decides it.
     can_run      True, False, or None when nothing says (offline, an older computer, not checked yet, not applicable)
     applicable   False for a bot an external agent runs (Hermes, OpenClaw, Grok Bot): no computer check applies
     problem      one plain sentence when can_run is not True
+    warning      an API-key computer login bills separately from a subscription; can_run stays True
     fix, link    what the person does and where (a relative `#/...` link), only when can_run is False or the bot has no
                  computer
     computer     {"id", "label"} or None; online
@@ -31,6 +32,30 @@ SIGNED_OUT = ("missing", "failed", "rejected")
 def _config(c, bot):
     row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
     return H._json(row["config_json"], {}) or {} if row else {}
+
+
+def computer_login(readiness, runtime):
+    """The physical default's report, never a dormant subscription's aggregate verdict."""
+    state = (readiness.get("runtimes") or {}).get(runtime) or {}
+    profile = (state.get("profiles") or {}).get(readiness.get("computer_profile") or "") or {}
+    # Account/key metadata lives on the runtime row; per-home rows carry only the sign-in check.
+    return {**state, **profile}
+
+
+def login_warning(readiness, runtime, harness=""):
+    """An API login has separate billing; a missing plan reading says nothing about its API credit."""
+    caps = harness_caps(harness, runtime)
+    if not caps.get("subscription_profiles") or caps.get("api_keys") != "computer":
+        return ""
+    state = computer_login(readiness, runtime)
+    if state.get("authenticated") != "ready":
+        return ""
+    if ((state.get("account") or {}).get("kind") == "api_key" or state.get("key")
+            or "api key" in str(state.get("detail") or "").lower()):
+        return ("This computer uses an API key, not a subscription allowance. API credit is not checked here. "
+                "Check the provider's API billing, or switch this computer to the intended subscription "
+                "in Settings > Computers before running its bots.")
+    return ""
 
 
 def own_harness(c, bot, runtime):
@@ -130,9 +155,11 @@ def can_run(c, bot, runtime, runner=None, harness="", model=""):
                            " Credential in Credentials", "#/credentials")
         return verdict(True)
     # Every bot runs each tool on its computer's one login for it: a bot has no sign-in of its own.
-    shared = (state.get("profiles") or {}).get("") or state
+    shared = computer_login(readiness, runtime)
     signed = str(shared.get("authenticated") or "unknown")
     if signed == "ready":
+        if warning := login_warning(readiness, runtime, harness):
+            out["warning"] = warning
         return verdict(True)
     if signed in SIGNED_OUT and (line := models_preset.gateway_line(
             c, bot, readiness, config={"runtime": runtime, "model": model or config.get("model")})):

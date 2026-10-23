@@ -18223,6 +18223,9 @@
           },
           "problem": {
             "type": "string"
+          },
+          "warning": {
+            "type": "string"
           }
         },
         "required": [
@@ -18234,7 +18237,8 @@
           "profile",
           "runtime",
           "signed_in",
-          "source"
+          "source",
+          "warning"
         ],
         "additionalProperties": true
       },

@@ -39,11 +39,12 @@ function machineConnections(machine) {
     // even before the tool reports it signed in; until it does, the line says so and claims no reading.
     const shared = machine.shared_with?.[runtime] || null;
     const blocked = value?.data_problem || reported?.data_problem || '';
+    const warning = links.find(b => b.runtime === runtime && b.warning)?.warning || '';
     // Signed out from Tico (Sign out) stays a line, so it can sign in again or go back to the shared key.
     if (!(auth === 'ready' || auth === 'rejected' || bots.length || machineSignedOut(machine, runtime) || shared)) continue;
     const reading = {signed_in: auth === 'ready' ? true : auth === 'rejected' || (auth === 'missing' && !shared) ? false : null,
       account: value?.account, weekly: value?.weekly, five_hour: value?.five_hour};
-    rows.push({key: `own:${runtime}`, runtime, name: shared ? 'Shared key' : "Computer's login", own: true, auth, value, state: reading, bots, shared, blocked});
+    rows.push({key: `own:${runtime}`, runtime, name: shared ? 'Shared key' : "Computer's login", own: true, auth, value, state: reading, bots, shared, blocked, warning});
   }
   for (const r of rows) {
     // Signed out from Tico is a red dot even with no bots on it yet: nothing signs it back in by itself.
@@ -149,6 +150,7 @@ function machineConnectionHTML(machine, conn, online, manage) {
     <div class="computer-conn-head">${conn.attention ? '<span class="machine-chip-dot" aria-hidden="true"></span>' : ''}<strong>${esc(conn.tool)}</strong><span>${esc(kind)}</span>${tags}</div>
     <div class="computer-conn-signin">${signIn}${action}${rejected}</div>
     ${usage ? `<div class="computer-conn-usage">${usage}</div>` : ''}
+    ${conn.warning ? `<p class="computer-conn-warning" role="note" data-login-warning="${esc(conn.runtime)}">${esc(conn.warning)}</p>` : ''}
     ${conn.shared ? `<div class="computer-conn-shared-with muted" data-shared-with>${esc(machineSharedWords(conn.shared))}</div>` : ''}
     <div class="computer-conn-bots muted">${esc(bots)}</div>${shared}
   </div>`;

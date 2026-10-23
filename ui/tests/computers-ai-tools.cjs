@@ -77,7 +77,7 @@ const {unrouted} = require('./support/routes.cjs');
       // The manifests' capabilities this page reads (runner/harnesses/*.toml).
       if (p === '/api/v2/models') return json({models: [], harnesses: [
         {id: 'claude', runtime: 'claude', name: 'Claude Code', capabilities: {account: 'status-json', weekly_usage: 'turns', browser_sign_in: true}},
-        {id: 'codex', runtime: 'codex', name: 'Codex', capabilities: {account: 'app-server', weekly_usage: 'refresh', browser_sign_in: true}},
+        {id: 'codex', runtime: 'codex', name: 'Codex', capabilities: {account: 'app-server', weekly_usage: 'refresh', browser_sign_in: true, sign_out: ['logout']}},
         // terminal_login as the server sends it: the executable and its arguments (clients/harness_manifests.py).
         {id: 'grok', runtime: 'grok', name: 'Grok Build', capabilities: {account: '', weekly_usage: 'manual', terminal_login: 'grok login'}},
         {id: 'cursor', runtime: 'cursor', name: 'Cursor Agent', capabilities: {account: '', weekly_usage: '', terminal_login: 'cursor-agent login', api_keys: 'computer'}},
@@ -171,6 +171,24 @@ const {unrouted} = require('./support/routes.cjs');
     assert.equal(await dialog.locator('[data-detail-section=settings] [data-computer-remove=box]').innerText(), 'Revoke computer');
     await dialog.locator('[data-detail-close]').click();
     assert.equal(await page.locator('#set-machines dialog.computer-detail[open]').count(), 0);
+
+    // API-key billing is visible before an upgrade moves bots to the computer login; account switching stays available.
+    const account = box.readiness.runtimes.codex.account;
+    box.readiness.runtimes.codex.account = {kind: 'api_key'};
+    box.bot_connections[1].warning = 'API credit is not checked here. Check billing or switch to the intended subscription.';
+    await page.evaluate(() => loadSettings('devices'));
+    await row('box').locator('.machine-facts').click();
+    await dialog.locator('[data-login-warning=codex]').waitFor();
+    assert.match(await dialog.locator('[data-login-warning=codex]').innerText(), /API credit is not checked/);
+    assert.equal(await codex.getByRole('button', {name: 'Switch to subscription', exact: true}).isEnabled(), true);
+    await page.setViewportSize({width: 390, height: 844});
+    assert.equal(await dialog.locator('[data-login-warning=codex]').isVisible(), true);
+    assert.equal(await dialog.evaluate(el => el.scrollWidth <= el.clientWidth), true);
+    await dialog.locator('[data-detail-close]').click();
+    box.readiness.runtimes.codex.account = account;
+    delete box.bot_connections[1].warning;
+    await page.setViewportSize({width: 1440, height: 900});
+    await page.evaluate(() => loadSettings('devices'));
 
     // 24. The pop-up of a computer with no connection.
     await row('empty').locator('[data-no-connection]').click();

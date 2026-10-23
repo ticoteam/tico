@@ -50,10 +50,30 @@ def _plural(n, one, many=None):
     return f"{n} {one if n == 1 else many or one + 's'}"
 
 
+def _login_dependencies(c, settings):
+    """Active bots' primary and fallback tools that actually use a computer login."""
+    from .harnesses import harness_caps, normalize_fallback, resolve_harness
+    from .shared_bots import follow
+    record, found = providers.load(c, settings), {}
+    for row in c.execute("SELECT a.runner_id,a.bot,bc.config_json FROM assignments a JOIN bots b ON b.slug=a.bot "
+                         "AND b.state='active' LEFT JOIN bot_config bc ON bc.bot=a.bot"):
+        config = providers.fill(record, follow(c, row['bot'], H._json(row['config_json'], {}) or {}))
+        fallback = normalize_fallback(config.get('fallback')) or {}
+        for choice in (config, fallback):
+            runtime = choice.get('runtime')
+            caps = harness_caps(resolve_harness(choice, runtime), runtime)
+            if (runtime and not gateway_connection.is_tico(choice.get('model'))
+                    and caps.get('readiness') is not False and caps.get('api_keys') != 'bot'):
+                found.setdefault(row['runner_id'], set()).add(runtime)
+    return found
+
+
 def _computers(c, runners_online, settings):
+    from .readiness import computer_login, login_warning, SIGNED_OUT
     since = {r["id"] for r in runners_online}
     rows, fleet = [], runner_versions.load(c)
     _, assigned = providers.runtimes_needed(c, settings)
+    run_on = _login_dependencies(c, settings)
     # The one default a computer installs for its first sign-in (providers.default_runtime), not every provider's
     # runtime while the company has no default model: the runner installs only that one.
     default = providers.default_runtime(providers.load(c, settings))
@@ -78,6 +98,9 @@ def _computers(c, runners_online, settings):
                                    "rejected_at": v.get("rejected_at") or "" if v.get("authenticated") == "rejected" else "",
                                    "rejected_reason": v.get("rejected_reason") or "" if v.get("authenticated") == "rejected" else "",
                                    "credential_source": v.get("credential_source") or "",
+                                   "login_warning": login_warning(document, n) if n in run_on.get(r["id"], ()) else "",
+                                   "login_unavailable": (n in run_on.get(r["id"], ())
+                                                         and computer_login(document, n).get("authenticated") in SIGNED_OUT),
                                    "signable": bool(v.get("installed")) and v.get("authenticated") != "ready"
                                    and n in model_login.RUNTIMES,
                                    # A model this computer runs that it has no sign-in for, and that no key from the
@@ -87,7 +110,8 @@ def _computers(c, runners_online, settings):
                                    and n in model_login.RUNTIMES
                                    and n in assigned.get(r["id"], {default})}
                                   for n, v in sorted(runtimes.items())
-                                  if v.get("installed") or n in wanted or n in assigned.get(r["id"], ())]})
+                                  if v.get("installed") or n in wanted or n in assigned.get(r["id"], ())
+                                  or n in run_on.get(r["id"], ())]})
     return rows
 
 
@@ -519,6 +543,8 @@ def runtime_choice(c, bot, runtime, who, computers, harness="", model=""):
     from .readiness import can_run
     answer = can_run(c, bot, runtime, harness=harness, model=model)
     view = {key: answer.get(key) for key in ("can_run", "problem", "fix", "link")}
+    if answer.get("warning"):
+        view["warning"] = answer["warning"]
     view["computer"] = answer.get("computer")
     if answer.get("can_run") is not False:
         return view
@@ -1412,6 +1438,19 @@ def view(c, who, settings, auth, github, config):
                              + " Sign in from Settings > Computers (BotOps can start it). To have new computers sign in by "
                              "themselves, store the company's model key in Credentials and give it to every computer.",
                              [_fix("Open Computers", "#/settings", "devices"), _fix("Open Credentials", "#/credentials")]))
+    # A signed-in API key can be paid and usable, but it never spends a subscription's allowance. Keep this visible
+    # before an upgrade moves bots to the computer login, even when none of those bots has queued work yet.
+    logins = [(computer, runtime) for computer in computers if computer["online"]
+              for runtime in computer["runtimes"] if runtime["login_warning"] or runtime["login_unavailable"]]
+    if logins:
+        unavailable = any(runtime["login_unavailable"] for _, runtime in logins)
+        summary = ("; ".join(f"{computer['label']} / {_harness_name(runtime['name'])}: "
+                             + ("bots depend on an unavailable computer login. Sign in or switch account in Settings > Computers"
+                                if runtime["login_unavailable"] else runtime["login_warning"])
+                             for computer, runtime in logins[:5]) if full else
+                   f"{len(logins)} computer login(s) used by bots need attention. Ask a computer operator to check Settings > Computers.")
+        checks.append(_check("computer_logins", "Computer logins used by bots", "bad" if unavailable else "warn", summary,
+                             [_fix("Open Computers", "#/settings", "devices")] if full else []))
     # The Tico AI Gateway's word on the company's key, for the owner who manages the connection: 80% of the month's cap
     # used, the cap reached, or the key revoked (backend/gateway_connection.py).
     if kind == "owner" and (gateway := gateway_connection.health(c, settings)):

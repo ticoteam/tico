@@ -536,7 +536,7 @@ SCHEMAS = {
         "state": {"enum": ["requested", "succeeded", "unavailable", "failed", "expired"]},
         "requested_at": "s", "updated_at": "s", "expires_at": "s"}),
     "BotSubscription": obj({"profile": "n", "id": "s", "display_name": "s", "source": {"enum": ["computer"]}, "computer": {"anyOf": [obj({"runner_id": "s", "label": "s"}), {"type": "null"}]},
-                            "runtime": "s", "harness": "s", "signed_in": {"type": ["boolean", "null"]}, "problem": "s"}),
+                            "runtime": "s", "harness": "s", "signed_in": {"type": ["boolean", "null"]}, "problem": "s", "warning": "s"}),
     "ChatGoal": obj({"id": "s", "conversation_id": "s", "bot": "s", "objective": "s", "status": "s",
                      "note": "s", "set_by": "s", "set_at": "s", "updated_at": "s", "ended_at": "n"},
                     required=["id", "conversation_id", "bot", "objective", "status", "note", "set_by", "set_at", "updated_at", "ended_at"]),
