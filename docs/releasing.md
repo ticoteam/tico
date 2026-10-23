@@ -23,7 +23,7 @@ only marks the merged PR links the running release contains as Shipped (backend/
 
 ## The fast path
 
-1. **While building a PR**, run the focused tests for its changes; CI also runs the default suite (below).
+1. **While building a PR**, run the focused tests for its changes; CI selects affected tests conservatively (below).
 2. **Write release notes.** The Technical Writer writes the version section in `CHANGELOG.md` at the cut.
 3. **Before you tag**, the release candidate must pass the full suite: the default suites, the opt-in tests and a short whole-product
    check: the manually dispatched Release validation workflow across fresh GitHub-hosted Linux VMs, or
@@ -35,9 +35,27 @@ only marks the merged PR links the running release contains as Shipped (backend/
 
 ## Tests on a PR
 
-Run tests on your computer while you work. The PR checks workflow also runs the default suite (pytest without `slow`,
-plus the core browser scripts) on every pull request to main and every push to main, so a failure shows on the pull
-request. Write unit
+Run tests on your computer while you work. The PR checks workflow uses audited affected-test mappings on pull requests to main. Unknown or shared changes
+(including conftest, workflows, dependencies and unmapped backend modules) fall back to the full default Python
+suite and core browser scripts. Main pushes always run that full default suite, and a newer main push never
+cancels an earlier one; only a pull request's superseded run is cancelled. Runner/harness changes also run
+slow conformance on the Rust runner and all its fake harnesses; UI changes select their browser scripts, including
+imported-history for chat changes, or every browser script when the UI mapping is uncertain.
+
+Python jobs install no npm packages, browsers or apt packages. The browser job caches both browser binaries and
+Ubuntu package indexes/debs under exact runner-image and dependency-lock keys. A warm cache uses apt with
+`--no-download`; a cold cache uses the canonical Ubuntu mirror. Each Install attempt has a five-minute limit with
+one retry. Pip and npm download caches remain enabled. The four Python groups use JUnit per-file timings from
+the last successful full main run, with collected test counts until timings exist. New files use the observed
+seconds per test. The **PR job timings** check links each job and its elapsed seconds in its summary. It also
+fails if a required job failed or was cancelled. The target is under ten minutes from start to completed checks;
+hosted run receipts, including cache state, establish whether that target is met.
+
+The initial backend leaf mapping is deliberately small (`backend/task_loops.py` to its feature test); extend
+`scripts/pr_checks.py` only after checking related coverage. Filename similarity alone does not prove isolation.
+The Release validation workflow retains its full candidate gate and never cancels a running validation.
+
+Write unit
 tests while you build and run them as you go; once the change passes, keep only the highest-value ones. Before merging,
 run the test files for what you touched and the checks the change obviously affects, not the full suite. For each release, run the full
 suite once on its frozen candidate. The scheduled nightly gate on main runs separately.
@@ -57,7 +75,7 @@ That is the default suite: pytest in parallel without the tests marked `@pytest.
 core browser scripts (`CORE` in `scripts/ui-tests.cjs`) with the load-aware concurrency described below. The check records wall time and load and fails
 if the combined run reaches 300 seconds; it should take about two minutes. This is a hard budget for any suite that runs on merge or on a schedule. Keep it by keeping few tests, the ones
 that guard security and privacy boundaries, data safety and core contracts, and by cutting one when you add one. The Docker workflow builds the three images for a `v*` tag and the Release workflow publishes the
-GitHub release. The PR checks workflow runs this default suite on every pull request to main and every push to main. Release validation runs the full gate for an explicitly dispatched immutable candidate and is also scheduled nightly on main against the latest published release. The configured nightly cron is 10:17 UTC (03:17 PDT / 02:17 PST); see `.github/workflows/ci.yml`. The manual screenshots workflow
+GitHub release. The PR checks workflow runs this full default suite on main and on uncertain PR selections; known PR mappings run the affected tests above. Release validation runs the full gate for an explicitly dispatched immutable candidate and is also scheduled nightly on main against the latest published release. The configured nightly cron is 10:17 UTC (03:17 PDT / 02:17 PST); see `.github/workflows/ci.yml`. The manual screenshots workflow
 generates documentation images from the Actions tab (Run workflow). `--release` runs this suite too, along with the
 slow tests and every browser script. Both release candidate validation and the scheduled nightly gate cover that full suite.
 
@@ -89,6 +107,35 @@ Targeted macOS compile/native checks can use a standard hosted Mac; desktop perm
 computer acceptance still need the corresponding Mac environment. The full Docker gate belongs on Linux.
 
 ## Before you tag
+
+Build the release task's evidence checklist from the candidate's merged PRs and their linked Dev tickets:
+
+```sh
+python scripts/release_checklist.py --head <candidate> --previous vX.Y.Z > checklist.md
+python scripts/release_checklist.py --head <candidate> --previous vX.Y.Z --json > checklist.json
+```
+
+Run in a checkout with fetched release tags, a `gh` login for the repository and a scoped `hub` login for
+the shared team API. No local team database is opened. Without `--previous`, it selects the earlier release
+tag using the freeze guard's rule. `--github owner/repository` overrides the checkout's origin.
+Attach the Markdown checklist to the release task; the JSON companion retains structured evidence and source
+message IDs. The checklist includes every PR found in the first-parent candidate range, each visible linked
+Dev ticket's current step, Review 1/2 verdicts and their full heads, test receipts, `qa` tag, QA verdicts and
+Technical Writer tasks and links. Security is outside the release pipeline; no Security result is required.
+
+Evidence comes from the ticket owner's messages and the owners of step children titled `Review 1:`,
+`Review 2:`, `QA:`, `Docs:`, `Documentation:` or `Technical Writer:`. Review 1 always requires a verdict;
+Review 2 requires one when its step child exists, and `qa` tickets require a QA approval and completed docs
+child. The latest verdict must approve the merged PR head; older heads are flagged for the Release Manager
+to resolve with the recorded review delta. A passing test receipt names the full PR head, tests and a passing
+result on the same line (for example, `Tests: head <full-sha>: 12 passed, 0 failed`). The latest receipt for that
+head must pass; a newer pending result remains a gap. Any recorded failure at that head stays a gap for the Release
+Manager to resolve, including after a passing rerun. Other test messages remain visible as evidence. Unrecorded reviews, legacy evidence elsewhere and unreadable tickets stay gaps rather
+than being inferred as passes.
+
+Exit 0 means no evidence gaps were found, 1 means the report lists gaps, and 2 means collection failed
+(including incomplete pagination). This is a visible-evidence snapshot for the Release Manager to read;
+it does not run tests, authorize a release, move tickets, dispatch workflows or replace the freeze guard.
 
 At freeze, before asking for Release validation, check what the candidate carries since the previous tag:
 

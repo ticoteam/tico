@@ -1363,12 +1363,22 @@ class Execution:
             return
         for row in rows:
             with isolated(c, "expire", row["id"]):
-                state = "queued" if row["state"] == "leased" else "uncertain"
+                retry_state = state = "queued" if row["state"] == "leased" else "uncertain"
+                jobs = c.execute("SELECT j.id,j.message_id,t.status AS task_status FROM jobs j "
+                                 "JOIN messages m ON m.id=j.message_id JOIN conversations cv ON cv.id=m.conversation_id "
+                                 f"LEFT JOIN tasks t ON t.id={H.MESSAGE_TASK_SQL} "
+                                 "WHERE j.attempt_id=? AND j.state IN ('leased','running','input')", (row["id"],)).fetchall()
+                # A lost lease may retry open work, but cannot undo Stop or resurrect a finished task.
+                # Inputs folded into a running turn have their own jobs: Stop applies only to its original request.
+                cancelled = {job["id"] for job in jobs if (row["stop_requested"] and job["id"] == row["job_id"])
+                             or job["task_status"] in ("done", "closed", "declined")}
+                if row["job_id"] in cancelled:
+                    state = "cancelled"
                 c.execute("UPDATE attempts SET state='expired',finished=? WHERE id=?", (H.now(), row["id"]))
                 from .performance import stamp_attempt
                 stamp_attempt(c, row["id"], row["runner_id"], "end")
                 gateway_connection.forget(c, row["id"])
-                if row["state"] == "leased":
+                if row["state"] == "leased" and state != "cancelled":
                     tries = c.execute("SELECT count(*) FROM attempts WHERE job_id=? AND started IS NULL "
                                       "AND state='expired' AND finished>=?", (row["job_id"], self.booted)).fetchone()[0]
                     if tries >= PRE_START_TRIES:
@@ -1392,10 +1402,19 @@ class Execution:
                                 H.say(c, "bot:" + row["bot"] if bot else H.KEEPER, msg["from_actor"], reason, kind="notice",
                                       conversation_id=msg["conversation_id"], in_reply_to=msg["id"],
                                       refs={"turn_id": row["id"]})
-                c.execute("UPDATE jobs SET state=? WHERE attempt_id=? AND state IN ('leased','running','input')", (state, row["id"]))
+                for job in jobs:
+                    job_state = "cancelled" if job["id"] in cancelled else retry_state if state == "cancelled" else state
+                    c.execute("UPDATE jobs SET state=? WHERE id=?", (job_state, job["id"]))
                 H.turn_finish(c, H.KEEPER, row["id"], exit_code="failed" if state == "failed" else "interrupted",
                               summary=reason if state == "failed" else "Runner lease expired")
-                if H.bot(c, row["bot"]):
+                if row["stop_requested"]:
+                    job = c.execute("SELECT m.conversation_id FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.id=?",
+                                    (row["job_id"],)).fetchone()
+                    if job:
+                        self.stopped(c, row, job["conversation_id"])
+                elif state == "cancelled":
+                    settle_status(c, row["bot"], "idle", "", claimed=row["created"])
+                elif H.bot(c, row["bot"]):
                     settle_status(c, row["bot"], "crashed",
                                   reason if state == "failed" else "One run stopped; saved for later",
                                   claimed=row["created"])
@@ -1531,8 +1550,11 @@ class Execution:
         # From this computer's bots to their queued jobs (jobs_queue): left to itself SQLite starts from
         # every keeper notice ever sent, tens of milliseconds on each of a runner's frequent claims.
         if c.execute("SELECT 1 FROM assignments x CROSS JOIN jobs j CROSS JOIN messages m "
+                     f"JOIN conversations cv ON cv.id=m.conversation_id JOIN tasks t ON t.id={H.MESSAGE_TASK_SQL} "
                      "WHERE x.runner_id=? AND j.bot=x.bot AND j.state='queued' AND m.id=j.message_id "
-                     "AND m.from_actor=? AND m.kind='notice' AND m.body LIKE 'New task from %' LIMIT 1",
+                     "AND m.from_actor=? AND m.kind='notice' AND t.status IN ('done','closed','declined') "
+                     "AND NOT EXISTS (SELECT 1 FROM job_recovery r WHERE r.job_id=j.id "
+                     "AND r.attempt_id=j.attempt_id AND r.decision='resume') LIMIT 1",
                      (who.runner_id, H.KEEPER)).fetchone():
             return None
         why = runner_versions.paused(c, who.runner_id)
@@ -1587,21 +1609,21 @@ class Execution:
         # this was recorded, the next wake compared itself against a heartbeat from before the
         # sleep, read the gap as one long stretch of presence, and took the work.
         awake_since = self.stamp(c, who, runner, now)
-        # An initial task notice can sit in the queue while another turn finishes
-        # that task. Suppress only this obsolete wake, never a later human follow-up.
+        # Any keeper notice can sit queued after its task finishes. Suppress obsolete automatic
+        # wakes of every kind, while preserving people's messages and explicitly resumed jobs.
         obsolete = c.execute("SELECT j.id,j.message_id,t.id AS task_id FROM assignments x "
             "CROSS JOIN jobs j CROSS JOIN messages m "
             f"JOIN conversations cv ON cv.id=m.conversation_id JOIN tasks t ON t.id={H.MESSAGE_TASK_SQL} "
             "WHERE x.runner_id=? AND j.bot=x.bot AND j.state='queued' AND m.id=j.message_id "
             "AND m.from_actor=? AND m.kind='notice' "
-            "AND m.body LIKE 'New task from %' AND t.status IN ('done','closed') "
-            "AND m.to_actor=t.owner AND NOT EXISTS (SELECT 1 FROM job_recovery r WHERE r.job_id=j.id "
+            "AND t.status IN ('done','closed','declined') "
+            "AND NOT EXISTS (SELECT 1 FROM job_recovery r WHERE r.job_id=j.id "
             "AND r.attempt_id=j.attempt_id AND r.decision='resume')", (who.runner_id,H.KEEPER)).fetchall()
         for old in obsolete:
             selected = None
             c.execute("UPDATE jobs SET state='cancelled' WHERE id=?", (old['id'],))
             c.execute("UPDATE messages SET delivered_at=coalesce(delivered_at,?) WHERE id=?", (H.now(),old['message_id']))
-            H.event(c,H.KEEPER,'job.suppress',old['id'],{'reason':'Task completed before initial notice delivery','task_id':old['task_id']})
+            H.event(c,H.KEEPER,'job.suppress',old['id'],{'reason':'Task finished before keeper notice delivery','task_id':old['task_id']})
         why = runner_versions.paused(c, who.runner_id)
         if why:
             return {"attempt": None, "paused": why}
@@ -2308,13 +2330,14 @@ class Execution:
         # NOT_ISOLATED). Settled now, so the bot says why once rather than its lease lapsing into a retry.
         # Likewise a turn sent away from a held login (`primary_held`) that found no fallback ready after all: nothing
         # ran, and it goes back to wait out the hold (backend/login_holds.py after_turn).
-        # And a turn stopped while it waited for its shared login, by a person or because its task was done or closed
-        # meanwhile (`skipped`): nothing ran, and its job ends with it.
+        # And a turn stopped while it waited for its shared login: older runners report failed, newer ones interrupted.
+        # Either settles the Stop. A task done or closed meanwhile (`skipped`) also ends its waiting turn.
         skipped = body.outcome == "interrupted" and not row["stop_requested"] and finished_before_start(c, row)
         unstarted = (row["state"] == "leased" and body.outcome == "failed"
                      and (any(gateway.run_code(error) == gateway.NOT_ISOLATED for error in limit_errors(c, aid))
                           or body.primary_held and body.limited and not body.fallback)
-                     or row["state"] == "leased" and body.outcome == "interrupted" and bool(row["stop_requested"] or skipped))
+                     or row["state"] == "leased" and body.outcome in ("failed", "interrupted") and bool(row["stop_requested"])
+                     or row["state"] == "leased" and skipped)
         if not late and row["state"] != "running" and not unstarted:
             raise Problem("not_started", "Acknowledge start before completing work", 409)
         if row["last_seq"] != body.last_seq:

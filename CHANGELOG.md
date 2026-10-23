@@ -8,14 +8,34 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
-- **Task model in Settings.** The bot editor has a Task model row (harness, model and effort; "Same as bot" until set),
-  and Settings > Bots shows a small Tasks mark beside each bot's model, marked when its tasks run on another model.
-  The mark opens a row under the bot with the same three pickers. Saving changes only what its tasks run on; the bot
-  keeps its own model.
-- **A plain-words warning for a cheap task model on a high-stakes bot.** Picking a cheaper model than the bot's own,
-  in the same family, for a bot that sends, spends or publishes through approvals, or can write through a tool grant,
-  shows a warning that names the risk ("This bot sends messages for you. … may word things badly."). It still saves
-  and its tasks still run on it, and each such run's note says it ran below the minimum for that bot.
+- **Settings › Billing.** Owners and admins see the company's balance in dollars and cents with one status line
+  (Active; Low balance; Tico models paused; or Hosting's grace period with when servers stop, UTC), credits with what is
+  left and when each ends (used-up and expired ones under Show past credits, with what expired), usage by day opening
+  into hours split by product and model ("<$0.01" under a cent), and each month's statement with a CSV download.
+  "Talk to us to add credit" opens Tico's booking link; there is no card form. It is read from Tico HQ with the
+  install's Tico AI Gateway key (`GET /api/v2/billing`, `/billing/usage?day=`, `/billing/statements/YYYY-MM.csv`);
+  other members don't see the page and its API refuses them. Needs Tico HQ with company billing reads.
+- **Choose a task model in Settings.** In **Settings > Bots**, click **Tasks** beside a bot's model to choose a harness, model and effort for its tasks. The bot editor also has a **Task model** row. Choose **Same as bot** to clear it. Chat keeps the bot's own model ([Task models](docs/harnesses.md#run-a-bots-tasks-on-another-model)).
+- **Cheaper task models show a warning for sensitive work.** A bot with send, spend or publish approval history, or write access beyond its own repository, warns when its task model costs less than its own model from the same provider. You can still save and run it; the run note records the warning ([Warning rules](docs/harnesses.md#a-warning-about-a-cheaper-task-model)).
+
+### Fixed
+- **A Muse Code run that ends in a quota failure ends its task attempt.** When Muse Code reported its run over (a
+  quota or other terminal failure) but its process, or a child process still holding its output, stayed up, the
+  runner kept the turn open and renewed the attempt's lease, so the bot showed rate limited and busy at once and its
+  model could not be changed. The run's terminal record now ends the turn: the process gets five seconds to exit
+  and is then stopped, and the attempt finishes failed with the quota hold kept. Nothing is retried on its own.
+- **Task updates point to the closing command.** The CLI no longer offers `closed` on `hub task update --status`. Trying it tells you to use `hub task close <id>`. MCP also directs requesters to `hub_task_close`; filtering a task list by `closed` still works ([Tasks](docs/tasks.md)).
+
+## [0.3.75] - 2026-10-23
+
+### Fixed
+- **A Docker runner at high capacity starts its turns and signs in.** The runner container allowed 2048 processes
+  and threads, about 70 turns' worth, so a runner set above that failed to start new turns ("Resource temporarily
+  unavailable"), kept claiming and dropping the same requests, and a Claude Code or Codex sign-in on that computer
+  stopped without signing in. The limit is now 12288, enough for the 256 turns a runner honours.
+- **A question's Needs you card shows when you open its task right after answering another.** A refresh that started
+  while an earlier read was still on its way reused that read and kept the old list, so the task page opened without
+  its card until the task was drawn again.
 
 ## [0.3.74] - 2026-10-22
 
@@ -4284,7 +4304,8 @@ First public release.
 - Hosting: local only on a Mac, or self-hosted, including a reference AWS stack under `infra/ec2/`
   with Litestream backups.
 
-[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.74...HEAD
+[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.75...HEAD
+[0.3.75]: https://github.com/ticoteam/tico/compare/v0.3.74...v0.3.75
 [0.3.74]: https://github.com/ticoteam/tico/compare/v0.3.73...v0.3.74
 [0.3.73]: https://github.com/ticoteam/tico/compare/v0.3.71...v0.3.73
 [0.3.71]: https://github.com/ticoteam/tico/compare/v0.3.70...v0.3.71

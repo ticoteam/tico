@@ -244,10 +244,12 @@ def guarded(c, auth, who, inner, function, columns=None):
     # Even an attempt's retained conversation grant must pass the current task gate.
     conversations = f"({conversations}) AND (task_id IS NULL OR kind<>'task' OR task_id IN (SELECT id FROM tasks))"
     by_task = "task_id IN (SELECT id FROM tasks)"
-    by_message = "message_id IN (SELECT id FROM messages)"
+    # Correlate large history tables by primary key. An IN subquery materializes
+    # every readable message/job/attempt before even a LIMIT 1 can return.
+    by_message = "EXISTS (SELECT 1 FROM messages readable WHERE readable.id=source.message_id)"
     by_schedule = "schedule_id IN (SELECT id FROM schedules)"
-    by_attempt = "attempt_id IN (SELECT id FROM attempts)"
-    by_job = "job_id IN (SELECT id FROM jobs)"
+    by_attempt = "EXISTS (SELECT 1 FROM attempts readable WHERE readable.id=source.attempt_id)"
+    by_job = "EXISTS (SELECT 1 FROM jobs readable WHERE readable.id=source.job_id)"
     by_meeting = "meeting_id IN (SELECT id FROM meetings)"
     mine = f"actor={me}" if bot else "1"
     person = H.actor_id(who.actor)
@@ -282,7 +284,8 @@ def guarded(c, auth, who, inner, function, columns=None):
               "WHERE review_state<>'live')")
     rules = {
         "conversations": conversations,
-        "messages": "conversation_id IN (SELECT id FROM conversations) AND deleted_at IS NULL AND " + msg_gate,
+        "messages": "EXISTS (SELECT 1 FROM conversations readable WHERE readable.id=source.conversation_id) "
+                    "AND deleted_at IS NULL AND " + msg_gate,
         "tasks": tasks,
         "tags": tag_gate, "task_tags": by_task,
         "task_events": by_task + " AND " + content_gate(("old", "new", "note")), "task_delegations": by_task,
@@ -434,7 +437,7 @@ def connect(path, c, auth, who, trace=None):
             conn.execute(f'CREATE TEMP VIEW {inner(table)} AS SELECT {names} FROM main."{table}"')
         for table, (predicate, _) in tables.items():
             projection = "*"
-            conn.execute(f'CREATE TEMP VIEW "{table}" AS SELECT {projection} FROM {inner(table)} WHERE {predicate}')
+            conn.execute(f'CREATE TEMP VIEW "{table}" AS SELECT {projection} FROM {inner(table)} AS source WHERE {predicate}')
         # The Assistant creates its table on first use: a view over a table or column not there yet is left out.
         granted = {name: view for name, view in GRANTED.items() if outcome_stats.may_read(c, who)
                    and all(set(GRANTED_SOURCES.get(base, ())) <= set(columns.get(base, ())) for base in view[0])}

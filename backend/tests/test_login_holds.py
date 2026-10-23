@@ -576,6 +576,49 @@ def test_a_company_out_of_credit_holds_the_tico_login_a_minute_and_a_fallbacks_o
                                           "(Tico models paused, out of credit)")
 
 
+RATED = "Tico AI Gateway: rate limited; retrying after the Gateway's requested wait (rate_limited)"
+
+
+def test_a_tico_rate_limit_another_model_finished_holds_the_tico_login_a_minute_not_the_backoff(api, monkeypatch):
+    """The Tico AI Gateway's rate_limited is the key's minute window, not a spent login: when the bot's fallback
+    finishes the turn, its Tico login is held for a minute (no Retry-After reaches the server then), never 30 minutes,
+    and a second one in a row is a minute again, not an hour."""
+    monkeypatch.setattr(login_holds, "limit_texts", lambda c, aid: TURNS[aid])
+    hop = ("diagnostic", "pi hit its usage limit; running this turn on codex")
+    done = Body(outcome="completed", fallback="codex", primary_limited=True)
+    with api.app.state.store.transaction() as c:
+        aid = attempt_with(c, [("error", RATED), hop])
+        assert login_holds.after_turn(c, "r1", "ops", "", "pi", done, aid, HIT) == {}
+        assert login_holds.get(c, "r1", "", "pi")["until"].startswith("2026-10-19T01:47:47")
+        later = "2026-10-19T01:48:00.000000Z"
+        aid = attempt_with(c, [("error", RATED), hop])
+        login_holds.after_turn(c, "r1", "ops", "", "pi", done, aid, later)
+        assert login_holds.get(c, "r1", "", "pi")["until"].startswith("2026-10-19T01:49:00")
+        # Its fallback ran out too: that login is held as before, with its own wait, and named as the Gateway's.
+        aid = attempt_with(c, [("error", RATED), hop, ("error", QUOTA)])
+        body = Body(limited=True, fallback="codex", primary_limited=True)
+        kept = login_holds.after_turn(c, "r2", "ops", "", "pi", body, aid, HIT)
+        assert kept["runtime"] == "codex" and kept["until"].startswith("2026-10-19T02:16:47")
+        assert login_holds.get(c, "r2", "", "pi")["until"].startswith("2026-10-19T01:47:47")
+        assert login_holds.label(login_holds.source(c, aid, "pi", body)) == (
+            "Fallback codex API quota or billing limit; primary pi also limited (Tico AI Gateway rate limit)")
+
+
+def test_a_gateway_reset_already_past_is_its_minute_not_the_backoff(api, monkeypatch):
+    """A runner whose clock is behind reports the Gateway's Retry-After as a reset already past: the Tico login is
+    held the Gateway's minute, not 30 minutes."""
+    monkeypatch.setattr(login_holds, "limit_texts", lambda c, aid: TURNS[aid])
+    with api.app.state.store.transaction() as c:
+        aid = attempt_with(c, [("error", PAUSED)])
+        past = Body(limited=True, limit_resets_at="2026-10-19T01:46:00.000000Z")
+        login_holds.after_turn(c, "r1", "ops", "", "pi", past, aid, HIT)
+        assert login_holds.get(c, "r1", "", "pi")["until"].startswith("2026-10-19T01:47:47")
+        # A rate limit the turn ended on with no Retry-After keeps the safe hour: early tries can't reach the Gateway.
+        aid = attempt_with(c, [("error", RATED)])
+        login_holds.after_turn(c, "r2", "ops", "", "pi", Body(limited=True), aid, HIT)
+        assert login_holds.get(c, "r2", "", "pi")["until"].startswith("2026-10-19T02:46:47")
+
+
 def test_a_primary_held_for_hours_with_its_tico_fallback_out_of_credit_waits_only_the_gateways_minute(
         api, monkeypatch):
     """A subscription bot whose last fallback is a Tico model: its own login stays held to its reset, but the turn

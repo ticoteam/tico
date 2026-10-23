@@ -49,7 +49,7 @@ from . import names as actor_names
 from .openapi_v2 import STABLE as STABLE_ROUTES
 from .route_renames import old_paths as old_route_paths
 from . import updates
-from . import gateway_connection
+from . import company_billing, gateway_connection
 from . import providers as Providers
 from . import access as Access
 from . import releases, runner_versions, ui_bundle
@@ -1466,6 +1466,31 @@ def create_app(settings=None):
         auth.domain(who)
         if not auth.bot_admin(who):
             raise Problem("forbidden", "Only an owner or an admin " + what, 403)
+
+    # ------------------------------------------------------------------ billing (Settings > Billing)
+    def billing_key(who):
+        """The gateway key and Gateway URL Settings > Billing reads HQ with. Owners and admins only."""
+        admin_only(who, "sees billing")
+        with store.read() as c:
+            return gateway_connection.key(c, app.state.vault, settings), gateway_connection.url(c, settings)
+
+    @app.get("/api/v2/billing")
+    def billing_view(request: Request, month: str = ""):
+        """The company's balance and status, credits, usage by day and the month's statement, from Tico HQ."""
+        return company_billing.read(*billing_key(request.state.identity), month)
+
+    @app.get("/api/v2/billing/usage")
+    def billing_day(request: Request, day: str = ""):
+        """One day's usage by hour, from Tico HQ."""
+        return company_billing.day(*billing_key(request.state.identity), day)
+
+    @app.get("/api/v2/billing/statements/{month}.csv")
+    def billing_statement_csv(request: Request, month: str):
+        """The month's statement as CSV, the same lines and numbers as on screen."""
+        body = company_billing.statement_csv(*billing_key(request.state.identity), month)
+        return Response(body, media_type="text/csv; charset=utf-8", headers={
+            "X-Content-Type-Options": "nosniff",
+            "Content-Disposition": 'attachment; filename="tico-statement-%s.csv"' % month})
 
     @app.get("/api/v2/access")
     def access_view(request: Request):

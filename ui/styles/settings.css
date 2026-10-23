@@ -640,3 +640,19 @@ fieldset.brepo>.repo-name+p{margin:-4px 0 4px 24px;font-size:var(--t-xs);line-he
 .sysr-ai{display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:var(--t-sm);margin-top:2px}
 .sysr-fallback{flex-basis:100%;color:var(--wait)}
 @media (max-width:720px){.sysr-row{grid-template-columns:1fr 1fr}.sysr-name,.sysr-ctl{grid-column:1/-1}}
+/* Settings > Billing (ui/app/settings-billing.js) */
+#set-billing h3{margin:var(--s3) 0 var(--s1);font-size:var(--t-sm);display:flex;align-items:center;gap:var(--s2)}
+.billing-head{display:flex;justify-content:space-between;align-items:flex-start;gap:var(--s2);flex-wrap:wrap}
+.billing-balance{font-size:2rem;font-weight:600;font-variant-numeric:tabular-nums}
+#set-billing h3 select{width:auto;font-size:var(--t-sm)}
+.billing-status{margin:2px 0 0}.billing-status[data-tone=ok]{color:var(--ok)}.billing-status[data-tone=warn]{color:var(--wait)}.billing-status[data-tone=bad]{color:var(--fail)}
+.billing-table{width:100%;border-collapse:collapse;font-size:var(--t-sm)}
+.billing-table td,.billing-table th{padding:4px 6px;border-bottom:1px solid var(--line);text-align:left}
+.billing-table .num,.billing-days .num,.billing-hour .num{text-align:right;font-variant-numeric:tabular-nums}
+.billing-statement .billing-total td{font-weight:600}
+.billing-past{margin-top:var(--s1)}.billing-past summary,.billing-days summary{cursor:pointer}
+.billing-days summary{display:flex;justify-content:space-between;padding:4px 0}
+.billing-days details>.billing-table,.billing-days [data-billing-hours]{margin-left:var(--s2)}
+.billing-hour-head{display:flex;justify-content:space-between;color:var(--muted);font-size:var(--t-xs);margin-top:var(--s1)}
+a.primary.btn{display:inline-block;text-decoration:none;background:var(--accent);color:var(--accent-ink);border-radius:var(--r-ctl);padding:5px 14px;line-height:20px;font-weight:600}
+@media (max-width:640px){.billing-table td,.billing-table th{padding:4px 3px}.billing-balance{font-size:1.6rem}}
