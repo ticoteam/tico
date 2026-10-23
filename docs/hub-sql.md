@@ -118,8 +118,12 @@ Timestamps are ISO-8601 UTC text (`2026-09-15T21:40:12.931675Z`); compare them w
 | `bot_file_versions`, `bot_file_activity` | `file_id, version` or `file_id, action, actor, created` | versions and activity of visible Files |
 | `documents`, `document_versions` | legacy mirror fields | compatibility tables for the older docs mirror |
 | `learnings` | `id, integration, actor, text, created, deleted_at` | Tools: what bots and humans learned about a tool (`integration` is the stored column; `integrations/`, `hub tool learn`) |
+| `assistant_action_weekly`, `mcp_call_weekly` | `week, proposer, area, method, status, actions, share_pct` and `week, bot, tool, calls, errors, error_pct, avg_ms, max_ms` | read-only totals for the owner and a bot the owner grants them (API only: `PUT /api/v2/outcome-stats/readers/<slug>`; revoke with `read: false`): how Assistant and BotOps proposals settled (`status`: done, failed, cancelled, expired ...) and how MCP tool calls went, per week. No row, text, id or person is in them; the underlying `assistant_actions` stays unreadable to a bot. The same bot may call `hub mcp stats` (no `--via`) |
 
-| `assistant_action_weekly`, `mcp_call_weekly` | `week, proposer, area, method, status, actions, share_pct` and `week, bot, tool, calls, errors, error_pct, avg_ms, max_ms` | read-only totals for the owner and a bot the owner grants them (Settings, or `PUT /api/v2/outcome-stats/readers/<slug>`; revoke with `read: false`): how Assistant and BotOps proposals settled (`status`: done, failed, cancelled, expired ...) and how MCP tool calls went, per week. No row, text, id or person is in them; the underlying `assistant_actions` stays unreadable to a bot. The same bot may call `hub mcp stats` (no `--via`) |
+Only the signed-in owner can grant or revoke access; personal API tokens and delegated Assistant or BotOps turns cannot.
+Delegated turns also cannot read these totals through the owner's role. Revocation removes the bot's access on its next
+request. Buckets are not suppressed: a count of one is visible, without the underlying proposal or person's identity.
+Tool names in the MCP totals and a granted bot's `hub mcp stats` are registered hub tool names; unknown names count as `other`.
 
 `sqlite_master` lists the rest (`SELECT name, sql FROM sqlite_master WHERE type='table'`).
 

@@ -2571,7 +2571,8 @@ def create_app(settings=None):
         who = request.state.identity
         with store.read() as c:
             granted = outcome_stats.may_read(c, who) and who.role == "bot"
-        if who.role not in ("human", "owner") and who.actor != H.bot_actor(H.FLEET_MAINTAINER) and not granted:
+        if (who.via or who.task_actor or
+                (who.role not in ("human", "owner") and who.actor != H.bot_actor(H.FLEET_MAINTAINER) and not granted)):
             raise Problem("forbidden", "Tool-call stats are for people, BotOps and a bot the owner granted outcome stats", 403)
         if granted and via:
             raise Problem("forbidden", "A bot granted outcome stats reads the totals, not one assistant's calls", 403)
@@ -2582,7 +2583,11 @@ def create_app(settings=None):
                 d = json.loads(row["detail_json"] or "{}")
                 if via and d.get("via") != via:
                     continue
-                t = tools.setdefault(d.get("tool") or "?", {"ms": [], "bytes": [], "errors": 0})
+                name = d.get("tool") or "?"
+                # Unknown names are caller text; only registered tool names leave the event for a granted bot.
+                if granted and name not in outcome_stats.TOOL_NAMES:
+                    name = "other"
+                t = tools.setdefault(name, {"ms": [], "bytes": [], "errors": 0})
                 t["ms"].append(int(d.get("ms") or 0)); t["bytes"].append(int(d.get("bytes") or 0))
                 t["errors"] += bool(d.get("error"))
         def pct(values, p):

@@ -10,11 +10,14 @@ writes nothing. Revoking the grant takes all of that away on its next query.
 
 from fastapi import Request
 
+from clients import hubtools
+
 from . import models as M
 from .repositories import metadata, save_metadata
 from .store import H, Problem
 
 GRANTS = "outcome-stats-readers"
+TOOL_NAMES = frozenset(hubtools.BY_NAME)
 
 
 class ReaderSet(M.Contract):
@@ -23,6 +26,8 @@ class ReaderSet(M.Contract):
 
 def may_read(c, who):
     """The owner, and a bot the owner granted the totals. A person reads their own proposals in the Assistant."""
+    if who.via or who.task_actor:
+        return False
     if who.role == "owner":
         return True
     return who.role == "bot" and metadata(c, GRANTS).get(H.actor_id(who.actor)) is True
@@ -30,7 +35,7 @@ def may_read(c, who):
 
 def require_owner(who):
     """The owner, as themselves: never a bot, BotOps or the Assistant acting for them."""
-    if who.role != "owner" or who.via or who.task_actor:
+    if who.role != "owner" or who.via_token or who.via or who.task_actor:
         raise Problem("forbidden", "Only the owner chooses which bots read outcome stats, signed in to Tico", 403)
 
 

@@ -336,6 +336,7 @@ def test_parallel_audits_share_a_commit_without_early_ack_or_lost_context(tmp_pa
 def test_a_granted_bot_reads_outcome_totals_but_no_proposal_row_and_cannot_write(api, world):
     from backend import assistant
     from backend.tests.test_api import setup_attempt
+    from backend.tests.test_mcp import call
     with api.app.state.store.transaction() as c:
         assistant.ensure_schema(c)
         for n, (status, proposer) in enumerate([("done", "assistant"), ("cancelled", "assistant"), ("done", "bot:botops")]):
@@ -356,6 +357,17 @@ def test_a_granted_bot_reads_outcome_totals_but_no_proposal_row_and_cannot_write
     assert query(api, "SELECT tool, calls FROM mcp_call_weekly", token)["rows"] == [["hub_task_show", 1]]
     stats = api.get("/api/v2/live/stats", headers=headers(token))
     assert stats.status_code == 200 and stats.json()["tools"][0]["tool"] == "hub_task_show"
+    # Failed MCP calls record caller-typed names too, even when they resemble a hub name.
+    for name in ("Ana wants to pay Dana's private invoice", "hub_ana_private_invoice"):
+        failed, _ = call(api, name)
+        assert failed
+    assert query(api, "SELECT tool, calls FROM mcp_call_weekly ORDER BY tool", token)["rows"] == [
+        ["hub_task_show", 1], ["other", 2]]
+    stats = api.get("/api/v2/live/stats", headers=headers(token))
+    assert stats.status_code == 200
+    assert {r["tool"]: r["calls"] for r in stats.json()["tools"]} == {"hub_task_show": 1, "other": 2}
+    failed, via_mcp = call(api, "hub_mcp_stats", token=token)
+    assert not failed and via_mcp["tools"] == stats.json()["tools"]
     assert api.get("/api/v2/live/stats?via=ana-laptop", headers=headers(token)).status_code == 403
     # Still no row: not the table, not a hidden column, not the base events the totals are built from.
     for sql in ("SELECT * FROM assistant_actions", "SELECT summary FROM assistant_action_weekly",
@@ -373,3 +385,35 @@ def test_a_granted_bot_reads_outcome_totals_but_no_proposal_row_and_cannot_write
     # Revoking takes it away at once.
     assert api.put("/api/v2/outcome-stats/readers/ops", json={"read": False}, headers=headers("ana-test")).json() == {"readers": []}
     assert "no such table" in error(api, totals, token)
+    assert "no such table" in error(api, "SELECT * FROM mcp_call_weekly", token)
+    assert api.get("/api/v2/live/stats", headers=headers(token)).status_code == 403
+
+
+def test_outcome_grants_require_owner_sign_in_and_delegation_does_not_lend_owner_reads(api):
+    from backend import assistant
+    from backend.tests.test_assistant import assistant_turn
+
+    # Mint a real personal token, so authentication sets via_token rather than a test identity shortcut.
+    personal = post(api, "me/tokens", {"label": "synthetic owner script"})["token"]
+    assert api.get("/api/v2/me", headers=headers(personal)).json()["role"] == "owner"
+    assert api.put("/api/v2/outcome-stats/readers/ops", json={"read": True},
+                   headers=headers(personal)).status_code == 403
+    assert api.get("/api/v2/outcome-stats/readers", headers=headers(personal)).status_code == 403
+    assert api.get("/api/v2/outcome-stats/readers", headers=headers()).json() == {"readers": []}
+    with api.app.state.store.transaction() as c:
+        assistant.ensure_schema(c)
+        assert not c.execute("SELECT 1 FROM registry_metadata WHERE key='outcome-stats-readers'").fetchone()
+        assert not c.execute("SELECT 1 FROM events WHERE action='outcome_stats.granted'").fetchone()
+    assert api.put("/api/v2/outcome-stats/readers/ops", json={"read": True},
+                   headers=headers()).json() == {"readers": ["ops"]}
+    assert api.put("/api/v2/outcome-stats/readers/ops", json={"read": False},
+                   headers=headers(personal)).status_code == 403
+    assert api.get("/api/v2/outcome-stats/readers", headers=headers()).json() == {"readers": ["ops"]}
+    assert query(api, "SELECT count(*) FROM assistant_action_weekly")["rows"] == [[0]]
+    _, attempt = assistant_turn(api, "ana-test", "Summarize proposal outcomes for me")
+    delegated = attempt["token"]
+    assert api.put("/api/v2/outcome-stats/readers/coo", json={"read": True},
+                   headers=headers(delegated)).status_code == 403
+    assert "no such table" in error(api, "SELECT * FROM assistant_action_weekly", delegated)
+    assert "no such table" in error(api, "SELECT * FROM mcp_call_weekly", delegated)
+    assert api.get("/api/v2/live/stats", headers=headers(delegated)).status_code == 403

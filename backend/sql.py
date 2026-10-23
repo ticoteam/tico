@@ -106,8 +106,7 @@ GRANTED = {
         FROM (SELECT date(ts, '-6 days', 'weekday 1') AS week,
                      CASE WHEN actor LIKE 'bot:%' AND substr(actor, 5) IN (SELECT slug FROM {bots})
                           THEN substr(actor, 5) END AS bot,
-                     CASE WHEN target GLOB 'hub_[a-z]*' AND target NOT GLOB '*[^a-z0-9_]*' AND length(target) <= 80
-                          THEN target ELSE 'other' END AS tool,
+                     CASE WHEN target IN {tool_names} THEN target ELSE 'other' END AS tool,
                      coalesce(json_extract(detail_json, '$.error'), 0) <> 0 AS error,
                      coalesce(json_extract(detail_json, '$.ms'), 0) AS ms
               FROM {all_events} WHERE action = 'mcp.call')
@@ -446,7 +445,8 @@ def connect(path, c, auth, who, trace=None):
             conn.execute(f'CREATE TEMP VIEW {inner(table)} AS SELECT {names} FROM main."{table}"')
         for name, (bases, select) in views.items():
             conn.execute(f'CREATE TEMP VIEW "{name}" AS ' + select.format(
-                **{base: f'"{base}"' for base in bases}, **{"all_" + base: inner(base) for base in bases}))
+                **{base: f'"{base}"' for base in bases}, **{"all_" + base: inner(base) for base in bases},
+                tool_names=qlist(sorted(outcome_stats.TOOL_NAMES))))
         # Older SQLite versions initialize JSON virtual tables with schema authorization calls.
         # Initialize only these built-ins before installing the read-only authorizer.
         for function in sorted(TABLE_FUNCTIONS):
