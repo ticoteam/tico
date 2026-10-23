@@ -187,6 +187,7 @@ def test_a_bot_reads_ordinary_tasks_but_only_its_granted_rooms_and_no_private_da
 def test_history_lookups_keep_legacy_visibility_without_scanning_messages(api, world, monkeypatch):
     from backend import sql as S
     from backend.auth import Identity
+    from dataclasses import replace
 
     store, auth = api.app.state.store, api.app.state.auth
     with store.transaction() as c:
@@ -233,7 +234,8 @@ def test_history_lookups_keep_legacy_visibility_without_scanning_messages(api, w
         return rules
 
     callers = [Identity('human:ana', 'owner'), Identity('human:ben', 'human'),
-               Identity('bot:ops', 'bot', attempt_id=world['attempt']['id'])]
+               Identity('bot:ops', 'bot', attempt_id=world['attempt']['id']),
+               replace(Identity('human:ana', 'owner'), task_actor='bot:ops')]
     for who in callers:
         answers = []
         for rules in (legacy, guarded):
@@ -246,13 +248,19 @@ def test_history_lookups_keep_legacy_visibility_without_scanning_messages(api, w
                 finally:
                     conn.close()
         assert answers[0] == answers[1], who
+        for table in ('attempts', 'turns'):
+            expected = {'attempt-public'}
+            if who.actor == 'human:ana' and not who.task_actor:
+                expected.update(('attempt-private-room', 'attempt-private-ref'))
+            assert {row[0] for row in answers[1][table] if row[0].startswith('attempt-')} == expected, who
         if who.role == 'bot':
             assert ['attempt-public'] in answers[1]['turns']
             for name in ('private-room', 'private-ref', 'deleted', 'unknown-task'):
                 assert ['attempt-' + name] not in answers[1]['turns']
                 assert ['attempt-' + name] not in answers[1]['attempts']
 
-    # A one-row read must check only its candidate message, independent of history size.
+    # Unfiltered LIMIT 1 must stop before authorizing the rest of history.
+    # The keyed case separately checks that nested views use candidate lookups.
     checked = []
     message = S.ReadIndex.message
 
@@ -263,9 +271,28 @@ def test_history_lookups_keep_legacy_visibility_without_scanning_messages(api, w
     monkeypatch.setattr(S.ReadIndex, 'message', counted)
     for table in ('turns', 'attempts'):
         checked.clear()
+        assert len(query(api, f'SELECT id FROM {table} LIMIT 1', world['attempt']['token'])['rows']) == 1
+        assert len(checked) == 1
+        checked.clear()
         assert query(api, f'SELECT id FROM {table} WHERE id=:id LIMIT 1', world['attempt']['token'],
                      params={'id': 'attempt-public'})['rows'] == [['attempt-public']]
         assert checked == ['message-public']
+
+
+def test_attempt_time_index_upgrades_existing_history_without_changing_rows(api, world):
+    store = api.app.state.store
+    with store.transaction() as c:
+        before = [dict(row) for row in c.execute('SELECT * FROM attempts ORDER BY id')]
+        c.execute('DROP INDEX attempts_created')
+        c.execute('DELETE FROM cloud_migrations WHERE version=62')
+    store.initialize()
+    store.initialize()  # Existing installs and repeated starts take the same additive path.
+    with store.read() as c:
+        assert [dict(row) for row in c.execute('SELECT * FROM attempts ORDER BY id')] == before
+        assert [row[2] for row in c.execute('PRAGMA index_info(attempts_created)')] == ['created']
+        assert c.execute('SELECT count(*) FROM cloud_migrations WHERE version=62').fetchone()[0] == 1
+        plan = c.execute("EXPLAIN QUERY PLAN SELECT count(*) FROM attempts WHERE created>=?", (H.now(),))
+        assert any('attempts_created (created>?)' in row[3] for row in plan)
 
 
 def test_current_docs_and_files_follow_api_visibility(api, world):

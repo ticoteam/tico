@@ -19,10 +19,10 @@ def test_bot_history_queries_finish_within_the_existing_timeout(api):
     ready(api, machine, ['ops'])
     post(api, 'chat/ops', {'text': 'Synthetic history benchmark'})
     attempt = claim(api, machine)
-    count, rooms = 30_000, 5_000
+    count, rooms, recent = 30_000, 5_000, 1_000
     now = H.now()
     with api.app.state.store.transaction() as c:
-        # The synthetic credential must stay valid through all fifty timed reads.
+        # The synthetic credential must stay valid through all timed reads.
         c.execute('UPDATE attempts SET lease_until=? WHERE id=?',
                   (H.shift(now, hours=1), attempt['id']))
         # Bulk fixture loading must not queue actual runs or construct message links.
@@ -55,10 +55,12 @@ def test_bot_history_queries_finish_within_the_existing_timeout(api):
             'message_id': f'fixture-messages-{i}', 'state': 'done', 'attempt_id': None})
         copies('attempts', attempt['id'], count, lambda i: {
             'job_id': f'fixture-jobs-{i}', 'token_hash': f'fixture-token-hash-{i}',
-            'state': 'done', 'lane': f'fixture-lane-{i}'})
+            'state': 'done', 'lane': f'fixture-lane-{i}',
+            'created': now if i < recent else H.shift(now, hours=-72)})
         copies('turns', attempt['id'], count, lambda i: {
             'id': f'fixture-attempts-{i}', 'message_id': f'fixture-messages-{i}',
-            'task_id': f'fixture-task-{i % rooms}'})
+            'task_id': f'fixture-task-{i % rooms}',
+            'started': now if i < recent else H.shift(now, hours=-72)})
         print('synthetic sizes:', {table: c.execute(f'SELECT count(*) FROM {table}').fetchone()[0]
                                    for table in ('tasks', 'conversations', 'messages', 'jobs', 'attempts', 'turns', 'events')},
               flush=True)
@@ -68,6 +70,8 @@ def test_bot_history_queries_finish_within_the_existing_timeout(api):
         'SELECT id FROM attempts LIMIT 1',
         "SELECT count(*) FROM turns WHERE started>=:day AND started<:tomorrow",
         "SELECT count(*) FROM attempts WHERE created>=:day AND created<:tomorrow",
+        "SELECT count(*) FROM turns WHERE started >= datetime('now','-1 day')",
+        "SELECT count(*) FROM attempts WHERE created >= datetime('now','-1 day')",
         'SELECT count(*) FROM messages',
     ]
     params = {'day': now[:10], 'tomorrow': H.shift(now, hours=24)[:10]}
@@ -86,7 +90,25 @@ def test_bot_history_queries_finish_within_the_existing_timeout(api):
             result = response.json()
             assert result['rows'] and not result['truncated'], result
             if 'count(*)' in sql:
-                assert result['rows'] == [[count * 5 + 1 if 'messages' in sql else count + 1]], result
+                assert result['rows'] == [[count * 5 + 1 if 'messages' in sql else recent + 1]], result
             measured.append((result['ms'], round(elapsed * 1000)))
             assert elapsed < 5, (sql, measured)
         print(sql, 'query_ms/http_ms:', measured, flush=True)
+
+    # Exercise the shared provenance index on a real task list with open asks.
+    with api.app.state.store.transaction() as c:
+        for i in range(100):
+            c.execute('UPDATE tasks SET conversation_id=? WHERE id=?',
+                      (f'fixture-room-{i}', f'fixture-task-{i}'))
+            c.execute("UPDATE messages SET kind='ask' WHERE id=?", (f'fixture-messages-{i}',))
+    task_ids = ','.join(f'fixture-task-{i}' for i in range(100))
+    measured = []
+    for _ in range(10):
+        start = time.monotonic()
+        response = api.get('/api/v2/tasks', params={'ids': task_ids, 'brief': 'true'},
+                           headers=headers(attempt['token']))
+        assert response.status_code == 200, response.text
+        assert len(response.json()['tasks']) == 100
+        assert all(row.get('ask') for row in response.json()['tasks'])
+        measured.append(round((time.monotonic() - start) * 1000))
+    print('task-list 100 brief rows http_ms:', measured, flush=True)
