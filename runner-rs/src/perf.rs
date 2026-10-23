@@ -133,10 +133,7 @@ impl Sampler {
             sample.insert("mem_total".into(), json!(memory.total));
             sample.insert("mem_used".into(), json!(memory.total.saturating_sub(memory.available)));
         }
-        if memory.swap_total > 0 {
-            sample.insert("swap_total".into(), json!(memory.swap_total));
-            sample.insert("swap_used".into(), json!(memory.swap_used));
-        }
+        add_swap(&mut sample, &memory, cfg!(target_os = "linux"));
         let mut disks: Vec<Value> = Vec::new();
         let mut seen = Vec::new();
         for (volume, path) in volumes {
@@ -151,6 +148,18 @@ impl Sampler {
         sample.insert("active".into(), json!(active));
         sample.insert("procs".into(), json!(top_names(&procs, &rates)));
         Some(Value::Object(sample))
+    }
+}
+
+/// macOS grows its swap total with use: report raw bytes, but keep them out of the diagnostic swap rule.
+fn add_swap(sample: &mut Map<String, Value>, memory: &Memory, diagnostic: bool) {
+    if memory.swap_total > 0 {
+        sample.insert("load_swap_total".into(), json!(memory.swap_total));
+        sample.insert("load_swap_used".into(), json!(memory.swap_used));
+        if diagnostic {
+            sample.insert("swap_total".into(), json!(memory.swap_total));
+            sample.insert("swap_used".into(), json!(memory.swap_used));
+        }
     }
 }
 
@@ -351,8 +360,7 @@ fn system_cpu() -> Option<(u64, u64)> {
 fn memory() -> Memory {
     let total = run(&["sysctl", "-n", "hw.memsize"]).and_then(|s| s.trim().parse().ok()).unwrap_or(0);
     let used = run(&["vm_stat"]).map(|s| vm_stat_used(&s)).unwrap_or(0);
-    // macOS adds swap files as it needs them, so its swap total moves with use and a share of it says nothing:
-    // memory pressure shows in Memory Used instead.
+    // Raw swap is visible in simple load readings; add_swap keeps it out of diagnostic overloads.
     let (swap_total, swap_used) = run(&["sysctl", "-n", "vm.swapusage"]).map(|s| swap_usage(&s)).unwrap_or((0, 0));
     Memory { total, available: total.saturating_sub(used), swap_total, swap_used }
 }
@@ -410,8 +418,12 @@ pub fn load_snapshot(active: usize) -> Value {
 }
 
 /// Add only for servers that accept the field; diagnostics off means no reading.
-pub async fn with_snapshot(mut body: Value, active: usize) -> Value {
-    if enabled() && crate::follow::feature("load_snapshot") {
+pub async fn with_snapshot(body: Value, active: usize) -> Value {
+    with_snapshot_if(body, active, enabled(), crate::follow::feature("load_snapshot")).await
+}
+
+async fn with_snapshot_if(mut body: Value, active: usize, on: bool, supported: bool) -> Value {
+    if on && supported {
         if let Ok(snapshot) = tokio::task::spawn_blocking(move || load_snapshot(active)).await {
             body["load_snapshot"] = snapshot;
         }
@@ -492,6 +504,31 @@ mod tests {
         let sample = sampler.sample(7, &[]).unwrap();
         assert_eq!(sample["interval_s"], json!(60));
         assert_eq!(sample["active"], json!(7));
+    }
+
+    #[tokio::test]
+    async fn snapshots_require_diagnostics_and_server_support() {
+        for (on, supported) in [(false, false), (false, true), (true, false)] {
+            let body = json!({"thread_id": "gate"});
+            assert_eq!(with_snapshot_if(body.clone(), 2, on, supported).await, body);
+        }
+        let body = with_snapshot_if(json!({"thread_id": "gate"}), 2, true, true).await;
+        assert_eq!(body["load_snapshot"]["running_turns"], json!(2));
+        assert_eq!(body["thread_id"], json!("gate"));
+    }
+
+    #[test]
+    fn raw_mac_swap_does_not_enter_diagnostic_fields() {
+        let memory = Memory { total: 1000, available: 150, swap_total: 100, swap_used: 95 };
+        let mut mac = Map::new();
+        add_swap(&mut mac, &memory, false);
+        assert_eq!(mac["load_swap_used"], json!(95));
+        assert_eq!(mac["load_swap_total"], json!(100));
+        assert!(!mac.contains_key("swap_used") && !mac.contains_key("swap_total"));
+        let mut linux = Map::new();
+        add_swap(&mut linux, &memory, true);
+        assert_eq!(linux["swap_used"], json!(95));
+        assert_eq!(linux["swap_total"], json!(100));
     }
 
     #[test]

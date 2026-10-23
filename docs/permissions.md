@@ -272,12 +272,13 @@ program's own name, never its arguments), and the turns shown are the server's o
 reader may not see (its **See** access) shows as "another bot", without its model or turn.
 
 `hub computer list` is readable by company bots, including computers closed to placement of members' bots.
-Placement and change controls keep their existing permissions. Each row includes `latest_sample` (timestamp,
+Computers a bot could not otherwise read expose only discovery fields and load, without operator identity,
+repositories or recent logs. Full detail, placement and change controls keep their existing permissions. Each row includes `latest_sample` (timestamp,
 `cpu_pct`, `mem_pct`, memory used/total, swap used/total and running turns) and a plain `overloaded` flag.
 CPU here is the one-minute load divided by available cores, times 100; it may exceed 100%. These minute
 samples are retained for 48 hours. Six consecutive readings spanning five minutes above 90% CPU or memory
 set the flag and a Health warning. A missing minute, a calm reading, a sample older than two minutes, or
-turning diagnostics off clears it. No automatic action or notification follows.
+turning diagnostics off clears it and hides `latest_sample`. No automatic action or notification follows.
 
 Runs carry `load_start` and `load_end` with CPU %, memory %, running turns and the sample timestamp in
 `hub run list`. Current computers take a reading at start and completion; older computers use a recent
@@ -287,7 +288,8 @@ also removes saved snapshots for that computer.
 
 Ten minutes in a row of CPU or memory over 90%, heavy swapping (half the swap in use with memory over 80%) or under 5%
 disk free record an overload: when, why, which bots' turns were running and the busiest processes. Health shows it as a
-warning for a day afterwards. An overload changes nothing on its own; it is there to explain a slow day.
+warning for a day afterwards. macOS swap is reported as raw bytes in `latest_sample`, but does not feed this
+diagnostic swapping rule because its swap total grows with use. An overload changes nothing on its own; it is there to explain a slow day.
 
 ## BotOps uses the requester’s rights
 

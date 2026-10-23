@@ -1,4 +1,5 @@
 """Runner minute load, durable per-attempt snapshots and plain-bot observability (synthetic fixtures only)."""
+import json
 import time
 
 from backend import models as M, performance as P
@@ -20,6 +21,8 @@ def test_sampler_keeps_one_load_row_per_minute_and_prunes_at_48_hours(api):
         P.ingest(c, rid, [M.PerformanceSample(**point(now - 49 * 3600))], now=now - 49 * 3600)
     samples = [point(now, cpu=125), point(now + 10, cpu=150)]
     post(api, "runners/performance", {"samples": samples}, token=r["token"])
+    # A delayed retry of the older reading cannot overwrite the newest reading in its minute.
+    post(api, "runners/performance", {"samples": [point(now, cpu=5, active=1)]}, token=r["token"])
     with api.app.state.store.read() as c:
         rows = c.execute("SELECT * FROM runner_load_samples WHERE runner_id=?", (rid,)).fetchall()
     assert len(rows) == 1
@@ -30,6 +33,7 @@ def test_sampler_keeps_one_load_row_per_minute_and_prunes_at_48_hours(api):
 
 def test_attempt_stores_fresh_start_and_end_snapshots_visible_in_run_list(api):
     r, _, a = setup_attempt(api)
+    assert get(api, "runners/desired", token=r["token"])["features"]["load_snapshot"] is True
     now = time.time()
     start = {"at": now, "cpu_pct": 125.0, "mem_pct": 55.0, "running_turns": 2}
     end = {"at": now + 1, "cpu_pct": 25.0, "mem_pct": 45.0, "running_turns": 1}
@@ -84,10 +88,11 @@ def test_five_full_minutes_trip_overload_in_health_and_gaps_calm_stale_or_off_cl
         assert P.load_status(c, rid, now)["overloaded"] is True  # memory alone qualifies
     post(api, f"computers/{rid}/performance", {"mode": "off"})
     with api.app.state.store.read() as c:
-        assert P.load_status(c, rid, now)["overloaded"] is False
+        assert P.load_status(c, rid, now) == {"latest_sample": None, "overloaded": False}
 
 
 def test_new_bot_computer_visibility_keeps_hidden_bots_and_accounts_private(world):
+    from backend.repositories import save_metadata
     from backend.tests.test_bot_access import set_access
     from backend.tests.test_mcp import call
     api, tokens, _ = world
@@ -95,17 +100,57 @@ def test_new_bot_computer_visibility_keeps_hidden_bots_and_accounts_private(worl
     rid = r["runner_id"]
     set_access(api, see={"teams": ["legal"]}, read={"teams": ["legal"]}, write={"teams": ["legal"]})
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET accepts_member_bots=0 WHERE id=?", (rid,))
+        c.execute("UPDATE runners SET accepts_member_bots=0,readiness_json=? WHERE id=?",
+                  (json.dumps({"schema_version": 1, "recent_errors": ["private runner log"], "bots": {}}), rid))
+        save_metadata(c, "computer-repositories:" + rid,
+                      {"repositories": [{"full_name": "acme/private-repo", "error": "private clone error"}]})
         c.execute("INSERT INTO assignments(bot,runner_id,generation,updated,updated_by) VALUES('counsel',?,1,?,'human:ana')", (rid, P._iso(time.time())))
     failed, detail = call(api, "hub_computer_list", {"computer": rid}, token=tokens["stranger"])
     assert not failed, detail
     assert "counsel" not in str(detail)
     assert detail["id"] == rid
+    assert "repositories" not in detail and "recent_errors" not in detail.get("readiness", {})
+    assert "operator" not in detail
+    raw = next(x for x in get(api, "computers", token=tokens["stranger"])["computers"] if x["id"] == rid)
+    assert set(raw) == {"id", "label", "online", "platform", "accepts_member_bots", "latest_sample", "overloaded"}
+    for section in ("repositories", "recent_errors"):
+        failed, page = call(api, "hub_computer_list", {"computer": rid, "section": section}, token=tokens["stranger"])
+        assert not failed and page["items"] == []
+    owner = next(x for x in get(api, "computers")["computers"] if x["id"] == rid)
+    assert owner["repositories"][0]["full_name"] == "acme/private-repo"
+    assert owner["readiness"]["recent_errors"] == ["private runner log"]
+    # Full details stay available for computers already readable before load discovery.
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runners SET accepts_member_bots=1 WHERE id=?", (rid,))
+    failed, opened = call(api, "hub_computer_list", {"computer": rid}, token=tokens["stranger"])
+    assert not failed and opened["repositories"] == owner["repositories"]
+
+
+def test_raw_mac_swap_is_visible_without_changing_diagnostic_overloads(api):
+    r, _, _ = setup_attempt(api)
+    rid = r["runner_id"]
+    now = (int(time.time()) // 60 - 1) * 60
+    def mac(at):
+        return point(at, cpu=10, mem=.85) | {"cpu": 10, "swap_used": None, "swap_total": None,
+                                            "load_swap_used": 95, "load_swap_total": 100}
+    post(api, "runners/performance", {"samples": [mac(now - 60*i) for i in range(9, -1, -1)]}, token=r["token"])
+    with api.app.state.store.read() as c:
+        assert P.load_status(c, rid)["latest_sample"]["swap_used"] == 95
+        assert c.execute("SELECT count(*) FROM perf_overloads WHERE runner_id=?", (rid,)).fetchone()[0] == 0
+        assert not any(P.reasons(p) for p in c.execute("SELECT * FROM perf_points WHERE runner_id=?", (rid,)))
+    # The existing fixed-swap Linux diagnostic rule still trips on the same raw numbers.
+    with api.app.state.store.transaction() as c:
+        P.ingest(c, rid, [M.PerformanceSample(**(mac(now + 60*i) | {"swap_used": 95, "swap_total": 100}))
+                          for i in range(1, 11)], now=now+600)
+        assert json.loads(c.execute("SELECT reasons FROM perf_overloads WHERE runner_id=?", (rid,)).fetchone()[0]) == ["swap"]
 
 
 def test_older_runner_snapshot_fallback_is_timestamped_and_off_or_stale_is_unknown(api):
     r, _, a = setup_attempt(api)
     rid, aid = r["runner_id"], a["id"]
+    with api.app.state.store.transaction() as c:
+        P.stamp_attempt(c, aid, rid, "start")
+        assert c.execute("SELECT count(*) FROM attempt_load_snapshots WHERE attempt_id=?", (aid,)).fetchone()[0] == 0
     at = int(time.time()) - 30
     post(api, "runners/performance", {"samples": [point(at, cpu=45)]}, token=r["token"])
     post(api, f"attempts/{aid}/started", {"thread_id": "older-runner"}, token=r["token"])

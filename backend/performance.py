@@ -41,7 +41,7 @@ MODES = ("on", "off")
 MINUTE, TEN = 60, 600
 MINUTE_HOURS = 48               # one-minute points, then ten-minute ones
 KEEP_DAYS = 14
-SAMPLE_S = 30                   # the runner's interval: a usage row's n samples cover n * 30 s
+SAMPLE_S = 30                   # legacy duration unit: a usage row's n covers n * 30 s
 SUSTAINED = 10                  # loaded minutes in a row that make an overload
 CPU_HIGH, MEM_HIGH = 90.0, 90.0
 SWAP_HIGH, SWAP_MEM = 50.0, 80.0    # swapping: half the swap in use while memory is already 80% used
@@ -112,7 +112,9 @@ def ingest(c, runner_id, samples, now=None):
                   "sampled_at=excluded.sampled_at,cpu_pct=excluded.cpu_pct,mem_used=excluded.mem_used,"
                   "mem_total=excluded.mem_total,swap_used=excluded.swap_used,swap_total=excluded.swap_total,"
                   "running_turns=excluded.running_turns WHERE excluded.sampled_at>=runner_load_samples.sampled_at",
-                  (runner_id, ts, at, cpu_pct, s.mem_used, s.mem_total, s.swap_used, s.swap_total, s.active))
+                  (runner_id, ts, at, cpu_pct, s.mem_used, s.mem_total,
+                   s.load_swap_used if s.load_swap_used is not None else s.swap_used,
+                   s.load_swap_total if s.load_swap_total is not None else s.swap_total, s.active))
         free, total = _volume(s)
         scope = "container_cpu" if s.scope == "container" and s.memory_scope == "host" else s.scope
         used = s.mem_used if s.mem_total else None
@@ -166,6 +168,8 @@ def load_status(c, runner_id, now=None):
 
     A missing minute, a calm reading, a stale sample or diagnostics being off clears the current flag.
     """
+    if not on(c, runner_id):
+        return {"latest_sample": None, "overloaded": False}
     now = int(time.time() if now is None else now)
     points = c.execute("SELECT * FROM runner_load_samples WHERE runner_id=? AND ts>=? ORDER BY ts DESC LIMIT 6",
                        (runner_id, now - 48 * 3600)).fetchall()
@@ -179,7 +183,7 @@ def load_status(c, runner_id, now=None):
               "swap_used": p["swap_used"], "swap_total": p["swap_total"],
               "running_turns": p["running_turns"], "stale": not fresh}
     loaded = lambda x: (x["cpu_pct"] or 0) > 90 or (_pct(x["mem_used"], x["mem_total"]) or 0) > 90
-    overloaded = (on(c, runner_id) and fresh and len(points) == 6
+    overloaded = (fresh and len(points) == 6
                   and all(points[i]["ts"] - points[i+1]["ts"] == 60 for i in range(5))
                   and points[0]["sampled_at"] - points[-1]["sampled_at"] >= 300
                   and all(loaded(x) for x in points))
@@ -198,6 +202,9 @@ def stamp_attempt(c, attempt_id, runner_id, phase, snapshot=None):
         value = ({k: latest[k] for k in ("at", "cpu_pct", "mem_pct", "running_turns")}
                  if latest and not latest["stale"] else None)
     column = {"start": "start_json", "end": "end_json"}[phase]
+    if value is None:
+        c.execute(f"UPDATE attempt_load_snapshots SET {column}=NULL WHERE attempt_id=?", (attempt_id,))
+        return
     c.execute(f"INSERT INTO attempt_load_snapshots(attempt_id,{column}) VALUES(?,?) "
               f"ON CONFLICT(attempt_id) DO UPDATE SET {column}=excluded.{column}",
               (attempt_id, json.dumps(value)))

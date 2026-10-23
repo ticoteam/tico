@@ -2100,6 +2100,9 @@ class PerformanceSample(_Sampled):
     mem_used: Bytes | None = None
     swap_total: Bytes | None = None
     swap_used: Bytes | None = None
+    # Raw swap for the simple load reading; macOS omits diagnostic swap because its total grows with use.
+    load_swap_total: Bytes | None = None
+    load_swap_used: Bytes | None = None
     disk: list[PerformanceDisk] = Field(default_factory=list, max_length=4)
     active: int = Field(default=0, ge=0, le=10_000)
     procs: list[PerformanceProcess] = Field(default_factory=list, max_length=16)
