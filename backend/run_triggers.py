@@ -22,8 +22,8 @@ Every run (`turns`, same id as its attempt) records three things, all in plain c
   named gets `purpose_for(bot, trigger_kind)`, the same map that fills the label on runs from before it existed. A
   pair the map does not know reads `unknown`, and the run is still counted.
 
-`run_weekly` in `hub sql` (backend/sql.py) adds these up per week, bot and trigger. A run from before this
-was recorded reads `unknown` for both, and is still counted.
+`run_weekly` in `hub sql` (backend/sql.py) adds these up per week, bot, trigger and purpose. A run whose
+trigger or purpose is not known reads `unknown` for that field, and is still counted.
 """
 
 TRIGGERS = ("comment", "status_or_relation", "pr_checks", "stall_check", "schedule", "person_message",
@@ -38,7 +38,7 @@ TRIGGER_PURPOSES = {
     "background_done": "resume after background work",
 }
 # Bots whose work is one thing: a reviewer woken by a task change or a PR's checks is reviewing that PR.
-REVIEWERS = ("pr-reviewer", "pr-reviewer-sol", "reviewer-2")
+REVIEWERS = ("pr-reviewer-sol", "reviewer-2")
 BOT_PURPOSES = {(bot, kind): "review PR" for bot in REVIEWERS for kind in ("status_or_relation", "pr_checks")}
 
 

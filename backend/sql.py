@@ -50,7 +50,7 @@ DENIED_FUNCTIONS = {"load_extension"}
 # caller may read: a bucket of one run would otherwise tell them that run exists, what it cost and whether it acted.
 # `{all_table}` may only narrow what is counted, never add a row.
 DERIVED = {
-    # Runs per week (Monday, UTC), bot and what woke them, with their tokens and outcome (backend/run_triggers.py).
+    # Runs per week (Monday, UTC), bot, trigger and purpose, with tokens and outcome (backend/run_triggers.py).
     # A run from before triggers were recorded reads `unknown`, and is counted, never dropped. Input is the run's
     # measured usage (every primary and fallback segment) first, and the runner's older one-number `tokens_in` only
     # when there is none: a resumed thread may report its whole running total there. An attempt that never got a
