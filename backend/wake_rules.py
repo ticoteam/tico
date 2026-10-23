@@ -19,10 +19,18 @@ task leaves one too (`own_comment`): it is written to the other side, so the bot
 the bot-to-bot rule in backend/bot_to_bot.py ask `always_wakes` first). `AWAITED` is what a waiting task waits for:
 it wakes the bot even when the bot's own write caused it, because the session that waits is not the one that wrote
 (knowledge: a bot finishing its own last subtask must still resume the parent, PR #657).
+
+`same_state` (token saving 3/9, Dev 141): a stall or status check about a task the bot owns, when the task stands as it
+did at the bot's last checkpoint, starts no run. `state_of` is that stand: status, step, owner, relations and their
+states, open asks, every comment, the pull request links' head and checks. execution.complete stores it with the
+checkpoint (`tasks.checkpoint_state`), and not when someone else changed the task during the turn, so a change the
+bot never saw cannot hide in it. No checkpoint, no stored state, or any difference: the check runs as before.
 Fail open: anything `gate` cannot read wakes.
 """
 
 import contextvars
+import hashlib
+import json
 import re
 
 # Who made the request whose writes are being made (backend/app.py request_guard): the person, or the bot, or the
@@ -63,10 +71,15 @@ HOLDABLE_TRIGGERS = ("comment", "status_or_relation")
 HOLDABLE_CLASSES = ("notice", "message")
 # The references news carries: a plain message's, the trigger stamp, a finished task's summary. Anything else (a
 # wake kind, a batch, an answer) is more than news, and so is a reference no rule here knows yet.
+# The person whose own act a keeper notice reports (H._write_message): kept on the message, after the request ends.
+CAUSED_BY = "caused_by"
 NEWS_REFS = frozenset({"task", "comment", "attachments", "files", "unsolicited", "turn_id", "warnings", "via",
-                       FLAG, "trigger", "trigger_source", "task_completion"})
+                       FLAG, "trigger", "trigger_source", "task_completion", CAUSED_BY})
 
-RULES = ("own_write", "parked")
+# The stall checks that only ask "has anything moved?"; same_state may hold these. A stuck run, a setup that is
+# held, a restated ask, a due date and a snooze ending are other news and keep waking.
+SAME_STATE_WAKES = ("status_check", "stalled")
+RULES = ("own_write", "parked", "same_state")
 SKIPPED = "wake.skipped"
 # A task in one of these still has work to do; a blocker in one of them still blocks.
 UNFINISHED = ("open", "doing", "waiting", "review", "ready", "blocked")
@@ -190,6 +203,93 @@ def _would_queue(conn, actor, target, refs):
     return not (row and row[0] in EXTERNAL_HARNESSES)
 
 
+def state_of(conn, task_row):
+    """A short hash of where the task stands (see the module note), or None when it cannot be read. Tico's own
+    notices in the task's room are left out (a held check is not news); every comment, from anyone, counts."""
+    from . import hubdb as H
+    try:
+        tid = task_row["id"]
+        row = H.task(conn, tid)
+        if not row:
+            return None
+        parts = {
+            "task": [row.get(k) for k in ("status", "step_id", "owner", "requester", "waiting_on", "snoozed_until",
+                                           "version")],
+            "relations": [list(r) for r in conn.execute(
+                "SELECT r.kind, r.from_task, r.to_task, t.status FROM task_relations r JOIN tasks t ON t.id="
+                "CASE WHEN r.from_task=? THEN r.to_task ELSE r.from_task END "
+                "WHERE ? IN (r.from_task, r.to_task) ORDER BY r.kind, r.from_task, r.to_task", (tid, tid))],
+            "asks": [a["id"] for a in H.open_task_asks(conn, row)],
+            "comments": [list(r) for r in conn.execute(
+                "SELECT id, edited_at FROM messages WHERE conversation_id=? AND from_actor<>? AND deleted_at IS NULL "
+                "ORDER BY rowid", (row["conversation_id"], H.KEEPER))],
+            "links": [list(r) for r in conn.execute(
+                "SELECT kind, url, state, pr_sha, json_extract(detail_json,'$.head_sha'), "
+                "checks, mergeable, review_state, pending_comments FROM task_links "
+                "WHERE task_id=? ORDER BY created, id", (tid,))],
+        }
+        return hashlib.sha256(json.dumps(parts, sort_keys=True, default=str).encode()).hexdigest()[:32]
+    except Exception:  # noqa: BLE001 - unreadable state is a state nobody can call the same
+        return None
+
+
+def settled_state(conn, task_row, bot, started, attempt_id):
+    """The state to store with the bot's checkpoint, or None when someone else changed the task since the turn
+    `started`, or another turn of the same bot overlapped it: the bot may not have seen that, so the next check runs."""
+    from . import hubdb as H
+    try:
+        me = "bot:" + bot
+        # Actor identity alone cannot attribute a write to this turn: task lanes run in parallel.
+        # Include siblings that finished during this turn, not only those still running now.
+        if conn.execute("SELECT 1 FROM attempts WHERE bot=? AND id<>? "
+                        "AND (state IN ('leased','running') OR finished>=?) LIMIT 1",
+                        (bot, attempt_id, started)).fetchone():
+            return None
+        if conn.execute("SELECT 1 FROM task_events WHERE task_id=? AND ts>? AND actor<>? LIMIT 1",
+                        (task_row["id"], started, me)).fetchone():
+            return None
+        # The hash includes related tasks' states too. Their events live on those tasks, not this one;
+        # a change during the turn must not be saved as if the bot had already seen it.
+        if conn.execute("SELECT 1 FROM task_events WHERE task_id IN ("
+                        "SELECT CASE WHEN from_task=? THEN to_task ELSE from_task END FROM task_relations "
+                        "WHERE ? IN (from_task,to_task)) AND ts>? AND actor<>? LIMIT 1",
+                        (task_row["id"], task_row["id"], started, me)).fetchone():
+            return None
+        if conn.execute("SELECT 1 FROM messages WHERE conversation_id=? AND created>? AND from_actor NOT IN (?,?) "
+                        "LIMIT 1", (task_row["conversation_id"], started, me, H.KEEPER)).fetchone():
+            return None
+        # Starting a task lane records this turn's own session link after claim. That is known
+        # to this turn; explicit edits by someone else are already caught by task_events above.
+        if conn.execute("SELECT 1 FROM task_links WHERE task_id=? AND kind<>'session' "
+                        "AND coalesce(updated,created)>? LIMIT 1",
+                        (task_row["id"], started)).fetchone():
+            return None
+        return state_of(conn, task_row)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def same_state(conn, actor, target, kind, refs, body, task_row, cause=None, in_reply_to=None):
+    """Whether this wake is a plain stall or status check about a task `target` owns that stands exactly as at its
+    last checkpoint. Nothing on ALWAYS_WAKE or AWAITED is ever held."""
+    if not task_row or task_row.get("owner") != target or refs.get("trigger") != "stall_check" \
+            or refs.get("wake") not in SAME_STATE_WAKES or set(refs) - NEWS_REFS - {"wake"} or awaited(refs):
+        return None
+    if task_row.get("checkpoint_blocked") or not task_row.get("checkpoint_state") \
+            or task_row.get("checkpoint_by") != target:
+        return None
+    if always_wakes(conn, actor, target, kind, refs, body, CAUSE.get() if cause is None else cause, in_reply_to):
+        return None
+    from . import hubdb as H
+    lanes, _ = H._session_lanes(conn, task_row)
+    # A completed turn's checkpoint says nothing about a newer active turn's health. Its
+    # first status check seeds the retry and diagnostic path when it stops making progress.
+    if conn.execute("SELECT 1 FROM attempts WHERE bot=? AND lane IN (?,?) "
+                    "AND state IN ('leased','running') LIMIT 1", (H.actor_id(target), *lanes)).fetchone():
+        return None
+    return "same_state" if state_of(conn, task_row) == task_row["checkpoint_state"] else None
+
+
 def gate(conn, actor, target, kind, refs, body, conv, in_reply_to=None):
     """The rule a message about to be written to `target` waits under, or None when it wakes as before. Most
     messages are not news (_news) and cost no query beyond a reply's parent. Fail open."""
@@ -199,12 +299,13 @@ def gate(conn, actor, target, kind, refs, body, conv, in_reply_to=None):
         if not isinstance(refs, dict) or not str(target).startswith("bot:"):
             return None
         cause = CAUSE.get()
-        if not _news(conn, actor, target, kind, refs, body, cause, in_reply_to) \
-                or not _would_queue(conn, actor, target, refs):
+        if not _would_queue(conn, actor, target, refs):
             return None
         task_id = H.message_task_id({"refs": refs}, conv)
-        return rule_for(conn, actor, target, kind, refs, body, H.task(conn, task_id) if task_id else None, cause,
-                        in_reply_to)
+        task_row = H.task(conn, task_id) if task_id else None
+        if _news(conn, actor, target, kind, refs, body, cause, in_reply_to):
+            return rule_for(conn, actor, target, kind, refs, body, task_row, cause, in_reply_to)
+        return same_state(conn, actor, target, kind, refs, body, task_row, cause, in_reply_to)
     except Exception:  # noqa: BLE001 - fail open: a wake this cannot read starts its run as before
         return None
 
@@ -228,6 +329,13 @@ def hold(conn, msg, rule):
     from . import hubdb as H
     task_id = H.message_task_id(msg, H.conversation(conn, msg["conversation_id"]))
     task_row = H.task(conn, task_id) if task_id else None
+    if rule == "same_state":
+        # Nothing to carry: the check only asked whether anything moved, and nothing did.
+        from . import run_triggers
+        return H.event(conn, H.KEEPER, SKIPPED, msg["id"], {
+            "bot": H.actor_id(msg["to_actor"]), "task": task_id, "rule": rule,
+            "trigger": run_triggers.of_message(msg)[0], "kind": msg["kind"], "from": msg["from_actor"],
+            "cause": CAUSE.get() or None, "note": None})
     where = f"on task {task_row['title']} ({task_row['id']})" if task_row else "in a direct message"
     why = {"own_write": "your own write caused it", "blocked_by": "the task waits on another task (blocked by)",
            "wake_once": "the task waits on its pull request's checks (wake once)",

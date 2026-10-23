@@ -4,7 +4,9 @@ A login is (computer, subscription profile or "" for the computer's own login, r
 login's usage limit, a hold is saved here, in the database, so it outlives a restart of the runner or the server:
 - until the reset the provider gave (Claude says it in words: "resets 2:40am (UTC)"), honored even when it is days
   away, as long as it is in the future and within LIMIT_RESET_MAX;
-- otherwise for BACKOFF[n] after the n-th limit in a row on that login (30, 60, then 120 minutes at most).
+- otherwise for BACKOFF[n] after the n-th limit in a row on that login (30, 60, then 120 minutes at most);
+- for CAPACITY_WAIT only when the provider said the model is at capacity or overloaded for now (`capacity`): the
+  provider's busy moment, not the login's quota, so it neither waits out a backoff nor counts in the streak.
 While it holds, no bot starts a turn on that login: a bot with a fallback that is ready and not held itself runs
 there instead (Dev 137), and only one with none waits. When it ends, one queued job (the probe) may start on the login and
 every other job on it waits for that turn's result: a success clears the hold, another limit saves a longer one. So a
@@ -24,6 +26,18 @@ BACKOFF = (1800, 3600, 7200)      # seconds held after the 1st, 2nd and later li
 LIMIT_RESET_MAX = 8 * 86400       # a reset further off than a weekly window is not believed
 PROBE_STALE = 900                 # a probe job that has not started within this long stops holding the others back
 LIVE_JOB = ("leased", "running")
+CAPACITY_WAIT = 120               # seconds held after a temporary model-capacity refusal
+CAPACITY_KIND = "temporary model capacity"
+
+# A provider out of capacity for the moment (runner-rs/src/hosts/mod.rs capacity_re): "Selected model is at capacity.
+# Please try a different model.", "overloaded_error", HTTP 503, "rate limited, try again in 20s". Quota or billing words
+# in the same notice win (_QUOTA_RE): "Quota exceeded. Check your plan and billing details." is the plan's, not a busy
+# moment.
+_CAPACITY_RE = re.compile(r"model is at capacity|no capacity available|\boverloaded(?:_error)?\b|"
+                          r"\b(?:code|status|http) 503\b|(?:retry|try again) (?:after|in) \d+(?:\.\d+)? ?"
+                          r"(?:s|secs?|seconds)\b", re.I)
+_QUOTA_RE = re.compile(r"hit your (?:usage|session|weekly) limit|usage limit|usage_limit_reached|quota|spend(?:ing)? "
+                       r"limit|monthly (?:usage |spend(?:ing)? )?limit|out_of_credit|billing|\bresets?\b", re.I)
 
 _MONTHS = {m: i for i, m in enumerate(("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov",
                                        "dec"), 1)}
@@ -34,6 +48,12 @@ _RESET_RE = re.compile(r"\bresets\s+(?:(?P<month>[A-Za-z]{3})[a-z]*\.?\s+(?P<day
                        re.I)
 # An API's own words with a timestamp: "Your usage window resets at 2026-10-19T00:00:00Z".
 _WINDOW_RE = re.compile(r"usage window resets at (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)", re.I)
+
+
+def capacity(notice):
+    """Whether a limit notice is a provider's temporary model capacity, not a login's quota or plan."""
+    notice = str(notice or "")
+    return bool(_CAPACITY_RE.search(notice)) and not _QUOTA_RE.search(notice) and not gateway.run_code(notice)
 
 
 def _iso(at):
@@ -140,21 +160,29 @@ def believable(reset, hit):
 def record(c, runner_id, profile, runtime, hit, reset=None, attempt_id=None, bot=None, error=""):
     """Save a hold on the login after a turn ended on its usage limit at `hit`, and return it. A hold still saved
     means no turn has worked on the login since, so this limit is the next in a row. A hold keeps every turn off the
-    login, even when the bot's work went on to finish on a fallback: the next turn goes straight there."""
+    login, even when the bot's work went on to finish on a fallback: the next turn goes straight there. A capacity
+    notice holds for CAPACITY_WAIT and keeps the quota streak as it was: a busy provider says nothing of the plan."""
     old = get(c, runner_id, profile, runtime)
+    busy = capacity(error)
+    if busy:
+        reset = H.shift(hit, seconds=CAPACITY_WAIT)
     at = believable(reset, hit)
     hit_at = H.parse_ts(hit)
-    if old and (old.get("until") or "") > _iso(hit_at):
+    if old and (old.get("until") or "") > _iso(hit_at) and (busy or not old.get("capacity")):
         # Met while the hold was still in force (a person's one try, or a turn sent to a fallback that was not ready
-        # after all): the same window, so neither the streak nor the end moves earlier.
-        streak = int(old.get("streak") or 1)
+        # after all): the same window, so neither the streak nor the end moves earlier, and a quota hold stays one, its
+        # end too: a busy model says nothing of the plan's reset. A quota notice during a capacity hold starts its own
+        # quota hold.
+        streak = int(old.get("streak") or (0 if busy else 1))
         until = max(at or hit_at, H.parse_ts(old["until"]))
+        if busy and not old.get("capacity"):
+            busy, at, error, until = False, old.get("reset"), old.get("error") or "", H.parse_ts(old["until"])
     else:
-        streak = int(old.get("streak") or 0) + 1 if old else 1
+        streak = int(old.get("streak") or 0) + (0 if busy else 1) if old else (0 if busy else 1)
         until = at or hit_at + timedelta(seconds=BACKOFF[min(streak, len(BACKOFF)) - 1])
     hold = {"runner_id": runner_id, "profile": profile or "", "runtime": runtime, "since": _iso(hit_at),
-            "until": _iso(until), "streak": streak, "reset": bool(at), "attempt_id": attempt_id, "bot": bot,
-            "error": (error or "")[:300], "probe_job": None, "probe_at": None}
+            "until": _iso(until), "streak": streak, "reset": bool(at) and not busy, "capacity": busy,
+            "attempt_id": attempt_id, "bot": bot, "error": (error or "")[:300], "probe_job": None, "probe_at": None}
     _save(c, hold)
     return hold
 
@@ -310,6 +338,8 @@ def window(notice):
         return "Tico models paused, out of credit"
     if gateway.rate_limited(notice):
         return "Tico AI Gateway rate limit"
+    if capacity(notice):
+        return CAPACITY_KIND
     if BILLING_LIMIT_RE.search(notice or ""):
         return "API quota or billing limit"
     if re.search(r"\bweekly\b", notice or "", re.I):

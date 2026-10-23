@@ -41,6 +41,11 @@ Set `subtask_session: own` to give every subtask its own session instead.
 Each turn on a task leaves a **checkpoint**: the turn's final reply, kept on the task. If a task's session can't be
 resumed (a new computer, a cleared thread), the next turn starts a fresh session from that checkpoint.
 
+A session that has grown large also starts fresh, to save tokens: once a bot's last completed turn on it read 400,000
+input tokens or more (the bot's `rotate_at`; `rotate_after_turns` caps its turns, off by default), the next turn gets
+a new session with the task's checkpoint and what was said since that turn, the bot's own replies included, instead of
+re-reading the old transcript. `/compact` keeps its session. The run records it in `turns.rotated` ([hub sql](hub-sql.md)).
+
 **Clear** on a bot's chat starts that chat over: the next turn opens a new provider thread and reads only what was
 said after the clear. The main chat is one thread shared by the bot's chats, so a clear in one person's chat starts
 that shared thread over too; others' chats then continue from their own history in Tico. A bot's computer must run

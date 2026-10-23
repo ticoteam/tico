@@ -74,6 +74,25 @@ def _login_problem(state):
                or "")[:200]
 
 
+def runner_route_latency(c, now=None):
+    """Merge the last fifteen minutes' histograms; averaging minute percentiles hides stalls."""
+    import time
+    from .flight import _merge, quantile
+    if not c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='flight_requests'").fetchone():
+        return None
+    routes = {f"POST /api/v2/attempts/{{aid}}/{name}": {} for name in ("inputs", "renew", "events")}
+    for row in c.execute("SELECT route,hist FROM flight_requests WHERE ts>=? AND span=60 AND route IN (?,?,?)",
+                         (int(now or time.time()) - 15 * 60, *routes)):
+        _merge(routes[row[0]], json.loads(row[1] or "{}"))
+    slow = {route.rsplit("/", 1)[-1]: quantile(hist, .95) for route, hist in routes.items()
+            if quantile(hist, .95) > 1000}
+    if slow:
+        return _check("runner_route_latency", "Runner request latency", "warn",
+                      "Runner requests exceed 1 s at p95 over the last 15 minutes: " +
+                      ", ".join(f"{name} {ms / 1000:.2f} s" for name, ms in slow.items()))
+    return None
+
+
 def _computers(c, runners_online, settings):
     from .readiness import computer_login, login_warning, SIGNED_OUT
     since = {r["id"] for r in runners_online}
@@ -1182,6 +1201,8 @@ def view(c, who, settings, auth, github, config):
         limited = [row for row in limited if readable.get(row["bot"], auth.FULL)["read"]]
     failed, failures = _failed(c)
     checks = []
+    if (full or kind == "bot") and (latency := runner_route_latency(c)):
+        checks.append(latency)
     if full and (listening := _listening(c, settings)):
         checks.append(listening)
     storage = storage_settings(c, settings)
