@@ -490,6 +490,32 @@ def test_10_names_that_only_contain_a_label_are_left_alone(text):
     assert C.scrub(text) == (text, False)
 
 
+# 32 or more letters and digits in a row are key-shaped however regular they look; HQ's copy of the scrubber has the
+# same rule. Invented strings, built at run time, each too regular for the randomness check alone.
+REGULAR = ["a1" * 16, "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA7", "key" + "0" * 29, "Ab12" * 10]
+
+
+@pytest.mark.parametrize("value", REGULAR)
+def test_10_a_long_run_of_letters_and_digits_is_removed_however_regular(value):
+    assert C.scrub("Use " + value + " now") == ("Use [removed] now", True)
+
+
+@pytest.mark.parametrize("value", [REGULAR[0] + "-", REGULAR[0] + "_", REGULAR[0] + "=", "x_" + REGULAR[0] + "=="])
+def test_10_a_long_run_inside_a_longer_token_is_removed(value):
+    out, cut = C.scrub("Use " + value + " now")
+    assert cut and REGULAR[0] not in out and "[removed]" in out
+
+
+@pytest.mark.parametrize("text", [
+    "aaaaaaaa-0000-aaaa-0000-aaaaaaaaaaaa",                  # a UUID: dashes, so not a letters-and-digits run
+    "a1" * 15 + "a",                                         # 31 letters and digits
+    "Supercalifragilisticexpialidociousness",                # letters only
+    "12345678901234567890123456789012345",                   # digits only
+])
+def test_10_a_uuid_and_runs_short_of_the_shape_stay(text):
+    assert C.scrub(text) == (text, False)
+
+
 def test_10_an_env_line_is_cut_in_the_turn_and_the_file():
     draft = started()
     draft["company"]["about"] = "Our .env: DB_PASSWORD=Qz STRIPE_API_KEY='ab' GITHUB_TOKEN: 5 NAME=Ann"

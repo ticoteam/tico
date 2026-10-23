@@ -103,12 +103,13 @@ def test_a_stop_before_the_start_and_a_completed_report_are_not_hand_backs(api):
     # Only a run that started can finish.
     post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "last_seq": 0, "text": "Done."},
          machine["token"], expected=409)
-    # A person's Stop keeps the lapse it always had, and the line says it was stopped.
+    # Main settles a person's Stop immediately, even before the runner acknowledged start.
     post(api, "bots/ops/stop", {"attempt_id": attempt["id"]})
     post(api, f"attempts/{attempt['id']}/complete", {"outcome": "interrupted", "last_seq": 0, "text": ""},
-         machine["token"], expected=409)
-    lapse(api, attempt)
-    assert status(api)["last_stop"]["text"] == "Last run was stopped before it started. Nothing ran."
+         machine["token"])
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT state FROM jobs WHERE id=?", (attempt["job_id"],)).fetchone()[0] == "cancelled"
+    assert status(api)["state"] == "idle" and status(api)["last_stop"] is None
 
 
 def test_a_run_that_stopped_partway_says_so_and_offers_the_review(api):

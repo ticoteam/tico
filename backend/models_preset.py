@@ -108,11 +108,10 @@ def gateway_line(c, bot, ready, settings=None, config=None):
     """What runs `bot`'s turns while its subscription is not signed in on the computer `ready` describes, in a
     person's words, or '' when the Gateway does not take them (`waiting`, the claim's own rule:
     backend/execution.py claim_refusal). `config` is the runtime and model asked about (the model picker's); the
-    bot's own, filled from the company's choice, when not given. A bot on its own subscription waits for that login,
-    and a computer without the Gateway's own runtime holds the turn (both as the claim does)."""
+    bot's own, filled from the company's choice, when not given. A computer without the Gateway's own runtime holds
+    the turn (as the claim does)."""
     from .providers import fill, load
-    from .subscriptions import effective
-    if effective(c, bot)[0] or ((ready.get("runtimes") or {}).get(GATEWAY_RUNTIME) or {}).get("installed") is not True:
+    if ((ready.get("runtimes") or {}).get(GATEWAY_RUNTIME) or {}).get("installed") is not True:
         return ""
     record = load(c, settings)
     if config is None:

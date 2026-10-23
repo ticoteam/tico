@@ -139,6 +139,19 @@ class Parser(unittest.TestCase):
         text = hubcli.parser().format_help()
         self.assertIn("{" + ",".join(SUBCOMMANDS) + "}", text)
 
+    def test_task_update_help_and_mcp_offer_only_writable_statuses(self):
+        from clients import hubtools
+
+        code, out = run_hub("task", "update", "--help")
+        self.assertEqual(code, 0, out)
+        self.assertNotIn("closed", out["_stdout"])
+        statuses = ["open", "doing", "waiting", "review", "ready", "done", "declined"]
+        schema = next(t["inputSchema"] for t in hubtools.TOOLS if t["name"] == "hub_task_update")
+        self.assertEqual(schema["properties"]["status"]["enum"], [status for status in statuses if status != "ready"])
+        for status in statuses:
+            args = hubcli.parser().parse_args(["task", "update", "T1", "--status", status])
+            self.assertEqual(args.status, status)
+
 
 class Remote(unittest.TestCase):
     def test_human_override_is_refused_remotely_with_exit_two(self):
@@ -173,6 +186,8 @@ class Stub(BaseHTTPRequestHandler):
             return self.reply(200, {"sets": [], "text": "Decide readout"})
         if self.path.startswith("/api/v2/tasks/T1"):
             return self.reply(200, {"task": {"id": "T1", "version": 3}})
+        if self.path == "/api/v2/tasks?status=closed":
+            return self.reply(200, {"tasks": [{"id": "T1", "status": "closed"}]})
         self.reply(404, {"error": {"code": "not_found", "detail": "no"}})
 
     def do_POST(self):
@@ -222,6 +237,20 @@ class AgainstAStub(unittest.TestCase):
         self.assertEqual(out["status"], "done")
         posted = next(b for m, p, _, b in Stub.seen if m == "POST")
         self.assertEqual((posted["version"], posted["status"], posted["note"]), (3, "done", "shipped"))
+
+    def test_task_update_closed_gives_close_hint_without_an_api_call(self):
+        for status_arg in (("--status", "closed"), ("--status=closed",)):
+            code, out = run_hub("task", "update", "T1", *status_arg, env=self.env)
+            self.assertEqual(code, 1, out)
+            self.assertIn("use `hub task close <id>`", out["_stderr"])
+            self.assertEqual(Stub.seen, [])
+
+    def test_task_list_still_filters_closed_tasks(self):
+        code, out = run_hub("task", "list", "--status", "closed", env=self.env)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(out, [{"id": "T1", "status": "closed"}])
+        self.assertEqual([(m, p) for m, p, _, _ in Stub.seen],
+                         [("GET", "/api/v2/me"), ("GET", "/api/v2/tasks?status=closed")])
 
     def test_task_child_on_a_check_model_is_the_bots_own_subtask(self):
         code, out = run_hub("task", "child", "T1", "--check-model", "grok", "--role", "review",

@@ -260,7 +260,7 @@ def require_payload(c, who, payload, principal=None, checked_for=None):
             and isinstance(payload.get("worktree_actions"), list)):
         # A computer is never a task participant, so its heartbeat's worktree actions are each read as the bot
         # it hosts that owns the worktree; the rest of the heartbeat is still read as the computer.
-        if not all(worktree_action_readable(c, who, action) for action in payload["worktree_actions"]):
+        if len(readable_worktree_actions(c, who, payload["worktree_actions"])) != len(payload["worktree_actions"]):
             raise Problem("privacy", "This response contains a task you can no longer read", 403)
         require_payload(c, who, {k: v for k, v in payload.items() if k != "worktree_actions"}, principal, checked_for)
         return payload
@@ -301,6 +301,19 @@ def require_payload(c, who, payload, principal=None, checked_for=None):
             if isinstance(value, (dict, list)):
                 require_payload(c, who, value, principal, principal)
     return payload
+
+
+def readable_worktree_actions(c, who, actions):
+    """Batch the existing own-checkout removal exception; prepare/restore still check every task."""
+    snapshot(c)
+    removals = {a.get("link_id") for a in actions if isinstance(a, dict) and a.get("action") == "remove"}
+    owned = set()
+    for part in H.chunks(removals):
+        owned.update(row[0] for row in c.execute(
+            "SELECT id FROM task_links WHERE kind='worktree' AND computer_id=? AND id IN (" +
+            ",".join("?" * len(part)) + ")", (who.runner_id, *part)))
+    return [a for a in actions if (isinstance(a, dict) and a.get("action") == "remove" and a.get("link_id") in owned)
+            or worktree_action_readable(c, who, a)]
 
 
 def worktree_action_readable(c, who, action):

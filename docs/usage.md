@@ -46,7 +46,7 @@ it.
   reads "Paused: over its hourly limit" (its own) or "Paused: the team is over its hourly limit" on its page and in Tasks, and a run
   already going finishes. A group's or the team's total is shown only to the owner and administrators.
 - What counts is the estimate of the runs the bots finished that started in the UTC clock hour, the UTC day, the week from Monday
-  00:00 UTC, or the UTC month. Subscription runs count their API-equivalent only if the team turns on "Count subscription runs" (in
+  00:00 UTC, or the UTC month. Subscription runs count their API-equivalent unless the team turns off "Count subscription runs" (in
   the default limit), for every level.
 - A message is sent once per bot or pool, period and limit, so raising a limit arms it again.
 

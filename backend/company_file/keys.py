@@ -40,8 +40,10 @@ PASSWORD = re.compile(r"(?i)\s*[\"']?(?:password|passwd|passcode|pwd)\b")
 # not a count).
 COUNT = re.compile(r"(?i)token\W*$")
 QUOTES = ('\\"', '"', "'")
-# A long run of token characters with letters and digits mixed, and close to random.
+# A long run of token characters with letters and digits mixed, and close to random (or letters and digits only).
 TOKEN = re.compile(r"[A-Za-z0-9_+/=-]{32,}")
+# 32 or more letters and digits in a row, inside a longer run that is not random as a whole ("...-", "..._", "...=").
+RUN = re.compile(r"[A-Za-z0-9]{32,}")
 # An id made from a title ("accounts-receivable-specialist-2", or a path of them) reads as random once it is long and
 # carries a number, but is not a key: lowercase words and numbers joined by hyphens, with a real word of four letters
 # and at most two short mixed words ("b2b", "2nd"). A key's runs mix case, or letters and digits at length (a UUID's
@@ -52,11 +54,20 @@ SLUG_WORD = re.compile(r"[a-z]+|[0-9]+|[a-z0-9]{1,3}")
 def _random(word):
     if not (re.search(r"[A-Za-z]", word) and re.search(r"[0-9]", word)) or _slug(word):
         return False
+    if word.isalnum():
+        return True                     # 32 or more letters and digits, however regular: no word or number is that
     counts = {}
     for char in word:
         counts[char] = counts.get(char, 0) + 1
     entropy = -sum(n / len(word) * math.log2(n / len(word)) for n in counts.values())
     return entropy >= 3.5
+
+
+def _token(match):
+    word = match.group(0)
+    if _random(word):
+        return MARK
+    return RUN.sub(lambda run: MARK if _random(run.group(0)) else run.group(0), word)
 
 
 def _slug(word):
@@ -88,7 +99,7 @@ def scrub(text):
     for pattern in PATTERNS:
         out = pattern.sub(MARK, out)
     out = LABELLED.sub(_labelled, out)
-    out = TOKEN.sub(lambda m: MARK if _random(m.group(0)) else m.group(0), out)
+    out = TOKEN.sub(_token, out)
     return out, out != text
 
 

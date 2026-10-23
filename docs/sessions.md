@@ -41,6 +41,11 @@ Set `subtask_session: own` to give every subtask its own session instead.
 Each turn on a task leaves a **checkpoint**: the turn's final reply, kept on the task. If a task's session can't be
 resumed (a new computer, a cleared thread), the next turn starts a fresh session from that checkpoint.
 
+A session that has grown large also starts fresh, to save tokens: once a bot's last completed turn on it read 400,000
+input tokens or more (the bot's `rotate_at`; `rotate_after_turns` caps its turns, off by default), the next turn gets
+a new session with the task's checkpoint and what was said since that turn, the bot's own replies included, instead of
+re-reading the old transcript. `/compact` keeps its session. The run records it in `turns.rotated` ([hub sql](hub-sql.md)).
+
 **Clear** on a bot's chat starts that chat over: the next turn opens a new provider thread and reads only what was
 said after the clear. The main chat is one thread shared by the bot's chats, so a clear in one person's chat starts
 that shared thread over too; others' chats then continue from their own history in Tico. A bot's computer must run
@@ -123,6 +128,23 @@ three files: `input.json` (the message and model settings), `<provider>_transcri
 `output.json` (the events and result Tico recorded). A raw stream can hold customer text, so only owners turn it on,
 and only owners and engineering bots read it, for runs they can already see in the bot's run list. The MCP tool answers only whether a run was captured and its size; the CLI writes the files.
 
+### Why a run stopped or stalled
+
+`hub run list <bot>` includes `end_reason`, `ended_at`, `last_event`, `last_event_at` and
+`last_heartbeat_at`. Reasons distinguish a finished run, a model error (with its reported code and message),
+a process exit (code or signal), a named timeout limit, cancellation and its actor, a lost heartbeat,
+and a runner restart. An explicit runner OOM report is identified as OOM; a kill signal or words in stderr alone do not prove an OOM kill.
+
+Every minute, the server checks attempts for five minutes without either an attempt heartbeat or an event.
+It marks them `stalled` in the run list and Health, with their last event and time. This warning does not stop
+the attempt or change its lease. Fresh activity clears it.
+
+The runner also keeps up to 200 lines / 64 KiB of scrubbed harness stderr per attempt for seven days,
+even with provider stream capture off. `hub run export <attempt> --fixture` adds `stderr.log` when present,
+and works with stderr alone when no provider stream exists. Its access rules remain the same as raw stream
+exports. The MCP summary reports the stderr byte count and end reason without returning the log text.
+An older runner can report only the failure evidence it has; historical runs are not assigned a guessed cause.
+
 ## FAQ
 
 **Why didn't my main chat see what I said in a task?**
@@ -130,7 +152,7 @@ Each task has its own session. The main chat sees only a one-line report when th
 declined or stuck. To give the task more to go on, write in the task's thread.
 
 **Can a bot work on two of my tasks at once?**
-Yes. Each task runs in its own session and worktree, side by side. Two messages on the same task take turns. On a Codex ChatGPT sign-in, the task lanes take turns too, because OpenAI allows one job at a time per login: a waiting task shows *Waiting for <login> to be free*, not a failure ([how it works](how-it-works.md#one-turn-per-chatgpt-login)).
+Yes. Each task runs in its own session and worktree, side by side. Two messages on the same task take turns. On a Codex ChatGPT sign-in, the task lanes run side by side too and share the plan's usage allowance ([how it works](how-it-works.md#one-turn-per-chatgpt-login)).
 
 **What happens when a bot needs something from me?**
 It files a subtask for you under its task, which shows in your Needs you. When you finish it, the bot wakes on the

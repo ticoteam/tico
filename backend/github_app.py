@@ -51,9 +51,12 @@ REFRESH_MARGIN = TURN_START_REFRESH_MARGIN
 TURN_PERMISSIONS = {"contents": "write", "pull_requests": "write", "issues": "write", "metadata": "read"}
 READ_PERMISSIONS = {"contents": "read", "metadata": "read"}
 # What a bot reads beside its code in any repository it can reach: workflow runs (a deploy's result), check runs
-# and commit statuses (a pull request's checks; `gh pr checks` needs both). GitHub refuses a token naming a
-# permission the installation has not accepted, so turns narrow to the ones it has accepted (mint_turn).
-TURN_READS = {"actions": "read", "checks": "read", "statuses": "read"}
+# and commit statuses (a pull request's checks; `gh pr checks` needs both), pull requests and their comments
+# (`gh pr view`, `gh pr diff`; a PR's conversation is its issue), and deployments (a preview's link). A write token
+# keeps its own write on pull requests and issues. GitHub refuses a token naming a permission the installation has
+# not accepted, so turns narrow to the ones it has accepted (mint_turn).
+TURN_READS = {"actions": "read", "checks": "read", "statuses": "read", "pull_requests": "read", "issues": "read",
+              "deployments": "read"}
 # A write grant an Owner or admin lets run workflows (start, rerun, cancel) gets its own token: GitHub permissions are
 # token-wide, so the bot's other repositories never carry it. Never Workflows: write, so workflow files stay unedited.
 WORKFLOW_PERMISSIONS = {**TURN_PERMISSIONS, "actions": "write"}
@@ -841,7 +844,7 @@ def _said(response):
 
 def manifest(settings, name, administration):
     public = settings.public_url
-    permissions = {**TURN_PERMISSIONS, **TURN_READS}
+    permissions = {**TURN_READS, **TURN_PERMISSIONS}       # a write a bot needs wins over the same read
     if administration:
         permissions["administration"] = "write"
     return {"name": name[:34], "url": public, "redirect_url": public + "/api/v2/github/app/callback",

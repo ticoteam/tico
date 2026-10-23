@@ -273,10 +273,16 @@ refused text (credential values masked) and its task; one click releases that pa
 
 **A subscription usage limit.** A run that hits one fails with `limited` set; it did nothing, so
 the job stays queued however often this happens (it is never *Interrupted*) and the bot shows
-*limited*. The limit holds the provider login, not just the bot: that runtime's sign-in on that computer (or the
-bot's own subscription connection), saved on the server so it outlasts a restart of the runner or the server. It holds
+*limited*. The limit holds the provider login, not just the bot: that runtime's sign-in on that computer, saved on the server so it outlasts a restart of the runner or the server. It holds
 until the reset the provider names (Claude's "resets 2:40am (UTC)" included, even days away), or when none is named
-or the named time has passed, 30 minutes, then 60, then two hours for each limit in a row on that login. While it
+or the named time has passed, 30 minutes, then 60, then two hours for each limit in a row on that login. A provider
+that says its model is at capacity or overloaded for now ("Selected model is at capacity", HTTP 503, "try again in
+20s", `overloaded_error`) has not spent the login's quota: that login is held two minutes, the streak does not grow,
+a fallback can still take the run, and the bot's line and Health say *temporary model capacity*, a check or task
+model's turn included; a quota hold already in force keeps its own end. Only a refusal before the bot sent a message
+or used a tool is a run that did nothing: one that came after the run had acted is never replayed or handed to a
+fallback, and waits for review as *uncertain*. A quota or billing refusal ("Quota exceeded. Check your plan and
+billing details.") stays a usage limit as above. While it
 holds, no bot starts a run on that login: a bot whose fallback (its own, or the company's default) is signed in on
 that computer and not held itself runs there at once, and the runner never tries the held login (the run's note says
 *claude login held (usage limit) until 02:40 UTC; running this turn on codex*); only a bot with no such fallback
@@ -291,7 +297,9 @@ only the bot's own login is held and its work goes on on a fallback); a run that
 hits the limit again goes back to the hold. **Try now**, beside the warning on the bot's page and in its chat line for anyone who
 manages the bot (`POST /api/v2/bots/{bot}/limit/retry`, BotOps as the person who asked), ends the
 hold for that bot and every bot limited on the same runtime on the same computer, which share
-the subscription (`limit.cleared` in the event log). If the bot has a fallback
+the subscription (`limit.cleared` in the event log). As when a hold runs out, one queued run goes first and the rest
+wait for its result: a success resumes them all, and another limit puts the hold back with the end it had, so a plan
+that is still spent sees one run, not one per bot. While that run is out, Try now is refused as not limited. If the bot has a fallback
 harness in **Settings → Bots**, the runner reruns that run at once on the fallback (fresh
 session, given the conversation's latest messages, up to about 16,000 tokens, marked as history; never a
 person's private Assistant chat) and
@@ -318,19 +326,15 @@ bot moves back on its own once the limit resets. The owner turns this off in **S
 (*Fall back when a plan runs out*, `auto_fallback`). Overview lists how many bots are on a fallback and
 since when, and how many are limited.
 
-<a id="one-turn-per-chatgpt-login"></a>**One turn per ChatGPT login.** OpenAI lets a Codex ChatGPT sign-in serve
-one job stream at a time, so the runner gives a ChatGPT login (`one_turn_per_login` in the harness manifest) to one
-turn at a time, from before the turn's Codex process starts until it stops. A turn from another bot, or from another
-task lane of the same bot, that wants the same login waits its turn in order. While it waits, its run streams a
-`status` event `{"waiting", "login", "holder"}`, and the chat, the task and **Runs** show *Waiting for <login> to be
-free (busy with <bot>)*. A waiting run counts toward the computer's capacity and is not failed. If the bot has a fallback
-of its own that is ready, the turn runs there instead of waiting. Its diagnostic says *ChatGPT login busy with
-<bot>; running this turn on <harness>*, and the run reports `fallback` as with a usage limit. A command or an active
-native goal always waits. The company's default fallback is not used for a busy login, because the login is
-free again within one turn. To run two Codex bots side by side on a ChatGPT plan, put each on its own subscription
-profile login ([Subscription profiles](environments.md#subscription-profiles)). Codex on an API key is never held, and neither are other harnesses. Only
-people who can see the holding bot see its name; others read "another bot". The lock lives in the runner, so a
-runner restart frees every login.
+<a id="one-turn-per-chatgpt-login"></a>**Codex bots share a ChatGPT login.** Bots on the same computer using
+one ChatGPT sign-in run turns at the same time, just as Claude bots do. This includes every bot on the
+computer's login and separate task lanes of one bot.
+They share the plan's usage allowance; when it runs out, the usage-limit and fallback rules above apply.
+A busy ChatGPT login does not queue another bot's turn or show a login-wait message. Codex has
+`one_turn_per_login = false` in its harness manifest; the optional login queue is dormant.
+Tico keeps using the original login in its own home. It never copies a login into another bot's home:
+copies can rotate apart when the provider refreshes the token.
+
 **Settings → Health** counts this company fallback: a limited bot covered by it gets no "has no fallback
 model" finding. When a computer's default login (no subscription) keeps stopping on a usage limit, Health
 says so once per computer and tool, e.g. "Team box's default Codex login is out of quota", until a turn on
@@ -353,7 +357,9 @@ a link out of the worktree is refused, the whole is capped at 16 KB, and a resum
 them again only when they change. A bot's chat and its own thread use the local
 `bot-<slug>` checkout one turn at a time; with a session per task, each task's turns run in that
 task's own worktree (`sessions/bot-<slug>/<task>`), beside the bot's other tasks. A bot never has two turns on
-one task at once: a wake about a task its turn is on goes into that turn, or waits for the next one there. Only that
+one task at once: a wake about a task its turn is on goes into that turn, or waits for the next one there. A task a bot
+files for itself during a turn starts its own turn once that turn ends (or after 5 minutes), and not at all if that
+turn finished, declined or parked it. Only that
 computer knows which thread
 it is. Tico never ends a thread, never asks the bot for a checkpoint before a model or computer
 change, and never rebuilds history into a prompt (a fresh session on a task starts from the task's last

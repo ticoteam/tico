@@ -59,8 +59,9 @@ def test_invalid_or_oversize_transport_fails_before_cloud_changes():
     ec2, iam, ssm, account = aws_clients()
     deployer = aws.Deployer(aws.plan_aws(domain="tico.example.com", front_door="caddy", region="us-east-1"),
                             ec2, iam, ssm, account, say=lambda _: None, sleep=lambda _: None)
-    with pytest.raises(SystemExit, match="8 KB"):
+    with pytest.raises(SystemExit, match="8 KB") as refused:
         deployer.put_env("x" * 8193, company_file=True)
+    assert str(refused.value).endswith(starter.IMPORT_IN_APP)
     assert not ssm.called("put_parameter")
 
 

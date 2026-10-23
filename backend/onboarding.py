@@ -324,6 +324,7 @@ def config_view(c, settings, who=None):
         # A runner names a folder its turns can't write (Muse Code's sessions) apart from its sign-in only to a server
         # that takes the field (runner-rs/src/fallback.rs server_takes_data_problem).
         value["readiness_data_problem"] = True
+        value["computer_logins_v1"] = True
         # Where a bucket's objects open (TICO_S3_VIEW_URLS): the UI links s3:// URIs, `hub` rewrites them before sending.
         value["s3_view_urls"] = dict(settings.s3_view_urls)
     value["in_docker"] = running_in_docker()      # the first run offers a Linux computer first when the server is one

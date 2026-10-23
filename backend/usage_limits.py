@@ -53,14 +53,15 @@ class Default(dict):
 
 
 def company(c):
-    """The default for bots with no limit of their own: {hourly_usd, daily_usd, weekly_usd, monthly_usd, count_subscription}."""
+    """The default for bots with no limit of their own: {hourly_usd, daily_usd, weekly_usd, monthly_usd, count_subscription}.
+    Subscription runs count unless the team turned that off."""
     row = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (KEY,)).fetchone()
     try:
         stored = json.loads(row[0]) if row else {}
     except ValueError:
         stored = {}
     stored = stored if isinstance(stored, dict) else {}
-    return Default({**{key: _amount(stored.get(key)) for key in KEYS}, "count_subscription": stored.get("count_subscription") is True})
+    return Default({**{key: _amount(stored.get(key)) for key in KEYS}, "count_subscription": stored.get("count_subscription") is not False})
 
 
 def _amount(value):

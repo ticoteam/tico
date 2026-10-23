@@ -1,7 +1,7 @@
 """Computer performance diagnostics (docs/computers.md#performance).
 
 On for every computer unless its operator or an admin turns it off (Settings > Computers). While on, the heartbeat
-reply says so and the runner posts a sample every 30 s (runner-rs/src/perf.rs): CPU, load, memory, swap, free disk
+reply says so and the runner posts a sample every 60 s (runner-rs/src/perf.rs): CPU, load, memory, swap, free disk
 and the busiest process names. Numbers and process names only: never command lines, prompts or file contents. Which
 turns ran at the time comes from this server's own attempts, not from the runner.
 
@@ -19,6 +19,11 @@ from fastapi import Request
 from .store import H, Problem
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS runner_load_samples(runner_id TEXT NOT NULL, ts INTEGER NOT NULL,
+  sampled_at INTEGER NOT NULL, cpu_pct REAL, mem_used INTEGER, mem_total INTEGER, swap_used INTEGER,
+  swap_total INTEGER, running_turns INTEGER NOT NULL, PRIMARY KEY(runner_id,ts)) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS attempt_load_snapshots(attempt_id TEXT PRIMARY KEY REFERENCES attempts(id) ON DELETE CASCADE,
+  start_json TEXT, end_json TEXT) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS perf_points(runner_id TEXT NOT NULL, span INTEGER NOT NULL, ts INTEGER NOT NULL,
   n INTEGER NOT NULL, scope TEXT NOT NULL DEFAULT 'host', cpu REAL NOT NULL, cpu_max REAL NOT NULL, load1 REAL,
   mem_used INTEGER, mem_max INTEGER, mem_total INTEGER, swap_used INTEGER, swap_total INTEGER, disk_free INTEGER,
@@ -36,7 +41,7 @@ MODES = ("on", "off")
 MINUTE, TEN = 60, 600
 MINUTE_HOURS = 48               # one-minute points, then ten-minute ones
 KEEP_DAYS = 14
-SAMPLE_S = 30                   # the runner's interval: a usage row's n samples cover n * 30 s
+SAMPLE_S = 30                   # legacy duration unit: a usage row's n covers n * 30 s
 SUSTAINED = 10                  # loaded minutes in a row that make an overload
 CPU_HIGH, MEM_HIGH = 90.0, 90.0
 SWAP_HIGH, SWAP_MEM = 50.0, 80.0    # swapping: half the swap in use while memory is already 80% used
@@ -100,6 +105,16 @@ def ingest(c, runner_id, samples, now=None):
         ts = at // MINUTE * MINUTE
         if not minutes or minutes[-1] != ts:
             minutes.append(ts)
+        # Separate high-level load from the existing CPU-time diagnostics. A retry replaces its minute,
+        # never duplicates it; delayed older samples cannot replace a newer sample in the same minute.
+        cpu_pct = round(100.0 * s.load[0] / s.cores, 1) if s.load else None
+        c.execute("INSERT INTO runner_load_samples VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(runner_id,ts) DO UPDATE SET "
+                  "sampled_at=excluded.sampled_at,cpu_pct=excluded.cpu_pct,mem_used=excluded.mem_used,"
+                  "mem_total=excluded.mem_total,swap_used=excluded.swap_used,swap_total=excluded.swap_total,"
+                  "running_turns=excluded.running_turns WHERE excluded.sampled_at>=runner_load_samples.sampled_at",
+                  (runner_id, ts, at, cpu_pct, s.mem_used, s.mem_total,
+                   s.load_swap_used if s.load_swap_used is not None else s.swap_used,
+                   s.load_swap_total if s.load_swap_total is not None else s.swap_total, s.active))
         free, total = _volume(s)
         scope = "container_cpu" if s.scope == "container" and s.memory_scope == "host" else s.scope
         used = s.mem_used if s.mem_total else None
@@ -121,9 +136,10 @@ def ingest(c, runner_id, samples, now=None):
                       (runner_id, MINUTE, ts, scope, s.cpu, s.cpu, load1, used, used, s.mem_total or None,
                        s.swap_used if s.swap_total else None, s.swap_total or None, free, total, s.active))
         for p in s.procs:
-            _add_usage(c, runner_id, MINUTE, ts, "proc", p.name, "", "", 1, p.cpu, p.cpu, p.mem, p.mem)
+            _add_usage(c, runner_id, MINUTE, ts, "proc", p.name, "", "", s.interval_s // SAMPLE_S, p.cpu, p.cpu, p.mem, p.mem)
     for ts in sorted(set(minutes)):    # each minute in turn: a backlog's calm minute ends an overload
         detect(c, runner_id, ts)
+    c.execute("DELETE FROM runner_load_samples WHERE runner_id=? AND ts<?", (runner_id, now - 48 * 3600))
     return kept
 
 
@@ -141,6 +157,63 @@ def _add_usage(c, runner_id, span, ts, kind, key, bot, harness, n, cpu, cpu_max,
     else:
         c.execute("INSERT INTO perf_usage VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                   (runner_id, span, ts, kind, key, bot, harness, n, cpu, cpu_max, int(mem), int(mem_max)))
+
+
+# ------------------------------------------------------------------------------------------------ simple load
+LOAD_FRESH_S = 120
+
+
+def load_status(c, runner_id, now=None):
+    """Numbers only, readable by every company bot. Six consecutive readings span five full minutes.
+
+    A missing minute, a calm reading, a stale sample or diagnostics being off clears the current flag.
+    """
+    if not on(c, runner_id):
+        return {"latest_sample": None, "overloaded": False}
+    now = int(time.time() if now is None else now)
+    points = c.execute("SELECT * FROM runner_load_samples WHERE runner_id=? AND ts>=? ORDER BY ts DESC LIMIT 6",
+                       (runner_id, now - 48 * 3600)).fetchall()
+    if not points:
+        return {"latest_sample": None, "overloaded": False}
+    p = points[0]
+    fresh = now - p["sampled_at"] <= LOAD_FRESH_S
+    latest = {"at": p["sampled_at"], "cpu_pct": p["cpu_pct"],
+              "mem_pct": _pct(p["mem_used"], p["mem_total"]),
+              "mem_used": p["mem_used"], "mem_total": p["mem_total"],
+              "swap_used": p["swap_used"], "swap_total": p["swap_total"],
+              "running_turns": p["running_turns"], "stale": not fresh}
+    loaded = lambda x: (x["cpu_pct"] or 0) > 90 or (_pct(x["mem_used"], x["mem_total"]) or 0) > 90
+    overloaded = (fresh and len(points) == 6
+                  and all(points[i]["ts"] - points[i+1]["ts"] == 60 for i in range(5))
+                  and points[0]["sampled_at"] - points[-1]["sampled_at"] >= 300
+                  and all(loaded(x) for x in points))
+    return {"latest_sample": latest, "overloaded": bool(overloaded)}
+
+
+def stamp_attempt(c, attempt_id, runner_id, phase, snapshot=None):
+    """Fresh runner readings when available; older runners use the latest sample, with its original timestamp.
+
+    An absent or stale sample stays unknown. Snapshot history outlives the 48-hour rolling sample window.
+    """
+    if snapshot is not None and on(c, runner_id):
+        value = snapshot.model_dump()
+    else:
+        latest = load_status(c, runner_id)["latest_sample"] if on(c, runner_id) else None
+        value = ({k: latest[k] for k in ("at", "cpu_pct", "mem_pct", "running_turns")}
+                 if latest and not latest["stale"] else None)
+    column = {"start": "start_json", "end": "end_json"}[phase]
+    if value is None:
+        c.execute(f"UPDATE attempt_load_snapshots SET {column}=NULL WHERE attempt_id=?", (attempt_id,))
+        return
+    c.execute(f"INSERT INTO attempt_load_snapshots(attempt_id,{column}) VALUES(?,?) "
+              f"ON CONFLICT(attempt_id) DO UPDATE SET {column}=excluded.{column}",
+              (attempt_id, json.dumps(value)))
+
+
+def attempt_snapshots(c, attempt_id):
+    row = c.execute("SELECT start_json,end_json FROM attempt_load_snapshots WHERE attempt_id=?", (attempt_id,)).fetchone()
+    return {"load_start": json.loads(row[0]) if row and row[0] else None,
+            "load_end": json.loads(row[1]) if row and row[1] else None}
 
 
 # ------------------------------------------------------------------------------------------------ overloads
@@ -411,13 +484,14 @@ def sweep(store, now=None):
             c.execute("DELETE FROM perf_usage WHERE span=? AND ts>=? AND ts<?", (MINUTE, hour, end))
     old = now - KEEP_DAYS * 86400
     with store.transaction() as c:
+        c.execute("DELETE FROM runner_load_samples WHERE ts<?", (cutoff,))
         c.execute("DELETE FROM perf_points WHERE ts<?", (old,))
         c.execute("DELETE FROM perf_usage WHERE ts<?", (old,))
         c.execute("DELETE FROM perf_overloads WHERE coalesce(ended,last)<?", (old,))
         # A computer that stopped reporting mid-overload: it ends where its samples did.
         c.execute("UPDATE perf_overloads SET ended=last+? WHERE ended IS NULL AND last<?", (MINUTE, now - STALE_S))
         gone = "SELECT id FROM runners WHERE revoked_at IS NOT NULL"
-        for table in ("perf_points", "perf_usage", "perf_overloads"):
+        for table in ("perf_points", "perf_usage", "perf_overloads", "runner_load_samples"):
             c.execute(f"DELETE FROM {table} WHERE runner_id IN ({gone})")
 
 
@@ -467,7 +541,9 @@ def _window_between(c, runner_id, start, end):
 
 
 def erase(c, runner_id):
-    for table in ("perf_points", "perf_usage", "perf_overloads"):
+    c.execute("DELETE FROM attempt_load_snapshots WHERE attempt_id IN (SELECT id FROM attempts WHERE runner_id=?)",
+              (runner_id,))
+    for table in ("perf_points", "perf_usage", "perf_overloads", "runner_load_samples"):
         c.execute(f"DELETE FROM {table} WHERE runner_id=?", (runner_id,))
 
 

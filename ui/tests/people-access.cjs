@@ -218,8 +218,13 @@ const CONFIG = {environment_id: 'initech', company_name: 'Initech', app_name: 'I
     await dialog.locator('[name=typed]').fill('BEN@acme.example');
     await dialog.locator('[name=admin]').check();
     assert.equal(calls.length, 0);
+    // The move reloads this page. Let that reload land and close the page before opening the next one: a new page
+    // opened while a page in the same routed context reloads could wait forever under load (newPage has no timeout).
+    const reloaded = page.waitForEvent('load');
     await go.click();
     assert.deepEqual(await next(), ['owner', {person: 'ben', previous_owner_bot_admin: true, expected_revision: 1, confirm: true}]);
+    await reloaded;
+    await page.close();
 
     // The owner changes their own sign-in email: only on their own row, typed twice, then signs in again.
     owner = 'ana@acme.example';
@@ -253,10 +258,12 @@ const CONFIG = {environment_id: 'initech', company_name: 'Initech', app_name: 'I
     await box.locator('[name=email]').fill(' Ana@New.example ');
     await box.locator('[name=again]').fill('ana@new.example');
     assert.equal(calls.length, 0);
+    const signedOut = own.waitForURL('**/api/v2/logout');
     await change.click();
     assert.deepEqual(await next(), ['owner-email', {email: 'ana@new.example', confirm_email: 'ana@new.example',
       expected_revision: 1, confirm: true}]);
     assert.deepEqual(await next(), ['logout'], 'a proxy session signs in again as the new address');
+    await signedOut;
     await own.close();
 
     // An admin sees no mode choice and no role picker, and cannot switch another admin's sign-in.

@@ -1,6 +1,8 @@
 //! Subscription profiles (runner/profiles.py): one directory on this machine per provider login, named in
-//! runner.json (`profiles`, `default_profile`, `bot_profiles`). A turn on a profile runs with that profile's
-//! HOME (Claude) or CODEX_HOME (Codex); `share_operator` keeps the operator's own logins.
+//! runner.json (`profiles`, `default_profile`). Every bot's turn runs on the computer's one login per tool: the
+//! `default_profile` when there is one (that profile's HOME for Claude, CODEX_HOME for Codex), else the operator's
+//! own. A bot never has a login of its own (`bot_profiles` and a server-named profile are not read); a different
+//! account means another runner. `share_operator` keeps the operator's own logins.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -104,9 +106,22 @@ impl Profile {
     }
 }
 
+/// The named profile, or with none the computer's own login (`default_profile`). None means that profile is not on
+/// this computer, or the computer's login is the operator's own.
+pub fn select(config: &Map<String, Value>, requested: Option<&str>) -> Option<Profile> {
+    let profiles = config.get("profiles").filter(|p| p.is_object()).cloned().unwrap_or(json!({}));
+    let name = requested.filter(|r| !r.is_empty()).map(String::from)
+        .unwrap_or_else(|| config.get("default_profile").map(text_of).unwrap_or_default());
+    let entry = &profiles[&name];
+    if name.is_empty() || !entry.is_object() || !truthy(entry.get("dir")) {
+        return None;
+    }
+    Some(Profile::new(&name, &text_of(&entry["dir"]), truthy(entry.get("share_operator"))))
+}
+
 /// The server-requested profile, or the local assignment and default when none is requested. None means the
 /// requested profile is not on this computer, or no local profile is configured.
-pub fn select(config: &Map<String, Value>, bot: Option<&str>, requested: Option<&str>) -> Option<Profile> {
+fn legacy_select(config: &Map<String, Value>, bot: Option<&str>, requested: Option<&str>) -> Option<Profile> {
     let profiles = config.get("profiles").filter(|p| p.is_object()).cloned().unwrap_or(json!({}));
     let mut name = bot.and_then(|b| config.get("bot_profiles").and_then(|m| m.get(b))).map(text_of).filter(|n| !n.is_empty());
     if let Some(r) = requested.filter(|r| !r.is_empty()) {
@@ -122,6 +137,20 @@ pub fn select(config: &Map<String, Value>, bot: Option<&str>, requested: Option<
         return None;
     }
     Some(Profile::new(&name, &text_of(&entry["dir"]), truthy(entry.get("share_operator"))))
+}
+
+/// An older server still owns its saved account choices. Switch to the computer default only after its handshake.
+pub fn assignment_profile(config: &Map<String, Value>, entry: &Value, computer_logins: bool) -> Option<Profile> {
+    if computer_logins && entry["computer_logins_v1"] == true {
+        computer_login(config)
+    } else {
+        legacy_select(config, Some(&text_of(&entry["bot"])), Some(&text_of(&entry["profile"])))
+    }
+}
+
+/// The login every turn on this computer runs on: its own (select with no name).
+pub fn computer_login(config: &Map<String, Value>) -> Option<Profile> {
+    select(config, None)
 }
 
 pub fn missing(config: &Map<String, Value>, requested: &str) -> String {
@@ -153,9 +182,12 @@ pub fn turn_profile(
     assignments: &[Value],
     rejected: &dyn Fn(&str, &Profile) -> bool,
 ) -> Result<Option<Profile>, Unavailable> {
+    // An attempt confirms the contract too: a rollback cannot reuse a cached config to change its account.
+    if attempt["computer_logins_v1"] == true {
+        return Ok(computer_login(config));
+    }
     let requested = text_of(&attempt["profile"]);
-    let bot = text_of(&attempt["bot"]);
-    let profile = select(config, Some(&bot), Some(&requested));
+    let profile = assignment_profile(config, attempt, false);
     if requested.is_empty() {
         return Ok(profile);
     }
@@ -292,8 +324,9 @@ pub fn configured(config: &Map<String, Value>) -> Vec<Profile> {
         .collect()
 }
 
-/// Persist a UI-made profile (service.py add_profile): created under `<config dir>/profiles`, added to
-/// runner.json without changing local assignments. Returns the entry.
+/// A named profile made under `<config dir>/profiles` and added to runner.json, as an earlier release's browser
+/// sign-in did. Returns the entry.
+#[cfg(test)]
 pub fn add_profile(config: &Config, name: &str) -> Result<Value, String> {
     let root = config.path.parent().unwrap_or(Path::new(".")).join("profiles");
     let entry = create(&root, name, false)?;
@@ -351,9 +384,9 @@ pub fn remove_profile(config: &Config, name: &str) -> Result<bool, String> {
     }
 }
 
-/// The `profile` subcommand: add, list, assign (runner/__main__.py profile_command). Writes runner.json the
+/// The `profile` subcommand: add, list (runner/__main__.py profile_command). Writes runner.json the
 /// way Python does: every key kept, two-space indent.
-pub fn command(config: &mut Config, action: &str, name: Option<&str>, share_operator: bool, bot: Option<&str>) -> Result<String, String> {
+pub fn command(config: &mut Config, action: &str, name: Option<&str>, share_operator: bool) -> Result<String, String> {
     match action {
         "add" => {
             let name = name.ok_or("profile add needs a name")?;
@@ -375,23 +408,8 @@ pub fn command(config: &mut Config, action: &str, name: Option<&str>, share_oper
         "list" => Ok(serde_json::to_string_pretty(&json!({
             "default_profile": config.data.get("default_profile").cloned().unwrap_or(json!("")),
             "profiles": config.data.get("profiles").cloned().unwrap_or(json!({})),
-            "bot_profiles": config.data.get("bot_profiles").cloned().unwrap_or(json!({})),
         }))
         .unwrap()),
-        "assign" => {
-            let name = name.ok_or("profile assign needs a profile")?;
-            let bot = bot.ok_or("profile assign needs a bot")?;
-            if !config.data.get("profiles").and_then(|p| p.get(name)).is_some_and(|e| truthy(Some(e))) {
-                return Err("No such profile on this registration; add it with `profile add`".into());
-            }
-            let map = config.data.entry("bot_profiles").or_insert(json!({}));
-            if !map.is_object() {
-                *map = json!({});
-            }
-            map[bot] = json!(name);
-            config.save()?;
-            Ok(format!("{bot} runs on subscription profile {name}"))
-        }
         other => Err(format!("unknown profile action {other}")),
     }
 }
@@ -651,21 +669,40 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn computer_login_selection_waits_for_the_server_handshake_and_survives_rollback() {
+        let config = json!({"profiles": {"own": {"dir": "/p/own"}, "local": {"dir": "/p/local"},
+                                         "server": {"dir": "/p/server"}},
+                            "default_profile": "own", "bot_profiles": {"ops": "local"}});
+        let c = config.as_object().unwrap();
+        let local = json!({"bot": "ops"});
+        let assigned = json!({"bot": "ops", "profile": "server"});
+        for current in [false, true, false] {
+            let mut request = assigned.clone();
+            if current { request["computer_logins_v1"] = json!(true); }
+            assert_eq!(assignment_profile(c, &request, current).unwrap().name, if current { "own" } else { "server" });
+        }
+        // A cached new-server config cannot override requests from an old server after rollback.
+        assert_eq!(assignment_profile(c, &local, true).unwrap().name, "local");
+        assert_eq!(assignment_profile(c, &assigned, true).unwrap().name, "server");
+        assert!(assignment_profile(c, &json!({"bot": "ops", "profile": "gone"}), false).is_none());
+        assert_eq!(computer_login(c).unwrap().environment("codex", &Env::new())["CODEX_HOME"], "/p/own/codex");
+    }
+
+    #[test]
     fn selection_follows_the_registration() {
         let config = json!({"profiles": {"acme": {"dir": "/p/acme"}, "beta": {"dir": "/p/beta", "share_operator": true}},
                             "default_profile": "acme", "bot_profiles": {"sales": "beta"}});
         let c = config.as_object().unwrap();
-        assert_eq!(select(c, Some("ops"), None).unwrap().name, "acme");
-        assert_eq!(select(c, Some("sales"), None).unwrap().name, "beta");
-        assert_eq!(select(c, Some("ops"), Some("beta")).unwrap().name, "beta");
-        assert!(select(c, Some("ops"), Some("gone")).is_none());
-        assert!(select(json!({}).as_object().unwrap(), Some("ops"), None).is_none());
-        let acme = select(c, None, None).unwrap();
+        // One login per tool per computer: a bot's old local assignment is not read.
+        assert_eq!(computer_login(c).unwrap().name, "acme");
+        assert_eq!(select(c, Some("beta")).unwrap().name, "beta");
+        assert!(select(c, Some("gone")).is_none());
+        assert!(computer_login(json!({}).as_object().unwrap()).is_none());
+        let acme = computer_login(c).unwrap();
         let env = acme.environment("codex", &Env::new());
         assert_eq!(env["CODEX_HOME"], "/p/acme/codex");
         assert_eq!(acme.environment("claude", &Env::new())["HOME"], "/p/acme/claude");
-        assert!(select(c, Some("sales"), None).unwrap().environment("claude", &Env::new()).is_empty());
-        assert_eq!(missing(c, "gone"), "profile gone not on this computer");
+        assert!(select(c, Some("beta")).unwrap().environment("claude", &Env::new()).is_empty());
     }
 
     /// A stand-in `claude` that signs in where Claude Code would: CLAUDE_CONFIG_DIR when set, else `$HOME/.claude`.
@@ -710,7 +747,10 @@ pub(crate) mod tests {
         let own = windows("", "claude");
         assert_eq!((own["five_hour"]["used_percent"].clone(), own["weekly"]["used_percent"].clone()), (json!(53.0), json!(17.0)));
         assert_eq!(own["five_hour"]["status"], "allowed");
-        assert!(windows("", "codex").is_empty() && windows("other", "claude").is_empty());
+        // Other tests can populate the computer's Codex windows concurrently. Check absent keys that
+        // belong to this test instead of assuming the shared Codex cache is empty.
+        assert!(windows("", "own-windows-missing-runtime").is_empty()
+            && windows("own-windows-missing-profile", "claude").is_empty());
         forget_windows("", "claude");
         assert!(windows("", "claude").is_empty());
     }
@@ -832,20 +872,18 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn add_list_and_assign_write_the_registration() {
+    fn add_and_list_write_the_registration() {
         let dir = std::env::temp_dir().join(format!("tico-profiles-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("runner.json");
         std::fs::write(&path, r#"{"runner_id":"r1","keep":1}"#).unwrap();
         let mut config = Config::load(&path).unwrap();
-        let out: Value = serde_json::from_str(&command(&mut config, "add", Some("acme"), false, None).unwrap()).unwrap();
+        let out: Value = serde_json::from_str(&command(&mut config, "add", Some("acme"), false).unwrap()).unwrap();
         assert_eq!(out["default_profile"], "acme");
         let folder = PathBuf::from(text_of(&out["dir"]));
         assert!(folder.join("claude/.claude").is_dir() && folder.join("codex").is_dir() && folder.join("profile.json").is_file());
-        command(&mut config, "assign", Some("acme"), false, Some("sales")).unwrap();
-        assert!(command(&mut config, "assign", Some("nope"), false, Some("sales")).is_err());
+        assert!(command(&mut config, "assign", Some("acme"), false).is_err(), "a bot has no login of its own");
         let stored = Config::load(&path).unwrap();
-        assert_eq!(stored.data["bot_profiles"]["sales"], "acme");
         assert_eq!(stored.data["keep"], 1);
         assert!(create(&dir.join("profiles"), "Bad Name", false).is_err());
         let names: Vec<String> = configured(&stored.data).into_iter().map(|p| p.name).collect();
@@ -858,6 +896,8 @@ pub(crate) mod tests {
         use std::os::unix::fs::PermissionsExt;
         let dir = std::env::temp_dir().join(format!("tico-profile-folder-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(dir.join("acme")).unwrap();
+        // macOS's temp root starts with /var, a symlink the production pinning must refuse.
+        let dir = std::fs::canonicalize(dir).unwrap();
         std::fs::set_permissions(dir.join("acme"), std::fs::Permissions::from_mode(0o700)).unwrap();
         crate::isolation::keep_supervisor_directory(&dir.join("acme"), 0o711).unwrap();
         assert_eq!(std::fs::metadata(dir.join("acme")).unwrap().permissions().mode() & 0o7777, 0o711);

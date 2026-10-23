@@ -1041,3 +1041,67 @@ def test_a_delayed_old_push_clears_on_the_next_clean_report_and_a_real_fix_forwa
     report['state'] = 'removed'
     post(api, 'runners/heartbeat', body, 'runner-test')
     assert released_events(api, tid)[-1]['reason'] == f"pull request merged (stale push {'a' * 12} cleared)"
+
+
+def test_a_stale_pending_tree_whose_pull_requests_finished_is_released_without_a_retry_nudge(prepared):
+    api, tid, _ = prepared
+    link = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test').json()
+    old = H.shift(H.now(), hours=-(W.PENDING_HOURS + 1))
+    with api.app_state.store.transaction() as c:
+        detail = json.loads(c.execute('SELECT detail_json FROM task_links WHERE id=?', (link['link_id'],)).fetchone()[0])
+        detail.update(checkout_state='checkout_ready', current_branch=link['branch'], last_commit='c' * 40,
+                      expected_head='a' * 40, checkout_target='refs/remotes/origin/main', expected_base='b' * 64)
+        c.execute('UPDATE task_links SET detail_json=?,updated=? WHERE id=?', (json.dumps(detail), old, link['link_id']))
+        H.task_link(c, 'bot:cmo', tid, 'https://github.com/Acme/product/pull/1')
+        c.execute("UPDATE task_links SET state='merged' WHERE kind='pr'")
+    actions = post(api, 'runners/heartbeat', {**HEARTBEAT, 'worktrees': []}, 'runner-test').json()['worktree_actions']
+    assert [(a['action'], a.get('release')) for a in actions] == [('remove', True)]
+    with api.app_state.store.read() as c:
+        assert not c.execute("SELECT count(*) FROM messages WHERE to_actor='bot:cmo' AND body LIKE '%Setup did not finish%'"
+                             ).fetchone()[0]
+        assert 'pending_expired' not in json.loads(c.execute('SELECT detail_json FROM task_links WHERE id=?',
+                                                             (link['link_id'],)).fetchone()[0])
+
+
+def test_only_the_task_owners_own_turn_holds_its_tree(prepared):
+    api, tid, _ = prepared
+    with api.app_state.store.transaction() as c:
+        c.execute("UPDATE tasks SET carried_by='a1' WHERE id=?", (tid,))        # cmo's turn on the task is running
+        assert W.live_turn(c, tid, 'bot:cmo')
+        assert not W.live_turn(c, tid, 'bot:cpo')                               # a reviewer's or other bot's view
+        c.execute("UPDATE tasks SET owner='bot:cpo' WHERE id=?", (tid,))        # the task moved to another bot
+        assert not W.live_turn(c, tid, 'bot:cmo')                               # the former owner's turn holds nothing
+        row = {'task_id': tid, 'owner': 'bot:cmo', 'repo': 'Acme/product', 'branch': None}
+        assert W.held_reason(c, row, {}) == ''
+
+
+def test_a_fault_reading_turns_is_raised_not_taken_for_no_live_turn(prepared):
+    import sqlite3
+    api, tid, _ = prepared
+
+    class Failing:
+        def __init__(self, c, message):
+            self.c, self.message = c, message
+
+        def execute(self, sql, *args):
+            if 'FROM attempts' in sql:
+                raise sqlite3.OperationalError(self.message)
+            return self.c.execute(sql, *args)
+    with api.app_state.store.read() as c:
+        assert not W.live_turn(Failing(c, 'no such table: attempts'), tid, 'bot:cmo')    # a local hub
+        with pytest.raises(sqlite3.OperationalError):
+            W.live_turn(Failing(c, 'database disk image is malformed'), tid, 'bot:cmo')
+
+
+def test_a_new_push_after_a_stale_push_was_cleared_resets_the_cleared_flag(prepared):
+    from backend import github
+    api, tid, _ = prepared
+    link = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test').json()
+    with api.app_state.store.transaction() as c:
+        detail = json.loads(c.execute('SELECT detail_json FROM task_links WHERE id=?', (link['link_id'],)).fetchone()[0])
+        c.execute('UPDATE task_links SET detail_json=? WHERE id=?',
+                  (json.dumps({**detail, 'stale_push_cleared': 'a' * 40}), link['link_id']))
+        github.push(c, {'ref': 'refs/heads/' + link['branch'], 'after': 'd' * 40,
+                        'repository': {'full_name': 'Acme/product', 'default_branch': 'main'}})
+        detail = json.loads(c.execute('SELECT detail_json FROM task_links WHERE id=?', (link['link_id'],)).fetchone()[0])
+    assert detail['pushed'] == 'd' * 40 and 'stale_push_cleared' not in detail
