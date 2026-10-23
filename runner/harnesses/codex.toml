@@ -55,6 +55,7 @@ model_list = "host"
 check = "command"
 args = ["login", "status"]
 ready = "logged in"
+not_ready = "not logged in"
 ready_detail = "Signed in with ChatGPT"
 missing_detail = "Codex login required"
 timeout_s = 8
