@@ -153,6 +153,8 @@ struct Inner {
     turn: Option<(String, String)>,
     stopper: Option<super::Stopper>,
     reply: HashMap<String, String>,
+    /// Turns that called a tool since their last text: the text after it is a new message.
+    new_message: HashSet<String>,
     interrupted: HashSet<String>,
     done_turns: HashSet<String>,
     reader: Option<tokio::task::JoinHandle<()>>,
@@ -409,23 +411,26 @@ impl GeminiHost {
                 let text = text_of(&msg["content"]);
                 if !text.is_empty() {
                     let delta = msg.get("delta").is_none_or(|d| crate::util::truthy(Some(d)));
-                    {
+                    let piece = {
                         let mut inner = self.inner();
+                        let new_message = inner.new_message.remove(turn);
                         let reply = inner.reply.entry(turn.into()).or_default();
                         if delta {
-                            reply.push_str(&text);
+                            super::add_piece(reply, new_message, &text)
                         } else {
                             *reply = text.clone();
+                            text.clone()
                         }
-                    }
+                    };
                     if delta {
-                        self.emit(event("delta", Some(tid), Some(turn), json!({"text": text, "delta_kind": "text"})));
+                        self.emit(event("delta", Some(tid), Some(turn), json!({"text": piece, "delta_kind": "text"})));
                     } else {
                         self.emit(event("message", Some(tid), Some(turn), json!({"text": text, "final": false})));
                     }
                 }
             }
             "tool_use" => {
+                self.inner().new_message.insert(turn.into());
                 self.emit(event("tool", Some(tid), Some(turn), json!({"server": "", "tool": tool(), "status": "started", "item_id": item()})));
             }
             "tool_result" => {
@@ -446,6 +451,7 @@ impl GeminiHost {
                 inner.stopper = None;
             }
             let reply = inner.reply.remove(turn).unwrap_or_default();
+            inner.new_message.remove(turn);
             if !inner.done_turns.insert(turn.into()) {
                 return;
             }
