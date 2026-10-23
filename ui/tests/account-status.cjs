@@ -33,7 +33,7 @@ const ALL_CLEAR = {audience: 'owner', checks: [{id: 'computers', label: 'Compute
     const broken = health;
     let failStatus = false;
     page.on('pageerror', e => errors.push(e.message));
-    await page.route('**/*', async route => {
+    const serve = async route => {
       const url = new URL(route.request().url()), p = url.pathname;
       if (url.origin !== 'http://tico-ui.test') return route.abort();
       const json = (body, code = 200) => route.fulfill({status: code, contentType: 'application/json', body: JSON.stringify(body)});
@@ -52,11 +52,12 @@ const ALL_CLEAR = {audience: 'owner', checks: [{id: 'computers', label: 'Compute
       if (p === '/api/v2/health-monitor') return json({on: false, findings: []});
       if (p === '/api/v2/needs-you') return json({items: []});
       return json(unrouted(p));
-    });
+    };
+    await page.route('**/*', serve);
+    // Snooze before startup so the automatic Needs you panel cannot cover account navigation.
+    await page.addInitScript(() => localStorage.setItem('tico.needsYou', JSON.stringify({snoozedUntil: Date.now() + 3600e3})));
     await page.goto('http://tico-ui.test/#/tasks');
     await page.waitForFunction(() => !document.querySelector('#account .account-email')?.textContent.includes('Signing in'));
-    // Keep the auto-opening Needs you panel out of the way: this test is about the sidebar.
-    await page.evaluate(() => localStorage.setItem('tico.needsYou', JSON.stringify({snoozedUntil: Date.now() + 3600e3})));
     const settle = async () => { await page.evaluate(async () => { await refresh(false); await hlRefresh(); }); };
     await settle();
     // Status dots in the sidebar footer, whatever their class: what a person sees as a small coloured circle.
@@ -173,6 +174,48 @@ const ALL_CLEAR = {audience: 'owner', checks: [{id: 'computers', label: 'Compute
     await settle();
     assert.equal(await dot.getAttribute('data-level'), 'bad');
     assert.equal(await page.locator('#account-menu .account-status-text').innerText(), "Bots aren't running: the cloud scheduler stopped");
+    // Many long actionable problems must leave every fix reachable and account navigation on screen.
+    health = ALL_CLEAR;
+    status = {cloud: true, keeper_alive: true, health_issues: Array.from({length: 7}, (_, i) => ({
+      kind: 'machine', machine: `computer-${i}`, title: `Acme computer ${i + 1} stopped checking in`,
+      detail: 'No word from it for 31 minutes. Builder and Writer cannot run until it reconnects. 12 saved requests are waiting.',
+      severity: 'error', needs_person: true, action: 'Wake this computer and check that Tico runs there.'}))};
+    await settle();
+    const checkList = async (target, selector) => {
+      const card = target.locator(selector), viewport = target.viewportSize();
+      const bounds = await card.boundingBox();
+      assert.ok(bounds.y >= 0 && bounds.y + bounds.height <= viewport.height,
+        `${selector} stays within ${viewport.width}x${viewport.height}: ${JSON.stringify(bounds)}`);
+      assert.equal(await card.locator('.account-status-line').count(), 7);
+      for (const action of await card.locator('.account-status-line a').all()) {
+        await action.click({trial: true, timeout: 3000});
+        const box = await action.boundingBox();
+        assert.ok(box.y >= 0 && box.y + box.height <= viewport.height, 'each scrolled fix is on screen');
+      }
+    };
+    for (const height of [860, 720]) {
+      await page.setViewportSize({width: 1280, height});
+      await page.evaluate(() => setAccountMenu(true));
+      await checkList(page, '#account-menu');
+      await page.locator('#account-menu [data-nav="settings"]').click({trial: true, timeout: 3000});
+      await page.evaluate(() => setAccountMenu(false));
+      await page.mouse.move(700, 400);
+      await dot.hover();
+      await page.locator('#account-status-pop').waitFor();
+      await checkList(page, '#account-status-pop');
+      await page.mouse.move(700, 400);
+      await page.locator('#account-status-pop').waitFor({state: 'hidden'});
+    }
+    const phone = await browser.newPage({viewport: {width: 390, height: 844}, hasTouch: true, isMobile: true, serviceWorkers: 'block'});
+    await phone.route('**/*', serve);
+    await phone.addInitScript(() => localStorage.setItem('tico.needsYou', JSON.stringify({snoozedUntil: Date.now() + 3600e3})));
+    await phone.goto('http://tico-ui.test/#/tasks');
+    await phone.evaluate(async () => { await refresh(false); await hlRefresh(); setDrawer(true); });
+    await phone.locator('#account').tap();
+    await checkList(phone, '#account-menu');
+    await phone.locator('#account-menu [data-nav="settings"]').tap();
+    assert.equal(await phone.locator('#account-menu').isHidden(), true, 'touch navigation closes the long menu');
+    await phone.close();
     assert.deepEqual(errors, []);
     console.log('account-status: ok');
   } finally { await browser.close(); }
