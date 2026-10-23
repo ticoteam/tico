@@ -727,7 +727,8 @@ function recruitFor({department, briefing, share}) {
       Object.defineProperty(navigator, 'clipboard', {configurable: true, value: {writeText: async value => { window.copied.push(value); }}}); });
     const copies = async () => {
       await page.evaluate(() => { window.copied = []; });
-      const buttons = await page.locator('.onb-steps [data-onb-copy], #onb-other [data-onb-copy], #onb-code-copy').all();
+      const buttons = [...await page.locator('.onb-steps [data-onb-copy]').all(),
+        ...await page.locator('#onb-other [data-onb-copy]').all(), page.locator('#onb-code-copy')];
       for (const button of buttons) await button.click();
       await page.waitForFunction(count => window.copied.length === count, buttons.length);
       const values = await page.evaluate(() => window.copied);
